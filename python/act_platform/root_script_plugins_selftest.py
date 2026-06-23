@@ -531,7 +531,7 @@ def run_selftest() -> dict[str, Any]:
                     }
                 settings_reads = int(state.get("settings_read_count") or 0)
                 settings_refreshes = int(state.get("settings_refresh_count") or 0)
-                if settings_reads <= 0 or settings_reads > 30 or settings_refreshes <= 0 or settings_refreshes > 2:
+                if settings_reads <= 0 or settings_reads > 34 or settings_refreshes <= 0 or settings_refreshes > 2:
                     return {
                         "ok": False,
                         "plugin_id": plugin_id,
@@ -619,6 +619,42 @@ def run_selftest() -> dict[str, Any]:
                         "stage": "stickwoman_retarget_motion_scale_max",
                         "state": motion_scale_state,
                     }
+                procedural_json = json.dumps({
+                    "schema": "sao.humanoid.procedural.v1",
+                    "enabled": True,
+                    "mode": "relative_ik_test",
+                    "default_action": "walk",
+                    "actions": {
+                        "walk": {
+                            "gait": {
+                                "enabled": True,
+                                "cadence": 4.0,
+                                "stride": 0.16,
+                                "lift": 0.08,
+                                "foot_planting": True,
+                                "ground_y": "auto",
+                            },
+                            "effectors": {
+                                "right_hand": {"offset": [0.0, 0.10, 0.0]},
+                            },
+                            "head": {"look_at": [0.0, 1.4, 1.2], "weight": 0.2},
+                        },
+                    },
+                }, ensure_ascii=False, separators=(",", ":"))
+                procedural_action = act_plugin_action(
+                    owner,
+                    "script.procedural.set_json",
+                    {"json": procedural_json},
+                    plugin_id=plugin_id,
+                )
+                procedural_state = _state(procedural_action)
+                if not str(procedural_state.get("procedural_action_json_hash") or ""):
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_procedural_action_hash",
+                        "state": procedural_state,
+                    }
                 model_path = str(motion_scale_state.get("model_path") or "")
                 reload_action = act_plugin_action(
                     owner, "script.model.set_path", {"path": model_path}, plugin_id=plugin_id)
@@ -638,6 +674,7 @@ def run_selftest() -> dict[str, Any]:
                 state["retarget_stretch_limit"] = stretch_state.get("retarget_stretch_limit")
                 state["retarget_motion_scale_min"] = motion_scale_state.get("retarget_motion_scale_min")
                 state["retarget_motion_scale_max"] = motion_scale_state.get("retarget_motion_scale_max")
+                state["procedural_action_json_hash"] = procedural_state.get("procedural_action_json_hash")
                 state["model_reload_nonce"] = reload_state.get("model_reload_nonce")
                 action = act_plugin_action(
                     owner, "script.avatar.action", {"name": "walk"}, plugin_id=plugin_id)
@@ -748,6 +785,25 @@ def run_selftest() -> dict[str, Any]:
                         "plugin_id": plugin_id,
                         "stage": "stickwoman_overlay_motion_scale_max",
                         "retarget": retarget,
+                    }
+                procedural = model_node.get("procedural_action") if isinstance(model_node.get("procedural_action"), dict) else {}
+                if procedural.get("mode") != "relative_ik_test":
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_overlay_procedural_action",
+                        "procedural_action": procedural,
+                    }
+                procedural_actions = procedural.get("actions") if isinstance(procedural.get("actions"), dict) else {}
+                walk_action = procedural_actions.get("walk") if isinstance(procedural_actions.get("walk"), dict) else {}
+                gait = walk_action.get("gait") if isinstance(walk_action.get("gait"), dict) else {}
+                effectors = walk_action.get("effectors") if isinstance(walk_action.get("effectors"), dict) else {}
+                if gait.get("foot_planting") is not True or "right_hand" not in effectors:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_overlay_relative_targets",
+                        "procedural_action": procedural,
                     }
                 model = model_node.get("model") if isinstance(model_node.get("model"), dict) else {}
                 reload_key = str(model.get("reload_key") or "")

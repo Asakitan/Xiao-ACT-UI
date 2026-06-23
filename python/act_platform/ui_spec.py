@@ -335,6 +335,12 @@ def _normalize_model3d(node: Mapping[str, Any]) -> dict:
 
     raw_physics = node.get("physics")
     physics = _json_safe_map(raw_physics, max_items=256) if isinstance(raw_physics, Mapping) else {}
+    raw_procedural = node.get("procedural_action")
+    procedural_action = (
+        _json_safe_map(raw_procedural, max_items=256)
+        if isinstance(raw_procedural, (Mapping, str))
+        else {}
+    )
     raw_secondary = node.get("secondary_motion")
     secondary_motion = (
         _json_safe_map(raw_secondary, max_items=256)
@@ -360,6 +366,7 @@ def _normalize_model3d(node: Mapping[str, Any]) -> dict:
         "skeleton": skeleton,
         "materials": materials,
         "physics": physics,
+        "procedural_action": procedural_action,
         "secondary_motion": secondary_motion,
         "background": _s(node.get("background") or "transparent", 40),
         "fallback": _s(node.get("fallback"), 400),
@@ -674,6 +681,7 @@ class UI:
                 skeleton: Optional[Mapping[str, Any]] = None,
                 materials: Optional[Any] = None,
                 physics: Optional[Mapping[str, Any]] = None,
+                procedural_action: Optional[Any] = None,
                 secondary_motion: Optional[Mapping[str, Any]] = None,
                 phase: float = 0.0,
                 fallback: Any = "",
@@ -705,6 +713,11 @@ class UI:
             "skeleton": dict(skeleton or {}) if isinstance(skeleton, Mapping) else {},
             "materials": materials if isinstance(materials, (Mapping, list, tuple)) else {},
             "physics": dict(physics or {}) if isinstance(physics, Mapping) else {},
+            "procedural_action": (
+                procedural_action
+                if isinstance(procedural_action, (Mapping, str))
+                else {}
+            ),
             "secondary_motion": dict(secondary_motion or {}) if isinstance(secondary_motion, Mapping) else {},
             "background": "transparent",
             "fallback": _s(fallback, 400),

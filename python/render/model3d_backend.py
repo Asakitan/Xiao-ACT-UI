@@ -3009,6 +3009,254 @@ def _procedural_action_offsets(action_name: str, phase: float, selected: Mapping
     return offsets
 
 
+def _selected_relative_action(
+    node: Mapping[str, Any],
+    action_name: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    root = node.get("procedural_action")
+    if not isinstance(root, Mapping) or not _bool_from_mapping(root, "enabled", False):
+        return {}, {}
+    actions = root.get("actions") if isinstance(root.get("actions"), Mapping) else {}
+    if not isinstance(actions, Mapping):
+        actions = {}
+    candidates: list[str] = []
+    name = str(action_name or "").strip()
+    if name:
+        candidates.extend([name, _normalize_action_name(name)])
+    default_action = str(root.get("default_action") or "").strip()
+    if default_action:
+        candidates.extend([default_action, _normalize_action_name(default_action)])
+    candidates.append("idle")
+    selected: dict[str, Any] = {}
+    for candidate in candidates:
+        if not candidate:
+            continue
+        raw = actions.get(candidate)
+        if raw is None:
+            for key, value in actions.items():
+                if _normalize_action_name(key) == _normalize_action_name(candidate):
+                    raw = value
+                    break
+        if isinstance(raw, Mapping):
+            selected = copy.deepcopy(dict(raw))
+            selected.setdefault("name", candidate)
+            break
+    if not selected:
+        selected = {}
+    common = root.get("common") if isinstance(root.get("common"), Mapping) else {}
+    merged = copy.deepcopy(dict(common)) if common else {}
+    merged.update(selected)
+    return dict(root), merged
+
+
+def _weighted_offset_from_config(config: Mapping[str, Any], key: str = "offset") -> tuple[float, float, float]:
+    point = _point3(config.get(key))
+    if point is None and key == "offset":
+        point = _point3(config.get("relative"))
+    if point is None and key == "offset":
+        point = _point3(config.get("target_offset"))
+    if point is None:
+        return 0.0, 0.0, 0.0
+    weight = _float_from_mapping(config, "weight", 1.0, lo=0.0, hi=2.0)
+    return _vec_scale(point, weight)
+
+
+def _relative_effector_offsets(
+    selected: Mapping[str, Any],
+    phase: float,
+) -> dict[str, tuple[float, float, float]]:
+    raw_effectors = selected.get("effectors")
+    if not isinstance(raw_effectors, Mapping):
+        raw_effectors = selected.get("targets")
+    if not isinstance(raw_effectors, Mapping):
+        return {}
+    offsets: dict[str, tuple[float, float, float]] = {}
+    for token, raw_config in raw_effectors.items():
+        bone = _canonical_from_token(token)
+        if not bone or not isinstance(raw_config, Mapping):
+            continue
+        base = _weighted_offset_from_config(raw_config)
+        swing = _point3(raw_config.get("wave")) or _point3(raw_config.get("swing"))
+        if swing is not None:
+            frequency = _float_from_mapping(raw_config, "frequency", 1.0, lo=0.01, hi=12.0)
+            phase_offset = _float_from_mapping(raw_config, "phase", 0.0, lo=-1000.0, hi=1000.0)
+            amount = math.sin((float(phase or 0.0) + phase_offset) * frequency)
+            base = _vec_add(base, _vec_scale(swing, amount))
+        offsets[bone] = _vec_add(offsets.get(bone, (0.0, 0.0, 0.0)), base)
+    return offsets
+
+
+def _relative_body_offsets(
+    selected: Mapping[str, Any],
+    phase: float,
+) -> dict[str, tuple[float, float, float]]:
+    body = selected.get("body") if isinstance(selected.get("body"), Mapping) else {}
+    if not body:
+        return {}
+    cadence = _float_from_mapping(body, "cadence", 1.0, lo=0.01, hi=12.0)
+    t = float(phase or 0.0) * cadence
+    breath = math.sin(t * 2.0)
+    sway = math.sin(t)
+    breathing = _float_from_mapping(body, "breathing", 0.0, lo=0.0, hi=0.25)
+    sway_amount = _float_from_mapping(body, "sway", 0.0, lo=0.0, hi=0.35)
+    bounce = _float_from_mapping(body, "bounce", 0.0, lo=0.0, hi=0.5)
+    return {
+        "hips": (sway * sway_amount * 0.25, abs(breath) * bounce, 0.0),
+        "spine": (sway * sway_amount * 0.45, breath * breathing * 0.35, 0.0),
+        "chest": (sway * sway_amount * 0.65, breath * breathing, 0.0),
+        "neck": (sway * sway_amount * 0.35, breath * breathing * 0.5, 0.0),
+        "head": (sway * sway_amount * 0.25, breath * breathing * 0.75, 0.0),
+    }
+
+
+def _relative_head_offsets(
+    selected: Mapping[str, Any],
+    rest: Mapping[str, tuple[float, float, float]],
+) -> dict[str, tuple[float, float, float]]:
+    head = selected.get("head") if isinstance(selected.get("head"), Mapping) else {}
+    look = selected.get("look_at") if isinstance(selected.get("look_at"), Mapping) else {}
+    if not head and not look:
+        return {}
+    config = dict(look)
+    config.update(head)
+    target = _point3(config.get("look_at")) or _point3(config.get("target"))
+    if target is None or "head" not in rest:
+        return {}
+    weight = _float_from_mapping(config, "weight", 0.25, lo=0.0, hi=1.0)
+    origin = rest["head"]
+    dx = max(-0.18, min(0.18, (target[0] - origin[0]) * 0.18 * weight))
+    dy = max(-0.12, min(0.12, (target[1] - origin[1]) * 0.14 * weight))
+    dz = max(-0.10, min(0.10, (target[2] - origin[2]) * 0.08 * weight))
+    return {
+        "neck": (dx * 0.35, dy * 0.30, dz * 0.25),
+        "head": (dx, dy, dz),
+    }
+
+
+def _relative_gait_offsets(
+    action_name: str,
+    selected: Mapping[str, Any],
+    phase: float,
+) -> dict[str, tuple[float, float, float]]:
+    gait = selected.get("gait") if isinstance(selected.get("gait"), Mapping) else {}
+    action_kind = _normalize_action_name(action_name)
+    if not gait and "walk" not in action_kind and "run" not in action_kind:
+        return {}
+    if gait and not _bool_from_mapping(gait, "enabled", True):
+        return {}
+    speed = _float_from_mapping(gait, "cadence", 4.0, lo=0.1, hi=12.0)
+    stride = _float_from_mapping(gait, "stride", 0.18, lo=0.0, hi=1.2)
+    lift = _float_from_mapping(gait, "lift", 0.08, lo=0.0, hi=0.8)
+    hip_bob = _float_from_mapping(gait, "hip_bob", 0.025, lo=0.0, hi=0.4)
+    arm_swing = _float_from_mapping(gait, "arm_swing", 0.16, lo=0.0, hi=1.0)
+    sway = _float_from_mapping(gait, "sway", 0.018, lo=0.0, hi=0.4)
+    step = math.sin(float(phase or 0.0) * speed)
+    left_lift = max(0.0, step)
+    right_lift = max(0.0, -step)
+    return {
+        "hips": (sway * step, abs(step) * hip_bob, 0.0),
+        "chest": (-sway * step * 0.45, abs(step) * hip_bob * 0.35, 0.0),
+        "left_leg": (stride * step * 0.35, left_lift * lift * 0.18, 0.0),
+        "left_knee": (stride * step * 0.58, left_lift * lift * 0.70, 0.0),
+        "left_foot": (stride * step, left_lift * lift, 0.035 * step),
+        "right_leg": (-stride * step * 0.35, right_lift * lift * 0.18, 0.0),
+        "right_knee": (-stride * step * 0.58, right_lift * lift * 0.70, 0.0),
+        "right_foot": (-stride * step, right_lift * lift, -0.035 * step),
+        "left_arm": (0.0, -arm_swing * step * 0.18, 0.0),
+        "left_forearm": (0.0, -arm_swing * step * 0.28, 0.0),
+        "left_hand": (0.0, -arm_swing * step * 0.38, 0.0),
+        "right_arm": (0.0, arm_swing * step * 0.18, 0.0),
+        "right_forearm": (0.0, arm_swing * step * 0.28, 0.0),
+        "right_hand": (0.0, arm_swing * step * 0.38, 0.0),
+    }
+
+
+def _relative_action_offsets(
+    node: Mapping[str, Any],
+    action_name: str,
+    phase: float,
+    rest: Mapping[str, tuple[float, float, float]],
+) -> tuple[dict[str, tuple[float, float, float]], dict[str, Any]]:
+    root, selected = _selected_relative_action(node, action_name)
+    if not root:
+        return {}, {"enabled": False}
+    offsets = _merge_offsets(
+        _relative_gait_offsets(action_name, selected, phase),
+        _relative_body_offsets(selected, phase),
+        _relative_head_offsets(selected, rest),
+        _relative_effector_offsets(selected, phase),
+    )
+    return offsets, {
+        "enabled": True,
+        "schema": str(root.get("schema") or "sao.humanoid.procedural.v1"),
+        "mode": str(root.get("mode") or "relative_ik"),
+        "name": str(selected.get("name") or action_name or ""),
+        "offset_count": len(offsets),
+        "has_gait": isinstance(selected.get("gait"), Mapping),
+        "has_effectors": isinstance(selected.get("effectors"), Mapping) or isinstance(selected.get("targets"), Mapping),
+        "references": tuple(str(item) for item in list(root.get("references") or [])[:8])
+        if isinstance(root.get("references"), (list, tuple))
+        else (),
+    }
+
+
+def _foot_planting_config(selected: Mapping[str, Any]) -> dict[str, Any]:
+    config: dict[str, Any] = {}
+    gait = selected.get("gait") if isinstance(selected.get("gait"), Mapping) else {}
+    raw = selected.get("foot_planting")
+    if isinstance(raw, Mapping):
+        config.update(dict(raw))
+    elif raw is not None:
+        config["enabled"] = bool(raw)
+    if gait:
+        if "foot_planting" in gait:
+            config.setdefault("enabled", _bool_from_mapping(gait, "foot_planting", True))
+        if "ground_y" in gait:
+            config.setdefault("ground_y", gait.get("ground_y"))
+        if "plant_strength" in gait:
+            config.setdefault("strength", gait.get("plant_strength"))
+    return config
+
+
+def _apply_relative_foot_planting(
+    pose: dict[str, tuple[float, float, float]],
+    rest: Mapping[str, tuple[float, float, float]],
+    node: Mapping[str, Any],
+    action_name: str,
+) -> dict[str, Any]:
+    _root, selected = _selected_relative_action(node, action_name)
+    config = _foot_planting_config(selected)
+    if not config or not _bool_from_mapping(config, "enabled", False):
+        return {"enabled": False}
+    raw_ground = config.get("ground_y", "auto")
+    if str(raw_ground).strip().lower() == "auto":
+        ground_candidates = [
+            rest[bone][1]
+            for bone in ("left_foot", "right_foot")
+            if bone in rest
+        ]
+        ground = min(ground_candidates) if ground_candidates else 0.0
+    else:
+        try:
+            ground = float(raw_ground)
+        except Exception:
+            ground = 0.0
+    strength = _float_from_mapping(config, "strength", 1.0, lo=0.0, hi=1.0)
+    planted: list[str] = []
+    for foot in ("left_foot", "right_foot"):
+        point = pose.get(foot)
+        if point is None or point[1] >= ground:
+            continue
+        pose[foot] = (point[0], point[1] + (ground - point[1]) * strength, point[2])
+        planted.append(foot)
+    return {
+        "enabled": True,
+        "ground_y": float(ground),
+        "strength": float(strength),
+        "planted": tuple(planted),
+    }
+
+
 def _canonical_rest_positions(
     plan: Mapping[str, Any],
     model_meta: Mapping[str, Any],
@@ -3073,6 +3321,7 @@ def evaluate_retarget_pose(node: Mapping[str, Any]) -> dict[str, Any]:
             "positions": {},
             "segments": (),
         }
+    relative_offsets, relative_info = _relative_action_offsets(node, action_name, phase, rest)
     explicit_offsets = _merge_offsets(
         _pose_offsets_from_mapping(selected.get("pose_offsets")),
         _pose_offsets_from_mapping(selected.get("bone_offsets")),
@@ -3091,6 +3340,7 @@ def evaluate_retarget_pose(node: Mapping[str, Any]) -> dict[str, Any]:
     )
     raw_offsets = _merge_offsets(
         _procedural_action_offsets(action_name, phase, selected) if use_procedural else {},
+        relative_offsets,
         rotation_offsets,
         keyframe_offsets,
         explicit_offsets,
@@ -3139,6 +3389,8 @@ def evaluate_retarget_pose(node: Mapping[str, Any]) -> dict[str, Any]:
             "clamped": was_clamped,
         })
 
+    foot_planting = _apply_relative_foot_planting(pose, rest, node, action_name)
+
     return {
         "ok": True,
         "mode": plan.get("mode"),
@@ -3150,6 +3402,8 @@ def evaluate_retarget_pose(node: Mapping[str, Any]) -> dict[str, Any]:
         "preserve_proportions": preserve,
         "rest_source": rest_source,
         "motion_source": keyframe_info.get("motion_source") or ("procedural" if use_procedural else "offsets"),
+        "procedural_action": dict(relative_info),
+        "foot_planting": dict(foot_planting),
         "motion_sample": dict(keyframe_info),
         "rotations": dict(keyframe_rotations),
         "rotation_limit": dict(rotation_limit),

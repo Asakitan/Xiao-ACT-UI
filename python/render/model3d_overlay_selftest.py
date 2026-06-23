@@ -458,11 +458,17 @@ class Model3DSpecTests(unittest.TestCase):
             "draggable": False,
             "materials": {"profile": "asaki_anime"},
             "physics": {"enabled": True},
+            "procedural_action": json.dumps({
+                "schema": "sao.humanoid.procedural.v1",
+                "enabled": True,
+                "actions": {"idle": {"body": {"breathing": 0.01}}},
+            }),
             "secondary_motion": {"enabled": True, "chains": [{"name": "hair"}]},
         })["nodes"][0]
         self.assertIs(fixed["draggable"], False)
         self.assertEqual(fixed["materials"]["profile"], "asaki_anime")
         self.assertIs(fixed["physics"]["enabled"], True)
+        self.assertEqual(fixed["procedural_action"]["schema"], "sao.humanoid.procedural.v1")
         self.assertEqual(fixed["secondary_motion"]["chains"][0]["name"], "hair")
 
         helper_with_physics = normalize_ui_spec(UI.model3d(
@@ -470,10 +476,12 @@ class Model3DSpecTests(unittest.TestCase):
             draggable=False,
             materials={"profile": "mtoon"},
             physics={"enabled": True},
+            procedural_action={"enabled": True, "actions": {"walk": {"gait": {"enabled": True}}}},
             secondary_motion={"enabled": True, "chains": [{"name": "ears"}]},
         ))["nodes"][0]
         self.assertIs(helper_with_physics["draggable"], False)
         self.assertEqual(helper_with_physics["materials"]["profile"], "mtoon")
+        self.assertIn("walk", helper_with_physics["procedural_action"]["actions"])
         self.assertEqual(helper_with_physics["secondary_motion"]["chains"][0]["name"], "ears")
 
     def test_model3d_preserves_action_json_text_from_csharp_plugin(self) -> None:
@@ -2081,6 +2089,101 @@ Objects:  {
         self.assertTrue(pose_b["ok"], pose_b)
         self.assertNotEqual(pose_a["positions"]["right_hand"], pose_b["positions"]["right_hand"])
         self.assertLessEqual(pose_b["max_stretch"], 0.120001)
+
+    def test_evaluate_retarget_pose_uses_relative_action_targets(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_pose_relative_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text("fixture", encoding="utf-8")
+            (Path(root) / "avatar.model3d.json").write_text(json.dumps({
+                "skeleton": {
+                    "bones": [
+                        "mixamorig:Hips",
+                        "mixamorig:Spine",
+                        "mixamorig:Spine2",
+                        "mixamorig:Neck",
+                        "mixamorig:Head",
+                        "mixamorig:LeftArm",
+                        "mixamorig:LeftForeArm",
+                        "mixamorig:LeftHand",
+                        "mixamorig:RightArm",
+                        "mixamorig:RightForeArm",
+                        "mixamorig:RightHand",
+                        "mixamorig:LeftUpLeg",
+                        "mixamorig:LeftLeg",
+                        "mixamorig:LeftFoot",
+                        "mixamorig:RightUpLeg",
+                        "mixamorig:RightLeg",
+                        "mixamorig:RightFoot",
+                    ],
+                    "rest_positions": {
+                        "mixamorig:Hips": [0.0, 0.12, 0.0],
+                        "mixamorig:Spine": [0.0, 0.55, 0.0],
+                        "mixamorig:Spine2": [0.0, 0.88, 0.0],
+                        "mixamorig:Neck": [0.0, 1.12, 0.0],
+                        "mixamorig:Head": [0.0, 1.35, 0.0],
+                        "mixamorig:LeftArm": [-0.40, 0.84, 0.0],
+                        "mixamorig:LeftForeArm": [-0.58, 0.60, 0.0],
+                        "mixamorig:LeftHand": [-0.68, 0.38, 0.0],
+                        "mixamorig:RightArm": [0.40, 0.84, 0.0],
+                        "mixamorig:RightForeArm": [0.58, 0.60, 0.0],
+                        "mixamorig:RightHand": [0.68, 0.38, 0.0],
+                        "mixamorig:LeftUpLeg": [-0.15, -0.26, 0.0],
+                        "mixamorig:LeftLeg": [-0.17, -0.72, 0.0],
+                        "mixamorig:LeftFoot": [-0.18, -1.08, 0.08],
+                        "mixamorig:RightUpLeg": [0.15, -0.26, 0.0],
+                        "mixamorig:RightLeg": [0.17, -0.72, 0.0],
+                        "mixamorig:RightFoot": [0.18, -1.08, 0.08],
+                    },
+                },
+            }), encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path)},
+                "retarget": {"mode": "humanoid_auto", "stretch_limit": 0.35},
+                "action": {"name": "walk"},
+                "phase": 0.30,
+                "procedural_action": {
+                    "schema": "sao.humanoid.procedural.v1",
+                    "enabled": True,
+                    "mode": "relative_ik",
+                    "references": ["github:sketchpunklabs/ossos"],
+                    "actions": {
+                        "walk": {
+                            "body": {"breathing": 0.01, "sway": 0.02},
+                            "head": {"look_at": [0.2, 1.45, 1.2], "weight": 0.5},
+                            "gait": {
+                                "enabled": True,
+                                "cadence": 4.0,
+                                "stride": 0.20,
+                                "lift": 0.10,
+                                "hip_bob": 0.03,
+                                "arm_swing": 0.18,
+                                "foot_planting": True,
+                                "ground_y": "auto",
+                            },
+                            "effectors": {
+                                "right_hand": {
+                                    "offset": [0.0, 0.12, 0.0],
+                                    "wave": [0.0, 0.03, 0.0],
+                                    "frequency": 3.0,
+                                },
+                            },
+                        },
+                    },
+                },
+            })["nodes"][0]
+
+            pose = evaluate_retarget_pose(node)
+
+        self.assertTrue(pose["ok"], pose)
+        self.assertTrue(pose["procedural_action"]["enabled"])
+        self.assertTrue(pose["procedural_action"]["has_gait"])
+        self.assertGreater(pose["procedural_action"]["offset_count"], 0)
+        self.assertTrue(pose["foot_planting"]["enabled"])
+        self.assertAlmostEqual(pose["foot_planting"]["ground_y"], -1.08)
+        self.assertGreater(pose["positions"]["right_hand"][1], 0.38)
+        self.assertGreater(pose["positions"]["head"][2], 0.0)
 
     def test_evaluate_retarget_pose_samples_looped_keyframes(self) -> None:
         clear_model3d_metadata_caches()
