@@ -4441,6 +4441,15 @@ class AIEditorAPI:
                     node["selected"] = bool(selected(element))
                 except Exception:
                     node["selected"] = False
+            revealed = getattr(tree_view, "is_revealed", None)
+            if callable(revealed):
+                try:
+                    if bool(revealed(element)):
+                        node["revealed"] = True
+                        node["revealVersion"] = int(
+                            getattr(tree_view, "reveal_version", 0) or 0)
+                except Exception:
+                    pass
         return node
 
     @staticmethod

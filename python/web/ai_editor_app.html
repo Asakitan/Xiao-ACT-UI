@@ -5476,6 +5476,16 @@ async function loadExtensionTreeChildren(viewId,node,childBox,depth){
 function reportExtensionTreeExpanded(viewId,node,expanded){
   if(viewId&&node&&node.handle)call('set_extension_tree_item_expanded',viewId,node.handle,!!expanded);
 }
+function focusRevealedExtensionTree(tree){
+  if(!tree)return;
+  const target=tree.querySelector('.ext-tree-node[data-revealed="1"]>.sb-item');
+  if(!target)return;
+  requestAnimationFrame(()=>{
+    try{target.scrollIntoView({block:'nearest',inline:'nearest'})}catch(e){target.scrollIntoView()}
+    try{target.focus({preventScroll:true})}catch(e){try{target.focus()}catch(_e){}}
+    target.classList.add('active');
+  });
+}
 function appendExtensionTitleActions(title,view,state){
   const actions=(Array.isArray(state.titleActions)&&state.titleActions.length)
     ?state.titleActions
@@ -5516,6 +5526,7 @@ function renderExtensionTreeView(view){
     tree.dataset.viewId=view.id||state.view_id||state.viewId||'';
     nodes.forEach(node=>tree.appendChild(renderExtensionTreeNode(tree.dataset.viewId,node,0)));
     body.appendChild(tree);
+    focusRevealedExtensionTree(tree);
   }else{
     body.innerHTML='<div style="color:var(--fg-dim);font-size:11px">'+esc(view.runtimeMessage||'Tree view provider registered; no root items reported.')+'</div>';
   }
@@ -5523,9 +5534,12 @@ function renderExtensionTreeView(view){
 }
 function renderExtensionTreeNode(viewId,node,depth){
   const wrap=document.createElement('div');wrap.className='ext-tree-node';wrap.setAttribute('role','treeitem');
+  if(node.handle)wrap.dataset.handle=String(node.handle);
+  if(node.revealed)wrap.dataset.revealed='1';
   const row=document.createElement('div');row.className='sb-item';row.style.cssText='display:flex;align-items:center;gap:4px;padding:3px 0 3px '+(depth*12)+'px;min-height:22px';
   row.tabIndex=0;row.setAttribute('role','button');
-  if(node.selected){row.classList.add('active');wrap.setAttribute('aria-selected','true')}else wrap.setAttribute('aria-selected','false');
+  if(node.handle)row.dataset.handle=String(node.handle);
+  if(node.selected||node.revealed){row.classList.add('active');wrap.setAttribute('aria-selected','true')}else wrap.setAttribute('aria-selected','false');
   if(!Array.isArray(node.children))node.children=[];
   const children=node.children;
   const rawCollapsible=Number(node.collapsibleState)||0;

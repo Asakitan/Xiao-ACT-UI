@@ -3315,9 +3315,11 @@ class _TreeView:
         self.title = view_id
         self.description = ""
         self.refresh_version = 0
+        self.reveal_version = 0
         self._snapshot_counter = 0
         self._handle_elements: Dict[str, Any] = {}
         self._expanded_handles = set()
+        self._revealed_element = None
         self._change_callback: Optional[Callable[[str, str, Dict[str, Any]], None]] = None
         self._provider_change_disposable = None
         self._dispose = EventEmitter()
@@ -3362,6 +3364,7 @@ class _TreeView:
         self._change_callback = change_callback
         self._handle_elements.clear()
         self._expanded_handles.clear()
+        self._revealed_element = None
         self.refresh_version += 1
         self._subscribe_provider_refresh()
 
@@ -3409,6 +3412,17 @@ class _TreeView:
         })
         return True
 
+    def is_revealed(self, element: Any) -> bool:
+        revealed = self._revealed_element
+        if revealed is None:
+            return False
+        if revealed is element:
+            return True
+        try:
+            return revealed == element
+        except Exception:
+            return False
+
     def is_selected(self, element: Any) -> bool:
         for selected in self.selection:
             if selected is element:
@@ -3426,7 +3440,7 @@ class _TreeView:
         self.set_selection([self._handle_elements[handle]])
         return True
 
-    def set_selection(self, selection: Any) -> None:
+    def set_selection(self, selection: Any, reveal: bool = False) -> None:
         if selection is None:
             normalized: List[Any] = []
         elif isinstance(selection, list):
@@ -3445,6 +3459,8 @@ class _TreeView:
                     pass
                 changed = True
                 break
+        if not reveal:
+            self._revealed_element = None
         self.selection = normalized
         self.activeItem = normalized[0] if normalized else None
         if changed:
@@ -3455,8 +3471,13 @@ class _TreeView:
             })
 
     def reveal(self, element: Any, **kw: Any) -> None:
-        self.set_selection([element])
-        self._notify_changed("reveal", {"refreshVersion": self.refresh_version})
+        self.set_selection([element], reveal=True)
+        self._revealed_element = element
+        self.reveal_version += 1
+        self._notify_changed("reveal", {
+            "refreshVersion": self.refresh_version,
+            "revealVersion": self.reveal_version,
+        })
 
     def dispose(self) -> None:
         self.visible = False

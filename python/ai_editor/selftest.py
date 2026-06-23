@@ -1178,6 +1178,9 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function appendExtensionTitleActions(title,view,state)" in html
             and "function showExtensionActionMenu(x,y,actions,runner)" in html
             and "function loadExtensionTreeChildren(viewId,node,childBox,depth)" in html
+            and "function focusRevealedExtensionTree(tree)" in html
+            and ".ext-tree-node[data-revealed=\"1\"]>.sb-item" in html
+            and "target.scrollIntoView({block:'nearest',inline:'nearest'})" in html
             and "call('load_extension_tree_children',viewId,node.handle)" in html
             and "call('set_extension_tree_item_expanded',viewId,node.handle,!!expanded)" in html
             and "call('select_extension_tree_item',viewId,node.handle)" in html
@@ -2663,6 +2666,9 @@ def test_vscode_api() -> None:
     _check("tree view selection emits VSCode event",
            tree_selection_events
            and tree_selection_events[-1].get("selection") == ["node"])
+    _check("tree view reveal marks focused element",
+           tree_view.is_revealed("node")
+           and tree_view.reveal_version == 1)
     tree_expand_events = []
     tree_collapse_events = []
     tree_view.onDidExpandElement(
@@ -3229,6 +3235,21 @@ def test_app_extension_runtime_support() -> None:
                item_action.get("ok") is True
                and item_action.get("opened") == "node-a"
                and activity_command_log[-1] == ("open", "node-a"))
+        if activity_tree_view is not None:
+            activity_tree_view.reveal("node-a")
+        revealed_activity_views = {
+            view.get("id"): view
+            for item in api.list_extension_activity_bar_items().get("items", [])
+            if item.get("id") == "selftest.activity"
+            for view in item.get("views", [])
+        }
+        revealed_activity_node = revealed_activity_views.get(
+            "selftest.activity.tree", {}).get(
+                "runtimeState", {}).get("nodes", [{}])[0]
+        _check("activity tree reveal snapshot marks focus target",
+               revealed_activity_node.get("revealed") is True
+               and revealed_activity_node.get("selected") is True
+               and revealed_activity_node.get("revealVersion", 0) >= 1)
         before_activity_version = activity_views.get(
             "selftest.activity.tree", {}).get("runtimeState", {}).get("refreshVersion", 0)
         activity_tree_provider.refresh("node-a")
