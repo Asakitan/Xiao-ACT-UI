@@ -328,6 +328,8 @@ def test_app_settings_parity() -> None:
             "custom_models": {"kept-model": {"max_input": 123, "max_output": 45}},
             "layout": {"sidebarVisible": False, "editorVisible": True, "chatVisible": False},
             "mode": "agent",
+            "color_theme": "ext:self-dark",
+            "file_icon_theme": "ext:self-icons",
             "permissions": {"readFile": "disabled"},
             "claude_code": {"cli_path": "claude-cli"},
             "future_section": {"enabled": True},
@@ -342,6 +344,7 @@ def test_app_settings_parity() -> None:
         "max_input_tokens", "max_output_tokens", "timeout",
         "extra_headers", "extra_body", "provider_keys", "_provider_keys",
         "custom_models", "mode", "permissions", "approval", "active_chat_provider",
+        "color_theme", "file_icon_theme",
     )
     _check("load_config advanced fields", all(k in loaded for k in advanced_keys))
     _check("load_config existing safe section",
@@ -349,6 +352,8 @@ def test_app_settings_parity() -> None:
     _check("load_config restores UI state payload",
            loaded.get("approval") == "bypass"
            and loaded.get("active_chat_provider") == "codex"
+           and loaded.get("color_theme") == "ext:self-dark"
+           and loaded.get("file_icon_theme") == "ext:self-icons"
            and loaded.get("layout", {}).get("sidebarVisible") is False
            and loaded.get("layout", {}).get("editorVisible") is True)
     _check("load_config skips absent safe section", "codex" not in loaded)
@@ -371,6 +376,8 @@ def test_app_settings_parity() -> None:
         "extra_body": {"stream_options": {"include_usage": True}},
         "approval": "autopilot",
         "active_chat_provider": "copilot",
+        "color_theme": "ext:phase-dark",
+        "file_icon_theme": "ext:phase-icons",
         "layout": {"sidebarVisible": True, "editorVisible": True, "chatVisible": True, "panelHeight": "320px"},
         "_provider_keys": {"openai": "new-openai", "deepseek": "new-deepseek"},
         "unknown_payload": {"preserve": True},
@@ -400,6 +407,8 @@ def test_app_settings_parity() -> None:
     _check("approval active provider and layout round-trip",
            loaded.get("approval") == "autopilot"
            and loaded.get("active_chat_provider") == "copilot"
+           and loaded.get("color_theme") == "ext:phase-dark"
+           and loaded.get("file_icon_theme") == "ext:phase-icons"
            and loaded.get("layout", {}).get("panelHeight") == "320px")
 
     from ai_editor import app as app_mod
@@ -1175,6 +1184,10 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function loadEditorThemes()" in html
             and "function renderEditorColorThemeOptions()" in html
             and "function applyEditorColorTheme(value,options)" in html
+            and "function renderEditorIconThemeOptions()" in html
+            and "function applyEditorIconTheme(value,options)" in html
+            and "id=\"s-file-icon-theme\"" in html
+            and "file_icon_theme" in html
             and "THEME_COLOR_VAR_MAP" in html
             and "EXTENSION_EDITOR_THEMES" in html
             and "grammarScopes" in html

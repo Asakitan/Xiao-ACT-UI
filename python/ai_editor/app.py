@@ -308,6 +308,10 @@ def _normalize_ai_editor_config(raw: Any) -> Dict[str, Any]:
         cfg["mode"] = mode if mode in _MODE_VALUES else "agent"
     if "theme" in cfg:
         cfg["theme"] = str(cfg.get("theme") or "")
+    if "color_theme" in cfg:
+        cfg["color_theme"] = str(cfg.get("color_theme") or "")
+    if "file_icon_theme" in cfg:
+        cfg["file_icon_theme"] = str(cfg.get("file_icon_theme") or "")
     for section, defaults in _AI_EDITOR_SECTION_DEFAULTS.items():
         if section in cfg:
             current = _as_dict(cfg.get(section))
@@ -857,6 +861,8 @@ class AIEditorAPI:
             "extra_body": cfg.extra_body,
             "system_prompt": cfg.system_prompt,
             "theme": theme,
+            "color_theme": ai_cfg.get("color_theme", ""),
+            "file_icon_theme": ai_cfg.get("file_icon_theme", ""),
             "language": language,
             "_provider_keys": pkeys,
             "provider_keys": pkeys,

@@ -1370,6 +1370,9 @@ pre.code-block { overflow:visible; }
       <label>Color Theme</label>
       <select id="s-color-theme" style="width:100%"></select>
       <div class="settings-help" id="s-color-theme-info">Extension color themes are loaded from contributed theme JSON files.</div>
+      <label>File Icon Theme</label>
+      <select id="s-file-icon-theme" style="width:100%"></select>
+      <div class="settings-help" id="s-file-icon-theme-info">Extension file icon themes are applied to Explorer and extension TreeViews.</div>
     </div>
 
     <div class="settings-section">
@@ -1547,7 +1550,7 @@ const SETTINGS_SECTION_DEFAULTS={
 const SETTINGS_DEFAULTS={
   provider:'openai',api_key:'',base_url:'',model:'',temperature:0.7,max_tokens:4096,system_prompt:'',
   top_p:1.0,frequency_penalty:0,presence_penalty:0,stop:[],max_input_tokens:0,max_output_tokens:0,timeout:180,
-  extra_headers:{},extra_body:{},_provider_keys:{},provider_keys:{},custom_models:{},permissions:{},mode:'agent',language:'en',approval:'default',active_chat_provider:'chat',theme:'dark',color_theme:'',
+  extra_headers:{},extra_body:{},_provider_keys:{},provider_keys:{},custom_models:{},permissions:{},mode:'agent',language:'en',approval:'default',active_chat_provider:'chat',theme:'dark',color_theme:'',file_icon_theme:'',
   ...SETTINGS_SECTION_DEFAULTS
 };
 function clonePlain(value){return JSON.parse(JSON.stringify(value))}
@@ -2376,7 +2379,7 @@ const BUILTIN_LANGUAGE_IDS=['plaintext','python','javascript','typescript','json
   'yaml','xml','sql','shell','lua','c','cpp','csharp','java','go','rust','toml'];
 let LANGUAGES=[...BUILTIN_LANGUAGE_IDS];
 let LANGUAGE_META=Object.create(null),LANGUAGE_BY_EXT=Object.create(null),LANGUAGE_BY_FILENAME=Object.create(null);
-let EXTENSION_EDITOR_THEMES=[],EXTENSION_ICON_THEME=null;
+let EXTENSION_EDITOR_THEMES=[],EXTENSION_ICON_THEME=null,currentFileIconTheme='';
 const LANGUAGE_ICONS={python:'🐍',javascript:'JS',typescript:'TS',json:'{}',html:'<>',css:'#',
   markdown:'M↓',yaml:'YAML',shell:'$_',lua:'Lua',sql:'SQL',plaintext:'{}'};
 const BUILTIN_LANGUAGE_EXTS={
@@ -2486,7 +2489,7 @@ async function loadEditorThemes(){
     const r=await call('list_editor_themes');
     if(r&&Array.isArray(r.themes))EXTENSION_EDITOR_THEMES=r.themes;
   }catch(e){}
-  await loadEditorIconTheme();
+  await loadEditorIconTheme(config.file_icon_theme||'');
 }
 function extensionColorThemes(){
   return EXTENSION_EDITOR_THEMES.filter(t=>t&&t.themeType==='color');
@@ -2494,14 +2497,27 @@ function extensionColorThemes(){
 function extensionIconThemes(){
   return EXTENSION_EDITOR_THEMES.filter(t=>t&&t.themeType!=='color');
 }
-async function loadEditorIconTheme(){
+function extensionIconThemeValue(theme){return 'ext:'+String((theme&&(theme.id||theme.label))||'')}
+function extensionIconThemeByValue(value){
+  const id=String(value||'').replace(/^ext:/,'');
+  return extensionIconThemes().find(t=>String(t.id||t.label||'')===id||String(t.label||'')===id)||null;
+}
+function defaultFileIconThemeValue(){
+  const first=extensionIconThemes()[0];
+  return first?extensionIconThemeValue(first):'builtin';
+}
+async function loadEditorIconTheme(value){
   EXTENSION_ICON_THEME=null;
-  const theme=extensionIconThemes()[0];
-  if(!theme)return;
+  const selected=String(value||'').trim();
+  const theme=selected==='builtin'?null:(extensionIconThemeByValue(selected)||(!selected?extensionIconThemes()[0]:null));
+  currentFileIconTheme=theme?extensionIconThemeValue(theme):'builtin';
+  if(!theme)return currentFileIconTheme;
   try{
     const r=await call('get_editor_icon_theme',String(theme.id||theme.label||''));
-    if(r&&r.ok)EXTENSION_ICON_THEME=r;
+    if(r&&r.ok){EXTENSION_ICON_THEME=r;return currentFileIconTheme}
   }catch(e){}
+  currentFileIconTheme='builtin';
+  return currentFileIconTheme;
 }
 function extensionThemeValue(theme){return 'ext:'+String(theme&&theme.id||'')}
 function extensionThemeByValue(value){
@@ -2531,6 +2547,27 @@ function renderEditorColorThemeOptions(){
   }
   const value=Array.from(sel.options).some(o=>o.value===selected)?selected:(config.theme||'dark');
   sel.value=value;
+}
+function renderEditorIconThemeOptions(){
+  const sel=$('s-file-icon-theme');if(!sel)return;
+  const selected=config.file_icon_theme||defaultFileIconThemeValue();
+  sel.innerHTML='';
+  sel.appendChild(new Option('Built-in', 'builtin'));
+  const iconThemes=extensionIconThemes();
+  if(iconThemes.length){
+    const group=document.createElement('optgroup');group.label='Extensions';
+    iconThemes.forEach(theme=>{
+      const label=(theme.label||theme.id||'Extension Icons')+(theme.extension_id?' · '+theme.extension_id:'');
+      const opt=new Option(label,extensionIconThemeValue(theme));
+      opt.title=theme.resolvedPath||theme.path||'';
+      group.appendChild(opt);
+    });
+    sel.appendChild(group);
+  }
+  const fallback=defaultFileIconThemeValue();
+  const value=Array.from(sel.options).some(o=>o.value===selected)?selected:fallback;
+  sel.value=value;
+  config.file_icon_theme=value;
 }
 function detectLanguage(code,name){
   const byName=languageForFileName(name);
@@ -4845,6 +4882,9 @@ function openSettings(){
   renderEditorColorThemeOptions();
   const selectedThemeOption=($('s-color-theme').selectedOptions||[])[0];
   setColorThemeInfo(currentColorTheme&&selectedThemeOption?('Active: '+selectedThemeOption.textContent):'',false);
+  renderEditorIconThemeOptions();
+  const selectedIconThemeOption=($('s-file-icon-theme').selectedOptions||[])[0];
+  setFileIconThemeInfo(selectedIconThemeOption?('Active: '+selectedIconThemeOption.textContent):'',false);
   // Provider keys
   const keys=config._provider_keys||config.provider_keys||{};
   if($('sk-openai'))$('sk-openai').value=keys.openai||'';
@@ -5080,6 +5120,7 @@ async function saveSettings(){
   config.extensions={...settingSection('extensions'),confirm_install:readCheckedValue('s-ext-confirm'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true),enabled_contributions:readListValue('s-ext-contribs',true)};
   config.customization={...settingSection('customization'),use_agent_md:readCheckedValue('s-cust-agent-md'),use_claude_md:readCheckedValue('s-cust-claude-md'),instructions_locations:readListValue('s-cust-instructions',true),agent_locations:readListValue('s-cust-agents',true),workflow_locations:readListValue('s-cust-workflows',true),skill_locations:readListValue('s-cust-skills',true)};
   await applyEditorColorTheme(readInputValue('s-color-theme')||config.color_theme||config.theme||'dark');
+  await applyEditorIconTheme(readInputValue('s-file-icon-theme')||config.file_icon_theme||defaultFileIconThemeValue());
   const newMode=normalizeMode($('s-mode').value);
   config.mode=newMode;
   if(newMode!==currentMode){
@@ -6588,6 +6629,30 @@ function setColorThemeInfo(text,isError){
   el.textContent=text||'Extension color themes are loaded from contributed theme JSON files.';
   el.style.color=isError?'var(--fg-error)':'var(--fg-dim)';
 }
+function setFileIconThemeInfo(text,isError){
+  const el=$('s-file-icon-theme-info');if(!el)return;
+  el.textContent=text||'Extension file icon themes are applied to Explorer and extension TreeViews.';
+  el.style.color=isError?'var(--fg-error)':'var(--fg-dim)';
+}
+function refreshFileIconThemeSurfaces(){
+  const tree=$('explorer-tree');
+  if(tree&&tree.dataset.loaded)refreshExplorer();
+  renderExtensionActivityBar();
+}
+async function applyEditorIconTheme(value,options){
+  const opts=options||{};
+  const selected=String(value||config.file_icon_theme||defaultFileIconThemeValue()).trim();
+  await loadEditorIconTheme(selected);
+  config.file_icon_theme=currentFileIconTheme||selected||'builtin';
+  const theme=extensionIconThemeByValue(config.file_icon_theme);
+  if(config.file_icon_theme==='builtin')setFileIconThemeInfo('Active: Built-in',false);
+  else if(theme)setFileIconThemeInfo('Active: '+(theme.label||theme.id||'Extension Icons'),false);
+  else setFileIconThemeInfo('Icon theme unavailable; using built-in icons.',true);
+  if(opts.refresh!==false)refreshFileIconThemeSurfaces();
+  if(opts.persist){
+    await persistConfigPatch({file_icon_theme:config.file_icon_theme},{errorPrefix:'Icon theme save failed: ',partialPrefix:'Icon theme updated only for current session: '});
+  }
+}
 
 // Load theme from config on init
 let _initDone=false;
@@ -6596,6 +6661,7 @@ init=async function(){
   if(_initDone)return;_initDone=true;
   await _origInit();
   await applyEditorColorTheme(config.color_theme||config.theme||'dark');
+  await applyEditorIconTheme(config.file_icon_theme||currentFileIconTheme,{refresh:false});
 };
 window.toggleTheme=toggleTheme;
 
