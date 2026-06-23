@@ -5665,6 +5665,43 @@ function extensionActionGlyph(action){
   if(icon&&icon.length<=3)return icon;
   return '...';
 }
+function extensionTreeThemeIconGlyph(id){
+  id=String(id||'').toLowerCase();
+  const map={
+    folder:'▣','folder-opened':'▣',file:'□','symbol-file':'□',
+    gear:'⚙',settings:'⚙',refresh:'↻',search:'⌕',warning:'!',error:'!',
+    'symbol-class':'C','symbol-method':'M','symbol-function':'F',
+    'symbol-property':'P','symbol-field':'P','symbol-variable':'V',
+    'symbol-interface':'I','symbol-enum':'E','symbol-key':'K',
+    'symbol-string':'S','symbol-number':'#','symbol-boolean':'B',
+    check:'✓',close:'×','circle-filled':'●','circle-outline':'○'
+  };
+  return map[id]||String(id||'').slice(0,2).toUpperCase()||'□';
+}
+function extensionTreeIconGlyph(node,collapsible){
+  const iconPath=node&&node.themeIcon?node.themeIcon:(node?node.iconPath:null);
+  if(iconPath&&typeof iconPath==='object'){
+    if(iconPath.kind==='theme'||iconPath.id)return extensionTreeThemeIconGlyph(iconPath.id);
+    const raw=String(iconPath.path||iconPath.light||iconPath.dark||'').toLowerCase();
+    if(raw.indexOf('folder')>=0)return extensionTreeThemeIconGlyph('folder');
+    if(raw)return extensionTreeThemeIconGlyph('file');
+  }
+  const icon=String((node&&node.icon)||'');
+  if(icon.startsWith('$(')&&icon.endsWith(')'))return extensionTreeThemeIconGlyph(icon.slice(2,-1));
+  if(icon&&icon.length<=3)return icon;
+  if(node&&node.resourceUri)return extensionTreeThemeIconGlyph('file');
+  if(collapsible)return extensionTreeThemeIconGlyph('folder');
+  return '';
+}
+function extensionTreeItemTitle(node){
+  const parts=[];
+  if(node&&node.tooltip)parts.push(String(node.tooltip));
+  if(node&&node.resourceUri)parts.push(String(node.resourceUri));
+  if(node&&node.contextValue)parts.push('context: '+String(node.contextValue));
+  const checkbox=node&&node.checkbox;
+  if(checkbox&&checkbox.tooltip)parts.push(String(checkbox.tooltip));
+  return parts.join('\n');
+}
 function showExtensionActionMenu(x,y,actions,runner){
   const menu=$('ctx-menu');if(!menu)return;
   menu.innerHTML='';
@@ -5785,6 +5822,8 @@ function renderExtensionTreeView(view){
 function renderExtensionTreeNode(viewId,node,depth,viewVersion){
   const wrap=document.createElement('div');wrap.className='ext-tree-node';wrap.setAttribute('role','treeitem');
   if(node.handle)wrap.dataset.handle=String(node.handle);
+  if(node.contextValue)wrap.dataset.contextValue=String(node.contextValue);
+  if(node.resourceUri)wrap.dataset.resourceUri=String(node.resourceUri);
   if(node.revealed)wrap.dataset.revealed='1';
   node.refreshVersion=Number(viewVersion||node.refreshVersion||0)||0;
   const row=document.createElement('div');row.className='sb-item';row.style.cssText='display:flex;align-items:center;gap:4px;padding:3px 0 3px '+(depth*12)+'px;min-height:22px';
@@ -5798,13 +5837,32 @@ function renderExtensionTreeNode(viewId,node,depth,viewVersion){
   const twist=document.createElement('button');twist.type='button';twist.className='icon-btn';twist.style.cssText='width:18px;height:18px;flex:0 0 18px;border:0;background:transparent;color:var(--fg-dim);padding:0';
   twist.textContent=collapsible?'▸':'';
   twist.disabled=!collapsible;twist.setAttribute('aria-label',collapsible?'Toggle '+(node.label||'tree item'):'');
-  const label=document.createElement('span');label.style.cssText='overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1';
-  label.textContent=(node.icon?node.icon+' ':'')+(node.label||'');
-  if(node.tooltip)label.title=node.tooltip;
+  const itemTitle=extensionTreeItemTitle(node);
+  const acc=node.accessibilityInformation||{};
+  if(itemTitle)row.title=itemTitle;
+  if(acc.label)row.setAttribute('aria-label',String(acc.label));
+  const glyph=extensionTreeIconGlyph(node,collapsible);
+  const icon=document.createElement('span');icon.className='ext-tree-icon';
+  icon.style.cssText='width:16px;flex:0 0 16px;text-align:center;color:var(--fg-dim);font-size:12px;line-height:18px';
+  icon.textContent=glyph;
+  if(glyph)icon.title=(node.themeIcon&&node.themeIcon.id)||((node.iconPath&&node.iconPath.id)||'');
+  const checkbox=node.checkbox;
+  if(checkbox){
+    const box=document.createElement('span');box.className='ext-tree-checkbox';
+    box.style.cssText='width:14px;flex:0 0 14px;text-align:center;color:var(--fg-dim);font-size:12px;line-height:18px';
+    box.textContent=checkbox.isChecked?'☑':'☐';
+    if(checkbox.tooltip)box.title=checkbox.tooltip;
+    row.appendChild(twist);row.appendChild(box);
+  }else{
+    row.appendChild(twist);
+  }
+  const label=document.createElement('span');label.style.cssText='overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0';
+  label.textContent=node.label||'';
+  if(itemTitle)label.title=itemTitle;
   const desc=document.createElement('span');desc.style.cssText='color:var(--fg-dim);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:42%';
   desc.textContent=node.description||'';
   const actions=Array.isArray(node.actions)?node.actions:[];
-  row.appendChild(twist);row.appendChild(label);if(node.description)row.appendChild(desc);
+  row.appendChild(icon);row.appendChild(label);if(node.description)row.appendChild(desc);
   if(actions.length){
     const actionBtn=document.createElement('button');actionBtn.type='button';actionBtn.className='icon-btn';
     actionBtn.style.cssText='width:18px;height:18px;flex:0 0 18px;border:0;background:transparent;color:var(--fg-dim);padding:0';

@@ -4714,23 +4714,42 @@ class AIEditorAPI:
             label = str(element)
         description = self._tree_value(item, "description")
         tooltip = self._tree_value(item, "tooltip")
+        resource_uri = self._tree_uri_preview(
+            self._tree_value(item, "resourceUri"))
         collapsible = self._tree_value(item, "collapsibleState", 0)
         try:
             collapsible_state = int(collapsible or 0)
         except Exception:
             collapsible_state = 0
         command = self._tree_command_preview(self._tree_value(item, "command"))
-        icon = self._tree_icon_preview(self._tree_value(item, "iconPath"))
+        raw_icon = self._tree_value(item, "iconPath")
+        icon_path = self._tree_icon_path_preview(raw_icon)
+        icon = self._tree_icon_preview(raw_icon, resource_uri, collapsible_state)
         context_value = self._tree_value(item, "contextValue")
         node = {
             "label": str(label),
-            "description": "" if description is None else str(description),
-            "tooltip": "" if tooltip is None else str(tooltip),
+            "description": self._tree_description_preview(description),
+            "descriptionIsDerived": description is True,
+            "tooltip": self._tree_text_preview(tooltip),
             "collapsibleState": collapsible_state,
             "command": command,
             "icon": icon,
             "contextValue": "" if context_value is None else str(context_value),
         }
+        if resource_uri:
+            node["resourceUri"] = resource_uri
+        if icon_path:
+            node["iconPath"] = icon_path
+            if icon_path.get("kind") == "theme":
+                node["themeIcon"] = dict(icon_path)
+        checkbox = self._tree_checkbox_preview(
+            self._tree_value(item, "checkboxState"))
+        if checkbox:
+            node["checkbox"] = checkbox
+        accessibility = self._tree_accessibility_preview(
+            self._tree_value(item, "accessibilityInformation"))
+        if accessibility:
+            node["accessibilityInformation"] = accessibility
         node["actions"] = self._view_item_actions(
             view_id, node.get("contextValue", ""))
         if tree_view is not None:
@@ -4796,15 +4815,208 @@ class AIEditorAPI:
         return [arguments]
 
     @staticmethod
-    def _tree_icon_preview(icon: Any) -> str:
-        if not icon:
+    def _tree_text_preview(value: Any) -> str:
+        if value is None:
             return ""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict):
+            markdown = value.get("value")
+            if markdown is not None:
+                return str(markdown)
+            label = value.get("label") or value.get("text")
+            if label is not None:
+                return str(label)
+        markdown = getattr(value, "value", None)
+        if markdown is not None:
+            return str(markdown)
+        return str(value)
+
+    @staticmethod
+    def _tree_description_preview(value: Any) -> str:
+        if value is None or isinstance(value, bool):
+            return ""
+        return AIEditorAPI._tree_text_preview(value)
+
+    @staticmethod
+    def _tree_uri_preview(uri: Any) -> str:
+        if not uri:
+            return ""
+        if isinstance(uri, str):
+            return uri
+        if isinstance(uri, dict):
+            raw = uri.get("uri") or uri.get("external") or uri.get("fsPath")
+            if raw:
+                return str(raw)
+            scheme = uri.get("scheme")
+            path = uri.get("path")
+            if scheme and path is not None:
+                authority = str(uri.get("authority") or "")
+                path_text = str(path)
+                query = str(uri.get("query") or "")
+                fragment = str(uri.get("fragment") or "")
+                if scheme == "file":
+                    if path_text and not path_text.startswith("/"):
+                        path_text = "/" + path_text
+                    result = f"file://{authority}{path_text}"
+                    if query:
+                        result += f"?{query}"
+                    if fragment:
+                        result += f"#{fragment}"
+                    return result
+                if authority:
+                    result = f"{scheme}://{authority}{path_text}"
+                else:
+                    result = f"{scheme}:{path_text}"
+                if query:
+                    result += f"?{query}"
+                if fragment:
+                    result += f"#{fragment}"
+                return result
+        to_string = getattr(uri, "to_string", None)
+        if callable(to_string):
+            try:
+                return str(to_string())
+            except Exception:
+                pass
+        js_to_string = getattr(uri, "toString", None)
+        if callable(js_to_string):
+            try:
+                return str(js_to_string())
+            except Exception:
+                pass
+        return str(uri)
+
+    @staticmethod
+    def _tree_icon_path_preview(icon: Any) -> Dict[str, str]:
+        if not icon:
+            return {}
         if isinstance(icon, str):
-            return icon
+            if icon.startswith("$(") and icon.endswith(")"):
+                return {"kind": "theme", "id": icon[2:-1]}
+            return {"kind": "path", "path": icon}
+        if isinstance(icon, dict):
+            icon_id = icon.get("id")
+            if icon_id:
+                result = {"kind": "theme", "id": str(icon_id)}
+                color = AIEditorAPI._tree_icon_color_preview(icon.get("color"))
+                if color:
+                    result["color"] = color
+                return result
+            result = {}
+            for key in ("light", "dark"):
+                value = icon.get(key)
+                if value:
+                    result[key] = AIEditorAPI._tree_uri_preview(value)
+            if result:
+                result["kind"] = "themedPath"
+                return result
+            path = icon.get("path") or icon.get("uri")
+            if path:
+                return {
+                    "kind": "path",
+                    "path": AIEditorAPI._tree_uri_preview(path),
+                }
         icon_id = getattr(icon, "id", "")
         if icon_id:
-            return f"$({icon_id})"
+            result = {"kind": "theme", "id": str(icon_id)}
+            color = AIEditorAPI._tree_icon_color_preview(
+                getattr(icon, "color", None))
+            if color:
+                result["color"] = color
+            return result
+        return {}
+
+    @staticmethod
+    def _tree_icon_color_preview(color: Any) -> str:
+        if not color:
+            return ""
+        if isinstance(color, str):
+            return color
+        if isinstance(color, dict):
+            return str(color.get("id") or color.get("value") or "")
+        return str(getattr(color, "id", "") or "")
+
+    @staticmethod
+    def _tree_icon_preview(icon: Any, resource_uri: str = "",
+                           collapsible_state: int = 0) -> str:
+        icon_path = AIEditorAPI._tree_icon_path_preview(icon)
+        if icon_path.get("kind") == "theme":
+            return f"$({icon_path.get('id', '')})"
+        raw_path = (
+            icon_path.get("path")
+            or icon_path.get("light")
+            or icon_path.get("dark"))
+        if raw_path:
+            name = os.path.basename(str(raw_path).replace("\\", "/")).lower()
+            if "folder" in name:
+                return "$(folder)"
+            if "file" in name:
+                return "$(file)"
+            return "$(symbol-file)"
+        if resource_uri:
+            return "$(file)"
+        if collapsible_state:
+            return "$(folder)"
         return ""
+
+    @staticmethod
+    def _tree_checkbox_preview(value: Any) -> Dict[str, Any]:
+        if value is None:
+            return {}
+        if isinstance(value, (int, float)):
+            return {"isChecked": int(value) == 1}
+        if isinstance(value, dict):
+            state = value.get("state", value.get("checkboxState"))
+            if state is None:
+                state = value.get("checked")
+            try:
+                checked = (
+                    bool(state) if isinstance(state, bool)
+                    else int(state or 0) == 1)
+            except Exception:
+                checked = str(state).strip().lower() in {
+                    "1", "true", "checked", "yes"}
+            result: Dict[str, Any] = {"isChecked": checked}
+            tooltip = AIEditorAPI._tree_text_preview(value.get("tooltip"))
+            if tooltip:
+                result["tooltip"] = tooltip
+            accessibility = AIEditorAPI._tree_accessibility_preview(
+                value.get("accessibilityInformation"))
+            if accessibility:
+                result["accessibilityInformation"] = accessibility
+            return result
+        state = getattr(value, "state", value)
+        try:
+            checked = int(state or 0) == 1
+        except Exception:
+            checked = bool(state)
+        result = {"isChecked": checked}
+        tooltip = AIEditorAPI._tree_text_preview(getattr(value, "tooltip", ""))
+        if tooltip:
+            result["tooltip"] = tooltip
+        accessibility = AIEditorAPI._tree_accessibility_preview(
+            getattr(value, "accessibilityInformation", None))
+        if accessibility:
+            result["accessibilityInformation"] = accessibility
+        return result
+
+    @staticmethod
+    def _tree_accessibility_preview(value: Any) -> Dict[str, str]:
+        if not value:
+            return {}
+        if isinstance(value, dict):
+            label = value.get("label")
+            role = value.get("role")
+        else:
+            label = getattr(value, "label", "")
+            role = getattr(value, "role", "")
+        result: Dict[str, str] = {}
+        if label:
+            result["label"] = str(label)
+        if role:
+            result["role"] = str(role)
+        return result
 
     def invoke_chat_participant(self, participant_id: str,
                                  prompt: str) -> Dict:

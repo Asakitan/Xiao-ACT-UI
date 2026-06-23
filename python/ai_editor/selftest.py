@@ -1194,6 +1194,15 @@ def test_phase1_ai_editor_regressions() -> None:
             "function renderExtensionContainerContent(item)" in html
             and "function renderExtensionTreeView(view)" in html
             and "function renderExtensionTreeNode(viewId,node,depth,viewVersion)" in html
+            and "function extensionTreeThemeIconGlyph(id)" in html
+            and "function extensionTreeIconGlyph(node,collapsible)" in html
+            and "function extensionTreeItemTitle(node)" in html
+            and "wrap.dataset.contextValue=String(node.contextValue)" in html
+            and "wrap.dataset.resourceUri=String(node.resourceUri)" in html
+            and "node.accessibilityInformation||{}" in html
+            and "node.themeIcon?node.themeIcon:(node?node.iconPath:null)" in html
+            and "checkbox.isChecked?'☑':'☐'" in html
+            and "className='ext-tree-icon'" in html
             and "tree.setAttribute('role','tree')" in html
             and "event==='extension_tree_changed'" in html
             and "function scheduleExtensionActivityRefresh()" in html
@@ -3315,16 +3324,42 @@ def test_app_extension_runtime_support() -> None:
                         "label": "Node A",
                         "description": "branch",
                         "tooltip": "Expandable node",
+                        "resourceUri": "file:///workspace/node-a.txt",
+                        "iconPath": {"id": "folder", "color": {"id": "charts.green"}},
                         "collapsibleState": 1,
                         "contextValue": "branch",
+                        "checkboxState": {
+                            "state": 1,
+                            "tooltip": "Enabled",
+                            "accessibilityInformation": {"label": "Node A enabled"},
+                        },
+                        "accessibilityInformation": {
+                            "label": "Node A tree item",
+                            "role": "treeitem",
+                        },
                         "command": {
                             "command": "selftest.command.tree",
                             "title": "Open Node A",
                             "arguments": [{"from": "tree"}],
                         },
                     })
-                return _ImmediateThenable(
-                    {"label": str(element).title(), "collapsibleState": 0})
+                resource_uri = (
+                    {
+                        "scheme": "file",
+                        "path": "/workspace/node-b.txt",
+                        "query": "from=test",
+                    }
+                    if element == "node-b" else "file:///workspace/leaf-a.txt")
+                return _ImmediateThenable({
+                    "label": str(element).title(),
+                    "description": True,
+                    "resourceUri": resource_uri,
+                    "iconPath": {
+                        "light": "icons/light/file.svg",
+                        "dark": "icons/dark/file.svg",
+                    },
+                    "collapsibleState": 0,
+                })
 
         activity_tree_provider = _ActivityTreeProvider()
         activity_command_log = []
@@ -3368,11 +3403,23 @@ def test_app_extension_runtime_support() -> None:
                activity_tree_nodes
                and activity_tree_nodes[0].get("label") == "Node A"
                and activity_tree_nodes[0].get("description") == "branch"
+               and activity_tree_nodes[0].get("tooltip") == "Expandable node"
+               and activity_tree_nodes[0].get("resourceUri") == "file:///workspace/node-a.txt"
+               and activity_tree_nodes[0].get("icon") == "$(folder)"
+               and activity_tree_nodes[0].get("iconPath", {}).get("kind") == "theme"
+               and activity_tree_nodes[0].get("themeIcon", {}).get("id") == "folder"
+               and activity_tree_nodes[0].get("themeIcon", {}).get("color") == "charts.green"
+               and activity_tree_nodes[0].get("checkbox", {}).get("isChecked") is True
+               and activity_tree_nodes[0].get("checkbox", {}).get("tooltip") == "Enabled"
+               and activity_tree_nodes[0].get("accessibilityInformation", {}).get("label") == "Node A tree item"
                and activity_tree_nodes[0].get("command", {}).get("command") == "selftest.command.tree"
                and activity_tree_nodes[0].get("children") == []
                and activity_tree_nodes[0].get("childrenLoaded") is False
                and activity_tree_nodes[0].get("lazyChildren") is True
-               and bool(activity_tree_nodes[0].get("handle")))
+               and bool(activity_tree_nodes[0].get("handle"))
+               and len(activity_tree_nodes) > 1
+               and activity_tree_nodes[1].get("resourceUri")
+               == "file:///workspace/node-b.txt?from=test")
         _check("activity tree views expose contributed title and item actions",
                activity_views.get("selftest.activity.tree", {})
                .get("runtimeState", {}).get("titleActions", [{}])[0].get("command")
@@ -3385,6 +3432,11 @@ def test_app_extension_runtime_support() -> None:
         _check("activity tree lazy loads direct children on demand",
                loaded_activity_children.get("ok") is True
                and loaded_activity_children.get("nodes", [{}])[0].get("label") == "Leaf-A"
+               and loaded_activity_children.get("nodes", [{}])[0].get("description") == ""
+               and loaded_activity_children.get("nodes", [{}])[0].get("descriptionIsDerived") is True
+               and loaded_activity_children.get("nodes", [{}])[0].get("resourceUri") == "file:///workspace/leaf-a.txt"
+               and loaded_activity_children.get("nodes", [{}])[0].get("iconPath", {}).get("kind") == "themedPath"
+               and loaded_activity_children.get("nodes", [{}])[0].get("icon") == "$(file)"
                and loaded_activity_children.get("nodes", [{}])[0].get("childrenLoaded") is True
                and loaded_activity_children.get("nodes", [{}])[0].get("actions", []) == [])
         expanded_activity = api.set_extension_tree_item_expanded(
