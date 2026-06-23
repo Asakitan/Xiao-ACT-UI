@@ -155,7 +155,7 @@ def _write_animated_hand_glb(path: Path) -> None:
     )
 
 
-def _write_skinned_strip_glb(path: Path) -> None:
+def _write_skinned_strip_glb(path: Path, *, rotation_clip: bool = False) -> None:
     vertices = [
         (-0.24, 0.00, -0.06), (0.24, 0.00, -0.06),
         (0.24, 0.40, -0.06), (-0.24, 0.40, -0.06),
@@ -191,9 +191,21 @@ def _write_skinned_strip_glb(path: Path) -> None:
     joints_offset, joints_len = append(b"".join(struct.pack("<BBBB", *row) for row in joints))
     weights_offset, weights_len = append(b"".join(struct.pack("<ffff", *row) for row in weights))
     time_offset, time_len = append(b"".join(struct.pack("<f", item) for item in (0.0, 1.0)))
-    trans_offset, trans_len = append(
-        b"".join(struct.pack("<fff", *point) for point in ((0.0, 0.0, 0.0), (0.0, 0.55, 0.0)))
-    )
+    if rotation_clip:
+        value_offset, value_len = append(
+            b"".join(struct.pack("<ffff", *quat) for quat in (
+                (0.0, 0.0, 0.0, 1.0),
+                (0.0, 0.0, 0.70710678, 0.70710678),
+            ))
+        )
+        value_type = "VEC4"
+        target_path = "rotation"
+    else:
+        value_offset, value_len = append(
+            b"".join(struct.pack("<fff", *point) for point in ((0.0, 0.0, 0.0), (0.0, 0.55, 0.0)))
+        )
+        value_type = "VEC3"
+        target_path = "translation"
     bin_blob = _pad4(b"".join(chunks), b"\0")
     gltf = {
         "asset": {"version": "2.0"},
@@ -204,7 +216,7 @@ def _write_skinned_strip_glb(path: Path) -> None:
             {"buffer": 0, "byteOffset": joints_offset, "byteLength": joints_len, "target": 34962},
             {"buffer": 0, "byteOffset": weights_offset, "byteLength": weights_len, "target": 34962},
             {"buffer": 0, "byteOffset": time_offset, "byteLength": time_len},
-            {"buffer": 0, "byteOffset": trans_offset, "byteLength": trans_len},
+            {"buffer": 0, "byteOffset": value_offset, "byteLength": value_len},
         ],
         "accessors": [
             {"bufferView": 0, "componentType": 5126, "count": len(vertices),
@@ -213,7 +225,7 @@ def _write_skinned_strip_glb(path: Path) -> None:
             {"bufferView": 2, "componentType": 5121, "count": len(vertices), "type": "VEC4"},
             {"bufferView": 3, "componentType": 5126, "count": len(vertices), "type": "VEC4"},
             {"bufferView": 4, "componentType": 5126, "count": 2, "type": "SCALAR"},
-            {"bufferView": 5, "componentType": 5126, "count": 2, "type": "VEC3"},
+            {"bufferView": 5, "componentType": 5126, "count": 2, "type": value_type},
         ],
         "meshes": [{"name": "SkinnedBody", "primitives": [
             {"attributes": {"POSITION": 0, "JOINTS_0": 2, "WEIGHTS_0": 3},
@@ -228,7 +240,7 @@ def _write_skinned_strip_glb(path: Path) -> None:
         "animations": [{"name": "Wave", "samplers": [
             {"input": 4, "output": 5, "interpolation": "LINEAR"}
         ], "channels": [
-            {"sampler": 0, "target": {"node": 1, "path": "translation"}}
+            {"sampler": 0, "target": {"node": 1, "path": target_path}}
         ]}],
         "scenes": [{"nodes": [0]}],
         "scene": 0,
@@ -920,6 +932,27 @@ Objects:  {
         self.assertAlmostEqual(skin[-1][0]["weight"], 1.0)
         self.assertEqual(plan["bone_map"]["hips"], "mixamorig:Hips")
         self.assertEqual(plan["bone_map"]["right_hand"], "mixamorig:RightHand")
+
+    def test_evaluate_retarget_pose_exposes_sampled_glb_rotations(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_glb_skin_rot_") as root:
+            model_path = Path(root) / "avatar.glb"
+            _write_skinned_strip_glb(model_path, rotation_clip=True)
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path), "format": "glb"},
+                "action": {"name": "Wave", "time": 0.5},
+                "retarget": {"mode": "humanoid_auto", "stretch_limit": 0.5},
+            })["nodes"][0]
+
+            pose = evaluate_retarget_pose(node)
+
+        self.assertTrue(pose["ok"], pose)
+        self.assertEqual(pose["motion_source"], "keyframes")
+        self.assertEqual(pose["motion_sample"]["rotation_count"], 1)
+        self.assertIn("right_hand", pose["rotations"])
+        self.assertAlmostEqual(pose["positions"]["right_hand"][0], pose["rest_positions"]["right_hand"][0])
+        self.assertAlmostEqual(pose["positions"]["right_hand"][1], pose["rest_positions"]["right_hand"][1])
 
     def test_model_metadata_applies_glb_node_rest_transforms(self) -> None:
         clear_model3d_metadata_caches()
@@ -1628,6 +1661,40 @@ class Model3DOverlayRenderTests(unittest.TestCase):
         self.assertTrue(pose["ok"], pose)
         self.assertEqual(pose["motion_source"], "keyframes")
         self.assertIn("skin", meta["mesh"]["preview"])
+        self.assertIsNotNone(diff.getbbox())
+
+    @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
+    def test_skinned_glb_software_preview_uses_sampled_bone_rotation(self) -> None:
+        clear_model3d_metadata_caches()
+        clear_native_model3d_renderers()
+        with tempfile.TemporaryDirectory(prefix="model3d_glb_skin_rot_render_") as root:
+            from PIL import ImageChops
+
+            model_path = Path(root) / "avatar.glb"
+            _write_skinned_strip_glb(model_path, rotation_clip=True)
+            base = {
+                "type": "model3d",
+                "width": 220,
+                "height": 220,
+                "model": {"path": str(model_path), "format": "glb"},
+                "retarget": {"mode": "humanoid_auto", "stretch_limit": 0.5},
+            }
+            first = normalize_ui_spec({
+                **base,
+                "action": {"name": "Wave", "time": 0.0},
+            })["nodes"][0]
+            rotated = normalize_ui_spec({
+                **base,
+                "action": {"name": "Wave", "time": 0.5},
+            })["nodes"][0]
+
+            image_a = render_model3d_node(first, {"accent": "#7dd3fc"})
+            image_b = render_model3d_node(rotated, {"accent": "#7dd3fc"})
+            pose = evaluate_retarget_pose(rotated)
+            diff = ImageChops.difference(image_a, image_b)
+
+        self.assertTrue(pose["ok"], pose)
+        self.assertIn("right_hand", pose["rotations"])
         self.assertIsNotNone(diff.getbbox())
 
     @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")

@@ -2517,6 +2517,7 @@ def evaluate_retarget_pose(node: Mapping[str, Any]) -> dict[str, Any]:
         "rest_source": rest_source,
         "motion_source": keyframe_info.get("motion_source") or ("procedural" if use_procedural else "offsets"),
         "motion_sample": dict(keyframe_info),
+        "rotations": dict(keyframe_rotations),
         "motion_scale": dict(motion_scale),
         "model_rest_bones": tuple(sorted(model_rest_bones)),
         "rest_positions": {key: [float(x) for x in value] for key, value in rest.items()},

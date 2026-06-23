@@ -90,6 +90,73 @@ def _pose_points(pose: Mapping[str, Any], key: str) -> dict[str, tuple[float, fl
     return out
 
 
+def _quat4(value: Any) -> tuple[float, float, float, float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) < 4:
+        return None
+    try:
+        quat = (float(value[0]), float(value[1]), float(value[2]), float(value[3]))
+    except Exception:
+        return None
+    length = math.sqrt(sum(item * item for item in quat))
+    if length <= 0.000001 or not math.isfinite(length):
+        return None
+    return quat[0] / length, quat[1] / length, quat[2] / length, quat[3] / length
+
+
+def _pose_rotations(pose: Mapping[str, Any]) -> dict[str, tuple[float, float, float, float]]:
+    raw = pose.get("rotations")
+    if not isinstance(raw, Mapping):
+        return {}
+    out: dict[str, tuple[float, float, float, float]] = {}
+    for name, value in raw.items():
+        quat = _quat4(value)
+        if quat is not None:
+            out[str(name)] = quat
+    return out
+
+
+def _vec_sub(
+    a: tuple[float, float, float],
+    b: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    return a[0] - b[0], a[1] - b[1], a[2] - b[2]
+
+
+def _vec_add(
+    a: tuple[float, float, float],
+    b: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    return a[0] + b[0], a[1] + b[1], a[2] + b[2]
+
+
+def _quat_rotate_vec(
+    q: tuple[float, float, float, float],
+    v: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    x, y, z, w = q
+    vx, vy, vz = v
+    tx = 2.0 * (y * vz - z * vy)
+    ty = 2.0 * (z * vx - x * vz)
+    tz = 2.0 * (x * vy - y * vx)
+    return (
+        vx + w * tx + (y * tz - z * ty),
+        vy + w * ty + (z * tx - x * tz),
+        vz + w * tz + (x * ty - y * tx),
+    )
+
+
+def _weighted_add(
+    acc: tuple[float, float, float],
+    point: tuple[float, float, float],
+    weight: float,
+) -> tuple[float, float, float]:
+    return (
+        acc[0] + point[0] * weight,
+        acc[1] + point[1] * weight,
+        acc[2] + point[2] * weight,
+    )
+
+
 def _deform_vertices(
     vertices: list[tuple[float, float, float]],
     preview: Mapping[str, Any],
@@ -108,6 +175,7 @@ def _deform_vertices(
         return vertices
     rest = _pose_points(pose, "rest_positions")
     posed = _pose_points(pose, "positions")
+    rotations = _pose_rotations(pose)
     if not rest or not posed:
         return vertices
 
@@ -118,20 +186,27 @@ def _deform_vertices(
         if not influences:
             deformed.append(point)
             continue
-        dx = dy = dz = total = 0.0
+        mixed = (0.0, 0.0, 0.0)
+        total = 0.0
         for joint, weight in influences:
             before = rest.get(joint)
             after = posed.get(joint)
-            if before is None or after is None:
+            if before is None:
                 continue
-            dx += (after[0] - before[0]) * weight
-            dy += (after[1] - before[1]) * weight
-            dz += (after[2] - before[2]) * weight
+            candidate = point
+            quat = rotations.get(joint)
+            if quat is not None:
+                candidate = _vec_add(before, _quat_rotate_vec(quat, _vec_sub(candidate, before)))
+            if after is not None:
+                candidate = _vec_add(candidate, _vec_sub(after, before))
+            mixed = _weighted_add(mixed, candidate, weight)
             total += weight
         if total <= 0.000001:
             deformed.append(point)
             continue
-        moved = (point[0] + dx, point[1] + dy, point[2] + dz)
+        if total < 0.999999:
+            mixed = _weighted_add(mixed, point, 1.0 - total)
+        moved = mixed
         if any(abs(moved[axis] - point[axis]) > 0.000001 for axis in range(3)):
             changed = True
         deformed.append(moved)
