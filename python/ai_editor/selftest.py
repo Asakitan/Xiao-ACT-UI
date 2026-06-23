@@ -6183,6 +6183,19 @@ function activate(context) {
     workspaceEdit.insert(editUri, new vscode.Position(0, 0), 'say ');
     const editApplied = await vscode.workspace.applyEdit(workspaceEdit);
     const editedDoc = await vscode.workspace.openTextDocument(editUri);
+    const createdUri = vscode.Uri.joinPath(context.extensionUri, 'workspace-created.txt');
+    const renamedUri = vscode.Uri.joinPath(context.extensionUri, 'workspace-renamed.txt');
+    const deleteUri = vscode.Uri.joinPath(context.extensionUri, 'workspace-delete-me.txt');
+    await vscode.workspace.fs.writeFile(deleteUri, new TextEncoder().encode('delete me'));
+    const fileEdit = new vscode.WorkspaceEdit();
+    fileEdit.createFile(createdUri, { overwrite: true });
+    fileEdit.renameFile(createdUri, renamedUri, { overwrite: true });
+    fileEdit.deleteFile(deleteUri, { ignoreIfNotExists: false });
+    const fileOpsApplied = await vscode.workspace.applyEdit(fileEdit);
+    let renamedExists = false;
+    let deleteMissing = false;
+    try { renamedExists = (await vscode.workspace.fs.stat(renamedUri)).type === vscode.FileType.File; } catch {}
+    try { await vscode.workspace.fs.stat(deleteUri); } catch { deleteMissing = true; }
     return {
       folderName: folders[0] && folders[0].name,
       rootPath: vscode.workspace.rootPath,
@@ -6195,6 +6208,9 @@ function activate(context) {
       untitledText: untitled.getText(),
       editApplied,
       editText: editedDoc.getText(),
+      fileOpsApplied,
+      renamedExists,
+      deleteMissing,
     };
   });
   vscode.commands.registerCommand('selftest.node.pythonCommandProbe', async () => {
@@ -6663,6 +6679,11 @@ module.exports = { activate, deactivate };
                        and node_workspace_probe.get("untitledText") == "alpha\nbeta"
                        and node_workspace_probe.get("editApplied") is True
                        and node_workspace_probe.get("editText") == "say hello SAO",
+                       json.dumps(node_workspace_probe, ensure_ascii=False))
+                _check("node host workspace applyEdit handles file operations",
+                       node_workspace_probe.get("fileOpsApplied") is True
+                       and node_workspace_probe.get("renamedExists") is True
+                       and node_workspace_probe.get("deleteMissing") is True,
                        json.dumps(node_workspace_probe, ensure_ascii=False))
                 node_snapshot = {"nodes": []}
                 def _node_root_focused():

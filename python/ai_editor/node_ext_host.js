@@ -1230,12 +1230,142 @@ function _workspaceEditText(entry) {
     return '';
 }
 
+function _workspaceEditKind(entry) {
+    if (!entry || typeof entry !== 'object') return 'text';
+    const kind = String(entry.kind || entry.type || entry.operation || '').toLowerCase();
+    if (kind === 'createfile' || kind === 'create') return 'create';
+    if (kind === 'deletefile' || kind === 'delete') return 'delete';
+    if (kind === 'renamefile' || kind === 'rename') return 'rename';
+    return 'text';
+}
+
+function _workspaceEditUri(entry) {
+    return _workspaceUriFromInput(entry && (
+        entry.uri || entry.resource || entry.path || entry.oldUri || entry.oldResource));
+}
+
+function _workspaceEditTargetUri(entry) {
+    return _workspaceUriFromInput(entry && (
+        entry.newUri || entry.target || entry.to || entry.newResource || entry.destination));
+}
+
+async function _workspacePathExists(fsPath) {
+    try {
+        await fsp.stat(fsPath);
+        return true;
+    } catch (err) {
+        if (err && err.code === 'ENOENT') return false;
+        throw err;
+    }
+}
+
+async function _workspaceApplyFileOperation(entry) {
+    const kind = _workspaceEditKind(entry);
+    const options = entry && typeof entry.options === 'object' ? entry.options : {};
+    const uri = _workspaceEditUri(entry);
+    if (!uri || uri.scheme !== 'file') return false;
+    if (kind === 'create') {
+        const exists = await _workspacePathExists(uri.fsPath);
+        if (exists && options.ignoreIfExists) return true;
+        if (exists && !options.overwrite) return false;
+        await fsp.mkdir(path.dirname(uri.fsPath), { recursive: true });
+        await fsp.writeFile(uri.fsPath, '', 'utf8');
+        _workspaceTextDocuments.delete(uri.toString());
+        return true;
+    }
+    if (kind === 'delete') {
+        const exists = await _workspacePathExists(uri.fsPath);
+        if (!exists && options.ignoreIfNotExists) return true;
+        if (!exists) return false;
+        await fsp.rm(uri.fsPath, {
+            recursive: !!options.recursive,
+            force: !!options.ignoreIfNotExists,
+        });
+        _workspaceTextDocuments.delete(uri.toString());
+        return true;
+    }
+    if (kind === 'rename') {
+        const target = _workspaceEditTargetUri(entry);
+        if (!target || target.scheme !== 'file') return false;
+        const sourceExists = await _workspacePathExists(uri.fsPath);
+        if (!sourceExists) return false;
+        const targetExists = await _workspacePathExists(target.fsPath);
+        if (targetExists && options.ignoreIfExists) return true;
+        if (targetExists && !options.overwrite) return false;
+        if (targetExists && options.overwrite) {
+            await fsp.rm(target.fsPath, { recursive: true, force: true });
+        }
+        await fsp.mkdir(path.dirname(target.fsPath), { recursive: true });
+        await fsp.rename(uri.fsPath, target.fsPath);
+        const cached = _workspaceTextDocuments.get(uri.toString());
+        _workspaceTextDocuments.delete(uri.toString());
+        if (cached) {
+            const text = await fsp.readFile(target.fsPath, 'utf8');
+            _workspaceTextDocuments.set(target.toString(), _createLanguageDocument({
+                uri: target,
+                text,
+                languageId: _languageIdForUri(target),
+                version: Date.now(),
+            }));
+        }
+        return true;
+    }
+    return false;
+}
+
 async function _workspaceApplyEdit(edit) {
     const entries = _workspaceEditEntries(edit);
     if (!entries.length) return true;
     const grouped = new Map();
+    async function flushTextEdits() {
+        try {
+            for (const group of grouped.values()) {
+                let text = '';
+                try { text = await fsp.readFile(group.uri.fsPath, 'utf8'); }
+                catch (err) {
+                    if (!err || err.code !== 'ENOENT') throw err;
+                }
+                const edits = group.edits.slice().sort((a, b) => {
+                    const ao = _offsetAt(text, a.range.start);
+                    const bo = _offsetAt(text, b.range.start);
+                    if (ao !== bo) return bo - ao;
+                    return _offsetAt(text, b.range.end) - _offsetAt(text, a.range.end);
+                });
+                for (const item of edits) {
+                    const start = _offsetAt(text, item.range.start);
+                    const end = _offsetAt(text, item.range.end);
+                    text = text.slice(0, start) + item.text + text.slice(end);
+                }
+                await fsp.mkdir(path.dirname(group.uri.fsPath), { recursive: true });
+                await fsp.writeFile(group.uri.fsPath, text, 'utf8');
+                const doc = _createLanguageDocument({
+                    uri: group.uri,
+                    text,
+                    languageId: _languageIdForUri(group.uri),
+                    version: Date.now(),
+                });
+                _workspaceTextDocuments.set(group.uri.toString(), doc);
+            }
+            grouped.clear();
+            return true;
+        } catch (err) {
+            log(`workspace.applyEdit failed: ${err && err.message || err}`);
+            return false;
+        }
+    }
     for (const entry of entries) {
-        const uri = _workspaceUriFromInput(entry && (entry.uri || entry.resource || entry.path));
+        const kind = _workspaceEditKind(entry);
+        if (kind !== 'text') {
+            if (!(await flushTextEdits())) return false;
+            try {
+                if (!(await _workspaceApplyFileOperation(entry))) return false;
+            } catch (err) {
+                log(`workspace.applyEdit file operation failed: ${err && err.message || err}`);
+                return false;
+            }
+            continue;
+        }
+        const uri = _workspaceEditUri(entry);
         if (!uri || uri.scheme !== 'file' || !entry.range) return false;
         const key = uri.toString();
         if (!grouped.has(key)) grouped.set(key, { uri, edits: [] });
@@ -1244,39 +1374,7 @@ async function _workspaceApplyEdit(edit) {
             text: _workspaceEditText(entry),
         });
     }
-    try {
-        for (const group of grouped.values()) {
-            let text = '';
-            try { text = await fsp.readFile(group.uri.fsPath, 'utf8'); }
-            catch (err) {
-                if (!err || err.code !== 'ENOENT') throw err;
-            }
-            const edits = group.edits.slice().sort((a, b) => {
-                const ao = _offsetAt(text, a.range.start);
-                const bo = _offsetAt(text, b.range.start);
-                if (ao !== bo) return bo - ao;
-                return _offsetAt(text, b.range.end) - _offsetAt(text, a.range.end);
-            });
-            for (const item of edits) {
-                const start = _offsetAt(text, item.range.start);
-                const end = _offsetAt(text, item.range.end);
-                text = text.slice(0, start) + item.text + text.slice(end);
-            }
-            await fsp.mkdir(path.dirname(group.uri.fsPath), { recursive: true });
-            await fsp.writeFile(group.uri.fsPath, text, 'utf8');
-            const doc = _createLanguageDocument({
-                uri: group.uri,
-                text,
-                languageId: _languageIdForUri(group.uri),
-                version: Date.now(),
-            });
-            _workspaceTextDocuments.set(group.uri.toString(), doc);
-        }
-        return true;
-    } catch (err) {
-        log(`workspace.applyEdit failed: ${err && err.message || err}`);
-        return false;
-    }
+    return flushTextEdits();
 }
 
 function _offsetAt(text, position) {
@@ -2140,7 +2238,22 @@ function buildVscodeModule(extDesc, extensionPath) {
         SemanticTokensEdit,
         SemanticTokensEdits,
         TextEdit: class { static replace(range, text) { return { range, newText: text }; }; static insert(pos, text) { return { range: new Range(pos, pos), newText: text }; }; static delete(range) { return { range, newText: '' }; } },
-        WorkspaceEdit: class { constructor() { this._edits = []; } replace(uri, range, text) { this._edits.push({ uri, range, text }); } insert(uri, pos, text) { this._edits.push({ uri, range: new Range(pos, pos), text }); } delete(uri, range) { this._edits.push({ uri, range, text: '' }); } set(uri, edits) { for (const e of edits) this._edits.push({ uri, ...e }); } },
+        WorkspaceEdit: class {
+            constructor() { this._edits = []; }
+            replace(uri, range, text) { this._edits.push({ uri, range, text }); }
+            insert(uri, pos, text) { this._edits.push({ uri, range: new Range(pos, pos), text }); }
+            delete(uri, range) { this._edits.push({ uri, range, text: '' }); }
+            set(uri, edits) { for (const e of edits) this._edits.push({ uri, ...e }); }
+            createFile(uri, options, metadata) {
+                this._edits.push({ kind: 'create', uri, options: options || {}, metadata });
+            }
+            deleteFile(uri, options, metadata) {
+                this._edits.push({ kind: 'delete', uri, options: options || {}, metadata });
+            }
+            renameFile(oldUri, newUri, options, metadata) {
+                this._edits.push({ kind: 'rename', oldUri, newUri, options: options || {}, metadata });
+            }
+        },
         RelativePattern: class { constructor(base, pattern) { this.base = base; this.pattern = pattern; } },
         FileType: { Unknown: 0, File: 1, Directory: 2, SymbolicLink: 64 },
         EndOfLine: { LF: 1, CRLF: 2 },
