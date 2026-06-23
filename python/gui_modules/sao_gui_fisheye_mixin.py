@@ -915,7 +915,7 @@ class SAOPlayerGUIFisheyeMixin:
         def _set_fisheye_capture_excluded(exclude: bool):
             # In unified compositor mode, gpu_win._hwnd is the single
             # host window that carries ALL overlay layers.  Applying
-            # SetWindowDisplayAffinity to it breaks DWM per-pixel alpha
+            # Applying capture exclusion to it breaks DWM per-pixel alpha
             # on AMD/Intel (the entire host renders opaque black).
             # Only apply capture exclusion when the window is a
             # standalone GLFW window that belongs to the fisheye alone.
@@ -931,16 +931,6 @@ class SAOPlayerGUIFisheyeMixin:
                 ok = _dc_apply(_hwnd) if exclude else _dc_remove(_hwnd)
             except Exception:
                 pass
-            if not ok:
-                try:
-                    import ctypes as _ct
-                    _u32 = _ct.windll.user32
-                    _u32.SetWindowDisplayAffinity.argtypes = [_ct.c_void_p, _ct.c_uint]
-                    _u32.SetWindowDisplayAffinity.restype = _ct.c_int
-                    flag = 0x00000011 if exclude else 0x00000000
-                    ok = bool(_u32.SetWindowDisplayAffinity(_ct.c_void_p(_hwnd), flag))
-                except Exception:
-                    pass
             _fisheye_capture_excluded[0] = ok and exclude
 
         # v2.3.x+: 把鱼眼 GPU 窗口从 HWND_TOPMOST 栈降级 (有限次)。

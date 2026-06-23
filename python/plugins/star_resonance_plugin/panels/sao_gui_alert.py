@@ -195,12 +195,6 @@ class AlertOverlay:
             _ac_ok = _dc_apply(hwnd)
         except Exception:
             pass
-        if not _ac_ok:
-            try:
-                _user32.SetWindowDisplayAffinity(ctypes.c_void_p(hwnd), 0x00000011)
-            except Exception:
-                pass
-
         entry = {
             'win': win, 'hwnd': hwnd, 'base_img': base_img,
             'created_at': time.time(), 'phase': 'open',

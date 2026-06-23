@@ -336,7 +336,7 @@ class SAOPlayerGUIFloatChromeMixin:
         以悬浮按钮为中心, 截取屏幕 → 径向缩放模糊 → 叠加层渐隐.
         • 后台线程: 截屏 + 径向模糊
         • 主线程: 显示结果 + 渐隐动画
-        • WDA_EXCLUDEFROMCAPTURE: 防止鱼眼层捕获到此叠加层 (消除撕裂)
+        • 捕获排除: 防止鱼眼层捕获到此叠加层 (消除撕裂)
         • BILINEAR 缩放: 减少锯齿/马赛克感
         """
         try:
@@ -475,8 +475,7 @@ class SAOPlayerGUIFloatChromeMixin:
                     ex = _u32.GetWindowLongPtrW(_ct.c_void_p(hwnd), _GWL_EXSTYLE)
                     _u32.SetWindowLongPtrW(
                         _ct.c_void_p(hwnd), _GWL_EXSTYLE,
-                        ex | _WS_EX_LAYERED | _WS_EX_TRANSPARENT
-                        | _WS_EX_TOOLWINDOW | _WS_EX_NOACTIVATE,
+                        ex | _WS_EX_LAYERED | _WS_EX_TRANSPARENT,
                     )
                     _u32.SetWindowPos(
                         _ct.c_void_p(hwnd), _ct.c_void_p(_HWND_TOPMOST),
@@ -486,10 +485,9 @@ class SAOPlayerGUIFloatChromeMixin:
                     )
                     try:
                         from mem_probe._dc import apply as _dc_apply
-                        if not _dc_apply(hwnd):
-                            raise RuntimeError
+                        _dc_apply(hwnd)
                     except Exception:
-                        _u32.SetWindowDisplayAffinity(hwnd, 0x00000011)
+                        pass
                 except Exception:
                     pass
                 if not closing:

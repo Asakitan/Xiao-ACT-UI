@@ -684,7 +684,6 @@ class UnifiedOverlay:
             self._init_gl()
             print('[Compositor] GL ready, showing window', flush=True)
             self._host.show()
-            self._host.set_input_passthrough(True)
             self._ready.set()
             print('[Compositor] running', flush=True)
             try:
@@ -722,7 +721,6 @@ class UnifiedOverlay:
             now = time.perf_counter()
             if now - self._last_topmost >= self._topmost_interval:
                 self._host.raise_topmost()
-                self._host.set_input_passthrough(True)
                 self._last_topmost = now
 
             # Tick layer fades + check if any layer needs rendering

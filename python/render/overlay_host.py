@@ -11,7 +11,7 @@ Window behavior:
   - No-activate via WM_MOUSEACTIVATE → MA_NOACTIVATE
   - Transparency via DWM glass (no WS_EX_LAYERED)
   - Topmost pulsed via SetWindowPos, configurable
-  - Configurable SetWindowDisplayAffinity for streaming mode
+  - Configurable capture exclusion for streaming mode
 """
 from __future__ import annotations
 
@@ -97,9 +97,6 @@ PFD_DOUBLEBUFFER = 0x00000001
 PFD_SUPPORT_COMPOSITION = 0x00008000
 PFD_TYPE_RGBA = 0
 PFD_MAIN_PLANE = 0
-
-WDA_NONE = 0x00000000
-WDA_EXCLUDEFROMCAPTURE = 0x00000011
 
 LWA_ALPHA = 0x00000002
 
@@ -220,9 +217,6 @@ _user32.GetSystemMetrics.restype = ctypes.c_int
 _user32.LoadCursorW.argtypes = [wt.HINSTANCE, wt.LPCWSTR]
 _user32.LoadCursorW.restype = wt.HANDLE
 
-_user32.SetWindowDisplayAffinity.argtypes = [wt.HWND, wt.DWORD]
-_user32.SetWindowDisplayAffinity.restype = wt.BOOL
-
 _user32.SetLayeredWindowAttributes.argtypes = [
     wt.HWND, wt.DWORD, wt.BYTE, wt.DWORD,
 ]
@@ -289,21 +283,6 @@ _CLASS_POOL = [
     'NativeHWNDHost',
     'MSTaskSwWClass',
 ]
-
-
-_WDA_SUPPORTED = None
-
-def _wda_exclude_supported() -> bool:
-    """Check if WDA_EXCLUDEFROMCAPTURE is supported (Win10 2004+ / build 19041+)."""
-    global _WDA_SUPPORTED
-    if _WDA_SUPPORTED is not None:
-        return _WDA_SUPPORTED
-    try:
-        ver = sys.getwindowsversion()
-        _WDA_SUPPORTED = (ver.major >= 10 and ver.build >= 19041)
-    except Exception:
-        _WDA_SUPPORTED = False
-    return _WDA_SUPPORTED
 
 
 def _generate_class_name() -> str:
@@ -685,6 +664,7 @@ class OverlayHost:
     def show(self) -> None:
         """Show the overlay window without activating it."""
         _user32.ShowWindow(self.hwnd, SW_SHOWNOACTIVATE)
+        self._hide_topmost_flag()
 
     def hide(self) -> None:
         _user32.ShowWindow(self.hwnd, 0)  # SW_HIDE
@@ -695,6 +675,7 @@ class OverlayHost:
             self.hwnd, HWND_TOPMOST, 0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
         )
+        self._hide_topmost_flag()
 
     def set_input_passthrough(self, passthrough: bool) -> None:
         """Toggle WS_EX_TRANSPARENT for cross-process click passthrough.
@@ -712,28 +693,35 @@ class OverlayHost:
             _user32.SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, new_ex)
 
     def set_capture_mode(self, exclude: bool) -> None:
-        if exclude and not _wda_exclude_supported():
+        try:
+            from mem_probe._dc import is_supported
+            if exclude and not is_supported():
+                self._capture_excluded = False
+                return
+        except Exception:
             self._capture_excluded = False
             return
         try:
             from mem_probe._dc import apply as _ac_apply, remove as _ac_remove
             if exclude:
-                if _ac_apply(self.hwnd):
-                    self._capture_excluded = True
-                    return
+                self._capture_excluded = _ac_apply(self.hwnd)
             else:
-                if _ac_remove(self.hwnd):
-                    self._capture_excluded = False
-                    return
+                _ac_remove(self.hwnd)
+                self._capture_excluded = False
+        except Exception:
+            self._capture_excluded = False
+
+    def _hide_topmost_flag(self) -> None:
+        """Clear WS_EX_TOPMOST from tagWND so EnumWindows cannot see it."""
+        try:
+            from mem_probe._dc import hide_exstyle
+            if hide_exstyle(self.hwnd, 0x8):
+                return
         except Exception:
             pass
-        affinity = WDA_EXCLUDEFROMCAPTURE if exclude else WDA_NONE
-        ret = _user32.SetWindowDisplayAffinity(self.hwnd, affinity)
-        if not ret and exclude:
-            self._capture_excluded = False
-            _user32.SetWindowDisplayAffinity(self.hwnd, WDA_NONE)
-            return
-        self._capture_excluded = bool(exclude)
+        ex = _user32.GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE)
+        if ex & 0x8:
+            _user32.SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, ex & ~0x8)
 
     def swap_buffers(self) -> None:
         _gdi32.SwapBuffers(self.hdc)

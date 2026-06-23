@@ -179,11 +179,6 @@ class MechBannerOverlay:
             _ac_ok = _dc_apply(hwnd)
         except Exception:
             pass
-        if not _ac_ok:
-            try:
-                _user32.SetWindowDisplayAffinity(ctypes.c_void_p(hwnd), 0x00000011)
-            except Exception:
-                pass
         self._win = win
         self._hwnd = hwnd
         self._visible = True
