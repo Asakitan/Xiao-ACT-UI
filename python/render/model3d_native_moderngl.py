@@ -179,10 +179,61 @@ def _project_vertices(
     if not callable(fn):
         return []
     try:
-        projected, _scale = fn(vertices, width, height, node)
+        result = fn(vertices, width, height, node)
+        projected = result[0] if isinstance(result, tuple) and result else result
         return list(projected)
     except Exception:
         return []
+
+
+def _accent_color(context: Mapping[str, Any]) -> tuple[int, int, int, int]:
+    palette = context.get("palette") if isinstance(context.get("palette"), Mapping) else {}
+    color_fn = getattr(_software, "_color", None) if _software is not None else None
+    if callable(color_fn):
+        try:
+            return color_fn(palette.get("accent") or "#7dd3fc", (125, 211, 252, 255))
+        except Exception:
+            pass
+    return 125, 211, 252, 255
+
+
+def _face_base_color(
+    face: list[int],
+    preview: Mapping[str, Any],
+    accent: tuple[int, int, int, int],
+) -> tuple[int, int, int, int]:
+    fn = getattr(_software, "_face_base_color", None) if _software is not None else None
+    if callable(fn):
+        try:
+            return fn(face, preview, accent)
+        except Exception:
+            pass
+    return accent
+
+
+def _outline_color(base: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    fn = getattr(_software, "_outline_color", None) if _software is not None else None
+    if callable(fn):
+        try:
+            return fn(base)
+        except Exception:
+            pass
+    return (
+        max(0, int(base[0] * 0.58)),
+        max(0, int(base[1] * 0.64)),
+        max(0, int(base[2] * 0.72)),
+        238,
+    )
+
+
+def _gl_color(color: tuple[int, int, int, int], alpha: float | None = None) -> tuple[float, float, float, float]:
+    a = color[3] / 255.0 if alpha is None else alpha
+    return (
+        max(0.0, min(1.0, color[0] / 255.0)),
+        max(0.0, min(1.0, color[1] / 255.0)),
+        max(0.0, min(1.0, color[2] / 255.0)),
+        max(0.0, min(1.0, a)),
+    )
 
 
 def _ndc(point: tuple[float, float, float], width: int, height: int) -> tuple[float, float]:
@@ -192,26 +243,40 @@ def _ndc(point: tuple[float, float, float], width: int, height: int) -> tuple[fl
     )
 
 
-def _mesh_arrays(
+def _mesh_arrays_by_color(
     projected: list[tuple[float, float, float]],
     faces: list[list[int]],
     width: int,
     height: int,
-) -> tuple[Any, Any]:
+    preview: Mapping[str, Any],
+    accent: tuple[int, int, int, int],
+) -> tuple[list[tuple[Any, tuple[float, float, float, float]]], list[tuple[Any, tuple[float, float, float, float]]]]:
     if np is None:
-        return None, None
-    triangles: list[tuple[float, float]] = []
-    lines: list[tuple[float, float]] = []
+        return [], []
+    tri_groups: dict[tuple[int, int, int, int], list[tuple[float, float]]] = {}
+    line_groups: dict[tuple[int, int, int, int], list[tuple[float, float]]] = {}
     ordered = sorted(faces, key=lambda face: sum(projected[idx][2] for idx in face) / len(face))
     for face in ordered:
         pts = [_ndc(projected[index], width, height) for index in face]
+        base = _face_base_color(face, preview, accent)
+        outline = _outline_color(base)
+        tri_group = tri_groups.setdefault(base, [])
+        line_group = line_groups.setdefault(outline, [])
         for index in range(1, len(pts) - 1):
-            triangles.extend((pts[0], pts[index], pts[index + 1]))
+            tri_group.extend((pts[0], pts[index], pts[index + 1]))
         for index, point in enumerate(pts):
-            lines.extend((point, pts[(index + 1) % len(pts)]))
-    tri_arr = np.asarray(triangles, dtype="f4") if triangles else None
-    line_arr = np.asarray(lines, dtype="f4") if lines else None
-    return tri_arr, line_arr
+            line_group.extend((point, pts[(index + 1) % len(pts)]))
+    triangles = [
+        (np.asarray(points, dtype="f4"), _gl_color(color, alpha=0.76))
+        for color, points in tri_groups.items()
+        if points
+    ]
+    lines = [
+        (np.asarray(points, dtype="f4"), _gl_color(color, alpha=0.96))
+        for color, points in line_groups.items()
+        if points
+    ]
+    return triangles, lines
 
 
 def _set_uniform(program: Any, name: str, value: tuple[float, float, float, float]) -> None:
@@ -273,8 +338,9 @@ def render_moderngl_model3d(node: Mapping[str, Any], context: Mapping[str, Any])
     projected = _project_vertices(vertices, width, height, node)
     if len(projected) != len(vertices):
         return None
-    triangles, lines = _mesh_arrays(projected, faces, width, height)
-    if triangles is None or getattr(triangles, "size", 0) <= 0:
+    accent = _accent_color(context)
+    triangle_batches, line_batches = _mesh_arrays_by_color(projected, faces, width, height, preview, accent)
+    if not triangle_batches:
         return None
 
     with _RENDER_LOCK, _get_wgl_serialize_lock():
@@ -303,12 +369,14 @@ def render_moderngl_model3d(node: Mapping[str, Any], context: Mapping[str, Any])
                 )
             except Exception:
                 pass
-            _draw_array(ctx, program, getattr(moderngl, "TRIANGLES", 4), triangles, (0.42, 0.86, 0.94, 0.26))
+            for triangles, color in triangle_batches:
+                _draw_array(ctx, program, getattr(moderngl, "TRIANGLES", 4), triangles, color)
             try:
                 ctx.line_width = 1.6
             except Exception:
                 pass
-            _draw_array(ctx, program, getattr(moderngl, "LINES", 1), lines, (0.48, 0.88, 1.0, 0.92))
+            for lines, color in line_batches:
+                _draw_array(ctx, program, getattr(moderngl, "LINES", 1), lines, color)
             return _read_image(fbo, width, height)
         except Exception:
             return None

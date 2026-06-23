@@ -2091,6 +2091,76 @@ class Model3DOverlayRenderTests(unittest.TestCase):
         self.assertEqual(pose.call_count, 0)
 
     @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
+    def test_software_mesh_preview_uses_semantic_skin_colors(self) -> None:
+        clear_model3d_metadata_caches()
+        clear_native_model3d_renderers()
+        with tempfile.TemporaryDirectory(prefix="model3d_semantic_skin_") as root:
+            model_path = Path(root) / "avatar.obj"
+            model_path.write_text(
+                "\n".join([
+                    "o SemanticAvatar",
+                    "v -0.90 0.25 0",
+                    "v -0.55 0.25 0",
+                    "v -0.55 1.70 0",
+                    "v -0.90 1.70 0",
+                    "v -0.24 0.90 0.02",
+                    "v 0.24 0.90 0.02",
+                    "v 0.24 1.18 0.02",
+                    "v -0.24 1.18 0.02",
+                    "v 0.50 1.00 0",
+                    "v 0.80 1.00 0",
+                    "v 0.80 1.85 0",
+                    "v 0.50 1.85 0",
+                    "v -0.25 0.10 0.01",
+                    "v 0.35 0.10 0.01",
+                    "v 0.35 0.80 0.01",
+                    "v -0.25 0.80 0.01",
+                    "f 1 2 3 4",
+                    "f 5 6 7 8",
+                    "f 9 10 11 12",
+                    "f 13 14 15 16",
+                ]),
+                encoding="utf-8",
+            )
+            (Path(root) / "avatar.model3d.json").write_text(json.dumps({
+                "mesh": {
+                    "preview": {
+                        "skin": [
+                            [{"joint": "hair_white", "weight": 1.0}],
+                            [{"joint": "hair_white", "weight": 1.0}],
+                            [{"joint": "hair_white", "weight": 1.0}],
+                            [{"joint": "hair_white", "weight": 1.0}],
+                            [{"joint": "eye_green", "weight": 1.0}],
+                            [{"joint": "eye_green", "weight": 1.0}],
+                            [{"joint": "eye_green", "weight": 1.0}],
+                            [{"joint": "eye_green", "weight": 1.0}],
+                            [{"joint": "rabbit_ear", "weight": 1.0}],
+                            [{"joint": "rabbit_ear", "weight": 1.0}],
+                            [{"joint": "rabbit_ear", "weight": 1.0}],
+                            [{"joint": "rabbit_ear", "weight": 1.0}],
+                            [{"joint": "outfit_olive", "weight": 1.0}],
+                            [{"joint": "outfit_olive", "weight": 1.0}],
+                            [{"joint": "outfit_olive", "weight": 1.0}],
+                            [{"joint": "outfit_olive", "weight": 1.0}],
+                        ]
+                    }
+                }
+            }), encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "width": 128,
+                "height": 128,
+                "model": {"path": str(model_path), "format": "obj"},
+            })["nodes"][0]
+
+            image = render_model3d_node(node, {"accent": "#7dd3fc"})
+
+        data = image.get_flattened_data() if hasattr(image, "get_flattened_data") else image.getdata()
+        pixels = [rgba for rgba in data if rgba[3] > 100]
+        self.assertTrue(any(r > 150 and g > 145 and b > 125 for r, g, b, _a in pixels))
+        self.assertTrue(any(g > 120 and b > 85 and r < 105 for r, g, b, _a in pixels))
+
+    @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
     def test_glb_software_preview_renders_without_native_window(self) -> None:
         with tempfile.TemporaryDirectory(prefix="model3d_glb_render_") as root:
             model_path = Path(root) / "avatar.glb"

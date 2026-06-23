@@ -237,7 +237,7 @@ def _transform(point: tuple[float, float, float], rotation: tuple[float, float, 
 
 
 def _project(points: list[tuple[float, float, float]], width: int, height: int,
-             node: Mapping[str, Any]) -> tuple[list[tuple[float, float, float]], float]:
+             node: Mapping[str, Any]) -> tuple[list[tuple[float, float, float]], float, list[tuple[float, float, float]]]:
     rotation = _rotation(node)
     transformed = [_transform(point, rotation) for point in points]
     xs = [p[0] for p in transformed]
@@ -257,7 +257,108 @@ def _project(points: list[tuple[float, float, float]], width: int, height: int,
         )
         for x, y, z in transformed
     ]
-    return projected, scale
+    return projected, scale, transformed
+
+
+def _face_normal(face: list[int], points: list[tuple[float, float, float]]) -> tuple[float, float, float]:
+    if len(face) < 3:
+        return 0.0, 0.0, 1.0
+    a = points[face[0]]
+    b = points[face[1]]
+    c = points[face[2]]
+    ux, uy, uz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+    vx, vy, vz = c[0] - a[0], c[1] - a[1], c[2] - a[2]
+    nx = uy * vz - uz * vy
+    ny = uz * vx - ux * vz
+    nz = ux * vy - uy * vx
+    length = math.sqrt(nx * nx + ny * ny + nz * nz)
+    if length <= 0.000001 or not math.isfinite(length):
+        return 0.0, 0.0, 1.0
+    return nx / length, ny / length, nz / length
+
+
+def _lit_color(
+    base: tuple[int, int, int, int],
+    normal: tuple[float, float, float],
+    depth: float,
+    min_depth: float,
+    max_depth: float,
+    *,
+    alpha: int,
+) -> tuple[int, int, int, int]:
+    lx, ly, lz = -0.35, -0.55, 0.76
+    light_len = math.sqrt(lx * lx + ly * ly + lz * lz)
+    lx, ly, lz = lx / light_len, ly / light_len, lz / light_len
+    diffuse = abs(normal[0] * lx + normal[1] * ly + normal[2] * lz)
+    span = max(0.0001, max_depth - min_depth)
+    depth_t = (depth - min_depth) / span
+    shade = 0.52 + 0.42 * diffuse + 0.14 * depth_t
+    return (
+        max(0, min(255, int(base[0] * shade))),
+        max(0, min(255, int(base[1] * shade))),
+        max(0, min(255, int(base[2] * shade))),
+        alpha,
+    )
+
+
+def _joint_color(joint: str, accent: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    text = str(joint or "").lower()
+    if "eye_green" in text or "emerald_eye" in text or "iris_green" in text:
+        return 56, 226, 190, 255
+    if "hair_white" in text or "white_hair" in text or "silver_hair" in text:
+        return 236, 231, 218, 255
+    if "rabbit_ear_inner" in text or "ear_inner" in text:
+        return 224, 183, 176, 255
+    if "rabbit_ear" in text or "bunny_ear" in text:
+        return 154, 130, 108, 255
+    if "bow" in text or "ribbon" in text or "choker" in text or "strap" in text:
+        return 38, 29, 48, 255
+    if "outfit_olive" in text or "dress_olive" in text or "skirt_olive" in text:
+        return 126, 119, 91, 255
+    if "outfit_dark" in text or "bodice" in text or "stocking" in text or "tights" in text:
+        return 55, 47, 62, 255
+    if "sleeve" in text or "shawl" in text or "wrap" in text:
+        return 226, 219, 207, 255
+    if "head" in text or "neck" in text or "hand" in text:
+        return 246, 213, 194, 255
+    if "foot" in text:
+        return 40, 54, 76, 255
+    if "leg" in text or "knee" in text:
+        return 92, 176, 204, 255
+    if "hips" in text or "spine" in text or "chest" in text or "shoulder" in text:
+        return 82, 192, 198, 255
+    if "arm" in text or "forearm" in text:
+        return 94, 191, 204, 255
+    return accent
+
+
+def _face_base_color(
+    face: list[int],
+    preview: Mapping[str, Any],
+    accent: tuple[int, int, int, int],
+) -> tuple[int, int, int, int]:
+    skin = preview.get("skin")
+    if not isinstance(skin, (list, tuple)) or not skin:
+        return accent
+    totals: dict[str, float] = {}
+    for index in face:
+        if index >= len(skin):
+            continue
+        for joint, weight in _skin_for_vertex(skin[index]):
+            totals[joint] = totals.get(joint, 0.0) + weight
+    if not totals:
+        return accent
+    joint = max(totals.items(), key=lambda item: item[1])[0]
+    return _joint_color(joint, accent)
+
+
+def _outline_color(base: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    return (
+        max(0, int(base[0] * 0.58)),
+        max(0, int(base[1] * 0.64)),
+        max(0, int(base[2] * 0.72)),
+        238,
+    )
 
 
 def render_software_model3d_preview(node: Mapping[str, Any], pal: Mapping[str, Any] | None = None) -> Any:
@@ -294,11 +395,9 @@ def render_software_model3d_preview(node: Mapping[str, Any], pal: Mapping[str, A
         return None
 
     vertices = _deform_vertices(vertices, preview, node)
-    projected, scale = _project(vertices, width, height, node)
+    projected, scale, transformed = _project(vertices, width, height, node)
     pal = dict(pal or {})
     accent = _color(pal.get("accent") or "#7dd3fc", (125, 211, 252, 255))
-    line = (accent[0], accent[1], accent[2], 220)
-    fill = (accent[0], accent[1], accent[2], 42)
     shadow = (0, 0, 0, 72)
     image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image, "RGBA")
@@ -308,10 +407,16 @@ def render_software_model3d_preview(node: Mapping[str, Any], pal: Mapping[str, A
 
     ordered = sorted(faces, key=lambda face: sum(projected[idx][2] for idx in face) / len(face))
     stroke = max(1, min(5, int(scale * 0.02)))
+    depths = [p[2] for p in projected]
+    min_depth, max_depth = min(depths), max(depths)
     for face in ordered:
         pts = [(projected[idx][0], projected[idx][1]) for idx in face]
+        depth = sum(projected[idx][2] for idx in face) / len(face)
+        normal = _face_normal(face, transformed)
+        base = _face_base_color(face, preview, accent)
+        fill = _lit_color(base, normal, depth, min_depth, max_depth, alpha=168)
         draw.polygon(pts, fill=fill)
-        draw.line(pts + [pts[0]], fill=line, width=stroke)
+        draw.line(pts + [pts[0]], fill=_outline_color(base), width=stroke)
     return image
 
 
