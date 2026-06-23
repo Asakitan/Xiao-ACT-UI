@@ -5,6 +5,7 @@ Run:  python -m ai_editor.selftest
 
 from __future__ import annotations
 
+import base64
 import json
 import shutil
 import subprocess
@@ -2487,6 +2488,40 @@ console.log("frontend auto-close behavior ok");
            and "function isExtensionCustomEditorTab(tab)" in html
            and "customEditorWebviewIdFromOpenResult(res)" in html
            and "injectCustomEditorWebview(viewId,data)||isLikelyCustomEditorViewId(viewId)" in html)
+    with tempfile.TemporaryDirectory() as webview_tmp:
+        script_path = os.path.join(webview_tmp, "panel.js")
+        style_path = os.path.join(webview_tmp, "panel.css")
+        font_path = os.path.join(webview_tmp, "panel.woff")
+        with open(script_path, "w", encoding="utf-8") as fh:
+            fh.write("window.__panelLoaded = true;\n")
+        with open(font_path, "wb") as fh:
+            fh.write(b"font-bytes")
+        with open(style_path, "w", encoding="utf-8") as fh:
+            fh.write("@font-face{src:url('./panel.woff')} body{color:red}")
+        def _wv_url(path: str) -> str:
+            return "https://webview.local/" + path.replace("\\", "/")
+        raw_webview_html = (
+            '<meta http-equiv="Content-Security-Policy" '
+            'content="default-src \'none\'; script-src \'nonce-a\'; '
+            'style-src https://webview.local">'
+            f'<link href="{_wv_url(style_path)}" rel="stylesheet">'
+            f'<script nonce="a" src="{_wv_url(script_path)}"></script>')
+        prepared_webview_html = AIEditorAPI(
+            _SettingsGui({"ai_editor": {}}))._prepare_extension_webview_html(
+                raw_webview_html)
+        css_payload = prepared_webview_html.split(
+            "data:text/css;base64,", 1)[1].split('"', 1)[0]
+        decoded_css = base64.b64decode(css_payload).decode(
+            "utf-8", errors="replace")
+        _check("webview local resources are inlined for srcdoc iframes",
+               "https://webview.local/" not in prepared_webview_html
+               and "data:text/javascript;base64," in prepared_webview_html
+               and "data:text/css;base64," in prepared_webview_html
+               and base64.b64encode(b"font-bytes").decode("ascii")
+               in decoded_css
+               and "script-src 'nonce-a' data:" in prepared_webview_html
+               and "style-src https://webview.local data: 'unsafe-inline'"
+               in prepared_webview_html)
     _check("inline HTML handlers are exported to window",
            all(token in html for token in (
                "window.refreshExplorer=refreshExplorer",

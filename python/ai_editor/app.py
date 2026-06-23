@@ -10,10 +10,12 @@ the pywebview window in a background thread if not already running.
 
 from __future__ import annotations
 
+import base64
 import fnmatch
 import inspect
 import json
 import math
+import mimetypes
 import os
 import re
 import sys
@@ -21,6 +23,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import unquote, urlparse
 
 # Ensure package root on path
 _HERE = os.path.dirname(__file__)
@@ -73,6 +76,9 @@ _WORKSPACE_TREE_IGNORED_DIRS = {
     "build", "dist", "publish", "out", "tmp", "temp",
 }
 _WORKSPACE_FILE_PREVIEW_BYTES = 1024 * 1024
+_WEBVIEW_LOCAL_URL_RE = re.compile(r"https://webview\.local/[^\s\"'<>)]*")
+_WEBVIEW_RESOURCE_MAX_BYTES = 2 * 1024 * 1024
+_WEBVIEW_RESOURCE_TOTAL_MAX_BYTES = 8 * 1024 * 1024
 _EDITOR_LANGUAGE_BY_EXT = {
     ".py": "python", ".pyi": "python", ".pyw": "python",
     ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
@@ -739,7 +745,11 @@ class _AIEditorUIBridge:
     # -- Webview panels --
     def render_webview_panel(self, view_id: str, html: str) -> None:
         """Push HTML content for a webview panel to the frontend."""
-        self._api._emit("render_webview_panel", {"view_id": view_id, "html": html})
+        prepared = self._api._prepare_extension_webview_html(html)
+        self._api._emit("render_webview_panel", {
+            "view_id": view_id,
+            "html": prepared,
+        })
 
     def dispose_webview_panel(self, view_id: str) -> None:
         """Dispose a webview panel by emitting a dispose event to the frontend."""
@@ -857,6 +867,128 @@ class AIEditorAPI:
         self._maximized = False
         self._window_geometry: Optional[Dict[str, int]] = None
         self._window_resize_supports_fix_point: Optional[bool] = None
+
+    @staticmethod
+    def _webview_local_path_from_url(url: str) -> str:
+        parsed = urlparse(str(url or ""))
+        if parsed.scheme != "https" or parsed.netloc != "webview.local":
+            return ""
+        path = unquote(parsed.path or "")
+        if re.match(r"^/[A-Za-z]:/", path):
+            path = path[1:]
+        return os.path.abspath(path) if path else ""
+
+    @staticmethod
+    def _webview_mime_for_path(path: str) -> str:
+        ext = os.path.splitext(path)[1].lower()
+        if ext in {".js", ".mjs"}:
+            return "text/javascript"
+        if ext == ".css":
+            return "text/css"
+        return mimetypes.guess_type(path)[0] or "application/octet-stream"
+
+    def _prepare_extension_webview_html(self, html: str) -> str:
+        """Inline local ``asWebviewUri`` resources for srcdoc webviews.
+
+        Node-side extensions naturally emit ``https://webview.local/...`` URLs
+        from ``webview.asWebviewUri``.  The AI Editor embeds webviews as
+        sandboxed ``srcdoc`` iframes instead of running a local webview
+        resource server, so readable local assets are converted to data URIs.
+        """
+        text = str(html or "")
+        if "https://webview.local/" not in text:
+            return text
+
+        budget = {"bytes": 0}
+
+        def file_to_data_uri(path: str) -> str:
+            full = os.path.abspath(path)
+            try:
+                if not os.path.isfile(full):
+                    return ""
+                size = os.path.getsize(full)
+                if (size > _WEBVIEW_RESOURCE_MAX_BYTES or
+                        budget["bytes"] + size > _WEBVIEW_RESOURCE_TOTAL_MAX_BYTES):
+                    return ""
+                budget["bytes"] += size
+                with open(full, "rb") as fh:
+                    data = fh.read()
+            except Exception:
+                return ""
+            mime = self._webview_mime_for_path(full)
+            if mime == "text/css":
+                try:
+                    css = data.decode("utf-8", errors="replace")
+                    css_dir = os.path.dirname(full)
+
+                    def css_url_repl(match: re.Match) -> str:
+                        quote = match.group(1) or ""
+                        raw_ref = (match.group(2) or "").strip()
+                        lowered = raw_ref.lower()
+                        if (not raw_ref or lowered.startswith(("data:", "http:",
+                                "https:", "//")) or raw_ref.startswith("#")):
+                            return match.group(0)
+                        ref_path = os.path.abspath(
+                            os.path.join(css_dir, unquote(raw_ref)))
+                        nested = file_to_data_uri(ref_path)
+                        return f"url({quote}{nested}{quote})" if nested else match.group(0)
+
+                    css = re.sub(
+                        r"url\(\s*(['\"]?)([^'\")]+)\1\s*\)",
+                        css_url_repl,
+                        css,
+                    )
+                    data = css.encode("utf-8")
+                except Exception:
+                    pass
+            encoded = base64.b64encode(data).decode("ascii")
+            return f"data:{mime};base64,{encoded}"
+
+        def local_url_repl(match: re.Match) -> str:
+            url = match.group(0)
+            path = self._webview_local_path_from_url(url)
+            data_uri = file_to_data_uri(path) if path else ""
+            return data_uri or url
+
+        prepared = _WEBVIEW_LOCAL_URL_RE.sub(local_url_repl, text)
+        return self._relax_webview_csp_for_data_uris(prepared)
+
+    @staticmethod
+    def _relax_webview_csp_for_data_uris(html: str) -> str:
+        def csp_repl(match: re.Match) -> str:
+            content = match.group(3)
+            additions = {
+                "font-src": ["data:"],
+                "img-src": ["data:", "blob:"],
+                "script-src": ["data:"],
+                "style-src": ["data:", "'unsafe-inline'"],
+            }
+            rebuilt = []
+            seen = set()
+            for directive in content.split(";"):
+                parts = directive.strip().split()
+                if not parts:
+                    continue
+                name = parts[0].lower()
+                seen.add(name)
+                for token in additions.get(name, []):
+                    if token not in parts:
+                        parts.append(token)
+                rebuilt.append(" ".join(parts))
+            for name, tokens in additions.items():
+                if name not in seen:
+                    rebuilt.append(" ".join([name, *tokens]))
+            return (
+                f"{match.group(1)}{match.group(2)}"
+                f"{'; '.join(rebuilt)}{match.group(4)}"
+            )
+
+        return re.sub(
+            r"(<meta\b(?=[^>]*http-equiv=[\"']Content-Security-Policy[\"'])(?=[^>]*content=)[^>]*\bcontent=)([\"'])(.*?)(\2[^>]*>)",
+            csp_repl,
+            html,
+            flags=re.IGNORECASE,
+        )
 
     def set_window(self, window: Any, initial_geometry: Optional[Dict[str, int]] = None) -> None:
         self._window = window
