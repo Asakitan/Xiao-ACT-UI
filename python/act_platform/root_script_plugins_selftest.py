@@ -60,6 +60,58 @@ def _find_model3d_node(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _find_canvas_nodes(value: Any) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+    if isinstance(value, dict):
+        if str(value.get("type") or "").lower() == "canvas":
+            found.append(dict(value))
+        for item in value.values():
+            found.extend(_find_canvas_nodes(item))
+    elif isinstance(value, list):
+        for item in value:
+            found.extend(_find_canvas_nodes(item))
+    return found
+
+
+def _require_canvas_split(owner: Any, plugin_id: str, static_id: str,
+                          dynamic_id: str, stage: str) -> dict[str, Any] | None:
+    overlays = render_overlays(owner, "unioverlay").get("overlays") or []
+    plugin_overlays = [
+        entry for entry in overlays
+        if isinstance(entry, dict) and str(entry.get("plugin_id") or "") == plugin_id
+    ]
+    nodes = _find_canvas_nodes(plugin_overlays)
+    by_id = {str(node.get("id") or ""): node for node in nodes}
+    static_node = by_id.get(static_id)
+    dynamic_node = by_id.get(dynamic_id)
+    if static_node is None or dynamic_node is None:
+        return {
+            "ok": False,
+            "plugin_id": plugin_id,
+            "stage": stage,
+            "expected": [static_id, dynamic_id],
+            "ids": sorted(by_id),
+            "overlays": plugin_overlays,
+        }
+    if static_node.get("draggable") is not False or dynamic_node.get("draggable") is not True:
+        return {
+            "ok": False,
+            "plugin_id": plugin_id,
+            "stage": f"{stage}_draggable",
+            "static": static_node.get("draggable"),
+            "dynamic": dynamic_node.get("draggable"),
+        }
+    if int(dynamic_node.get("z") or 0) <= int(static_node.get("z") or 0):
+        return {
+            "ok": False,
+            "plugin_id": plugin_id,
+            "stage": f"{stage}_z_order",
+            "static": static_node.get("z"),
+            "dynamic": dynamic_node.get("z"),
+        }
+    return None
+
+
 def run_selftest() -> dict[str, Any]:
     root_plugins = _workspace_root() / "plugins"
     if not root_plugins.is_dir():
@@ -222,8 +274,16 @@ def run_selftest() -> dict[str, Any]:
                 state = dict(seconds_state)
 
             if plugin_id == "script_flappy_emma":
+                split_failure = _require_canvas_split(
+                    owner, plugin_id, "flappy_game_static", "flappy_game", "flappy_canvas_split")
+                if split_failure:
+                    return split_failure
                 if not state.get("level") or not state.get("pipe_speed") or not state.get("gap_half"):
                     return {"ok": False, "plugin_id": plugin_id, "stage": "difficulty_state", "state": state}
+                if int(state.get("static_ops_count") or 0) <= 0 or int(state.get("dynamic_ops_count") or 0) <= 0:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_split_layer_ops", "state": state}
+                if int(state.get("dynamic_ops_count") or 999) > 32:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_dynamic_ops_budget", "state": state}
                 if int(state.get("target_score") or 0) <= 0 or "progress" not in state or int(state.get("progress") or 0) != 0:
                     return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_goal_state", "state": state}
                 if state.get("started") is not False:
@@ -254,6 +314,10 @@ def run_selftest() -> dict[str, Any]:
                         "before": queued_state,
                         "after": tick_state,
                     }
+                if int(tick_state.get("static_ops_count") or 0) <= 0 or int(tick_state.get("dynamic_ops_count") or 0) <= 0:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_tick_split_layer_ops", "state": tick_state}
+                if int(tick_state.get("dynamic_ops_count") or 999) > 32:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_tick_dynamic_ops_budget", "state": tick_state}
                 paused_action = act_plugin_action(
                     owner, "script.game.pause", {"paused": True}, plugin_id=plugin_id)
                 paused_state = _state(paused_action)
@@ -296,8 +360,16 @@ def run_selftest() -> dict[str, Any]:
             else:
                 action: dict[str, Any] = {"ok": True}
             if plugin_id == "script_snake_lua":
+                split_failure = _require_canvas_split(
+                    owner, plugin_id, "snake_game_static", "snake_game", "snake_canvas_split")
+                if split_failure:
+                    return split_failure
                 if not state.get("level") or not state.get("tick_interval"):
                     return {"ok": False, "plugin_id": plugin_id, "stage": "difficulty_state", "state": state}
+                if int(state.get("static_ops_count") or 0) <= 0 or int(state.get("dynamic_ops_count") or 0) <= 0:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "snake_split_layer_ops", "state": state}
+                if int(state.get("dynamic_ops_count") or 999) > 24:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "snake_dynamic_ops_budget", "state": state}
                 if int(state.get("target_score") or 0) <= 0 or "progress" not in state or int(state.get("progress") or 0) != 0:
                     return {"ok": False, "plugin_id": plugin_id, "stage": "snake_goal_state", "state": state}
                 if state.get("timer_active") is not True or not _plugin_timer_active(manager, plugin_id):
@@ -354,6 +426,10 @@ def run_selftest() -> dict[str, Any]:
                     owner, "script.game.tick", {}, plugin_id=plugin_id))
                 if tick_two.get("direction") != "left":
                     return {"ok": False, "plugin_id": plugin_id, "stage": "snake_buffered_turns_second_tick", "state": tick_two}
+                if int(tick_two.get("static_ops_count") or 0) <= 0 or int(tick_two.get("dynamic_ops_count") or 0) <= 0:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "snake_tick_split_layer_ops", "state": tick_two}
+                if int(tick_two.get("dynamic_ops_count") or 999) > 24:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "snake_tick_dynamic_ops_budget", "state": tick_two}
                 action = act_plugin_action(
                     owner, "script.game.direction", {"direction": "down"}, plugin_id=plugin_id)
             elif plugin_id == "script_stickwoman_csharp":
@@ -483,6 +559,8 @@ def run_selftest() -> dict[str, Any]:
                 "action": state.get("action"),
                 "tick_count": state.get("tick_count"),
                 "render_count": state.get("render_count"),
+                "static_ops_count": state.get("static_ops_count"),
+                "dynamic_ops_count": state.get("dynamic_ops_count"),
                 "spec_build_count": state.get("spec_build_count"),
                 "animation_fps": state.get("animation_fps"),
                 "retarget_twist_limit": state.get("retarget_twist_limit"),
