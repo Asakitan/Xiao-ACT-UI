@@ -330,6 +330,7 @@ def test_app_settings_parity() -> None:
         "clear_active_agent", "delete_agent", "delete_workflow",
         "run_workflow", "get_scopes", "save_agent", "save_workflow",
         "list_workspace_tree", "open_workspace_file",
+        "apply_workspace_text_edits",
         "editor_language_provider",
         "get_chat_controls", "set_active_provider", "set_active_model",
         "set_active_mode", "set_provider_model", "set_chat_provider",
@@ -1075,6 +1076,20 @@ def test_app_settings_parity() -> None:
                and opened.get("absolute_path") == sample_file
                and opened.get("language") == "python"
                and "print('tree')" in opened.get("content", ""))
+        edit_result = tree_api.apply_workspace_text_edits([{
+            "uri": "src/sample.py",
+            "range": {
+                "start": {"line": 0, "character": 6},
+                "end": {"line": 0, "character": 12},
+            },
+            "newText": "'edited'",
+        }])
+        with open(sample_file, "r", encoding="utf-8") as fh:
+            edited_text = fh.read()
+        _check("workspace edit API applies safe text edits",
+               edit_result.get("ok") is True
+               and edit_result.get("applied", [{}])[0].get("edits") == 1
+               and "print('edited')" in edited_text)
         blocked_path = tree_api.open_workspace_file("../outside.py")
         _check("workspace file API blocks path traversal",
                "escapes workspace" in blocked_path.get("error", ""))
@@ -1085,6 +1100,20 @@ def test_app_settings_parity() -> None:
                 fh.write("outside")
             _check("workspace path safety rejects outside real paths",
                    tree_api._is_workspace_safe_path(tmpdir, outside_file) is False)
+            blocked_edit = tree_api.apply_workspace_text_edits([{
+                "uri": outside_file,
+                "range": {
+                    "start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 7},
+                },
+                "newText": "changed",
+            }])
+            with open(outside_file, "r", encoding="utf-8") as fh:
+                outside_text = fh.read()
+            _check("workspace edit API blocks outside files",
+                   not blocked_edit.get("applied")
+                   and blocked_edit.get("skipped")
+                   and outside_text == "outside")
 
             link_path = os.path.join(tmpdir, "outside-link.txt")
             try:
@@ -1521,6 +1550,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function requestEditorRename(quiet)" in html
            and "function promptEditorRenameName(seed)" in html
            and "function confirmEditorRenameApply(newName,summary)" in html
+           and "function confirmEditorWorkspaceEditApply(titleText,summary,detailText)" in html
+           and "function editorWorkspaceEditPreviewItems(summary)" in html
+           and "call('apply_workspace_text_edits'" in html
            and "function editorApplyTextEdits(edits)" in html
            and "Ctrl+Space" in html
            and "Ctrl+Shift+Space" in html

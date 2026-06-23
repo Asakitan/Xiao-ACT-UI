@@ -504,6 +504,22 @@ def _text_position_for_offset(text: str, offset: Any) -> Position:
     return Position(line, index - line_start)
 
 
+def _offset_for_text_position(text: str, position: Any) -> int:
+    value = str(text or "")
+    pos = _editor_provider_position(position, value)
+    target_line = max(0, int(getattr(pos, "line", 0)))
+    character = max(0, int(getattr(pos, "character", 0)))
+    offset = 0
+    for _ in range(target_line):
+        next_line = value.find("\n", offset)
+        if next_line < 0:
+            return len(value)
+        offset = next_line + 1
+    line_end = value.find("\n", offset)
+    limit = len(value) if line_end < 0 else line_end
+    return max(offset, min(limit, offset + character))
+
+
 def _editor_provider_position(value: Any, content: str = "") -> Position:
     if isinstance(value, Position):
         return value
@@ -2050,6 +2066,116 @@ class AIEditorAPI:
         if not self._is_workspace_safe_path(root, full):
             raise ValueError("Path escapes workspace")
         return full
+
+    def _workspace_path_for_edit_uri(self, uri_value: Any) -> str:
+        root = self._workspace_root()
+        raw = uri_value
+        if isinstance(raw, Uri):
+            raw = raw.fs_path if raw.scheme == "file" else str(raw)
+        elif isinstance(raw, dict):
+            if raw.get("scheme") == "file":
+                raw = Uri(
+                    "file",
+                    str(raw.get("path") or ""),
+                    str(raw.get("authority") or ""),
+                    str(raw.get("query") or ""),
+                    str(raw.get("fragment") or ""),
+                ).fs_path
+            else:
+                raw = raw.get("uri") or raw.get("path") or ""
+        raw_text = str(raw or "").strip()
+        if raw_text.startswith("file:"):
+            parsed = Uri.parse(raw_text)
+            if parsed.scheme != "file":
+                raise ValueError("Only file workspace edits are supported")
+            full = os.path.abspath(parsed.fs_path)
+        elif os.path.isabs(raw_text) or (
+                len(raw_text) >= 2 and raw_text[1] == ":"
+                and raw_text[0].isalpha()):
+            full = os.path.abspath(raw_text)
+        else:
+            full = self._resolve_workspace_path(raw_text)
+        if not self._is_workspace_safe_path(root, full):
+            raise ValueError("Path escapes workspace")
+        return full
+
+    def apply_workspace_text_edits(self, edits: List[Dict[str, Any]]) -> Dict:
+        """Apply text edits to existing files under the active workspace."""
+        if not isinstance(edits, list):
+            return {"error": "Workspace edits must be a list"}
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        skipped: List[Dict[str, Any]] = []
+        root = self._workspace_root()
+        for index, edit in enumerate(edits):
+            if not isinstance(edit, dict):
+                skipped.append({"index": index, "reason": "Edit must be an object"})
+                continue
+            if not edit.get("range") and edit.get("position"):
+                edit = dict(edit)
+                edit["range"] = {
+                    "start": edit.get("position"),
+                    "end": edit.get("position"),
+                }
+            if not edit.get("range"):
+                skipped.append({"index": index, "reason": "Missing edit range"})
+                continue
+            try:
+                full = self._workspace_path_for_edit_uri(
+                    edit.get("uri") or edit.get("targetUri") or edit.get("path"))
+            except Exception as exc:
+                skipped.append({"index": index, "reason": str(exc)})
+                continue
+            if not os.path.isfile(full):
+                skipped.append({
+                    "index": index,
+                    "path": self._workspace_rel_path(root, full),
+                    "reason": "File not found",
+                })
+                continue
+            grouped.setdefault(full, []).append(edit)
+
+        applied: List[Dict[str, Any]] = []
+        errors: List[Dict[str, Any]] = []
+        for full, items in grouped.items():
+            try:
+                with open(full, "r", encoding="utf-8") as fh:
+                    text = fh.read()
+                ops: List[Dict[str, Any]] = []
+                for edit in items:
+                    rng = edit.get("range") or {}
+                    start = _offset_for_text_position(text, rng.get("start"))
+                    end = _offset_for_text_position(text, rng.get("end"))
+                    ops.append({
+                        "start": min(start, end),
+                        "end": max(start, end),
+                        "text": str(edit.get("newText", edit.get("text", ""))),
+                    })
+                next_text = text
+                for op in sorted(ops, key=lambda item: (
+                        item["start"], item["end"]), reverse=True):
+                    next_text = (
+                        next_text[:op["start"]]
+                        + op["text"]
+                        + next_text[op["end"]:]
+                    )
+                with open(full, "w", encoding="utf-8", newline="") as fh:
+                    fh.write(next_text)
+                applied.append({
+                    "path": self._workspace_rel_path(root, full),
+                    "absolute_path": full,
+                    "edits": len(items),
+                })
+            except Exception as exc:
+                errors.append({
+                    "path": self._workspace_rel_path(root, full),
+                    "error": str(exc),
+                })
+        return {
+            "ok": not errors,
+            "applied": applied,
+            "skipped": skipped,
+            "errors": errors,
+        }
 
     def _editor_language_entries(self) -> List[Dict[str, Any]]:
         rows: Dict[str, Dict[str, Any]] = {}

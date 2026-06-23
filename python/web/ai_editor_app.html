@@ -3316,9 +3316,10 @@ function editorInsertText(item){
   if(text===undefined||text===null||text==='')text=completionLabelText(item&&item.label);
   return String(text||'').replace(/\$\{\d+:([^}]+)\}/g,'$1').replace(/\$\d+/g,'');
 }
-function editorApplyTextEdits(edits){
+function editorApplyTextEditsToValue(value,edits){
   if(!Array.isArray(edits)||!edits.length)return false;
-  const value=ed.value,ops=[];
+  value=String(value||'');
+  const ops=[];
   edits.forEach(edit=>{
     if(!edit||typeof edit!=='object')return;
     let range=edit.range;
@@ -3330,8 +3331,13 @@ function editorApplyTextEdits(edits){
   if(!ops.length)return false;
   const primary=ops[0];let next=value;
   ops.sort((a,b)=>b.start-a.start||b.end-a.end).forEach(op=>{next=next.slice(0,op.start)+op.text+next.slice(op.end)});
-  ed.value=next;
-  const cursor=Math.min(next.length,primary.start+primary.text.length);
+  return {value:next,cursor:Math.min(next.length,primary.start+primary.text.length)};
+}
+function editorApplyTextEdits(edits){
+  const result=editorApplyTextEditsToValue(ed.value,edits);
+  if(!result)return false;
+  ed.value=result.value;
+  const cursor=result.cursor;
   ed.selectionStart=ed.selectionEnd=cursor;editorDirty=true;
   updateLineNums();updateCursorPos();scheduleEditorSyntaxHighlight();
   return true;
@@ -3557,13 +3563,21 @@ function editorNormalizeDocumentUri(value){
   }
   return text.toLowerCase();
 }
-function editorCurrentUriMatches(uri){
+function editorTabUriMatches(uri,tab){
   if(!uri)return true;
   const incoming=editorNormalizeDocumentUri(uri);
   if(!incoming)return true;
-  const tab=activeEditorTab(),filePath=tab.filePath||'',untitled=editorUntitledUri(tab);
+  tab=tab||{};
+  const filePath=tab.filePath||'',untitled=editorUntitledUri(tab);
   const candidates=[filePath,filePath?'file:///'+filePath.replace(/\\/g,'/'): '',untitled].map(editorNormalizeDocumentUri);
   return candidates.some(candidate=>candidate&&candidate===incoming);
+}
+function editorCurrentUriMatches(uri){
+  return editorTabUriMatches(uri,activeEditorTab());
+}
+function editorTabForUri(uri){
+  if(!uri||typeof tabs==='undefined'||!Array.isArray(tabs))return null;
+  return tabs.find(tab=>editorTabUriMatches(uri,tab))||null;
 }
 function editorDocumentUriToPath(uri){
   if(!uri)return '';
@@ -3751,26 +3765,72 @@ function promptEditorRenameName(seed){
     setTimeout(()=>{input.focus();input.select()},0);
   });
 }
-function confirmEditorRenameApply(newName,summary){
+function editorWorkspaceEditEditCount(summary){
+  if(!summary)return 0;
+  return (summary.edits?summary.edits.length:0)
+    +(summary.tabEdits?summary.tabEdits.length:0)
+    +(summary.workspaceEdits?summary.workspaceEdits.length:0);
+}
+function editorWorkspaceEditPreviewItems(summary){
+  const items=[];
+  if(summary&&summary.edits&&summary.edits.length){
+    items.push({label:(activeEditorTab().name||'Current editor'),count:summary.edits.length});
+  }
+  const tabGroups={};
+  (summary&&summary.tabEdits||[]).forEach(item=>{
+    const tab=tabs.find(t=>t.id===item.tabId)||{};
+    const label=tab.name||tab.workspacePath||tab.filePath||'Open tab';
+    tabGroups[label]=(tabGroups[label]||0)+1;
+  });
+  Object.keys(tabGroups).forEach(label=>items.push({label,count:tabGroups[label]}));
+  const fileGroups={};
+  (summary&&summary.workspaceEdits||[]).forEach(item=>{
+    const path=editorDocumentUriToPath(item.uri)||String(item.uri||'Workspace file');
+    const label=path.split(/[\\/]/).slice(-2).join('/')||path;
+    fileGroups[label]=(fileGroups[label]||0)+1;
+  });
+  Object.keys(fileGroups).forEach(label=>items.push({label,count:fileGroups[label]}));
+  return items;
+}
+function confirmEditorWorkspaceEditApply(titleText,summary,detailText){
   return new Promise(resolve=>{
     const modal=document.createElement('div');modal.className='modal-bg open';
-    const panel=document.createElement('div');panel.className='modal';panel.style.width='420px';
-    const title=document.createElement('h2');title.textContent='Apply Rename';
+    const panel=document.createElement('div');panel.className='modal';panel.style.width='460px';
+    const title=document.createElement('h2');title.textContent=titleText||'Apply Workspace Edit';
     const text=document.createElement('div');text.className='settings-help';
-    const count=summary&&Array.isArray(summary.edits)?summary.edits.length:0;
+    const count=editorWorkspaceEditEditCount(summary);
     const skipped=summary&&Number(summary.skipped)||0;
-    text.textContent='Apply '+count+' edit'+(count===1?'':'s')+' for "'+newName+'".'+(skipped?' '+skipped+' external edit'+(skipped===1?'':'s')+' will be skipped.':'');
+    text.textContent=(detailText||('Apply '+count+' edit'+(count===1?'':'s')+'.'))+(skipped?' '+skipped+' unsupported edit'+(skipped===1?'':'s')+' will be skipped.':'');
+    const list=document.createElement('div');list.className='settings-help';
+    list.style.cssText='margin-top:10px;max-height:150px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:6px';
+    const previewItems=editorWorkspaceEditPreviewItems(summary);
+    list.textContent=previewItems.length?'':'No editable files';
+    previewItems.forEach(item=>{
+      const row=document.createElement('div');
+      row.style.cssText='display:flex;justify-content:space-between;gap:12px;padding:2px 0';
+      const name=document.createElement('span');name.textContent=item.label;
+      const countEl=document.createElement('span');countEl.style.color='var(--fg-dim)';countEl.textContent=item.count+' edit'+(item.count===1?'':'s');
+      row.appendChild(name);row.appendChild(countEl);list.appendChild(row);
+    });
     const buttons=document.createElement('div');buttons.className='modal-btns';
     const cancel=document.createElement('button');cancel.className='toolbar-btn';cancel.type='button';cancel.textContent='Cancel';
     const apply=document.createElement('button');apply.className='toolbar-btn';apply.type='button';apply.textContent='Apply';
     buttons.appendChild(cancel);buttons.appendChild(apply);
-    panel.appendChild(title);panel.appendChild(text);panel.appendChild(buttons);modal.appendChild(panel);document.body.appendChild(modal);
+    panel.appendChild(title);panel.appendChild(text);panel.appendChild(list);panel.appendChild(buttons);modal.appendChild(panel);document.body.appendChild(modal);
     const finish=value=>{modal.remove();resolve(value)};
     cancel.onclick=()=>finish(false);apply.onclick=()=>finish(true);
     modal.onclick=e=>{if(e.target===modal)finish(false)};
     modal.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();finish(false)}if(e.key==='Enter'){e.preventDefault();finish(true)}};
     setTimeout(()=>apply.focus(),0);
   });
+}
+function confirmEditorRenameApply(newName,summary){
+  const count=editorWorkspaceEditEditCount(summary);
+  return confirmEditorWorkspaceEditApply(
+    'Apply Rename',
+    summary,
+    'Apply '+count+' edit'+(count===1?'':'s')+' for "'+newName+'".'
+  );
 }
 async function requestEditorRename(quiet){
   closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();
@@ -3787,11 +3847,11 @@ async function requestEditorRename(quiet){
   const res=await call('editor_language_provider',editorProviderPayload('rename',Object.assign({},basePayload,{newName})));
   if(!res||res.error){setStatus('Rename failed: '+((res&&res.error)||'No rename result'));ed.focus();return}
   const summary=editorCodeActionEdits({edit:res.edit});
-  if(!summary.edits.length&&!summary.skipped){setStatus('Rename produced no local edits');ed.focus();return}
+  if(!editorWorkspaceEditEditCount(summary)&&!summary.skipped){setStatus('Rename produced no edits');ed.focus();return}
   if(!await confirmEditorRenameApply(newName,summary)){ed.focus();return}
   _undoPush(true);
-  const applied=editorApplyWorkspaceEdit(res.edit);
-  if(applied.changed)setStatus('Renamed symbol to '+newName+(applied.skipped?' ('+applied.skipped+' external edits skipped)':''));
+  const applied=await editorApplyWorkspaceEdit(res.edit,summary);
+  if(applied.changed||applied.tabApplied||applied.workspaceApplied)setStatus('Renamed symbol to '+newName+(applied.skipped?' ('+applied.skipped+' edits skipped)':''));
   else if(applied.skipped)setStatus('Rename edits outside the active editor were skipped');
   else setStatus('Rename produced no local edits');
   ed.focus();
@@ -3806,16 +3866,22 @@ function editorTextEditFromActionEntry(entry){
   return {range,newText:text};
 }
 function editorCodeActionEdits(action){
-  const edits=[];let skipped=0;
+  const edits=[],tabEdits=[],workspaceEdits=[];let skipped=0;
   function take(edit,uri){
-    if(!editorCurrentUriMatches(uri)){skipped++;return}
     const textEdit=editorTextEditFromActionEntry(edit);
     if(textEdit)edits.push(textEdit);
-    else if(edit&&edit.kind)skipped++;
+    else if(edit&&edit.kind){skipped++;return}
+    if(!textEdit)return;
+    if(!uri||editorCurrentUriMatches(uri))return;
+    edits.pop();
+    const tab=editorTabForUri(uri);
+    if(tab){tabEdits.push({tabId:tab.id,uri,edit:textEdit});return}
+    if(editorDocumentUriToPath(uri)){workspaceEdits.push({uri,range:textEdit.range,newText:textEdit.newText});return}
+    skipped++;
   }
   const edit=action&&action.edit;
-  if(!edit)return {edits,skipped};
-  if(Array.isArray(edit)){edit.forEach(item=>take(item,item&&item.uri));return {edits,skipped}}
+  if(!edit)return {edits,tabEdits,workspaceEdits,skipped};
+  if(Array.isArray(edit)){edit.forEach(item=>take(item,item&&item.uri));return {edits,tabEdits,workspaceEdits,skipped}}
   if(edit.range||edit.position)take(edit,edit.uri);
   const entries=Array.isArray(edit._edits)?edit._edits:(Array.isArray(edit.edits)?edit.edits:[]);
   entries.forEach(item=>take(item,item&&item.uri));
@@ -3834,11 +3900,36 @@ function editorCodeActionEdits(action){
       else take(change,uri);
     });
   }
-  return {edits,skipped};
+  return {edits,tabEdits,workspaceEdits,skipped};
 }
-function editorApplyWorkspaceEdit(edit){
-  const result=editorCodeActionEdits({edit});
-  return {changed:editorApplyTextEdits(result.edits),skipped:result.skipped};
+function editorApplyTabTextEdits(tabEdits){
+  const groups={};let applied=0;
+  (tabEdits||[]).forEach(item=>{(groups[item.tabId]||(groups[item.tabId]=[])).push(item.edit)});
+  Object.keys(groups).forEach(id=>{
+    const tab=tabs.find(t=>String(t.id)===String(id));
+    if(!tab)return;
+    const result=editorApplyTextEditsToValue(tab.content||'',groups[id]);
+    if(result){tab.content=result.value;tab.cursor=result.cursor;applied+=groups[id].length}
+  });
+  if(applied)renderTabs();
+  return applied;
+}
+async function editorApplyWorkspaceEdit(edit,summary){
+  const result=summary||editorCodeActionEdits({edit});
+  const changed=editorApplyTextEdits(result.edits);
+  const tabApplied=editorApplyTabTextEdits(result.tabEdits);
+  let workspaceApplied=0,skipped=result.skipped||0,errors=[];
+  if(result.workspaceEdits&&result.workspaceEdits.length){
+    const response=await call('apply_workspace_text_edits',result.workspaceEdits);
+    if(response&&Array.isArray(response.applied)){
+      workspaceApplied=response.applied.reduce((total,item)=>total+(Number(item.edits)||0),0);
+    }
+    if(response&&Array.isArray(response.skipped))skipped+=response.skipped.length;
+    if(response&&Array.isArray(response.errors))errors=response.errors;
+    if(!response||response.error)errors.push({error:(response&&response.error)||'Workspace edit failed'});
+    if(errors.length)skipped+=errors.length;
+  }
+  return {changed,tabApplied,workspaceApplied,skipped,errors};
 }
 async function runEditorCodeActionCommand(command){
   if(!command)return null;
@@ -3852,12 +3943,16 @@ async function runEditorCodeActionCommand(command){
 }
 async function applyEditorCodeAction(action){
   if(!action||action.disabled)return;
+  const summary=action.edit?editorCodeActionEdits({edit:action.edit}):{edits:[],tabEdits:[],workspaceEdits:[],skipped:0};
+  if(action.edit&&(summary.tabEdits.length||summary.workspaceEdits.length)){
+    if(!await confirmEditorWorkspaceEditApply('Apply Code Action',summary,'Apply code action "'+codeActionTitle(action)+'".')){ed.focus();return}
+  }
   _undoPush(true);
-  const editResult=action.edit?editorApplyWorkspaceEdit(action.edit):{changed:false,skipped:0};
+  const editResult=action.edit?await editorApplyWorkspaceEdit(action.edit,summary):{changed:false,skipped:0,tabApplied:0,workspaceApplied:0,errors:[]};
   const commandResult=action.command?await runEditorCodeActionCommand(action.command):null;
   closeEditorCodeActions();ed.focus();
   const title=codeActionTitle(action);
-  if(editResult.changed){setStatus('Applied code action: '+title);return}
+  if(editResult.changed||editResult.tabApplied||editResult.workspaceApplied){setStatus('Applied code action: '+title);return}
   if(callSucceeded(commandResult)){setStatus('Ran code action: '+title);return}
   if(editResult.skipped){setStatus('Code action edits outside the active editor were skipped');return}
   setStatus('Code action has no local edit');
