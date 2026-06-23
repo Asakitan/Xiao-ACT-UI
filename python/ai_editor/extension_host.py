@@ -1329,6 +1329,7 @@ class NodeTreeDataProvider:
         self._host = host
         self.view_id = str(view_id or "")
         self._emitter = EventEmitter()
+        self.last_error = ""
 
     @property
     def onDidChangeTreeData(self):
@@ -1338,9 +1339,11 @@ class NodeTreeDataProvider:
         self._emitter.fire(element)
 
     def getChildren(self, element: Any = None) -> List[NodeTreeElement]:
-        value = self._host.request_tree_data(
+        result = self._host.request_tree_data_result(
             self.view_id, "getChildren",
             self._element_handle(element), default=[])
+        self._remember_result_error(result)
+        value = result.get("value", [])
         if not isinstance(value, list):
             return []
         return [
@@ -1350,16 +1353,29 @@ class NodeTreeDataProvider:
         ]
 
     def getTreeItem(self, element: Any) -> Dict[str, Any]:
-        value = self._host.request_tree_data(
+        result = self._host.request_tree_data_result(
             self.view_id, "getTreeItem",
             self._element_handle(element), default={})
+        self._remember_result_error(result)
+        value = result.get("value", {})
         return value if isinstance(value, dict) else {}
 
     def getParent(self, element: Any) -> Optional[NodeTreeElement]:
-        value = self._host.request_tree_data(
+        result = self._host.request_tree_data_result(
             self.view_id, "getParent",
             self._element_handle(element), default=None)
+        self._remember_result_error(result)
+        value = result.get("value")
         return self._coerce_element(value) if isinstance(value, dict) else None
+
+    def clear_error(self) -> None:
+        self.last_error = ""
+
+    def _remember_result_error(self, result: Dict[str, Any]) -> None:
+        if result.get("ok"):
+            self.last_error = ""
+            return
+        self.last_error = str(result.get("error") or "Node tree provider failed")
 
     @staticmethod
     def _coerce_element(value: Dict[str, Any]) -> NodeTreeElement:
@@ -1965,8 +1981,20 @@ class NodeExtensionHost:
             self, view_id: str, op: str, element_handle: str = "",
             default: Any = None, timeout: float = 0.85) -> Any:
         """Synchronously request TreeDataProvider data from the Node host."""
+        result = self.request_tree_data_result(
+            view_id, op, element_handle, default=default, timeout=timeout)
+        return result.get("value", default) if result.get("ok") else default
+
+    def request_tree_data_result(
+            self, view_id: str, op: str, element_handle: str = "",
+            default: Any = None, timeout: float = 0.85) -> Dict[str, Any]:
+        """Return a structured Node TreeDataProvider request result."""
         if not self.is_running:
-            return default
+            return {
+                "ok": False,
+                "value": default,
+                "error": "Node extension host is not running",
+            }
         request_id = str(uuid.uuid4())
         event = threading.Event()
         with self._tree_request_lock:
@@ -1980,15 +2008,33 @@ class NodeExtensionHost:
                 "elementHandle": str(element_handle or ""),
             })
             if not sent:
-                return default
+                return {
+                    "ok": False,
+                    "value": default,
+                    "error": "Node tree provider request could not be sent",
+                }
             if not event.wait(timeout):
-                return default
+                return {
+                    "ok": False,
+                    "value": default,
+                    "error": "Node tree provider request timed out",
+                    "timeout": True,
+                }
             with self._tree_request_lock:
                 pending = self._tree_requests.get(request_id, {})
             response = pending.get("response", {})
             if isinstance(response, dict) and response.get("ok"):
-                return response.get("value", default)
-            return default
+                return {
+                    "ok": True,
+                    "value": response.get("value", default),
+                }
+            return {
+                "ok": False,
+                "value": default,
+                "error": (
+                    response.get("error")
+                    if isinstance(response, dict) else "Node tree provider failed"),
+            }
         finally:
             with self._tree_request_lock:
                 self._tree_requests.pop(request_id, None)

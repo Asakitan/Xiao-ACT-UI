@@ -4001,9 +4001,21 @@ class AIEditorAPI:
                 }
             seen = {id(parent)}
         view.begin_snapshot()
+        errors: List[Dict[str, Any]] = []
         nodes = self._tree_view_nodes_preview(
             provider, parent, depth=0, seen=seen,
-            tree_view=view, max_depth=0)
+            tree_view=view, max_depth=0, errors=errors)
+        if errors:
+            error = errors[-1]
+            return {
+                "error": error.get("message", "Tree data provider failed"),
+                "operation": error.get("operation", "getChildren"),
+                "retryable": error.get("retryable", True),
+                "view_id": normalized_view_id,
+                "handle": normalized_handle,
+                "nodes": nodes,
+                "refreshVersion": getattr(view, "refresh_version", 0),
+            }
         return {
             "ok": True,
             "view_id": normalized_view_id,
@@ -4486,7 +4498,11 @@ class AIEditorAPI:
         if tree_provider or tree_view:
             if tree_view is not None and hasattr(tree_view, "begin_snapshot"):
                 tree_view.begin_snapshot()
-            return {
+            errors: List[Dict[str, Any]] = []
+            nodes = self._tree_view_nodes_preview(
+                tree_provider, tree_view=tree_view, max_depth=0,
+                errors=errors)
+            state = {
                 "ok": True,
                 "kind": "treeView",
                 "runtimeAvailable": True,
@@ -4498,10 +4514,15 @@ class AIEditorAPI:
                     for item in list(getattr(tree_view, "selection", []) or [])
                 ],
                 "refreshVersion": getattr(tree_view, "refresh_version", 0),
-                "children": self._tree_view_children_preview(tree_provider),
-                "nodes": self._tree_view_nodes_preview(
-                    tree_provider, tree_view=tree_view, max_depth=0),
+                "children": [
+                    str(node.get("label", ""))
+                    for node in nodes[:20]
+                ],
+                "nodes": nodes,
             }
+            if errors:
+                state["treeError"] = errors[-1]
+            return state
         webview_provider = self._vscode_ns._webview_view_providers.get(view_id, {})
         webview_view = self._vscode_ns._webview_views.get(view_id)
         if webview_provider or webview_view:
@@ -4700,6 +4721,28 @@ class AIEditorAPI:
         return value
 
     @staticmethod
+    def _append_tree_provider_error(
+            errors: Optional[List[Dict[str, Any]]],
+            operation: str, message: Any) -> None:
+        if errors is None:
+            return
+        text = str(message or "").strip()
+        if not text:
+            return
+        errors.append({
+            "operation": operation,
+            "message": text,
+            "retryable": True,
+        })
+
+    @classmethod
+    def _append_last_tree_provider_error(
+            cls, provider: Any, errors: Optional[List[Dict[str, Any]]],
+            operation: str) -> None:
+        cls._append_tree_provider_error(
+            errors, operation, getattr(provider, "last_error", ""))
+
+    @staticmethod
     def _tree_view_children_preview(provider: Any) -> List[str]:
         if provider is None or not hasattr(provider, "getChildren"):
             return []
@@ -4722,7 +4765,10 @@ class AIEditorAPI:
                                  depth: int = 0,
                                  seen: Optional[set] = None,
                                  tree_view: Any = None,
-                                 max_depth: int = 2) -> List[Dict[str, Any]]:
+                                 max_depth: int = 2,
+                                 errors: Optional[
+                                     List[Dict[str, Any]]] = None
+                                 ) -> List[Dict[str, Any]]:
         if provider is None or not hasattr(provider, "getChildren"):
             return []
         if seen is None:
@@ -4732,18 +4778,28 @@ class AIEditorAPI:
         try:
             children = _resolve_vscode_provider_result(
                 provider.getChildren(element), default=[])
-        except TypeError:
+        except TypeError as exc:
             if element is None:
-                children = _resolve_vscode_provider_result(
-                    provider.getChildren(), default=[])
+                try:
+                    children = _resolve_vscode_provider_result(
+                        provider.getChildren(), default=[])
+                except Exception as exc:
+                    self._append_tree_provider_error(
+                        errors, "getChildren", exc)
+                    return []
             else:
+                self._append_tree_provider_error(errors, "getChildren", exc)
                 return []
-        except Exception:
+        except Exception as exc:
+            self._append_tree_provider_error(errors, "getChildren", exc)
             return []
+        self._append_last_tree_provider_error(provider, errors, "getChildren")
         if not isinstance(children, list):
             try:
                 children = list(children)
-            except Exception:
+            except Exception as exc:
+                self._append_tree_provider_error(
+                    errors, "getChildren", exc)
                 return []
         nodes: List[Dict[str, Any]] = []
         for child in children[:30]:
@@ -4752,7 +4808,7 @@ class AIEditorAPI:
                 continue
             child_seen = set(seen)
             child_seen.add(marker)
-            item = self._tree_item_for_element(provider, child)
+            item = self._tree_item_for_element(provider, child, errors=errors)
             node = self._tree_node_preview(
                 child, item, tree_view=tree_view, view_id=getattr(tree_view, "id", ""))
             force_reveal_children = False
@@ -4775,7 +4831,8 @@ class AIEditorAPI:
                     if force_reveal_children else max_depth)
                 child_nodes = self._tree_view_nodes_preview(
                     provider, child, depth + 1, child_seen,
-                    tree_view=tree_view, max_depth=child_max_depth)
+                    tree_view=tree_view, max_depth=child_max_depth,
+                    errors=errors)
                 if child_nodes and not node.get("collapsibleState", 0):
                     node["collapsibleState"] = 2 if force_reveal_children else 1
                 elif force_reveal_children and node.get("collapsibleState", 0):
@@ -4788,15 +4845,19 @@ class AIEditorAPI:
             nodes.append(node)
         return nodes
 
-    @staticmethod
-    def _tree_item_for_element(provider: Any, element: Any) -> Any:
+    def _tree_item_for_element(self, provider: Any, element: Any,
+                               errors: Optional[
+                                   List[Dict[str, Any]]] = None) -> Any:
         if provider is None or not hasattr(provider, "getTreeItem"):
             return element
         try:
             item = _resolve_vscode_provider_result(
                 provider.getTreeItem(element), default=None)
+            self._append_last_tree_provider_error(
+                provider, errors, "getTreeItem")
             return item if item is not None else element
-        except Exception:
+        except Exception as exc:
+            self._append_tree_provider_error(errors, "getTreeItem", exc)
             return element
 
     def _tree_node_preview(self, element: Any, item: Any,

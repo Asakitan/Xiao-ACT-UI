@@ -5722,16 +5722,31 @@ function runExtensionTreeItemAction(viewId,node,action){
   if(viewId&&node&&node.handle)call('execute_extension_tree_item_action',viewId,node.handle,action.command);
   else call('execute_command',action.command);
 }
-function extensionTreeStatusRow(depth,text,kind){
+function extensionTreeStatusRow(depth,text,kind,retry){
   const row=document.createElement('div');
   row.className='ext-tree-status '+(kind||'');
-  row.style.cssText='color:var(--fg-dim);font-size:11px;padding:3px 0 3px '+((depth+1)*12+18)+'px';
-  row.textContent=text;
+  const color=kind==='error'?'var(--fg-error)':'var(--fg-dim)';
+  row.style.cssText='display:flex;align-items:center;gap:6px;color:'+color+';font-size:11px;padding:3px 0 3px '+((depth+1)*12+18)+'px';
+  const label=document.createElement('span');
+  label.style.cssText='min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  label.textContent=text;
+  row.appendChild(label);
+  if(retry){
+    const btn=document.createElement('button');btn.type='button';btn.className='icon-btn';
+    btn.style.cssText='height:18px;min-width:38px;border:0;background:transparent;color:var(--fg-accent);padding:0 4px;font-size:11px';
+    btn.textContent='Retry';btn.title='Retry';
+    btn.onclick=e=>{e.stopPropagation();retry()};
+    row.appendChild(btn);
+  }
   return row;
 }
-function setExtensionTreeStatus(childBox,depth,text,kind){
+function setExtensionTreeStatus(childBox,depth,text,kind,retry){
   childBox.innerHTML='';
-  childBox.appendChild(extensionTreeStatusRow(depth,text,kind));
+  childBox.appendChild(extensionTreeStatusRow(depth,text,kind,retry));
+}
+function extensionTreeErrorText(error,fallback){
+  const msg=error&&error.error?error.error:(error&&error.message?error.message:'');
+  return msg?fallback+': '+String(msg):fallback;
 }
 async function loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion){
   if(!viewId||!node||!node.handle||node.childrenLoaded)return true;
@@ -5748,7 +5763,10 @@ async function loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion)
     return false;
   }
   if(!r||r.error){
-    setExtensionTreeStatus(childBox,depth,'Unable to load children','error');
+    node.childrenLoaded=false;node.lazyChildren=true;
+    setExtensionTreeStatus(
+      childBox,depth,extensionTreeErrorText(r,'Unable to load children'),'error',
+      ()=>{node.childrenLoaded=false;node.lazyChildren=true;void loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion)});
     return false;
   }
   const nodes=Array.isArray(r.nodes)?r.nodes:[];
@@ -5813,7 +5831,12 @@ function renderExtensionTreeView(view){
     tree.dataset.refreshVersion=String(viewVersion);
     nodes.forEach(node=>tree.appendChild(renderExtensionTreeNode(tree.dataset.viewId,node,0,viewVersion)));
     body.appendChild(tree);
+    if(state.treeError){
+      body.appendChild(extensionTreeStatusRow(-1,extensionTreeErrorText(state.treeError,'Unable to load tree items'),'error',()=>renderExtensionActivityBar()));
+    }
     focusRevealedExtensionTree(tree);
+  }else if(state.treeError){
+    body.appendChild(extensionTreeStatusRow(-1,extensionTreeErrorText(state.treeError,'Unable to load tree items'),'error',()=>renderExtensionActivityBar()));
   }else{
     body.innerHTML='<div style="color:var(--fg-dim);font-size:11px">'+esc(view.runtimeMessage||'Tree view provider registered; no root items reported.')+'</div>';
   }

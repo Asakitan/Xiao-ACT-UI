@@ -1210,7 +1210,11 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function showExtensionActionMenu(x,y,actions,runner)" in html
             and "let _extTreeChildRequestSeq=0" in html
             and "function loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion)" in html
-            and "function setExtensionTreeStatus(childBox,depth,text,kind)" in html
+            and "function setExtensionTreeStatus(childBox,depth,text,kind,retry)" in html
+            and "function extensionTreeErrorText(error,fallback)" in html
+            and "btn.textContent='Retry'" in html
+            and "node.childrenLoaded=false;node.lazyChildren=true" in html
+            and "state.treeError" in html
             and "node._childRequestId!==requestId||!childBox.isConnected" in html
             and "expectedVersion!==responseVersion" in html
             and "function focusRevealedExtensionTree(tree)" in html
@@ -2897,7 +2901,8 @@ def test_app_extension_runtime_support() -> None:
     from ai_editor.app import AIEditorAPI
     from ai_editor.chat_providers import ChatProviderDef
     from ai_editor.extension_host import (
-        EventEmitter, ExtensionDescription, ExtensionHost, NodeExtensionHost)
+        EventEmitter, ExtensionDescription, ExtensionHost, NodeExtensionHost,
+        NodeTreeDataProvider)
     from ai_editor.node_runtime import get_node_path
     from ai_editor.vscode_api import LanguageModelToolResult
 
@@ -3310,10 +3315,13 @@ def test_app_extension_runtime_support() -> None:
                 self._emitter.fire(element)
 
             def getChildren(self, element=None):
+                if element == "node-error":
+                    raise RuntimeError("Provider exploded")
                 if element == "node-a":
                     return _ImmediateThenable(["leaf-a"])
                 return _ImmediateThenable(
-                    ["node-a", "node-b"] if element is None else [])
+                    ["node-a", "node-b", "node-error"]
+                    if element is None else [])
 
             def getParent(self, element):
                 if element == "leaf-a":
@@ -3344,6 +3352,13 @@ def test_app_extension_runtime_support() -> None:
                             "title": "Open Node A",
                             "arguments": [{"from": "tree"}],
                         },
+                    })
+                if element == "node-error":
+                    return _ImmediateThenable({
+                        "label": "Node Error",
+                        "description": "throws",
+                        "collapsibleState": 1,
+                        "contextValue": "branch",
                     })
                 resource_uri = (
                     {
@@ -3441,6 +3456,15 @@ def test_app_extension_runtime_support() -> None:
                and loaded_activity_children.get("nodes", [{}])[0].get("icon") == "$(file)"
                and loaded_activity_children.get("nodes", [{}])[0].get("childrenLoaded") is True
                and loaded_activity_children.get("nodes", [{}])[0].get("actions", []) == [])
+        activity_tree_error_handle = (
+            activity_tree_nodes[2].get("handle", "")
+            if len(activity_tree_nodes) > 2 else "")
+        errored_activity_children = api.load_extension_tree_children(
+            "selftest.activity.tree", activity_tree_error_handle)
+        _check("activity tree provider child errors are retryable",
+               errored_activity_children.get("retryable") is True
+               and errored_activity_children.get("operation") == "getChildren"
+               and "Provider exploded" in errored_activity_children.get("error", ""))
         expanded_activity = api.set_extension_tree_item_expanded(
             "selftest.activity.tree", activity_tree_handle, True)
         collapsed_activity = api.set_extension_tree_item_expanded(
@@ -3678,6 +3702,37 @@ module.exports = { activate, deactivate };
             finally:
                 node_host.stop(timeout=1.0)
                 api._node_ext_host = previous_node_host
+
+        class _FailingNodeTreeHost:
+            def __init__(self):
+                self.calls = 0
+
+            def request_tree_data_result(
+                    self, view_id, op, element_handle="", default=None,
+                    timeout=0.85):
+                self.calls += 1
+                if self.calls == 1:
+                    return {
+                        "ok": False,
+                        "value": default,
+                        "error": "Node tree provider request timed out",
+                        "timeout": True,
+                    }
+                return {
+                    "ok": True,
+                    "value": [{"label": "Recovered", "_nodeTreeHandle": "r"}],
+                }
+
+        node_timeout_provider = NodeTreeDataProvider(
+            _FailingNodeTreeHost(), "selftest.timeout")
+        _check("node tree provider records structured request failures",
+               node_timeout_provider.getChildren() == []
+               and "timed out" in node_timeout_provider.last_error)
+        recovered_node_children = node_timeout_provider.getChildren()
+        _check("node tree provider clears request failures after success",
+               recovered_node_children
+               and recovered_node_children[0].get("label") == "Recovered"
+               and node_timeout_provider.last_error == "")
 
         provider = ChatProviderDef(
             id="selftest-provider",
