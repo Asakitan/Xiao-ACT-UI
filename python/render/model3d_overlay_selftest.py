@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 
@@ -31,6 +31,7 @@ from render.model3d_backend import (
     probe_model3d_backend,
 )
 from render.model3d_native import (
+    bootstrap_builtin_native_model3d_renderers,
     build_native_model3d_context,
     clear_native_model3d_renderers,
     native_model3d_renderer_status,
@@ -552,6 +553,56 @@ class Model3DBackendTests(unittest.TestCase):
         self.assertEqual(image.getpixel((1, 1)), (10, 20, 30, 255))
         self.assertEqual(pose.call_count, 0)
         self.assertEqual(native_model3d_renderer_status()["renderer"], "fake-offscreen")
+
+    def test_builtin_native_renderer_bootstraps_without_window(self) -> None:
+        fake_module = ModuleType("render.model3d_native_moderngl")
+        calls = []
+
+        def register_builtin_renderers(register):
+            from PIL import Image
+
+            def fake_renderer(_node, context):
+                calls.append(dict(context))
+                self.assertTrue(context["offscreen"])
+                self.assertTrue(context["windowless"])
+                self.assertEqual(context["presentation"], "existing_compositor_layer")
+                return Image.new("RGBA", (context["width"], context["height"]), (3, 5, 7, 255))
+
+            register("builtin-fake-offscreen", fake_renderer)
+            return ("builtin-fake-offscreen",)
+
+        fake_module.register_builtin_renderers = register_builtin_renderers
+        with mock.patch.dict(sys.modules, {"render.model3d_native_moderngl": fake_module}):
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "id": "avatar",
+                "width": 8,
+                "height": 6,
+                "model": {"path": "missing.fbx"},
+            })["nodes"][0]
+            image = render_model3d_node(node)
+
+        self.assertEqual(image.size, (8, 6))
+        self.assertEqual(image.getpixel((0, 0)), (3, 5, 7, 255))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(native_model3d_renderer_status()["renderer"], "builtin-fake-offscreen")
+
+    def test_missing_builtin_native_renderer_bootstrap_is_quiet(self) -> None:
+        clear_native_model3d_renderers()
+        modules = {
+            key: value
+            for key, value in sys.modules.items()
+            if key != "render.model3d_native_moderngl"
+        }
+        with mock.patch.object(sys, "modules", modules):
+            result = bootstrap_builtin_native_model3d_renderers(force=True)
+
+        self.assertEqual(result["renderer_count"], 0)
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(
+            native_model3d_renderer_status()["reason"],
+            "no native offscreen model3d renderer registered",
+        )
 
     def test_native_context_exposes_model_action_retarget_and_pose_resources(self) -> None:
         clear_model3d_metadata_caches()

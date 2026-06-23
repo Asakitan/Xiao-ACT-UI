@@ -8,6 +8,7 @@ own presentation, z-order, and input.
 """
 from __future__ import annotations
 
+import importlib
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, is_dataclass
 from threading import RLock
@@ -28,6 +29,8 @@ NativeModel3DRenderer = Callable[[Mapping[str, Any], Mapping[str, Any]], Any]
 
 _LOCK = RLock()
 _RENDERERS: list[tuple[str, NativeModel3DRenderer]] = []
+_BUILTIN_BOOTSTRAPPED = False
+_BUILTIN_PROVIDER_MODULES = ("render.model3d_native_moderngl",)
 _LAST_STATUS: dict[str, Any] = {
     "available": False,
     "renderer": "",
@@ -94,8 +97,10 @@ def unregister_native_model3d_renderer(name: str) -> None:
 
 
 def clear_native_model3d_renderers() -> None:
+    global _BUILTIN_BOOTSTRAPPED
     with _LOCK:
         _RENDERERS.clear()
+        _BUILTIN_BOOTSTRAPPED = False
         _LAST_STATUS.update({
             "available": False,
             "renderer": "",
@@ -107,6 +112,59 @@ def clear_native_model3d_renderers() -> None:
 def native_model3d_renderer_status() -> dict[str, Any]:
     with _LOCK:
         return dict(_LAST_STATUS)
+
+
+def bootstrap_builtin_native_model3d_renderers(*, force: bool = False) -> dict[str, Any]:
+    """Lazily register bundled offscreen renderers when present.
+
+    Built-in providers are optional and must obey the same contract as external
+    renderers: return an RGBA image and never own a window, z-order, or input.
+    Missing provider modules are treated as "no renderer bundled" rather than
+    an error so model3d diagnostics/fallbacks stay quiet.
+    """
+
+    global _BUILTIN_BOOTSTRAPPED
+    with _LOCK:
+        if _BUILTIN_BOOTSTRAPPED and not force:
+            return {
+                "bootstrapped": True,
+                "renderer_count": len(_RENDERERS),
+                "errors": [],
+            }
+        _BUILTIN_BOOTSTRAPPED = True
+
+    errors: list[str] = []
+    for module_name in _BUILTIN_PROVIDER_MODULES:
+        try:
+            module = importlib.import_module(module_name)
+        except ModuleNotFoundError as exc:
+            if getattr(exc, "name", "") != module_name:
+                errors.append(f"{module_name}: {exc}")
+            continue
+        except Exception as exc:
+            errors.append(f"{module_name}: {exc}")
+            continue
+        registrar = getattr(module, "register_builtin_renderers", None)
+        if not callable(registrar):
+            continue
+        try:
+            registrar(register_native_model3d_renderer)
+        except Exception as exc:
+            errors.append(f"{module_name}.register_builtin_renderers: {exc}")
+
+    with _LOCK:
+        if errors and not _RENDERERS:
+            _LAST_STATUS.update({
+                "available": False,
+                "renderer": "",
+                "reason": "builtin native model3d bootstrap failed",
+                "errors": errors,
+            })
+        return {
+            "bootstrapped": True,
+            "renderer_count": len(_RENDERERS),
+            "errors": list(errors),
+        }
 
 
 def _image_from_result(result: Any, width: int, height: int) -> Any:
@@ -215,6 +273,8 @@ def try_render_native_model3d_node(
         _set_status(available=False, reason="PIL unavailable", errors=[])
         return None
 
+    bootstrap_builtin_native_model3d_renderers()
+
     with _LOCK:
         renderers = list(_RENDERERS)
     if not renderers:
@@ -254,6 +314,7 @@ def try_render_native_model3d_node(
 
 __all__ = [
     "NativeModel3DRenderer",
+    "bootstrap_builtin_native_model3d_renderers",
     "build_native_model3d_context",
     "clear_native_model3d_renderers",
     "native_model3d_renderer_status",
