@@ -898,11 +898,13 @@ class ExtensionPoints:
             if isinstance(theme, dict):
                 theme = dict(theme)
                 theme["_extensionId"] = eid
+                theme["_themeType"] = "color"
                 self._themes.append(theme)
         for theme in c.get("iconThemes", []):
             if isinstance(theme, dict):
                 theme = dict(theme)
                 theme["_extensionId"] = eid
+                theme["_themeType"] = "icon"
                 self._themes.append(theme)
 
         for snip in c.get("snippets", []):

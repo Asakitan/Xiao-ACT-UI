@@ -1878,6 +1878,7 @@ function _applyLayoutState(){
 async function init(){
   const c=await call('load_config'); Object.assign(config,withSettingsDefaults({...config,...(c||{})}));
   await loadEditorLanguages();
+  await loadEditorThemes();
   if(normalizeUiLanguage(config.language))_curLang=config.language;
   syncUI();
   _applyLayoutState();
@@ -2332,6 +2333,7 @@ const BUILTIN_LANGUAGE_IDS=['plaintext','python','javascript','typescript','json
   'yaml','xml','sql','shell','lua','c','cpp','csharp','java','go','rust','toml'];
 let LANGUAGES=[...BUILTIN_LANGUAGE_IDS];
 let LANGUAGE_META=Object.create(null),LANGUAGE_BY_EXT=Object.create(null),LANGUAGE_BY_FILENAME=Object.create(null);
+let EXTENSION_EDITOR_THEMES=[];
 const LANGUAGE_ICONS={python:'🐍',javascript:'JS',typescript:'TS',json:'{}',html:'<>',css:'#',
   markdown:'M↓',yaml:'YAML',shell:'$_',lua:'Lua',sql:'SQL',plaintext:'{}'};
 const BUILTIN_LANGUAGE_EXTS={
@@ -2384,7 +2386,7 @@ function languageDisplayName(lang){
 function languageSearchText(lang){
   const meta=LANGUAGE_META[lang]||{};
   const exts=(meta.extensions||[]).flatMap(ext=>[ext,'.'+String(ext).replace(/^\./,'')]);
-  return [lang,meta.name||'',...(meta.aliases||[]),...exts,...(meta.filenames||[])]
+  return [lang,meta.name||'',...(meta.aliases||[]),...exts,...(meta.filenames||[]),...(meta.grammarScopes||[]),meta.tokenizer||'']
     .join(' ').toLowerCase();
 }
 function languageForFileName(name){
@@ -2410,11 +2412,16 @@ function applyEditorLanguages(rows){
     const aliases=Array.isArray(row.aliases)?row.aliases.map(String).filter(Boolean):[];
     const extensions=Array.isArray(row.extensions)?row.extensions.map(normalizeLanguageExt).filter(Boolean):[];
     const filenames=Array.isArray(row.filenames)?row.filenames.map(v=>String(v).toLowerCase()).filter(Boolean):[];
+    const grammars=Array.isArray(row.grammars)?row.grammars:[];
+    const grammarScopes=Array.isArray(row.grammarScopes)?row.grammarScopes.map(String).filter(Boolean):[];
     byId[id]={...current,...row,id,
       name:row.name||aliases[0]||current.name||id,
       aliases:[...(current.aliases||[]),...aliases].filter((v,i,a)=>a.indexOf(v)===i),
       extensions:[...(current.extensions||[]),...extensions].filter((v,i,a)=>a.indexOf(v)===i),
-      filenames:[...(current.filenames||[]),...filenames].filter((v,i,a)=>a.indexOf(v)===i)};
+      filenames:[...(current.filenames||[]),...filenames].filter((v,i,a)=>a.indexOf(v)===i),
+      grammars:[...(current.grammars||[]),...grammars].filter((v,i,a)=>a.indexOf(v)===i),
+      grammarScopes:[...(current.grammarScopes||[]),...grammarScopes].filter((v,i,a)=>a.indexOf(v)===i),
+      tokenizer:row.tokenizer||current.tokenizer||''};
     extensions.forEach(ext=>{byExt[ext]=id});
     filenames.forEach(filename=>{byFilename[filename]=id});
   });
@@ -2429,6 +2436,13 @@ async function loadEditorLanguages(){
     if(r&&Array.isArray(r.languages))applyEditorLanguages(r.languages);
   }catch(e){}
 }
+async function loadEditorThemes(){
+  EXTENSION_EDITOR_THEMES=[];
+  try{
+    const r=await call('list_editor_themes');
+    if(r&&Array.isArray(r.themes))EXTENSION_EDITOR_THEMES=r.themes;
+  }catch(e){}
+}
 function detectLanguage(code,name){
   const byName=languageForFileName(name);
   if(byName){setEditorLanguage(byName);return}
@@ -2440,6 +2454,11 @@ function detectLanguage(code,name){
 function setEditorLanguage(lang){
   editorLang=LANGUAGE_META[lang]?lang:'plaintext';
   $('status-language').textContent=(LANGUAGE_ICONS[editorLang]||'{}')+' '+languageDisplayName(editorLang);
+  const meta=LANGUAGE_META[editorLang]||{};
+  const bits=[editorLang,...(meta.extensions||[]).map(ext=>'.'+String(ext).replace(/^\./,''))];
+  if(meta.grammarScopes&&meta.grammarScopes.length)bits.push('TextMate: '+meta.grammarScopes.join(', '));
+  if(meta.extension_id)bits.push('Extension: '+meta.extension_id);
+  $('status-language').title=bits.filter(Boolean).join(' · ');
 }
 
 // ── Undo / Redo stack for textarea editor ──
@@ -2701,8 +2720,11 @@ function filterLanguages(){
   LANGUAGES.filter(l=>!q||languageSearchText(l).includes(q)).forEach(l=>{
     const d=document.createElement('div');d.className='sb-item';d.style.padding='6px 16px';
     const meta=LANGUAGE_META[l]||{};
-    d.textContent=languageDisplayName(l)+(meta.source==='extension'?' · Extension':'');
-    d.title=[l,...(meta.extensions||[])].filter(Boolean).join(' ');
+    const badges=[];
+    if(meta.source==='extension')badges.push('Extension');
+    if(meta.grammarScopes&&meta.grammarScopes.length)badges.push('TextMate');
+    d.textContent=languageDisplayName(l)+(badges.length?' · '+badges.join(' · '):'');
+    d.title=[l,...(meta.extensions||[]),...(meta.grammarScopes||[])].filter(Boolean).join(' ');
     d.onclick=()=>{setEditorLanguage(l);$('lang-picker').classList.remove('open')};
     list.appendChild(d);
   });

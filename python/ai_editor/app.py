@@ -888,6 +888,34 @@ class AIEditorAPI:
             "languages": languages,
             "extensionCount": sum(
                 1 for item in languages if item.get("source") == "extension"),
+            "grammarCount": sum(
+                len(item.get("grammars") or []) for item in languages),
+        }
+
+    def list_editor_grammars(self) -> Dict:
+        """Return VS Code TextMate grammar metadata contributed by extensions."""
+        self._ensure_engine()
+        grammars = self._editor_grammar_entries()
+        return {
+            "grammars": grammars,
+            "count": len(grammars),
+            "languages": sorted({
+                str(item.get("language") or "")
+                for item in grammars if item.get("language")
+            }),
+        }
+
+    def list_editor_themes(self) -> Dict:
+        """Return VS Code color/icon theme metadata contributed by extensions."""
+        self._ensure_engine()
+        themes = self._editor_theme_entries()
+        return {
+            "themes": themes,
+            "count": len(themes),
+            "colorThemes": sum(
+                1 for item in themes if item.get("themeType") == "color"),
+            "iconThemes": sum(
+                1 for item in themes if item.get("themeType") != "color"),
         }
 
     def save_config(self, data: Dict) -> Dict:
@@ -1590,6 +1618,9 @@ class AIEditorAPI:
                 "aliases": [],
                 "extensions": [],
                 "filenames": [],
+                "grammars": [],
+                "grammarScopes": [],
+                "tokenizer": "",
                 "source": source,
                 "extension_id": "",
             })
@@ -1638,10 +1669,144 @@ class AIEditorAPI:
                 if normalized_name and normalized_name not in item["filenames"]:
                     item["filenames"].append(normalized_name)
 
+        for language_id, grammars in self._editor_grammars_by_language().items():
+            if not language_id:
+                continue
+            item = _entry(language_id, "extension")
+            if item.get("source") != "builtin":
+                item["source"] = "extension"
+            if grammars and not item.get("extension_id"):
+                item["extension_id"] = str(
+                    grammars[0].get("extension_id") or "")
+            item["tokenizer"] = "textmate"
+            for grammar in grammars:
+                if grammar not in item["grammars"]:
+                    item["grammars"].append(grammar)
+                scope = str(grammar.get("scopeName") or "").strip()
+                if scope and scope not in item["grammarScopes"]:
+                    item["grammarScopes"].append(scope)
+
         return sorted(rows.values(), key=lambda item: (
             0 if item.get("id") == "plaintext" else 1,
             str(item.get("name") or item.get("id") or "").casefold(),
         ))
+
+    def _editor_grammars_by_language(self) -> Dict[str, List[Dict[str, Any]]]:
+        result: Dict[str, List[Dict[str, Any]]] = {}
+        for grammar in self._editor_grammar_entries():
+            language_id = str(grammar.get("language") or "").strip()
+            if language_id:
+                result.setdefault(language_id, []).append(grammar)
+        return result
+
+    def _editor_grammar_entries(self) -> List[Dict[str, Any]]:
+        try:
+            raw_grammars = self._ext_host.ext_points.all_contributions.get(
+                "grammars", [])
+        except Exception:
+            raw_grammars = []
+        entries: List[Dict[str, Any]] = []
+        for raw in raw_grammars:
+            if not isinstance(raw, dict):
+                continue
+            language_id = str(raw.get("language") or "").strip()
+            scope_name = str(raw.get("scopeName") or "").strip()
+            grammar_path = str(raw.get("path") or "").strip()
+            if not language_id and not scope_name:
+                continue
+            extension_id = str(raw.get("_extensionId") or "")
+            embedded_languages = raw.get("embeddedLanguages")
+            token_types = raw.get("tokenTypes")
+            entries.append({
+                "language": language_id,
+                "scopeName": scope_name,
+                "path": grammar_path,
+                "resolvedPath": self._extension_contribution_path(
+                    extension_id, grammar_path),
+                "extension_id": extension_id,
+                "embeddedLanguages": (
+                    dict(embedded_languages)
+                    if isinstance(embedded_languages, dict) else {}),
+                "tokenTypes": (
+                    dict(token_types)
+                    if isinstance(token_types, dict) else {}),
+                "injectTo": self._extension_string_list(raw.get("injectTo")),
+                "balancedBracketScopes": self._extension_string_list(
+                    raw.get("balancedBracketScopes")),
+                "unbalancedBracketScopes": self._extension_string_list(
+                    raw.get("unbalancedBracketScopes")),
+            })
+        return sorted(entries, key=lambda item: (
+            str(item.get("language") or "").casefold(),
+            str(item.get("scopeName") or "").casefold(),
+        ))
+
+    def _editor_theme_entries(self) -> List[Dict[str, Any]]:
+        try:
+            raw_themes = self._ext_host.ext_points.all_contributions.get(
+                "themes", [])
+        except Exception:
+            raw_themes = []
+        entries: List[Dict[str, Any]] = []
+        for raw in raw_themes:
+            if not isinstance(raw, dict):
+                continue
+            extension_id = str(raw.get("_extensionId") or "")
+            theme_path = str(raw.get("path") or "").strip()
+            theme_type = str(raw.get("_themeType") or "").strip()
+            if not theme_type:
+                theme_type = "color" if raw.get("uiTheme") else "icon"
+            label = str(
+                raw.get("label") or raw.get("id") or raw.get("uiTheme")
+                or os.path.basename(theme_path) or "Theme")
+            entries.append({
+                "id": str(raw.get("id") or label),
+                "label": label,
+                "uiTheme": str(raw.get("uiTheme") or ""),
+                "themeType": theme_type,
+                "path": theme_path,
+                "resolvedPath": self._extension_contribution_path(
+                    extension_id, theme_path),
+                "extension_id": extension_id,
+            })
+        return sorted(entries, key=lambda item: (
+            str(item.get("themeType") or "").casefold(),
+            str(item.get("label") or "").casefold(),
+        ))
+
+    def _extension_contribution_path(self, extension_id: str,
+                                     rel_path: str) -> str:
+        rel = str(rel_path or "").strip()
+        if not rel:
+            return ""
+        try:
+            ext = self._ext_host.registry.get(str(extension_id or ""))
+        except Exception:
+            ext = None
+        root = getattr(ext, "extension_path", "") if ext else ""
+        if not root:
+            return rel
+        full = os.path.abspath(os.path.join(root, rel))
+        try:
+            root_real = os.path.realpath(os.path.abspath(root))
+            full_real = os.path.realpath(full)
+            if os.path.commonpath([
+                    os.path.normcase(root_real),
+                    os.path.normcase(full_real)]) != os.path.normcase(root_real):
+                return ""
+        except Exception:
+            return ""
+        return full
+
+    @staticmethod
+    def _extension_string_list(value: Any) -> List[str]:
+        if not isinstance(value, list):
+            return []
+        return [
+            str(item).strip()
+            for item in value
+            if str(item or "").strip()
+        ]
 
     def _editor_language_by_ext(self) -> Dict[str, str]:
         language_by_ext = dict(_EDITOR_LANGUAGE_BY_EXT)

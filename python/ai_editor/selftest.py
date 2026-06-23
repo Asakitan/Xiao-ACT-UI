@@ -282,7 +282,8 @@ def test_app_settings_parity() -> None:
         "set_active_mode", "set_provider_model", "set_chat_provider",
         "set_chat_controls",
         "get_extension_contributions",
-        "list_editor_languages",
+        "list_editor_languages", "list_editor_grammars",
+        "list_editor_themes",
         "list_extension_activity_bar_items",
         "load_history", "switch_provider", "list_chat_providers",
         "provider_send", "provider_cancel", "provider_new_chat",
@@ -1165,7 +1166,12 @@ def test_phase1_ai_editor_regressions() -> None:
             and "rememberDynamicProvidersFromEventData(data)" in html)
     _check("frontend loads dynamic editor language contributions",
             "call('list_editor_languages')" in html
+            and "call('list_editor_themes')" in html
             and "function applyEditorLanguages(rows)" in html
+            and "function loadEditorThemes()" in html
+            and "EXTENSION_EDITOR_THEMES" in html
+            and "grammarScopes" in html
+            and "badges.push('TextMate')" in html
             and "LANGUAGE_BY_EXT" in html
             and "languageForFileName(name)" in html)
     _check("frontend renders extension activity bar views dynamically",
@@ -2910,6 +2916,24 @@ def test_app_extension_runtime_support() -> None:
                     "extensions": [".self"],
                     "filenames": ["SELFFILE"],
                 }],
+                "grammars": [{
+                    "language": "selflang",
+                    "scopeName": "source.selflang",
+                    "path": "./syntaxes/self.tmLanguage.json",
+                    "embeddedLanguages": {
+                        "meta.embedded.selflang": "json",
+                    },
+                }],
+                "themes": [{
+                    "label": "Self Dark",
+                    "uiTheme": "vs-dark",
+                    "path": "./themes/self-dark.json",
+                }],
+                "iconThemes": [{
+                    "id": "self-icons",
+                    "label": "Self Icons",
+                    "path": "./themes/self-icons.json",
+                }],
             },
         }, "/tmp/selftest-language")
         api._ext_host.ext_points.process(language_desc)
@@ -2917,9 +2941,35 @@ def test_app_extension_runtime_support() -> None:
             item.get("id"): item
             for item in api.list_editor_languages().get("languages", [])
         }
+        editor_grammars = api.list_editor_grammars().get("grammars", [])
+        editor_themes = api.list_editor_themes()
+        selflang_grammars = (
+            editor_languages.get("selflang", {}).get("grammars") or [{}])
+        selflang_resolved_path = (
+            selflang_grammars[0]
+            .get("resolvedPath", "")
+            .replace("\\", "/"))
         _check("extension languages feed editor language table",
                editor_languages.get("selflang", {}).get("name") == "Self Lang"
-               and ".self" in editor_languages.get("selflang", {}).get("extensions", []))
+               and ".self" in editor_languages.get("selflang", {}).get("extensions", [])
+               and "source.selflang" in editor_languages.get("selflang", {}).get("grammarScopes", [])
+               and editor_languages.get("selflang", {}).get("tokenizer") == "textmate")
+        _check("extension grammars feed editor language metadata",
+               any(item.get("language") == "selflang"
+                   and item.get("scopeName") == "source.selflang"
+                   and item.get("embeddedLanguages", {}).get("meta.embedded.selflang") == "json"
+                   for item in editor_grammars)
+               and selflang_resolved_path.endswith("/syntaxes/self.tmLanguage.json"))
+        _check("extension themes feed editor theme metadata",
+               editor_themes.get("colorThemes") >= 1
+               and editor_themes.get("iconThemes") >= 1
+               and any(item.get("label") == "Self Dark"
+                       and item.get("uiTheme") == "vs-dark"
+                       and item.get("themeType") == "color"
+                       for item in editor_themes.get("themes", []))
+               and any(item.get("id") == "self-icons"
+                       and item.get("themeType") == "icon"
+                       for item in editor_themes.get("themes", [])))
         _check("extension language extensions and filenames drive file detection",
                api._editor_language_for_path("demo.self") == "selflang"
                and api._editor_language_for_path("SELFFILE") == "selflang")
