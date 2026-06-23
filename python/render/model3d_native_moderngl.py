@@ -36,6 +36,11 @@ _TLS = threading.local()
 _GLOBAL_FAILED = False
 _MODERNGL: Any = None
 _IMPORT_ERROR = ""
+_TOPOLOGY_CACHE_LIMIT = 64
+_TOPOLOGY_CACHE: dict[
+    tuple[Any, ...],
+    tuple[list[tuple[Any, Any]], list[tuple[Any, Any]]],
+] = {}
 
 
 _VS_MESH = """
@@ -149,6 +154,13 @@ def _preview_from_context(context: Mapping[str, Any]) -> tuple[list[tuple[float,
     model = context.get("model") if isinstance(context.get("model"), Mapping) else {}
     mesh = model.get("mesh") if isinstance(model.get("mesh"), Mapping) else {}
     preview = mesh.get("preview") if isinstance(mesh.get("preview"), Mapping) else {}
+    cached_geometry = getattr(_software, "_preview_geometry", None) if _software is not None else None
+    if callable(cached_geometry):
+        try:
+            vertices, faces = cached_geometry(model, preview)
+            return vertices, faces, preview
+        except Exception:
+            pass
     raw_vertices = preview.get("vertices") if isinstance(preview, Mapping) else ()
     vertices = [point for point in (_point3(item) for item in (raw_vertices or ())) if point is not None]
     faces = _faces(preview.get("faces"), len(vertices)) if isinstance(preview, Mapping) else []
@@ -226,6 +238,75 @@ def _outline_color(base: tuple[int, int, int, int]) -> tuple[int, int, int, int]
     )
 
 
+def _topology_cache_key(
+    faces: list[list[int]],
+    preview: Mapping[str, Any],
+    accent: tuple[int, int, int, int],
+) -> tuple[Any, ...]:
+    skin = preview.get("skin")
+    return (
+        id(preview.get("faces")),
+        len(faces),
+        id(skin),
+        len(skin) if isinstance(skin, (list, tuple)) else 0,
+        accent,
+    )
+
+
+def _topology_index_batches(
+    faces: list[list[int]],
+    preview: Mapping[str, Any],
+    accent: tuple[int, int, int, int],
+) -> tuple[list[tuple[Any, Any]], list[tuple[Any, Any]]]:
+    if np is None:
+        return [], []
+    key = _topology_cache_key(faces, preview, accent)
+    cached = _TOPOLOGY_CACHE.get(key)
+    if cached is not None:
+        return cached
+    tri_groups: dict[tuple[int, int, int, int], list[int]] = {}
+    line_groups: dict[tuple[int, int, int, int], list[int]] = {}
+    for face in faces:
+        if len(face) < 3:
+            continue
+        base = _face_base_color(face, preview, accent)
+        outline = _outline_color(base)
+        tri_group = tri_groups.setdefault(base, [])
+        line_group = line_groups.setdefault(outline, [])
+        first = face[0]
+        for index in range(1, len(face) - 1):
+            tri_group.extend((first, face[index], face[index + 1]))
+        for index, point in enumerate(face):
+            line_group.extend((point, face[(index + 1) % len(face)]))
+    triangles = [
+        (np.asarray(indices, dtype=np.int32), _gl_color(color, alpha=0.76))
+        for color, indices in tri_groups.items()
+        if indices
+    ]
+    lines = [
+        (np.asarray(indices, dtype=np.int32), _gl_color(color, alpha=0.96))
+        for color, indices in line_groups.items()
+        if indices
+    ]
+    if len(_TOPOLOGY_CACHE) >= _TOPOLOGY_CACHE_LIMIT:
+        _TOPOLOGY_CACHE.clear()
+    cached = (triangles, lines)
+    _TOPOLOGY_CACHE[key] = cached
+    return cached
+
+
+def _projected_ndc_array(projected: list[tuple[float, float, float]], width: int, height: int) -> Any:
+    if np is None:
+        return None
+    arr = np.asarray(projected, dtype=np.float32)
+    if arr.ndim != 2 or arr.shape[0] <= 0 or arr.shape[1] < 2:
+        return None
+    out = np.empty((arr.shape[0], 2), dtype=np.float32)
+    out[:, 0] = (arr[:, 0] / max(1.0, float(width))) * 2.0 - 1.0
+    out[:, 1] = 1.0 - (arr[:, 1] / max(1.0, float(height))) * 2.0
+    return out
+
+
 def _gl_color(color: tuple[int, int, int, int], alpha: float | None = None) -> tuple[float, float, float, float]:
     a = color[3] / 255.0 if alpha is None else alpha
     return (
@@ -253,6 +334,20 @@ def _mesh_arrays_by_color(
 ) -> tuple[list[tuple[Any, tuple[float, float, float, float]]], list[tuple[Any, tuple[float, float, float, float]]]]:
     if np is None:
         return [], []
+    ndc = _projected_ndc_array(projected, width, height)
+    if ndc is not None:
+        tri_index_batches, line_index_batches = _topology_index_batches(faces, preview, accent)
+        triangles = [
+            (np.ascontiguousarray(ndc[indices].reshape((-1, 2)), dtype="f4"), color)
+            for indices, color in tri_index_batches
+            if getattr(indices, "size", 0) > 0
+        ]
+        lines = [
+            (np.ascontiguousarray(ndc[indices].reshape((-1, 2)), dtype="f4"), color)
+            for indices, color in line_index_batches
+            if getattr(indices, "size", 0) > 0
+        ]
+        return triangles, lines
     tri_groups: dict[tuple[int, int, int, int], list[tuple[float, float]]] = {}
     line_groups: dict[tuple[int, int, int, int], list[tuple[float, float]]] = {}
     ordered = sorted(faces, key=lambda face: sum(projected[idx][2] for idx in face) / len(face))
@@ -404,6 +499,7 @@ def _reset_for_tests() -> None:
     _GLOBAL_FAILED = False
     _MODERNGL = None
     _IMPORT_ERROR = ""
+    _TOPOLOGY_CACHE.clear()
     _TLS.__dict__.clear()
 
 

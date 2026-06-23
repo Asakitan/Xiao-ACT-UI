@@ -60,25 +60,25 @@ HUMANOID_BONES = (
 
 _BONE_ALIASES: dict[str, tuple[str, ...]] = {
     "root": ("root", "armature", "scene", "origin"),
-    "hips": ("hips", "hip", "pelvis", "pelvisbone", "waist", "mixamorig:hips", "bip001pelvis", "spine05"),
-    "spine": ("spine", "spine1", "spine01", "spine_01", "spine04", "torso", "body"),
-    "chest": ("chest", "upperchest", "spine2", "spine02", "spine_02", "spine03", "breast"),
-    "neck": ("neck", "neck1", "neck01", "neck02", "neck03"),
-    "head": ("head", "headtop", "head_end"),
-    "left_shoulder": ("leftshoulder", "lshoulder", "shoulder_l", "l_clavicle", "leftclavicle", "clavicle_l", "clavicle.l", "shoulder01.l"),
-    "left_arm": ("leftarm", "leftupperarm", "upperarm_l", "lupperarm", "arm_l", "l_arm", "upperarm01.l", "upperarm02.l"),
-    "left_forearm": ("leftforearm", "leftlowerarm", "forearm_l", "lowerarm_l", "lelbow", "l_forearm", "lowerarm01.l", "lowerarm02.l"),
-    "left_hand": ("lefthand", "hand_l", "lhand", "l_hand", "leftwrist", "wrist_l", "wrist.l"),
-    "right_shoulder": ("rightshoulder", "rshoulder", "shoulder_r", "r_clavicle", "rightclavicle", "clavicle_r", "clavicle.r", "shoulder01.r"),
-    "right_arm": ("rightarm", "rightupperarm", "upperarm_r", "rupperarm", "arm_r", "r_arm", "upperarm01.r", "upperarm02.r"),
-    "right_forearm": ("rightforearm", "rightlowerarm", "forearm_r", "lowerarm_r", "relbow", "r_forearm", "lowerarm01.r", "lowerarm02.r"),
-    "right_hand": ("righthand", "hand_r", "rhand", "r_hand", "rightwrist", "wrist_r", "wrist.r"),
-    "left_leg": ("leftupleg", "leftupperleg", "leftleg", "thigh_l", "upleg_l", "lthigh", "l_leg", "upperleg01.l", "upperleg02.l"),
-    "left_knee": ("leftleg", "leftlowerleg", "calf_l", "leg_l", "lknee", "shin_l", "lowerleg01.l", "lowerleg02.l"),
-    "left_foot": ("leftfoot", "foot_l", "lfoot", "l_foot", "leftankle", "ankle_l", "foot.l"),
-    "right_leg": ("rightupleg", "rightupperleg", "rightleg", "thigh_r", "upleg_r", "rthigh", "r_leg", "upperleg01.r", "upperleg02.r"),
-    "right_knee": ("rightleg", "rightlowerleg", "calf_r", "leg_r", "rknee", "shin_r", "lowerleg01.r", "lowerleg02.r"),
-    "right_foot": ("rightfoot", "foot_r", "rfoot", "r_foot", "rightankle", "ankle_r", "foot.r"),
+    "hips": ("hips", "hip", "pelvis", "pelvisbone", "waist", "mixamorig:hips", "bip001pelvis", "spine05", "j_bip_c_hips"),
+    "spine": ("spine", "spine1", "spine01", "spine_01", "spine04", "spine.001", "j_bip_c_spine", "torso", "body"),
+    "chest": ("chest", "upperchest", "spine2", "spine02", "spine_02", "spine03", "spine.002", "spine.003", "j_bip_c_chest", "j_bip_c_upperchest", "breast"),
+    "neck": ("neck", "neck1", "neck01", "neck02", "neck03", "j_bip_c_neck"),
+    "head": ("head", "headtop", "head_end", "j_bip_c_head"),
+    "left_shoulder": ("leftshoulder", "lshoulder", "shoulder_l", "l_clavicle", "leftclavicle", "clavicle_l", "clavicle.l", "shoulder01.l", "j_bip_l_shoulder"),
+    "left_arm": ("leftarm", "leftupperarm", "upperarm_l", "lupperarm", "arm_l", "l_arm", "upperarm01.l", "upperarm02.l", "upper_arm.l", "j_bip_l_upperarm"),
+    "left_forearm": ("leftforearm", "leftlowerarm", "forearm_l", "lowerarm_l", "lower_arm.l", "lelbow", "l_forearm", "lowerarm01.l", "lowerarm02.l", "j_bip_l_lowerarm"),
+    "left_hand": ("lefthand", "hand_l", "lhand", "l_hand", "leftwrist", "wrist_l", "wrist.l", "j_bip_l_hand"),
+    "right_shoulder": ("rightshoulder", "rshoulder", "shoulder_r", "r_clavicle", "rightclavicle", "clavicle_r", "clavicle.r", "shoulder01.r", "j_bip_r_shoulder"),
+    "right_arm": ("rightarm", "rightupperarm", "upperarm_r", "rupperarm", "arm_r", "r_arm", "upperarm01.r", "upperarm02.r", "upper_arm.r", "j_bip_r_upperarm"),
+    "right_forearm": ("rightforearm", "rightlowerarm", "forearm_r", "lowerarm_r", "lower_arm.r", "relbow", "r_forearm", "lowerarm01.r", "lowerarm02.r", "j_bip_r_lowerarm"),
+    "right_hand": ("righthand", "hand_r", "rhand", "r_hand", "rightwrist", "wrist_r", "wrist.r", "j_bip_r_hand"),
+    "left_leg": ("leftupleg", "leftupperleg", "leftleg", "thigh_l", "upleg_l", "upper_leg.l", "lthigh", "l_leg", "upperleg01.l", "upperleg02.l", "j_bip_l_upperleg"),
+    "left_knee": ("leftleg", "leftlowerleg", "calf_l", "leg_l", "lower_leg.l", "lknee", "shin_l", "lowerleg01.l", "lowerleg02.l", "j_bip_l_lowerleg"),
+    "left_foot": ("leftfoot", "foot_l", "lfoot", "l_foot", "leftankle", "ankle_l", "foot.l", "j_bip_l_foot"),
+    "right_leg": ("rightupleg", "rightupperleg", "rightleg", "thigh_r", "upleg_r", "upper_leg.r", "rthigh", "r_leg", "upperleg01.r", "upperleg02.r", "j_bip_r_upperleg"),
+    "right_knee": ("rightleg", "rightlowerleg", "calf_r", "leg_r", "lower_leg.r", "rknee", "shin_r", "lowerleg01.r", "lowerleg02.r", "j_bip_r_lowerleg"),
+    "right_foot": ("rightfoot", "foot_r", "rfoot", "r_foot", "rightankle", "ankle_r", "foot.r", "j_bip_r_foot"),
 }
 
 _COARSE_BONE_FALLBACKS: dict[str, tuple[str, ...]] = {
@@ -1858,6 +1858,26 @@ def _has_keyframes(value: Any) -> bool:
     return isinstance(frames, (list, tuple)) and bool(frames)
 
 
+def _clip_match_tokens(value: Any) -> set[str]:
+    text = str(value or "").strip()
+    if not text:
+        return set()
+    candidates = {text}
+    for part in re.split(r"[|:/\\]+", text):
+        part = part.strip()
+        if part:
+            candidates.add(part)
+    out: set[str] = set()
+    for candidate in candidates:
+        normalized = _normalize_action_name(candidate)
+        compact = "".join(ch for ch in normalized if ch.isalnum())
+        if normalized:
+            out.add(normalized)
+        if compact:
+            out.add(compact)
+    return out
+
+
 def _select_clip_keyframes(model_meta: Mapping[str, Any], action_name: str, clip_name: Any) -> tuple[str, dict[str, Any]]:
     clips = model_meta.get("clip_keyframes")
     if not isinstance(clips, Mapping):
@@ -1866,12 +1886,22 @@ def _select_clip_keyframes(model_meta: Mapping[str, Any], action_name: str, clip
     clip_text = str(clip_name or "").strip()
     if clip_text:
         requested.insert(0, clip_text)
-    normalized = {_normalize_action_name(name) for name in requested if str(name or "").strip()}
+    normalized: set[str] = set()
+    for name in requested:
+        normalized.update(_clip_match_tokens(name))
     for raw_name, raw_clip in clips.items():
         clip_key = str(raw_name or "").strip()
-        if not clip_key or _normalize_action_name(clip_key) not in normalized:
+        if not clip_key or not (_clip_match_tokens(clip_key) & normalized):
             continue
         if isinstance(raw_clip, Mapping):
+            selected = copy.deepcopy(dict(raw_clip))
+            selected.setdefault("clip", clip_key)
+            selected.setdefault("name", clip_key)
+            return clip_key, selected
+    if len(clips) == 1:
+        raw_name, raw_clip = next(iter(clips.items()))
+        clip_key = str(raw_name or "").strip()
+        if clip_key and isinstance(raw_clip, Mapping):
             selected = copy.deepcopy(dict(raw_clip))
             selected.setdefault("clip", clip_key)
             selected.setdefault("name", clip_key)
@@ -1889,7 +1919,7 @@ def clear_model3d_metadata_caches() -> None:
     _RETARGET_PLAN_CACHE.clear()
 
 
-def get_model_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
+def _get_model_metadata_cached(node: Mapping[str, Any], *, copy_result: bool) -> dict[str, Any]:
     """Return cached offline metadata for a model3d node's model file."""
 
     model = node.get("model") if isinstance(node.get("model"), Mapping) else {}
@@ -1902,7 +1932,7 @@ def get_model_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
     cache_key = (str(resolved), fmt, reload_key, exists, size, mtime_ns, sidecar_signature)
     cached = _MODEL_METADATA_CACHE.get(cache_key)
     if cached is not None:
-        return _copy_metadata(cached)
+        return _copy_metadata(cached) if copy_result else cached
     sidecar_meta = _read_model_sidecar(sidecar_path, bool(sidecar_signature[1]))
     file_meta = _read_model_file_metadata(resolved, fmt, exists)
     bone_names = _merge_unique(sidecar_meta.get("bone_names"), file_meta.get("bone_names"))
@@ -1944,10 +1974,27 @@ def get_model_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
         "cache_key": cache_key,
     }
     _cache_put(_MODEL_METADATA_CACHE, cache_key, metadata)
-    return _copy_metadata(metadata)
+    return _copy_metadata(metadata) if copy_result else metadata
 
 
-def get_action_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
+def get_model_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a caller-owned copy of offline metadata for a model3d model file."""
+
+    return _get_model_metadata_cached(node, copy_result=True)
+
+
+def get_model_metadata_view(node: Mapping[str, Any]) -> dict[str, Any]:
+    """Return cached metadata for internal read-only hot paths.
+
+    The returned object is shared with the metadata cache.  Rendering and
+    retargeting code must treat it as immutable; public/plugin-facing callers
+    should continue to use :func:`get_model_metadata`.
+    """
+
+    return _get_model_metadata_cached(node, copy_result=False)
+
+
+def _get_action_metadata_cached(node: Mapping[str, Any], *, copy_result: bool) -> dict[str, Any]:
     """Return cached action data and the selected action config for a node."""
 
     action = node.get("action") if isinstance(node.get("action"), Mapping) else {}
@@ -1962,7 +2009,7 @@ def get_action_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
     action_file = str(action.get("file") or "").strip()
     action_path = resolve_action_path(action_file, node) if action_file else Path("")
     file_exists, file_size, file_mtime_ns = _file_signature(action_path) if action_file else (False, 0, 0)
-    model_meta = get_model_metadata(node)
+    model_meta = get_model_metadata_view(node)
     model_cache_key = tuple(model_meta.get("cache_key") or ())
     cache_key = (
         name,
@@ -1976,7 +2023,7 @@ def get_action_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
     )
     cached = _ACTION_METADATA_CACHE.get(cache_key)
     if cached is not None:
-        return _copy_metadata(cached)
+        return _copy_metadata(cached) if copy_result else cached
 
     data: dict[str, Any] = dict(inline)
     errors: list[str] = []
@@ -2032,7 +2079,19 @@ def get_action_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
     if errors:
         metadata["selected"]["_load_error"] = "; ".join(errors)
     _cache_put(_ACTION_METADATA_CACHE, cache_key, metadata)
-    return _copy_metadata(metadata)
+    return _copy_metadata(metadata) if copy_result else metadata
+
+
+def get_action_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a caller-owned copy of action data and selected action config."""
+
+    return _get_action_metadata_cached(node, copy_result=True)
+
+
+def get_action_metadata_view(node: Mapping[str, Any]) -> dict[str, Any]:
+    """Return cached action metadata for internal read-only hot paths."""
+
+    return _get_action_metadata_cached(node, copy_result=False)
 
 
 def _normalize_bone_token(value: Any) -> str:
@@ -2053,6 +2112,8 @@ def _normalize_bone_token(value: Any) -> str:
         "armature|",
         "armature:",
         "def-",
+        "org-",
+        "mch-",
         "jnt_",
     ):
         if text.startswith(prefix):
@@ -2121,7 +2182,7 @@ def _resolve_bone(
     return "", "pending_backend"
 
 
-def get_retarget_plan(node: Mapping[str, Any]) -> dict[str, Any]:
+def _get_retarget_plan_cached(node: Mapping[str, Any], *, copy_result: bool) -> dict[str, Any]:
     """Build an offline humanoid retarget plan for a model3d node.
 
     The native renderer will eventually consume this plan directly.  Until then
@@ -2130,7 +2191,7 @@ def get_retarget_plan(node: Mapping[str, Any]) -> dict[str, Any]:
     """
 
     retarget = node.get("retarget") if isinstance(node.get("retarget"), Mapping) else {}
-    model_meta = get_model_metadata(node)
+    model_meta = get_model_metadata_view(node)
     skeleton = node.get("skeleton") if isinstance(node.get("skeleton"), Mapping) else {}
     cache_key = (
         tuple(model_meta.get("cache_key") or ()),
@@ -2139,7 +2200,7 @@ def get_retarget_plan(node: Mapping[str, Any]) -> dict[str, Any]:
     )
     cached = _RETARGET_PLAN_CACHE.get(cache_key)
     if cached is not None:
-        return _copy_retarget_plan(cached)
+        return _copy_retarget_plan(cached) if copy_result else cached
 
     sidecar_map = _sidecar_bone_map(model_meta)
     requests = dict(sidecar_map)
@@ -2203,7 +2264,19 @@ def get_retarget_plan(node: Mapping[str, Any]) -> dict[str, Any]:
         "warnings": tuple(warnings),
     }
     _cache_put(_RETARGET_PLAN_CACHE, cache_key, plan)
-    return _copy_retarget_plan(plan)
+    return _copy_retarget_plan(plan) if copy_result else plan
+
+
+def get_retarget_plan(node: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a caller-owned humanoid retarget plan for a model3d node."""
+
+    return _get_retarget_plan_cached(node, copy_result=True)
+
+
+def get_retarget_plan_view(node: Mapping[str, Any]) -> dict[str, Any]:
+    """Return cached retarget plan for internal read-only hot paths."""
+
+    return _get_retarget_plan_cached(node, copy_result=False)
 
 
 def _float_from_mapping(src: Mapping[str, Any], key: str, default: float,
@@ -2948,7 +3021,7 @@ def evaluate_retarget_pose(node: Mapping[str, Any]) -> dict[str, Any]:
     rest positions and clip samples into the same contract.
     """
 
-    model_meta = get_model_metadata(node)
+    model_meta = get_model_metadata_view(node)
     if not bool(model_meta.get("exists")):
         return {
             "ok": False,
@@ -2956,8 +3029,8 @@ def evaluate_retarget_pose(node: Mapping[str, Any]) -> dict[str, Any]:
             "positions": {},
             "segments": (),
         }
-    plan = get_retarget_plan(node)
-    action_meta = get_action_metadata(node)
+    plan = get_retarget_plan_view(node)
+    action_meta = get_action_metadata_view(node)
     action_name = str(action_meta.get("name") or "idle")
     selected = action_meta.get("selected") if isinstance(action_meta.get("selected"), Mapping) else {}
     action = node.get("action") if isinstance(node.get("action"), Mapping) else {}
@@ -3077,7 +3150,7 @@ def diagnose_model3d_node(
 
     backend = status or get_backend_status()
     key = model3d_node_key(plugin_id, node, order)
-    model_meta = get_model_metadata(node)
+    model_meta = get_model_metadata_view(node)
     path_text = str(model_meta.get("path") or "")
     lines = [f"model3d {key}"]
     if path_text:
@@ -3090,7 +3163,7 @@ def diagnose_model3d_node(
         lines.append(backend.reason)
     retarget = node.get("retarget") if isinstance(node.get("retarget"), Mapping) else {}
     if retarget:
-        plan = get_retarget_plan(node)
+        plan = get_retarget_plan_view(node)
         if plan.get("mode"):
             lines.append(
                 f"retarget {plan.get('mode')}: "
@@ -3107,9 +3180,12 @@ __all__ = [
     "diagnose_model3d_node",
     "evaluate_retarget_pose",
     "get_action_metadata",
+    "get_action_metadata_view",
     "get_backend_status",
     "get_model_metadata",
+    "get_model_metadata_view",
     "get_retarget_plan",
+    "get_retarget_plan_view",
     "HUMANOID_BONES",
     "HUMANOID_SEGMENTS",
     "model3d_node_key",

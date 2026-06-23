@@ -28,6 +28,7 @@ from render.model3d_backend import (
     get_action_metadata,
     get_backend_status,
     get_model_metadata,
+    get_model_metadata_view,
     get_retarget_plan,
     probe_model3d_backend,
 )
@@ -786,6 +787,47 @@ class Model3DBackendTests(unittest.TestCase):
         self.assertEqual(image.size, (48, 64))
         self.assertEqual(image.getpixel((0, 0)), (18, 48, 88, 220))
 
+    def test_moderngl_provider_reuses_preview_topology_batches(self) -> None:
+        from render import model3d_native_moderngl as provider
+
+        if provider.np is None:
+            self.skipTest("numpy is unavailable")
+        provider._reset_for_tests()
+        projected = [
+            (8.0, 8.0, 0.0),
+            (40.0, 8.0, 0.1),
+            (40.0, 56.0, 0.2),
+            (8.0, 56.0, 0.3),
+            (18.0, 18.0, 0.4),
+            (30.0, 18.0, 0.5),
+            (30.0, 44.0, 0.6),
+            (18.0, 44.0, 0.7),
+        ]
+        faces = [[0, 1, 2, 3], [4, 5, 6, 7]]
+        preview = {
+            "faces": faces,
+            "skin": [
+                [{"joint": "hair_white", "weight": 1.0}],
+                [{"joint": "hair_white", "weight": 1.0}],
+                [{"joint": "hair_white", "weight": 1.0}],
+                [{"joint": "hair_white", "weight": 1.0}],
+                [{"joint": "outfit_olive", "weight": 1.0}],
+                [{"joint": "outfit_olive", "weight": 1.0}],
+                [{"joint": "outfit_olive", "weight": 1.0}],
+                [{"joint": "outfit_olive", "weight": 1.0}],
+            ],
+        }
+        with mock.patch.object(provider, "_face_base_color", wraps=provider._face_base_color) as color:
+            first = provider._mesh_arrays_by_color(projected, faces, 48, 64, preview, (125, 211, 252, 255))
+            first_count = color.call_count
+            second = provider._mesh_arrays_by_color(projected, faces, 48, 64, preview, (125, 211, 252, 255))
+
+        provider._reset_for_tests()
+        self.assertGreater(first_count, 0)
+        self.assertEqual(color.call_count, first_count)
+        self.assertEqual(len(first[0]), len(second[0]))
+        self.assertEqual(len(first[1]), len(second[1]))
+
     def test_missing_builtin_native_renderer_bootstrap_is_quiet(self) -> None:
         clear_native_model3d_renderers()
         modules = {
@@ -983,6 +1025,33 @@ class Model3DBackendTests(unittest.TestCase):
 
         self.assertEqual(meta["selected"]["speed"], 3.0)
 
+    def test_action_metadata_matches_export_prefixed_clip_names(self) -> None:
+        clear_model3d_metadata_caches()
+        node = normalize_ui_spec({
+            "type": "model3d",
+            "model": {"path": "missing/avatar.fbx"},
+            "action": {"name": "wave", "clip": "wave"},
+        })["nodes"][0]
+        model_meta = {
+            "cache_key": ("mock", "prefixed_clip"),
+            "clip_keyframes": {
+                "ARM-asaki-standard|Wave": {
+                    "duration": 1.0,
+                    "keyframes": [
+                        {"time": 0.0, "offsets": {"right_hand": [0.0, 0.0, 0.0]}},
+                        {"time": 1.0, "offsets": {"right_hand": [0.0, 0.4, 0.0]}},
+                    ],
+                },
+            },
+        }
+
+        with mock.patch.object(model3d_backend, "get_model_metadata_view", return_value=model_meta):
+            meta = get_action_metadata(node)
+
+        self.assertEqual(meta["model_clip"], "ARM-asaki-standard|Wave")
+        self.assertEqual(meta["selected"]["name"], "ARM-asaki-standard|Wave")
+        self.assertTrue(meta["selected"]["keyframes"])
+
     def test_model_metadata_cache_invalidates_on_size_or_reload_key(self) -> None:
         clear_model3d_metadata_caches()
         with tempfile.TemporaryDirectory(prefix="model3d_model_") as root:
@@ -1027,6 +1096,35 @@ class Model3DBackendTests(unittest.TestCase):
         self.assertEqual(load.call_count, 1)
         self.assertEqual(first["sidecar"]["path"], str(sidecar_path))
         self.assertEqual(second["clips"], ["Wave"])
+
+    def test_model_metadata_view_reuses_cache_while_public_copy_stays_isolated(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_meta_view_") as root:
+            model_path = Path(root) / "avatar.obj"
+            model_path.write_text(
+                "\n".join([
+                    "o ViewAvatar",
+                    "v 0 0 0",
+                    "v 1 0 0",
+                    "v 0 1 0",
+                    "f 1 2 3",
+                ]),
+                encoding="utf-8",
+            )
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path), "format": "obj"},
+            })["nodes"][0]
+
+            first_view = get_model_metadata_view(node)
+            second_view = get_model_metadata_view(node)
+            public_copy = get_model_metadata(node)
+            public_copy["mesh"]["preview"]["vertices"][0][0] = 999.0
+            third_view = get_model_metadata_view(node)
+
+        self.assertIs(first_view, second_view)
+        self.assertIs(first_view, third_view)
+        self.assertEqual(third_view["mesh"]["preview"]["vertices"][0][0], 0.0)
 
     def test_model_metadata_extracts_obj_mesh_bounds(self) -> None:
         clear_model3d_metadata_caches()
@@ -1637,6 +1735,50 @@ Objects:  {
         self.assertEqual(plan["bone_map"]["right_foot"], "mixamorig:RightFoot")
         self.assertGreater(plan["coverage"], 0.75)
         self.assertAlmostEqual(plan["stretch_limit"], 0.2)
+
+    def test_retarget_plan_maps_vroid_vrm_humanoid_bones(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_retarget_vrm_") as root:
+            model_path = Path(root) / "avatar.vrm"
+            model_path.write_text("fixture", encoding="utf-8")
+            (Path(root) / "avatar.model3d.json").write_text(json.dumps({
+                "skeleton": {
+                    "bones": [
+                        "J_Bip_C_Hips",
+                        "J_Bip_C_Spine",
+                        "J_Bip_C_Chest",
+                        "J_Bip_C_Neck",
+                        "J_Bip_C_Head",
+                        "J_Bip_L_Shoulder",
+                        "J_Bip_L_UpperArm",
+                        "J_Bip_L_LowerArm",
+                        "J_Bip_L_Hand",
+                        "J_Bip_R_Shoulder",
+                        "J_Bip_R_UpperArm",
+                        "J_Bip_R_LowerArm",
+                        "J_Bip_R_Hand",
+                        "J_Bip_L_UpperLeg",
+                        "J_Bip_L_LowerLeg",
+                        "J_Bip_L_Foot",
+                        "J_Bip_R_UpperLeg",
+                        "J_Bip_R_LowerLeg",
+                        "J_Bip_R_Foot",
+                    ],
+                },
+            }), encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path), "format": "vrm"},
+                "retarget": {"mode": "humanoid_auto"},
+            })["nodes"][0]
+
+            plan = get_retarget_plan(node)
+
+        self.assertEqual(plan["bone_map"]["hips"], "J_Bip_C_Hips")
+        self.assertEqual(plan["bone_map"]["left_arm"], "J_Bip_L_UpperArm")
+        self.assertEqual(plan["bone_map"]["right_forearm"], "J_Bip_R_LowerArm")
+        self.assertEqual(plan["bone_map"]["left_foot"], "J_Bip_L_Foot")
+        self.assertGreater(plan["coverage"], 0.9)
 
     def test_retarget_plan_cache_copies_and_invalidates_on_inputs(self) -> None:
         clear_model3d_metadata_caches()

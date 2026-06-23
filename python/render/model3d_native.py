@@ -227,9 +227,9 @@ def build_native_model3d_context(
 
     width, height = _node_size(node)
     errors: list[str] = []
-    model_meta = _safe_backend_call("get_model_metadata", node, errors)
-    action_meta = _safe_backend_call("get_action_metadata", node, errors)
-    retarget_plan = _safe_backend_call("get_retarget_plan", node, errors)
+    model_meta = _safe_backend_call("get_model_metadata_view", node, errors)
+    action_meta = _safe_backend_call("get_action_metadata_view", node, errors)
+    retarget_plan = _safe_backend_call("get_retarget_plan_view", node, errors)
     pose = _safe_backend_call("evaluate_retarget_pose", node, errors)
     context: dict[str, Any] = {
         "width": width,

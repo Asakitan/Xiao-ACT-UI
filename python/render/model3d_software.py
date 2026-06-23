@@ -14,10 +14,19 @@ except Exception:  # pragma: no cover - optional at import time
     ImageDraw = None  # type: ignore[assignment]
 
 try:
-    from render.model3d_backend import evaluate_retarget_pose, get_model_metadata
+    from render.model3d_backend import evaluate_retarget_pose, get_model_metadata_view
 except Exception:  # pragma: no cover
     evaluate_retarget_pose = None  # type: ignore[assignment]
-    get_model_metadata = None  # type: ignore[assignment]
+    get_model_metadata_view = None  # type: ignore[assignment]
+
+
+_GEOMETRY_CACHE_LIMIT = 64
+_PREVIEW_GEOMETRY_CACHE: dict[
+    tuple[Any, ...],
+    tuple[list[tuple[float, float, float]], list[list[int]]],
+] = {}
+_SKIN_INFLUENCE_CACHE: dict[tuple[Any, ...], list[list[tuple[str, float]]]] = {}
+_CHAIN_WEIGHT_CACHE: dict[tuple[Any, ...], list[list[tuple[int, float]]]] = {}
 
 
 def _color(value: Any, default: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
@@ -57,6 +66,67 @@ def _faces(value: Any, vertex_count: int) -> list[list[int]]:
         if len(face) >= 3:
             out.append(face)
     return out
+
+
+def clear_software_model3d_caches() -> None:
+    """Clear software-preview geometry caches for tests and reload hooks."""
+
+    _PREVIEW_GEOMETRY_CACHE.clear()
+    _SKIN_INFLUENCE_CACHE.clear()
+    _CHAIN_WEIGHT_CACHE.clear()
+
+
+def _preview_geometry_cache_key(meta: Mapping[str, Any], preview: Mapping[str, Any]) -> tuple[Any, ...]:
+    raw_vertices = preview.get("vertices")
+    raw_faces = preview.get("faces")
+    return (
+        tuple(meta.get("cache_key") or ()),
+        str(preview.get("source") or ""),
+        len(raw_vertices) if isinstance(raw_vertices, (list, tuple)) else 0,
+        len(raw_faces) if isinstance(raw_faces, (list, tuple)) else 0,
+    )
+
+
+def _preview_geometry(
+    meta: Mapping[str, Any],
+    preview: Mapping[str, Any],
+) -> tuple[list[tuple[float, float, float]], list[list[int]]]:
+    key = _preview_geometry_cache_key(meta, preview)
+    cached = _PREVIEW_GEOMETRY_CACHE.get(key)
+    if cached is not None:
+        return cached
+    raw_vertices = preview.get("vertices") if isinstance(preview, Mapping) else None
+    vertices = [point for point in (_point3(item) for item in (raw_vertices or [])) if point is not None]
+    faces = _faces(preview.get("faces"), len(vertices)) if vertices else []
+    if len(_PREVIEW_GEOMETRY_CACHE) >= _GEOMETRY_CACHE_LIMIT:
+        _PREVIEW_GEOMETRY_CACHE.clear()
+    cached = (vertices, faces)
+    _PREVIEW_GEOMETRY_CACHE[key] = cached
+    return cached
+
+
+def _skin_cache_key(preview: Mapping[str, Any]) -> tuple[Any, ...]:
+    skin = preview.get("skin")
+    return (
+        id(skin),
+        len(skin) if isinstance(skin, (list, tuple)) else 0,
+    )
+
+
+def _preview_skin_influences(preview: Mapping[str, Any]) -> list[list[tuple[str, float]]]:
+    skin = preview.get("skin")
+    if not isinstance(skin, (list, tuple)) or not any(skin):
+        return []
+    key = _skin_cache_key(preview)
+    cached = _SKIN_INFLUENCE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    parsed = [_skin_for_vertex(item) for item in skin]
+    if len(_SKIN_INFLUENCE_CACHE) >= _GEOMETRY_CACHE_LIMIT:
+        _SKIN_INFLUENCE_CACHE.clear()
+        _CHAIN_WEIGHT_CACHE.clear()
+    _SKIN_INFLUENCE_CACHE[key] = parsed
+    return parsed
 
 
 def _skin_for_vertex(value: Any) -> list[tuple[str, float]]:
@@ -247,39 +317,115 @@ def _chain_weight(influences: list[tuple[str, float]], chain: Mapping[str, Any])
     return max(0.0, min(1.0, total))
 
 
+def _prepared_chains(chains: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    prepared: list[dict[str, Any]] = []
+    for chain in chains:
+        tokens = _chain_tokens(chain)
+        if not tokens:
+            continue
+        prepared.append({
+            "tokens": tokens,
+            "axis": _point3(chain.get("axis")) or (1.0, 0.0, 0.0),
+            "gravity": _point3(chain.get("gravity")) or (0.0, -1.0, 0.0),
+            "amplitude": _float(chain.get("amplitude"), 0.035, 0.0, 1.0),
+            "frequency": _float(chain.get("frequency"), 0.8, 0.0, 12.0),
+            "phase": _float(chain.get("phase"), 0.0, -1000.0, 1000.0),
+            "wave": _float(chain.get("wave"), 0.65, 0.0, 12.0),
+            "damping": _float(chain.get("damping"), 0.18, 0.0, 1.0),
+            "gravity_strength": _float(chain.get("gravity_strength"), 0.18, 0.0, 2.0),
+        })
+    return prepared
+
+
+def _prepared_chain_signature(chains: list[dict[str, Any]]) -> tuple[Any, ...]:
+    return tuple(
+        (
+            item["tokens"],
+            item["axis"],
+            item["gravity"],
+            item["amplitude"],
+            item["frequency"],
+            item["phase"],
+            item["wave"],
+            item["damping"],
+            item["gravity_strength"],
+        )
+        for item in chains
+    )
+
+
+def _influence_matches_tokens(influences: list[tuple[str, float]], tokens: tuple[str, ...]) -> float:
+    total = 0.0
+    for joint, weight in influences:
+        text = str(joint or "").lower()
+        if any(token == text or token in text for token in tokens):
+            total += max(0.0, weight)
+    return max(0.0, min(1.0, total))
+
+
+def _chain_weights_for_skin(
+    skin_influences: list[list[tuple[str, float]]],
+    chains: list[dict[str, Any]],
+    preview: Mapping[str, Any],
+) -> list[list[tuple[int, float]]]:
+    if not skin_influences or not chains:
+        return []
+    key = (_skin_cache_key(preview), _prepared_chain_signature(chains))
+    cached = _CHAIN_WEIGHT_CACHE.get(key)
+    if cached is not None:
+        return cached
+    weights: list[list[tuple[int, float]]] = []
+    for influences in skin_influences:
+        vertex_weights: list[tuple[int, float]] = []
+        if influences:
+            for chain_index, chain in enumerate(chains):
+                weight = _influence_matches_tokens(influences, chain["tokens"])
+                if weight > 0.000001:
+                    vertex_weights.append((chain_index, weight))
+        weights.append(vertex_weights)
+    if len(_CHAIN_WEIGHT_CACHE) >= _GEOMETRY_CACHE_LIMIT:
+        _CHAIN_WEIGHT_CACHE.clear()
+    _CHAIN_WEIGHT_CACHE[key] = weights
+    return weights
+
+
 def _apply_secondary_motion(
     vertices: list[tuple[float, float, float]],
     preview: Mapping[str, Any],
     node: Mapping[str, Any],
     meta: Mapping[str, Any] | None,
+    skin_influences: list[list[tuple[str, float]]] | None = None,
 ) -> list[tuple[float, float, float]]:
     chains = _motion_chains(node, meta)
     if not chains:
         return vertices
-    skin = preview.get("skin")
-    if not isinstance(skin, (list, tuple)) or not any(skin):
+    if skin_influences is None:
+        skin_influences = _preview_skin_influences(preview)
+    if not skin_influences:
         return vertices
+    prepared = _prepared_chains(chains)
+    if not prepared:
+        return vertices
+    chain_weights = _chain_weights_for_skin(skin_influences, prepared, preview)
     time_value = _motion_time(node)
     moved: list[tuple[float, float, float]] = []
     changed = False
     for index, point in enumerate(vertices):
-        influences = _skin_for_vertex(skin[index] if index < len(skin) else ())
-        if not influences:
+        vertex_chain_weights = chain_weights[index] if index < len(chain_weights) else ()
+        if not vertex_chain_weights:
             moved.append(point)
             continue
         offset = (0.0, 0.0, 0.0)
-        for chain in chains:
-            weight = _chain_weight(influences, chain)
-            if weight <= 0.000001:
-                continue
-            axis = _point3(chain.get("axis")) or (1.0, 0.0, 0.0)
-            gravity = _point3(chain.get("gravity")) or (0.0, -1.0, 0.0)
-            amplitude = _float(chain.get("amplitude"), 0.035, 0.0, 1.0)
-            frequency = _float(chain.get("frequency"), 0.8, 0.0, 12.0)
-            phase = _float(chain.get("phase"), 0.0, -1000.0, 1000.0)
-            wave = _float(chain.get("wave"), 0.65, 0.0, 12.0)
-            damping = _float(chain.get("damping"), 0.18, 0.0, 1.0)
-            gravity_strength = _float(chain.get("gravity_strength"), 0.18, 0.0, 2.0)
+        for chain_index, weight in vertex_chain_weights:
+            chain = prepared[chain_index]
+            axis = chain["axis"]
+            gravity = chain["gravity"]
+            amplitude = chain["amplitude"]
+            frequency = chain["frequency"]
+            phase = chain["phase"]
+            wave = chain["wave"]
+            damping = chain["damping"]
+            gravity_strength = chain["gravity_strength"]
             sample = (
                 time_value * frequency * math.tau
                 + phase
@@ -303,17 +449,17 @@ def _deform_vertices(
     node: Mapping[str, Any],
     meta: Mapping[str, Any] | None = None,
 ) -> list[tuple[float, float, float]]:
-    skin = preview.get("skin")
-    if not isinstance(skin, (list, tuple)) or not any(skin):
-        return _apply_secondary_motion(vertices, preview, node, meta)
+    skin_influences = _preview_skin_influences(preview)
+    if not skin_influences:
+        return _apply_secondary_motion(vertices, preview, node, meta, skin_influences)
     if not callable(evaluate_retarget_pose):
-        return _apply_secondary_motion(vertices, preview, node, meta)
+        return _apply_secondary_motion(vertices, preview, node, meta, skin_influences)
     try:
         pose = evaluate_retarget_pose(node)
     except Exception:
-        return _apply_secondary_motion(vertices, preview, node, meta)
+        return _apply_secondary_motion(vertices, preview, node, meta, skin_influences)
     if not isinstance(pose, Mapping) or not bool(pose.get("ok")):
-        return _apply_secondary_motion(vertices, preview, node, meta)
+        return _apply_secondary_motion(vertices, preview, node, meta, skin_influences)
     rest = _pose_points(pose, "rest_positions")
     posed = _pose_points(pose, "positions")
     rotations = _pose_rotations(pose)
@@ -323,7 +469,7 @@ def _deform_vertices(
     deformed: list[tuple[float, float, float]] = []
     changed = False
     for index, point in enumerate(vertices):
-        influences = _skin_for_vertex(skin[index] if index < len(skin) else ())
+        influences = skin_influences[index] if index < len(skin_influences) else ()
         if not influences:
             deformed.append(point)
             continue
@@ -354,7 +500,7 @@ def _deform_vertices(
             changed = True
         deformed.append(moved)
     deformed = deformed if changed else vertices
-    return _apply_secondary_motion(deformed, preview, node, meta)
+    return _apply_secondary_motion(deformed, preview, node, meta, skin_influences)
 
 
 def _rotation(node: Mapping[str, Any]) -> tuple[float, float, float]:
@@ -515,7 +661,7 @@ def render_software_model3d_preview(node: Mapping[str, Any], pal: Mapping[str, A
     window and never owns input/z-order.
     """
 
-    if Image is None or ImageDraw is None or not callable(get_model_metadata):
+    if Image is None or ImageDraw is None or not callable(get_model_metadata_view):
         return None
     try:
         width = max(1, int(node.get("width") or 320))
@@ -523,18 +669,16 @@ def render_software_model3d_preview(node: Mapping[str, Any], pal: Mapping[str, A
     except Exception:
         width, height = 320, 480
     try:
-        meta = get_model_metadata(node)
+        meta = get_model_metadata_view(node)
     except Exception:
         return None
     if not bool(meta.get("exists")):
         return None
     mesh = meta.get("mesh") if isinstance(meta.get("mesh"), Mapping) else {}
     preview = mesh.get("preview") if isinstance(mesh.get("preview"), Mapping) else {}
-    raw_vertices = preview.get("vertices") if isinstance(preview, Mapping) else None
-    vertices = [point for point in (_point3(item) for item in (raw_vertices or [])) if point is not None]
+    vertices, faces = _preview_geometry(meta, preview)
     if len(vertices) < 3:
         return None
-    faces = _faces(preview.get("faces"), len(vertices))
     if not faces:
         return None
     if len(vertices) < 6 or len(faces) < 4:
@@ -566,4 +710,7 @@ def render_software_model3d_preview(node: Mapping[str, Any], pal: Mapping[str, A
     return image
 
 
-__all__ = ["render_software_model3d_preview"]
+__all__ = [
+    "clear_software_model3d_caches",
+    "render_software_model3d_preview",
+]
