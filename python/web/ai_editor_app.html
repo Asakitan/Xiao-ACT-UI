@@ -5428,16 +5428,47 @@ function renderExtensionTreeView(view){
   title.textContent=extensionViewTitle(view);
   const body=document.createElement('div');body.className='tool-body open';body.style.whiteSpace='normal';
   const state=view.runtimeState||{};
-  const children=Array.isArray(state.children)?state.children:[];
-  if(children.length){
-    children.forEach(child=>{
-      const row=document.createElement('div');row.className='sb-item';row.style.padding='4px 0';
-      row.textContent=String(child);body.appendChild(row);
-    });
+  const nodes=Array.isArray(state.nodes)&&state.nodes.length
+    ?state.nodes
+    :(Array.isArray(state.children)?state.children.map(label=>({label:String(label),children:[]})):[]);
+  if(nodes.length){
+    const tree=document.createElement('div');tree.setAttribute('role','tree');
+    nodes.forEach(node=>tree.appendChild(renderExtensionTreeNode(node,0)));
+    body.appendChild(tree);
   }else{
     body.innerHTML='<div style="color:var(--fg-dim);font-size:11px">'+esc(view.runtimeMessage||'Tree view provider registered; no root items reported.')+'</div>';
   }
   card.appendChild(title);card.appendChild(body);return card;
+}
+function renderExtensionTreeNode(node,depth){
+  const wrap=document.createElement('div');wrap.className='ext-tree-node';wrap.setAttribute('role','treeitem');
+  const row=document.createElement('div');row.className='sb-item';row.style.cssText='display:flex;align-items:center;gap:4px;padding:3px 0 3px '+(depth*12)+'px;min-height:22px';
+  const children=Array.isArray(node.children)?node.children:[];
+  const rawCollapsible=Number(node.collapsibleState)||0;
+  const collapsible=(rawCollapsible||children.length)?(rawCollapsible||1):0;
+  const twist=document.createElement('button');twist.type='button';twist.className='icon-btn';twist.style.cssText='width:18px;height:18px;flex:0 0 18px;border:0;background:transparent;color:var(--fg-dim);padding:0';
+  twist.textContent=collapsible?'▸':'';
+  twist.disabled=!collapsible;twist.setAttribute('aria-label',collapsible?'Toggle tree item':'');
+  const label=document.createElement('span');label.style.cssText='overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1';
+  label.textContent=(node.icon?node.icon+' ':'')+(node.label||'');
+  if(node.tooltip)label.title=node.tooltip;
+  const desc=document.createElement('span');desc.style.cssText='color:var(--fg-dim);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:42%';
+  desc.textContent=node.description||'';
+  row.appendChild(twist);row.appendChild(label);if(node.description)row.appendChild(desc);
+  const childBox=document.createElement('div');childBox.style.display=collapsible===2?'':'none';
+  if(collapsible)wrap.setAttribute('aria-expanded',collapsible===2?'true':'false');
+  children.forEach(child=>childBox.appendChild(renderExtensionTreeNode(child,depth+1)));
+  const setOpen=open=>{childBox.style.display=open?'':'none';twist.textContent=open?'▾':'▸';wrap.setAttribute('aria-expanded',open?'true':'false')};
+  setOpen(collapsible===2);
+  twist.onclick=e=>{e.stopPropagation();if(collapsible)setOpen(childBox.style.display==='none')};
+  row.onclick=()=>{
+    if(node.command&&node.command.command&&window.pywebview&&window.pywebview.api){
+      window.pywebview.api.execute_command(node.command.command,...(node.command.arguments||[]));
+    }else if(collapsible){
+      setOpen(childBox.style.display==='none');
+    }
+  };
+  wrap.appendChild(row);wrap.appendChild(childBox);return wrap;
 }
 function renderExtensionManifestView(view){
   const card=document.createElement('div');card.className='tool-call';card.style.margin='0 0 8px 0';

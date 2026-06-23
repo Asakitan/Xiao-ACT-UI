@@ -1171,6 +1171,9 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("frontend renders extension activity bar views dynamically",
             "function renderExtensionContainerContent(item)" in html
             and "function renderExtensionTreeView(view)" in html
+            and "function renderExtensionTreeNode(node,depth)" in html
+            and "tree.setAttribute('role','tree')" in html
+            and "window.pywebview.api.execute_command(node.command.command" in html
             and "function renderExtensionWebviewView(view)" in html
             and "_injectWebviewHtml(host,view.id||state.view_id||state.viewId,html,state.state)" in html
             and "renderExtensionContainerContent(item)" in html)
@@ -3024,8 +3027,29 @@ def test_app_extension_runtime_support() -> None:
             },
         }, "/tmp/selftest-activity")
         api._ext_host.ext_points.process(activity_desc)
+        class _ActivityTreeProvider:
+            def getChildren(self, element=None):
+                if element == "node-a":
+                    return ["leaf-a"]
+                return ["node-a", "node-b"] if element is None else []
+
+            def getTreeItem(self, element):
+                if element == "node-a":
+                    return {
+                        "label": "Node A",
+                        "description": "branch",
+                        "tooltip": "Expandable node",
+                        "collapsibleState": 1,
+                        "command": {
+                            "command": "selftest.command.tree",
+                            "title": "Open Node A",
+                            "arguments": [{"from": "tree"}],
+                        },
+                    }
+                return {"label": str(element).title(), "collapsibleState": 0}
+
         api._vscode_ns.build(activity_desc)["window"]["registerTreeDataProvider"](
-            "selftest.activity.tree", _TreeProvider())
+            "selftest.activity.tree", _ActivityTreeProvider())
         api._vscode_ns.build(activity_desc)["window"]["registerWebviewViewProvider"](
             "selftest.activity.webview", _CommandWebviewProvider())
         activity_items = {
@@ -3039,9 +3063,15 @@ def test_app_extension_runtime_support() -> None:
         _check("activity bar containers include runtime extension views",
                activity_items.get("selftest.activity", {}).get("view_count") == 2
                and activity_views.get("selftest.activity.tree", {}).get("runtimeState", {}).get("kind") == "treeView"
-               and activity_views.get("selftest.activity.tree", {}).get("runtimeState", {}).get("children") == ["node-a", "node-b"]
                and activity_views.get("selftest.activity.webview", {}).get("runtimeState", {}).get("kind") == "webviewView"
                and "command-webview" in activity_views.get("selftest.activity.webview", {}).get("runtimeState", {}).get("html", ""))
+        activity_tree_nodes = activity_views.get("selftest.activity.tree", {}).get("runtimeState", {}).get("nodes", [])
+        _check("activity tree views expose structured expandable nodes",
+               activity_tree_nodes
+               and activity_tree_nodes[0].get("label") == "Node A"
+               and activity_tree_nodes[0].get("description") == "branch"
+               and activity_tree_nodes[0].get("command", {}).get("command") == "selftest.command.tree"
+               and activity_tree_nodes[0].get("children", [{}])[0].get("label") == "Leaf-A")
 
         contribs = api.get_extension_contributions().get("contributions", {})
         command_items = {

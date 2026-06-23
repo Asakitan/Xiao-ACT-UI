@@ -3969,6 +3969,7 @@ class AIEditorAPI:
                 "title": getattr(tree_view, "title", view_id),
                 "selection": list(getattr(tree_view, "selection", []) or []),
                 "children": self._tree_view_children_preview(tree_provider),
+                "nodes": self._tree_view_nodes_preview(tree_provider),
             }
         webview_provider = self._vscode_ns._webview_view_providers.get(view_id, {})
         webview_view = self._vscode_ns._webview_views.get(view_id)
@@ -4027,6 +4028,133 @@ class AIEditorAPI:
             except Exception:
                 return []
         return [str(child) for child in children[:20]]
+
+    def _tree_view_nodes_preview(self, provider: Any, element: Any = None,
+                                 depth: int = 0,
+                                 seen: Optional[set] = None) -> List[Dict[str, Any]]:
+        if provider is None or not hasattr(provider, "getChildren"):
+            return []
+        if seen is None:
+            seen = set()
+        if depth > 2:
+            return []
+        try:
+            children = provider.getChildren(element)
+        except TypeError:
+            if element is None:
+                children = provider.getChildren()
+            else:
+                return []
+        except Exception:
+            return []
+        if not isinstance(children, list):
+            try:
+                children = list(children)
+            except Exception:
+                return []
+        nodes: List[Dict[str, Any]] = []
+        for child in children[:30]:
+            marker = id(child)
+            if marker in seen:
+                continue
+            child_seen = set(seen)
+            child_seen.add(marker)
+            item = self._tree_item_for_element(provider, child)
+            node = self._tree_node_preview(child, item)
+            child_nodes: List[Dict[str, Any]] = []
+            if node.get("collapsibleState", 0) or depth < 1:
+                child_nodes = self._tree_view_nodes_preview(
+                    provider, child, depth + 1, child_seen)
+                if child_nodes and not node.get("collapsibleState", 0):
+                    node["collapsibleState"] = 1
+            node["children"] = child_nodes
+            nodes.append(node)
+        return nodes
+
+    @staticmethod
+    def _tree_item_for_element(provider: Any, element: Any) -> Any:
+        if provider is None or not hasattr(provider, "getTreeItem"):
+            return element
+        try:
+            item = provider.getTreeItem(element)
+            return item if item is not None else element
+        except Exception:
+            return element
+
+    def _tree_node_preview(self, element: Any, item: Any) -> Dict[str, Any]:
+        label = self._tree_value(item, "label")
+        if isinstance(label, dict):
+            label = label.get("label") or label.get("text") or ""
+        if not label:
+            label = str(element)
+        description = self._tree_value(item, "description")
+        tooltip = self._tree_value(item, "tooltip")
+        collapsible = self._tree_value(item, "collapsibleState", 0)
+        try:
+            collapsible_state = int(collapsible or 0)
+        except Exception:
+            collapsible_state = 0
+        command = self._tree_command_preview(self._tree_value(item, "command"))
+        icon = self._tree_icon_preview(self._tree_value(item, "iconPath"))
+        context_value = self._tree_value(item, "contextValue")
+        return {
+            "label": str(label),
+            "description": "" if description is None else str(description),
+            "tooltip": "" if tooltip is None else str(tooltip),
+            "collapsibleState": collapsible_state,
+            "command": command,
+            "icon": icon,
+            "contextValue": "" if context_value is None else str(context_value),
+        }
+
+    @staticmethod
+    def _tree_value(item: Any, key: str, default: Any = None) -> Any:
+        if isinstance(item, dict):
+            return item.get(key, default)
+        return getattr(item, key, default)
+
+    @staticmethod
+    def _tree_command_preview(command: Any) -> Dict[str, Any]:
+        if not command:
+            return {}
+        if isinstance(command, dict):
+            command_id = command.get("command") or command.get("id") or ""
+            return {
+                "command": str(command_id),
+                "title": str(command.get("title") or command_id),
+                "arguments": AIEditorAPI._tree_command_arguments(
+                    command.get("arguments")),
+            }
+        command_id = getattr(command, "command", "") or getattr(command, "id", "")
+        if not command_id:
+            return {}
+        return {
+            "command": str(command_id),
+            "title": str(getattr(command, "title", command_id) or command_id),
+            "arguments": AIEditorAPI._tree_command_arguments(
+                getattr(command, "arguments", [])),
+        }
+
+    @staticmethod
+    def _tree_command_arguments(arguments: Any) -> List[Any]:
+        if arguments is None:
+            return []
+        if isinstance(arguments, list):
+            return list(arguments)
+        if isinstance(arguments, tuple):
+            return list(arguments)
+        return [arguments]
+
+    @staticmethod
+    def _tree_icon_preview(icon: Any) -> str:
+        if not icon:
+            return ""
+        if isinstance(icon, str):
+            return icon
+        icon_id = getattr(icon, "id", "")
+        if icon_id:
+            return f"$({icon_id})"
+        return ""
 
     def invoke_chat_participant(self, participant_id: str,
                                  prompt: str) -> Dict:
