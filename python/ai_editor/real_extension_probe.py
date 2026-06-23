@@ -109,6 +109,25 @@ def _wait_for_webview_message(
     return None
 
 
+def _wait_for_custom_editor_state(
+        api: AIEditorAPI, view_id: str, view_type: str, uri: str,
+        predicate, timeout: float = 5.0) -> Dict[str, Any]:
+    deadline = time.time() + timeout
+    last: Dict[str, Any] = {}
+    while time.time() < deadline:
+        state = api.custom_editor_state(
+            view_id=view_id, view_type=view_type, uri=uri)
+        if isinstance(state, dict):
+            last = state
+            try:
+                if predicate(state):
+                    return state
+            except Exception:
+                pass
+        time.sleep(0.05)
+    return last
+
+
 def run_probe(extension_dir: str, keep_copy: bool = False) -> Dict[str, Any]:
     if not os.path.isdir(extension_dir):
         return {"ok": False, "error": f"Extension directory not found: {extension_dir}"}
@@ -192,6 +211,43 @@ def run_probe(extension_dir: str, keep_copy: bool = False) -> Dict[str, Any]:
             state = api.custom_editor_state(view_id=view_id)
             ready_result = api.webview_post_message(view_id, {"type": "ready"})
             init_message = _wait_for_webview_message(events, view_id, "init")
+            init_body = (
+                init_message.get("message", {}).get("body", {})
+                if isinstance(init_message, dict) else {}
+            )
+            init_content = (
+                init_body.get("content", {})
+                if isinstance(init_body, dict) else {}
+            )
+            old_root = (
+                dict(init_content.get("root", {}))
+                if isinstance(init_content, dict)
+                and isinstance(init_content.get("root", {}), dict)
+                else {}
+            )
+            first_root = dict(old_root)
+            first_root["__sao_probe"] = {"type": 8, "value": "hello"}
+            edit_payload = {
+                "type": "edit",
+                "body": {
+                    "type": "set",
+                    "path": [],
+                    "old": {"type": 10, "value": old_root},
+                    "new": {"type": 10, "value": first_root},
+                },
+            }
+            edit_result = api.webview_post_message(view_id, edit_payload)
+            dirty_state = _wait_for_custom_editor_state(
+                api,
+                view_id,
+                state.get("viewType", ""),
+                state.get("uri", ""),
+                lambda item: bool(item.get("dirty")),
+            )
+            opened_path = str(success.get("absolute_path", ""))
+            before_bytes = b""
+            with open(opened_path, "rb") as fh:
+                before_bytes = fh.read()
             backup_result = api.backup_extension_custom_editor(
                 view_id,
                 state.get("viewType", ""),
@@ -202,11 +258,47 @@ def run_probe(extension_dir: str, keep_copy: bool = False) -> Dict[str, Any]:
                 state.get("viewType", ""),
                 state.get("uri", ""),
             )
+            clean_state = _wait_for_custom_editor_state(
+                api,
+                view_id,
+                state.get("viewType", ""),
+                state.get("uri", ""),
+                lambda item: not bool(item.get("dirty")),
+            )
+            with open(opened_path, "rb") as fh:
+                after_save_bytes = fh.read()
+            second_root = dict(first_root)
+            second_root["__sao_probe"] = {"type": 8, "value": "world"}
+            second_edit_result = api.webview_post_message(view_id, {
+                "type": "edit",
+                "body": {
+                    "type": "set",
+                    "path": [],
+                    "old": {"type": 10, "value": first_root},
+                    "new": {"type": 10, "value": second_root},
+                },
+            })
+            dirty_state_after_second_edit = _wait_for_custom_editor_state(
+                api,
+                view_id,
+                state.get("viewType", ""),
+                state.get("uri", ""),
+                lambda item: bool(item.get("dirty")),
+            )
             revert_result = api.revert_extension_custom_editor(
                 view_id,
                 state.get("viewType", ""),
                 state.get("uri", ""),
             )
+            reverted_state = _wait_for_custom_editor_state(
+                api,
+                view_id,
+                state.get("viewType", ""),
+                state.get("uri", ""),
+                lambda item: not bool(item.get("dirty")),
+            )
+            with open(opened_path, "rb") as fh:
+                after_revert_bytes = fh.read()
 
             result = {
                 "ok": True,
@@ -222,10 +314,25 @@ def run_probe(extension_dir: str, keep_copy: bool = False) -> Dict[str, Any]:
                 "diagnostics": diagnostics,
                 "readyResult": ready_result,
                 "initMessage": init_message,
+                "edit": {
+                    "first": edit_result,
+                    "dirtyState": dirty_state,
+                    "second": second_edit_result,
+                    "dirtyStateAfterSecondEdit": dirty_state_after_second_edit,
+                },
                 "lifecycle": {
                     "backup": backup_result,
                     "save": save_result,
+                    "cleanState": clean_state,
                     "revert": revert_result,
+                    "revertedState": reverted_state,
+                },
+                "disk": {
+                    "changedAfterSave": before_bytes != after_save_bytes,
+                    "restoredAfterRevert": after_save_bytes == after_revert_bytes,
+                    "beforeSize": len(before_bytes),
+                    "afterSaveSize": len(after_save_bytes),
+                    "afterRevertSize": len(after_revert_bytes),
                 },
                 "attempts": attempts,
                 "render": {
