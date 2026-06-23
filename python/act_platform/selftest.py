@@ -12,6 +12,7 @@ from types import ModuleType
 from .adapters import built_in_parser_adapters
 from .event_bus import EventBus
 from .plugins import PluginManager
+from .scripting.angel_runtime import _AngelScriptInterpreter
 
 
 PLUGIN_CODE = r'''
@@ -177,6 +178,18 @@ def _write_lazy_panel_plugin(root: str) -> str:
 
 
 def run_selftest() -> dict:
+    angel = _AngelScriptInterpreter()
+    angel.execute_source(r'''
+string token = "";
+dictionary@ state()
+{
+    return {"active": token != "", "sum": 1 + 2, "label": "x" + "y"};
+}
+''')
+    angel_state = angel.get_function("state")()
+    assert isinstance(angel_state, dict), angel_state
+    assert angel_state == {"active": False, "sum": 3, "label": "xy"}, angel_state
+
     bus = EventBus()
     direct_events = []
     bus.subscribe("damage", direct_events.append, owner_id="selftest")

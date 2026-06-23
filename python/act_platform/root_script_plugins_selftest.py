@@ -120,6 +120,40 @@ def run_selftest() -> dict[str, Any]:
                     }
             positioned = partial
 
+            if plugin_id == "script_world_clock_angelscript":
+                if state.get("timer_active") is not True or not _plugin_timer_active(manager, plugin_id):
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "clock_timer_active", "state": state}
+                if abs(float(state.get("tick_interval") or 0.0) - 1.0) > 0.0001:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "clock_tick_interval", "state": state}
+                if int(state.get("render_count") or 0) < 1:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "clock_render_count", "state": state}
+                refresh = act_plugin_action(
+                    owner, "script.clock.refresh", {}, plugin_id=plugin_id)
+                refresh_state = _state(refresh)
+                if int(refresh_state.get("render_count") or 0) <= int(positioned.get("render_count") or 0):
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "clock_refresh_render",
+                        "before": positioned,
+                        "after": refresh_state,
+                    }
+                redraw = act_plugin_action(
+                    owner, "script.clock.redraw", {}, plugin_id=plugin_id)
+                redraw_state = _state(redraw)
+                redraw_result = redraw.get("result") if isinstance(redraw.get("result"), dict) else {}
+                if redraw_result.get("redraw_changed") is not False:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "clock_redraw_cache_flag", "result": redraw}
+                if int(redraw_state.get("cache_hit_count") or 0) <= int(refresh_state.get("cache_hit_count") or 0):
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "clock_redraw_cache_hit",
+                        "before": refresh_state,
+                        "after": redraw_state,
+                    }
+                state = dict(redraw_state)
+
             if plugin_id == "script_flappy_emma":
                 if not state.get("level") or not state.get("pipe_speed") or not state.get("gap_half"):
                     return {"ok": False, "plugin_id": plugin_id, "stage": "difficulty_state", "state": state}
@@ -231,6 +265,7 @@ def run_selftest() -> dict[str, Any]:
                 "tick_count": state.get("tick_count"),
                 "render_count": state.get("render_count"),
                 "spec_build_count": state.get("spec_build_count"),
+                "cache_hit_count": state.get("cache_hit_count"),
             }
         finally:
             act_plugin_action(

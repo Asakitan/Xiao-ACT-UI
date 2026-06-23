@@ -332,9 +332,9 @@ class _AngelScriptInterpreter:
         for op in ("||", "&&"):
             depth = 0
             for idx in range(len(tokens) - 1, -1, -1):
-                if tokens[idx] in (")", "]"):
+                if tokens[idx] in (")", "]", "}"):
                     depth += 1
-                elif tokens[idx] in ("(", "["):
+                elif tokens[idx] in ("(", "[", "{"):
                     depth -= 1
                 elif depth == 0 and tokens[idx] == op:
                     left = self._eval_expr(tokens[:idx], scope)
@@ -346,9 +346,9 @@ class _AngelScriptInterpreter:
         for op in ("==", "!=", "<=", ">=", "<", ">"):
             depth = 0
             for idx in range(len(tokens) - 1, -1, -1):
-                if tokens[idx] in (")", "]"):
+                if tokens[idx] in (")", "]", "}"):
                     depth += 1
-                elif tokens[idx] in ("(", "["):
+                elif tokens[idx] in ("(", "[", "{"):
                     depth -= 1
                 elif depth == 0 and tokens[idx] == op:
                     left = self._eval_expr(tokens[:idx], scope)
@@ -361,9 +361,9 @@ class _AngelScriptInterpreter:
         for op in ("+", "-"):
             depth = 0
             for idx in range(len(tokens) - 1, 0, -1):
-                if tokens[idx] in (")", "]"):
+                if tokens[idx] in (")", "]", "}"):
                     depth += 1
-                elif tokens[idx] in ("(", "["):
+                elif tokens[idx] in ("(", "[", "{"):
                     depth -= 1
                 elif depth == 0 and tokens[idx] == op:
                     left = self._eval_expr(tokens[:idx], scope)
@@ -377,9 +377,9 @@ class _AngelScriptInterpreter:
         for op in ("*", "/", "%"):
             depth = 0
             for idx in range(len(tokens) - 1, 0, -1):
-                if tokens[idx] in (")", "]"):
+                if tokens[idx] in (")", "]", "}"):
                     depth += 1
-                elif tokens[idx] in ("(", "["):
+                elif tokens[idx] in ("(", "[", "{"):
                     depth -= 1
                 elif depth == 0 and tokens[idx] == op:
                     left = self._eval_expr(tokens[:idx], scope)
