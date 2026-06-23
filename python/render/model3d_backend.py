@@ -369,7 +369,7 @@ def _copy_metadata(value: dict[str, Any]) -> dict[str, Any]:
 
 def _copy_retarget_plan(value: dict[str, Any]) -> dict[str, Any]:
     out = dict(value)
-    for key in ("bone_map", "sources"):
+    for key in ("bone_map", "sources", "declared_aliases"):
         item = out.get(key)
         if isinstance(item, Mapping):
             out[key] = dict(item)
@@ -589,6 +589,9 @@ def _extract_sidecar_metadata(value: Any) -> dict[str, Any]:
         bone_map = skeleton.get("bone_map")
         if isinstance(bone_map, Mapping):
             out["bone_map"] = {str(k): str(v) for k, v in bone_map.items()}
+        aliases = skeleton.get("aliases") or skeleton.get("bone_aliases")
+        if isinstance(aliases, Mapping):
+            out["aliases"] = copy.deepcopy(dict(aliases))
     rest_positions = (
         _extract_rest_positions(src.get("rest_positions"))
         or _extract_rest_positions((skeleton or {}).get("rest_positions"))
@@ -2183,6 +2186,66 @@ def _explicit_bone_requests(node: Mapping[str, Any]) -> dict[str, str]:
     return requests
 
 
+def _canonical_alias_key(value: Any) -> str:
+    norm = _normalize_bone_token(value)
+    if not norm:
+        return ""
+    for canonical in HUMANOID_BONES:
+        if norm == _normalize_bone_token(canonical):
+            return canonical
+        for alias in _BONE_ALIASES.get(canonical, ()):
+            if norm == _normalize_bone_token(alias):
+                return canonical
+    return ""
+
+
+def _iter_alias_items(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        text = value.strip()
+        return (text,) if text else ()
+    if isinstance(value, Mapping):
+        out: list[str] = []
+        for key in ("name", "bone", "id", "alias"):
+            text = str(value.get(key) or "").strip()
+            if text:
+                out.append(text)
+        values = value.get("aliases") or value.get("names")
+        if isinstance(values, (list, tuple, set)):
+            out.extend(str(item or "").strip() for item in values)
+        return tuple(item for item in out if item)
+    if isinstance(value, (list, tuple, set)):
+        out: list[str] = []
+        for item in value:
+            out.extend(_iter_alias_items(item))
+        return tuple(out)
+    return ()
+
+
+def _declared_bone_aliases(
+    node: Mapping[str, Any],
+    model_meta: Mapping[str, Any],
+) -> dict[str, tuple[str, ...]]:
+    aliases: dict[str, list[str]] = {}
+    skeleton = node.get("skeleton") if isinstance(node.get("skeleton"), Mapping) else {}
+    retarget = node.get("retarget") if isinstance(node.get("retarget"), Mapping) else {}
+    sidecar = model_meta.get("sidecar") if isinstance(model_meta.get("sidecar"), Mapping) else {}
+    for source in (sidecar, skeleton, retarget):
+        raw = None
+        if isinstance(source, Mapping):
+            raw = source.get("aliases") or source.get("bone_aliases")
+        if not isinstance(raw, Mapping):
+            continue
+        for key, value in raw.items():
+            canonical = _canonical_alias_key(key)
+            if not canonical:
+                continue
+            bucket = aliases.setdefault(canonical, [])
+            for alias in _iter_alias_items(value):
+                if alias and alias not in bucket:
+                    bucket.append(alias)
+    return {key: tuple(value) for key, value in aliases.items()}
+
+
 def _sidecar_bone_map(model_meta: Mapping[str, Any]) -> dict[str, str]:
     sidecar = model_meta.get("sidecar") if isinstance(model_meta.get("sidecar"), Mapping) else {}
     bone_map = sidecar.get("bone_map") if isinstance(sidecar.get("bone_map"), Mapping) else {}
@@ -2194,15 +2257,21 @@ def _resolve_bone(
     request: str,
     names: list[str],
     index: Mapping[str, str],
+    declared_aliases: Mapping[str, tuple[str, ...]] | None = None,
 ) -> tuple[str, str]:
     raw = str(request or "").strip()
     if raw and raw.lower() != "auto":
         norm = _normalize_bone_token(raw)
         return str(index.get(norm) or raw), "explicit"
-    for alias in (canonical, *_BONE_ALIASES.get(canonical, ())):
+    for alias in (
+        canonical,
+        *_BONE_ALIASES.get(canonical, ()),
+        *((declared_aliases or {}).get(canonical, ())),
+    ):
         norm = _normalize_bone_token(alias)
         if norm in index:
-            return str(index[norm]), "alias"
+            source = "declared_alias" if alias in (declared_aliases or {}).get(canonical, ()) else "alias"
+            return str(index[norm]), source
     if names:
         return "", "unresolved"
     return "", "pending_backend"
@@ -2233,13 +2302,20 @@ def _get_retarget_plan_cached(node: Mapping[str, Any], *, copy_result: bool) -> 
     requests.update(_explicit_bone_requests(node))
     bone_names = list(model_meta.get("bone_names") or [])
     index = _bone_index(bone_names)
+    declared_aliases = _declared_bone_aliases(node, model_meta)
 
     resolved: dict[str, str] = {}
     sources: dict[str, str] = {}
     unresolved: list[str] = []
     pending_backend: list[str] = []
     for canonical in HUMANOID_BONES:
-        mapped, source = _resolve_bone(canonical, requests.get(canonical, "auto"), bone_names, index)
+        mapped, source = _resolve_bone(
+            canonical,
+            requests.get(canonical, "auto"),
+            bone_names,
+            index,
+            declared_aliases,
+        )
         if mapped:
             resolved[canonical] = mapped
             sources[canonical] = source
@@ -2280,6 +2356,7 @@ def _get_retarget_plan_cached(node: Mapping[str, Any], *, copy_result: bool) -> 
         "motion_scale_max": motion_scale_max,
         "bone_map": resolved,
         "sources": sources,
+        "declared_aliases": declared_aliases,
         "unresolved": tuple(unresolved),
         "pending_backend": tuple(pending_backend),
         "coverage": coverage,
@@ -3044,9 +3121,19 @@ def _selected_relative_action(
     if not selected:
         selected = {}
     common = root.get("common") if isinstance(root.get("common"), Mapping) else {}
-    merged = copy.deepcopy(dict(common)) if common else {}
-    merged.update(selected)
+    merged = _merge_action_config(common, selected)
     return dict(root), merged
+
+
+def _merge_action_config(common: Mapping[str, Any], selected: Mapping[str, Any]) -> dict[str, Any]:
+    merged = copy.deepcopy(dict(common or {}))
+    for key, value in dict(selected or {}).items():
+        existing = merged.get(key)
+        if isinstance(existing, Mapping) and isinstance(value, Mapping):
+            merged[key] = _merge_action_config(existing, value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
 
 
 def _weighted_offset_from_config(config: Mapping[str, Any], key: str = "offset") -> tuple[float, float, float]:
@@ -3100,13 +3187,42 @@ def _relative_body_offsets(
     breathing = _float_from_mapping(body, "breathing", 0.0, lo=0.0, hi=0.25)
     sway_amount = _float_from_mapping(body, "sway", 0.0, lo=0.0, hi=0.35)
     bounce = _float_from_mapping(body, "bounce", 0.0, lo=0.0, hi=0.5)
-    return {
+    lean = _point3(body.get("lean"))
+    if lean is None:
+        lean = (
+            _float_from_mapping(body, "lean_x", 0.0, lo=-0.45, hi=0.45),
+            _float_from_mapping(body, "lean_y", 0.0, lo=-0.45, hi=0.45),
+            _float_from_mapping(body, "lean_z", 0.0, lo=-0.45, hi=0.45),
+        )
+    crouch = _float_from_mapping(body, "crouch", 0.0, lo=0.0, hi=0.6)
+    offsets = {
         "hips": (sway * sway_amount * 0.25, abs(breath) * bounce, 0.0),
         "spine": (sway * sway_amount * 0.45, breath * breathing * 0.35, 0.0),
         "chest": (sway * sway_amount * 0.65, breath * breathing, 0.0),
         "neck": (sway * sway_amount * 0.35, breath * breathing * 0.5, 0.0),
         "head": (sway * sway_amount * 0.25, breath * breathing * 0.75, 0.0),
     }
+    if lean is not None:
+        for bone, amount in (
+            ("hips", 0.18),
+            ("spine", 0.42),
+            ("chest", 0.72),
+            ("neck", 0.90),
+            ("head", 1.0),
+        ):
+            offsets[bone] = _vec_add(offsets.get(bone, (0.0, 0.0, 0.0)), _vec_scale(lean, amount))
+    if crouch > 0.0:
+        for bone, amount in (
+            ("hips", 1.00),
+            ("spine", 0.78),
+            ("chest", 0.58),
+            ("neck", 0.42),
+            ("head", 0.35),
+        ):
+            offsets[bone] = _vec_add(offsets.get(bone, (0.0, 0.0, 0.0)), (0.0, -crouch * amount, crouch * 0.10 * amount))
+        offsets["left_knee"] = _vec_add(offsets.get("left_knee", (0.0, 0.0, 0.0)), (-crouch * 0.12, crouch * 0.22, crouch * 0.18))
+        offsets["right_knee"] = _vec_add(offsets.get("right_knee", (0.0, 0.0, 0.0)), (crouch * 0.12, crouch * 0.22, crouch * 0.18))
+    return offsets
 
 
 def _relative_head_offsets(

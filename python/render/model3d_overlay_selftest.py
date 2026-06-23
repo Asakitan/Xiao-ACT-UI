@@ -18,7 +18,7 @@ _PY_ROOT = Path(__file__).resolve().parents[1]
 if str(_PY_ROOT) not in sys.path:
     sys.path.insert(0, str(_PY_ROOT))
 
-from act_platform.ui_spec import MAX_LAYER_POS, MAX_LAYER_Z, UI, normalize_ui_spec
+from act_platform.ui_spec import MAX_LAYER_POS, MAX_LAYER_Z, MAX_TEXT_LEN, UI, normalize_ui_spec
 from gui_modules import sao_plugin_unified_overlay as overlay_mod
 from render import model3d_backend
 from render import overlay_adapter as overlay_adapter_mod
@@ -483,6 +483,48 @@ class Model3DSpecTests(unittest.TestCase):
         self.assertEqual(helper_with_physics["materials"]["profile"], "mtoon")
         self.assertIn("walk", helper_with_physics["procedural_action"]["actions"])
         self.assertEqual(helper_with_physics["secondary_motion"]["chains"][0]["name"], "ears")
+
+        long_procedural = json.dumps({
+            "schema": "sao.humanoid.procedural.v1",
+            "enabled": True,
+            "default_action": "idle",
+            "common": {
+                "body": {"breathing": 0.01, "crouch": 0.02},
+                "gait": {"foot_planting": True, "ground_y": "auto"},
+            },
+            "actions": {
+                f"action_{idx}": {
+                    "body": {"sway": 0.01 + idx * 0.0001},
+                    "effectors": {
+                        "right_hand": {
+                            "offset": [0.01, 0.02, 0.03],
+                            "wave": [0.01, 0.0, 0.0],
+                            "frequency": 1.0,
+                        },
+                    },
+                }
+                for idx in range(80)
+            },
+        }, ensure_ascii=False, separators=(",", ":"))
+        self.assertGreater(len(long_procedural), MAX_TEXT_LEN)
+        long_node = normalize_ui_spec({
+            "type": "model3d",
+            "id": "long-procedural",
+            "procedural_action": long_procedural,
+            "retarget": {
+                "adaptive_motion_scale": True,
+                "motion_scale_min": 0.4,
+                "motion_scale_max": 2.5,
+                "prefer_model_clips": True,
+            },
+        })["nodes"][0]
+        self.assertEqual(long_node["procedural_action"]["default_action"], "idle")
+        self.assertIn("action_79", long_node["procedural_action"]["actions"])
+        self.assertTrue(long_node["procedural_action"]["common"]["gait"]["foot_planting"])
+        self.assertIs(long_node["retarget"]["adaptive_motion_scale"], True)
+        self.assertEqual(long_node["retarget"]["motion_scale_min"], 0.4)
+        self.assertEqual(long_node["retarget"]["motion_scale_max"], 2.5)
+        self.assertIs(long_node["retarget"]["prefer_model_clips"], True)
 
     def test_model3d_preserves_action_json_text_from_csharp_plugin(self) -> None:
         raw = '{"wave":{"speed":1.7,"rightArmLift":0.8}}'
@@ -1916,6 +1958,58 @@ Objects:  {
         self.assertEqual(plan["bone_map"]["left_foot"], "J_Bip_L_Foot")
         self.assertGreater(plan["coverage"], 0.9)
 
+    def test_retarget_plan_uses_declared_aliases_for_custom_humanoid_bones(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_retarget_aliases_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text("fixture", encoding="utf-8")
+            (Path(root) / "avatar.model3d.json").write_text(json.dumps({
+                "skeleton": {
+                    "bones": [
+                        "CenterPelvis",
+                        "BodyColumn",
+                        "UpperBodyNode",
+                        "NeckPivot",
+                        "FaceRigHead",
+                        "Avatar_Left_Bicep",
+                        "Avatar_Left_Elbow",
+                        "Avatar_Left_Palm",
+                        "Avatar_Right_Bicep",
+                        "Avatar_Right_Elbow",
+                        "Avatar_Right_Palm",
+                    ],
+                },
+            }), encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path)},
+                "retarget": {
+                    "mode": "humanoid_auto",
+                    "aliases": {
+                        "hips": ["CenterPelvis"],
+                        "spine": ["BodyColumn"],
+                        "chest": ["UpperBodyNode"],
+                        "neck": ["NeckPivot"],
+                        "head": ["FaceRigHead"],
+                        "left_arm": ["Avatar_Left_Bicep"],
+                        "left_forearm": ["Avatar_Left_Elbow"],
+                        "left_hand": ["Avatar_Left_Palm"],
+                        "right_arm": ["Avatar_Right_Bicep"],
+                        "right_forearm": ["Avatar_Right_Elbow"],
+                        "right_hand": ["Avatar_Right_Palm"],
+                    },
+                },
+            })["nodes"][0]
+
+            plan = get_retarget_plan(node)
+
+        self.assertEqual(plan["bone_map"]["hips"], "CenterPelvis")
+        self.assertEqual(plan["bone_map"]["left_hand"], "Avatar_Left_Palm")
+        self.assertEqual(plan["bone_map"]["right_forearm"], "Avatar_Right_Elbow")
+        self.assertEqual(plan["sources"]["hips"], "declared_alias")
+        self.assertIn("hips", plan["declared_aliases"])
+        self.assertGreater(plan["coverage"], 0.5)
+
     def test_retarget_plan_cache_copies_and_invalidates_on_inputs(self) -> None:
         clear_model3d_metadata_caches()
         with tempfile.TemporaryDirectory(prefix="model3d_retarget_cache_") as root:
@@ -2184,6 +2278,71 @@ Objects:  {
         self.assertAlmostEqual(pose["foot_planting"]["ground_y"], -1.08)
         self.assertGreater(pose["positions"]["right_hand"][1], 0.38)
         self.assertGreater(pose["positions"]["head"][2], 0.0)
+
+    def test_evaluate_retarget_pose_applies_body_lean_and_crouch(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_pose_body_controls_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text("fixture", encoding="utf-8")
+            (Path(root) / "avatar.model3d.json").write_text(json.dumps({
+                "skeleton": {
+                    "bones": [
+                        "Hips", "Spine", "Chest", "Neck", "Head",
+                        "LeftKnee", "RightKnee",
+                    ],
+                    "bone_map": {
+                        "hips": "Hips",
+                        "spine": "Spine",
+                        "chest": "Chest",
+                        "neck": "Neck",
+                        "head": "Head",
+                        "left_knee": "LeftKnee",
+                        "right_knee": "RightKnee",
+                    },
+                    "rest_positions": {
+                        "Hips": [0.0, 0.12, 0.0],
+                        "Spine": [0.0, 0.55, 0.0],
+                        "Chest": [0.0, 0.88, 0.0],
+                        "Neck": [0.0, 1.12, 0.0],
+                        "Head": [0.0, 1.35, 0.0],
+                        "LeftKnee": [-0.16, -0.72, 0.0],
+                        "RightKnee": [0.16, -0.72, 0.0],
+                    },
+                },
+            }), encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path)},
+                "retarget": {"mode": "humanoid_auto", "stretch_limit": 0.5},
+                "action": {"name": "guard"},
+                "procedural_action": {
+                    "schema": "sao.humanoid.procedural.v1",
+                    "enabled": True,
+                    "mode": "relative_ik",
+                    "common": {
+                        "body": {
+                            "breathing": 0.0,
+                            "sway": 0.0,
+                            "crouch": 0.20,
+                        },
+                    },
+                    "actions": {
+                        "guard": {
+                            "body": {
+                                "lean": [0.08, -0.02, 0.06],
+                            },
+                        },
+                    },
+                },
+            })["nodes"][0]
+
+            pose = evaluate_retarget_pose(node)
+
+        self.assertTrue(pose["ok"], pose)
+        self.assertLess(pose["positions"]["hips"][1], pose["rest_positions"]["hips"][1])
+        self.assertGreater(pose["positions"]["head"][0], pose["rest_positions"]["head"][0])
+        self.assertGreater(pose["positions"]["head"][2], pose["rest_positions"]["head"][2])
+        self.assertGreater(pose["positions"]["left_knee"][1], pose["rest_positions"]["left_knee"][1])
 
     def test_evaluate_retarget_pose_samples_looped_keyframes(self) -> None:
         clear_model3d_metadata_caches()

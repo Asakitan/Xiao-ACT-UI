@@ -42,6 +42,7 @@ MAX_CANVAS_OPS = 4000
 MAX_CANVAS_DIM = 4096
 MAX_MODEL_PATH_LEN = 2000
 MAX_MODEL3D_ACTION_JSON_TEXT_LEN = 4 * 1024 * 1024
+MAX_MODEL3D_PROCEDURAL_JSON_TEXT_LEN = 4 * 1024 * 1024
 MAX_LAYER_POS = 32768
 MAX_LAYER_Z = 10000
 
@@ -134,10 +135,16 @@ def _json_safe_value(value: Any, *, max_items: int = 64, depth: int = 0) -> Any:
     return _json_scalar(value)
 
 
-def _json_safe_map(value: Any, *, max_items: int = 64, depth: int = 0) -> dict:
+def _json_safe_map(
+    value: Any,
+    *,
+    max_items: int = 64,
+    depth: int = 0,
+    text_limit: int = MAX_TEXT_LEN,
+) -> dict:
     if isinstance(value, str):
         text = value.strip()
-        if not text or len(text) > MAX_TEXT_LEN:
+        if not text or len(text) > text_limit:
             return {}
         try:
             value = json.loads(text)
@@ -337,7 +344,11 @@ def _normalize_model3d(node: Mapping[str, Any]) -> dict:
     physics = _json_safe_map(raw_physics, max_items=256) if isinstance(raw_physics, Mapping) else {}
     raw_procedural = node.get("procedural_action")
     procedural_action = (
-        _json_safe_map(raw_procedural, max_items=256)
+        _json_safe_map(
+            raw_procedural,
+            max_items=512,
+            text_limit=MAX_MODEL3D_PROCEDURAL_JSON_TEXT_LEN,
+        )
         if isinstance(raw_procedural, (Mapping, str))
         else {}
     )
