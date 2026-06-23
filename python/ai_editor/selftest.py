@@ -3010,6 +3010,12 @@ def test_app_extension_runtime_support() -> None:
                         },
                     },
                 },
+                "configurationDefaults": {
+                    "selftest.mode": "manual",
+                    "[selflang]": {
+                        "editor.tabSize": 2,
+                    },
+                },
             },
         }, settings_tmp)
         api._ext_host.registry.register(settings_desc)
@@ -3021,8 +3027,11 @@ def test_app_extension_runtime_support() -> None:
             {})
         _check("extension settings expose defaults and modified map",
                settings_cfg.get("values", {}).get("selftest.flag") is False
-               and settings_cfg.get("defaults", {}).get("selftest.mode") == "auto"
+               and settings_cfg.get("values", {}).get("selftest.mode") == "manual"
+               and settings_cfg.get("defaults", {}).get("selftest.mode") == "manual"
                and settings_cfg.get("modified", {}).get("selftest.flag") is False)
+        _check("extension configurationDefaults override schema defaults",
+               api.get_extension_setting("selftest.mode").get("value") == "manual")
         set_setting = api.set_extension_setting("selftest.flag", True)
         after_set = next(
             (item for item in api.list_extension_settings().get("configurations", [])

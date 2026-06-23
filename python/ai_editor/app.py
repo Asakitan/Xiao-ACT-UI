@@ -4043,6 +4043,7 @@ class AIEditorAPI:
         """Return all extension configuration contributions with current values."""
         self._ensure_engine()
         contributions = self._ext_host.ext_points.configuration_contributions
+        default_overrides = self._extension_configuration_default_overrides()
         result: List[Dict[str, Any]] = []
         for entry in contributions:
             eid = entry.get("extension_id", "")
@@ -4059,16 +4060,18 @@ class AIEditorAPI:
             for key, schema in props.items():
                 if not isinstance(schema, dict):
                     continue
-                has_default = "default" in schema
+                has_default = key in default_overrides or "default" in schema
                 if has_default:
-                    defaults[key] = schema["default"]
+                    defaults[key] = (
+                        default_overrides[key]
+                        if key in default_overrides else schema["default"])
                 if key in configured_keys:
                     stored = ws_state.get(key) if ws_state else None
                     values[key] = stored
                     configured_values[key] = stored
                     modified[key] = True
                 elif has_default:
-                    values[key] = schema["default"]
+                    values[key] = defaults[key]
                     modified[key] = False
                 else:
                     modified[key] = False
@@ -4088,6 +4091,7 @@ class AIEditorAPI:
         """Read a single extension setting value from workspace state."""
         self._ensure_engine()
         contributions = self._ext_host.ext_points.configuration_contributions
+        default_overrides = self._extension_configuration_default_overrides()
         for entry in contributions:
             props = entry.get("properties", {})
             if key in props:
@@ -4098,9 +4102,15 @@ class AIEditorAPI:
                     if key in keys:
                         stored = ctx.workspace_state.get(key)
                         return {"ok": True, "key": key, "value": stored}
-                schema_default = props[key].get("default") if isinstance(props[key], dict) else None
+                if key in default_overrides:
+                    return {"ok": True, "key": key,
+                            "value": default_overrides[key]}
+                schema = props[key] if isinstance(props[key], dict) else {}
+                if "default" in schema:
+                    return {"ok": True, "key": key,
+                            "value": schema["default"]}
                 return {"ok": True, "key": key,
-                        "value": schema_default if schema_default is not None else default}
+                        "value": default}
         return {"ok": True, "key": key, "value": default}
 
     def set_extension_setting(self, key: str, value: Any) -> Dict:
@@ -4123,6 +4133,7 @@ class AIEditorAPI:
         """Remove a workspace override for an extension setting."""
         self._ensure_engine()
         contributions = self._ext_host.ext_points.configuration_contributions
+        default_overrides = self._extension_configuration_default_overrides()
         for entry in contributions:
             props = entry.get("properties", {})
             if key in props:
@@ -4132,7 +4143,9 @@ class AIEditorAPI:
                     return {"error": f"Extension context not found: {eid}"}
                 ctx.workspace_state.delete(key)
                 schema = props[key] if isinstance(props[key], dict) else {}
-                default_value = schema.get("default")
+                default_value = (
+                    default_overrides[key]
+                    if key in default_overrides else schema.get("default"))
                 self._notify_extension_setting_changed(key, default_value)
                 return {
                     "ok": True,
@@ -4142,6 +4155,25 @@ class AIEditorAPI:
                     "modified": False,
                 }
         return {"error": f"Setting key not found in any extension: {key}"}
+
+    def _extension_configuration_default_overrides(self) -> Dict[str, Any]:
+        try:
+            entries = self._ext_host.ext_points.all_contributions.get(
+                "configurationDefaults", [])
+        except Exception:
+            entries = []
+        defaults: Dict[str, Any] = {}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            for key, value in entry.items():
+                key_str = str(key or "")
+                if not key_str or key_str == "_extensionId":
+                    continue
+                if key_str.startswith("["):
+                    continue
+                defaults[key_str] = value
+        return defaults
 
     def _notify_extension_setting_changed(self, key: str, value: Any) -> None:
         section = key.rsplit(".", 1)[0] if "." in key else ""
