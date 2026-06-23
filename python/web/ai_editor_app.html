@@ -2393,6 +2393,20 @@ const BUILTIN_LANGUAGE_EXTS={
   bash:'shell',ps1:'shell',bat:'shell',cmd:'shell',lua:'lua',c:'c',cc:'cpp',cpp:'cpp',
   cxx:'cpp',h:'cpp',hpp:'cpp',cs:'csharp',java:'java',go:'go',rs:'rust',toml:'toml'
 };
+const BUILTIN_LANGUAGE_COMMENTS={
+  python:{lineComment:'#'},javascript:{lineComment:'//',blockComment:['/*','*/']},
+  typescript:{lineComment:'//',blockComment:['/*','*/']},json:{lineComment:'//',blockComment:['/*','*/']},
+  html:{blockComment:['<!--','-->']},css:{blockComment:['/*','*/']},markdown:{blockComment:['<!--','-->']},
+  yaml:{lineComment:'#'},xml:{blockComment:['<!--','-->']},sql:{lineComment:'--'},shell:{lineComment:'#'},
+  lua:{lineComment:'--',blockComment:['--[[',']]']},c:{lineComment:'//',blockComment:['/*','*/']},
+  cpp:{lineComment:'//',blockComment:['/*','*/']},csharp:{lineComment:'//',blockComment:['/*','*/']},
+  java:{lineComment:'//',blockComment:['/*','*/']},go:{lineComment:'//',blockComment:['/*','*/']},
+  rust:{lineComment:'//',blockComment:['/*','*/']},toml:{lineComment:'#'}
+};
+const DEFAULT_AUTO_CLOSING_PAIRS=[
+  {open:'(',close:')'},{open:'[',close:']'},{open:'{',close:'}'},
+  {open:"'",close:"'"},{open:'"',close:'"'},{open:'`',close:'`'}
+];
 
 let _prevLineCount=1;
 function updateLineNums(){
@@ -2440,6 +2454,71 @@ function languageSearchText(lang){
   return [lang,meta.name||'',...(meta.aliases||[]),...exts,...(meta.filenames||[]),...(meta.grammarScopes||[]),meta.tokenizer||'']
     .join(' ').toLowerCase();
 }
+function languageConfiguration(lang){
+  const meta=LANGUAGE_META[lang]||{},cfg=meta.configuration;
+  return cfg&&typeof cfg==='object'&&!Array.isArray(cfg)?cfg:{};
+}
+function languagePairArray(value,allowEmptyClose){
+  if(!Array.isArray(value)||value.length<2)return null;
+  const open=String(value[0]||''),close=String(value[1]||'');
+  if(!open||(!close&&!allowEmptyClose))return null;
+  return [open,close];
+}
+function normalizeLanguagePairs(value,allowEmptyClose){
+  if(!Array.isArray(value))return [];
+  return value.map(item=>{
+    if(Array.isArray(item)){
+      const pair=languagePairArray(item,allowEmptyClose);
+      return pair?{open:pair[0],close:pair[1],notIn:[]}:null;
+    }
+    if(item&&typeof item==='object'){
+      const open=String(item.open||''),close=String(item.close||'');
+      if(!open||(!close&&!allowEmptyClose))return null;
+      return {open,close,notIn:Array.isArray(item.notIn)?item.notIn.map(String):[]};
+    }
+    return null;
+  }).filter(Boolean);
+}
+function languageCommentTokens(lang){
+  const comments=languageConfiguration(lang).comments||{};
+  const fallback=BUILTIN_LANGUAGE_COMMENTS[lang]||{};
+  const line=String(comments.lineComment||fallback.lineComment||'');
+  const block=languagePairArray(comments.blockComment,false)||fallback.blockComment||null;
+  return {lineComment:line,blockComment:block};
+}
+function languageAutoClosingPairs(lang){
+  const pairs=normalizeLanguagePairs(languageConfiguration(lang).autoClosingPairs,false);
+  return pairs.length?pairs:DEFAULT_AUTO_CLOSING_PAIRS;
+}
+function languageSurroundingPairs(lang){
+  const pairs=normalizeLanguagePairs(languageConfiguration(lang).surroundingPairs,true);
+  return pairs.length?pairs:languageAutoClosingPairs(lang);
+}
+function languageClosingCharacters(lang){
+  return new Set(languageAutoClosingPairs(lang).map(pair=>pair.close).filter(close=>close&&close.length===1));
+}
+function languageSingleCharPairMap(lang){
+  const map=Object.create(null);
+  languageAutoClosingPairs(lang).forEach(pair=>{
+    if(pair.open&&pair.close&&pair.open.length===1&&pair.close.length===1)map[pair.open]=pair.close;
+  });
+  return map;
+}
+function autoClosingPairForKey(lang,key,value,pos,hasSelection){
+  if(String(key||'').length!==1)return null;
+  const before=String(value||'').slice(0,pos);
+  const pairs=(hasSelection?languageSurroundingPairs(lang):languageAutoClosingPairs(lang))
+    .filter(pair=>pair&&pair.open&&typeof pair.close==='string'&&pair.open.endsWith(key))
+    .sort((a,b)=>b.open.length-a.open.length);
+  for(const pair of pairs){
+    if(hasSelection&&pair.open!==key)continue;
+    if(pair.open===key)return pair;
+    const prefix=pair.open.slice(0,-key.length);
+    if(prefix&&before.endsWith(prefix))return pair;
+  }
+  return null;
+}
+function escapeRegExpText(text){return String(text||'').replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}
 function languageForFileName(name){
   const base=String(name||'').split(/[\\/]/).pop().toLowerCase();
   if(!base)return '';
@@ -2465,6 +2544,8 @@ function applyEditorLanguages(rows){
     const filenames=Array.isArray(row.filenames)?row.filenames.map(v=>String(v).toLowerCase()).filter(Boolean):[];
     const grammars=Array.isArray(row.grammars)?row.grammars:[];
     const grammarScopes=Array.isArray(row.grammarScopes)?row.grammarScopes.map(String).filter(Boolean):[];
+    const configuration=row.configuration&&typeof row.configuration==='object'&&!Array.isArray(row.configuration)
+      ?row.configuration:(current.configuration||{});
     byId[id]={...current,...row,id,
       name:row.name||aliases[0]||current.name||id,
       aliases:[...(current.aliases||[]),...aliases].filter((v,i,a)=>a.indexOf(v)===i),
@@ -2472,6 +2553,7 @@ function applyEditorLanguages(rows){
       filenames:[...(current.filenames||[]),...filenames].filter((v,i,a)=>a.indexOf(v)===i),
       grammars:[...(current.grammars||[]),...grammars].filter((v,i,a)=>a.indexOf(v)===i),
       grammarScopes:[...(current.grammarScopes||[]),...grammarScopes].filter((v,i,a)=>a.indexOf(v)===i),
+      configuration,
       tokenizer:row.tokenizer||current.tokenizer||''};
     extensions.forEach(ext=>{byExt[ext]=id});
     filenames.forEach(filename=>{byFilename[filename]=id});
@@ -2622,6 +2704,14 @@ function setEditorLanguage(lang){
   const bits=[editorLang,...(meta.extensions||[]).map(ext=>'.'+String(ext).replace(/^\./,''))];
   if(meta.grammarScopes&&meta.grammarScopes.length)bits.push('TextMate: '+meta.grammarScopes.join(', '));
   if(meta.extension_id)bits.push('Extension: '+meta.extension_id);
+  const cfg=languageConfiguration(editorLang),comments=languageCommentTokens(editorLang),configBits=[];
+  if(comments.lineComment)bits.push('Line comment: '+comments.lineComment);
+  else if(comments.blockComment)bits.push('Block comment: '+comments.blockComment.join(' ... '));
+  if(cfg.comments)configBits.push('comments');
+  if(Array.isArray(cfg.brackets)&&cfg.brackets.length)configBits.push('brackets');
+  if(Array.isArray(cfg.autoClosingPairs)&&cfg.autoClosingPairs.length)configBits.push('autoClosingPairs');
+  if(Array.isArray(cfg.surroundingPairs)&&cfg.surroundingPairs.length)configBits.push('surroundingPairs');
+  if(configBits.length)bits.push('Config: '+configBits.join(', '));
   $('status-language').title=bits.filter(Boolean).join(' · ');
   scheduleEditorSyntaxHighlight();
 }
@@ -2733,26 +2823,26 @@ ed.addEventListener('keydown',function(e){
     this.selectionStart=this.selectionEnd=pos+ins.length;
     updateLineNums();updateCursorPos()}
   // Auto-closing brackets/quotes (EDIT-001)
-  const _AP={'(':')',  '[':']',  '{':'}',  "'":"'",  '"':'"',  '`':'`'};
-  const _APC=new Set(Object.values(_AP));
-  if(_AP[e.key]){
+  const pair=autoClosingPairForKey(editorLang,e.key,this.value,this.selectionStart,this.selectionStart!==this.selectionEnd);
+  if(pair){
     e.preventDefault();_undoPush(true);
     const s=this.selectionStart,end=this.selectionEnd,val=this.value;
-    const open=e.key,close=_AP[open];
     if(s!==end){
       const sel=val.substring(s,end);
-      this.value=val.substring(0,s)+open+sel+close+val.substring(end);
-      this.selectionStart=s;this.selectionEnd=end+2;
+      this.value=val.substring(0,s)+pair.open+sel+pair.close+val.substring(end);
+      this.selectionStart=s;this.selectionEnd=end+pair.open.length+pair.close.length;
     }else{
-      this.value=val.substring(0,s)+open+close+val.substring(end);
-      this.selectionStart=this.selectionEnd=s+1;
+      const prefixLen=pair.open===e.key?0:pair.open.length-String(e.key).length;
+      const insertStart=Math.max(0,s-prefixLen);
+      this.value=val.substring(0,insertStart)+pair.open+pair.close+val.substring(end);
+      this.selectionStart=this.selectionEnd=insertStart+pair.open.length;
     }
     updateLineNums();return}
-  if(_APC.has(e.key)&&this.value[this.selectionStart]===e.key&&this.selectionStart===this.selectionEnd){
+  if(languageClosingCharacters(editorLang).has(e.key)&&this.value[this.selectionStart]===e.key&&this.selectionStart===this.selectionEnd){
     e.preventDefault();this.selectionStart=this.selectionEnd=this.selectionStart+1;return}
   if(e.key==='Backspace'&&!e.ctrlKey){
-    const s=this.selectionStart,val=this.value;
-    if(s>0&&s===this.selectionEnd&&_AP[val[s-1]]&&val[s]===_AP[val[s-1]]){
+    const s=this.selectionStart,val=this.value,pairMap=languageSingleCharPairMap(editorLang);
+    if(s>0&&s===this.selectionEnd&&pairMap[val[s-1]]&&val[s]===pairMap[val[s-1]]){
       e.preventDefault();_undoPush(true);
       this.value=val.substring(0,s-1)+val.substring(s+1);
       this.selectionStart=this.selectionEnd=s-1;
@@ -2858,17 +2948,68 @@ function goToLinePrompt(){
 
 // ── Toggle comment ──
 function toggleComment(){
-  const cmt=editorLang==='python'?'# ':editorLang==='html'?'<!-- ':editorLang==='css'?'/* ':'// ';
+  const tokens=languageCommentTokens(editorLang);
+  if(tokens.lineComment){toggleLineComment(tokens.lineComment);return}
+  if(tokens.blockComment){toggleBlockComment(tokens.blockComment[0],tokens.blockComment[1]);return}
+  setStatus('Comments not configured for '+languageDisplayName(editorLang));
+}
+function selectedLineRange(){
   const val=ed.value,start=ed.selectionStart,end=ed.selectionEnd;
-  const before=val.substring(0,start),lineStart=before.lastIndexOf('\n')+1;
-  const line=val.substring(lineStart,val.indexOf('\n',start)===-1?val.length:val.indexOf('\n',start));
-  if(line.trimStart().startsWith(cmt.trim())){
-    const idx=line.indexOf(cmt.trim());
-    ed.value=val.substring(0,lineStart+idx)+val.substring(lineStart+idx+cmt.length);
-  } else {
-    ed.value=val.substring(0,lineStart)+cmt+val.substring(lineStart);
+  const lineStart=start>0?val.lastIndexOf('\n',start-1)+1:0;
+  const effectiveEnd=end>start&&val[end-1]==='\n'?end-1:end;
+  let lineEnd=val.indexOf('\n',effectiveEnd);
+  if(lineEnd===-1)lineEnd=val.length;
+  return {lineStart,lineEnd,start,end};
+}
+function toggleLineComment(token){
+  token=String(token||'').trim();if(!token)return;
+  const val=ed.value,range=selectedLineRange();
+  const block=val.substring(range.lineStart,range.lineEnd),lines=block.split('\n');
+  const nonEmpty=lines.filter(line=>line.trim().length);
+  const markerRe=new RegExp('^(\\s*)'+escapeRegExpText(token)+' ?');
+  const shouldUncomment=nonEmpty.length&&nonEmpty.every(line=>markerRe.test(line));
+  const insert=token+(token.endsWith(' ')?'':' ');
+  const next=lines.map(line=>{
+    if(!line.trim())return line;
+    if(shouldUncomment)return line.replace(markerRe,'$1');
+    return line.replace(/^(\s*)/,'$1'+insert);
+  }).join('\n');
+  ed.value=val.substring(0,range.lineStart)+next+val.substring(range.lineEnd);
+  const delta=next.length-block.length;
+  if(range.start!==range.end){
+    ed.selectionStart=range.lineStart;
+    ed.selectionEnd=range.lineEnd+delta;
+  }else{
+    ed.selectionStart=ed.selectionEnd=Math.max(range.lineStart,range.start+delta);
   }
-  updateLineNums();
+  updateLineNums();updateCursorPos();
+}
+function toggleBlockComment(open,close){
+  open=String(open||'');close=String(close||'');
+  if(!open||!close)return;
+  const val=ed.value,range=selectedLineRange();
+  const block=val.substring(range.lineStart,range.lineEnd);
+  const leading=(block.match(/^\s*/)||[''])[0],trailing=(block.match(/\s*$/)||[''])[0];
+  const coreStart=leading.length,coreEnd=Math.max(coreStart,block.length-trailing.length);
+  const core=block.slice(coreStart,coreEnd);
+  let next;
+  if(core.startsWith(open)&&core.endsWith(close)){
+    let inner=core.slice(open.length,core.length-close.length);
+    if(inner.startsWith(' '))inner=inner.slice(1);
+    if(inner.endsWith(' '))inner=inner.slice(0,-1);
+    next=leading+inner+trailing;
+  }else{
+    next=leading+open+' '+core+' '+close+trailing;
+  }
+  ed.value=val.substring(0,range.lineStart)+next+val.substring(range.lineEnd);
+  const delta=next.length-block.length;
+  if(range.start!==range.end){
+    ed.selectionStart=range.lineStart;
+    ed.selectionEnd=range.lineEnd+delta;
+  }else{
+    ed.selectionStart=ed.selectionEnd=Math.max(range.lineStart,range.start+delta);
+  }
+  updateLineNums();updateCursorPos();
 }
 
 // ── Duplicate line ──

@@ -1928,6 +1928,9 @@ class AIEditorAPI:
                 "tokenizer": "",
                 "source": source,
                 "extension_id": "",
+                "configurationPath": "",
+                "configurationResolvedPath": "",
+                "configuration": {},
             })
             if item.get("source") != "builtin" and source == "builtin":
                 item["source"] = "builtin"
@@ -1954,7 +1957,9 @@ class AIEditorAPI:
             item = _entry(language_id, "extension")
             if item.get("source") != "builtin":
                 item["source"] = "extension"
-            item["extension_id"] = str(lang.get("_extensionId") or item.get("extension_id") or "")
+            extension_id = str(
+                lang.get("_extensionId") or item.get("extension_id") or "")
+            item["extension_id"] = extension_id
             aliases = [
                 str(value).strip()
                 for value in (lang.get("aliases") or [])
@@ -1973,6 +1978,15 @@ class AIEditorAPI:
                 normalized_name = str(filename or "").strip()
                 if normalized_name and normalized_name not in item["filenames"]:
                     item["filenames"].append(normalized_name)
+            config_path = str(lang.get("configuration") or "").strip()
+            if config_path:
+                item["configurationPath"] = config_path
+                resolved, configuration = self._editor_language_configuration(
+                    extension_id, config_path)
+                if resolved:
+                    item["configurationResolvedPath"] = resolved
+                if configuration:
+                    item["configuration"] = configuration
 
         for language_id, grammars in self._editor_grammars_by_language().items():
             if not language_id:
@@ -1995,6 +2009,123 @@ class AIEditorAPI:
             0 if item.get("id") == "plaintext" else 1,
             str(item.get("name") or item.get("id") or "").casefold(),
         ))
+
+    def _editor_language_configuration(
+            self, extension_id: str, rel_path: str) -> tuple[str, Dict[str, Any]]:
+        resolved = self._extension_contribution_path(extension_id, rel_path)
+        if not resolved or not os.path.isabs(resolved):
+            return "", {}
+        if not os.path.exists(resolved):
+            return resolved, {}
+        try:
+            payload = _load_jsonc_file(resolved)
+        except Exception:
+            return resolved, {}
+        return resolved, self._safe_editor_language_configuration(payload)
+
+    @classmethod
+    def _safe_editor_language_configuration(
+            cls, payload: Any) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            return {}
+        result: Dict[str, Any] = {}
+        comments = cls._safe_editor_language_comments(payload.get("comments"))
+        if comments:
+            result["comments"] = comments
+        brackets = cls._safe_editor_language_pairs(payload.get("brackets"))
+        if brackets:
+            result["brackets"] = brackets
+        auto_pairs = cls._safe_editor_auto_closing_pairs(
+            payload.get("autoClosingPairs"))
+        if auto_pairs:
+            result["autoClosingPairs"] = auto_pairs
+        surrounding_pairs = cls._safe_editor_language_pairs(
+            payload.get("surroundingPairs"), allow_empty_close=True)
+        if surrounding_pairs:
+            result["surroundingPairs"] = surrounding_pairs
+        return result
+
+    @classmethod
+    def _safe_editor_language_comments(cls, value: Any) -> Dict[str, Any]:
+        if not isinstance(value, dict):
+            return {}
+        comments: Dict[str, Any] = {}
+        line = cls._safe_editor_language_text(
+            value.get("lineComment"), strip=True)
+        if line:
+            comments["lineComment"] = line
+        block = cls._safe_editor_language_pair(value.get("blockComment"))
+        if block:
+            comments["blockComment"] = block
+        return comments
+
+    @classmethod
+    def _safe_editor_language_pairs(
+            cls, value: Any, *,
+            allow_empty_close: bool = False) -> List[List[str]]:
+        if not isinstance(value, list):
+            return []
+        pairs: List[List[str]] = []
+        for raw in value[:64]:
+            pair = cls._safe_editor_language_pair(
+                raw, allow_empty_close=allow_empty_close)
+            if pair:
+                pairs.append(pair)
+        return pairs
+
+    @classmethod
+    def _safe_editor_auto_closing_pairs(
+            cls, value: Any) -> List[Dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        pairs: List[Dict[str, Any]] = []
+        for raw in value[:64]:
+            open_token = ""
+            close_token = ""
+            not_in: List[str] = []
+            if isinstance(raw, dict):
+                open_token = cls._safe_editor_language_text(raw.get("open"))
+                close_token = cls._safe_editor_language_text(
+                    raw.get("close"), allow_empty=True)
+                not_in = cls._extension_string_list(raw.get("notIn"))[:16]
+            elif isinstance(raw, list):
+                open_token = cls._safe_editor_language_text(raw[0] if raw else "")
+                close_token = cls._safe_editor_language_text(
+                    raw[1] if len(raw) > 1 else "", allow_empty=True)
+            if not open_token:
+                continue
+            pairs.append({
+                "open": open_token,
+                "close": close_token,
+                "notIn": not_in,
+            })
+        return pairs
+
+    @classmethod
+    def _safe_editor_language_pair(
+            cls, value: Any, *,
+            allow_empty_close: bool = False) -> List[str]:
+        if not isinstance(value, list) or len(value) < 2:
+            return []
+        open_token = cls._safe_editor_language_text(value[0])
+        close_token = cls._safe_editor_language_text(
+            value[1], allow_empty=allow_empty_close)
+        if not open_token or (not close_token and not allow_empty_close):
+            return []
+        return [open_token, close_token]
+
+    @staticmethod
+    def _safe_editor_language_text(
+            value: Any, *, allow_empty: bool = False,
+            strip: bool = False) -> str:
+        if not isinstance(value, str):
+            return ""
+        text = value.strip() if strip else value
+        if "\r" in text or "\n" in text or len(text) > 80:
+            return ""
+        if not text and not allow_empty:
+            return ""
+        return text
 
     def _editor_grammars_by_language(self) -> Dict[str, List[Dict[str, Any]]]:
         result: Dict[str, List[Dict[str, Any]]] = {}

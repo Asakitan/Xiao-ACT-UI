@@ -1194,6 +1194,13 @@ def test_phase1_ai_editor_regressions() -> None:
             and "badges.push('TextMate')" in html
             and "LANGUAGE_BY_EXT" in html
             and "languageForFileName(name)" in html
+            and "function languageConfiguration(lang)" in html
+            and "function languageCommentTokens(lang)" in html
+            and "function languageAutoClosingPairs(lang)" in html
+            and "function autoClosingPairForKey(lang,key,value,pos,hasSelection)" in html
+            and "function toggleLineComment(token)" in html
+            and "function toggleBlockComment(open,close)" in html
+            and "Line comment: " in html
             and "id=\"editor-syntax-highlight\"" in html
             and "class=\"editor-syntax-layer\"" in html
             and "function updateEditorSyntaxHighlight()" in html
@@ -3046,6 +3053,23 @@ def test_app_extension_runtime_support() -> None:
   "languageIds": {"selflang": "_self",},
 }
 """)
+        with open(os.path.join(language_tmp, "language-configuration.json"),
+                  "w", encoding="utf-8") as f:
+            f.write("""
+{
+  // VS Code language configuration files commonly use JSONC.
+  "comments": {
+    "lineComment": ";;",
+    "blockComment": ["<#", "#>"],
+  },
+  "brackets": [["{", "}"], ["[", "]"], ["(", ")"]],
+  "autoClosingPairs": [
+    {"open": "{", "close": "}"},
+    {"open": "\\"", "close": "\\"", "notIn": ["string"]},
+  ],
+  "surroundingPairs": [["(", ")"]],
+}
+""")
         language_desc = ExtensionDescription.from_package_json({
             "name": "language-pack",
             "publisher": "selftest",
@@ -3056,6 +3080,7 @@ def test_app_extension_runtime_support() -> None:
                     "aliases": ["Self Lang"],
                     "extensions": [".self"],
                     "filenames": ["SELFFILE"],
+                    "configuration": "./language-configuration.json",
                 }],
                 "grammars": [{
                     "language": "selflang",
@@ -3093,11 +3118,28 @@ def test_app_extension_runtime_support() -> None:
             selflang_grammars[0]
             .get("resolvedPath", "")
             .replace("\\", "/"))
+        selflang_config = editor_languages.get("selflang", {}).get(
+            "configuration", {})
         _check("extension languages feed editor language table",
                editor_languages.get("selflang", {}).get("name") == "Self Lang"
                and ".self" in editor_languages.get("selflang", {}).get("extensions", [])
                and "source.selflang" in editor_languages.get("selflang", {}).get("grammarScopes", [])
                and editor_languages.get("selflang", {}).get("tokenizer") == "textmate")
+        _check("extension language configuration feeds editor behavior metadata",
+               editor_languages.get("selflang", {}).get("configurationPath")
+                   == "./language-configuration.json"
+               and editor_languages.get("selflang", {})
+                   .get("configurationResolvedPath", "")
+                   .replace("\\", "/").endswith("/language-configuration.json")
+               and selflang_config.get("comments", {}).get("lineComment") == ";;"
+               and selflang_config.get("comments", {}).get("blockComment")
+                   == ["<#", "#>"]
+               and ["{", "}"] in selflang_config.get("brackets", [])
+               and any(pair.get("open") == "\""
+                       and pair.get("close") == "\""
+                       and "string" in pair.get("notIn", [])
+                       for pair in selflang_config.get("autoClosingPairs", []))
+               and ["(", ")"] in selflang_config.get("surroundingPairs", []))
         _check("extension grammars feed editor language metadata",
                any(item.get("language") == "selflang"
                    and item.get("scopeName") == "source.selflang"
