@@ -5431,12 +5431,66 @@ function scheduleExtensionActivityRefresh(){
 function extensionViewTitle(view){
   return view.name||view.title||view.id||'Extension View';
 }
+function extensionActionGlyph(action){
+  const icon=String((action&&action.icon)||'');
+  if(icon.indexOf('refresh')>=0)return '↻';
+  if(icon.indexOf('collapse')>=0)return '⇤';
+  if(icon.startsWith('$(')&&icon.endsWith(')'))return icon.slice(2,-1).slice(0,2).toUpperCase();
+  if(icon&&icon.length<=3)return icon;
+  return '...';
+}
+function showExtensionActionMenu(x,y,actions,runner){
+  const menu=$('ctx-menu');if(!menu)return;
+  menu.innerHTML='';
+  (actions||[]).forEach(action=>{
+    const d=document.createElement('div');d.className='ctx-item';
+    d.textContent=action.title||action.command||'Command';
+    d.onclick=()=>{menu.style.display='none';runner(action)};
+    menu.appendChild(d);
+  });
+  if(!menu.children.length)return;
+  menu.style.display='block';menu.style.left=x+'px';menu.style.top=y+'px';
+}
+function runExtensionViewAction(action){
+  if(action&&action.command)call('execute_command',action.command);
+}
+function runExtensionTreeItemAction(viewId,node,action){
+  if(!action||!action.command)return;
+  if(viewId&&node&&node.handle)call('execute_extension_tree_item_action',viewId,node.handle,action.command);
+  else call('execute_command',action.command);
+}
+function appendExtensionTitleActions(title,view,state){
+  const actions=(Array.isArray(state.titleActions)&&state.titleActions.length)
+    ?state.titleActions
+    :(Array.isArray(view.titleActions)?view.titleActions:[]);
+  if(!actions.length)return;
+  const box=document.createElement('div');box.style.cssText='margin-left:auto;display:flex;align-items:center;gap:2px';
+  actions.slice(0,3).forEach(action=>{
+    const btn=document.createElement('button');btn.type='button';btn.className='icon-btn';
+    btn.style.cssText='width:22px;height:22px;border:0;background:transparent;color:var(--fg-dim);padding:0';
+    btn.textContent=extensionActionGlyph(action);
+    btn.title=action.title||action.command||'Command';
+    btn.onclick=e=>{e.stopPropagation();runExtensionViewAction(action)};
+    box.appendChild(btn);
+  });
+  if(actions.length>3){
+    const more=document.createElement('button');more.type='button';more.className='icon-btn';
+    more.style.cssText='width:22px;height:22px;border:0;background:transparent;color:var(--fg-dim);padding:0';
+    more.textContent='...';more.title='More actions';
+    more.onclick=e=>{e.stopPropagation();showExtensionActionMenu(e.clientX,e.clientY,actions.slice(3),runExtensionViewAction)};
+    box.appendChild(more);
+  }
+  title.appendChild(box);
+}
 function renderExtensionTreeView(view){
   const card=document.createElement('div');card.className='tool-call';card.style.margin='0 0 8px 0';
   const title=document.createElement('div');title.className='tool-header open';
-  title.textContent=extensionViewTitle(view);
+  title.style.display='flex';title.style.alignItems='center';title.style.gap='6px';
+  const titleLabel=document.createElement('span');titleLabel.style.cssText='overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  titleLabel.textContent=extensionViewTitle(view);title.appendChild(titleLabel);
   const body=document.createElement('div');body.className='tool-body open';body.style.whiteSpace='normal';
   const state=view.runtimeState||{};
+  appendExtensionTitleActions(title,view,state);
   const nodes=Array.isArray(state.nodes)&&state.nodes.length
     ?state.nodes
     :(Array.isArray(state.children)?state.children.map(label=>({label:String(label),children:[]})):[]);
@@ -5466,7 +5520,15 @@ function renderExtensionTreeNode(viewId,node,depth){
   if(node.tooltip)label.title=node.tooltip;
   const desc=document.createElement('span');desc.style.cssText='color:var(--fg-dim);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:42%';
   desc.textContent=node.description||'';
+  const actions=Array.isArray(node.actions)?node.actions:[];
   row.appendChild(twist);row.appendChild(label);if(node.description)row.appendChild(desc);
+  if(actions.length){
+    const actionBtn=document.createElement('button');actionBtn.type='button';actionBtn.className='icon-btn';
+    actionBtn.style.cssText='width:18px;height:18px;flex:0 0 18px;border:0;background:transparent;color:var(--fg-dim);padding:0';
+    actionBtn.textContent='...';actionBtn.title='Tree item actions';
+    actionBtn.onclick=e=>{e.stopPropagation();showExtensionActionMenu(e.clientX,e.clientY,actions,action=>runExtensionTreeItemAction(viewId,node,action))};
+    row.appendChild(actionBtn);
+  }
   const childBox=document.createElement('div');childBox.style.display=collapsible===2?'':'none';
   if(collapsible)wrap.setAttribute('aria-expanded',collapsible===2?'true':'false');
   children.forEach(child=>childBox.appendChild(renderExtensionTreeNode(viewId,child,depth+1)));
@@ -5487,6 +5549,12 @@ function renderExtensionTreeNode(viewId,node,depth){
     if(e.key==='Enter'||e.key===' '){e.preventDefault();activateNode()}
     else if(e.key==='ArrowRight'&&collapsible&&childBox.style.display==='none'){e.preventDefault();setOpen(true)}
     else if(e.key==='ArrowLeft'&&collapsible&&childBox.style.display!=='none'){e.preventDefault();setOpen(false)}
+  };
+  row.oncontextmenu=e=>{
+    if(!actions.length)return;
+    e.preventDefault();e.stopPropagation();
+    selectNode();
+    showExtensionActionMenu(e.clientX,e.clientY,actions,action=>runExtensionTreeItemAction(viewId,node,action));
   };
   wrap.appendChild(row);wrap.appendChild(childBox);return wrap;
 }

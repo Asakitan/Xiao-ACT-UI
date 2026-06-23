@@ -1175,7 +1175,10 @@ def test_phase1_ai_editor_regressions() -> None:
             and "tree.setAttribute('role','tree')" in html
             and "event==='extension_tree_changed'" in html
             and "function scheduleExtensionActivityRefresh()" in html
+            and "function appendExtensionTitleActions(title,view,state)" in html
+            and "function showExtensionActionMenu(x,y,actions,runner)" in html
             and "call('select_extension_tree_item',viewId,node.handle)" in html
+            and "call('execute_extension_tree_item_action',viewId,node.handle,action.command)" in html
             and "window.pywebview.api.execute_command(node.command.command" in html
             and "function renderExtensionWebviewView(view)" in html
             and "_injectWebviewHtml(host,view.id||state.view_id||state.viewId,html,state.state)" in html
@@ -2127,6 +2130,11 @@ def test_extension_host() -> None:
             "languageModelTools": [{"name": "test_tool",
                                     "displayName": "Test Tool"}],
             "views": {"explorer": [{"id": "test.tree", "name": "Test Tree"}]},
+            "menus": {"view/title": [{
+                "command": "test.hello",
+                "when": "view == test.tree",
+                "group": "navigation@1",
+            }]},
             "jsonValidation": [{"fileMatch": "test.json", "url": "./schema.json"}],
             "viewsWelcome": [{"view": "test.view", "contents": "Welcome"}],
             "submenus": [{"id": "test.submenu", "label": "Submenu"}],
@@ -2188,6 +2196,7 @@ def test_extension_host() -> None:
     _check("EP.extra contribution details retained",
            len(contrib_details.get("jsonValidation", [])) == 1
             and len(contrib_details.get("views", {}).get("explorer", [])) == 1
+           and len(contrib_details.get("menus", {}).get("view/title", [])) == 1
            and len(contrib_details.get("viewsWelcome", [])) == 1
            and len(contrib_details.get("submenus", [])) == 1
            and len(contrib_details.get("problemMatchers", [])) == 1
@@ -3051,6 +3060,29 @@ def test_app_extension_runtime_support() -> None:
             "publisher": "selftest",
             "version": "0.0.1",
             "contributes": {
+                "commands": [
+                    {
+                        "command": "selftest.activity.refresh",
+                        "title": "Refresh Activity",
+                        "icon": "$(refresh)",
+                    },
+                    {
+                        "command": "selftest.activity.openItem",
+                        "title": "Open Activity Item",
+                    },
+                ],
+                "menus": {
+                    "view/title": [{
+                        "command": "selftest.activity.refresh",
+                        "when": "view == selftest.activity.tree",
+                        "group": "navigation@1",
+                    }],
+                    "view/item/context": [{
+                        "command": "selftest.activity.openItem",
+                        "when": "view == selftest.activity.tree && viewItem == branch",
+                        "group": "inline@1",
+                    }],
+                },
                 "viewsContainers": {"activitybar": [{
                     "id": "selftest.activity",
                     "title": "Selftest Activity",
@@ -3085,6 +3117,7 @@ def test_app_extension_runtime_support() -> None:
                         "description": "branch",
                         "tooltip": "Expandable node",
                         "collapsibleState": 1,
+                        "contextValue": "branch",
                         "command": {
                             "command": "selftest.command.tree",
                             "title": "Open Node A",
@@ -3094,9 +3127,17 @@ def test_app_extension_runtime_support() -> None:
                 return {"label": str(element).title(), "collapsibleState": 0}
 
         activity_tree_provider = _ActivityTreeProvider()
-        api._vscode_ns.build(activity_desc)["window"]["registerTreeDataProvider"](
+        activity_command_log = []
+        activity_api = api._vscode_ns.build(activity_desc)
+        activity_api["commands"]["registerCommand"](
+            "selftest.activity.refresh",
+            lambda: activity_command_log.append(("refresh", None)) or {"refreshed": True})
+        activity_api["commands"]["registerCommand"](
+            "selftest.activity.openItem",
+            lambda item: activity_command_log.append(("open", item)) or {"opened": str(item)})
+        activity_api["window"]["registerTreeDataProvider"](
             "selftest.activity.tree", activity_tree_provider)
-        api._vscode_ns.build(activity_desc)["window"]["registerWebviewViewProvider"](
+        activity_api["window"]["registerWebviewViewProvider"](
             "selftest.activity.webview", _CommandWebviewProvider())
         activity_items = {
             item.get("id"): item
@@ -3119,6 +3160,13 @@ def test_app_extension_runtime_support() -> None:
                and activity_tree_nodes[0].get("command", {}).get("command") == "selftest.command.tree"
                and activity_tree_nodes[0].get("children", [{}])[0].get("label") == "Leaf-A"
                and bool(activity_tree_nodes[0].get("handle")))
+        _check("activity tree views expose contributed title and item actions",
+               activity_views.get("selftest.activity.tree", {})
+               .get("runtimeState", {}).get("titleActions", [{}])[0].get("command")
+               == "selftest.activity.refresh"
+               and activity_tree_nodes[0].get("actions", [{}])[0].get("command")
+               == "selftest.activity.openItem"
+               and activity_tree_nodes[0].get("children", [{}])[0].get("actions", []) == [])
         activity_tree_view = api._vscode_ns._tree_views.get("selftest.activity.tree")
         activity_selection_events = []
         if activity_tree_view is not None:
@@ -3131,6 +3179,14 @@ def test_app_extension_runtime_support() -> None:
                and activity_selection_events
                and activity_selection_events[-1].get("selection") == ["node-a"]
                and selected_tree.get("runtimeState", {}).get("nodes", [{}])[0].get("selected") is True)
+        item_action = api.execute_extension_tree_item_action(
+            "selftest.activity.tree",
+            activity_tree_nodes[0].get("handle", ""),
+            "selftest.activity.openItem")
+        _check("activity tree item context action receives selected element",
+               item_action.get("ok") is True
+               and item_action.get("opened") == "node-a"
+               and activity_command_log[-1] == ("open", "node-a"))
         before_activity_version = activity_views.get(
             "selftest.activity.tree", {}).get("runtimeState", {}).get("refreshVersion", 0)
         activity_tree_provider.refresh("node-a")

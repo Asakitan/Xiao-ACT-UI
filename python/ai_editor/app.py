@@ -3696,6 +3696,45 @@ class AIEditorAPI:
             "runtimeState": snapshot,
         }
 
+    def execute_extension_tree_item_action(
+            self, view_id: str, handle: str, command_id: str) -> Dict:
+        """Execute a contributed TreeView item action with the item as argument."""
+        self._ensure_engine()
+        normalized_view_id = str(view_id or "")
+        normalized_handle = str(handle or "")
+        normalized_command = str(command_id or "")
+        if not normalized_view_id or not normalized_handle or not normalized_command:
+            return {"error": "Tree view id, node handle, and command id are required"}
+        view = self._vscode_ns._tree_views.get(normalized_view_id)
+        if view is None:
+            return {"error": f"Tree view not found: {normalized_view_id}"}
+        if not view.select_handle(normalized_handle):
+            return {
+                "error": "Tree node handle is stale or unknown",
+                "view_id": normalized_view_id,
+                "handle": normalized_handle,
+            }
+        selection = list(getattr(view, "selection", []) or [])
+        element = selection[0] if selection else None
+        try:
+            result = self._ext_host.commands.execute(normalized_command, element)
+            payload: Dict[str, Any]
+            if isinstance(result, dict):
+                payload = dict(result)
+            else:
+                payload = {"result": result}
+            payload.setdefault("ok", True)
+            payload.update({
+                "view_id": normalized_view_id,
+                "command": normalized_command,
+                "selection": [str(item) for item in selection],
+            })
+            return json.loads(json.dumps(payload, ensure_ascii=False, default=str))
+        except KeyError:
+            return {"error": f"Command not found: {normalized_command}"}
+        except Exception as exc:
+            return {"error": str(exc), "command": normalized_command}
+
     def list_commands(self) -> Dict:
         self._ensure_engine()
         return {"commands": self._ext_host.commands.list_commands()}
@@ -3909,11 +3948,13 @@ class AIEditorAPI:
 
     def _decorate_extension_view(self, item: Dict[str, Any]) -> Dict[str, Any]:
         view = dict(item)
-        snapshot = self._extension_view_snapshot(str(view.get("id") or ""))
+        view_id = str(view.get("id") or "")
+        snapshot = self._extension_view_snapshot(view_id)
         view.update({
             "runtimeAvailable": bool(snapshot.get("runtimeAvailable")),
             "runtimeKind": snapshot.get("kind") or "view",
             "runtimeMessage": snapshot.get("message", ""),
+            "titleActions": self._view_title_actions(view_id),
         })
         if snapshot:
             view["runtimeState"] = snapshot
@@ -4003,6 +4044,7 @@ class AIEditorAPI:
                 "runtimeAvailable": True,
                 "message": "Runtime tree view provider registered.",
                 "title": getattr(tree_view, "title", view_id),
+                "titleActions": self._view_title_actions(view_id),
                 "selection": [
                     str(item)
                     for item in list(getattr(tree_view, "selection", []) or [])
@@ -4025,6 +4067,7 @@ class AIEditorAPI:
                 "runtimeAvailable": True,
                 "message": "Runtime webview provider registered.",
                 "title": getattr(webview_view, "title", view_id),
+                "titleActions": self._view_title_actions(view_id),
                 "html": getattr(getattr(webview_view, "webview", None), "html", ""),
                 "visible": bool(getattr(webview_view, "visible", False)),
             }
@@ -4037,6 +4080,7 @@ class AIEditorAPI:
                 "message": manifest_view.get("_runtimeSupport", {}).get(
                     "message", "View manifest is present but no runtime provider is registered."),
                 "title": manifest_view.get("name") or view_id,
+                "titleActions": self._view_title_actions(view_id),
                 "location": manifest_view.get("_viewLocation", ""),
             }
         return {
@@ -4052,6 +4096,160 @@ class AIEditorAPI:
                 if str(view.get("id") or "") == view_id:
                     return dict(view)
         return {}
+
+    def _view_title_actions(self, view_id: str) -> List[Dict[str, Any]]:
+        return self._extension_menu_actions("view/title", {
+            "view": str(view_id or ""),
+        })
+
+    def _view_item_actions(
+            self, view_id: str, context_value: Any) -> List[Dict[str, Any]]:
+        return self._extension_menu_actions("view/item/context", {
+            "view": str(view_id or ""),
+            "viewItem": "" if context_value is None else str(context_value),
+        })
+
+    def _extension_menu_actions(
+            self, menu_id: str, context: Dict[str, str]) -> List[Dict[str, Any]]:
+        menus = self._ext_host.ext_points.all_contributions.get("menus", {})
+        if not isinstance(menus, dict):
+            return []
+        result: List[Dict[str, Any]] = []
+        for item in menus.get(menu_id, []):
+            if not isinstance(item, dict):
+                continue
+            if not self._extension_when_matches(item.get("when", ""), context):
+                continue
+            action = self._extension_menu_action_preview(item, context)
+            if action:
+                result.append(action)
+        result.sort(key=lambda action: (
+            str(action.get("group", "")),
+            float(action.get("order", 0.0)),
+            str(action.get("title", "")).lower(),
+        ))
+        return result
+
+    def _extension_menu_action_preview(
+            self, item: Dict[str, Any],
+            context: Dict[str, str]) -> Dict[str, Any]:
+        command_id = str(item.get("command") or "")
+        if not command_id:
+            return {}
+        command_record = self._ext_host.ext_points.get_command_contribution(
+            command_id)
+        title = (
+            item.get("title")
+            or command_record.get("title")
+            or item.get("alt")
+            or command_id
+        )
+        return {
+            "command": command_id,
+            "title": str(title),
+            "shortTitle": str(
+                item.get("shortTitle")
+                or command_record.get("shortTitle")
+                or title),
+            "icon": self._extension_action_icon(
+                item.get("icon") or command_record.get("icon")),
+            "extension_id": str(item.get("_extensionId", "")),
+            "group": str(item.get("group", "")),
+            "order": self._extension_menu_order(item.get("group", "")),
+            "when": str(item.get("when", "")),
+            "view": context.get("view", ""),
+            "viewItem": context.get("viewItem", ""),
+        }
+
+    @staticmethod
+    def _extension_menu_order(group: Any) -> float:
+        text = str(group or "")
+        if "@" not in text:
+            return 0.0
+        try:
+            return float(text.rsplit("@", 1)[1])
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _extension_action_icon(icon: Any) -> str:
+        if not icon:
+            return ""
+        if isinstance(icon, str):
+            return icon
+        if isinstance(icon, dict):
+            for key in ("id", "light", "dark"):
+                value = icon.get(key)
+                if value:
+                    return str(value)
+        icon_id = getattr(icon, "id", "")
+        return str(icon_id or "")
+
+    @classmethod
+    def _extension_when_matches(
+            cls, when: Any, context: Dict[str, str]) -> bool:
+        expr = str(when or "").strip()
+        if not expr:
+            return True
+        # Common view menu clauses use simple disjunctions/conjunctions. Be
+        # conservative for unknown contexts so actions do not leak to views
+        # where VS Code would hide them.
+        for or_part in re.split(r"\s*\|\|\s*", expr):
+            clauses = [
+                clause.strip()
+                for clause in re.split(r"\s*&&\s*", or_part)
+                if clause.strip()
+            ]
+            if clauses and all(
+                    cls._extension_when_clause_matches(clause, context)
+                    for clause in clauses):
+                return True
+        return False
+
+    @classmethod
+    def _extension_when_clause_matches(
+            cls, clause: str, context: Dict[str, str]) -> bool:
+        clause = clause.strip()
+        while clause.startswith("(") and clause.endswith(")"):
+            clause = clause[1:-1].strip()
+        negated = clause.startswith("!")
+        if negated:
+            clause = clause[1:].strip()
+        regex_match = re.match(
+            r"^(view|viewItem)\s*=~\s*/(.+)/(i)?$", clause)
+        if regex_match:
+            key, pattern, flags = regex_match.groups()
+            try:
+                matched = re.search(
+                    pattern,
+                    context.get(key, ""),
+                    re.IGNORECASE if flags else 0) is not None
+            except re.error:
+                matched = False
+            return not matched if negated else matched
+        compare_match = re.match(
+            r"^(view|viewItem)\s*(==|!=|===|!==)\s*(.+)$", clause)
+        if compare_match:
+            key, op, raw_expected = compare_match.groups()
+            expected = cls._strip_when_value(raw_expected)
+            actual = context.get(key, "")
+            matched = actual == expected
+            if op in ("!=", "!=="):
+                matched = not matched
+            return not matched if negated else matched
+        if clause in {"view", "viewItem"}:
+            matched = bool(context.get(clause, ""))
+            return not matched if negated else matched
+        # Unknown context keys should not make an action visible.
+        return bool(negated)
+
+    @staticmethod
+    def _strip_when_value(value: str) -> str:
+        value = value.strip()
+        if ((value.startswith("'") and value.endswith("'"))
+                or (value.startswith('"') and value.endswith('"'))):
+            return value[1:-1]
+        return value
 
     @staticmethod
     def _tree_view_children_preview(provider: Any) -> List[str]:
@@ -4102,7 +4300,8 @@ class AIEditorAPI:
             child_seen = set(seen)
             child_seen.add(marker)
             item = self._tree_item_for_element(provider, child)
-            node = self._tree_node_preview(child, item, tree_view=tree_view)
+            node = self._tree_node_preview(
+                child, item, tree_view=tree_view, view_id=getattr(tree_view, "id", ""))
             child_nodes: List[Dict[str, Any]] = []
             if node.get("collapsibleState", 0) or depth < 1:
                 child_nodes = self._tree_view_nodes_preview(
@@ -4125,7 +4324,8 @@ class AIEditorAPI:
             return element
 
     def _tree_node_preview(self, element: Any, item: Any,
-                           tree_view: Any = None) -> Dict[str, Any]:
+                           tree_view: Any = None,
+                           view_id: str = "") -> Dict[str, Any]:
         label = self._tree_value(item, "label")
         if isinstance(label, dict):
             label = label.get("label") or label.get("text") or ""
@@ -4150,6 +4350,8 @@ class AIEditorAPI:
             "icon": icon,
             "contextValue": "" if context_value is None else str(context_value),
         }
+        node["actions"] = self._view_item_actions(
+            view_id, node.get("contextValue", ""))
         if tree_view is not None:
             remember = getattr(tree_view, "remember_element", None)
             if callable(remember):

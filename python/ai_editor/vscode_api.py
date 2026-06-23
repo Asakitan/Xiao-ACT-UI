@@ -3349,14 +3349,22 @@ class _TreeView:
         self._dispose_provider_listener()
         self.provider = provider
         self._change_callback = change_callback
+        self._handle_elements.clear()
         self.refresh_version += 1
         self._subscribe_provider_refresh()
 
     def begin_snapshot(self) -> None:
         self._snapshot_counter += 1
-        self._handle_elements.clear()
 
     def remember_element(self, element: Any) -> str:
+        for handle, existing in self._handle_elements.items():
+            if existing is element:
+                return handle
+            try:
+                if existing == element:
+                    return handle
+            except Exception:
+                pass
         handle = f"{self._snapshot_counter}:{len(self._handle_elements) + 1}"
         self._handle_elements[handle] = element
         return handle
@@ -3450,6 +3458,7 @@ class _TreeView:
 
     def _on_provider_changed(self, element: Any = None) -> None:
         self.refresh_version += 1
+        self._handle_elements.clear()
         self._notify_changed("refresh", {
             "refreshVersion": self.refresh_version,
             "element": element,
