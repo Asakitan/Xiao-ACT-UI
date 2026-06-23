@@ -3320,6 +3320,7 @@ class _TreeView:
         self._handle_elements: Dict[str, Any] = {}
         self._expanded_handles = set()
         self._revealed_element = None
+        self._reveal_ancestors: List[Any] = []
         self._change_callback: Optional[Callable[[str, str, Dict[str, Any]], None]] = None
         self._provider_change_disposable = None
         self._dispose = EventEmitter()
@@ -3365,6 +3366,7 @@ class _TreeView:
         self._handle_elements.clear()
         self._expanded_handles.clear()
         self._revealed_element = None
+        self._reveal_ancestors = []
         self.refresh_version += 1
         self._subscribe_provider_refresh()
 
@@ -3412,16 +3414,26 @@ class _TreeView:
         })
         return True
 
+    @staticmethod
+    def _same_element(left: Any, right: Any) -> bool:
+        if left is right:
+            return True
+        try:
+            return left == right
+        except Exception:
+            return False
+
     def is_revealed(self, element: Any) -> bool:
         revealed = self._revealed_element
         if revealed is None:
             return False
-        if revealed is element:
-            return True
-        try:
-            return revealed == element
-        except Exception:
-            return False
+        return self._same_element(revealed, element)
+
+    def is_reveal_ancestor(self, element: Any) -> bool:
+        for ancestor in self._reveal_ancestors:
+            if self._same_element(ancestor, element):
+                return True
+        return False
 
     def is_selected(self, element: Any) -> bool:
         for selected in self.selection:
@@ -3461,6 +3473,7 @@ class _TreeView:
                 break
         if not reveal:
             self._revealed_element = None
+            self._reveal_ancestors = []
         self.selection = normalized
         self.activeItem = normalized[0] if normalized else None
         if changed:
@@ -3473,11 +3486,38 @@ class _TreeView:
     def reveal(self, element: Any, **kw: Any) -> None:
         self.set_selection([element], reveal=True)
         self._revealed_element = element
+        self._reveal_ancestors = self._resolve_reveal_ancestors(element)
         self.reveal_version += 1
         self._notify_changed("reveal", {
             "refreshVersion": self.refresh_version,
             "revealVersion": self.reveal_version,
         })
+
+    def _resolve_reveal_ancestors(self, element: Any) -> List[Any]:
+        provider = self.provider
+        get_parent = (
+            getattr(provider, "getParent", None)
+            or getattr(provider, "get_parent", None)
+        )
+        if not callable(get_parent):
+            return []
+        ancestors: List[Any] = []
+        seen = {id(element)}
+        current = element
+        for _ in range(50):
+            try:
+                parent = get_parent(current)
+            except Exception:
+                break
+            if parent is None:
+                break
+            marker = id(parent)
+            if marker in seen:
+                break
+            ancestors.append(parent)
+            seen.add(marker)
+            current = parent
+        return ancestors
 
     def dispose(self) -> None:
         self.visible = False

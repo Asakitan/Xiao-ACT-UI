@@ -3134,6 +3134,11 @@ def test_app_extension_runtime_support() -> None:
                     return ["leaf-a"]
                 return ["node-a", "node-b"] if element is None else []
 
+            def getParent(self, element):
+                if element == "leaf-a":
+                    return "node-a"
+                return None
+
             def getTreeItem(self, element):
                 if element == "node-a":
                     return {
@@ -3236,7 +3241,7 @@ def test_app_extension_runtime_support() -> None:
                and item_action.get("opened") == "node-a"
                and activity_command_log[-1] == ("open", "node-a"))
         if activity_tree_view is not None:
-            activity_tree_view.reveal("node-a")
+            activity_tree_view.reveal("leaf-a")
         revealed_activity_views = {
             view.get("id"): view
             for item in api.list_extension_activity_bar_items().get("items", [])
@@ -3246,10 +3251,15 @@ def test_app_extension_runtime_support() -> None:
         revealed_activity_node = revealed_activity_views.get(
             "selftest.activity.tree", {}).get(
                 "runtimeState", {}).get("nodes", [{}])[0]
-        _check("activity tree reveal snapshot marks focus target",
-               revealed_activity_node.get("revealed") is True
-               and revealed_activity_node.get("selected") is True
-               and revealed_activity_node.get("revealVersion", 0) >= 1)
+        revealed_activity_child = revealed_activity_node.get("children", [{}])[0]
+        _check("activity tree reveal expands provider parent chain",
+               revealed_activity_node.get("revealAncestor") is True
+               and revealed_activity_node.get("collapsibleState") == 2
+               and revealed_activity_node.get("childrenLoaded") is True
+               and revealed_activity_child.get("label") == "Leaf-A"
+               and revealed_activity_child.get("revealed") is True
+               and revealed_activity_child.get("selected") is True
+               and revealed_activity_child.get("revealVersion", 0) >= 1)
         before_activity_version = activity_views.get(
             "selftest.activity.tree", {}).get("runtimeState", {}).get("refreshVersion", 0)
         activity_tree_provider.refresh("node-a")

@@ -4372,15 +4372,31 @@ class AIEditorAPI:
             item = self._tree_item_for_element(provider, child)
             node = self._tree_node_preview(
                 child, item, tree_view=tree_view, view_id=getattr(tree_view, "id", ""))
+            force_reveal_children = False
+            reveal_ancestor = getattr(tree_view, "is_reveal_ancestor", None)
+            if callable(reveal_ancestor):
+                try:
+                    force_reveal_children = bool(reveal_ancestor(child))
+                except Exception:
+                    force_reveal_children = False
+            if force_reveal_children:
+                node["revealAncestor"] = True
             child_nodes: List[Dict[str, Any]] = []
             attempted_children = False
-            if depth < max_depth and (node.get("collapsibleState", 0) or depth < 1):
+            if force_reveal_children or (
+                    depth < max_depth
+                    and (node.get("collapsibleState", 0) or depth < 1)):
                 attempted_children = True
+                child_max_depth = (
+                    max(max_depth, depth + 1)
+                    if force_reveal_children else max_depth)
                 child_nodes = self._tree_view_nodes_preview(
                     provider, child, depth + 1, child_seen,
-                    tree_view=tree_view, max_depth=max_depth)
+                    tree_view=tree_view, max_depth=child_max_depth)
                 if child_nodes and not node.get("collapsibleState", 0):
-                    node["collapsibleState"] = 1
+                    node["collapsibleState"] = 2 if force_reveal_children else 1
+                elif force_reveal_children and node.get("collapsibleState", 0):
+                    node["collapsibleState"] = 2
             node["children"] = child_nodes
             node["childrenLoaded"] = attempted_children or not bool(
                 node.get("collapsibleState", 0))
