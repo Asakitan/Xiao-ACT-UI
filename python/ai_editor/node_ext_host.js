@@ -150,6 +150,128 @@ class DocumentHighlight {
     }
 }
 
+class DataTransferFile {
+    constructor(name, uri, data) {
+        this.name = name === undefined || name === null ? '' : String(name);
+        this.uri = uri ? _uriFromPayload(uri) : undefined;
+        this._data = data;
+    }
+    data() {
+        if (this._data instanceof Uint8Array) return Promise.resolve(this._data);
+        if (Array.isArray(this._data)) return Promise.resolve(Uint8Array.from(this._data));
+        if (Buffer.isBuffer(this._data)) return Promise.resolve(new Uint8Array(this._data));
+        return Promise.resolve(new TextEncoder().encode(String(this._data ?? '')));
+    }
+}
+
+class DataTransferItem {
+    constructor(value) {
+        this.value = value;
+    }
+    asString() {
+        if (this.value === undefined || this.value === null) return Promise.resolve('');
+        if (typeof this.value === 'string') return Promise.resolve(this.value);
+        if (Buffer.isBuffer(this.value)) return Promise.resolve(this.value.toString('utf8'));
+        if (this.value instanceof Uint8Array) return Promise.resolve(new TextDecoder().decode(this.value));
+        if (typeof this.value === 'object') {
+            try { return Promise.resolve(JSON.stringify(_serializeLanguageValue(this.value))); }
+            catch { return Promise.resolve(String(this.value)); }
+        }
+        return Promise.resolve(String(this.value));
+    }
+    asFile() {
+        if (this.value instanceof DataTransferFile) return this.value;
+        if (this.value && typeof this.value === 'object'
+            && (this.value.name !== undefined || this.value.uri !== undefined || this.value.data !== undefined)) {
+            return new DataTransferFile(
+                this.value.name || this.value.fileName || '',
+                this.value.uri || this.value.path,
+                this.value.data || this.value.contents || []);
+        }
+        return undefined;
+    }
+}
+
+class DataTransfer {
+    constructor(entries) {
+        this._items = new Map();
+        if (entries instanceof DataTransfer) {
+            for (const [mime, item] of entries) this.set(mime, item);
+        } else if (entries && typeof entries === 'object' && !Array.isArray(entries)) {
+            for (const [mime, item] of Object.entries(entries)) this.set(mime, item);
+        } else if (Array.isArray(entries)) {
+            for (const [mime, item] of entries) this.set(mime, item);
+        }
+    }
+    _key(mimeType) { return String(mimeType || '').toLowerCase(); }
+    get(mimeType) { return this._items.get(this._key(mimeType)); }
+    set(mimeType, value) {
+        const key = this._key(mimeType);
+        if (!key) return;
+        this._items.set(key, value instanceof DataTransferItem ? value : new DataTransferItem(value));
+    }
+    delete(mimeType) { this._items.delete(this._key(mimeType)); }
+    has(mimeType) { return this._items.has(this._key(mimeType)); }
+    forEach(callbackfn, thisArg) {
+        for (const [mime, item] of this._items) {
+            callbackfn.call(thisArg, item, mime, this);
+        }
+    }
+    [Symbol.iterator]() { return this._items[Symbol.iterator](); }
+    toJSON() {
+        const result = {};
+        for (const [mime, item] of this._items) {
+            result[mime] = _serializeLanguageValue(item.value);
+        }
+        return result;
+    }
+}
+
+class DocumentDropOrPasteEditKind {
+    constructor(value) {
+        this.value = value === undefined || value === null ? '' : String(value);
+    }
+    append(...parts) {
+        const suffix = parts.filter(part => part !== undefined && part !== null && String(part))
+            .map(part => String(part).replace(/^\.+|\.+$/g, ''))
+            .join('.');
+        return new DocumentDropOrPasteEditKind([this.value, suffix].filter(Boolean).join('.'));
+    }
+    intersects(other) {
+        const otherKind = _dropOrPasteKindFromPayload(other);
+        return this.contains(otherKind) || otherKind.contains(this);
+    }
+    contains(other) {
+        const otherValue = _dropOrPasteKindFromPayload(other).value;
+        if (!this.value) return !otherValue;
+        return otherValue === this.value || otherValue.startsWith(`${this.value}.`);
+    }
+    toString() { return this.value; }
+}
+DocumentDropOrPasteEditKind.Empty = new DocumentDropOrPasteEditKind('');
+DocumentDropOrPasteEditKind.Text = new DocumentDropOrPasteEditKind('text');
+DocumentDropOrPasteEditKind.TextUpdateImports = new DocumentDropOrPasteEditKind('text.updateImports');
+
+class DocumentDropEdit {
+    constructor(insertText, title, kind) {
+        this.insertText = insertText;
+        this.title = title === undefined || title === null ? undefined : String(title);
+        this.kind = kind === undefined || kind === null ? undefined : _dropOrPasteKindFromPayload(kind);
+        this.yieldTo = undefined;
+        this.additionalEdit = undefined;
+    }
+}
+
+class DocumentPasteEdit {
+    constructor(insertText, title, kind) {
+        this.insertText = insertText;
+        this.title = title === undefined || title === null ? '' : String(title);
+        this.kind = _dropOrPasteKindFromPayload(kind);
+        this.additionalEdit = undefined;
+        this.yieldTo = undefined;
+    }
+}
+
 class SymbolInformation {
     constructor(name, kind, containerOrRange, locationOrUri, containerName) {
         this.name = name === undefined || name === null ? '' : String(name);
@@ -741,6 +863,9 @@ function _serializeLanguageValue(value) {
     if (value instanceof Uri) return _serializeLanguageUri(value);
     if (value instanceof Position) return _serializeLanguagePosition(value);
     if (value instanceof Range) return _serializeLanguageRange(value);
+    if (value instanceof DataTransfer) return value.toJSON();
+    if (value instanceof DataTransferItem) return _serializeLanguageValue(value.value);
+    if (value instanceof DocumentDropOrPasteEditKind) return { value: value.value };
     if (value instanceof RegExp) {
         return { source: value.source, flags: value.flags, pattern: String(value) };
     }
@@ -770,6 +895,48 @@ function _positionFromPayload(value) {
 function _rangeFromPayload(value) {
     if (value instanceof Range) return value;
     return new Range(_positionFromPayload(value?.start), _positionFromPayload(value?.end));
+}
+
+function _dropOrPasteKindFromPayload(value) {
+    if (value instanceof DocumentDropOrPasteEditKind) return value;
+    if (value && typeof value === 'object' && value.value !== undefined) {
+        return new DocumentDropOrPasteEditKind(value.value);
+    }
+    return new DocumentDropOrPasteEditKind(value === undefined || value === null ? '' : String(value));
+}
+
+function _dataTransferFromPayload(value) {
+    return value instanceof DataTransfer ? value : new DataTransfer(value || {});
+}
+
+function _dataTransferToPayload(value) {
+    return _serializeLanguageValue(_dataTransferFromPayload(value).toJSON());
+}
+
+function _dataTransferMatchesMime(dataTransfer, mimeType) {
+    const requested = String(mimeType || '').toLowerCase();
+    if (!requested) return false;
+    if (requested === 'files') {
+        for (const [, item] of dataTransfer) {
+            if (item.asFile()) return true;
+        }
+        return false;
+    }
+    if (requested.endsWith('/*')) {
+        const prefix = requested.slice(0, -1);
+        for (const [mime] of dataTransfer) {
+            if (mime.startsWith(prefix)) return true;
+        }
+        return false;
+    }
+    return dataTransfer.has(requested);
+}
+
+function _dataTransferMatchesMetadata(dataTransfer, metadata, key) {
+    if (!metadata || typeof metadata !== 'object') return true;
+    const mimeTypes = metadata[key];
+    if (!Array.isArray(mimeTypes) || !mimeTypes.length) return true;
+    return mimeTypes.some(mime => _dataTransferMatchesMime(dataTransfer, mime));
 }
 
 function _callHierarchyItemFromPayload(value) {
@@ -1409,6 +1576,16 @@ function buildVscodeModule(extDesc, extensionPath) {
                 registerTypeHierarchyProvider(selector, provider) {
                     return _registerLangProvider('typeHierarchy', selector, provider);
                 },
+                registerDocumentDropEditProvider(selector, provider, metadata) {
+                    return _registerLangProvider('documentDrop', selector, provider, {
+                        metadata: metadata || null,
+                    });
+                },
+                registerDocumentPasteEditProvider(selector, provider, metadata) {
+                    return _registerLangProvider('documentPaste', selector, provider, {
+                        metadata: metadata || null,
+                    });
+                },
                 registerRenameProvider(selector, provider) {
                     return _registerLangProvider('rename', selector, provider);
                 },
@@ -1670,6 +1847,11 @@ function buildVscodeModule(extDesc, extensionPath) {
         CodeActionKind: { QuickFix: 'quickfix', Refactor: 'refactor', Source: 'source', Empty: '' },
         Hover: class { constructor(contents, range) { this.contents = Array.isArray(contents) ? contents : [contents]; this.range = range; } },
         DocumentLink: class { constructor(range, target) { this.range = range; this.target = target; } },
+        DocumentDropOrPasteEditKind,
+        DocumentDropEdit,
+        DocumentPasteEdit,
+        DataTransfer,
+        DataTransferItem,
         DocumentHighlight,
         SymbolInformation,
         Color,
@@ -1681,6 +1863,7 @@ function buildVscodeModule(extDesc, extensionPath) {
         InlineCompletionItem: class { constructor(insertText, range, command) { this.insertText = insertText; this.range = range; this.command = command; } },
         InlineCompletionList: class { constructor(items) { this.items = items || []; } },
         InlineCompletionTriggerKind: { Invoke: 0, Automatic: 1 },
+        DocumentPasteTriggerKind: { Automatic: 0, PasteAs: 1 },
         CodeLens: class { constructor(range, command) { this.range = range; this.command = command; } get isResolved() { return !!this.command; } },
         FoldingRange,
         FoldingRangeKind: { Comment: 1, Imports: 2, Region: 3 },
@@ -2029,6 +2212,9 @@ function _languageProviderMethod(kind) {
         formatting: 'provideDocumentFormattingEdits',
         rangeFormatting: 'provideDocumentRangeFormattingEdits',
         onTypeFormatting: 'provideOnTypeFormattingEdits',
+        prepareDocumentPaste: 'prepareDocumentPaste',
+        documentPaste: 'provideDocumentPasteEdits',
+        documentDrop: 'provideDocumentDropEdits',
     })[kind] || '';
 }
 
@@ -2151,9 +2337,11 @@ async function handleLanguageProviderRequest(msg) {
                     : kind === 'workspaceSymbolResolve'
                         ? 'workspaceSymbol'
                     : kind === 'prepareCallHierarchy' || kind === 'callHierarchyIncoming' || kind === 'callHierarchyOutgoing'
-                        ? 'callHierarchy'
+                    ? 'callHierarchy'
                     : kind === 'prepareTypeHierarchy' || kind === 'typeHierarchySupertypes' || kind === 'typeHierarchySubtypes'
                         ? 'typeHierarchy'
+                    : kind === 'prepareDocumentPaste'
+                        ? 'documentPaste'
                     : (kind === 'prepareRename' || kind === 'rename') ? 'rename' : kind;
         const providers = workspaceSymbolKind
             ? _languageProviders.filter(entry => entry.kind === 'workspaceSymbol')
@@ -2527,6 +2715,115 @@ async function handleLanguageProviderRequest(msg) {
                             remainingResolves -= 1;
                         }
                         values.push(lens);
+                    }
+                } catch (err) {
+                    log(`language provider ${kind} error: ${err.message}`);
+                }
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: _serializeLanguageValue(values),
+            });
+            return;
+        }
+
+        if (kind === 'prepareDocumentPaste') {
+            const dataTransfer = _dataTransferFromPayload(msg.dataTransfer);
+            const pasteRanges = Array.isArray(msg.ranges)
+                ? msg.ranges.map(_rangeFromPayload)
+                : [range];
+            for (const entry of providers) {
+                const provider = entry.provider;
+                const fn = provider && provider[methodName];
+                if (typeof fn !== 'function') continue;
+                try {
+                    await fn.call(provider, document, pasteRanges, dataTransfer, token);
+                } catch (err) {
+                    log(`language provider ${kind} error: ${err.message}`);
+                }
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: { dataTransfer: _dataTransferToPayload(dataTransfer) },
+            });
+            return;
+        }
+
+        if (kind === 'documentPaste') {
+            const values = [];
+            const dataTransfer = _dataTransferFromPayload(msg.dataTransfer);
+            const pasteRanges = Array.isArray(msg.ranges)
+                ? msg.ranges.map(_rangeFromPayload)
+                : [range];
+            const rawResolveCount = Number(msg.pasteResolveCount || msg.resolveCount || 0);
+            let remainingResolves = Number.isFinite(rawResolveCount) ? Math.max(0, rawResolveCount) : 0;
+            const pasteContext = Object.assign({
+                triggerKind: 0,
+                only: undefined,
+            }, msg.context || {});
+            if (pasteContext.only !== undefined && pasteContext.only !== null) {
+                pasteContext.only = _dropOrPasteKindFromPayload(pasteContext.only);
+            }
+            for (const entry of providers) {
+                if (!_dataTransferMatchesMetadata(dataTransfer, entry.metadata, 'pasteMimeTypes')) continue;
+                const provider = entry.provider;
+                const fn = provider && provider[methodName];
+                if (typeof fn !== 'function') continue;
+                try {
+                    const rawEdits = _normalizeProviderItems(
+                        await fn.call(provider, document, pasteRanges, dataTransfer, pasteContext, token));
+                    for (let edit of rawEdits) {
+                        if (remainingResolves > 0) {
+                            if (typeof provider.resolveDocumentPasteEdit === 'function') {
+                                const resolved = await provider.resolveDocumentPasteEdit.call(provider, edit, token);
+                                if (resolved !== undefined && resolved !== null) edit = resolved;
+                            }
+                            remainingResolves -= 1;
+                        }
+                        values.push(edit);
+                    }
+                } catch (err) {
+                    log(`language provider ${kind} error: ${err.message}`);
+                }
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: _serializeLanguageValue(values),
+            });
+            return;
+        }
+
+        if (kind === 'documentDrop') {
+            const values = [];
+            const dataTransfer = _dataTransferFromPayload(msg.dataTransfer);
+            const rawResolveCount = Number(msg.dropResolveCount || msg.resolveCount || 0);
+            let remainingResolves = Number.isFinite(rawResolveCount) ? Math.max(0, rawResolveCount) : 0;
+            for (const entry of providers) {
+                if (!_dataTransferMatchesMetadata(dataTransfer, entry.metadata, 'dropMimeTypes')) continue;
+                const provider = entry.provider;
+                const fn = provider && provider[methodName];
+                if (typeof fn !== 'function') continue;
+                try {
+                    const rawEdits = _normalizeProviderItems(
+                        await fn.call(provider, document, position, dataTransfer, token));
+                    for (let edit of rawEdits) {
+                        if (remainingResolves > 0) {
+                            if (typeof provider.resolveDocumentDropEdit === 'function') {
+                                const resolved = await provider.resolveDocumentDropEdit.call(provider, edit, token);
+                                if (resolved !== undefined && resolved !== null) edit = resolved;
+                            }
+                            remainingResolves -= 1;
+                        }
+                        values.push(edit);
                     }
                 } catch (err) {
                     log(`language provider ${kind} error: ${err.message}`);

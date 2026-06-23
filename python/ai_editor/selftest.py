@@ -362,6 +362,7 @@ def test_app_settings_parity() -> None:
         ColorInformation, ColorPresentation, SymbolInformation,
         DocumentHighlight, CallHierarchyItem, CallHierarchyIncomingCall,
         CallHierarchyOutgoingCall, TypeHierarchyItem, Uri,
+        DocumentDropOrPasteEditKind, DocumentDropEdit, DocumentPasteEdit,
     )
     provider_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     provider_api._extension_scan_dirs = lambda: []
@@ -626,6 +627,40 @@ def test_app_settings_parity() -> None:
                          newName)
             return edit
 
+        def prepareDocumentPaste(self, document, ranges, dataTransfer, token):
+            dataTransfer.set("application/x-sao-selftest", "prepared")
+
+        def provideDocumentPasteEdits(
+                self, document, ranges, dataTransfer, context, token):
+            self.seen_paste_context = context
+            text_item = dataTransfer.get("text/plain")
+            text = text_item.asString() if text_item else ""
+            edit = DocumentPasteEdit(
+                "paste:" + text,
+                "Paste Selftest",
+                DocumentDropOrPasteEditKind.Text.append("selftest"),
+            )
+            edit.yieldTo = [DocumentDropOrPasteEditKind.Text]
+            return [edit]
+
+        def resolveDocumentPasteEdit(self, pasteEdit, token):
+            pasteEdit.insertText += ":resolved"
+            return pasteEdit
+
+        def provideDocumentDropEdits(
+                self, document, position, dataTransfer, token):
+            text_item = dataTransfer.get("text/plain")
+            text = text_item.asString() if text_item else ""
+            return [DocumentDropEdit(
+                "drop:" + text,
+                "Drop Selftest",
+                DocumentDropOrPasteEditKind.Text,
+            )]
+
+        def resolveDocumentDropEdit(self, dropEdit, token):
+            dropEdit.insertText += ":resolved"
+            return dropEdit
+
     editor_provider = _EditorProvider()
     editor_provider.semantic_legend = SemanticTokensLegend(
         ["function", "variable"], ["readonly"])
@@ -653,6 +688,16 @@ def test_app_settings_parity() -> None:
     lang_api["registerLinkedEditingRangeProvider"]("python", editor_provider)
     lang_api["registerCallHierarchyProvider"]("python", editor_provider)
     lang_api["registerTypeHierarchyProvider"]("python", editor_provider)
+    lang_api["registerDocumentPasteEditProvider"]("python", editor_provider, {
+        "providedPasteEditKinds": [
+            DocumentDropOrPasteEditKind.Text.append("selftest")],
+        "pasteMimeTypes": ["text/plain"],
+        "copyMimeTypes": ["application/x-sao-selftest"],
+    })
+    lang_api["registerDocumentDropEditProvider"]("python", editor_provider, {
+        "providedDropEditKinds": [DocumentDropOrPasteEditKind.Text],
+        "dropMimeTypes": ["text/plain"],
+    })
     lang_api["registerDocumentHighlightProvider"]("python", editor_provider)
     lang_api["registerWorkspaceSymbolProvider"](editor_provider)
     lang_api["registerColorProvider"]("python", editor_provider)
@@ -724,6 +769,30 @@ def test_app_settings_parity() -> None:
             dict(provider_payload, kind="typeHierarchySupertypes", item=type_item))
         subtypes_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="typeHierarchySubtypes", item=type_item))
+        prepare_paste_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="prepareDocumentPaste",
+                 ranges=[{
+                    "start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 6},
+                 }],
+                 dataTransfer={"text/plain": "clip"}))
+        paste_edit_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="documentPaste",
+                 ranges=[{
+                    "start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 6},
+                 }],
+                 dataTransfer={"text/plain": "clip"},
+                 triggerKind=1,
+                 only="text.selftest",
+                 pasteResolveCount=1))
+        drop_edit_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="documentDrop",
+                 dataTransfer={"text/plain": "drop"},
+                 dropResolveCount=1))
+        drop_filtered_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="documentDrop",
+                 dataTransfer={"image/png": [1, 2, 3]}))
         document_highlight_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="documentHighlight",
                  position={"line": 0, "character": 1}))
@@ -883,6 +952,26 @@ def test_app_settings_parity() -> None:
                and super_item.get("name") == "EditorSuper"
                and sub_item.get("selectionRange", {})
                .get("end", {}).get("character") == 9)
+        paste_edit = paste_edit_result.get("pasteEdits", [{}])[0]
+        drop_edit = drop_edit_result.get("dropEdits", [{}])[0]
+        _check("editor_language_provider prepares document paste data transfer",
+               prepare_paste_result.get("ok") is True
+               and prepare_paste_result.get("dataTransfer", {})
+               .get("application/x-sao-selftest") == "prepared")
+        _check("editor_language_provider serializes document paste edits",
+               paste_edit_result.get("ok") is True
+               and paste_edit.get("insertText") == "paste:clip:resolved"
+               and paste_edit.get("title") == "Paste Selftest"
+               and paste_edit.get("kind", {}).get("value") == "text.selftest"
+               and paste_edit.get("yieldTo", [{}])[0].get("value") == "text"
+               and editor_provider.seen_paste_context.get("only").value
+               == "text.selftest")
+        _check("editor_language_provider serializes document drop edits",
+               drop_edit_result.get("ok") is True
+               and drop_edit.get("insertText") == "drop:drop:resolved"
+               and drop_edit.get("title") == "Drop Selftest"
+               and drop_edit.get("kind", {}).get("value") == "text"
+               and drop_filtered_result.get("dropEdits") == [])
         highlight = document_highlight_result.get("highlights", [{}])[0]
         _check("editor_language_provider serializes document highlights",
                document_highlight_result.get("ok") is True
@@ -3316,6 +3405,7 @@ def test_vscode_api() -> None:
         SymbolInformation, DocumentHighlight, ParameterInformation,
         CallHierarchyItem, CallHierarchyIncomingCall,
         CallHierarchyOutgoingCall, TypeHierarchyItem,
+        DocumentDropOrPasteEditKind, DocumentDropEdit, DocumentPasteEdit,
     )
 
     host = ExtensionHost()
@@ -3358,6 +3448,9 @@ def test_vscode_api() -> None:
            api["SymbolInformation"] is SymbolInformation)
     _check("api.DocumentHighlight",
            api["DocumentHighlight"] is DocumentHighlight)
+    _check("api.DocumentDropEdit",
+           api["DocumentDropEdit"] is DocumentDropEdit
+           and api["DocumentPasteEdit"] is DocumentPasteEdit)
     _check("api.SemanticTokensBuilder",
            api["SemanticTokensBuilder"] is SemanticTokensBuilder)
     _check("api.CompletionItemKind", api["CompletionItemKind"]["Function"] == 2)
@@ -3975,6 +4068,49 @@ def test_vscode_api() -> None:
                 self.triggers.append(ch)
                 return [TextEdit.insert(position, "typ")]
 
+        class _PasteDropProvider:
+            def __init__(self):
+                self.contexts = []
+                self.paste_resolved = 0
+                self.drop_resolved = 0
+
+            def prepareDocumentPaste(
+                    self, document, ranges, dataTransfer, token):
+                dataTransfer.set("application/x-vscode-api-selftest",
+                                 "prepared")
+
+            def provideDocumentPasteEdits(
+                    self, document, ranges, dataTransfer, context, token):
+                self.contexts.append(context)
+                item = dataTransfer.get("text/plain")
+                text = item.asString() if item else ""
+                edit = DocumentPasteEdit(
+                    "paste:" + text,
+                    "Paste API",
+                    DocumentDropOrPasteEditKind.Text.append("api"),
+                )
+                return [edit]
+
+            def resolveDocumentPasteEdit(self, pasteEdit, token):
+                self.paste_resolved += 1
+                pasteEdit.insertText += ":resolved"
+                return pasteEdit
+
+            def provideDocumentDropEdits(
+                    self, document, position, dataTransfer, token):
+                item = dataTransfer.get("text/plain")
+                text = item.asString() if item else ""
+                return [DocumentDropEdit(
+                    "drop:" + text,
+                    "Drop API",
+                    DocumentDropOrPasteEditKind.Text,
+                )]
+
+            def resolveDocumentDropEdit(self, dropEdit, token):
+                self.drop_resolved += 1
+                dropEdit.insertText += ":resolved"
+                return dropEdit
+
         hover_runtime = api["languages"]["registerHoverProvider"](
             {"language": "python", "scheme": "file"}, _HoverProvider())
         signature_provider = _SignatureProvider()
@@ -4041,6 +4177,19 @@ def test_vscode_api() -> None:
         on_type_format_provider = _OnTypeFormatProvider()
         api["languages"]["registerOnTypeFormattingEditProvider"](
             "python", on_type_format_provider, "}")
+        paste_drop_provider = _PasteDropProvider()
+        api["languages"]["registerDocumentPasteEditProvider"](
+            "python", paste_drop_provider, {
+                "providedPasteEditKinds": [
+                    DocumentDropOrPasteEditKind.Text.append("api")],
+                "pasteMimeTypes": ["text/plain"],
+                "copyMimeTypes": ["application/x-vscode-api-selftest"],
+            })
+        api["languages"]["registerDocumentDropEditProvider"](
+            "python", paste_drop_provider, {
+                "providedDropEditKinds": [DocumentDropOrPasteEditKind.Text],
+                "dropMimeTypes": ["text/plain"],
+            })
         hovers = api["commands"]["executeCommand"](
             "vscode.executeHoverProvider", doc.uri, Position(0, 0))
         signature_none = api["commands"]["executeCommand"](
@@ -4165,6 +4314,32 @@ def test_vscode_api() -> None:
         on_type_edits = api["commands"]["executeCommand"](
             "vscode.executeFormatOnTypeProvider",
             doc.uri, Position(0, 4), "}", {"tabSize": 4})
+        prepared_paste = api["commands"]["executeCommand"](
+            "_prepareDocumentPasteProvider",
+            doc.uri,
+            [Range(Position(0, 0), Position(0, 4))],
+            {"text/plain": "copy"})
+        paste_edits = api["commands"]["executeCommand"](
+            "_executeDocumentPasteEditProvider",
+            doc.uri,
+            [Range(Position(0, 0), Position(0, 4))],
+            {"text/plain": "copy"},
+            {
+                "triggerKind": api["DocumentPasteTriggerKind"]["PasteAs"],
+                "only": "text.api",
+            },
+            1)
+        drop_edits = api["commands"]["executeCommand"](
+            "_executeDocumentDropEditProvider",
+            doc.uri,
+            Position(0, 4),
+            {"text/plain": "drag"},
+            1)
+        drop_miss = api["commands"]["executeCommand"](
+            "_executeDocumentDropEditProvider",
+            doc.uri,
+            Position(0, 4),
+            {"image/png": [1, 2, 3]})
         _check("executeHoverProvider invokes matching providers",
                hovers and hovers[0].contents == ["selftest hover"])
         _check("executeSignatureHelpProvider invokes matching providers",
@@ -4306,6 +4481,22 @@ def test_vscode_api() -> None:
                and on_type_edits
                and on_type_edits[0]["newText"] == "typ"
                and on_type_format_provider.triggers == ["}"])
+        _check("prepareDocumentPasteProvider mutates data transfer",
+               prepared_paste.get("application/x-vscode-api-selftest").asString()
+               == "prepared")
+        _check("executeDocumentPasteEditProvider invokes matching providers",
+               paste_edits
+               and paste_edits[0].insertText == "paste:copy:resolved"
+               and paste_edits[0].kind.value == "text.api"
+               and paste_drop_provider.paste_resolved == 1
+               and paste_drop_provider.contexts[-1]["only"].value
+               == "text.api")
+        _check("executeDocumentDropEditProvider invokes matching providers",
+               drop_edits
+               and drop_edits[0].insertText == "drop:drag:resolved"
+               and drop_edits[0].kind.value == "text"
+               and paste_drop_provider.drop_resolved == 1
+               and drop_miss == [])
         hover_runtime.dispose()
         _check("language execute commands are registered",
                "vscode.executeCompletionItemProvider"
@@ -4365,6 +4556,12 @@ def test_vscode_api() -> None:
                and "_executeDocumentRenameProvider"
                in api["commands"]["getCommands"]()
                and "_executePrepareRename"
+               in api["commands"]["getCommands"]()
+               and "_prepareDocumentPasteProvider"
+               in api["commands"]["getCommands"]()
+               and "_executeDocumentPasteEditProvider"
+               in api["commands"]["getCommands"]()
+               and "_executeDocumentDropEditProvider"
                in api["commands"]["getCommands"]()
                and "vscode.executeSignatureHelpProvider"
                in api["commands"]["getCommands"]())
@@ -5848,6 +6045,45 @@ function activate(context) {
       return [vscode.TextEdit.insert(position, 'NODE_TYPE_' + ch)];
     },
   }, '}');
+  vscode.languages.registerDocumentPasteEditProvider('python', {
+    prepareDocumentPaste(document, ranges, dataTransfer, token) {
+      dataTransfer.set('application/x-node-paste', new vscode.DataTransferItem('prepared'));
+    },
+    async provideDocumentPasteEdits(document, ranges, dataTransfer, context, token) {
+      const text = await dataTransfer.get('text/plain').asString();
+      const edit = new vscode.DocumentPasteEdit(
+        'nodePaste:' + text,
+        'Node Paste',
+        vscode.DocumentDropOrPasteEditKind.Text.append('node'),
+      );
+      return [edit];
+    },
+    resolveDocumentPasteEdit(edit, token) {
+      edit.insertText += ':resolved';
+      return edit;
+    },
+  }, {
+    providedPasteEditKinds: [vscode.DocumentDropOrPasteEditKind.Text.append('node')],
+    pasteMimeTypes: ['text/plain'],
+    copyMimeTypes: ['application/x-node-paste'],
+  });
+  vscode.languages.registerDocumentDropEditProvider('python', {
+    async provideDocumentDropEdits(document, position, dataTransfer, token) {
+      const text = await dataTransfer.get('text/plain').asString();
+      return [new vscode.DocumentDropEdit(
+        'nodeDrop:' + text,
+        'Node Drop',
+        vscode.DocumentDropOrPasteEditKind.Text,
+      )];
+    },
+    resolveDocumentDropEdit(edit, token) {
+      edit.insertText += ':resolved';
+      return edit;
+    },
+  }, {
+    providedDropEditKinds: [vscode.DocumentDropOrPasteEditKind.Text],
+    dropMimeTypes: ['text/plain'],
+  });
   vscode.commands.registerCommand('selftest.node.openItem', element => {
     output.appendLine('open:' + (element && element.id));
   });
@@ -6042,6 +6278,32 @@ module.exports = { activate, deactivate };
                 node_on_type_edits = api._ext_host.commands.execute(
                     "vscode.executeFormatOnTypeProvider",
                     node_uri, Position(0, 4), "}", {"tabSize": 2})
+                node_prepared_paste = api._ext_host.commands.execute(
+                    "_prepareDocumentPasteProvider",
+                    node_uri,
+                    [Range(Position(0, 0), Position(0, 4))],
+                    {"text/plain": "node-copy"})
+                node_paste_edits = api._ext_host.commands.execute(
+                    "_executeDocumentPasteEditProvider",
+                    node_uri,
+                    [Range(Position(0, 0), Position(0, 4))],
+                    {"text/plain": "node-copy"},
+                    {
+                        "triggerKind": 1,
+                        "only": "text.node",
+                    },
+                    1)
+                node_drop_edits = api._ext_host.commands.execute(
+                    "_executeDocumentDropEditProvider",
+                    node_uri,
+                    Position(0, 4),
+                    {"text/plain": "node-drag"},
+                    1)
+                node_drop_miss = api._ext_host.commands.execute(
+                    "_executeDocumentDropEditProvider",
+                    node_uri,
+                    Position(0, 4),
+                    {"image/png": [1, 2, 3]})
                 node_completion_items = getattr(node_completion, "items", [])
                 node_completion_labels = [
                     item.get("label") if isinstance(item, dict)
@@ -6212,6 +6474,24 @@ module.exports = { activate, deactivate };
                        and node_on_type_edits
                        and node_on_type_edits[0].get("newText")
                        == "NODE_TYPE_}")
+                _check("node host language provider prepares JS document paste",
+                       node_prepared_paste
+                       and node_prepared_paste.get(
+                           "application/x-node-paste").asString()
+                       == "prepared")
+                _check("node host language provider invokes JS paste edits",
+                       node_paste_edits
+                       and node_paste_edits[0].get("insertText")
+                       == "nodePaste:node-copy:resolved"
+                       and node_paste_edits[0].get("kind", {}).get("value")
+                       == "text.node")
+                _check("node host language provider invokes JS drop edits",
+                       node_drop_edits
+                       and node_drop_edits[0].get("insertText")
+                       == "nodeDrop:node-drag:resolved"
+                       and node_drop_edits[0].get("kind", {}).get("value")
+                       == "text"
+                       and node_drop_miss == [])
                 node_snapshot = {"nodes": []}
                 def _node_root_focused():
                     node_items = {

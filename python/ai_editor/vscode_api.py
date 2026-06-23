@@ -826,6 +826,222 @@ class DocumentLink:
         self.tooltip = None
 
 
+def _plain_json_value(value: Any, depth: int = 0) -> Any:
+    if depth > 8:
+        return str(value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, bytes):
+        return list(value)
+    if isinstance(value, bytearray):
+        return list(bytes(value))
+    if isinstance(value, Uri):
+        return str(value)
+    if isinstance(value, Position):
+        return {"line": int(value.line), "character": int(value.character)}
+    if isinstance(value, Range):
+        return {
+            "start": _plain_json_value(value.start, depth + 1),
+            "end": _plain_json_value(value.end, depth + 1),
+        }
+    if isinstance(value, dict):
+        return {
+            str(key): _plain_json_value(item, depth + 1)
+            for key, item in value.items()
+            if not callable(item)
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_plain_json_value(item, depth + 1) for item in value]
+    if hasattr(value, "__dict__"):
+        return {
+            str(key): _plain_json_value(item, depth + 1)
+            for key, item in vars(value).items()
+            if not key.startswith("_") and not callable(item)
+        }
+    return str(value)
+
+
+class DataTransferFile:
+    """Best-effort file payload used by editor drop/paste providers."""
+
+    def __init__(self, name: Any = "", uri: Any = None,
+                 data: Any = b"") -> None:
+        self.name = "" if name is None else str(name)
+        self.uri = _coerce_uri(uri) if uri is not None else None
+        self._data = data
+
+    def data(self) -> bytes:
+        value = self._data
+        if isinstance(value, bytes):
+            return value
+        if isinstance(value, bytearray):
+            return bytes(value)
+        if isinstance(value, list):
+            try:
+                return bytes(int(item) & 0xFF for item in value)
+            except Exception:
+                return bytes(str(value), "utf-8")
+        return bytes(str(value or ""), "utf-8")
+
+
+class DataTransferItem:
+    def __init__(self, value: Any) -> None:
+        self.value = value
+
+    def asString(self) -> str:
+        value = self.value
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        if isinstance(value, bytearray):
+            return bytes(value).decode("utf-8", errors="replace")
+        if isinstance(value, (dict, list, tuple, set)):
+            try:
+                return json.dumps(_plain_json_value(value), ensure_ascii=False)
+            except Exception:
+                return str(value)
+        return "" if value is None else str(value)
+
+    def asFile(self) -> Optional[DataTransferFile]:
+        value = self.value
+        if isinstance(value, DataTransferFile):
+            return value
+        if isinstance(value, dict) and (
+                value.get("name") is not None
+                or value.get("uri") is not None
+                or value.get("data") is not None):
+            return DataTransferFile(
+                value.get("name") or value.get("fileName") or "",
+                value.get("uri") or value.get("path"),
+                value.get("data") or value.get("contents") or b"",
+            )
+        return None
+
+
+class DataTransfer:
+    def __init__(self, entries: Any = None) -> None:
+        self._items: Dict[str, DataTransferItem] = {}
+        if isinstance(entries, DataTransfer):
+            for mime, item in entries:
+                self.set(mime, item)
+            return
+        if isinstance(entries, dict):
+            for mime, item in entries.items():
+                self.set(str(mime), item)
+            return
+        if entries:
+            try:
+                for mime, item in entries:
+                    self.set(str(mime), item)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _key(mime_type: Any) -> str:
+        return str(mime_type or "").lower()
+
+    @staticmethod
+    def _item(value: Any) -> DataTransferItem:
+        return value if isinstance(value, DataTransferItem) else DataTransferItem(value)
+
+    def get(self, mimeType: Any) -> Optional[DataTransferItem]:
+        return self._items.get(self._key(mimeType))
+
+    def set(self, mimeType: Any, value: Any) -> None:
+        key = self._key(mimeType)
+        if key:
+            self._items[key] = self._item(value)
+
+    def delete(self, mimeType: Any) -> None:
+        self._items.pop(self._key(mimeType), None)
+
+    def has(self, mimeType: Any) -> bool:
+        return self._key(mimeType) in self._items
+
+    def forEach(self, callback: Callable, thisArg: Any = None) -> None:
+        for mime, item in list(self._items.items()):
+            if thisArg is None:
+                callback(item, mime, self)
+            else:
+                callback(thisArg, item, mime, self)
+
+    def __iter__(self):
+        return iter(self._items.items())
+
+    def items(self):
+        return self._items.items()
+
+    def to_payload(self) -> Dict[str, Any]:
+        return {
+            mime: _plain_json_value(item.value)
+            for mime, item in self._items.items()
+        }
+
+
+class DocumentDropOrPasteEditKind:
+    Empty: "DocumentDropOrPasteEditKind"
+    Text: "DocumentDropOrPasteEditKind"
+    TextUpdateImports: "DocumentDropOrPasteEditKind"
+
+    def __init__(self, value: Any = "") -> None:
+        self.value = "" if value is None else str(value)
+
+    def append(self, *parts: Any) -> "DocumentDropOrPasteEditKind":
+        suffix = ".".join(str(part).strip(".") for part in parts if part)
+        return DocumentDropOrPasteEditKind(
+            ".".join(part for part in (self.value, suffix) if part))
+
+    def intersects(self, other: Any) -> bool:
+        other_kind = _coerce_drop_or_paste_kind(other)
+        return self.contains(other_kind) or other_kind.contains(self)
+
+    def contains(self, other: Any) -> bool:
+        other_value = _coerce_drop_or_paste_kind(other).value
+        if not self.value:
+            return not other_value
+        return other_value == self.value or other_value.startswith(
+            self.value + ".")
+
+    def __str__(self) -> str:
+        return self.value
+
+    def __repr__(self) -> str:
+        return f"DocumentDropOrPasteEditKind({self.value!r})"
+
+
+DocumentDropOrPasteEditKind.Empty = DocumentDropOrPasteEditKind("")
+DocumentDropOrPasteEditKind.Text = DocumentDropOrPasteEditKind("text")
+DocumentDropOrPasteEditKind.TextUpdateImports = DocumentDropOrPasteEditKind(
+    "text.updateImports")
+
+
+class DocumentDropEdit:
+    def __init__(self, insert_text: Any, title: Any = None,
+                 kind: Any = None) -> None:
+        self.insertText = insert_text
+        self.title = None if title is None else str(title)
+        self.kind = _coerce_drop_or_paste_kind(kind) if kind is not None else None
+        self.yieldTo = None
+        self.additionalEdit = None
+
+
+class DocumentPasteEdit:
+    def __init__(self, insert_text: Any, title: Any,
+                 kind: Any) -> None:
+        self.insertText = insert_text
+        self.title = "" if title is None else str(title)
+        self.kind = _coerce_drop_or_paste_kind(kind)
+        self.additionalEdit = None
+        self.yieldTo = None
+
+
+def _coerce_drop_or_paste_kind(value: Any) -> DocumentDropOrPasteEditKind:
+    if isinstance(value, DocumentDropOrPasteEditKind):
+        return value
+    if isinstance(value, dict) and "value" in value:
+        return DocumentDropOrPasteEditKind(value.get("value"))
+    return DocumentDropOrPasteEditKind("" if value is None else str(value))
+
+
 class Color:
     def __init__(
             self, red: Any, green: Any, blue: Any,
@@ -1482,6 +1698,9 @@ class VscodeNamespace:
             "vscode.executeFormatRangeProvider": self._execute_format_range_provider,
             "_executeFormatOnTypeProvider": self._execute_format_on_type_provider,
             "vscode.executeFormatOnTypeProvider": self._execute_format_on_type_provider,
+            "_prepareDocumentPasteProvider": self._execute_prepare_document_paste_provider,
+            "_executeDocumentPasteEditProvider": self._execute_document_paste_edit_provider,
+            "_executeDocumentDropEditProvider": self._execute_document_drop_edit_provider,
         }
         for command_id, handler in commands.items():
             try:
@@ -2554,6 +2773,208 @@ class VscodeNamespace:
                 options=format_options)))
         return results
 
+    @staticmethod
+    def _coerce_data_transfer(value: Any) -> DataTransfer:
+        return value if isinstance(value, DataTransfer) else DataTransfer(value or {})
+
+    @classmethod
+    def _data_transfer_payload(cls, value: Any) -> Dict[str, Any]:
+        data_transfer = cls._coerce_data_transfer(value)
+        return data_transfer.to_payload()
+
+    @staticmethod
+    def _data_transfer_matches_mime(
+            data_transfer: DataTransfer, mime_type: str) -> bool:
+        requested = str(mime_type or "").lower()
+        if not requested:
+            return False
+        if requested == "files":
+            return any(item.asFile() is not None for _mime, item in data_transfer)
+        if requested.endswith("/*"):
+            prefix = requested[:-1]
+            return any(mime.startswith(prefix) for mime, _item in data_transfer)
+        return data_transfer.has(requested)
+
+    @classmethod
+    def _data_transfer_matches_metadata(
+            cls, data_transfer: DataTransfer, metadata: Any,
+            key: str) -> bool:
+        if not isinstance(metadata, dict):
+            return True
+        mime_types = metadata.get(key)
+        if not mime_types:
+            return True
+        return any(
+            cls._data_transfer_matches_mime(data_transfer, str(item))
+            for item in mime_types)
+
+    @staticmethod
+    def _coerce_language_ranges(ranges: Any) -> List[Range]:
+        if isinstance(ranges, (list, tuple)):
+            return [_coerce_range(item) for item in ranges]
+        if ranges is None:
+            return [Range()]
+        return [_coerce_range(ranges)]
+
+    @staticmethod
+    def _paste_context_payload(context: Any) -> Dict[str, Any]:
+        if isinstance(context, dict):
+            payload = dict(context)
+        else:
+            payload = {}
+        try:
+            payload["triggerKind"] = int(payload.get("triggerKind", 0) or 0)
+        except Exception:
+            payload["triggerKind"] = 0
+        if payload.get("only") is not None:
+            payload["only"] = _coerce_drop_or_paste_kind(
+                payload.get("only")).value
+        else:
+            payload["only"] = None
+        return payload
+
+    @staticmethod
+    def _paste_context_for_provider(context: Any) -> Dict[str, Any]:
+        payload = VscodeNamespace._paste_context_payload(context)
+        return {
+            "triggerKind": payload["triggerKind"],
+            "only": (
+                _coerce_drop_or_paste_kind(payload.get("only"))
+                if payload.get("only") is not None else None),
+        }
+
+    def _execute_prepare_document_paste_provider(
+            self, uri: Any, ranges: Any = None,
+            data_transfer: Any = None) -> DataTransfer:
+        document = self._resolve_language_document(uri)
+        paste_ranges = self._coerce_language_ranges(ranges)
+        transfer = self._coerce_data_transfer(data_transfer)
+        for entry in self._matching_language_providers("documentPaste", document):
+            provider = entry.get("provider")
+            method = provider.get("prepareDocumentPaste") if isinstance(
+                provider, dict) else getattr(
+                    provider, "prepareDocumentPaste", None)
+            if not callable(method):
+                continue
+            self._call_language_provider(
+                provider,
+                "prepareDocumentPaste",
+                (document, paste_ranges, transfer, CancellationToken.NONE),
+                default=None)
+        external = self._request_external_language_provider(
+            "prepareDocumentPaste",
+            document,
+            ranges=[self._range_payload(rng) for rng in paste_ranges],
+            dataTransfer=transfer.to_payload())
+        if isinstance(external, dict):
+            transfer = self._coerce_data_transfer(
+                external.get("dataTransfer") or external)
+        return transfer
+
+    def _execute_document_paste_edit_provider(
+            self, uri: Any, ranges: Any = None, data_transfer: Any = None,
+            context: Any = None, paste_resolve_count: Any = 0) -> List[Any]:
+        document = self._resolve_language_document(uri)
+        paste_ranges = self._coerce_language_ranges(ranges)
+        transfer = self._coerce_data_transfer(data_transfer)
+        provider_context = self._paste_context_for_provider(context)
+        payload_context = self._paste_context_payload(context)
+        try:
+            remaining_resolves = max(0, int(paste_resolve_count or 0))
+        except Exception:
+            remaining_resolves = 0
+        results: List[Any] = []
+        for entry in self._matching_language_providers("documentPaste", document):
+            if not self._data_transfer_matches_metadata(
+                    transfer, entry.get("metadata"), "pasteMimeTypes"):
+                continue
+            provider = entry.get("provider")
+            value = self._call_language_provider(
+                provider,
+                "provideDocumentPasteEdits",
+                (document, paste_ranges, transfer, provider_context,
+                 CancellationToken.NONE),
+                default=None)
+            edits = self._provider_values(value)
+            if remaining_resolves:
+                resolve_method = provider.get("resolveDocumentPasteEdit") if (
+                    isinstance(provider, dict)) else getattr(
+                        provider, "resolveDocumentPasteEdit", None)
+                if callable(resolve_method):
+                    resolved_edits: List[Any] = []
+                    for edit in edits:
+                        if remaining_resolves > 0:
+                            resolved = self._call_language_provider(
+                                provider,
+                                "resolveDocumentPasteEdit",
+                                (edit, CancellationToken.NONE),
+                                default=None)
+                            if resolved is not None:
+                                edit = resolved
+                            remaining_resolves -= 1
+                        resolved_edits.append(edit)
+                    edits = resolved_edits
+            results.extend(edits)
+        external = self._request_external_language_provider(
+            "documentPaste",
+            document,
+            ranges=[self._range_payload(rng) for rng in paste_ranges],
+            dataTransfer=transfer.to_payload(),
+            context=payload_context,
+            pasteResolveCount=remaining_resolves)
+        results.extend(self._provider_values(external))
+        return results
+
+    def _execute_document_drop_edit_provider(
+            self, uri: Any, position: Any = None, data_transfer: Any = None,
+            drop_resolve_count: Any = 0) -> List[Any]:
+        document = self._resolve_language_document(uri)
+        pos = _coerce_position(position)
+        transfer = self._coerce_data_transfer(data_transfer)
+        try:
+            remaining_resolves = max(0, int(drop_resolve_count or 0))
+        except Exception:
+            remaining_resolves = 0
+        results: List[Any] = []
+        for entry in self._matching_language_providers("documentDrop", document):
+            if not self._data_transfer_matches_metadata(
+                    transfer, entry.get("metadata"), "dropMimeTypes"):
+                continue
+            provider = entry.get("provider")
+            value = self._call_language_provider(
+                provider,
+                "provideDocumentDropEdits",
+                (document, pos, transfer, CancellationToken.NONE),
+                default=None)
+            edits = self._provider_values(value)
+            if remaining_resolves:
+                resolve_method = provider.get("resolveDocumentDropEdit") if (
+                    isinstance(provider, dict)) else getattr(
+                        provider, "resolveDocumentDropEdit", None)
+                if callable(resolve_method):
+                    resolved_edits: List[Any] = []
+                    for edit in edits:
+                        if remaining_resolves > 0:
+                            resolved = self._call_language_provider(
+                                provider,
+                                "resolveDocumentDropEdit",
+                                (edit, CancellationToken.NONE),
+                                default=None)
+                            if resolved is not None:
+                                edit = resolved
+                            remaining_resolves -= 1
+                        resolved_edits.append(edit)
+                    edits = resolved_edits
+            results.extend(edits)
+        external = self._request_external_language_provider(
+            "documentDrop",
+            document,
+            position=self._position_payload(pos),
+            dataTransfer=transfer.to_payload(),
+            dropResolveCount=remaining_resolves)
+        results.extend(self._provider_values(external))
+        return results
+
     def set_ui_bridge(self, bridge: UIBridge) -> None:
         """Connect this namespace to a live HTML UI bridge (e.g. AIEditorAPI).
 
@@ -2679,6 +3100,8 @@ class VscodeNamespace:
             "Location": Location,
             "DocumentHighlight": DocumentHighlight,
             "SymbolInformation": SymbolInformation,
+            "DataTransfer": DataTransfer,
+            "DataTransferItem": DataTransferItem,
             "Diagnostic": Diagnostic,
             "CompletionItem": CompletionItem,
             "CompletionList": CompletionList,
@@ -2709,6 +3132,9 @@ class VscodeNamespace:
             "SemanticTokensEdits": SemanticTokensEdits,
             "TextEdit": TextEdit,
             "WorkspaceEdit": WorkspaceEdit,
+            "DocumentDropOrPasteEditKind": DocumentDropOrPasteEditKind,
+            "DocumentDropEdit": DocumentDropEdit,
+            "DocumentPasteEdit": DocumentPasteEdit,
             "ChatResultFeedback": ChatResult,
             "ChatResponseStream": ChatResponseStream,
             "LanguageModelToolResult": LanguageModelToolResult,
@@ -2722,6 +3148,7 @@ class VscodeNamespace:
             "ExtensionMode": {"Production": 1, "Development": 2, "Test": 3},
             "InlayHintKind": {"Type": 1, "Parameter": 2},
             "InlineCompletionTriggerKind": {"Invoke": 0, "Automatic": 1},
+            "DocumentPasteTriggerKind": {"Automatic": 0, "PasteAs": 1},
             "FoldingRangeKind": {"Comment": 1, "Imports": 2, "Region": 3},
             "CompletionItemKind": {
                 "Text": 0, "Method": 1, "Function": 2, "Constructor": 3,
@@ -3576,6 +4003,8 @@ class VscodeNamespace:
             "registerLinkedEditingRangeProvider": lambda selector, provider: self._register_language_provider("linkedEditing", selector, provider),
             "registerCallHierarchyProvider": lambda selector, provider: self._register_language_provider("callHierarchy", selector, provider),
             "registerTypeHierarchyProvider": lambda selector, provider: self._register_language_provider("typeHierarchy", selector, provider),
+            "registerDocumentDropEditProvider": lambda selector, provider, metadata=None: self._register_language_provider("documentDrop", selector, provider, metadata),
+            "registerDocumentPasteEditProvider": lambda selector, provider, metadata: self._register_language_provider("documentPaste", selector, provider, metadata),
             "registerColorProvider": lambda selector, provider: self._register_language_provider("documentColor", selector, provider),
             "registerDocumentSemanticTokensProvider": lambda selector, provider, legend: self._register_language_provider("semanticTokens", selector, provider, legend),
             "registerDocumentRangeSemanticTokensProvider": lambda selector, provider, legend: self._register_language_provider("semanticTokensRange", selector, provider, legend),

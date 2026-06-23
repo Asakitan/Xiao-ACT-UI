@@ -38,6 +38,8 @@ from ai_editor.chat_providers import (
 )
 from ai_editor.extension_host import Position, Range, Uri
 from ai_editor.vscode_api import (
+    DataTransfer,
+    DataTransferItem,
     WorkspaceEdit,
     _resolve_provider_result as _resolve_vscode_provider_result,
 )
@@ -492,7 +494,7 @@ _LANGUAGE_RESULT_ATTRS = (
     "paddingLeft", "paddingRight", "location", "isResolved", "data",
     "resultId", "edits", "start", "end", "deleteCount", "tokenTypes",
     "tokenModifiers", "parent", "color", "red", "green", "blue", "alpha",
-    "tags", "from", "fromRanges", "to",
+    "tags", "from", "fromRanges", "to", "yieldTo", "additionalEdit",
 )
 
 
@@ -601,6 +603,10 @@ def _json_ready_language_value(value: Any, depth: int = 0) -> Any:
         return {
             "_edits": _json_ready_language_value(value.entries(), depth + 1),
         }
+    if isinstance(value, DataTransfer):
+        return _json_ready_language_value(value.to_payload(), depth + 1)
+    if isinstance(value, DataTransferItem):
+        return _json_ready_language_value(value.value, depth + 1)
     if isinstance(value, dict):
         return {
             str(key): _json_ready_language_value(item, depth + 1)
@@ -2837,6 +2843,20 @@ class AIEditorAPI:
             "formatSelection": "rangeFormatting",
             "formatOnType": "onTypeFormatting",
             "onTypeFormatting": "onTypeFormatting",
+            "prepareDocumentPaste": "prepareDocumentPaste",
+            "documentPaste": "documentPaste",
+            "documentPasteEdit": "documentPaste",
+            "documentPasteEdits": "documentPaste",
+            "paste": "documentPaste",
+            "pasteEdit": "documentPaste",
+            "pasteEdits": "documentPaste",
+            "pasteAs": "documentPaste",
+            "documentDrop": "documentDrop",
+            "documentDropEdit": "documentDrop",
+            "documentDropEdits": "documentDrop",
+            "drop": "documentDrop",
+            "dropEdit": "documentDrop",
+            "dropEdits": "documentDrop",
         }
         kind = kind_aliases.get(str(payload.get("kind") or "").strip())
         if not kind:
@@ -3385,6 +3405,110 @@ class AIEditorAPI:
                     "uri": str(document.uri),
                     "version": document.version,
                     "actions": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind in {"prepareDocumentPaste", "documentPaste"}:
+                raw_ranges = payload.get("ranges")
+                if isinstance(raw_ranges, list):
+                    paste_ranges = [
+                        _editor_provider_range(item, content)
+                        for item in raw_ranges
+                    ]
+                elif payload.get("range") is not None:
+                    paste_ranges = [
+                        _editor_provider_range(payload.get("range"), content)]
+                else:
+                    paste_ranges = [Range(position, position)]
+                data_transfer = (
+                    payload.get("dataTransfer")
+                    if payload.get("dataTransfer") is not None
+                    else payload.get("data_transfer"))
+                if data_transfer is None:
+                    text_value = (
+                        payload.get("pasteText")
+                        if payload.get("pasteText") is not None
+                        else payload.get("clipboardText"))
+                    if text_value is not None:
+                        data_transfer = {"text/plain": str(text_value)}
+                if kind == "prepareDocumentPaste":
+                    result = self._ext_host.commands.execute(
+                        "_prepareDocumentPasteProvider",
+                        document.uri,
+                        paste_ranges,
+                        data_transfer or {},
+                    )
+                    return {
+                        "ok": True,
+                        "kind": kind,
+                        "uri": str(document.uri),
+                        "version": document.version,
+                        "dataTransfer": _json_ready_language_value(result),
+                    }
+                context = payload.get("context")
+                if not isinstance(context, dict):
+                    context = {}
+                context = dict(context)
+                if payload.get("triggerKind") is not None:
+                    context["triggerKind"] = payload.get("triggerKind")
+                if payload.get("only") is not None:
+                    context["only"] = payload.get("only")
+                try:
+                    resolve_count = int(
+                        payload.get("pasteResolveCount")
+                        if payload.get("pasteResolveCount") is not None
+                        else payload.get("resolveCount") or 0)
+                except Exception:
+                    resolve_count = 0
+                result = self._ext_host.commands.execute(
+                    "_executeDocumentPasteEditProvider",
+                    document.uri,
+                    paste_ranges,
+                    data_transfer or {},
+                    context,
+                    max(0, resolve_count),
+                )
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "pasteEdits": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "documentDrop":
+                data_transfer = (
+                    payload.get("dataTransfer")
+                    if payload.get("dataTransfer") is not None
+                    else payload.get("data_transfer"))
+                if data_transfer is None:
+                    text_value = (
+                        payload.get("dropText")
+                        if payload.get("dropText") is not None
+                        else payload.get("text"))
+                    if text_value is not None:
+                        data_transfer = {"text/plain": str(text_value)}
+                try:
+                    resolve_count = int(
+                        payload.get("dropResolveCount")
+                        if payload.get("dropResolveCount") is not None
+                        else payload.get("resolveCount") or 0)
+                except Exception:
+                    resolve_count = 0
+                result = self._ext_host.commands.execute(
+                    "_executeDocumentDropEditProvider",
+                    document.uri,
+                    position,
+                    data_transfer or {},
+                    max(0, resolve_count),
+                )
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "dropEdits": value if isinstance(value, list) else (
                         [] if value is None else [value]),
                 }
             options = payload.get("options")
