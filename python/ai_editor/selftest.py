@@ -355,7 +355,7 @@ def test_app_settings_parity() -> None:
     from ai_editor.vscode_api import (
         CompletionItem, CompletionList, Hover, TextEdit, Position, Range,
         SignatureHelp, SignatureInformation, ParameterInformation,
-        CodeAction, WorkspaceEdit,
+        CodeAction, WorkspaceEdit, Location,
     )
     provider_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     provider_api._extension_scan_dirs = lambda: []
@@ -398,6 +398,12 @@ def test_app_settings_parity() -> None:
             }
             return [action]
 
+        def provideDefinition(self, document, position, token):
+            return Location(
+                document.uri,
+                Range(Position(0, 0), Position(0, 6)),
+            )
+
     editor_provider = _EditorProvider()
     lang_api = provider_api._vscode_ns.build()["languages"]
     lang_api["registerCompletionItemProvider"]("python", editor_provider)
@@ -405,6 +411,7 @@ def test_app_settings_parity() -> None:
     lang_api["registerSignatureHelpProvider"]("python", editor_provider, "(")
     lang_api["registerDocumentFormattingEditProvider"]("python", editor_provider)
     lang_api["registerCodeActionsProvider"]("python", editor_provider)
+    lang_api["registerDefinitionProvider"]("python", editor_provider)
     tmp_provider_dir = tempfile.mkdtemp()
     try:
         provider_path = os.path.join(tmp_provider_dir, "buffer.py")
@@ -428,6 +435,8 @@ def test_app_settings_parity() -> None:
                 "start": {"line": 0, "character": 0},
                 "end": {"line": 0, "character": 6},
             }))
+        definition_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="definition"))
         format_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="formatting"))
         with open(provider_path, "r", encoding="utf-8") as fh:
@@ -456,6 +465,13 @@ def test_app_settings_parity() -> None:
                and action.get("edit", {}).get("_edits", [{}])[0]
                .get("newText") == "fixed"
                and action.get("command", {}).get("arguments") == ["ok"])
+        definition = definition_result.get("definitions", [{}])[0]
+        _check("editor_language_provider serializes definitions",
+               definition_result.get("ok") is True
+               and definition.get("uri", "").startswith("file://")
+               and definition.get("range", {}).get("start", {}).get("line") == 0
+               and definition.get("range", {}).get("end", {})
+               .get("character") == 6)
         _check("editor_language_provider exposes formatting edits without saving",
                format_result.get("edits", [{}])[0].get("newText") == "formatted"
                and disk_text == "disk")
@@ -1444,10 +1460,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function showEditorCodeActions(actions,position)" in html
            and "function editorCodeActionEdits(action)" in html
            and "function applyEditorCodeAction(action)" in html
+           and "function requestEditorDefinition(quiet)" in html
+           and "function navigateEditorDefinition(target)" in html
+           and "function editorRevealRange(range)" in html
            and "function editorApplyTextEdits(edits)" in html
            and "Ctrl+Space" in html
            and "Ctrl+Shift+Space" in html
            and "Ctrl+." in html
+           and "F12" in html
+           and "Go to Definition" in html
            and "Quick Fix..." in html
            and "Formatted via extension" in html)
     try:

@@ -3234,6 +3234,7 @@ let _editorSuggestItems=[],_editorSuggestIndex=0,_editorSuggestRequest=0;
 let _editorHoverTimer=null,_editorHoverRequest=0;
 let _editorSignatureRequest=0;
 let _editorCodeActions=[],_editorCodeActionIndex=0,_editorCodeActionRequest=0;
+let _editorDefinitionRequest=0;
 function activeEditorTab(){
   return (typeof tabs!=='undefined'&&Array.isArray(tabs)?tabs.find(t=>t.id===activeTab):null)||{};
 }
@@ -3554,6 +3555,76 @@ function editorCurrentUriMatches(uri){
   const candidates=[filePath,filePath?'file:///'+filePath.replace(/\\/g,'/'): '',untitled].map(editorNormalizeDocumentUri);
   return candidates.some(candidate=>candidate&&candidate===incoming);
 }
+function editorDocumentUriToPath(uri){
+  if(!uri)return '';
+  if(typeof uri==='object'){
+    if(uri.fsPath)uri=uri.fsPath;
+    else if(uri.path)uri=uri.path;
+    else if(uri.uri)uri=uri.uri;
+    else uri=String(uri);
+  }
+  let text=String(uri).replace(/\\/g,'/');
+  try{text=decodeURIComponent(text)}catch{}
+  if(text.startsWith('file://')){
+    text=text.replace(/^file:\/\/\/?/,'');
+    if(/^\/[A-Za-z]:\//.test(text))text=text.slice(1);
+  }
+  if(/^[A-Za-z]:\//.test(text)||text.startsWith('/'))return text;
+  return '';
+}
+function editorWorkspaceRelativePath(absPath){
+  const tab=activeEditorTab(),filePath=String(tab.filePath||'').replace(/\\/g,'/'),workspacePath=String(tab.workspacePath||'').replace(/\\/g,'/');
+  const target=String(absPath||'').replace(/\\/g,'/');
+  if(!filePath||!workspacePath||!target)return '';
+  const activeLower=filePath.toLowerCase(),workspaceLower=workspacePath.toLowerCase();
+  if(!(activeLower===workspaceLower||activeLower.endsWith('/'+workspaceLower)))return '';
+  const root=filePath.slice(0,filePath.length-workspacePath.length).replace(/\/$/,'');
+  if(!root)return '';
+  const rootLower=root.toLowerCase(),targetLower=target.toLowerCase();
+  if(targetLower===rootLower)return '';
+  if(!targetLower.startsWith(rootLower+'/'))return '';
+  return target.slice(root.length+1);
+}
+function editorRevealRange(range){
+  if(!range||!range.start)return false;
+  const start=editorOffsetFromPosition(ed.value,range.start),end=editorOffsetFromPosition(ed.value,range.end||range.start);
+  editorSetSelection(Math.min(start,end),Math.max(start,end));
+  const style=getComputedStyle(ed),lineHeight=parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.5||18;
+  ed.scrollTop=Math.max(0,(Number(range.start.line)||0)-6)*lineHeight;
+  syncEditorSyntaxScroll();updateCursorPos();
+  return true;
+}
+function editorDefinitionTarget(definition){
+  if(!definition||typeof definition!=='object')return null;
+  const uri=definition.targetUri||definition.uri;
+  const range=definition.targetSelectionRange||definition.targetRange||definition.range;
+  return uri||range?{uri,range}:null;
+}
+async function navigateEditorDefinition(target){
+  if(!target)return false;
+  const uri=target.uri,range=target.range;
+  if(!uri||editorCurrentUriMatches(uri)){
+    if(editorRevealRange(range)){setStatus('Definition revealed');return true}
+    return false;
+  }
+  const absPath=editorDocumentUriToPath(uri),relPath=editorWorkspaceRelativePath(absPath);
+  if(!relPath){setStatus('Definition target is outside the active workspace');return false}
+  const opened=await openWorkspaceFile(relPath);
+  if(!opened)return false;
+  if(range)editorRevealRange(range);
+  setStatus('Definition opened: '+(opened.path||relPath));
+  return true;
+}
+async function requestEditorDefinition(quiet){
+  const requestId=++_editorDefinitionRequest;
+  const res=await call('editor_language_provider',editorProviderPayload('definition'));
+  if(requestId!==_editorDefinitionRequest)return;
+  if(res&&res.error){if(!quiet)setStatus('Definition failed: '+res.error);return}
+  const definitions=res&&res.ok&&Array.isArray(res.definitions)?res.definitions:[];
+  const target=definitions.map(editorDefinitionTarget).find(Boolean);
+  if(target&&await navigateEditorDefinition(target))return;
+  if(!quiet)setStatus('No definition found');
+}
 function editorTextEditFromActionEntry(entry){
   if(!entry||typeof entry!=='object')return null;
   if(entry.kind==='createFile'||entry.kind==='deleteFile'||entry.kind==='renameFile')return null;
@@ -3653,6 +3724,7 @@ ed.addEventListener('keydown',function(e){
   if(handleEditorCodeActionKey(e))return;
   if(handleEditorSignatureKey(e))return;
   if(handleEditorSuggestKey(e))return;
+  if(e.key==='F12'&&!e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorDefinition(false);return}
   if(e.key==='.'&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorCodeActions(false);return}
   if((e.code==='Space'||e.key===' ')&&e.ctrlKey&&e.shiftKey&&!e.altKey){e.preventDefault();requestEditorSignatureHelp('',1,false);return}
   if((e.code==='Space'||e.key===' ')&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorCompletion('',false);return}
@@ -3745,6 +3817,7 @@ ed.addEventListener('contextmenu',function(e){
     {label:'Trigger Suggest',shortcut:'Ctrl+Space',action:()=>requestEditorCompletion('',false)},
     {label:'Signature Help',shortcut:'Ctrl+Shift+Space',action:()=>requestEditorSignatureHelp('',1,false)},
     {label:'Quick Fix...',shortcut:'Ctrl+.',action:()=>requestEditorCodeActions(false)},
+    {label:'Go to Definition',shortcut:'F12',action:()=>requestEditorDefinition(false)},
     {label:'Format Document',shortcut:'',action:()=>formatDocument()},
     {sep:true},
     {label:'Change Language Mode',shortcut:'',action:()=>showLanguagePicker()},
@@ -4799,7 +4872,7 @@ async function openWorkspaceFile(relPath){
   const res=await call('open_workspace_file',relPath||'');
   if(!res||res.error){
     showToast((res&&res.error)||t('workspace_load_failed'),'error',2500);
-    return;
+    return null;
   }
   explorerSelectedPath=res.path||relPath||'';
   const absolutePath=res.absolute_path||'';
@@ -4816,6 +4889,7 @@ async function openWorkspaceFile(relPath){
   }
   if(res.truncated)showToast(t('file_preview_limited'),'info',2200);
   highlightExplorerSelection();
+  return res;
 }
 
 // ── Instructions ──
@@ -7839,6 +7913,7 @@ const COMMANDS=[
   {label:'Trigger Suggest',shortcut:'Ctrl+Space',action:()=>requestEditorCompletion('',false)},
   {label:'Signature Help',shortcut:'Ctrl+Shift+Space',action:()=>requestEditorSignatureHelp('',1,false)},
   {label:'Quick Fix...',shortcut:'Ctrl+.',action:()=>requestEditorCodeActions(false)},
+  {label:'Go to Definition',shortcut:'F12',action:()=>requestEditorDefinition(false)},
   {label:'Format Document',shortcut:'',action:()=>formatDocument()},
   {label:'Change Language Mode',shortcut:'',action:()=>showLanguagePicker()},
   {label:'Toggle Theme',shortcut:'',action:()=>toggleTheme()},
