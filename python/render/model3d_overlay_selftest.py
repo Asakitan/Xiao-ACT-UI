@@ -221,6 +221,61 @@ def _write_rotating_arm_glb(path: Path) -> None:
     )
 
 
+def _write_transformed_rest_glb(path: Path) -> None:
+    vertices = [(-0.2, 0.0, 0.0), (0.2, 0.0, 0.0), (0.0, 0.4, 0.0)]
+    indices = [0, 1, 2]
+    position_blob = b"".join(struct.pack("<fff", *point) for point in vertices)
+    index_offset = len(position_blob)
+    index_blob = b"".join(struct.pack("<H", item) for item in indices)
+    bin_blob = _pad4(position_blob + index_blob, b"\0")
+    gltf = {
+        "asset": {"version": "2.0"},
+        "buffers": [{"byteLength": len(bin_blob)}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": len(position_blob), "target": 34962},
+            {"buffer": 0, "byteOffset": index_offset, "byteLength": len(index_blob), "target": 34963},
+        ],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": len(vertices),
+             "type": "VEC3", "min": [-0.2, 0.0, 0.0], "max": [0.2, 0.4, 0.0]},
+            {"bufferView": 1, "componentType": 5123, "count": len(indices), "type": "SCALAR"},
+        ],
+        "meshes": [{"name": "HandMarker", "primitives": [
+            {"attributes": {"POSITION": 0}, "indices": 1, "mode": 4}
+        ]}],
+        "nodes": [
+            {"name": "mixamorig:Hips", "children": [1], "translation": [0.0, 0.0, 0.0]},
+            {
+                "name": "mixamorig:Spine",
+                "children": [2, 3],
+                "translation": [0.0, 1.0, 0.0],
+                "rotation": [0.0, 0.0, 0.70710678, 0.70710678],
+                "scale": [2.0, 2.0, 2.0],
+            },
+            {"name": "mixamorig:RightHand", "mesh": 0, "translation": [1.0, 0.0, 0.0]},
+            {
+                "name": "mixamorig:LeftHand",
+                "mesh": 0,
+                "matrix": [
+                    1.0, 0.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0, 0.0,
+                    0.0, 0.0, 1.0, 0.0,
+                    0.5, 0.0, 0.0, 1.0,
+                ],
+            },
+        ],
+        "scenes": [{"nodes": [0]}],
+        "scene": 0,
+    }
+    json_blob = _pad4(json.dumps(gltf, separators=(",", ":")).encode("utf-8"), b" ")
+    total = 12 + 8 + len(json_blob) + 8 + len(bin_blob)
+    path.write_bytes(
+        b"glTF" + struct.pack("<II", 2, total)
+        + struct.pack("<II", len(json_blob), 0x4E4F534A) + json_blob
+        + struct.pack("<II", len(bin_blob), 0x004E4942) + bin_blob
+    )
+
+
 class Model3DSpecTests(unittest.TestCase):
     def test_canvas_position_and_z_are_normalized(self) -> None:
         node = normalize_ui_spec(UI.canvas(
@@ -681,6 +736,29 @@ Objects:  {
         self.assertEqual(len(meta["mesh"]["preview"]["faces"]), 12)
         self.assertIn("CubeNode", meta["nodes"])
         self.assertIn("PreviewMat", meta["materials"])
+
+    def test_model_metadata_applies_glb_node_rest_transforms(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_glb_rest_xform_") as root:
+            model_path = Path(root) / "avatar.glb"
+            _write_transformed_rest_glb(model_path)
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path), "format": "glb"},
+                "retarget": {"mode": "humanoid_auto"},
+            })["nodes"][0]
+
+            meta = get_model_metadata(node)
+
+        rest = meta["rest_positions"]
+        right_hand = rest["mixamorig:RightHand"]
+        left_hand = rest["mixamorig:LeftHand"]
+        self.assertAlmostEqual(right_hand[0], 0.0, places=5)
+        self.assertAlmostEqual(right_hand[1], 3.0, places=5)
+        self.assertAlmostEqual(right_hand[2], 0.0, places=5)
+        self.assertAlmostEqual(left_hand[0], 0.0, places=5)
+        self.assertAlmostEqual(left_hand[1], 2.0, places=5)
+        self.assertAlmostEqual(left_hand[2], 0.0, places=5)
 
     def test_model_metadata_extracts_glb_translation_clip_for_retarget(self) -> None:
         clear_model3d_metadata_caches()

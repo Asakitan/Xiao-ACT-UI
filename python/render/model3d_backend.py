@@ -965,6 +965,105 @@ def _node_translation(nodes: Any, index: int) -> tuple[float, float, float]:
     return point or (0.0, 0.0, 0.0)
 
 
+def _mat4_identity() -> tuple[float, ...]:
+    return (
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    )
+
+
+def _mat4_from_json(value: Any) -> tuple[float, ...] | None:
+    if not isinstance(value, (list, tuple)) or len(value) < 16:
+        return None
+    try:
+        matrix = tuple(float(value[index]) for index in range(16))
+    except Exception:
+        return None
+    if not all(math.isfinite(item) for item in matrix):
+        return None
+    return matrix
+
+
+def _mat4_mul(a: tuple[float, ...], b: tuple[float, ...]) -> tuple[float, ...]:
+    out: list[float] = []
+    for col in range(4):
+        for row in range(4):
+            value = 0.0
+            for k in range(4):
+                value += a[k * 4 + row] * b[col * 4 + k]
+            out.append(value)
+    return tuple(out)
+
+
+def _mat4_transform_point(
+    m: tuple[float, ...],
+    point: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    x, y, z = point
+    return (
+        m[0] * x + m[4] * y + m[8] * z + m[12],
+        m[1] * x + m[5] * y + m[9] * z + m[13],
+        m[2] * x + m[6] * y + m[10] * z + m[14],
+    )
+
+
+def _mat4_from_translation(value: tuple[float, float, float]) -> tuple[float, ...]:
+    x, y, z = value
+    return (
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        x, y, z, 1.0,
+    )
+
+
+def _mat4_from_scale(value: tuple[float, float, float]) -> tuple[float, ...]:
+    x, y, z = value
+    return (
+        x, 0.0, 0.0, 0.0,
+        0.0, y, 0.0, 0.0,
+        0.0, 0.0, z, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    )
+
+
+def _mat4_from_quat(value: tuple[float, float, float, float]) -> tuple[float, ...]:
+    x, y, z, w = _quat_normalize(value)
+    xx = x * x
+    yy = y * y
+    zz = z * z
+    xy = x * y
+    xz = x * z
+    yz = y * z
+    wx = w * x
+    wy = w * y
+    wz = w * z
+    return (
+        1.0 - 2.0 * (yy + zz), 2.0 * (xy + wz), 2.0 * (xz - wy), 0.0,
+        2.0 * (xy - wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz + wx), 0.0,
+        2.0 * (xz + wy), 2.0 * (yz - wx), 1.0 - 2.0 * (xx + yy), 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    )
+
+
+def _node_local_matrix(nodes: Any, index: int) -> tuple[float, ...]:
+    node = _json_index(nodes, index)
+    if node is None:
+        return _mat4_identity()
+    matrix = _mat4_from_json(node.get("matrix"))
+    if matrix is not None:
+        return matrix
+    translation = _node_translation(nodes, index)
+    rotation = _quat4(node.get("rotation")) or (0.0, 0.0, 0.0, 1.0)
+    scale = _point3(node.get("scale")) or (1.0, 1.0, 1.0)
+    return _mat4_mul(
+        _mat4_mul(_mat4_from_translation(translation), _mat4_from_quat(rotation)),
+        _mat4_from_scale(scale),
+    )
+
+
 def _glb_node_rest_positions(data: Mapping[str, Any]) -> dict[str, tuple[float, float, float]]:
     nodes = data.get("nodes")
     if not isinstance(nodes, list):
@@ -999,22 +1098,22 @@ def _glb_node_rest_positions(data: Mapping[str, Any]) -> dict[str, tuple[float, 
             if _canonical_from_token(_node_name(nodes, index))
         }
 
-    world_cache: dict[int, tuple[float, float, float]] = {}
+    world_cache: dict[int, tuple[float, ...]] = {}
 
-    def world(index: int, seen: set[int] | None = None) -> tuple[float, float, float]:
+    def world(index: int, seen: set[int] | None = None) -> tuple[float, ...]:
         if index in world_cache:
             return world_cache[index]
         if seen is None:
             seen = set()
         if index in seen:
-            return _node_translation(nodes, index)
+            return _node_local_matrix(nodes, index)
         seen.add(index)
-        local = _node_translation(nodes, index)
+        local = _node_local_matrix(nodes, index)
         parent_index = parent.get(index)
         if parent_index is None:
             result = local
         else:
-            result = _vec_add(world(parent_index, seen), local)
+            result = _mat4_mul(world(parent_index, seen), local)
         world_cache[index] = result
         return result
 
@@ -1023,7 +1122,7 @@ def _glb_node_rest_positions(data: Mapping[str, Any]) -> dict[str, tuple[float, 
         name = _node_name(nodes, index)
         if not name or not _canonical_from_token(name):
             continue
-        out[name] = world(index)
+        out[name] = _mat4_transform_point(world(index), (0.0, 0.0, 0.0))
     return out
 
 
