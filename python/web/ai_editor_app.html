@@ -1327,6 +1327,17 @@ pre.code-block { overflow:visible; }
   </div>
 </div>
 
+<!-- Fold region picker modal -->
+<div id="fold-region-picker" class="modal-bg">
+  <div class="modal" style="width:430px;max-height:520px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+      <h2 style="margin:0;flex:1">Fold Regions</h2>
+      <span id="fold-region-count" style="font-size:11px;color:var(--fg-dim);font-family:var(--mono)"></span>
+    </div>
+    <div id="fold-region-list" role="listbox" style="max-height:400px;overflow-y:auto"></div>
+  </div>
+</div>
+
 <!-- Editor context menu -->
 <div id="ctx-menu" style="display:none;position:fixed;background:var(--bg2);border:1px solid var(--border);
   border-radius:4px;padding:4px 0;z-index:200;box-shadow:0 4px 16px #00000060;min-width:180px">
@@ -2685,6 +2696,63 @@ function goToFoldRegion(direction){
 }
 function goToNextFoldRegion(){goToFoldRegion(1)}
 function goToPreviousFoldRegion(){goToFoldRegion(-1)}
+function foldRegionDisplayLabel(region,index){
+  const raw=String(region&&region.label||'').trim();
+  const cleaned=raw
+    .replace(/^[\s/*#;:-]*(?:#?region|<editor-fold\b)\s*/i,'')
+    .replace(/\*\/\s*$/,'')
+    .replace(/-->\s*$/,'')
+    .trim();
+  return cleaned||('Region '+(index+1));
+}
+function renderFoldRegionList(){
+  const list=$('fold-region-list'),count=$('fold-region-count');if(!list)return;
+  const regions=editorFoldingRegions();
+  if(count)count.textContent=regions.length?regions.length+' regions':'';
+  list.innerHTML='';
+  if(!regions.length){
+    const empty=document.createElement('div');
+    empty.className='sb-item';
+    empty.style.cssText='color:var(--fg-dim);padding:10px 12px;cursor:default';
+    empty.textContent='No fold regions for '+languageDisplayName(editorLang);
+    list.appendChild(empty);
+    return;
+  }
+  const current=editorCursorLine();
+  regions.forEach((region,index)=>{
+    const row=document.createElement('div');
+    row.className='sb-item'+(region.startLine<=current&&current<=region.endLine?' active':'');
+    row.tabIndex=0;row.setAttribute('role','option');
+    row.setAttribute('aria-selected',row.classList.contains('active')?'true':'false');
+    row.style.cssText='padding:7px 12px;min-height:30px;cursor:pointer';
+    const label=foldRegionDisplayLabel(region,index);
+    row.innerHTML='<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(label)+'</span>'
+      +'<span class="meta">Ln '+(region.startLine+1)+'-'+(region.endLine+1)+'</span>';
+    row.onclick=()=>{closeFoldRegionPicker();editorSetCursorLine(region.startLine);setStatus('Fold region '+(region.startLine+1)+'-'+(region.endLine+1))};
+    row.onkeydown=e=>{
+      if(e.key==='Enter'){e.preventDefault();row.click();return}
+      if(e.key==='Escape'){e.preventDefault();closeFoldRegionPicker();return}
+      if(e.key==='ArrowDown'||e.key==='ArrowUp'){
+        e.preventDefault();
+        const items=[...list.querySelectorAll('.sb-item[role="option"]')];
+        const idx=items.indexOf(row),next=items[idx+(e.key==='ArrowDown'?1:-1)]||items[e.key==='ArrowDown'?0:items.length-1];
+        if(next)next.focus();
+      }
+    };
+    list.appendChild(row);
+  });
+  const active=list.querySelector('.sb-item.active')||list.querySelector('.sb-item[role="option"]');
+  if(active)active.focus();
+}
+function openFoldRegionPicker(){
+  const picker=$('fold-region-picker');if(!picker)return;
+  picker.classList.add('open');
+  renderFoldRegionList();
+}
+function closeFoldRegionPicker(){
+  const picker=$('fold-region-picker');if(picker)picker.classList.remove('open');
+  ed.focus();
+}
 function languageForFileName(name){
   const base=String(name||'').split(/[\\/]/).pop().toLowerCase();
   if(!base)return '';
@@ -3030,6 +3098,7 @@ ed.addEventListener('contextmenu',function(e){
     {label:'Replace',shortcut:'Ctrl+H',action:()=>openFindBar(true)},
     {sep:true},
     {label:'Go to Line',shortcut:'Ctrl+G',action:()=>goToLinePrompt()},
+    {label:'Fold Regions',shortcut:'',action:()=>openFoldRegionPicker()},
     {label:'Next Fold Region',shortcut:'',action:()=>goToNextFoldRegion()},
     {label:'Previous Fold Region',shortcut:'',action:()=>goToPreviousFoldRegion()},
     {label:'Toggle Comment',shortcut:'Ctrl+/',action:()=>toggleComment()},
@@ -3241,6 +3310,7 @@ function filterLanguages(){
   });
 }
 $('lang-picker').onclick=e=>{if(e.target.id==='lang-picker')e.target.classList.remove('open')};
+$('fold-region-picker').onclick=e=>{if(e.target.id==='fold-region-picker')closeFoldRegionPicker()};
 window.showLanguagePicker=showLanguagePicker;window.filterLanguages=filterLanguages;
 
 // ── Syntax highlighting ──
@@ -7106,6 +7176,7 @@ const COMMANDS=[
   {label:'Find',shortcut:'Ctrl+F',action:()=>openFindBar()},
   {label:'Replace',shortcut:'Ctrl+H',action:()=>openFindBar(true)},
   {label:'Go to Line',shortcut:'Ctrl+G',action:()=>goToLinePrompt()},
+  {label:'Fold Regions',shortcut:'',action:()=>openFoldRegionPicker()},
   {label:'Next Fold Region',shortcut:'',action:()=>goToNextFoldRegion()},
   {label:'Previous Fold Region',shortcut:'',action:()=>goToPreviousFoldRegion()},
   {label:'Toggle Comment',shortcut:'Ctrl+/',action:()=>toggleComment()},
@@ -7164,6 +7235,7 @@ const _GLOBAL_SHORTCUT_MAP={
 document.addEventListener('keydown',e=>{
   if(e.key==='P'&&e.ctrlKey&&e.shiftKey){e.preventDefault();openCommandPalette()}
   if(e.key==='Escape'&&$('cmd-palette').classList.contains('open')){e.preventDefault();closeCommandPalette()}
+  if(e.key==='Escape'&&$('fold-region-picker').classList.contains('open')){e.preventDefault();closeFoldRegionPicker();return}
   // Ctrl+W → close active tab (TAB-004)
   if(e.key==='w'&&e.ctrlKey&&!e.shiftKey){e.preventDefault();if(typeof activeTab!=='undefined'&&tabs.length>1)closeTab(activeTab);return}
   // Ctrl+Tab / Ctrl+Shift+Tab → cycle tabs (TAB-005)

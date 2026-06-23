@@ -1204,6 +1204,15 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function editorFoldingRegions()" in html
             and "function goToNextFoldRegion()" in html
             and "function goToPreviousFoldRegion()" in html
+            and "id=\"fold-region-picker\"" in html
+            and "id=\"fold-region-list\"" in html
+            and "role=\"listbox\"" in html
+            and "function foldRegionDisplayLabel(region,index)" in html
+            and "function renderFoldRegionList()" in html
+            and "function openFoldRegionPicker()" in html
+            and "function closeFoldRegionPicker()" in html
+            and "Fold Regions" in html
+            and "ArrowDown" in html
             and "function languageWordPattern(lang)" in html
             and "function languageWordRegex(globalFlag)" in html
             and "function editorWordAtCursor()" in html
