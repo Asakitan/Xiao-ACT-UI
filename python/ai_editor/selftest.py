@@ -1204,6 +1204,9 @@ def test_phase1_ai_editor_regressions() -> None:
             and "syncEditorSyntaxScroll()" in html
             and "EXTENSION_ICON_THEME" in html
             and "function extensionIconThemes()" in html
+            and "function iconThemeDefinitionIcon(iconId,fallback)" in html
+            and "function applyIconVisual(el,value)" in html
+            and "icon.uri||icon.iconUri" in html
             and "function iconThemeFileGlyph(name,language)" in html
             and "function explorerFolderIcon(name,expanded,isRoot)" in html)
     _check("frontend renders extension settings modified reset controls",
@@ -1221,6 +1224,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function renderExtensionTreeView(view)" in html
             and "function renderExtensionTreeNode(viewId,node,depth,viewVersion)" in html
             and "function extensionTreeThemeIconGlyph(id)" in html
+            and "function extensionTreeIconPathUri(iconPath)" in html
             and "function extensionTreeIconGlyph(node,collapsible)" in html
             and "function extensionTreeItemTitle(node)" in html
             and "wrap.dataset.contextValue=String(node.contextValue)" in html
@@ -2981,6 +2985,13 @@ def test_app_extension_runtime_support() -> None:
 
         language_tmp = tempfile.mkdtemp(prefix="sao_ext_language_")
         os.makedirs(os.path.join(language_tmp, "themes"), exist_ok=True)
+        os.makedirs(os.path.join(language_tmp, "themes", "icons"), exist_ok=True)
+        with open(os.path.join(language_tmp, "themes", "icons", "self.svg"),
+                  "w", encoding="utf-8") as f:
+            f.write(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" "
+                "viewBox=\"0 0 16 16\"><path fill=\"#68e4ff\" "
+                "d=\"M2 2h12v12H2z\"/></svg>")
         with open(os.path.join(language_tmp, "themes", "self-dark.json"),
                   "w", encoding="utf-8") as f:
             f.write("""
@@ -3003,7 +3014,11 @@ def test_app_extension_runtime_support() -> None:
   "showLanguageModeIcons": true,
   "iconDefinitions": {
     "_file": {"fontCharacter": "F"},
-    "_self": {"fontCharacter": "S", "fontColor": "#68e4ff"},
+    "_self": {
+      "fontCharacter": "S",
+      "fontColor": "#68e4ff",
+      "iconPath": "./icons/self.svg",
+    },
     "_folder": {"fontCharacter": "D"},
     "_folder_open": {"fontCharacter": "O"},
   },
@@ -3097,6 +3112,9 @@ def test_app_extension_runtime_support() -> None:
                    .get("_self", {}).get("fontCharacter") == "S"
                and editor_icon_theme_data.get("iconDefinitions", {})
                    .get("_self", {}).get("fontColor") == "#68e4ff"
+               and editor_icon_theme_data.get("iconDefinitions", {})
+                   .get("_self", {}).get("iconUri", "")
+                   .replace("\\", "/").endswith("/themes/icons/self.svg")
                and editor_icon_theme_data.get("fileExtensions", {})
                    .get("self") == "_self"
                and editor_icon_theme_data.get("fileNames", {})

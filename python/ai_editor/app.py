@@ -18,6 +18,7 @@ import re
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 # Ensure package root on path
@@ -1079,7 +1080,7 @@ class AIEditorAPI:
         if not isinstance(payload, dict):
             return {"error": "Icon theme JSON must be an object", "theme": theme}
         icon_definitions = self._safe_icon_theme_definitions(
-            payload.get("iconDefinitions"))
+            payload.get("iconDefinitions"), theme, path)
         return {
             "ok": True,
             "theme": theme,
@@ -1118,24 +1119,61 @@ class AIEditorAPI:
             if str(key or "").strip() and cls._safe_icon_theme_id(icon_id)
         }
 
-    @classmethod
     def _safe_icon_theme_definitions(
-            cls, value: Any) -> Dict[str, Dict[str, str]]:
+            self, value: Any, theme: Dict,
+            theme_path: str) -> Dict[str, Dict[str, str]]:
         if not isinstance(value, dict):
             return {}
         result: Dict[str, Dict[str, str]] = {}
         for icon_id, raw in value.items():
-            normalized_id = cls._safe_icon_theme_id(icon_id)
+            normalized_id = self._safe_icon_theme_id(icon_id)
             if not normalized_id or not isinstance(raw, dict):
                 continue
             item: Dict[str, str] = {}
-            for key in ("fontCharacter", "fontColor", "iconPath"):
+            for key in ("fontCharacter", "fontColor"):
                 raw_value = raw.get(key)
                 if isinstance(raw_value, str) and raw_value.strip():
                     item[key] = raw_value.strip()
+            raw_icon_path = raw.get("iconPath")
+            if isinstance(raw_icon_path, str) and raw_icon_path.strip():
+                item["iconPath"] = raw_icon_path.strip()
+                icon_uri = self._safe_icon_theme_asset_uri(
+                    theme, theme_path, raw_icon_path)
+                if icon_uri:
+                    item["iconUri"] = icon_uri
             if item:
                 result[normalized_id] = item
         return result
+
+    def _safe_icon_theme_asset_uri(
+            self, theme: Dict, theme_path: str, raw_path: str) -> str:
+        raw = str(raw_path or "").strip()
+        if not raw or re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", raw):
+            return ""
+        asset_ref = raw.split("?", 1)[0].split("#", 1)[0]
+        ext = os.path.splitext(asset_ref)[1].lower()
+        if ext not in {".svg", ".png"}:
+            return ""
+        theme_dir = os.path.dirname(os.path.abspath(theme_path))
+        full = os.path.abspath(os.path.join(theme_dir, asset_ref))
+        try:
+            extension_id = str(theme.get("extension_id") or "")
+            ext_desc = self._ext_host.registry.get(extension_id)
+            root = getattr(ext_desc, "extension_path", "") if ext_desc else ""
+            root_real = os.path.realpath(os.path.abspath(root or theme_dir))
+            full_real = os.path.realpath(full)
+            if os.path.commonpath([
+                    os.path.normcase(root_real),
+                    os.path.normcase(full_real)]) != os.path.normcase(root_real):
+                return ""
+        except Exception:
+            return ""
+        if not os.path.exists(full):
+            return ""
+        try:
+            return Path(full).resolve().as_uri()
+        except Exception:
+            return ""
 
     def save_config(self, data: Dict) -> Dict:
         settings = _resolve_settings(self._gui_ref)
