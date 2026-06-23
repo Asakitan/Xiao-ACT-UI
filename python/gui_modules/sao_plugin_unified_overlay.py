@@ -581,10 +581,12 @@ class PluginUnifiedOverlayHost:
             except Exception:
                 pass
         self._sync_host_input_mode()
+        self._schedule(0)
 
     def mark_dirty(self) -> None:
         self._dirty = True
-        self._schedule(0)
+        if not self._hidden:
+            self._schedule(0)
 
     def _subscribe(self) -> None:
         try:
@@ -594,12 +596,14 @@ class PluginUnifiedOverlayHost:
                 payload = event.get("payload") if isinstance(event, Mapping) else None
                 if not isinstance(payload, Mapping):
                     self._dirty = True
-                    self._schedule(0)
+                    if not self._hidden:
+                        self._schedule(0)
                     return
                 surface = str(payload.get("surface") or "")
                 if not surface or surface == self.surface:
                     self._dirty = True
-                    self._schedule(0)
+                    if not self._hidden:
+                        self._schedule(0)
 
             self._sub_token = bus.subscribe(
                 "plugin_ui_invalidate",

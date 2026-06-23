@@ -2682,6 +2682,43 @@ class UnifiedOverlayDrawableTests(unittest.TestCase):
         self.assertEqual(len(root.after_calls), 1)
         self.assertEqual(root.after_calls[0][0], 0)
 
+    def test_hidden_host_defers_invalidate_refresh_until_restore(self) -> None:
+        class FakeRoot:
+            def __init__(self):
+                self.after_calls = []
+
+            def after(self, delay, callback):
+                self.after_calls.append((delay, callback))
+                return f"after_{len(self.after_calls)}"
+
+        class FakeBus:
+            def __init__(self):
+                self.callbacks = {}
+
+            def subscribe(self, topic, callback, owner_id=""):
+                self.callbacks[str(topic)] = callback
+                return f"token_{topic}"
+
+        root = FakeRoot()
+        bus = FakeBus()
+        host = overlay_mod.PluginUnifiedOverlayHost(
+            SimpleNamespace(root=root), surface="unioverlay")
+        host.hide_temporarily()
+
+        with mock.patch.object(overlay_mod, "ensure_act_event_bus", lambda _owner: bus):
+            host._subscribe()
+
+        bus.callbacks["plugin_ui_invalidate"]({
+            "payload": {"surface": "unioverlay", "reason": "overlay_set"}
+        })
+        self.assertTrue(host._dirty)
+        self.assertEqual(root.after_calls, [])
+
+        host.restore()
+
+        self.assertEqual(len(root.after_calls), 1)
+        self.assertEqual(root.after_calls[0][0], 0)
+
     def test_tick_reschedules_if_refresh_marks_dirty_again(self) -> None:
         class FakeRoot:
             def __init__(self):
