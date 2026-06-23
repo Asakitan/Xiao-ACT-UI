@@ -234,6 +234,14 @@ body.window-resizing * { cursor:inherit !important; }
   padding:1px 5px; max-width:260px; overflow:hidden; text-overflow:ellipsis;
   white-space:nowrap; cursor:pointer; opacity:.92; }
 .editor-codelens-item:hover { background:var(--bg-hover); color:var(--fg-bright); }
+.editor-color-layer { position:absolute; inset:0 0 0 50px; z-index:5; pointer-events:none;
+  font:13px/1.5 var(--mono); padding:8px 12px; overflow:hidden; white-space:pre; tab-size:4; }
+.editor-color-swatch { position:absolute; pointer-events:auto; width:11px; height:11px;
+  border:1px solid color-mix(in srgb,var(--fg-bright) 72%,transparent); border-radius:2px;
+  box-shadow:0 0 0 1px var(--bg-editor),0 1px 3px rgba(0,0,0,.28); cursor:pointer;
+  transition:transform .12s ease,border-color .12s ease,box-shadow .12s ease; }
+.editor-color-swatch:hover { transform:scale(1.25); border-color:var(--fg-bright);
+  box-shadow:0 0 0 1px var(--bg-editor),0 2px 6px rgba(0,0,0,.36); }
 .editor-textarea { flex:1; background:var(--bg-editor); color:var(--fg-code); font:13px/1.5 var(--mono);
   padding:8px 12px; border:none; outline:none; resize:none; tab-size:4; white-space:pre;
   overflow:auto; caret-color:var(--fg-accent); position:relative; z-index:2; }
@@ -1221,6 +1229,7 @@ pre.code-block { overflow:visible; }
         <div class="editor-inlay-layer" id="editor-inlay-layer" aria-hidden="true"></div>
         <div class="editor-ghost-layer" id="editor-ghost-layer" aria-hidden="true"></div>
         <div class="editor-codelens-layer" id="editor-codelens-layer" aria-hidden="true"></div>
+        <div class="editor-color-layer" id="editor-color-layer" aria-hidden="true"></div>
         <textarea class="editor-textarea" id="editor-text" spellcheck="false" placeholder="// Your code here..."></textarea>
         <div class="editor-suggest" id="editor-suggest" role="listbox"></div>
         <div class="editor-hover" id="editor-hover" role="tooltip"></div>
@@ -2465,6 +2474,7 @@ function openInEditor(code,lang){
   if(typeof clearEditorCodeLenses==='function')clearEditorCodeLenses();
   if(typeof clearEditorSemanticTokens==='function')clearEditorSemanticTokens();
   if(typeof clearEditorFoldingRanges==='function')clearEditorFoldingRanges();
+  if(typeof clearEditorDocumentColors==='function')clearEditorDocumentColors();
   updateLineNums();updateCursorPos();
   if(lang&&LANGUAGES.includes(lang))setEditorLanguage(lang);
   else detectLanguage(code,'');
@@ -2474,6 +2484,7 @@ function openInEditor(code,lang){
   if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(260);
   if(typeof scheduleEditorSemanticTokens==='function')scheduleEditorSemanticTokens(300);
   if(typeof scheduleEditorFoldingRanges==='function')scheduleEditorFoldingRanges(360);
+  if(typeof scheduleEditorDocumentColors==='function')scheduleEditorDocumentColors(420);
 }
 function showEditorArea(){
   _editorVis=true;
@@ -3366,12 +3377,14 @@ function setEditorLanguage(lang){
   $('status-language').title=bits.filter(Boolean).join(' · ');
   if(typeof clearEditorSemanticTokens==='function')clearEditorSemanticTokens();
   if(typeof clearEditorFoldingRanges==='function')clearEditorFoldingRanges();
+  if(typeof clearEditorDocumentColors==='function')clearEditorDocumentColors();
   scheduleEditorSyntaxHighlight();
   if(typeof scheduleEditorInlayHints==='function')scheduleEditorInlayHints(220);
   if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(260);
   if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(320);
   if(typeof scheduleEditorSemanticTokens==='function')scheduleEditorSemanticTokens(360);
   if(typeof scheduleEditorFoldingRanges==='function')scheduleEditorFoldingRanges(420);
+  if(typeof scheduleEditorDocumentColors==='function')scheduleEditorDocumentColors(460);
 }
 
 let _editorSyntaxRaf=0;
@@ -3388,6 +3401,7 @@ function syncEditorSyntaxScroll(){
   layer.scrollTop=ta.scrollTop;layer.scrollLeft=ta.scrollLeft;
   if(typeof renderEditorInlayHints==='function')renderEditorInlayHints(_editorInlayHints);
   if(typeof renderEditorInlineCompletion==='function')renderEditorInlineCompletion();
+  if(typeof renderEditorDocumentColors==='function')renderEditorDocumentColors(_editorDocumentColors);
   if(typeof renderEditorCodeLenses==='function')renderEditorCodeLenses(_editorCodeLenses);
 }
 function updateEditorSyntaxHighlight(){
@@ -3432,6 +3446,8 @@ function editorUndo(){
   if(typeof scheduleEditorSemanticTokens==='function')scheduleEditorSemanticTokens(420);
   if(typeof clearEditorFoldingRanges==='function')clearEditorFoldingRanges();
   if(typeof scheduleEditorFoldingRanges==='function')scheduleEditorFoldingRanges(460);
+  if(typeof clearEditorDocumentColors==='function')clearEditorDocumentColors();
+  if(typeof scheduleEditorDocumentColors==='function')scheduleEditorDocumentColors(500);
 }
 function editorRedo(){
   const ta=$('editor-text');if(!ta||!_redoStack.length)return;
@@ -3449,6 +3465,8 @@ function editorRedo(){
   if(typeof scheduleEditorSemanticTokens==='function')scheduleEditorSemanticTokens(420);
   if(typeof clearEditorFoldingRanges==='function')clearEditorFoldingRanges();
   if(typeof scheduleEditorFoldingRanges==='function')scheduleEditorFoldingRanges(460);
+  if(typeof clearEditorDocumentColors==='function')clearEditorDocumentColors();
+  if(typeof scheduleEditorDocumentColors==='function')scheduleEditorDocumentColors(500);
 }
 function _editorInputWithUndo(e){
   updateLineNums();updateCursorPos();editorDirty=true;
@@ -3474,6 +3492,8 @@ function _editorInputWithUndo(e){
   scheduleEditorSemanticTokens();
   clearEditorFoldingRanges();
   scheduleEditorFoldingRanges();
+  clearEditorDocumentColors();
+  scheduleEditorDocumentColors();
 }
 
 let _editorSuggestItems=[],_editorSuggestIndex=0,_editorSuggestRequest=0;
@@ -3488,6 +3508,7 @@ let _editorInlineCompletions=[],_editorInlineCompletionIndex=0,_editorInlineComp
 let _editorCodeLenses=[],_editorCodeLensRequest=0,_editorCodeLensTimer=null;
 let _editorSemanticTokens=null,_editorSemanticTokensRequest=0,_editorSemanticTokensTimer=null,_editorSemanticTokensContentLength=-1;
 let _editorFoldingRanges=[],_editorFoldingRangeRequest=0,_editorFoldingRangeTimer=null,_editorFoldingRangeContentLength=-1;
+let _editorDocumentColors=[],_editorDocumentColorRequest=0,_editorDocumentColorTimer=null,_editorDocumentColorContentLength=-1;
 let _editorSelectionRanges=[],_editorSelectionRangeIndex=-1,_editorSelectionRangeKey='';
 function activeEditorTab(){
   return (typeof tabs!=='undefined'&&Array.isArray(tabs)?tabs.find(t=>t.id===activeTab):null)||{};
@@ -3854,6 +3875,100 @@ function scheduleEditorCodeLenses(delay){
   clearTimeout(_editorCodeLensTimer);
   _editorCodeLensTimer=setTimeout(()=>requestEditorCodeLenses(true),delay==null?700:delay);
 }
+function editorColorComponent(value,fallback){
+  const number=Number(value);
+  if(!Number.isFinite(number))return fallback;
+  return Math.max(0,Math.min(1,number));
+}
+function editorColorToCss(color){
+  const r=Math.round(editorColorComponent(color&&color.red,0)*255);
+  const g=Math.round(editorColorComponent(color&&color.green,0)*255);
+  const b=Math.round(editorColorComponent(color&&color.blue,0)*255);
+  const a=editorColorComponent(color&&color.alpha,1);
+  return 'rgba('+r+', '+g+', '+b+', '+a.toFixed(3).replace(/0+$/,'').replace(/\.$/,'')+')';
+}
+function editorColorHex(color){
+  const part=value=>Math.round(editorColorComponent(value,0)*255).toString(16).padStart(2,'0');
+  const base='#'+part(color&&color.red)+part(color&&color.green)+part(color&&color.blue);
+  const alpha=editorColorComponent(color&&color.alpha,1);
+  return alpha>=1?base:base+part(alpha);
+}
+function normalizeEditorDocumentColor(info,index){
+  if(!info||typeof info!=='object'||!info.range||!info.range.start||!info.color)return null;
+  return {range:info.range,color:info.color,label:info.label||editorColorHex(info.color),index:index||0};
+}
+function clearEditorDocumentColors(){
+  _editorDocumentColorRequest++;
+  clearTimeout(_editorDocumentColorTimer);
+  _editorDocumentColors=[];_editorDocumentColorContentLength=-1;
+  const layer=$('editor-color-layer');if(layer)layer.innerHTML='';
+}
+function renderEditorDocumentColors(colors){
+  const layer=$('editor-color-layer'),ta=$('editor-text'),wrap=$('editor-container');
+  if(!layer||!ta||!wrap)return;
+  layer.innerHTML='';
+  if(wrap.style.display==='none'||wrap.offsetParent===null||!Array.isArray(colors)||!colors.length)return;
+  if(_editorDocumentColorContentLength!==String(ta.value||'').length)return;
+  const style=getComputedStyle(ta),lineHeight=parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.5;
+  const fontSize=parseFloat(style.fontSize)||13,charWidth=fontSize*.62;
+  const paddingTop=parseFloat(style.paddingTop)||8,paddingLeft=parseFloat(style.paddingLeft)||12;
+  const maxTop=wrap.clientHeight+lineHeight,maxLeft=layer.clientWidth||wrap.clientWidth;
+  colors.slice().sort((a,b)=>editorPositionCompare(a.range&&a.range.start,b.range&&b.range.start)).slice(0,360).forEach(info=>{
+    const normalized=normalizeEditorDocumentColor(info);if(!normalized)return;
+    const pos=normalized.range.start;
+    const top=paddingTop+(Number(pos.line)||0)*lineHeight-ta.scrollTop+(lineHeight-11)/2;
+    const rawLeft=paddingLeft+(Number(pos.character)||0)*charWidth-ta.scrollLeft-15;
+    if(top<-14||top>maxTop||rawLeft<-24||rawLeft>maxLeft)return;
+    const el=document.createElement('button');
+    el.type='button';el.className='editor-color-swatch';
+    const css=editorColorToCss(normalized.color),hex=editorColorHex(normalized.color);
+    el.style.background=css;el.style.top=top+'px';el.style.left=Math.max(1,rawLeft)+'px';
+    el.title=hex+' · '+css+' · Alt-click applies first presentation';
+    el.onmousedown=e=>{e.preventDefault();e.stopPropagation();requestEditorColorPresentations(normalized,false,e)};
+    layer.appendChild(el);
+  });
+}
+async function requestEditorDocumentColors(quiet){
+  const wrap=$('editor-container');
+  if(!ed||!wrap||wrap.style.display==='none')return;
+  const requestId=++_editorDocumentColorRequest;
+  const contentLength=String(ed.value||'').length;
+  const res=await call('editor_language_provider',editorProviderPayload('documentColor'));
+  if(requestId!==_editorDocumentColorRequest||contentLength!==String(ed.value||'').length)return;
+  if(res&&res.error){
+    _editorDocumentColors=[];_editorDocumentColorContentLength=-1;renderEditorDocumentColors([]);
+    if(!quiet)setStatus('Document colors failed: '+res.error);
+    return;
+  }
+  _editorDocumentColors=(res&&res.ok&&Array.isArray(res.colors)?res.colors:[])
+    .map(normalizeEditorDocumentColor).filter(Boolean);
+  _editorDocumentColorContentLength=_editorDocumentColors.length?contentLength:-1;
+  renderEditorDocumentColors(_editorDocumentColors);
+  if(!quiet)setStatus(_editorDocumentColors.length+' document color'+(_editorDocumentColors.length===1?'':'s'));
+}
+function scheduleEditorDocumentColors(delay){
+  clearTimeout(_editorDocumentColorTimer);
+  _editorDocumentColorTimer=setTimeout(()=>requestEditorDocumentColors(true),delay==null?740:delay);
+}
+async function requestEditorColorPresentations(info,quiet,event){
+  if(!info||!info.range||!info.color)return false;
+  const res=await call('editor_language_provider',editorProviderPayload('colorPresentation',{color:info.color,range:info.range}));
+  if(res&&res.error){if(!quiet)setStatus('Color presentations failed: '+res.error);return false}
+  const presentations=res&&res.ok&&Array.isArray(res.presentations)?res.presentations:[];
+  const first=presentations[0]||null,label=first?String(first.label||''):'';
+  if(first&&event&&event.altKey){
+    const edits=[];
+    if(first.textEdit)edits.push(first.textEdit);
+    else if(label)edits.push({range:info.range,newText:label});
+    if(Array.isArray(first.additionalTextEdits))edits.push(...first.additionalTextEdits);
+    if(edits.length){
+      _undoPush(true);
+      if(editorApplyTextEdits(edits)){setStatus('Applied color presentation: '+(label||editorColorHex(info.color)));return true}
+    }
+  }
+  if(!quiet)setStatus(label?('Color presentation: '+label):('Color: '+editorColorHex(info.color)));
+  return !!presentations.length;
+}
 function completionLabelText(label){
   if(label&&typeof label==='object')return String(label.label||label.name||label.detail||'');
   return String(label||'');
@@ -3904,6 +4019,8 @@ function editorApplyTextEdits(edits){
   scheduleEditorInlineCompletions(240);
   clearEditorCodeLenses();
   scheduleEditorCodeLenses(420);
+  clearEditorDocumentColors();
+  scheduleEditorDocumentColors(460);
   return true;
 }
 function isEditorSuggestOpen(){
@@ -4756,6 +4873,7 @@ ed.addEventListener('contextmenu',function(e){
     {label:'Go to Line',shortcut:'Ctrl+G',action:()=>goToLinePrompt()},
     {label:'Fold Regions',shortcut:'',action:()=>openFoldRegionPicker()},
     {label:'Refresh Folding Ranges',shortcut:'',action:()=>requestEditorFoldingRanges(false)},
+    {label:'Refresh Document Colors',shortcut:'',action:()=>requestEditorDocumentColors(false)},
     {label:'Next Fold Region',shortcut:'',action:()=>goToNextFoldRegion()},
     {label:'Previous Fold Region',shortcut:'',action:()=>goToPreviousFoldRegion()},
     {label:'Toggle Comment',shortcut:'Ctrl+/',action:()=>toggleComment()},
@@ -8504,6 +8622,7 @@ function switchTab(id){
     if(typeof clearEditorCodeLenses==='function')clearEditorCodeLenses();
     if(typeof clearEditorSemanticTokens==='function')clearEditorSemanticTokens();
     if(typeof clearEditorFoldingRanges==='function')clearEditorFoldingRanges();
+    if(typeof clearEditorDocumentColors==='function')clearEditorDocumentColors();
     updateLineNums();updateCursorPos();
     $('editor-welcome').style.display='none';$('editor-container').style.display='flex';
     if(typeof scheduleEditorInlayHints==='function')scheduleEditorInlayHints(160);
@@ -8511,6 +8630,7 @@ function switchTab(id){
     if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(280);
     if(typeof scheduleEditorSemanticTokens==='function')scheduleEditorSemanticTokens(340);
     if(typeof scheduleEditorFoldingRanges==='function')scheduleEditorFoldingRanges(380);
+    if(typeof scheduleEditorDocumentColors==='function')scheduleEditorDocumentColors(440);
   }
   renderTabs();
 }
@@ -8870,6 +8990,7 @@ const COMMANDS=[
   {label:'Shrink Selection',shortcut:'Shift+Alt+Left',action:()=>shrinkEditorSelection(false)},
   {label:'Fold Regions',shortcut:'',action:()=>openFoldRegionPicker()},
   {label:'Refresh Folding Ranges',shortcut:'',action:()=>requestEditorFoldingRanges(false)},
+  {label:'Refresh Document Colors',shortcut:'',action:()=>requestEditorDocumentColors(false)},
   {label:'Next Fold Region',shortcut:'',action:()=>goToNextFoldRegion()},
   {label:'Previous Fold Region',shortcut:'',action:()=>goToPreviousFoldRegion()},
   {label:'Toggle Comment',shortcut:'Ctrl+/',action:()=>toggleComment()},

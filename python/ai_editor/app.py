@@ -491,7 +491,7 @@ _LANGUAGE_RESULT_ATTRS = (
     "placeholder", "rejectReason", "target", "tooltip", "textEdits",
     "paddingLeft", "paddingRight", "location", "isResolved", "data",
     "resultId", "edits", "start", "end", "deleteCount", "tokenTypes",
-    "tokenModifiers", "parent",
+    "tokenModifiers", "parent", "color", "red", "green", "blue", "alpha",
 )
 
 
@@ -2754,6 +2754,11 @@ class AIEditorAPI:
             "selectionRange": "selectionRange",
             "selectionRanges": "selectionRange",
             "expandSelection": "selectionRange",
+            "documentColor": "documentColor",
+            "documentColors": "documentColor",
+            "colors": "documentColor",
+            "colorPresentation": "colorPresentation",
+            "colorPresentations": "colorPresentation",
             "semanticToken": "semanticTokens",
             "semanticTokens": "semanticTokens",
             "documentSemanticTokens": "semanticTokens",
@@ -3026,6 +3031,37 @@ class AIEditorAPI:
                     "uri": str(document.uri),
                     "version": document.version,
                     "ranges": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "documentColor":
+                result = self._ext_host.commands.execute(
+                    "vscode.executeDocumentColorProvider",
+                    document.uri,
+                )
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "colors": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "colorPresentation":
+                color_range = _editor_provider_range(
+                    payload.get("range"), content)
+                result = self._ext_host.commands.execute(
+                    "vscode.executeColorPresentationProvider",
+                    payload.get("color") or {},
+                    {"uri": document.uri, "range": color_range},
+                )
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "presentations": value if isinstance(value, list) else (
                         [] if value is None else [value]),
                 }
             if kind == "semanticTokens":

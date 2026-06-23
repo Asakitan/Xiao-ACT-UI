@@ -358,7 +358,8 @@ def test_app_settings_parity() -> None:
         SignatureHelp, SignatureInformation, ParameterInformation,
         CodeAction, DocumentLink, InlayHint, InlineCompletionItem,
         CodeLens, FoldingRange, SelectionRange, SemanticTokensLegend,
-        SemanticTokensBuilder, WorkspaceEdit, Location,
+        SemanticTokensBuilder, WorkspaceEdit, Location, Color,
+        ColorInformation, ColorPresentation,
     )
     provider_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     provider_api._extension_scan_dirs = lambda: []
@@ -466,6 +467,18 @@ def test_app_settings_parity() -> None:
             return [SelectionRange(
                 Range(Position(0, 0), Position(0, 3)), parent)]
 
+        def provideDocumentColors(self, document, token):
+            return [ColorInformation(
+                Range(Position(0, 0), Position(0, 6)),
+                Color(1, 0, 0, 1),
+            )]
+
+        def provideColorPresentations(self, color, context, token):
+            presentation = ColorPresentation("rgb(255, 0, 0)")
+            presentation.textEdit = TextEdit.replace(
+                context["range"], presentation.label)
+            return [presentation]
+
         def prepareRename(self, document, position, token):
             return {
                 "range": Range(Position(0, 0), Position(0, 6)),
@@ -496,6 +509,7 @@ def test_app_settings_parity() -> None:
     lang_api["registerCodeLensProvider"]("python", editor_provider)
     lang_api["registerFoldingRangeProvider"]("python", editor_provider)
     lang_api["registerSelectionRangeProvider"]("python", editor_provider)
+    lang_api["registerColorProvider"]("python", editor_provider)
     lang_api["registerDocumentSemanticTokensProvider"](
         "python", editor_provider, editor_provider.semantic_legend)
     lang_api["registerRenameProvider"]("python", editor_provider)
@@ -541,6 +555,15 @@ def test_app_settings_parity() -> None:
             dict(provider_payload, kind="foldingRange"))
         selection_range_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="selectionRange"))
+        document_color_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="documentColor"))
+        color_presentation_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="colorPresentation",
+                 color={"red": 1, "green": 0, "blue": 0, "alpha": 1},
+                 range={
+                    "start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 6},
+                 }))
         semantic_tokens_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="semanticTokens"))
         prepare_rename_result = provider_api.editor_language_provider(
@@ -631,6 +654,20 @@ def test_app_settings_parity() -> None:
                .get("character") == 3
                and selection_range.get("parent", {})
                .get("range", {}).get("end", {}).get("character") == 6)
+        color_info = document_color_result.get("colors", [{}])[0]
+        color_presentation = color_presentation_result.get(
+            "presentations", [{}])[0]
+        _check("editor_language_provider serializes document colors",
+               document_color_result.get("ok") is True
+               and color_info.get("range", {}).get("end", {})
+               .get("character") == 6
+               and color_info.get("color", {}).get("red") == 1.0
+               and color_info.get("color", {}).get("alpha") == 1.0)
+        _check("editor_language_provider serializes color presentations",
+               color_presentation_result.get("ok") is True
+               and color_presentation.get("label") == "rgb(255, 0, 0)"
+               and color_presentation.get("textEdit", {})
+               .get("newText") == "rgb(255, 0, 0)")
         _check("editor_language_provider serializes semantic tokens",
                semantic_tokens_result.get("ok") is True
                and semantic_tokens_result.get("legend", {})
@@ -1671,6 +1708,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "id=\"editor-inlay-layer\"" in html
            and "id=\"editor-ghost-layer\"" in html
            and "id=\"editor-codelens-layer\"" in html
+           and "id=\"editor-color-layer\"" in html
            and "call('editor_language_provider'" in html
            and "function editorProviderPayload(kind,extra)" in html
            and "function requestEditorCompletion(triggerCharacter,quiet)" in html
@@ -1709,6 +1747,14 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function runEditorCodeLens(lens)" in html
            and "function scheduleEditorCodeLenses(delay)" in html
            and "editorProviderPayload('codeLens'" in html
+           and "function requestEditorDocumentColors(quiet)" in html
+           and "function renderEditorDocumentColors(colors)" in html
+           and "async function requestEditorColorPresentations(info,quiet,event)" in html
+           and "function scheduleEditorDocumentColors(delay)" in html
+           and "editorProviderPayload('documentColor'" in html
+           and "editorProviderPayload('colorPresentation'" in html
+           and "Refresh Document Colors" in html
+           and "editor-color-swatch" in html
            and "function requestEditorSemanticTokens(quiet)" in html
            and "function decodeEditorSemanticTokens(data,legend)" in html
            and "function highlightCodeWithSemanticTokens(code,lang,payload)" in html
@@ -2947,7 +2993,7 @@ def test_vscode_api() -> None:
         DocumentLink, InlayHint, InlayHintLabelPart, InlineCompletionItem,
         CodeLens, FoldingRange, SelectionRange, SemanticTokensLegend,
         SemanticTokensBuilder, TextEdit, Location, SignatureHelp,
-        SignatureInformation,
+        SignatureInformation, Color, ColorInformation, ColorPresentation,
         ParameterInformation,
     )
 
@@ -2982,6 +3028,7 @@ def test_vscode_api() -> None:
     _check("api.TextEdit", api["TextEdit"] is TextEdit)
     _check("api.FoldingRange", api["FoldingRange"] is FoldingRange)
     _check("api.SelectionRange", api["SelectionRange"] is SelectionRange)
+    _check("api.Color", api["Color"] is Color)
     _check("api.SemanticTokensBuilder",
            api["SemanticTokensBuilder"] is SemanticTokensBuilder)
     _check("api.CompletionItemKind", api["CompletionItemKind"]["Function"] == 2)
@@ -3388,6 +3435,19 @@ def test_vscode_api() -> None:
                 return [SelectionRange(
                     Range(Position(0, 0), Position(0, 4)), parent)]
 
+        class _ColorProvider:
+            def provideDocumentColors(self, document, token):
+                return [ColorInformation(
+                    Range(Position(0, 0), Position(0, 4)),
+                    Color(0.2, 0.4, 0.6, 1),
+                )]
+
+            def provideColorPresentations(self, color, context, token):
+                presentation = ColorPresentation("#336699")
+                presentation.textEdit = TextEdit.replace(
+                    context["range"], presentation.label)
+                return [presentation]
+
         class _SemanticTokensProvider:
             def provideDocumentSemanticTokens(self, document, token):
                 builder = SemanticTokensBuilder(semantic_legend)
@@ -3455,6 +3515,8 @@ def test_vscode_api() -> None:
             "python", _FoldingRangeProvider())
         api["languages"]["registerSelectionRangeProvider"](
             "python", _SelectionRangeProvider())
+        api["languages"]["registerColorProvider"](
+            "python", _ColorProvider())
         semantic_legend = SemanticTokensLegend(
             ["function", "variable"], ["readonly"])
         api["languages"]["registerDocumentSemanticTokensProvider"](
@@ -3502,6 +3564,12 @@ def test_vscode_api() -> None:
             "vscode.executeSelectionRangeProvider",
             doc.uri,
             [Position(0, 1)])
+        document_colors = api["commands"]["executeCommand"](
+            "vscode.executeDocumentColorProvider", doc.uri)
+        color_presentations = api["commands"]["executeCommand"](
+            "vscode.executeColorPresentationProvider",
+            Color(0.2, 0.4, 0.6, 1),
+            {"uri": doc.uri, "range": Range(Position(0, 0), Position(0, 4))})
         semantic_legend_result = api["commands"]["executeCommand"](
             "vscode.provideDocumentSemanticTokensLegend", doc.uri)
         semantic_tokens = api["commands"]["executeCommand"](
@@ -3566,6 +3634,16 @@ def test_vscode_api() -> None:
                selection_ranges
                and selection_ranges[0].range.end.character == 4
                and selection_ranges[0].parent.range.end.character == 11)
+        _check("executeDocumentColorProvider invokes matching providers",
+               document_colors
+               and isinstance(document_colors[0], ColorInformation)
+               and document_colors[0].range.end.character == 4
+               and document_colors[0].color.blue == 0.6)
+        _check("executeColorPresentationProvider invokes matching providers",
+               color_presentations
+               and isinstance(color_presentations[0], ColorPresentation)
+               and color_presentations[0].label == "#336699"
+               and color_presentations[0].textEdit["newText"] == "#336699")
         _check("provideDocumentSemanticTokens invokes matching providers",
                semantic_legend_result
                and semantic_legend_result.tokenTypes == ["function", "variable"]
@@ -3600,6 +3678,10 @@ def test_vscode_api() -> None:
                and "vscode.executeFoldingRangeProvider"
                in api["commands"]["getCommands"]()
                and "vscode.executeSelectionRangeProvider"
+               in api["commands"]["getCommands"]()
+               and "vscode.executeDocumentColorProvider"
+               in api["commands"]["getCommands"]()
+               and "vscode.executeColorPresentationProvider"
                in api["commands"]["getCommands"]()
                and "vscode.provideDocumentSemanticTokens"
                in api["commands"]["getCommands"]()
@@ -4897,6 +4979,19 @@ function activate(context) {
       return [new vscode.SelectionRange(new vscode.Range(0, 0, 0, 4), parent)];
     },
   });
+  vscode.languages.registerColorProvider('python', {
+    provideDocumentColors(document, token) {
+      return [new vscode.ColorInformation(
+        new vscode.Range(0, 0, 0, 4),
+        new vscode.Color(1, 0.5, 0, 1),
+      )];
+    },
+    provideColorPresentations(color, context, token) {
+      const presentation = new vscode.ColorPresentation('node-color');
+      presentation.textEdit = vscode.TextEdit.replace(context.range, 'node-color');
+      return [presentation];
+    },
+  });
   const semanticLegend = new vscode.SemanticTokensLegend(
     ['function', 'variable'],
     ['readonly'],
@@ -5051,6 +5146,15 @@ module.exports = { activate, deactivate };
                     "vscode.executeSelectionRangeProvider",
                     node_uri,
                     [Position(0, 1)])
+                node_document_colors = api._ext_host.commands.execute(
+                    "vscode.executeDocumentColorProvider", node_uri)
+                node_color_presentations = api._ext_host.commands.execute(
+                    "vscode.executeColorPresentationProvider",
+                    {"red": 1, "green": 0.5, "blue": 0, "alpha": 1},
+                    {
+                        "uri": node_uri,
+                        "range": Range(Position(0, 0), Position(0, 4)),
+                    })
                 node_semantic_legend = api._ext_host.commands.execute(
                     "vscode.provideDocumentSemanticTokensLegend", node_uri)
                 node_semantic_tokens = api._ext_host.commands.execute(
@@ -5136,6 +5240,17 @@ module.exports = { activate, deactivate };
                        .get("end", {}).get("character") == 4
                        and node_selection_ranges[0].get("parent", {})
                        .get("range", {}).get("end", {}).get("character") == 12)
+                _check("node host language provider invokes JS document colors",
+                       node_document_colors
+                       and node_document_colors[0].get("color", {})
+                       .get("green") == 0.5
+                       and node_document_colors[0].get("range", {})
+                       .get("end", {}).get("character") == 4)
+                _check("node host language provider invokes JS color presentations",
+                       node_color_presentations
+                       and node_color_presentations[0].get("label") == "node-color"
+                       and node_color_presentations[0].get("textEdit", {})
+                       .get("newText") == "node-color")
                 _check("node host language provider invokes JS semantic tokens",
                        node_semantic_legend
                        and node_semantic_legend.get("tokenTypes", [None])[0]

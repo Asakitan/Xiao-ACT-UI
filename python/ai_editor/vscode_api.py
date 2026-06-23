@@ -788,6 +788,36 @@ class DocumentLink:
         self.tooltip = None
 
 
+class Color:
+    def __init__(
+            self, red: Any, green: Any, blue: Any,
+            alpha: Any = 1) -> None:
+        self.red = self._component(red, 0.0)
+        self.green = self._component(green, 0.0)
+        self.blue = self._component(blue, 0.0)
+        self.alpha = self._component(alpha, 1.0)
+
+    @staticmethod
+    def _component(value: Any, default: float) -> float:
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except Exception:
+            return default
+
+
+class ColorInformation:
+    def __init__(self, range: Any, color: Any) -> None:
+        self.range = range
+        self.color = _coerce_color(color)
+
+
+class ColorPresentation:
+    def __init__(self, label: Any) -> None:
+        self.label = "" if label is None else str(label)
+        self.textEdit = None
+        self.additionalTextEdits = None
+
+
 class InlayHintLabelPart:
     def __init__(self, value: Any) -> None:
         self.value = "" if value is None else str(value)
@@ -1322,6 +1352,10 @@ class VscodeNamespace:
             "vscode.executeFoldingRangeProvider": self._execute_folding_range_provider,
             "_executeSelectionRangeProvider": self._execute_selection_range_provider,
             "vscode.executeSelectionRangeProvider": self._execute_selection_range_provider,
+            "_executeDocumentColorProvider": self._execute_document_color_provider,
+            "vscode.executeDocumentColorProvider": self._execute_document_color_provider,
+            "_executeColorPresentationProvider": self._execute_color_presentation_provider,
+            "vscode.executeColorPresentationProvider": self._execute_color_presentation_provider,
             "_provideDocumentSemanticTokensLegend": self._execute_document_semantic_tokens_legend,
             "vscode.provideDocumentSemanticTokensLegend": self._execute_document_semantic_tokens_legend,
             "_provideDocumentSemanticTokens": self._execute_document_semantic_tokens_provider,
@@ -1378,6 +1412,16 @@ class VscodeNamespace:
         return {
             "start": cls._position_payload(rng.start),
             "end": cls._position_payload(rng.end),
+        }
+
+    @staticmethod
+    def _color_payload(color: Any) -> Dict[str, float]:
+        value = _coerce_color(color)
+        return {
+            "red": float(getattr(value, "red", 0.0)),
+            "green": float(getattr(value, "green", 0.0)),
+            "blue": float(getattr(value, "blue", 0.0)),
+            "alpha": float(getattr(value, "alpha", 1.0)),
         }
 
     @classmethod
@@ -1842,6 +1886,51 @@ class VscodeNamespace:
                        for pos in selection_positions])
         return self._provider_values(external)
 
+    def _execute_document_color_provider(self, uri: Any) -> List[Any]:
+        document = self._resolve_language_document(uri)
+        results = self._collect_language_provider_results(
+            "documentColor", document, "provideDocumentColors",
+            (document, CancellationToken.NONE))
+        results.extend(self._provider_values(
+            self._request_external_language_provider(
+                "documentColor", document)))
+        return results
+
+    def _execute_color_presentation_provider(
+            self, uri_or_color_or_context: Any, color_or_context: Any = None,
+            range: Any = None) -> List[Any]:
+        if isinstance(color_or_context, dict) and (
+                "uri" in color_or_context or "document" in color_or_context):
+            context_value = color_or_context
+            uri = context_value.get("uri") or context_value.get("document")
+            color = uri_or_color_or_context
+            range = context_value.get("range")
+        elif color_or_context is None and isinstance(
+                uri_or_color_or_context, dict) and (
+                    "uri" in uri_or_color_or_context
+                    or "document" in uri_or_color_or_context):
+            context_value = uri_or_color_or_context
+            uri = context_value.get("uri") or context_value.get("document")
+            color = context_value.get("color")
+            range = context_value.get("range")
+        else:
+            uri = uri_or_color_or_context
+            color = color_or_context
+        document = self._resolve_language_document(uri)
+        color_value = _coerce_color(color)
+        color_range = _coerce_range(range)
+        context = {"document": document, "range": color_range}
+        results = self._collect_language_provider_results(
+            "documentColor", document, "provideColorPresentations",
+            (color_value, context, CancellationToken.NONE))
+        results.extend(self._provider_values(
+            self._request_external_language_provider(
+                "colorPresentation",
+                document,
+                color=self._color_payload(color_value),
+                range=self._range_payload(color_range))))
+        return results
+
     def _execute_document_semantic_tokens_legend(self, uri: Any) -> Any:
         document = self._resolve_language_document(uri)
         for entry in self._matching_language_providers(
@@ -2079,6 +2168,9 @@ class VscodeNamespace:
             "SignatureHelp": SignatureHelp,
             "CodeAction": CodeAction,
             "DocumentLink": DocumentLink,
+            "Color": Color,
+            "ColorInformation": ColorInformation,
+            "ColorPresentation": ColorPresentation,
             "InlayHint": InlayHint,
             "InlayHintLabelPart": InlayHintLabelPart,
             "InlineCompletionItem": InlineCompletionItem,
@@ -2944,6 +3036,7 @@ class VscodeNamespace:
             "registerInlineCompletionItemProvider": lambda selector, provider: self._register_language_provider("inlineCompletion", selector, provider),
             "registerFoldingRangeProvider": lambda selector, provider: self._register_language_provider("foldingRange", selector, provider),
             "registerSelectionRangeProvider": lambda selector, provider: self._register_language_provider("selectionRange", selector, provider),
+            "registerColorProvider": lambda selector, provider: self._register_language_provider("documentColor", selector, provider),
             "registerDocumentSemanticTokensProvider": lambda selector, provider, legend: self._register_language_provider("semanticTokens", selector, provider, legend),
             "registerDocumentRangeSemanticTokensProvider": lambda selector, provider, legend: self._register_language_provider("semanticTokensRange", selector, provider, legend),
             "setTextDocumentLanguage": lambda doc, language_id: _set_document_language(doc, language_id),
@@ -4999,6 +5092,22 @@ def _coerce_range(value: Any) -> Range:
     if isinstance(value, dict):
         return Range(_coerce_position(value.get("start")), _coerce_position(value.get("end")))
     return Range()
+
+
+def _coerce_color(value: Any) -> Color:
+    if isinstance(value, Color):
+        return value
+    if isinstance(value, dict):
+        return Color(
+            value.get("red", 0.0),
+            value.get("green", 0.0),
+            value.get("blue", 0.0),
+            value.get("alpha", 1.0))
+    return Color(
+        getattr(value, "red", 0.0),
+        getattr(value, "green", 0.0),
+        getattr(value, "blue", 0.0),
+        getattr(value, "alpha", 1.0))
 
 
 def _position_to_offset(text: str, position: Position) -> int:

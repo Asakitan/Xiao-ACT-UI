@@ -143,6 +143,30 @@ class Location {
     }
 }
 
+class Color {
+    constructor(red, green, blue, alpha) {
+        this.red = _clampColorComponent(red, 0);
+        this.green = _clampColorComponent(green, 0);
+        this.blue = _clampColorComponent(blue, 0);
+        this.alpha = _clampColorComponent(alpha, 1);
+    }
+}
+
+class ColorInformation {
+    constructor(range, color) {
+        this.range = range;
+        this.color = color instanceof Color ? color : _colorFromPayload(color);
+    }
+}
+
+class ColorPresentation {
+    constructor(label) {
+        this.label = label === undefined || label === null ? '' : String(label);
+        this.textEdit = undefined;
+        this.additionalTextEdits = undefined;
+    }
+}
+
 class FoldingRange {
     constructor(start, end, kind) {
         this.start = Math.max(0, Number(start || 0));
@@ -668,6 +692,17 @@ function _positionFromPayload(value) {
 function _rangeFromPayload(value) {
     if (value instanceof Range) return value;
     return new Range(_positionFromPayload(value?.start), _positionFromPayload(value?.end));
+}
+
+function _clampColorComponent(value, fallback) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return fallback;
+    return Math.max(0, Math.min(1, number));
+}
+
+function _colorFromPayload(value) {
+    if (value instanceof Color) return value;
+    return new Color(value?.red, value?.green, value?.blue, value?.alpha);
 }
 
 function _uriFromPayload(value) {
@@ -1312,6 +1347,9 @@ function buildVscodeModule(extDesc, extensionPath) {
                 registerSelectionRangeProvider(selector, provider) {
                     return _registerLangProvider('selectionRange', selector, provider);
                 },
+                registerColorProvider(selector, provider) {
+                    return _registerLangProvider('documentColor', selector, provider);
+                },
                 registerDocumentSemanticTokensProvider(selector, provider, legend) {
                     return _registerLangProvider('semanticTokens', selector, provider, {
                         metadata: legend || new SemanticTokensLegend([], []),
@@ -1483,6 +1521,9 @@ function buildVscodeModule(extDesc, extensionPath) {
         CodeActionKind: { QuickFix: 'quickfix', Refactor: 'refactor', Source: 'source', Empty: '' },
         Hover: class { constructor(contents, range) { this.contents = Array.isArray(contents) ? contents : [contents]; this.range = range; } },
         DocumentLink: class { constructor(range, target) { this.range = range; this.target = target; } },
+        Color,
+        ColorInformation,
+        ColorPresentation,
         InlayHintLabelPart: class { constructor(value) { this.value = value === undefined || value === null ? '' : String(value); } },
         InlayHint: class { constructor(position, label, kind) { this.position = position; this.label = label; this.kind = kind; } },
         InlayHintKind: { Type: 1, Parameter: 2 },
@@ -1813,6 +1854,8 @@ function _languageProviderMethod(kind) {
         codeLens: 'provideCodeLenses',
         foldingRange: 'provideFoldingRanges',
         selectionRange: 'provideSelectionRanges',
+        documentColor: 'provideDocumentColors',
+        colorPresentation: 'provideColorPresentations',
         semanticTokens: 'provideDocumentSemanticTokens',
         semanticTokensLegend: 'provideDocumentSemanticTokens',
         semanticTokensRange: 'provideDocumentRangeSemanticTokens',
@@ -1861,6 +1904,7 @@ async function handleLanguageProviderRequest(msg) {
             ? msg.positions.map(_positionFromPayload)
             : [position];
         const range = _rangeFromPayload(msg.range);
+        const color = _colorFromPayload(msg.color);
         const token = { isCancellationRequested: false, onCancellationRequested: new EventEmitter().event };
         const trigger = msg.triggerCharacter === undefined || msg.triggerCharacter === null
             ? ''
@@ -1878,7 +1922,9 @@ async function handleLanguageProviderRequest(msg) {
             ? 'semanticTokens'
             : kind === 'semanticTokensRangeLegend'
                 ? 'semanticTokensRange'
-                : (kind === 'prepareRename' || kind === 'rename') ? 'rename' : kind;
+                : kind === 'colorPresentation'
+                    ? 'documentColor'
+                    : (kind === 'prepareRename' || kind === 'rename') ? 'rename' : kind;
         const providers = _languageProviders
             .filter(entry => entry.kind === providerKind)
             .map(entry => ({ entry, score: _matchDocumentSelector(entry.selector, document) }))
@@ -2133,6 +2179,10 @@ async function handleLanguageProviderRequest(msg) {
                     value = await fn.call(provider, document, msg.context || {}, token);
                 } else if (kind === 'selectionRange') {
                     value = await fn.call(provider, document, positions, token);
+                } else if (kind === 'documentColor') {
+                    value = await fn.call(provider, document, token);
+                } else if (kind === 'colorPresentation') {
+                    value = await fn.call(provider, color, { document, range }, token);
                 } else if (kind === 'documentSymbol') {
                     value = await fn.call(provider, document, token);
                 } else {
