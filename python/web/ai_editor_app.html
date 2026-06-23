@@ -242,6 +242,16 @@ body.window-resizing * { cursor:inherit !important; }
   transition:transform .12s ease,border-color .12s ease,box-shadow .12s ease; }
 .editor-color-swatch:hover { transform:scale(1.25); border-color:var(--fg-bright);
   box-shadow:0 0 0 1px var(--bg-editor),0 2px 6px rgba(0,0,0,.36); }
+.editor-color-presentation-menu { position:fixed; min-width:180px; max-width:min(360px,calc(100vw - 24px));
+  max-height:260px; overflow:auto; z-index:315; background:var(--bg2); border:1px solid var(--border);
+  border-radius:6px; box-shadow:0 8px 26px #00000066; padding:4px 0; }
+.editor-color-presentation-item { width:100%; border:0; background:transparent; color:var(--fg);
+  display:flex; align-items:center; gap:8px; padding:6px 10px; text-align:left; cursor:pointer;
+  font:12px var(--mono); box-sizing:border-box; }
+.editor-color-presentation-item:hover,.editor-color-presentation-item:focus { background:var(--bg-hover); outline:none; }
+.editor-color-presentation-chip { flex:0 0 auto; width:12px; height:12px; border-radius:3px;
+  border:1px solid var(--border); box-shadow:0 1px 3px #0005; }
+.editor-color-presentation-label { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .editor-textarea { flex:1; background:var(--bg-editor); color:var(--fg-code); font:13px/1.5 var(--mono);
   padding:8px 12px; border:none; outline:none; resize:none; tab-size:4; white-space:pre;
   overflow:auto; caret-color:var(--fg-accent); position:relative; z-index:2; }
@@ -3533,6 +3543,7 @@ let _editorSemanticTokens=null,_editorSemanticTokensRequest=0,_editorSemanticTok
 let currentSemanticTokenRules=[];
 let _editorFoldingRanges=[],_editorFoldingRangeRequest=0,_editorFoldingRangeTimer=null,_editorFoldingRangeContentLength=-1;
 let _editorDocumentColors=[],_editorDocumentColorRequest=0,_editorDocumentColorTimer=null,_editorDocumentColorContentLength=-1;
+let _editorColorPresentationMenu=null;
 let _editorSelectionRanges=[],_editorSelectionRangeIndex=-1,_editorSelectionRangeKey='';
 function activeEditorTab(){
   return (typeof tabs!=='undefined'&&Array.isArray(tabs)?tabs.find(t=>t.id===activeTab):null)||{};
@@ -3951,6 +3962,7 @@ function clearEditorDocumentColors(){
   clearTimeout(_editorDocumentColorTimer);
   _editorDocumentColors=[];_editorDocumentColorContentLength=-1;
   const layer=$('editor-color-layer');if(layer)layer.innerHTML='';
+  closeEditorColorPresentationMenu();
 }
 function renderEditorDocumentColors(colors){
   const layer=$('editor-color-layer'),ta=$('editor-text'),wrap=$('editor-container');
@@ -3999,6 +4011,62 @@ function scheduleEditorDocumentColors(delay){
   clearTimeout(_editorDocumentColorTimer);
   _editorDocumentColorTimer=setTimeout(()=>requestEditorDocumentColors(true),delay==null?740:delay);
 }
+function closeEditorColorPresentationMenu(){
+  if(_editorColorPresentationMenu&&_editorColorPresentationMenu.parentNode){
+    _editorColorPresentationMenu.parentNode.removeChild(_editorColorPresentationMenu);
+  }
+  _editorColorPresentationMenu=null;
+}
+function editorColorPresentationLabel(presentation,info){
+  return String((presentation&&presentation.label)||editorColorHex(info&&info.color)||'Color');
+}
+function editorColorPresentationEdits(presentation,info){
+  if(!presentation||!info||!info.range)return [];
+  const edits=[],label=editorColorPresentationLabel(presentation,info);
+  if(presentation.textEdit)edits.push(presentation.textEdit);
+  else if(label)edits.push({range:info.range,newText:label});
+  if(Array.isArray(presentation.additionalTextEdits))edits.push(...presentation.additionalTextEdits);
+  return edits;
+}
+function applyEditorColorPresentation(presentation,info){
+  const edits=editorColorPresentationEdits(presentation,info);
+  if(!edits.length)return false;
+  _undoPush(true);
+  if(editorApplyTextEdits(edits)){
+    closeEditorColorPresentationMenu();
+    setStatus('Applied color presentation: '+editorColorPresentationLabel(presentation,info));
+    clearEditorDocumentColors();scheduleEditorDocumentColors(260);
+    ed.focus();
+    return true;
+  }
+  return false;
+}
+function showEditorColorPresentationMenu(info,presentations,event){
+  closeEditorColorPresentationMenu();
+  if(!Array.isArray(presentations)||!presentations.length)return false;
+  const menu=document.createElement('div');
+  menu.className='editor-color-presentation-menu';
+  presentations.slice(0,24).forEach(presentation=>{
+    const item=document.createElement('button');item.type='button';item.className='editor-color-presentation-item';
+    const chip=document.createElement('span');chip.className='editor-color-presentation-chip';chip.style.background=editorColorToCss(info.color);
+    const label=document.createElement('span');label.className='editor-color-presentation-label';label.textContent=editorColorPresentationLabel(presentation,info);
+    item.appendChild(chip);item.appendChild(label);
+    item.onmousedown=e=>e.preventDefault();
+    item.onclick=e=>{e.preventDefault();e.stopPropagation();applyEditorColorPresentation(presentation,info)};
+    menu.appendChild(item);
+  });
+  document.body.appendChild(menu);
+  const wrap=$('editor-container'),rect=wrap?wrap.getBoundingClientRect():{left:0,top:0};
+  const point=info&&info.range&&info.range.start?editorOverlayPoint(info.range.start):{left:24,top:24};
+  const x=event&&event.clientX!=null?event.clientX:rect.left+point.left;
+  const y=event&&event.clientY!=null?event.clientY:rect.top+point.top;
+  menu.style.left=Math.max(8,Math.min(window.innerWidth-menu.offsetWidth-8,x))+'px';
+  menu.style.top=Math.max(8,Math.min(window.innerHeight-menu.offsetHeight-8,y))+'px';
+  _editorColorPresentationMenu=menu;
+  const first=menu.querySelector('.editor-color-presentation-item');
+  if(first)first.focus({preventScroll:true});
+  return true;
+}
 async function requestEditorColorPresentations(info,quiet,event){
   if(!info||!info.range||!info.color)return false;
   const res=await call('editor_language_provider',editorProviderPayload('colorPresentation',{color:info.color,range:info.range}));
@@ -4006,14 +4074,11 @@ async function requestEditorColorPresentations(info,quiet,event){
   const presentations=res&&res.ok&&Array.isArray(res.presentations)?res.presentations:[];
   const first=presentations[0]||null,label=first?String(first.label||''):'';
   if(first&&event&&event.altKey){
-    const edits=[];
-    if(first.textEdit)edits.push(first.textEdit);
-    else if(label)edits.push({range:info.range,newText:label});
-    if(Array.isArray(first.additionalTextEdits))edits.push(...first.additionalTextEdits);
-    if(edits.length){
-      _undoPush(true);
-      if(editorApplyTextEdits(edits)){setStatus('Applied color presentation: '+(label||editorColorHex(info.color)));return true}
-    }
+    return applyEditorColorPresentation(first,info);
+  }
+  if(presentations.length&&showEditorColorPresentationMenu(info,presentations,event)){
+    if(!quiet)setStatus(presentations.length+' color presentation'+(presentations.length===1?'':'s'));
+    return true;
   }
   if(!quiet)setStatus(label?('Color presentation: '+label):('Color: '+editorColorHex(info.color)));
   return !!presentations.length;
@@ -4926,7 +4991,7 @@ ed.addEventListener('input',_editorInputWithUndo);
 ed.addEventListener('click',e=>{updateCursorPos();renderEditorInlineCompletion();if(e.ctrlKey||e.metaKey){requestEditorDocumentLinks(true,true);return}scheduleEditorHover()});
 ed.addEventListener('dblclick',()=>editorSelectWordAtCursor());
 ed.addEventListener('keyup',()=>{updateCursorPos();renderEditorInlineCompletion();scheduleEditorHover()});
-ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();renderEditorInlayHints(_editorInlayHints);updateCursorPos();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();closeEditorLinks()});
+ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();renderEditorInlayHints(_editorInlayHints);updateCursorPos();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();closeEditorLinks();closeEditorColorPresentationMenu()});
 ed.addEventListener('keydown',function(e){
   if(handleEditorLinksKey(e))return;
   if(handleEditorReferencesKey(e))return;
@@ -5056,6 +5121,7 @@ ed.addEventListener('contextmenu',function(e){
 document.addEventListener('click',e=>{
   $('ctx-menu').style.display='none';
   if(e.target.closest&&!e.target.closest('#workspace-symbol-palette')&&!e.target.closest('#cmd-palette')&&!e.target.closest('#ctx-menu'))closeWorkspaceSymbolPicker();
+  if(e.target.closest&&!e.target.closest('.editor-color-presentation-menu')&&!e.target.closest('.editor-color-swatch'))closeEditorColorPresentationMenu();
   if(!e.target.closest||!e.target.closest('#editor-container')){closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();closeEditorLinks()}
 });
 
@@ -9267,6 +9333,7 @@ document.addEventListener('keydown',e=>{
   if(e.key==='P'&&e.ctrlKey&&e.shiftKey){e.preventDefault();openCommandPalette()}
   if(e.key==='t'&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();openWorkspaceSymbolPicker();return}
   if(e.key==='Escape'&&$('cmd-palette').classList.contains('open')){e.preventDefault();closeCommandPalette()}
+  if(e.key==='Escape'&&_editorColorPresentationMenu){e.preventDefault();closeEditorColorPresentationMenu();return}
   if(e.key==='Escape'&&isWorkspaceSymbolPickerOpen()){e.preventDefault();closeWorkspaceSymbolPicker();return}
   if(e.key==='Escape'&&$('fold-region-picker').classList.contains('open')){e.preventDefault();closeFoldRegionPicker();return}
   // Ctrl+W → close active tab (TAB-004)

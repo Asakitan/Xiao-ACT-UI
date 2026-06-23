@@ -1802,11 +1802,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function requestEditorDocumentColors(quiet)" in html
            and "function renderEditorDocumentColors(colors)" in html
            and "async function requestEditorColorPresentations(info,quiet,event)" in html
+           and "function showEditorColorPresentationMenu(info,presentations,event)" in html
+           and "function applyEditorColorPresentation(presentation,info)" in html
+           and "function closeEditorColorPresentationMenu()" in html
            and "function scheduleEditorDocumentColors(delay)" in html
            and "editorProviderPayload('documentColor'" in html
            and "editorProviderPayload('colorPresentation'" in html
            and "Refresh Document Colors" in html
            and "editor-color-swatch" in html
+           and "editor-color-presentation-menu" in html
            and "function requestEditorSemanticTokens(quiet)" in html
            and "function decodeEditorSemanticTokens(data,legend)" in html
            and "function editorSemanticTokenThemeStyle(token)" in html
