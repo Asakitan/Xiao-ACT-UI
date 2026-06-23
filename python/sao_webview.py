@@ -798,6 +798,7 @@ class SAOWebViewGUI:
         _set_process_app_id('sao.auto.overlay')
 
         self.settings = SettingsManager()
+        self._cfg_settings_ref = self.settings
         self.settings.set('ui_mode', 'webview')
         self.settings.save()
 
@@ -891,7 +892,7 @@ class SAOWebViewGUI:
         self._hp_position_guard_started = False
 
         # 识别相关引用
-        self._cfg_settings_ref = None
+        self._cfg_settings_ref = getattr(self, '_cfg_settings_ref', None) or self.settings
         self._cache_loop_stop = threading.Event()
         self._last_identity_alert_serial = 0
         self._identity_alert_visible = False

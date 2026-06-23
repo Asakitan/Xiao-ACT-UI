@@ -109,6 +109,22 @@ def _assert_window_ownership_contract() -> None:
             raise AssertionError(f"platform WebView runtime still contains plugin-owned window token: {token}")
 
 
+def _assert_single_settings_owner_contract() -> None:
+    source = SAO_WEBVIEW.read_text(encoding="utf-8")
+    runtime_source = (Path(__file__).resolve().parents[3] / "act_platform" / "runtime.py").read_text(encoding="utf-8")
+    webview_required = [
+        "self.settings = SettingsManager()",
+        "self._cfg_settings_ref = self.settings",
+        "self._cfg_settings_ref = getattr(self, '_cfg_settings_ref', None) or self.settings",
+    ]
+    for snippet in webview_required:
+        if snippet not in source:
+            raise AssertionError(f"missing single SettingsManager owner snippet: {snippet}")
+    runtime_required = 'return getattr(owner, "_cfg_settings_ref", None) or getattr(owner, "settings", None)'
+    if runtime_required not in runtime_source:
+        raise AssertionError(f"missing runtime SettingsManager owner snippet: {runtime_required}")
+
+
 class _Owner:
     def __init__(self, settings: SettingsManager) -> None:
         self._cfg_settings_ref = settings
@@ -165,6 +181,7 @@ def main() -> int:
         raise AssertionError(f"DPS fade timeout should recover bad values: {timeout}")
 
     _assert_window_ownership_contract()
+    _assert_single_settings_owner_contract()
 
     try:
         Path(settings._path).unlink(missing_ok=True)
