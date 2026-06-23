@@ -366,6 +366,7 @@ def test_app_settings_parity() -> None:
             self.seen_texts = []
             self.seen_dirty = []
             self.seen_reference_context = None
+            self.seen_rename_name = None
 
         def provideCompletionItems(self, document, position, token, context):
             self.seen_texts.append(document.getText())
@@ -414,6 +415,19 @@ def test_app_settings_parity() -> None:
                 )
             ]
 
+        def prepareRename(self, document, position, token):
+            return {
+                "range": Range(Position(0, 0), Position(0, 6)),
+                "placeholder": "buffer",
+            }
+
+        def provideRenameEdits(self, document, position, newName, token):
+            self.seen_rename_name = newName
+            edit = WorkspaceEdit()
+            edit.replace(document.uri, Range(Position(0, 0), Position(0, 6)),
+                         newName)
+            return edit
+
     editor_provider = _EditorProvider()
     lang_api = provider_api._vscode_ns.build()["languages"]
     lang_api["registerCompletionItemProvider"]("python", editor_provider)
@@ -423,6 +437,7 @@ def test_app_settings_parity() -> None:
     lang_api["registerCodeActionsProvider"]("python", editor_provider)
     lang_api["registerDefinitionProvider"]("python", editor_provider)
     lang_api["registerReferenceProvider"]("python", editor_provider)
+    lang_api["registerRenameProvider"]("python", editor_provider)
     tmp_provider_dir = tempfile.mkdtemp()
     try:
         provider_path = os.path.join(tmp_provider_dir, "buffer.py")
@@ -450,6 +465,10 @@ def test_app_settings_parity() -> None:
             dict(provider_payload, kind="definition"))
         references_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="references", includeDeclaration=False))
+        prepare_rename_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="prepareRename"))
+        rename_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="rename", newName="renamed"))
         format_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="formatting"))
         with open(provider_path, "r", encoding="utf-8") as fh:
@@ -493,6 +512,17 @@ def test_app_settings_parity() -> None:
                and reference.get("uri", "").startswith("file://")
                and reference.get("range", {}).get("start", {})
                .get("character") == 1)
+        _check("editor_language_provider serializes rename prepare",
+               prepare_rename_result.get("ok") is True
+               and prepare_rename_result.get("prepareRename", {})
+               .get("placeholder") == "buffer"
+               and prepare_rename_result.get("prepareRename", {})
+               .get("range", {}).get("end", {}).get("character") == 6)
+        _check("editor_language_provider serializes rename edits",
+               rename_result.get("ok") is True
+               and editor_provider.seen_rename_name == "renamed"
+               and rename_result.get("edit", {}).get("_edits", [{}])[0]
+               .get("newText") == "renamed")
         _check("editor_language_provider exposes formatting edits without saving",
                format_result.get("edits", [{}])[0].get("newText") == "formatted"
                and disk_text == "disk")
@@ -1488,14 +1518,19 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function requestEditorReferences(quiet)" in html
            and "function showEditorReferences(references,position)" in html
            and "function handleEditorReferencesKey(e)" in html
+           and "function requestEditorRename(quiet)" in html
+           and "function promptEditorRenameName(seed)" in html
+           and "function confirmEditorRenameApply(newName,summary)" in html
            and "function editorApplyTextEdits(edits)" in html
            and "Ctrl+Space" in html
            and "Ctrl+Shift+Space" in html
            and "Ctrl+." in html
            and "F12" in html
            and "Shift+F12" in html
+           and "F2" in html
            and "Go to Definition" in html
            and "Find All References" in html
+           and "Rename Symbol" in html
            and "Quick Fix..." in html
            and "Formatted via extension" in html)
     try:
@@ -3077,6 +3112,24 @@ def test_vscode_api() -> None:
                 return [Location(
                     document.uri, Range(Position(0, 1), Position(0, 4)))]
 
+        class _RenameProvider:
+            def __init__(self):
+                self.names = []
+
+            def prepareRename(self, document, position, token):
+                return {
+                    "range": Range(Position(0, 0), Position(0, 4)),
+                    "placeholder": "prin",
+                }
+
+            def provideRenameEdits(self, document, position, newName, token):
+                self.names.append(newName)
+                edit = WorkspaceEdit()
+                edit.replace(
+                    document.uri, Range(Position(0, 0), Position(0, 4)),
+                    newName)
+                return edit
+
         class _DocumentSymbolProvider:
             def provideDocumentSymbols(self, document, token):
                 return [{"name": "selftest_symbol",
@@ -3103,6 +3156,9 @@ def test_vscode_api() -> None:
         reference_provider = _ReferenceProvider()
         api["languages"]["registerReferenceProvider"](
             "python", reference_provider)
+        rename_provider = _RenameProvider()
+        api["languages"]["registerRenameProvider"](
+            "python", rename_provider)
         api["languages"]["registerDocumentSymbolProvider"](
             "python", _DocumentSymbolProvider())
         api["languages"]["registerCodeActionsProvider"](
@@ -3120,6 +3176,11 @@ def test_vscode_api() -> None:
         references = api["commands"]["executeCommand"](
             "vscode.executeReferenceProvider", doc.uri, Position(0, 0),
             {"includeDeclaration": False})
+        prepare_rename = api["commands"]["executeCommand"](
+            "_executePrepareRename", doc.uri, Position(0, 0))
+        rename_edit = api["commands"]["executeCommand"](
+            "_executeDocumentRenameProvider", doc.uri, Position(0, 0),
+            "renamed")
         symbols = api["commands"]["executeCommand"](
             "vscode.executeDocumentSymbolProvider", doc.uri)
         actions = api["commands"]["executeCommand"](
@@ -3141,6 +3202,12 @@ def test_vscode_api() -> None:
         _check("executeReferenceProvider invokes matching providers",
                references and references[0].uri == doc.uri
                and reference_provider.contexts[-1]["includeDeclaration"] is False)
+        _check("executePrepareRename invokes matching providers",
+               prepare_rename.get("placeholder") == "prin")
+        _check("executeDocumentRenameProvider invokes matching providers",
+               isinstance(rename_edit, WorkspaceEdit)
+               and rename_provider.names[-1] == "renamed"
+               and rename_edit.entries()[0]["newText"] == "renamed")
         _check("executeDocumentSymbolProvider invokes matching providers",
                symbols and symbols[0]["name"] == "selftest_symbol")
         _check("executeCodeActionProvider passes diagnostics context",
@@ -3152,6 +3219,10 @@ def test_vscode_api() -> None:
                "vscode.executeCompletionItemProvider"
                in api["commands"]["getCommands"]()
                and "vscode.executeReferenceProvider"
+               in api["commands"]["getCommands"]()
+               and "_executeDocumentRenameProvider"
+               in api["commands"]["getCommands"]()
+               and "_executePrepareRename"
                in api["commands"]["getCommands"]()
                and "vscode.executeSignatureHelpProvider"
                in api["commands"]["getCommands"]())
@@ -4383,6 +4454,16 @@ function activate(context) {
       return [new vscode.Location(document.uri, new vscode.Range(0, 1, 0, 4))];
     },
   });
+  vscode.languages.registerRenameProvider('python', {
+    prepareRename(document, position, token) {
+      return { range: new vscode.Range(0, 0, 0, 4), placeholder: 'node' };
+    },
+    provideRenameEdits(document, position, newName, token) {
+      const edit = new vscode.WorkspaceEdit();
+      edit.replace(document.uri, new vscode.Range(0, 0, 0, 4), newName);
+      return edit;
+    },
+  });
   vscode.languages.registerDocumentSymbolProvider('python', {
     provideDocumentSymbols(document, token) {
       return [{ name: 'nodeSymbol', kind: vscode.SymbolKind.Function, range: new vscode.Range(0, 0, 0, 4) }];
@@ -4496,6 +4577,11 @@ module.exports = { activate, deactivate };
                     "vscode.executeDefinitionProvider", node_uri, Position(0, 1))
                 node_references = api._ext_host.commands.execute(
                     "vscode.executeReferenceProvider", node_uri, Position(0, 1))
+                node_prepare_rename = api._ext_host.commands.execute(
+                    "_executePrepareRename", node_uri, Position(0, 1))
+                node_rename_edit = api._ext_host.commands.execute(
+                    "_executeDocumentRenameProvider",
+                    node_uri, Position(0, 1), "NODE_RENAME")
                 node_symbols = api._ext_host.commands.execute(
                     "vscode.executeDocumentSymbolProvider", node_uri)
                 node_actions = api._ext_host.commands.execute(
@@ -4539,6 +4625,13 @@ module.exports = { activate, deactivate };
                        and node_references[0].get("uri", "").endswith("node_provider.py")
                        and node_references[0].get("range", {}).get("start", {})
                        .get("character") == 1)
+                _check("node host language provider invokes JS prepare rename",
+                       node_prepare_rename
+                       and node_prepare_rename.get("placeholder") == "node")
+                _check("node host language provider invokes JS rename",
+                       node_rename_edit
+                       and node_rename_edit.get("_edits", [{}])[0]
+                       .get("text") == "NODE_RENAME")
                 _check("node host language provider invokes JS document symbols",
                        node_symbols
                        and node_symbols[0].get("name") == "nodeSymbol")

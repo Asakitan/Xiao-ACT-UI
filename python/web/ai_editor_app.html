@@ -3703,6 +3703,99 @@ function handleEditorReferencesKey(e){
   if(e.key==='Escape'){e.preventDefault();closeEditorReferences();return true}
   return false;
 }
+function editorRangeFromOffsets(start,end){
+  return {start:editorPositionFromOffset(ed.value,start),end:editorPositionFromOffset(ed.value,end)};
+}
+function editorRangeText(range){
+  if(!range||!range.start)return '';
+  const start=editorOffsetFromPosition(ed.value,range.start),end=editorOffsetFromPosition(ed.value,range.end||range.start);
+  return ed.value.slice(Math.min(start,end),Math.max(start,end));
+}
+function editorNormalizePrepareRename(value){
+  if(!value||typeof value!=='object')return null;
+  if(value.range)return {range:value.range,placeholder:String(value.placeholder||editorRangeText(value.range)||'')};
+  if(value.start&&value.end)return {range:value,placeholder:editorRangeText(value)};
+  return null;
+}
+function editorFallbackPrepareRename(offset){
+  const start=Math.min(ed.selectionStart,ed.selectionEnd),end=Math.max(ed.selectionStart,ed.selectionEnd);
+  if(end>start){
+    const range=editorRangeFromOffsets(start,end);
+    return {range,placeholder:editorRangeText(range)};
+  }
+  const word=editorWordRangeAt(ed.value,offset,offset);
+  if(!word)return null;
+  const range=editorRangeFromOffsets(word.start,word.end);
+  return {range,placeholder:word.text||editorRangeText(range)};
+}
+function promptEditorRenameName(seed){
+  return new Promise(resolve=>{
+    const modal=document.createElement('div');modal.className='modal-bg open';
+    const panel=document.createElement('div');panel.className='modal';panel.style.width='380px';
+    const title=document.createElement('h2');title.textContent='Rename Symbol';
+    const label=document.createElement('label');label.textContent='New name';
+    const input=document.createElement('input');input.type='text';input.value=seed||'';input.autocomplete='off';
+    const buttons=document.createElement('div');buttons.className='modal-btns';
+    const cancel=document.createElement('button');cancel.className='toolbar-btn';cancel.type='button';cancel.textContent='Cancel';
+    const apply=document.createElement('button');apply.className='toolbar-btn';apply.type='button';apply.textContent='Rename';
+    buttons.appendChild(cancel);buttons.appendChild(apply);
+    panel.appendChild(title);panel.appendChild(label);panel.appendChild(input);panel.appendChild(buttons);modal.appendChild(panel);document.body.appendChild(modal);
+    const finish=value=>{modal.remove();resolve(value)};
+    cancel.onclick=()=>finish(null);
+    apply.onclick=()=>finish(input.value.trim()||null);
+    modal.onclick=e=>{if(e.target===modal)finish(null)};
+    input.onkeydown=e=>{
+      if(e.key==='Escape'){e.preventDefault();finish(null)}
+      if(e.key==='Enter'){e.preventDefault();finish(input.value.trim()||null)}
+    };
+    setTimeout(()=>{input.focus();input.select()},0);
+  });
+}
+function confirmEditorRenameApply(newName,summary){
+  return new Promise(resolve=>{
+    const modal=document.createElement('div');modal.className='modal-bg open';
+    const panel=document.createElement('div');panel.className='modal';panel.style.width='420px';
+    const title=document.createElement('h2');title.textContent='Apply Rename';
+    const text=document.createElement('div');text.className='settings-help';
+    const count=summary&&Array.isArray(summary.edits)?summary.edits.length:0;
+    const skipped=summary&&Number(summary.skipped)||0;
+    text.textContent='Apply '+count+' edit'+(count===1?'':'s')+' for "'+newName+'".'+(skipped?' '+skipped+' external edit'+(skipped===1?'':'s')+' will be skipped.':'');
+    const buttons=document.createElement('div');buttons.className='modal-btns';
+    const cancel=document.createElement('button');cancel.className='toolbar-btn';cancel.type='button';cancel.textContent='Cancel';
+    const apply=document.createElement('button');apply.className='toolbar-btn';apply.type='button';apply.textContent='Apply';
+    buttons.appendChild(cancel);buttons.appendChild(apply);
+    panel.appendChild(title);panel.appendChild(text);panel.appendChild(buttons);modal.appendChild(panel);document.body.appendChild(modal);
+    const finish=value=>{modal.remove();resolve(value)};
+    cancel.onclick=()=>finish(false);apply.onclick=()=>finish(true);
+    modal.onclick=e=>{if(e.target===modal)finish(false)};
+    modal.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();finish(false)}if(e.key==='Enter'){e.preventDefault();finish(true)}};
+    setTimeout(()=>apply.focus(),0);
+  });
+}
+async function requestEditorRename(quiet){
+  closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();
+  const offset=ed.selectionStart,position=editorPositionFromOffset(ed.value,offset);
+  const basePayload={offset,position};
+  const prepRes=await call('editor_language_provider',editorProviderPayload('prepareRename',basePayload));
+  if(prepRes&&prepRes.error){if(!quiet)setStatus('Rename failed: '+prepRes.error);return}
+  const prepared=editorNormalizePrepareRename(prepRes&&prepRes.prepareRename)||editorFallbackPrepareRename(offset);
+  if(!prepared||!prepared.range){if(!quiet)setStatus('No rename target');return}
+  editorRevealRange(prepared.range);
+  const oldName=prepared.placeholder||editorRangeText(prepared.range);
+  const newName=await promptEditorRenameName(oldName);
+  if(!newName||newName===oldName){ed.focus();return}
+  const res=await call('editor_language_provider',editorProviderPayload('rename',Object.assign({},basePayload,{newName})));
+  if(!res||res.error){setStatus('Rename failed: '+((res&&res.error)||'No rename result'));ed.focus();return}
+  const summary=editorCodeActionEdits({edit:res.edit});
+  if(!summary.edits.length&&!summary.skipped){setStatus('Rename produced no local edits');ed.focus();return}
+  if(!await confirmEditorRenameApply(newName,summary)){ed.focus();return}
+  _undoPush(true);
+  const applied=editorApplyWorkspaceEdit(res.edit);
+  if(applied.changed)setStatus('Renamed symbol to '+newName+(applied.skipped?' ('+applied.skipped+' external edits skipped)':''));
+  else if(applied.skipped)setStatus('Rename edits outside the active editor were skipped');
+  else setStatus('Rename produced no local edits');
+  ed.focus();
+}
 function editorTextEditFromActionEntry(entry){
   if(!entry||typeof entry!=='object')return null;
   if(entry.kind==='createFile'||entry.kind==='deleteFile'||entry.kind==='renameFile')return null;
@@ -3803,6 +3896,7 @@ ed.addEventListener('keydown',function(e){
   if(handleEditorCodeActionKey(e))return;
   if(handleEditorSignatureKey(e))return;
   if(handleEditorSuggestKey(e))return;
+  if(e.key==='F2'&&!e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorRename(false);return}
   if(e.key==='F12'&&e.shiftKey&&!e.ctrlKey&&!e.altKey){e.preventDefault();requestEditorReferences(false);return}
   if(e.key==='F12'&&!e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorDefinition(false);return}
   if(e.key==='.'&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorCodeActions(false);return}
@@ -3897,6 +3991,7 @@ ed.addEventListener('contextmenu',function(e){
     {label:'Trigger Suggest',shortcut:'Ctrl+Space',action:()=>requestEditorCompletion('',false)},
     {label:'Signature Help',shortcut:'Ctrl+Shift+Space',action:()=>requestEditorSignatureHelp('',1,false)},
     {label:'Quick Fix...',shortcut:'Ctrl+.',action:()=>requestEditorCodeActions(false)},
+    {label:'Rename Symbol',shortcut:'F2',action:()=>requestEditorRename(false)},
     {label:'Go to Definition',shortcut:'F12',action:()=>requestEditorDefinition(false)},
     {label:'Find All References',shortcut:'Shift+F12',action:()=>requestEditorReferences(false)},
     {label:'Format Document',shortcut:'',action:()=>formatDocument()},
@@ -7995,6 +8090,7 @@ const COMMANDS=[
   {label:'Trigger Suggest',shortcut:'Ctrl+Space',action:()=>requestEditorCompletion('',false)},
   {label:'Signature Help',shortcut:'Ctrl+Shift+Space',action:()=>requestEditorSignatureHelp('',1,false)},
   {label:'Quick Fix...',shortcut:'Ctrl+.',action:()=>requestEditorCodeActions(false)},
+  {label:'Rename Symbol',shortcut:'F2',action:()=>requestEditorRename(false)},
   {label:'Go to Definition',shortcut:'F12',action:()=>requestEditorDefinition(false)},
   {label:'Find All References',shortcut:'Shift+F12',action:()=>requestEditorReferences(false)},
   {label:'Format Document',shortcut:'',action:()=>formatDocument()},

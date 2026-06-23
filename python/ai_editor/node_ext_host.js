@@ -1102,6 +1102,9 @@ function buildVscodeModule(extDesc, extensionPath) {
                 registerReferenceProvider(selector, provider) {
                     return _registerLangProvider('references', selector, provider);
                 },
+                registerRenameProvider(selector, provider) {
+                    return _registerLangProvider('rename', selector, provider);
+                },
                 registerDocumentSymbolProvider(selector, provider) {
                     return _registerLangProvider('documentSymbol', selector, provider);
                 },
@@ -1630,6 +1633,8 @@ function _languageProviderMethod(kind) {
         signatureHelp: 'provideSignatureHelp',
         definition: 'provideDefinition',
         references: 'provideReferences',
+        prepareRename: 'prepareRename',
+        rename: 'provideRenameEdits',
         documentSymbol: 'provideDocumentSymbols',
         codeActions: 'provideCodeActions',
         formatting: 'provideDocumentFormattingEdits',
@@ -1684,8 +1689,9 @@ async function handleLanguageProviderRequest(msg) {
         } else if (kind === 'completion' || kind === 'signatureHelp') {
             context.triggerKind = context.triggerKind || 1;
         }
+        const providerKind = (kind === 'prepareRename' || kind === 'rename') ? 'rename' : kind;
         const providers = _languageProviders
-            .filter(entry => entry.kind === kind)
+            .filter(entry => entry.kind === providerKind)
             .map(entry => ({ entry, score: _matchDocumentSelector(entry.selector, document) }))
             .filter(item => item.score > 0)
             .sort((a, b) => b.score - a.score)
@@ -1735,6 +1741,39 @@ async function handleLanguageProviderRequest(msg) {
                 if (typeof fn !== 'function') continue;
                 try {
                     const value = await fn.call(provider, document, position, token, context);
+                    if (value !== undefined && value !== null) {
+                        send({
+                            type: 'language_provider_response',
+                            requestId,
+                            ok: true,
+                            kind,
+                            value: _serializeLanguageValue(value),
+                        });
+                        return;
+                    }
+                } catch (err) {
+                    log(`language provider ${kind} error: ${err.message}`);
+                }
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: null,
+            });
+            return;
+        }
+
+        if (kind === 'prepareRename' || kind === 'rename') {
+            for (const entry of providers) {
+                const provider = entry.provider;
+                const fn = provider && provider[methodName];
+                if (typeof fn !== 'function') continue;
+                try {
+                    const value = kind === 'rename'
+                        ? await fn.call(provider, document, position, String(msg.newName || ''), token)
+                        : await fn.call(provider, document, position, token);
                     if (value !== undefined && value !== null) {
                         send({
                             type: 'language_provider_response',

@@ -488,6 +488,7 @@ _LANGUAGE_RESULT_ATTRS = (
     "children", "selectionRange", "diagnostics", "edit", "title",
     "isPreferred", "disabled", "newText", "position", "value",
     "signatures", "activeSignature", "activeParameter", "parameters",
+    "placeholder", "rejectReason",
 )
 
 
@@ -2602,6 +2603,9 @@ class AIEditorAPI:
             "definitions": "definition",
             "reference": "references",
             "references": "references",
+            "prepareRename": "prepareRename",
+            "prepare_rename": "prepareRename",
+            "rename": "rename",
             "documentSymbol": "documentSymbol",
             "documentSymbols": "documentSymbol",
             "symbols": "documentSymbol",
@@ -2713,6 +2717,33 @@ class AIEditorAPI:
                     "version": document.version,
                     "references": value if isinstance(value, list) else (
                         [] if value is None else [value]),
+                }
+            if kind == "prepareRename":
+                result = self._ext_host.commands.execute(
+                    "_executePrepareRename", document.uri, position)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "prepareRename": _json_ready_language_value(result),
+                }
+            if kind == "rename":
+                new_name = str(payload.get("newName") or "")
+                if not new_name:
+                    return {"error": "New name is required"}
+                result = self._ext_host.commands.execute(
+                    "_executeDocumentRenameProvider",
+                    document.uri,
+                    position,
+                    new_name,
+                )
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "edit": _json_ready_language_value(result),
                 }
             if kind == "documentSymbol":
                 result = self._ext_host.commands.execute(
