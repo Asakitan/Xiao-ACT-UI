@@ -5820,8 +5820,28 @@ def test_app_extension_runtime_support() -> None:
             node_extension_js = r"""
 const vscode = require('vscode');
 const output = vscode.window.createOutputChannel('node-tree-selftest');
+const workspaceEvents = { open: 0, change: 0, close: 0, save: 0 };
 
 function activate(context) {
+  vscode.workspace.onDidOpenTextDocument(function(document) {
+    workspaceEvents.open += 1;
+    workspaceEvents.openThis = this && this.name;
+    workspaceEvents.lastOpen = document.uri.toString();
+  }, { name: 'workspace-this' }, context.subscriptions);
+  vscode.workspace.onDidChangeTextDocument(event => {
+    workspaceEvents.change += 1;
+    workspaceEvents.lastChangeText = event.contentChanges.map(change => change.text).join('|');
+    workspaceEvents.lastChangeDocumentText = event.document.getText();
+    workspaceEvents.lastChangeVersion = event.document.version;
+  }, null, context.subscriptions);
+  vscode.workspace.onDidCloseTextDocument(document => {
+    workspaceEvents.close += 1;
+    workspaceEvents.lastClose = document.uri.toString();
+  }, null, context.subscriptions);
+  vscode.workspace.onDidSaveTextDocument(document => {
+    workspaceEvents.save += 1;
+    workspaceEvents.lastSave = document.uri.toString();
+  }, null, context.subscriptions);
   const root = {
     id: 'root',
     label: 'Node Root',
@@ -6183,6 +6203,15 @@ function activate(context) {
       content: 'alpha\nbeta',
       language: 'plaintext',
     });
+    const eventUri = vscode.Uri.joinPath(context.extensionUri, 'workspace-events.txt');
+    await vscode.workspace.fs.writeFile(eventUri, new TextEncoder().encode('event-one'));
+    const eventDoc = await vscode.workspace.openTextDocument(eventUri);
+    const eventEdit = new vscode.WorkspaceEdit();
+    eventEdit.replace(eventUri, new vscode.Range(0, 6, 0, 9), 'two');
+    const eventEditApplied = await vscode.workspace.applyEdit(eventEdit);
+    const eventDocTextAfterApply = eventDoc.getText();
+    await eventDoc.save();
+    await vscode.workspace.fs.delete(eventUri);
     const editUri = vscode.Uri.joinPath(context.extensionUri, 'workspace-edit.txt');
     await vscode.workspace.fs.writeFile(editUri, new TextEncoder().encode('hello world'));
     const workspaceEdit = new vscode.WorkspaceEdit();
@@ -6213,6 +6242,9 @@ function activate(context) {
       pyCount: pyMatches.length,
       textDocuments: vscode.workspace.textDocuments.length,
       untitledText: untitled.getText(),
+      eventEditApplied,
+      eventDocTextAfterApply,
+      workspaceEvents,
       editApplied,
       editText: editedDoc.getText(),
       fileOpsApplied,
@@ -6699,6 +6731,22 @@ module.exports = { activate, deactivate };
                        and node_workspace_probe.get("untitledText") == "alpha\nbeta"
                        and node_workspace_probe.get("editApplied") is True
                        and node_workspace_probe.get("editText") == "say hello SAO",
+                       json.dumps(node_workspace_probe, ensure_ascii=False))
+                node_workspace_events = (
+                    node_workspace_probe.get("workspaceEvents", {})
+                    if isinstance(node_workspace_probe, dict) else {})
+                _check("node host workspace document events fire for JS extensions",
+                       node_workspace_probe.get("eventEditApplied") is True
+                       and node_workspace_probe.get("eventDocTextAfterApply") == "event-two"
+                       and node_workspace_events.get("open", 0) >= 3
+                       and node_workspace_events.get("change", 0) >= 1
+                       and node_workspace_events.get("close", 0) >= 1
+                       and node_workspace_events.get("save", 0) >= 1
+                       and node_workspace_events.get("openThis") == "workspace-this"
+                       and node_workspace_events.get("lastChangeText") == "two"
+                       and node_workspace_events.get("lastChangeDocumentText") == "event-two"
+                       and str(node_workspace_events.get("lastClose", ""))
+                       .endswith("workspace-events.txt"),
                        json.dumps(node_workspace_probe, ensure_ascii=False))
                 _check("node host workspace applyEdit handles file operations",
                        node_workspace_probe.get("fileOpsApplied") is True

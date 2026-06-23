@@ -36,13 +36,19 @@ function send(msg) {
 // -------------------------------------------------------------------------
 class EventEmitter {
     constructor() { this._listeners = []; }
-    get event() { return (fn) => this._subscribe(fn); }
-    _subscribe(fn) {
-        this._listeners.push(fn);
-        return new Disposable(() => {
-            const i = this._listeners.indexOf(fn);
+    get event() {
+        return (fn, thisArgs, disposables) => this._subscribe(fn, thisArgs, disposables);
+    }
+    _subscribe(fn, thisArgs, disposables) {
+        if (typeof fn !== 'function') return new Disposable(() => {});
+        const listener = thisArgs === undefined ? fn : (data) => fn.call(thisArgs, data);
+        this._listeners.push(listener);
+        const disposable = new Disposable(() => {
+            const i = this._listeners.indexOf(listener);
             if (i >= 0) this._listeners.splice(i, 1);
         });
+        if (Array.isArray(disposables)) disposables.push(disposable);
+        return disposable;
     }
     fire(data) {
         for (const fn of [...this._listeners]) {
@@ -614,6 +620,10 @@ let _nextLanguageProviderHandle = 1;
 let _nextPythonCommandRequestHandle = 1;
 const _languageDocumentTextCache = new Map(); // uri -> { version, text }
 const _workspaceTextDocuments = new Map(); // uri -> TextDocument-like object
+const _onDidOpenTextDocumentEmitter = new EventEmitter();
+const _onDidCloseTextDocumentEmitter = new EventEmitter();
+const _onDidChangeTextDocumentEmitter = new EventEmitter();
+const _onDidSaveTextDocumentEmitter = new EventEmitter();
 const _workspaceRoot = path.resolve(process.cwd());
 const _workspaceName = path.basename(_workspaceRoot) || _workspaceRoot;
 const _workspaceDefaultSkipDirs = new Set(['.git', 'node_modules', '__pycache__', '.venv', 'venv']);
@@ -628,6 +638,7 @@ const _debugConfigProviders = new Map();    // type -> provider
 const _taskProviders = new Map();           // type -> provider
 const _scmProviders = new Map();            // id -> SourceControl
 const _onDidChangeConfigurationEmitter = new EventEmitter();
+let _nextUntitledDocument = 1;
 
 function _treeStore(viewId) {
     const key = String(viewId || '');
@@ -1233,17 +1244,18 @@ async function _workspaceOpenTextDocument(uriOrPath) {
     if (uriOrPath && typeof uriOrPath === 'object'
         && !(uriOrPath instanceof Uri)
         && (uriOrPath.content !== undefined || uriOrPath.language !== undefined)) {
-        const uri = new Uri('untitled', '', '/Untitled-1', '', '');
+        const uri = new Uri('untitled', '', `/Untitled-${_nextUntitledDocument++}`, '', '');
         const doc = _createLanguageDocument({
             uri,
             text: String(uriOrPath.content || ''),
             languageId: uriOrPath.language || 'plaintext',
             version: Date.now(),
         });
-        _workspaceTextDocuments.set(uri.toString(), doc);
-        return doc;
+        return _workspaceStoreTextDocument(doc, true);
     }
     const uri = _workspaceUriFromInput(uriOrPath);
+    const cached = _workspaceTextDocuments.get(uri.toString());
+    if (cached) return cached;
     const text = uri.scheme === 'file' ? await fsp.readFile(uri.fsPath, 'utf8') : '';
     const doc = _createLanguageDocument({
         uri,
@@ -1251,8 +1263,7 @@ async function _workspaceOpenTextDocument(uriOrPath) {
         languageId: _languageIdForUri(uri),
         version: Date.now(),
     });
-    _workspaceTextDocuments.set(uri.toString(), doc);
-    return doc;
+    return _workspaceStoreTextDocument(doc, true);
 }
 
 function _workspaceEditEntries(edit) {
@@ -1298,6 +1309,65 @@ function _workspaceOpenDetail(uriOrPath) {
     return _workspaceRelativePath(uriOrPath);
 }
 
+function _workspaceContentToText(content) {
+    if (content === undefined || content === null) return '';
+    if (typeof content === 'string') return content;
+    if (Buffer.isBuffer(content)) return content.toString('utf8');
+    if (content instanceof Uint8Array || Array.isArray(content)) {
+        return Buffer.from(content).toString('utf8');
+    }
+    return String(content);
+}
+
+function _workspaceStoreTextDocument(doc, fireOpen) {
+    if (!doc || !doc.uri) return doc;
+    const key = doc.uri.toString();
+    const existed = _workspaceTextDocuments.has(key);
+    _workspaceTextDocuments.set(key, doc);
+    if (fireOpen && !existed) _onDidOpenTextDocumentEmitter.fire(doc);
+    return doc;
+}
+
+function _workspaceCloseTextDocument(uriOrDoc) {
+    const uri = uriOrDoc && uriOrDoc.uri ? uriOrDoc.uri : _workspaceUriFromInput(uriOrDoc);
+    if (!uri) return undefined;
+    const key = uri.toString();
+    const doc = _workspaceTextDocuments.get(key);
+    if (!doc) return undefined;
+    _workspaceTextDocuments.delete(key);
+    _onDidCloseTextDocumentEmitter.fire(doc);
+    return doc;
+}
+
+function _workspaceFullDocumentRange(text) {
+    return new Range(0, 0, _positionAt(text, text.length).line, _positionAt(text, text.length).character);
+}
+
+function _workspaceSetDocumentText(uri, text, languageId, contentChanges) {
+    const key = uri.toString();
+    let doc = _workspaceTextDocuments.get(key);
+    const version = Date.now();
+    if (doc && typeof doc._setText === 'function') {
+        doc._setText(text, version);
+    } else {
+        doc = _createLanguageDocument({
+            uri,
+            text,
+            languageId: languageId || _languageIdForUri(uri),
+            version,
+        });
+        _workspaceTextDocuments.set(key, doc);
+    }
+    const changes = Array.isArray(contentChanges) ? contentChanges : [{
+        range: _workspaceFullDocumentRange(text),
+        rangeOffset: 0,
+        rangeLength: text.length,
+        text,
+    }];
+    _onDidChangeTextDocumentEmitter.fire({ document: doc, contentChanges: changes });
+    return doc;
+}
+
 async function _workspacePathExists(fsPath) {
     try {
         await fsp.stat(fsPath);
@@ -1319,7 +1389,7 @@ async function _workspaceApplyFileOperation(entry) {
         if (exists && !options.overwrite) return false;
         await fsp.mkdir(path.dirname(uri.fsPath), { recursive: true });
         await fsp.writeFile(uri.fsPath, '', 'utf8');
-        _workspaceTextDocuments.delete(uri.toString());
+        _workspaceCloseTextDocument(uri);
         return true;
     }
     if (kind === 'delete') {
@@ -1330,7 +1400,7 @@ async function _workspaceApplyFileOperation(entry) {
             recursive: !!options.recursive,
             force: !!options.ignoreIfNotExists,
         });
-        _workspaceTextDocuments.delete(uri.toString());
+        _workspaceCloseTextDocument(uri);
         return true;
     }
     if (kind === 'rename') {
@@ -1346,16 +1416,15 @@ async function _workspaceApplyFileOperation(entry) {
         }
         await fsp.mkdir(path.dirname(target.fsPath), { recursive: true });
         await fsp.rename(uri.fsPath, target.fsPath);
-        const cached = _workspaceTextDocuments.get(uri.toString());
-        _workspaceTextDocuments.delete(uri.toString());
+        const cached = _workspaceCloseTextDocument(uri);
         if (cached) {
             const text = await fsp.readFile(target.fsPath, 'utf8');
-            _workspaceTextDocuments.set(target.toString(), _createLanguageDocument({
+            _workspaceStoreTextDocument(_createLanguageDocument({
                 uri: target,
                 text,
                 languageId: _languageIdForUri(target),
                 version: Date.now(),
-            }));
+            }), true);
         }
         return true;
     }
@@ -1369,10 +1438,13 @@ async function _workspaceApplyEdit(edit) {
     async function flushTextEdits() {
         try {
             for (const group of grouped.values()) {
-                let text = '';
-                try { text = await fsp.readFile(group.uri.fsPath, 'utf8'); }
-                catch (err) {
-                    if (!err || err.code !== 'ENOENT') throw err;
+                const cachedDoc = _workspaceTextDocuments.get(group.uri.toString());
+                let text = cachedDoc ? cachedDoc.getText() : '';
+                if (!cachedDoc) {
+                    try { text = await fsp.readFile(group.uri.fsPath, 'utf8'); }
+                    catch (err) {
+                        if (!err || err.code !== 'ENOENT') throw err;
+                    }
                 }
                 const edits = group.edits.slice().sort((a, b) => {
                     const ao = _offsetAt(text, a.range.start);
@@ -1380,20 +1452,24 @@ async function _workspaceApplyEdit(edit) {
                     if (ao !== bo) return bo - ao;
                     return _offsetAt(text, b.range.end) - _offsetAt(text, a.range.end);
                 });
+                const contentChanges = [];
                 for (const item of edits) {
                     const start = _offsetAt(text, item.range.start);
                     const end = _offsetAt(text, item.range.end);
+                    contentChanges.unshift({
+                        range: item.range,
+                        rangeOffset: start,
+                        rangeLength: Math.max(0, end - start),
+                        text: item.text,
+                    });
                     text = text.slice(0, start) + item.text + text.slice(end);
                 }
                 await fsp.mkdir(path.dirname(group.uri.fsPath), { recursive: true });
                 await fsp.writeFile(group.uri.fsPath, text, 'utf8');
-                const doc = _createLanguageDocument({
-                    uri: group.uri,
-                    text,
-                    languageId: _languageIdForUri(group.uri),
-                    version: Date.now(),
-                });
-                _workspaceTextDocuments.set(group.uri.toString(), doc);
+                if (cachedDoc) {
+                    _workspaceSetDocumentText(
+                        group.uri, text, _languageIdForUri(group.uri), contentChanges);
+                }
             }
             grouped.clear();
             return true;
@@ -1466,7 +1542,7 @@ function _positionAt(text, offset) {
 function _createLanguageDocument(msg) {
     const uri = _uriFromPayload(msg.uri);
     const uriKey = uri.toString();
-    const version = Number(msg.version || 1);
+    let version = Number(msg.version || 1);
     let text = '';
     if (Object.prototype.hasOwnProperty.call(msg, 'text')) {
         text = String(msg.text ?? '');
@@ -1476,11 +1552,11 @@ function _createLanguageDocument(msg) {
         text = cached && cached.version === version ? cached.text : '';
     }
     const languageId = String(msg.languageId || _languageIdForUri(uri));
-    return {
+    const document = {
         uri,
         fileName: uri.scheme === 'file' ? uri.fsPath : uri.toString(),
         languageId,
-        version,
+        get version() { return version; },
         isDirty: false,
         isUntitled: uri.scheme === 'untitled',
         get lineCount() { return text.split(/\r\n|\r|\n/).length; },
@@ -1510,8 +1586,17 @@ function _createLanguageDocument(msg) {
         offsetAt(position) { return _offsetAt(text, _positionFromPayload(position)); },
         positionAt(offset) { return _positionAt(text, offset); },
         getWordRangeAtPosition() { return undefined; },
-        save() { return Promise.resolve(true); },
+        save() {
+            _onDidSaveTextDocumentEmitter.fire(document);
+            return Promise.resolve(true);
+        },
+        _setText(nextText, nextVersion) {
+            text = String(nextText ?? '');
+            version = Number(nextVersion || Date.now());
+            _languageDocumentTextCache.set(uriKey, { version, text });
+        },
     };
+    return document;
 }
 
 function _matchDocumentSelector(selector, document) {
@@ -1843,13 +1928,30 @@ function buildVscodeModule(extDesc, extensionPath) {
             get name() { return _workspaceName; },
             get rootPath() { return _workspaceRoot; },
             get textDocuments() { return Array.from(_workspaceTextDocuments.values()); },
+            onDidOpenTextDocument: _onDidOpenTextDocumentEmitter.event,
+            onDidCloseTextDocument: _onDidCloseTextDocumentEmitter.event,
+            onDidChangeTextDocument: _onDidChangeTextDocumentEmitter.event,
+            onDidSaveTextDocument: _onDidSaveTextDocumentEmitter.event,
             fs: {
                 readFile: (uri) => _diagnoseAsync(
                     'workspace.fs.readFile', _workspaceRelativePath(uri),
                     () => fsp.readFile(uri.fsPath)),
                 writeFile: (uri, content) => _diagnoseAsync(
                     'workspace.fs.writeFile', _workspaceRelativePath(uri),
-                    () => fsp.writeFile(uri.fsPath, content)),
+                    async () => {
+                        await fsp.writeFile(uri.fsPath, content);
+                        const cached = _workspaceTextDocuments.get(uri.toString());
+                        if (cached) {
+                            const oldText = cached.getText();
+                            const text = _workspaceContentToText(content);
+                            _workspaceSetDocumentText(uri, text, _languageIdForUri(uri), [{
+                                range: _workspaceFullDocumentRange(oldText),
+                                rangeOffset: 0,
+                                rangeLength: oldText.length,
+                                text,
+                            }]);
+                        }
+                    }),
                 stat: (uri) => _diagnoseAsync(
                     'workspace.fs.stat', _workspaceRelativePath(uri),
                     () => fsp.stat(uri.fsPath).then(s => ({
@@ -1867,11 +1969,26 @@ function buildVscodeModule(extDesc, extensionPath) {
                     () => fsp.mkdir(uri.fsPath, { recursive: true })),
                 delete: (uri) => _diagnoseAsync(
                     'workspace.fs.delete', _workspaceRelativePath(uri),
-                    () => fsp.rm(uri.fsPath, { force: true })),
+                    async () => {
+                        await fsp.rm(uri.fsPath, { force: true });
+                        _workspaceCloseTextDocument(uri);
+                    }),
                 rename: (src, dst) => _diagnoseAsync(
                     'workspace.fs.rename',
                     `${_workspaceRelativePath(src)} -> ${_workspaceRelativePath(dst)}`,
-                    () => fsp.rename(src.fsPath, dst.fsPath)),
+                    async () => {
+                        await fsp.rename(src.fsPath, dst.fsPath);
+                        const cached = _workspaceCloseTextDocument(src);
+                        if (cached) {
+                            const text = await fsp.readFile(dst.fsPath, 'utf8');
+                            _workspaceStoreTextDocument(_createLanguageDocument({
+                                uri: dst,
+                                text,
+                                languageId: _languageIdForUri(dst),
+                                version: Date.now(),
+                            }), true);
+                        }
+                    }),
                 copy: (src, dst) => _diagnoseAsync(
                     'workspace.fs.copy',
                     `${_workspaceRelativePath(src)} -> ${_workspaceRelativePath(dst)}`,
