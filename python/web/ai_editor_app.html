@@ -7671,6 +7671,8 @@ function applyCustomEditorState(data){
   ce.view_type=ce.view_type||data.view_type||data.viewType||'';
   ce.dirty=!!data.dirty;
   ce.editable=!!data.editable;
+  ce.textEditor=!!(data.textEditor||data.text_editor);
+  ce.text_editor=ce.textEditor;
   ce.kind=data.kind||ce.kind||'';
   ce.label=data.label||'';
   ce.backup_id=data.backup_id||data.backupId||'';

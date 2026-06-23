@@ -6443,8 +6443,18 @@ function activate(context) {
           localResourceRoots: [context.extensionUri],
         };
         panel.webview.html = '<main data-view="custom-editor">' + document.getText() + '</main>';
-        panel.webview.onDidReceiveMessage(message => {
+        panel.webview.onDidReceiveMessage(async message => {
           output.appendLine('custom:' + message.type);
+          if (message && message.type === 'edit') {
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(
+              document.uri,
+              new vscode.Range(new vscode.Position(0, 0), document.positionAt(document.getText().length)),
+              String(message.text || 'custom-text-updated'),
+            );
+            const ok = await vscode.workspace.applyEdit(edit);
+            output.appendLine('custom:editApplied:' + ok);
+          }
         });
       },
     },
@@ -6863,6 +6873,26 @@ module.exports = { activate, deactivate };
                 if node_custom_editor.get("viewId"):
                     node_host.relay_webview_message(
                         node_custom_editor.get("viewId"), {"type": "ping"})
+                    node_host.relay_webview_message(
+                        node_custom_editor.get("viewId"), {
+                            "type": "edit",
+                            "text": "custom-editor-updated",
+                        })
+                node_custom_text_dirty = _wait_until(
+                    lambda: node_host.custom_editor_state(
+                        view_id=node_custom_editor.get("viewId", ""))
+                    .get("dirty") is True,
+                    timeout=3.0)
+                node_custom_text_dirty_state = node_host.custom_editor_state(
+                    view_id=node_custom_editor.get("viewId", ""))
+                node_custom_text_save = api.save_extension_custom_editor(
+                    node_custom_editor.get("viewId", ""),
+                    "selftest.node.customEditor",
+                    node_custom_editor.get("uri", ""))
+                node_custom_text_saved_state = node_host.custom_editor_state(
+                    view_id=node_custom_editor.get("viewId", ""))
+                with open(custom_editor_file, "r", encoding="utf-8") as fh:
+                    node_custom_text_disk = fh.read()
                 lifecycle_editor_file = os.path.join(
                     node_tree_tmp, "custom-editor.life")
                 with open(lifecycle_editor_file, "w", encoding="utf-8") as fh:
@@ -7219,6 +7249,14 @@ module.exports = { activate, deactivate };
                        and node_custom_editor.get("viewId")
                        and 'data-view="custom-editor"' in node_custom_editor_html
                        and "custom-editor-doc" in node_custom_editor_html
+                       and node_custom_editor.get("textEditor") is True
+                       and node_custom_editor.get("supportsSave") is True
+                       and node_custom_text_dirty
+                       and node_custom_text_dirty_state.get("dirty") is True
+                       and node_custom_text_dirty_state.get("textEditor") is True
+                       and node_custom_text_save.get("ok") is True
+                       and node_custom_text_saved_state.get("dirty") is False
+                       and node_custom_text_disk == "custom-editor-updated"
                        and os.path.normcase(os.path.realpath(node_tree_tmp))
                        in node_custom_editor_root_paths
                        and custom_editor_message_seen,
@@ -7226,6 +7264,10 @@ module.exports = { activate, deactivate };
                            "result": node_custom_editor,
                            "html": node_custom_editor_html,
                            "roots": node_custom_editor_roots,
+                           "dirty": node_custom_text_dirty_state,
+                           "save": node_custom_text_save,
+                           "saved": node_custom_text_saved_state,
+                           "disk": node_custom_text_disk,
                            "output": node_host._output_channels.get(
                                "node-tree-selftest", []),
                        }, ensure_ascii=False))

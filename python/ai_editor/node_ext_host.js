@@ -698,9 +698,10 @@ function _safeViewIdPart(value) {
         .slice(0, 80) || 'custom';
 }
 
-function _customEditorDocumentKey(viewType, uriLike) {
+function _customEditorDocumentKey(viewType, uriLike, viewId = '') {
     const uri = uriLike instanceof Uri ? uriLike : _workspaceUriFromInput(uriLike);
-    return `${String(viewType || '')}|${uri.toString()}`;
+    const base = `${String(viewType || '')}|${uri.toString()}`;
+    return viewId ? `${base}|${String(viewId)}` : base;
 }
 
 function _customEditorEntryForMessage(msg) {
@@ -712,7 +713,12 @@ function _customEditorEntryForMessage(msg) {
     const uriText = msg.uri || msg.resource || msg.path;
     if (viewType && uriText) {
         const key = _customEditorDocumentKey(viewType, uriText);
-        return _customEditorDocuments.get(key) || null;
+        const entry = _customEditorDocuments.get(key);
+        if (entry) return entry;
+        const uri = _workspaceUriFromInput(uriText).toString();
+        for (const item of _customEditorDocuments.values()) {
+            if (item.viewType === viewType && item.uri.toString() === uri) return item;
+        }
     }
     if (uriText) {
         const uri = _workspaceUriFromInput(uriText).toString();
@@ -732,9 +738,10 @@ function _customEditorStatePayload(entry, kind, extra = {}) {
         uri: entry.uri.toString(),
         dirty: !!entry.dirty,
         editable: !!entry.editable,
-        supportsSave: typeof provider.saveCustomDocument === 'function',
+        textEditor: !!entry.textEditor,
+        supportsSave: !!entry.textEditor || typeof provider.saveCustomDocument === 'function',
         supportsSaveAs: typeof provider.saveCustomDocumentAs === 'function',
-        supportsRevert: typeof provider.revertCustomDocument === 'function',
+        supportsRevert: !!entry.textEditor || typeof provider.revertCustomDocument === 'function',
         supportsBackup: typeof provider.backupCustomDocument === 'function',
         kind: kind || entry.lastKind || '',
         label: entry.lastLabel || '',
@@ -838,6 +845,35 @@ function _markCustomEditorClean(entry) {
     entry.lastEditId = 0;
 }
 
+function _customTextEditorEntriesForDocument(document) {
+    if (!document || !document.uri) return [];
+    const uri = document.uri.toString();
+    return Array.from(_customEditorDocuments.values()).filter(entry => (
+        entry.textEditor && entry.uri.toString() === uri
+    ));
+}
+
+function _markCustomTextEditorsDirty(document, kind = 'textChange') {
+    if (!document) return;
+    document.isDirty = true;
+    for (const entry of _customTextEditorEntriesForDocument(document)) {
+        entry.contentDirty = true;
+        entry.dirty = true;
+        entry.lastKind = kind;
+        _sendCustomEditorState(entry, kind);
+    }
+}
+
+function _markCustomTextEditorsSaved(document, kind = 'save') {
+    if (!document) return;
+    document.isDirty = false;
+    for (const entry of _customTextEditorEntriesForDocument(document)) {
+        _markCustomEditorClean(entry);
+        entry.lastKind = kind;
+        _sendCustomEditorState(entry, kind, { dirty: false });
+    }
+}
+
 // -------------------------------------------------------------------------
 // OutputChannel
 // -------------------------------------------------------------------------
@@ -867,8 +903,8 @@ const _pythonCommandRequests = new Map(); // requestId -> { resolve, reject, tim
 const _webviewViewProviders = new Map(); // viewType -> { provider, options }
 const _webviewViews = new Map();         // viewId -> WebviewView
 const _customEditorProviders = new Map(); // viewType -> { provider, options, extensionId }
-const _customEditorDocuments = new Map(); // viewType|uri -> resolved custom document state
-const _customEditorViewKeys = new Map();  // viewId -> viewType|uri
+const _customEditorDocuments = new Map(); // viewType|uri|viewId -> resolved custom document state
+const _customEditorViewKeys = new Map();  // viewId -> custom editor document key
 const _treeDataProviders = new Map();    // viewId -> { provider, disposable? }
 const _treeViews = new Map();            // viewId -> TreeView-like object
 const _treeElementStores = new Map();    // viewId -> element handle store
@@ -1624,7 +1660,9 @@ function _workspaceSetDocumentText(uri, text, languageId, contentChanges) {
         rangeLength: text.length,
         text,
     }];
+    doc.isDirty = true;
     _onDidChangeTextDocumentEmitter.fire({ document: doc, contentChanges: changes });
+    _markCustomTextEditorsDirty(doc, 'textChange');
     return doc;
 }
 
@@ -1846,9 +1884,15 @@ function _createLanguageDocument(msg) {
         offsetAt(position) { return _offsetAt(text, _positionFromPayload(position)); },
         positionAt(offset) { return _positionAt(text, offset); },
         getWordRangeAtPosition() { return undefined; },
-        save() {
+        async save() {
+            if (uri.scheme === 'file') {
+                await fsp.mkdir(path.dirname(uri.fsPath), { recursive: true });
+                await fsp.writeFile(uri.fsPath, text, 'utf8');
+            }
+            document.isDirty = false;
             _onDidSaveTextDocumentEmitter.fire(document);
-            return Promise.resolve(true);
+            _markCustomTextEditorsSaved(document, 'save');
+            return true;
         },
         _setText(nextText, nextVersion) {
             text = String(nextText ?? '');
@@ -3009,6 +3053,31 @@ async function resolveCustomEditor(msg) {
         if (typeof reg.provider.resolveCustomTextEditor === 'function') {
             document = await _workspaceOpenTextDocument(uri);
             await reg.provider.resolveCustomTextEditor(document, panel, token);
+            const key = _customEditorDocumentKey(viewType, document.uri, viewId);
+            customEntry = {
+                viewType,
+                uri: _workspaceUriFromInput(document.uri),
+                viewId,
+                provider: reg.provider,
+                document,
+                dirty: !!document.isDirty,
+                contentDirty: !!document.isDirty,
+                editable: true,
+                textEditor: true,
+                lastKind: 'resolved',
+                lastLabel: '',
+                lastEditId: 0,
+                edits: [],
+                currentEditIndex: -1,
+                backup: null,
+                backupId: '',
+            };
+            _customEditorDocuments.set(key, customEntry);
+            _customEditorViewKeys.set(viewId, key);
+            panel.onDidDispose(() => {
+                _customEditorDocuments.delete(key);
+                _customEditorViewKeys.delete(viewId);
+            });
         } else {
             if (typeof reg.provider.openCustomDocument === 'function') {
                 document = await reg.provider.openCustomDocument(
@@ -3021,7 +3090,7 @@ async function resolveCustomEditor(msg) {
             }
             await reg.provider.resolveCustomEditor(document, panel, token);
             if (!document.uri) document.uri = uri;
-            const key = _customEditorDocumentKey(viewType, document.uri);
+            const key = _customEditorDocumentKey(viewType, document.uri, viewId);
             customEntry = {
                 viewType,
                 uri: _workspaceUriFromInput(document.uri),
@@ -3084,7 +3153,30 @@ async function handleCustomEditorLifecycle(msg) {
             onCancellationRequested: new EventEmitter().event,
         };
         let value = null;
-        if (action === 'save') {
+        if (entry.textEditor && action === 'save') {
+            if (typeof entry.document.save === 'function') {
+                await entry.document.save();
+            } else {
+                _markCustomTextEditorsSaved(entry.document, 'save');
+            }
+            entry.lastKind = 'save';
+            value = _customEditorStatePayload(entry, 'save', { dirty: false });
+        } else if (entry.textEditor && action === 'revert') {
+            if (entry.uri.scheme === 'file') {
+                const text = await fsp.readFile(entry.uri.fsPath, 'utf8');
+                if (typeof entry.document._setText === 'function') {
+                    entry.document._setText(text, Date.now());
+                }
+            }
+            _markCustomTextEditorsSaved(entry.document, 'revert');
+            entry.lastKind = 'revert';
+            value = _customEditorStatePayload(entry, 'revert', { dirty: false });
+        } else if (entry.textEditor && action === 'state') {
+            value = _customEditorStatePayload(entry, 'state');
+        } else if (entry.textEditor && action === 'backup') {
+            entry.lastKind = 'backup';
+            value = _customEditorStatePayload(entry, 'backup');
+        } else if (action === 'save') {
             if (typeof provider.saveCustomDocument !== 'function') {
                 throw new Error('Custom editor provider does not implement saveCustomDocument');
             }

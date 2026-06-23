@@ -1825,6 +1825,8 @@ class NodeExtensionHost:
         state["uri"] = str(payload.get("uri") or "")
         state["dirty"] = bool(payload.get("dirty", False))
         state["editable"] = bool(payload.get("editable", False))
+        state["textEditor"] = bool(payload.get("textEditor", False))
+        state["text_editor"] = state["textEditor"]
         state["kind"] = str(payload.get("kind") or "")
         state["label"] = str(payload.get("label") or "")
         state["backupId"] = str(payload.get("backupId") or payload.get("backup_id") or "")

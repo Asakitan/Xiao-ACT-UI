@@ -3025,6 +3025,7 @@ class AIEditorAPI:
                 "extension_id": contribution.get("_extensionId", ""),
                 "dirty": bool(result.get("dirty", False)),
                 "editable": bool(result.get("editable", False)),
+                "text_editor": bool(result.get("textEditor", False)),
                 "supports_save": bool(result.get("supportsSave", False)),
                 "supports_save_as": bool(result.get("supportsSaveAs", False)),
                 "supports_revert": bool(result.get("supportsRevert", False)),
