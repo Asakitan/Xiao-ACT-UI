@@ -54,7 +54,7 @@ def _faces(value: Any, vertex_count: int) -> list[list[int]]:
     out: list[list[int]] = []
     if not isinstance(value, (list, tuple)):
         return out
-    for raw in value[:4096]:
+    for raw in value:
         if not isinstance(raw, (list, tuple)):
             continue
         face: list[int] = []

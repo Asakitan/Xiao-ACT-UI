@@ -1409,6 +1409,81 @@ class Model3DBackendTests(unittest.TestCase):
         self.assertEqual(len(meta["mesh"]["preview"]["faces"]), 2)
         self.assertEqual(meta["metadata_errors"], [])
 
+    def test_assimpnet_preview_samples_late_materials_when_vertex_limited(self) -> None:
+        from render import model3d_assimpnet
+
+        def _mesh(material_index: int, x_offset: float) -> SimpleNamespace:
+            vertices = [
+                SimpleNamespace(X=x_offset + float(index % 4), Y=float(index // 4), Z=0.0)
+                for index in range(12)
+            ]
+            faces = [
+                SimpleNamespace(Indices=[0, 1, 4]),
+                SimpleNamespace(Indices=[1, 5, 4]),
+                SimpleNamespace(Indices=[6, 7, 10]),
+                SimpleNamespace(Indices=[7, 11, 10]),
+            ]
+            return SimpleNamespace(
+                Name=f"mesh_{material_index}",
+                MaterialIndex=material_index,
+                Vertices=vertices,
+                Faces=faces,
+                Bones=[],
+            )
+
+        scene = SimpleNamespace(MeshCount=2, Meshes=[_mesh(0, 0.0), _mesh(1, 10.0)])
+
+        with mock.patch.object(model3d_assimpnet, "_MESH_PREVIEW_VERTEX_LIMIT", 8):
+            with mock.patch.object(model3d_assimpnet, "_MESH_PREVIEW_FACE_LIMIT", 8):
+                mesh_meta, _skins, _bones = model3d_assimpnet._extract_meshes(scene, ("Face", "Body"))
+
+        preview = mesh_meta["preview"]
+        self.assertLessEqual(len(preview["vertices"]), 8)
+        self.assertIn("Face", preview["face_materials"])
+        self.assertIn("Body", preview["face_materials"])
+
+    def test_assimpnet_preview_is_full_by_default(self) -> None:
+        from render import model3d_assimpnet
+
+        vertices = [
+            SimpleNamespace(X=float(index % 8), Y=float(index // 8), Z=0.0)
+            for index in range(24)
+        ]
+        faces = [
+            SimpleNamespace(Indices=[index, index + 1, index + 8])
+            for index in range(16)
+        ]
+        scene = SimpleNamespace(
+            MeshCount=1,
+            Meshes=[
+                SimpleNamespace(
+                    Name="full_mesh",
+                    MaterialIndex=0,
+                    Vertices=vertices,
+                    Faces=faces,
+                    Bones=[],
+                )
+            ],
+        )
+
+        mesh_meta, _skins, _bones = model3d_assimpnet._extract_meshes(scene, ("Body",))
+
+        preview = mesh_meta["preview"]
+        self.assertEqual(mesh_meta["vertex_count"], 24)
+        self.assertEqual(mesh_meta["face_count"], 16)
+        self.assertEqual(len(preview["vertices"]), 24)
+        self.assertEqual(len(preview["faces"]), 16)
+        self.assertFalse(preview["truncated"])
+
+    def test_preview_face_parsers_do_not_truncate_full_meshes(self) -> None:
+        from render import model3d_native_moderngl
+        from render import model3d_software
+
+        raw_faces = [[0, 1, 2] for _index in range(5000)]
+
+        self.assertEqual(len(model3d_software._faces(raw_faces, 3)), 5000)
+        self.assertEqual(len(model3d_native_moderngl._faces(raw_faces, 3)), 5000)
+
     def test_model_metadata_extracts_ascii_fbx_mesh_bones_and_clips(self) -> None:
         clear_model3d_metadata_caches()
         with tempfile.TemporaryDirectory(prefix="model3d_fbx_meta_") as root:

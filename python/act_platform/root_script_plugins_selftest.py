@@ -22,6 +22,11 @@ except Exception:  # pragma: no cover - render package can be absent in narrow i
     evaluate_retarget_pose = None  # type: ignore[assignment]
     get_model_metadata = None  # type: ignore[assignment]
 
+try:
+    from render.model3d_overlay import render_model3d_node
+except Exception:  # pragma: no cover - render package can be absent in narrow imports
+    render_model3d_node = None  # type: ignore[assignment]
+
 
 def _workspace_root() -> Path:
     return Path(__file__).resolve().parents[3]
@@ -1050,10 +1055,16 @@ def run_selftest() -> dict[str, Any]:
                     meta = get_model_metadata(model_node)
                     mesh = meta.get("mesh") if isinstance(meta.get("mesh"), dict) else {}
                     preview = mesh.get("preview") if isinstance(mesh.get("preview"), dict) else {}
+                    preview_vertices = (
+                        preview.get("vertices") if isinstance(preview.get("vertices"), list) else []
+                    )
+                    preview_faces = preview.get("faces") if isinstance(preview.get("faces"), list) else []
                     skin = preview.get("skin") if isinstance(preview.get("skin"), list) else []
                     face_materials = preview.get("face_materials") if isinstance(preview.get("face_materials"), list) else []
                     vertex_count = int(mesh.get("vertex_count") or 0)
                     face_count = int(mesh.get("face_count") or 0)
+                    preview_vertex_count = len(preview_vertices)
+                    preview_face_count = len(preview_faces)
                     bone_names = meta.get("bone_names") if isinstance(meta.get("bone_names"), (list, tuple)) else ()
                     materials_config = meta.get("materials_config") if isinstance(meta.get("materials_config"), dict) else {}
                     textures = materials_config.get("textures") if isinstance(materials_config.get("textures"), dict) else {}
@@ -1072,13 +1083,19 @@ def run_selftest() -> dict[str, Any]:
                         if not texture_path.is_file():
                             missing_textures.append(str(texture))
                     material_names = {str(item) for item in meta.get("materials") or ()}
+                    preview_material_names = {str(item) for item in face_materials if str(item or "").strip()}
+                    expected_tomurai_materials = {"Hair", "Clothes", "Outer", "Body", "Face", "Other"}
                     if (
                         vertex_count < 30000
                         or face_count < 50000
-                        or len(skin) < 3000
-                        or len(face_materials) < 3000
+                        or preview_vertex_count != vertex_count
+                        or preview_face_count != face_count
+                        or bool(preview.get("truncated"))
+                        or len(skin) != preview_vertex_count
+                        or len(face_materials) != preview_face_count
                         or len(bone_names) < 100
-                        or {"Hair", "Clothes", "Outer", "Body", "Face", "Other"} - material_names
+                        or expected_tomurai_materials - material_names
+                        or expected_tomurai_materials - preview_material_names
                         or len(base_textures) < 6
                         or missing_textures
                         or len(native_files) < 28
@@ -1091,18 +1108,62 @@ def run_selftest() -> dict[str, Any]:
                             "mesh": {
                                 "vertex_count": vertex_count,
                                 "face_count": face_count,
+                                "preview_vertex_count": preview_vertex_count,
+                                "preview_face_count": preview_face_count,
+                                "preview_truncated": preview.get("truncated"),
                                 "preview_skin_count": len(skin),
                                 "preview_skin_source": preview.get("skin_source"),
                                 "preview_face_material_count": len(face_materials),
                                 "bone_count": len(bone_names),
                                 "materials": sorted(material_names),
+                                "preview_materials": sorted(preview_material_names),
                                 "base_textures": base_textures,
                                 "missing_textures": missing_textures,
                                 "native_unity_file_count": len(native_files),
                             },
                         }
+                    if callable(render_model3d_node):
+                        image = render_model3d_node(model_node, {"accent": "#7dd3fc"})
+                        alpha = image.getchannel("A") if image is not None and hasattr(image, "getchannel") else None
+                        bbox = alpha.getbbox() if alpha is not None and hasattr(alpha, "getbbox") else None
+                        width = int(getattr(image, "width", 0) or 0)
+                        height = int(getattr(image, "height", 0) or 0)
+                        pixels = []
+                        if image is not None:
+                            if hasattr(image, "get_flattened_data"):
+                                pixels = list(image.get_flattened_data())
+                            elif hasattr(image, "getdata"):
+                                pixels = list(image.getdata())
+                        opaque_count = sum(
+                            1
+                            for pixel in pixels
+                            if len(pixel) >= 4 and int(pixel[3]) > 100
+                        )
+                        bbox_height = int(bbox[3] - bbox[1]) if bbox else 0
+                        opaque_ratio = (
+                            opaque_count / float(width * height)
+                            if width > 0 and height > 0
+                            else 0.0
+                        )
+                        if not bbox or bbox_height < int(height * 0.28) or opaque_ratio < 0.035:
+                            return {
+                                "ok": False,
+                                "plugin_id": plugin_id,
+                                "stage": "stickwoman_default_tomurai_visual_coverage",
+                                "model": model_node.get("model"),
+                                "visual": {
+                                    "size": [width, height],
+                                    "alpha_bbox": list(bbox) if bbox else None,
+                                    "bbox_height": bbox_height,
+                                    "opaque_count": opaque_count,
+                                    "opaque_ratio": opaque_ratio,
+                                    "preview_materials": sorted(preview_material_names),
+                                },
+                            }
                     state["default_vertex_count"] = vertex_count
                     state["default_face_count"] = face_count
+                    state["default_preview_vertex_count"] = preview_vertex_count
+                    state["default_preview_face_count"] = preview_face_count
                     state["default_preview_skin_count"] = len(skin)
                     state["default_preview_face_material_count"] = len(face_materials)
                     state["default_bone_count"] = len(bone_names)
@@ -1140,7 +1201,10 @@ def run_selftest() -> dict[str, Any]:
                 "retarget_motion_scale_max": state.get("retarget_motion_scale_max"),
                 "default_vertex_count": state.get("default_vertex_count"),
                 "default_face_count": state.get("default_face_count"),
+                "default_preview_vertex_count": state.get("default_preview_vertex_count"),
+                "default_preview_face_count": state.get("default_preview_face_count"),
                 "default_preview_skin_count": state.get("default_preview_skin_count"),
+                "default_preview_face_material_count": state.get("default_preview_face_material_count"),
                 "cache_hit_count": state.get("cache_hit_count"),
                 "pending_turns": state.get("pending_turns"),
                 "queued_flaps": state.get("queued_flaps"),

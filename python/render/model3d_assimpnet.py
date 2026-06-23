@@ -15,8 +15,8 @@ from threading import RLock
 from typing import Any, Mapping
 
 
-_MESH_PREVIEW_VERTEX_LIMIT = 4096
-_MESH_PREVIEW_FACE_LIMIT = 8192
+_MESH_PREVIEW_VERTEX_LIMIT = 0
+_MESH_PREVIEW_FACE_LIMIT = 0
 _ASSIMP_LOCK = RLock()
 _ASSIMP: Any = None
 _DLL_HANDLES: list[Any] = []
@@ -231,15 +231,139 @@ def _skin_influence_name(raw_name: str) -> str:
     return canonical or raw_name
 
 
+def _spread_indices(count: int, target: int) -> list[int]:
+    target = max(0, min(int(target), int(count)))
+    if target <= 0 or count <= 0:
+        return []
+    if target == 1:
+        return [0]
+    seen: set[int] = set()
+    out: list[int] = []
+    span = max(1, count - 1)
+    for slot in range(target):
+        index = min(count - 1, int(round((slot * span) / float(target - 1))))
+        if index not in seen:
+            seen.add(index)
+            out.append(index)
+    return out
+
+
+def _balanced_preview_face_indices(full_faces: list[tuple[list[int], str]]) -> list[int]:
+    face_limit = len(full_faces) if _MESH_PREVIEW_FACE_LIMIT <= 0 else _MESH_PREVIEW_FACE_LIMIT
+    if not full_faces or face_limit <= 0:
+        return []
+    material_order: list[str] = []
+    grouped: dict[str, list[int]] = {}
+    for face_index, (_face, material_name) in enumerate(full_faces):
+        key = str(material_name or "").strip()
+        if key not in grouped:
+            grouped[key] = []
+            material_order.append(key)
+        grouped[key].append(face_index)
+    per_material = max(1, face_limit // max(1, len(material_order)))
+    material_candidates: list[list[int]] = []
+    for material_name in material_order:
+        members = grouped[material_name]
+        local_indices = _spread_indices(len(members), min(len(members), per_material))
+        material_candidates.append([members[index] for index in local_indices])
+
+    out: list[int] = []
+    seen: set[int] = set()
+    max_group = max((len(items) for items in material_candidates), default=0)
+    for slot in range(max_group):
+        for candidates in material_candidates:
+            if slot >= len(candidates):
+                continue
+            face_index = candidates[slot]
+            if face_index in seen:
+                continue
+            seen.add(face_index)
+            out.append(face_index)
+            if len(out) >= face_limit:
+                return out
+
+    for face_index in range(len(full_faces)):
+        if len(out) >= face_limit:
+            break
+        if face_index in seen:
+            continue
+        seen.add(face_index)
+        out.append(face_index)
+    return out
+
+
+def _append_preview_vertex(
+    global_index: int,
+    full_vertices: list[tuple[float, float, float]],
+    full_skin: list[list[dict[str, Any]]],
+    preview_vertices: list[list[float]],
+    preview_skin: list[list[dict[str, Any]]],
+    global_to_preview: dict[int, int],
+) -> int:
+    preview_index = global_to_preview.get(global_index)
+    if preview_index is not None:
+        return preview_index
+    point = full_vertices[global_index]
+    preview_index = len(preview_vertices)
+    global_to_preview[global_index] = preview_index
+    preview_vertices.append([point[0], point[1], point[2]])
+    preview_skin.append([dict(item) for item in full_skin[global_index]])
+    return preview_index
+
+
+def _build_mesh_preview(
+    full_vertices: list[tuple[float, float, float]],
+    full_skin: list[list[dict[str, Any]]],
+    full_faces: list[tuple[list[int], str]],
+) -> tuple[list[list[float]], list[list[int]], list[str], list[list[dict[str, Any]]]]:
+    preview_vertices: list[list[float]] = []
+    preview_faces: list[list[int]] = []
+    preview_face_materials: list[str] = []
+    preview_skin: list[list[dict[str, Any]]] = []
+    global_to_preview: dict[int, int] = {}
+    vertex_limit = len(full_vertices) if _MESH_PREVIEW_VERTEX_LIMIT <= 0 else _MESH_PREVIEW_VERTEX_LIMIT
+    face_limit = len(full_faces) if _MESH_PREVIEW_FACE_LIMIT <= 0 else _MESH_PREVIEW_FACE_LIMIT
+    if not full_vertices or vertex_limit <= 0:
+        return preview_vertices, preview_faces, preview_face_materials, preview_skin
+
+    for face_index in _balanced_preview_face_indices(full_faces):
+        face, material_name = full_faces[face_index]
+        needed = [index for index in face if index not in global_to_preview]
+        if len(preview_vertices) + len(needed) > vertex_limit:
+            continue
+        mapped = [
+            _append_preview_vertex(
+                index,
+                full_vertices,
+                full_skin,
+                preview_vertices,
+                preview_skin,
+                global_to_preview,
+            )
+            for index in face
+        ]
+        if len(mapped) >= 3:
+            preview_faces.append(mapped)
+            preview_face_materials.append(material_name)
+        if len(preview_faces) >= face_limit:
+            break
+
+    if not preview_vertices:
+        for global_index, point in enumerate(full_vertices[:vertex_limit]):
+            global_to_preview[global_index] = len(preview_vertices)
+            preview_vertices.append([point[0], point[1], point[2]])
+            preview_skin.append([dict(item) for item in full_skin[global_index]])
+    return preview_vertices, preview_faces, preview_face_materials, preview_skin
+
+
 def _extract_meshes(
     scene: Any,
     material_names: tuple[str, ...] = (),
 ) -> tuple[dict[str, Any], list[dict[str, Any]], tuple[str, ...]]:
     points_for_bbox: list[tuple[float, float, float]] = []
-    preview_vertices: list[list[float]] = []
-    preview_faces: list[list[int]] = []
-    preview_face_materials: list[str] = []
-    preview_skin: list[list[dict[str, Any]]] = []
+    full_vertices: list[tuple[float, float, float]] = []
+    full_skin: list[list[dict[str, Any]]] = []
+    full_faces: list[tuple[list[int], str]] = []
     skins: list[dict[str, Any]] = []
     bone_names: list[str] = []
     vertex_total = 0
@@ -251,7 +375,7 @@ def _extract_meshes(
         meshes = []
     for mesh_index, mesh in enumerate(meshes):
         try:
-            material_index = int(getattr(mesh, "MaterialIndex", -1) or -1)
+            material_index = int(getattr(mesh, "MaterialIndex", -1))
         except Exception:
             material_index = -1
         material_name = (
@@ -263,15 +387,13 @@ def _extract_meshes(
             vertices = list(getattr(mesh, "Vertices", []) or [])
         except Exception:
             vertices = []
-        local_to_preview: dict[int, int] = {}
+        base_index = len(full_vertices)
         for local_index, vertex in enumerate(vertices):
             point = _vec3(vertex)
             points_for_bbox.append(point)
+            full_vertices.append(point)
+            full_skin.append([])
             vertex_total += 1
-            if len(preview_vertices) < _MESH_PREVIEW_VERTEX_LIMIT:
-                local_to_preview[local_index] = len(preview_vertices)
-                preview_vertices.append([point[0], point[1], point[2]])
-                preview_skin.append([])
         try:
             faces = list(getattr(mesh, "Faces", []) or [])
         except Exception:
@@ -283,10 +405,12 @@ def _extract_meshes(
                 indices = []
             if len(indices) >= 3:
                 face_total += 1
-            mapped = [local_to_preview[index] for index in indices if index in local_to_preview]
-            if len(mapped) == len(indices) and len(mapped) >= 3 and len(preview_faces) < _MESH_PREVIEW_FACE_LIMIT:
-                preview_faces.append(mapped)
-                preview_face_materials.append(material_name)
+            if len(indices) < 3:
+                continue
+            bounded = indices[:8]
+            mapped = [base_index + index for index in bounded if 0 <= index < len(vertices)]
+            if len(mapped) == len(bounded) and len(mapped) >= 3:
+                full_faces.append((mapped, material_name))
         mesh_bones: list[str] = []
         try:
             bones = list(getattr(mesh, "Bones", []) or [])
@@ -303,13 +427,16 @@ def _extract_meshes(
             except Exception:
                 weights = []
             for weight in weights:
-                local_index = int(getattr(weight, "VertexID", -1) or -1)
-                preview_index = local_to_preview.get(local_index)
-                if preview_index is None:
+                try:
+                    local_index = int(getattr(weight, "VertexID", -1))
+                except Exception:
+                    local_index = -1
+                if not 0 <= local_index < len(vertices):
                     continue
+                global_index = base_index + local_index
                 amount = _finite_float(getattr(weight, "Weight", 0.0))
                 if amount > 0.000001 and joint:
-                    preview_skin[preview_index].append({
+                    full_skin[global_index].append({
                         "joint": joint,
                         "source": raw_name,
                         "weight": amount,
@@ -321,6 +448,11 @@ def _extract_meshes(
                 "joints": _unique(mesh_bones),
                 "canonical_joints": _unique(_canonical_from_token(name) for name in mesh_bones),
             })
+    preview_vertices, preview_faces, preview_face_materials, preview_skin = _build_mesh_preview(
+        full_vertices,
+        full_skin,
+        full_faces,
+    )
     for entries in preview_skin:
         total = sum(_finite_float(item.get("weight")) for item in entries)
         if total > 0.000001:
@@ -330,6 +462,7 @@ def _extract_meshes(
         "source": "assimpnet",
         "vertices": preview_vertices,
         "faces": preview_faces,
+        "truncated": len(preview_vertices) < vertex_total or len(preview_faces) < face_total,
     }
     if preview_face_materials:
         preview["face_materials"] = preview_face_materials
