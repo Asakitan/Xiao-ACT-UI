@@ -35,6 +35,9 @@ from ai_editor.chat_providers import (
     describe_provider_status,
     provider_runtime_cli_path,
 )
+from ai_editor.vscode_api import (
+    _resolve_provider_result as _resolve_vscode_provider_result,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -4325,9 +4328,11 @@ class AIEditorAPI:
         if provider is None or not hasattr(provider, "getChildren"):
             return []
         try:
-            children = provider.getChildren(None)
+            children = _resolve_vscode_provider_result(
+                provider.getChildren(None), default=[])
         except TypeError:
-            children = provider.getChildren()
+            children = _resolve_vscode_provider_result(
+                provider.getChildren(), default=[])
         except Exception:
             return []
         if not isinstance(children, list):
@@ -4349,10 +4354,12 @@ class AIEditorAPI:
         if depth > max_depth:
             return []
         try:
-            children = provider.getChildren(element)
+            children = _resolve_vscode_provider_result(
+                provider.getChildren(element), default=[])
         except TypeError:
             if element is None:
-                children = provider.getChildren()
+                children = _resolve_vscode_provider_result(
+                    provider.getChildren(), default=[])
             else:
                 return []
         except Exception:
@@ -4410,7 +4417,8 @@ class AIEditorAPI:
         if provider is None or not hasattr(provider, "getTreeItem"):
             return element
         try:
-            item = provider.getTreeItem(element)
+            item = _resolve_vscode_provider_result(
+                provider.getTreeItem(element), default=None)
             return item if item is not None else element
         except Exception:
             return element

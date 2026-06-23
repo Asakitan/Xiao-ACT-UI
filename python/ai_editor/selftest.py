@@ -3118,6 +3118,14 @@ def test_app_extension_runtime_support() -> None:
             },
         }, "/tmp/selftest-activity")
         api._ext_host.ext_points.process(activity_desc)
+        class _ImmediateThenable:
+            def __init__(self, value):
+                self.value = value
+
+            def then(self, resolve, reject=None):
+                resolve(self.value)
+                return self
+
         class _ActivityTreeProvider:
             def __init__(self):
                 self._emitter = EventEmitter()
@@ -3131,17 +3139,18 @@ def test_app_extension_runtime_support() -> None:
 
             def getChildren(self, element=None):
                 if element == "node-a":
-                    return ["leaf-a"]
-                return ["node-a", "node-b"] if element is None else []
+                    return _ImmediateThenable(["leaf-a"])
+                return _ImmediateThenable(
+                    ["node-a", "node-b"] if element is None else [])
 
             def getParent(self, element):
                 if element == "leaf-a":
-                    return "node-a"
-                return None
+                    return _ImmediateThenable("node-a")
+                return _ImmediateThenable(None)
 
             def getTreeItem(self, element):
                 if element == "node-a":
-                    return {
+                    return _ImmediateThenable({
                         "label": "Node A",
                         "description": "branch",
                         "tooltip": "Expandable node",
@@ -3152,8 +3161,9 @@ def test_app_extension_runtime_support() -> None:
                             "title": "Open Node A",
                             "arguments": [{"from": "tree"}],
                         },
-                    }
-                return {"label": str(element).title(), "collapsibleState": 0}
+                    })
+                return _ImmediateThenable(
+                    {"label": str(element).title(), "collapsibleState": 0})
 
         activity_tree_provider = _ActivityTreeProvider()
         activity_command_log = []
@@ -3193,7 +3203,7 @@ def test_app_extension_runtime_support() -> None:
                and activity_views.get("selftest.activity.webview", {}).get("runtimeState", {}).get("kind") == "webviewView"
                and "command-webview" in activity_views.get("selftest.activity.webview", {}).get("runtimeState", {}).get("html", ""))
         activity_tree_nodes = activity_views.get("selftest.activity.tree", {}).get("runtimeState", {}).get("nodes", [])
-        _check("activity tree views expose structured expandable nodes",
+        _check("activity tree thenable provider exposes structured expandable nodes",
                activity_tree_nodes
                and activity_tree_nodes[0].get("label") == "Node A"
                and activity_tree_nodes[0].get("description") == "branch"
@@ -3252,7 +3262,7 @@ def test_app_extension_runtime_support() -> None:
             "selftest.activity.tree", {}).get(
                 "runtimeState", {}).get("nodes", [{}])[0]
         revealed_activity_child = revealed_activity_node.get("children", [{}])[0]
-        _check("activity tree reveal expands provider parent chain",
+        _check("activity tree reveal expands thenable provider parent chain",
                revealed_activity_node.get("revealAncestor") is True
                and revealed_activity_node.get("collapsibleState") == 2
                and revealed_activity_node.get("childrenLoaded") is True

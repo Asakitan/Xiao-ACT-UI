@@ -18,6 +18,7 @@ Implemented namespaces:
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import os
@@ -35,6 +36,98 @@ from ai_editor.extension_host import (
     CommandService, ExtensionHost, ExtensionDescription,
     Position, Range, Uri, Disposable, EventEmitter,
 )
+
+_PROVIDER_RESULT_TIMEOUT = 0.75
+
+
+def _resolve_provider_result(
+        value: Any,
+        default: Any = None,
+        timeout: float = _PROVIDER_RESULT_TIMEOUT) -> Any:
+    """Resolve VS Code ProviderResult/Thenable-like values with a short bound."""
+    if value is None:
+        return default
+    if inspect.isawaitable(value):
+        return _resolve_awaitable_provider_result(value, default, timeout)
+    result = getattr(value, "result", None)
+    if callable(result):
+        try:
+            return _resolve_provider_result(
+                result(timeout=timeout), default=default, timeout=timeout)
+        except TypeError:
+            done = getattr(value, "done", None)
+            if callable(done):
+                try:
+                    if not done():
+                        return default
+                except Exception:
+                    return default
+            return _resolve_provider_result(
+                result(), default=default, timeout=timeout)
+        except TimeoutError:
+            return default
+    then = getattr(value, "then", None)
+    if callable(then):
+        return _resolve_thenable_provider_result(value, then, default, timeout)
+    return value
+
+
+def _resolve_awaitable_provider_result(
+        value: Any, default: Any, timeout: float) -> Any:
+    box: Dict[str, Any] = {}
+    finished = threading.Event()
+
+    def _run() -> None:
+        async def _await_value() -> Any:
+            return await asyncio.wait_for(value, timeout=timeout)
+
+        try:
+            box["value"] = asyncio.run(_await_value())
+        except TimeoutError:
+            box["value"] = default
+        except Exception as exc:
+            box["error"] = exc
+        finally:
+            finished.set()
+
+    threading.Thread(target=_run, daemon=True).start()
+    if not finished.wait(timeout + 0.05):
+        return default
+    if "error" in box:
+        raise box["error"]
+    return _resolve_provider_result(box.get("value"), default=default,
+                                    timeout=timeout)
+
+
+def _resolve_thenable_provider_result(
+        value: Any, then: Callable, default: Any, timeout: float) -> Any:
+    box: Dict[str, Any] = {}
+    finished = threading.Event()
+
+    def _resolve(resolved: Any = None) -> None:
+        box["value"] = resolved
+        finished.set()
+
+    def _reject(error: Any = None) -> None:
+        box["error"] = error
+        finished.set()
+
+    try:
+        chained = then(_resolve, _reject)
+    except TypeError:
+        chained = then(_resolve)
+    if finished.wait(timeout):
+        if "error" in box:
+            error = box["error"]
+            if isinstance(error, BaseException):
+                raise error
+            raise RuntimeError(str(error))
+        return _resolve_provider_result(box.get("value"), default=default,
+                                        timeout=timeout)
+    if chained is not None and chained is not value:
+        return _resolve_provider_result(chained, default=default,
+                                        timeout=timeout)
+    return default
 
 
 # NOTE: UIBridge Protocol is defined once below (after WorkspaceEdit) with
@@ -3506,7 +3599,8 @@ class _TreeView:
         current = element
         for _ in range(50):
             try:
-                parent = get_parent(current)
+                parent = _resolve_provider_result(
+                    get_parent(current), default=None)
             except Exception:
                 break
             if parent is None:
