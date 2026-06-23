@@ -3479,7 +3479,9 @@ class VscodeNamespace:
         doc_key = self._document_key(document)
         for existing in self._text_documents:
             if self._document_key(existing) == doc_key:
+                existing._save_callback = self._save_text_document
                 return existing
+        document._save_callback = self._save_text_document
         self._text_documents.append(document)
         self._sync_workspace_state()
         self._workspace_open_text_document_emitter.fire(document)
@@ -3698,7 +3700,7 @@ class VscodeNamespace:
             updated = _apply_structured_text_edits(current, [entry])
         if updated is None:
             return False
-        self._store_document_content(document, updated)
+        self._apply_document_content(document, updated)
         return True
 
     def _apply_create_file(self, entry: Dict[str, Any]) -> bool:
@@ -3820,9 +3822,17 @@ class VscodeNamespace:
             os.makedirs(parent, exist_ok=True)
         return self._remember_text_document(_TextDocument(uri, "", _language_id_for_path(path)))
 
-    def _store_document_content(self, document: "_TextDocument", content: str) -> None:
+    def _apply_document_content(self, document: "_TextDocument", content: str) -> None:
         document._content = content
         document.version += 1
+        document.isDirty = True
+        self._workspace_change_text_document_emitter.fire({"document": document})
+        self._sync_workspace_state()
+
+    def _save_text_document(self, document: "_TextDocument") -> bool:
+        if document.isUntitled:
+            return False
+        content = document.getText()
         if getattr(document.uri, "scheme", "") == "file":
             parent = os.path.dirname(document.fileName)
             if parent:
@@ -3832,14 +3842,19 @@ class VscodeNamespace:
             document.isDirty = False
             self._workspace_save_text_document_emitter.fire(document)
             self._notify_workspace_watchers(document.fileName, "change")
+            self._sync_workspace_state()
+            return True
         else:
             try:
                 self._write_document_bytes(document.uri, content.encode("utf-8"))
                 document.isDirty = False
                 self._workspace_save_text_document_emitter.fire(document)
+                self._sync_workspace_state()
+                return True
             except Exception:
                 document.isDirty = True
-        self._workspace_change_text_document_emitter.fire({"document": document})
+                self._sync_workspace_state()
+                return False
 
     def _create_file_system_watcher(self, pattern: Any, *args: Any,
                                     **kw: Any) -> Any:
@@ -5370,6 +5385,7 @@ class _TextDocument:
         self.isDirty = False
         self.isUntitled = getattr(uri, "scheme", "") == "untitled"
         self._content = content
+        self._save_callback: Optional[Callable[["_TextDocument"], bool]] = None
 
     @property
     def lineCount(self) -> int:
@@ -5379,8 +5395,8 @@ class _TextDocument:
         return self._content
 
     def save(self) -> bool:
-        if self.isUntitled:
-            return False
+        if callable(self._save_callback):
+            return bool(self._save_callback(self))
         with open(self.fileName, "w", encoding="utf-8") as fh:
             fh.write(self._content)
         self.isDirty = False

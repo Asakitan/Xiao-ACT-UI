@@ -3826,9 +3826,17 @@ def test_vscode_api() -> None:
         edit.replace(doc.uri, Range(Position(0, 0), Position(0, 5)), "echo")
         _check("workspace.applyEdit rejects malformed payloads",
              api["workspace"]["applyEdit"]({"edits": [1]}) is False)
-        _check("workspace.applyEdit updates document and file contents",
-             api["workspace"]["applyEdit"](edit) is True
+        edit_applied = api["workspace"]["applyEdit"](edit)
+        disk_after_apply = open(sample, "r", encoding="utf-8").read()
+        _check("workspace.applyEdit updates dirty document before save",
+             edit_applied is True
+             and doc.isDirty is True
              and doc.getText().startswith("echo('vscode')")
+             and "print('vscode')" in disk_after_apply)
+        doc_saved = doc.save()
+        _check("TextDocument.save persists workspace.applyEdit changes",
+             doc_saved is True
+             and doc.isDirty is False
              and "echo('vscode')" in open(sample, "r", encoding="utf-8").read())
         _check("workspace.applyEdit empty WorkspaceEdit succeeds",
                api["workspace"]["applyEdit"](WorkspaceEdit()) is True)
@@ -3872,9 +3880,15 @@ def test_vscode_api() -> None:
         mem_doc = api["workspace"]["openTextDocument"](mem_uri)
         mem_edit = WorkspaceEdit()
         mem_edit.replace(mem_uri, Range(Position(0, 0), Position(0, 5)), "HELLO")
-        _check("workspace.registerFileSystemProvider supports custom scheme edits",
-               api["workspace"]["applyEdit"](mem_edit) is True
+        mem_apply_ok = api["workspace"]["applyEdit"](mem_edit)
+        _check("workspace.registerFileSystemProvider keeps edits dirty before save",
+               mem_apply_ok is True
+               and mem_doc.isDirty is True
                and mem_doc.getText() == "HELLO"
+               and api["workspace"]["fs"].readFile(mem_uri) == b"hello")
+        _check("workspace.registerFileSystemProvider saves custom scheme edits",
+               mem_doc.save() is True
+               and mem_doc.isDirty is False
                and api["workspace"]["fs"].readFile(mem_uri) == b"HELLO")
         watcher = api["workspace"]["createFileSystemWatcher"]("*.py", True)
         watcher_events = []
@@ -6362,6 +6376,7 @@ function activate(context) {
     eventEdit.replace(eventUri, new vscode.Range(0, 6, 0, 9), 'two');
     const eventEditApplied = await vscode.workspace.applyEdit(eventEdit);
     const eventDocTextAfterApply = eventDoc.getText();
+    const eventDiskAfterApply = new TextDecoder().decode(await vscode.workspace.fs.readFile(eventUri));
     await eventDoc.save();
     await vscode.workspace.fs.delete(eventUri);
     const editUri = vscode.Uri.joinPath(context.extensionUri, 'workspace-edit.txt');
@@ -6396,6 +6411,7 @@ function activate(context) {
       untitledText: untitled.getText(),
       eventEditApplied,
       eventDocTextAfterApply,
+      eventDiskAfterApply,
       workspaceEvents,
       editApplied,
       editText: editedDoc.getText(),
@@ -6885,6 +6901,8 @@ module.exports = { activate, deactivate };
                     timeout=3.0)
                 node_custom_text_dirty_state = node_host.custom_editor_state(
                     view_id=node_custom_editor.get("viewId", ""))
+                with open(custom_editor_file, "r", encoding="utf-8") as fh:
+                    node_custom_text_disk_before_save = fh.read()
                 node_custom_text_save = api.save_extension_custom_editor(
                     node_custom_editor.get("viewId", ""),
                     "selftest.node.customEditor",
@@ -7225,6 +7243,7 @@ module.exports = { activate, deactivate };
                 _check("node host workspace document events fire for JS extensions",
                        node_workspace_probe.get("eventEditApplied") is True
                        and node_workspace_probe.get("eventDocTextAfterApply") == "event-two"
+                       and node_workspace_probe.get("eventDiskAfterApply") == "event-one"
                        and node_workspace_events.get("open", 0) >= 3
                        and node_workspace_events.get("change", 0) >= 1
                        and node_workspace_events.get("close", 0) >= 1
@@ -7254,6 +7273,7 @@ module.exports = { activate, deactivate };
                        and node_custom_text_dirty
                        and node_custom_text_dirty_state.get("dirty") is True
                        and node_custom_text_dirty_state.get("textEditor") is True
+                       and node_custom_text_disk_before_save == "custom-editor-doc"
                        and node_custom_text_save.get("ok") is True
                        and node_custom_text_saved_state.get("dirty") is False
                        and node_custom_text_disk == "custom-editor-updated"
@@ -7265,6 +7285,7 @@ module.exports = { activate, deactivate };
                            "html": node_custom_editor_html,
                            "roots": node_custom_editor_roots,
                            "dirty": node_custom_text_dirty_state,
+                           "diskBeforeSave": node_custom_text_disk_before_save,
                            "save": node_custom_text_save,
                            "saved": node_custom_text_saved_state,
                            "disk": node_custom_text_disk,

@@ -1762,11 +1762,12 @@ async function _workspaceApplyEdit(edit) {
                     });
                     text = text.slice(0, start) + item.text + text.slice(end);
                 }
-                await fsp.mkdir(path.dirname(group.uri.fsPath), { recursive: true });
-                await fsp.writeFile(group.uri.fsPath, text, 'utf8');
                 if (cachedDoc) {
                     _workspaceSetDocumentText(
                         group.uri, text, _languageIdForUri(group.uri), contentChanges);
+                } else {
+                    await fsp.mkdir(path.dirname(group.uri.fsPath), { recursive: true });
+                    await fsp.writeFile(group.uri.fsPath, text, 'utf8');
                 }
             }
             grouped.clear();
