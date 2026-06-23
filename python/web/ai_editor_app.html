@@ -1708,6 +1708,11 @@ pre.code-block { overflow:visible; }
   <div class="workspace-symbol-list" id="workspace-symbol-list" role="listbox"></div>
 </div>
 
+<div class="workspace-symbol-palette document-symbol-palette" id="document-symbol-palette" role="dialog" aria-label="Document symbols">
+  <input id="document-symbol-input" placeholder="Type the name of a symbol to go to." aria-label="Search document symbols">
+  <div class="workspace-symbol-list" id="document-symbol-list" role="listbox"></div>
+</div>
+
 <!-- SETTINGS-05: Keyboard shortcuts editor modal -->
 <div class="kb-modal-bg" id="kb-shortcuts-modal">
   <div class="kb-modal">
@@ -2561,6 +2566,7 @@ function openInEditor(code,lang){
   if(typeof closeEditorSignatureHelp==='function')closeEditorSignatureHelp();
   if(typeof closeEditorCodeActions==='function')closeEditorCodeActions();
   if(typeof closeEditorReferences==='function')closeEditorReferences();
+  if(typeof closeDocumentSymbolPicker==='function')closeDocumentSymbolPicker();
   if(typeof closeEditorHierarchy==='function')closeEditorHierarchy();
   if(typeof closeEditorLinks==='function')closeEditorLinks();
   if(typeof clearEditorInlayHints==='function')clearEditorInlayHints();
@@ -3578,6 +3584,7 @@ function _editorInputWithUndo(e){
   closeEditorHover();
   closeEditorCodeActions();
   closeEditorReferences();
+  closeDocumentSymbolPicker();
   closeEditorHierarchy();
   const ch=e&&typeof e.data==='string'?e.data:'';
   if(editorCompletionTriggerCharacter(ch))requestEditorCompletion(ch,true);
@@ -3614,6 +3621,7 @@ let _editorReferences=[],_editorReferenceIndex=0,_editorReferencesRequest=0;
 let _editorReferenceGroups=[],_editorLocationPeekLabel='';
 let _editorHierarchyMode='',_editorHierarchyDirection='',_editorHierarchyRoot=null,_editorHierarchyRows=[],_editorHierarchyIndex=0,_editorHierarchyRequest=0;
 let _workspaceSymbols=[],_workspaceSymbolIndex=0,_workspaceSymbolRequest=0,_workspaceSymbolTimer=null;
+let _documentSymbolRows=[],_documentSymbols=[],_documentSymbolIndex=0,_documentSymbolRequest=0;
 let _editorLinks=[],_editorLinkIndex=0,_editorLinksRequest=0;
 let _editorInlayHints=[],_editorInlayHintRequest=0,_editorInlayHintTimer=null;
 let _editorInlineCompletions=[],_editorInlineCompletionIndex=0,_editorInlineCompletionRequest=0,_editorInlineCompletionTimer=null;
@@ -4997,7 +5005,7 @@ function scheduleWorkspaceSymbolSearch(delay){
 }
 function openWorkspaceSymbolPicker(){
   showEditorArea();
-  closeCommandPalette();
+  closeCommandPalette();closeDocumentSymbolPicker();
   closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();closeEditorHierarchy();closeEditorLinks();
   const box=$('workspace-symbol-palette'),input=$('workspace-symbol-input');if(!box||!input)return;
   box.style.display='block';requestAnimationFrame(()=>box.classList.add('open'));
@@ -5024,6 +5032,121 @@ function handleWorkspaceSymbolKey(e){
   if(e.key==='ArrowUp'){e.preventDefault();setWorkspaceSymbolIndex(_workspaceSymbolIndex-1);return true}
   if(e.key==='Enter'||e.key==='Tab'){e.preventDefault();applyWorkspaceSymbol(_workspaceSymbols[_workspaceSymbolIndex]);return true}
   if(e.key==='Escape'){e.preventDefault();closeWorkspaceSymbolPicker();ed.focus();return true}
+  return false;
+}
+function isDocumentSymbolPickerOpen(){
+  const box=$('document-symbol-palette');return !!(box&&box.classList.contains('open'));
+}
+function closeDocumentSymbolPicker(){
+  const box=$('document-symbol-palette');if(!box)return;
+  _documentSymbolRequest++;
+  box.classList.remove('open');box.style.display='none';
+  _documentSymbolRows=[];_documentSymbols=[];_documentSymbolIndex=0;
+}
+function documentSymbolTarget(symbol){
+  if(!symbol||typeof symbol!=='object')return null;
+  if(symbol.location)return workspaceSymbolTarget(symbol);
+  const range=symbol.selectionRange||symbol.range||symbol.targetSelectionRange||symbol.targetRange;
+  const uri=symbol.uri||symbol.targetUri;
+  return range||uri?{uri,range}:null;
+}
+function flattenDocumentSymbols(symbols,level,container){
+  const rows=[];
+  (Array.isArray(symbols)?symbols:[]).forEach(symbol=>{
+    if(!symbol||typeof symbol!=='object')return;
+    const name=String(symbol.name||'');
+    const target=documentSymbolTarget(symbol);
+    const containerName=String(symbol.containerName||container||'');
+    if(name&&target)rows.push({symbol,target,level:Math.max(0,level||0),container:containerName});
+    const children=Array.isArray(symbol.children)?symbol.children:[];
+    if(children.length)rows.push(...flattenDocumentSymbols(children,(level||0)+1,name||containerName));
+  });
+  return rows;
+}
+function documentSymbolDetail(row){
+  const symbol=row&&row.symbol||{},target=row&&row.target||{},range=target.range||{},start=range.start||{};
+  const bits=[workspaceSymbolKindLabel(symbol.kind)];
+  if(symbol.detail)bits.push(String(symbol.detail));
+  if(row&&row.container)bits.push(String(row.container));
+  bits.push('Ln '+((Number(start.line)||0)+1)+', Col '+((Number(start.character)||0)+1));
+  return bits.filter(Boolean).join(' · ');
+}
+function documentSymbolMatches(row,query){
+  if(!query)return true;
+  const symbol=row&&row.symbol||{};
+  const hay=[symbol.name,symbol.detail,row&&row.container,workspaceSymbolKindLabel(symbol.kind)].join(' ').toLowerCase();
+  return hay.includes(query.toLowerCase());
+}
+function setDocumentSymbolIndex(index){
+  if(!_documentSymbols.length)return;
+  _documentSymbolIndex=(index+_documentSymbols.length)%_documentSymbols.length;
+  document.querySelectorAll('#document-symbol-list .workspace-symbol-item').forEach((el,i)=>{
+    const selected=i===_documentSymbolIndex;
+    el.classList.toggle('active',selected);
+    el.setAttribute('aria-selected',selected?'true':'false');
+    if(selected)el.scrollIntoView({block:'nearest'});
+  });
+}
+function renderDocumentSymbols(query,message){
+  const list=$('document-symbol-list');if(!list)return;
+  list.innerHTML='';
+  const q=String(query||'').trim();
+  _documentSymbols=_documentSymbolRows.filter(row=>documentSymbolMatches(row,q)).slice(0,160);
+  _documentSymbolIndex=0;
+  if(message||!_documentSymbols.length){
+    const empty=document.createElement('div');empty.className='workspace-symbol-empty';
+    empty.textContent=message||(q?'No matching symbols':'No document symbols');
+    list.appendChild(empty);return;
+  }
+  _documentSymbols.forEach((row,index)=>{
+    const symbol=row.symbol;
+    const item=document.createElement('div');item.className='workspace-symbol-item'+(index===0?' active':'');
+    item.setAttribute('role','option');item.setAttribute('aria-selected',index===0?'true':'false');
+    item.style.paddingLeft=(12+row.level*14)+'px';
+    const kind=document.createElement('div');kind.className='workspace-symbol-kind';kind.textContent=workspaceSymbolGlyph(symbol.kind);
+    const body=document.createElement('div');
+    const title=document.createElement('div');title.className='workspace-symbol-title';title.textContent=String(symbol.name||'');
+    const detail=document.createElement('div');detail.className='workspace-symbol-detail';detail.textContent=documentSymbolDetail(row);
+    body.appendChild(title);body.appendChild(detail);item.appendChild(kind);item.appendChild(body);
+    item.onmouseenter=()=>setDocumentSymbolIndex(index);
+    item.onmousedown=e=>{e.preventDefault();applyDocumentSymbol(row)};
+    list.appendChild(item);
+  });
+}
+function filterDocumentSymbols(){
+  const input=$('document-symbol-input');renderDocumentSymbols(input?input.value:'');
+}
+async function requestDocumentSymbols(quiet){
+  const requestId=++_documentSymbolRequest;
+  const res=await call('editor_language_provider',editorProviderPayload('documentSymbol'));
+  if(requestId!==_documentSymbolRequest)return;
+  if(res&&res.error){_documentSymbolRows=[];renderDocumentSymbols('', 'Document symbols failed: '+res.error);if(!quiet)setStatus('Document symbols failed: '+res.error);return}
+  _documentSymbolRows=flattenDocumentSymbols(res&&res.ok&&Array.isArray(res.symbols)?res.symbols:[],0,'');
+  filterDocumentSymbols();
+  if(!quiet)setStatus(_documentSymbolRows.length+' document symbol'+(_documentSymbolRows.length===1?'':'s'));
+}
+function openDocumentSymbolPicker(){
+  showEditorArea();
+  closeCommandPalette();closeWorkspaceSymbolPicker();
+  closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();closeEditorHierarchy();closeEditorLinks();
+  const box=$('document-symbol-palette'),input=$('document-symbol-input');if(!box||!input)return;
+  box.style.display='block';requestAnimationFrame(()=>box.classList.add('open'));
+  input.value='';input.focus();_documentSymbolRows=[];renderDocumentSymbols('', 'Loading symbols...');
+  requestDocumentSymbols(true);
+}
+async function applyDocumentSymbol(row){
+  if(!row)return false;
+  closeDocumentSymbolPicker();
+  const ok=await navigateEditorDefinition(row.target,String(row.symbol&&row.symbol.name||'Symbol'));
+  if(ok)setStatus('Opened symbol: '+String(row.symbol&&row.symbol.name||''));
+  return ok;
+}
+function handleDocumentSymbolKey(e){
+  if(!isDocumentSymbolPickerOpen())return false;
+  if(e.key==='ArrowDown'){e.preventDefault();setDocumentSymbolIndex(_documentSymbolIndex+1);return true}
+  if(e.key==='ArrowUp'){e.preventDefault();setDocumentSymbolIndex(_documentSymbolIndex-1);return true}
+  if(e.key==='Enter'||e.key==='Tab'){e.preventDefault();applyDocumentSymbol(_documentSymbols[_documentSymbolIndex]);return true}
+  if(e.key==='Escape'){e.preventDefault();closeDocumentSymbolPicker();ed.focus();return true}
   return false;
 }
 function editorRangeFromOffsets(start,end){
@@ -5521,6 +5644,7 @@ ed.addEventListener('contextmenu',function(e){
     {label:'Find All References',shortcut:'Shift+F12',action:()=>requestEditorReferences(false)},
     {label:'Peek Call Hierarchy',shortcut:'Shift+Alt+H',action:()=>requestEditorCallHierarchy(false)},
     {label:'Peek Type Hierarchy',shortcut:'',action:()=>requestEditorTypeHierarchy(false)},
+    {label:'Go to Symbol in Editor...',shortcut:'Ctrl+Shift+O',action:()=>openDocumentSymbolPicker()},
     {label:'Go to Symbol in Workspace...',shortcut:'Ctrl+T',action:()=>openWorkspaceSymbolPicker()},
     {label:'Format Document',shortcut:'',action:()=>formatDocument()},
     {label:'Format Selection',shortcut:'',action:()=>formatSelection()},
@@ -5538,7 +5662,7 @@ ed.addEventListener('contextmenu',function(e){
 });
 document.addEventListener('click',e=>{
   $('ctx-menu').style.display='none';
-  if(e.target.closest&&!e.target.closest('#workspace-symbol-palette')&&!e.target.closest('#cmd-palette')&&!e.target.closest('#ctx-menu'))closeWorkspaceSymbolPicker();
+  if(e.target.closest&&!e.target.closest('#workspace-symbol-palette')&&!e.target.closest('#document-symbol-palette')&&!e.target.closest('#cmd-palette')&&!e.target.closest('#ctx-menu')){closeWorkspaceSymbolPicker();closeDocumentSymbolPicker()}
   if(e.target.closest&&!e.target.closest('.editor-color-presentation-menu')&&!e.target.closest('.editor-color-swatch'))closeEditorColorPresentationMenu();
   if(!e.target.closest||!e.target.closest('#editor-container')){closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();closeEditorHierarchy();closeEditorLinks()}
 });
@@ -9374,6 +9498,7 @@ function switchTab(id){
     if(typeof closeEditorSignatureHelp==='function')closeEditorSignatureHelp();
     if(typeof closeEditorCodeActions==='function')closeEditorCodeActions();
     if(typeof closeEditorReferences==='function')closeEditorReferences();
+    if(typeof closeDocumentSymbolPicker==='function')closeDocumentSymbolPicker();
     if(typeof closeEditorHierarchy==='function')closeEditorHierarchy();
     if(typeof closeEditorLinks==='function')closeEditorLinks();
     if(typeof clearEditorInlayHints==='function')clearEditorInlayHints();
@@ -9814,6 +9939,7 @@ const COMMANDS=[
   {label:'Find All References',shortcut:'Shift+F12',action:()=>requestEditorReferences(false)},
   {label:'Peek Call Hierarchy',shortcut:'Shift+Alt+H',action:()=>requestEditorCallHierarchy(false)},
   {label:'Peek Type Hierarchy',shortcut:'',action:()=>requestEditorTypeHierarchy(false)},
+  {label:'Go to Symbol in Editor...',shortcut:'Ctrl+Shift+O',action:()=>openDocumentSymbolPicker()},
   {label:'Go to Symbol in Workspace...',shortcut:'Ctrl+T',action:()=>openWorkspaceSymbolPicker()},
   {label:'Format Document',shortcut:'',action:()=>formatDocument()},
   {label:'Format Selection',shortcut:'',action:()=>formatSelection()},
@@ -9855,6 +9981,9 @@ $('cmd-palette').addEventListener('click',e=>{if(e.target.id==='cmd-palette')clo
 $('workspace-symbol-input').addEventListener('input',()=>scheduleWorkspaceSymbolSearch());
 $('workspace-symbol-input').addEventListener('keydown',handleWorkspaceSymbolKey);
 $('workspace-symbol-palette').addEventListener('click',e=>{if(e.target.id==='workspace-symbol-palette')closeWorkspaceSymbolPicker()});
+$('document-symbol-input').addEventListener('input',filterDocumentSymbols);
+$('document-symbol-input').addEventListener('keydown',handleDocumentSymbolKey);
+$('document-symbol-palette').addEventListener('click',e=>{if(e.target.id==='document-symbol-palette')closeDocumentSymbolPicker()});
 // KB-002: Normalize a keydown event into a shortcut string like "Ctrl+Shift+N"
 function _normalizeKeyCombo(e){
   const parts=[];
@@ -9874,9 +10003,11 @@ const _GLOBAL_SHORTCUT_MAP={
 document.addEventListener('keydown',e=>{
   if(e.key==='P'&&e.ctrlKey&&e.shiftKey){e.preventDefault();openCommandPalette()}
   if(e.key==='t'&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();openWorkspaceSymbolPicker();return}
+  if((e.key==='o'||e.key==='O')&&e.ctrlKey&&e.shiftKey&&!e.altKey){e.preventDefault();openDocumentSymbolPicker();return}
   if(e.key==='Escape'&&$('cmd-palette').classList.contains('open')){e.preventDefault();closeCommandPalette()}
   if(e.key==='Escape'&&_editorColorPresentationMenu){e.preventDefault();closeEditorColorPresentationMenu();return}
   if(e.key==='Escape'&&isWorkspaceSymbolPickerOpen()){e.preventDefault();closeWorkspaceSymbolPicker();return}
+  if(e.key==='Escape'&&isDocumentSymbolPickerOpen()){e.preventDefault();closeDocumentSymbolPicker();return}
   if(e.key==='Escape'&&$('fold-region-picker').classList.contains('open')){e.preventDefault();closeFoldRegionPicker();return}
   // Ctrl+W → close active tab (TAB-004)
   if(e.key==='w'&&e.ctrlKey&&!e.shiftKey){e.preventDefault();if(typeof activeTab!=='undefined'&&tabs.length>1)closeTab(activeTab);return}

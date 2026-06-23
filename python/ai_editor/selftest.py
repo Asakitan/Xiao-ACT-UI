@@ -2070,6 +2070,16 @@ def test_phase1_ai_editor_regressions() -> None:
            and "editorProviderPayload('resolveWorkspaceSymbol'" in html
            and "Go to Symbol in Workspace..." in html
            and "Ctrl+T" in html
+           and "id=\"document-symbol-palette\"" in html
+           and "id=\"document-symbol-input\"" in html
+           and "function openDocumentSymbolPicker()" in html
+           and "async function requestDocumentSymbols(quiet)" in html
+           and "function flattenDocumentSymbols(symbols,level,container)" in html
+           and "function applyDocumentSymbol(row)" in html
+           and "function handleDocumentSymbolKey(e)" in html
+           and "editorProviderPayload('documentSymbol'" in html
+           and "Go to Symbol in Editor..." in html
+           and "Ctrl+Shift+O" in html
            and "call('editor_language_provider'" in html
            and "function editorProviderPayload(kind,extra)" in html
            and "function requestEditorCompletion(triggerCharacter,quiet)" in html
