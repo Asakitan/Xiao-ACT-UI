@@ -764,6 +764,9 @@ class PluginUnifiedOverlayHost:
         if layer is None or not hasattr(layer, "set_input_callbacks"):
             return
 
+        def _pointer_event(event: str, local_x: float, local_y: float) -> None:
+            self._dispatch_pointer_event(key, state, event, local_x, local_y)
+
         def _motion(local_x: float, local_y: float) -> None:
             drag = self._drag_state.get(key)
             if not drag:
@@ -773,6 +776,12 @@ class PluginUnifiedOverlayHost:
             sx, sy = _cursor_screen_pos(cur_x, cur_y)
             new_x = sx - int(drag.get("offset_x") or 0)
             new_y = sy - int(drag.get("offset_y") or 0)
+            if not bool(drag.get("moved", False)):
+                start_x = int(drag.get("start_x") or sx)
+                start_y = int(drag.get("start_y") or sy)
+                if abs(sx - start_x) > 2 or abs(sy - start_y) > 2:
+                    drag["moved"] = True
+                    _pointer_event("drag", local_x, local_y)
             self._position_overrides[key] = (new_x, new_y)
             state["x"] = new_x
             state["y"] = new_y
@@ -798,9 +807,15 @@ class PluginUnifiedOverlayHost:
                 self._drag_state[key] = {
                     "offset_x": sx - int(state.get("x") or 0),
                     "offset_y": sy - int(state.get("y") or 0),
+                    "start_x": sx,
+                    "start_y": sy,
+                    "moved": False,
                 }
+                _pointer_event("press", local_x, local_y)
             else:
+                drag = self._drag_state.get(key) or {}
                 self._drag_state.pop(key, None)
+                _pointer_event("release" if bool(drag.get("moved", False)) else "click", local_x, local_y)
                 self._persist_drag_position(key, state)
 
         try:
@@ -810,6 +825,50 @@ class PluginUnifiedOverlayHost:
         except Exception:
             state["input_ready"] = False
             pass
+
+    def _dispatch_pointer_event(
+        self,
+        key: str,
+        state: Mapping[str, Any],
+        event: str,
+        local_x: float,
+        local_y: float,
+    ) -> None:
+        plugin_id = str(state.get("plugin_id") or "")
+        if not plugin_id:
+            return
+        payload = {
+            "event": str(event or ""),
+            "x": int(state.get("x") or 0),
+            "y": int(state.get("y") or 0),
+            "z": int(state.get("node_z") or 0),
+            "local_x": float(local_x or 0.0),
+            "local_y": float(local_y or 0.0),
+            "key": str(key or ""),
+            "display_key": str(state.get("display_key") or ""),
+            "surface": self.surface,
+        }
+
+        def _dispatch() -> None:
+            try:
+                from act_platform.runtime import act_plugin_action
+                act_plugin_action(
+                    self.owner,
+                    "script.overlay.pointer",
+                    payload,
+                    plugin_id=plugin_id,
+                )
+            except Exception:
+                pass
+
+        try:
+            after = getattr(self.root, "after", None)
+            if callable(after):
+                after(0, _dispatch)
+                return
+        except Exception:
+            pass
+        _dispatch()
 
     def _persist_drag_position(self, key: str, state: Mapping[str, Any]) -> None:
         plugin_id = str(state.get("plugin_id") or "")

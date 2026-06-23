@@ -693,6 +693,62 @@ def run_selftest() -> dict[str, Any]:
                         "before": action_state,
                         "after": same_action_state,
                     }
+                click_feedback = act_plugin_action(
+                    owner,
+                    "script.overlay.pointer",
+                    {"event": "click", "local_x": 100, "local_y": 120, "x": 20, "y": 30, "z": 40},
+                    plugin_id=plugin_id,
+                )
+                click_state = _state(click_feedback)
+                if not click_feedback.get("ok") or click_state.get("action") != "walk" or click_state.get("effective_action") != "tap_react":
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_click_feedback",
+                        "result": click_feedback,
+                        "state": click_state,
+                    }
+                drag_feedback = act_plugin_action(
+                    owner,
+                    "script.overlay.pointer",
+                    {"event": "drag", "local_x": 150, "local_y": 180, "x": 40, "y": 60, "z": 40},
+                    plugin_id=plugin_id,
+                )
+                drag_state = _state(drag_feedback)
+                if (
+                    not drag_feedback.get("ok")
+                    or drag_state.get("action") != "walk"
+                    or drag_state.get("effective_action") != "drag_react"
+                    or int(drag_state.get("drag_feedback_count") or 0) < 1
+                ):
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_drag_feedback",
+                        "result": drag_feedback,
+                        "state": drag_state,
+                    }
+                release_feedback = act_plugin_action(
+                    owner,
+                    "script.overlay.pointer",
+                    {"event": "release", "local_x": 160, "local_y": 190, "x": 42, "y": 64, "z": 40},
+                    plugin_id=plugin_id,
+                )
+                release_state = _state(release_feedback)
+                if (
+                    not release_feedback.get("ok")
+                    or release_state.get("action") != "walk"
+                    or release_state.get("effective_action") != "drop_react"
+                    or int(release_state.get("pointer_event_count") or 0) < 3
+                ):
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_release_feedback",
+                        "result": release_feedback,
+                        "state": release_state,
+                    }
+                action_state = release_state
                 spec_build_count = int(action_state.get("spec_build_count") or 0)
                 redraw = act_plugin_action(owner, "script.model3d.redraw", {}, plugin_id=plugin_id)
                 redraw_state = _state(redraw)
@@ -731,6 +787,9 @@ def run_selftest() -> dict[str, Any]:
                 action_state = redraw_state
                 state = dict(state)
                 state["action"] = action_state.get("action")
+                state["effective_action"] = action_state.get("effective_action")
+                state["pointer_event_count"] = action_state.get("pointer_event_count")
+                state["drag_feedback_count"] = action_state.get("drag_feedback_count")
                 state["timer_active"] = action_state.get("timer_active")
                 state["tick_interval"] = action_state.get("tick_interval")
                 state["tick_count"] = action_state.get("tick_count")
@@ -852,6 +911,9 @@ def run_selftest() -> dict[str, Any]:
                 "y": positioned.get("y"),
                 "z": positioned.get("z"),
                 "action": state.get("action"),
+                "effective_action": state.get("effective_action"),
+                "pointer_event_count": state.get("pointer_event_count"),
+                "drag_feedback_count": state.get("drag_feedback_count"),
                 "tick_count": state.get("tick_count"),
                 "render_count": state.get("render_count"),
                 "static_ops_count": state.get("static_ops_count"),

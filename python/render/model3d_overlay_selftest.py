@@ -3616,7 +3616,7 @@ class UnifiedOverlayDrawableTests(unittest.TestCase):
              mock.patch.object(overlay_mod, "render_overlays",
                                lambda _owner, _surface: {"overlays": self._sample_overlays()}), \
              mock.patch.object(overlay_mod, "_cursor_screen_pos",
-                               side_effect=[(100, 100), (130, 150)]), \
+                               side_effect=[(100, 100), (130, 150), (140, 160)]), \
              mock.patch("act_platform.runtime.act_plugin_action") as action:
             host._refresh_now()
             self.assertEqual(fake_overlay.created[0].geometry, (11, 22, 20, 10))
@@ -3627,12 +3627,33 @@ class UnifiedOverlayDrawableTests(unittest.TestCase):
             fake_overlay.created[1].cursor_pos_fn(40.0, 70.0)
             fake_overlay.created[1].mouse_button_fn(0, 0, 0, 40.0, 70.0)
             self.assertEqual(fake_overlay.created[1].geometry, (74, 105, 40, 30))
-            action.assert_called_once()
+            self.assertEqual(action.call_count, 4)
+            dispatched = [(call.args[1], call.args[2], call.kwargs) for call in action.call_args_list]
+            self.assertEqual(
+                [item[0] for item in dispatched],
+                [
+                    "script.overlay.pointer",
+                    "script.overlay.pointer",
+                    "script.overlay.pointer",
+                    "script.overlay.set_position",
+                ],
+            )
+            self.assertEqual([item[1].get("event") for item in dispatched[:3]], ["press", "drag", "release"])
             args, kwargs = action.call_args
             self.assertEqual(args[1], "script.overlay.set_position")
             self.assertEqual(kwargs.get("plugin_id"), "plug")
             self.assertEqual(args[2]["x"], 74)
             self.assertEqual(args[2]["y"], 105)
+            action.reset_mock()
+            fake_overlay.created[1].mouse_button_fn(0, 1, 0, 12.0, 22.0)
+            fake_overlay.created[1].mouse_button_fn(0, 0, 0, 12.0, 22.0)
+            self.assertEqual(action.call_count, 3)
+            dispatched = [(call.args[1], call.args[2]) for call in action.call_args_list]
+            self.assertEqual(
+                [item[0] for item in dispatched],
+                ["script.overlay.pointer", "script.overlay.pointer", "script.overlay.set_position"],
+            )
+            self.assertEqual([item[1].get("event") for item in dispatched[:2]], ["press", "click"])
 
         with mock.patch.object(overlay_mod, "render_overlays",
                                lambda _owner, _surface: {"overlays": self._sample_overlays()}):
