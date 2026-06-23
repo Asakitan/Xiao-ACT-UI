@@ -9,6 +9,7 @@ own presentation, z-order, and input.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from dataclasses import asdict, is_dataclass
 from threading import RLock
 from typing import Any
 
@@ -16,6 +17,11 @@ try:
     from PIL import Image
 except Exception:  # pragma: no cover - PIL is optional at import time
     Image = None  # type: ignore[assignment]
+
+try:
+    from render import model3d_backend as _backend
+except Exception:  # pragma: no cover - backend is optional at import time
+    _backend = None  # type: ignore[assignment]
 
 
 NativeModel3DRenderer = Callable[[Mapping[str, Any], Mapping[str, Any]], Any]
@@ -119,6 +125,81 @@ def _image_from_result(result: Any, width: int, height: int) -> Any:
         return None
 
 
+def _safe_backend_call(name: str, node: Mapping[str, Any], errors: list[str]) -> Any:
+    if _backend is None:
+        return None
+    fn = getattr(_backend, name, None)
+    if not callable(fn):
+        return None
+    try:
+        return fn(node)
+    except Exception as exc:
+        errors.append(f"{name}: {exc}")
+        return None
+
+
+def _backend_status_context(errors: list[str]) -> dict[str, Any]:
+    if _backend is None or not callable(getattr(_backend, "get_backend_status", None)):
+        return {"available": False, "reason": "model3d backend unavailable"}
+    try:
+        status = _backend.get_backend_status()
+    except Exception as exc:
+        errors.append(f"get_backend_status: {exc}")
+        return {"available": False, "reason": str(exc)}
+    if is_dataclass(status):
+        return dict(asdict(status))
+    if isinstance(status, Mapping):
+        return dict(status)
+    return {
+        "available": bool(getattr(status, "render_available", False)),
+        "backend": str(getattr(status, "backend", "")),
+        "files_present": bool(getattr(status, "files_present", False)),
+        "render_available": bool(getattr(status, "render_available", False)),
+        "reason": str(getattr(status, "reason", "")),
+    }
+
+
+def build_native_model3d_context(
+    node: Mapping[str, Any],
+    *,
+    palette: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the plain-data context consumed by native/offscreen providers."""
+
+    width, height = _node_size(node)
+    errors: list[str] = []
+    model_meta = _safe_backend_call("get_model_metadata", node, errors)
+    action_meta = _safe_backend_call("get_action_metadata", node, errors)
+    retarget_plan = _safe_backend_call("get_retarget_plan", node, errors)
+    pose = _safe_backend_call("evaluate_retarget_pose", node, errors)
+    context: dict[str, Any] = {
+        "width": width,
+        "height": height,
+        "palette": dict(palette or {}),
+        "surface": "unioverlay",
+        "presentation": "existing_compositor_layer",
+        "offscreen": True,
+        "windowless": True,
+        "model": dict(model_meta) if isinstance(model_meta, Mapping) else {},
+        "action": dict(action_meta) if isinstance(action_meta, Mapping) else {},
+        "retarget": dict(retarget_plan) if isinstance(retarget_plan, Mapping) else {},
+        "pose": dict(pose) if isinstance(pose, Mapping) else {},
+        "backend": _backend_status_context(errors),
+        "errors": errors,
+    }
+    model = context["model"]
+    action = context["action"]
+    retarget = context["retarget"]
+    context["signatures"] = {
+        "model": tuple(model.get("cache_key") or ()) if isinstance(model, Mapping) else (),
+        "action": tuple(action.get("cache_key") or ()) if isinstance(action, Mapping) else (),
+        "retarget": (
+            tuple(retarget.get("bone_names") or ()) if isinstance(retarget, Mapping) else ()
+        ),
+    }
+    return context
+
+
 def try_render_native_model3d_node(
     node: Mapping[str, Any],
     *,
@@ -145,16 +226,13 @@ def try_render_native_model3d_node(
         )
         return None
 
-    width, height = _node_size(node)
-    context = {
-        "width": width,
-        "height": height,
-        "palette": dict(palette or {}),
-        "surface": "unioverlay",
-        "presentation": "existing_compositor_layer",
-        "offscreen": True,
-    }
+    context = build_native_model3d_context(node, palette=palette)
+    width = int(context.get("width") or _node_size(node)[0])
+    height = int(context.get("height") or _node_size(node)[1])
     errors: list[str] = []
+    context_errors = context.get("errors")
+    if isinstance(context_errors, list):
+        errors.extend(str(item) for item in context_errors)
     for name, renderer in reversed(renderers):
         try:
             image = _image_from_result(renderer(node, context), width, height)
@@ -176,6 +254,7 @@ def try_render_native_model3d_node(
 
 __all__ = [
     "NativeModel3DRenderer",
+    "build_native_model3d_context",
     "clear_native_model3d_renderers",
     "native_model3d_renderer_status",
     "register_native_model3d_renderer",

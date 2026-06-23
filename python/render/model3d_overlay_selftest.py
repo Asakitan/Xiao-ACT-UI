@@ -30,6 +30,7 @@ from render.model3d_backend import (
     probe_model3d_backend,
 )
 from render.model3d_native import (
+    build_native_model3d_context,
     clear_native_model3d_renderers,
     native_model3d_renderer_status,
     register_native_model3d_renderer,
@@ -426,7 +427,13 @@ class Model3DBackendTests(unittest.TestCase):
 
         def fake_renderer(node, context):
             self.assertTrue(context["offscreen"])
+            self.assertTrue(context["windowless"])
             self.assertEqual(context["presentation"], "existing_compositor_layer")
+            self.assertIn("model", context)
+            self.assertIn("action", context)
+            self.assertIn("retarget", context)
+            self.assertIn("pose", context)
+            self.assertIn("backend", context)
             return Image.new("RGBA", (context["width"], context["height"]), (10, 20, 30, 255))
 
         register_native_model3d_renderer("fake-offscreen", fake_renderer)
@@ -445,6 +452,71 @@ class Model3DBackendTests(unittest.TestCase):
         self.assertEqual(image.getpixel((1, 1)), (10, 20, 30, 255))
         self.assertEqual(pose.call_count, 0)
         self.assertEqual(native_model3d_renderer_status()["renderer"], "fake-offscreen")
+
+    def test_native_context_exposes_model_action_retarget_and_pose_resources(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_native_context_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text("fixture", encoding="utf-8")
+            (Path(root) / "avatar.model3d.json").write_text(json.dumps({
+                "skeleton": {
+                    "bones": [
+                        "mixamorig:Hips",
+                        "mixamorig:Spine",
+                        "mixamorig:Head",
+                        "mixamorig:RightForeArm",
+                        "mixamorig:RightHand",
+                    ],
+                    "bone_map": {
+                        "hips": "mixamorig:Hips",
+                        "spine": "mixamorig:Spine",
+                        "head": "mixamorig:Head",
+                        "right_forearm": "mixamorig:RightForeArm",
+                        "right_hand": "mixamorig:RightHand",
+                    },
+                    "rest_positions": {
+                        "mixamorig:Hips": [0.0, 0.0, 0.0],
+                        "mixamorig:Spine": [0.0, 0.45, 0.0],
+                        "mixamorig:Head": [0.0, 1.28, 0.0],
+                        "mixamorig:RightForeArm": [0.5, 0.5, 0.0],
+                        "mixamorig:RightHand": [0.8, 0.42, 0.0],
+                    },
+                },
+                "clips": ["Wave"],
+            }), encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "id": "avatar",
+                "width": 64,
+                "height": 96,
+                "model": {"path": str(model_path)},
+                "retarget": {"mode": "humanoid_auto"},
+                "action": {
+                    "name": "wave",
+                    "json": {
+                        "wave": {
+                            "keyframes": [
+                                {"time": 0.0, "offsets": {"right_hand": [0.0, 0.2, 0.0]}},
+                            ],
+                        },
+                    },
+                },
+            })["nodes"][0]
+
+            context = build_native_model3d_context(node, palette={"accent": "#fff"})
+
+        self.assertEqual((context["width"], context["height"]), (64, 96))
+        self.assertTrue(context["offscreen"])
+        self.assertTrue(context["windowless"])
+        self.assertEqual(context["surface"], "unioverlay")
+        self.assertTrue(context["model"]["exists"])
+        self.assertIn("mixamorig:RightHand", context["model"]["bone_names"])
+        self.assertEqual(context["action"]["name"], "wave")
+        self.assertEqual(context["retarget"]["bone_map"]["right_hand"], "mixamorig:RightHand")
+        self.assertTrue(context["pose"]["ok"], context["pose"])
+        self.assertIn("model", context["signatures"])
+        self.assertIn("action", context["signatures"])
+        self.assertIn("backend", context)
 
     def test_native_offscreen_renderer_failure_falls_back(self) -> None:
         def failing_renderer(node, context):
