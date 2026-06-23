@@ -129,10 +129,11 @@ class SAOPlayerGUIFloatHandlersMixin:
             except Exception:
                 pass
         _apply(force_focus=True)
-        # Many plugin panels briefly demote themselves at ~220ms after
-        # show(). Re-assert topmost just after that so Entity panels do not
-        # disappear behind the game when the user clicks elsewhere.
-        for delay in (260, 520):
+        # Many plugin panels briefly demote themselves after show(), and the
+        # SAO menu close/fade path can still be topmost for roughly 650-900ms.
+        # Re-assert after both windows settle so menu-launched panels stay
+        # clickable instead of sitting behind the closing fisheye overlay.
+        for delay in (260, 520, 920):
             try:
                 self.root.after(delay, _apply)
             except Exception:
