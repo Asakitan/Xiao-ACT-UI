@@ -6911,6 +6911,29 @@ module.exports = { activate, deactivate };
                     view_id=node_custom_editor.get("viewId", ""))
                 with open(custom_editor_file, "r", encoding="utf-8") as fh:
                     node_custom_text_disk = fh.read()
+                custom_editor_save_as_file = os.path.join(
+                    node_tree_tmp, "custom-editor-save-as.txt")
+                node_host.relay_webview_message(
+                    node_custom_editor.get("viewId", ""), {
+                        "type": "edit",
+                        "text": "custom-editor-save-as",
+                    })
+                node_custom_text_save_as_dirty = _wait_until(
+                    lambda: node_host.custom_editor_state(
+                        view_id=node_custom_editor.get("viewId", ""))
+                    .get("dirty") is True,
+                    timeout=3.0)
+                node_custom_text_save_as = api.save_extension_custom_editor_as(
+                    node_custom_editor.get("viewId", ""),
+                    "selftest.node.customEditor",
+                    node_custom_editor.get("uri", ""),
+                    custom_editor_save_as_file)
+                node_custom_text_save_as_state = node_host.custom_editor_state(
+                    view_id=node_custom_editor.get("viewId", ""))
+                with open(custom_editor_save_as_file, "r", encoding="utf-8") as fh:
+                    node_custom_text_save_as_disk = fh.read()
+                with open(custom_editor_file, "r", encoding="utf-8") as fh:
+                    node_custom_text_original_after_save_as = fh.read()
                 lifecycle_editor_file = os.path.join(
                     node_tree_tmp, "custom-editor.life")
                 with open(lifecycle_editor_file, "w", encoding="utf-8") as fh:
@@ -7270,6 +7293,7 @@ module.exports = { activate, deactivate };
                        and "custom-editor-doc" in node_custom_editor_html
                        and node_custom_editor.get("textEditor") is True
                        and node_custom_editor.get("supportsSave") is True
+                       and node_custom_editor.get("supportsSaveAs") is True
                        and node_custom_text_dirty
                        and node_custom_text_dirty_state.get("dirty") is True
                        and node_custom_text_dirty_state.get("textEditor") is True
@@ -7277,6 +7301,12 @@ module.exports = { activate, deactivate };
                        and node_custom_text_save.get("ok") is True
                        and node_custom_text_saved_state.get("dirty") is False
                        and node_custom_text_disk == "custom-editor-updated"
+                       and node_custom_text_save_as_dirty
+                       and node_custom_text_save_as.get("ok") is True
+                       and node_custom_text_save_as_state.get("dirty") is False
+                       and node_custom_text_save_as_state.get("uri", "").endswith("custom-editor-save-as.txt")
+                       and node_custom_text_save_as_disk == "custom-editor-save-as"
+                       and node_custom_text_original_after_save_as == "custom-editor-updated"
                        and os.path.normcase(os.path.realpath(node_tree_tmp))
                        in node_custom_editor_root_paths
                        and custom_editor_message_seen,
@@ -7289,6 +7319,10 @@ module.exports = { activate, deactivate };
                            "save": node_custom_text_save,
                            "saved": node_custom_text_saved_state,
                            "disk": node_custom_text_disk,
+                           "saveAs": node_custom_text_save_as,
+                           "saveAsState": node_custom_text_save_as_state,
+                           "saveAsDisk": node_custom_text_save_as_disk,
+                           "originalAfterSaveAs": node_custom_text_original_after_save_as,
                            "output": node_host._output_channels.get(
                                "node-tree-selftest", []),
                        }, ensure_ascii=False))

@@ -740,7 +740,7 @@ function _customEditorStatePayload(entry, kind, extra = {}) {
         editable: !!entry.editable,
         textEditor: !!entry.textEditor,
         supportsSave: !!entry.textEditor || typeof provider.saveCustomDocument === 'function',
-        supportsSaveAs: typeof provider.saveCustomDocumentAs === 'function',
+        supportsSaveAs: !!entry.textEditor || typeof provider.saveCustomDocumentAs === 'function',
         supportsRevert: !!entry.textEditor || typeof provider.revertCustomDocument === 'function',
         supportsBackup: typeof provider.backupCustomDocument === 'function',
         kind: kind || entry.lastKind || '',
@@ -1635,6 +1635,17 @@ function _workspaceCloseTextDocument(uriOrDoc) {
     return doc;
 }
 
+function _workspaceRetargetTextDocument(document, targetUri) {
+    if (!document || !targetUri) return document;
+    const oldKey = document.uri ? document.uri.toString() : '';
+    if (oldKey) _workspaceTextDocuments.delete(oldKey);
+    document.uri = targetUri;
+    document.fileName = targetUri.scheme === 'file' ? targetUri.fsPath : targetUri.toString();
+    document.languageId = _languageIdForUri(targetUri);
+    document.isUntitled = targetUri.scheme === 'untitled';
+    return _workspaceStoreTextDocument(document, false);
+}
+
 function _workspaceFullDocumentRange(text) {
     return new Range(0, 0, _positionAt(text, text.length).line, _positionAt(text, text.length).character);
 }
@@ -1886,11 +1897,13 @@ function _createLanguageDocument(msg) {
         positionAt(offset) { return _positionAt(text, offset); },
         getWordRangeAtPosition() { return undefined; },
         async save() {
-            if (uri.scheme === 'file') {
-                await fsp.mkdir(path.dirname(uri.fsPath), { recursive: true });
-                await fsp.writeFile(uri.fsPath, text, 'utf8');
+            const saveUri = document.uri || uri;
+            if (saveUri.scheme === 'file') {
+                await fsp.mkdir(path.dirname(saveUri.fsPath), { recursive: true });
+                await fsp.writeFile(saveUri.fsPath, text, 'utf8');
             }
             document.isDirty = false;
+            document.isUntitled = false;
             _onDidSaveTextDocumentEmitter.fire(document);
             _markCustomTextEditorsSaved(document, 'save');
             return true;
@@ -1898,7 +1911,8 @@ function _createLanguageDocument(msg) {
         _setText(nextText, nextVersion) {
             text = String(nextText ?? '');
             version = Number(nextVersion || Date.now());
-            _languageDocumentTextCache.set(uriKey, { version, text });
+            const textKey = document.uri ? document.uri.toString() : uriKey;
+            _languageDocumentTextCache.set(textKey, { version, text });
         },
     };
     return document;
@@ -3162,6 +3176,29 @@ async function handleCustomEditorLifecycle(msg) {
             }
             entry.lastKind = 'save';
             value = _customEditorStatePayload(entry, 'save', { dirty: false });
+        } else if (entry.textEditor && action === 'saveAs') {
+            const targetInput = msg.target || msg.targetUri || msg.target_uri || '';
+            if (!targetInput) throw new Error('Custom editor saveAs target is required');
+            const oldKey = entry.viewId ? _customEditorViewKeys.get(entry.viewId) : '';
+            const target = _workspaceUriFromInput(targetInput);
+            if (target.scheme !== 'file') {
+                throw new Error('Custom text editor saveAs target must be a file URI');
+            }
+            await fsp.mkdir(path.dirname(target.fsPath), { recursive: true });
+            await fsp.writeFile(target.fsPath, entry.document.getText(), 'utf8');
+            if (oldKey) _customEditorDocuments.delete(oldKey);
+            _workspaceRetargetTextDocument(entry.document, target);
+            entry.uri = target;
+            const newKey = _customEditorDocumentKey(entry.viewType, target, entry.viewId);
+            _customEditorDocuments.set(newKey, entry);
+            if (entry.viewId) _customEditorViewKeys.set(entry.viewId, newKey);
+            _markCustomEditorClean(entry);
+            entry.lastKind = 'saveAs';
+            _sendCustomEditorState(entry, 'saveAs', { dirty: false, target: target.toString() });
+            value = _customEditorStatePayload(entry, 'saveAs', {
+                dirty: false,
+                target: target.toString(),
+            });
         } else if (entry.textEditor && action === 'revert') {
             if (entry.uri.scheme === 'file') {
                 const text = await fsp.readFile(entry.uri.fsPath, 'utf8');
