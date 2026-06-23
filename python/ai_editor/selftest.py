@@ -356,7 +356,8 @@ def test_app_settings_parity() -> None:
     from ai_editor.vscode_api import (
         CompletionItem, CompletionList, Hover, TextEdit, Position, Range,
         SignatureHelp, SignatureInformation, ParameterInformation,
-        CodeAction, DocumentLink, InlayHint, WorkspaceEdit, Location,
+        CodeAction, DocumentLink, InlayHint, InlineCompletionItem,
+        WorkspaceEdit, Location,
     )
     provider_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     provider_api._extension_scan_dirs = lambda: []
@@ -430,6 +431,15 @@ def test_app_settings_parity() -> None:
             hint.paddingLeft = True
             return [hint]
 
+        def provideInlineCompletionItems(
+                self, document, position, context, token):
+            item = InlineCompletionItem(
+                "bufferGhost",
+                Range(Position(0, 0), Position(0, 6)),
+            )
+            item.filterText = "bufferGhost"
+            return [item]
+
         def prepareRename(self, document, position, token):
             return {
                 "range": Range(Position(0, 0), Position(0, 6)),
@@ -454,6 +464,7 @@ def test_app_settings_parity() -> None:
     lang_api["registerReferenceProvider"]("python", editor_provider)
     lang_api["registerDocumentLinkProvider"]("python", editor_provider)
     lang_api["registerInlayHintsProvider"]("python", editor_provider)
+    lang_api["registerInlineCompletionItemProvider"]("python", editor_provider)
     lang_api["registerRenameProvider"]("python", editor_provider)
     tmp_provider_dir = tempfile.mkdtemp()
     try:
@@ -489,6 +500,8 @@ def test_app_settings_parity() -> None:
                 "start": {"line": 0, "character": 0},
                 "end": {"line": 0, "character": 6},
             }))
+        inline_completion_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="inlineCompletion", triggerKind=0))
         prepare_rename_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="prepareRename"))
         rename_result = provider_api.editor_language_provider(
@@ -551,6 +564,13 @@ def test_app_settings_parity() -> None:
                and hint.get("tooltip") == "buffer inlay"
                and hint.get("paddingLeft") is True
                and hint.get("position", {}).get("character") == 6)
+        inline_item = inline_completion_result.get("items", [{}])[0]
+        _check("editor_language_provider serializes inline completions",
+               inline_completion_result.get("ok") is True
+               and inline_item.get("insertText") == "bufferGhost"
+               and inline_item.get("filterText") == "bufferGhost"
+               and inline_item.get("range", {}).get("end", {})
+               .get("character") == 6)
         _check("editor_language_provider serializes rename prepare",
                prepare_rename_result.get("ok") is True
                and prepare_rename_result.get("prepareRename", {})
@@ -1567,6 +1587,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "id=\"editor-references\"" in html
            and "id=\"editor-links\"" in html
            and "id=\"editor-inlay-layer\"" in html
+           and "id=\"editor-ghost-layer\"" in html
            and "call('editor_language_provider'" in html
            and "function editorProviderPayload(kind,extra)" in html
            and "function requestEditorCompletion(triggerCharacter,quiet)" in html
@@ -1594,6 +1615,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function renderEditorInlayHints(hints)" in html
            and "function scheduleEditorInlayHints(delay)" in html
            and "editorProviderPayload('inlayHint'" in html
+           and "function requestEditorInlineCompletions(quiet,triggerKind)" in html
+           and "function renderEditorInlineCompletion()" in html
+           and "function scheduleEditorInlineCompletions(delay,triggerKind)" in html
+           and "function acceptEditorInlineCompletion()" in html
+           and "function handleEditorInlineCompletionKey(e)" in html
+           and "editorProviderPayload('inlineCompletion'" in html
            and "call('open_external_uri'" in html
            and "function requestEditorRename(quiet)" in html
            and "function promptEditorRenameName(seed)" in html
@@ -2822,8 +2849,9 @@ def test_vscode_api() -> None:
         AuthenticationProviderBase, Diagnostic, WorkspaceEdit,
         Position, Range, AuthenticationSession, PreparedToolInvocation,
         EventEmitter, CompletionItem, CompletionList, Hover, CodeAction,
-        DocumentLink, InlayHint, InlayHintLabelPart, TextEdit, Location,
-        SignatureHelp, SignatureInformation, ParameterInformation,
+        DocumentLink, InlayHint, InlayHintLabelPart, InlineCompletionItem,
+        TextEdit, Location, SignatureHelp, SignatureInformation,
+        ParameterInformation,
     )
 
     host = ExtensionHost()
@@ -3220,6 +3248,18 @@ def test_vscode_api() -> None:
                 hint.paddingRight = True
                 return [hint]
 
+        class _InlineCompletionProvider:
+            def __init__(self):
+                self.contexts = []
+
+            def provideInlineCompletionItems(
+                    self, document, position, context, token):
+                self.contexts.append(dict(context))
+                return [InlineCompletionItem(
+                    "print('ghost')",
+                    Range(Position(0, 0), Position(0, 4)),
+                )]
+
         class _RenameProvider:
             def __init__(self):
                 self.names = []
@@ -3269,6 +3309,9 @@ def test_vscode_api() -> None:
             "python", document_link_provider)
         api["languages"]["registerInlayHintsProvider"](
             "python", _InlayHintProvider())
+        inline_completion_provider = _InlineCompletionProvider()
+        api["languages"]["registerInlineCompletionItemProvider"](
+            "python", inline_completion_provider)
         rename_provider = _RenameProvider()
         api["languages"]["registerRenameProvider"](
             "python", rename_provider)
@@ -3297,6 +3340,11 @@ def test_vscode_api() -> None:
             "vscode.executeInlayHintProvider",
             doc.uri,
             Range(Position(0, 0), Position(0, 5)))
+        inline_completions = api["commands"]["executeCommand"](
+            "_executeInlineCompletionProvider",
+            doc.uri,
+            Position(0, 4),
+            {"triggerKind": api["InlineCompletionTriggerKind"]["Invoke"]})
         prepare_rename = api["commands"]["executeCommand"](
             "_executePrepareRename", doc.uri, Position(0, 0))
         rename_edit = api["commands"]["executeCommand"](
@@ -3336,6 +3384,12 @@ def test_vscode_api() -> None:
                and inlay_hints[0].label[0].tooltip == "type label"
                and inlay_hints[0].kind == api["InlayHintKind"]["Type"]
                and inlay_hints[0].paddingRight is True)
+        _check("executeInlineCompletionProvider invokes matching providers",
+               inline_completions
+               and inline_completions[0].insertText == "print('ghost')"
+               and inline_completions[0].range.end.character == 4
+               and inline_completion_provider.contexts[-1]["triggerKind"]
+               == api["InlineCompletionTriggerKind"]["Invoke"])
         _check("executePrepareRename invokes matching providers",
                prepare_rename.get("placeholder") == "prin")
         _check("executeDocumentRenameProvider invokes matching providers",
@@ -3357,6 +3411,8 @@ def test_vscode_api() -> None:
                and "vscode.executeLinkProvider"
                in api["commands"]["getCommands"]()
                and "vscode.executeInlayHintProvider"
+               in api["commands"]["getCommands"]()
+               and "_executeInlineCompletionProvider"
                in api["commands"]["getCommands"]()
                and "_executeDocumentRenameProvider"
                in api["commands"]["getCommands"]()
@@ -4616,6 +4672,16 @@ function activate(context) {
       return [hint];
     },
   });
+  vscode.languages.registerInlineCompletionItemProvider('python', {
+    provideInlineCompletionItems(document, position, context, token) {
+      const item = new vscode.InlineCompletionItem(
+        'nodeGhost',
+        new vscode.Range(0, 0, 0, 4),
+      );
+      item.filterText = 'nodeGhost';
+      return [item];
+    },
+  });
   vscode.languages.registerRenameProvider('python', {
     prepareRename(document, position, token) {
       return { range: new vscode.Range(0, 0, 0, 4), placeholder: 'node' };
@@ -4745,6 +4811,11 @@ module.exports = { activate, deactivate };
                     "vscode.executeInlayHintProvider",
                     node_uri,
                     Range(Position(0, 0), Position(0, 12)))
+                node_inline_completions = api._ext_host.commands.execute(
+                    "_executeInlineCompletionProvider",
+                    node_uri,
+                    Position(0, 4),
+                    {"triggerKind": 0})
                 node_prepare_rename = api._ext_host.commands.execute(
                     "_executePrepareRename", node_uri, Position(0, 1))
                 node_rename_edit = api._ext_host.commands.execute(
@@ -4803,6 +4874,12 @@ module.exports = { activate, deactivate };
                        and node_inlay_hints[0].get("kind") == 2
                        and node_inlay_hints[0].get("paddingLeft") is True
                        and node_inlay_hints[0].get("tooltip") == "node inlay")
+                _check("node host language provider invokes JS inline completions",
+                       node_inline_completions
+                       and node_inline_completions[0].get("insertText") == "nodeGhost"
+                       and node_inline_completions[0].get("filterText") == "nodeGhost"
+                       and node_inline_completions[0].get("range", {})
+                       .get("end", {}).get("character") == 4)
                 _check("node host language provider invokes JS prepare rename",
                        node_prepare_rename
                        and node_prepare_rename.get("placeholder") == "node")

@@ -2739,6 +2739,9 @@ class AIEditorAPI:
             "inlayHint": "inlayHint",
             "inlayHints": "inlayHint",
             "hints": "inlayHint",
+            "inlineCompletion": "inlineCompletion",
+            "inlineCompletions": "inlineCompletion",
+            "ghostText": "inlineCompletion",
             "documentSymbol": "documentSymbol",
             "documentSymbols": "documentSymbol",
             "symbols": "documentSymbol",
@@ -2915,6 +2918,37 @@ class AIEditorAPI:
                     "uri": str(document.uri),
                     "version": document.version,
                     "hints": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "inlineCompletion":
+                try:
+                    trigger_kind = int(payload.get("triggerKind", 1))
+                except Exception:
+                    trigger_kind = 1
+                context = payload.get("context")
+                if not isinstance(context, dict):
+                    context = {}
+                context = {
+                    **context,
+                    "triggerKind": 0 if trigger_kind == 0 else 1,
+                    "selectedCompletionInfo": (
+                        payload.get("selectedCompletionInfo")
+                        if payload.get("selectedCompletionInfo") is not None
+                        else context.get("selectedCompletionInfo")),
+                }
+                result = self._ext_host.commands.execute(
+                    "_executeInlineCompletionProvider",
+                    document.uri,
+                    position,
+                    context,
+                )
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "items": value if isinstance(value, list) else (
                         [] if value is None else [value]),
                 }
             if kind == "documentSymbol":

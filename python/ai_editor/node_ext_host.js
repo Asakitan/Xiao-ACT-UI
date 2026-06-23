@@ -1332,6 +1332,9 @@ function buildVscodeModule(extDesc, extensionPath) {
         InlayHintLabelPart: class { constructor(value) { this.value = value === undefined || value === null ? '' : String(value); } },
         InlayHint: class { constructor(position, label, kind) { this.position = position; this.label = label; this.kind = kind; } },
         InlayHintKind: { Type: 1, Parameter: 2 },
+        InlineCompletionItem: class { constructor(insertText, range, command) { this.insertText = insertText; this.range = range; this.command = command; } },
+        InlineCompletionList: class { constructor(items) { this.items = items || []; } },
+        InlineCompletionTriggerKind: { Invoke: 0, Automatic: 1 },
         TextEdit: class { static replace(range, text) { return { range, newText: text }; }; static insert(pos, text) { return { range: new Range(pos, pos), newText: text }; }; static delete(range) { return { range, newText: '' }; } },
         WorkspaceEdit: class { constructor() { this._edits = []; } replace(uri, range, text) { this._edits.push({ uri, range, text }); } insert(uri, pos, text) { this._edits.push({ uri, range: new Range(pos, pos), text }); } delete(uri, range) { this._edits.push({ uri, range, text: '' }); } set(uri, edits) { for (const e of edits) this._edits.push({ uri, ...e }); } },
         RelativePattern: class { constructor(base, pattern) { this.base = base; this.pattern = pattern; } },
@@ -1643,6 +1646,7 @@ function _languageProviderMethod(kind) {
         rename: 'provideRenameEdits',
         documentLink: 'provideDocumentLinks',
         inlayHint: 'provideInlayHints',
+        inlineCompletion: 'provideInlineCompletionItems',
         documentSymbol: 'provideDocumentSymbols',
         codeActions: 'provideCodeActions',
         formatting: 'provideDocumentFormattingEdits',
@@ -1861,6 +1865,11 @@ async function handleLanguageProviderRequest(msg) {
                     value = await fn.call(provider, document, msg.options || {}, token);
                 } else if (kind === 'inlayHint') {
                     value = await fn.call(provider, document, range, token);
+                } else if (kind === 'inlineCompletion') {
+                    value = await fn.call(provider, document, position, Object.assign({
+                        triggerKind: 1,
+                        selectedCompletionInfo: undefined,
+                    }, msg.context || {}), token);
                 } else if (kind === 'documentSymbol') {
                     value = await fn.call(provider, document, token);
                 } else {

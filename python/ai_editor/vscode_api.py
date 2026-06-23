@@ -807,6 +807,21 @@ class InlayHint:
         self.paddingRight = None
 
 
+class InlineCompletionItem:
+    def __init__(
+            self, insert_text: Any, range: Any = None,
+            command: Any = None) -> None:
+        self.insertText = insert_text
+        self.range = range
+        self.command = command
+        self.filterText = None
+
+
+class InlineCompletionList:
+    def __init__(self, items: Any = None) -> None:
+        self.items = list(items or [])
+
+
 @dataclass
 class Diagnostic:
     range: Range
@@ -1108,6 +1123,7 @@ class VscodeNamespace:
             "vscode.executeLinkProvider": self._execute_link_provider,
             "_executeInlayHintProvider": self._execute_inlay_hint_provider,
             "vscode.executeInlayHintProvider": self._execute_inlay_hint_provider,
+            "_executeInlineCompletionProvider": self._execute_inline_completion_provider,
             "vscode.executeDocumentSymbolProvider": self._execute_document_symbol_provider,
             "vscode.executeCodeActionProvider": self._execute_code_action_provider,
             "vscode.executeFormatDocumentProvider": self._execute_format_document_provider,
@@ -1177,6 +1193,17 @@ class VscodeNamespace:
         if isinstance(value, list):
             return value
         return [value]
+
+    @classmethod
+    def _inline_completion_items(cls, value: Any) -> List[Any]:
+        if value is None:
+            return []
+        if isinstance(value, dict) and "items" in value:
+            return cls._provider_values(value.get("items"))
+        items = getattr(value, "items", None)
+        if items is not None:
+            return cls._provider_values(items)
+        return cls._provider_values(value)
 
     def _request_external_language_provider(
             self, kind: str, document: Any, **payload: Any) -> Any:
@@ -1503,6 +1530,34 @@ class VscodeNamespace:
                 range=self._range_payload(hint_range))))
         return results
 
+    def _execute_inline_completion_provider(
+            self, uri: Any, position: Any = None,
+            context: Any = None) -> List[Any]:
+        document = self._resolve_language_document(uri)
+        pos = _coerce_position(position)
+        inline_context = context if isinstance(context, dict) else {}
+        if "triggerKind" not in inline_context:
+            inline_context = dict(inline_context)
+            inline_context["triggerKind"] = 1
+        if "selectedCompletionInfo" not in inline_context:
+            inline_context = dict(inline_context)
+            inline_context["selectedCompletionInfo"] = None
+        results: List[Any] = []
+        for entry in self._matching_language_providers(
+                "inlineCompletion", document):
+            value = self._call_language_provider(
+                entry.get("provider"), "provideInlineCompletionItems",
+                (document, pos, inline_context, CancellationToken.NONE),
+                default=None)
+            results.extend(self._inline_completion_items(value))
+        external = self._request_external_language_provider(
+            "inlineCompletion",
+            document,
+            position=self._position_payload(pos),
+            context=inline_context)
+        results.extend(self._inline_completion_items(external))
+        return results
+
     def _execute_document_symbol_provider(self, uri: Any) -> List[Any]:
         document = self._resolve_language_document(uri)
         results = self._collect_language_provider_results(
@@ -1680,6 +1735,8 @@ class VscodeNamespace:
             "DocumentLink": DocumentLink,
             "InlayHint": InlayHint,
             "InlayHintLabelPart": InlayHintLabelPart,
+            "InlineCompletionItem": InlineCompletionItem,
+            "InlineCompletionList": InlineCompletionList,
             "TextEdit": TextEdit,
             "WorkspaceEdit": WorkspaceEdit,
             "ChatResultFeedback": ChatResult,
@@ -1694,6 +1751,7 @@ class VscodeNamespace:
             "ChatSessionStatus": {"Failed": 0, "Completed": 1, "InProgress": 2},
             "ExtensionMode": {"Production": 1, "Development": 2, "Test": 3},
             "InlayHintKind": {"Type": 1, "Parameter": 2},
+            "InlineCompletionTriggerKind": {"Invoke": 0, "Automatic": 1},
             "CompletionItemKind": {
                 "Text": 0, "Method": 1, "Function": 2, "Constructor": 3,
                 "Field": 4, "Variable": 5, "Class": 6, "Interface": 7,

@@ -223,6 +223,10 @@ body.window-resizing * { cursor:inherit !important; }
   border-radius:3px; padding:0 3px; opacity:.9; white-space:pre; box-shadow:0 1px 2px rgba(0,0,0,.18); }
 .editor-inlay-hint.kind-1 { color:var(--fg-accent); }
 .editor-inlay-hint.kind-2 { color:var(--fg-warning); }
+.editor-ghost-layer { position:absolute; inset:0 0 0 50px; z-index:4; pointer-events:none;
+  font:13px/1.5 var(--mono); padding:8px 12px; overflow:hidden; white-space:pre; tab-size:4; }
+.editor-ghost-text { position:absolute; color:var(--fg-dim); opacity:.56; white-space:pre;
+  max-width:min(520px,70%); overflow:hidden; text-overflow:ellipsis; }
 .editor-textarea { flex:1; background:var(--bg-editor); color:var(--fg-code); font:13px/1.5 var(--mono);
   padding:8px 12px; border:none; outline:none; resize:none; tab-size:4; white-space:pre;
   overflow:auto; caret-color:var(--fg-accent); position:relative; z-index:2; }
@@ -1190,6 +1194,7 @@ pre.code-block { overflow:visible; }
         <div class="line-numbers" id="line-nums">1</div>
         <pre class="editor-syntax-layer" id="editor-syntax-highlight" aria-hidden="true"></pre>
         <div class="editor-inlay-layer" id="editor-inlay-layer" aria-hidden="true"></div>
+        <div class="editor-ghost-layer" id="editor-ghost-layer" aria-hidden="true"></div>
         <textarea class="editor-textarea" id="editor-text" spellcheck="false" placeholder="// Your code here..."></textarea>
         <div class="editor-suggest" id="editor-suggest" role="listbox"></div>
         <div class="editor-hover" id="editor-hover" role="tooltip"></div>
@@ -2430,11 +2435,13 @@ function openInEditor(code,lang){
   if(typeof closeEditorReferences==='function')closeEditorReferences();
   if(typeof closeEditorLinks==='function')closeEditorLinks();
   if(typeof clearEditorInlayHints==='function')clearEditorInlayHints();
+  if(typeof clearEditorInlineCompletions==='function')clearEditorInlineCompletions();
   updateLineNums();updateCursorPos();
   if(lang&&LANGUAGES.includes(lang))setEditorLanguage(lang);
   else detectLanguage(code,'');
   editorDirty=false;
   if(typeof scheduleEditorInlayHints==='function')scheduleEditorInlayHints(160);
+  if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(220);
 }
 function showEditorArea(){
   _editorVis=true;
@@ -3188,6 +3195,7 @@ function setEditorLanguage(lang){
   $('status-language').title=bits.filter(Boolean).join(' · ');
   scheduleEditorSyntaxHighlight();
   if(typeof scheduleEditorInlayHints==='function')scheduleEditorInlayHints(220);
+  if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(260);
 }
 
 let _editorSyntaxRaf=0;
@@ -3203,6 +3211,7 @@ function syncEditorSyntaxScroll(){
   if(!layer||!ta)return;
   layer.scrollTop=ta.scrollTop;layer.scrollLeft=ta.scrollLeft;
   if(typeof renderEditorInlayHints==='function')renderEditorInlayHints(_editorInlayHints);
+  if(typeof renderEditorInlineCompletion==='function')renderEditorInlineCompletion();
 }
 function updateEditorSyntaxHighlight(){
   const layer=$('editor-syntax-highlight'),ta=$('editor-text'),wrap=$('editor-container');
@@ -3237,6 +3246,8 @@ function editorUndo(){
   updateLineNums();updateCursorPos();
   if(typeof clearEditorInlayHints==='function')clearEditorInlayHints();
   if(typeof scheduleEditorInlayHints==='function')scheduleEditorInlayHints(180);
+  if(typeof clearEditorInlineCompletions==='function')clearEditorInlineCompletions();
+  if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(220);
 }
 function editorRedo(){
   const ta=$('editor-text');if(!ta||!_redoStack.length)return;
@@ -3246,6 +3257,8 @@ function editorRedo(){
   updateLineNums();updateCursorPos();
   if(typeof clearEditorInlayHints==='function')clearEditorInlayHints();
   if(typeof scheduleEditorInlayHints==='function')scheduleEditorInlayHints(180);
+  if(typeof clearEditorInlineCompletions==='function')clearEditorInlineCompletions();
+  if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(220);
 }
 function _editorInputWithUndo(e){
   updateLineNums();updateCursorPos();editorDirty=true;
@@ -3263,6 +3276,8 @@ function _editorInputWithUndo(e){
   scheduleEditorHover();
   clearEditorInlayHints();
   scheduleEditorInlayHints();
+  clearEditorInlineCompletions();
+  scheduleEditorInlineCompletions();
 }
 
 let _editorSuggestItems=[],_editorSuggestIndex=0,_editorSuggestRequest=0;
@@ -3273,6 +3288,7 @@ let _editorDefinitionRequest=0;
 let _editorReferences=[],_editorReferenceIndex=0,_editorReferencesRequest=0;
 let _editorLinks=[],_editorLinkIndex=0,_editorLinksRequest=0;
 let _editorInlayHints=[],_editorInlayHintRequest=0,_editorInlayHintTimer=null;
+let _editorInlineCompletions=[],_editorInlineCompletionIndex=0,_editorInlineCompletionRequest=0,_editorInlineCompletionTimer=null;
 function activeEditorTab(){
   return (typeof tabs!=='undefined'&&Array.isArray(tabs)?tabs.find(t=>t.id===activeTab):null)||{};
 }
@@ -3387,6 +3403,89 @@ function scheduleEditorInlayHints(delay){
   clearTimeout(_editorInlayHintTimer);
   _editorInlayHintTimer=setTimeout(()=>requestEditorInlayHints(true),delay==null?450:delay);
 }
+function editorInlineCompletionInsertText(item){
+  let text=item&&item.insertText;
+  if(text&&typeof text==='object')text=text.value||text.snippet||text.text||'';
+  return String(text||'').replace(/\$\{\d+:([^}]+)\}/g,'$1').replace(/\$\d+/g,'');
+}
+function editorInlineCompletionRange(item){
+  const pos=editorPositionFromOffset(ed.value,ed.selectionStart);
+  return item&&item.range?item.range:{start:pos,end:pos};
+}
+function editorInlineCompletionPreviewText(item){
+  const insertText=editorInlineCompletionInsertText(item);
+  if(!insertText)return '';
+  const range=editorInlineCompletionRange(item);
+  const cursor=ed.selectionStart,start=editorOffsetFromPosition(ed.value,range.start),end=editorOffsetFromPosition(ed.value,range.end||range.start);
+  if(cursor<start||cursor>end)return '';
+  const typed=ed.value.slice(start,cursor);
+  const filter=String((item&&item.filterText)||insertText);
+  if(typed&&!(insertText.startsWith(typed)||filter.startsWith(typed)))return '';
+  return insertText.startsWith(typed)?insertText.slice(typed.length):insertText;
+}
+function clearEditorInlineCompletions(){
+  _editorInlineCompletionRequest++;
+  clearTimeout(_editorInlineCompletionTimer);
+  _editorInlineCompletions=[];_editorInlineCompletionIndex=0;
+  const layer=$('editor-ghost-layer');if(layer)layer.innerHTML='';
+}
+function renderEditorInlineCompletion(){
+  const layer=$('editor-ghost-layer'),ta=$('editor-text'),wrap=$('editor-container');
+  if(!layer||!ta||!wrap)return;
+  layer.innerHTML='';
+  if(wrap.style.display==='none'||wrap.offsetParent===null||!_editorInlineCompletions.length)return;
+  let item=_editorInlineCompletions[_editorInlineCompletionIndex],preview=editorInlineCompletionPreviewText(item);
+  if(!preview){
+    const next=_editorInlineCompletions.findIndex(candidate=>editorInlineCompletionPreviewText(candidate));
+    if(next<0)return;
+    _editorInlineCompletionIndex=next;item=_editorInlineCompletions[next];preview=editorInlineCompletionPreviewText(item);
+  }
+  const firstLine=preview.split('\n')[0]+(preview.includes('\n')?' ...':'');
+  if(!firstLine)return;
+  const style=getComputedStyle(ta),lineHeight=parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.5;
+  const fontSize=parseFloat(style.fontSize)||13,charWidth=fontSize*.62;
+  const paddingTop=parseFloat(style.paddingTop)||8,paddingLeft=parseFloat(style.paddingLeft)||12;
+  const pos=editorPositionFromOffset(ed.value,ed.selectionStart);
+  const top=paddingTop+(Number(pos.line)||0)*lineHeight-ta.scrollTop;
+  const left=paddingLeft+(Number(pos.character)||0)*charWidth-ta.scrollLeft;
+  if(top<-lineHeight||top>wrap.clientHeight+lineHeight||left<-80||left>wrap.clientWidth)return;
+  const el=document.createElement('span');
+  el.className='editor-ghost-text';el.textContent=firstLine;
+  el.style.top=top+'px';el.style.left=left+'px';
+  layer.appendChild(el);
+}
+async function requestEditorInlineCompletions(quiet,triggerKind){
+  const wrap=$('editor-container');
+  if(!ed||!wrap||wrap.style.display==='none')return;
+  const requestId=++_editorInlineCompletionRequest;
+  const res=await call('editor_language_provider',editorProviderPayload('inlineCompletion',{triggerKind:triggerKind==null?1:triggerKind}));
+  if(requestId!==_editorInlineCompletionRequest)return;
+  if(res&&res.error){_editorInlineCompletions=[];renderEditorInlineCompletion();if(!quiet)setStatus('Inline completions failed: '+res.error);return}
+  _editorInlineCompletions=(res&&res.ok&&Array.isArray(res.items)?res.items:[]).filter(item=>item&&item.insertText!==undefined);
+  _editorInlineCompletionIndex=0;renderEditorInlineCompletion();
+  if(!quiet)setStatus(_editorInlineCompletions.length+' inline completion'+(_editorInlineCompletions.length===1?'':'s'));
+}
+function scheduleEditorInlineCompletions(delay,triggerKind){
+  clearTimeout(_editorInlineCompletionTimer);
+  _editorInlineCompletionTimer=setTimeout(()=>requestEditorInlineCompletions(true,triggerKind==null?1:triggerKind),delay==null?520:delay);
+}
+async function acceptEditorInlineCompletion(){
+  const item=_editorInlineCompletions[_editorInlineCompletionIndex];
+  if(!item||!editorInlineCompletionPreviewText(item))return false;
+  _undoPush(true);
+  const ok=editorApplyTextEdits([{range:editorInlineCompletionRange(item),newText:editorInlineCompletionInsertText(item)}]);
+  clearEditorInlineCompletions();
+  if(ok&&item.command&&typeof runEditorCodeActionCommand==='function')await runEditorCodeActionCommand(item.command);
+  if(ok){ed.focus();setStatus('Accepted inline completion')}
+  return !!ok;
+}
+function handleEditorInlineCompletionKey(e){
+  const hasGhost=!!($('editor-ghost-layer')&&$('editor-ghost-layer').children.length);
+  if(!hasGhost)return false;
+  if(e.key==='Tab'){e.preventDefault();acceptEditorInlineCompletion();return true}
+  if(e.key==='Escape'){e.preventDefault();clearEditorInlineCompletions();return true}
+  return false;
+}
 function completionLabelText(label){
   if(label&&typeof label==='object')return String(label.label||label.name||label.detail||'');
   return String(label||'');
@@ -3433,6 +3532,8 @@ function editorApplyTextEdits(edits){
   updateLineNums();updateCursorPos();scheduleEditorSyntaxHighlight();
   clearEditorInlayHints();
   scheduleEditorInlayHints(200);
+  clearEditorInlineCompletions();
+  scheduleEditorInlineCompletions(240);
   return true;
 }
 function isEditorSuggestOpen(){
@@ -4180,9 +4281,9 @@ const ed=$('editor-text');
 // Seed initial undo state
 _undoPush(true);
 ed.addEventListener('input',_editorInputWithUndo);
-ed.addEventListener('click',e=>{updateCursorPos();if(e.ctrlKey||e.metaKey){requestEditorDocumentLinks(true,true);return}scheduleEditorHover()});
+ed.addEventListener('click',e=>{updateCursorPos();renderEditorInlineCompletion();if(e.ctrlKey||e.metaKey){requestEditorDocumentLinks(true,true);return}scheduleEditorHover()});
 ed.addEventListener('dblclick',()=>editorSelectWordAtCursor());
-ed.addEventListener('keyup',()=>{updateCursorPos();scheduleEditorHover()});
+ed.addEventListener('keyup',()=>{updateCursorPos();renderEditorInlineCompletion();scheduleEditorHover()});
 ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();renderEditorInlayHints(_editorInlayHints);updateCursorPos();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();closeEditorLinks()});
 ed.addEventListener('keydown',function(e){
   if(handleEditorLinksKey(e))return;
@@ -4190,6 +4291,7 @@ ed.addEventListener('keydown',function(e){
   if(handleEditorCodeActionKey(e))return;
   if(handleEditorSignatureKey(e))return;
   if(handleEditorSuggestKey(e))return;
+  if(handleEditorInlineCompletionKey(e))return;
   if(e.key==='F2'&&!e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorRename(false);return}
   if(e.key==='F12'&&e.shiftKey&&!e.ctrlKey&&!e.altKey){e.preventDefault();requestEditorReferences(false);return}
   if(e.key==='F12'&&!e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorDefinition(false);return}
@@ -8023,9 +8125,11 @@ function switchTab(id){
     if(typeof closeEditorReferences==='function')closeEditorReferences();
     if(typeof closeEditorLinks==='function')closeEditorLinks();
     if(typeof clearEditorInlayHints==='function')clearEditorInlayHints();
+    if(typeof clearEditorInlineCompletions==='function')clearEditorInlineCompletions();
     updateLineNums();updateCursorPos();
     $('editor-welcome').style.display='none';$('editor-container').style.display='flex';
     if(typeof scheduleEditorInlayHints==='function')scheduleEditorInlayHints(160);
+    if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(220);
   }
   renderTabs();
 }
@@ -8386,6 +8490,7 @@ const COMMANDS=[
   {label:'Previous Fold Region',shortcut:'',action:()=>goToPreviousFoldRegion()},
   {label:'Toggle Comment',shortcut:'Ctrl+/',action:()=>toggleComment()},
   {label:'Trigger Suggest',shortcut:'Ctrl+Space',action:()=>requestEditorCompletion('',false)},
+  {label:'Trigger Inline Completion',shortcut:'',action:()=>requestEditorInlineCompletions(false,0)},
   {label:'Signature Help',shortcut:'Ctrl+Shift+Space',action:()=>requestEditorSignatureHelp('',1,false)},
   {label:'Refresh Inlay Hints',shortcut:'',action:()=>requestEditorInlayHints(false)},
   {label:'Quick Fix...',shortcut:'Ctrl+.',action:()=>requestEditorCodeActions(false)},
