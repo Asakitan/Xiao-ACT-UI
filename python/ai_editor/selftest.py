@@ -1809,9 +1809,13 @@ def test_phase1_ai_editor_regressions() -> None:
            and "editor-color-swatch" in html
            and "function requestEditorSemanticTokens(quiet)" in html
            and "function decodeEditorSemanticTokens(data,legend)" in html
+           and "function editorSemanticTokenThemeStyle(token)" in html
+           and "function applyExtensionSemanticTokenColors(colors)" in html
+           and "function semanticTokenThemeRule(selector,value)" in html
            and "function highlightCodeWithSemanticTokens(code,lang,payload)" in html
            and "function scheduleEditorSemanticTokens(delay)" in html
            and "editorProviderPayload('semanticTokens'" in html
+           and "semanticTokenColors" in html
            and "Refresh Semantic Tokens" in html
            and ".sem-function" in html
            and "call('open_external_uri'" in html
@@ -4212,6 +4216,12 @@ def test_app_extension_runtime_support() -> None:
     "editor.foreground": "#f0f3f8",
     "statusBar.background": "#203040",
   },
+  "semanticHighlighting": true,
+  "semanticTokenColors": {
+    "variable.readonly": {"foreground": "#68e4ff", "fontStyle": "italic"},
+    "function.declaration:selflang": "#ffd166",
+    "*.deprecated": {"foreground": "#808080", "strikethrough": true},
+  },
 }
 """)
         with open(os.path.join(language_tmp, "themes", "self-icons.json"),
@@ -4402,6 +4412,13 @@ def test_app_extension_runtime_support() -> None:
         _check("extension color theme JSON feeds editor theme colors",
                editor_theme_data.get("ok") is True
                and editor_theme_data.get("colors", {}).get("editor.background") == "#101820"
+               and editor_theme_data.get("semanticHighlighting") is True
+               and editor_theme_data.get("semanticTokenColors", {})
+                   .get("variable.readonly", {}).get("foreground") == "#68e4ff"
+               and editor_theme_data.get("semanticTokenColors", {})
+                   .get("function.declaration:selflang") == "#ffd166"
+               and editor_theme_data.get("semanticTokenColors", {})
+                   .get("*.deprecated", {}).get("strikethrough") is True
                and editor_theme_data.get("theme", {}).get("label") == "Self Dark")
         _check("extension icon themes feed editor file icon metadata",
                editor_icon_theme_data.get("ok") is True

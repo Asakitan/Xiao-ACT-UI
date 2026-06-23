@@ -1205,10 +1205,38 @@ class AIEditorAPI:
             for key, value in colors.items()
             if isinstance(key, str) and isinstance(value, str)
         }
+        semantic_token_colors = payload.get("semanticTokenColors") or {}
+        safe_semantic_token_colors: Dict[str, Any] = {}
+        if isinstance(semantic_token_colors, dict):
+            for key, value in semantic_token_colors.items():
+                selector = str(key or "").strip()
+                if not selector or len(selector) > 160:
+                    continue
+                if isinstance(value, str):
+                    safe_semantic_token_colors[selector] = value.strip()
+                    continue
+                if not isinstance(value, dict):
+                    continue
+                rule: Dict[str, Any] = {}
+                foreground = value.get("foreground") or value.get("color")
+                font_style = value.get("fontStyle")
+                if isinstance(foreground, str):
+                    rule["foreground"] = foreground.strip()
+                if isinstance(font_style, str):
+                    rule["fontStyle"] = font_style.strip()
+                for attr in (
+                        "bold", "italic", "underline",
+                        "strikethrough"):
+                    if isinstance(value.get(attr), bool):
+                        rule[attr] = bool(value.get(attr))
+                if rule:
+                    safe_semantic_token_colors[selector] = rule
         return {
             "ok": True,
             "theme": theme,
             "colors": safe_colors,
+            "semanticHighlighting": payload.get("semanticHighlighting"),
+            "semanticTokenColors": safe_semantic_token_colors,
             "name": str(payload.get("name") or theme.get("label") or ""),
             "type": str(payload.get("type") or theme.get("uiTheme") or ""),
         }

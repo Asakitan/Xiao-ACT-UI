@@ -3530,6 +3530,7 @@ let _editorInlayHints=[],_editorInlayHintRequest=0,_editorInlayHintTimer=null;
 let _editorInlineCompletions=[],_editorInlineCompletionIndex=0,_editorInlineCompletionRequest=0,_editorInlineCompletionTimer=null;
 let _editorCodeLenses=[],_editorCodeLensRequest=0,_editorCodeLensTimer=null;
 let _editorSemanticTokens=null,_editorSemanticTokensRequest=0,_editorSemanticTokensTimer=null,_editorSemanticTokensContentLength=-1;
+let currentSemanticTokenRules=[];
 let _editorFoldingRanges=[],_editorFoldingRangeRequest=0,_editorFoldingRangeTimer=null,_editorFoldingRangeContentLength=-1;
 let _editorDocumentColors=[],_editorDocumentColorRequest=0,_editorDocumentColorTimer=null,_editorDocumentColorContentLength=-1;
 let _editorSelectionRanges=[],_editorSelectionRangeIndex=-1,_editorSelectionRangeKey='';
@@ -3641,6 +3642,30 @@ function editorSemanticTokenClass(token){
   if(modifiers.includes('readonly')||modifiers.includes('static'))classes.push('sem-readonly');
   return classes.join(' ');
 }
+function editorSemanticTokenThemeStyle(token){
+  if(!currentSemanticTokenRules.length||!token)return '';
+  const type=String(token.type||'').toLowerCase();
+  const language=String(editorLang||'').toLowerCase();
+  const modifiers=new Set((Array.isArray(token.modifiers)?token.modifiers:[]).map(v=>String(v).toLowerCase()));
+  let best=null,bestScore=-1;
+  currentSemanticTokenRules.forEach(rule=>{
+    if(rule.language&&rule.language!==language)return;
+    if(rule.type&&rule.type!=='*'&&rule.type!==type)return;
+    if(rule.modifiers.some(mod=>!modifiers.has(mod)))return;
+    const score=(rule.type==='*'?0:100)+rule.modifiers.length*10+(rule.language?5:0);
+    if(score>bestScore){best=rule;bestScore=score}
+  });
+  if(!best)return '';
+  const styles=[];
+  if(best.foreground)styles.push('color:'+best.foreground);
+  if(best.bold)styles.push('font-weight:600');
+  if(best.italic)styles.push('font-style:italic');
+  const decorations=[];
+  if(best.underline)decorations.push('underline');
+  if(best.strikethrough)decorations.push('line-through');
+  if(decorations.length)styles.push('text-decoration:'+decorations.join(' '));
+  return styles.join(';');
+}
 function highlightCodeWithSemanticTokens(code,lang,payload){
   if(!payload||_editorSemanticTokensContentLength!==String(code||'').length)return '';
   const data=editorSemanticTokensData(payload),legend=editorSemanticTokensLegend(payload);
@@ -3662,7 +3687,8 @@ function highlightCodeWithSemanticTokens(code,lang,payload){
       if(end<=cursor)return;
       if(start>cursor)out+=esc(lineText.slice(cursor,start));
       const safeStart=Math.max(start,cursor);
-      out+='<span class="'+editorSemanticTokenClass(token)+'">'+esc(lineText.slice(safeStart,end))+'</span>';
+      const style=editorSemanticTokenThemeStyle(token);
+      out+='<span class="'+editorSemanticTokenClass(token)+'"'+(style?' style="'+style+'"':'')+'>'+esc(lineText.slice(safeStart,end))+'</span>';
       cursor=end;
     });
     if(cursor<lineText.length)out+=esc(lineText.slice(cursor));
@@ -9008,9 +9034,53 @@ function clearExtensionThemeColors(){
   const style=document.documentElement.style;
   THEME_COLOR_VARS.forEach(name=>style.removeProperty(name));
 }
+function parseSemanticTokenSelector(selector){
+  const raw=String(selector||'').trim().toLowerCase();
+  if(!raw)return null;
+  const parts=raw.split(':');
+  const body=parts.shift()||'';
+  const language=(parts.shift()||'').trim();
+  const bits=body.split('.').map(v=>v.trim()).filter(Boolean);
+  const type=bits.shift()||'*';
+  if(!type)return null;
+  return {type,modifiers:bits,language};
+}
 function safeThemeColor(value){
   const v=String(value||'').trim();
   return /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(v)?v:'';
+}
+function semanticTokenThemeRule(selector,value){
+  const parsed=parseSemanticTokenSelector(selector);
+  if(!parsed)return null;
+  const source=value&&typeof value==='object'&&!Array.isArray(value)?value:{foreground:value};
+  const foreground=safeThemeColor(source.foreground||source.color||'');
+  const fontStyle=String(source.fontStyle||'').toLowerCase();
+  const rule=Object.assign(parsed,{
+    foreground,
+    bold:!!source.bold||fontStyle.includes('bold'),
+    italic:!!source.italic||fontStyle.includes('italic'),
+    underline:!!source.underline||fontStyle.includes('underline'),
+    strikethrough:!!source.strikethrough||fontStyle.includes('strikethrough')
+      ||fontStyle.includes('line-through')
+  });
+  return (rule.foreground||rule.bold||rule.italic||rule.underline||rule.strikethrough)?rule:null;
+}
+function clearExtensionSemanticTokenColors(){
+  currentSemanticTokenRules=[];
+  scheduleEditorSyntaxHighlight();
+}
+function applyExtensionSemanticTokenColors(colors){
+  currentSemanticTokenRules=[];
+  if(colors&&typeof colors==='object'&&!Array.isArray(colors)){
+    Object.entries(colors).forEach(([selector,value])=>{
+      const rule=semanticTokenThemeRule(selector,value);
+      if(rule)currentSemanticTokenRules.push(rule);
+    });
+  }
+  currentSemanticTokenRules.sort((a,b)=>
+    ((b.type==='*'?0:100)+b.modifiers.length*10+(b.language?5:0))-
+    ((a.type==='*'?0:100)+a.modifiers.length*10+(a.language?5:0)));
+  scheduleEditorSyntaxHighlight();
 }
 function applyExtensionThemeColors(colors){
   if(!colors||typeof colors!=='object')return;
@@ -9022,6 +9092,7 @@ function applyExtensionThemeColors(colors){
 }
 function applyTheme(theme){
   clearExtensionThemeColors();
+  clearExtensionSemanticTokenColors();
   document.documentElement.setAttribute('data-theme',theme);
   currentTheme=theme;
 }
@@ -9034,7 +9105,7 @@ async function applyEditorColorTheme(value,options){
     applyTheme(base);
     currentColorTheme=selected;config.color_theme=selected;config.theme=base;
     const r=await call('get_editor_theme',String(theme.id||theme.label||''));
-    if(r&&r.ok){applyExtensionThemeColors(r.colors||{});setColorThemeInfo(theme.label||theme.id||'',false)}
+    if(r&&r.ok){applyExtensionThemeColors(r.colors||{});applyExtensionSemanticTokenColors(r.semanticTokenColors||{});setColorThemeInfo(theme.label||theme.id||'',false)}
     else setColorThemeInfo((r&&r.error)||'Theme colors unavailable',true);
     if(opts.persist){
       await persistConfigPatch({theme:base,color_theme:selected},{errorPrefix:'Theme save failed: ',partialPrefix:'Theme updated only for current session: '});
