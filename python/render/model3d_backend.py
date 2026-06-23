@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-_MANAGED_NAMES = ("AssimpNet.dll",)
+_MANAGED_NAMES = ("AssimpNet.dll", "StirlingLabs.Assimp.Net.dll")
 _NATIVE_NAMES = (
     "assimp.dll",
     "assimp-vc143-mt.dll",
@@ -142,6 +142,7 @@ class Model3DBackendStatus:
 
     backend: str
     files_present: bool
+    import_available: bool
     render_available: bool
     reason: str
     managed_files: tuple[str, ...]
@@ -182,12 +183,7 @@ def _find_named_files(roots: tuple[Path, ...], names: tuple[str, ...]) -> tuple[
 
 
 def probe_model3d_backend() -> Model3DBackendStatus:
-    """Inspect the bundled AssimpNet/native-file layout.
-
-    ``render_available`` remains false until a real Python/GL bridge is wired.
-    Keeping this explicit lets the overlay host draw a useful diagnostic instead
-    of pretending a model can render and then failing during plugin load.
-    """
+    """Inspect the bundled AssimpNet/native-file layout."""
 
     roots = _candidate_roots()
     managed = _find_named_files(roots, _MANAGED_NAMES)
@@ -200,10 +196,11 @@ def probe_model3d_backend() -> Model3DBackendStatus:
     elif not native:
         reason = "AssimpNet.dll found, but native assimp DLL is missing."
     else:
-        reason = "AssimpNet files are present, but model3d GL rendering is not enabled in this build."
+        reason = "AssimpNet importer and native assimp files are available."
     return Model3DBackendStatus(
         backend="assimpnet",
         files_present=files_present,
+        import_available=files_present,
         render_available=False,
         reason=reason,
         managed_files=managed,
@@ -1669,20 +1666,70 @@ def _parse_gltf_metadata(path: Path) -> dict[str, Any]:
     }
 
 
+def _has_model_content(meta: Mapping[str, Any]) -> bool:
+    mesh = meta.get("mesh") if isinstance(meta.get("mesh"), Mapping) else {}
+    try:
+        if int(mesh.get("vertex_count") or 0) > 0 or int(mesh.get("face_count") or 0) > 0:
+            return True
+    except Exception:
+        pass
+    return bool(
+        meta.get("nodes")
+        or meta.get("bone_names")
+        or meta.get("clips")
+        or meta.get("clip_keyframes")
+    )
+
+
+def _has_imported_mesh_or_motion(meta: Mapping[str, Any]) -> bool:
+    mesh = meta.get("mesh") if isinstance(meta.get("mesh"), Mapping) else {}
+    try:
+        if int(mesh.get("vertex_count") or 0) > 0 or int(mesh.get("face_count") or 0) > 0:
+            return True
+    except Exception:
+        pass
+    return bool(meta.get("bone_names") or meta.get("clips") or meta.get("clip_keyframes"))
+
+
+def _parse_assimpnet_metadata(path: Path) -> dict[str, Any]:
+    try:
+        from render.model3d_assimpnet import import_model_metadata
+    except Exception as exc:
+        return {
+            "mesh": {"source": "assimpnet", "vertex_count": 0, "face_count": 0, "bbox": {}},
+            "nodes": (),
+            "materials": (),
+            "errors": (str(exc),),
+        }
+    return import_model_metadata(path)
+
+
 def _read_model_file_metadata(path: Path, fmt: str, exists: bool) -> dict[str, Any]:
     if not exists or not str(path):
         return {}
     suffix = path.suffix.lower()
     chosen = fmt if fmt and fmt != "auto" else suffix.lstrip(".")
     try:
+        if chosen in {"assimp", "assimpnet"}:
+            return _parse_assimpnet_metadata(path)
         if chosen == "obj" or suffix == ".obj":
             return _parse_obj_metadata(path)
         if chosen == "fbx" or suffix == ".fbx":
-            return _parse_ascii_fbx_metadata(path)
+            assimp_meta = _parse_assimpnet_metadata(path)
+            if _has_imported_mesh_or_motion(assimp_meta):
+                return assimp_meta
+            ascii_meta = _parse_ascii_fbx_metadata(path)
+            if _has_model_content(ascii_meta):
+                return ascii_meta
+            return assimp_meta
         if chosen == "gltf" or suffix == ".gltf":
             return _parse_gltf_metadata(path)
         if chosen == "glb" or suffix == ".glb":
             return _parse_glb_metadata(path)
+        assimp_meta = _parse_assimpnet_metadata(path)
+        if _has_model_content(assimp_meta):
+            return assimp_meta
+        return assimp_meta
     except Exception as exc:
         return {"mesh": {}, "nodes": (), "materials": (), "errors": (str(exc),)}
     return {}
@@ -2950,7 +2997,7 @@ def diagnose_model3d_node(
             lines.append("model file is missing")
     else:
         lines.append("model path is empty")
-    if not backend.render_available:
+    if not bool(getattr(backend, "import_available", backend.files_present)):
         lines.append(backend.reason)
     retarget = node.get("retarget") if isinstance(node.get("retarget"), Mapping) else {}
     if retarget:

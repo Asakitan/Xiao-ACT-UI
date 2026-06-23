@@ -83,10 +83,10 @@ def _backend_status() -> str:
     if callable(get_backend_status):
         try:
             status = get_backend_status()
-            if getattr(status, "render_available", False):
-                return "AssimpNet renderer ready"
+            if getattr(status, "import_available", False):
+                return "AssimpNet importer ready"
             if getattr(status, "files_present", False):
-                return "AssimpNet files present; render unavailable"
+                return "AssimpNet files present; importer unavailable"
             return "AssimpNet backend not bundled"
         except Exception:
             pass
@@ -95,7 +95,7 @@ def _backend_status() -> str:
     managed = os.path.join(vendor, "AssimpNet.dll")
     native = os.path.join(vendor, "runtimes", "win-x64", "native", "assimp.dll")
     if os.path.isfile(managed) and os.path.isfile(native):
-        return "AssimpNet files present; render unavailable"
+        return "AssimpNet importer ready"
     return "AssimpNet backend not bundled"
 
 

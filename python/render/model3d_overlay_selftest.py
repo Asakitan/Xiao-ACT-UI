@@ -497,8 +497,12 @@ class Model3DBackendTests(unittest.TestCase):
         clear_native_model3d_renderers()
 
     def test_backend_probe_and_diagnostic_are_safe_when_binaries_are_absent(self) -> None:
-        status = probe_model3d_backend()
+        with tempfile.TemporaryDirectory(prefix="model3d_empty_backend_") as root:
+            empty = Path(root)
+            with mock.patch.object(model3d_backend, "_candidate_roots", return_value=(empty,)):
+                status = probe_model3d_backend()
         self.assertEqual(status.backend, "assimpnet")
+        self.assertFalse(status.import_available)
         self.assertFalse(status.render_available)
         self.assertTrue(status.reason)
 
@@ -509,6 +513,16 @@ class Model3DBackendTests(unittest.TestCase):
         }, status=status)
         self.assertEqual(key, "plug/avatar")
         self.assertTrue(any("model path is empty" in line for line in lines))
+
+    def test_backend_probe_detects_bundled_assimpnet_importer(self) -> None:
+        status = get_backend_status(force=True)
+
+        self.assertEqual(status.backend, "assimpnet")
+        self.assertTrue(status.files_present, status)
+        self.assertTrue(status.import_available, status)
+        self.assertFalse(status.render_available, status)
+        self.assertTrue(any(path.endswith("AssimpNet.dll") for path in status.managed_files))
+        self.assertTrue(any(path.endswith("assimp.dll") for path in status.native_files))
 
     def test_backend_probe_cache_avoids_repeated_directory_scans(self) -> None:
         clear_model3d_metadata_caches()
@@ -840,6 +854,8 @@ class Model3DBackendTests(unittest.TestCase):
         self.assertIn("model", context["signatures"])
         self.assertIn("action", context["signatures"])
         self.assertIn("backend", context)
+        self.assertTrue(context["backend"]["import_available"], context["backend"])
+        self.assertFalse(context["backend"]["render_available"], context["backend"])
 
     def test_native_offscreen_renderer_failure_falls_back(self) -> None:
         def failing_renderer(node, context):
@@ -1032,6 +1048,46 @@ class Model3DBackendTests(unittest.TestCase):
         self.assertIn("CuteAvatar", meta["nodes"])
         self.assertIn("body", meta["materials"])
         self.assertEqual(again_preview_x, -1.0)
+
+    def test_model_metadata_imports_ply_with_bundled_assimpnet(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_assimp_ply_") as root:
+            model_path = Path(root) / "avatar.ply"
+            model_path.write_text(
+                "\n".join([
+                    "ply",
+                    "format ascii 1.0",
+                    "element vertex 4",
+                    "property float x",
+                    "property float y",
+                    "property float z",
+                    "element face 2",
+                    "property list uchar int vertex_indices",
+                    "end_header",
+                    "0 0 0",
+                    "1 0 0",
+                    "1 1 0",
+                    "0 1 0",
+                    "3 0 1 2",
+                    "3 0 2 3",
+                ]),
+                encoding="utf-8",
+            )
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path), "format": "auto"},
+            })["nodes"][0]
+
+            meta = get_model_metadata(node)
+
+        self.assertEqual(meta["mesh"]["source"], "assimpnet")
+        self.assertGreaterEqual(meta["mesh"]["mesh_count"], 1)
+        self.assertEqual(meta["mesh"]["vertex_count"], 4)
+        self.assertEqual(meta["mesh"]["face_count"], 2)
+        self.assertEqual(meta["mesh"]["preview"]["source"], "assimpnet")
+        self.assertEqual(len(meta["mesh"]["preview"]["vertices"]), 4)
+        self.assertEqual(len(meta["mesh"]["preview"]["faces"]), 2)
+        self.assertEqual(meta["metadata_errors"], [])
 
     def test_model_metadata_extracts_ascii_fbx_mesh_bones_and_clips(self) -> None:
         clear_model3d_metadata_caches()

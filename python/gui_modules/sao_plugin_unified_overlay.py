@@ -427,6 +427,7 @@ def _backend_status_signature(backend_status: Any) -> dict[str, Any]:
     return {
         "backend": str(getattr(backend_status, "backend", "") or ""),
         "files_present": bool(getattr(backend_status, "files_present", False)),
+        "import_available": bool(getattr(backend_status, "import_available", False)),
         "render_available": bool(getattr(backend_status, "render_available", False)),
         "reason": str(getattr(backend_status, "reason", "") or ""),
         "managed_files": tuple(getattr(backend_status, "managed_files", ()) or ()),

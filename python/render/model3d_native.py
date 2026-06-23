@@ -212,6 +212,7 @@ def _backend_status_context(errors: list[str]) -> dict[str, Any]:
         "available": bool(getattr(status, "render_available", False)),
         "backend": str(getattr(status, "backend", "")),
         "files_present": bool(getattr(status, "files_present", False)),
+        "import_available": bool(getattr(status, "import_available", False)),
         "render_available": bool(getattr(status, "render_available", False)),
         "reason": str(getattr(status, "reason", "")),
     }
