@@ -6470,7 +6470,11 @@ function activate(context) {
     workspaceEdit.replace(editUri, new vscode.Range(0, 6, 0, 11), 'SAO');
     workspaceEdit.insert(editUri, new vscode.Position(0, 0), 'say ');
     const editApplied = await vscode.workspace.applyEdit(workspaceEdit);
+    const editDiskAfterApply = new TextDecoder().decode(await vscode.workspace.fs.readFile(editUri));
     const editedDoc = await vscode.workspace.openTextDocument(editUri);
+    const editDirtyBeforeSave = !!editedDoc.isDirty;
+    const editSaveApplied = await editedDoc.save();
+    const editDiskAfterSave = new TextDecoder().decode(await vscode.workspace.fs.readFile(editUri));
     const createdUri = vscode.Uri.joinPath(context.extensionUri, 'workspace-created.txt');
     const renamedUri = vscode.Uri.joinPath(context.extensionUri, 'workspace-renamed.txt');
     const deleteUri = vscode.Uri.joinPath(context.extensionUri, 'workspace-delete-me.txt');
@@ -6499,6 +6503,10 @@ function activate(context) {
       eventDiskAfterApply,
       workspaceEvents,
       editApplied,
+      editDiskAfterApply,
+      editDirtyBeforeSave,
+      editSaveApplied,
+      editDiskAfterSave,
       editText: editedDoc.getText(),
       fileOpsApplied,
       renamedExists,
@@ -7396,7 +7404,11 @@ module.exports = { activate, deactivate };
                        and node_workspace_probe.get("textDocuments", 0) >= 3
                        and node_workspace_probe.get("untitledText") == "alpha\nbeta"
                        and node_workspace_probe.get("editApplied") is True
-                       and node_workspace_probe.get("editText") == "say hello SAO",
+                       and node_workspace_probe.get("editText") == "say hello SAO"
+                       and node_workspace_probe.get("editDiskAfterApply") == "hello world"
+                       and node_workspace_probe.get("editDirtyBeforeSave") is True
+                       and node_workspace_probe.get("editSaveApplied") is True
+                       and node_workspace_probe.get("editDiskAfterSave") == "say hello SAO",
                        json.dumps(node_workspace_probe, ensure_ascii=False))
                 node_workspace_events = (
                     node_workspace_probe.get("workspaceEvents", {})

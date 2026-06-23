@@ -979,6 +979,17 @@ const _scmProviders = new Map();            // id -> SourceControl
 const _onDidChangeConfigurationEmitter = new EventEmitter();
 let _nextUntitledDocument = 1;
 
+function _workspaceDocumentIsOpened(document) {
+    return !!document && document.__opened !== false;
+}
+
+function _workspacePromoteTextDocument(document) {
+    if (!document || _workspaceDocumentIsOpened(document)) return document;
+    document.__opened = true;
+    _onDidOpenTextDocumentEmitter.fire(document);
+    return document;
+}
+
 function _treeStore(viewId) {
     const key = String(viewId || '');
     let store = _treeElementStores.get(key);
@@ -1595,7 +1606,7 @@ async function _workspaceOpenTextDocument(uriOrPath) {
     }
     const uri = _workspaceUriFromInput(uriOrPath);
     const cached = _workspaceTextDocuments.get(uri.toString());
-    if (cached) return cached;
+    if (cached) return _workspacePromoteTextDocument(cached);
     const text = uri.scheme === 'file' ? await fsp.readFile(uri.fsPath, 'utf8') : '';
     const doc = _createLanguageDocument({
         uri,
@@ -1662,9 +1673,15 @@ function _workspaceContentToText(content) {
 function _workspaceStoreTextDocument(doc, fireOpen) {
     if (!doc || !doc.uri) return doc;
     const key = doc.uri.toString();
-    const existed = _workspaceTextDocuments.has(key);
+    const existing = _workspaceTextDocuments.get(key);
+    const wasOpen = _workspaceDocumentIsOpened(existing);
+    if (fireOpen) {
+        doc.__opened = true;
+    } else if (doc.__opened === undefined) {
+        doc.__opened = wasOpen;
+    }
     _workspaceTextDocuments.set(key, doc);
-    if (fireOpen && !existed) _onDidOpenTextDocumentEmitter.fire(doc);
+    if (fireOpen && !wasOpen) _onDidOpenTextDocumentEmitter.fire(doc);
     return doc;
 }
 
@@ -1675,7 +1692,7 @@ function _workspaceCloseTextDocument(uriOrDoc) {
     const doc = _workspaceTextDocuments.get(key);
     if (!doc) return undefined;
     _workspaceTextDocuments.delete(key);
-    _onDidCloseTextDocumentEmitter.fire(doc);
+    if (_workspaceDocumentIsOpened(doc)) _onDidCloseTextDocumentEmitter.fire(doc);
     return doc;
 }
 
@@ -1707,6 +1724,7 @@ function _workspaceSetDocumentText(uri, text, languageId, contentChanges) {
             languageId: languageId || _languageIdForUri(uri),
             version,
         });
+        doc.__opened = false;
         _workspaceTextDocuments.set(key, doc);
     }
     const changes = Array.isArray(contentChanges) ? contentChanges : [{
@@ -1716,7 +1734,12 @@ function _workspaceSetDocumentText(uri, text, languageId, contentChanges) {
         text,
     }];
     doc.isDirty = true;
-    _onDidChangeTextDocumentEmitter.fire({ document: doc, contentChanges: changes });
+    if (_workspaceDocumentIsOpened(doc)) {
+        _onDidChangeTextDocumentEmitter.fire({
+            document: doc,
+            contentChanges: changes,
+        });
+    }
     _markCustomTextEditorsDirty(doc, 'textChange');
     return doc;
 }
@@ -1768,16 +1791,28 @@ async function _workspaceApplyFileOperation(entry) {
             await fsp.rm(target.fsPath, { recursive: true, force: true });
         }
         await fsp.mkdir(path.dirname(target.fsPath), { recursive: true });
+        const oldKey = uri.toString();
+        let cached = _workspaceTextDocuments.get(oldKey);
         await fsp.rename(uri.fsPath, target.fsPath);
-        const cached = _workspaceCloseTextDocument(uri);
         if (cached) {
-            const text = await fsp.readFile(target.fsPath, 'utf8');
-            _workspaceStoreTextDocument(_createLanguageDocument({
-                uri: target,
-                text,
-                languageId: _languageIdForUri(target),
-                version: Date.now(),
-            }), true);
+            _workspaceTextDocuments.delete(oldKey);
+            if (cached.isDirty) {
+                _workspaceRetargetTextDocument(cached, target);
+            } else {
+                const text = await fsp.readFile(target.fsPath, 'utf8');
+                if (typeof cached._setText === 'function') {
+                    cached._setText(text, Date.now());
+                    cached.isDirty = false;
+                    _workspaceRetargetTextDocument(cached, target);
+                } else {
+                    _workspaceStoreTextDocument(_createLanguageDocument({
+                        uri: target,
+                        text,
+                        languageId: _languageIdForUri(target),
+                        version: Date.now(),
+                    }), _workspaceDocumentIsOpened(cached));
+                }
+            }
         }
         return true;
     }
@@ -1821,8 +1856,16 @@ async function _workspaceApplyEdit(edit) {
                     _workspaceSetDocumentText(
                         group.uri, text, _languageIdForUri(group.uri), contentChanges);
                 } else {
-                    await fsp.mkdir(path.dirname(group.uri.fsPath), { recursive: true });
-                    await fsp.writeFile(group.uri.fsPath, text, 'utf8');
+                    const hiddenDoc = _createLanguageDocument({
+                        uri: group.uri,
+                        text,
+                        languageId: _languageIdForUri(group.uri),
+                        version: Date.now(),
+                    });
+                    hiddenDoc.__opened = false;
+                    _workspaceStoreTextDocument(hiddenDoc, false);
+                    _workspaceSetDocumentText(
+                        group.uri, text, _languageIdForUri(group.uri), contentChanges);
                 }
             }
             grouped.clear();
@@ -2319,7 +2362,10 @@ function buildVscodeModule(extDesc, extensionPath) {
             get workspaceFolders() { return [_workspaceFolder()]; },
             get name() { return _workspaceName; },
             get rootPath() { return _workspaceRoot; },
-            get textDocuments() { return Array.from(_workspaceTextDocuments.values()); },
+            get textDocuments() {
+                return Array.from(_workspaceTextDocuments.values()).filter(
+                    _workspaceDocumentIsOpened);
+            },
             onDidOpenTextDocument: _onDidOpenTextDocumentEmitter.event,
             onDidCloseTextDocument: _onDidCloseTextDocumentEmitter.event,
             onDidChangeTextDocument: _onDidChangeTextDocumentEmitter.event,
