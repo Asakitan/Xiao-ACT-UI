@@ -403,6 +403,52 @@ class MenuMixinActSummaryTests(unittest.TestCase):
         self.assertTrue(harness._sao_menu_needs_rebuild)
         self.assertEqual(calls, [("immediate",)])
 
+    def test_plugin_lifecycle_unload_clears_overlay_panel_and_visible_menu(self) -> None:
+        harness = _MenuHarness()
+        calls: list[tuple] = []
+        harness._sao_menu = type("Menu", (), {"visible": True})()
+        harness._menu_children_cache = {"old": []}
+        harness._menu_children_cache_sig = ("old",)
+        harness._last_menu_refresh_sig = ("old",)
+        harness._last_menu_refresh_sig_time = 123.0
+        harness._refresh_menu_immediate = lambda: calls.append(("immediate",))
+
+        class Host:
+            def _destroy_plugin_layers(self, plugin_id):
+                calls.append(("destroy_layers", plugin_id))
+
+            def mark_dirty(self):
+                calls.append(("host_dirty",))
+
+        class Panel:
+            def is_visible(self):
+                return True
+
+            def refresh(self):
+                calls.append(("panel_refresh",))
+
+        harness._plugin_unified_overlay = Host()
+        harness._act_plugin_manager_panel = Panel()
+
+        harness._handle_plugin_lifecycle({
+            "payload": {
+                "plugin_id": "script_snake",
+                "action": "unloaded",
+            }
+        })
+
+        self.assertIsNone(harness._menu_children_cache)
+        self.assertIsNone(harness._menu_children_cache_sig)
+        self.assertIsNone(harness._last_menu_refresh_sig)
+        self.assertEqual(harness._last_menu_refresh_sig_time, 0.0)
+        self.assertTrue(harness._sao_menu_needs_rebuild)
+        self.assertEqual(calls, [
+            ("destroy_layers", "script_snake"),
+            ("host_dirty",),
+            ("panel_refresh",),
+            ("immediate",),
+        ])
+
     def test_plugin_menu_invalidate_refreshes_visible_menu_only_for_menu_surface(self) -> None:
         harness = _MenuHarness()
         calls: list[tuple] = []
