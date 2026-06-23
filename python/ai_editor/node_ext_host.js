@@ -1635,6 +1635,7 @@ function _languageProviderMethod(kind) {
         references: 'provideReferences',
         prepareRename: 'prepareRename',
         rename: 'provideRenameEdits',
+        documentLink: 'provideDocumentLinks',
         documentSymbol: 'provideDocumentSymbols',
         codeActions: 'provideCodeActions',
         formatting: 'provideDocumentFormattingEdits',
@@ -1794,6 +1795,40 @@ async function handleLanguageProviderRequest(msg) {
                 ok: true,
                 kind,
                 value: null,
+            });
+            return;
+        }
+
+        if (kind === 'documentLink') {
+            const values = [];
+            const rawResolveCount = Number(msg.linkResolveCount || msg.resolveCount || 0);
+            let remainingResolves = Number.isFinite(rawResolveCount) ? Math.max(0, rawResolveCount) : 0;
+            for (const entry of providers) {
+                const provider = entry.provider;
+                const fn = provider && provider[methodName];
+                if (typeof fn !== 'function') continue;
+                try {
+                    const rawLinks = _normalizeProviderItems(await fn.call(provider, document, token));
+                    for (let link of rawLinks) {
+                        if (remainingResolves > 0) {
+                            if (typeof provider.resolveDocumentLink === 'function') {
+                                const resolved = await provider.resolveDocumentLink.call(provider, link, token);
+                                if (resolved !== undefined && resolved !== null) link = resolved;
+                            }
+                            remainingResolves -= 1;
+                        }
+                        values.push(link);
+                    }
+                } catch (err) {
+                    log(`language provider ${kind} error: ${err.message}`);
+                }
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: _serializeLanguageValue(values),
             });
             return;
         }

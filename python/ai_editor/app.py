@@ -488,7 +488,7 @@ _LANGUAGE_RESULT_ATTRS = (
     "children", "selectionRange", "diagnostics", "edit", "title",
     "isPreferred", "disabled", "newText", "position", "value",
     "signatures", "activeSignature", "activeParameter", "parameters",
-    "placeholder", "rejectReason",
+    "placeholder", "rejectReason", "target", "tooltip",
 )
 
 
@@ -2732,6 +2732,9 @@ class AIEditorAPI:
             "prepareRename": "prepareRename",
             "prepare_rename": "prepareRename",
             "rename": "rename",
+            "documentLink": "documentLink",
+            "documentLinks": "documentLink",
+            "links": "documentLink",
             "documentSymbol": "documentSymbol",
             "documentSymbols": "documentSymbol",
             "symbols": "documentSymbol",
@@ -2870,6 +2873,28 @@ class AIEditorAPI:
                     "uri": str(document.uri),
                     "version": document.version,
                     "edit": _json_ready_language_value(result),
+                }
+            if kind == "documentLink":
+                try:
+                    link_resolve_count = int(
+                        payload.get("linkResolveCount")
+                        if payload.get("linkResolveCount") is not None
+                        else payload.get("resolveCount") or 0)
+                except Exception:
+                    link_resolve_count = 0
+                result = self._ext_host.commands.execute(
+                    "vscode.executeLinkProvider",
+                    document.uri,
+                    max(0, link_resolve_count),
+                )
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "links": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
                 }
             if kind == "documentSymbol":
                 result = self._ext_host.commands.execute(
@@ -4931,6 +4956,14 @@ class AIEditorAPI:
             return {"error": f"Command not found: {command_id}"}
         except Exception as exc:
             return {"error": str(exc)}
+
+    def open_external_uri(self, uri: str) -> Dict:
+        self._ensure_engine()
+        uri_text = str(uri or "").strip()
+        if not uri_text:
+            return {"error": "URI is required"}
+        ok = self._vscode_ns._open_external(uri_text)
+        return {"ok": bool(ok)}
 
     def select_extension_tree_item(self, view_id: str, handle: str) -> Dict:
         """Select a runtime extension TreeView node by frontend snapshot handle."""

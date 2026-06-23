@@ -330,7 +330,7 @@ def test_app_settings_parity() -> None:
         "clear_active_agent", "delete_agent", "delete_workflow",
         "run_workflow", "get_scopes", "save_agent", "save_workflow",
         "list_workspace_tree", "open_workspace_file",
-        "apply_workspace_text_edits",
+        "apply_workspace_text_edits", "open_external_uri",
         "editor_language_provider",
         "get_chat_controls", "set_active_provider", "set_active_model",
         "set_active_mode", "set_provider_model", "set_chat_provider",
@@ -356,7 +356,7 @@ def test_app_settings_parity() -> None:
     from ai_editor.vscode_api import (
         CompletionItem, CompletionList, Hover, TextEdit, Position, Range,
         SignatureHelp, SignatureInformation, ParameterInformation,
-        CodeAction, WorkspaceEdit, Location,
+        CodeAction, DocumentLink, WorkspaceEdit, Location,
     )
     provider_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     provider_api._extension_scan_dirs = lambda: []
@@ -416,6 +416,14 @@ def test_app_settings_parity() -> None:
                 )
             ]
 
+        def provideDocumentLinks(self, document, token):
+            link = DocumentLink(
+                Range(Position(0, 0), Position(0, 6)),
+                document.uri,
+            )
+            link.tooltip = "buffer link"
+            return [link]
+
         def prepareRename(self, document, position, token):
             return {
                 "range": Range(Position(0, 0), Position(0, 6)),
@@ -438,6 +446,7 @@ def test_app_settings_parity() -> None:
     lang_api["registerCodeActionsProvider"]("python", editor_provider)
     lang_api["registerDefinitionProvider"]("python", editor_provider)
     lang_api["registerReferenceProvider"]("python", editor_provider)
+    lang_api["registerDocumentLinkProvider"]("python", editor_provider)
     lang_api["registerRenameProvider"]("python", editor_provider)
     tmp_provider_dir = tempfile.mkdtemp()
     try:
@@ -466,6 +475,8 @@ def test_app_settings_parity() -> None:
             dict(provider_payload, kind="definition"))
         references_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="references", includeDeclaration=False))
+        document_link_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="documentLink", linkResolveCount=10))
         prepare_rename_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="prepareRename"))
         rename_result = provider_api.editor_language_provider(
@@ -513,6 +524,13 @@ def test_app_settings_parity() -> None:
                and reference.get("uri", "").startswith("file://")
                and reference.get("range", {}).get("start", {})
                .get("character") == 1)
+        link = document_link_result.get("links", [{}])[0]
+        _check("editor_language_provider serializes document links",
+               document_link_result.get("ok") is True
+               and link.get("target", "").startswith("file://")
+               and link.get("tooltip") == "buffer link"
+               and link.get("range", {}).get("end", {})
+               .get("character") == 6)
         _check("editor_language_provider serializes rename prepare",
                prepare_rename_result.get("ok") is True
                and prepare_rename_result.get("prepareRename", {})
@@ -1527,6 +1545,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "id=\"editor-signature-help\"" in html
            and "id=\"editor-code-actions\"" in html
            and "id=\"editor-references\"" in html
+           and "id=\"editor-links\"" in html
            and "call('editor_language_provider'" in html
            and "function editorProviderPayload(kind,extra)" in html
            and "function requestEditorCompletion(triggerCharacter,quiet)" in html
@@ -1547,6 +1566,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function requestEditorReferences(quiet)" in html
            and "function showEditorReferences(references,position)" in html
            and "function handleEditorReferencesKey(e)" in html
+           and "function requestEditorDocumentLinks(quiet,openAtCursor)" in html
+           and "function showEditorDocumentLinks(links,position)" in html
+           and "function openEditorDocumentLink(link)" in html
+           and "call('open_external_uri'" in html
            and "function requestEditorRename(quiet)" in html
            and "function promptEditorRenameName(seed)" in html
            and "function confirmEditorRenameApply(newName,summary)" in html
@@ -1562,6 +1585,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "F2" in html
            and "Go to Definition" in html
            and "Find All References" in html
+           and "Open Link" in html
            and "Rename Symbol" in html
            and "Quick Fix..." in html
            and "Formatted via extension" in html)
@@ -2773,7 +2797,7 @@ def test_vscode_api() -> None:
         AuthenticationProviderBase, Diagnostic, WorkspaceEdit,
         Position, Range, AuthenticationSession, PreparedToolInvocation,
         EventEmitter, CompletionItem, CompletionList, Hover, CodeAction,
-        TextEdit, Location, SignatureHelp, SignatureInformation,
+        DocumentLink, TextEdit, Location, SignatureHelp, SignatureInformation,
         ParameterInformation,
     )
 
@@ -3144,6 +3168,21 @@ def test_vscode_api() -> None:
                 return [Location(
                     document.uri, Range(Position(0, 1), Position(0, 4)))]
 
+        class _DocumentLinkProvider:
+            def __init__(self):
+                self.resolved = 0
+
+            def provideDocumentLinks(self, document, token):
+                return [
+                    DocumentLink(Range(Position(0, 0), Position(0, 4))),
+                ]
+
+            def resolveDocumentLink(self, link, token):
+                self.resolved += 1
+                link.target = doc.uri
+                link.tooltip = "resolved link"
+                return link
+
         class _RenameProvider:
             def __init__(self):
                 self.names = []
@@ -3188,6 +3227,9 @@ def test_vscode_api() -> None:
         reference_provider = _ReferenceProvider()
         api["languages"]["registerReferenceProvider"](
             "python", reference_provider)
+        document_link_provider = _DocumentLinkProvider()
+        api["languages"]["registerDocumentLinkProvider"](
+            "python", document_link_provider)
         rename_provider = _RenameProvider()
         api["languages"]["registerRenameProvider"](
             "python", rename_provider)
@@ -3208,6 +3250,10 @@ def test_vscode_api() -> None:
         references = api["commands"]["executeCommand"](
             "vscode.executeReferenceProvider", doc.uri, Position(0, 0),
             {"includeDeclaration": False})
+        document_links_unresolved = api["commands"]["executeCommand"](
+            "vscode.executeLinkProvider", doc.uri)
+        document_links = api["commands"]["executeCommand"](
+            "vscode.executeLinkProvider", doc.uri, 1)
         prepare_rename = api["commands"]["executeCommand"](
             "_executePrepareRename", doc.uri, Position(0, 0))
         rename_edit = api["commands"]["executeCommand"](
@@ -3234,6 +3280,13 @@ def test_vscode_api() -> None:
         _check("executeReferenceProvider invokes matching providers",
                references and references[0].uri == doc.uri
                and reference_provider.contexts[-1]["includeDeclaration"] is False)
+        _check("executeLinkProvider invokes matching providers",
+               document_links_unresolved
+               and document_links_unresolved[0].target is None
+               and document_links
+               and document_links[0].target == doc.uri
+               and document_links[0].tooltip == "resolved link"
+               and document_link_provider.resolved == 1)
         _check("executePrepareRename invokes matching providers",
                prepare_rename.get("placeholder") == "prin")
         _check("executeDocumentRenameProvider invokes matching providers",
@@ -3251,6 +3304,8 @@ def test_vscode_api() -> None:
                "vscode.executeCompletionItemProvider"
                in api["commands"]["getCommands"]()
                and "vscode.executeReferenceProvider"
+               in api["commands"]["getCommands"]()
+               and "vscode.executeLinkProvider"
                in api["commands"]["getCommands"]()
                and "_executeDocumentRenameProvider"
                in api["commands"]["getCommands"]()
@@ -4486,6 +4541,18 @@ function activate(context) {
       return [new vscode.Location(document.uri, new vscode.Range(0, 1, 0, 4))];
     },
   });
+  vscode.languages.registerDocumentLinkProvider('python', {
+    provideDocumentLinks(document, token) {
+      const link = new vscode.DocumentLink(new vscode.Range(0, 0, 0, 4));
+      link.tooltip = 'node pending link';
+      return [link];
+    },
+    resolveDocumentLink(link, token) {
+      link.target = vscode.Uri.file('/workspace/node-link.py');
+      link.tooltip = 'node resolved link';
+      return link;
+    },
+  });
   vscode.languages.registerRenameProvider('python', {
     prepareRename(document, position, token) {
       return { range: new vscode.Range(0, 0, 0, 4), placeholder: 'node' };
@@ -4609,6 +4676,8 @@ module.exports = { activate, deactivate };
                     "vscode.executeDefinitionProvider", node_uri, Position(0, 1))
                 node_references = api._ext_host.commands.execute(
                     "vscode.executeReferenceProvider", node_uri, Position(0, 1))
+                node_document_links = api._ext_host.commands.execute(
+                    "vscode.executeLinkProvider", node_uri, 1)
                 node_prepare_rename = api._ext_host.commands.execute(
                     "_executePrepareRename", node_uri, Position(0, 1))
                 node_rename_edit = api._ext_host.commands.execute(
@@ -4657,6 +4726,10 @@ module.exports = { activate, deactivate };
                        and node_references[0].get("uri", "").endswith("node_provider.py")
                        and node_references[0].get("range", {}).get("start", {})
                        .get("character") == 1)
+                _check("node host language provider invokes JS document links",
+                       node_document_links
+                       and node_document_links[0].get("target", "").endswith("node-link.py")
+                       and node_document_links[0].get("tooltip") == "node resolved link")
                 _check("node host language provider invokes JS prepare rename",
                        node_prepare_rename
                        and node_prepare_rename.get("placeholder") == "node")

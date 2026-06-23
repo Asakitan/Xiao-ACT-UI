@@ -781,6 +781,13 @@ class Location:
     range: Range = field(default_factory=Range)
 
 
+class DocumentLink:
+    def __init__(self, range: Any, target: Any = None) -> None:
+        self.range = range
+        self.target = target
+        self.tooltip = None
+
+
 @dataclass
 class Diagnostic:
     range: Range
@@ -1078,6 +1085,8 @@ class VscodeNamespace:
             "vscode.executeDocumentRenameProvider": self._execute_rename_provider,
             "_executePrepareRename": self._execute_prepare_rename_provider,
             "vscode.executePrepareRenameProvider": self._execute_prepare_rename_provider,
+            "_executeLinkProvider": self._execute_link_provider,
+            "vscode.executeLinkProvider": self._execute_link_provider,
             "vscode.executeDocumentSymbolProvider": self._execute_document_symbol_provider,
             "vscode.executeCodeActionProvider": self._execute_code_action_provider,
             "vscode.executeFormatDocumentProvider": self._execute_format_document_provider,
@@ -1412,6 +1421,53 @@ class VscodeNamespace:
             return external[0] if external else None
         return external
 
+    def _execute_link_provider(
+            self, uri: Any, link_resolve_count: Any = 0) -> List[Any]:
+        document = self._resolve_language_document(uri)
+        try:
+            remaining_resolves = max(0, int(link_resolve_count or 0))
+        except Exception:
+            remaining_resolves = 0
+        results: List[Any] = []
+        for entry in self._matching_language_providers("documentLink", document):
+            provider = entry.get("provider")
+            value = self._call_language_provider(
+                provider, "provideDocumentLinks",
+                (document, CancellationToken.NONE),
+                default=None)
+            links = self._provider_values(value)
+            if remaining_resolves:
+                resolved_links: List[Any] = []
+                resolve_method = None
+                if isinstance(provider, dict):
+                    resolve_method = provider.get("resolveDocumentLink")
+                if resolve_method is None:
+                    resolve_method = getattr(
+                        provider, "resolveDocumentLink", None)
+                for link in links:
+                    if remaining_resolves > 0:
+                        if callable(resolve_method):
+                            try:
+                                resolved = _resolve_provider_result(
+                                    _call_with_compatible_args(
+                                        resolve_method,
+                                        (link, CancellationToken.NONE)),
+                                    default=None)
+                                if resolved is not None:
+                                    link = resolved
+                            except Exception:
+                                pass
+                        remaining_resolves -= 1
+                    resolved_links.append(link)
+                links = resolved_links
+            results.extend(links)
+        external = self._request_external_language_provider(
+            "documentLink",
+            document,
+            linkResolveCount=remaining_resolves)
+        results.extend(self._provider_values(external))
+        return results
+
     def _execute_document_symbol_provider(self, uri: Any) -> List[Any]:
         document = self._resolve_language_document(uri)
         results = self._collect_language_provider_results(
@@ -1586,6 +1642,7 @@ class VscodeNamespace:
             "SignatureInformation": SignatureInformation,
             "SignatureHelp": SignatureHelp,
             "CodeAction": CodeAction,
+            "DocumentLink": DocumentLink,
             "TextEdit": TextEdit,
             "WorkspaceEdit": WorkspaceEdit,
             "ChatResultFeedback": ChatResult,
