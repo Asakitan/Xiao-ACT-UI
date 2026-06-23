@@ -357,7 +357,7 @@ def test_app_settings_parity() -> None:
         CompletionItem, CompletionList, Hover, TextEdit, Position, Range,
         SignatureHelp, SignatureInformation, ParameterInformation,
         CodeAction, DocumentLink, InlayHint, InlineCompletionItem,
-        WorkspaceEdit, Location,
+        CodeLens, WorkspaceEdit, Location,
     )
     provider_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     provider_api._extension_scan_dirs = lambda: []
@@ -440,6 +440,17 @@ def test_app_settings_parity() -> None:
             item.filterText = "bufferGhost"
             return [item]
 
+        def provideCodeLenses(self, document, token):
+            return [CodeLens(Range(Position(0, 0), Position(0, 6)))]
+
+        def resolveCodeLens(self, lens, token):
+            lens.command = {
+                "command": "selftest.editorLens",
+                "title": "Run lens",
+                "arguments": ["lens-ok"],
+            }
+            return lens
+
         def prepareRename(self, document, position, token):
             return {
                 "range": Range(Position(0, 0), Position(0, 6)),
@@ -465,6 +476,7 @@ def test_app_settings_parity() -> None:
     lang_api["registerDocumentLinkProvider"]("python", editor_provider)
     lang_api["registerInlayHintsProvider"]("python", editor_provider)
     lang_api["registerInlineCompletionItemProvider"]("python", editor_provider)
+    lang_api["registerCodeLensProvider"]("python", editor_provider)
     lang_api["registerRenameProvider"]("python", editor_provider)
     tmp_provider_dir = tempfile.mkdtemp()
     try:
@@ -502,6 +514,8 @@ def test_app_settings_parity() -> None:
             }))
         inline_completion_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="inlineCompletion", triggerKind=0))
+        code_lens_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="codeLens", itemResolveCount=10))
         prepare_rename_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="prepareRename"))
         rename_result = provider_api.editor_language_provider(
@@ -570,6 +584,13 @@ def test_app_settings_parity() -> None:
                and inline_item.get("insertText") == "bufferGhost"
                and inline_item.get("filterText") == "bufferGhost"
                and inline_item.get("range", {}).get("end", {})
+               .get("character") == 6)
+        lens = code_lens_result.get("lenses", [{}])[0]
+        _check("editor_language_provider serializes code lenses",
+               code_lens_result.get("ok") is True
+               and lens.get("command", {}).get("title") == "Run lens"
+               and lens.get("command", {}).get("arguments") == ["lens-ok"]
+               and lens.get("range", {}).get("end", {})
                .get("character") == 6)
         _check("editor_language_provider serializes rename prepare",
                prepare_rename_result.get("ok") is True
@@ -1588,6 +1609,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "id=\"editor-links\"" in html
            and "id=\"editor-inlay-layer\"" in html
            and "id=\"editor-ghost-layer\"" in html
+           and "id=\"editor-codelens-layer\"" in html
            and "call('editor_language_provider'" in html
            and "function editorProviderPayload(kind,extra)" in html
            and "function requestEditorCompletion(triggerCharacter,quiet)" in html
@@ -1621,6 +1643,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function acceptEditorInlineCompletion()" in html
            and "function handleEditorInlineCompletionKey(e)" in html
            and "editorProviderPayload('inlineCompletion'" in html
+           and "function requestEditorCodeLenses(quiet)" in html
+           and "function renderEditorCodeLenses(lenses)" in html
+           and "function runEditorCodeLens(lens)" in html
+           and "function scheduleEditorCodeLenses(delay)" in html
+           and "editorProviderPayload('codeLens'" in html
            and "call('open_external_uri'" in html
            and "function requestEditorRename(quiet)" in html
            and "function promptEditorRenameName(seed)" in html
@@ -2850,7 +2877,7 @@ def test_vscode_api() -> None:
         Position, Range, AuthenticationSession, PreparedToolInvocation,
         EventEmitter, CompletionItem, CompletionList, Hover, CodeAction,
         DocumentLink, InlayHint, InlayHintLabelPart, InlineCompletionItem,
-        TextEdit, Location, SignatureHelp, SignatureInformation,
+        CodeLens, TextEdit, Location, SignatureHelp, SignatureInformation,
         ParameterInformation,
     )
 
@@ -3260,6 +3287,22 @@ def test_vscode_api() -> None:
                     Range(Position(0, 0), Position(0, 4)),
                 )]
 
+        class _CodeLensProvider:
+            def __init__(self):
+                self.resolved = 0
+
+            def provideCodeLenses(self, document, token):
+                return [CodeLens(Range(Position(0, 0), Position(0, 4)))]
+
+            def resolveCodeLens(self, lens, token):
+                self.resolved += 1
+                lens.command = {
+                    "command": "selftest.lens",
+                    "title": "Selftest Lens",
+                    "arguments": ["ok"],
+                }
+                return lens
+
         class _RenameProvider:
             def __init__(self):
                 self.names = []
@@ -3312,6 +3355,9 @@ def test_vscode_api() -> None:
         inline_completion_provider = _InlineCompletionProvider()
         api["languages"]["registerInlineCompletionItemProvider"](
             "python", inline_completion_provider)
+        code_lens_provider = _CodeLensProvider()
+        api["languages"]["registerCodeLensProvider"](
+            "python", code_lens_provider)
         rename_provider = _RenameProvider()
         api["languages"]["registerRenameProvider"](
             "python", rename_provider)
@@ -3345,6 +3391,10 @@ def test_vscode_api() -> None:
             doc.uri,
             Position(0, 4),
             {"triggerKind": api["InlineCompletionTriggerKind"]["Invoke"]})
+        code_lenses_unresolved = api["commands"]["executeCommand"](
+            "vscode.executeCodeLensProvider", doc.uri)
+        code_lenses = api["commands"]["executeCommand"](
+            "vscode.executeCodeLensProvider", doc.uri, 1)
         prepare_rename = api["commands"]["executeCommand"](
             "_executePrepareRename", doc.uri, Position(0, 0))
         rename_edit = api["commands"]["executeCommand"](
@@ -3390,6 +3440,12 @@ def test_vscode_api() -> None:
                and inline_completions[0].range.end.character == 4
                and inline_completion_provider.contexts[-1]["triggerKind"]
                == api["InlineCompletionTriggerKind"]["Invoke"])
+        _check("executeCodeLensProvider invokes matching providers",
+               code_lenses_unresolved
+               and code_lenses_unresolved[0].command is None
+               and code_lenses
+               and code_lenses[0].command["title"] == "Selftest Lens"
+               and code_lens_provider.resolved == 1)
         _check("executePrepareRename invokes matching providers",
                prepare_rename.get("placeholder") == "prin")
         _check("executeDocumentRenameProvider invokes matching providers",
@@ -3413,6 +3469,8 @@ def test_vscode_api() -> None:
                and "vscode.executeInlayHintProvider"
                in api["commands"]["getCommands"]()
                and "_executeInlineCompletionProvider"
+               in api["commands"]["getCommands"]()
+               and "vscode.executeCodeLensProvider"
                in api["commands"]["getCommands"]()
                and "_executeDocumentRenameProvider"
                in api["commands"]["getCommands"]()
@@ -4682,6 +4740,19 @@ function activate(context) {
       return [item];
     },
   });
+  vscode.languages.registerCodeLensProvider('python', {
+    provideCodeLenses(document, token) {
+      return [new vscode.CodeLens(new vscode.Range(0, 0, 0, 4))];
+    },
+    resolveCodeLens(lens, token) {
+      lens.command = {
+        command: 'selftest.node.openItem',
+        title: 'Node Lens',
+        arguments: [{ id: 'lens-root' }],
+      };
+      return lens;
+    },
+  });
   vscode.languages.registerRenameProvider('python', {
     prepareRename(document, position, token) {
       return { range: new vscode.Range(0, 0, 0, 4), placeholder: 'node' };
@@ -4816,6 +4887,8 @@ module.exports = { activate, deactivate };
                     node_uri,
                     Position(0, 4),
                     {"triggerKind": 0})
+                node_code_lenses = api._ext_host.commands.execute(
+                    "vscode.executeCodeLensProvider", node_uri, 1)
                 node_prepare_rename = api._ext_host.commands.execute(
                     "_executePrepareRename", node_uri, Position(0, 1))
                 node_rename_edit = api._ext_host.commands.execute(
@@ -4880,6 +4953,12 @@ module.exports = { activate, deactivate };
                        and node_inline_completions[0].get("filterText") == "nodeGhost"
                        and node_inline_completions[0].get("range", {})
                        .get("end", {}).get("character") == 4)
+                _check("node host language provider invokes JS code lenses",
+                       node_code_lenses
+                       and node_code_lenses[0].get("command", {})
+                       .get("title") == "Node Lens"
+                       and node_code_lenses[0].get("command", {})
+                       .get("arguments", [{}])[0].get("id") == "lens-root")
                 _check("node host language provider invokes JS prepare rename",
                        node_prepare_rename
                        and node_prepare_rename.get("placeholder") == "node")

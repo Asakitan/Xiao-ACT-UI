@@ -1335,6 +1335,7 @@ function buildVscodeModule(extDesc, extensionPath) {
         InlineCompletionItem: class { constructor(insertText, range, command) { this.insertText = insertText; this.range = range; this.command = command; } },
         InlineCompletionList: class { constructor(items) { this.items = items || []; } },
         InlineCompletionTriggerKind: { Invoke: 0, Automatic: 1 },
+        CodeLens: class { constructor(range, command) { this.range = range; this.command = command; } get isResolved() { return !!this.command; } },
         TextEdit: class { static replace(range, text) { return { range, newText: text }; }; static insert(pos, text) { return { range: new Range(pos, pos), newText: text }; }; static delete(range) { return { range, newText: '' }; } },
         WorkspaceEdit: class { constructor() { this._edits = []; } replace(uri, range, text) { this._edits.push({ uri, range, text }); } insert(uri, pos, text) { this._edits.push({ uri, range: new Range(pos, pos), text }); } delete(uri, range) { this._edits.push({ uri, range, text: '' }); } set(uri, edits) { for (const e of edits) this._edits.push({ uri, ...e }); } },
         RelativePattern: class { constructor(base, pattern) { this.base = base; this.pattern = pattern; } },
@@ -1647,6 +1648,7 @@ function _languageProviderMethod(kind) {
         documentLink: 'provideDocumentLinks',
         inlayHint: 'provideInlayHints',
         inlineCompletion: 'provideInlineCompletionItems',
+        codeLens: 'provideCodeLenses',
         documentSymbol: 'provideDocumentSymbols',
         codeActions: 'provideCodeActions',
         formatting: 'provideDocumentFormattingEdits',
@@ -1829,6 +1831,40 @@ async function handleLanguageProviderRequest(msg) {
                             remainingResolves -= 1;
                         }
                         values.push(link);
+                    }
+                } catch (err) {
+                    log(`language provider ${kind} error: ${err.message}`);
+                }
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: _serializeLanguageValue(values),
+            });
+            return;
+        }
+
+        if (kind === 'codeLens') {
+            const values = [];
+            const rawResolveCount = Number(msg.itemResolveCount || msg.resolveCount || 0);
+            let remainingResolves = Number.isFinite(rawResolveCount) ? Math.max(0, rawResolveCount) : 0;
+            for (const entry of providers) {
+                const provider = entry.provider;
+                const fn = provider && provider[methodName];
+                if (typeof fn !== 'function') continue;
+                try {
+                    const rawLenses = _normalizeProviderItems(await fn.call(provider, document, token));
+                    for (let lens of rawLenses) {
+                        if (remainingResolves > 0) {
+                            if (typeof provider.resolveCodeLens === 'function') {
+                                const resolved = await provider.resolveCodeLens.call(provider, lens, token);
+                                if (resolved !== undefined && resolved !== null) lens = resolved;
+                            }
+                            remainingResolves -= 1;
+                        }
+                        values.push(lens);
                     }
                 } catch (err) {
                     log(`language provider ${kind} error: ${err.message}`);

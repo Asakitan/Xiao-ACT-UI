@@ -489,7 +489,7 @@ _LANGUAGE_RESULT_ATTRS = (
     "isPreferred", "disabled", "newText", "position", "value",
     "signatures", "activeSignature", "activeParameter", "parameters",
     "placeholder", "rejectReason", "target", "tooltip", "textEdits",
-    "paddingLeft", "paddingRight", "location",
+    "paddingLeft", "paddingRight", "location", "isResolved",
 )
 
 
@@ -2742,6 +2742,10 @@ class AIEditorAPI:
             "inlineCompletion": "inlineCompletion",
             "inlineCompletions": "inlineCompletion",
             "ghostText": "inlineCompletion",
+            "codeLens": "codeLens",
+            "codeLenses": "codeLens",
+            "lens": "codeLens",
+            "lenses": "codeLens",
             "documentSymbol": "documentSymbol",
             "documentSymbols": "documentSymbol",
             "symbols": "documentSymbol",
@@ -2949,6 +2953,28 @@ class AIEditorAPI:
                     "uri": str(document.uri),
                     "version": document.version,
                     "items": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "codeLens":
+                try:
+                    resolve_count = int(
+                        payload.get("itemResolveCount")
+                        if payload.get("itemResolveCount") is not None
+                        else payload.get("resolveCount") or 0)
+                except Exception:
+                    resolve_count = 0
+                result = self._ext_host.commands.execute(
+                    "vscode.executeCodeLensProvider",
+                    document.uri,
+                    max(0, resolve_count),
+                )
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "lenses": value if isinstance(value, list) else (
                         [] if value is None else [value]),
                 }
             if kind == "documentSymbol":

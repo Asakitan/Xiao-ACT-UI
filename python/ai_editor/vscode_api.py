@@ -822,6 +822,16 @@ class InlineCompletionList:
         self.items = list(items or [])
 
 
+class CodeLens:
+    def __init__(self, range: Any, command: Any = None) -> None:
+        self.range = range
+        self.command = command
+
+    @property
+    def isResolved(self) -> bool:
+        return self.command is not None
+
+
 @dataclass
 class Diagnostic:
     range: Range
@@ -1124,6 +1134,8 @@ class VscodeNamespace:
             "_executeInlayHintProvider": self._execute_inlay_hint_provider,
             "vscode.executeInlayHintProvider": self._execute_inlay_hint_provider,
             "_executeInlineCompletionProvider": self._execute_inline_completion_provider,
+            "_executeCodeLensProvider": self._execute_code_lens_provider,
+            "vscode.executeCodeLensProvider": self._execute_code_lens_provider,
             "vscode.executeDocumentSymbolProvider": self._execute_document_symbol_provider,
             "vscode.executeCodeActionProvider": self._execute_code_action_provider,
             "vscode.executeFormatDocumentProvider": self._execute_format_document_provider,
@@ -1558,6 +1570,52 @@ class VscodeNamespace:
         results.extend(self._inline_completion_items(external))
         return results
 
+    def _execute_code_lens_provider(
+            self, uri: Any, item_resolve_count: Any = 0) -> List[Any]:
+        document = self._resolve_language_document(uri)
+        try:
+            remaining_resolves = max(0, int(item_resolve_count or 0))
+        except Exception:
+            remaining_resolves = 0
+        results: List[Any] = []
+        for entry in self._matching_language_providers("codeLens", document):
+            provider = entry.get("provider")
+            value = self._call_language_provider(
+                provider, "provideCodeLenses",
+                (document, CancellationToken.NONE),
+                default=None)
+            lenses = self._provider_values(value)
+            if remaining_resolves:
+                resolved_lenses: List[Any] = []
+                resolve_method = None
+                if isinstance(provider, dict):
+                    resolve_method = provider.get("resolveCodeLens")
+                if resolve_method is None:
+                    resolve_method = getattr(provider, "resolveCodeLens", None)
+                for lens in lenses:
+                    if remaining_resolves > 0:
+                        if callable(resolve_method):
+                            try:
+                                resolved = _resolve_provider_result(
+                                    _call_with_compatible_args(
+                                        resolve_method,
+                                        (lens, CancellationToken.NONE)),
+                                    default=None)
+                                if resolved is not None:
+                                    lens = resolved
+                            except Exception:
+                                pass
+                        remaining_resolves -= 1
+                    resolved_lenses.append(lens)
+                lenses = resolved_lenses
+            results.extend(lenses)
+        external = self._request_external_language_provider(
+            "codeLens",
+            document,
+            itemResolveCount=remaining_resolves)
+        results.extend(self._provider_values(external))
+        return results
+
     def _execute_document_symbol_provider(self, uri: Any) -> List[Any]:
         document = self._resolve_language_document(uri)
         results = self._collect_language_provider_results(
@@ -1737,6 +1795,7 @@ class VscodeNamespace:
             "InlayHintLabelPart": InlayHintLabelPart,
             "InlineCompletionItem": InlineCompletionItem,
             "InlineCompletionList": InlineCompletionList,
+            "CodeLens": CodeLens,
             "TextEdit": TextEdit,
             "WorkspaceEdit": WorkspaceEdit,
             "ChatResultFeedback": ChatResult,

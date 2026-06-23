@@ -227,6 +227,13 @@ body.window-resizing * { cursor:inherit !important; }
   font:13px/1.5 var(--mono); padding:8px 12px; overflow:hidden; white-space:pre; tab-size:4; }
 .editor-ghost-text { position:absolute; color:var(--fg-dim); opacity:.56; white-space:pre;
   max-width:min(520px,70%); overflow:hidden; text-overflow:ellipsis; }
+.editor-codelens-layer { position:absolute; inset:0 0 0 50px; z-index:6; pointer-events:none;
+  font:11px/1.25 var(--ui); padding:8px 12px; overflow:hidden; }
+.editor-codelens-item { position:absolute; pointer-events:auto; color:var(--fg-accent);
+  background:var(--bg-editor); border:1px solid var(--border); border-radius:3px;
+  padding:1px 5px; max-width:260px; overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap; cursor:pointer; opacity:.92; }
+.editor-codelens-item:hover { background:var(--bg-hover); color:var(--fg-bright); }
 .editor-textarea { flex:1; background:var(--bg-editor); color:var(--fg-code); font:13px/1.5 var(--mono);
   padding:8px 12px; border:none; outline:none; resize:none; tab-size:4; white-space:pre;
   overflow:auto; caret-color:var(--fg-accent); position:relative; z-index:2; }
@@ -1195,6 +1202,7 @@ pre.code-block { overflow:visible; }
         <pre class="editor-syntax-layer" id="editor-syntax-highlight" aria-hidden="true"></pre>
         <div class="editor-inlay-layer" id="editor-inlay-layer" aria-hidden="true"></div>
         <div class="editor-ghost-layer" id="editor-ghost-layer" aria-hidden="true"></div>
+        <div class="editor-codelens-layer" id="editor-codelens-layer" aria-hidden="true"></div>
         <textarea class="editor-textarea" id="editor-text" spellcheck="false" placeholder="// Your code here..."></textarea>
         <div class="editor-suggest" id="editor-suggest" role="listbox"></div>
         <div class="editor-hover" id="editor-hover" role="tooltip"></div>
@@ -2436,12 +2444,14 @@ function openInEditor(code,lang){
   if(typeof closeEditorLinks==='function')closeEditorLinks();
   if(typeof clearEditorInlayHints==='function')clearEditorInlayHints();
   if(typeof clearEditorInlineCompletions==='function')clearEditorInlineCompletions();
+  if(typeof clearEditorCodeLenses==='function')clearEditorCodeLenses();
   updateLineNums();updateCursorPos();
   if(lang&&LANGUAGES.includes(lang))setEditorLanguage(lang);
   else detectLanguage(code,'');
   editorDirty=false;
   if(typeof scheduleEditorInlayHints==='function')scheduleEditorInlayHints(160);
   if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(220);
+  if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(260);
 }
 function showEditorArea(){
   _editorVis=true;
@@ -3196,6 +3206,7 @@ function setEditorLanguage(lang){
   scheduleEditorSyntaxHighlight();
   if(typeof scheduleEditorInlayHints==='function')scheduleEditorInlayHints(220);
   if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(260);
+  if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(320);
 }
 
 let _editorSyntaxRaf=0;
@@ -3212,6 +3223,7 @@ function syncEditorSyntaxScroll(){
   layer.scrollTop=ta.scrollTop;layer.scrollLeft=ta.scrollLeft;
   if(typeof renderEditorInlayHints==='function')renderEditorInlayHints(_editorInlayHints);
   if(typeof renderEditorInlineCompletion==='function')renderEditorInlineCompletion();
+  if(typeof renderEditorCodeLenses==='function')renderEditorCodeLenses(_editorCodeLenses);
 }
 function updateEditorSyntaxHighlight(){
   const layer=$('editor-syntax-highlight'),ta=$('editor-text'),wrap=$('editor-container');
@@ -3248,6 +3260,8 @@ function editorUndo(){
   if(typeof scheduleEditorInlayHints==='function')scheduleEditorInlayHints(180);
   if(typeof clearEditorInlineCompletions==='function')clearEditorInlineCompletions();
   if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(220);
+  if(typeof clearEditorCodeLenses==='function')clearEditorCodeLenses();
+  if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(360);
 }
 function editorRedo(){
   const ta=$('editor-text');if(!ta||!_redoStack.length)return;
@@ -3259,6 +3273,8 @@ function editorRedo(){
   if(typeof scheduleEditorInlayHints==='function')scheduleEditorInlayHints(180);
   if(typeof clearEditorInlineCompletions==='function')clearEditorInlineCompletions();
   if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(220);
+  if(typeof clearEditorCodeLenses==='function')clearEditorCodeLenses();
+  if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(360);
 }
 function _editorInputWithUndo(e){
   updateLineNums();updateCursorPos();editorDirty=true;
@@ -3278,6 +3294,8 @@ function _editorInputWithUndo(e){
   scheduleEditorInlayHints();
   clearEditorInlineCompletions();
   scheduleEditorInlineCompletions();
+  clearEditorCodeLenses();
+  scheduleEditorCodeLenses();
 }
 
 let _editorSuggestItems=[],_editorSuggestIndex=0,_editorSuggestRequest=0;
@@ -3289,6 +3307,7 @@ let _editorReferences=[],_editorReferenceIndex=0,_editorReferencesRequest=0;
 let _editorLinks=[],_editorLinkIndex=0,_editorLinksRequest=0;
 let _editorInlayHints=[],_editorInlayHintRequest=0,_editorInlayHintTimer=null;
 let _editorInlineCompletions=[],_editorInlineCompletionIndex=0,_editorInlineCompletionRequest=0,_editorInlineCompletionTimer=null;
+let _editorCodeLenses=[],_editorCodeLensRequest=0,_editorCodeLensTimer=null;
 function activeEditorTab(){
   return (typeof tabs!=='undefined'&&Array.isArray(tabs)?tabs.find(t=>t.id===activeTab):null)||{};
 }
@@ -3486,6 +3505,66 @@ function handleEditorInlineCompletionKey(e){
   if(e.key==='Escape'){e.preventDefault();clearEditorInlineCompletions();return true}
   return false;
 }
+function editorCodeLensTitle(lens){
+  const command=lens&&lens.command;
+  if(!command)return '';
+  if(typeof command==='string')return command;
+  return String(command.title||command.command||command.id||'');
+}
+function clearEditorCodeLenses(){
+  _editorCodeLensRequest++;
+  clearTimeout(_editorCodeLensTimer);
+  _editorCodeLenses=[];
+  const layer=$('editor-codelens-layer');if(layer)layer.innerHTML='';
+}
+function renderEditorCodeLenses(lenses){
+  const layer=$('editor-codelens-layer'),ta=$('editor-text'),wrap=$('editor-container');
+  if(!layer||!ta||!wrap)return;
+  layer.innerHTML='';
+  if(wrap.style.display==='none'||wrap.offsetParent===null||!Array.isArray(lenses)||!lenses.length)return;
+  const style=getComputedStyle(ta),lineHeight=parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.5;
+  const paddingTop=parseFloat(style.paddingTop)||8,paddingLeft=parseFloat(style.paddingLeft)||12;
+  const perLine=Object.create(null);
+  lenses.slice(0,120).forEach((lens,index)=>{
+    const title=editorCodeLensTitle(lens),range=lens&&lens.range;
+    if(!title||!range||!range.start)return;
+    const line=Math.max(0,Number(range.start.line)||0),slot=perLine[line]||0;
+    perLine[line]=slot+1;
+    const top=Math.max(0,paddingTop+line*lineHeight-ta.scrollTop-13);
+    const left=paddingLeft+slot*170-ta.scrollLeft;
+    if(top<-16||top>wrap.clientHeight+lineHeight||left<-180||left>wrap.clientWidth)return;
+    const el=document.createElement('button');
+    el.type='button';el.className='editor-codelens-item';el.textContent=title;el.title=title;
+    el.style.top=top+'px';el.style.left=Math.max(0,left)+'px';
+    el.onmousedown=e=>{e.preventDefault();e.stopPropagation();runEditorCodeLens(lens)};
+    layer.appendChild(el);
+  });
+}
+async function runEditorCodeLens(lens){
+  const command=lens&&lens.command;
+  if(!command){setStatus('CodeLens has no command');return false}
+  const result=typeof runEditorCodeActionCommand==='function'
+    ? await runEditorCodeActionCommand(command)
+    : await call('execute_command',String(command.command||command.id||command),...(Array.isArray(command.arguments)?command.arguments:[]));
+  if(callSucceeded(result))setStatus('Ran CodeLens: '+editorCodeLensTitle(lens));
+  ed.focus();
+  return callSucceeded(result);
+}
+async function requestEditorCodeLenses(quiet){
+  const wrap=$('editor-container');
+  if(!ed||!wrap||wrap.style.display==='none')return;
+  const requestId=++_editorCodeLensRequest;
+  const res=await call('editor_language_provider',editorProviderPayload('codeLens',{itemResolveCount:120}));
+  if(requestId!==_editorCodeLensRequest)return;
+  if(res&&res.error){_editorCodeLenses=[];renderEditorCodeLenses([]);if(!quiet)setStatus('CodeLens failed: '+res.error);return}
+  _editorCodeLenses=(res&&res.ok&&Array.isArray(res.lenses)?res.lenses:[]).filter(lens=>lens&&lens.range&&lens.command);
+  renderEditorCodeLenses(_editorCodeLenses);
+  if(!quiet)setStatus(_editorCodeLenses.length+' CodeLens item'+(_editorCodeLenses.length===1?'':'s'));
+}
+function scheduleEditorCodeLenses(delay){
+  clearTimeout(_editorCodeLensTimer);
+  _editorCodeLensTimer=setTimeout(()=>requestEditorCodeLenses(true),delay==null?700:delay);
+}
 function completionLabelText(label){
   if(label&&typeof label==='object')return String(label.label||label.name||label.detail||'');
   return String(label||'');
@@ -3534,6 +3613,8 @@ function editorApplyTextEdits(edits){
   scheduleEditorInlayHints(200);
   clearEditorInlineCompletions();
   scheduleEditorInlineCompletions(240);
+  clearEditorCodeLenses();
+  scheduleEditorCodeLenses(420);
   return true;
 }
 function isEditorSuggestOpen(){
@@ -8126,10 +8207,12 @@ function switchTab(id){
     if(typeof closeEditorLinks==='function')closeEditorLinks();
     if(typeof clearEditorInlayHints==='function')clearEditorInlayHints();
     if(typeof clearEditorInlineCompletions==='function')clearEditorInlineCompletions();
+    if(typeof clearEditorCodeLenses==='function')clearEditorCodeLenses();
     updateLineNums();updateCursorPos();
     $('editor-welcome').style.display='none';$('editor-container').style.display='flex';
     if(typeof scheduleEditorInlayHints==='function')scheduleEditorInlayHints(160);
     if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(220);
+    if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(280);
   }
   renderTabs();
 }
@@ -8493,6 +8576,7 @@ const COMMANDS=[
   {label:'Trigger Inline Completion',shortcut:'',action:()=>requestEditorInlineCompletions(false,0)},
   {label:'Signature Help',shortcut:'Ctrl+Shift+Space',action:()=>requestEditorSignatureHelp('',1,false)},
   {label:'Refresh Inlay Hints',shortcut:'',action:()=>requestEditorInlayHints(false)},
+  {label:'Refresh CodeLens',shortcut:'',action:()=>requestEditorCodeLenses(false)},
   {label:'Quick Fix...',shortcut:'Ctrl+.',action:()=>requestEditorCodeActions(false)},
   {label:'Open Link',shortcut:'Ctrl+Click',action:()=>requestEditorDocumentLinks(false,true)},
   {label:'Rename Symbol',shortcut:'F2',action:()=>requestEditorRename(false)},
