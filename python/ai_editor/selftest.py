@@ -2168,8 +2168,13 @@ def test_phase1_ai_editor_regressions() -> None:
            and "Format Selection" in html
            and "async function handleEditorDocumentPaste(e)" in html
            and "async function handleEditorDocumentDrop(e)" in html
+           and "id=\"editor-drop-paste-options\"" in html
            and "function editorDataTransferPayload(source)" in html
            and "function editorApplyDropPasteEdit(edit,ranges,label)" in html
+           and "async function editorApplyDropPasteEdits(edits,ranges,label,snapshot,position)" in html
+           and "function showEditorDropPasteOptions(session,position)" in html
+           and "function handleEditorDropPasteOptionsKey(e)" in html
+           and "function closeEditorDropPasteOptions()" in html
            and "editorDropPasteProviderPayload('prepareDocumentPaste'" in html
            and "editorDropPasteProviderPayload('documentPaste'" in html
            and "editorDropPasteProviderPayload('documentDrop'" in html
