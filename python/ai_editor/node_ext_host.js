@@ -105,11 +105,18 @@ class Uri {
     }
     get fsPath() { return this.path.replace(/\//g, path.sep); }
     toString() {
+        let result;
         if (this.scheme === 'file') {
             const p = this.path.startsWith('/') ? this.path : '/' + this.path;
-            return `file://${this.authority}${p}`;
+            result = `file://${this.authority}${p}`;
+        } else if (this.authority) {
+            result = `${this.scheme}://${this.authority}${this.path}`;
+        } else {
+            result = `${this.scheme}:${this.path}`;
         }
-        return `${this.scheme}://${this.authority}${this.path}`;
+        if (this.query) result += `?${this.query}`;
+        if (this.fragment) result += `#${this.fragment}`;
+        return result;
     }
     with(change) {
         return new Uri(
@@ -130,6 +137,43 @@ class Uri {
     static joinPath(base, ...segments) {
         return Uri.file(path.join(base.fsPath, ...segments));
     }
+}
+
+const WEBVIEW_RESOURCE_AUTHORITY_SUFFIX = '.vscode-resource.webview.local';
+const WEBVIEW_CSP_SOURCE = "'self' https://webview.local https://*.vscode-resource.webview.local";
+
+function _encodeWebviewResourceAuthority(authority) {
+    return String(authority || '').replace(/./g, (ch) => {
+        const code = ch.charCodeAt(0);
+        if (
+            (code >= 48 && code <= 57)
+            || (code >= 65 && code <= 90)
+            || (code >= 97 && code <= 122)
+        ) {
+            return ch;
+        }
+        return '-' + code.toString(16).padStart(4, '0');
+    });
+}
+
+function _encodeWebviewResourcePath(resourcePath) {
+    let value = String(resourcePath || '').replace(/\\/g, '/');
+    if (!value.startsWith('/')) value = '/' + value;
+    return value.split('/').map((part) => encodeURIComponent(part)).join('/');
+}
+
+function _asWebviewResourceUri(localUri) {
+    const uri = localUri instanceof Uri ? localUri : _workspaceUriFromInput(localUri);
+    if (uri.scheme === 'http' || uri.scheme === 'https') return uri;
+    const authorityPrefix = encodeURIComponent(
+        `${uri.scheme}+${_encodeWebviewResourceAuthority(uri.authority)}`);
+    return new Uri(
+        'https',
+        `${authorityPrefix}${WEBVIEW_RESOURCE_AUTHORITY_SUFFIX}`,
+        _encodeWebviewResourcePath(uri.path),
+        uri.query,
+        uri.fragment,
+    );
 }
 
 // -------------------------------------------------------------------------
@@ -568,7 +612,7 @@ class Webview {
             : [];
         this._onDidReceiveMessage = new EventEmitter();
         this.onDidReceiveMessage = this._onDidReceiveMessage.event;
-        this.cspSource = 'https://cdn.example.com';
+        this.cspSource = WEBVIEW_CSP_SOURCE;
     }
     get html() { return this._html; }
     set html(value) {
@@ -588,7 +632,7 @@ class Webview {
         return Promise.resolve(true);
     }
     asWebviewUri(localUri) {
-        return Uri.parse(`https://webview.local/${localUri.path}`);
+        return _asWebviewResourceUri(localUri);
     }
     _localResourceRootsPayload() {
         const roots = (

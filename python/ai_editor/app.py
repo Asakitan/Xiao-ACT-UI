@@ -76,7 +76,10 @@ _WORKSPACE_TREE_IGNORED_DIRS = {
     "build", "dist", "publish", "out", "tmp", "temp",
 }
 _WORKSPACE_FILE_PREVIEW_BYTES = 1024 * 1024
-_WEBVIEW_LOCAL_URL_RE = re.compile(r"https://webview\.local/[^\s\"'<>)]*")
+_WEBVIEW_LOCAL_URL_RE = re.compile(
+    r"https://(?:webview\.local|[^/\s\"'<>)]*\.vscode-resource\.webview\.local)"
+    r"/[^\s\"'<>)]*"
+)
 _WEBVIEW_RESOURCE_MAX_BYTES = 2 * 1024 * 1024
 _WEBVIEW_RESOURCE_TOTAL_MAX_BYTES = 8 * 1024 * 1024
 _EDITOR_LANGUAGE_BY_EXT = {
@@ -878,8 +881,16 @@ class AIEditorAPI:
     @staticmethod
     def _webview_local_path_from_url(url: str) -> str:
         parsed = urlparse(str(url or ""))
-        if parsed.scheme != "https" or parsed.netloc != "webview.local":
+        if parsed.scheme != "https":
             return ""
+        netloc = parsed.netloc.lower()
+        if netloc != "webview.local":
+            suffix = ".vscode-resource.webview.local"
+            if not netloc.endswith(suffix):
+                return ""
+            resource_prefix = unquote(netloc[:-len(suffix)])
+            if not resource_prefix.startswith("file+"):
+                return ""
         path = unquote(parsed.path or "")
         if re.match(r"^/[A-Za-z]:/", path):
             path = path[1:]
@@ -949,13 +960,13 @@ class AIEditorAPI:
             self, html: str, local_resource_roots: Any = None) -> str:
         """Inline local ``asWebviewUri`` resources for srcdoc webviews.
 
-        Node-side extensions naturally emit ``https://webview.local/...`` URLs
-        from ``webview.asWebviewUri``.  The AI Editor embeds webviews as
-        sandboxed ``srcdoc`` iframes instead of running a local webview
-        resource server, so readable local assets are converted to data URIs.
+        Node-side extensions naturally emit local HTTPS resource URLs from
+        ``webview.asWebviewUri``.  The AI Editor embeds webviews as sandboxed
+        ``srcdoc`` iframes instead of running a local webview resource server,
+        so readable local assets are converted to data URIs.
         """
         text = str(html or "")
-        if "https://webview.local/" not in text:
+        if "webview.local/" not in text:
             return text
 
         budget = {"bytes": 0}

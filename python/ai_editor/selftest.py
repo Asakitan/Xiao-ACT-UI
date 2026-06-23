@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 import tkinter as tk
+from urllib.parse import quote
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -2569,16 +2570,29 @@ console.log("frontend auto-close behavior ok");
             fh.write("@font-face{src:url('./panel.woff')} body{color:red}")
         def _wv_url(path: str) -> str:
             return "https://webview.local/" + path.replace("\\", "/")
+        def _wv_resource_url(path: str) -> str:
+            url_path = path.replace("\\", "/")
+            if len(url_path) >= 2 and url_path[1] == ":":
+                url_path = "/" + url_path
+            return (
+                "https://file%2B.vscode-resource.webview.local"
+                + quote(url_path, safe="/")
+            )
         raw_webview_html = (
             '<meta http-equiv="Content-Security-Policy" '
             'content="default-src \'none\'; script-src \'nonce-a\'; '
             'style-src https://webview.local">'
             f'<link href="{_wv_url(style_path)}" rel="stylesheet">'
             f'<script nonce="a" src="{_wv_url(script_path)}"></script>')
+        encoded_webview_html = (
+            f'<script src="{_wv_resource_url(script_path)}?v=1#main"></script>')
         blocked_webview_html = f'<script src="{_wv_url(outside_script_path)}"></script>'
         prepared_webview_html = AIEditorAPI(
             _SettingsGui({"ai_editor": {}}))._prepare_extension_webview_html(
                 raw_webview_html, [{"uri": "file:///" + webview_tmp.replace("\\", "/")}])
+        encoded_prepared_html = AIEditorAPI(
+            _SettingsGui({"ai_editor": {}}))._prepare_extension_webview_html(
+                encoded_webview_html, [{"fsPath": webview_tmp}])
         blocked_prepared_html = AIEditorAPI(
             _SettingsGui({"ai_editor": {}}))._prepare_extension_webview_html(
                 blocked_webview_html, [{"fsPath": webview_tmp}])
@@ -2597,6 +2611,11 @@ console.log("frontend auto-close behavior ok");
                and "script-src 'nonce-a' data:" in prepared_webview_html
                and "style-src https://webview.local data: 'unsafe-inline'"
                in prepared_webview_html)
+        _check("webview VS Code-style resource URLs are inlined",
+               f'src="{_wv_resource_url(script_path)}?v=1#main"'
+               not in encoded_prepared_html
+               and "data:text/javascript;base64," in encoded_prepared_html
+               and "sao-webview-resource-map" in encoded_prepared_html)
         _check("webview local resource roots block outside files",
                "https://webview.local/" in blocked_prepared_html
                and "data:text/javascript;base64," not in blocked_prepared_html)
@@ -6479,6 +6498,31 @@ function activate(context) {
     panel.webview.html = '<main data-view="empty-roots"></main>';
     return true;
   });
+  vscode.commands.registerCommand('selftest.node.webviewUriProbe', () => {
+    const panel = vscode.window.createWebviewPanel(
+      'selftest.uriProbe',
+      'URI Probe',
+      vscode.ViewColumn.One,
+      { enableScripts: true },
+    );
+    const fileUrl = panel.webview.asWebviewUri(
+      vscode.Uri.parse('file:///Users/codey/f%20ile.html?cache=1#frag'));
+    const windowsUrl = panel.webview.asWebviewUri(
+      vscode.Uri.parse('file:///C:/codey/file.txt'));
+    const authorityUrl = panel.webview.asWebviewUri(
+      vscode.Uri.parse('sao-resource://host.name/path/to/asset.svg'));
+    const httpUrl = panel.webview.asWebviewUri(
+      vscode.Uri.parse('https://example.com/cdn/app.js?x=1#top'));
+    panel.webview.html = '<meta http-equiv="Content-Security-Policy" content="img-src '
+      + panel.webview.cspSource + '"><main data-view="uri-probe"></main>';
+    return {
+      fileUrl: fileUrl.toString(),
+      windowsUrl: windowsUrl.toString(),
+      authorityUrl: authorityUrl.toString(),
+      httpUrl: httpUrl.toString(),
+      cspSource: panel.webview.cspSource,
+    };
+  });
   context.subscriptions.push(vscode.window.registerCustomEditorProvider(
     'selftest.node.customEditor',
     {
@@ -6686,6 +6730,10 @@ module.exports = { activate, deactivate };
                     lambda: "selftest.node.webviewEmptyRoots"
                     in api._ext_host.commands.list_commands(),
                     timeout=3.0)
+                node_webview_uri_command_registered = _wait_until(
+                    lambda: "selftest.node.webviewUriProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
                 node_language_registered = _wait_until(
                     lambda: any(
                         item.get("kind") == "completion"
@@ -6860,6 +6908,11 @@ module.exports = { activate, deactivate };
                         "selftest.node.webviewEmptyRoots")
                 except Exception as exc:
                     node_empty_roots_probe = {"_error": str(exc)}
+                try:
+                    node_webview_uri_probe = api._ext_host.commands.execute(
+                        "selftest.node.webviewUriProbe")
+                except Exception as exc:
+                    node_webview_uri_probe = {"_error": str(exc)}
                 _wait_until(
                     lambda: any(
                         'data-view="default-roots"' in html
@@ -7273,6 +7326,25 @@ module.exports = { activate, deactivate };
                            "view_id": node_empty_roots_view_id,
                            "roots": node_empty_roots,
                        }, ensure_ascii=False))
+                _check("node host webview asWebviewUri matches VS Code resource shape",
+                       node_webview_uri_command_registered
+                       and isinstance(node_webview_uri_probe, dict)
+                       and node_webview_uri_probe.get("fileUrl") == (
+                           "https://file%2B.vscode-resource.webview.local"
+                           "/Users/codey/f%20ile.html?cache=1#frag")
+                       and node_webview_uri_probe.get("windowsUrl") == (
+                           "https://file%2B.vscode-resource.webview.local"
+                           "/C%3A/codey/file.txt")
+                       and node_webview_uri_probe.get("authorityUrl") == (
+                           "https://sao-resource%2Bhost-002ename"
+                           ".vscode-resource.webview.local/path/to/asset.svg")
+                       and node_webview_uri_probe.get("httpUrl") == (
+                           "https://example.com/cdn/app.js?x=1#top")
+                       and "https://*.vscode-resource.webview.local"
+                       in node_webview_uri_probe.get("cspSource", "")
+                       and "cdn.example.com"
+                       not in node_webview_uri_probe.get("cspSource", ""),
+                       json.dumps(node_webview_uri_probe, ensure_ascii=False))
                 _check("node host workspace APIs read local files",
                        node_workspace_command_registered
                        and isinstance(node_workspace_probe, dict)
