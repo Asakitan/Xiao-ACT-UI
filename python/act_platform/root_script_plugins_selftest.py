@@ -157,6 +157,8 @@ def run_selftest() -> dict[str, Any]:
             if plugin_id == "script_flappy_emma":
                 if not state.get("level") or not state.get("pipe_speed") or not state.get("gap_half"):
                     return {"ok": False, "plugin_id": plugin_id, "stage": "difficulty_state", "state": state}
+                if int(state.get("target_score") or 0) <= 0 or "progress" not in state or int(state.get("progress") or 0) != 0:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_goal_state", "state": state}
                 if state.get("started") is not False:
                     return {"ok": False, "plugin_id": plugin_id, "stage": "ready_state", "state": state}
                 if state.get("timer_active") is not False or _plugin_timer_active(manager, plugin_id):
@@ -197,11 +199,40 @@ def run_selftest() -> dict[str, Any]:
                 action_state = _state(action)
                 if action_state.get("timer_active") is not True or not _plugin_timer_active(manager, plugin_id):
                     return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_resume_timer_active", "state": action_state}
+                target_action = act_plugin_action(
+                    owner, "script.game.set_target_score", {"target_score": 2}, plugin_id=plugin_id)
+                target_state = _state(target_action)
+                if int(target_state.get("target_score") or 0) != 2:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_target_score", "state": target_state}
+                clear_action = act_plugin_action(
+                    owner, "script.game.set_score", {"score": 2}, plugin_id=plugin_id)
+                clear_state = _state(clear_action)
+                if clear_state.get("won") is not True or clear_state.get("game_over") is not False:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_clear_state", "state": clear_state}
+                if int(clear_state.get("progress") or 0) != 100:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_clear_progress", "state": clear_state}
+                if clear_state.get("timer_active") is not False or _plugin_timer_active(manager, plugin_id):
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_clear_timer_idle", "state": clear_state}
+                raised_goal = _state(act_plugin_action(
+                    owner, "script.game.set_target_score", {"target_score": 4}, plugin_id=plugin_id))
+                if raised_goal.get("won") is not False or int(raised_goal.get("progress") or 0) != 50:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_raise_goal", "state": raised_goal}
+                if raised_goal.get("timer_active") is not True or not _plugin_timer_active(manager, plugin_id):
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_raise_goal_timer", "state": raised_goal}
+                replay_state = _state(act_plugin_action(
+                    owner, "script.game.flap", {}, plugin_id=plugin_id))
+                if replay_state.get("won") is not False or replay_state.get("started") is not True:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_clear_replay", "state": replay_state}
+                if replay_state.get("timer_active") is not True or not _plugin_timer_active(manager, plugin_id):
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_clear_replay_timer", "state": replay_state}
+                state = dict(replay_state)
             else:
                 action: dict[str, Any] = {"ok": True}
             if plugin_id == "script_snake_lua":
                 if not state.get("level") or not state.get("tick_interval"):
                     return {"ok": False, "plugin_id": plugin_id, "stage": "difficulty_state", "state": state}
+                if int(state.get("target_score") or 0) <= 0 or "progress" not in state or int(state.get("progress") or 0) != 0:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "snake_goal_state", "state": state}
                 if state.get("timer_active") is not True or not _plugin_timer_active(manager, plugin_id):
                     return {"ok": False, "plugin_id": plugin_id, "stage": "snake_running_timer_active", "state": state}
                 paused_action = act_plugin_action(
@@ -216,6 +247,26 @@ def run_selftest() -> dict[str, Any]:
                 resume_state = _state(resume_action)
                 if resume_state.get("timer_active") is not True or not _plugin_timer_active(manager, plugin_id):
                     return {"ok": False, "plugin_id": plugin_id, "stage": "snake_resume_timer_active", "state": resume_state}
+                target_state = _state(act_plugin_action(
+                    owner, "script.game.set_target_score", {"target_score": 2}, plugin_id=plugin_id))
+                if int(target_state.get("target_score") or 0) != 2:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "snake_target_score", "state": target_state}
+                clear_state = _state(act_plugin_action(
+                    owner, "script.game.set_score", {"score": 2}, plugin_id=plugin_id))
+                if clear_state.get("stage_clear") is not True or clear_state.get("won") is not False:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "snake_stage_clear", "state": clear_state}
+                if int(clear_state.get("progress") or 0) != 100:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "snake_goal_progress", "state": clear_state}
+                if clear_state.get("timer_active") is not True or not _plugin_timer_active(manager, plugin_id):
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "snake_stage_clear_timer_active", "state": clear_state}
+                raised_goal = _state(act_plugin_action(
+                    owner, "script.game.set_target_score", {"target_score": 4}, plugin_id=plugin_id))
+                if raised_goal.get("stage_clear") is not False or int(raised_goal.get("progress") or 0) != 50:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "snake_raise_goal", "state": raised_goal}
+                reset_state = _state(act_plugin_action(
+                    owner, "script.game.reset", {}, plugin_id=plugin_id))
+                if reset_state.get("stage_clear") is not False or "progress" not in reset_state or int(reset_state.get("progress") or 0) != 0:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "snake_reset_goal_state", "state": reset_state}
                 queued_first = _state(act_plugin_action(
                     owner, "script.game.direction", {"direction": "up"}, plugin_id=plugin_id))
                 queued_second = _state(act_plugin_action(
@@ -307,6 +358,10 @@ def run_selftest() -> dict[str, Any]:
                 "pending_turns": state.get("pending_turns"),
                 "queued_flaps": state.get("queued_flaps"),
                 "frame_count": state.get("frame_count"),
+                "target_score": state.get("target_score"),
+                "progress": state.get("progress"),
+                "won": state.get("won"),
+                "stage_clear": state.get("stage_clear"),
             }
         finally:
             act_plugin_action(
