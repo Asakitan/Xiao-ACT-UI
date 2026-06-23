@@ -453,8 +453,25 @@ class Model3DSpecTests(unittest.TestCase):
             "type": "model3d",
             "id": "fixed",
             "draggable": False,
+            "materials": {"profile": "asaki_anime"},
+            "physics": {"enabled": True},
+            "secondary_motion": {"enabled": True, "chains": [{"name": "hair"}]},
         })["nodes"][0]
         self.assertIs(fixed["draggable"], False)
+        self.assertEqual(fixed["materials"]["profile"], "asaki_anime")
+        self.assertIs(fixed["physics"]["enabled"], True)
+        self.assertEqual(fixed["secondary_motion"]["chains"][0]["name"], "hair")
+
+        helper_with_physics = normalize_ui_spec(UI.model3d(
+            "helper-physics", "avatar.fbx",
+            draggable=False,
+            materials={"profile": "mtoon"},
+            physics={"enabled": True},
+            secondary_motion={"enabled": True, "chains": [{"name": "ears"}]},
+        ))["nodes"][0]
+        self.assertIs(helper_with_physics["draggable"], False)
+        self.assertEqual(helper_with_physics["materials"]["profile"], "mtoon")
+        self.assertEqual(helper_with_physics["secondary_motion"]["chains"][0]["name"], "ears")
 
     def test_model3d_preserves_action_json_text_from_csharp_plugin(self) -> None:
         raw = '{"wave":{"speed":1.7,"rightArmLift":0.8}}'
@@ -1267,6 +1284,61 @@ Objects:  {
         self.assertEqual(preview["skin"][0][0]["joint"], "hips")
         self.assertEqual(preview["skin"][4][0]["joint"], "head")
         self.assertNotEqual(image_a.tobytes(), image_b.tobytes())
+
+    def test_sidecar_preview_mesh_and_secondary_motion_are_merged(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_sidecar_preview_mesh_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text(
+                """
+Objects:  {
+    Geometry: 1, "Geometry::Tiny", "Mesh" {
+        Vertices: *9 { a: 0,0,0, 1,0,0, 0,1,0 }
+        PolygonVertexIndex: *3 { a: 0,1,-3 }
+    }
+    Model: 2, "Model::Tiny", "Mesh" {}
+}
+""",
+                encoding="utf-8",
+            )
+            model_path.with_suffix(".model3d.json").write_text(json.dumps({
+                "materials": {"profile": "asaki_anime"},
+                "physics": {
+                    "enabled": True,
+                    "secondary_motion": {
+                        "enabled": True,
+                        "chains": [{"name": "hair", "joints": ["hair_white"], "amplitude": 0.04}],
+                    },
+                },
+                "mesh": {
+                    "preview": {
+                        "source": "sidecar_proxy",
+                        "vertices": [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                        "faces": [[0, 1, 2], [0, 2, 3]],
+                        "skin": [
+                            [{"joint": "hair_white", "weight": 1.0}],
+                            [{"joint": "hair_white", "weight": 1.0}],
+                            [{"joint": "skin", "weight": 1.0}],
+                            [{"joint": "skin", "weight": 1.0}],
+                        ],
+                    },
+                },
+            }), encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "id": "avatar",
+                "model": {"path": str(model_path)},
+            })["nodes"][0]
+            meta = get_model_metadata(node)
+
+        preview = meta["mesh"]["preview"]
+        self.assertEqual(preview["source"], "sidecar_proxy")
+        self.assertEqual(len(preview["vertices"]), 4)
+        self.assertEqual(len(preview["faces"]), 2)
+        self.assertEqual(preview["skin_source"], "sidecar")
+        self.assertEqual(meta["materials_config"]["profile"], "asaki_anime")
+        self.assertIs(meta["physics"]["enabled"], True)
+        self.assertEqual(meta["secondary_motion"]["chains"][0]["name"], "hair")
 
     def test_model_metadata_extracts_gltf_json_names_and_bounds(self) -> None:
         clear_model3d_metadata_caches()

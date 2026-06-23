@@ -157,22 +157,163 @@ def _weighted_add(
     )
 
 
+def _weighted_scale(
+    point: tuple[float, float, float],
+    weight: float,
+) -> tuple[float, float, float]:
+    return point[0] * weight, point[1] * weight, point[2] * weight
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _float(value: Any, default: float, lo: float, hi: float) -> float:
+    try:
+        num = float(value)
+    except Exception:
+        return default
+    if not math.isfinite(num):
+        return default
+    return max(lo, min(hi, num))
+
+
+def _motion_time(node: Mapping[str, Any]) -> float:
+    action = _mapping(node.get("action"))
+    try:
+        return float(action.get("time", node.get("phase", 0.0)) or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _motion_sources(node: Mapping[str, Any], meta: Mapping[str, Any] | None) -> list[Mapping[str, Any]]:
+    out: list[Mapping[str, Any]] = []
+    for source in (_mapping(node.get("secondary_motion")), _mapping(node.get("physics")).get("secondary_motion")):
+        if isinstance(source, Mapping):
+            out.append(source)
+    if isinstance(meta, Mapping):
+        for source in (
+            _mapping(meta.get("secondary_motion")),
+            _mapping(meta.get("physics")).get("secondary_motion"),
+        ):
+            if isinstance(source, Mapping):
+                out.append(source)
+    return out
+
+
+def _motion_chains(node: Mapping[str, Any], meta: Mapping[str, Any] | None) -> list[Mapping[str, Any]]:
+    chains: list[Mapping[str, Any]] = []
+    for source in _motion_sources(node, meta):
+        if source.get("enabled") is False:
+            continue
+        raw = source.get("chains") or source.get("spring_bones") or source.get("springs")
+        if isinstance(raw, Mapping):
+            raw = raw.values()
+        if not isinstance(raw, (list, tuple)):
+            continue
+        for item in raw[:64]:
+            if isinstance(item, Mapping):
+                chains.append(item)
+    return chains
+
+
+def _chain_tokens(chain: Mapping[str, Any]) -> tuple[str, ...]:
+    raw = (
+        chain.get("joints")
+        or chain.get("bones")
+        or chain.get("tokens")
+        or chain.get("match")
+        or chain.get("joint")
+        or chain.get("bone")
+    )
+    if isinstance(raw, str):
+        items = [raw]
+    elif isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        items = []
+    return tuple(str(item).strip().lower() for item in items if str(item).strip())
+
+
+def _chain_weight(influences: list[tuple[str, float]], chain: Mapping[str, Any]) -> float:
+    tokens = _chain_tokens(chain)
+    if not tokens:
+        return 0.0
+    total = 0.0
+    for joint, weight in influences:
+        text = str(joint or "").lower()
+        if any(token == text or token in text for token in tokens):
+            total += max(0.0, weight)
+    return max(0.0, min(1.0, total))
+
+
+def _apply_secondary_motion(
+    vertices: list[tuple[float, float, float]],
+    preview: Mapping[str, Any],
+    node: Mapping[str, Any],
+    meta: Mapping[str, Any] | None,
+) -> list[tuple[float, float, float]]:
+    chains = _motion_chains(node, meta)
+    if not chains:
+        return vertices
+    skin = preview.get("skin")
+    if not isinstance(skin, (list, tuple)) or not any(skin):
+        return vertices
+    time_value = _motion_time(node)
+    moved: list[tuple[float, float, float]] = []
+    changed = False
+    for index, point in enumerate(vertices):
+        influences = _skin_for_vertex(skin[index] if index < len(skin) else ())
+        if not influences:
+            moved.append(point)
+            continue
+        offset = (0.0, 0.0, 0.0)
+        for chain in chains:
+            weight = _chain_weight(influences, chain)
+            if weight <= 0.000001:
+                continue
+            axis = _point3(chain.get("axis")) or (1.0, 0.0, 0.0)
+            gravity = _point3(chain.get("gravity")) or (0.0, -1.0, 0.0)
+            amplitude = _float(chain.get("amplitude"), 0.035, 0.0, 1.0)
+            frequency = _float(chain.get("frequency"), 0.8, 0.0, 12.0)
+            phase = _float(chain.get("phase"), 0.0, -1000.0, 1000.0)
+            wave = _float(chain.get("wave"), 0.65, 0.0, 12.0)
+            damping = _float(chain.get("damping"), 0.18, 0.0, 1.0)
+            gravity_strength = _float(chain.get("gravity_strength"), 0.18, 0.0, 2.0)
+            sample = (
+                time_value * frequency * math.tau
+                + phase
+                + (point[0] * 0.73 + point[1] * 1.19 + point[2] * 0.41) * wave
+            )
+            sway = math.sin(sample) * amplitude * (1.0 - damping)
+            fall = (0.5 + 0.5 * math.sin(sample - math.pi * 0.5)) * amplitude * gravity_strength
+            offset = _vec_add(offset, _weighted_scale(axis, sway * weight))
+            offset = _vec_add(offset, _weighted_scale(gravity, fall * weight))
+        if any(abs(value) > 0.000001 for value in offset):
+            changed = True
+            moved.append(_vec_add(point, offset))
+        else:
+            moved.append(point)
+    return moved if changed else vertices
+
+
 def _deform_vertices(
     vertices: list[tuple[float, float, float]],
     preview: Mapping[str, Any],
     node: Mapping[str, Any],
+    meta: Mapping[str, Any] | None = None,
 ) -> list[tuple[float, float, float]]:
     skin = preview.get("skin")
     if not isinstance(skin, (list, tuple)) or not any(skin):
-        return vertices
+        return _apply_secondary_motion(vertices, preview, node, meta)
     if not callable(evaluate_retarget_pose):
-        return vertices
+        return _apply_secondary_motion(vertices, preview, node, meta)
     try:
         pose = evaluate_retarget_pose(node)
     except Exception:
-        return vertices
+        return _apply_secondary_motion(vertices, preview, node, meta)
     if not isinstance(pose, Mapping) or not bool(pose.get("ok")):
-        return vertices
+        return _apply_secondary_motion(vertices, preview, node, meta)
     rest = _pose_points(pose, "rest_positions")
     posed = _pose_points(pose, "positions")
     rotations = _pose_rotations(pose)
@@ -204,13 +345,16 @@ def _deform_vertices(
         if total <= 0.000001:
             deformed.append(point)
             continue
-        if total < 0.999999:
+        if total > 1.000001:
+            mixed = _weighted_scale(mixed, 1.0 / total)
+        elif total < 0.999999:
             mixed = _weighted_add(mixed, point, 1.0 - total)
         moved = mixed
         if any(abs(moved[axis] - point[axis]) > 0.000001 for axis in range(3)):
             changed = True
         deformed.append(moved)
-    return deformed if changed else vertices
+    deformed = deformed if changed else vertices
+    return _apply_secondary_motion(deformed, preview, node, meta)
 
 
 def _rotation(node: Mapping[str, Any]) -> tuple[float, float, float]:
@@ -319,6 +463,8 @@ def _joint_color(joint: str, accent: tuple[int, int, int, int]) -> tuple[int, in
         return 55, 47, 62, 255
     if "sleeve" in text or "shawl" in text or "wrap" in text:
         return 226, 219, 207, 255
+    if "skin" in text or "body_skin" in text:
+        return 246, 213, 194, 255
     if "head" in text or "neck" in text or "hand" in text:
         return 246, 213, 194, 255
     if "foot" in text:
@@ -394,7 +540,7 @@ def render_software_model3d_preview(node: Mapping[str, Any], pal: Mapping[str, A
     if len(vertices) < 6 or len(faces) < 4:
         return None
 
-    vertices = _deform_vertices(vertices, preview, node)
+    vertices = _deform_vertices(vertices, preview, node, meta)
     projected, scale, transformed = _project(vertices, width, height, node)
     pal = dict(pal or {})
     accent = _color(pal.get("accent") or "#7dd3fc", (125, 211, 252, 255))

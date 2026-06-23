@@ -306,6 +306,24 @@ def _normalize_model3d(node: Mapping[str, Any]) -> dict:
     raw_skeleton = node.get("skeleton")
     skeleton = _json_safe_map(raw_skeleton) if isinstance(raw_skeleton, Mapping) else {}
 
+    raw_materials = node.get("materials")
+    materials = (
+        _json_safe_value(raw_materials, max_items=256)
+        if isinstance(raw_materials, (Mapping, list, tuple, str))
+        else {}
+    )
+    if not isinstance(materials, (dict, list)):
+        materials = {}
+
+    raw_physics = node.get("physics")
+    physics = _json_safe_map(raw_physics, max_items=256) if isinstance(raw_physics, Mapping) else {}
+    raw_secondary = node.get("secondary_motion")
+    secondary_motion = (
+        _json_safe_map(raw_secondary, max_items=256)
+        if isinstance(raw_secondary, Mapping)
+        else {}
+    )
+
     return {
         "type": "model3d",
         "id": _s(node.get("id"), 120),
@@ -322,6 +340,9 @@ def _normalize_model3d(node: Mapping[str, Any]) -> dict:
         "transform": normalized_transform,
         "retarget": retarget,
         "skeleton": skeleton,
+        "materials": materials,
+        "physics": physics,
+        "secondary_motion": secondary_motion,
         "background": _s(node.get("background") or "transparent", 40),
         "fallback": _s(node.get("fallback"), 400),
         "debug": bool(node.get("debug", False)),
@@ -631,17 +652,23 @@ class UI:
                 animation_json: Any = None,
                 camera: Optional[Mapping[str, Any]] = None,
                 transform: Optional[Mapping[str, Any]] = None,
+                retarget: Optional[Mapping[str, Any]] = None,
+                skeleton: Optional[Mapping[str, Any]] = None,
+                materials: Optional[Any] = None,
+                physics: Optional[Mapping[str, Any]] = None,
+                secondary_motion: Optional[Mapping[str, Any]] = None,
                 phase: float = 0.0,
                 fallback: Any = "",
                 debug: bool = False,
-                diagnostic: bool = False) -> dict:
+                diagnostic: bool = False,
+                draggable: bool = True) -> dict:
         return {
             "type": "model3d",
             "id": _s(id, 120),
             "x": _cpos(x, 0), "y": _cpos(y, 0), "z": _cz(z, 0),
             "width": max(1, min(MAX_CANVAS_DIM, _ci(width, 320))),
             "height": max(1, min(MAX_CANVAS_DIM, _ci(height, 480))),
-            "draggable": True,
+            "draggable": bool(draggable),
             "phase": _cf(phase, 0.0, lo=-1.0e9, hi=1.0e9),
             "model": {"path": _s(model_path, MAX_MODEL_PATH_LEN), "format": "auto"},
             "action": {
@@ -652,6 +679,11 @@ class UI:
             },
             "camera": dict(camera or {}) if isinstance(camera, Mapping) else {},
             "transform": dict(transform or {}) if isinstance(transform, Mapping) else {},
+            "retarget": dict(retarget or {}) if isinstance(retarget, Mapping) else {},
+            "skeleton": dict(skeleton or {}) if isinstance(skeleton, Mapping) else {},
+            "materials": materials if isinstance(materials, (Mapping, list, tuple)) else {},
+            "physics": dict(physics or {}) if isinstance(physics, Mapping) else {},
+            "secondary_motion": dict(secondary_motion or {}) if isinstance(secondary_motion, Mapping) else {},
             "background": "transparent",
             "fallback": _s(fallback, 400),
             "debug": bool(debug),

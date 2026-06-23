@@ -15,8 +15,8 @@ from threading import RLock
 from typing import Any, Mapping
 
 
-_MESH_PREVIEW_VERTEX_LIMIT = 2048
-_MESH_PREVIEW_FACE_LIMIT = 4096
+_MESH_PREVIEW_VERTEX_LIMIT = 4096
+_MESH_PREVIEW_FACE_LIMIT = 8192
 _ASSIMP_LOCK = RLock()
 _ASSIMP: Any = None
 _DLL_HANDLES: list[Any] = []

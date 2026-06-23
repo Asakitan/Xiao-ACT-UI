@@ -28,8 +28,8 @@ _NATIVE_NAMES = (
 )
 _CACHE_LIMIT = 128
 _MODEL_PARSE_LIMIT = 4 * 1024 * 1024
-_MESH_PREVIEW_VERTEX_LIMIT = 2048
-_MESH_PREVIEW_FACE_LIMIT = 4096
+_MESH_PREVIEW_VERTEX_LIMIT = 4096
+_MESH_PREVIEW_FACE_LIMIT = 8192
 _BACKEND_STATUS_CACHE: Model3DBackendStatus | None = None
 _MODEL_METADATA_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 _ACTION_METADATA_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -60,25 +60,25 @@ HUMANOID_BONES = (
 
 _BONE_ALIASES: dict[str, tuple[str, ...]] = {
     "root": ("root", "armature", "scene", "origin"),
-    "hips": ("hips", "hip", "pelvis", "pelvisbone", "waist", "mixamorig:hips", "bip001pelvis"),
-    "spine": ("spine", "spine1", "spine01", "spine_01", "torso", "body"),
-    "chest": ("chest", "upperchest", "spine2", "spine02", "spine_02", "breast"),
-    "neck": ("neck", "neck1", "neck01"),
+    "hips": ("hips", "hip", "pelvis", "pelvisbone", "waist", "mixamorig:hips", "bip001pelvis", "spine05"),
+    "spine": ("spine", "spine1", "spine01", "spine_01", "spine04", "torso", "body"),
+    "chest": ("chest", "upperchest", "spine2", "spine02", "spine_02", "spine03", "breast"),
+    "neck": ("neck", "neck1", "neck01", "neck02", "neck03"),
     "head": ("head", "headtop", "head_end"),
-    "left_shoulder": ("leftshoulder", "lshoulder", "shoulder_l", "l_clavicle", "leftclavicle", "clavicle_l"),
-    "left_arm": ("leftarm", "leftupperarm", "upperarm_l", "lupperarm", "arm_l", "l_arm"),
-    "left_forearm": ("leftforearm", "leftlowerarm", "forearm_l", "lowerarm_l", "lelbow", "l_forearm"),
-    "left_hand": ("lefthand", "hand_l", "lhand", "l_hand", "leftwrist", "wrist_l"),
-    "right_shoulder": ("rightshoulder", "rshoulder", "shoulder_r", "r_clavicle", "rightclavicle", "clavicle_r"),
-    "right_arm": ("rightarm", "rightupperarm", "upperarm_r", "rupperarm", "arm_r", "r_arm"),
-    "right_forearm": ("rightforearm", "rightlowerarm", "forearm_r", "lowerarm_r", "relbow", "r_forearm"),
-    "right_hand": ("righthand", "hand_r", "rhand", "r_hand", "rightwrist", "wrist_r"),
-    "left_leg": ("leftupleg", "leftupperleg", "leftleg", "thigh_l", "upleg_l", "lthigh", "l_leg"),
-    "left_knee": ("leftleg", "leftlowerleg", "calf_l", "leg_l", "lknee", "shin_l"),
-    "left_foot": ("leftfoot", "foot_l", "lfoot", "l_foot", "leftankle", "ankle_l"),
-    "right_leg": ("rightupleg", "rightupperleg", "rightleg", "thigh_r", "upleg_r", "rthigh", "r_leg"),
-    "right_knee": ("rightleg", "rightlowerleg", "calf_r", "leg_r", "rknee", "shin_r"),
-    "right_foot": ("rightfoot", "foot_r", "rfoot", "r_foot", "rightankle", "ankle_r"),
+    "left_shoulder": ("leftshoulder", "lshoulder", "shoulder_l", "l_clavicle", "leftclavicle", "clavicle_l", "clavicle.l", "shoulder01.l"),
+    "left_arm": ("leftarm", "leftupperarm", "upperarm_l", "lupperarm", "arm_l", "l_arm", "upperarm01.l", "upperarm02.l"),
+    "left_forearm": ("leftforearm", "leftlowerarm", "forearm_l", "lowerarm_l", "lelbow", "l_forearm", "lowerarm01.l", "lowerarm02.l"),
+    "left_hand": ("lefthand", "hand_l", "lhand", "l_hand", "leftwrist", "wrist_l", "wrist.l"),
+    "right_shoulder": ("rightshoulder", "rshoulder", "shoulder_r", "r_clavicle", "rightclavicle", "clavicle_r", "clavicle.r", "shoulder01.r"),
+    "right_arm": ("rightarm", "rightupperarm", "upperarm_r", "rupperarm", "arm_r", "r_arm", "upperarm01.r", "upperarm02.r"),
+    "right_forearm": ("rightforearm", "rightlowerarm", "forearm_r", "lowerarm_r", "relbow", "r_forearm", "lowerarm01.r", "lowerarm02.r"),
+    "right_hand": ("righthand", "hand_r", "rhand", "r_hand", "rightwrist", "wrist_r", "wrist.r"),
+    "left_leg": ("leftupleg", "leftupperleg", "leftleg", "thigh_l", "upleg_l", "lthigh", "l_leg", "upperleg01.l", "upperleg02.l"),
+    "left_knee": ("leftleg", "leftlowerleg", "calf_l", "leg_l", "lknee", "shin_l", "lowerleg01.l", "lowerleg02.l"),
+    "left_foot": ("leftfoot", "foot_l", "lfoot", "l_foot", "leftankle", "ankle_l", "foot.l"),
+    "right_leg": ("rightupleg", "rightupperleg", "rightleg", "thigh_r", "upleg_r", "rthigh", "r_leg", "upperleg01.r", "upperleg02.r"),
+    "right_knee": ("rightleg", "rightlowerleg", "calf_r", "leg_r", "rknee", "shin_r", "lowerleg01.r", "lowerleg02.r"),
+    "right_foot": ("rightfoot", "foot_r", "rfoot", "r_foot", "rightankle", "ankle_r", "foot.r"),
 }
 
 _COARSE_BONE_FALLBACKS: dict[str, tuple[str, ...]] = {
@@ -343,6 +343,10 @@ def _copy_metadata(value: dict[str, Any]) -> dict[str, Any]:
         "retarget",
         "mesh",
         "skins",
+        "materials_config",
+        "physics",
+        "secondary_motion",
+        "preview_mesh",
         "rest_positions",
         "clip_keyframes",
     ):
@@ -513,6 +517,48 @@ def _extract_preview_skin(value: Any) -> list[list[dict[str, float | str]]]:
     return out if any_weight else []
 
 
+def _extract_preview_mesh(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    vertices_raw = value.get("vertices")
+    faces_raw = value.get("faces")
+    if not isinstance(vertices_raw, (list, tuple)) or not isinstance(faces_raw, (list, tuple)):
+        return {}
+    vertices: list[list[float]] = []
+    for raw in list(vertices_raw)[:_MESH_PREVIEW_VERTEX_LIMIT]:
+        point = _point3(raw)
+        if point is not None:
+            vertices.append([float(point[0]), float(point[1]), float(point[2])])
+    if len(vertices) < 3:
+        return {}
+    faces: list[list[int]] = []
+    for raw_face in list(faces_raw)[:_MESH_PREVIEW_FACE_LIMIT]:
+        if not isinstance(raw_face, (list, tuple)):
+            continue
+        face: list[int] = []
+        for item in raw_face[:8]:
+            try:
+                index = int(item)
+            except Exception:
+                continue
+            if 0 <= index < len(vertices):
+                face.append(index)
+        if len(face) >= 3:
+            faces.append(face)
+    if not faces:
+        return {}
+    out = {
+        "source": str(value.get("source") or "sidecar"),
+        "vertices": vertices,
+        "faces": faces,
+    }
+    skin = _extract_preview_skin(value.get("skin"))
+    if skin:
+        out["skin"] = skin
+        out["skin_source"] = "sidecar"
+    return out
+
+
 def _extract_sidecar_metadata(value: Any) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         return {}
@@ -555,11 +601,28 @@ def _extract_sidecar_metadata(value: Any) -> dict[str, Any]:
     )
     if preview_skin:
         out["preview_skin"] = preview_skin
+    preview_mesh = _extract_preview_mesh(preview)
+    if preview_mesh:
+        out["preview_mesh"] = preview_mesh
     for key in ("profile", "up_axis", "unit_scale", "rest_pose"):
         if key in src:
             out[key] = _json_safe_scalar(src.get(key))
         elif skeleton and key in skeleton:
             out[key] = _json_safe_scalar(skeleton.get(key))
+    materials = src.get("materials")
+    if isinstance(materials, (Mapping, list, tuple)):
+        out["materials_config"] = copy.deepcopy(materials)
+    physics = src.get("physics")
+    if isinstance(physics, Mapping):
+        out["physics"] = copy.deepcopy(dict(physics))
+    secondary_motion = (
+        src.get("secondary_motion")
+        or src.get("secondaryMotion")
+        or (physics.get("secondary_motion") if isinstance(physics, Mapping) else None)
+        or (physics.get("secondaryMotion") if isinstance(physics, Mapping) else None)
+    )
+    if isinstance(secondary_motion, Mapping):
+        out["secondary_motion"] = copy.deepcopy(dict(secondary_motion))
     return out
 
 
@@ -587,6 +650,29 @@ def _merge_sidecar_preview_skin(
     preview["skin"] = merged_skin
     preview["skin_source"] = "sidecar"
     mesh["preview"] = preview
+    return mesh
+
+
+def _merge_sidecar_preview(
+    file_mesh: Any,
+    sidecar_meta: Mapping[str, Any],
+) -> dict[str, Any]:
+    mesh = _merge_sidecar_preview_skin(file_mesh, sidecar_meta)
+    preview_mesh = sidecar_meta.get("preview_mesh")
+    if not isinstance(preview_mesh, Mapping):
+        return mesh
+    preview = copy.deepcopy(dict(preview_mesh))
+    skin = sidecar_meta.get("preview_skin")
+    if isinstance(skin, list) and skin:
+        vertex_count = len(preview.get("vertices") or ())
+        merged_skin = copy.deepcopy(skin[:vertex_count])
+        while len(merged_skin) < vertex_count:
+            merged_skin.append([])
+        preview["skin"] = merged_skin
+        preview["skin_source"] = "sidecar"
+    mesh = copy.deepcopy(mesh)
+    mesh["preview"] = preview
+    mesh["preview_source"] = "sidecar"
     return mesh
 
 
@@ -1842,10 +1928,13 @@ def get_model_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
         "mtime_ns": mtime_ns,
         "extension": resolved.suffix.lower(),
         "sidecar": dict(sidecar_meta),
-        "mesh": _merge_sidecar_preview_skin(file_meta.get("mesh") or {}, sidecar_meta),
+        "mesh": _merge_sidecar_preview(file_meta.get("mesh") or {}, sidecar_meta),
         "skins": copy.deepcopy(file_meta.get("skins") or []),
         "nodes": tuple(file_meta.get("nodes") or ()),
         "materials": tuple(file_meta.get("materials") or ()),
+        "materials_config": copy.deepcopy(sidecar_meta.get("materials_config") or {}),
+        "physics": copy.deepcopy(sidecar_meta.get("physics") or {}),
+        "secondary_motion": copy.deepcopy(sidecar_meta.get("secondary_motion") or {}),
         "bone_names": bone_names,
         "clips": clips,
         "clip_keyframes": dict(clip_keyframes) if isinstance(clip_keyframes, Mapping) else {},
