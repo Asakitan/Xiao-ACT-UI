@@ -4300,6 +4300,10 @@ function postExtensionMessageToWebview(iframe,msg){
   }
 }
 window._onEditorEvent=function(event,data){
+  if(event==='extension_tree_changed'){
+    scheduleExtensionActivityRefresh();
+    return;
+  }
   if(event==='provider_tabs_changed'||event==='extension_views_changed'){
     rememberDynamicProvidersFromEventData(data);
     void renderProviderTabs().then(()=>{
@@ -5419,6 +5423,11 @@ async function refreshInstalledExts(){
 
 // Extension-contributed activity bar icons
 let _extActBarItems=[];
+let _extTreeRefreshTimer=0;
+function scheduleExtensionActivityRefresh(){
+  clearTimeout(_extTreeRefreshTimer);
+  _extTreeRefreshTimer=setTimeout(()=>{_extTreeRefreshTimer=0;renderExtensionActivityBar()},30);
+}
 function extensionViewTitle(view){
   return view.name||view.title||view.id||'Extension View';
 }
@@ -5433,22 +5442,25 @@ function renderExtensionTreeView(view){
     :(Array.isArray(state.children)?state.children.map(label=>({label:String(label),children:[]})):[]);
   if(nodes.length){
     const tree=document.createElement('div');tree.setAttribute('role','tree');
-    nodes.forEach(node=>tree.appendChild(renderExtensionTreeNode(node,0)));
+    tree.dataset.viewId=view.id||state.view_id||state.viewId||'';
+    nodes.forEach(node=>tree.appendChild(renderExtensionTreeNode(tree.dataset.viewId,node,0)));
     body.appendChild(tree);
   }else{
     body.innerHTML='<div style="color:var(--fg-dim);font-size:11px">'+esc(view.runtimeMessage||'Tree view provider registered; no root items reported.')+'</div>';
   }
   card.appendChild(title);card.appendChild(body);return card;
 }
-function renderExtensionTreeNode(node,depth){
+function renderExtensionTreeNode(viewId,node,depth){
   const wrap=document.createElement('div');wrap.className='ext-tree-node';wrap.setAttribute('role','treeitem');
   const row=document.createElement('div');row.className='sb-item';row.style.cssText='display:flex;align-items:center;gap:4px;padding:3px 0 3px '+(depth*12)+'px;min-height:22px';
+  row.tabIndex=0;row.setAttribute('role','button');
+  if(node.selected){row.classList.add('active');wrap.setAttribute('aria-selected','true')}else wrap.setAttribute('aria-selected','false');
   const children=Array.isArray(node.children)?node.children:[];
   const rawCollapsible=Number(node.collapsibleState)||0;
   const collapsible=(rawCollapsible||children.length)?(rawCollapsible||1):0;
   const twist=document.createElement('button');twist.type='button';twist.className='icon-btn';twist.style.cssText='width:18px;height:18px;flex:0 0 18px;border:0;background:transparent;color:var(--fg-dim);padding:0';
   twist.textContent=collapsible?'▸':'';
-  twist.disabled=!collapsible;twist.setAttribute('aria-label',collapsible?'Toggle tree item':'');
+  twist.disabled=!collapsible;twist.setAttribute('aria-label',collapsible?'Toggle '+(node.label||'tree item'):'');
   const label=document.createElement('span');label.style.cssText='overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1';
   label.textContent=(node.icon?node.icon+' ':'')+(node.label||'');
   if(node.tooltip)label.title=node.tooltip;
@@ -5457,16 +5469,24 @@ function renderExtensionTreeNode(node,depth){
   row.appendChild(twist);row.appendChild(label);if(node.description)row.appendChild(desc);
   const childBox=document.createElement('div');childBox.style.display=collapsible===2?'':'none';
   if(collapsible)wrap.setAttribute('aria-expanded',collapsible===2?'true':'false');
-  children.forEach(child=>childBox.appendChild(renderExtensionTreeNode(child,depth+1)));
+  children.forEach(child=>childBox.appendChild(renderExtensionTreeNode(viewId,child,depth+1)));
   const setOpen=open=>{childBox.style.display=open?'':'none';twist.textContent=open?'▾':'▸';wrap.setAttribute('aria-expanded',open?'true':'false')};
+  const selectNode=()=>{row.classList.add('active');wrap.setAttribute('aria-selected','true');if(viewId&&node.handle)call('select_extension_tree_item',viewId,node.handle)};
   setOpen(collapsible===2);
   twist.onclick=e=>{e.stopPropagation();if(collapsible)setOpen(childBox.style.display==='none')};
-  row.onclick=()=>{
+  const activateNode=()=>{
+    selectNode();
     if(node.command&&node.command.command&&window.pywebview&&window.pywebview.api){
       window.pywebview.api.execute_command(node.command.command,...(node.command.arguments||[]));
     }else if(collapsible){
       setOpen(childBox.style.display==='none');
     }
+  };
+  row.onclick=activateNode;
+  row.onkeydown=e=>{
+    if(e.key==='Enter'||e.key===' '){e.preventDefault();activateNode()}
+    else if(e.key==='ArrowRight'&&collapsible&&childBox.style.display==='none'){e.preventDefault();setOpen(true)}
+    else if(e.key==='ArrowLeft'&&collapsible&&childBox.style.display!=='none'){e.preventDefault();setOpen(false)}
   };
   wrap.appendChild(row);wrap.appendChild(childBox);return wrap;
 }

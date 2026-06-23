@@ -1171,8 +1171,11 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("frontend renders extension activity bar views dynamically",
             "function renderExtensionContainerContent(item)" in html
             and "function renderExtensionTreeView(view)" in html
-            and "function renderExtensionTreeNode(node,depth)" in html
+            and "function renderExtensionTreeNode(viewId,node,depth)" in html
             and "tree.setAttribute('role','tree')" in html
+            and "event==='extension_tree_changed'" in html
+            and "function scheduleExtensionActivityRefresh()" in html
+            and "call('select_extension_tree_item',viewId,node.handle)" in html
             and "window.pywebview.api.execute_command(node.command.command" in html
             and "function renderExtensionWebviewView(view)" in html
             and "_injectWebviewHtml(host,view.id||state.view_id||state.viewId,html,state.state)" in html
@@ -2234,6 +2237,7 @@ def test_vscode_api() -> None:
         WorkspaceConfiguration, LanguageModelToolResult,
         AuthenticationProviderBase, Diagnostic, WorkspaceEdit,
         Position, Range, AuthenticationSession, PreparedToolInvocation,
+        EventEmitter,
     )
 
     host = ExtensionHost()
@@ -2617,13 +2621,43 @@ def test_vscode_api() -> None:
             delivered is True
             and webview_messages_2[-1] == {"from": "ui"}
             and ns.get_webview_html("test") == "<div>panel-html</div>")
-    tree_provider = object()
+    tree_changes = []
+    ns.set_tree_view_change_callback(lambda evt: tree_changes.append(evt))
+
+    class _RefreshTreeProvider:
+        def __init__(self):
+            self._emitter = EventEmitter()
+
+        @property
+        def onDidChangeTreeData(self):
+            return self._emitter.event
+
+        def getChildren(self, element=None):
+            return ["node"]
+
+        def refresh(self, element=None):
+            self._emitter.fire(element)
+
+    tree_provider = _RefreshTreeProvider()
     tree_view = api["window"]["createTreeView"](
         "selftest.tree", treeDataProvider=tree_provider)
+    tree_selection_events = []
+    tree_view.onDidChangeSelection(
+        lambda evt: tree_selection_events.append(evt))
     api["window"]["registerTreeDataProvider"]("selftest.tree", tree_provider)
     tree_view.reveal("node")
     _check("tree view stores provider and selection",
            tree_view.provider is tree_provider and tree_view.selection == ["node"])
+    _check("tree view selection emits VSCode event",
+           tree_selection_events
+           and tree_selection_events[-1].get("selection") == ["node"])
+    before_tree_version = tree_view.refresh_version
+    tree_provider.refresh("node")
+    _check("tree data provider refresh notifies runtime view callback",
+           tree_view.refresh_version > before_tree_version
+           and any(evt.get("event") == "refresh"
+                   and evt.get("view_id") == "selftest.tree"
+                   for evt in tree_changes))
     resolved_webviews = []
     class _WebviewViewProvider:
         def resolveWebviewView(self, view, context=None, token=None):
@@ -2794,7 +2828,8 @@ def test_app_extension_runtime_support() -> None:
     import ai_editor.extension_host as extension_host_module
     from ai_editor.app import AIEditorAPI
     from ai_editor.chat_providers import ChatProviderDef
-    from ai_editor.extension_host import ExtensionDescription, ExtensionHost
+    from ai_editor.extension_host import (
+        EventEmitter, ExtensionDescription, ExtensionHost)
     from ai_editor.vscode_api import LanguageModelToolResult
 
     previous_host = extension_host_module._host
@@ -3028,6 +3063,16 @@ def test_app_extension_runtime_support() -> None:
         }, "/tmp/selftest-activity")
         api._ext_host.ext_points.process(activity_desc)
         class _ActivityTreeProvider:
+            def __init__(self):
+                self._emitter = EventEmitter()
+
+            @property
+            def onDidChangeTreeData(self):
+                return self._emitter.event
+
+            def refresh(self, element=None):
+                self._emitter.fire(element)
+
             def getChildren(self, element=None):
                 if element == "node-a":
                     return ["leaf-a"]
@@ -3048,8 +3093,9 @@ def test_app_extension_runtime_support() -> None:
                     }
                 return {"label": str(element).title(), "collapsibleState": 0}
 
+        activity_tree_provider = _ActivityTreeProvider()
         api._vscode_ns.build(activity_desc)["window"]["registerTreeDataProvider"](
-            "selftest.activity.tree", _ActivityTreeProvider())
+            "selftest.activity.tree", activity_tree_provider)
         api._vscode_ns.build(activity_desc)["window"]["registerWebviewViewProvider"](
             "selftest.activity.webview", _CommandWebviewProvider())
         activity_items = {
@@ -3071,7 +3117,33 @@ def test_app_extension_runtime_support() -> None:
                and activity_tree_nodes[0].get("label") == "Node A"
                and activity_tree_nodes[0].get("description") == "branch"
                and activity_tree_nodes[0].get("command", {}).get("command") == "selftest.command.tree"
-               and activity_tree_nodes[0].get("children", [{}])[0].get("label") == "Leaf-A")
+               and activity_tree_nodes[0].get("children", [{}])[0].get("label") == "Leaf-A"
+               and bool(activity_tree_nodes[0].get("handle")))
+        activity_tree_view = api._vscode_ns._tree_views.get("selftest.activity.tree")
+        activity_selection_events = []
+        if activity_tree_view is not None:
+            activity_tree_view.onDidChangeSelection(
+                lambda evt: activity_selection_events.append(evt))
+        selected_tree = api.select_extension_tree_item(
+            "selftest.activity.tree", activity_tree_nodes[0].get("handle", ""))
+        _check("activity tree selection updates runtime TreeView event state",
+               selected_tree.get("ok") is True
+               and activity_selection_events
+               and activity_selection_events[-1].get("selection") == ["node-a"]
+               and selected_tree.get("runtimeState", {}).get("nodes", [{}])[0].get("selected") is True)
+        before_activity_version = activity_views.get(
+            "selftest.activity.tree", {}).get("runtimeState", {}).get("refreshVersion", 0)
+        activity_tree_provider.refresh("node-a")
+        refreshed_activity_views = {
+            view.get("id"): view
+            for item in api.list_extension_activity_bar_items().get("items", [])
+            if item.get("id") == "selftest.activity"
+            for view in item.get("views", [])
+        }
+        _check("activity tree refresh events advance runtime snapshot version",
+               refreshed_activity_views.get("selftest.activity.tree", {})
+               .get("runtimeState", {}).get("refreshVersion", 0)
+               > before_activity_version)
 
         contribs = api.get_extension_contributions().get("contributions", {})
         command_items = {

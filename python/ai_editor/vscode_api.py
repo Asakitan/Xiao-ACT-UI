@@ -805,6 +805,9 @@ class VscodeNamespace:
         self._auth_sessions_emitter = EventEmitter()
         self._tree_views: Dict[str, Any] = {}
         self._tree_data_providers: Dict[str, Any] = {}
+        self._tree_view_change_callback: Optional[
+            Callable[[Dict[str, Any]], None]
+        ] = None
         self._webview_view_providers: Dict[str, Any] = {}
         self._webview_views: Dict[str, Any] = {}
         self._webview_view_change_callback: Optional[
@@ -858,6 +861,32 @@ class VscodeNamespace:
             callback: Optional[Callable[[Dict[str, Any]], None]]) -> None:
         """Notify the host when runtime WebviewView providers change."""
         self._webview_view_change_callback = callback
+
+    def set_tree_view_change_callback(
+            self,
+            callback: Optional[Callable[[Dict[str, Any]], None]]) -> None:
+        """Notify the host when runtime TreeView providers or data change."""
+        self._tree_view_change_callback = callback
+
+    def _notify_tree_view_changed(
+            self,
+            event: str,
+            view_id: str,
+            payload: Optional[Dict[str, Any]] = None) -> None:
+        data = {
+            "event": event,
+            "view_id": view_id,
+        }
+        if payload:
+            data.update(dict(payload))
+        self._window_tabs_emitter.fire(data)
+        self._window_tab_groups_emitter.fire(data)
+        callback = self._tree_view_change_callback
+        if callback is not None:
+            try:
+                callback(data)
+            except Exception:
+                pass
 
     def _notify_webview_view_changed(
             self,
@@ -1060,16 +1089,41 @@ class VscodeNamespace:
         return kw.get("value", "")
 
     def _create_tree_view(self, view_id: str, **kw: Any) -> Any:
-        view = _TreeView(view_id, kw.get("treeDataProvider"))
+        provider = kw.get("treeDataProvider")
+        view = self._tree_views.get(view_id)
+        if view is None:
+            view = _TreeView(view_id)
         self._tree_views[view_id] = view
+        if provider is not None:
+            self._tree_data_providers[view_id] = provider
+            view.bind_provider(provider, self._notify_tree_view_changed)
+        self._notify_tree_view_changed("registered", view_id, {
+            "refreshVersion": getattr(view, "refresh_version", 0),
+        })
         return view
 
     def _register_tree_data_provider(self, view_id: str,
                                      provider: Any) -> Disposable:
         self._tree_data_providers[view_id] = provider
-        if view_id in self._tree_views:
-            self._tree_views[view_id].provider = provider
-        return Disposable(lambda: self._tree_data_providers.pop(view_id, None))
+        view = self._tree_views.get(view_id)
+        if view is None:
+            view = _TreeView(view_id)
+            self._tree_views[view_id] = view
+        view.bind_provider(provider, self._notify_tree_view_changed)
+        self._notify_tree_view_changed("registered", view_id, {
+            "refreshVersion": getattr(view, "refresh_version", 0),
+        })
+
+        def _dispose() -> None:
+            self._tree_data_providers.pop(view_id, None)
+            current = self._tree_views.get(view_id)
+            if current is view:
+                view.bind_provider(None, self._notify_tree_view_changed)
+                self._notify_tree_view_changed("disposed", view_id, {
+                    "refreshVersion": getattr(view, "refresh_version", 0),
+                })
+
+        return Disposable(_dispose)
 
     def _register_webview_view_provider(self, view_id: str, provider: Any,
                                         options: Dict[str, Any] = None,
@@ -3253,24 +3307,162 @@ class _DebugSession:
 class _TreeView:
     def __init__(self, view_id: str, provider: Any = None) -> None:
         self.id = view_id
-        self.provider = provider
+        self.provider = None
         self.visible = True
         self.selection = []
+        self.activeItem = None
         self.message = ""
         self.title = view_id
         self.description = ""
+        self.refresh_version = 0
+        self._snapshot_counter = 0
+        self._handle_elements: Dict[str, Any] = {}
+        self._change_callback: Optional[Callable[[str, str, Dict[str, Any]], None]] = None
+        self._provider_change_disposable = None
         self._dispose = EventEmitter()
+        self._selection_change = EventEmitter()
+        self._active_change = EventEmitter()
+        self._visibility_change = EventEmitter()
+        if provider is not None:
+            self.bind_provider(provider)
 
     @property
     def onDidDispose(self):
         return self._dispose.event
 
+    @property
+    def onDidChangeSelection(self):
+        return self._selection_change.event
+
+    @property
+    def onDidChangeActiveItem(self):
+        return self._active_change.event
+
+    @property
+    def onDidChangeVisibility(self):
+        return self._visibility_change.event
+
+    def bind_provider(self, provider: Any,
+                      change_callback: Optional[
+                          Callable[[str, str, Dict[str, Any]], None]
+                      ] = None) -> None:
+        self._dispose_provider_listener()
+        self.provider = provider
+        self._change_callback = change_callback
+        self.refresh_version += 1
+        self._subscribe_provider_refresh()
+
+    def begin_snapshot(self) -> None:
+        self._snapshot_counter += 1
+        self._handle_elements.clear()
+
+    def remember_element(self, element: Any) -> str:
+        handle = f"{self._snapshot_counter}:{len(self._handle_elements) + 1}"
+        self._handle_elements[handle] = element
+        return handle
+
+    def is_selected(self, element: Any) -> bool:
+        for selected in self.selection:
+            if selected is element:
+                return True
+            try:
+                if selected == element:
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def select_handle(self, handle: str) -> bool:
+        if handle not in self._handle_elements:
+            return False
+        self.set_selection([self._handle_elements[handle]])
+        return True
+
+    def set_selection(self, selection: Any) -> None:
+        if selection is None:
+            normalized: List[Any] = []
+        elif isinstance(selection, list):
+            normalized = list(selection)
+        else:
+            normalized = [selection]
+        changed = len(normalized) != len(self.selection)
+        if not changed:
+            for old, new in zip(self.selection, normalized):
+                if old is new:
+                    continue
+                try:
+                    if old == new:
+                        continue
+                except Exception:
+                    pass
+                changed = True
+                break
+        self.selection = normalized
+        self.activeItem = normalized[0] if normalized else None
+        if changed:
+            self._selection_change.fire({"selection": list(self.selection)})
+            self._active_change.fire({"activeItem": self.activeItem})
+            self._notify_changed("selection", {
+                "refreshVersion": self.refresh_version,
+            })
+
     def reveal(self, element: Any, **kw: Any) -> None:
-        self.selection = [element]
+        self.set_selection([element])
+        self._notify_changed("reveal", {"refreshVersion": self.refresh_version})
 
     def dispose(self) -> None:
         self.visible = False
+        self._dispose_provider_listener()
         self._dispose.fire()
+        self._visibility_change.fire({"visible": False})
+
+    def _subscribe_provider_refresh(self) -> None:
+        provider = self.provider
+        if provider is None:
+            return
+        event = (
+            getattr(provider, "onDidChangeTreeData", None)
+            or getattr(provider, "on_did_change_tree_data", None)
+        )
+        subscribe = getattr(event, "event", None) if event is not None else None
+        if subscribe is None:
+            subscribe = event
+        if not callable(subscribe):
+            return
+        try:
+            self._provider_change_disposable = subscribe(self._on_provider_changed)
+        except Exception:
+            self._provider_change_disposable = None
+
+    def _dispose_provider_listener(self) -> None:
+        disposable = self._provider_change_disposable
+        self._provider_change_disposable = None
+        if disposable is None:
+            return
+        dispose = getattr(disposable, "dispose", None)
+        try:
+            if callable(dispose):
+                dispose()
+            elif callable(disposable):
+                disposable()
+        except Exception:
+            pass
+
+    def _on_provider_changed(self, element: Any = None) -> None:
+        self.refresh_version += 1
+        self._notify_changed("refresh", {
+            "refreshVersion": self.refresh_version,
+            "element": element,
+        })
+
+    def _notify_changed(self, event: str, payload: Dict[str, Any]) -> None:
+        callback = self._change_callback
+        if callback is None:
+            return
+        try:
+            callback(event, self.id, payload)
+        except Exception:
+            pass
 
 
 class _DiagnosticCollection:

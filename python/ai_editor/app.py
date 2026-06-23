@@ -770,6 +770,8 @@ class AIEditorAPI:
         self._vscode_ns = VscodeNamespace(
             self._ext_host, self._engine, self._settings_getter)
         self._vscode_ns.set_ui_bridge(_AIEditorUIBridge(self))
+        self._vscode_ns.set_tree_view_change_callback(
+            self._on_tree_view_changed)
         self._vscode_ns.set_webview_view_change_callback(
             self._on_webview_view_changed)
         self._ext_host.set_command_fallback_resolver(
@@ -2345,6 +2347,11 @@ class AIEditorAPI:
         self._sync_dynamic_webview_providers()
         self._refresh_provider_tabs({"source": "runtime_webview", **_as_dict(event)})
 
+    def _on_tree_view_changed(self, event: Dict[str, Any]) -> None:
+        self._emit("extension_tree_changed", {
+            "change": {"source": "runtime_tree", **_as_dict(event)},
+        })
+
     def _refresh_provider_tabs(self, change: Optional[Dict[str, Any]] = None) -> None:
         payload = {"change": _as_dict(change)}
         try:
@@ -3664,6 +3671,31 @@ class AIEditorAPI:
         except Exception as exc:
             return {"error": str(exc)}
 
+    def select_extension_tree_item(self, view_id: str, handle: str) -> Dict:
+        """Select a runtime extension TreeView node by frontend snapshot handle."""
+        self._ensure_engine()
+        normalized_view_id = str(view_id or "")
+        normalized_handle = str(handle or "")
+        if not normalized_view_id or not normalized_handle:
+            return {"error": "Tree view id and node handle are required"}
+        view = self._vscode_ns._tree_views.get(normalized_view_id)
+        if view is None:
+            return {"error": f"Tree view not found: {normalized_view_id}"}
+        if not view.select_handle(normalized_handle):
+            return {
+                "error": "Tree node handle is stale or unknown",
+                "view_id": normalized_view_id,
+                "handle": normalized_handle,
+            }
+        snapshot = self._extension_view_snapshot(normalized_view_id)
+        return {
+            "ok": True,
+            "view_id": normalized_view_id,
+            "handle": normalized_handle,
+            "selection": [str(item) for item in getattr(view, "selection", [])],
+            "runtimeState": snapshot,
+        }
+
     def list_commands(self) -> Dict:
         self._ensure_engine()
         return {"commands": self._ext_host.commands.list_commands()}
@@ -3957,19 +3989,28 @@ class AIEditorAPI:
             return {}
         tree_provider = self._vscode_ns._tree_data_providers.get(view_id)
         tree_view = self._vscode_ns._tree_views.get(view_id)
+        if tree_provider is None and tree_view is not None:
+            tree_provider = getattr(tree_view, "provider", None)
         if tree_provider and tree_view is None:
             tree_view = self._vscode_ns._create_tree_view(
                 view_id, treeDataProvider=tree_provider)
         if tree_provider or tree_view:
+            if tree_view is not None and hasattr(tree_view, "begin_snapshot"):
+                tree_view.begin_snapshot()
             return {
                 "ok": True,
                 "kind": "treeView",
                 "runtimeAvailable": True,
                 "message": "Runtime tree view provider registered.",
                 "title": getattr(tree_view, "title", view_id),
-                "selection": list(getattr(tree_view, "selection", []) or []),
+                "selection": [
+                    str(item)
+                    for item in list(getattr(tree_view, "selection", []) or [])
+                ],
+                "refreshVersion": getattr(tree_view, "refresh_version", 0),
                 "children": self._tree_view_children_preview(tree_provider),
-                "nodes": self._tree_view_nodes_preview(tree_provider),
+                "nodes": self._tree_view_nodes_preview(
+                    tree_provider, tree_view=tree_view),
             }
         webview_provider = self._vscode_ns._webview_view_providers.get(view_id, {})
         webview_view = self._vscode_ns._webview_views.get(view_id)
@@ -4031,7 +4072,8 @@ class AIEditorAPI:
 
     def _tree_view_nodes_preview(self, provider: Any, element: Any = None,
                                  depth: int = 0,
-                                 seen: Optional[set] = None) -> List[Dict[str, Any]]:
+                                 seen: Optional[set] = None,
+                                 tree_view: Any = None) -> List[Dict[str, Any]]:
         if provider is None or not hasattr(provider, "getChildren"):
             return []
         if seen is None:
@@ -4060,11 +4102,12 @@ class AIEditorAPI:
             child_seen = set(seen)
             child_seen.add(marker)
             item = self._tree_item_for_element(provider, child)
-            node = self._tree_node_preview(child, item)
+            node = self._tree_node_preview(child, item, tree_view=tree_view)
             child_nodes: List[Dict[str, Any]] = []
             if node.get("collapsibleState", 0) or depth < 1:
                 child_nodes = self._tree_view_nodes_preview(
-                    provider, child, depth + 1, child_seen)
+                    provider, child, depth + 1, child_seen,
+                    tree_view=tree_view)
                 if child_nodes and not node.get("collapsibleState", 0):
                     node["collapsibleState"] = 1
             node["children"] = child_nodes
@@ -4081,7 +4124,8 @@ class AIEditorAPI:
         except Exception:
             return element
 
-    def _tree_node_preview(self, element: Any, item: Any) -> Dict[str, Any]:
+    def _tree_node_preview(self, element: Any, item: Any,
+                           tree_view: Any = None) -> Dict[str, Any]:
         label = self._tree_value(item, "label")
         if isinstance(label, dict):
             label = label.get("label") or label.get("text") or ""
@@ -4097,7 +4141,7 @@ class AIEditorAPI:
         command = self._tree_command_preview(self._tree_value(item, "command"))
         icon = self._tree_icon_preview(self._tree_value(item, "iconPath"))
         context_value = self._tree_value(item, "contextValue")
-        return {
+        node = {
             "label": str(label),
             "description": "" if description is None else str(description),
             "tooltip": "" if tooltip is None else str(tooltip),
@@ -4106,6 +4150,20 @@ class AIEditorAPI:
             "icon": icon,
             "contextValue": "" if context_value is None else str(context_value),
         }
+        if tree_view is not None:
+            remember = getattr(tree_view, "remember_element", None)
+            if callable(remember):
+                try:
+                    node["handle"] = str(remember(element))
+                except Exception:
+                    node["handle"] = ""
+            selected = getattr(tree_view, "is_selected", None)
+            if callable(selected):
+                try:
+                    node["selected"] = bool(selected(element))
+                except Exception:
+                    node["selected"] = False
+        return node
 
     @staticmethod
     def _tree_value(item: Any, key: str, default: Any = None) -> Any:
