@@ -167,6 +167,24 @@ def run_selftest() -> dict[str, Any]:
                     return {"ok": False, "plugin_id": plugin_id, "stage": "flap_started", "state": action_state}
                 if action_state.get("timer_active") is not True or not _plugin_timer_active(manager, plugin_id):
                     return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_flap_timer_active", "state": action_state}
+                queued_action = act_plugin_action(owner, "script.game.flap", {}, plugin_id=plugin_id)
+                queued_state = _state(queued_action)
+                if int(queued_state.get("queued_flaps") or 0) != 1:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_buffered_flap_queued", "state": queued_state}
+                tick_action = act_plugin_action(owner, "script.game.tick", {}, plugin_id=plugin_id)
+                tick_state = _state(tick_action)
+                if int(tick_state.get("frame_count") or 0) < 1:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_tick_frame_count", "state": tick_state}
+                if int(tick_state.get("queued_flaps") or 0) != 0:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_buffered_flap_consumed", "state": tick_state}
+                if int(tick_state.get("render_count") or 0) <= int(queued_state.get("render_count") or 0):
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "flappy_tick_render_count",
+                        "before": queued_state,
+                        "after": tick_state,
+                    }
                 paused_action = act_plugin_action(
                     owner, "script.game.pause", {"paused": True}, plugin_id=plugin_id)
                 paused_state = _state(paused_action)
@@ -287,6 +305,8 @@ def run_selftest() -> dict[str, Any]:
                 "spec_build_count": state.get("spec_build_count"),
                 "cache_hit_count": state.get("cache_hit_count"),
                 "pending_turns": state.get("pending_turns"),
+                "queued_flaps": state.get("queued_flaps"),
+                "frame_count": state.get("frame_count"),
             }
         finally:
             act_plugin_action(
