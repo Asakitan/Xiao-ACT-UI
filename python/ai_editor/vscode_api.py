@@ -781,6 +781,38 @@ class Location:
     range: Range = field(default_factory=Range)
 
 
+class SymbolInformation:
+    def __init__(
+            self,
+            name: Any,
+            kind: Any,
+            container_or_range: Any = "",
+            location_or_uri: Any = None,
+            container_name: Any = None) -> None:
+        self.name = "" if name is None else str(name)
+        try:
+            self.kind = int(kind)
+        except Exception:
+            self.kind = kind
+        self.tags = None
+        if isinstance(location_or_uri, Location):
+            self.containerName = (
+                "" if container_or_range is None
+                else str(container_or_range))
+            self.location = location_or_uri
+            return
+        if isinstance(container_or_range, (Range, dict)):
+            uri = _coerce_uri(location_or_uri) or Uri.file("")
+            self.containerName = (
+                "" if container_name is None else str(container_name))
+            self.location = Location(uri, _coerce_range(container_or_range))
+            return
+        self.containerName = (
+            "" if container_or_range is None else str(container_or_range))
+        self.location = location_or_uri if isinstance(
+            location_or_uri, Location) else Location(Uri.file(""))
+
+
 class DocumentLink:
     def __init__(self, range: Any, target: Any = None) -> None:
         self.range = range
@@ -1356,6 +1388,9 @@ class VscodeNamespace:
             "vscode.executeDocumentColorProvider": self._execute_document_color_provider,
             "_executeColorPresentationProvider": self._execute_color_presentation_provider,
             "vscode.executeColorPresentationProvider": self._execute_color_presentation_provider,
+            "_executeWorkspaceSymbolProvider": self._execute_workspace_symbol_provider,
+            "vscode.executeWorkspaceSymbolProvider": self._execute_workspace_symbol_provider,
+            "_resolveWorkspaceSymbolProvider": self._execute_resolve_workspace_symbol_provider,
             "_provideDocumentSemanticTokensLegend": self._execute_document_semantic_tokens_legend,
             "vscode.provideDocumentSemanticTokensLegend": self._execute_document_semantic_tokens_legend,
             "_provideDocumentSemanticTokens": self._execute_document_semantic_tokens_provider,
@@ -1460,6 +1495,17 @@ class VscodeNamespace:
         callback = self._language_provider_request_callback
         if callback is None:
             return None
+        if document is None:
+            request = {"kind": kind}
+            request.update(payload)
+            try:
+                result = _resolve_provider_result(
+                    callback(request), default=None)
+            except Exception:
+                return None
+            if isinstance(result, dict) and "ok" in result:
+                return result.get("value") if result.get("ok") else None
+            return result
         request = {
             "kind": kind,
             "uri": str(getattr(document, "uri", "")),
@@ -2002,6 +2048,44 @@ class VscodeNamespace:
             self._request_external_language_provider("documentSymbol", document)))
         return results
 
+    def _execute_workspace_symbol_provider(
+            self, query: Any = "") -> List[Any]:
+        search = "" if query is None else str(query)
+        results: List[Any] = []
+        for entry in list(self._language_providers.get("workspaceSymbol", [])):
+            value = self._call_language_provider(
+                entry.get("provider"), "provideWorkspaceSymbols",
+                (search, CancellationToken.NONE), default=None)
+            results.extend(self._provider_values(value))
+        results.extend(self._provider_values(
+            self._request_external_language_provider(
+                "workspaceSymbol", None, query=search)))
+        return results
+
+    def _execute_resolve_workspace_symbol_provider(
+            self, symbol: Any = None) -> Any:
+        if symbol is None:
+            return None
+        if isinstance(symbol, dict) and symbol.get("_workspaceSymbolHandle"):
+            external = self._request_external_language_provider(
+                "workspaceSymbolResolve", None, symbol=symbol)
+            return external if external is not None else symbol
+        for entry in list(self._language_providers.get("workspaceSymbol", [])):
+            provider = entry.get("provider")
+            method = provider.get("resolveWorkspaceSymbol") if isinstance(
+                provider, dict) else getattr(
+                    provider, "resolveWorkspaceSymbol", None)
+            if not callable(method):
+                continue
+            value = self._call_language_provider(
+                provider, "resolveWorkspaceSymbol",
+                (symbol, CancellationToken.NONE), default=None)
+            if value is not None:
+                return value
+        external = self._request_external_language_provider(
+            "workspaceSymbolResolve", None, symbol=symbol)
+        return external if external is not None else symbol
+
     def _execute_code_action_provider(
             self, uri: Any, range: Any = None, kind: Any = None) -> List[Any]:
         document = self._resolve_language_document(uri)
@@ -2159,6 +2243,7 @@ class VscodeNamespace:
             "LanguageModelThinkingPart": LanguageModelThinkingPart,
             "LanguageModelError": LanguageModelError,
             "Location": Location,
+            "SymbolInformation": SymbolInformation,
             "Diagnostic": Diagnostic,
             "CompletionItem": CompletionItem,
             "CompletionList": CompletionList,
@@ -2224,6 +2309,7 @@ class VscodeNamespace:
                 "EnumMember": 21, "Struct": 22, "Event": 23,
                 "Operator": 24, "TypeParameter": 25,
             },
+            "SymbolTag": {"Deprecated": 1},
             "CodeActionKind": {
                 "QuickFix": "quickfix",
                 "Refactor": "refactor",
@@ -3028,6 +3114,7 @@ class VscodeNamespace:
             "registerReferenceProvider": lambda selector, provider: self._register_language_provider("references", selector, provider),
             "registerRenameProvider": lambda selector, provider: self._register_language_provider("rename", selector, provider),
             "registerDocumentSymbolProvider": lambda selector, provider: self._register_language_provider("documentSymbol", selector, provider),
+            "registerWorkspaceSymbolProvider": lambda provider: self._register_language_provider("workspaceSymbol", None, provider),
             "registerDocumentFormattingEditProvider": lambda selector, provider: self._register_language_provider("formatting", selector, provider),
             "registerCodeActionsProvider": lambda selector, provider, metadata=None: self._register_language_provider("codeActions", selector, provider, metadata),
             "registerCodeLensProvider": lambda selector, provider: self._register_language_provider("codeLens", selector, provider),

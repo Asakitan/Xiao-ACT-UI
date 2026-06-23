@@ -717,6 +717,23 @@ pre.code-block code .type { color:var(--fg-type); }
 .cmd-palette .cmd-item:hover, .cmd-palette .cmd-item.selected { background:var(--bg-hover); }
 .cmd-palette .cmd-item .label { flex:1; font-size:13px; color:var(--fg); }
 .cmd-palette .cmd-item .shortcut { font-size:11px; color:var(--fg-dim); font-family:var(--mono); }
+.workspace-symbol-palette { position:fixed; top:60px; left:50%; transform:translateX(-50%);
+  width:min(640px,calc(100vw - 28px)); background:var(--bg2); border:1px solid var(--border);
+  border-radius:6px; box-shadow:0 8px 32px #00000060; z-index:301; display:none; }
+.workspace-symbol-palette.open { display:block; }
+.workspace-symbol-palette input { width:100%; background:var(--bg-input); color:var(--fg);
+  border:none; border-bottom:1px solid var(--border); padding:10px 14px;
+  font:13px var(--sans); outline:none; box-sizing:border-box; }
+.workspace-symbol-list { max-height:360px; overflow-y:auto; padding:4px 0; }
+.workspace-symbol-item { display:grid; grid-template-columns:24px minmax(0,1fr); gap:8px;
+  padding:6px 12px; cursor:pointer; align-items:center; }
+.workspace-symbol-item:hover,.workspace-symbol-item.active { background:var(--bg-hover); }
+.workspace-symbol-kind { width:20px; height:20px; border-radius:4px; border:1px solid var(--border);
+  color:var(--fg-accent); display:flex; align-items:center; justify-content:center;
+  font:10px var(--mono); background:var(--bg); }
+.workspace-symbol-title { color:var(--fg); font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.workspace-symbol-detail { color:var(--fg-dim); font:11px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:1px; }
+.workspace-symbol-empty { padding:10px 14px; color:var(--fg-dim); font-size:12px; }
 
 /* ── Toast notifications ── */
 .toast-container { position:fixed; bottom:30px; right:16px; z-index:400; display:flex;
@@ -1614,6 +1631,11 @@ pre.code-block { overflow:visible; }
 <div class="cmd-palette" id="cmd-palette">
   <input id="cmd-input" placeholder="Type a command..." oninput="filterCommands()">
   <div class="cmd-list" id="cmd-list"></div>
+</div>
+
+<div class="workspace-symbol-palette" id="workspace-symbol-palette" role="dialog" aria-label="Workspace symbols">
+  <input id="workspace-symbol-input" placeholder="Search symbols" aria-label="Search symbols">
+  <div class="workspace-symbol-list" id="workspace-symbol-list" role="listbox"></div>
 </div>
 
 <!-- SETTINGS-05: Keyboard shortcuts editor modal -->
@@ -3502,6 +3524,7 @@ let _editorSignatureRequest=0;
 let _editorCodeActions=[],_editorCodeActionIndex=0,_editorCodeActionRequest=0;
 let _editorDefinitionRequest=0;
 let _editorReferences=[],_editorReferenceIndex=0,_editorReferencesRequest=0;
+let _workspaceSymbols=[],_workspaceSymbolIndex=0,_workspaceSymbolRequest=0,_workspaceSymbolTimer=null;
 let _editorLinks=[],_editorLinkIndex=0,_editorLinksRequest=0;
 let _editorInlayHints=[],_editorInlayHintRequest=0,_editorInlayHintTimer=null;
 let _editorInlineCompletions=[],_editorInlineCompletionIndex=0,_editorInlineCompletionRequest=0,_editorInlineCompletionTimer=null;
@@ -4398,6 +4421,112 @@ function handleEditorReferencesKey(e){
   if(e.key==='Escape'){e.preventDefault();closeEditorReferences();return true}
   return false;
 }
+function isWorkspaceSymbolPickerOpen(){
+  const box=$('workspace-symbol-palette');return !!(box&&box.classList.contains('open'));
+}
+function closeWorkspaceSymbolPicker(){
+  const box=$('workspace-symbol-palette');if(!box)return;
+  box.classList.remove('open');box.style.display='none';
+  clearTimeout(_workspaceSymbolTimer);_workspaceSymbols=[];_workspaceSymbolIndex=0;
+}
+function workspaceSymbolKindLabel(kind){
+  const names=['File','Module','Namespace','Package','Class','Method','Property','Field','Constructor','Enum','Interface','Function','Variable','Constant','String','Number','Boolean','Array','Object','Key','Null','EnumMember','Struct','Event','Operator','TypeParameter'];
+  if(typeof kind==='string'&&kind)return kind;
+  return names[Number(kind)||0]||'Symbol';
+}
+function workspaceSymbolGlyph(kind){
+  const label=workspaceSymbolKindLabel(kind);
+  const map={Class:'C',Method:'M',Function:'F',Variable:'V',Property:'P',Field:'P',Interface:'I',Enum:'E',File:'□',Module:'M',Namespace:'N',Constructor:'C',Constant:'K'};
+  return map[label]||label.slice(0,1).toUpperCase()||'S';
+}
+function workspaceSymbolTarget(symbol){
+  if(!symbol||typeof symbol!=='object')return null;
+  return editorDefinitionTarget(symbol.location||symbol);
+}
+function workspaceSymbolDetail(symbol){
+  const target=workspaceSymbolTarget(symbol)||{},range=target.range||{},start=range.start||{};
+  const path=editorDocumentUriToPath(target.uri);
+  const bits=[];
+  if(symbol&&symbol.containerName)bits.push(String(symbol.containerName));
+  if(path)bits.push(path.split(/[\\/]/).pop()+':'+((Number(start.line)||0)+1)+':'+((Number(start.character)||0)+1));
+  else if(target.uri)bits.push(String(target.uri));
+  return bits.join(' · ');
+}
+function setWorkspaceSymbolIndex(index){
+  if(!_workspaceSymbols.length)return;
+  _workspaceSymbolIndex=(index+_workspaceSymbols.length)%_workspaceSymbols.length;
+  document.querySelectorAll('#workspace-symbol-list .workspace-symbol-item').forEach((el,i)=>{
+    el.classList.toggle('active',i===_workspaceSymbolIndex);
+    el.setAttribute('aria-selected',i===_workspaceSymbolIndex?'true':'false');
+    if(i===_workspaceSymbolIndex)el.scrollIntoView({block:'nearest'});
+  });
+}
+function renderWorkspaceSymbols(symbols,query){
+  const list=$('workspace-symbol-list');if(!list)return;
+  list.innerHTML='';
+  _workspaceSymbols=(Array.isArray(symbols)?symbols:[]).filter(sym=>sym&&sym.name&&workspaceSymbolTarget(sym)).slice(0,120);
+  _workspaceSymbolIndex=0;
+  if(!_workspaceSymbols.length){
+    const empty=document.createElement('div');empty.className='workspace-symbol-empty';
+    empty.textContent='No symbols';
+    list.appendChild(empty);return;
+  }
+  _workspaceSymbols.forEach((symbol,index)=>{
+    const row=document.createElement('div');row.className='workspace-symbol-item'+(index===0?' active':'');
+    row.setAttribute('role','option');row.setAttribute('aria-selected',index===0?'true':'false');
+    const kind=document.createElement('div');kind.className='workspace-symbol-kind';kind.textContent=workspaceSymbolGlyph(symbol.kind);
+    const body=document.createElement('div');
+    const title=document.createElement('div');title.className='workspace-symbol-title';title.textContent=String(symbol.name||'');
+    const detail=document.createElement('div');detail.className='workspace-symbol-detail';detail.textContent=workspaceSymbolKindLabel(symbol.kind)+(workspaceSymbolDetail(symbol)?' · '+workspaceSymbolDetail(symbol):'');
+    body.appendChild(title);body.appendChild(detail);row.appendChild(kind);row.appendChild(body);
+    row.onmousedown=e=>{e.preventDefault();applyWorkspaceSymbol(symbol)};
+    list.appendChild(row);
+  });
+}
+async function requestWorkspaceSymbols(quiet){
+  const input=$('workspace-symbol-input');if(!input)return;
+  const query=String(input.value||'').trim();
+  const requestId=++_workspaceSymbolRequest;
+  const res=await call('editor_language_provider',editorProviderPayload('workspaceSymbol',{query}));
+  if(requestId!==_workspaceSymbolRequest)return;
+  if(res&&res.error){renderWorkspaceSymbols([],query);if(!quiet)setStatus('Workspace symbols failed: '+res.error);return}
+  renderWorkspaceSymbols(res&&res.ok&&Array.isArray(res.symbols)?res.symbols:[],query);
+}
+function scheduleWorkspaceSymbolSearch(delay){
+  clearTimeout(_workspaceSymbolTimer);
+  _workspaceSymbolTimer=setTimeout(()=>requestWorkspaceSymbols(true),delay==null?180:delay);
+}
+function openWorkspaceSymbolPicker(){
+  showEditorArea();
+  closeCommandPalette();
+  closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();closeEditorLinks();
+  const box=$('workspace-symbol-palette'),input=$('workspace-symbol-input');if(!box||!input)return;
+  box.style.display='block';requestAnimationFrame(()=>box.classList.add('open'));
+  input.value='';input.focus();renderWorkspaceSymbols([], '');
+  requestWorkspaceSymbols(true);
+}
+async function resolveWorkspaceSymbol(symbol){
+  const res=await call('editor_language_provider',editorProviderPayload('resolveWorkspaceSymbol',{symbol}));
+  if(res&&res.ok&&res.symbol)return res.symbol;
+  return symbol;
+}
+async function applyWorkspaceSymbol(symbol){
+  if(!symbol)return false;
+  const resolved=await resolveWorkspaceSymbol(symbol);
+  const target=workspaceSymbolTarget(resolved)||workspaceSymbolTarget(symbol);
+  closeWorkspaceSymbolPicker();
+  if(target&&await navigateEditorDefinition(target)){setStatus('Opened symbol: '+String((resolved&&resolved.name)||symbol.name||''));return true}
+  setStatus('Workspace symbol target is unavailable');
+  return false;
+}
+function handleWorkspaceSymbolKey(e){
+  if(!isWorkspaceSymbolPickerOpen())return false;
+  if(e.key==='ArrowDown'){e.preventDefault();setWorkspaceSymbolIndex(_workspaceSymbolIndex+1);return true}
+  if(e.key==='ArrowUp'){e.preventDefault();setWorkspaceSymbolIndex(_workspaceSymbolIndex-1);return true}
+  if(e.key==='Enter'||e.key==='Tab'){e.preventDefault();applyWorkspaceSymbol(_workspaceSymbols[_workspaceSymbolIndex]);return true}
+  if(e.key==='Escape'){e.preventDefault();closeWorkspaceSymbolPicker();ed.focus();return true}
+  return false;
+}
 function editorRangeFromOffsets(start,end){
   return {start:editorPositionFromOffset(ed.value,start),end:editorPositionFromOffset(ed.value,end)};
 }
@@ -4884,6 +5013,7 @@ ed.addEventListener('contextmenu',function(e){
     {label:'Rename Symbol',shortcut:'F2',action:()=>requestEditorRename(false)},
     {label:'Go to Definition',shortcut:'F12',action:()=>requestEditorDefinition(false)},
     {label:'Find All References',shortcut:'Shift+F12',action:()=>requestEditorReferences(false)},
+    {label:'Go to Symbol in Workspace...',shortcut:'Ctrl+T',action:()=>openWorkspaceSymbolPicker()},
     {label:'Format Document',shortcut:'',action:()=>formatDocument()},
     {sep:true},
     {label:'Change Language Mode',shortcut:'',action:()=>showLanguagePicker()},
@@ -4899,6 +5029,7 @@ ed.addEventListener('contextmenu',function(e){
 });
 document.addEventListener('click',e=>{
   $('ctx-menu').style.display='none';
+  if(e.target.closest&&!e.target.closest('#workspace-symbol-palette')&&!e.target.closest('#cmd-palette')&&!e.target.closest('#ctx-menu'))closeWorkspaceSymbolPicker();
   if(!e.target.closest||!e.target.closest('#editor-container')){closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();closeEditorLinks()}
 });
 
@@ -9005,6 +9136,7 @@ const COMMANDS=[
   {label:'Rename Symbol',shortcut:'F2',action:()=>requestEditorRename(false)},
   {label:'Go to Definition',shortcut:'F12',action:()=>requestEditorDefinition(false)},
   {label:'Find All References',shortcut:'Shift+F12',action:()=>requestEditorReferences(false)},
+  {label:'Go to Symbol in Workspace...',shortcut:'Ctrl+T',action:()=>openWorkspaceSymbolPicker()},
   {label:'Format Document',shortcut:'',action:()=>formatDocument()},
   {label:'Change Language Mode',shortcut:'',action:()=>showLanguagePicker()},
   {label:'Toggle Theme',shortcut:'',action:()=>toggleTheme()},
@@ -9041,6 +9173,9 @@ $('cmd-input').addEventListener('keydown',e=>{
   if(e.key==='Enter'){const first=$('cmd-list').querySelector('.cmd-item');if(first)first.click()}
 });
 $('cmd-palette').addEventListener('click',e=>{if(e.target.id==='cmd-palette')closeCommandPalette()});
+$('workspace-symbol-input').addEventListener('input',()=>scheduleWorkspaceSymbolSearch());
+$('workspace-symbol-input').addEventListener('keydown',handleWorkspaceSymbolKey);
+$('workspace-symbol-palette').addEventListener('click',e=>{if(e.target.id==='workspace-symbol-palette')closeWorkspaceSymbolPicker()});
 // KB-002: Normalize a keydown event into a shortcut string like "Ctrl+Shift+N"
 function _normalizeKeyCombo(e){
   const parts=[];
@@ -9059,7 +9194,9 @@ const _GLOBAL_SHORTCUT_MAP={
 };
 document.addEventListener('keydown',e=>{
   if(e.key==='P'&&e.ctrlKey&&e.shiftKey){e.preventDefault();openCommandPalette()}
+  if(e.key==='t'&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();openWorkspaceSymbolPicker();return}
   if(e.key==='Escape'&&$('cmd-palette').classList.contains('open')){e.preventDefault();closeCommandPalette()}
+  if(e.key==='Escape'&&isWorkspaceSymbolPickerOpen()){e.preventDefault();closeWorkspaceSymbolPicker();return}
   if(e.key==='Escape'&&$('fold-region-picker').classList.contains('open')){e.preventDefault();closeFoldRegionPicker();return}
   // Ctrl+W → close active tab (TAB-004)
   if(e.key==='w'&&e.ctrlKey&&!e.shiftKey){e.preventDefault();if(typeof activeTab!=='undefined'&&tabs.length>1)closeTab(activeTab);return}

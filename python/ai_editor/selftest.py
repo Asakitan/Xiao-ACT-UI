@@ -359,7 +359,7 @@ def test_app_settings_parity() -> None:
         CodeAction, DocumentLink, InlayHint, InlineCompletionItem,
         CodeLens, FoldingRange, SelectionRange, SemanticTokensLegend,
         SemanticTokensBuilder, WorkspaceEdit, Location, Color,
-        ColorInformation, ColorPresentation,
+        ColorInformation, ColorPresentation, SymbolInformation, Uri,
     )
     provider_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     provider_api._extension_scan_dirs = lambda: []
@@ -467,6 +467,26 @@ def test_app_settings_parity() -> None:
             return [SelectionRange(
                 Range(Position(0, 0), Position(0, 3)), parent)]
 
+        def provideWorkspaceSymbols(self, query, token):
+            self.seen_workspace_query = query
+            return [SymbolInformation(
+                "bufferSymbol",
+                11,
+                "workspace",
+                Location(self.workspace_uri, Range(
+                    Position(0, 0), Position(0, 6))),
+            )]
+
+        def resolveWorkspaceSymbol(self, symbol, token):
+            self.seen_workspace_resolve = symbol
+            return SymbolInformation(
+                "bufferSymbolResolved",
+                11,
+                "workspace",
+                Location(self.workspace_uri, Range(
+                    Position(0, 1), Position(0, 6))),
+            )
+
         def provideDocumentColors(self, document, token):
             return [ColorInformation(
                 Range(Position(0, 0), Position(0, 6)),
@@ -509,6 +529,7 @@ def test_app_settings_parity() -> None:
     lang_api["registerCodeLensProvider"]("python", editor_provider)
     lang_api["registerFoldingRangeProvider"]("python", editor_provider)
     lang_api["registerSelectionRangeProvider"]("python", editor_provider)
+    lang_api["registerWorkspaceSymbolProvider"](editor_provider)
     lang_api["registerColorProvider"]("python", editor_provider)
     lang_api["registerDocumentSemanticTokensProvider"](
         "python", editor_provider, editor_provider.semantic_legend)
@@ -518,6 +539,7 @@ def test_app_settings_parity() -> None:
         provider_path = os.path.join(tmp_provider_dir, "buffer.py")
         with open(provider_path, "w", encoding="utf-8") as fh:
             fh.write("disk")
+        editor_provider.workspace_uri = Uri.file(provider_path)
         provider_payload = {
             "filePath": provider_path,
             "language": "python",
@@ -555,6 +577,12 @@ def test_app_settings_parity() -> None:
             dict(provider_payload, kind="foldingRange"))
         selection_range_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="selectionRange"))
+        workspace_symbol_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="workspaceSymbol", query="buf"))
+        workspace_symbol = workspace_symbol_result.get("symbols", [{}])[0]
+        resolve_workspace_symbol_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="resolveWorkspaceSymbol",
+                 symbol=workspace_symbol))
         document_color_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="documentColor"))
         color_presentation_result = provider_api.editor_language_provider(
@@ -654,6 +682,19 @@ def test_app_settings_parity() -> None:
                .get("character") == 3
                and selection_range.get("parent", {})
                .get("range", {}).get("end", {}).get("character") == 6)
+        _check("editor_language_provider serializes workspace symbols",
+               workspace_symbol_result.get("ok") is True
+               and editor_provider.seen_workspace_query == "buf"
+               and workspace_symbol.get("name") == "bufferSymbol"
+               and workspace_symbol.get("location", {})
+               .get("range", {}).get("end", {}).get("character") == 6)
+        _check("editor_language_provider resolves workspace symbols",
+               resolve_workspace_symbol_result.get("ok") is True
+               and resolve_workspace_symbol_result.get("symbol", {})
+               .get("name") == "bufferSymbolResolved"
+               and resolve_workspace_symbol_result.get("symbol", {})
+               .get("location", {}).get("range", {}).get("start", {})
+               .get("character") == 1)
         color_info = document_color_result.get("colors", [{}])[0]
         color_presentation = color_presentation_result.get(
             "presentations", [{}])[0]
@@ -1709,6 +1750,17 @@ def test_phase1_ai_editor_regressions() -> None:
            and "id=\"editor-ghost-layer\"" in html
            and "id=\"editor-codelens-layer\"" in html
            and "id=\"editor-color-layer\"" in html
+           and "id=\"workspace-symbol-palette\"" in html
+           and "id=\"workspace-symbol-input\"" in html
+           and "function openWorkspaceSymbolPicker()" in html
+           and "function requestWorkspaceSymbols(quiet)" in html
+           and "function resolveWorkspaceSymbol(symbol)" in html
+           and "function applyWorkspaceSymbol(symbol)" in html
+           and "function handleWorkspaceSymbolKey(e)" in html
+           and "editorProviderPayload('workspaceSymbol'" in html
+           and "editorProviderPayload('resolveWorkspaceSymbol'" in html
+           and "Go to Symbol in Workspace..." in html
+           and "Ctrl+T" in html
            and "call('editor_language_provider'" in html
            and "function editorProviderPayload(kind,extra)" in html
            and "function requestEditorCompletion(triggerCharacter,quiet)" in html
@@ -2994,7 +3046,7 @@ def test_vscode_api() -> None:
         CodeLens, FoldingRange, SelectionRange, SemanticTokensLegend,
         SemanticTokensBuilder, TextEdit, Location, SignatureHelp,
         SignatureInformation, Color, ColorInformation, ColorPresentation,
-        ParameterInformation,
+        SymbolInformation, ParameterInformation,
     )
 
     host = ExtensionHost()
@@ -3029,6 +3081,8 @@ def test_vscode_api() -> None:
     _check("api.FoldingRange", api["FoldingRange"] is FoldingRange)
     _check("api.SelectionRange", api["SelectionRange"] is SelectionRange)
     _check("api.Color", api["Color"] is Color)
+    _check("api.SymbolInformation",
+           api["SymbolInformation"] is SymbolInformation)
     _check("api.SemanticTokensBuilder",
            api["SemanticTokensBuilder"] is SemanticTokensBuilder)
     _check("api.CompletionItemKind", api["CompletionItemKind"]["Function"] == 2)
@@ -3435,6 +3489,29 @@ def test_vscode_api() -> None:
                 return [SelectionRange(
                     Range(Position(0, 0), Position(0, 4)), parent)]
 
+        class _WorkspaceSymbolProvider:
+            def __init__(self):
+                self.queries = []
+                self.resolved = 0
+
+            def provideWorkspaceSymbols(self, query, token):
+                self.queries.append(query)
+                return [SymbolInformation(
+                    "selftestWorkspaceSymbol",
+                    api["SymbolKind"]["Function"],
+                    "selftest",
+                    Location(doc.uri, Range(Position(0, 0), Position(0, 4))),
+                )]
+
+            def resolveWorkspaceSymbol(self, symbol, token):
+                self.resolved += 1
+                return SymbolInformation(
+                    "selftestWorkspaceResolved",
+                    api["SymbolKind"]["Function"],
+                    "selftest",
+                    Location(doc.uri, Range(Position(0, 1), Position(0, 4))),
+                )
+
         class _ColorProvider:
             def provideDocumentColors(self, document, token):
                 return [ColorInformation(
@@ -3515,6 +3592,9 @@ def test_vscode_api() -> None:
             "python", _FoldingRangeProvider())
         api["languages"]["registerSelectionRangeProvider"](
             "python", _SelectionRangeProvider())
+        workspace_symbol_provider = _WorkspaceSymbolProvider()
+        api["languages"]["registerWorkspaceSymbolProvider"](
+            workspace_symbol_provider)
         api["languages"]["registerColorProvider"](
             "python", _ColorProvider())
         semantic_legend = SemanticTokensLegend(
@@ -3564,6 +3644,29 @@ def test_vscode_api() -> None:
             "vscode.executeSelectionRangeProvider",
             doc.uri,
             [Position(0, 1)])
+        workspace_symbols = api["commands"]["executeCommand"](
+            "vscode.executeWorkspaceSymbolProvider", "self")
+        workspace_symbol_resolved = api["commands"]["executeCommand"](
+            "_resolveWorkspaceSymbolProvider", workspace_symbols[0])
+        workspace_symbol_resolved_count = workspace_symbol_provider.resolved
+
+        def _external_workspace_symbol_resolve(request):
+            if request.get("kind") == "workspaceSymbolResolve":
+                return {
+                    "ok": True,
+                    "value": {"name": "externalWorkspaceResolved"},
+                }
+            return None
+
+        ns.set_language_provider_request_callback(
+            _external_workspace_symbol_resolve)
+        external_workspace_symbol_resolved = api["commands"]["executeCommand"](
+            "_resolveWorkspaceSymbolProvider",
+            {
+                "name": "externalWorkspaceSymbol",
+                "_workspaceSymbolHandle": "external-1",
+            })
+        ns.set_language_provider_request_callback(None)
         document_colors = api["commands"]["executeCommand"](
             "vscode.executeDocumentColorProvider", doc.uri)
         color_presentations = api["commands"]["executeCommand"](
@@ -3634,6 +3737,22 @@ def test_vscode_api() -> None:
                selection_ranges
                and selection_ranges[0].range.end.character == 4
                and selection_ranges[0].parent.range.end.character == 11)
+        _check("executeWorkspaceSymbolProvider invokes matching providers",
+               workspace_symbols
+               and workspace_symbols[0].name == "selftestWorkspaceSymbol"
+               and workspace_symbol_provider.queries[-1] == "self"
+               and workspace_symbols[0].location.range.end.character == 4)
+        _check("resolveWorkspaceSymbolProvider invokes matching providers",
+               workspace_symbol_resolved
+               and workspace_symbol_provider.resolved == 1
+               and workspace_symbol_resolved.name == "selftestWorkspaceResolved"
+               and workspace_symbol_resolved.location.range.start.character == 1)
+        _check("resolveWorkspaceSymbolProvider routes external handles",
+               external_workspace_symbol_resolved
+               and external_workspace_symbol_resolved.get("name")
+               == "externalWorkspaceResolved"
+               and workspace_symbol_provider.resolved
+               == workspace_symbol_resolved_count)
         _check("executeDocumentColorProvider invokes matching providers",
                document_colors
                and isinstance(document_colors[0], ColorInformation)
@@ -3678,6 +3797,10 @@ def test_vscode_api() -> None:
                and "vscode.executeFoldingRangeProvider"
                in api["commands"]["getCommands"]()
                and "vscode.executeSelectionRangeProvider"
+               in api["commands"]["getCommands"]()
+               and "vscode.executeWorkspaceSymbolProvider"
+               in api["commands"]["getCommands"]()
+               and "_resolveWorkspaceSymbolProvider"
                in api["commands"]["getCommands"]()
                and "vscode.executeDocumentColorProvider"
                in api["commands"]["getCommands"]()
@@ -5019,6 +5142,21 @@ function activate(context) {
       return [{ name: 'nodeSymbol', kind: vscode.SymbolKind.Function, range: new vscode.Range(0, 0, 0, 4) }];
     },
   });
+  vscode.languages.registerWorkspaceSymbolProvider({
+    provideWorkspaceSymbols(query, token) {
+      return [new vscode.SymbolInformation(
+        'nodeWorkspaceSymbol',
+        vscode.SymbolKind.Function,
+        'node-container',
+        new vscode.Location(vscode.Uri.file('/workspace/node-symbol.py'), new vscode.Range(0, 0, 0, 4)),
+      )];
+    },
+    resolveWorkspaceSymbol(symbol, token) {
+      symbol.name = 'nodeWorkspaceResolved';
+      symbol.location = new vscode.Location(vscode.Uri.file('/workspace/node-symbol-resolved.py'), new vscode.Range(1, 0, 1, 4));
+      return symbol;
+    },
+  });
   vscode.languages.registerCodeActionsProvider('python', {
     provideCodeActions(document, range, context, token) {
       const action = new vscode.CodeAction('node quick fix', vscode.CodeActionKind.QuickFix);
@@ -5166,6 +5304,11 @@ module.exports = { activate, deactivate };
                     node_uri, Position(0, 1), "NODE_RENAME")
                 node_symbols = api._ext_host.commands.execute(
                     "vscode.executeDocumentSymbolProvider", node_uri)
+                node_workspace_symbols = api._ext_host.commands.execute(
+                    "vscode.executeWorkspaceSymbolProvider", "node")
+                node_workspace_symbol_resolved = api._ext_host.commands.execute(
+                    "_resolveWorkspaceSymbolProvider",
+                    node_workspace_symbols[0] if node_workspace_symbols else {})
                 node_actions = api._ext_host.commands.execute(
                     "vscode.executeCodeActionProvider",
                     node_uri, Range(Position(0, 0), Position(0, 1)),
@@ -5269,6 +5412,17 @@ module.exports = { activate, deactivate };
                 _check("node host language provider invokes JS document symbols",
                        node_symbols
                        and node_symbols[0].get("name") == "nodeSymbol")
+                _check("node host language provider invokes JS workspace symbols",
+                       node_workspace_symbols
+                       and node_workspace_symbols[0].get("name")
+                       == "nodeWorkspaceSymbol"
+                       and node_workspace_symbols[0].get("_workspaceSymbolHandle"))
+                _check("node host language provider resolves JS workspace symbols",
+                       node_workspace_symbol_resolved
+                       and node_workspace_symbol_resolved.get("name")
+                       == "nodeWorkspaceResolved"
+                       and node_workspace_symbol_resolved.get("location", {})
+                       .get("uri", "").endswith("node-symbol-resolved.py"))
                 _check("node host language provider invokes JS code actions",
                        node_actions
                        and node_actions[0].get("title") == "node quick fix")

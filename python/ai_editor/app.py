@@ -492,6 +492,7 @@ _LANGUAGE_RESULT_ATTRS = (
     "paddingLeft", "paddingRight", "location", "isResolved", "data",
     "resultId", "edits", "start", "end", "deleteCount", "tokenTypes",
     "tokenModifiers", "parent", "color", "red", "green", "blue", "alpha",
+    "tags",
 )
 
 
@@ -2768,6 +2769,9 @@ class AIEditorAPI:
             "documentSymbol": "documentSymbol",
             "documentSymbols": "documentSymbol",
             "symbols": "documentSymbol",
+            "workspaceSymbol": "workspaceSymbol",
+            "workspaceSymbols": "workspaceSymbol",
+            "resolveWorkspaceSymbol": "resolveWorkspaceSymbol",
             "codeAction": "codeActions",
             "codeActions": "codeActions",
             "format": "formatting",
@@ -3124,6 +3128,33 @@ class AIEditorAPI:
                     "version": document.version,
                     "symbols": value if isinstance(value, list) else (
                         [] if value is None else [value]),
+                }
+            if kind == "workspaceSymbol":
+                query = str(payload.get("query")
+                            if payload.get("query") is not None
+                            else payload.get("search") or "")
+                result = self._ext_host.commands.execute(
+                    "vscode.executeWorkspaceSymbolProvider", query)
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "symbols": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "resolveWorkspaceSymbol":
+                result = self._ext_host.commands.execute(
+                    "_resolveWorkspaceSymbolProvider",
+                    payload.get("symbol") or {},
+                )
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "symbol": _json_ready_language_value(result),
                 }
             if kind == "codeActions":
                 action_range = _editor_provider_range(

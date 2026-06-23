@@ -143,6 +143,32 @@ class Location {
     }
 }
 
+class SymbolInformation {
+    constructor(name, kind, containerOrRange, locationOrUri, containerName) {
+        this.name = name === undefined || name === null ? '' : String(name);
+        this.kind = Number(kind || 0);
+        this.tags = undefined;
+        if (locationOrUri instanceof Location) {
+            this.containerName = containerOrRange === undefined || containerOrRange === null
+                ? ''
+                : String(containerOrRange);
+            this.location = locationOrUri;
+        } else if (containerOrRange instanceof Range) {
+            this.containerName = containerName === undefined || containerName === null
+                ? ''
+                : String(containerName);
+            this.location = new Location(locationOrUri || Uri.file(''), containerOrRange);
+        } else {
+            this.containerName = containerOrRange === undefined || containerOrRange === null
+                ? ''
+                : String(containerOrRange);
+            this.location = locationOrUri instanceof Location
+                ? locationOrUri
+                : new Location(Uri.file(''), new Range(0, 0, 0, 0));
+        }
+    }
+}
+
 class Color {
     constructor(red, green, blue, alpha) {
         this.red = _clampColorComponent(red, 0);
@@ -417,6 +443,8 @@ const _outputChannels = new Map();       // name -> OutputChannel
 const _languageProviders = [];           // { kind, selector, provider, triggers?, disposable }
 let _nextLanguageProviderHandle = 1;
 const _languageDocumentTextCache = new Map(); // uri -> { version, text }
+const _workspaceSymbolCache = new Map(); // handle -> { provider, symbol }
+let _nextWorkspaceSymbolHandle = 1;
 const _diagnosticCollections = new Map(); // name -> DiagnosticCollection
 const _onDidChangeDiagnosticsEmitter = new EventEmitter();
 const _debugAdapterFactories = new Map();   // type -> factory
@@ -987,6 +1015,7 @@ function buildVscodeModule(extDesc, extensionPath) {
         Range,
         Selection,
         Location,
+        SymbolInformation,
         Disposable,
         EventEmitter,
         CancellationTokenSource,
@@ -1281,6 +1310,9 @@ function buildVscodeModule(extDesc, extensionPath) {
                 registerDocumentSymbolProvider(selector, provider) {
                     return _registerLangProvider('documentSymbol', selector, provider);
                 },
+                registerWorkspaceSymbolProvider(provider) {
+                    return _registerLangProvider('workspaceSymbol', null, provider);
+                },
                 registerCodeActionsProvider(selector, provider, metadata) {
                     return _registerLangProvider('codeActions', selector, provider, { metadata });
                 },
@@ -1521,6 +1553,7 @@ function buildVscodeModule(extDesc, extensionPath) {
         CodeActionKind: { QuickFix: 'quickfix', Refactor: 'refactor', Source: 'source', Empty: '' },
         Hover: class { constructor(contents, range) { this.contents = Array.isArray(contents) ? contents : [contents]; this.range = range; } },
         DocumentLink: class { constructor(range, target) { this.range = range; this.target = target; } },
+        SymbolInformation,
         Color,
         ColorInformation,
         ColorPresentation,
@@ -1856,6 +1889,8 @@ function _languageProviderMethod(kind) {
         selectionRange: 'provideSelectionRanges',
         documentColor: 'provideDocumentColors',
         colorPresentation: 'provideColorPresentations',
+        workspaceSymbol: 'provideWorkspaceSymbols',
+        workspaceSymbolResolve: 'resolveWorkspaceSymbol',
         semanticTokens: 'provideDocumentSemanticTokens',
         semanticTokensLegend: 'provideDocumentSemanticTokens',
         semanticTokensRange: 'provideDocumentRangeSemanticTokens',
@@ -1891,6 +1926,21 @@ function _completionListFromProviderValue(value) {
     return { items: [value], isIncomplete: false };
 }
 
+function _cacheWorkspaceSymbol(provider, symbol) {
+    const handle = String(_nextWorkspaceSymbolHandle++);
+    _workspaceSymbolCache.set(handle, { provider, symbol });
+    while (_workspaceSymbolCache.size > 1000) {
+        const first = _workspaceSymbolCache.keys().next().value;
+        if (first === undefined) break;
+        _workspaceSymbolCache.delete(first);
+    }
+    const value = _serializeLanguageValue(symbol);
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+        value._workspaceSymbolHandle = handle;
+    }
+    return value;
+}
+
 async function handleLanguageProviderRequest(msg) {
     const requestId = String(msg.requestId || '');
     const kind = String(msg.kind || '');
@@ -1898,7 +1948,8 @@ async function handleLanguageProviderRequest(msg) {
     try {
         if (!requestId) throw new Error('Missing language provider requestId');
         if (!methodName) throw new Error(`Unsupported language provider kind: ${kind}`);
-        const document = _createLanguageDocument(msg.document || msg);
+        const workspaceSymbolKind = kind === 'workspaceSymbol' || kind === 'workspaceSymbolResolve';
+        const document = workspaceSymbolKind ? null : _createLanguageDocument(msg.document || msg);
         const position = _positionFromPayload(msg.position);
         const positions = Array.isArray(msg.positions)
             ? msg.positions.map(_positionFromPayload)
@@ -1924,13 +1975,72 @@ async function handleLanguageProviderRequest(msg) {
                 ? 'semanticTokensRange'
                 : kind === 'colorPresentation'
                     ? 'documentColor'
+                    : kind === 'workspaceSymbolResolve'
+                        ? 'workspaceSymbol'
                     : (kind === 'prepareRename' || kind === 'rename') ? 'rename' : kind;
-        const providers = _languageProviders
-            .filter(entry => entry.kind === providerKind)
-            .map(entry => ({ entry, score: _matchDocumentSelector(entry.selector, document) }))
-            .filter(item => item.score > 0)
-            .sort((a, b) => b.score - a.score)
-            .map(item => item.entry);
+        const providers = workspaceSymbolKind
+            ? _languageProviders.filter(entry => entry.kind === 'workspaceSymbol')
+            : _languageProviders
+                .filter(entry => entry.kind === providerKind)
+                .map(entry => ({ entry, score: _matchDocumentSelector(entry.selector, document) }))
+                .filter(item => item.score > 0)
+                .sort((a, b) => b.score - a.score)
+                .map(item => item.entry);
+
+        if (kind === 'workspaceSymbol') {
+            const values = [];
+            const query = String(msg.query || msg.search || '');
+            for (const entry of providers) {
+                const provider = entry.provider;
+                const fn = provider && provider[methodName];
+                if (typeof fn !== 'function') continue;
+                try {
+                    const rawSymbols = _normalizeProviderItems(await fn.call(provider, query, token));
+                    for (const symbol of rawSymbols) {
+                        if (symbol && symbol.name) values.push(_cacheWorkspaceSymbol(provider, symbol));
+                    }
+                } catch (err) {
+                    log(`language provider ${kind} error: ${err.message}`);
+                }
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: values,
+            });
+            return;
+        }
+
+        if (kind === 'workspaceSymbolResolve') {
+            const handle = String(msg.symbol?._workspaceSymbolHandle || '');
+            const cached = handle ? _workspaceSymbolCache.get(handle) : null;
+            if (cached && typeof cached.provider?.resolveWorkspaceSymbol === 'function') {
+                try {
+                    const value = await cached.provider.resolveWorkspaceSymbol.call(
+                        cached.provider, cached.symbol, token);
+                    send({
+                        type: 'language_provider_response',
+                        requestId,
+                        ok: true,
+                        kind,
+                        value: _serializeLanguageValue(value || cached.symbol),
+                    });
+                    return;
+                } catch (err) {
+                    log(`language provider ${kind} error: ${err.message}`);
+                }
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: msg.symbol || null,
+            });
+            return;
+        }
 
         if (kind === 'semanticTokensLegend' || kind === 'semanticTokensRangeLegend') {
             const entry = providers.find(item => item.metadata);
