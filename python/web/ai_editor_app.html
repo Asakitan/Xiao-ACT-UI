@@ -5459,6 +5459,23 @@ function runExtensionTreeItemAction(viewId,node,action){
   if(viewId&&node&&node.handle)call('execute_extension_tree_item_action',viewId,node.handle,action.command);
   else call('execute_command',action.command);
 }
+async function loadExtensionTreeChildren(viewId,node,childBox,depth){
+  if(!viewId||!node||!node.handle||node.childrenLoaded)return true;
+  childBox.innerHTML='<div style="color:var(--fg-dim);font-size:11px;padding:3px 0 3px '+((depth+1)*12+18)+'px">Loading...</div>';
+  const r=await call('load_extension_tree_children',viewId,node.handle);
+  if(!r||r.error){
+    childBox.innerHTML='<div style="color:var(--fg-dim);font-size:11px;padding:3px 0 3px '+((depth+1)*12+18)+'px">Unable to load children</div>';
+    return false;
+  }
+  const nodes=Array.isArray(r.nodes)?r.nodes:[];
+  node.children=nodes;node.childrenLoaded=true;node.lazyChildren=false;
+  childBox.innerHTML='';
+  nodes.forEach(child=>childBox.appendChild(renderExtensionTreeNode(viewId,child,depth+1)));
+  return true;
+}
+function reportExtensionTreeExpanded(viewId,node,expanded){
+  if(viewId&&node&&node.handle)call('set_extension_tree_item_expanded',viewId,node.handle,!!expanded);
+}
 function appendExtensionTitleActions(title,view,state){
   const actions=(Array.isArray(state.titleActions)&&state.titleActions.length)
     ?state.titleActions
@@ -5509,7 +5526,8 @@ function renderExtensionTreeNode(viewId,node,depth){
   const row=document.createElement('div');row.className='sb-item';row.style.cssText='display:flex;align-items:center;gap:4px;padding:3px 0 3px '+(depth*12)+'px;min-height:22px';
   row.tabIndex=0;row.setAttribute('role','button');
   if(node.selected){row.classList.add('active');wrap.setAttribute('aria-selected','true')}else wrap.setAttribute('aria-selected','false');
-  const children=Array.isArray(node.children)?node.children:[];
+  if(!Array.isArray(node.children))node.children=[];
+  const children=node.children;
   const rawCollapsible=Number(node.collapsibleState)||0;
   const collapsible=(rawCollapsible||children.length)?(rawCollapsible||1):0;
   const twist=document.createElement('button');twist.type='button';twist.className='icon-btn';twist.style.cssText='width:18px;height:18px;flex:0 0 18px;border:0;background:transparent;color:var(--fg-dim);padding:0';
@@ -5532,23 +5550,30 @@ function renderExtensionTreeNode(viewId,node,depth){
   const childBox=document.createElement('div');childBox.style.display=collapsible===2?'':'none';
   if(collapsible)wrap.setAttribute('aria-expanded',collapsible===2?'true':'false');
   children.forEach(child=>childBox.appendChild(renderExtensionTreeNode(viewId,child,depth+1)));
-  const setOpen=open=>{childBox.style.display=open?'':'none';twist.textContent=open?'▾':'▸';wrap.setAttribute('aria-expanded',open?'true':'false')};
+  const setOpen=async (open,notify=true)=>{
+    if(open&&collapsible&&node.lazyChildren&&!node.childrenLoaded){
+      const loaded=await loadExtensionTreeChildren(viewId,node,childBox,depth);
+      if(!loaded)return;
+    }
+    childBox.style.display=open?'':'none';twist.textContent=open?'▾':'▸';wrap.setAttribute('aria-expanded',open?'true':'false');
+    if(collapsible&&notify)reportExtensionTreeExpanded(viewId,node,open);
+  };
   const selectNode=()=>{row.classList.add('active');wrap.setAttribute('aria-selected','true');if(viewId&&node.handle)call('select_extension_tree_item',viewId,node.handle)};
-  setOpen(collapsible===2);
-  twist.onclick=e=>{e.stopPropagation();if(collapsible)setOpen(childBox.style.display==='none')};
+  void setOpen(collapsible===2,false);
+  twist.onclick=e=>{e.stopPropagation();if(collapsible)void setOpen(childBox.style.display==='none')};
   const activateNode=()=>{
     selectNode();
     if(node.command&&node.command.command&&window.pywebview&&window.pywebview.api){
       window.pywebview.api.execute_command(node.command.command,...(node.command.arguments||[]));
     }else if(collapsible){
-      setOpen(childBox.style.display==='none');
+      void setOpen(childBox.style.display==='none');
     }
   };
   row.onclick=activateNode;
   row.onkeydown=e=>{
     if(e.key==='Enter'||e.key===' '){e.preventDefault();activateNode()}
-    else if(e.key==='ArrowRight'&&collapsible&&childBox.style.display==='none'){e.preventDefault();setOpen(true)}
-    else if(e.key==='ArrowLeft'&&collapsible&&childBox.style.display!=='none'){e.preventDefault();setOpen(false)}
+    else if(e.key==='ArrowRight'&&collapsible&&childBox.style.display==='none'){e.preventDefault();void setOpen(true)}
+    else if(e.key==='ArrowLeft'&&collapsible&&childBox.style.display!=='none'){e.preventDefault();void setOpen(false)}
   };
   row.oncontextmenu=e=>{
     if(!actions.length)return;

@@ -1177,6 +1177,9 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function scheduleExtensionActivityRefresh()" in html
             and "function appendExtensionTitleActions(title,view,state)" in html
             and "function showExtensionActionMenu(x,y,actions,runner)" in html
+            and "function loadExtensionTreeChildren(viewId,node,childBox,depth)" in html
+            and "call('load_extension_tree_children',viewId,node.handle)" in html
+            and "call('set_extension_tree_item_expanded',viewId,node.handle,!!expanded)" in html
             and "call('select_extension_tree_item',viewId,node.handle)" in html
             and "call('execute_extension_tree_item_action',viewId,node.handle,action.command)" in html
             and "window.pywebview.api.execute_command(node.command.command" in html
@@ -2660,6 +2663,21 @@ def test_vscode_api() -> None:
     _check("tree view selection emits VSCode event",
            tree_selection_events
            and tree_selection_events[-1].get("selection") == ["node"])
+    tree_expand_events = []
+    tree_collapse_events = []
+    tree_view.onDidExpandElement(
+        lambda evt: tree_expand_events.append(evt))
+    tree_view.onDidCollapseElement(
+        lambda evt: tree_collapse_events.append(evt))
+    tree_view.begin_snapshot()
+    tree_handle = tree_view.remember_element("node")
+    tree_expanded = tree_view.set_expanded(tree_handle, True)
+    tree_collapsed = tree_view.set_expanded(tree_handle, False)
+    _check("tree view expand and collapse events expose element",
+           tree_expanded is True
+           and tree_collapsed is True
+           and tree_expand_events[-1].get("element") == "node"
+           and tree_collapse_events[-1].get("element") == "node")
     before_tree_version = tree_view.refresh_version
     tree_provider.refresh("node")
     _check("tree data provider refresh notifies runtime view callback",
@@ -3139,6 +3157,17 @@ def test_app_extension_runtime_support() -> None:
             "selftest.activity.tree", activity_tree_provider)
         activity_api["window"]["registerWebviewViewProvider"](
             "selftest.activity.webview", _CommandWebviewProvider())
+        activity_tree_view = api._vscode_ns._tree_views.get("selftest.activity.tree")
+        activity_selection_events = []
+        activity_expand_events = []
+        activity_collapse_events = []
+        if activity_tree_view is not None:
+            activity_tree_view.onDidChangeSelection(
+                lambda evt: activity_selection_events.append(evt))
+            activity_tree_view.onDidExpandElement(
+                lambda evt: activity_expand_events.append(evt))
+            activity_tree_view.onDidCollapseElement(
+                lambda evt: activity_collapse_events.append(evt))
         activity_items = {
             item.get("id"): item
             for item in api.list_extension_activity_bar_items().get("items", [])
@@ -3158,22 +3187,35 @@ def test_app_extension_runtime_support() -> None:
                and activity_tree_nodes[0].get("label") == "Node A"
                and activity_tree_nodes[0].get("description") == "branch"
                and activity_tree_nodes[0].get("command", {}).get("command") == "selftest.command.tree"
-               and activity_tree_nodes[0].get("children", [{}])[0].get("label") == "Leaf-A"
+               and activity_tree_nodes[0].get("children") == []
+               and activity_tree_nodes[0].get("childrenLoaded") is False
+               and activity_tree_nodes[0].get("lazyChildren") is True
                and bool(activity_tree_nodes[0].get("handle")))
         _check("activity tree views expose contributed title and item actions",
                activity_views.get("selftest.activity.tree", {})
                .get("runtimeState", {}).get("titleActions", [{}])[0].get("command")
                == "selftest.activity.refresh"
                and activity_tree_nodes[0].get("actions", [{}])[0].get("command")
-               == "selftest.activity.openItem"
-               and activity_tree_nodes[0].get("children", [{}])[0].get("actions", []) == [])
-        activity_tree_view = api._vscode_ns._tree_views.get("selftest.activity.tree")
-        activity_selection_events = []
-        if activity_tree_view is not None:
-            activity_tree_view.onDidChangeSelection(
-                lambda evt: activity_selection_events.append(evt))
+               == "selftest.activity.openItem")
+        activity_tree_handle = activity_tree_nodes[0].get("handle", "")
+        loaded_activity_children = api.load_extension_tree_children(
+            "selftest.activity.tree", activity_tree_handle)
+        _check("activity tree lazy loads direct children on demand",
+               loaded_activity_children.get("ok") is True
+               and loaded_activity_children.get("nodes", [{}])[0].get("label") == "Leaf-A"
+               and loaded_activity_children.get("nodes", [{}])[0].get("childrenLoaded") is True
+               and loaded_activity_children.get("nodes", [{}])[0].get("actions", []) == [])
+        expanded_activity = api.set_extension_tree_item_expanded(
+            "selftest.activity.tree", activity_tree_handle, True)
+        collapsed_activity = api.set_extension_tree_item_expanded(
+            "selftest.activity.tree", activity_tree_handle, False)
+        _check("activity tree expand and collapse events reach runtime TreeView",
+               expanded_activity.get("ok") is True
+               and collapsed_activity.get("ok") is True
+               and activity_expand_events[-1].get("element") == "node-a"
+               and activity_collapse_events[-1].get("element") == "node-a")
         selected_tree = api.select_extension_tree_item(
-            "selftest.activity.tree", activity_tree_nodes[0].get("handle", ""))
+            "selftest.activity.tree", activity_tree_handle)
         _check("activity tree selection updates runtime TreeView event state",
                selected_tree.get("ok") is True
                and activity_selection_events
@@ -3181,7 +3223,7 @@ def test_app_extension_runtime_support() -> None:
                and selected_tree.get("runtimeState", {}).get("nodes", [{}])[0].get("selected") is True)
         item_action = api.execute_extension_tree_item_action(
             "selftest.activity.tree",
-            activity_tree_nodes[0].get("handle", ""),
+            activity_tree_handle,
             "selftest.activity.openItem")
         _check("activity tree item context action receives selected element",
                item_action.get("ok") is True

@@ -3696,6 +3696,75 @@ class AIEditorAPI:
             "runtimeState": snapshot,
         }
 
+    def load_extension_tree_children(self, view_id: str,
+                                     handle: str = "") -> Dict:
+        """Load direct children for a runtime extension TreeView node."""
+        self._ensure_engine()
+        normalized_view_id = str(view_id or "")
+        normalized_handle = str(handle or "")
+        if not normalized_view_id:
+            return {"error": "Tree view id is required"}
+        view = self._vscode_ns._tree_views.get(normalized_view_id)
+        provider = self._vscode_ns._tree_data_providers.get(normalized_view_id)
+        if view is None and provider is None:
+            return {"error": f"Tree view not found: {normalized_view_id}"}
+        if view is None:
+            view = self._vscode_ns._create_tree_view(
+                normalized_view_id, treeDataProvider=provider)
+        if provider is None:
+            provider = getattr(view, "provider", None)
+        if provider is None:
+            return {"error": f"Tree data provider not found: {normalized_view_id}"}
+        parent = None
+        seen = None
+        if normalized_handle:
+            lookup = getattr(view, "element_for_handle", None)
+            parent = lookup(normalized_handle) if callable(lookup) else None
+            if parent is None:
+                return {
+                    "error": "Tree node handle is stale or unknown",
+                    "view_id": normalized_view_id,
+                    "handle": normalized_handle,
+                }
+            seen = {id(parent)}
+        view.begin_snapshot()
+        nodes = self._tree_view_nodes_preview(
+            provider, parent, depth=0, seen=seen,
+            tree_view=view, max_depth=0)
+        return {
+            "ok": True,
+            "view_id": normalized_view_id,
+            "handle": normalized_handle,
+            "nodes": nodes,
+            "refreshVersion": getattr(view, "refresh_version", 0),
+        }
+
+    def set_extension_tree_item_expanded(
+            self, view_id: str, handle: str, expanded: bool) -> Dict:
+        """Report frontend TreeView expand/collapse state to extensions."""
+        self._ensure_engine()
+        normalized_view_id = str(view_id or "")
+        normalized_handle = str(handle or "")
+        if not normalized_view_id or not normalized_handle:
+            return {"error": "Tree view id and node handle are required"}
+        view = self._vscode_ns._tree_views.get(normalized_view_id)
+        if view is None:
+            return {"error": f"Tree view not found: {normalized_view_id}"}
+        set_expanded = getattr(view, "set_expanded", None)
+        if not callable(set_expanded) or not set_expanded(
+                normalized_handle, bool(expanded)):
+            return {
+                "error": "Tree node handle is stale or unknown",
+                "view_id": normalized_view_id,
+                "handle": normalized_handle,
+            }
+        return {
+            "ok": True,
+            "view_id": normalized_view_id,
+            "handle": normalized_handle,
+            "expanded": bool(expanded),
+        }
+
     def execute_extension_tree_item_action(
             self, view_id: str, handle: str, command_id: str) -> Dict:
         """Execute a contributed TreeView item action with the item as argument."""
@@ -4052,7 +4121,7 @@ class AIEditorAPI:
                 "refreshVersion": getattr(tree_view, "refresh_version", 0),
                 "children": self._tree_view_children_preview(tree_provider),
                 "nodes": self._tree_view_nodes_preview(
-                    tree_provider, tree_view=tree_view),
+                    tree_provider, tree_view=tree_view, max_depth=0),
             }
         webview_provider = self._vscode_ns._webview_view_providers.get(view_id, {})
         webview_view = self._vscode_ns._webview_views.get(view_id)
@@ -4271,12 +4340,13 @@ class AIEditorAPI:
     def _tree_view_nodes_preview(self, provider: Any, element: Any = None,
                                  depth: int = 0,
                                  seen: Optional[set] = None,
-                                 tree_view: Any = None) -> List[Dict[str, Any]]:
+                                 tree_view: Any = None,
+                                 max_depth: int = 2) -> List[Dict[str, Any]]:
         if provider is None or not hasattr(provider, "getChildren"):
             return []
         if seen is None:
             seen = set()
-        if depth > 2:
+        if depth > max_depth:
             return []
         try:
             children = provider.getChildren(element)
@@ -4303,13 +4373,19 @@ class AIEditorAPI:
             node = self._tree_node_preview(
                 child, item, tree_view=tree_view, view_id=getattr(tree_view, "id", ""))
             child_nodes: List[Dict[str, Any]] = []
-            if node.get("collapsibleState", 0) or depth < 1:
+            attempted_children = False
+            if depth < max_depth and (node.get("collapsibleState", 0) or depth < 1):
+                attempted_children = True
                 child_nodes = self._tree_view_nodes_preview(
                     provider, child, depth + 1, child_seen,
-                    tree_view=tree_view)
+                    tree_view=tree_view, max_depth=max_depth)
                 if child_nodes and not node.get("collapsibleState", 0):
                     node["collapsibleState"] = 1
             node["children"] = child_nodes
+            node["childrenLoaded"] = attempted_children or not bool(
+                node.get("collapsibleState", 0))
+            node["lazyChildren"] = bool(
+                node.get("collapsibleState", 0)) and not attempted_children
             nodes.append(node)
         return nodes
 

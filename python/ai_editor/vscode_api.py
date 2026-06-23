@@ -3317,9 +3317,12 @@ class _TreeView:
         self.refresh_version = 0
         self._snapshot_counter = 0
         self._handle_elements: Dict[str, Any] = {}
+        self._expanded_handles = set()
         self._change_callback: Optional[Callable[[str, str, Dict[str, Any]], None]] = None
         self._provider_change_disposable = None
         self._dispose = EventEmitter()
+        self._expand = EventEmitter()
+        self._collapse = EventEmitter()
         self._selection_change = EventEmitter()
         self._active_change = EventEmitter()
         self._visibility_change = EventEmitter()
@@ -3329,6 +3332,14 @@ class _TreeView:
     @property
     def onDidDispose(self):
         return self._dispose.event
+
+    @property
+    def onDidExpandElement(self):
+        return self._expand.event
+
+    @property
+    def onDidCollapseElement(self):
+        return self._collapse.event
 
     @property
     def onDidChangeSelection(self):
@@ -3350,6 +3361,7 @@ class _TreeView:
         self.provider = provider
         self._change_callback = change_callback
         self._handle_elements.clear()
+        self._expanded_handles.clear()
         self.refresh_version += 1
         self._subscribe_provider_refresh()
 
@@ -3368,6 +3380,34 @@ class _TreeView:
         handle = f"{self._snapshot_counter}:{len(self._handle_elements) + 1}"
         self._handle_elements[handle] = element
         return handle
+
+    def element_for_handle(self, handle: str) -> Any:
+        return self._handle_elements.get(str(handle or ""))
+
+    def set_expanded(self, handle: str, expanded: bool) -> bool:
+        normalized_handle = str(handle or "")
+        if normalized_handle not in self._handle_elements:
+            return False
+        was_expanded = normalized_handle in self._expanded_handles
+        next_expanded = bool(expanded)
+        if was_expanded == next_expanded:
+            return True
+        if next_expanded:
+            self._expanded_handles.add(normalized_handle)
+            self._expand.fire({
+                "element": self._handle_elements[normalized_handle],
+            })
+        else:
+            self._expanded_handles.discard(normalized_handle)
+            self._collapse.fire({
+                "element": self._handle_elements[normalized_handle],
+            })
+        self._notify_changed("expanded", {
+            "handle": normalized_handle,
+            "expanded": next_expanded,
+            "refreshVersion": self.refresh_version,
+        })
+        return True
 
     def is_selected(self, element: Any) -> bool:
         for selected in self.selection:
@@ -3459,6 +3499,7 @@ class _TreeView:
     def _on_provider_changed(self, element: Any = None) -> None:
         self.refresh_version += 1
         self._handle_elements.clear()
+        self._expanded_handles.clear()
         self._notify_changed("refresh", {
             "refreshVersion": self.refresh_version,
             "element": element,
