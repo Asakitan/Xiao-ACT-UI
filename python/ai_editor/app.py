@@ -2806,7 +2806,7 @@ class AIEditorAPI:
             except Exception:
                 pass
         result = self.resolve_extension_custom_editor(
-            view_type, full, title=os.path.basename(full))
+            view_type, full, title=os.path.basename(full), timeout=10.0)
         if not result.get("ok"):
             return None
         view_id = result.get("viewId") or result.get("view_id") or ""
@@ -5988,7 +5988,8 @@ class AIEditorAPI:
         }
 
     def resolve_extension_custom_editor(
-            self, view_type: str, uri: str, title: str = "") -> Dict:
+            self, view_type: str, uri: str, title: str = "",
+            timeout: float = 2.0) -> Dict:
         """Resolve a Node-registered custom editor into a dynamic webview."""
         host = getattr(self, "_node_ext_host", None)
         if host is None or not getattr(host, "is_running", False):
@@ -5996,7 +5997,13 @@ class AIEditorAPI:
                 "ok": False,
                 "error": "Node extension host is not running",
             }
-        return host.request_custom_editor_result(view_type, uri, title=title)
+        try:
+            timeout_value = float(timeout)
+        except (TypeError, ValueError):
+            timeout_value = 2.0
+        timeout_value = max(0.5, min(timeout_value, 30.0))
+        return host.request_custom_editor_result(
+            view_type, uri, title=title, timeout=timeout_value)
 
     def get_extension_settings(self, ext_id: str = "") -> Dict:
         """EXT-10: Return extension-contributed configuration schema and values.

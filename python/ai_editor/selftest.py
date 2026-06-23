@@ -1662,6 +1662,7 @@ def test_app_settings_parity() -> None:
                == "selftest.customNbt"
                and tree_api._node_ext_host.requests
                and tree_api._node_ext_host.requests[0].get("uri") == custom_file
+               and tree_api._node_ext_host.requests[0].get("timeout") >= 8.0
                and "onCustomEditor:selftest.customNbt"
                in tree_api._ext_host.activated_events,
                json.dumps(opened_custom, ensure_ascii=False))
