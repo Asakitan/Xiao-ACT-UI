@@ -2546,11 +2546,16 @@ console.log("frontend auto-close behavior ok");
             "function renderExtensionSettings()" in html
             and "function extensionSettingValidateJsonValue(value,type)" in html
             and "function extensionSettingSchemaSummary(schema,type)" in html
+            and "function extensionSettingDeprecationText(schema)" in html
             and "function extensionSettingJsonRows(value,type)" in html
             and "function extensionSettingTextRows(value)" in html
             and "function extensionSettingUsesMultiline(schema,type)" in html
             and "editPresentation" in html
             and "multilineText" in html
+            and "markdownDeprecationMessage" in html
+            and "deprecationMessage" in html
+            and "ext-setting-deprecated-badge" in html
+            and "appendExtensionSettingMarkdown(dep,deprecation)" in html
             and "reset_extension_setting" in html
             and "markExtensionSettingRow" in html
             and "function applyExtensionSettingsFilter()" in html
@@ -2573,6 +2578,7 @@ console.log("frontend auto-close behavior ok");
             "extensionSettingSafeLinkTarget",
             "appendExtensionSettingMarkdown",
             "extensionSettingSchemaSummary",
+            "extensionSettingDeprecationText",
             "extensionSettingJson",
             "extensionSettingJsonRows",
             "extensionSettingTextRows",
@@ -2618,6 +2624,10 @@ const objectSchema = {
   }
 };
 const multilineSchema = { type: "string", editPresentation: "multilineText" };
+const deprecatedSchema = {
+  deprecationMessage: "Use the new setting.",
+  markdownDeprecationMessage: "**Use** `new.setting`."
+};
 const numberSchema = { type: "number", minimum: 1, maximum: 5 };
 const textarea = { type: "textarea", tagName: "TEXTAREA", value: "", rows: 0 };
 setExtensionSettingInputValue(textarea, arraySchema, "array", ["a", "b"]);
@@ -2652,6 +2662,12 @@ assert(extensionSettingSchemaSummary(arraySchema, "array") === "items: string",
        "array schema summary");
 assert(extensionSettingSchemaSummary(objectSchema, "object").indexOf("level") >= 0,
        "object schema summary");
+assert(extensionSettingDeprecationText(deprecatedSchema) === "**Use** `new.setting`.",
+       "markdown deprecation preferred");
+assert(extensionSettingDeprecationText({ deprecationMessage: "Use fallback." }) === "Use fallback.",
+       "deprecation fallback");
+assert(extensionSettingDeprecationText({}) === "",
+       "empty deprecation text");
 const textAreaSetting = { type: "textarea", tagName: "TEXTAREA", value: "", rows: 0 };
 setExtensionSettingInputValue(textAreaSetting, multilineSchema, "string", "alpha\nbeta\ncharlie");
 assert(extensionSettingUsesMultiline(multilineSchema, "string") === true,
