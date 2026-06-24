@@ -8486,6 +8486,7 @@ class AIEditorAPI:
         view = dict(item)
         view_id = str(view.get("id") or "")
         snapshot = self._extension_view_snapshot(view_id)
+        welcome = self._view_welcome_entries(view_id)
         view.update({
             "runtimeAvailable": bool(snapshot.get("runtimeAvailable")),
             "runtimeKind": snapshot.get("kind") or "view",
@@ -8493,6 +8494,7 @@ class AIEditorAPI:
                 snapshot.get("runtimeMessage")
                 or snapshot.get("message", "")),
             "titleActions": self._view_title_actions(view_id),
+            "welcome": welcome,
         })
         if snapshot:
             view["runtimeState"] = snapshot
@@ -8580,6 +8582,7 @@ class AIEditorAPI:
             nodes = self._tree_view_nodes_preview(
                 tree_provider, tree_view=tree_view, max_depth=0,
                 errors=errors)
+            welcome = self._view_welcome_entries(view_id)
             state = {
                 "ok": True,
                 "kind": "treeView",
@@ -8596,6 +8599,7 @@ class AIEditorAPI:
                     for item in list(getattr(tree_view, "selection", []) or [])
                 ],
                 "refreshVersion": getattr(tree_view, "refresh_version", 0),
+                "welcome": welcome,
                 "children": [
                     str(node.get("label", ""))
                     for node in nodes[:20]
@@ -8612,6 +8616,7 @@ class AIEditorAPI:
                 provider = webview_provider.get("provider")
                 self._vscode_ns._register_webview_view_provider(view_id, provider)
                 webview_view = self._vscode_ns._webview_views.get(view_id)
+            welcome = self._view_welcome_entries(view_id)
             return {
                 "ok": True,
                 "kind": "webviewView",
@@ -8619,11 +8624,13 @@ class AIEditorAPI:
                 "message": "Runtime webview provider registered.",
                 "title": getattr(webview_view, "title", view_id),
                 "titleActions": self._view_title_actions(view_id),
+                "welcome": welcome,
                 "html": getattr(getattr(webview_view, "webview", None), "html", ""),
                 "visible": bool(getattr(webview_view, "visible", False)),
             }
         manifest_view = self._manifest_view(view_id)
         if manifest_view:
+            welcome = self._view_welcome_entries(view_id)
             return {
                 "ok": False,
                 "kind": str(manifest_view.get("type") or "view"),
@@ -8632,6 +8639,7 @@ class AIEditorAPI:
                     "message", "View manifest is present but no runtime provider is registered."),
                 "title": manifest_view.get("name") or view_id,
                 "titleActions": self._view_title_actions(view_id),
+                "welcome": welcome,
                 "location": manifest_view.get("_viewLocation", ""),
             }
         return {
@@ -8647,6 +8655,50 @@ class AIEditorAPI:
                 if str(view.get("id") or "") == view_id:
                     return dict(view)
         return {}
+
+    def _view_welcome_entries(self, view_id: str) -> List[Dict[str, Any]]:
+        view_id = str(view_id or "")
+        if not view_id:
+            return []
+        try:
+            entries = self._ext_host.ext_points.all_contributions.get(
+                "viewsWelcome", [])
+        except Exception:
+            entries = []
+        result: List[Dict[str, Any]] = []
+        context = {"view": view_id, "viewItem": ""}
+        for index, item in enumerate(entries):
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("view") or "") != view_id:
+                continue
+            contents = item.get("contents")
+            if contents is None:
+                contents = item.get("content", "")
+            text = str(contents or "").strip()
+            if not text:
+                continue
+            when = str(item.get("when", "") or "")
+            if not self._extension_view_when_matches(when, context):
+                continue
+            group = str(item.get("group", "") or "")
+            result.append({
+                "view": view_id,
+                "contents": text,
+                "content": text,
+                "when": when,
+                "enablement": str(item.get("enablement", "") or ""),
+                "group": group,
+                "order": self._extension_menu_order(group),
+                "extension_id": str(item.get("_extensionId", "") or ""),
+                "index": index,
+            })
+        result.sort(key=lambda entry: (
+            str(entry.get("group", "")),
+            float(entry.get("order", 0.0)),
+            int(entry.get("index", 0)),
+        ))
+        return result
 
     def _view_title_actions(self, view_id: str) -> List[Dict[str, Any]]:
         return self._extension_menu_actions("view/title", {
@@ -8793,6 +8845,54 @@ class AIEditorAPI:
             return not matched if negated else matched
         # Unknown context keys should not make an action visible.
         return bool(negated)
+
+    @classmethod
+    def _extension_view_when_matches(
+            cls, when: Any, context: Dict[str, str]) -> bool:
+        expr = str(when or "").strip()
+        if not expr:
+            return True
+        for or_part in re.split(r"\s*\|\|\s*", expr):
+            clauses = cls._extension_when_clauses(or_part)
+            if not clauses:
+                continue
+            allowed = True
+            for clause in clauses:
+                key = cls._extension_when_clause_context_key(clause)
+                if not key or key not in {"view", "viewItem"}:
+                    allowed = False
+                    break
+            if allowed and cls._extension_when_matches(or_part, context):
+                return True
+        return False
+
+    @staticmethod
+    def _extension_when_clauses(expr: str) -> List[str]:
+        return [
+            clause.strip()
+            for clause in re.split(r"\s*&&\s*", str(expr or ""))
+            if clause.strip()
+        ]
+
+    @staticmethod
+    def _extension_when_clause_context_key(clause: str) -> str:
+        text = str(clause or "").strip()
+        while text.startswith("(") and text.endswith(")"):
+            text = text[1:-1].strip()
+        if text.startswith("!"):
+            text = text[1:].strip()
+        regex_match = re.match(
+            r"^([A-Za-z_][\w.$-]*)\s*=~\s*/.+/(?:i)?$", text)
+        if regex_match:
+            return regex_match.group(1)
+        compare_match = re.match(
+            r"^([A-Za-z_][\w.$-]*)\s*(==|!=|===|!==)\s*.+$", text)
+        if compare_match:
+            return compare_match.group(1)
+        bare_match = re.match(r"^([A-Za-z_][\w.$-]*)$", text)
+        if bare_match:
+            return bare_match.group(1)
+        return ""
 
     @staticmethod
     def _strip_when_value(value: str) -> str:

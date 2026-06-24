@@ -2911,6 +2911,14 @@ console.log("extension setting schema helpers ok");
             and "function scheduleExtensionActivityRefresh()" in html
             and "function appendExtensionTitleActions(title,view,state)" in html
             and "function showExtensionActionMenu(x,y,actions,runner)" in html
+            and "function extensionWelcomeEntries(view,state)" in html
+            and "function appendExtensionWelcomeContent(parent,entries)" in html
+            and "function appendExtensionWelcomeLine(parent,line)" in html
+            and "function extensionWelcomeCommandFromUri(uri)" in html
+            and "command.startsWith('command:')" in html
+            and "call('execute_command',command)" in html
+            and "const welcomeEntries=extensionWelcomeEntries(view,state)" in html
+            and "appendExtensionWelcomeContent(body,welcomeEntries)" in html
             and "let _extTreeChildRequestSeq=0" in html
             and "function loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion)" in html
             and "function setExtensionTreeStatus(childBox,depth,text,kind,retry)" in html
@@ -6958,6 +6966,23 @@ def test_app_extension_runtime_support() -> None:
                     {"id": "selftest.activity.tree", "name": "Activity Tree"},
                     {"id": "selftest.activity.webview", "name": "Activity Webview", "type": "webview"},
                 ]},
+                "viewsWelcome": [
+                    {
+                        "view": "selftest.activity.tree",
+                        "contents": "Welcome Activity\n[Refresh](command:selftest.activity.refresh)",
+                        "when": "view == selftest.activity.tree",
+                        "group": "navigation@1",
+                    },
+                    {
+                        "view": "selftest.activity.tree",
+                        "contents": "Hidden external context",
+                        "when": "config.git.enabled",
+                    },
+                    {
+                        "view": "selftest.activity.webview",
+                        "content": "Legacy welcome content",
+                    },
+                ],
             },
         }, "/tmp/selftest-activity")
         api._ext_host.ext_points.process(activity_desc)
@@ -7102,6 +7127,23 @@ def test_app_extension_runtime_support() -> None:
                .get("runtimeState", {}).get("badge", {}).get("value") == 8
                and activity_views.get("selftest.activity.tree", {})
                .get("runtimeState", {}).get("badge", {}).get("tooltip") == "dynamic badge")
+        activity_tree_welcome = activity_views.get(
+            "selftest.activity.tree", {}).get(
+                "runtimeState", {}).get("welcome", [])
+        activity_webview_welcome = activity_views.get(
+            "selftest.activity.webview", {}).get(
+                "runtimeState", {}).get("welcome", [])
+        _check("activity views expose contributed welcome content safely",
+               len(activity_tree_welcome) == 1
+               and activity_tree_welcome[0].get("contents", "").startswith(
+                   "Welcome Activity")
+               and activity_tree_welcome[0].get("when")
+                   == "view == selftest.activity.tree"
+               and activity_tree_welcome[0].get("extension_id")
+                   == "selftest.activity-container"
+               and len(activity_webview_welcome) == 1
+               and activity_webview_welcome[0].get("contents")
+                   == "Legacy welcome content")
         activity_tree_nodes = activity_views.get("selftest.activity.tree", {}).get("runtimeState", {}).get("nodes", [])
         _check("activity tree thenable provider exposes structured expandable nodes",
                activity_tree_nodes

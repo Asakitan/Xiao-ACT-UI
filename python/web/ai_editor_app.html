@@ -10315,6 +10315,60 @@ function showExtensionActionMenu(x,y,actions,runner){
 function runExtensionViewAction(action){
   if(action&&action.command)call('execute_command',action.command);
 }
+function extensionWelcomeEntries(view,state){
+  const stateEntries=state&&Array.isArray(state.welcome)?state.welcome:[];
+  const viewEntries=view&&Array.isArray(view.welcome)?view.welcome:[];
+  const raw=stateEntries.length?stateEntries:viewEntries;
+  return raw.filter(entry=>entry&&String(entry.contents||entry.content||'').trim());
+}
+function extensionWelcomeCommandFromUri(uri){
+  let command=String(uri||'');
+  if(!command.startsWith('command:'))return '';
+  command=command.slice('command:'.length);
+  const queryIndex=command.indexOf('?');
+  if(queryIndex>=0)command=command.slice(0,queryIndex);
+  try{command=decodeURIComponent(command)}catch(e){}
+  return command.trim();
+}
+function appendExtensionWelcomeLine(parent,line){
+  const text=String(line||'');
+  const linkRe=/\[([^\]]+)\]\((command:[^)]+)\)/g;
+  let last=0,match;
+  while((match=linkRe.exec(text))){
+    if(match.index>last)parent.appendChild(document.createTextNode(text.slice(last,match.index)));
+    const command=extensionWelcomeCommandFromUri(match[2]);
+    if(command){
+      const btn=document.createElement('button');btn.type='button';btn.className='link-btn';
+      btn.style.cssText='border:0;background:transparent;color:var(--fg-accent);padding:0;font:inherit;cursor:pointer;text-align:left';
+      btn.textContent=match[1]||command;btn.title=command;
+      btn.onclick=e=>{e.stopPropagation();call('execute_command',command)};
+      parent.appendChild(btn);
+    }else{
+      parent.appendChild(document.createTextNode(match[0]));
+    }
+    last=match.index+match[0].length;
+  }
+  if(last<text.length)parent.appendChild(document.createTextNode(text.slice(last)));
+}
+function appendExtensionWelcomeContent(parent,entries){
+  const visible=Array.isArray(entries)?entries:[];
+  if(!visible.length)return false;
+  const box=document.createElement('div');box.className='ext-view-welcome';
+  box.style.cssText='display:flex;flex-direction:column;gap:8px;color:var(--fg-dim);font-size:11px;line-height:1.45;padding:0 0 8px 0';
+  visible.forEach(entry=>{
+    const block=document.createElement('div');
+    block.style.cssText='display:flex;flex-direction:column;gap:2px';
+    String(entry.contents||entry.content||'').split(/\r?\n/).forEach(line=>{
+      const row=document.createElement('div');
+      row.style.cssText='min-width:0;overflow-wrap:anywhere';
+      appendExtensionWelcomeLine(row,line);
+      block.appendChild(row);
+    });
+    box.appendChild(block);
+  });
+  parent.appendChild(box);
+  return true;
+}
 function runExtensionTreeItemAction(viewId,node,action){
   if(!action||!action.command)return;
   if(viewId&&node&&node.handle)call('execute_extension_tree_item_action',viewId,node.handle,action.command);
@@ -10431,6 +10485,7 @@ function appendExtensionTitleActions(title,view,state){
 function renderExtensionTreeView(view){
   const card=document.createElement('div');card.className='tool-call';card.style.margin='0 0 8px 0';
   const state=view.runtimeState||{};
+  const welcomeEntries=extensionWelcomeEntries(view,state);
   const title=document.createElement('div');title.className='tool-header open';
   title.style.display='flex';title.style.alignItems='center';title.style.gap='6px';
   const titleLabel=document.createElement('span');titleLabel.style.cssText='overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
@@ -10469,10 +10524,13 @@ function renderExtensionTreeView(view){
   }else if(state.treeError){
     body.appendChild(extensionTreeStatusRow(-1,extensionTreeErrorText(state.treeError,'Unable to load tree items'),'error',()=>renderExtensionActivityBar()));
   }else{
-    const empty=document.createElement('div');
-    empty.style.cssText='color:var(--fg-dim);font-size:11px';
-    empty.textContent=view.runtimeMessage||'Tree view provider registered; no root items reported.';
-    body.appendChild(empty);
+    const hasWelcome=appendExtensionWelcomeContent(body,welcomeEntries);
+    if(!hasWelcome){
+      const empty=document.createElement('div');
+      empty.style.cssText='color:var(--fg-dim);font-size:11px';
+      empty.textContent=view.runtimeMessage||'Tree view provider registered; no root items reported.';
+      body.appendChild(empty);
+    }
   }
   card.appendChild(title);card.appendChild(body);return card;
 }
@@ -10569,10 +10627,21 @@ function renderExtensionTreeNode(viewId,node,depth,viewVersion){
 }
 function renderExtensionManifestView(view){
   const card=document.createElement('div');card.className='tool-call';card.style.margin='0 0 8px 0';
+  const state=view.runtimeState||{};
+  const welcomeEntries=extensionWelcomeEntries(view,state);
   const title=document.createElement('div');title.className='tool-header open';
-  title.textContent=extensionViewTitle(view);
+  title.style.display='flex';title.style.alignItems='center';title.style.gap='6px';
+  const titleLabel=document.createElement('span');titleLabel.style.cssText='overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  titleLabel.textContent=(state.title||extensionViewTitle(view));title.appendChild(titleLabel);
+  appendExtensionTitleActions(title,view,state);
   const body=document.createElement('div');body.className='tool-body open';body.style.whiteSpace='normal';
-  body.innerHTML='<div style="color:var(--fg-dim);font-size:11px">'+esc(view.runtimeMessage||'View manifest is present, but no runtime provider is registered yet.')+'</div>';
+  const hasWelcome=appendExtensionWelcomeContent(body,welcomeEntries);
+  if(!hasWelcome){
+    const msg=document.createElement('div');
+    msg.style.cssText='color:var(--fg-dim);font-size:11px';
+    msg.textContent=state.message||view.runtimeMessage||'View manifest is present, but no runtime provider is registered yet.';
+    body.appendChild(msg);
+  }
   card.appendChild(title);card.appendChild(body);return card;
 }
 function renderExtensionWebviewView(view){
