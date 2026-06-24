@@ -940,6 +940,22 @@ def test_app_settings_parity() -> None:
             "kind": "providerMetadata",
             "providerKind": "codeActions",
         })
+        matched_completion_metadata_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="providerMetadata",
+                 providerKind="completion", matchedOnly=True))
+        plaintext_completion_metadata_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="providerMetadata",
+                 providerKind="completion", language="plaintext",
+                 matchedOnly=True))
+        signature_metadata_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="providerMetadata",
+                 providerKind="signatureHelp", matchedOnly=True))
+        on_type_metadata_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="providerMetadata",
+                 providerKind="onTypeFormatting", matchedOnly=True))
+        inlay_hint_metadata_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="providerMetadata",
+                 providerKind="inlayHint", matchedOnly=True))
         document_symbol_metadata_result = provider_api.editor_language_provider({
             "kind": "providerMetadata",
             "providerKind": "documentSymbol",
@@ -1140,7 +1156,44 @@ def test_app_settings_parity() -> None:
                    and "source.fixAll.selftest" in (
                        item.get("codeActionKinds") or [])
                    and "quickfix" in (item.get("codeActionKinds") or [])
+                   and item.get("matchScore") in (0, 10)
+                   and item.get("resolveSupport", {}).get("supported")
+                   is True
                    for item in provider_metadata_result.get("providers", [])))
+        _check("editor_language_provider exposes language-matched provider metadata",
+               matched_completion_metadata_result.get("ok") is True
+               and matched_completion_metadata_result.get("matchedOnly") is True
+               and matched_completion_metadata_result.get("languageId") == "python"
+               and any(
+                   item.get("kind") == "completion"
+                   and item.get("matched") is True
+                   and item.get("matchScore") == 10
+                   and item.get("resolveSupport", {}).get("method")
+                   == "resolveCompletionItem"
+                   and item.get("resolveSupport", {}).get("supported") is False
+                   for item in matched_completion_metadata_result.get(
+                       "providers", []))
+               and not plaintext_completion_metadata_result.get("providers"))
+        _check("editor_language_provider exposes trigger metadata",
+               signature_metadata_result.get("ok") is True
+               and any(
+                   item.get("kind") == "signatureHelp"
+                   and "(" in (item.get("triggerCharacters") or [])
+                   for item in signature_metadata_result.get("providers", []))
+               and on_type_metadata_result.get("ok") is True
+               and any(
+                   item.get("kind") == "onTypeFormatting"
+                   and "}" in (item.get("triggerCharacters") or [])
+                   for item in on_type_metadata_result.get("providers", [])))
+        _check("editor_language_provider exposes item resolve metadata",
+               inlay_hint_metadata_result.get("ok") is True
+               and any(
+                   item.get("kind") == "inlayHint"
+                   and item.get("resolveSupport", {}).get("supported") is True
+                   and item.get("resolveSupport", {}).get("method")
+                   == "resolveInlayHint"
+                   for item in inlay_hint_metadata_result.get(
+                       "providers", [])))
         _check("editor_language_provider exposes document symbol provider metadata",
                document_symbol_metadata_result.get("ok") is True
                and any(
@@ -2791,6 +2844,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function editorFormatOnSaveEnabled()" in html
            and "function editorDefaultFormatter()" in html
            and "async function requestEditorFormattingProviders()" in html
+           and "editorProviderPayload('formattingProviders',{matchedOnly:true})" in html
            and "function showEditorFormatterPicker(providers)" in html
            and "async function formatDocumentWithProvider()" in html
            and "function editorFormatOnTypeEnabled()" in html
@@ -2809,6 +2863,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function readCodeActionsOnSaveExtras(id)" in html
            and "function editorCodeActionProviderKinds(providers)" in html
            and "async function refreshEditorCodeActionProviderKinds()" in html
+           and "editorProviderPayload('providerMetadata',{providerKind:'codeActions',matchedOnly:true})" in html
            and "async function triggerEditorCodeActionsOnFocusChange()" in html
            and "async function applyEditorCodeActionForSave(action)" in html
            and "async function fetchEditorCodeActionsForKind(only,range)" in html
@@ -13949,6 +14004,33 @@ module.exports = { activate, deactivate };
                         "language": "python",
                         "content": "print('node provider')\n",
                     }))
+                node_editor_completion_providers = (
+                    api.editor_language_provider({
+                        "kind": "providerMetadata",
+                        "providerKind": "completion",
+                        "filePath": node_provider_sample,
+                        "language": "python",
+                        "content": "print('node provider')\n",
+                        "matchedOnly": True,
+                    }))
+                node_editor_signature_providers = (
+                    api.editor_language_provider({
+                        "kind": "providerMetadata",
+                        "providerKind": "signatureHelp",
+                        "filePath": node_provider_sample,
+                        "language": "python",
+                        "content": "print('node provider')\n",
+                        "matchedOnly": True,
+                    }))
+                node_editor_on_type_providers = (
+                    api.editor_language_provider({
+                        "kind": "providerMetadata",
+                        "providerKind": "onTypeFormatting",
+                        "filePath": node_provider_sample,
+                        "language": "python",
+                        "content": "print('node provider')\n",
+                        "matchedOnly": True,
+                    }))
                 node_format_edits = api._ext_host.commands.execute(
                     "vscode.executeFormatDocumentProvider",
                     node_uri, {"tabSize": 2})
@@ -14647,11 +14729,39 @@ module.exports = { activate, deactivate };
                        any(
                            item.get("source") == "node"
                            and item.get("kind") == "documentSymbol"
+                           and item.get("matched") is True
+                           and item.get("matchScore") == 10
                            and item.get("metadata", {}).get("label")
                            == "Node Outline"
                            and item.get("displayName") == "Node Outline"
                            for item in
                            node_editor_document_symbol_providers.get(
+                               "providers", [])))
+                _check("node host exposes JS provider trigger and resolve metadata",
+                       node_editor_completion_providers.get("matchedOnly") is True
+                       and any(
+                           item.get("source") == "node"
+                           and item.get("kind") == "completion"
+                           and item.get("matched") is True
+                           and "." in (item.get("triggerCharacters") or [])
+                           and item.get("resolveSupport", {}).get("method")
+                           == "resolveCompletionItem"
+                           and item.get("resolveSupport", {}).get("supported")
+                           is True
+                           for item in
+                           node_editor_completion_providers.get(
+                               "providers", []))
+                       and any(
+                           item.get("kind") == "signatureHelp"
+                           and "(" in (item.get("triggerCharacters") or [])
+                           for item in
+                           node_editor_signature_providers.get(
+                               "providers", []))
+                       and any(
+                           item.get("kind") == "onTypeFormatting"
+                           and "}" in (item.get("triggerCharacters") or [])
+                           for item in
+                           node_editor_on_type_providers.get(
                                "providers", [])))
                 _check("node host language provider invokes JS workspace symbols",
                        node_workspace_symbols

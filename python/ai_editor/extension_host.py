@@ -2674,6 +2674,7 @@ class NodeExtensionHost:
                 "kind": kind,
                 "selector": selector,
                 "triggers": list(msg.get("triggers") or []),
+                "resolveSupport": msg.get("resolveSupport"),
                 "metadata": msg.get("metadata"),
             })
             _log.info("[NodeExtHost] Language provider registered: %s "

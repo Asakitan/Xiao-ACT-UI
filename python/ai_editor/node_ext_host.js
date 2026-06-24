@@ -1615,6 +1615,25 @@ let _nextQuickInputHandle = 1;
 let _activeQuickInput = null;
 const _quickInputs = new Map();          // quickInput id -> QuickInputBase
 
+const _languageProviderResolveMethods = {
+    completion: 'resolveCompletionItem',
+    documentLink: 'resolveDocumentLink',
+    inlayHint: 'resolveInlayHint',
+    codeLens: 'resolveCodeLens',
+    codeActions: 'resolveCodeAction',
+    documentPaste: 'resolveDocumentPasteEdit',
+    documentDrop: 'resolveDocumentDropEdit',
+    workspaceSymbol: 'resolveWorkspaceSymbol',
+};
+
+function _languageProviderResolveSupport(kind, provider) {
+    const method = _languageProviderResolveMethods[String(kind || '')] || '';
+    return {
+        supported: !!(method && provider && typeof provider[method] === 'function'),
+        method,
+    };
+}
+
 function _workspaceDocumentIsOpened(document) {
     return !!document && document.__opened !== false;
 }
@@ -6073,6 +6092,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     provider,
                 }, extra || {});
                 _languageProviders.push(entry);
+                const resolveSupport = _languageProviderResolveSupport(kind, provider);
                 send({
                     type: 'language_provider_registered',
                     handle: entry.handle,
@@ -6082,6 +6102,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     kind,
                     selector,
                     triggers: entry.triggers || [],
+                    resolveSupport,
                     metadata: entry.metadata || null,
                 });
                 log(`register ${kind} provider: ${JSON.stringify(selector)}`);

@@ -719,6 +719,97 @@ def _code_action_metadata_kinds(metadata: Any) -> List[str]:
     return kinds
 
 
+def _language_provider_trigger_characters(entry: Dict[str, Any]) -> List[str]:
+    """Return trigger characters advertised by a language provider."""
+    values: List[str] = []
+
+    def add(raw: Any) -> None:
+        items = raw if isinstance(raw, (list, tuple, set)) else [raw]
+        for item in items:
+            if item is None:
+                continue
+            text = str(item)
+            if text and text not in values:
+                values.append(text)
+
+    add(entry.get("triggers"))
+    metadata = entry.get("metadata")
+    if isinstance(metadata, dict):
+        add(metadata.get("triggerCharacters"))
+        add(metadata.get("retriggerCharacters"))
+        add(metadata.get("triggers"))
+    elif isinstance(metadata, (list, tuple, set)):
+        add(metadata)
+    return values
+
+
+_LANGUAGE_PROVIDER_RESOLVE_METHODS = {
+    "completion": "resolveCompletionItem",
+    "documentLink": "resolveDocumentLink",
+    "inlayHint": "resolveInlayHint",
+    "codeLens": "resolveCodeLens",
+    "codeActions": "resolveCodeAction",
+    "documentPaste": "resolveDocumentPasteEdit",
+    "documentDrop": "resolveDocumentDropEdit",
+    "workspaceSymbol": "resolveWorkspaceSymbol",
+}
+
+
+def _language_provider_resolve_support(entry: Dict[str, Any]) -> Dict[str, Any]:
+    """Return whether a provider can resolve its own deferred items."""
+    raw = entry.get("resolveSupport")
+    if isinstance(raw, dict):
+        method = str(raw.get("method") or "")
+        supported = bool(raw.get("supported") or raw.get("resolve"))
+        return {"supported": supported, "method": method}
+    kind = str(entry.get("kind") or "")
+    method = _LANGUAGE_PROVIDER_RESOLVE_METHODS.get(kind, "")
+    provider = entry.get("provider")
+    supported = bool(method and hasattr(provider, method))
+    return {"supported": supported, "method": method}
+
+
+def _language_provider_match_score(
+        vscode_ns: Any, selector: Any, document: Any) -> int:
+    """Match provider selectors through the VS Code namespace rules."""
+    if selector in (None, ""):
+        return 10
+    try:
+        return int(vscode_ns._language_match(selector, document))
+    except Exception:
+        return 0
+
+
+def _language_provider_metadata_entry(
+        source: str,
+        entry: Dict[str, Any],
+        document: Any,
+        vscode_ns: Any) -> Dict[str, Any]:
+    metadata = entry.get("metadata")
+    selector = entry.get("selector")
+    match_score = _language_provider_match_score(
+        vscode_ns, selector, document)
+    provider_id = str(entry.get("providerId") or entry.get("id")
+                      or entry.get("handle") or "")
+    extension_id = str(entry.get("extensionId") or provider_id)
+    display_name = str(entry.get("displayName") or provider_id
+                       or extension_id)
+    return {
+        "source": source,
+        "kind": str(entry.get("kind") or ""),
+        "providerId": provider_id,
+        "displayName": display_name,
+        "extensionId": extension_id,
+        "selector": _json_ready_language_value(selector),
+        "matchScore": match_score,
+        "matched": match_score > 0,
+        "triggerCharacters": _language_provider_trigger_characters(entry),
+        "resolveSupport": _language_provider_resolve_support(entry),
+        "metadata": _json_ready_language_value(metadata),
+        "codeActionKinds": _code_action_metadata_kinds(metadata),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Local webview resource server
 # ---------------------------------------------------------------------------
@@ -4442,6 +4533,9 @@ class AIEditorAPI:
         try:
             if kind == "providerMetadata":
                 target_kind = str(payload.get("providerKind") or "").strip()
+                matched_only = payload.get("matchedOnly") is True or (
+                    str(payload.get("filter") or "").strip().lower()
+                    in {"matched", "language", "current"})
                 providers: List[Dict[str, Any]] = []
                 provider_map = getattr(
                     self._vscode_ns, "_language_providers", {}) or {}
@@ -4455,24 +4549,10 @@ class AIEditorAPI:
                 for entry in items:
                     if not isinstance(entry, dict):
                         continue
-                    metadata = entry.get("metadata")
-                    providers.append({
-                        "source": "python",
-                        "kind": str(entry.get("kind") or ""),
-                        "providerId": str(entry.get("providerId")
-                                          or entry.get("id") or ""),
-                        "displayName": str(entry.get("displayName")
-                                           or entry.get("providerId")
-                                           or entry.get("id") or ""),
-                        "extensionId": str(entry.get("extensionId")
-                                           or entry.get("providerId")
-                                           or entry.get("id") or ""),
-                        "selector": _json_ready_language_value(
-                            entry.get("selector")),
-                        "metadata": _json_ready_language_value(metadata),
-                        "codeActionKinds": _code_action_metadata_kinds(
-                            metadata),
-                    })
+                    item = _language_provider_metadata_entry(
+                        "python", entry, document, self._vscode_ns)
+                    if not matched_only or item.get("matched"):
+                        providers.append(item)
                 node_host = getattr(self, "_node_ext_host", None)
                 if node_host is not None and getattr(
                         node_host, "is_running", False):
@@ -4482,31 +4562,17 @@ class AIEditorAPI:
                                 continue
                             if target_kind and entry.get("kind") != target_kind:
                                 continue
-                            metadata = entry.get("metadata")
-                            providers.append({
-                                "source": "node",
-                                "kind": str(entry.get("kind") or ""),
-                                "providerId": str(entry.get("providerId")
-                                                  or entry.get("handle")
-                                                  or ""),
-                                "displayName": str(entry.get("displayName")
-                                                   or entry.get("extensionId")
-                                                   or entry.get("handle")
-                                                   or ""),
-                                "extensionId": str(entry.get("extensionId")
-                                                   or ""),
-                                "selector": _json_ready_language_value(
-                                    entry.get("selector")),
-                                "metadata": _json_ready_language_value(
-                                    metadata),
-                                "codeActionKinds": _code_action_metadata_kinds(
-                                    metadata),
-                            })
+                            item = _language_provider_metadata_entry(
+                                "node", entry, document, self._vscode_ns)
+                            if not matched_only or item.get("matched"):
+                                providers.append(item)
                     except Exception:
                         pass
                 return {
                     "ok": True,
                     "kind": kind,
+                    "matchedOnly": matched_only,
+                    "languageId": language,
                     "providers": providers,
                 }
             if kind == "diagnostics":

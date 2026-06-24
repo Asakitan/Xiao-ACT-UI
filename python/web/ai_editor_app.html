@@ -7875,7 +7875,7 @@ function normalizeEditorFormattingProvider(value){
   return {...value,id:providerId,providerId,displayName,capabilities:[...new Set(capabilities.filter(Boolean))]};
 }
 async function requestEditorFormattingProviders(){
-  const res=await call('editor_language_provider',editorProviderPayload('formattingProviders'));
+  const res=await call('editor_language_provider',editorProviderPayload('formattingProviders',{matchedOnly:true}));
   if(res&&res.error){setStatus('Formatter providers failed: '+res.error);return []}
   const providers=Array.isArray(res&&res.providers)?res.providers:[];
   const seen=new Set(),items=[];
@@ -10832,7 +10832,7 @@ function renderEditorCodeActionProviderKinds(hostId,inputId,items){
   });
 }
 async function refreshEditorCodeActionProviderKinds(){
-  const res=await call('editor_language_provider',editorProviderPayload('providerMetadata',{providerKind:'codeActions'}));
+  const res=await call('editor_language_provider',editorProviderPayload('providerMetadata',{providerKind:'codeActions',matchedOnly:true}));
   const items=editorCodeActionProviderKinds(res&&res.ok?res.providers:[]);
   renderEditorCodeActionProviderKinds('s-editor-code-actions-detected','s-editor-code-actions-on-save-json',items);
   renderEditorCodeActionProviderKinds('s-editor-lang-code-actions-detected','s-editor-lang-code-actions-on-save-json',items);
