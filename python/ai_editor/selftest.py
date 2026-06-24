@@ -3139,6 +3139,13 @@ console.log("quick input filter helpers ok");
            and "_windowShowQuickPick(items" in node_ext_host_source
            and "return picked && picked.folder ? picked.folder : undefined"
            in node_ext_host_source)
+    _check("extension workspace folder mutations follow VS Code API",
+           "function _workspaceUpdateWorkspaceFolders" in node_ext_host_source
+           and "updateWorkspaceFolders(start, deleteCount"
+           in node_ext_host_source
+           and "getWorkspaceFolder(uri)" in node_ext_host_source
+           and "_onDidChangeWorkspaceFoldersEmitter.event"
+           in node_ext_host_source)
 
     runtime_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     runtime_api._controller = object()
@@ -7092,6 +7099,7 @@ module.exports = { activate };
 const vscode = require('vscode');
 const output = vscode.window.createOutputChannel('node-tree-selftest');
 const workspaceEvents = { open: 0, change: 0, close: 0, save: 0 };
+const workspaceFolderEvents = [];
 const configEvents = { count: 0 };
 let contextProbe = {};
 const lifecycleEvents = new vscode.EventEmitter();
@@ -7352,6 +7360,20 @@ async function activate(context) {
   vscode.workspace.onDidSaveTextDocument(document => {
     workspaceEvents.save += 1;
     workspaceEvents.lastSave = document.uri.toString();
+  }, null, context.subscriptions);
+  vscode.workspace.onDidChangeWorkspaceFolders(event => {
+    workspaceFolderEvents.push({
+      added: event.added.map(folder => ({
+        name: folder.name,
+        index: folder.index,
+        uri: folder.uri.toString(),
+      })),
+      removed: event.removed.map(folder => ({
+        name: folder.name,
+        index: folder.index,
+        uri: folder.uri.toString(),
+      })),
+    });
   }, null, context.subscriptions);
   context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider(
     'selfdoc',
@@ -7740,6 +7762,30 @@ async function activate(context) {
       '**/__pycache__/**',
       20,
     );
+    const extraFolderUri = vscode.Uri.joinPath(context.extensionUri, 'workspace-extra-root');
+    await vscode.workspace.fs.createDirectory(extraFolderUri);
+    const addWorkspaceOk = vscode.workspace.updateWorkspaceFolders(
+      folders.length,
+      null,
+      { uri: extraFolderUri, name: 'Extra Root' },
+    );
+    const afterAddFolders = vscode.workspace.workspaceFolders || [];
+    const extraFileUri = vscode.Uri.joinPath(extraFolderUri, 'nested.txt');
+    const matchedExtraFolder = vscode.workspace.getWorkspaceFolder(extraFileUri);
+    const extraRelativePath = vscode.workspace.asRelativePath(extraFileUri);
+    const duplicateWorkspaceOk = vscode.workspace.updateWorkspaceFolders(
+      afterAddFolders.length,
+      0,
+      { uri: extraFolderUri, name: 'Duplicate Root' },
+    );
+    let removeWorkspaceOk = false;
+    if (addWorkspaceOk) {
+      removeWorkspaceOk = vscode.workspace.updateWorkspaceFolders(
+        afterAddFolders.length - 1,
+        1,
+      );
+    }
+    const afterRemoveFolders = vscode.workspace.workspaceFolders || [];
     const untitled = await vscode.workspace.openTextDocument({
       content: 'alpha\nbeta',
       language: 'plaintext',
@@ -7880,6 +7926,14 @@ async function activate(context) {
       pickedFolderName: pickedFolder && pickedFolder.name,
       pickedFolderUri: pickedFolder && pickedFolder.uri && pickedFolder.uri.toString(),
       rootPath: vscode.workspace.rootPath,
+      workspaceFolderAddOk: addWorkspaceOk,
+      workspaceFolderRemoveOk: removeWorkspaceOk,
+      workspaceFolderDuplicateOk: duplicateWorkspaceOk,
+      afterAddFolderNames: afterAddFolders.map(folder => folder.name),
+      afterRemoveFolderNames: afterRemoveFolders.map(folder => folder.name),
+      matchedExtraFolderName: matchedExtraFolder && matchedExtraFolder.name,
+      extraRelativePath,
+      workspaceFolderEvents,
       found: found.map(uri => uri.toString()),
       relative: found[0] ? vscode.workspace.asRelativePath(found[0]) : '',
       docPrefix: doc ? doc.getText(new vscode.Range(0, 0, 0, 6)) : '',
@@ -9988,6 +10042,35 @@ module.exports = { activate, deactivate };
                        and node_workspace_probe.get("editSaveApplied") is True
                        and node_workspace_probe.get("editDiskAfterSave") == "say hello SAO",
                        json.dumps(node_workspace_probe, ensure_ascii=False))
+                node_workspace_folder_events = (
+                    node_workspace_probe.get("workspaceFolderEvents", [])
+                    if isinstance(node_workspace_probe, dict) else [])
+                _check("node host workspace folder mutations fire VS Code events",
+                       node_workspace_probe.get("workspaceFolderAddOk") is True
+                       and node_workspace_probe.get(
+                           "workspaceFolderRemoveOk") is True
+                       and node_workspace_probe.get(
+                           "workspaceFolderDuplicateOk") is False
+                       and "Extra Root" in node_workspace_probe.get(
+                           "afterAddFolderNames", [])
+                       and "Extra Root" not in node_workspace_probe.get(
+                           "afterRemoveFolderNames", [])
+                       and node_workspace_probe.get(
+                           "matchedExtraFolderName") == "Extra Root"
+                       and node_workspace_probe.get(
+                           "extraRelativePath") == "Extra Root/nested.txt"
+                       and any(
+                           any(item.get("name") == "Extra Root"
+                               for item in event.get("added", []))
+                           for event in node_workspace_folder_events)
+                       and any(
+                           any(item.get("name") == "Extra Root"
+                               for item in event.get("removed", []))
+                           for event in node_workspace_folder_events),
+                       json.dumps({
+                           "probe": node_workspace_probe,
+                           "folderEvents": node_workspace_folder_events,
+                       }, ensure_ascii=False))
                 node_workspace_events = (
                     node_workspace_probe.get("workspaceEvents", {})
                     if isinstance(node_workspace_probe, dict) else {})

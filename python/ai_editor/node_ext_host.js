@@ -1288,6 +1288,12 @@ const _onDidSaveTextDocumentEmitter = new EventEmitter();
 const _onDidChangeLmToolsEmitter = new EventEmitter();
 const _workspaceRoot = path.resolve(process.cwd());
 const _workspaceName = path.basename(_workspaceRoot) || _workspaceRoot;
+const _onDidChangeWorkspaceFoldersEmitter = new EventEmitter();
+let _workspaceFolders = [{
+    uri: Uri.file(_workspaceRoot),
+    name: _workspaceName,
+    index: 0,
+}];
 const _workspaceDefaultSkipDirs = new Set(['.git', 'node_modules', '__pycache__', '.venv', 'venv']);
 const _workspaceSymbolCache = new Map(); // handle -> { provider, symbol }
 let _nextWorkspaceSymbolHandle = 1;
@@ -2310,10 +2316,6 @@ function _languageIdForUri(uri) {
     })[ext] || 'plaintext';
 }
 
-function _workspaceFolder() {
-    return { uri: Uri.file(_workspaceRoot), name: _workspaceName, index: 0 };
-}
-
 function _pathFromUriLike(value) {
     if (!value) return '';
     if (value instanceof Uri) return value.fsPath;
@@ -2340,12 +2342,126 @@ function _workspaceUriFromInput(value) {
     return new Uri('untitled', '', '/Untitled-1', '', '');
 }
 
+function _workspaceFolderName(uri, explicitName) {
+    if (explicitName !== undefined && explicitName !== null && String(explicitName).trim()) {
+        return String(explicitName);
+    }
+    return path.basename(uri.fsPath || uri.path || '') || uri.toString();
+}
+
+function _normalizeWorkspaceFolder(value, index) {
+    const raw = value && typeof value === 'object' && value.uri ? value.uri : value;
+    const uri = _workspaceUriFromInput(raw);
+    return {
+        uri,
+        name: _workspaceFolderName(uri, value && value.name),
+        index,
+    };
+}
+
+function _workspaceFolderKey(folder) {
+    const uri = folder && folder.uri instanceof Uri ? folder.uri : _workspaceUriFromInput(folder);
+    const text = uri.toString();
+    return process.platform === 'win32' ? text.toLowerCase() : text;
+}
+
+function _workspaceFoldersSnapshot() {
+    return _workspaceFolders.map((folder, index) => ({
+        uri: folder.uri,
+        name: folder.name,
+        index,
+    }));
+}
+
+function _workspaceFolder() {
+    return _workspaceFoldersSnapshot()[0];
+}
+
+function _workspaceFolderContainsUri(folder, uri) {
+    if (!folder || !uri || folder.uri.scheme !== uri.scheme) return false;
+    if (folder.uri.authority !== uri.authority) return false;
+    if (uri.scheme === 'file') {
+        const folderPath = path.resolve(folder.uri.fsPath);
+        const targetPath = path.resolve(uri.fsPath);
+        const rel = path.relative(folderPath, targetPath);
+        return !rel || (!rel.startsWith('..') && !path.isAbsolute(rel));
+    }
+    const folderPrefix = folder.uri.toString().replace(/[\\/]?$/, '/');
+    const target = uri.toString();
+    return target === folder.uri.toString() || target.startsWith(folderPrefix);
+}
+
+function _workspaceGetWorkspaceFolder(uriInput) {
+    const uri = _workspaceUriFromInput(uriInput);
+    let best;
+    let bestLength = -1;
+    for (const folder of _workspaceFoldersSnapshot()) {
+        if (!_workspaceFolderContainsUri(folder, uri)) continue;
+        const length = folder.uri.scheme === 'file'
+            ? path.resolve(folder.uri.fsPath).length
+            : folder.uri.toString().length;
+        if (length > bestLength) {
+            best = folder;
+            bestLength = length;
+        }
+    }
+    return best;
+}
+
+function _workspaceUpdateWorkspaceFolders(start, deleteCount, ...workspaceFoldersToAdd) {
+    const current = _workspaceFoldersSnapshot();
+    const startIndex = Number(start);
+    if (!Number.isInteger(startIndex) || startIndex < 0 || startIndex > current.length) {
+        return false;
+    }
+    const rawDeleteCount = deleteCount === undefined || deleteCount === null
+        ? 0
+        : Number(deleteCount);
+    if (!Number.isInteger(rawDeleteCount) || rawDeleteCount < 0) {
+        return false;
+    }
+    const deleteTotal = Math.min(rawDeleteCount, current.length - startIndex);
+    const additions = [];
+    for (let i = 0; i < workspaceFoldersToAdd.length; i += 1) {
+        const item = workspaceFoldersToAdd[i];
+        if (!item || typeof item !== 'object' || !item.uri) return false;
+        additions.push(_normalizeWorkspaceFolder(item, startIndex + i));
+    }
+    const next = current.slice();
+    next.splice(startIndex, deleteTotal, ...additions);
+    const keys = new Set();
+    for (const folder of next) {
+        const key = _workspaceFolderKey(folder);
+        if (keys.has(key)) return false;
+        keys.add(key);
+    }
+    const removed = current.slice(startIndex, startIndex + deleteTotal);
+    _workspaceFolders = next.map((folder, index) => ({
+        uri: folder.uri,
+        name: folder.name,
+        index,
+    }));
+    const added = _workspaceFolders.slice(
+        startIndex, startIndex + additions.length).map((folder, index) => ({
+            uri: folder.uri,
+            name: folder.name,
+            index: startIndex + index,
+        }));
+    _onDidChangeWorkspaceFoldersEmitter.fire({ added, removed });
+    return true;
+}
+
 function _workspaceRelativePath(value, includeWorkspaceFolder) {
     const rawPath = _pathFromUriLike(value);
     const absPath = path.resolve(rawPath || _workspaceRoot);
-    let rel = path.relative(_workspaceRoot, absPath).replace(/\\/g, '/');
+    const folder = _workspaceGetWorkspaceFolder(Uri.file(absPath));
+    const basePath = folder ? folder.uri.fsPath : _workspaceRoot;
+    let rel = path.relative(basePath, absPath).replace(/\\/g, '/');
     if (!rel || rel.startsWith('..')) rel = absPath.replace(/\\/g, '/');
-    return includeWorkspaceFolder ? `${_workspaceName}/${rel}` : rel;
+    const includeFolder = includeWorkspaceFolder === undefined
+        ? _workspaceFolders.length > 1
+        : !!includeWorkspaceFolder;
+    return includeFolder && folder ? `${folder.name}/${rel}` : rel;
 }
 
 function _normalizeFileSystemScheme(scheme) {
@@ -3521,7 +3637,7 @@ async function _windowShowInputBox(options = {}, token = undefined) {
 }
 
 async function _windowShowWorkspaceFolderPick(options = {}, token = undefined) {
-    const folders = [_workspaceFolder()].filter(folder => folder && folder.uri);
+    const folders = _workspaceFoldersSnapshot().filter(folder => folder && folder.uri);
     if (!folders.length || token?.isCancellationRequested) return undefined;
     const items = folders.map(folder => ({
         label: folder.name || path.basename(folder.uri.fsPath || folder.uri.path || ''),
@@ -4511,9 +4627,20 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 return _createConfigProxy(
                     section, _configOverrideIdentifierFromScope(scope));
             },
-            get workspaceFolders() { return [_workspaceFolder()]; },
-            get name() { return _workspaceName; },
-            get rootPath() { return _workspaceRoot; },
+            get workspaceFolders() {
+                const folders = _workspaceFoldersSnapshot();
+                return folders.length ? folders : undefined;
+            },
+            get name() {
+                if (!_workspaceFolders.length) return undefined;
+                return _workspaceFolders.length === 1
+                    ? _workspaceFolders[0].name
+                    : _workspaceName;
+            },
+            get rootPath() {
+                const folder = _workspaceFolder();
+                return folder ? folder.uri.fsPath : undefined;
+            },
             get textDocuments() {
                 return Array.from(_workspaceTextDocuments.values()).filter(
                     _workspaceDocumentIsOpened);
@@ -4568,7 +4695,14 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 });
             },
             onDidChangeConfiguration: _onDidChangeConfigurationEmitter.event,
-            onDidChangeWorkspaceFolders: new EventEmitter().event,
+            onDidChangeWorkspaceFolders: _onDidChangeWorkspaceFoldersEmitter.event,
+            updateWorkspaceFolders(start, deleteCount, ...workspaceFoldersToAdd) {
+                return _workspaceUpdateWorkspaceFolders(
+                    start, deleteCount, ...workspaceFoldersToAdd);
+            },
+            getWorkspaceFolder(uri) {
+                return _workspaceGetWorkspaceFolder(uri);
+            },
             findFiles(include, exclude, maxResults) {
                 return _diagnoseAsync(
                     'workspace.findFiles',
