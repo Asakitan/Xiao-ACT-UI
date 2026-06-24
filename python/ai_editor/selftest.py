@@ -5424,6 +5424,7 @@ def test_app_extension_runtime_support() -> None:
     from ai_editor.extension_host import (
         EventEmitter, ExtensionDescription, ExtensionHost, NodeExtensionHost,
         NodeTreeDataProvider, Position, Range, Uri)
+    from ai_editor.llm_engine import LLMResponse, StreamDelta
     from ai_editor.node_runtime import get_node_path
     from ai_editor.vscode_api import LanguageModelToolResult
 
@@ -5444,6 +5445,13 @@ def test_app_extension_runtime_support() -> None:
     try:
         api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
         api._ensure_engine()
+        def _node_lm_completion(messages, tools=None, on_delta=None):
+            if on_delta:
+                on_delta(StreamDelta(content="node-stream:"))
+                on_delta(StreamDelta(content="ok"))
+            return LLMResponse(content="node-stream:ok")
+
+        api._engine.chat_completion_stream = _node_lm_completion
 
         manifest_desc = ExtensionDescription.from_package_json({
             "name": "manifest-only",
@@ -6678,6 +6686,41 @@ async function activate(context) {
     const tokenCount = firstModel
       ? await firstModel.countTokens('hello from node model')
       : 0;
+    let sendRequest = null;
+    if (firstModel) {
+      const response = await firstModel.sendRequest([
+        vscode.LanguageModelChatMessage.User('hello model'),
+      ]);
+      const streamTypes = [];
+      const textParts = [];
+      for await (const chunk of response.stream) {
+        streamTypes.push(chunk && chunk.constructor && chunk.constructor.name);
+        if (chunk instanceof vscode.LanguageModelTextPart) {
+          textParts.push(chunk.value);
+        }
+      }
+      let textAggregate = '';
+      for await (const text of response.text) {
+        textAggregate += text;
+      }
+      sendRequest = {
+        streamAsync: !!(response.stream && response.stream[Symbol.asyncIterator]),
+        textAsync: !!(response.text && response.text[Symbol.asyncIterator]),
+        streamTypes,
+        textParts,
+        textAggregate,
+        value: response.value,
+      };
+    }
+    const toolCallPart = new vscode.LanguageModelToolCallPart(
+      'call-node', 'selftest_node_dynamic_tool', { value: 'from-part' });
+    const dataPart = vscode.LanguageModelDataPart.text('payload', 'text/plain');
+    const thinkingPart = new vscode.LanguageModelThinkingPart(
+      'thinking', 'think-node', { source: 'selftest' });
+    const promptPart = new vscode.LanguageModelPromptTsxPart({ tag: 'span' });
+    const toolResultPart = new vscode.LanguageModelToolResultPart(
+      'call-node', [new vscode.LanguageModelTextPart('tool-result')], true);
+    const wrappedMessage = vscode.LanguageModelChatMessage.User('wrapped');
     return {
       hasTool: tools.some(tool => tool.name === 'selftest_node_dynamic_tool'),
       localText: localResult.content[0] && (
@@ -6696,6 +6739,20 @@ async function activate(context) {
       filteredCount: filtered.length,
       missingCount: missing.length,
       tokenCount,
+      sendRequest,
+      partProbe: {
+        toolCall: toolCallPart.callId === 'call-node'
+          && toolCallPart.name === 'selftest_node_dynamic_tool'
+          && toolCallPart.input.value === 'from-part',
+        data: dataPart.mimeType === 'text/plain' && dataPart.data.length > 0,
+        thinking: thinkingPart.id === 'think-node'
+          && thinkingPart.metadata.source === 'selftest',
+        prompt: promptPart.value.tag === 'span',
+        toolResult: toolResultPart.isError === true
+          && toolResultPart.content[0] instanceof vscode.LanguageModelTextPart,
+        messageWrapsText: wrappedMessage.content[0]
+          instanceof vscode.LanguageModelTextPart,
+      },
     };
   });
   vscode.workspace.onDidChangeConfiguration(event => {
@@ -8977,8 +9034,32 @@ module.exports = { activate, deactivate };
                        and node_lm_chat_probe.get("filteredCount") == 1
                        and node_lm_chat_probe.get("missingCount") == 0
                        and node_lm_chat_probe.get("tokenCount", 0) > 0,
-                       json.dumps(node_lm_chat_probe,
-                                  ensure_ascii=False, default=str))
+                        json.dumps(node_lm_chat_probe,
+                                   ensure_ascii=False, default=str))
+                node_lm_send_request = (
+                    node_lm_chat_probe.get("sendRequest")
+                    if isinstance(node_lm_chat_probe, dict) else {})
+                node_lm_part_probe = (
+                    node_lm_chat_probe.get("partProbe")
+                    if isinstance(node_lm_chat_probe, dict) else {})
+                _check("node host preserves LM response part objects",
+                       node_started is True
+                       and isinstance(node_lm_send_request, dict)
+                       and node_lm_send_request.get("streamAsync") is True
+                       and node_lm_send_request.get("textAsync") is True
+                       and node_lm_send_request.get("streamTypes")
+                       == ["LanguageModelTextPart",
+                           "LanguageModelTextPart"]
+                       and node_lm_send_request.get("textParts")
+                       == ["node-stream:", "ok"]
+                       and node_lm_send_request.get("textAggregate")
+                       == "node-stream:ok"
+                       and isinstance(node_lm_part_probe, dict)
+                       and all(node_lm_part_probe.values()),
+                       json.dumps({
+                           "sendRequest": node_lm_send_request,
+                           "partProbe": node_lm_part_probe,
+                       }, ensure_ascii=False, default=str))
                 _check("node host invokes dynamic LM tool and chat participant",
                        node_started is True
                        and isinstance(node_dynamic_tool_result, dict)

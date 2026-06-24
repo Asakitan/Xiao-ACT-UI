@@ -5984,6 +5984,58 @@ class AIEditorAPI:
                 result.append({"role": "user", "content": str(message)})
         return result
 
+    @staticmethod
+    def _node_lm_response_part_text(part: Any) -> str:
+        if part is None:
+            return ""
+        if isinstance(part, (str, int, float, bool)):
+            return str(part)
+        if isinstance(part, dict):
+            part_type = str(part.get("type") or "").lower()
+            if part_type == "text":
+                return str(
+                    part.get("value")
+                    if part.get("value") is not None
+                    else part.get("text", ""))
+            if part_type:
+                return ""
+            for key in ("value", "text", "content"):
+                if key in part and isinstance(part.get(key), (str, int, float, bool)):
+                    return str(part.get(key))
+            return ""
+        value = getattr(part, "value", None)
+        return str(value) if value is not None else ""
+
+    @classmethod
+    def _serialize_node_lm_response_part(cls, part: Any) -> Dict[str, Any]:
+        if isinstance(part, dict) and part.get("type"):
+            return dict(part)
+        if hasattr(part, "call_id") and hasattr(part, "name"):
+            return {
+                "type": "tool_call",
+                "callId": str(getattr(part, "call_id", "") or ""),
+                "name": str(getattr(part, "name", "") or ""),
+                "input": getattr(part, "input", None) or {},
+            }
+        if hasattr(part, "data") and hasattr(part, "mime_type"):
+            data = getattr(part, "data", b"") or b""
+            if isinstance(data, str):
+                data = data.encode("utf-8")
+            return {
+                "type": "data",
+                "data": base64.b64encode(bytes(data)).decode("ascii"),
+                "encoding": "base64",
+                "mimeType": str(getattr(part, "mime_type", "") or "application/octet-stream"),
+            }
+        if hasattr(part, "metadata") and hasattr(part, "id"):
+            return {
+                "type": "thinking",
+                "value": cls._node_lm_response_part_text(part),
+                "id": str(getattr(part, "id", "") or ""),
+                "metadata": getattr(part, "metadata", None) or {},
+            }
+        return {"type": "text", "value": cls._node_lm_response_part_text(part)}
+
     def _send_node_lm_request(
             self, model: Any, messages: Any,
             options: Dict[str, Any]) -> Dict[str, Any]:
@@ -5992,16 +6044,27 @@ class AIEditorAPI:
             options or {},
             None,
         )
-        chunks = list(getattr(response, "_chunks", []) or [])
-        if not chunks:
+        raw_chunks = list(getattr(response, "_chunks", []) or [])
+        if not raw_chunks:
             stream = getattr(response, "stream", None)
             if stream is not None:
                 try:
-                    chunks = [str(item) for item in stream]
+                    raw_chunks = list(stream)
                 except Exception:
-                    chunks = []
-        text = str(getattr(response, "text", "") or "".join(chunks))
-        return {"text": text, "chunks": chunks or ([text] if text else [])}
+                    raw_chunks = []
+        text = str(
+            getattr(response, "text", "")
+            or "".join(
+                self._node_lm_response_part_text(item)
+                for item in raw_chunks))
+        chunks = [
+            self._serialize_node_lm_response_part(item)
+            for item in raw_chunks
+        ]
+        return {
+            "text": text,
+            "chunks": chunks or ([{"type": "text", "value": text}] if text else []),
+        }
 
     def _sync_settings_to_node_host(self) -> None:
         """Push the full settings dict to the Node extension host.

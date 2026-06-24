@@ -595,10 +595,104 @@ class LanguageModelTextPart {
     }
 }
 
+class LanguageModelToolCallPart {
+    constructor(callId = '', name = '', input = {}) {
+        this.callId = callId === undefined || callId === null ? '' : String(callId);
+        this.name = name === undefined || name === null ? '' : String(name);
+        this.input = input === undefined ? {} : input;
+    }
+}
+
+class LanguageModelToolResultPart {
+    constructor(callId = '', content = [], isError = false) {
+        this.callId = callId === undefined || callId === null ? '' : String(callId);
+        this.content = Array.isArray(content) ? content : [content];
+        this.isError = !!isError;
+    }
+}
+
+function _toUint8Array(value, encoding) {
+    if (value instanceof Uint8Array) return value;
+    if (Buffer.isBuffer(value)) return new Uint8Array(value);
+    if (Array.isArray(value)) return Uint8Array.from(value.map(item => Number(item) & 0xff));
+    if (value && typeof value === 'object' && Array.isArray(value.data)) {
+        return Uint8Array.from(value.data.map(item => Number(item) & 0xff));
+    }
+    if (typeof value === 'string') {
+        return new Uint8Array(Buffer.from(value, encoding === 'base64' ? 'base64' : 'utf8'));
+    }
+    return new Uint8Array();
+}
+
+class LanguageModelDataPart {
+    constructor(data = new Uint8Array(), mimeType = 'application/octet-stream', audience) {
+        this.mimeType = mimeType === undefined || mimeType === null
+            ? 'application/octet-stream'
+            : String(mimeType);
+        this.data = _toUint8Array(data);
+        this.audience = audience;
+    }
+
+    static image(data, mimeType = 'image/png') {
+        return new LanguageModelDataPart(data, mimeType);
+    }
+
+    static json(value, mimeType = 'text/x-json') {
+        return new LanguageModelDataPart(
+            Buffer.from(JSON.stringify(value), 'utf8'), mimeType);
+    }
+
+    static text(value, mimeType = 'text/plain') {
+        return new LanguageModelDataPart(Buffer.from(String(value ?? ''), 'utf8'), mimeType);
+    }
+}
+
+class LanguageModelThinkingPart {
+    constructor(value = '', id, metadata) {
+        this.value = Array.isArray(value)
+            ? value.map(item => String(item))
+            : String(value ?? '');
+        this.id = id;
+        this.metadata = metadata;
+    }
+}
+
+class LanguageModelPromptTsxPart {
+    constructor(value) {
+        this.value = value;
+    }
+}
+
 class LanguageModelToolResult {
     constructor(content = []) {
         this.content = Array.isArray(content) ? content : [content];
     }
+}
+
+class LanguageModelChatMessage {
+    constructor(role, content, name) {
+        this.role = role;
+        this.content = content;
+        this.name = name;
+    }
+
+    set content(value) {
+        if (typeof value === 'string') {
+            this._content = [new LanguageModelTextPart(value)];
+        } else if (Array.isArray(value)) {
+            this._content = value;
+        } else {
+            this._content = [new LanguageModelTextPart(value === undefined ? '' : String(value))];
+        }
+    }
+
+    get content() {
+        return this._content;
+    }
+
+    static System(content, name) { return new LanguageModelChatMessage(0, content, name); }
+    static User(content, name) { return new LanguageModelChatMessage(1, content, name); }
+    static Assistant(content, name) { return new LanguageModelChatMessage(2, content, name); }
 }
 
 // -------------------------------------------------------------------------
@@ -1434,6 +1528,7 @@ function _normalizeLmCapabilities(value) {
 
 function _languageModelTextFromChunk(chunk) {
     if (chunk === undefined || chunk === null) return '';
+    if (chunk instanceof LanguageModelTextPart) return chunk.value;
     if (typeof chunk === 'string' || typeof chunk === 'number' || typeof chunk === 'boolean') {
         return String(chunk);
     }
@@ -1444,18 +1539,88 @@ function _languageModelTextFromChunk(chunk) {
     return String(chunk);
 }
 
+function _languageModelDataPartFromPayload(chunk) {
+    const data = chunk.data ?? chunk.value ?? chunk.content ?? '';
+    const encoding = chunk.encoding || (chunk.base64 ? 'base64' : undefined);
+    return new LanguageModelDataPart(
+        _toUint8Array(data, encoding),
+        chunk.mimeType ?? chunk.mime_type ?? chunk.mime ?? 'application/octet-stream',
+        chunk.audience);
+}
+
+function _languageModelPartFromPayload(chunk) {
+    if (
+        chunk instanceof LanguageModelTextPart
+        || chunk instanceof LanguageModelToolCallPart
+        || chunk instanceof LanguageModelDataPart
+        || chunk instanceof LanguageModelThinkingPart
+        || chunk instanceof LanguageModelToolResultPart
+    ) {
+        return chunk;
+    }
+    if (chunk === undefined || chunk === null
+        || typeof chunk === 'string'
+        || typeof chunk === 'number'
+        || typeof chunk === 'boolean') {
+        return new LanguageModelTextPart(_languageModelTextFromChunk(chunk));
+    }
+    if (chunk && typeof chunk === 'object') {
+        const type = String(chunk.type ?? chunk.kind ?? '').toLowerCase();
+        if (type === 'tool_use' || type === 'tool_call' || type === 'toolcall'
+            || (chunk.name && (chunk.toolCallId || chunk.callId || chunk.id))) {
+            return new LanguageModelToolCallPart(
+                chunk.toolCallId ?? chunk.callId ?? chunk.id ?? '',
+                chunk.name,
+                chunk.parameters ?? chunk.input ?? chunk.arguments ?? {});
+        }
+        if (type === 'data' || chunk.mimeType || chunk.mime_type || chunk.mime) {
+            return _languageModelDataPartFromPayload(chunk);
+        }
+        if (type === 'thinking') {
+            return new LanguageModelThinkingPart(
+                chunk.value ?? chunk.text ?? chunk.content ?? '',
+                chunk.id,
+                chunk.metadata);
+        }
+        if (type === 'tool_result' || type === 'tool_result_part') {
+            return new LanguageModelToolResultPart(
+                chunk.toolCallId ?? chunk.callId ?? chunk.id ?? '',
+                Array.isArray(chunk.content) ? chunk.content.map(_languageModelPartFromPayload) : [],
+                chunk.isError);
+        }
+        if (chunk.value !== undefined || chunk.text !== undefined || chunk.content !== undefined) {
+            return new LanguageModelTextPart(_languageModelTextFromChunk(chunk), chunk.audience);
+        }
+    }
+    return chunk;
+}
+
+function _languageModelResponsePartText(part) {
+    if (part instanceof LanguageModelTextPart) return part.value;
+    return '';
+}
+
 function _languageModelResponseFromPayload(value) {
     const payload = value && typeof value === 'object' ? value : {};
-    const chunks = Array.isArray(payload.chunks)
+    const rawChunks = Array.isArray(payload.chunks)
         ? payload.chunks
         : (payload.text !== undefined && payload.text !== null ? [payload.text] : []);
+    const chunks = rawChunks.map(_languageModelPartFromPayload);
     const stream = async function* () {
         for (const chunk of chunks) {
-            yield new LanguageModelTextPart(_languageModelTextFromChunk(chunk));
+            yield chunk;
         }
     };
+    const text = async function* () {
+        for (const chunk of chunks) {
+            const partText = _languageModelResponsePartText(chunk);
+            if (partText) yield partText;
+        }
+    };
+    const fallbackText = chunks.map(_languageModelResponsePartText).join('');
     return {
-        text: String(payload.text ?? chunks.map(_languageModelTextFromChunk).join('')),
+        text: text(),
+        value: String(payload.text ?? fallbackText),
         stream: stream(),
     };
 }
@@ -4031,8 +4196,12 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         InlayHint: class { constructor(position, label, kind) { this.position = position; this.label = label; this.kind = kind; } },
         InlayHintKind: { Type: 1, Parameter: 2 },
         LanguageModelTextPart,
+        LanguageModelToolCallPart,
+        LanguageModelDataPart,
+        LanguageModelThinkingPart,
+        LanguageModelPromptTsxPart,
         LanguageModelToolResult,
-        LanguageModelToolResultPart: class { constructor(callId, content) { this.callId = callId; this.content = content || []; } },
+        LanguageModelToolResultPart,
         InlineCompletionItem: class { constructor(insertText, range, command) { this.insertText = insertText; this.range = range; this.command = command; } },
         InlineCompletionList: class { constructor(items) { this.items = items || []; } },
         InlineCompletionTriggerKind: { Invoke: 0, Automatic: 1 },
@@ -4115,13 +4284,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         TaskRevealKind: { Always: 1, Silent: 2, Never: 3 },
         TaskPanelKind: { Shared: 1, Dedicated: 2, New: 3 },
 
-        // Placeholder for LanguageModelChatMessage
-        LanguageModelChatMessage: class {
-            constructor(role, content, name) { this.role = role; this.content = content; this.name = name; }
-            static System(content, name) { return new vscode.LanguageModelChatMessage(0, content, name); }
-            static User(content, name) { return new vscode.LanguageModelChatMessage(1, content, name); }
-            static Assistant(content, name) { return new vscode.LanguageModelChatMessage(2, content, name); }
-        },
+        LanguageModelChatMessage,
     };
 
     return { vscode, context };
