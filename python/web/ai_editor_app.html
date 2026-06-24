@@ -195,6 +195,7 @@ body.window-resizing * { cursor:inherit !important; }
   justify-content:center; border-radius:3px; cursor:pointer; font-size:14px; color:var(--fg-dim);
   background:transparent; border:none; }
 .editor-title-actions .eta-btn:hover { background:var(--bg-hover); color:var(--fg); }
+.editor-title-actions .eta-btn:disabled { opacity:.35; cursor:default; pointer-events:none; }
 .tab { padding:0 12px; height:35px; display:flex; align-items:center; gap:6px;
   font-size:12px; color:var(--fg-dim); cursor:pointer; border-right:1px solid var(--border);
   white-space:nowrap; min-width:80px; position:relative; background:var(--bg-tab); }
@@ -1164,6 +1165,7 @@ pre.code-block { overflow:visible; }
   <div class="dd-sep"></div>
   <div class="dd-item" onclick="saveFile()"><span data-i18n="save">Save</span> <span class="shortcut">Ctrl+S</span></div>
   <div class="dd-item" onclick="saveFileAs()"><span>Save As...</span> <span class="shortcut">Ctrl+Shift+S</span></div>
+  <div class="dd-item" onclick="revertFile()"><span>Revert File</span></div>
   <div class="dd-item" onclick="exportChat()" data-i18n="export_chat">Export Chat...</div>
   <div class="dd-sep"></div>
   <div class="dd-item" onclick="openSettings()" data-i18n="preferences">Preferences</div>
@@ -10734,12 +10736,31 @@ async function _loadEditorTitleActions(){
 }
 function _renderEditorTitleActions(){
   const c=$('editor-title-actions');if(!c)return;c.innerHTML='';
+  const tab=tabs.find(t=>t.id===activeTab);
+  if(isExtensionCustomEditorTab(tab))appendCustomEditorTitleActions(c,tab);
   _editorTitleActions.forEach(a=>{
     const btn=document.createElement('button');btn.className='eta-btn';
     btn.textContent=a.icon||'▣';btn.title=a.title||a.command||'';
     btn.onclick=()=>{if(a.command&&window.pywebview&&window.pywebview.api)window.pywebview.api.execute_command(a.command)};
     c.appendChild(btn);
   });
+}
+function makeEditorTitleButton(title,icon,onClick,disabled){
+  const btn=document.createElement('button');btn.className='eta-btn';
+  btn.innerHTML=icon;btn.title=title;btn.setAttribute('aria-label',title);
+  btn.disabled=!!disabled;
+  btn.onclick=ev=>{ev.preventDefault();ev.stopPropagation();if(!btn.disabled)onClick()};
+  return btn;
+}
+function appendCustomEditorTitleActions(container,tab){
+  const ce=tab&&tab.customEditor||{};
+  const canSave=!!(ce.supportsSave||ce.supports_save||ce.textEditor||ce.text_editor);
+  const canSaveAs=!!(ce.supportsSaveAs||ce.supports_save_as||ce.textEditor||ce.text_editor);
+  const canRevert=!!(ce.supportsRevert||ce.supports_revert||ce.textEditor||ce.text_editor);
+  const dirty=!!ce.dirty;
+  container.appendChild(makeEditorTitleButton('Save custom editor','<svg viewBox="0 0 16 16" width="14" height="14"><path d="M3 2h8l2 2v10H3zM5 2v4h5V2M5 12h6V9H5z" fill="currentColor"/></svg>',()=>saveCustomEditorTab(tab),!canSave||!dirty));
+  container.appendChild(makeEditorTitleButton('Save custom editor as','<svg viewBox="0 0 16 16" width="14" height="14"><path d="M3 2h8l2 2v10H3zM5 2v4h5V2M5 12h4V9H5zM10.5 9.2l2.3 2.3-2.3 2.3v-1.5H8.8v-1.6h1.7z" fill="currentColor"/></svg>',()=>saveCustomEditorTabAs(tab),!canSaveAs));
+  container.appendChild(makeEditorTitleButton('Revert custom editor','<svg viewBox="0 0 16 16" width="14" height="14"><path d="M7 3a5 5 0 1 1-4.5 7.2l1.3-.7A3.5 3.5 0 1 0 4 5.3V8H2V3h5v2H5.2A3.5 3.5 0 0 1 7 3z" fill="currentColor"/></svg>',()=>revertCustomEditorTab(tab),!canRevert||!dirty));
 }
 
 // Update openInEditor to use tabs
@@ -11732,6 +11753,25 @@ async function saveCustomEditorTabAs(tab){
   showToast('Saved As: '+tab.name,'success',1500);
   return r;
 }
+async function revertCustomEditorTab(tab){
+  const ce=tab&&tab.customEditor||{};
+  if(!(ce.supportsRevert||ce.supports_revert||ce.textEditor||ce.text_editor)){
+    showToast('Revert failed: custom editor provider unavailable','error');
+    return {error:'custom editor provider unavailable'};
+  }
+  if(ce.dirty&&!window.confirm('Revert custom editor changes?'))return {ok:false,cancelled:true};
+  const viewId=customEditorWebviewIdFromTab(tab);
+  const viewType=customEditorViewTypeFromTab(tab);
+  const uri=customEditorUriFromTab(tab);
+  const r=await call('revert_extension_custom_editor',viewId,viewType,uri);
+  if(!callSucceeded(r)){
+    showToast('Revert failed: '+callFailedMessage(r,'custom editor provider unavailable'),'error');
+    return r||{error:'custom editor provider unavailable'};
+  }
+  applyCustomEditorState((r&&r.state)||r);
+  showToast('Reverted: '+(tab.name||uri||viewType||'custom editor'),'success',1500);
+  return r;
+}
 async function saveTextTabAs(tab){
   const content=$('editor-text').value;
   const r=await call('save_file_as',content,saveAsSuggestedName(tab));
@@ -11757,6 +11797,14 @@ async function saveFileAs(){
     return;
   }
   await saveTextTabAs(tab);
+}
+async function revertFile(){
+  const tab=tabs.find(t=>t.id===activeTab);
+  if(isExtensionCustomEditorTab(tab)){
+    await revertCustomEditorTab(tab);
+    return;
+  }
+  showToast('Revert is available for extension custom editors','warning',2200);
 }
 async function saveFile(){
   const tab=tabs.find(t=>t.id===activeTab);

@@ -2887,6 +2887,13 @@ console.log("quick input filter helpers ok");
            and "function saveCustomEditorTabAs(tab)" in html
            and "call('save_file_dialog',suggested)" in html
            and "call('save_extension_custom_editor_as',viewId,viewType,uri,target)" in html
+           and "function revertCustomEditorTab(tab)" in html
+           and "call('revert_extension_custom_editor',viewId,viewType,uri)" in html
+           and "function revertFile()" in html
+           and "onclick=\"revertFile()\"" in html
+           and "function appendCustomEditorTitleActions(container,tab)" in html
+           and "Save custom editor" in html
+           and "Revert custom editor" in html
            and "function saveTextTabAs(tab)" in html
            and "call('save_file_as',content,saveAsSuggestedName(tab))" in html
            and "'Ctrl+Shift+S':()=>saveFileAs()" in html
