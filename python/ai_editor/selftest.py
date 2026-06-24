@@ -4150,8 +4150,14 @@ console.log("frontend signature help docs ok");
             and "ext-setting-target-select" in html
             and "ext-settings-scope" in html
             and "ext-settings-target" in html
-            and "const scopeOk=!scopeFilter||row.dataset.extSettingScope===scopeFilter" in html
-            and "const targetOk=!targetFilter||row.dataset.extSettingTarget===targetFilter" in html
+            and "@scope:" in html
+            and "@target:" in html
+            and "const scopeOk=(!scopeFilter||row.dataset.extSettingScope===scopeFilter)" in html
+            and "&&(!query.scopes.length||query.scopes.includes(row.dataset.extSettingScope||''))" in html
+            and "const targetOk=(!targetFilter||row.dataset.extSettingTarget===targetFilter)" in html
+            and "&&(!query.targets.length||query.targets.includes(row.dataset.extSettingTarget||''))" in html
+            and "ext-settings-clear-filters" in html
+            and "categorySelect.value='';scopeSelect.value='';targetSelect.value='';modifiedBox.checked=false" in html
             and "const fragment=document.createDocumentFragment()" in html
             and "fragment.appendChild(section)" in html
             and "container.appendChild(fragment)" in html
