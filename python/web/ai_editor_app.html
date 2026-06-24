@@ -9749,6 +9749,13 @@ function extensionSettingType(schema){
   if(Array.isArray(t))return t.find(v=>v&&v!=='null')||'string';
   return t||'string';
 }
+function extensionSettingTypeFromValue(value){
+  if(Array.isArray(value))return 'array';
+  if(value&&typeof value==='object')return 'object';
+  if(typeof value==='boolean')return 'boolean';
+  if(typeof value==='number')return Number.isInteger(value)?'integer':'number';
+  return 'string';
+}
 function extensionSettingDefault(schema,defaults,key){
   if(defaults&&Object.prototype.hasOwnProperty.call(defaults,key))return defaults[key];
   if(schema&&Object.prototype.hasOwnProperty.call(schema,'default'))return schema.default;
@@ -10043,8 +10050,10 @@ function applyExtensionSettingsFilter(){
 }
 function renderExtensionLanguageDefaults(languageDefaults,container,categorySelect,seenCategories){
   (Array.isArray(languageDefaults)?languageDefaults:[]).forEach(item=>{
-    const settings=item&&item.settings&&typeof item.settings==='object'?item.settings:{};
-    const keys=Object.keys(settings).sort((a,b)=>a.localeCompare(b));
+    const defaults=item&&item.defaults&&typeof item.defaults==='object'?item.defaults:(item&&item.settings&&typeof item.settings==='object'?item.settings:{});
+    const values=item&&item.values&&typeof item.values==='object'?item.values:{};
+    const modified=item&&item.modified&&typeof item.modified==='object'?item.modified:{};
+    const keys=Object.keys(defaults).sort((a,b)=>a.localeCompare(b));
     if(!keys.length)return;
     const extId=item.extension_id||'';
     const displayName=item.display_name||extId||'Extension';
@@ -10065,23 +10074,67 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
     section.appendChild(summary);
     const inner=document.createElement('div');inner.style.cssText='padding:8px 0';
     keys.forEach(key=>{
-      const value=settings[key];
+      const defaultValue=defaults[key];
+      const value=Object.prototype.hasOwnProperty.call(values,key)?values[key]:defaultValue;
+      const type=extensionSettingTypeFromValue(value);
+      const schema={type};
       const row=document.createElement('div');row.className='ext-setting-row settings-field';
       row.dataset.extSettingKey=override+'.'+key;
-      row.dataset.extSettingModified='0';
-      row.dataset.modified='0';
+      row.dataset.extSettingModified=modified[key]?'1':'0';
+      row.dataset.modified=modified[key]?'1':'0';
       row.dataset.extSettingTags=['language-default',String(item.language||'').toLowerCase()].filter(Boolean).join('\n');
       row.dataset.extSettingSearch=[displayName,extId,override,item.language,key,extensionSettingJson(value,'')].join(' ').toLowerCase();
       const head=document.createElement('div');head.className='ext-setting-head';
       const name=document.createElement('span');name.className='ext-setting-title';name.textContent=key;
+      const modifiedBadge=document.createElement('span');modifiedBadge.className='ext-setting-badge';modifiedBadge.textContent='Modified';
       const badge=document.createElement('span');badge.className='ext-setting-readonly-badge';badge.textContent='Language Default';
-      head.appendChild(name);head.appendChild(badge);row.appendChild(head);
+      head.appendChild(name);head.appendChild(modifiedBadge);head.appendChild(badge);row.appendChild(head);
       const keyLabel=document.createElement('div');keyLabel.className='ext-setting-key';
-      keyLabel.textContent=override+' · '+key+' · contributed default';
+      keyLabel.textContent=override+' · '+key+' · '+type;
       row.appendChild(keyLabel);
       const meta=document.createElement('div');meta.className='ext-setting-schema';
-      meta.textContent='default: '+extensionSettingJson(value,'').replace(/\s+/g,' ').trim();
+      meta.textContent='default: '+extensionSettingJson(defaultValue,'').replace(/\s+/g,' ').trim();
       row.appendChild(meta);
+      let input;
+      if(type==='boolean'){
+        const lbl=document.createElement('label');lbl.className='settings-check';
+        input=document.createElement('input');input.type='checkbox';
+        const span=document.createElement('span');span.textContent=key;
+        lbl.appendChild(input);lbl.appendChild(span);row.appendChild(lbl);
+      }else if(type==='number'||type==='integer'){
+        input=document.createElement('input');input.type='number';
+        if(type==='integer')input.step='1';
+        row.appendChild(input);
+      }else if(type==='array'||type==='object'){
+        input=document.createElement('textarea');input.rows=3;input.spellcheck=false;
+        row.appendChild(input);
+      }else{
+        input=document.createElement('input');input.type='text';
+        row.appendChild(input);
+      }
+      input.dataset.extSettingInput='1';
+      input.title=override+' '+key;
+      setExtensionSettingInputValue(input,schema,type,value);
+      const err=document.createElement('div');err.className='ext-setting-error';row.appendChild(err);
+      const reset=document.createElement('span');reset.className='s-reset';reset.textContent='↻';reset.title='Reset language override';
+      reset.onclick=async ev=>{
+        ev.preventDefault();ev.stopPropagation();setExtensionSettingError(row,'');
+        const r=await call('reset_extension_language_setting',item.language,key);
+        if(r&&r.ok){setExtensionSettingInputValue(input,schema,type,defaultValue);markExtensionSettingRow(row,false);applyExtensionSettingsFilter()}
+        else showToast('Reset failed: '+((r&&r.error)||'unknown'),'error');
+      };
+      row.appendChild(reset);
+      input.addEventListener('change',async()=>{
+        setExtensionSettingError(row,'');
+        let nextValue;
+        try{nextValue=readExtensionSettingInputValue(input,schema,type)}
+        catch(e){setExtensionSettingError(row,'Invalid JSON: '+e.message);return}
+        const r=await call('set_extension_language_setting',item.language,key,nextValue);
+        if(r&&r.ok){markExtensionSettingRow(row,true);applyExtensionSettingsFilter()}
+        else showToast('Setting save failed: '+((r&&r.error)||'unknown'),'error');
+      });
+      if(type==='array'||type==='object')input.addEventListener('input',()=>setExtensionSettingError(row,''));
+      markExtensionSettingRow(row,modified[key]===true);
       inner.appendChild(row);
     });
     section.appendChild(inner);

@@ -8459,6 +8459,7 @@ class AIEditorAPI:
                 "configurationDefaults", [])
         except Exception:
             entries = []
+        configured_by_language = self._extension_language_override_values()
         result: List[Dict[str, Any]] = []
         for entry in entries:
             if not isinstance(entry, dict):
@@ -8484,12 +8485,32 @@ class AIEditorAPI:
                     }
                     if not settings:
                         continue
+                    configured = configured_by_language.get(language_id, {})
+                    configured_values = {
+                        key: configured[key]
+                        for key in settings
+                        if key in configured
+                    }
+                    values = {
+                        key: (
+                            configured_values[key]
+                            if key in configured_values else default_value)
+                        for key, default_value in settings.items()
+                    }
+                    modified = {
+                        key: key in configured_values
+                        for key in settings
+                    }
                     result.append({
                         "extension_id": eid,
                         "display_name": display_name,
                         "override": f"[{language_id}]",
                         "language": language_id,
                         "settings": settings,
+                        "defaults": settings,
+                        "values": values,
+                        "configuredValues": configured_values,
+                        "modified": modified,
                         "count": len(settings),
                     })
         result.sort(key=lambda item: (
@@ -8497,6 +8518,112 @@ class AIEditorAPI:
             str(item.get("language", "")).lower(),
         ))
         return result
+
+    def _extension_language_override_values(self) -> Dict[str, Dict[str, Any]]:
+        settings = _resolve_settings(self._gui_ref)
+        if not settings:
+            return {}
+        raw_data = getattr(settings, "data", None)
+        if not isinstance(raw_data, dict):
+            raw_data = getattr(settings, "_data", None)
+        if not isinstance(raw_data, dict):
+            return {}
+        result: Dict[str, Dict[str, Any]] = {}
+        for key, value in raw_data.items():
+            key_text = str(key or "").strip()
+            if not (key_text.startswith("[") and key_text.endswith("]")):
+                continue
+            language_id = key_text[1:-1].strip()
+            if not language_id or not isinstance(value, dict):
+                continue
+            result[language_id] = {
+                str(setting_key): setting_value
+                for setting_key, setting_value in value.items()
+                if str(setting_key or "").strip()
+            }
+        return result
+
+    def set_extension_language_setting(
+            self, language_id: str, key: str, value: Any) -> Dict:
+        """Write a workspace language override for an extension default."""
+        self._ensure_engine()
+        language = str(language_id or "").strip()
+        setting_key = str(key or "").strip()
+        if not language:
+            return {"ok": False, "error": "Language id is required"}
+        if not setting_key:
+            return {"ok": False, "error": "Setting key is required"}
+        settings = _resolve_settings(self._gui_ref)
+        if not settings:
+            return {"ok": False, "error": "Settings not available"}
+        override_key = f"[{language}]"
+        current = settings.get(override_key, {}) or {}
+        if not isinstance(current, dict):
+            current = {}
+        current[setting_key] = value
+        settings.set(override_key, current)
+        try:
+            settings.save()
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        self._notify_node_settings_changed()
+        return {
+            "ok": True,
+            "language": language,
+            "override": override_key,
+            "key": setting_key,
+            "value": value,
+            "modified": True,
+        }
+
+    def reset_extension_language_setting(
+            self, language_id: str, key: str) -> Dict:
+        """Remove a workspace language override for an extension default."""
+        self._ensure_engine()
+        language = str(language_id or "").strip()
+        setting_key = str(key or "").strip()
+        if not language:
+            return {"ok": False, "error": "Language id is required"}
+        if not setting_key:
+            return {"ok": False, "error": "Setting key is required"}
+        settings = _resolve_settings(self._gui_ref)
+        if not settings:
+            return {"ok": False, "error": "Settings not available"}
+        override_key = f"[{language}]"
+        current = settings.get(override_key, {}) or {}
+        if isinstance(current, dict):
+            current = dict(current)
+            current.pop(setting_key, None)
+        else:
+            current = {}
+        if current:
+            settings.set(override_key, current)
+        else:
+            raw_data = getattr(settings, "data", None)
+            if not isinstance(raw_data, dict):
+                raw_data = getattr(settings, "_data", None)
+            if isinstance(raw_data, dict):
+                raw_data.pop(override_key, None)
+        try:
+            settings.save()
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        self._notify_node_settings_changed()
+        default_value = None
+        for item in self._extension_configuration_language_defaults():
+            if item.get("language") == language:
+                defaults = item.get("defaults", {})
+                if isinstance(defaults, dict) and setting_key in defaults:
+                    default_value = defaults.get(setting_key)
+                    break
+        return {
+            "ok": True,
+            "language": language,
+            "override": override_key,
+            "key": setting_key,
+            "value": default_value,
+            "modified": False,
+        }
 
     def _notify_extension_setting_changed(
             self, key: str, value: Any,

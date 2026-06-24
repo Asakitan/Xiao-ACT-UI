@@ -403,6 +403,7 @@ def test_app_settings_parity() -> None:
         "get_extension_contributions",
         "list_extension_settings", "get_extension_setting",
         "set_extension_setting", "reset_extension_setting",
+        "set_extension_language_setting", "reset_extension_language_setting",
         "get_extension_host_diagnostics", "set_extension_host_diagnostics",
         "resolve_extension_custom_editor",
         "custom_editor_state", "list_custom_editor_states",
@@ -2693,9 +2694,12 @@ console.log("frontend auto-close behavior ok");
             and "markExtensionSettingRow" in html
             and "function applyExtensionSettingsFilter()" in html
             and "function renderExtensionLanguageDefaults(languageDefaults,container,categorySelect,seenCategories)" in html
+            and "function extensionSettingTypeFromValue(value)" in html
             and "ext-setting-readonly-badge" in html
             and "languageDefaults" in html
             and "language-default" in html
+            and "set_extension_language_setting" in html
+            and "reset_extension_language_setting" in html
             and "ext-settings-category" in html
             and "dataset.extSettingsCategory" in html
             and "@modified" in html
@@ -6825,7 +6829,48 @@ def test_app_extension_runtime_support() -> None:
                selflang_defaults.get("override") == "[selflang]"
                and selflang_defaults.get("settings", {}).get(
                    "editor.tabSize") == 2
+               and selflang_defaults.get("values", {}).get(
+                   "editor.tabSize") == 2
+               and selflang_defaults.get("modified", {}).get(
+                   "editor.tabSize") is False
                and selflang_defaults.get("count") == 1)
+        language_set = api.set_extension_language_setting(
+            "selflang", "editor.tabSize", 4)
+        data_after_language_set = dict(getattr(
+            api._gui_ref.settings, "data", {}))
+        language_settings_after_set = api.list_extension_settings().get(
+            "languageDefaults", [])
+        selflang_after_set = next(
+            (item for item in language_settings_after_set
+             if item.get("extension_id") == "selftest.settings-pack"
+             and item.get("language") == "selflang"),
+            {})
+        language_reset = api.reset_extension_language_setting(
+            "selflang", "editor.tabSize")
+        language_settings_after_reset = api.list_extension_settings().get(
+            "languageDefaults", [])
+        selflang_after_reset = next(
+            (item for item in language_settings_after_reset
+             if item.get("extension_id") == "selftest.settings-pack"
+             and item.get("language") == "selflang"),
+            {})
+        _check("extension language setting overrides write and reset",
+               language_set.get("ok") is True
+               and data_after_language_set.get(
+                   "[selflang]", {}).get("editor.tabSize") == 4
+               and selflang_after_set.get("values", {}).get(
+                   "editor.tabSize") == 4
+               and selflang_after_set.get("configuredValues", {}).get(
+                   "editor.tabSize") == 4
+               and selflang_after_set.get("modified", {}).get(
+                   "editor.tabSize") is True
+               and language_reset.get("ok") is True
+               and "[selflang]" not in getattr(
+                   api._gui_ref.settings, "data", {})
+               and selflang_after_reset.get("values", {}).get(
+                   "editor.tabSize") == 2
+               and selflang_after_reset.get("modified", {}).get(
+                   "editor.tabSize") is False)
         invalid_options = api.set_extension_setting(
             "selftest.options", {"mode": "auto"})
         invalid_tags = api.set_extension_setting(
