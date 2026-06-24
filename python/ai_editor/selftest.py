@@ -2965,11 +2965,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function requestEditorSemanticTokens(quiet)" in html
            and "function editorVisibleRangePayload()" in html
            and "function editorSemanticTokenFallbackLines(lines,lang,range)" in html
+           and "function editorSemanticTokenDataArray(value)" in html
            and "function decodeEditorSemanticTokens(data,legend)" in html
            and "function editorSemanticTokenThemeStyle(token)" in html
            and "function applyExtensionSemanticTokenColors(colors)" in html
            and "function semanticTokenThemeRule(selector,value)" in html
            and "function highlightCodeWithSemanticTokens(code,lang,payload)" in html
+           and "sem-declaration" in html
+           and "sem-definition" in html
+           and "sem-async" in html
            and "function scheduleEditorSemanticTokens(delay)" in html
            and "editorProviderPayload('semanticTokensRange'" in html
            and "editorProviderPayload('semanticTokens'" in html
@@ -3239,6 +3243,91 @@ console.log("frontend auto-close behavior ok");
                    (result.stderr or result.stdout).strip())
         except Exception as exc:
             _check("frontend auto-close notIn behavior", False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
+    if not node_path:
+        _check("frontend semantic token rendering behavior skipped without Node.js", True)
+    else:
+        semantic_functions = [
+            "editorSemanticTokenFallbackLines",
+            "editorSemanticTokenDataArray",
+            "editorSemanticTokensData",
+            "editorSemanticTokensLegend",
+            "decodeEditorSemanticTokens",
+            "editorSemanticTokenClass",
+            "editorSemanticTokenThemeStyle",
+            "highlightCodeWithSemanticTokens",
+            "parseSemanticTokenSelector",
+            "safeThemeColor",
+            "themeColorToCss",
+            "semanticTokenThemeRule",
+        ]
+        js_functions = "\n".join(
+            _extract_js_function(html, name) for name in semantic_functions)
+        js = r"""
+const THEME_COLOR_VAR_MAP = { "editor.foreground": "--fg-code" };
+let currentSemanticTokenRules = [];
+let editorLang = "python";
+let _editorSemanticTokensContentLength = 0;
+function esc(value){
+  return String(value).replace(/[&<>]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[ch]));
+}
+function highlightCode(code, lang){
+  return String(code || "").split("\n").map(line => "H:" + esc(line)).join("\n");
+}
+""" + js_functions + r"""
+function assert(ok, label){ if(!ok){ throw new Error(label); } }
+const code = "foo bar\nbaz";
+const legend = { tokenTypes: ["function", "variable"], tokenModifiers: ["declaration", "async"] };
+const data = new Uint32Array([
+  0, 0, 3, 0, 1,
+  0, 2, 3, 1, 0,
+  1, 0, 3, 1, 2,
+  0, 0, 2, 9, 0
+]);
+const payload = { tokens: { data }, legend };
+const decoded = decodeEditorSemanticTokens(editorSemanticTokensData(payload), editorSemanticTokensLegend(payload));
+assert(decoded.length === 3, "unknown token type skipped");
+assert(editorSemanticTokensData({ data: { 0: 0, 1: 0, 2: 1, 3: 0, 4: 0, length: 5 } }).length === 5,
+       "array-like semantic token data normalized");
+const rule = semanticTokenThemeRule("function.declaration:python", {
+  foreground: "editor.foreground",
+  fontStyle: "bold underline"
+});
+currentSemanticTokenRules = [rule];
+_editorSemanticTokensContentLength = code.length;
+const rendered = highlightCodeWithSemanticTokens(code, "python", payload);
+assert((rendered.match(/<span/g) || []).length === 2, "overlapping semantic token skipped");
+assert(rendered.includes("sem-function sem-declaration") && rendered.includes("color:var(--fg-code)"),
+       "function declaration theme color applied");
+assert(rendered.includes("sem-variable sem-async"), "async modifier class applied");
+assert(rendered.includes("foo</span> bar"), "overlap leaves original text intact");
+console.log("frontend semantic token rendering behavior ok");
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check("frontend semantic token rendering behavior",
+                   result.returncode == 0
+                   and "frontend semantic token rendering behavior ok" in result.stdout,
+                   (result.stderr or result.stdout).strip())
+        except Exception as exc:
+            _check("frontend semantic token rendering behavior", False, str(exc))
         finally:
             if js_path:
                 try:

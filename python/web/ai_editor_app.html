@@ -586,6 +586,9 @@ pre.code-block code .type { color:var(--fg-type); }
 .editor-syntax-layer .sem-parameter,
 .editor-syntax-layer .sem-variable,
 .editor-syntax-layer .sem-property { color:var(--fg-code); }
+.editor-syntax-layer .sem-declaration { text-decoration:underline; text-decoration-thickness:1px; text-underline-offset:2px; }
+.editor-syntax-layer .sem-definition { font-weight:600; }
+.editor-syntax-layer .sem-async { font-style:italic; }
 .editor-syntax-layer .sem-deprecated { opacity:.62; text-decoration:line-through; }
 .editor-syntax-layer .sem-readonly { font-style:italic; }
 
@@ -4353,31 +4356,54 @@ function editorSemanticTokenFallbackLines(lines,lang,range){
   const highlighted=String(highlightCode(lines.slice(start,end+1).join('\n'),lang)||'').split('\n');
   return {start,lines:highlighted};
 }
+function editorSemanticTokenDataArray(value){
+  if(Array.isArray(value))return value;
+  if(value&&typeof ArrayBuffer!=='undefined'&&ArrayBuffer.isView&&ArrayBuffer.isView(value))return Array.from(value);
+  if(value&&typeof value==='object'&&Number.isFinite(Number(value.length))&&Number(value.length)>=0){
+    const length=Math.min(Number(value.length)||0,200000);
+    const out=[];
+    for(let i=0;i<length;i++)out.push(value[i]);
+    return out;
+  }
+  return null;
+}
 function editorSemanticTokensData(payload){
   const tokens=payload&&payload.tokens!==undefined?payload.tokens:payload;
-  if(Array.isArray(tokens))return tokens;
-  if(tokens&&Array.isArray(tokens.data))return tokens.data;
+  const direct=editorSemanticTokenDataArray(tokens);
+  if(direct)return direct;
+  if(tokens){
+    const data=editorSemanticTokenDataArray(tokens.data);
+    if(data)return data;
+  }
   return null;
 }
 function editorSemanticTokensLegend(payload){
   const tokens=payload&&payload.tokens!==undefined?payload.tokens:payload;
-  return (payload&&payload.legend)||(tokens&&tokens.legend)||{};
+  const legend=(payload&&payload.legend)||(tokens&&tokens.legend)||{};
+  return {
+    tokenTypes:Array.isArray(legend&&legend.tokenTypes)?legend.tokenTypes.map(v=>String(v||'')):[],
+    tokenModifiers:Array.isArray(legend&&legend.tokenModifiers)?legend.tokenModifiers.map(v=>String(v||'')):[]
+  };
 }
 function decodeEditorSemanticTokens(data,legend){
+  data=editorSemanticTokenDataArray(data);
   if(!Array.isArray(data)||data.length<5)return [];
   const tokenTypes=Array.isArray(legend&&legend.tokenTypes)?legend.tokenTypes:[];
   const tokenModifiers=Array.isArray(legend&&legend.tokenModifiers)?legend.tokenModifiers:[];
   const decoded=[];
   let line=0,start=0;
   for(let i=0;i+4<data.length;i+=5){
-    const deltaLine=Number(data[i])||0,deltaStart=Number(data[i+1])||0;
-    const length=Number(data[i+2])||0,typeIndex=Number(data[i+3])||0,modifierBits=Number(data[i+4])||0;
+    const raw=[data[i],data[i+1],data[i+2],data[i+3],data[i+4]].map(value=>Number(value));
+    if(raw.some(value=>!Number.isFinite(value)||value<0))continue;
+    const deltaLine=Math.floor(raw[0]),deltaStart=Math.floor(raw[1]);
+    const length=Math.floor(raw[2]),typeIndex=Math.floor(raw[3]),modifierBits=Math.floor(raw[4])>>>0;
     line+=deltaLine;
     start=deltaLine?deltaStart:start+deltaStart;
-    if(length<=0||line<0||start<0)continue;
+    const type=tokenTypes[typeIndex];
+    if(length<=0||line<0||start<0||type===undefined||type===null||String(type)==='')continue;
     const modifiers=[];
-    tokenModifiers.forEach((name,index)=>{if((modifierBits&(1<<index))!==0)modifiers.push(String(name))});
-    decoded.push({line,start,length,type:String(tokenTypes[typeIndex]||''),modifiers});
+    tokenModifiers.forEach((name,index)=>{if(index<32&&(modifierBits&Math.pow(2,index))!==0)modifiers.push(String(name))});
+    decoded.push({line,start,length,type:String(type),modifiers});
   }
   return decoded;
 }
@@ -4403,6 +4429,9 @@ function editorSemanticTokenClass(token){
   const modifiers=(token&&Array.isArray(token.modifiers))?token.modifiers.map(v=>String(v).toLowerCase()):[];
   if(modifiers.includes('deprecated'))classes.push('sem-deprecated');
   if(modifiers.includes('readonly')||modifiers.includes('static'))classes.push('sem-readonly');
+  if(modifiers.includes('declaration'))classes.push('sem-declaration');
+  if(modifiers.includes('definition'))classes.push('sem-definition');
+  if(modifiers.includes('async'))classes.push('sem-async');
   return classes.join(' ');
 }
 function editorSemanticTokenThemeStyle(token){
@@ -4449,10 +4478,10 @@ function highlightCodeWithSemanticTokens(code,lang,payload){
       const start=Math.max(0,Math.min(lineText.length,Number(token.start)||0));
       const end=Math.max(start,Math.min(lineText.length,start+(Number(token.length)||0)));
       if(end<=cursor)return;
+      if(start<cursor)return;
       if(start>cursor)out+=esc(lineText.slice(cursor,start));
-      const safeStart=Math.max(start,cursor);
       const style=editorSemanticTokenThemeStyle(token);
-      out+='<span class="'+editorSemanticTokenClass(token)+'"'+(style?' style="'+style+'"':'')+'>'+esc(lineText.slice(safeStart,end))+'</span>';
+      out+='<span class="'+editorSemanticTokenClass(token)+'"'+(style?' style="'+style+'"':'')+'>'+esc(lineText.slice(start,end))+'</span>';
       cursor=end;
     });
     if(cursor<lineText.length)out+=esc(lineText.slice(cursor));
@@ -4487,7 +4516,9 @@ async function requestEditorSemanticTokens(quiet){
   _editorSemanticTokensRangeActive=!!(_editorSemanticTokens&&_editorSemanticTokens.source==='range');
   scheduleEditorSyntaxHighlight();
   if(!quiet){
-    const count=(_editorSemanticTokens&&editorSemanticTokensData(_editorSemanticTokens)||[]).length/5;
+    const count=decodeEditorSemanticTokens(
+      editorSemanticTokensData(_editorSemanticTokens)||[],
+      editorSemanticTokensLegend(_editorSemanticTokens)).length;
     setStatus(Math.floor(count)+' semantic token'+(count===1?'':'s'));
   }
 }
@@ -14638,7 +14669,7 @@ function semanticTokenThemeRule(selector,value){
   const parsed=parseSemanticTokenSelector(selector);
   if(!parsed)return null;
   const source=value&&typeof value==='object'&&!Array.isArray(value)?value:{foreground:value};
-  const foreground=safeThemeColor(source.foreground||source.color||'');
+  const foreground=themeColorToCss(source.foreground||source.color||'');
   const fontStyle=String(source.fontStyle||'').toLowerCase();
   const rule=Object.assign(parsed,{
     foreground,
