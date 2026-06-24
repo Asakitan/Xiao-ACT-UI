@@ -702,32 +702,101 @@ CancellationToken.NONE = CancellationToken()
 # Configuration API
 # ---------------------------------------------------------------------------
 
+_CONFIG_MISSING = object()
+_CONFIG_AI_EDITOR_ALIASES = {
+    "claude_code",
+    "codex",
+    "mcp",
+    "terminal",
+    "extensions",
+    "customization",
+}
+
+
+def _config_path(value: Any) -> List[str]:
+    text = str(value or "").strip(".")
+    return [part for part in text.split(".") if part]
+
+
+def _config_lookup(data: Any, path: Sequence[str]) -> Any:
+    current = data
+    for part in path:
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            return _CONFIG_MISSING
+    return current
+
+
+def _config_set(data: Dict[str, Any], path: Sequence[str], value: Any) -> None:
+    if not path:
+        return
+    current = data
+    for part in path[:-1]:
+        child = current.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            current[part] = child
+        current = child
+    current[path[-1]] = value
+
+
+def _config_mirror_ai_editor_alias(
+        data: Dict[str, Any],
+        path: Sequence[str],
+        value: Any) -> None:
+    if not path:
+        return
+    mirror_path = None
+    if (path[0] == "ai_editor" and len(path) > 1
+            and path[1] in _CONFIG_AI_EDITOR_ALIASES):
+        mirror_path = list(path[1:])
+    elif path[0] in _CONFIG_AI_EDITOR_ALIASES:
+        mirror_path = ["ai_editor", *path]
+    if mirror_path and list(mirror_path) != list(path):
+        _config_set(data, mirror_path, value)
+
+
 class WorkspaceConfiguration:
     def __init__(self, section: str = "", data: Dict = None) -> None:
-        self._section = section
+        self._section = str(section or "")
         self._data = data or {}
 
-    def get(self, key: str, default: Any = None) -> Any:
-        parts = key.split(".")
-        current = self._data
-        for p in parts:
-            if isinstance(current, dict):
-                current = current.get(p)
-            else:
-                return default
-            if current is None:
-                return default
-        return current
+    def _full_path(self, key: str = "") -> List[str]:
+        path = _config_path(self._section)
+        path.extend(_config_path(key))
+        return path
+
+    def _section_data(self) -> Any:
+        if not self._section:
+            return self._data
+        value = _config_lookup(self._data, _config_path(self._section))
+        return {} if value is _CONFIG_MISSING else value
+
+    def get(self, key: str = "", default: Any = None) -> Any:
+        value = _config_lookup(self._data, self._full_path(key))
+        return default if value is _CONFIG_MISSING else value
 
     def has(self, key: str) -> bool:
-        return self.get(key) is not None
+        return _config_lookup(self._data, self._full_path(key)) is not _CONFIG_MISSING
 
     def update(self, key: str, value: Any, global_scope: bool = True) -> None:
-        self._data[key] = value
+        path = self._full_path(key)
+        _config_set(self._data, path, value)
+        _config_mirror_ai_editor_alias(self._data, path, value)
 
-    def inspect(self, key: str) -> Dict:
-        return {"key": key, "globalValue": self.get(key),
-                "workspaceValue": self.get(key)}
+    def inspect(self, key: str) -> Optional[Dict[str, Any]]:
+        value = _config_lookup(self._data, self._full_path(key))
+        if value is _CONFIG_MISSING:
+            return None
+        full_key = ".".join(self._full_path(key))
+        return {
+            "key": full_key,
+            "defaultValue": None,
+            "globalValue": value,
+            "workspaceValue": value,
+            "workspaceFolderValue": None,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -3621,11 +3690,17 @@ class VscodeNamespace:
         return document
 
     def _get_configuration(self, section: str = "") -> WorkspaceConfiguration:
-        data = {}
+        data: Dict[str, Any] = {}
         if self._settings_getter:
-            raw = self._settings_getter("ai_editor", {}) or {}
-            if isinstance(raw, dict):
-                data = raw
+            ai_cfg = self._settings_getter("ai_editor", {}) or {}
+            if isinstance(ai_cfg, dict):
+                data["ai_editor"] = dict(ai_cfg)
+                for name, value in ai_cfg.items():
+                    if isinstance(value, dict):
+                        data.setdefault(str(name), value)
+            themes = self._settings_getter("panel_themes", {}) or {}
+            if isinstance(themes, dict):
+                data["panel_themes"] = dict(themes)
         return WorkspaceConfiguration(section, data)
 
     def _get_workspace_folders(self) -> List[Dict]:

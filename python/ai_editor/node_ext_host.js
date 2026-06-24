@@ -2965,62 +2965,146 @@ let _settings = {};
 // -------------------------------------------------------------------------
 // Configuration proxy — reads from _settings cache, writes back to Python
 // -------------------------------------------------------------------------
+const _CONFIG_MISSING = Symbol('configMissing');
+const _AI_EDITOR_SECTION_ALIASES = new Set([
+    'claude_code',
+    'codex',
+    'mcp',
+    'terminal',
+    'extensions',
+    'customization',
+]);
+
+function _configPath(value) {
+    if (value === undefined || value === null) return [];
+    return String(value).replace(/^\.+|\.+$/g, '').split('.').filter(Boolean);
+}
+
+function _configLookup(data, pathParts) {
+    let current = data;
+    for (const part of pathParts) {
+        if (current && typeof current === 'object'
+                && Object.prototype.hasOwnProperty.call(current, part)) {
+            current = current[part];
+        } else {
+            return _CONFIG_MISSING;
+        }
+    }
+    return current;
+}
+
+function _configSet(data, pathParts, value) {
+    if (!pathParts.length) return;
+    let current = data;
+    for (const part of pathParts.slice(0, -1)) {
+        let child = current[part];
+        if (!child || typeof child !== 'object' || Array.isArray(child)) {
+            child = {};
+            current[part] = child;
+        }
+        current = child;
+    }
+    current[pathParts[pathParts.length - 1]] = value;
+}
+
+function _configDelete(data, pathParts) {
+    if (!pathParts.length) return;
+    let current = data;
+    for (const part of pathParts.slice(0, -1)) {
+        const child = current && current[part];
+        if (!child || typeof child !== 'object') return;
+        current = child;
+    }
+    delete current[pathParts[pathParts.length - 1]];
+}
+
+function _configMirrorAiEditorAlias(pathParts, value, remove) {
+    let mirrorPath = null;
+    if (pathParts[0] === 'ai_editor'
+            && _AI_EDITOR_SECTION_ALIASES.has(pathParts[1])) {
+        mirrorPath = pathParts.slice(1);
+    } else if (_AI_EDITOR_SECTION_ALIASES.has(pathParts[0])) {
+        mirrorPath = ['ai_editor'].concat(pathParts);
+    }
+    if (!mirrorPath || mirrorPath.join('.') === pathParts.join('.')) return;
+    if (remove) {
+        _configDelete(_settings, mirrorPath);
+    } else {
+        _configSet(_settings, mirrorPath, value);
+    }
+}
+
+function _configFullPath(section, key) {
+    return _configPath(section).concat(_configPath(key));
+}
+
+function _fireConfigurationChanged(pathParts) {
+    const fullKey = pathParts.join('.');
+    _onDidChangeConfigurationEmitter.fire({
+        affectsConfiguration(sect) {
+            const probe = _configPath(sect).join('.');
+            if (!probe) return true;
+            return fullKey === probe
+                || fullKey.startsWith(probe + '.')
+                || probe.startsWith(fullKey + '.');
+        },
+    });
+}
+
 function _createConfigProxy(section) {
-    const sectionData = () => (section && typeof _settings[section] === 'object' && _settings[section] !== null) ? _settings[section] : {};
+    const sectionPath = _configPath(section);
+    const sectionData = () => {
+        const value = _configLookup(_settings, sectionPath);
+        return value === _CONFIG_MISSING ? {} : value;
+    };
     return {
         get(key, defaultValue) {
             if (arguments.length === 0 || key === undefined) {
-                return Object.assign({}, sectionData());
+                const data = sectionData();
+                return data && typeof data === 'object'
+                    ? Object.assign({}, data)
+                    : data;
             }
-            const data = sectionData();
-            if (key in data) return data[key];
-            // Support dotted keys: "editor.fontSize" -> nested lookup
-            const parts = String(key).split('.');
-            let current = data;
-            for (const part of parts) {
-                if (current && typeof current === 'object' && part in current) {
-                    current = current[part];
-                } else {
-                    return defaultValue;
-                }
-            }
-            return current;
+            const value = _configLookup(_settings, _configFullPath(section, key));
+            return value === _CONFIG_MISSING ? defaultValue : value;
         },
         has(key) {
-            const data = sectionData();
-            if (key in data) return true;
-            const parts = String(key).split('.');
-            let current = data;
-            for (const part of parts) {
-                if (current && typeof current === 'object' && part in current) {
-                    current = current[part];
-                } else {
-                    return false;
-                }
-            }
-            return true;
+            return _configLookup(_settings, _configFullPath(section, key))
+                !== _CONFIG_MISSING;
         },
         inspect(key) {
-            const data = sectionData();
-            const value = key in data ? data[key] : undefined;
+            const pathParts = _configFullPath(section, key);
+            const value = _configLookup(_settings, pathParts);
+            if (value === _CONFIG_MISSING) return undefined;
             return {
-                key: section ? `${section}.${key}` : key,
+                key: pathParts.join('.'),
                 defaultValue: undefined,
                 globalValue: value,
                 workspaceValue: value,
+                workspaceFolderValue: undefined,
             };
         },
         update(key, value, configTarget, overrideInLanguage) {
-            if (!_settings[section] || typeof _settings[section] !== 'object') {
-                _settings[section] = {};
+            const pathParts = _configFullPath(section, key);
+            if (value === undefined) {
+                _configDelete(_settings, pathParts);
+                _configMirrorAiEditorAlias(pathParts, value, true);
+            } else {
+                _configSet(_settings, pathParts, value);
+                _configMirrorAiEditorAlias(pathParts, value, false);
             }
-            _settings[section][key] = value;
-            send({
+            const message = {
                 type: 'config_set',
                 section: section || '',
                 key: String(key),
-                value: value,
-            });
+            };
+            if (value === undefined) {
+                message.remove = true;
+            } else {
+                message.value = value;
+            }
+            send(message);
+            _fireConfigurationChanged(pathParts);
             return Promise.resolve();
         },
     };
@@ -4484,21 +4568,19 @@ async function handleMessage(msg) {
             // Incremental update: a single section/key changed
             const changedSection = msg.section;
             if (changedSection !== undefined) {
+                const changedPath = _configFullPath(changedSection, msg.key);
                 if (msg.key !== undefined) {
-                    if (!_settings[changedSection] || typeof _settings[changedSection] !== 'object') {
-                        _settings[changedSection] = {};
-                    }
-                    _settings[changedSection][msg.key] = msg.value;
+                    _configSet(_settings, changedPath, msg.value);
+                    _configMirrorAiEditorAlias(changedPath, msg.value, false);
                 } else if (msg.value !== undefined && typeof msg.value === 'object') {
-                    _settings[changedSection] = msg.value;
+                    const sectionPath = _configPath(changedSection);
+                    _configSet(_settings, sectionPath, msg.value);
+                    _configMirrorAiEditorAlias(sectionPath, msg.value, false);
                 }
                 // Fire onDidChangeConfiguration for listening extensions
-                _onDidChangeConfigurationEmitter.fire({
-                    affectsConfiguration(sect) {
-                        if (!sect) return true;
-                        return sect === changedSection || changedSection.startsWith(sect + '.') || sect.startsWith(changedSection + '.');
-                    },
-                });
+                _fireConfigurationChanged(changedPath.length
+                    ? changedPath
+                    : _configPath(changedSection));
             }
             break;
         }

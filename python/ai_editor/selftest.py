@@ -5236,6 +5236,35 @@ def test_vscode_api() -> None:
     # Configuration
     cfg = api["workspace"]["getConfiguration"]("ai_editor")
     _check("getConfiguration", isinstance(cfg, WorkspaceConfiguration))
+    config_settings = {
+        "ai_editor": {
+            "extensions": {"diagnostics_enabled": True},
+            "mcp": {"autostart": True},
+        },
+        "panel_themes": {"active": "neo"},
+    }
+    config_ns = VscodeNamespace(
+        ExtensionHost(),
+        settings_getter=lambda key, default=None: config_settings.get(
+            key, default))
+    config_workspace = config_ns.build()["workspace"]
+    config_ai = config_workspace["getConfiguration"]("ai_editor")
+    config_extensions = config_workspace["getConfiguration"]("extensions")
+    config_nested = config_workspace["getConfiguration"](
+        "ai_editor.extensions")
+    config_root = config_workspace["getConfiguration"]()
+    config_ai.update("extensions.probe", "ok")
+    config_inspect = config_ai.inspect("extensions.diagnostics_enabled") or {}
+    _check("WorkspaceConfiguration resolves section and dotted keys",
+           config_ai.get("extensions.diagnostics_enabled") is True
+           and config_extensions.get("diagnostics_enabled") is True
+           and config_nested.has("diagnostics_enabled")
+           and config_root.get("ai_editor.mcp.autostart") is True
+           and config_root.get("panel_themes.active") == "neo"
+           and config_inspect.get("key")
+               == "ai_editor.extensions.diagnostics_enabled"
+           and config_ai.get("extensions.probe") == "ok"
+           and config_extensions.get("probe") == "ok")
 
     # selectChatModels (no engine)
     models = api["lm"]["selectChatModels"]()
@@ -6232,11 +6261,19 @@ def test_app_extension_runtime_support() -> None:
 const vscode = require('vscode');
 const output = vscode.window.createOutputChannel('node-tree-selftest');
 const workspaceEvents = { open: 0, change: 0, close: 0, save: 0 };
+const configEvents = { count: 0 };
 const lifecycleEvents = new vscode.EventEmitter();
 const lifecycleDocs = new Map();
 
 function activate(context) {
   console.log('node console probe', { source: 'selftest' });
+  vscode.workspace.onDidChangeConfiguration(event => {
+    configEvents.count += 1;
+    configEvents.aiEditor = event.affectsConfiguration('ai_editor');
+    configEvents.extensions = event.affectsConfiguration('extensions');
+    configEvents.diagnostics = event.affectsConfiguration('ai_editor.extensions.diagnostics_enabled');
+    configEvents.unrelated = event.affectsConfiguration('terminal.integrated.shell');
+  }, null, context.subscriptions);
   vscode.workspace.onDidOpenTextDocument(function(document) {
     workspaceEvents.open += 1;
     workspaceEvents.openThis = this && this.name;
@@ -6668,6 +6705,41 @@ function activate(context) {
     let deleteMissing = false;
     try { renamedExists = (await vscode.workspace.fs.stat(renamedUri)).type === vscode.FileType.File; } catch {}
     try { await vscode.workspace.fs.stat(deleteUri); } catch { deleteMissing = true; }
+    const aiConfig = vscode.workspace.getConfiguration('ai_editor');
+    const aliasConfig = vscode.workspace.getConfiguration('extensions');
+    const nestedConfig = vscode.workspace.getConfiguration('ai_editor.extensions');
+    const rootConfig = vscode.workspace.getConfiguration();
+    const configBefore = {
+      aiDiagnostics: aiConfig.get('extensions.diagnostics_enabled'),
+      aliasDiagnostics: aliasConfig.get('diagnostics_enabled'),
+      nestedDiagnostics: nestedConfig.get('diagnostics_enabled'),
+      rootDiagnostics: rootConfig.get('ai_editor.extensions.diagnostics_enabled'),
+      aiProbe: aiConfig.get('extensions.probe_flag'),
+      aliasProbe: aliasConfig.get('probe_flag'),
+      nestedProbe: nestedConfig.get('probe_flag'),
+      rootProbe: rootConfig.get('ai_editor.extensions.probe_flag'),
+      hasAlias: aliasConfig.has('diagnostics_enabled'),
+      inspectKey: aiConfig.inspect('extensions.diagnostics_enabled').key,
+    };
+    await aliasConfig.update('probe_flag', false);
+    const configAfter = {
+      aiDiagnostics: aiConfig.get('extensions.diagnostics_enabled'),
+      aliasDiagnostics: aliasConfig.get('diagnostics_enabled'),
+      nestedDiagnostics: nestedConfig.get('diagnostics_enabled'),
+      rootDiagnostics: rootConfig.get('ai_editor.extensions.diagnostics_enabled'),
+      aiProbe: aiConfig.get('extensions.probe_flag'),
+      aliasProbe: aliasConfig.get('probe_flag'),
+      nestedProbe: nestedConfig.get('probe_flag'),
+      rootProbe: rootConfig.get('ai_editor.extensions.probe_flag'),
+      eventCount: configEvents.count,
+      eventExtensions: configEvents.extensions,
+      eventUnrelated: configEvents.unrelated,
+    };
+    await nestedConfig.update('transient_probe', 'present');
+    await nestedConfig.update('transient_probe', undefined);
+    const configRemoved = !nestedConfig.has('transient_probe')
+      && !aiConfig.has('extensions.transient_probe')
+      && !aliasConfig.has('transient_probe');
     return {
       folderName: folders[0] && folders[0].name,
       rootPath: vscode.workspace.rootPath,
@@ -6691,6 +6763,9 @@ function activate(context) {
       fileOpsApplied,
       renamedExists,
       deleteMissing,
+      configBefore,
+      configAfter,
+      configRemoved,
     };
   });
   vscode.commands.registerCommand('selftest.node.pythonCommandProbe', async () => {
@@ -6905,6 +6980,14 @@ module.exports = { activate, deactivate };
             node_host.set_diagnostics_enabled(True)
             node_host.set_command_service(api._ext_host.commands)
             node_host.on_tree_event(api._handle_node_tree_event)
+            node_host.on_config_set(api._handle_node_config_set)
+            if getattr(getattr(api, "_gui_ref", None), "settings", None):
+                settings_data = getattr(api._gui_ref.settings, "data", {})
+                settings_data.setdefault("ai_editor", {}).setdefault(
+                    "extensions", {}).update({
+                        "diagnostics_enabled": True,
+                        "probe_flag": True,
+                    })
             python_echo_dispose = api._ext_host.commands.register(
                 "selftest.python.echo",
                 lambda payload=None: {
@@ -6918,10 +7001,12 @@ module.exports = { activate, deactivate };
                         "ai_editor": {
                             "extensions": {
                                 "diagnostics_enabled": True,
+                                "probe_flag": True,
                             },
                         },
                         "extensions": {
                             "diagnostics_enabled": True,
+                            "probe_flag": True,
                         },
                     })
                 sent = node_host.activate(node_tree_tmp, node_tree_desc.id, {
@@ -7130,6 +7215,20 @@ module.exports = { activate, deactivate };
                         "selftest.node.workspaceProbe")
                 except Exception as exc:
                     node_workspace_probe = {"_error": str(exc)}
+                node_config_persisted = _wait_until(
+                    lambda: (
+                        getattr(getattr(api, "_gui_ref", None),
+                                "settings", None) is not None
+                        and getattr(api._gui_ref.settings, "data", {})
+                        .get("ai_editor", {})
+                        .get("extensions", {})
+                        .get("probe_flag") is False
+                        and "transient_probe" not in getattr(
+                            api._gui_ref.settings, "data", {})
+                        .get("ai_editor", {})
+                        .get("extensions", {})
+                    ),
+                    timeout=3.0)
                 try:
                     node_python_command_probe = api._ext_host.commands.execute(
                         "selftest.node.pythonCommandProbe")
@@ -7553,6 +7652,45 @@ module.exports = { activate, deactivate };
                        and isinstance(node_workspace_probe, dict)
                        and node_workspace_probe.get("editText") == "say hello SAO",
                        json.dumps(node_workspace_probe, ensure_ascii=False))
+                node_config_before = (
+                    node_workspace_probe.get("configBefore", {})
+                    if isinstance(node_workspace_probe, dict) else {})
+                node_config_after = (
+                    node_workspace_probe.get("configAfter", {})
+                    if isinstance(node_workspace_probe, dict) else {})
+                _check("node host workspace configuration matches VS Code sections",
+                       node_workspace_command_registered
+                       and node_config_before.get("aiDiagnostics") is True
+                       and node_config_before.get("aliasDiagnostics") is True
+                       and node_config_before.get("nestedDiagnostics") is True
+                       and node_config_before.get("rootDiagnostics") is True
+                       and node_config_before.get("aiProbe") is True
+                       and node_config_before.get("aliasProbe") is True
+                       and node_config_before.get("nestedProbe") is True
+                       and node_config_before.get("rootProbe") is True
+                       and node_config_before.get("hasAlias") is True
+                       and node_config_before.get("inspectKey")
+                       == "ai_editor.extensions.diagnostics_enabled"
+                       and node_config_after.get("aiDiagnostics") is True
+                       and node_config_after.get("aliasDiagnostics") is True
+                       and node_config_after.get("nestedDiagnostics") is True
+                       and node_config_after.get("rootDiagnostics") is True
+                       and node_config_after.get("aiProbe") is False
+                       and node_config_after.get("aliasProbe") is False
+                       and node_config_after.get("nestedProbe") is False
+                       and node_config_after.get("rootProbe") is False
+                       and node_config_after.get("eventCount", 0) >= 1
+                       and node_config_after.get("eventExtensions") is True
+                       and node_config_after.get("eventUnrelated") is False
+                       and node_workspace_probe.get("configRemoved") is True
+                       and node_config_persisted is True,
+                       json.dumps({
+                           "probe": node_workspace_probe,
+                           "persisted": node_config_persisted,
+                           "settings": getattr(getattr(
+                               getattr(api, "_gui_ref", None),
+                               "settings", None), "data", {}),
+                       }, ensure_ascii=False))
                 _check("node host JS command awaits Python command result",
                        node_python_command_registered
                        and isinstance(node_python_command_probe, dict)

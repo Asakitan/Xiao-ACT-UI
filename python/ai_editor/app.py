@@ -5627,7 +5627,7 @@ class AIEditorAPI:
             print(f"[NodeExtHost] Failed to sync settings: {exc}")
 
     def _handle_node_config_set(self, section: str, key: str,
-                                value: Any) -> None:
+                                value: Any, remove: bool = False) -> None:
         """Handle a config_set message from Node.
 
         Persists the change via the Python settings manager and notifies
@@ -5636,32 +5636,94 @@ class AIEditorAPI:
         settings = _resolve_settings(self._gui_ref)
         if not settings:
             return
-        try:
-            if section == "ai_editor":
-                ai_cfg = settings.get("ai_editor", {}) or {}
-                if not isinstance(ai_cfg, dict):
-                    ai_cfg = {}
-                ai_cfg[key] = value
-                settings.set("ai_editor", ai_cfg)
-            elif section in _AI_EDITOR_SECTION_DEFAULTS:
-                ai_cfg = settings.get("ai_editor", {}) or {}
-                if not isinstance(ai_cfg, dict):
-                    ai_cfg = {}
-                sub = ai_cfg.get(section, {})
-                if not isinstance(sub, dict):
-                    sub = {}
-                sub[key] = value
-                ai_cfg[section] = sub
-                settings.set("ai_editor", ai_cfg)
+
+        def _parts(text: str) -> List[str]:
+            return [
+                part for part in str(text or "").strip(".").split(".")
+                if part
+            ]
+
+        def _set_nested(target: Dict[str, Any],
+                        path: List[str],
+                        next_value: Any) -> None:
+            if not path:
+                return
+            current = target
+            for part in path[:-1]:
+                child = current.get(part)
+                if not isinstance(child, dict):
+                    child = {}
+                current[part] = child
+                current = child
+            current[path[-1]] = next_value
+
+        def _delete_nested(target: Dict[str, Any], path: List[str]) -> None:
+            if not path:
+                return
+            current = target
+            for part in path[:-1]:
+                child = current.get(part)
+                if not isinstance(child, dict):
+                    return
+                current = child
+            current.pop(path[-1], None)
+
+        def _set_ai_editor(path: List[str], next_value: Any) -> None:
+            if not path:
+                return
+            ai_cfg = settings.get("ai_editor", {}) or {}
+            if not isinstance(ai_cfg, dict):
+                ai_cfg = {}
+            if remove:
+                _delete_nested(ai_cfg, path)
             else:
-                # Generic top-level section
-                current = settings.get(section, {})
-                if isinstance(current, dict):
-                    current[key] = value
-                    settings.set(section, current)
+                _set_nested(ai_cfg, path, next_value)
+            settings.set("ai_editor", ai_cfg)
+
+        def _set_top_level(path: List[str], next_value: Any) -> None:
+            if not path:
+                return
+            top_key = path[0]
+            rest = path[1:]
+            if not rest:
+                if remove:
+                    current_data = getattr(settings, "data", None)
+                    if not isinstance(current_data, dict):
+                        current_data = getattr(settings, "_data", None)
+                    if isinstance(current_data, dict):
+                        current_data.pop(top_key, None)
                 else:
-                    settings.set(section, {key: value})
+                    settings.set(top_key, next_value)
+                return
+            current = settings.get(top_key, {}) or {}
+            if not isinstance(current, dict):
+                current = {}
+            if remove:
+                _delete_nested(current, rest)
+            else:
+                _set_nested(current, rest, next_value)
+            settings.set(top_key, current)
+
+        try:
+            section_path = _parts(section)
+            key_path = _parts(key)
+            if not key_path:
+                return
+
+            if section_path == ["ai_editor"]:
+                _set_ai_editor(key_path, value)
+            elif len(section_path) > 1 and section_path[0] == "ai_editor":
+                _set_ai_editor(section_path[1:] + key_path, value)
+            elif section_path and section_path[0] in _AI_EDITOR_SECTION_DEFAULTS:
+                _set_ai_editor(section_path + key_path, value)
+            elif not section_path and key_path[0] == "ai_editor":
+                _set_ai_editor(key_path[1:], value)
+            elif not section_path and key_path[0] in _AI_EDITOR_SECTION_DEFAULTS:
+                _set_ai_editor(key_path, value)
+            else:
+                _set_top_level(section_path + key_path, value)
             settings.save()
+            self._notify_node_settings_changed()
         except Exception as exc:
             print(f"[NodeExtHost] Failed to persist config_set "
                   f"{section}.{key}: {exc}")

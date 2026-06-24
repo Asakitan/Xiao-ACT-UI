@@ -1581,7 +1581,7 @@ class NodeExtensionHost:
         self._on_activated_callbacks: List[Callable[[str], None]] = []
         self._on_error_callbacks: List[Callable[[str, str], None]] = []
         self._on_config_set_callbacks: List[
-            Callable[[str, str, Any], None]
+            Callable[[str, str, Any, bool], None]
         ] = []
         self._on_tree_callbacks: List[
             Callable[[str, str, Dict[str, Any]], None]
@@ -2145,14 +2145,16 @@ class NodeExtensionHost:
             section = str(msg.get("section", ""))
             key = str(msg.get("key", ""))
             value = msg.get("value")
-            if section and key:
-                _log.info("[NodeExtHost] config_set: %s.%s", section, key)
+            remove = bool(msg.get("remove"))
+            if key:
+                full_key = f"{section}.{key}" if section else key
+                _log.info("[NodeExtHost] config_set: %s", full_key)
                 for cb in self._on_config_set_callbacks:
                     try:
-                        cb(section, key, value)
+                        cb(section, key, value, remove)
                     except Exception:
                         _log.exception("[NodeExtHost] on_config_set callback "
-                                       "error for %s.%s", section, key)
+                                       "error for %s", full_key)
 
         elif msg_type == "status_bar_show":
             if self._ui_bridge:
@@ -2195,10 +2197,12 @@ class NodeExtensionHost:
             "value": value,
         })
 
-    def on_config_set(self, callback: Callable[[str, str, Any], None]) -> None:
+    def on_config_set(
+            self,
+            callback: Callable[[str, str, Any, bool], None]) -> None:
         """Register a callback invoked when Node sends a config_set message.
 
-        The callback receives ``(section, key, value)`` and is responsible
+        The callback receives ``(section, key, value, remove)`` and is responsible
         for persisting the change on the Python side.
         """
         self._on_config_set_callbacks.append(callback)
