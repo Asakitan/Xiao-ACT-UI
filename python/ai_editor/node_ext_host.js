@@ -1359,9 +1359,11 @@ const _fileSystemProviders = new Map();  // scheme -> { provider, options, exten
 const _textDocumentContentProviders = new Map(); // scheme -> { provider, extensionId }
 const _uriHandlers = new Map();          // extensionId -> { handler }
 const _languageProviders = [];           // { kind, selector, provider, triggers?, disposable }
+const _runtimeLanguageConfigurations = new Map(); // languageId -> [{ handle, configuration }]
 const _lmTools = new Map();              // name -> { handle, tool, extensionId, metadata }
 const _chatParticipants = new Map();     // id -> { handle, handler, extensionId }
 let _nextLanguageProviderHandle = 1;
+let _nextLanguageConfigurationHandle = 1;
 let _nextLmToolHandle = 1;
 let _nextChatParticipantHandle = 1;
 let _nextPythonCommandRequestHandle = 1;
@@ -2412,6 +2414,61 @@ function _languageIdForUri(uri) {
         '.yaml': 'yaml',
         '.yml': 'yaml',
     })[ext] || 'plaintext';
+}
+
+function _knownLanguageIds() {
+    const languages = new Set([
+        'plaintext', 'python', 'javascript', 'typescript', 'json', 'html',
+        'css', 'markdown', 'yaml', 'xml', 'sql', 'shell', 'lua', 'c', 'cpp',
+        'csharp', 'java', 'go', 'rust', 'toml',
+    ]);
+    for (const entry of _knownExtensions.values()) {
+        const contributed = entry?.manifest?.contributes?.languages;
+        for (const language of Array.isArray(contributed) ? contributed : []) {
+            const id = String(language?.id || '').trim();
+            if (id) languages.add(id);
+        }
+    }
+    for (const id of _runtimeLanguageConfigurations.keys()) {
+        if (id) languages.add(id);
+    }
+    return Array.from(languages).sort((a, b) => a.localeCompare(b));
+}
+
+function _setLanguageConfiguration(language, configuration) {
+    const languageId = String(language || '').trim();
+    if (!languageId) return new Disposable();
+    const entry = {
+        handle: _nextLanguageConfigurationHandle++,
+        configuration: _serializeLanguageValue(configuration || {}),
+    };
+    const list = _runtimeLanguageConfigurations.get(languageId) || [];
+    list.push(entry);
+    _runtimeLanguageConfigurations.set(languageId, list);
+    return new Disposable(() => {
+        const current = _runtimeLanguageConfigurations.get(languageId);
+        if (!current) return;
+        const filtered = current.filter(item => item.handle !== entry.handle);
+        if (filtered.length) {
+            _runtimeLanguageConfigurations.set(languageId, filtered);
+        } else {
+            _runtimeLanguageConfigurations.delete(languageId);
+        }
+    });
+}
+
+function _setTextDocumentLanguage(document, languageId) {
+    const target = document && typeof document === 'object' ? document : undefined;
+    const language = String(languageId || 'plaintext');
+    if (!target) return Promise.resolve(target);
+    _onDidCloseTextDocumentEmitter.fire(target);
+    target.languageId = language;
+    if (target.uri) {
+        const cached = _workspaceTextDocuments.get(target.uri.toString());
+        if (cached) cached.languageId = language;
+    }
+    _onDidOpenTextDocumentEmitter.fire(target);
+    return Promise.resolve(target);
 }
 
 function _pathFromUriLike(value) {
@@ -5263,6 +5320,12 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 match(selector, document) {
                     return _matchDocumentSelector(selector, document);
                 },
+                setTextDocumentLanguage(document, languageId) {
+                    return _setTextDocumentLanguage(document, languageId);
+                },
+                setLanguageConfiguration(language, configuration) {
+                    return _setLanguageConfiguration(language, configuration);
+                },
                 registerDocumentFormattingEditProvider(selector, provider) {
                     return _registerLangProvider('formatting', selector, provider);
                 },
@@ -5306,7 +5369,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                         metadata: legend || new SemanticTokensLegend([], []),
                     });
                 },
-                getLanguages() { return Promise.resolve([]); },
+                getLanguages() { return Promise.resolve(_knownLanguageIds()); },
             };
         })(),
 

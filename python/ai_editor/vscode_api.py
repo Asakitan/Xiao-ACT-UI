@@ -1864,6 +1864,7 @@ class VscodeNamespace:
         self._variables: Dict[str, Callable] = {}
         self._lm_providers: Dict[str, Any] = {}
         self._language_providers: Dict[str, List[Any]] = {}
+        self._language_configurations: Dict[str, List[Dict[str, Any]]] = {}
         self._diagnostic_collections: Dict[str, Any] = {}
         self._file_system_providers: Dict[str, Dict[str, Any]] = {}
         self._chat_context_providers: Dict[str, Dict[str, Any]] = {
@@ -4446,6 +4447,7 @@ class VscodeNamespace:
             "getLanguages": self._get_languages,
             "match": self._language_match,
             "onDidChangeDiagnostics": self._diagnostics_change_emitter.event,
+            "setLanguageConfiguration": self._set_language_configuration,
             "registerHoverProvider": lambda selector, provider: self._register_language_provider("hover", selector, provider),
             "registerCompletionItemProvider": lambda selector, provider, *trigger: self._register_language_provider("completion", selector, provider, trigger),
             "registerSignatureHelpProvider": lambda selector, provider, *metadata: self._register_language_provider("signatureHelp", selector, provider, self._signature_help_registration_metadata(metadata)),
@@ -4511,7 +4513,32 @@ class VscodeNamespace:
             "css", "markdown", "yaml", "xml", "sql", "shell", "lua", "c",
             "cpp", "csharp", "java", "go", "rust", "toml",
         ]
-        return sorted(set(builtins + contributed))
+        configured = list(self._language_configurations.keys())
+        return sorted(set(builtins + contributed + configured))
+
+    def _set_language_configuration(
+            self, language: Any, configuration: Any) -> Disposable:
+        language_id = str(language or "").strip()
+        if not language_id:
+            return Disposable()
+        payload = self._language_value_payload(configuration)
+        if not isinstance(payload, dict):
+            payload = {}
+        entries = self._language_configurations.setdefault(language_id, [])
+        entries.append(payload)
+
+        def _dispose() -> None:
+            current = self._language_configurations.get(language_id)
+            if not current:
+                return
+            try:
+                current.remove(payload)
+            except ValueError:
+                return
+            if not current:
+                self._language_configurations.pop(language_id, None)
+
+        return Disposable(_dispose)
 
     def _language_match(self, selector: Any, document: Any) -> int:
         language_id = getattr(document, "languageId", "")

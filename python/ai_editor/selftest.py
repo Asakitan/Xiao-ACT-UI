@@ -4716,6 +4716,29 @@ def test_vscode_api() -> None:
         provider_dispose = api["languages"]["registerHoverProvider"]("python", object())
         _check("languages provider registration disposable", hasattr(provider_dispose, "dispose"))
         _check("languages.match", api["languages"]["match"]("python", doc) == 10)
+        before_language_config = api["languages"]["getLanguages"]()
+        config_disposable = api["languages"]["setLanguageConfiguration"](
+            "self-runtime-lang",
+            {
+                "comments": {"lineComment": "#"},
+                "brackets": [["{", "}"]],
+                "wordPattern": {"source": "[A-Za-z_]+"},
+            })
+        after_language_config = api["languages"]["getLanguages"]()
+        config_disposable.dispose()
+        after_language_config_dispose = api["languages"]["getLanguages"]()
+        _check("languages.setLanguageConfiguration tracks runtime languages",
+               "self-runtime-lang" not in before_language_config
+               and "self-runtime-lang" in after_language_config
+               and "self-runtime-lang" not in after_language_config_dispose
+               and hasattr(config_disposable, "dispose"))
+        language_doc = ns.update_text_document_snapshot(
+            "untitled:LanguageProbe", "probe", "plaintext")
+        changed_language_doc = api["languages"]["setTextDocumentLanguage"](
+            language_doc, "self-runtime-lang")
+        _check("languages.setTextDocumentLanguage updates snapshots",
+               changed_language_doc is language_doc
+               and language_doc.languageId == "self-runtime-lang")
 
         class _BadCompletionProvider:
             def provideCompletionItems(self, document, position, token, context):
@@ -7358,7 +7381,15 @@ module.exports = { activate };
             node_extension_js = r"""
 const vscode = require('vscode');
 const output = vscode.window.createOutputChannel('node-tree-selftest');
-const workspaceEvents = { open: 0, change: 0, close: 0, save: 0 };
+const workspaceEvents = {
+  open: 0,
+  change: 0,
+  close: 0,
+  save: 0,
+  openUris: [],
+  closeUris: [],
+  saveUris: [],
+};
 const workspaceFolderEvents = [];
 const configEvents = { count: 0 };
 let contextProbe = {};
@@ -7608,6 +7639,7 @@ async function activate(context) {
     workspaceEvents.open += 1;
     workspaceEvents.openThis = this && this.name;
     workspaceEvents.lastOpen = document.uri.toString();
+    workspaceEvents.openUris.push(document.uri.toString());
   }, { name: 'workspace-this' }, context.subscriptions);
   vscode.workspace.onDidChangeTextDocument(event => {
     workspaceEvents.change += 1;
@@ -7618,10 +7650,12 @@ async function activate(context) {
   vscode.workspace.onDidCloseTextDocument(document => {
     workspaceEvents.close += 1;
     workspaceEvents.lastClose = document.uri.toString();
+    workspaceEvents.closeUris.push(document.uri.toString());
   }, null, context.subscriptions);
   vscode.workspace.onDidSaveTextDocument(document => {
     workspaceEvents.save += 1;
     workspaceEvents.lastSave = document.uri.toString();
+    workspaceEvents.saveUris.push(document.uri.toString());
   }, null, context.subscriptions);
   vscode.workspace.onDidChangeWorkspaceFolders(event => {
     workspaceFolderEvents.push({
@@ -8210,6 +8244,27 @@ async function activate(context) {
     const configRemoved = !nestedConfig.has('transient_probe')
       && !aiConfig.has('extensions.transient_probe')
       && !aliasConfig.has('transient_probe');
+    const knownLanguagesBefore = await vscode.languages.getLanguages();
+    const runtimeLanguageDisposable = vscode.languages.setLanguageConfiguration(
+      'self-runtime-node',
+      {
+        comments: { lineComment: '#' },
+        brackets: [['{', '}']],
+        wordPattern: /[A-Za-z_]+/g,
+      },
+    );
+    const knownLanguagesAfterConfig = await vscode.languages.getLanguages();
+    runtimeLanguageDisposable.dispose();
+    const knownLanguagesAfterDispose = await vscode.languages.getLanguages();
+    const languageProbeDoc = await vscode.workspace.openTextDocument({
+      content: 'language probe',
+      language: 'plaintext',
+    });
+    const languageProbeBefore = languageProbeDoc.languageId;
+    const languageProbeChanged = await vscode.languages.setTextDocumentLanguage(
+      languageProbeDoc,
+      'self-runtime-node',
+    );
     return {
       folderName: folders[0] && folders[0].name,
       pickedFolderName: pickedFolder && pickedFolder.name,
@@ -8253,6 +8308,14 @@ async function activate(context) {
       manifestConfigSet,
       manifestConfigReset,
       configRemoved,
+      languageApi: {
+        knownLanguagesBefore,
+        knownLanguagesAfterConfig,
+        knownLanguagesAfterDispose,
+        languageProbeBefore,
+        languageProbeAfter: languageProbeChanged && languageProbeChanged.languageId,
+        sameDocument: languageProbeChanged === languageProbeDoc,
+      },
     };
   });
   vscode.commands.registerCommand('selftest.node.fileSystemActivationProbe', async () => {
@@ -9025,6 +9088,11 @@ module.exports = { activate, deactivate };
                         "id": "selftest.node.tree",
                         "name": "Node Tree",
                     }]},
+                    "languages": [{
+                        "id": "selflang",
+                        "aliases": ["Self Lang"],
+                        "extensions": [".self"],
+                    }],
                     "configuration": {
                         "title": "Node Selftest",
                         "properties": {
@@ -10311,6 +10379,9 @@ module.exports = { activate, deactivate };
                 node_manifest_language_config_persist = (
                     node_workspace_probe.get("manifestLanguageConfigPersist", {})
                     if isinstance(node_workspace_probe, dict) else {})
+                node_language_api = (
+                    node_workspace_probe.get("languageApi", {})
+                    if isinstance(node_workspace_probe, dict) else {})
                 node_manifest_config_set = (
                     node_workspace_probe.get("manifestConfigSet", {})
                     if isinstance(node_workspace_probe, dict) else {})
@@ -10427,10 +10498,26 @@ module.exports = { activate, deactivate };
                            "reset": node_manifest_language_config_reset,
                            "persist": node_manifest_language_config_persist,
                            "persisted": node_language_config_persisted,
-                           "settings": getattr(getattr(
-                               getattr(api, "_gui_ref", None),
-                               "settings", None), "data", {}),
+                               "settings": getattr(getattr(
+                                   getattr(api, "_gui_ref", None),
+                                   "settings", None), "data", {}),
                        }, ensure_ascii=False, default=str))
+                _check("node host languages API matches VS Code basics",
+                       node_workspace_command_registered
+                       and "python" in node_language_api.get(
+                           "knownLanguagesBefore", [])
+                       and "selflang" in node_language_api.get(
+                           "knownLanguagesBefore", [])
+                       and "self-runtime-node" in node_language_api.get(
+                           "knownLanguagesAfterConfig", [])
+                       and "self-runtime-node" not in node_language_api.get(
+                           "knownLanguagesAfterDispose", [])
+                       and node_language_api.get("languageProbeBefore")
+                       == "plaintext"
+                       and node_language_api.get("languageProbeAfter")
+                       == "self-runtime-node"
+                       and node_language_api.get("sameDocument") is True,
+                       json.dumps(node_language_api, ensure_ascii=False))
                 _check("node host JS command awaits Python command result",
                        node_python_command_registered
                        and isinstance(node_python_command_probe, dict)
@@ -10662,8 +10749,10 @@ module.exports = { activate, deactivate };
                        and node_workspace_events.get("openThis") == "workspace-this"
                        and node_workspace_events.get("lastChangeText") == "two"
                        and node_workspace_events.get("lastChangeDocumentText") == "event-two"
-                       and str(node_workspace_events.get("lastClose", ""))
-                       .endswith("workspace-events.txt"),
+                       and any(
+                           str(uri).endswith("workspace-events.txt")
+                           for uri in node_workspace_events.get(
+                               "closeUris", [])),
                        json.dumps(node_workspace_probe, ensure_ascii=False))
                 _check("node host workspace applyEdit handles file operations",
                        node_workspace_probe.get("fileOpsApplied") is True
