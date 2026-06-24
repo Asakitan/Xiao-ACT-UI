@@ -11392,31 +11392,75 @@ function setStatus(t){$('status-text').textContent=t}
 
 // ── Extension Status Bar Items ──
 const _extStatusBarItems={};
+function _extStatusBarText(value){
+  if(value==null)return '';
+  if(typeof value==='string')return value;
+  if(typeof value==='object'&&Object.prototype.hasOwnProperty.call(value,'value'))return String(value.value??'');
+  return String(value);
+}
+function _extStatusBarCssColor(value){
+  if(value==null||value==='')return '';
+  if(typeof value==='string')return value;
+  if(typeof value==='object'&&value.id)return '';
+  return String(value);
+}
+function _extStatusBarThemeColorId(value){
+  return value&&typeof value==='object'&&value.id?String(value.id):'';
+}
+function _extStatusBarCommand(data){
+  const command=data&&data.command;
+  if(!command)return null;
+  if(typeof command==='string')return {command,arguments:[]};
+  if(typeof command==='object'&&command.command)return {
+    command:String(command.command),
+    arguments:Array.isArray(command.arguments)?command.arguments:[]
+  };
+  return null;
+}
+function _placeExtStatusBarItem(el,id,align,pri){
+  const container=align===1?$('sb-ext-left'):$('sb-ext-right');
+  if(!container)return;
+  _extStatusBarItems[id]={alignment:align,priority:pri};
+  if(el.parentElement!==container)container.appendChild(el);
+  const children=Array.from(container.children).filter(child=>child!==el);
+  let inserted=false;
+  for(let i=0;i<children.length;i++){
+    const cid=children[i].id.replace('sb-ext-','');
+    const cPri=(_extStatusBarItems[cid]||{}).priority||0;
+    if(pri>cPri){container.insertBefore(el,children[i]);inserted=true;break}
+  }
+  if(!inserted)container.appendChild(el);
+}
 function _upsertExtStatusBarItem(data){
   if(!data||!data.id)return;
   const id=data.id,align=Number(data.alignment)||2,pri=Number(data.priority)||0;
   let el=document.getElementById('sb-ext-'+id);
   if(!el){
     el=document.createElement('span');el.className='sb-item sb-ext-item';el.id='sb-ext-'+id;
-    el.style.cursor=data.command?'pointer':'default';
-    _extStatusBarItems[id]={alignment:align,priority:pri};
-    const container=align===1?$('sb-ext-left'):$('sb-ext-right');
-    if(container){
-      const children=Array.from(container.children);
-      let inserted=false;
-      for(let i=0;i<children.length;i++){
-        const cid=children[i].id.replace('sb-ext-','');
-        const cPri=(_extStatusBarItems[cid]||{}).priority||0;
-        if(pri>cPri){container.insertBefore(el,children[i]);inserted=true;break}
-      }
-      if(!inserted)container.appendChild(el);
-    }
   }
-  el.textContent=data.text||'';
-  el.title=data.tooltip||'';
-  if(data.color)el.style.color=data.color;
-  if(data.backgroundColor)el.style.background=data.backgroundColor;
-  if(data.command){el.onclick=()=>{if(window.pywebview&&window.pywebview.api)window.pywebview.api.execute_command(data.command)}}
+  _placeExtStatusBarItem(el,id,align,pri);
+  const text=_extStatusBarText(data.text);
+  const tooltip=_extStatusBarText(data.tooltip);
+  const name=_extStatusBarText(data.name);
+  const accessibility=data.accessibilityInformation&&typeof data.accessibilityInformation==='object'?data.accessibilityInformation:{};
+  el.textContent=text;
+  el.title=tooltip||name||text;
+  el.dataset.name=name;
+  el.dataset.alignment=String(align);
+  el.dataset.priority=String(pri);
+  const color=_extStatusBarCssColor(data.color),background=_extStatusBarCssColor(data.backgroundColor);
+  const colorId=_extStatusBarThemeColorId(data.color),backgroundId=_extStatusBarThemeColorId(data.backgroundColor);
+  el.style.color=color||'';
+  el.style.background=background||'';
+  if(colorId)el.dataset.themeColor=colorId;else delete el.dataset.themeColor;
+  if(backgroundId)el.dataset.themeBackgroundColor=backgroundId;else delete el.dataset.themeBackgroundColor;
+  const ariaLabel=_extStatusBarText(accessibility.label)||name||text;
+  if(ariaLabel)el.setAttribute('aria-label',ariaLabel);else el.removeAttribute('aria-label');
+  const role=_extStatusBarText(accessibility.role);
+  if(role)el.setAttribute('role',role);else el.removeAttribute('role');
+  const command=_extStatusBarCommand(data);
+  el.style.cursor=command?'pointer':'default';
+  el.onclick=command?()=>{if(window.pywebview&&window.pywebview.api)window.pywebview.api.execute_command(command.command,...command.arguments)}:null;
 }
 function _removeExtStatusBarItem(id){
   if(!id)return;
@@ -11637,6 +11681,24 @@ function appendExtensionSettingDefaultOverrideBadge(head,meta){
   el.title=meta.title;
   head.appendChild(el);
 }
+function extensionSettingPolicyMetadata(schema){
+  const policy=schema&&schema.policy;
+  if(!policy||typeof policy!=='object')return {managed:false,label:'',tag:'',title:'',name:''};
+  const name=String(policy.name||policy.policyName||'').trim();
+  const label=name?'Policy: '+name:'Policy';
+  const parts=['Can be managed by policy'];
+  if(name)parts.push(name);
+  if(policy.minimumVersion)parts.push('minimum version '+String(policy.minimumVersion));
+  return {managed:true,label,tag:'policy',title:parts.join(' · '),name};
+}
+function appendExtensionSettingPolicyBadge(head,meta){
+  if(!head||!meta||!meta.managed)return;
+  const el=document.createElement('span');
+  el.className='ext-setting-scope-badge ext-setting-policy-badge';
+  el.textContent=meta.label;
+  el.title=meta.title;
+  head.appendChild(el);
+}
 function extensionSettingDefault(schema,defaults,key){
   if(defaults&&Object.prototype.hasOwnProperty.call(defaults,key))return defaults[key];
   if(schema&&Object.prototype.hasOwnProperty.call(schema,'default'))return schema.default;
@@ -11702,6 +11764,8 @@ function extensionSettingSchemaSummary(schema,type){
     if(keys.length)parts.push('properties: '+keys.slice(0,4).join(', ')+(keys.length>4?' +'+(keys.length-4):''));
   }
   if(schema.disallowConfigurationDefault===true)parts.push('configurationDefaults disabled');
+  const policyMeta=extensionSettingPolicyMetadata(schema);
+  if(policyMeta.managed)parts.push(policyMeta.name?'policy: '+policyMeta.name:'policy managed');
   const constraints=extensionSettingConstraintSummary(schema,type);
   if(constraints)parts.push(constraints);
   return parts.join(' · ');
@@ -11787,6 +11851,8 @@ function extensionSettingSearchText(key,schema,type,description,deprecation,sche
     schema.ignoreSync===true?'ignoreSync sync ignored':'',
     schema.disallowSyncIgnore===true?'disallowSyncIgnore sync locked':'',
     schema.disallowConfigurationDefault===true?'disallowConfigurationDefault default locked configuration defaults':''];
+  const policyMeta=extensionSettingPolicyMetadata(schema);
+  if(policyMeta.managed)parts.push('policy managed '+policyMeta.name+' '+policyMeta.title);
   ['tags','keywords','enumItemLabels','enumDescriptions','markdownEnumDescriptions'].forEach(name=>{
     extensionSettingList(schema,name).forEach(value=>parts.push(value));
   });
@@ -12115,6 +12181,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       const scopeBadge=extensionSettingScopeBadge(schema);
       const syncMeta=extensionSettingSyncMetadata(schema);
       const defaultOverrideMeta=extensionSettingDefaultOverrideMetadata(schema);
+      const policyMeta=extensionSettingPolicyMetadata(schema);
       const shortKey=key.split('.').pop()||key;
       const row=document.createElement('div');row.className='ext-setting-row settings-field';
       if(!workspaceWritable)row.classList.add('scope-readonly');
@@ -12126,7 +12193,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
         .concat([scopeName,schema.restricted===true?'restricted':'',
           workspaceWritable?'':'scope-readonly',syncMeta.tag,
           syncMeta.ignored?'sync-ignored':'',syncMeta.locked?'sync-locked':'',
-          defaultOverrideMeta.tag]);
+          defaultOverrideMeta.tag,policyMeta.tag,policyMeta.name.toLowerCase()]);
       row.dataset.extSettingTags=tagList.filter(Boolean).join('\n');
       row.dataset.extSettingSearch=[
         displayName,extId,override,item.language,
@@ -12144,6 +12211,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       }
       appendExtensionSettingSyncBadge(head,syncMeta);
       appendExtensionSettingDefaultOverrideBadge(head,defaultOverrideMeta);
+      appendExtensionSettingPolicyBadge(head,policyMeta);
       if(schema.restricted===true){
         const restrictedEl=document.createElement('span');restrictedEl.className='ext-setting-scope-badge';restrictedEl.textContent='Restricted';
         head.appendChild(restrictedEl);
@@ -12318,6 +12386,7 @@ async function renderExtensionSettings(){
       const scopeBadge=extensionSettingScopeBadge(schema);
       const syncMeta=extensionSettingSyncMetadata(schema);
       const defaultOverrideMeta=extensionSettingDefaultOverrideMetadata(schema);
+      const policyMeta=extensionSettingPolicyMetadata(schema);
       const shortKey=key.split('.').pop()||key;
       const row=document.createElement('div');row.className='ext-setting-row settings-field';row.dataset.extSettingKey=key;
       if(!workspaceWritable)row.classList.add('scope-readonly');
@@ -12331,6 +12400,7 @@ async function renderExtensionSettings(){
       }
       appendExtensionSettingSyncBadge(head,syncMeta);
       appendExtensionSettingDefaultOverrideBadge(head,defaultOverrideMeta);
+      appendExtensionSettingPolicyBadge(head,policyMeta);
       if(schema.restricted===true){
         const restrictedEl=document.createElement('span');restrictedEl.className='ext-setting-scope-badge';restrictedEl.textContent='Restricted';
         head.appendChild(restrictedEl);
@@ -12352,7 +12422,7 @@ async function renderExtensionSettings(){
         .concat([scopeName,schema.restricted===true?'restricted':'',
           workspaceWritable?'':'scope-readonly',syncMeta.tag,
           syncMeta.ignored?'sync-ignored':'',syncMeta.locked?'sync-locked':'',
-          defaultOverrideMeta.tag])
+          defaultOverrideMeta.tag,policyMeta.tag,policyMeta.name.toLowerCase()])
         .filter(Boolean).join('\n');
       row.dataset.extSettingSearch=(
         sectionSearch+' '+extensionSettingSearchText(

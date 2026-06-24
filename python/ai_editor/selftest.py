@@ -4152,8 +4152,12 @@ console.log("frontend signature help docs ok");
             and "appendExtensionSettingSyncBadge(head,syncMeta)" in html
             and "function extensionSettingDefaultOverrideMetadata(schema)" in html
             and "appendExtensionSettingDefaultOverrideBadge(head,defaultOverrideMeta)" in html
+            and "function extensionSettingPolicyMetadata(schema)" in html
+            and "appendExtensionSettingPolicyBadge(head,policyMeta)" in html
             and "Default Locked" in html
             and "default-locked" in html
+            and "Policy:" in html
+            and "ext-setting-policy-badge" in html
             and "configurationDefaults disabled" in html
             and "ext-setting-sync-badge" in html
             and "sync-ignored" in html
@@ -4206,6 +4210,8 @@ console.log("frontend signature help docs ok");
             "extensionSettingSchemaSummary",
             "extensionSettingDefaultOverrideMetadata",
             "appendExtensionSettingDefaultOverrideBadge",
+            "extensionSettingPolicyMetadata",
+            "appendExtensionSettingPolicyBadge",
             "extensionSettingDeprecationText",
             "extensionSettingList",
             "extensionSettingEnumDescription",
@@ -4299,6 +4305,10 @@ const searchSchema = {
 const defaultLockedSchema = {
   type: "boolean",
   disallowConfigurationDefault: true
+};
+const policySchema = {
+  type: "string",
+  policy: { name: "SelftestPolicy", minimumVersion: "1.2.3" }
 };
 const numberSchema = { type: "number", minimum: 1, maximum: 5 };
 const multipleIntegerSchema = { type: "integer", minimum: 0, maximum: 10, multipleOf: 2 };
@@ -4537,6 +4547,8 @@ assert(extensionSettingSchemaSummary(rangedStringSchema, "string").indexOf("patt
        "string constraint summary");
 assert(extensionSettingSchemaSummary(defaultLockedSchema, "boolean").indexOf("configurationDefaults disabled") >= 0,
        "default override lock schema summary");
+assert(extensionSettingSchemaSummary(policySchema, "string").indexOf("policy: SelftestPolicy") >= 0,
+       "policy schema summary");
 assert(extensionSettingDeprecationText(deprecatedSchema) === "**Use** `new.setting`.",
        "markdown deprecation preferred");
 assert(extensionSettingDeprecationText({ deprecationMessage: "Use fallback." }) === "Use fallback.",
@@ -4567,6 +4579,18 @@ const lockedBadgeHost = makeNode("div");
 appendExtensionSettingDefaultOverrideBadge(lockedBadgeHost, lockedMeta);
 assert(lockedBadgeHost.children.some(n => n.textContent === "Default Locked"),
        "default override lock badge rendered");
+const policySearchText = extensionSettingSearchText("demo.policy", policySchema, "string", "", "", "");
+assert(policySearchText.indexOf("policy managed") >= 0
+       && policySearchText.indexOf("selftestpolicy") >= 0,
+       "settings search text includes policy metadata");
+const policyMeta = extensionSettingPolicyMetadata(policySchema);
+assert(policyMeta.managed === true && policyMeta.tag === "policy"
+       && policyMeta.name === "SelftestPolicy",
+       "policy metadata detected");
+const policyBadgeHost = makeNode("div");
+appendExtensionSettingPolicyBadge(policyBadgeHost, policyMeta);
+assert(policyBadgeHost.children.some(n => n.textContent === "Policy: SelftestPolicy"),
+       "policy badge rendered");
 assert(extensionSettingEnumDescription(searchSchema, 0) === "Uses **network**.",
        "markdown enum description preferred");
 const enumDescHost = makeNode("div");
@@ -5179,10 +5203,16 @@ console.log("quick input filter helpers ok");
            "setStatusBarMessage(text, hideAfterTimeoutOrThenable)"
            in node_ext_host_source
            and "function _windowSetStatusBarMessage" in node_ext_host_source
+           and "function _createStatusBarItemObject" in node_ext_host_source
+           and "function _statusBarCommand" in node_ext_host_source
+           and "function _statusBarAccessibility" in node_ext_host_source
            and "status_bar_hide" in node_ext_host_source
            and "self._ui_bridge.hide_status_bar_item" in extension_host_source
            and "def hide_status_bar_item(self, item_id: str) -> None:"
-           in app_source)
+           in app_source
+           and "function _extStatusBarCommand(data)" in html
+           and "execute_command(command.command,...command.arguments)" in html
+           and "aria-label" in html)
     _check("extension terminals bridge through Node host",
            "class TerminalObject" in node_ext_host_source
            and "createTerminal(nameOrOptions, shellPath, shellArgs)"
@@ -11711,7 +11741,28 @@ async function activate(context) {
     const text = await vscode.env.clipboard.readText();
     return { text };
   });
+  vscode.commands.registerCommand('selftest.node.statusBarNoop', (...args) => args);
   vscode.commands.registerCommand('selftest.node.statusBarMessageProbe', async () => {
+    const item = vscode.window.createStatusBarItem(
+      'selftest.node.status',
+      vscode.StatusBarAlignment.Left,
+      42
+    );
+    item.name = 'Selftest Status';
+    item.text = '$(zap) Initial Status';
+    item.tooltip = new vscode.MarkdownString('**Status** tooltip', true);
+    item.command = {
+      command: 'selftest.node.statusBarNoop',
+      title: 'Run Status',
+      arguments: ['status-arg', 2],
+    };
+    item.color = new vscode.ThemeColor('statusBarItem.prominentForeground');
+    item.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+    item.accessibilityInformation = { label: 'Selftest Status Accessible', role: 'button' };
+    item.show();
+    item.text = 'Updated Status';
+    item.hide();
+    item.dispose();
     const persistent = vscode.window.setStatusBarMessage('node persistent message');
     persistent.dispose();
     const timed = vscode.window.setStatusBarMessage('node timeout message', 5);
@@ -11729,6 +11780,7 @@ async function activate(context) {
       timedDisposable: !!(timed && timed.dispose),
       thenableDisposable: !!(thenable && thenable.dispose),
       cancelledDisposable: !!(cancelled && cancelled.dispose),
+      itemId: item._id,
     };
   });
   vscode.commands.registerCommand('selftest.node.terminalProbe', async () => {
@@ -12405,16 +12457,23 @@ module.exports = { activate, deactivate };
 
                 def show_status_bar_item(self, item_id, text, tooltip,
                                          command, alignment=2, priority=0,
-                                         color="", backgroundColor=""):
+                                         color="", backgroundColor="",
+                                         name="",
+                                         accessibilityInformation=None):
                     item = {
                         "id": str(item_id),
                         "text": str(text),
                         "tooltip": str(tooltip),
-                        "command": str(command),
+                        "command": command,
                         "alignment": int(alignment),
                         "priority": int(priority),
-                        "color": str(color),
-                        "backgroundColor": str(backgroundColor),
+                        "color": color,
+                        "backgroundColor": backgroundColor,
+                        "name": str(name),
+                        "accessibilityInformation": (
+                            accessibilityInformation
+                            if isinstance(accessibilityInformation, dict)
+                            else {}),
                     }
                     self.status_bar_items[item["id"]] = item
                     event = {"event": "show", **item}
@@ -14606,6 +14665,38 @@ module.exports = { activate, deactivate };
                            "thenableDisposable") is True
                        and node_status_bar_probe.get(
                            "cancelledDisposable") is True
+                       and node_status_bar_probe.get("itemId") == "selftest.node.status"
+                       and any(
+                           item.get("event") == "show"
+                           and item.get("id") == "selftest.node.status"
+                           and item.get("text") == "$(zap) Initial Status"
+                           and item.get("alignment") == 1
+                           and item.get("priority") == 42
+                           and item.get("name") == "Selftest Status"
+                           and item.get("command", {}).get("command")
+                           == "selftest.node.statusBarNoop"
+                           and item.get("command", {}).get("arguments")
+                           == ["status-arg", 2]
+                           and item.get("color", {}).get("id")
+                           == "statusBarItem.prominentForeground"
+                           and item.get("backgroundColor", {}).get("id")
+                           == "statusBarItem.warningBackground"
+                           and item.get("accessibilityInformation", {})
+                           .get("label") == "Selftest Status Accessible"
+                           for item in node_status_bar_events)
+                       and any(
+                           item.get("event") == "show"
+                           and item.get("id") == "selftest.node.status"
+                           and item.get("text") == "Updated Status"
+                           for item in node_status_bar_events)
+                       and any(
+                           item.get("event") == "hide"
+                           and item.get("id") == "selftest.node.status"
+                           for item in node_status_bar_events)
+                       and any(
+                           item.get("event") == "dispose"
+                           and item.get("id") == "selftest.node.status"
+                           for item in node_status_bar_events)
                        and {
                            "node persistent message",
                            "node timeout message",

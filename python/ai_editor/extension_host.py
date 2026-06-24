@@ -2876,9 +2876,11 @@ class NodeExtensionHost:
                 try:
                     self._ui_bridge.show_status_bar_item(
                         str(msg.get("id", "")), str(msg.get("text", "")),
-                        str(msg.get("tooltip", "")), str(msg.get("command", "")),
+                        str(msg.get("tooltip", "")), msg.get("command", ""),
                         int(msg.get("alignment", 2)), int(msg.get("priority", 0)),
-                        str(msg.get("color", "")), str(msg.get("backgroundColor", "")))
+                        msg.get("color", ""), msg.get("backgroundColor", ""),
+                        str(msg.get("name", "")),
+                        msg.get("accessibilityInformation"))
                 except Exception:
                     pass
 

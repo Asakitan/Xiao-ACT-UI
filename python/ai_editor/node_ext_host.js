@@ -4875,6 +4875,113 @@ function _windowSetStatusBarMessage(text, hideAfterTimeoutOrThenable) {
     return new Disposable(() => close('status_bar_dispose'));
 }
 
+function _statusBarText(value) {
+    if (value === undefined || value === null) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'object' && value.value !== undefined) return String(value.value ?? '');
+    return String(value);
+}
+
+function _statusBarColor(value) {
+    if (value === undefined || value === null) return '';
+    if (typeof value === 'string') return value;
+    if (value instanceof ThemeColor) return { id: value.id };
+    if (typeof value === 'object' && value.id) return { id: String(value.id) };
+    return String(value);
+}
+
+function _statusBarCommand(value) {
+    if (value === undefined || value === null || value === '') return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'object' && value.command) {
+        return {
+            command: String(value.command),
+            title: value.title === undefined || value.title === null
+                ? ''
+                : String(value.title),
+            arguments: Array.isArray(value.arguments)
+                ? value.arguments.map(arg => _serializeArgForPython(arg))
+                : [],
+        };
+    }
+    return '';
+}
+
+function _statusBarAccessibility(value) {
+    if (!value || typeof value !== 'object') return null;
+    return {
+        label: value.label === undefined || value.label === null
+            ? ''
+            : String(value.label),
+        role: value.role === undefined || value.role === null
+            ? ''
+            : String(value.role),
+    };
+}
+
+function _createStatusBarItemObject(id, alignment, priority) {
+    const state = {
+        alignment,
+        priority,
+        text: '',
+        tooltip: '',
+        color: '',
+        backgroundColor: undefined,
+        command: undefined,
+        name: '',
+        accessibilityInformation: undefined,
+        visible: false,
+        disposed: false,
+    };
+    const item = { _id: id };
+    function payload() {
+        return {
+            type: 'status_bar_show',
+            id,
+            text: _statusBarText(state.text),
+            tooltip: _statusBarText(state.tooltip),
+            command: _statusBarCommand(state.command),
+            alignment: state.alignment,
+            priority: state.priority,
+            color: _statusBarColor(state.color),
+            backgroundColor: _statusBarColor(state.backgroundColor),
+            name: _statusBarText(state.name),
+            accessibilityInformation: _statusBarAccessibility(
+                state.accessibilityInformation),
+        };
+    }
+    function refreshIfVisible() {
+        if (!state.disposed && state.visible) send(payload());
+    }
+    [
+        'alignment', 'priority', 'text', 'tooltip', 'color',
+        'backgroundColor', 'command', 'name', 'accessibilityInformation',
+    ].forEach(prop => {
+        Object.defineProperty(item, prop, {
+            enumerable: true,
+            get() { return state[prop]; },
+            set(value) { state[prop] = value; refreshIfVisible(); },
+        });
+    });
+    item.show = () => {
+        if (state.disposed) return;
+        state.visible = true;
+        send(payload());
+    };
+    item.hide = () => {
+        if (state.disposed) return;
+        state.visible = false;
+        send({ type: 'status_bar_hide', id });
+    };
+    item.dispose = () => {
+        if (state.disposed) return;
+        state.disposed = true;
+        state.visible = false;
+        send({ type: 'status_bar_dispose', id });
+    };
+    return item;
+}
+
 function _authProviderMethod(provider, names) {
     for (const name of names) {
         if (provider && typeof provider[name] === 'function') {
@@ -5312,20 +5419,20 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 return _windowSetStatusBarMessage(text, hideAfterTimeoutOrThenable);
             },
             createStatusBarItem(alignmentOrId, priorityOrAlignment, priority) {
-                const align = typeof alignmentOrId === 'number' ? alignmentOrId : 2;
-                const pri = typeof priorityOrAlignment === 'number' ? priorityOrAlignment :
-                            (typeof priority === 'number' ? priority : 0);
-                const id = 'sbi-node-' + (++_sbiCounter);
-                const item = {
-                    alignment: align, priority: pri, text: '', tooltip: '', color: '',
-                    backgroundColor: undefined, command: undefined, name: '', _id: id,
-                    show() { send({type:'status_bar_show', id, text:item.text, tooltip:item.tooltip,
-                              command:item.command||'', alignment:align, priority:pri,
-                              color:item.color||'', backgroundColor:item.backgroundColor||''}); },
-                    hide() { send({type:'status_bar_hide', id}); },
-                    dispose() { send({type:'status_bar_dispose', id}); },
-                };
-                return item;
+                const id = typeof alignmentOrId === 'string' && alignmentOrId
+                    ? alignmentOrId
+                    : 'sbi-node-' + (++_sbiCounter);
+                const align = typeof alignmentOrId === 'number'
+                    ? alignmentOrId
+                    : (typeof priorityOrAlignment === 'number'
+                        ? priorityOrAlignment
+                        : 2);
+                const pri = typeof alignmentOrId === 'number'
+                    ? (typeof priorityOrAlignment === 'number'
+                        ? priorityOrAlignment
+                        : 0)
+                    : (typeof priority === 'number' ? priority : 0);
+                return _createStatusBarItemObject(id, align, pri);
             },
             registerTreeDataProvider(viewId, treeDataProvider) {
                 log(`registerTreeDataProvider ${viewId}`);

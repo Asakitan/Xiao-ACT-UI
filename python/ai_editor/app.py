@@ -1007,15 +1007,18 @@ class _AIEditorUIBridge:
 
     # -- Status bar --
     def show_status_bar_item(self, item_id: str, text: str,
-                             tooltip: str, command: str,
+                             tooltip: str, command: Any,
                              alignment: int = 2, priority: int = 0,
                              color: str = "",
-                             backgroundColor: str = "") -> None:
+                             backgroundColor: str = "",
+                             name: str = "",
+                             accessibilityInformation: Any = None) -> None:
         self._api._emit("show_status_bar_item", {
             "id": item_id, "text": text, "tooltip": tooltip,
             "command": command, "alignment": alignment,
             "priority": priority, "color": color,
-            "backgroundColor": backgroundColor})
+            "backgroundColor": backgroundColor, "name": name,
+            "accessibilityInformation": accessibilityInformation})
 
     def hide_status_bar_item(self, item_id: str) -> None:
         self._api._emit("hide_status_bar_item", {"id": item_id})
