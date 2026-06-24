@@ -5446,6 +5446,12 @@ def test_app_extension_runtime_support() -> None:
         api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
         api._ensure_engine()
         node_lm_cancel_observed = []
+        emitted_events = []
+
+        def _record_emit(event, data):
+            emitted_events.append({"event": event, "data": data})
+
+        api._emit = _record_emit
 
         def _node_lm_completion(messages, tools=None, on_delta=None):
             raw_messages = json.dumps(messages, ensure_ascii=False, default=str)
@@ -6838,6 +6844,30 @@ async function activate(context) {
       },
     };
   });
+  vscode.commands.registerCommand('selftest.node.progressProbe', async () => {
+    const progressLocation = vscode.ProgressLocation || {};
+    const result = await vscode.window.withProgress({
+      location: progressLocation.Notification,
+      title: 'Node Progress Probe',
+      cancellable: true,
+    }, async (progress, token) => {
+      progress.report({ message: 'halfway', increment: 25 });
+      progress.report({ message: 'worked-alias', worked: 50 });
+      return {
+        tokenCancelled: token.isCancellationRequested,
+        hasCancelEvent: typeof token.onCancellationRequested === 'function',
+      };
+    });
+    const scmResult = await vscode.window.withScmProgress(async progress => {
+      progress.report(7);
+      return 'scm-ok';
+    });
+    return {
+      result,
+      scmResult,
+      progressLocation,
+    };
+  });
   vscode.workspace.onDidChangeConfiguration(event => {
     configEvents.count += 1;
     configEvents.aiEditor = event.affectsConfiguration('ai_editor');
@@ -7814,6 +7844,7 @@ module.exports = { activate, deactivate };
                 def __init__(self) -> None:
                     self.webviews = {}
                     self.local_resource_roots = {}
+                    self.progress = []
 
                 def render_webview_panel(
                         self, view_id: str, html: str,
@@ -7823,6 +7854,14 @@ module.exports = { activate, deactivate };
 
                 def post_webview_message(self, view_id: str, message) -> None:
                     self.webviews.setdefault(view_id, "")
+
+                def show_progress(self, message, increment) -> None:
+                    event = {"message": message, "increment": increment}
+                    self.progress.append(event)
+                    emitted_events.append({
+                        "event": "show_progress",
+                        "data": event,
+                    })
 
             node_ui_bridge = _NodeUiBridge()
             node_host = NodeExtensionHost(
@@ -7998,6 +8037,20 @@ module.exports = { activate, deactivate };
                         "selftest.node.lmChatProbe")
                 except Exception as exc:
                     node_lm_chat_probe = {"_error": str(exc)}
+                node_progress_command_registered = _wait_until(
+                    lambda: "selftest.node.progressProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                try:
+                    node_progress_probe = api._ext_host.commands.execute(
+                        "selftest.node.progressProbe")
+                except Exception as exc:
+                    node_progress_probe = {"_error": str(exc)}
+                node_progress_events = [
+                    item.get("data", {})
+                    for item in emitted_events
+                    if item.get("event") == "show_progress"
+                ]
                 node_lm_cancel_bridge_seen = _wait_until(
                     lambda: bool(node_lm_cancel_observed),
                     timeout=3.0)
@@ -9198,6 +9251,41 @@ module.exports = { activate, deactivate };
                        json.dumps({
                            "cancellation": node_lm_cancellation,
                            "observed": node_lm_cancel_observed,
+                       }, ensure_ascii=False, default=str))
+                _check("node host bridges withProgress reports",
+                       node_started is True
+                       and node_progress_command_registered
+                       and isinstance(node_progress_probe, dict)
+                       and node_progress_probe.get(
+                           "progressLocation", {}).get("Notification") == 15
+                       and node_progress_probe.get(
+                           "progressLocation", {}).get("SourceControl") == 1
+                       and node_progress_probe.get("scmResult") == "scm-ok"
+                       and node_progress_probe.get(
+                           "result", {}).get("tokenCancelled") is False
+                       and node_progress_probe.get(
+                           "result", {}).get("hasCancelEvent") is True
+                       and any(
+                           item.get("message") == "Node Progress Probe"
+                           for item in node_progress_events
+                           if isinstance(item, dict))
+                       and any(
+                           item.get("message") == "halfway"
+                           and item.get("increment") == 25
+                           for item in node_progress_events
+                           if isinstance(item, dict))
+                       and any(
+                           item.get("message") == "worked-alias"
+                           and item.get("increment") == 50
+                           for item in node_progress_events
+                           if isinstance(item, dict))
+                       and any(
+                           item.get("increment") == 7
+                           for item in node_progress_events
+                           if isinstance(item, dict)),
+                       json.dumps({
+                           "probe": node_progress_probe,
+                           "events": node_progress_events,
                        }, ensure_ascii=False, default=str))
                 _check("node host invokes dynamic LM tool and chat participant",
                        node_started is True

@@ -11,7 +11,8 @@
  *
  * Outbound (to Python):
  *   activated, webview_html, webview_post_message, command_registered,
- *   output, error, show_message
+ *   output, error, show_message, progress_start, progress_report,
+ *   progress_done
  */
 'use strict';
 
@@ -587,6 +588,12 @@ class CancellationTokenSource {
     }
     dispose() { this._emitter.dispose(); }
 }
+
+const ProgressLocation = {
+    SourceControl: 1,
+    Window: 10,
+    Notification: 15,
+};
 
 class LanguageModelTextPart {
     constructor(value = '', audience) {
@@ -1196,6 +1203,7 @@ const _authenticationSessions = new Map();  // id -> AuthenticationSession[]
 const _onDidChangeAuthenticationSessionsEmitter = new EventEmitter();
 const _onDidChangeConfigurationEmitter = new EventEmitter();
 let _nextUntitledDocument = 1;
+let _nextProgressHandle = 1;
 
 function _workspaceDocumentIsOpened(document) {
     return !!document && document.__opened !== false;
@@ -1861,6 +1869,77 @@ function _createChatResponseStream(parts) {
         updateToolInvocation() {},
         push: append,
     };
+}
+
+function _normalizeProgressOptions(options) {
+    const opts = options && typeof options === 'object' ? options : {};
+    return {
+        location: opts.location,
+        title: opts.title === undefined || opts.title === null ? '' : String(opts.title),
+        cancellable: !!opts.cancellable,
+    };
+}
+
+function _normalizeProgressReport(value) {
+    if (value === undefined || value === null) return {};
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        return { message: String(value) };
+    }
+    if (value && typeof value === 'object') {
+        const report = {};
+        if (value.message !== undefined && value.message !== null) {
+            report.message = String(value.message);
+        }
+        const rawIncrement = value.increment ?? value.worked;
+        if (rawIncrement !== undefined && rawIncrement !== null) {
+            const increment = Number(rawIncrement);
+            if (Number.isFinite(increment)) report.increment = increment;
+        }
+        return report;
+    }
+    return { message: String(value) };
+}
+
+function _withProgress(options, task) {
+    const progressId = `progress-${_nextProgressHandle++}`;
+    const normalizedOptions = _normalizeProgressOptions(options);
+    const token = {
+        isCancellationRequested: false,
+        onCancellationRequested: new EventEmitter().event,
+    };
+    send({
+        type: 'progress_start',
+        progressId,
+        options: normalizedOptions,
+        message: normalizedOptions.title,
+    });
+    const progress = {
+        report(value) {
+            const report = _normalizeProgressReport(value);
+            send(Object.assign({
+                type: 'progress_report',
+                progressId,
+                options: normalizedOptions,
+            }, report));
+        },
+    };
+    return Promise.resolve()
+        .then(() => task(progress, token))
+        .then(
+            (value) => {
+                send({ type: 'progress_done', progressId, ok: true, options: normalizedOptions });
+                return value;
+            },
+            (error) => {
+                send({
+                    type: 'progress_done',
+                    progressId,
+                    ok: false,
+                    options: normalizedOptions,
+                    error: String(error && error.message || error),
+                });
+                throw error;
+            });
 }
 
 function _chatRequestFromPayload(msg) {
@@ -3382,6 +3461,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         ExtensionMode: { Production: 1, Development: 2, Test: 3 },
         DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2, Hint: 3 },
         DocumentHighlightKind: { Text: 0, Read: 1, Write: 2 },
+        ProgressLocation,
         CompletionItemKind: Object.fromEntries([
             'Text', 'Method', 'Function', 'Constructor', 'Field', 'Variable',
             'Class', 'Interface', 'Module', 'Property', 'Unit', 'Value',
@@ -3500,10 +3580,15 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             showInputBox(options) {
                 return _windowShowInputBox(options || {});
             },
-            withProgress(options, task) {
-                const progress = { report: () => {} };
-                const token = { isCancellationRequested: false, onCancellationRequested: new EventEmitter().event };
-                return task(progress, token);
+            withProgress: _withProgress,
+            withScmProgress(task) {
+                return _withProgress(
+                    { location: ProgressLocation.SourceControl },
+                    (progress) => task({
+                        report(value) {
+                            progress.report({ increment: Number(value) || 0 });
+                        },
+                    }));
             },
             createStatusBarItem(alignmentOrId, priorityOrAlignment, priority) {
                 const align = typeof alignmentOrId === 'number' ? alignmentOrId : 2;

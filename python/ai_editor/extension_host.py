@@ -1577,6 +1577,9 @@ class NodeExtensionHost:
         {"type": "config_set",          "section": "...", "key": "...", "value": ...}
         {"type": "output",              "channel": "...", "text": "..."}
         {"type": "show_message",        "level": "info|warn|error", "message": "..."}
+        {"type": "progress_start",      "message": "..."}
+        {"type": "progress_report",     "message": "...", "increment": 10}
+        {"type": "progress_done",       "ok": true}
     """
 
     def __init__(self,
@@ -2418,6 +2421,32 @@ class NodeExtensionHost:
                     self._ui_bridge.dispose_status_bar_item(str(msg.get("id", "")))
                 except Exception:
                     pass
+
+        elif msg_type in ("progress_start", "progress_report", "progress_done"):
+            progress_handler = (
+                getattr(self._ui_bridge, "show_progress", None)
+                if self._ui_bridge else None)
+            if callable(progress_handler):
+                try:
+                    message = msg.get("message")
+                    if message is None and msg_type != "progress_done":
+                        options = msg.get("options")
+                        if isinstance(options, dict):
+                            message = options.get("title")
+                    increment = msg.get("increment")
+                    if isinstance(increment, bool):
+                        increment = None
+                    elif increment is not None:
+                        try:
+                            increment = float(increment)
+                        except (TypeError, ValueError):
+                            increment = None
+                    if message is not None or increment is not None:
+                        progress_handler(
+                            str(message) if message is not None else None,
+                            increment)
+                except Exception:
+                    _log.exception("[NodeExtHost] show_progress failed")
 
         else:
             _log.debug("[NodeExtHost] Unknown message type: %s", msg_type)
