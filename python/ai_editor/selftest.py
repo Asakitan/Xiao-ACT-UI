@@ -2755,7 +2755,13 @@ console.log("extension setting schema helpers ok");
            and "function renderQuickInputState(state)" in html
            and "function quickInputRenderItems(list,state,input)" in html
            and "function quickInputMoveActive(state,delta)" in html
+           and "function quickInputItemMatchesFilter(item,state)" in html
+           and "function quickInputFilterText(state)" in html
            and "quickInputSelectableIndices(state)" in html
+           and "state.matchOnDescription" in html
+           and "state.matchOnDetail" in html
+           and "state.keepScrollPosition" in html
+           and "previousScrollTop" in html
            and "e.key==='ArrowDown'" in html
            and "e.key==='ArrowUp'" in html
            and "aria-activedescendant" in html
@@ -2773,6 +2779,77 @@ console.log("extension setting schema helpers ok");
            and "call('extension_quick_input_action',id,action,payload||{})" in html
            and "if(event==='quick_input')" in html
            and "renderQuickInputEvent(data)" in html)
+    if node_path:
+        quick_input_functions = [
+            "quickInputItemKey",
+            "quickInputSelectedKeySet",
+            "quickInputFilterText",
+            "quickInputItemMatchesFilter",
+            "quickInputSelectedIndices",
+            "quickInputSelectableIndices",
+            "quickInputActiveIndex",
+        ]
+        quick_input_js = "\n".join(
+            _extract_js_function(html, name)
+            for name in quick_input_functions)
+        js = quick_input_js + r"""
+function assert(ok,label){ if(!ok){ throw new Error(label); } }
+const state = {
+  value: "beta",
+  matchOnDescription: false,
+  matchOnDetail: false,
+  items: [
+    { kind: 1, label: "Group" },
+    { label: "Alpha", description: "beta desc", detail: "gamma detail" },
+    { label: "Beta", description: "plain", detail: "plain" },
+    { label: "Gamma", description: "plain", detail: "beta detail" },
+  ],
+  activeItems: [{ label: "Alpha", description: "beta desc", detail: "gamma detail" }],
+  selectedItems: [{ label: "Beta", description: "plain", detail: "plain" }],
+};
+assert(JSON.stringify(quickInputSelectableIndices(state)) === "[2]",
+       "label filter excludes separator and nonmatching items");
+assert(quickInputActiveIndex(state) === 2,
+       "hidden active item falls back to visible selected item");
+state.matchOnDescription = true;
+assert(JSON.stringify(quickInputSelectableIndices(state)) === "[1,2]",
+       "description filter enabled");
+state.matchOnDescription = false;
+state.matchOnDetail = true;
+assert(JSON.stringify(quickInputSelectableIndices(state)) === "[2,3]",
+       "detail filter enabled");
+state.value = "";
+assert(JSON.stringify(quickInputSelectableIndices(state)) === "[1,2,3]",
+       "empty filter shows all non-separator items");
+console.log("quick input filter helpers ok");
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check("frontend QuickInput filters match VS Code options",
+                   result.returncode == 0
+                   and "quick input filter helpers ok" in result.stdout,
+                   (result.stderr or result.stdout).strip())
+        except Exception as exc:
+            _check("frontend QuickInput filters match VS Code options",
+                   False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
     _check("webview bridge preserves raw and falsy messages",
             "postExtensionMessageToWebview(iframe,msg)" in html
             and "iframe.contentWindow.postMessage(msg,'*')" in html
