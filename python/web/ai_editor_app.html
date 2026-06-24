@@ -1004,6 +1004,7 @@ pre.code-block { overflow:visible; }
 .ext-setting-row.modified .ext-setting-badge { display:inline-flex; }
 .ext-setting-key { font-size:11px; font-family:var(--mono); color:var(--fg-dim); user-select:all; margin-bottom:4px; }
 .ext-setting-desc { font-size:11px; color:var(--fg-dim); line-height:1.35; margin-bottom:4px; }
+.ext-setting-schema { font-size:10px; color:var(--fg-dim); font-family:var(--mono); margin-bottom:4px; }
 .ext-setting-error { display:none; color:var(--fg-error); font-size:11px; margin-top:3px; }
 .ext-setting-row.invalid .ext-setting-error { display:block; }
 .ext-settings-filter { display:grid; grid-template-columns:minmax(140px,1fr) auto auto; align-items:center;
@@ -9577,10 +9578,31 @@ function extensionSettingDefault(schema,defaults,key){
   const type=extensionSettingType(schema||{});
   return type==='array'?[]:(type==='object'?{}:'');
 }
+function extensionSettingSchemaSummary(schema,type){
+  if(!schema||typeof schema!=='object')return '';
+  if(type==='array'&&schema.items&&typeof schema.items==='object'){
+    const itemType=extensionSettingType(schema.items);
+    return 'items: '+itemType;
+  }
+  if(type==='object'&&schema.properties&&typeof schema.properties==='object'){
+    const keys=Object.keys(schema.properties);
+    return keys.length?'properties: '+keys.slice(0,4).join(', ')+(keys.length>4?' +'+(keys.length-4):''):'';
+  }
+  return '';
+}
 function extensionSettingJson(value,type){
   const fallback=type==='array'?[]:(type==='object'?{}:'');
   const v=value===undefined?fallback:value;
   try{return JSON.stringify(v,null,2)}catch(e){return String(v??'')}
+}
+function extensionSettingJsonRows(value,type){
+  const lines=extensionSettingJson(value,type).split('\n').length;
+  return Math.max(3,Math.min(10,lines));
+}
+function extensionSettingValidateJsonValue(value,type){
+  if(type==='array'&&!Array.isArray(value))throw new Error('Expected JSON array');
+  if(type==='object'&&(!value||typeof value!=='object'||Array.isArray(value)))throw new Error('Expected JSON object');
+  return value;
 }
 function setExtensionSettingInputValue(input,schema,type,value){
   if(input.type==='checkbox'){input.checked=!!value;return}
@@ -9589,7 +9611,10 @@ function setExtensionSettingInputValue(input,schema,type,value){
     const idx=schema.enum.findIndex(opt=>JSON.stringify(opt)===wanted);
     input.selectedIndex=idx>=0?idx:0;return;
   }
-  if(type==='array'||type==='object')input.value=extensionSettingJson(value,type);
+  if(type==='array'||type==='object'){
+    input.value=extensionSettingJson(value,type);
+    input.rows=extensionSettingJsonRows(value,type);
+  }
   else input.value=value!=null?String(value):'';
 }
 function readExtensionSettingInputValue(input,schema,type){
@@ -9604,7 +9629,7 @@ function readExtensionSettingInputValue(input,schema,type){
   if(type==='array'||type==='object'){
     const text=input.value.trim();
     if(!text)return type==='array'?[]:{};
-    return JSON.parse(text);
+    return extensionSettingValidateJsonValue(JSON.parse(text),type);
   }
   return input.value;
 }
@@ -9725,6 +9750,8 @@ async function renderExtensionSettings(){
       keyLabel.textContent=key+(schema.scope?' · '+schema.scope:'')+' · '+type;
       row.appendChild(keyLabel);
       if(description){const desc=document.createElement('div');desc.className='ext-setting-desc';desc.textContent=description;row.appendChild(desc)}
+      const schemaSummary=extensionSettingSchemaSummary(schema,type);
+      if(schemaSummary){const meta=document.createElement('div');meta.className='ext-setting-schema';meta.textContent=schemaSummary;row.appendChild(meta)}
       let input;
       if(type==='boolean'){
         const lbl=document.createElement('label');lbl.className='settings-check';
@@ -9735,8 +9762,10 @@ async function renderExtensionSettings(){
         input=document.createElement('select');
         schema.enum.forEach((opt,idx)=>{
           const o=document.createElement('option');o.value=String(opt);o.dataset.enumIndex=String(idx);
-          const enumLabels=schema.enumItemLabels||schema.enumDescriptions||[];
+          const enumLabels=schema.enumItemLabels||[];
+          const enumDescriptions=schema.markdownEnumDescriptions||schema.enumDescriptions||[];
           o.textContent=enumLabels[idx]||String(opt);input.appendChild(o);
+          if(enumDescriptions[idx])o.title=String(enumDescriptions[idx]);
         });
         row.appendChild(input);
       } else if(type==='number'||type==='integer'){

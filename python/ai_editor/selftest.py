@@ -2538,6 +2538,9 @@ console.log("frontend auto-close behavior ok");
                     pass
     _check("frontend renders extension settings modified reset controls",
             "function renderExtensionSettings()" in html
+            and "function extensionSettingValidateJsonValue(value,type)" in html
+            and "function extensionSettingSchemaSummary(schema,type)" in html
+            and "function extensionSettingJsonRows(value,type)" in html
             and "reset_extension_setting" in html
             and "markExtensionSettingRow" in html
             and "function applyExtensionSettingsFilter()" in html
@@ -2545,7 +2548,78 @@ console.log("frontend auto-close behavior ok");
             and "dataset.extSettingsCategory" in html
             and "@modified" in html
             and "ext-setting-badge" in html
-            and "Invalid JSON" in html)
+            and "Invalid JSON" in html
+            and "Expected JSON array" in html
+            and "Expected JSON object" in html
+            and "ext-setting-schema" in html
+            and "markdownEnumDescriptions" in html)
+    if node_path:
+        setting_functions = [
+            "extensionSettingType",
+            "extensionSettingDefault",
+            "extensionSettingSchemaSummary",
+            "extensionSettingJson",
+            "extensionSettingJsonRows",
+            "extensionSettingValidateJsonValue",
+            "setExtensionSettingInputValue",
+            "readExtensionSettingInputValue",
+        ]
+        setting_js = "\n".join(
+            _extract_js_function(html, name) for name in setting_functions)
+        js = setting_js + r"""
+function assert(ok,label){ if(!ok){ throw new Error(label); } }
+const arraySchema = { type: "array", items: { type: "string" } };
+const objectSchema = {
+  type: "object",
+  properties: { level: { type: "number" }, mode: { type: "string" } }
+};
+const textarea = { type: "textarea", tagName: "TEXTAREA", value: "", rows: 0 };
+setExtensionSettingInputValue(textarea, arraySchema, "array", ["a", "b"]);
+assert(textarea.value.indexOf('"a"') >= 0, "array formatted as JSON");
+assert(textarea.rows >= 3, "textarea rows stable");
+textarea.value = '{"not":"array"}';
+let arrayRejected = false;
+try { readExtensionSettingInputValue(textarea, arraySchema, "array"); }
+catch (err) { arrayRejected = /Expected JSON array/.test(String(err.message)); }
+assert(arrayRejected, "array schema rejects object JSON");
+textarea.value = '["not-object"]';
+let objectRejected = false;
+try { readExtensionSettingInputValue(textarea, objectSchema, "object"); }
+catch (err) { objectRejected = /Expected JSON object/.test(String(err.message)); }
+assert(objectRejected, "object schema rejects array JSON");
+assert(extensionSettingSchemaSummary(arraySchema, "array") === "items: string",
+       "array schema summary");
+assert(extensionSettingSchemaSummary(objectSchema, "object").indexOf("level") >= 0,
+       "object schema summary");
+console.log("extension setting schema helpers ok");
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check("frontend extension settings validate array/object schemas",
+                   result.returncode == 0
+                   and "extension setting schema helpers ok" in result.stdout,
+                   (result.stderr or result.stdout).strip())
+        except Exception as exc:
+            _check("frontend extension settings validate array/object schemas",
+                   False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
     _check("frontend renders extension contribution toggles",
             "id=\"s-ext-diagnostics\"" in html
             and "id=\"s-ext-contribs-list\"" in html
