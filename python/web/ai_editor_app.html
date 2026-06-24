@@ -1073,13 +1073,21 @@ pre.code-block { overflow:visible; }
 .ext-setting-schema { font-size:10px; color:var(--fg-dim); font-family:var(--mono); margin-bottom:4px; }
 .ext-setting-error { display:none; color:var(--fg-error); font-size:11px; margin-top:3px; }
 .ext-setting-row.invalid .ext-setting-error { display:block; }
-.ext-settings-filter { display:grid; grid-template-columns:minmax(140px,1fr) minmax(96px,auto) minmax(116px,auto) auto auto auto; align-items:center;
+.ext-settings-filter { position:relative; display:grid; grid-template-columns:minmax(140px,1fr) minmax(96px,auto) minmax(116px,auto) auto auto auto auto; align-items:center;
   gap:6px; margin:8px 0 4px; padding:6px 8px; background:var(--bg2); border:1px solid var(--border); border-radius:4px; }
 .ext-settings-filter select { min-width:0; }
 .ext-settings-filter button { height:24px; padding:2px 8px; font-size:11px; }
 .ext-settings-filter label { display:flex; align-items:center; gap:5px; margin:0; color:var(--fg-dim); font-size:11px; }
 .ext-settings-filter input[type="checkbox"] { width:auto; margin:0; }
 .ext-settings-filter .ext-settings-count { color:var(--fg-dim); font:11px var(--mono); white-space:nowrap; }
+.ext-settings-filter-menu { display:none; position:absolute; z-index:20; top:34px; right:8px; min-width:188px; padding:4px;
+  background:var(--bg); border:1px solid var(--border); box-shadow:var(--shadow); border-radius:4px; }
+.ext-settings-filter-menu.open { display:block; }
+.ext-settings-filter-menu button { display:block; width:100%; height:24px; text-align:left; border:0; background:transparent; color:var(--fg);
+  padding:2px 7px; border-radius:3px; font-size:11px; }
+.ext-settings-filter-menu button:hover { background:var(--bg-hover); }
+.ext-settings-filter-menu button.checked::before { content:'✓ '; color:var(--fg-accent); }
+.ext-settings-filter-menu .sep { height:1px; background:var(--border); margin:4px; }
 
 /* ── SETTINGS-05: Keyboard shortcuts editor ── */
 .kb-modal-bg { position:fixed; inset:0; background:#00000080; z-index:700; display:none; align-items:center; justify-content:center; }
@@ -12160,6 +12168,49 @@ function extensionSettingSplitFilterValues(value){
 function extensionSettingPushFilterValues(list,value){
   extensionSettingSplitFilterValues(value).forEach(item=>list.push(item));
 }
+function extensionSettingQueryTokens(raw){
+  const text=String(raw||'').trim();
+  if(!text)return [];
+  const tokens=[];
+  const re=new RegExp('@[^\\s:]+:"[^"]*"|"[^"]*"|\\S+','g');
+  let match;
+  while((match=re.exec(text))!==null)tokens.push(match[0]);
+  return tokens;
+}
+function extensionSettingIsFilterToken(token){
+  return /^@(modified|stable|policy|restricted)(?=$|\s)/i.test(token)
+    || /^@(tag|ext|feature|id|lang|scope|target|type|sync):/i.test(token);
+}
+function extensionSettingSearchTokenValue(){
+  const search=$('settings-search');
+  return search?search.value:'';
+}
+function extensionSettingSetSearchTokenValue(value){
+  const search=$('settings-search');
+  if(search){search.value=String(value||'').trim();if(search.focus)search.focus()}
+  return search?search.value:'';
+}
+function extensionSettingAppendFilterToken(token){
+  const tokens=extensionSettingQueryTokens(extensionSettingSearchTokenValue());
+  if(!tokens.includes(token))tokens.push(token);
+  extensionSettingSetSearchTokenValue(tokens.join(' '));
+  applyExtensionSettingsFilter();
+}
+function extensionSettingToggleFilterToken(token,excludeTokens){
+  const excludes=new Set((excludeTokens||[]).concat([token]));
+  const tokens=extensionSettingQueryTokens(extensionSettingSearchTokenValue());
+  const has=tokens.includes(token);
+  const next=has?tokens.filter(item=>item!==token):tokens.filter(item=>!excludes.has(item)).concat([token]);
+  extensionSettingSetSearchTokenValue(next.join(' '));
+  applyExtensionSettingsFilter();
+}
+function extensionSettingClearFilterTokens(){
+  const text=extensionSettingQueryTokens(extensionSettingSearchTokenValue())
+    .filter(token=>!extensionSettingIsFilterToken(token)).join(' ');
+  extensionSettingSetSearchTokenValue(text);
+  const cb=$('ext-settings-modified');if(cb)cb.checked=false;
+  applyExtensionSettingsFilter();
+}
 function extensionSettingsQuery(){
   const raw=(($('settings-search')||{}).value||'').trim();
   return extensionSettingParseQuery(raw,(($('ext-settings-modified')||{}).checked===true));
@@ -12469,6 +12520,51 @@ async function renderExtensionSettings(){
   const modifiedLabel=document.createElement('label');
   const modifiedBox=document.createElement('input');modifiedBox.type='checkbox';modifiedBox.id='ext-settings-modified';
   modifiedLabel.appendChild(modifiedBox);modifiedLabel.appendChild(document.createTextNode('@modified'));
+  const filterButton=document.createElement('button');filterButton.type='button';filterButton.id='ext-settings-filter-menu-button';filterButton.textContent='Filters';
+  const filterMenu=document.createElement('div');filterMenu.className='ext-settings-filter-menu';filterMenu.id='ext-settings-filter-menu';
+  const addFilterAction=(label,token,opts)=>{
+    const btn=document.createElement('button');btn.type='button';btn.textContent=label;btn.dataset.filterToken=token;
+    btn.onclick=ev=>{
+      ev.preventDefault();ev.stopPropagation();
+      if(opts&&opts.append)extensionSettingAppendFilterToken(token);
+      else extensionSettingToggleFilterToken(token,(opts&&opts.exclude)||[]);
+      filterMenu.classList.remove('open');
+    };
+    filterMenu.appendChild(btn);
+    return btn;
+  };
+  addFilterAction('Modified','@modified');
+  addFilterAction('Extension ID...','@ext:',{append:true});
+  addFilterAction('Feature...','@feature:',{append:true});
+  addFilterAction('Tag...','@tag:',{append:true});
+  addFilterAction('Language...','@lang:',{append:true});
+  addFilterAction('Setting ID...','@id:',{append:true});
+  const sep1=document.createElement('div');sep1.className='sep';filterMenu.appendChild(sep1);
+  addFilterAction('Online services','@tag:usesOnlineServices');
+  addFilterAction('Policy','@policy');
+  addFilterAction('Sync','@tag:sync');
+  const sep2=document.createElement('div');sep2.className='sep';filterMenu.appendChild(sep2);
+  addFilterAction('Stable','@stable',{exclude:['@tag:preview','@tag:experimental']});
+  addFilterAction('Preview','@tag:preview',{exclude:['@stable','@tag:experimental']});
+  addFilterAction('Experimental','@tag:experimental',{exclude:['@stable','@tag:preview']});
+  addFilterAction('Advanced','@tag:advanced');
+  const sep3=document.createElement('div');sep3.className='sep';filterMenu.appendChild(sep3);
+  const clearFilterTokens=document.createElement('button');clearFilterTokens.type='button';clearFilterTokens.textContent='Clear Filter Tokens';
+  clearFilterTokens.onclick=ev=>{ev.preventDefault();ev.stopPropagation();extensionSettingClearFilterTokens();filterMenu.classList.remove('open')};
+  filterMenu.appendChild(clearFilterTokens);
+  filterButton.onclick=ev=>{
+    ev.preventDefault();ev.stopPropagation();
+    const tokens=extensionSettingQueryTokens(extensionSettingSearchTokenValue());
+    filterMenu.querySelectorAll('button[data-filter-token]').forEach(btn=>btn.classList.toggle('checked',tokens.includes(btn.dataset.filterToken)));
+    filterMenu.classList.toggle('open');
+  };
+  if(!window._extSettingsFilterMenuCloser){
+    window._extSettingsFilterMenuCloser=true;
+    document.addEventListener('click',ev=>{
+      const menu=$('ext-settings-filter-menu'),button=$('ext-settings-filter-menu-button');
+      if(menu&&button&&!menu.contains(ev.target)&&!button.contains(ev.target))menu.classList.remove('open');
+    });
+  }
   const clearButton=document.createElement('button');clearButton.type='button';clearButton.id='ext-settings-clear-filters';clearButton.textContent='Clear';
   clearButton.onclick=()=>{
     const search=$('settings-search');if(search)search.value='';
@@ -12476,7 +12572,7 @@ async function renderExtensionSettings(){
     applyExtensionSettingsFilter();
   };
   const count=document.createElement('span');count.className='ext-settings-count';count.id='ext-settings-filter-count';count.textContent='0 / 0';
-  filter.appendChild(categorySelect);filter.appendChild(scopeSelect);filter.appendChild(targetSelect);filter.appendChild(modifiedLabel);filter.appendChild(clearButton);filter.appendChild(count);
+  filter.appendChild(categorySelect);filter.appendChild(scopeSelect);filter.appendChild(targetSelect);filter.appendChild(modifiedLabel);filter.appendChild(filterButton);filter.appendChild(clearButton);filter.appendChild(count);filter.appendChild(filterMenu);
   fragment.appendChild(filter);
   const seenCategories=new Set();
   const orderedConfigs=configs.slice().sort((a,b)=>{

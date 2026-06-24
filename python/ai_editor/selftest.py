@@ -4149,6 +4149,14 @@ console.log("frontend signature help docs ok");
             and "@tag:" in html
             and "function extensionSettingSplitFilterValues(value)" in html
             and "function extensionSettingPushFilterValues(list,value)" in html
+            and "function extensionSettingQueryTokens(raw)" in html
+            and "function extensionSettingIsFilterToken(token)" in html
+            and "function extensionSettingAppendFilterToken(token)" in html
+            and "function extensionSettingToggleFilterToken(token,excludeTokens)" in html
+            and "function extensionSettingClearFilterTokens()" in html
+            and "ext-settings-filter-menu-button" in html
+            and "ext-settings-filter-menu" in html
+            and "Clear Filter Tokens" in html
             and "function extensionSettingTargetName(target)" in html
             and "function createExtensionSettingTargetSelect(target)" in html
             and "function extensionSettingRowTarget(row)" in html
@@ -4166,6 +4174,10 @@ console.log("frontend signature help docs ok");
             and "@feature:" in html
             and "@lang:" in html
             and "@stable" in html
+            and "Extension ID..." in html
+            and "Feature..." in html
+            and "Setting ID..." in html
+            and "Online services" in html
             and "@policy" in html
             and "@restricted" in html
             and "@sync" in html
@@ -4275,6 +4287,13 @@ console.log("frontend signature help docs ok");
             "extensionSettingSearchText",
             "extensionSettingSplitFilterValues",
             "extensionSettingPushFilterValues",
+            "extensionSettingQueryTokens",
+            "extensionSettingIsFilterToken",
+            "extensionSettingSearchTokenValue",
+            "extensionSettingSetSearchTokenValue",
+            "extensionSettingAppendFilterToken",
+            "extensionSettingToggleFilterToken",
+            "extensionSettingClearFilterTokens",
             "extensionSettingJson",
             "extensionSettingJsonRows",
             "extensionSettingTextRows",
@@ -4313,6 +4332,11 @@ globalThis.document = {
   createElement(tag){ return makeNode(tag); },
   createTextNode(text){ return makeNode("#text", String(text)); },
 };
+const fakeSearch = { value: "", focused: false, focus(){ this.focused = true; } };
+const fakeModified = { checked: true };
+globalThis.$ = id => id === "settings-search" ? fakeSearch : (id === "ext-settings-modified" ? fakeModified : null);
+let filterApplyCount = 0;
+globalThis.applyExtensionSettingsFilter = () => { filterApplyCount++; };
 const arraySchema = { type: "array", items: { type: "string" } };
 const strictArraySchema = {
   type: "array",
@@ -4648,6 +4672,28 @@ assert(vscodeStyleQuery.ids[0] === "selftest.*"
        "settings query parses vscode id feature language quoted comma filters");
 assert(extensionSettingSplitFilterValues('"one,two",three').length === 3,
        "settings query filter values split comma lists");
+assert(extensionSettingQueryTokens('alpha @tag:"uses online" beta').length === 3,
+       "settings query tokenizes quoted filter values");
+fakeSearch.value = "render";
+extensionSettingAppendFilterToken("@ext:");
+assert(fakeSearch.value === "render @ext:" && fakeSearch.focused && filterApplyCount > 0,
+       "settings filter menu appends prompt token");
+fakeSearch.value = "render @tag:preview";
+extensionSettingToggleFilterToken("@tag:experimental", ["@stable", "@tag:preview"]);
+assert(fakeSearch.value === "render @tag:experimental",
+       "settings filter menu applies mutually exclusive filters");
+extensionSettingToggleFilterToken("@tag:experimental", ["@stable", "@tag:preview"]);
+assert(fakeSearch.value === "render",
+       "settings filter menu toggles existing filter off");
+fakeSearch.value = "render @modified @tag:preview @id:selftest.*";
+fakeModified.checked = true;
+extensionSettingClearFilterTokens();
+assert(fakeSearch.value === "render" && fakeModified.checked === false,
+       "settings filter menu clears filter tokens and preserves text");
+assert(extensionSettingIsFilterToken("@feature:terminal")
+       && extensionSettingIsFilterToken("@stable")
+       && !extensionSettingIsFilterToken("terminal"),
+       "settings filter menu identifies filter tokens");
 const searchText = extensionSettingSearchText("demo.telemetry", searchSchema, "string",
   "Controls telemetry.", "Deprecated telemetry mode.", "");
 assert(searchText.indexOf("usesonlineservices") >= 0
