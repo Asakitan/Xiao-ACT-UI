@@ -4193,6 +4193,7 @@ console.log("frontend signature help docs ok");
             and "function createExtensionSettingTargetSelect(target)" in html
             and "function extensionSettingRowTarget(row)" in html
             and "function extensionSettingScopedValues(raw)" in html
+            and "function applyExtensionSettingResponseTargets(scopedValues,response,target,value,modified)" in html
             and "function extensionSettingValueForTarget(scopedValues,target,fallback)" in html
             and "const targetScopedValues=cfg.targetScopedValues||{}" in html
             and "ext-setting-target-select" in html
@@ -9691,8 +9692,14 @@ def test_app_extension_runtime_support() -> None:
         _check("extension language settings preserve target-specific values",
                language_global_set.get("ok") is True
                and language_global_set.get("target") == "global"
+               and language_global_set.get("targetValues", {}).get(
+                   "global") == 6
                and language_workspace_set.get("ok") is True
                and language_workspace_set.get("target") == "workspace"
+               and language_workspace_set.get("targetValues", {}).get(
+                   "global") == 6
+               and language_workspace_set.get("targetValues", {}).get(
+                   "workspace") == 4
                and selflang_targets_set.get("targets", {}).get(
                    "editor.tabSize") == "workspace"
                and selflang_targets_set.get("targetValues", {}).get(
@@ -9708,6 +9715,11 @@ def test_app_extension_runtime_support() -> None:
                    "[selflang].editor.tabSize", {}).get(
                        "values", {}).get("workspace") == 4
                and language_global_reset.get("ok") is True
+               and "global" not in language_global_reset.get(
+                   "targetValues", {})
+               and language_global_reset.get(
+                   "targetValues", {}).get("workspace") == 4
+               and language_global_reset.get("modified") is False
                and data_after_language_global_reset.get(
                    "[selflang]", {}).get("editor.tabSize") == 4
                and language_target_after_global_reset.get(
@@ -9716,6 +9728,7 @@ def test_app_extension_runtime_support() -> None:
                and "global" not in language_target_after_global_reset.get(
                    "targetScopedValues", {}).get("editor.tabSize", {})
                and language_workspace_reset.get("ok") is True
+               and language_workspace_reset.get("targetValues", {}) == {}
                and "[selflang].editor.tabSize"
                not in language_target_data_after_reset,
                json.dumps({
@@ -10013,8 +10026,13 @@ def test_app_extension_runtime_support() -> None:
         _check("extension setting targets persist and reset by scope",
                target_set.get("ok") is True
                and target_set.get("target") == "global"
+               and target_set.get("targetValues", {}).get("global") is True
                and workspace_target_set.get("ok") is True
                and workspace_target_set.get("target") == "workspace"
+               and workspace_target_set.get(
+                   "targetValues", {}).get("global") is True
+               and workspace_target_set.get(
+                   "targetValues", {}).get("workspace") is False
                and target_get.get("value") is True
                and target_get.get("target") == "global"
                and workspace_target_get.get("value") is False
@@ -10036,6 +10054,10 @@ def test_app_extension_runtime_support() -> None:
                and target_data.get("selftest.flag", {}).get(
                    "values", {}).get("workspace") is False
                and target_reset.get("ok") is True
+               and "global" not in target_reset.get("targetValues", {})
+               and target_reset.get(
+                   "targetValues", {}).get("workspace") is False
+               and target_reset.get("modified") is False
                and target_data_after_reset.get(
                    "selftest.flag", {}).get("target") == "workspace"
                and "global" not in target_data_after_reset.get(
@@ -10046,6 +10068,7 @@ def test_app_extension_runtime_support() -> None:
                and after_target_reset.get("modified", {}).get(
                    "selftest.flag") is True
                and workspace_target_reset.get("ok") is True
+               and workspace_target_reset.get("targetValues", {}) == {}
                and "selftest.flag" not in target_data_after_all_reset
                and folder_set.get("ok") is True
                and folder_set.get("target") == "workspaceFolder"

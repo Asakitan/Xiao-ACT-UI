@@ -9473,6 +9473,10 @@ class AIEditorAPI:
                         "extension_id": eid,
                         "target": target_name,
                     }
+                next_target_entry = self._extension_setting_target_entry(key)
+                next_scoped_values = (
+                    self._extension_setting_target_scoped_values(
+                        next_target_entry))
                 self._notify_extension_setting_changed(key, value)
                 return {
                     "ok": True,
@@ -9480,6 +9484,8 @@ class AIEditorAPI:
                     "extension_id": eid,
                     "value": value,
                     "target": target_name,
+                    "targetValues": next_scoped_values,
+                    "targetScopedValues": {key: next_scoped_values},
                     "modified": True,
                 }
         return {"error": f"Setting key not found in any extension: {key}"}
@@ -9914,6 +9920,9 @@ class AIEditorAPI:
                         "target": target_name,
                     }
                 next_target_entry = self._extension_setting_target_entry(key)
+                next_scoped_values = (
+                    self._extension_setting_target_scoped_values(
+                        next_target_entry))
                 if "value" in next_target_entry:
                     ctx.workspace_state.update(
                         key, next_target_entry.get("value"))
@@ -9922,15 +9931,20 @@ class AIEditorAPI:
                 default_value = (
                     default_overrides[key]
                     if key in default_overrides else schema.get("default"))
+                response_value = next_scoped_values.get(
+                    target_name, default_value)
                 self._notify_extension_setting_changed(
                     key, default_value, remove=True)
                 return {
                     "ok": True,
                     "key": key,
                     "extension_id": eid,
-                    "value": default_value,
+                    "value": response_value,
+                    "defaultValue": default_value,
                     "target": target_name,
-                    "modified": False,
+                    "targetValues": next_scoped_values,
+                    "targetScopedValues": {key: next_scoped_values},
+                    "modified": target_name in next_scoped_values,
                 }
         return {"error": f"Setting key not found in any extension: {key}"}
 
@@ -10291,6 +10305,10 @@ class AIEditorAPI:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
         self._notify_node_settings_changed()
+        next_target_entry = self._extension_language_target_entry(
+            language, setting_key)
+        next_scoped_values = self._extension_setting_target_scoped_values(
+            next_target_entry)
         return {
             "ok": True,
             "language": language,
@@ -10299,6 +10317,8 @@ class AIEditorAPI:
             "extension_id": ext_id,
             "value": value,
             "target": target_name,
+            "targetValues": next_scoped_values,
+            "targetScopedValues": {setting_key: next_scoped_values},
             "modified": True,
         }
 
@@ -10356,15 +10376,21 @@ class AIEditorAPI:
                 if isinstance(defaults, dict) and setting_key in defaults:
                     default_value = defaults.get(setting_key)
                     break
+        next_scoped_values = self._extension_setting_target_scoped_values(
+            next_target_entry)
+        response_value = next_scoped_values.get(target_name, default_value)
         return {
             "ok": True,
             "language": language,
             "override": override_key,
             "key": setting_key,
             "extension_id": ext_id,
-            "value": default_value,
+            "value": response_value,
+            "defaultValue": default_value,
             "target": target_name,
-            "modified": False,
+            "targetValues": next_scoped_values,
+            "targetScopedValues": {setting_key: next_scoped_values},
+            "modified": target_name in next_scoped_values,
         }
 
     def _notify_extension_setting_changed(

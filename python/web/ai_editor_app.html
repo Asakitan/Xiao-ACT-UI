@@ -12269,6 +12269,26 @@ function extensionSettingRowTarget(row){
 function extensionSettingScopedValues(raw){
   return raw&&typeof raw==='object'&&!Array.isArray(raw)?raw:{};
 }
+function replaceExtensionSettingScopedValues(scopedValues,nextValues){
+  const target=extensionSettingScopedValues(scopedValues);
+  Object.keys(target).forEach(key=>delete target[key]);
+  if(nextValues&&typeof nextValues==='object'&&!Array.isArray(nextValues)){
+    Object.keys(nextValues).forEach(key=>{
+      target[extensionSettingTargetName(key)]=nextValues[key];
+    });
+  }
+  return target;
+}
+function applyExtensionSettingResponseTargets(scopedValues,response,target,value,modified){
+  if(response&&response.targetValues&&typeof response.targetValues==='object'){
+    return replaceExtensionSettingScopedValues(scopedValues,response.targetValues);
+  }
+  const targetMap=extensionSettingScopedValues(scopedValues);
+  const targetName=extensionSettingTargetName(target);
+  if(modified)targetMap[targetName]=value;
+  else delete targetMap[targetName];
+  return targetMap;
+}
 function extensionSettingHasTargetValue(scopedValues,target){
   return Object.prototype.hasOwnProperty.call(
     extensionSettingScopedValues(scopedValues),extensionSettingTargetName(target));
@@ -12708,16 +12728,18 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
         ev.preventDefault();ev.stopPropagation();setExtensionSettingError(row,'');
         const r=await call('reset_extension_language_setting',item.language,key,item.extension_id||'',extensionSettingRowTarget(row));
         if(r&&r.ok){
-          delete scopedValues[extensionSettingRowTarget(row)];
-          setExtensionSettingInputValue(input,schema,type,defaultValue);
+          row.dataset.extSettingTarget=extensionSettingTargetName(r.target||extensionSettingRowTarget(row));
+          applyExtensionSettingResponseTargets(scopedValues,r,row.dataset.extSettingTarget,r.value,false);
+          const nextValue=extensionSettingValueForTarget(scopedValues,row.dataset.extSettingTarget,defaultValue);
+          setExtensionSettingInputValue(input,schema,type,nextValue);
           if(enumHelp)renderExtensionSettingEnumDescription(enumHelp,schema,input);
-          markExtensionSettingRow(row,false);
+          markExtensionSettingRow(row,extensionSettingHasTargetValue(scopedValues,row.dataset.extSettingTarget));
           row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,
             ['language-default',String(item.language||'').toLowerCase()]).join('\n');
           row.dataset.extSettingSearch=[
             displayName,extId,override,item.language,
             extensionSettingSearchText(key,schema,type,description,deprecation,schemaSummary),
-            extensionSettingJson(defaultValue,type),extensionSettingJson(defaultValue,type),
+            extensionSettingJson(nextValue,type),extensionSettingJson(defaultValue,type),
             extensionSettingTargetSearchText(scopedValues,type),
             extensionSettingTargetLabel(row.dataset.extSettingTarget)
           ].join(' ').toLowerCase();
@@ -12737,14 +12759,15 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
         const r=await call('set_extension_language_setting',item.language,key,nextValue,item.extension_id||'',extensionSettingRowTarget(row));
         if(r&&r.ok){
           row.dataset.extSettingTarget=r.target||extensionSettingRowTarget(row);
-          scopedValues[row.dataset.extSettingTarget]=nextValue;
-          markExtensionSettingRow(row,true);
+          applyExtensionSettingResponseTargets(scopedValues,r,row.dataset.extSettingTarget,nextValue,true);
+          const savedValue=extensionSettingValueForTarget(scopedValues,row.dataset.extSettingTarget,nextValue);
+          markExtensionSettingRow(row,extensionSettingHasTargetValue(scopedValues,row.dataset.extSettingTarget));
           row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,
             ['language-default',String(item.language||'').toLowerCase()]).join('\n');
           row.dataset.extSettingSearch=[
             displayName,extId,override,item.language,
             extensionSettingSearchText(key,schema,type,description,deprecation,schemaSummary),
-            extensionSettingJson(nextValue,type),extensionSettingJson(defaultValue,type),
+            extensionSettingJson(savedValue,type),extensionSettingJson(defaultValue,type),
             extensionSettingTargetSearchText(scopedValues,type),
             extensionSettingTargetLabel(row.dataset.extSettingTarget)
           ].join(' ').toLowerCase();
@@ -13076,17 +13099,18 @@ async function renderExtensionSettings(){
         if(isHiddenSetting){setExtensionSettingError(row,'Hidden settings are shown for diagnostics only');return}
         const r=await call('reset_extension_setting',key,extensionSettingRowTarget(row));
         if(r&&r.ok){
-          delete scopedValues[extensionSettingRowTarget(row)];
-          setExtensionSettingInputValue(input,schema,type,hasDefaultValue?r.value:defaultVal);
-          row.dataset.extSettingTarget=extensionSettingRowTarget(row);
-          markExtensionSettingRow(row,false);
+          row.dataset.extSettingTarget=extensionSettingTargetName(r.target||extensionSettingRowTarget(row));
+          applyExtensionSettingResponseTargets(scopedValues,r,row.dataset.extSettingTarget,r.value,false);
+          const nextValue=extensionSettingValueForTarget(scopedValues,row.dataset.extSettingTarget,hasDefaultValue?r.value:defaultVal);
+          setExtensionSettingInputValue(input,schema,type,nextValue);
+          markExtensionSettingRow(row,extensionSettingHasTargetValue(scopedValues,row.dataset.extSettingTarget));
           row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,
             [isHiddenSetting?'hidden':'',isHiddenSetting?'excluded':'']).join('\n');
           row.dataset.extSettingSearch=(
             sectionSearch+' '+extensionSettingSearchText(
               key,schema,type,description,deprecation,schemaSummary)+' '+
               (isHiddenSetting?'hidden excluded included false diagnostics ':'')+
-              extensionSettingJson(hasDefaultValue?r.value:defaultVal,type)+' '+
+              extensionSettingJson(nextValue,type)+' '+
               extensionSettingTargetSearchText(scopedValues,type)+' '+
               extensionSettingTargetLabel(row.dataset.extSettingTarget)
           ).trim().toLowerCase();
@@ -13106,15 +13130,16 @@ async function renderExtensionSettings(){
         const r=await call('set_extension_setting',key,nextValue,extensionSettingRowTarget(row));
         if(r&&r.ok){
           row.dataset.extSettingTarget=r.target||extensionSettingRowTarget(row);
-          scopedValues[row.dataset.extSettingTarget]=nextValue;
-          markExtensionSettingRow(row,true);
+          applyExtensionSettingResponseTargets(scopedValues,r,row.dataset.extSettingTarget,nextValue,true);
+          const savedValue=extensionSettingValueForTarget(scopedValues,row.dataset.extSettingTarget,nextValue);
+          markExtensionSettingRow(row,extensionSettingHasTargetValue(scopedValues,row.dataset.extSettingTarget));
           row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,
             [isHiddenSetting?'hidden':'',isHiddenSetting?'excluded':'']).join('\n');
           row.dataset.extSettingSearch=(
             sectionSearch+' '+extensionSettingSearchText(
               key,schema,type,description,deprecation,schemaSummary)+' '+
               (isHiddenSetting?'hidden excluded included false diagnostics ':'')+
-              extensionSettingJson(nextValue,type)+' '+
+              extensionSettingJson(savedValue,type)+' '+
               extensionSettingTargetSearchText(scopedValues,type)+' '+
               extensionSettingTargetLabel(row.dataset.extSettingTarget)
           ).trim().toLowerCase();
