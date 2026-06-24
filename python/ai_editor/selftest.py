@@ -1420,7 +1420,12 @@ def test_app_settings_parity() -> None:
         "file_icon_theme": "ext:phase-icons",
         "layout": {"sidebarVisible": True, "editorVisible": True, "chatVisible": True, "panelHeight": "320px"},
         "editor": {"tabSize": 2, "insertSpaces": False},
-        "[python]": {"editor.formatOnSave": True},
+        "files": {"trimTrailingWhitespace": True, "insertFinalNewline": False},
+        "[python]": {
+            "editor.formatOnSave": True,
+            "files.trimTrailingWhitespace": False,
+            "files.insertFinalNewline": True,
+        },
         "_provider_keys": {"openai": "new-openai", "deepseek": "new-deepseek"},
         "unknown_payload": {"preserve": True},
     }
@@ -1454,12 +1459,20 @@ def test_app_settings_parity() -> None:
            and loaded.get("layout", {}).get("panelHeight") == "320px")
     _check("language override settings round-trip",
            stored.get("[python]", {}).get("editor.formatOnSave") is True
-           and loaded.get("[python]", {}).get("editor.formatOnSave") is True)
+           and loaded.get("[python]", {}).get("editor.formatOnSave") is True
+           and stored.get("[python]", {}).get("files.trimTrailingWhitespace") is False
+           and stored.get("[python]", {}).get("files.insertFinalNewline") is True
+           and loaded.get("[python]", {}).get("files.insertFinalNewline") is True)
     _check("editor format option settings round-trip",
            stored.get("editor", {}).get("tabSize") == 2
            and stored.get("editor", {}).get("insertSpaces") is False
            and loaded.get("editor", {}).get("tabSize") == 2
            and loaded.get("editor", {}).get("insertSpaces") is False)
+    _check("files save participant settings round-trip",
+           stored.get("files", {}).get("trimTrailingWhitespace") is True
+           and stored.get("files", {}).get("insertFinalNewline") is False
+           and loaded.get("files", {}).get("trimTrailingWhitespace") is True
+           and loaded.get("files", {}).get("insertFinalNewline") is False)
 
     from ai_editor import app as app_mod
     from config import SettingsManager
@@ -2366,9 +2379,17 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function editorFormatOptions()" in html
            and "function editorEffectiveSection(section,language)" in html
            and "function editorLanguageOverrideSettings(language)" in html
+           and 'id="s-files-trim-trailing-whitespace"' in html
+           and 'id="s-files-insert-final-newline"' in html
+           and 'id="s-files-lang-override-enabled"' in html
+           and "function filesEffectiveSection(language)" in html
+           and "function editorApplyFilesSaveParticipantsToText(value,files)" in html
            and "entry['editor.defaultFormatter']" in html
            and "entry['editor.tabSize']" in html
-           and "saveEditorLanguageOverrideSettings();" in html)
+           and "entry['files.trimTrailingWhitespace']" in html
+           and "entry['files.insertFinalNewline']" in html
+           and "saveEditorLanguageOverrideSettings();" in html
+           and "saveFilesLanguageOverrideSettings();" in html)
     _check("provider webviews bridge persistent vscode state",
            'type:"webview-set-state"' in html
            and 'webview_set_state' in html
@@ -2638,6 +2659,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "editorProviderPayload('inlineCompletion'" in html
            and "function editorFormatOptions()" in html
            and "editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,linkedEditing:false,codeActionsOnSave:{},tabSize:4,insertSpaces:true}" in html
+           and "files:{trimTrailingWhitespace:false,insertFinalNewline:false}" in html
            and "defaultFormatter:''" in html
            and "linkedEditing:false" in html
            and "formatOnSave:false" in html
@@ -2655,6 +2677,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "async function formatDocumentWithProvider()" in html
            and "function editorFormatOnTypeEnabled()" in html
            and "function editorLinkedEditingEnabled()" in html
+           and "function filesEffectiveSection(language)" in html
+           and "function editorApplyFilesSaveParticipantsToText(value,files)" in html
+           and "function applyEditorFilesSaveParticipants()" in html
            and "function editorCodeActionsOnSaveKinds()" in html
            and "function runEditorSaveParticipants()" in html
            and "function runEditorCodeActionsOnSave()" in html
@@ -2674,12 +2699,17 @@ def test_phase1_ai_editor_regressions() -> None:
            and "setCheckedValue('s-editor-linked-editing',editor.linkedEditing===true)" in html
            and "setCheckedValue('s-editor-organize-imports-on-save',editorKnownCodeActionsOnSave(editor.codeActionsOnSave,'source.organizeImports'))" in html
            and "setCheckedValue('s-editor-fix-all-on-save',editorKnownCodeActionsOnSave(editor.codeActionsOnSave,'source.fixAll'))" in html
+           and "setCheckedValue('s-files-trim-trailing-whitespace',files.trimTrailingWhitespace===true)" in html
+           and "setCheckedValue('s-files-insert-final-newline',files.insertFinalNewline===true)" in html
            and "setInputValue('s-editor-default-formatter',editor.defaultFormatter||editor.default_formatter||'')" in html
            and "defaultFormatter:readInputValue('s-editor-default-formatter').trim()" in html
            and "formatOnSave:readCheckedValue('s-editor-format-on-save')" in html
            and "formatOnType:readCheckedValue('s-editor-format-on-type')" in html
            and "linkedEditing:readCheckedValue('s-editor-linked-editing')" in html
            and "codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)" in html
+           and "trimTrailingWhitespace:readCheckedValue('s-files-trim-trailing-whitespace')" in html
+           and "insertFinalNewline:readCheckedValue('s-files-insert-final-newline')" in html
+           and "changed=applyEditorFilesSaveParticipants()||changed" in html
            and "await runEditorSaveParticipants();" in html
            and "saveTextTabAs(tab,{skipSaveParticipants:true})" in html
            and "async function formatSelection()" in html
@@ -2800,10 +2830,14 @@ def test_phase1_ai_editor_regressions() -> None:
             "setDottedConfigValue",
             "editorLanguageOverrideKey",
             "editorLanguageOverrideSection",
+            "sectionLanguageOverrideSettings",
             "editorEffectiveSection",
             "editorTabSize",
             "editorInsertSpaces",
             "editorFormatOptions",
+            "filesEffectiveSection",
+            "editorPreferredEol",
+            "editorApplyFilesSaveParticipantsToText",
             "editorSaveSettingEnabled",
             "editorKnownCodeActionsOnSave",
             "editorCodeActionKindIsSource",
@@ -2841,6 +2875,11 @@ assert(formatOptions.tabSize === 2 && formatOptions.insertSpaces === false, "lan
 config = { editor: { tabSize: 99, insertSpaces: "truthy" } };
 editorLang = "plaintext";
 assert(editorFormatOptions().tabSize === 4 && editorFormatOptions().insertSpaces === true, "format options clamp invalid settings");
+config = { files: { trimTrailingWhitespace: false, insertFinalNewline: false }, "[python]": { "files.trimTrailingWhitespace": true, "files.insertFinalNewline": true } };
+editorLang = "python";
+assert(filesEffectiveSection().trimTrailingWhitespace === true && filesEffectiveSection().insertFinalNewline === true, "language files settings override global settings");
+assert(editorApplyFilesSaveParticipantsToText("a  \r\nb\t", filesEffectiveSection()) === "a\r\nb\r\n", "files save participant trims and preserves CRLF final newline");
+assert(editorApplyFilesSaveParticipantsToText("   ", { trimTrailingWhitespace: false, insertFinalNewline: true }) === "   ", "final newline skips whitespace-only last line");
 console.log("frontend save participant settings ok");
 """
         js_path = ""
@@ -7711,10 +7750,13 @@ def test_vscode_api() -> None:
             "extensions": {"diagnostics_enabled": True},
             "mcp": {"autostart": True},
             "editor": {"formatOnSave": False, "tabSize": 4},
+            "files": {"trimTrailingWhitespace": False, "insertFinalNewline": False},
             "[selflang]": {
                 "editor.formatOnSave": True,
                 "editor.tabSize": 2,
                 "editor": {"linkedEditing": True},
+                "files.trimTrailingWhitespace": True,
+                "files": {"insertFinalNewline": True},
             },
         },
         "panel_themes": {"active": "neo"},
@@ -7732,6 +7774,9 @@ def test_vscode_api() -> None:
     config_editor_lang = config_workspace["getConfiguration"](
         "editor", {"languageId": "selflang"})
     config_editor_plain = config_workspace["getConfiguration"]("editor")
+    config_files_lang = config_workspace["getConfiguration"](
+        "files", {"languageId": "selflang"})
+    config_files_plain = config_workspace["getConfiguration"]("files")
     config_ai.update("extensions.probe", "ok")
     config_editor_lang.update("defaultFormatter", "selftest.formatter", True, True)
     config_inspect = config_ai.inspect("extensions.diagnostics_enabled") or {}
@@ -7755,6 +7800,11 @@ def test_vscode_api() -> None:
            and config_editor_plain.get("tabSize") == 4
            and config_editor_inspect.get("globalValue") is False
            and config_editor_inspect.get("workspaceLanguageValue") is True)
+    _check("WorkspaceConfiguration resolves language files overrides",
+           config_files_lang.get("trimTrailingWhitespace") is True
+           and config_files_lang.get("insertFinalNewline") is True
+           and config_files_plain.get("trimTrailingWhitespace") is False
+           and config_files_plain.get("insertFinalNewline") is False)
 
     # selectChatModels (no engine)
     models = api["lm"]["selectChatModels"]()

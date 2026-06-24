@@ -190,6 +190,10 @@ _AI_EDITOR_SECTION_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "tabSize": 4,
         "insertSpaces": True,
     },
+    "files": {
+        "trimTrailingWhitespace": False,
+        "insertFinalNewline": False,
+    },
     "customization": {
         "instructions_locations": [".sao/instructions.md", ".sao/instructions"],
         "agent_locations": [".sao/agents"],
