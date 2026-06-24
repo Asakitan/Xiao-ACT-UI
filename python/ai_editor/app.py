@@ -1210,6 +1210,7 @@ class AIEditorAPI:
         self._maximized = False
         self._window_geometry: Optional[Dict[str, int]] = None
         self._window_resize_supports_fix_point: Optional[bool] = None
+        self._extension_snippet_cache: Dict[str, Dict[str, Any]] = {}
 
     @classmethod
     def _ensure_webview_resource_server(cls) -> _WebviewResourceServer:
@@ -3500,6 +3501,246 @@ class AIEditorAPI:
             os.path.splitext(path)[1].lower(), "plaintext")
 
     @staticmethod
+    def _editor_snippet_string_list(value: Any) -> List[str]:
+        if isinstance(value, list):
+            return [
+                str(item).strip()
+                for item in value
+                if str(item or "").strip()
+            ]
+        text = str(value or "").strip()
+        return [text] if text else []
+
+    @staticmethod
+    def _editor_snippet_body(value: Any) -> str:
+        if isinstance(value, list):
+            return "\n".join(str(item) for item in value)
+        return str(value) if isinstance(value, str) else ""
+
+    @staticmethod
+    def _editor_snippet_scopes(
+            snippet: Dict[str, Any],
+            default_language: str = "") -> List[str]:
+        language = str(default_language or "").strip()
+        if language:
+            return [language]
+        scope = snippet.get("scope")
+        if isinstance(scope, str):
+            return [
+                item.strip()
+                for item in scope.split(",")
+                if item.strip()
+            ]
+        return []
+
+    @staticmethod
+    def _editor_snippet_language_matches(
+            scopes: List[str], language: str) -> bool:
+        if not scopes:
+            return True
+        selector = str(language or "").strip()
+        selectors = []
+        while selector:
+            selectors.append(selector)
+            if "." not in selector:
+                break
+            selector = selector.rsplit(".", 1)[0]
+        return any(scope in selectors for scope in scopes)
+
+    @staticmethod
+    def _editor_snippet_pattern_matches(pattern: str, path: str) -> bool:
+        normalized_pattern = str(pattern or "").replace("\\", "/").casefold()
+        normalized_path = str(path or "").replace("\\", "/").casefold()
+        if not normalized_pattern or not normalized_path:
+            return False
+        target = (
+            normalized_path
+            if "/" in normalized_pattern
+            else os.path.basename(normalized_path))
+        return fnmatch.fnmatch(target, normalized_pattern)
+
+    @classmethod
+    def _editor_snippet_file_included(
+            cls, snippet: Dict[str, Any], path: str) -> bool:
+        if not path:
+            return True
+        excludes = snippet.get("exclude") or []
+        includes = snippet.get("include") or []
+        for pattern in excludes:
+            if cls._editor_snippet_pattern_matches(str(pattern), path):
+                return False
+        if includes:
+            return any(
+                cls._editor_snippet_pattern_matches(str(pattern), path)
+                for pattern in includes)
+        return True
+
+    def _extension_snippet_path(self, contribution: Dict[str, Any]) -> str:
+        if not isinstance(contribution, dict):
+            return ""
+        raw_path = str(contribution.get("path") or "").strip()
+        extension_id = str(contribution.get("_extensionId") or "").strip()
+        if not raw_path or not extension_id:
+            return ""
+        ext = self._ext_host.registry.get(extension_id)
+        base = os.path.abspath(getattr(ext, "extension_path", "") or "")
+        if not base:
+            return ""
+        candidate = (
+            os.path.abspath(raw_path)
+            if os.path.isabs(raw_path)
+            else os.path.abspath(os.path.join(base, raw_path)))
+        try:
+            if os.path.commonpath([base, candidate]) != base:
+                return ""
+        except ValueError:
+            return ""
+        return candidate
+
+    def _parse_editor_snippet(
+            self,
+            name: str,
+            snippet: Any,
+            contribution: Dict[str, Any],
+            file_path: str) -> List[Dict[str, Any]]:
+        if not isinstance(snippet, dict) or "body" not in snippet:
+            return []
+        body = self._editor_snippet_body(snippet.get("body"))
+        if not body:
+            return []
+        description = snippet.get("description", "")
+        if isinstance(description, list):
+            description = "\n".join(str(item) for item in description)
+        prefixes = self._editor_snippet_string_list(snippet.get("prefix"))
+        if not prefixes:
+            prefixes = [""]
+        scopes = self._editor_snippet_scopes(
+            snippet, str(contribution.get("language") or ""))
+        extension_id = str(contribution.get("_extensionId") or "")
+        ext = self._ext_host.registry.get(extension_id)
+        source = getattr(ext, "display_name", "") or extension_id
+        includes = self._editor_snippet_string_list(snippet.get("include"))
+        excludes = self._editor_snippet_string_list(snippet.get("exclude"))
+        parsed: List[Dict[str, Any]] = []
+        for prefix in prefixes:
+            parsed.append({
+                "name": str(name or ""),
+                "prefix": prefix,
+                "body": body,
+                "description": str(description or ""),
+                "scopes": scopes,
+                "include": includes,
+                "exclude": excludes,
+                "isFileTemplate": bool(snippet.get("isFileTemplate")),
+                "source": source,
+                "extension_id": extension_id,
+                "path": file_path,
+            })
+        return parsed
+
+    def _load_extension_snippet_file(
+            self, contribution: Dict[str, Any]) -> List[Dict[str, Any]]:
+        path = self._extension_snippet_path(contribution)
+        if not path or not os.path.isfile(path):
+            return []
+        try:
+            stat = os.stat(path)
+        except OSError:
+            return []
+        cache_key = os.path.abspath(path)
+        signature = (stat.st_mtime_ns, stat.st_size)
+        cached = self._extension_snippet_cache.get(cache_key)
+        if cached and cached.get("signature") == signature:
+            return list(cached.get("snippets") or [])
+        try:
+            payload = _load_jsonc_file(path)
+        except Exception:
+            payload = {}
+        snippets: List[Dict[str, Any]] = []
+        if isinstance(payload, dict):
+            for name, raw_snippet in payload.items():
+                if isinstance(raw_snippet, dict) and "body" in raw_snippet:
+                    snippets.extend(self._parse_editor_snippet(
+                        str(name), raw_snippet, contribution, path))
+                elif isinstance(raw_snippet, dict):
+                    for child_name, child_snippet in raw_snippet.items():
+                        snippets.extend(self._parse_editor_snippet(
+                            str(child_name), child_snippet,
+                            contribution, path))
+        self._extension_snippet_cache[cache_key] = {
+            "signature": signature,
+            "snippets": snippets,
+        }
+        return list(snippets)
+
+    @staticmethod
+    def _editor_prefix_at_position(content: str, position: Position) -> str:
+        offset = _offset_for_text_position(content, position)
+        before = str(content or "")[:offset]
+        match = re.search(r"[A-Za-z0-9_$-]+$", before)
+        return match.group(0) if match else ""
+
+    def _extension_snippet_completion_items(
+            self,
+            language: str,
+            uri: Uri,
+            content: str,
+            position: Position) -> List[Dict[str, Any]]:
+        try:
+            contributions = self._ext_host.ext_points.all_contributions.get(
+                "snippets", [])
+        except Exception:
+            contributions = []
+        file_path = uri.fs_path if getattr(uri, "scheme", "") == "file" else ""
+        typed_prefix = self._editor_prefix_at_position(content, position)
+        typed_lower = typed_prefix.casefold()
+        items: List[Dict[str, Any]] = []
+        for contribution in contributions:
+            if not isinstance(contribution, dict):
+                continue
+            for snippet in self._load_extension_snippet_file(contribution):
+                if not self._editor_snippet_language_matches(
+                        snippet.get("scopes") or [], language):
+                    continue
+                if not self._editor_snippet_file_included(snippet, file_path):
+                    continue
+                prefix = str(snippet.get("prefix") or "")
+                if typed_lower and not prefix.casefold().startswith(typed_lower):
+                    continue
+                label = prefix or str(snippet.get("name") or "")
+                if not label:
+                    continue
+                items.append({
+                    "label": label,
+                    "kind": "Snippet",
+                    "detail": snippet.get("name") or snippet.get("source") or "Snippet",
+                    "documentation": snippet.get("description") or "",
+                    "insertText": {
+                        "snippet": snippet.get("body") or "",
+                        "value": snippet.get("body") or "",
+                    },
+                    "filterText": prefix,
+                    "sortText": f"zz_snippet_{len(items):04d}_{label}",
+                    "source": snippet.get("source") or "",
+                    "extension_id": snippet.get("extension_id") or "",
+                    "isFileTemplate": bool(snippet.get("isFileTemplate")),
+                })
+        return items
+
+    def list_editor_snippets(
+            self, language: str = "", path: str = "",
+            prefix: str = "") -> Dict[str, Any]:
+        """Return extension-contributed snippets visible for a language/path."""
+        self._ensure_engine()
+        language_id = str(language or "").strip() or (
+            self._editor_language_for_path(path) if path else "plaintext")
+        uri = Uri.file(path) if path else Uri.parse("untitled:snippet")
+        position = Position(0, len(str(prefix or "")))
+        items = self._extension_snippet_completion_items(
+            language_id, uri, str(prefix or ""), position)
+        return {"ok": True, "language": language_id, "snippets": items}
+
+    @staticmethod
     def _expand_custom_editor_glob(pattern: str) -> List[str]:
         """Expand simple VS Code-style brace globs such as ``*.{png,jpg}``."""
         text = str(pattern or "").strip().replace("\\", "/")
@@ -4004,13 +4245,18 @@ class AIEditorAPI:
                 else:
                     items = value if isinstance(value, list) else []
                     incomplete = False
+                if not isinstance(items, list):
+                    items = []
+                snippet_items = self._extension_snippet_completion_items(
+                    language, document.uri, content, position)
                 return {
                     "ok": True,
                     "kind": kind,
                     "uri": str(document.uri),
                     "version": document.version,
-                    "items": items,
+                    "items": list(items) + snippet_items,
                     "isIncomplete": incomplete,
+                    "snippetCount": len(snippet_items),
                 }
             if kind == "hover":
                 result = self._ext_host.commands.execute(

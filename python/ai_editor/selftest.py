@@ -2412,6 +2412,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function requestEditorCompletion(triggerCharacter,quiet)" in html
            and "itemResolveCount:8" in html
            and "function showEditorSuggest(items,position)" in html
+           and "text.value||text.snippet||text.text" in html
            and "function applyEditorCompletion(item)" in html
            and "function handleEditorSuggestKey(e)" in html
            and "function requestEditorHover()" in html
@@ -6809,6 +6810,45 @@ def test_app_extension_runtime_support() -> None:
   ],
 }
 """)
+        os.makedirs(os.path.join(language_tmp, "snippets"), exist_ok=True)
+        with open(os.path.join(language_tmp, "snippets", "selflang.json"),
+                  "w", encoding="utf-8") as f:
+            f.write("""
+{
+  // VS Code extension snippet files commonly use JSONC.
+  "Self Function": {
+    "prefix": ["sf", "self-fn"],
+    "body": [
+      "fn ${1:name}()",
+      "  $0",
+      "end",
+    ],
+    "description": ["Create", "a self function"],
+    "include": "*.self",
+    "exclude": "*.skip.self",
+  },
+  "Grouped": {
+    "Self Config": {
+      "scope": "selflang, otherlang",
+      "prefix": "cfg",
+      "body": "config ${1:key}",
+      "description": "Create config",
+    },
+  },
+}
+""")
+        with open(os.path.join(language_tmp, "snippets", "global.code-snippets"),
+                  "w", encoding="utf-8") as f:
+            f.write("""
+{
+  "Global Self": {
+    "scope": "selflang",
+    "prefix": "globalself",
+    "body": "global ${1:item}",
+    "description": "Global snippet for selflang",
+  },
+}
+""")
         language_desc = ExtensionDescription.from_package_json({
             "name": "language-pack",
             "publisher": "selftest",
@@ -6839,6 +6879,15 @@ def test_app_extension_runtime_support() -> None:
                     "label": "Self Icons",
                     "path": "./themes/self-icons.json",
                 }],
+                "snippets": [
+                    {
+                        "language": "selflang",
+                        "path": "./snippets/selflang.json",
+                    },
+                    {
+                        "path": "./snippets/global.code-snippets",
+                    },
+                ],
             },
         }, language_tmp)
         api._ext_host.registry.register(language_desc)
@@ -6962,6 +7011,53 @@ def test_app_extension_runtime_support() -> None:
         _check("extension language extensions and filenames drive file detection",
                api._editor_language_for_path("demo.self") == "selflang"
                and api._editor_language_for_path("SELFFILE") == "selflang")
+        selflang_snippet_path = os.path.join(language_tmp, "demo.self")
+        excluded_snippet_path = os.path.join(language_tmp, "demo.skip.self")
+        snippet_payload = api.list_editor_snippets(
+            "selflang", selflang_snippet_path, "s")
+        snippet_labels = [
+            item.get("label")
+            for item in snippet_payload.get("snippets", [])
+        ]
+        snippet_details = {
+            item.get("label"): item
+            for item in snippet_payload.get("snippets", [])
+        }
+        excluded_snippet_payload = api.list_editor_snippets(
+            "selflang", excluded_snippet_path, "s")
+        global_snippet_payload = api.list_editor_snippets(
+            "selflang", selflang_snippet_path, "global")
+        wrong_language_snippet_payload = api.list_editor_snippets(
+            "python", selflang_snippet_path, "global")
+        completion_snippets = api.editor_language_provider({
+            "kind": "completion",
+            "language": "selflang",
+            "path": selflang_snippet_path,
+            "content": "s",
+            "position": {"line": 0, "character": 1},
+        })
+        completion_labels = [
+            item.get("label")
+            for item in completion_snippets.get("items", [])
+        ]
+        _check("extension snippets feed editor completions",
+               snippet_payload.get("ok") is True
+               and "sf" in snippet_labels
+               and "self-fn" in snippet_labels
+               and "fn ${1:name}()" in snippet_details.get(
+                   "sf", {}).get("insertText", {}).get("snippet", "")
+               and "Create\na self function" in snippet_details.get(
+                   "sf", {}).get("documentation", "")
+               and snippet_details.get("sf", {}).get(
+                   "extension_id") == "selftest.language-pack"
+               and not excluded_snippet_payload.get("snippets")
+               and global_snippet_payload.get("snippets", [{}])[0].get(
+                   "label") == "globalself"
+               and not wrong_language_snippet_payload.get("snippets")
+               and completion_snippets.get("ok") is True
+               and completion_snippets.get("snippetCount", 0) >= 2
+               and "sf" in completion_labels
+               and "self-fn" in completion_labels)
 
         settings_tmp = tempfile.mkdtemp(prefix="sao_ext_settings_")
         settings_desc = ExtensionDescription.from_package_json({
