@@ -2679,7 +2679,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function handleEditorInlineCompletionKey(e)" in html
            and "editorProviderPayload('inlineCompletion'" in html
            and "function editorFormatOptions()" in html
-           and "editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,linkedEditing:false,codeActionsOnSave:{},tabSize:4,insertSpaces:true}" in html
+           and "editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,linkedEditing:false,codeActionsOnSave:{},codeActions:{triggerOnFocusChange:false},tabSize:4,insertSpaces:true}" in html
            and "files:{autoSave:'off',autoSaveDelay:1000,trimTrailingWhitespace:false,insertFinalNewline:false,trimFinalNewlines:false}" in html
            and "defaultFormatter:''" in html
            and "linkedEditing:false" in html
@@ -2691,6 +2691,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "id=\"s-editor-linked-editing\"" in html
            and "id=\"s-editor-organize-imports-on-save\"" in html
            and "id=\"s-editor-fix-all-on-save\"" in html
+           and "id=\"s-editor-code-actions-trigger-focus\"" in html
            and "function editorFormatOnSaveEnabled()" in html
            and "function editorDefaultFormatter()" in html
            and "async function requestEditorFormattingProviders()" in html
@@ -2701,9 +2702,13 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function filesEffectiveSection(language)" in html
            and "function editorApplyFilesSaveParticipantsToText(value,files)" in html
            and "function applyEditorFilesSaveParticipants()" in html
-           and "function editorCodeActionsOnSaveKinds()" in html
+           and "function editorCodeActionsOnSaveKinds(reason)" in html
            and "async function runEditorSaveParticipants(options)" in html
-           and "function runEditorCodeActionsOnSave()" in html
+           and "async function runEditorCodeActionsOnSave(options)" in html
+           and "function editorCodeActionKindContains(parent,child)" in html
+           and "function editorCodeActionOnSaveMode(value)" in html
+           and "function editorNormalizeCodeActionKinds(kinds,excluded)" in html
+           and "async function triggerEditorCodeActionsOnFocusChange()" in html
            and "async function applyEditorCodeActionForSave(action)" in html
            and "async function fetchEditorCodeActionsForKind(only,range)" in html
            and "async function requestEditorLinkedEditingRanges(quiet)" in html
@@ -2718,8 +2723,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "setCheckedValue('s-editor-format-on-save',editor.formatOnSave===true)" in html
            and "setCheckedValue('s-editor-format-on-type',editor.formatOnType===true)" in html
            and "setCheckedValue('s-editor-linked-editing',editor.linkedEditing===true)" in html
-           and "setCheckedValue('s-editor-organize-imports-on-save',editorKnownCodeActionsOnSave(editor.codeActionsOnSave,'source.organizeImports'))" in html
-           and "setCheckedValue('s-editor-fix-all-on-save',editorKnownCodeActionsOnSave(editor.codeActionsOnSave,'source.fixAll'))" in html
+           and "setInputValue('s-editor-organize-imports-on-save',editorCodeActionsOnSaveMode(editor.codeActionsOnSave,'source.organizeImports'))" in html
+           and "setInputValue('s-editor-fix-all-on-save',editorCodeActionsOnSaveMode(editor.codeActionsOnSave,'source.fixAll'))" in html
+           and "setCheckedValue('s-editor-code-actions-trigger-focus',isPlainObject(editor.codeActions)&&editor.codeActions.triggerOnFocusChange===true)" in html
            and "setCheckedValue('s-files-trim-trailing-whitespace',files.trimTrailingWhitespace===true)" in html
            and "setInputValue('s-files-auto-save',filesAutoSaveMode(files))" in html
            and "setInputValue('s-files-auto-save-delay',filesAutoSaveDelay(files))" in html
@@ -2730,19 +2736,20 @@ def test_phase1_ai_editor_regressions() -> None:
            and "formatOnSave:readCheckedValue('s-editor-format-on-save')" in html
            and "formatOnType:readCheckedValue('s-editor-format-on-type')" in html
            and "linkedEditing:readCheckedValue('s-editor-linked-editing')" in html
+           and "triggerOnFocusChange:readCheckedValue('s-editor-code-actions-trigger-focus')" in html
            and "codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)" in html
            and "trimTrailingWhitespace:readCheckedValue('s-files-trim-trailing-whitespace')" in html
            and "autoSave:filesAutoSaveMode({autoSave:readInputValue('s-files-auto-save')})" in html
            and "autoSaveDelay:filesAutoSaveDelay({autoSaveDelay:readNumberValue('s-files-auto-save-delay',1000,true)})" in html
            and "insertFinalNewline:readCheckedValue('s-files-insert-final-newline')" in html
            and "trimFinalNewlines:readCheckedValue('s-files-trim-final-newlines')" in html
-           and "const skipExplicitSaveParticipants=opts.autoSaveMode==='afterDelay'" in html
+           and "const skipExplicitSaveParticipants=opts.autoSave===true" in html
            and "if(!skipExplicitSaveParticipants&&editorFormatOnSaveEnabled())" in html
-           and "if(!skipExplicitSaveParticipants)changed=await runEditorCodeActionsOnSave()||changed" in html
+           and "if(!skipExplicitSaveParticipants)changed=await runEditorCodeActionsOnSave({reason:'explicit'})||changed" in html
            and "if(opts.autoSave&&!(tab&&tab.filePath))" in html
            and "function triggerEditorAutoSave(mode)" in html
-           and "ed.addEventListener('blur',()=>{triggerEditorAutoSave('onFocusChange')})" in html
-           and "window.addEventListener('blur',()=>{triggerEditorAutoSave('onWindowChange')})" in html
+           and "ed.addEventListener('blur',()=>{triggerEditorCodeActionsOnFocusChange();triggerEditorAutoSave('onFocusChange')})" in html
+           and "window.addEventListener('blur',()=>{triggerEditorCodeActionsOnFocusChange();triggerEditorAutoSave('onWindowChange')})" in html
            and "document.visibilityState==='hidden'" in html
            and "await saveFile({autoSave:true,autoSaveMode:autoSaveMode})" in html
            and "await runEditorSaveParticipants({autoSave:opts.autoSave===true,autoSaveMode:opts.autoSaveMode||''})" in html
@@ -2879,8 +2886,12 @@ def test_phase1_ai_editor_regressions() -> None:
             "editorApplyFilesSaveParticipantsToText",
             "editorSaveSettingEnabled",
             "editorKnownCodeActionsOnSave",
+            "editorCodeActionsOnSaveMode",
             "editorCodeActionKindIsSource",
+            "editorCodeActionKindContains",
             "editorCodeActionSaveOrder",
+            "editorCodeActionOnSaveMode",
+            "editorNormalizeCodeActionKinds",
             "editorCodeActionsOnSaveKinds",
         ]
         save_participant_js = "\n".join(
@@ -2896,17 +2907,23 @@ let config = { editor: { codeActionsOnSave: {
   "source.fixAll": "always",
   "source.custom": true,
   "source.never": "never",
+  "source.never.child": "explicit",
 }}};
-let kinds = editorCodeActionsOnSaveKinds();
+let kinds = editorCodeActionsOnSaveKinds("explicit");
 assert(kinds[0] === "source.fixAll", "fixAll is first");
 assert(kinds.includes("source.organizeImports"), "organize imports kept");
 assert(kinds.includes("source.custom"), "custom source action kept");
 assert(!kinds.includes("quickfix"), "non-source action filtered");
 assert(!kinds.includes("source.never"), "never action filtered");
+assert(!kinds.includes("source.never.child"), "never parent excludes child action");
 assert(editorKnownCodeActionsOnSave(config.editor.codeActionsOnSave, "source.organizeImports"), "known object setting detected");
+assert(editorCodeActionsOnSaveMode(config.editor.codeActionsOnSave, "source.fixAll") === "always", "known mode preserved");
+kinds = editorCodeActionsOnSaveKinds("always");
+assert(kinds.length === 1 && kinds[0] === "source.fixAll", "always reason only keeps always source actions");
 config = { editor: { codeActionsOnSave: ["quickfix", "source.organizeImports", "source.fixAll.eslint"] } };
-kinds = editorCodeActionsOnSaveKinds();
+kinds = editorCodeActionsOnSaveKinds("explicit");
 assert(kinds[0] === "source.fixAll.eslint" && kinds[1] === "source.organizeImports", "array settings filtered and sorted");
+assert(editorCodeActionsOnSaveKinds("always").length === 0, "array settings do not run for always focus trigger");
 config = { editor: { tabSize: 4, insertSpaces: true }, "[python]": { "editor.tabSize": 2, "editor.insertSpaces": false } };
 editorLang = "python";
 const formatOptions = editorFormatOptions();

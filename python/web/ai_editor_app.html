@@ -1727,8 +1727,11 @@ pre.code-block { overflow:visible; }
       <label class="settings-check"><input id="s-editor-format-on-save" type="checkbox"><span><b>Format on save</b><small>Runs the active formatter before explicit saves.</small></span></label>
       <label class="settings-check"><input id="s-editor-format-on-type" type="checkbox"><span><b>Format on type</b><small>Runs extension on-type formatting providers for typed trigger characters.</small></span></label>
       <label class="settings-check"><input id="s-editor-linked-editing" type="checkbox"><span><b>Linked editing</b><small>Mirrors edits across extension-provided linked ranges, such as paired HTML tags.</small></span></label>
-      <label class="settings-check"><input id="s-editor-organize-imports-on-save" type="checkbox"><span><b>Organize imports on save</b><small>Runs <code>source.organizeImports</code> before explicit saves.</small></span></label>
-      <label class="settings-check"><input id="s-editor-fix-all-on-save" type="checkbox"><span><b>Fix all on save</b><small>Runs <code>source.fixAll</code> before explicit saves.</small></span></label>
+      <div class="settings-grid">
+        <div><label>Organize imports on save</label><select id="s-editor-organize-imports-on-save" style="width:100%"><option value="">Off</option><option value="explicit">explicit</option><option value="always">always</option><option value="never">never</option></select></div>
+        <div><label>Fix all on save</label><select id="s-editor-fix-all-on-save" style="width:100%"><option value="">Off</option><option value="explicit">explicit</option><option value="always">always</option><option value="never">never</option></select></div>
+      </div>
+      <label class="settings-check"><input id="s-editor-code-actions-trigger-focus" type="checkbox"><span><b>Trigger code actions on focus change</b><small>Runs <code>always</code> source actions when Auto Save is <code>afterDelay</code>.</small></span></label>
       <div class="sb-group" style="padding:0;margin-top:12px">Files</div>
       <div class="settings-grid">
         <div><label>Auto Save</label><select id="s-files-auto-save" style="width:100%"><option value="off">off</option><option value="afterDelay">afterDelay</option><option value="onFocusChange">onFocusChange</option><option value="onWindowChange">onWindowChange</option></select></div>
@@ -1749,8 +1752,11 @@ pre.code-block { overflow:visible; }
       <label class="settings-check"><input id="s-editor-lang-format-on-save" type="checkbox"><span><b>Format on save</b><small>Language-specific editor.formatOnSave.</small></span></label>
       <label class="settings-check"><input id="s-editor-lang-format-on-type" type="checkbox"><span><b>Format on type</b><small>Language-specific editor.formatOnType.</small></span></label>
       <label class="settings-check"><input id="s-editor-lang-linked-editing" type="checkbox"><span><b>Linked editing</b><small>Language-specific editor.linkedEditing.</small></span></label>
-      <label class="settings-check"><input id="s-editor-lang-organize-imports-on-save" type="checkbox"><span><b>Organize imports on save</b><small>Language-specific source.organizeImports.</small></span></label>
-      <label class="settings-check"><input id="s-editor-lang-fix-all-on-save" type="checkbox"><span><b>Fix all on save</b><small>Language-specific source.fixAll.</small></span></label>
+      <div class="settings-grid">
+        <div><label>Organize imports on save</label><select id="s-editor-lang-organize-imports-on-save" style="width:100%"><option value="">Off</option><option value="explicit">explicit</option><option value="always">always</option><option value="never">never</option></select></div>
+        <div><label>Fix all on save</label><select id="s-editor-lang-fix-all-on-save" style="width:100%"><option value="">Off</option><option value="explicit">explicit</option><option value="always">always</option><option value="never">never</option></select></div>
+      </div>
+      <label class="settings-check"><input id="s-editor-lang-code-actions-trigger-focus" type="checkbox"><span><b>Trigger code actions on focus change</b><small>Language-specific editor.codeActions.triggerOnFocusChange.</small></span></label>
       <div class="settings-help" id="s-files-lang-override-info">Writes VS Code-style [language] files settings for the active editor language.</div>
       <label class="settings-check"><input id="s-files-lang-override-enabled" type="checkbox"><span><b>Override current language file saves</b><small>Use file save participants only for this language id.</small></span></label>
       <label class="settings-check"><input id="s-files-lang-trim-trailing-whitespace" type="checkbox"><span><b>Trim trailing whitespace</b><small>Language-specific files.trimTrailingWhitespace.</small></span></label>
@@ -1947,7 +1953,7 @@ const SETTINGS_SECTION_DEFAULTS={
   mcp:{access:'prompt',autostart:false,discovery_enabled:true,collision_behavior:'first',server_sampling:false},
   terminal:{profile:'PowerShell 7 (No Profile)',shell_path:'',shell_args:[],timeout:30,output_limit:8000,auto_approve:{}},
   extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands','views','customEditors'],enabled_contributions_explicit:false,diagnostics_enabled:false},
-  editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,linkedEditing:false,codeActionsOnSave:{},tabSize:4,insertSpaces:true},
+  editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,linkedEditing:false,codeActionsOnSave:{},codeActions:{triggerOnFocusChange:false},tabSize:4,insertSpaces:true},
   files:{autoSave:'off',autoSaveDelay:1000,trimTrailingWhitespace:false,insertFinalNewline:false,trimFinalNewlines:false},
   customization:{instructions_locations:['.sao/instructions.md','.sao/instructions'],agent_locations:['.sao/agents'],workflow_locations:['.sao/workflows'],skill_locations:['.agents/skills/.local','.claude/skills/.local'],use_agent_md:true,use_claude_md:false}
 };
@@ -7925,6 +7931,10 @@ function editorCodeActionKindIsSource(kind){
   kind=String(kind||'');
   return kind==='source'||kind.startsWith('source.');
 }
+function editorCodeActionKindContains(parent,child){
+  parent=String(parent||'');child=String(child||'');
+  return !!parent&&(parent===child||child.startsWith(parent+'.'));
+}
 function editorCodeActionSaveOrder(a,b){
   const aFix=String(a||'')==='source.fixAll'||String(a||'').startsWith('source.fixAll.');
   const bFix=String(b||'')==='source.fixAll'||String(b||'').startsWith('source.fixAll.');
@@ -7932,13 +7942,35 @@ function editorCodeActionSaveOrder(a,b){
   if(bFix&&!aFix)return 1;
   return 0;
 }
-function editorCodeActionsOnSaveKinds(){
+function editorCodeActionOnSaveMode(value){
+  if(value===true||value==='true')return 'explicit';
+  if(value==='always'||value==='explicit'||value==='never')return value;
+  return '';
+}
+function editorNormalizeCodeActionKinds(kinds,excluded){
+  const unique=[...new Set((Array.isArray(kinds)?kinds:[]).map(kind=>String(kind||'')).filter(editorCodeActionKindIsSource))];
+  const blocked=(Array.isArray(excluded)?excluded:[]).map(kind=>String(kind||'')).filter(editorCodeActionKindIsSource);
+  return unique
+    .filter(kind=>!blocked.some(parent=>editorCodeActionKindContains(parent,kind)))
+    .filter(kind=>unique.every(other=>other===kind||!editorCodeActionKindContains(other,kind)))
+    .sort(editorCodeActionSaveOrder);
+}
+function editorCodeActionsOnSaveKinds(reason){
   const editor=editorEffectiveSection('editor');
   const setting=editor.codeActionsOnSave;
+  const saveReason=reason||'explicit';
   let kinds=[];
-  if(Array.isArray(setting))kinds=setting;
-  else if(isPlainObject(setting))kinds=Object.keys(setting).filter(kind=>editorSaveSettingEnabled(setting[kind]));
-  return [...new Set(kinds.map(kind=>String(kind||'')).filter(editorCodeActionKindIsSource))].sort(editorCodeActionSaveOrder);
+  let excluded=[];
+  if(Array.isArray(setting)){
+    if(saveReason==='explicit')kinds=setting;
+  }else if(isPlainObject(setting)){
+    Object.keys(setting).forEach(kind=>{
+      const mode=editorCodeActionOnSaveMode(setting[kind]);
+      if(mode==='never')excluded.push(kind);
+      else if(mode==='always'||(mode==='explicit'&&saveReason==='explicit'))kinds.push(kind);
+    });
+  }
+  return editorNormalizeCodeActionKinds(kinds,excluded);
 }
 async function requestEditorOnTypeFormatting(ch,quiet){
   if(!editorFormatOnTypeEnabled()||typeof ch!=='string'||ch.length!==1)return false;
@@ -7981,8 +8013,9 @@ async function formatSelection(){
   }
   setStatus('Format selection not available for '+editorLang);
 }
-async function runEditorCodeActionsOnSave(){
-  const kinds=editorCodeActionsOnSaveKinds();
+async function runEditorCodeActionsOnSave(options){
+  const opts=isPlainObject(options)?options:{};
+  const kinds=editorCodeActionsOnSaveKinds(opts.reason||'explicit');
   if(!kinds.length)return false;
   let changed=false;
   const range=editorFullRangePayload();
@@ -7998,12 +8031,20 @@ async function runEditorCodeActionsOnSave(){
 }
 async function runEditorSaveParticipants(options){
   const opts=isPlainObject(options)?options:{};
-  const skipExplicitSaveParticipants=opts.autoSaveMode==='afterDelay';
+  const skipExplicitSaveParticipants=opts.autoSave===true;
   let changed=false;
   if(!skipExplicitSaveParticipants&&editorFormatOnSaveEnabled())changed=await formatDocument({quiet:true,onSave:true})||changed;
-  if(!skipExplicitSaveParticipants)changed=await runEditorCodeActionsOnSave()||changed;
+  if(!skipExplicitSaveParticipants)changed=await runEditorCodeActionsOnSave({reason:'explicit'})||changed;
   changed=applyEditorFilesSaveParticipants()||changed;
   if(changed)saveCurrentTab();
+  return changed;
+}
+async function triggerEditorCodeActionsOnFocusChange(){
+  const editor=editorEffectiveSection('editor');
+  const trigger=isPlainObject(editor.codeActions)?editor.codeActions.triggerOnFocusChange===true:false;
+  if(!trigger||filesAutoSaveMode()!=='afterDelay')return false;
+  const changed=await runEditorCodeActionsOnSave({reason:'always'});
+  if(changed)scheduleEditorAutoSave();
   return changed;
 }
 let _editorAutoSaveTimer=null,_editorAutoSaveInFlight=false,_editorAutoSavePending=false;
@@ -8047,10 +8088,10 @@ async function runEditorAutoSave(mode){
     }
   }
 }
-ed.addEventListener('blur',()=>{triggerEditorAutoSave('onFocusChange')});
-window.addEventListener('blur',()=>{triggerEditorAutoSave('onWindowChange')});
+ed.addEventListener('blur',()=>{triggerEditorCodeActionsOnFocusChange();triggerEditorAutoSave('onFocusChange')});
+window.addEventListener('blur',()=>{triggerEditorCodeActionsOnFocusChange();triggerEditorAutoSave('onWindowChange')});
 document.addEventListener('visibilitychange',()=>{
-  if(document.visibilityState==='hidden')triggerEditorAutoSave('onWindowChange');
+  if(document.visibilityState==='hidden'){triggerEditorCodeActionsOnFocusChange();triggerEditorAutoSave('onWindowChange')}
 });
 
 // ── Language picker ──
@@ -10395,7 +10436,15 @@ window.addEventListener('resize',()=>{
 });
 
 // ── Settings ──
-function settingSection(name){return mergeSectionDefaults(name,config[name])}
+function settingSection(name){
+  const section=mergeSectionDefaults(name,config[name]);
+  if(!isPlainObject(section)||!isPlainObject(config))return section;
+  const result={...section},prefix=name+'.';
+  Object.keys(config).forEach(key=>{
+    if(key.startsWith(prefix))setDottedConfigValue(result,key.slice(prefix.length),config[key]);
+  });
+  return result;
+}
 function setInputValue(id,value){const el=$(id);if(el)el.value=value??''}
 function setCheckedValue(id,value){const el=$(id);if(el)el.checked=!!value}
 function setSelectValue(id,value,fallback){
@@ -10463,12 +10512,14 @@ function readJsonObjectValue(id,fallback){
   const text=readInputValue(id).trim();if(!text)return fallback||{};
   try{const parsed=JSON.parse(text);return isPlainObject(parsed)?parsed:(fallback||{})}catch{return fallback||{}}
 }
-function editorSaveSettingEnabled(value){
-  return value===true||value==='true'||value==='always'||value==='explicit';
-}
+function editorSaveSettingEnabled(value){return ['always','explicit'].includes(editorCodeActionOnSaveMode(value))}
 function editorKnownCodeActionsOnSave(setting,kind){
   if(Array.isArray(setting))return setting.includes(kind);
   return isPlainObject(setting)&&editorSaveSettingEnabled(setting[kind]);
+}
+function editorCodeActionsOnSaveMode(setting,kind){
+  if(Array.isArray(setting)&&setting.includes(kind))return 'explicit';
+  return isPlainObject(setting)?editorCodeActionOnSaveMode(setting[kind]):'';
 }
 function editorCodeActionsOnSaveFromSettings(base,ids){
   const inputIds=isPlainObject(ids)?ids:{};
@@ -10476,9 +10527,11 @@ function editorCodeActionsOnSaveFromSettings(base,ids){
   const fixAllId=inputIds.fixAll||'s-editor-fix-all-on-save';
   const current=isPlainObject(base)?{...base}:{};
   if(Array.isArray(base))base.forEach(kind=>{if(kind)current[String(kind)]='explicit'});
-  if(readCheckedValue(organizeId))current['source.organizeImports']='explicit';
+  const organizeMode=editorCodeActionOnSaveMode(readInputValue(organizeId));
+  const fixAllMode=editorCodeActionOnSaveMode(readInputValue(fixAllId));
+  if(organizeMode)current['source.organizeImports']=organizeMode;
   else delete current['source.organizeImports'];
-  if(readCheckedValue(fixAllId))current['source.fixAll']='explicit';
+  if(fixAllMode)current['source.fixAll']=fixAllMode;
   else delete current['source.fixAll'];
   return current;
 }
@@ -10487,13 +10540,19 @@ function removeManagedEditorLanguageOverrideKeys(entry){
   const next={...entry};
   const managedFlat=[
     'editor.defaultFormatter','editor.default_formatter','editor.formatOnSave',
-    'editor.formatOnType','editor.linkedEditing','editor.codeActionsOnSave',
+    'editor.formatOnType','editor.linkedEditing','editor.codeActionsOnSave','editor.codeActions.triggerOnFocusChange',
     'editor.tabSize','editor.insertSpaces'
   ];
   managedFlat.forEach(key=>delete next[key]);
   if(isPlainObject(next.editor)){
     const editor={...next.editor};
     ['defaultFormatter','default_formatter','formatOnSave','formatOnType','linkedEditing','codeActionsOnSave','tabSize','insertSpaces'].forEach(key=>delete editor[key]);
+    if(isPlainObject(editor.codeActions)){
+      const codeActions={...editor.codeActions};
+      delete codeActions.triggerOnFocusChange;
+      if(Object.keys(codeActions).length)editor.codeActions=codeActions;
+      else delete editor.codeActions;
+    }
     if(Object.keys(editor).length)next.editor=editor;
     else delete next.editor;
   }
@@ -10524,6 +10583,7 @@ function saveEditorLanguageOverrideSettings(){
     entry['editor.formatOnSave']=readCheckedValue('s-editor-lang-format-on-save');
     entry['editor.formatOnType']=readCheckedValue('s-editor-lang-format-on-type');
     entry['editor.linkedEditing']=readCheckedValue('s-editor-lang-linked-editing');
+    entry['editor.codeActions.triggerOnFocusChange']=readCheckedValue('s-editor-lang-code-actions-trigger-focus');
     entry['editor.codeActionsOnSave']=editorCodeActionsOnSaveFromSettings(
       current.codeActionsOnSave,
       {organize:'s-editor-lang-organize-imports-on-save',fixAll:'s-editor-lang-fix-all-on-save'}
@@ -10572,8 +10632,9 @@ function openSettings(){
   setCheckedValue('s-editor-format-on-save',editor.formatOnSave===true);
   setCheckedValue('s-editor-format-on-type',editor.formatOnType===true);
   setCheckedValue('s-editor-linked-editing',editor.linkedEditing===true);
-  setCheckedValue('s-editor-organize-imports-on-save',editorKnownCodeActionsOnSave(editor.codeActionsOnSave,'source.organizeImports'));
-  setCheckedValue('s-editor-fix-all-on-save',editorKnownCodeActionsOnSave(editor.codeActionsOnSave,'source.fixAll'));
+  setInputValue('s-editor-organize-imports-on-save',editorCodeActionsOnSaveMode(editor.codeActionsOnSave,'source.organizeImports'));
+  setInputValue('s-editor-fix-all-on-save',editorCodeActionsOnSaveMode(editor.codeActionsOnSave,'source.fixAll'));
+  setCheckedValue('s-editor-code-actions-trigger-focus',isPlainObject(editor.codeActions)&&editor.codeActions.triggerOnFocusChange===true);
   const files=settingSection('files');
   setInputValue('s-files-auto-save',filesAutoSaveMode(files));
   setInputValue('s-files-auto-save-delay',filesAutoSaveDelay(files));
@@ -10589,8 +10650,9 @@ function openSettings(){
   setCheckedValue('s-editor-lang-format-on-save',languageEditor.formatOnSave===true);
   setCheckedValue('s-editor-lang-format-on-type',languageEditor.formatOnType===true);
   setCheckedValue('s-editor-lang-linked-editing',languageEditor.linkedEditing===true);
-  setCheckedValue('s-editor-lang-organize-imports-on-save',editorKnownCodeActionsOnSave(languageEditor.codeActionsOnSave,'source.organizeImports'));
-  setCheckedValue('s-editor-lang-fix-all-on-save',editorKnownCodeActionsOnSave(languageEditor.codeActionsOnSave,'source.fixAll'));
+  setInputValue('s-editor-lang-organize-imports-on-save',editorCodeActionsOnSaveMode(languageEditor.codeActionsOnSave,'source.organizeImports'));
+  setInputValue('s-editor-lang-fix-all-on-save',editorCodeActionsOnSaveMode(languageEditor.codeActionsOnSave,'source.fixAll'));
+  setCheckedValue('s-editor-lang-code-actions-trigger-focus',isPlainObject(languageEditor.codeActions)&&languageEditor.codeActions.triggerOnFocusChange===true);
   const langInfo=$('s-editor-lang-override-info');
   if(langInfo)langInfo.textContent='Writes VS Code-style '+editorLanguageOverrideKey(editorLang)+' editor settings for the active editor language.';
   const languageFiles=filesLanguageOverrideHas(editorLang)?{...files,...filesLanguageOverrideSettings(editorLang)}:filesEffectiveSection(editorLang);
@@ -10834,7 +10896,7 @@ async function saveSettings(){
   config.terminal={...settingSection('terminal'),profile:readInputValue('s-term-profile')||'PowerShell 7 (No Profile)',shell_path:readInputValue('s-term-shell'),shell_args:readListValue('s-term-args',false),timeout:readNumberValue('s-term-timeout',30,true),output_limit:readNumberValue('s-term-output',8000,true)};
   config.extensions={...settingSection('extensions'),confirm_install:readCheckedValue('s-ext-confirm'),diagnostics_enabled:readCheckedValue('s-ext-diagnostics'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true),enabled_contributions:readExtensionContributionValues(),enabled_contributions_explicit:true};
   const editorSettings=settingSection('editor');
-  config.editor={...editorSettings,defaultFormatter:readInputValue('s-editor-default-formatter').trim(),tabSize:editorTabSize(readNumberValue('s-editor-tab-size',4,true)),insertSpaces:readCheckedValue('s-editor-insert-spaces'),formatOnSave:readCheckedValue('s-editor-format-on-save'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing'),codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)};
+  config.editor={...editorSettings,defaultFormatter:readInputValue('s-editor-default-formatter').trim(),tabSize:editorTabSize(readNumberValue('s-editor-tab-size',4,true)),insertSpaces:readCheckedValue('s-editor-insert-spaces'),formatOnSave:readCheckedValue('s-editor-format-on-save'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing'),codeActions:{...(isPlainObject(editorSettings.codeActions)?editorSettings.codeActions:{}),triggerOnFocusChange:readCheckedValue('s-editor-code-actions-trigger-focus')},codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)};
   saveEditorLanguageOverrideSettings();
   config.files={...settingSection('files'),autoSave:filesAutoSaveMode({autoSave:readInputValue('s-files-auto-save')}),autoSaveDelay:filesAutoSaveDelay({autoSaveDelay:readNumberValue('s-files-auto-save-delay',1000,true)}),trimTrailingWhitespace:readCheckedValue('s-files-trim-trailing-whitespace'),insertFinalNewline:readCheckedValue('s-files-insert-final-newline'),trimFinalNewlines:readCheckedValue('s-files-trim-final-newlines')};
   saveFilesLanguageOverrideSettings();
