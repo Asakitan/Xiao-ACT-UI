@@ -60,6 +60,9 @@ from utils.sao_sound import play_sound
 from sao_theme import SAOPopUpMenu
 
 
+_CLOSE_BEFORE_COMMAND_DELAY_MS = 420
+
+
 def _finite_float(value: Any, default: float = 0.0, *, lo: float | None = None, hi: float | None = None) -> float:
     try:
         number = float(value)
@@ -603,13 +606,40 @@ class SAOPlayerGUIMenuMixin:
         if not callable(command):
             return wrapped
 
-        def _close_open_menu() -> None:
+        def _close_open_menu(*, release_fisheye_input: bool = False) -> None:
             menu = getattr(self, '_sao_menu', None)
-            if menu is not None and getattr(menu, 'visible', False):
+            if menu is None or not getattr(menu, 'visible', False):
+                return
+            if release_fisheye_input:
+                external_closer = getattr(self, '_close_sao_menu_for_external_command', None)
+                if callable(external_closer):
+                    try:
+                        external_closer()
+                        return
+                    except Exception:
+                        pass
+                closer = getattr(self, '_close_sao_menu_from_background', None)
+                if callable(closer):
+                    try:
+                        closer()
+                        return
+                    except Exception:
+                        pass
+            try:
+                self._toggle_sao_menu(allow_close=True)
+            except Exception:
+                pass
+
+        def _run_after_menu_close(command=command):
+            root = getattr(self, 'root', None)
+            after = getattr(root, 'after', None)
+            if callable(after):
                 try:
-                    self._toggle_sao_menu(allow_close=True)
+                    after(_CLOSE_BEFORE_COMMAND_DELAY_MS, command)
+                    return None
                 except Exception:
                     pass
+            return command()
 
         def _wrapped_command(command=command, keep_menu_open=keep_menu_open,
                              close_menu_before=close_menu_before):
@@ -618,7 +648,8 @@ class SAOPlayerGUIMenuMixin:
                 menu = getattr(self, '_sao_menu', None)
                 should_close = bool(menu is not None and getattr(menu, 'visible', False))
             if should_close and close_menu_before:
-                _close_open_menu()
+                _close_open_menu(release_fisheye_input=True)
+                return _run_after_menu_close(command)
             result = command()
             if should_close and not close_menu_before:
                 _close_open_menu()
@@ -1010,6 +1041,54 @@ class SAOPlayerGUIMenuMixin:
             except Exception:
                 self._sao_menu_close_pending = False
 
+    def _close_sao_menu_for_external_command(self):
+        """Close menu input surfaces immediately before opening native UI.
+
+        Normal menu closes keep the GPU popup alive for its fade-out. That is
+        visually nicer, but a native file dialog opened from a row command can
+        appear while popup/fisheye input windows are still topmost. For those
+        commands we tear down the input surfaces synchronously, then let the
+        command run on the existing short delay.
+        """
+        if self._exit_animating or self._close_finalized:
+            return
+        menu = getattr(self, '_sao_menu', None)
+        if menu is None or not getattr(menu, 'visible', False):
+            return
+        self._sao_menu_close_pending = True
+        self._fisheye_close_suppress_until = time.time() + 1.4
+        try:
+            self._destroy_fisheye_hit_layer()
+        except Exception:
+            pass
+        ov = getattr(self, '_fisheye_ov', None)
+        try:
+            self._release_fisheye_input_zorder(ov)
+        except Exception:
+            pass
+        stop_fisheye = getattr(self, '_stop_fisheye_overlay', None)
+        if callable(stop_fisheye):
+            try:
+                stop_fisheye()
+            except Exception:
+                pass
+        try:
+            destroy = getattr(menu, 'force_destroy_overlay', None)
+            if callable(destroy):
+                destroy(invoke_callback=True)
+            else:
+                menu.close()
+        finally:
+            try:
+                from render.overlay_scheduler import get_scheduler as _get_sched
+                _get_sched(self.root).set_menu_open(False)
+            except Exception:
+                pass
+            try:
+                self.root.after(650, self._clear_sao_menu_close_pending)
+            except Exception:
+                self._sao_menu_close_pending = False
+
     def _clear_sao_menu_close_pending(self):
         menu = getattr(self, '_sao_menu', None)
         if menu is not None and getattr(menu, 'visible', False):
@@ -1024,6 +1103,12 @@ class SAOPlayerGUIMenuMixin:
         """SAO 菜单打开时 — 停止呼吸, 启动持久鱼眼 (Win32 z-order 接管)"""
         self._stop_float_breath()
         self._lift_loop_active = False
+        try:
+            panel = getattr(self, '_act_plugin_manager_panel', None)
+            if panel is not None and panel.is_visible():
+                panel.hide()
+        except Exception:
+            pass
         self._set_plugin_unified_overlay_visible(False)
         try:
             self.root.after(140, lambda: self._start_fisheye_with_retry(retries=12, delay=100))

@@ -35,8 +35,33 @@ _MESH_PREVIEW_FACE_LIMIT = 8192
 _BACKEND_STATUS_CACHE: Model3DBackendStatus | None = None
 _MODEL_METADATA_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 _ACTION_METADATA_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+_ACTION_JSON_TEXT_CACHE: dict[tuple[str, str], tuple[dict[str, Any], tuple[str, ...]]] = {}
 _RETARGET_PLAN_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 _UNITY_ANIM_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+
+_UNITY_HAND_MUSCLE_RE = re.compile(
+    r"^(LeftHand|RightHand)\.(Thumb|Index|Middle|Ring|Little)\.(?:(\d)\s+Stretched|Spread)$",
+    re.IGNORECASE,
+)
+_UNITY_FINGER_SEGMENTS = {
+    "1": "Proximal",
+    "2": "Intermediate",
+    "3": "Distal",
+}
+_UNITY_FINGER_CURL_LIMITS = {
+    "Thumb": (1.05, 0.95, 0.75),
+    "Index": (1.30, 1.15, 0.95),
+    "Middle": (1.30, 1.15, 0.95),
+    "Ring": (1.35, 1.20, 1.00),
+    "Little": (1.35, 1.20, 1.00),
+}
+_UNITY_FINGER_SPREAD_LIMITS = {
+    "Thumb": 0.70,
+    "Index": 0.34,
+    "Middle": 0.22,
+    "Ring": 0.26,
+    "Little": 0.34,
+}
 
 HUMANOID_BONES = (
     "root",
@@ -329,6 +354,16 @@ def _hash_mapping(value: Mapping[str, Any]) -> str:
     return _hash_text(encoded)
 
 
+def _hash_action_source(value: Any) -> str:
+    if isinstance(value, Mapping):
+        return _hash_mapping(value)
+    if isinstance(value, str):
+        return _hash_text(value)
+    if value is None:
+        return ""
+    return _hash_text(repr(value))
+
+
 def _cache_put(cache: dict[tuple[Any, ...], dict[str, Any]], key: tuple[Any, ...], value: dict[str, Any]) -> None:
     if len(cache) >= _CACHE_LIMIT:
         cache.clear()
@@ -346,11 +381,14 @@ def _copy_metadata(value: dict[str, Any]) -> dict[str, Any]:
         "retarget",
         "mesh",
         "skins",
+        "material_textures",
+        "embedded_textures",
         "materials_config",
         "physics",
         "secondary_motion",
         "preview_mesh",
         "rest_positions",
+        "node_parents",
         "clip_keyframes",
     ):
         item = out.get(key)
@@ -484,6 +522,18 @@ def _extract_rest_positions(value: Any) -> dict[str, tuple[float, float, float]]
     return out
 
 
+def _extract_node_parents(value: Any) -> dict[str, str]:
+    if not isinstance(value, Mapping):
+        return {}
+    out: dict[str, str] = {}
+    for child, parent in value.items():
+        child_name = str(child or "").strip()
+        parent_name = str(parent or "").strip()
+        if child_name and parent_name and child_name != parent_name:
+            out[child_name] = parent_name
+    return out
+
+
 def _extract_preview_skin(value: Any) -> list[list[dict[str, float | str]]]:
     if not isinstance(value, (list, tuple)):
         return []
@@ -610,6 +660,14 @@ def _extract_sidecar_metadata(value: Any) -> dict[str, Any]:
     )
     if rest_positions:
         out["rest_positions"] = dict(rest_positions)
+    node_parents = (
+        _extract_node_parents(src.get("node_parents"))
+        or _extract_node_parents(src.get("parents"))
+        or _extract_node_parents((skeleton or {}).get("node_parents"))
+        or _extract_node_parents((skeleton or {}).get("parents"))
+    )
+    if node_parents:
+        out["node_parents"] = dict(node_parents)
     preview_skin = (
         _extract_preview_skin(src.get("preview_skin"))
         or _extract_preview_skin((preview or {}).get("skin"))
@@ -1882,6 +1940,32 @@ def _action_json_oversize_message(source: str, size: int) -> str:
     )
 
 
+def _parse_action_json_text(text: str, source: str) -> tuple[dict[str, Any], list[str]]:
+    token = _action_json_text_cache_token(text)
+    cache_key = (source, token)
+    cached = _ACTION_JSON_TEXT_CACHE.get(cache_key)
+    if cached is not None:
+        cached_data, cached_errors = cached
+        return dict(cached_data), list(cached_errors)
+    data: dict[str, Any] = {}
+    errors: list[str] = []
+    if len(text) > _ACTION_JSON_PARSE_LIMIT:
+        errors.append(_action_json_oversize_message(source, len(text)))
+    else:
+        try:
+            loaded = json.loads(text)
+            if isinstance(loaded, Mapping):
+                data.update(dict(loaded))
+            else:
+                errors.append(f"{source} must decode to an object")
+        except Exception as exc:
+            errors.append(str(exc))
+    if len(_ACTION_JSON_TEXT_CACHE) >= _CACHE_LIMIT:
+        _ACTION_JSON_TEXT_CACHE.clear()
+    _ACTION_JSON_TEXT_CACHE[cache_key] = (dict(data), tuple(errors))
+    return data, errors
+
+
 def _unity_anim_signature(path: Path) -> tuple[str, bool, int, int]:
     exists, size, mtime_ns = _file_signature(path)
     return str(path), exists, size, mtime_ns
@@ -2024,6 +2108,61 @@ def _unity_curve_name(curve: Mapping[str, Any]) -> str:
     return f"{path}/{attribute}" if path else attribute
 
 
+def _unity_finger_bone(side: str, finger: str, segment: str) -> str:
+    suffix = "_L" if side.lower().startswith("left") else "_R"
+    segment_name = _UNITY_FINGER_SEGMENTS.get(str(segment or "1"), "Proximal")
+    return f"{finger}{segment_name}{suffix}"
+
+
+def _is_unity_finger_bone(name: str) -> bool:
+    text = str(name or "")
+    if not text.endswith(("_L", "_R")):
+        return False
+    return any(
+        text.startswith(f"{finger}{segment}")
+        for finger in ("Thumb", "Index", "Middle", "Ring", "Little")
+        for segment in ("Proximal", "Intermediate", "Distal")
+    )
+
+
+def _clamped_muscle_value(value: Any) -> float:
+    try:
+        out = float(value)
+    except Exception:
+        return 0.0
+    if not math.isfinite(out):
+        return 0.0
+    return max(-1.0, min(1.0, out))
+
+
+def _unity_humanoid_muscle_rotations(
+    sampled: Mapping[str, Any],
+) -> dict[str, tuple[float, float, float, float]]:
+    rotations: dict[str, tuple[float, float, float, float]] = {}
+    if not isinstance(sampled, Mapping):
+        return rotations
+    for raw_name, raw_value in sampled.items():
+        name = str(raw_name or "").rsplit("/", 1)[-1].strip()
+        match = _UNITY_HAND_MUSCLE_RE.match(name)
+        if not match:
+            continue
+        side, finger, segment, = match.group(1), match.group(2), match.group(3)
+        value = _clamped_muscle_value(raw_value)
+        side_sign = -1.0 if side.lower().startswith("left") else 1.0
+        if segment:
+            bone = _unity_finger_bone(side, finger, segment)
+            limits = _UNITY_FINGER_CURL_LIMITS.get(finger, (1.20, 1.05, 0.90))
+            limit = limits[max(0, min(2, int(segment) - 1))]
+            curl = ((1.0 - value) * 0.5) * limit
+            quat = _axis_angle_quat((0.0, 0.0, side_sign), curl)
+        else:
+            bone = _unity_finger_bone(side, finger, "1")
+            spread_limit = _UNITY_FINGER_SPREAD_LIMITS.get(finger, 0.28)
+            quat = _axis_angle_quat((0.0, side_sign, 0.0), value * spread_limit)
+        rotations[bone] = _quat_mul(rotations.get(bone, (0.0, 0.0, 0.0, 1.0)), quat)
+    return rotations
+
+
 def _load_native_unity_action(
     model_meta: Mapping[str, Any],
     selected: Mapping[str, Any],
@@ -2076,6 +2215,9 @@ def _load_native_unity_action(
         "unity_float_curves": sampled,
         "unity_blendshapes": blendshapes,
     }
+    muscle_rotations = _unity_humanoid_muscle_rotations(sampled)
+    if muscle_rotations:
+        out["unity_muscle_rotations"] = muscle_rotations
     if errors:
         out["unity_errors"] = tuple(errors)
     return out
@@ -2090,20 +2232,42 @@ def _has_keyframes(value: Any) -> bool:
     return isinstance(frames, (list, tuple)) and bool(frames)
 
 
+def _has_explicit_motion(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    if _has_keyframes(value):
+        return True
+    for key in (
+        "pose_offsets",
+        "bone_offsets",
+        "offsets",
+        "pose_rotations",
+        "bone_rotations",
+        "rotations",
+    ):
+        item = value.get(key)
+        if isinstance(item, Mapping) and item:
+            return True
+    return False
+
+
 def _unity_motion_sample_info(selected: Mapping[str, Any]) -> dict[str, Any]:
     clips = selected.get("unity_clips")
     curves = selected.get("unity_float_curves")
     blendshapes = selected.get("unity_blendshapes")
+    muscle_rotations = selected.get("unity_muscle_rotations")
     clip_count = len(clips) if isinstance(clips, (list, tuple)) else 0
     curve_count = len(curves) if isinstance(curves, Mapping) else 0
     blendshape_count = len(blendshapes) if isinstance(blendshapes, Mapping) else 0
-    if clip_count <= 0 and curve_count <= 0 and blendshape_count <= 0:
+    muscle_rotation_count = len(muscle_rotations) if isinstance(muscle_rotations, Mapping) else 0
+    if clip_count <= 0 and curve_count <= 0 and blendshape_count <= 0 and muscle_rotation_count <= 0:
         return {}
     return {
         "motion_source": "unity_anim",
         "unity_clip_count": clip_count,
         "unity_curve_count": curve_count,
         "unity_blendshape_count": blendshape_count,
+        "unity_muscle_rotation_count": muscle_rotation_count,
         "unity_clips": tuple(
             str(item.get("name") or item.get("path") or "")
             for item in list(clips or [])[:8]
@@ -2163,6 +2327,70 @@ def _select_clip_keyframes(model_meta: Mapping[str, Any], action_name: str, clip
     return "", {}
 
 
+def _external_motion_metadata(path: Path, exists: bool) -> dict[str, Any]:
+    if not exists or not str(path):
+        return {}
+    sidecar_path, sidecar_signature = _model_sidecar_signature(path, exists)
+    sidecar_meta = _read_model_sidecar(sidecar_path, bool(sidecar_signature[1]))
+    file_meta = _read_model_file_metadata(path, "auto", exists)
+    clips = _merge_unique(sidecar_meta.get("clips"), file_meta.get("clips"))
+    metadata = {
+        "path": str(path),
+        "resolved_path": str(path),
+        "sidecar": dict(sidecar_meta),
+        "clips": clips,
+        "clip_keyframes": copy.deepcopy(file_meta.get("clip_keyframes") or {}),
+        "native_unity_animations": copy.deepcopy(sidecar_meta.get("native_unity_animations") or {}),
+        "errors": _merge_unique(sidecar_meta.get("errors"), file_meta.get("errors")),
+    }
+    return metadata
+
+
+def _load_external_motion_action(
+    action_path: Path,
+    model_meta: Mapping[str, Any],
+    selected: Mapping[str, Any],
+    action_name: str,
+    phase: float,
+) -> tuple[str, dict[str, Any]]:
+    suffix = action_path.suffix.lower()
+    if suffix == ".anim":
+        merged = dict(selected)
+        refs = [str(action_path)]
+        existing = merged.get("native_unity")
+        if isinstance(existing, (list, tuple)):
+            refs.extend(str(item).strip() for item in existing if str(item or "").strip())
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for ref in refs:
+            if ref and ref not in seen:
+                seen.add(ref)
+                deduped.append(ref)
+        merged["native_unity"] = deduped
+        unity_action = _load_native_unity_action(model_meta, merged, phase)
+        if unity_action:
+            merged.update(unity_action)
+            merged.setdefault("clip", str(action_path.stem))
+            merged.setdefault("name", str(action_path.stem))
+            return str(action_path.stem), merged
+        return "", {}
+    motion_meta = _external_motion_metadata(action_path, action_path.is_file())
+    clip_key, motion_selected = _select_clip_keyframes(motion_meta, action_name, selected.get("clip"))
+    if motion_selected:
+        merged = _merge_action_config(selected, motion_selected)
+        merged.setdefault("source_file", str(action_path))
+        return clip_key, merged
+    return "", {}
+
+
+def _selected_action_motion_file(selected: Mapping[str, Any]) -> str:
+    for key in ("file", "motion_file", "animation_file"):
+        text = str(selected.get(key) or "").strip()
+        if text:
+            return text
+    return ""
+
+
 def clear_model3d_metadata_caches() -> None:
     """Clear model3d probe/metadata caches for focused tests."""
 
@@ -2170,6 +2398,7 @@ def clear_model3d_metadata_caches() -> None:
     _BACKEND_STATUS_CACHE = None
     _MODEL_METADATA_CACHE.clear()
     _ACTION_METADATA_CACHE.clear()
+    _ACTION_JSON_TEXT_CACHE.clear()
     _RETARGET_PLAN_CACHE.clear()
     _UNITY_ANIM_CACHE.clear()
 
@@ -2196,13 +2425,17 @@ def _get_model_metadata_cached(node: Mapping[str, Any], *, copy_result: bool) ->
     clip_keyframes = copy.deepcopy(file_meta.get("clip_keyframes") or {})
     file_rest = dict(file_meta.get("rest_positions") or {}) if isinstance(file_meta.get("rest_positions"), Mapping) else {}
     sidecar_rest = dict(sidecar_meta.get("rest_positions") or {}) if isinstance(sidecar_meta.get("rest_positions"), Mapping) else {}
-    rest_positions = dict(file_rest)
-    rest_positions.update(sidecar_rest)
+    rest_positions = dict(sidecar_rest)
+    rest_positions.update(file_rest)
+    file_parents = dict(file_meta.get("node_parents") or {}) if isinstance(file_meta.get("node_parents"), Mapping) else {}
+    sidecar_parents = dict(sidecar_meta.get("node_parents") or {}) if isinstance(sidecar_meta.get("node_parents"), Mapping) else {}
+    node_parents = dict(sidecar_parents)
+    node_parents.update(file_parents)
     rest_source = ""
-    if sidecar_rest:
-        rest_source = "sidecar"
-    elif file_rest:
+    if file_rest:
         rest_source = str(file_meta.get("rest_positions_source") or "model")
+    elif sidecar_rest:
+        rest_source = "sidecar"
     metadata = {
         "path": path_text,
         "resolved_path": str(resolved),
@@ -2217,6 +2450,8 @@ def _get_model_metadata_cached(node: Mapping[str, Any], *, copy_result: bool) ->
         "skins": copy.deepcopy(file_meta.get("skins") or []),
         "nodes": tuple(file_meta.get("nodes") or ()),
         "materials": tuple(file_meta.get("materials") or ()),
+        "material_textures": copy.deepcopy(file_meta.get("material_textures") or {}),
+        "embedded_textures": copy.deepcopy(file_meta.get("embedded_textures") or {}),
         "materials_config": copy.deepcopy(sidecar_meta.get("materials_config") or {}),
         "native_unity_animations": copy.deepcopy(sidecar_meta.get("native_unity_animations") or {}),
         "physics": copy.deepcopy(sidecar_meta.get("physics") or {}),
@@ -2225,6 +2460,7 @@ def _get_model_metadata_cached(node: Mapping[str, Any], *, copy_result: bool) ->
         "clips": clips,
         "clip_keyframes": dict(clip_keyframes) if isinstance(clip_keyframes, Mapping) else {},
         "rest_positions": rest_positions,
+        "node_parents": node_parents,
         "rest_positions_source": rest_source,
         "metadata_errors": errors,
         "cache_key": cache_key,
@@ -2272,38 +2508,24 @@ def _get_action_metadata_cached(node: Mapping[str, Any], *, copy_result: bool) -
         action_time = float(action.get("time", node.get("phase", 0.0)) or 0.0)
     except Exception:
         action_time = 0.0
-    cache_key = (
-        name,
-        _hash_mapping(inline) if inline else "",
-        _action_json_text_cache_token(json_text) if json_text else "",
-        str(action_path) if action_file else "",
-        file_exists,
-        file_size,
-        file_mtime_ns,
-        json_error,
-        model_cache_key,
-        round(action_time, 4),
+    procedural_source_hash = _hash_action_source(
+        node.get("procedural_action")
+        if node.get("procedural_action") is not None
+        else action.get("procedural_action")
+        if isinstance(action, Mapping) and action.get("procedural_action") is not None
+        else action.get("procedural_action_json")
+        if isinstance(action, Mapping)
+        else None
     )
-    cached = _ACTION_METADATA_CACHE.get(cache_key)
-    if cached is not None:
-        return _copy_metadata(cached) if copy_result else cached
 
     data: dict[str, Any] = dict(inline)
     errors: list[str] = []
     if json_error:
         errors.append(json_error)
     if json_text:
-        if len(json_text) > _ACTION_JSON_PARSE_LIMIT:
-            errors.append(_action_json_oversize_message("action json_text", len(json_text)))
-        else:
-            try:
-                loaded = json.loads(json_text)
-                if isinstance(loaded, Mapping):
-                    data.update(dict(loaded))
-                else:
-                    errors.append("action json_text must decode to an object")
-            except Exception as exc:
-                errors.append(str(exc))
+        loaded_data, loaded_errors = _parse_action_json_text(json_text, "action json_text")
+        data.update(loaded_data)
+        errors.extend(loaded_errors)
     if action_file:
         if file_exists:
             if _is_json_action_file(action_path, action_file):
@@ -2323,34 +2545,86 @@ def _get_action_metadata_cached(node: Mapping[str, Any], *, copy_result: bool) -
             errors.append(f"action file is missing: {action_file}")
 
     selected = dict(data.get(name) or {}) if isinstance(data.get(name), Mapping) else {}
-    _procedural_root, procedural_selected = _selected_relative_action(node, name)
-    if procedural_selected:
-        selected = _merge_action_config(procedural_selected, selected)
+    top_level_is_json = bool(action_file and _is_json_action_file(action_path, action_file))
+    selected_motion_file = _selected_action_motion_file(selected) if (not action_file or top_level_is_json) else ""
+    motion_file = (
+        action_file
+        if action_file and not top_level_is_json
+        else selected_motion_file
+    )
+    motion_path = resolve_action_path(motion_file, node) if motion_file else Path("")
+    motion_exists, motion_size, motion_mtime_ns = _file_signature(motion_path) if motion_file else (False, 0, 0)
+    file_kind = "motion" if motion_file else "json" if top_level_is_json else ""
+    cache_key = (
+        name,
+        _hash_mapping(inline) if inline else "",
+        _action_json_text_cache_token(json_text) if json_text else "",
+        str(action_path) if action_file else "",
+        file_exists,
+        file_size,
+        file_mtime_ns,
+        str(motion_path) if motion_file else "",
+        motion_exists,
+        motion_size,
+        motion_mtime_ns,
+        json_error,
+        procedural_source_hash,
+        model_cache_key,
+        round(action_time, 4),
+    )
+    cached = _ACTION_METADATA_CACHE.get(cache_key)
+    if cached is not None:
+        return _copy_metadata(cached) if copy_result else cached
+    external_motion_clip = ""
+    procedural_fallback = False
+    if file_kind == "motion" and motion_exists:
+        external_motion_clip, external_selected = _load_external_motion_action(
+            motion_path,
+            model_meta,
+            selected,
+            name,
+            action_time,
+        )
+        if external_selected:
+            selected = external_selected
+            data.setdefault(name, dict(selected))
     model_clip_name = ""
-    if not _has_keyframes(selected):
+    if not _has_explicit_motion(selected):
         model_clip_name, model_selected = _select_clip_keyframes(model_meta, name, action.get("clip"))
         if model_selected:
             merged = dict(selected)
             merged.update(model_selected)
             selected = merged
             data.setdefault(name, dict(selected))
+    if not _has_explicit_motion(selected):
+        _procedural_root, procedural_selected = _selected_relative_action(node, name)
+        if procedural_selected:
+            selected = _merge_action_config(procedural_selected, selected)
+            procedural_fallback = True
+    elif not any(key in selected for key in ("native_unity", "unity_anim", "unity_animation")):
+        _procedural_root, procedural_selected = _selected_relative_action(node, name)
+        if procedural_selected:
+            for key in ("native_unity", "unity_anim", "unity_animation"):
+                if key in procedural_selected:
+                    selected[key] = copy.deepcopy(procedural_selected[key])
     unity_action = _load_native_unity_action(model_meta, selected, action_time)
     if unity_action:
         selected.update(unity_action)
         data.setdefault(name, dict(selected))
-    file_kind = "json" if action_file and _is_json_action_file(action_path, action_file) else "motion" if action_file else ""
     metadata = {
         "name": name,
         "data": dict(data),
         "selected": dict(selected or {}),
         "model_clip": model_clip_name,
+        "external_motion_clip": external_motion_clip,
         "file": action_file,
         "resolved_file": str(action_path) if action_file else "",
         "file_kind": file_kind,
-        "motion_file": action_file if file_kind == "motion" else "",
-        "resolved_motion_file": str(action_path) if file_kind == "motion" else "",
-        "motion_exists": bool(file_exists) if file_kind == "motion" else False,
-        "motion_format": action_path.suffix.lower().lstrip(".") if file_kind == "motion" else "",
+        "motion_file": motion_file if file_kind == "motion" else "",
+        "resolved_motion_file": str(motion_path) if file_kind == "motion" else "",
+        "motion_exists": bool(motion_exists) if file_kind == "motion" else False,
+        "motion_format": motion_path.suffix.lower().lstrip(".") if file_kind == "motion" else "",
+        "procedural_fallback": procedural_fallback,
         "errors": tuple(errors),
         "cache_key": cache_key,
     }
@@ -2642,33 +2916,6 @@ def _float_from_mapping(src: Mapping[str, Any], key: str, default: float,
     return max(lo, min(hi, value))
 
 
-def _vec_add(a: tuple[float, float, float], b: tuple[float, float, float]) -> tuple[float, float, float]:
-    return a[0] + b[0], a[1] + b[1], a[2] + b[2]
-
-
-def _vec_sub(a: tuple[float, float, float], b: tuple[float, float, float]) -> tuple[float, float, float]:
-    return a[0] - b[0], a[1] - b[1], a[2] - b[2]
-
-
-def _vec_scale(a: tuple[float, float, float], scale: float) -> tuple[float, float, float]:
-    return a[0] * scale, a[1] * scale, a[2] * scale
-
-
-def _vec_len(a: tuple[float, float, float]) -> float:
-    return math.sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2])
-
-
-def _vec_cross(
-    a: tuple[float, float, float],
-    b: tuple[float, float, float],
-) -> tuple[float, float, float]:
-    return (
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    )
-
-
 def _quat_normalize(q: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
     length = math.sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3])
     if length <= 0.000001:
@@ -2676,64 +2923,30 @@ def _quat_normalize(q: tuple[float, float, float, float]) -> tuple[float, float,
     return q[0] / length, q[1] / length, q[2] / length, q[3] / length
 
 
-def _quat_shortest(q: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
-    q = _quat_normalize(q)
-    if q[3] < 0.0:
-        return -q[0], -q[1], -q[2], -q[3]
-    return q
-
-
-def _quat_angle(q: tuple[float, float, float, float]) -> float:
-    q = _quat_shortest(q)
-    axis_len = math.sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2])
-    return 2.0 * math.atan2(axis_len, max(-1.0, min(1.0, q[3])))
-
-
-def _limit_quat_angle(
-    q: tuple[float, float, float, float],
-    max_angle: float,
-) -> tuple[tuple[float, float, float, float], float, float, bool]:
-    q = _quat_shortest(q)
-    angle = _quat_angle(q)
-    limit = max(0.0, min(math.pi, float(max_angle or 0.0)))
-    if angle <= limit + 0.000001:
-        return q, angle, angle, False
-    axis_len = math.sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2])
-    if axis_len <= 0.000001 or limit <= 0.000001:
-        return (0.0, 0.0, 0.0, 1.0), angle, 0.0, True
-    axis = (q[0] / axis_len, q[1] / axis_len, q[2] / axis_len)
-    half = limit * 0.5
-    s = math.sin(half)
-    limited = (axis[0] * s, axis[1] * s, axis[2] * s, math.cos(half))
-    return _quat_normalize(limited), angle, limit, True
-
-
-def _quat_rotate_vec(
-    q: tuple[float, float, float, float],
-    v: tuple[float, float, float],
-) -> tuple[float, float, float]:
-    x, y, z, w = _quat_normalize(q)
-    u = (x, y, z)
-    uv = _vec_cross(u, v)
-    uuv = _vec_cross(u, uv)
-    return _vec_add(v, _vec_add(_vec_scale(uv, 2.0 * w), _vec_scale(uuv, 2.0)))
-
-
-def _lerp_quat(
+def _quat_mul(
     a: tuple[float, float, float, float],
     b: tuple[float, float, float, float],
-    amount: float,
 ) -> tuple[float, float, float, float]:
-    t = max(0.0, min(1.0, float(amount or 0.0)))
-    dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
-    if dot < 0.0:
-        b = (-b[0], -b[1], -b[2], -b[3])
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
     return _quat_normalize((
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t,
-        a[2] + (b[2] - a[2]) * t,
-        a[3] + (b[3] - a[3]) * t,
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz,
     ))
+
+
+def _axis_angle_quat(
+    axis: tuple[float, float, float],
+    angle: float,
+) -> tuple[float, float, float, float]:
+    length = math.sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2])
+    if length <= 0.000001 or abs(angle) <= 0.000001:
+        return 0.0, 0.0, 0.0, 1.0
+    half = float(angle) * 0.5
+    scale = math.sin(half) / length
+    return _quat_normalize((axis[0] * scale, axis[1] * scale, axis[2] * scale, math.cos(half)))
 
 
 def _normalize_action_name(value: Any) -> str:
@@ -2938,39 +3151,6 @@ def _fbx_animation_keyframes(text: str, model_names_by_id: Mapping[int, str]) ->
     return out
 
 
-def _pose_offsets_from_mapping(value: Any) -> dict[str, tuple[float, float, float]]:
-    if not isinstance(value, Mapping):
-        return {}
-    out: dict[str, tuple[float, float, float]] = {}
-    for key, raw in value.items():
-        canonical = _canonical_from_token(key)
-        point = _point3(raw)
-        if canonical and point is not None:
-            out[canonical] = point
-    return out
-
-
-def _pose_rotations_from_mapping(value: Any) -> dict[str, tuple[float, float, float, float]]:
-    if not isinstance(value, Mapping):
-        return {}
-    out: dict[str, tuple[float, float, float, float]] = {}
-    for key, raw in value.items():
-        canonical = _canonical_from_token(key)
-        quat = _quat4(raw)
-        if canonical and quat is not None:
-            out[canonical] = _quat_normalize(quat)
-    return out
-
-
-def _merge_offsets(*groups: Mapping[str, tuple[float, float, float]]) -> dict[str, tuple[float, float, float]]:
-    out: dict[str, tuple[float, float, float]] = {}
-    for group in groups:
-        for key, value in group.items():
-            old = out.get(key, (0.0, 0.0, 0.0))
-            out[key] = _vec_add(old, value)
-    return out
-
-
 def _bool_from_mapping(src: Mapping[str, Any], key: str, default: bool) -> bool:
     try:
         value = src.get(key, default)
@@ -2985,363 +3165,189 @@ def _bool_from_mapping(src: Mapping[str, Any], key: str, default: bool) -> bool:
     return bool(value)
 
 
-def _frame_time(frame: Mapping[str, Any], fallback: float) -> float:
-    for key in ("time", "t", "phase", "frame"):
-        try:
-            value = frame.get(key)
-            if value is not None:
-                result = float(value)
-                if result == result:
-                    return result
-        except Exception:
-            continue
-    return float(fallback)
 
-
-def _frame_offsets(frame: Mapping[str, Any]) -> dict[str, tuple[float, float, float]]:
-    direct = {
-        key: value for key, value in frame.items()
-        if key not in {
-            "time", "t", "phase", "frame",
-            "offsets", "pose_offsets", "bone_offsets", "bones",
-            "rotations", "pose_rotations", "bone_rotations",
-        }
-    }
-    return _merge_offsets(
-        _pose_offsets_from_mapping(frame.get("pose_offsets")),
-        _pose_offsets_from_mapping(frame.get("bone_offsets")),
-        _pose_offsets_from_mapping(frame.get("offsets")),
-        _pose_offsets_from_mapping(frame.get("bones")),
-        _pose_offsets_from_mapping(direct),
-    )
-
-
-def _frame_rotations(frame: Mapping[str, Any]) -> dict[str, tuple[float, float, float, float]]:
-    out: dict[str, tuple[float, float, float, float]] = {}
-    for group in (
-        _pose_rotations_from_mapping(frame.get("pose_rotations")),
-        _pose_rotations_from_mapping(frame.get("bone_rotations")),
-        _pose_rotations_from_mapping(frame.get("rotations")),
-    ):
-        out.update(group)
-    return out
-
-
-def _lerp_offsets(
-    a: Mapping[str, tuple[float, float, float]],
-    b: Mapping[str, tuple[float, float, float]],
-    amount: float,
-) -> dict[str, tuple[float, float, float]]:
-    t = max(0.0, min(1.0, float(amount or 0.0)))
-    out: dict[str, tuple[float, float, float]] = {}
-    for key in set(a) | set(b):
-        av = a.get(key, (0.0, 0.0, 0.0))
-        bv = b.get(key, (0.0, 0.0, 0.0))
-        out[key] = (
-            av[0] + (bv[0] - av[0]) * t,
-            av[1] + (bv[1] - av[1]) * t,
-            av[2] + (bv[2] - av[2]) * t,
-        )
-    return out
-
-
-def _lerp_rotations(
-    a: Mapping[str, tuple[float, float, float, float]],
-    b: Mapping[str, tuple[float, float, float, float]],
-    amount: float,
-) -> dict[str, tuple[float, float, float, float]]:
-    t = max(0.0, min(1.0, float(amount or 0.0)))
-    out: dict[str, tuple[float, float, float, float]] = {}
-    for key in set(a) | set(b):
-        av = a.get(key)
-        bv = b.get(key)
-        if av is None and bv is not None:
-            av = bv
-        if bv is None and av is not None:
-            bv = av
-        if av is None or bv is None:
-            continue
-        out[key] = _lerp_quat(av, bv, t)
-    return out
-
-
-def _json_rotations(
-    rotations: Mapping[str, tuple[float, float, float, float]],
-) -> dict[str, list[float]]:
-    return {key: [float(x) for x in value] for key, value in sorted(rotations.items())}
-
-
-def _sample_keyframe_offsets(
-    selected: Mapping[str, Any],
-    phase: float,
-) -> tuple[dict[str, tuple[float, float, float]], dict[str, Any]]:
-    raw_frames = selected.get("keyframes")
-    if not isinstance(raw_frames, (list, tuple)):
-        raw_frames = selected.get("frames")
-    if not isinstance(raw_frames, (list, tuple)):
-        return {}, {}
-
-    frames: list[tuple[
-        float,
-        dict[str, tuple[float, float, float]],
-        dict[str, tuple[float, float, float, float]],
-    ]] = []
-    for index, raw in enumerate(raw_frames):
-        if not isinstance(raw, Mapping):
-            continue
-        offsets = _frame_offsets(raw)
-        rotations = _frame_rotations(raw)
-        if offsets or rotations:
-            frames.append((_frame_time(raw, float(index)), offsets, rotations))
-    frames.sort(key=lambda item: item[0])
-    if not frames:
-        return {}, {}
-
-    speed = _float_from_mapping(selected, "speed", 1.0, lo=0.05, hi=5.0)
-    t = float(phase or 0.0) * speed
-    try:
-        duration = float(selected.get("duration") or 0.0)
-    except Exception:
-        duration = 0.0
-    if duration <= 0.0:
-        duration = max(frames[-1][0], 0.0)
-    loop = _bool_from_mapping(selected, "loop", True)
-    if loop and duration > 0.0:
-        t = t % duration
-    elif frames:
-        t = max(frames[0][0], min(frames[-1][0], t))
-
-    if len(frames) == 1:
-        return dict(frames[0][1]), {
-            "motion_source": "keyframes",
-            "sample_time": t,
-            "keyframe_count": 1,
-            "duration": duration,
-            "loop": loop,
-            "rotations": _json_rotations(frames[0][2]),
-            "rotation_count": len(frames[0][2]),
-        }
-
-    prev = frames[0]
-    nxt = frames[-1]
-    for index in range(1, len(frames)):
-        if t <= frames[index][0]:
-            prev = frames[index - 1]
-            nxt = frames[index]
-            break
-
-    span = max(0.000001, nxt[0] - prev[0])
-    amount = (t - prev[0]) / span
-    interpolation = str(selected.get("interpolation") or "linear").strip().lower()
-    if interpolation in {"step", "hold", "nearest"}:
-        sampled = dict(prev[1] if amount < 1.0 else nxt[1])
-        rotations = dict(prev[2] if amount < 1.0 else nxt[2])
-    else:
-        sampled = _lerp_offsets(prev[1], nxt[1], amount)
-        rotations = _lerp_rotations(prev[2], nxt[2], amount)
-    return sampled, {
-        "motion_source": "keyframes",
-        "sample_time": t,
-        "keyframe_count": len(frames),
-        "duration": duration,
-        "loop": loop,
-        "frame_a": prev[0],
-        "frame_b": nxt[0],
-        "blend": max(0.0, min(1.0, amount)),
-        "rotations": _json_rotations(rotations),
-        "rotation_count": len(rotations),
-    }
-
-
-def _humanoid_descendants(root: str) -> tuple[str, ...]:
-    children: dict[str, list[str]] = {}
-    for parent, child in HUMANOID_SEGMENTS:
-        children.setdefault(parent, []).append(child)
-    out: list[str] = []
-    stack = list(children.get(root, ()))
-    seen: set[str] = set()
-    while stack:
-        bone = stack.pop(0)
-        if bone in seen:
-            continue
-        seen.add(bone)
-        out.append(bone)
-        stack.extend(children.get(bone, ()))
-    return tuple(out)
-
-
-def _rotation_offsets_from_samples(
-    rest: Mapping[str, tuple[float, float, float]],
-    rotations: Mapping[str, Any],
-) -> dict[str, tuple[float, float, float]]:
-    out: dict[str, tuple[float, float, float]] = {}
-    for bone, raw_quat in rotations.items():
-        canonical = _canonical_from_token(bone)
-        quat = _quat4(raw_quat)
-        if not canonical or quat is None or canonical not in rest:
-            continue
-        anchor = rest[canonical]
-        for child in _humanoid_descendants(canonical):
-            if child not in rest:
-                continue
-            rest_vec = _vec_sub(rest[child], anchor)
-            if _vec_len(rest_vec) <= 0.000001:
-                continue
-            rotated = _vec_add(anchor, _quat_rotate_vec(quat, rest_vec))
-            delta = _vec_sub(rotated, rest[child])
-            out[child] = _vec_add(out.get(child, (0.0, 0.0, 0.0)), delta)
-    return out
-
-
-def _twist_limit_angle(plan: Mapping[str, Any]) -> float:
-    try:
-        raw = float(plan.get("twist_limit") or 0.0)
-    except Exception:
-        raw = 0.0
-    if raw <= 0.0:
-        return 0.0
-    # Existing specs express values in the same small 0..1 style as
-    # stretch_limit; treat that range as a fraction of a half-turn. Larger
-    # values are accepted as radians for advanced/native backends.
-    if raw <= 1.0:
-        return min(math.pi, raw * math.pi)
-    return min(math.pi, raw)
-
-
-def _limit_keyframe_rotations(
-    rotations: Mapping[str, Any],
-    plan: Mapping[str, Any],
-) -> tuple[dict[str, tuple[float, float, float, float]], dict[str, Any]]:
-    max_angle = _twist_limit_angle(plan)
-    out: dict[str, tuple[float, float, float, float]] = {}
-    angles: dict[str, float] = {}
-    source_angles: dict[str, float] = {}
-    clamped: list[str] = []
-    for bone, raw_quat in rotations.items():
-        canonical = _canonical_from_token(bone)
-        quat = _quat4(raw_quat)
-        if not canonical or quat is None:
-            continue
-        limited, source_angle, limited_angle, was_clamped = _limit_quat_angle(quat, max_angle)
-        out[canonical] = limited
-        angles[canonical] = float(limited_angle)
-        source_angles[canonical] = float(source_angle)
-        if was_clamped:
-            clamped.append(canonical)
-    return out, {
+def _default_procedural_action_root() -> dict[str, Any]:
+    return {
+        "schema": "sao.humanoid.procedural.v1",
         "enabled": True,
-        "max_angle": float(max_angle),
-        "clamped_count": len(clamped),
-        "clamped": tuple(sorted(clamped)),
-        "angles": {bone: float(value) for bone, value in sorted(angles.items())},
-        "source_angles": {bone: float(value) for bone, value in sorted(source_angles.items())},
+        "mode": "relative_ik_moe",
+        "default_action": "moe_idle",
+        "common": {
+            "body": {"breathing": 0.014, "sway": 0.006, "cadence": 0.85},
+            "head": {"look_at": [0.0, 1.42, 1.08], "weight": 0.12},
+        },
+        "actions": {
+            "tomurai_idle": {
+                "clip": "Idle",
+                "body": {"breathing": 0.020, "sway": 0.010, "cadence": 0.72, "bounce": 0.006},
+                "head": {"look_at": [0.0, 1.44, 1.10], "weight": 0.18},
+                "effectors": {
+                    "left_arm": {"offset": [0.16, -0.34, 0.03], "weight": 0.95},
+                    "left_forearm": {"offset": [0.34, -0.68, 0.06], "weight": 1.00},
+                    "left_hand": {"offset": [0.50, -0.88, 0.08], "weight": 1.00},
+                    "right_arm": {"offset": [-0.16, -0.34, 0.03], "weight": 0.95},
+                    "right_forearm": {"offset": [-0.34, -0.68, 0.06], "weight": 1.00},
+                    "right_hand": {"offset": [-0.50, -0.88, 0.08], "weight": 1.00},
+                },
+            },
+            "moe_idle": {
+                "clip": "Idle",
+                "body": {
+                    "breathing": 0.022,
+                    "sway": 0.016,
+                    "cadence": 0.82,
+                    "bounce": 0.010,
+                    "lean": [0.010, 0.0, 0.012],
+                },
+                "head": {"look_at": [0.06, 1.45, 1.08], "weight": 0.24},
+                "effectors": {
+                    "left_arm": {"offset": [0.18, -0.38, 0.04], "weight": 0.95},
+                    "left_forearm": {"offset": [0.38, -0.76, 0.08], "weight": 1.00},
+                    "left_hand": {"offset": [0.56, -0.98, 0.10], "weight": 1.00, "wave": [0.0, 0.010, 0.0], "frequency": 1.2},
+                    "right_arm": {"offset": [-0.18, -0.38, 0.04], "weight": 0.95},
+                    "right_forearm": {"offset": [-0.38, -0.76, 0.08], "weight": 1.00},
+                    "right_hand": {"offset": [-0.56, -0.98, 0.10], "weight": 1.00, "wave": [0.0, 0.012, 0.0], "frequency": 1.3, "phase": 0.4},
+                },
+            "bone_rotations": {
+                "left_arm": [0.0, 0.0, -0.62, 0.785],
+                "left_forearm": [0.0, 0.0, -0.40, 0.916],
+                "right_arm": [0.0, 0.0, 0.62, 0.785],
+                "right_forearm": [0.0, 0.0, 0.40, 0.916],
+            },
+            },
+            "tap_react": {
+                "effectors": {
+                    "left_arm": {"offset": [0.06, -0.04, 0.02], "weight": 0.85},
+                    "left_forearm": {"offset": [0.18, 0.06, 0.06], "weight": 1.00},
+                    "left_hand": {"offset": [0.24, 0.14, 0.10], "weight": 1.00},
+                    "right_arm": {"offset": [-0.06, -0.04, 0.02], "weight": 0.85},
+                    "right_forearm": {"offset": [-0.18, 0.06, 0.06], "weight": 1.00},
+                    "right_hand": {"offset": [-0.24, 0.14, 0.10], "weight": 1.00},
+                },
+                "bone_rotations": {
+                    "left_arm": [0.0, 0.0, -0.26, 0.965],
+                    "left_forearm": [0.0, 0.0, -0.18, 0.985],
+                    "right_arm": [0.0, 0.0, 0.26, 0.965],
+                    "right_forearm": [0.0, 0.0, 0.18, 0.985],
+                },
+            },
+            "press_react": {
+                "effectors": {
+                    "left_hand": {"offset": [0.18, -0.12, 0.08], "weight": 1.0},
+                    "right_hand": {"offset": [-0.18, -0.12, 0.08], "weight": 1.0},
+                },
+            },
+            "drag_react": {
+                "body": {"lean": [0.04, 0.0, 0.035], "sway": 0.022, "breathing": 0.016},
+                "effectors": {
+                    "left_arm": {"offset": [0.10, 0.04, 0.03], "weight": 0.90},
+                    "left_forearm": {"offset": [0.26, 0.18, 0.08], "weight": 1.00},
+                    "left_hand": {"offset": [0.34, 0.26, 0.12], "weight": 1.00},
+                    "right_arm": {"offset": [-0.02, -0.10, 0.01], "weight": 0.75},
+                    "right_forearm": {"offset": [-0.08, -0.20, 0.03], "weight": 0.80},
+                    "right_hand": {"offset": [-0.10, -0.24, 0.04], "weight": 0.80},
+                },
+                "bone_rotations": {
+                    "left_arm": [0.0, 0.0, -0.18, 0.982],
+                    "left_forearm": [0.0, 0.0, -0.10, 0.995],
+                    "right_arm": [0.0, 0.0, 0.52, 0.854],
+                    "right_forearm": [0.0, 0.0, 0.30, 0.954],
+                },
+            },
+            "drop_react": {
+                "body": {"bounce": 0.026, "breathing": 0.020, "sway": 0.010},
+                "effectors": {
+                    "left_arm": {"offset": [0.04, -0.10, 0.02], "weight": 0.80},
+                    "left_forearm": {"offset": [0.12, 0.00, 0.05], "weight": 0.95},
+                    "left_hand": {"offset": [0.18, 0.10, 0.08], "weight": 1.00},
+                    "right_arm": {"offset": [-0.04, -0.10, 0.02], "weight": 0.80},
+                    "right_forearm": {"offset": [-0.12, 0.00, 0.05], "weight": 0.95},
+                    "right_hand": {"offset": [-0.18, 0.10, 0.08], "weight": 1.00},
+                },
+                "bone_rotations": {
+                    "left_arm": [0.0, 0.0, -0.30, 0.954],
+                    "left_forearm": [0.0, 0.0, -0.16, 0.987],
+                    "right_arm": [0.0, 0.0, 0.30, 0.954],
+                    "right_forearm": [0.0, 0.0, 0.16, 0.987],
+                },
+            },
+            "double_peace": {
+                "head": {"look_at": [0.04, 1.48, 1.12], "weight": 0.22},
+                "effectors": {
+                    "left_arm": {"offset": [0.08, 0.05, 0.04], "weight": 0.85},
+                    "left_forearm": {"offset": [0.22, 0.30, 0.08], "weight": 1.00},
+                    "left_hand": {"offset": [0.32, 0.48, 0.12], "weight": 1.00},
+                    "right_arm": {"offset": [-0.08, 0.05, 0.04], "weight": 0.85},
+                    "right_forearm": {"offset": [-0.22, 0.30, 0.08], "weight": 1.00},
+                    "right_hand": {"offset": [-0.32, 0.48, 0.12], "weight": 1.00},
+                },
+                "bone_rotations": {
+                    "left_arm": [0.0, 0.0, 0.58, 0.815],
+                    "left_forearm": [0.0, 0.0, 0.44, 0.898],
+                    "left_hand": [0.0, 0.0, 0.16, 0.987],
+                    "right_arm": [0.0, 0.0, -0.58, 0.815],
+                    "right_forearm": [0.0, 0.0, -0.44, 0.898],
+                    "right_hand": [0.0, 0.0, -0.16, 0.987],
+                },
+            },
+            "shy_wave": {
+                "body": {"lean": [0.018, 0.0, 0.012], "breathing": 0.020, "sway": 0.014},
+                "head": {"look_at": [-0.04, 1.43, 1.04], "weight": 0.28},
+                "effectors": {
+                    "left_arm": {"offset": [0.12, -0.22, 0.03], "weight": 0.80},
+                    "left_forearm": {"offset": [0.28, -0.44, 0.06], "weight": 0.85},
+                    "left_hand": {"offset": [0.38, -0.60, 0.08], "weight": 0.90},
+                    "right_arm": {"offset": [-0.08, 0.04, 0.04], "weight": 0.90},
+                    "right_forearm": {"offset": [-0.26, 0.30, 0.08], "weight": 1.00, "wave": [0.02, 0.04, 0.0], "frequency": 4.0},
+                    "right_hand": {"offset": [-0.38, 0.48, 0.12], "weight": 1.00, "wave": [0.04, 0.08, 0.0], "frequency": 4.0},
+                },
+                "bone_rotations": {
+                    "left_arm": [0.0, 0.0, -0.36, 0.933],
+                    "left_forearm": [0.0, 0.0, -0.22, 0.975],
+                    "right_arm": [0.0, 0.0, -0.48, 0.877],
+                    "right_forearm": [0.0, 0.0, -0.36, 0.933],
+                    "right_hand": [0.0, 0.0, -0.18, 0.984],
+                },
+            },
+            "wave": {
+                "use_effectors": True,
+                "body": {"breathing": 0.018, "sway": 0.010, "cadence": 0.86},
+                "head": {"look_at": [-0.08, 1.40, 1.04], "weight": 0.24},
+                "effectors": {
+                    "right_arm": {"offset": [-0.04, 0.13, 0.02], "weight": 0.70},
+                    "right_forearm": {"offset": [-0.13, 0.28, 0.04], "weight": 0.92, "wave": [0.025, 0.035, 0.0], "frequency": 3.2},
+                    "right_hand": {"offset": [-0.22, 0.44, 0.04], "weight": 1.00, "wave": [0.045, 0.065, 0.0], "frequency": 3.2},
+                },
+            },
+            "guard": {
+                "body": {"crouch": 0.04, "breathing": 0.018},
+                "effectors": {
+                    "left_arm": {"offset": [0.06, -0.02, 0.04], "weight": 0.85},
+                    "left_forearm": {"offset": [0.18, 0.12, 0.08], "weight": 1.00},
+                    "left_hand": {"offset": [0.26, 0.22, 0.12], "weight": 1.00},
+                    "right_arm": {"offset": [-0.06, -0.02, 0.04], "weight": 0.85},
+                    "right_forearm": {"offset": [-0.18, 0.12, 0.08], "weight": 1.00},
+                    "right_hand": {"offset": [-0.26, 0.22, 0.12], "weight": 1.00},
+                },
+                "bone_rotations": {
+                    "left_arm": [0.0, 0.0, 0.32, 0.947],
+                    "left_forearm": [0.0, 0.0, -0.58, 0.815],
+                    "right_arm": [0.0, 0.0, -0.32, 0.947],
+                    "right_forearm": [0.0, 0.0, 0.58, 0.815],
+                },
+            },
+        },
     }
-
-
-def _motion_scale_for_bone(
-    bone: str,
-    rest: Mapping[str, tuple[float, float, float]],
-    model_rest_bones: set[str],
-    plan: Mapping[str, Any],
-) -> float:
-    if not bool(plan.get("adaptive_motion_scale", True)):
-        return 1.0
-    parent = _HUMANOID_PARENT_BY_CHILD.get(bone)
-    if not parent or parent not in model_rest_bones or bone not in model_rest_bones:
-        return 1.0
-    if parent not in rest or bone not in rest:
-        return 1.0
-    default_parent = _DEFAULT_REST_POSITIONS.get(parent)
-    default_child = _DEFAULT_REST_POSITIONS.get(bone)
-    if default_parent is None or default_child is None:
-        return 1.0
-    default_len = _vec_len(_vec_sub(default_child, default_parent))
-    target_len = _vec_len(_vec_sub(rest[bone], rest[parent]))
-    if default_len <= 0.000001 or target_len <= 0.000001:
-        return 1.0
-    lo = float(plan.get("motion_scale_min") or 0.25)
-    hi = float(plan.get("motion_scale_max") or 4.0)
-    if lo > hi:
-        lo, hi = hi, lo
-    return max(lo, min(hi, target_len / default_len))
-
-
-def _scale_motion_offsets(
-    offsets: Mapping[str, tuple[float, float, float]],
-    rest: Mapping[str, tuple[float, float, float]],
-    model_rest_bones: set[str],
-    plan: Mapping[str, Any],
-) -> tuple[dict[str, tuple[float, float, float]], dict[str, Any]]:
-    if not offsets:
-        return {}, {"enabled": bool(plan.get("adaptive_motion_scale", True)), "scaled_count": 0}
-    out: dict[str, tuple[float, float, float]] = {}
-    scales: dict[str, float] = {}
-    for bone, offset in offsets.items():
-        scale = _motion_scale_for_bone(bone, rest, model_rest_bones, plan)
-        scales[bone] = scale
-        out[bone] = _vec_scale(offset, scale)
-    changed = {bone: value for bone, value in scales.items() if abs(value - 1.0) > 0.000001}
-    return out, {
-        "enabled": bool(plan.get("adaptive_motion_scale", True)),
-        "scaled_count": len(changed),
-        "scales": {bone: float(value) for bone, value in sorted(changed.items())},
-        "min": float(plan.get("motion_scale_min") or 0.25),
-        "max": float(plan.get("motion_scale_max") or 4.0),
-    }
-
-
-def _procedural_action_offsets(action_name: str, phase: float, selected: Mapping[str, Any]) -> dict[str, tuple[float, float, float]]:
-    name = _normalize_action_name(action_name)
-    speed = _float_from_mapping(selected, "speed", 1.0, lo=0.05, hi=5.0)
-    t = float(phase or 0.0) * speed
-    arm = _float_from_mapping(selected, "armSwing", 0.16, lo=0.0, hi=1.2)
-    leg = _float_from_mapping(selected, "legSwing", 0.14, lo=0.0, hi=1.2)
-    bounce = _float_from_mapping(selected, "bounce", 0.03, lo=0.0, hi=0.4)
-    wave = math.sin(t * 3.0)
-    step = math.sin(t * 4.0)
-    offsets: dict[str, tuple[float, float, float]] = {}
-
-    if "jump" in name:
-        lift = abs(math.sin(t * 2.1)) * max(0.16, bounce)
-        for bone in ("hips", "spine", "chest", "neck", "head", "left_shoulder", "right_shoulder"):
-            offsets[bone] = (0.0, lift, 0.0)
-        offsets["left_foot"] = (-0.03, lift * 0.25, 0.02)
-        offsets["right_foot"] = (0.03, lift * 0.25, 0.02)
-    elif "walk" in name or "run" in name:
-        offsets["left_arm"] = (0.0, -arm * step * 0.18, 0.0)
-        offsets["left_forearm"] = (0.0, -arm * step * 0.26, 0.0)
-        offsets["left_hand"] = (0.0, -arm * step * 0.34, 0.0)
-        offsets["right_arm"] = (0.0, arm * step * 0.18, 0.0)
-        offsets["right_forearm"] = (0.0, arm * step * 0.26, 0.0)
-        offsets["right_hand"] = (0.0, arm * step * 0.34, 0.0)
-        offsets["left_knee"] = (leg * step * 0.10, abs(step) * 0.06, 0.0)
-        offsets["left_foot"] = (leg * step * 0.18, abs(step) * 0.08, 0.03)
-        offsets["right_knee"] = (-leg * step * 0.10, abs(step) * 0.04, 0.0)
-        offsets["right_foot"] = (-leg * step * 0.18, abs(step) * 0.05, -0.03)
-        offsets["hips"] = (0.0, abs(step) * bounce, 0.0)
-    elif "wave" in name:
-        lift = _float_from_mapping(selected, "rightArmLift", 0.52, lo=0.0, hi=1.5)
-        offsets["right_arm"] = (-0.05, lift * 0.16, 0.0)
-        offsets["right_forearm"] = (-0.18, lift * 0.36 + wave * 0.05, 0.0)
-        offsets["right_hand"] = (-0.28, lift * 0.58 + wave * 0.10, 0.0)
-        offsets["left_hand"] = (0.03, -0.04, 0.0)
-    else:
-        idle = math.sin(t * 1.6)
-        offsets["hips"] = (0.0, idle * bounce * 0.5, 0.0)
-        offsets["chest"] = (idle * 0.015, idle * bounce, 0.0)
-        offsets["head"] = (idle * 0.02, idle * bounce * 1.2, 0.0)
-        offsets["right_hand"] = (0.0, idle * 0.025, 0.0)
-        offsets["left_hand"] = (0.0, -idle * 0.020, 0.0)
-    return offsets
 
 
 def _selected_relative_action(
     node: Mapping[str, Any],
     action_name: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    root = node.get("procedural_action")
-    if not isinstance(root, Mapping) or not _bool_from_mapping(root, "enabled", False):
-        return {}, {}
+    user_root = _procedural_action_root(node)
+    if user_root and "enabled" in user_root and not _bool_from_mapping(user_root, "enabled", True):
+        return dict(user_root), {}
+    root = _merge_action_config(_default_procedural_action_root(), user_root) if user_root else _default_procedural_action_root()
     actions = root.get("actions") if isinstance(root.get("actions"), Mapping) else {}
     if not isinstance(actions, Mapping):
         actions = {}
@@ -3350,9 +3356,10 @@ def _selected_relative_action(
     if name:
         candidates.extend([name, _normalize_action_name(name)])
     default_action = str(root.get("default_action") or "").strip()
-    if default_action:
+    if user_root and default_action:
         candidates.extend([default_action, _normalize_action_name(default_action)])
-    candidates.append("idle")
+    if user_root:
+        candidates.append("idle")
     selected: dict[str, Any] = {}
     for candidate in candidates:
         if not candidate:
@@ -3368,10 +3375,47 @@ def _selected_relative_action(
             selected.setdefault("name", candidate)
             break
     if not selected:
+        if not user_root:
+            return {}, {}
         selected = {}
     common = root.get("common") if isinstance(root.get("common"), Mapping) else {}
     merged = _merge_action_config(common, selected)
+    mode = str(root.get("mode") or "").strip()
+    if mode and "mode" not in merged:
+        merged["mode"] = mode
+    if user_root and "use_effectors" not in merged and "use_effector_ik" not in merged:
+        profile = str(root.get("character_profile") or "").lower()
+        if "tomurai" not in profile and "moe" not in mode.lower():
+            merged["use_effectors"] = True
     return dict(root), merged
+
+
+def _procedural_action_root(node: Mapping[str, Any]) -> dict[str, Any]:
+    raw = node.get("procedural_action")
+    if isinstance(raw, Mapping):
+        return copy.deepcopy(dict(raw))
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return {}
+        return copy.deepcopy(dict(parsed)) if isinstance(parsed, Mapping) else {}
+    action = node.get("action") if isinstance(node.get("action"), Mapping) else {}
+    for key in ("procedural_action", "procedural_action_json"):
+        raw_nested = action.get(key) if isinstance(action, Mapping) else None
+        if isinstance(raw_nested, Mapping):
+            return copy.deepcopy(dict(raw_nested))
+        if isinstance(raw_nested, str) and raw_nested.strip():
+            try:
+                parsed = json.loads(raw_nested)
+            except Exception:
+                continue
+            if isinstance(parsed, Mapping):
+                return copy.deepcopy(dict(parsed))
+    return {}
 
 
 def _merge_action_config(common: Mapping[str, Any], selected: Mapping[str, Any]) -> dict[str, Any]:
@@ -3384,248 +3428,6 @@ def _merge_action_config(common: Mapping[str, Any], selected: Mapping[str, Any])
             merged[key] = copy.deepcopy(value)
     return merged
 
-
-def _weighted_offset_from_config(config: Mapping[str, Any], key: str = "offset") -> tuple[float, float, float]:
-    point = _point3(config.get(key))
-    if point is None and key == "offset":
-        point = _point3(config.get("relative"))
-    if point is None and key == "offset":
-        point = _point3(config.get("target_offset"))
-    if point is None:
-        return 0.0, 0.0, 0.0
-    weight = _float_from_mapping(config, "weight", 1.0, lo=0.0, hi=2.0)
-    return _vec_scale(point, weight)
-
-
-def _relative_effector_offsets(
-    selected: Mapping[str, Any],
-    phase: float,
-) -> dict[str, tuple[float, float, float]]:
-    raw_effectors = selected.get("effectors")
-    if not isinstance(raw_effectors, Mapping):
-        raw_effectors = selected.get("targets")
-    if not isinstance(raw_effectors, Mapping):
-        return {}
-    offsets: dict[str, tuple[float, float, float]] = {}
-    for token, raw_config in raw_effectors.items():
-        bone = _canonical_from_token(token)
-        if not bone or not isinstance(raw_config, Mapping):
-            continue
-        base = _weighted_offset_from_config(raw_config)
-        swing = _point3(raw_config.get("wave")) or _point3(raw_config.get("swing"))
-        if swing is not None:
-            frequency = _float_from_mapping(raw_config, "frequency", 1.0, lo=0.01, hi=12.0)
-            phase_offset = _float_from_mapping(raw_config, "phase", 0.0, lo=-1000.0, hi=1000.0)
-            amount = math.sin((float(phase or 0.0) + phase_offset) * frequency)
-            base = _vec_add(base, _vec_scale(swing, amount))
-        offsets[bone] = _vec_add(offsets.get(bone, (0.0, 0.0, 0.0)), base)
-    return offsets
-
-
-def _relative_body_offsets(
-    selected: Mapping[str, Any],
-    phase: float,
-) -> dict[str, tuple[float, float, float]]:
-    body = selected.get("body") if isinstance(selected.get("body"), Mapping) else {}
-    if not body:
-        return {}
-    cadence = _float_from_mapping(body, "cadence", 1.0, lo=0.01, hi=12.0)
-    t = float(phase or 0.0) * cadence
-    breath = math.sin(t * 2.0)
-    sway = math.sin(t)
-    breathing = _float_from_mapping(body, "breathing", 0.0, lo=0.0, hi=0.25)
-    sway_amount = _float_from_mapping(body, "sway", 0.0, lo=0.0, hi=0.35)
-    bounce = _float_from_mapping(body, "bounce", 0.0, lo=0.0, hi=0.5)
-    lean = _point3(body.get("lean"))
-    if lean is None:
-        lean = (
-            _float_from_mapping(body, "lean_x", 0.0, lo=-0.45, hi=0.45),
-            _float_from_mapping(body, "lean_y", 0.0, lo=-0.45, hi=0.45),
-            _float_from_mapping(body, "lean_z", 0.0, lo=-0.45, hi=0.45),
-        )
-    crouch = _float_from_mapping(body, "crouch", 0.0, lo=0.0, hi=0.6)
-    offsets = {
-        "hips": (sway * sway_amount * 0.25, abs(breath) * bounce, 0.0),
-        "spine": (sway * sway_amount * 0.45, breath * breathing * 0.35, 0.0),
-        "chest": (sway * sway_amount * 0.65, breath * breathing, 0.0),
-        "neck": (sway * sway_amount * 0.35, breath * breathing * 0.5, 0.0),
-        "head": (sway * sway_amount * 0.25, breath * breathing * 0.75, 0.0),
-    }
-    if lean is not None:
-        for bone, amount in (
-            ("hips", 0.18),
-            ("spine", 0.42),
-            ("chest", 0.72),
-            ("neck", 0.90),
-            ("head", 1.0),
-        ):
-            offsets[bone] = _vec_add(offsets.get(bone, (0.0, 0.0, 0.0)), _vec_scale(lean, amount))
-    if crouch > 0.0:
-        for bone, amount in (
-            ("hips", 1.00),
-            ("spine", 0.78),
-            ("chest", 0.58),
-            ("neck", 0.42),
-            ("head", 0.35),
-        ):
-            offsets[bone] = _vec_add(offsets.get(bone, (0.0, 0.0, 0.0)), (0.0, -crouch * amount, crouch * 0.10 * amount))
-        offsets["left_knee"] = _vec_add(offsets.get("left_knee", (0.0, 0.0, 0.0)), (-crouch * 0.12, crouch * 0.22, crouch * 0.18))
-        offsets["right_knee"] = _vec_add(offsets.get("right_knee", (0.0, 0.0, 0.0)), (crouch * 0.12, crouch * 0.22, crouch * 0.18))
-    return offsets
-
-
-def _relative_head_offsets(
-    selected: Mapping[str, Any],
-    rest: Mapping[str, tuple[float, float, float]],
-) -> dict[str, tuple[float, float, float]]:
-    head = selected.get("head") if isinstance(selected.get("head"), Mapping) else {}
-    look = selected.get("look_at") if isinstance(selected.get("look_at"), Mapping) else {}
-    if not head and not look:
-        return {}
-    config = dict(look)
-    config.update(head)
-    target = _point3(config.get("look_at")) or _point3(config.get("target"))
-    if target is None or "head" not in rest:
-        return {}
-    weight = _float_from_mapping(config, "weight", 0.25, lo=0.0, hi=1.0)
-    origin = rest["head"]
-    dx = max(-0.18, min(0.18, (target[0] - origin[0]) * 0.18 * weight))
-    dy = max(-0.12, min(0.12, (target[1] - origin[1]) * 0.14 * weight))
-    dz = max(-0.10, min(0.10, (target[2] - origin[2]) * 0.08 * weight))
-    return {
-        "neck": (dx * 0.35, dy * 0.30, dz * 0.25),
-        "head": (dx, dy, dz),
-    }
-
-
-def _relative_gait_offsets(
-    action_name: str,
-    selected: Mapping[str, Any],
-    phase: float,
-) -> dict[str, tuple[float, float, float]]:
-    gait = selected.get("gait") if isinstance(selected.get("gait"), Mapping) else {}
-    action_kind = _normalize_action_name(action_name)
-    if not gait and "walk" not in action_kind and "run" not in action_kind:
-        return {}
-    if gait and not _bool_from_mapping(gait, "enabled", True):
-        return {}
-    speed = _float_from_mapping(gait, "cadence", 4.0, lo=0.1, hi=12.0)
-    stride = _float_from_mapping(gait, "stride", 0.18, lo=0.0, hi=1.2)
-    lift = _float_from_mapping(gait, "lift", 0.08, lo=0.0, hi=0.8)
-    hip_bob = _float_from_mapping(gait, "hip_bob", 0.025, lo=0.0, hi=0.4)
-    arm_swing = _float_from_mapping(gait, "arm_swing", 0.16, lo=0.0, hi=1.0)
-    sway = _float_from_mapping(gait, "sway", 0.018, lo=0.0, hi=0.4)
-    step = math.sin(float(phase or 0.0) * speed)
-    left_lift = max(0.0, step)
-    right_lift = max(0.0, -step)
-    return {
-        "hips": (sway * step, abs(step) * hip_bob, 0.0),
-        "chest": (-sway * step * 0.45, abs(step) * hip_bob * 0.35, 0.0),
-        "left_leg": (stride * step * 0.35, left_lift * lift * 0.18, 0.0),
-        "left_knee": (stride * step * 0.58, left_lift * lift * 0.70, 0.0),
-        "left_foot": (stride * step, left_lift * lift, 0.035 * step),
-        "right_leg": (-stride * step * 0.35, right_lift * lift * 0.18, 0.0),
-        "right_knee": (-stride * step * 0.58, right_lift * lift * 0.70, 0.0),
-        "right_foot": (-stride * step, right_lift * lift, -0.035 * step),
-        "left_arm": (0.0, -arm_swing * step * 0.18, 0.0),
-        "left_forearm": (0.0, -arm_swing * step * 0.28, 0.0),
-        "left_hand": (0.0, -arm_swing * step * 0.38, 0.0),
-        "right_arm": (0.0, arm_swing * step * 0.18, 0.0),
-        "right_forearm": (0.0, arm_swing * step * 0.28, 0.0),
-        "right_hand": (0.0, arm_swing * step * 0.38, 0.0),
-    }
-
-
-def _relative_action_offsets(
-    node: Mapping[str, Any],
-    action_name: str,
-    phase: float,
-    rest: Mapping[str, tuple[float, float, float]],
-) -> tuple[dict[str, tuple[float, float, float]], dict[str, Any]]:
-    root, selected = _selected_relative_action(node, action_name)
-    if not root:
-        return {}, {"enabled": False}
-    offsets = _merge_offsets(
-        _relative_gait_offsets(action_name, selected, phase),
-        _relative_body_offsets(selected, phase),
-        _relative_head_offsets(selected, rest),
-        _relative_effector_offsets(selected, phase),
-    )
-    return offsets, {
-        "enabled": True,
-        "schema": str(root.get("schema") or "sao.humanoid.procedural.v1"),
-        "mode": str(root.get("mode") or "relative_ik"),
-        "name": str(selected.get("name") or action_name or ""),
-        "clip": str(selected.get("clip") or ""),
-        "native_unity": tuple(
-            str(item)
-            for item in list(selected.get("native_unity") or [])[:8]
-            if str(item or "").strip()
-        ) if isinstance(selected.get("native_unity"), (list, tuple)) else (),
-        "offset_count": len(offsets),
-        "has_gait": isinstance(selected.get("gait"), Mapping),
-        "has_effectors": isinstance(selected.get("effectors"), Mapping) or isinstance(selected.get("targets"), Mapping),
-        "references": tuple(str(item) for item in list(root.get("references") or [])[:8])
-        if isinstance(root.get("references"), (list, tuple))
-        else (),
-    }
-
-
-def _foot_planting_config(selected: Mapping[str, Any]) -> dict[str, Any]:
-    config: dict[str, Any] = {}
-    gait = selected.get("gait") if isinstance(selected.get("gait"), Mapping) else {}
-    raw = selected.get("foot_planting")
-    if isinstance(raw, Mapping):
-        config.update(dict(raw))
-    elif raw is not None:
-        config["enabled"] = bool(raw)
-    if gait:
-        if "foot_planting" in gait:
-            config.setdefault("enabled", _bool_from_mapping(gait, "foot_planting", True))
-        if "ground_y" in gait:
-            config.setdefault("ground_y", gait.get("ground_y"))
-        if "plant_strength" in gait:
-            config.setdefault("strength", gait.get("plant_strength"))
-    return config
-
-
-def _apply_relative_foot_planting(
-    pose: dict[str, tuple[float, float, float]],
-    rest: Mapping[str, tuple[float, float, float]],
-    node: Mapping[str, Any],
-    action_name: str,
-) -> dict[str, Any]:
-    _root, selected = _selected_relative_action(node, action_name)
-    config = _foot_planting_config(selected)
-    if not config or not _bool_from_mapping(config, "enabled", False):
-        return {"enabled": False}
-    raw_ground = config.get("ground_y", "auto")
-    if str(raw_ground).strip().lower() == "auto":
-        ground_candidates = [
-            rest[bone][1]
-            for bone in ("left_foot", "right_foot")
-            if bone in rest
-        ]
-        ground = min(ground_candidates) if ground_candidates else 0.0
-    else:
-        try:
-            ground = float(raw_ground)
-        except Exception:
-            ground = 0.0
-    strength = _float_from_mapping(config, "strength", 1.0, lo=0.0, hi=1.0)
-    planted: list[str] = []
-    for foot in ("left_foot", "right_foot"):
-        point = pose.get(foot)
-        if point is None or point[1] >= ground:
-            continue
-        pose[foot] = (point[0], point[1] + (ground - point[1]) * strength, point[2])
-        planted.append(foot)
-    return {
-        "enabled": True,
-        "ground_y": float(ground),
-        "strength": float(strength),
-        "planted": tuple(planted),
-    }
 
 
 def _canonical_rest_positions(
@@ -3654,145 +3456,15 @@ def _canonical_rest_positions(
             source = rest_source or "model"
         elif canonical in _DEFAULT_REST_POSITIONS:
             out[canonical] = _DEFAULT_REST_POSITIONS[canonical]
+    if isinstance(rest_positions, Mapping):
+        for raw_name, raw_point in rest_positions.items():
+            name = str(raw_name or "").strip()
+            point = _point3(raw_point)
+            if name and point is not None and name not in out:
+                out[name] = point
+                source = rest_source or source
     return out, source, model_rest_bones
 
-
-def evaluate_retarget_pose(node: Mapping[str, Any]) -> dict[str, Any]:
-    """Evaluate a safe humanoid pose for a model3d node.
-
-    This is an offline-safe retargeting stage: it uses sidecar/model metadata,
-    action JSON, and the declared stretch limit to produce bone positions that
-    preserve the target rest proportions.  Native importers can later feed real
-    rest positions and clip samples into the same contract.
-    """
-
-    model_meta = get_model_metadata_view(node)
-    if not bool(model_meta.get("exists")):
-        return {
-            "ok": False,
-            "reason": "model missing",
-            "positions": {},
-            "segments": (),
-        }
-    plan = get_retarget_plan_view(node)
-    action_meta = get_action_metadata_view(node)
-    action_name = str(action_meta.get("name") or "idle")
-    selected = action_meta.get("selected") if isinstance(action_meta.get("selected"), Mapping) else {}
-    action = node.get("action") if isinstance(node.get("action"), Mapping) else {}
-    try:
-        phase = float(action.get("time", node.get("phase", 0.0)) or 0.0)
-    except Exception:
-        phase = 0.0
-
-    rest, rest_source, model_rest_bones = _canonical_rest_positions(plan, model_meta)
-    if not rest:
-        return {
-            "ok": False,
-            "reason": "no rest pose",
-            "positions": {},
-            "segments": (),
-        }
-    relative_offsets, relative_info = _relative_action_offsets(node, action_name, phase, rest)
-    explicit_offsets = _merge_offsets(
-        _pose_offsets_from_mapping(selected.get("pose_offsets")),
-        _pose_offsets_from_mapping(selected.get("bone_offsets")),
-        _pose_offsets_from_mapping(selected.get("offsets")),
-    )
-    keyframe_offsets, keyframe_info = _sample_keyframe_offsets(selected, phase)
-    unity_motion_info = _unity_motion_sample_info(selected)
-    keyframe_rotations = (
-        keyframe_info.get("rotations") if isinstance(keyframe_info.get("rotations"), Mapping) else {}
-    )
-    keyframe_rotations, rotation_limit = _limit_keyframe_rotations(keyframe_rotations, plan)
-    rotation_offsets = _rotation_offsets_from_samples(rest, keyframe_rotations)
-    has_keyframe_motion = keyframe_info.get("motion_source") == "keyframes"
-    use_procedural = (
-        not has_keyframe_motion
-        or _bool_from_mapping(selected, "procedural", False)
-    )
-    raw_offsets = _merge_offsets(
-        _procedural_action_offsets(action_name, phase, selected) if use_procedural else {},
-        relative_offsets,
-        rotation_offsets,
-        keyframe_offsets,
-        explicit_offsets,
-    )
-    offsets, motion_scale = _scale_motion_offsets(raw_offsets, rest, model_rest_bones, plan)
-    stretch_limit = float(plan.get("stretch_limit") or 0.0)
-    preserve = bool(plan.get("preserve_proportions", True))
-
-    pose: dict[str, tuple[float, float, float]] = {
-        bone: _vec_add(point, offsets.get(bone, (0.0, 0.0, 0.0)))
-        for bone, point in rest.items()
-    }
-    clamped: list[str] = []
-    segment_infos: list[dict[str, Any]] = []
-    max_stretch = 0.0
-    for parent, child in HUMANOID_SEGMENTS:
-        if parent not in rest or child not in rest or parent not in pose:
-            continue
-        rest_vec = _vec_sub(rest[child], rest[parent])
-        rest_len = _vec_len(rest_vec)
-        if rest_len <= 0.000001:
-            continue
-        target = pose.get(child, rest[child])
-        vec = _vec_sub(target, pose[parent])
-        length = _vec_len(vec)
-        was_clamped = False
-        if preserve:
-            lo = rest_len * max(0.0, 1.0 - stretch_limit)
-            hi = rest_len * (1.0 + stretch_limit)
-            clipped = max(lo, min(hi, length))
-            if abs(clipped - length) > 0.000001:
-                direction = _vec_scale(vec, 1.0 / length) if length > 0.000001 else _vec_scale(rest_vec, 1.0 / rest_len)
-                target = _vec_add(pose[parent], _vec_scale(direction, clipped))
-                pose[child] = target
-                length = clipped
-                was_clamped = True
-                clamped.append(f"{parent}->{child}")
-        stretch = abs((length / rest_len) - 1.0)
-        max_stretch = max(max_stretch, stretch)
-        segment_infos.append({
-            "parent": parent,
-            "child": child,
-            "rest_length": rest_len,
-            "length": length,
-            "stretch": stretch,
-            "clamped": was_clamped,
-        })
-
-    foot_planting = _apply_relative_foot_planting(pose, rest, node, action_name)
-
-    return {
-        "ok": True,
-        "mode": plan.get("mode"),
-        "profile": plan.get("profile"),
-        "action": action_name,
-        "phase": phase,
-        "coverage": plan.get("coverage"),
-        "stretch_limit": stretch_limit,
-        "preserve_proportions": preserve,
-        "rest_source": rest_source,
-        "motion_source": (
-            keyframe_info.get("motion_source")
-            or unity_motion_info.get("motion_source")
-            or ("procedural" if use_procedural else "offsets")
-        ),
-        "procedural_action": dict(relative_info),
-        "foot_planting": dict(foot_planting),
-        "motion_sample": dict(keyframe_info, **unity_motion_info),
-        "rotations": dict(keyframe_rotations),
-        "rotation_limit": dict(rotation_limit),
-        "motion_scale": dict(motion_scale),
-        "model_rest_bones": tuple(sorted(model_rest_bones)),
-        "rest_positions": {key: [float(x) for x in value] for key, value in rest.items()},
-        "positions": {key: [float(x) for x in value] for key, value in pose.items()},
-        "segments": tuple(segment_infos),
-        "clamped_segments": tuple(clamped),
-        "clamped_count": len(clamped),
-        "max_stretch": max_stretch,
-        "warnings": tuple(plan.get("warnings") or ()),
-    }
 
 
 def diagnose_model3d_node(
@@ -3830,14 +3502,63 @@ def diagnose_model3d_node(
     return key, tuple(lines)
 
 
+def get_model_data(node: Mapping[str, Any]) -> dict[str, Any]:
+    """Return raw skeleton, mesh, and animation data for plugin-side computation.
+
+    The C# plugin calls this once when the model changes to initialize its
+    local skeletal animation engine.  All subsequent per-frame computation
+    happens in C#; the platform only receives pre-computed bone transforms.
+    """
+    model_meta = get_model_metadata_view(node)
+    if not bool(model_meta.get("exists")):
+        return {"ok": False, "reason": "model missing"}
+
+    plan = get_retarget_plan_view(node)
+    rest, rest_source, model_rest_bones = _canonical_rest_positions(plan, model_meta)
+
+    skeleton = {
+        "bones": list(HUMANOID_BONES),
+        "parents": dict(_HUMANOID_PARENT_BY_CHILD),
+        "rest_positions": {
+            bone: list(pos) for bone, pos in rest.items()
+        },
+        "model_rest_bones": sorted(model_rest_bones),
+        "rest_source": rest_source,
+        "bone_map": dict(plan.get("bone_map") or {}),
+    }
+
+    # Extract animation clips if available
+    clips = {}
+    action_meta = get_action_metadata_view(node)
+    if isinstance(action_meta, Mapping):
+        selected = action_meta.get("selected")
+        if isinstance(selected, Mapping):
+            clips["current"] = dict(selected)
+
+    # Extract secondary motion chains from sidecar
+    sidecar = model_meta.get("sidecar") if isinstance(model_meta.get("sidecar"), Mapping) else {}
+    physics = sidecar.get("physics") if isinstance(sidecar.get("physics"), Mapping) else {}
+    secondary_motion = physics.get("secondary_motion") if isinstance(physics.get("secondary_motion"), Mapping) else {}
+    chains = secondary_motion.get("chains") if isinstance(secondary_motion.get("chains"), (list, tuple)) else []
+
+    return {
+        "ok": True,
+        "skeleton": skeleton,
+        "clips": clips,
+        "secondary_motion_chains": list(chains),
+        "model_path": str(model_meta.get("path") or ""),
+        "format": str(model_meta.get("format") or ""),
+    }
+
+
 __all__ = [
     "Model3DBackendStatus",
     "clear_model3d_metadata_caches",
     "diagnose_model3d_node",
-    "evaluate_retarget_pose",
     "get_action_metadata",
     "get_action_metadata_view",
     "get_backend_status",
+    "get_model_data",
     "get_model_metadata",
     "get_model_metadata_view",
     "get_retarget_plan",

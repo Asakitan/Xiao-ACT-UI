@@ -71,6 +71,8 @@ class SAOPlayerGUIFisheyeMixin:
         return tuple(k for k in vars(obj) if k.endswith('_panel') and k.startswith('_'))
 
     def _fisheye_close_suppressed(self) -> bool:
+        if bool(getattr(self, '_sao_native_dialog_active', False)):
+            return True
         try:
             return time.time() < float(getattr(self, '_fisheye_close_suppress_until', 0.0) or 0.0)
         except Exception:
@@ -311,7 +313,10 @@ class SAOPlayerGUIFisheyeMixin:
             except Exception:
                 pass
 
-    _FISHEYE_EXCLUDE_PANELS = frozenset({'_process_selector_panel'})
+    _FISHEYE_EXCLUDE_PANELS = frozenset({
+        '_process_selector_panel',
+        '_act_plugin_manager_panel',
+    })
 
     def _iter_fisheye_panels(self):
         seen = set()

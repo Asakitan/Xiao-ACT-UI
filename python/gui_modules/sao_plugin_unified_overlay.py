@@ -414,6 +414,10 @@ def _render_drawable_frame(
             )
     else:
         return None
+    if kind == "model3d" and isinstance(image, Image.Image):
+        speech = node.get("speech_bubble") if isinstance(node.get("speech_bubble"), Mapping) else None
+        if speech:
+            _draw_speech_bubble(image, speech, width, height)
     signature = json.dumps({
         "kind": kind,
         "key": drawable.get("key"),
@@ -424,6 +428,59 @@ def _render_drawable_frame(
         "diagnostic": diagnostic_lines,
     }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return signature, _image_to_bgra(image, width, height), width, height
+
+
+def _draw_speech_bubble(image: Any, speech: Mapping[str, Any], width: int, height: int) -> None:
+    """Draw a speech bubble above the model with anime-style text."""
+    if ImageDraw is None or ImageFont is None:
+        return
+    text = str(speech.get("text") or "").strip()
+    if not text:
+        return
+    try:
+        draw = ImageDraw.Draw(image)
+    except Exception:
+        return
+    font = None
+    for name in ("msyh.ttc", "YuGothM.ttc", "msgothic.ttc", "segoeui.ttf", "arial.ttf"):
+        try:
+            font = ImageFont.truetype(name, size=14)
+            break
+        except Exception:
+            continue
+    if font is None:
+        try:
+            font = ImageFont.load_default()
+        except Exception:
+            return
+    try:
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
+    except Exception:
+        tw, th = len(text) * 10, 16
+    pad = 8
+    bw = tw + pad * 2
+    bh = th + pad * 2
+    bx = max(0, (width - bw) // 2)
+    by = max(0, min(10, height // 8 - bh))
+    draw.rounded_rectangle(
+        [bx, by, bx + bw, by + bh],
+        radius=10,
+        fill=(255, 255, 255, 210),
+        outline=(180, 140, 200, 255),
+        width=2,
+    )
+    tx = bx + (bw - tw) // 2
+    ty = by + (bh - th) // 2
+    draw.text((tx, ty), text, fill=(80, 60, 100, 255), font=font)
+    cx = width // 2
+    cy = by + bh
+    draw.polygon(
+        [(cx - 6, cy), (cx + 6, cy), (cx, cy + 8)],
+        fill=(255, 255, 255, 210),
+        outline=(180, 140, 200, 255),
+    )
 
 
 def _backend_status_signature(backend_status: Any) -> dict[str, Any]:
@@ -566,9 +623,16 @@ class PluginUnifiedOverlayHost:
                 continue
             try:
                 layer.hide()
-                layer.sync_input_proxy()
+                state["visible"] = False
+                try:
+                    layer.click_through = True
+                    layer.destroy_input_proxy()
+                    state["input_ready"] = False
+                except Exception:
+                    pass
             except Exception:
                 pass
+        self._sync_host_input_mode()
 
     def restore(self) -> None:
         self._hidden = False
@@ -581,7 +645,20 @@ class PluginUnifiedOverlayHost:
                 continue
             try:
                 layer.show()
-                layer.sync_input_proxy()
+                state["visible"] = True
+                if state.get("draggable"):
+                    try:
+                        layer.click_through = False
+                        create_proxy = getattr(layer, "create_input_proxy", None)
+                        if callable(create_proxy) and self.root is not None:
+                            create_proxy(self.root)
+                        state["input_ready"] = True
+                        layer.sync_input_proxy()
+                    except Exception:
+                        state["input_ready"] = False
+                        pass
+                else:
+                    layer.sync_input_proxy()
                 layer.request_redraw()
             except Exception:
                 pass
@@ -652,6 +729,13 @@ class PluginUnifiedOverlayHost:
         overlay = self._overlay
         if overlay is None:
             return
+        if any(
+            bool(state.get("visible", False))
+            and bool(state.get("draggable", False))
+            for state in self._layers.values()
+        ):
+            if self._force_real_host_passthrough(overlay):
+                return
         fn = getattr(overlay, "sync_host_input_mode", None)
         if not callable(fn):
             fn = getattr(overlay, "force_host_input_passthrough", None)
@@ -660,6 +744,33 @@ class PluginUnifiedOverlayHost:
                 fn()
             except Exception:
                 pass
+
+    @staticmethod
+    def _force_real_host_passthrough(overlay: Any) -> bool:
+        """Keep plugin draggable layers local to their Tk input proxies.
+
+        ``UnifiedOverlay.sync_host_input_mode()`` may make the full overlay HWND
+        input-capable for legacy compositor users. Plugin positioned layers use
+        local Tk proxies instead, so the real host must stay WS_EX_TRANSPARENT.
+        """
+        host = getattr(overlay, "host", None)
+        if host is None:
+            host = getattr(overlay, "_host", None)
+        setter = getattr(host, "set_input_passthrough", None)
+        if callable(setter):
+            try:
+                setter(True)
+                return True
+            except Exception:
+                pass
+        fn = getattr(overlay, "force_host_input_passthrough", None)
+        if callable(fn):
+            try:
+                fn()
+                return True
+            except Exception:
+                pass
+        return False
 
     def _destroy_layer(self, key: str) -> None:
         key_text = str(key)
@@ -759,10 +870,33 @@ class PluginUnifiedOverlayHost:
             return bool(node.get("draggable"))
         return kind == "model3d"
 
+    @staticmethod
+    def _alpha_hit(state: dict[str, Any], local_x: float, local_y: float, threshold: int = 10) -> bool:
+        """Return True if pixel at (local_x, local_y) has alpha above threshold."""
+        bgra = state.get("frame_bgra")
+        if bgra is None:
+            return True
+        w = int(state.get("frame_w") or 0)
+        h = int(state.get("frame_h") or 0)
+        if w <= 0 or h <= 0:
+            return True
+        px = int(round(local_x))
+        py = int(round(local_y))
+        if px < 0 or px >= w or py < 0 or py >= h:
+            return False
+        offset = (py * w + px) * 4 + 3
+        if offset < 0 or offset >= len(bgra):
+            return False
+        alpha = bgra[offset] if isinstance(bgra, (bytes, bytearray)) else int(bgra[offset])
+        return alpha >= threshold
+
     def _install_drag_callbacks(self, key: str, state: dict[str, Any]) -> None:
         layer = state.get("layer")
         if layer is None or not hasattr(layer, "set_input_callbacks"):
             return
+
+        node = (state.get("node") or {}) if isinstance(state.get("node"), dict) else {}
+        use_alpha_hit = str(node.get("hit_test") or "").strip().lower() == "alpha"
 
         def _pointer_event(event: str, local_x: float, local_y: float) -> None:
             self._dispatch_pointer_event(key, state, event, local_x, local_y)
@@ -801,6 +935,8 @@ class PluginUnifiedOverlayHost:
             if int(button or 0) != 0:
                 return
             if int(action or 0):
+                if use_alpha_hit and not self._alpha_hit(state, local_x, local_y):
+                    return
                 cur_x = int(state.get("x") or 0) + int(round(local_x))
                 cur_y = int(state.get("y") or 0) + int(round(local_y))
                 sx, sy = _cursor_screen_pos(cur_x, cur_y)
@@ -820,6 +956,9 @@ class PluginUnifiedOverlayHost:
 
         try:
             layer.set_input_callbacks(cursor_pos_fn=_motion, mouse_button_fn=_mouse)
+            create_proxy = getattr(layer, "create_input_proxy", None)
+            if callable(create_proxy) and self.root is not None:
+                create_proxy(self.root)
             state["input_ready"] = True
             self._sync_host_input_mode()
         except Exception:
@@ -969,6 +1108,12 @@ class PluginUnifiedOverlayHost:
                             state["input_ready"] = False
                     elif draggable and not state.get("input_ready"):
                         self._install_drag_callbacks(key, state)
+                    new_node = drawable.get("node") if isinstance(drawable.get("node"), dict) else {}
+                    old_node = state.get("node") or {}
+                    if new_node.get("hit_test") != old_node.get("hit_test"):
+                        state["node"] = new_node
+                        if draggable:
+                            self._install_drag_callbacks(key, state)
                     if geometry_changed:
                         try:
                             layer.sync_input_proxy()
@@ -995,6 +1140,7 @@ class PluginUnifiedOverlayHost:
             if not self._hidden:
                 layer.show()
                 layer.sync_input_proxy()
+            node = drawable.get("node") if isinstance(drawable.get("node"), dict) else {}
             state = {
                 "layer": layer,
                 "layer_name": layer_name,
@@ -1013,6 +1159,7 @@ class PluginUnifiedOverlayHost:
                 "node_z": int(drawable.get("z") or 0),
                 "input_ready": False,
                 "visible": False,
+                "node": node,
             }
             self._layers[key] = state
             if draggable:
@@ -1036,15 +1183,26 @@ class PluginUnifiedOverlayHost:
                 pass
             try:
                 layer.hide()
-                layer.sync_input_proxy()
+                state["visible"] = False
+                try:
+                    layer.click_through = True
+                    layer.destroy_input_proxy()
+                except Exception:
+                    pass
             except Exception:
                 pass
         self._sync_host_input_mode()
 
     def _refresh_now(self) -> None:
+        overlays = []
         try:
-            payload = render_overlays(self.owner, self.surface) or {}
-            overlays = payload.get("overlays") or []
+            manager = getattr(self.owner, "_act_plugin_manager", None)
+            getter = getattr(manager, "surface_overlays", None)
+            if callable(getter):
+                overlays = getter(self.surface) or []
+            else:
+                payload = render_overlays(self.owner, self.surface) or {}
+                overlays = payload.get("overlays") or []
         except Exception:
             overlays = []
         if not overlays:
@@ -1085,8 +1243,22 @@ class PluginUnifiedOverlayHost:
                     if bool(state.get("visible", False)) != target_visible:
                         if target_visible:
                             layer.show()
+                            if state.get("draggable"):
+                                try:
+                                    layer.click_through = False
+                                    create_proxy = getattr(layer, "create_input_proxy", None)
+                                    if callable(create_proxy) and self.root is not None:
+                                        create_proxy(self.root)
+                                    layer.sync_input_proxy()
+                                except Exception:
+                                    pass
                         else:
                             layer.hide()
+                            try:
+                                layer.click_through = True
+                                layer.destroy_input_proxy()
+                            except Exception:
+                                pass
                         state["visible"] = target_visible
                         layer.sync_input_proxy()
                         layer.request_redraw()
@@ -1118,12 +1290,29 @@ class PluginUnifiedOverlayHost:
                     presenter.set_frame(bgra, int(width), int(height))
                     state["last_signature"] = signature
                     state["input_signature"] = input_signature
+                    state["frame_bgra"] = bgra
+                    state["frame_w"] = int(width)
+                    state["frame_h"] = int(height)
                 state["has_frame"] = True
                 if visible_changed:
                     if target_visible:
                         layer.show()
+                        if state.get("draggable"):
+                            try:
+                                layer.click_through = False
+                                create_proxy = getattr(layer, "create_input_proxy", None)
+                                if callable(create_proxy) and self.root is not None:
+                                    create_proxy(self.root)
+                                layer.sync_input_proxy()
+                            except Exception:
+                                pass
                     else:
                         layer.hide()
+                        try:
+                            layer.click_through = True
+                            layer.destroy_input_proxy()
+                        except Exception:
+                            pass
                     state["visible"] = target_visible
                 if frame_changed or visible_changed:
                     layer.sync_input_proxy()

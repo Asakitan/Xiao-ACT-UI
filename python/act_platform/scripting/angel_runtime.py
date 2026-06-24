@@ -56,7 +56,7 @@ import sys
 from types import ModuleType
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
-from .base import ContextProxy, ScriptModule, ScriptRuntime, wrap_callback, to_json_safe
+from .base import ContextProxy, ScriptModule, ScriptRuntime, wrap_callback, to_json_safe, resolve_local_script_path
 
 if TYPE_CHECKING:
     from act_platform.plugins import PluginContext, PluginRecord
@@ -848,6 +848,20 @@ class AngelScriptRuntime(ScriptRuntime):
         interp.register_host_object("tostring", str)
         interp.register_host_object("toint", lambda v: int(v) if v is not None else 0)
         interp.register_host_object("tofloat", lambda v: float(v) if v is not None else 0.0)
+
+        plugin_base = os.path.abspath(str(record.path))
+
+        def _as_load_script(relative_path, *, _interp=interp, _base=plugin_base):
+            target = resolve_local_script_path(_base, relative_path)
+            with open(target, "r", encoding="utf-8") as fp:
+                more_source = fp.read()
+            _interp.execute_source(more_source)
+            return True
+
+        interp.register_host_object("load_script", _as_load_script)
+        interp.register_host_object("import", _as_load_script)
+        proxy.load_script = _as_load_script
+
         self._interpreters[record.plugin_id] = interp
 
         interp.execute_source(source)

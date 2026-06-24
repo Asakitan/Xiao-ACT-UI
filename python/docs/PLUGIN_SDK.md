@@ -687,6 +687,10 @@ engine = module.MyEngine()
 parser = ctx.load_local("parsers/my_parser.py")
 ```
 
+`load_local` 只加载 **Python** `.py` 模块（返回 `ModuleType`）。Lua / AngelScript / Emma 脚本插件加载**同语言**子脚本（`.lua` / `.as` / `.emma`）请用 `load_script("相对路径")`（Lua 也可用 `dofile`），子文件的函数和全局变量会合并进同一解释器作用域。C# 源码插件无需 `load_script`——平台编译时自动把同目录所有 `.cs` 一起编进同一程序集；外部 .NET DLL 放 `refs/`。详见 [MULTI_LANGUAGE_SCRIPTING.md](MULTI_LANGUAGE_SCRIPTING.md#多文件拆分)。
+
+两种 API 都做防穿越沙箱：路径以插件目录为根，必须留在插件目录内，`..` 会被拒绝。
+
 ### 日志
 
 ```python

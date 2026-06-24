@@ -474,7 +474,8 @@ def parse_hotkey(spec):
 
     接受 ``"F5"`` / ``"CTRL+F5"`` / ``"Ctrl+Alt+F12"`` 字符串,
     ``{'vk': N[, 'mods': [...]]}`` 自定义 VK dict, 以及插件映射的
-    ``{'key': 'CTRL+F8'}`` 形式。字符串主键限 F1-F12 (dict 的 vk 不限);
+    ``{'key': 'CTRL+F8'}`` 形式。字符串主键限 ``HOTKEY_FKEY_VK`` 中的命名键
+    (如 F1-F12 / HOME 等; dict 的 vk 不限);
     解析失败返回 None, 该绑定不触发。
     """
     if isinstance(spec, dict):
@@ -525,7 +526,7 @@ def normalize_hotkey(spec):
     """规范化拼写 → ``'CTRL+ALT+F5'`` (修饰键固定 CTRL,ALT,SHIFT 序)。
 
     'control + f8' / 'MENU+F5' 等别名拼写都收敛到唯一形式, 占用表和
-    冲突拒绝才能按字符串比较。主键不是 F1-F12 或解析失败返回 None。
+    冲突拒绝才能按字符串比较。主键不是已支持的命名键或解析失败返回 None。
     """
     parsed = parse_hotkey(spec)
     if not parsed:

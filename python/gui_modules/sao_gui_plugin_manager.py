@@ -33,7 +33,7 @@ from gui_modules.sao_plugin_ui_render import PluginPanelList, SpecRenderer
 from gui_modules.sao_panel_components import (
     SP_SM, SP_MD, SP_XS,
     _pc,
-    action_button, dropdown_button, keep_canvas_scroll,
+    action_button, bind_canvas_mousewheel, dropdown_button, keep_canvas_scroll,
     rounded_panel, sao_entry, sao_option_menu, sao_scrollbar,
     status_badge,
 )
@@ -279,7 +279,7 @@ class PluginManagerPanel:
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side='left', fill='both', expand=True, padx=(12, 0), pady=(0, 12))
         scroll.pack(side='right', fill='y', padx=(0, 12), pady=(0, 12))
-        canvas.bind('<MouseWheel>', lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units'))
+        bind_canvas_mousewheel(canvas, self._list)
         self._canvas = canvas
 
         # ── Panels tab: auto-redrawing plugin UI panels ──
@@ -293,6 +293,7 @@ class PluginManagerPanel:
         pcanvas.configure(yscrollcommand=pscroll.set)
         pcanvas.pack(side='left', fill='both', expand=True, padx=(12, 0), pady=(0, 12))
         pscroll.pack(side='right', fill='y', padx=(0, 12), pady=(0, 12))
+        bind_canvas_mousewheel(pcanvas, panels_inner)
         self._panel_list = PluginPanelList(panels_inner, self.owner)
 
         # ── Resize grip ──
@@ -400,8 +401,10 @@ class PluginManagerPanel:
             child.destroy()
         if not plugins:
             self._render_empty()
+            bind_canvas_mousewheel(getattr(self, '_canvas', None), self._list)
             return
         self._render_grid(plugins)
+        bind_canvas_mousewheel(getattr(self, '_canvas', None), self._list)
 
     def _render_empty(self) -> None:
         if self._list is None:
@@ -773,6 +776,7 @@ class PluginDetachedPanel:
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side='left', fill='both', expand=True, padx=(10, 0), pady=10)
         scroll.pack(side='right', fill='y', padx=(0, 10), pady=10)
+        bind_canvas_mousewheel(canvas, inner)
 
         self._detached_canvas = canvas
         self._detached_inner = inner
@@ -855,6 +859,8 @@ class PluginDetachedPanel:
         self._last_render_sig = sig
         self._renderer.set_on_action(self._make_action(pid))
         self._renderer.render(spec)
+        bind_canvas_mousewheel(getattr(self, '_detached_canvas', None),
+                               getattr(self, '_detached_inner', None))
 
     def _render_signature(self, spec: Any) -> str:
         payload = {
@@ -923,6 +929,8 @@ class PluginDetachedPanel:
                 except Exception:
                     pass
             opt.pack(side='right')
+        bind_canvas_mousewheel(getattr(self, '_detached_canvas', None),
+                               getattr(self, '_detached_inner', None))
 
     def _set_hotkey(self, action: str, value: str) -> None:
         key = '' if value == _HK_DEFAULT else value

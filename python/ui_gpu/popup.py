@@ -292,6 +292,7 @@ class SAOPopUpMenu:
 
     def force_destroy_overlay(self, invoke_callback: bool = False) -> None:
         self._release_click_guard()
+        self._release_input_zorder()
         self._closing = True
         self._destroy_window()
         if invoke_callback and self.on_close_callback:

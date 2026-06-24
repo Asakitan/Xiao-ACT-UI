@@ -106,7 +106,8 @@ ctx.clear_timer(timer_id)
 | `ctx.mem` | 内存访问门面 `MemAccess` |
 | `ctx.ui` | 声明式 UI 构建器 |
 | `ctx.log(message)` | 写插件日志 |
-| `ctx.load_local(relative_path)` | 加载插件目录下的 `.py` 模块 |
+| `ctx.load_local(relative_path)` | 加载插件目录下的 `.py` 模块（返回 `ModuleType`） |
+| `ctx.load_script(relative_path)` | 脚本插件加载同语言子文件（`.lua`/`.as`/`.emma`），合并到同一作用域；Lua 也可用 `dofile` |
 | `ctx.run_on_ui(callback)` | 在 UI 线程执行 |
 | `ctx.ensure_requirements(install=True)` | 安装插件依赖 |
 

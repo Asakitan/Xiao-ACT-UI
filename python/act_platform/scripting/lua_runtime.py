@@ -38,7 +38,7 @@ import sys
 from types import ModuleType
 from typing import Any, Callable, TYPE_CHECKING
 
-from .base import ContextProxy, ScriptModule, ScriptRuntime, wrap_callback
+from .base import ContextProxy, ScriptModule, ScriptRuntime, wrap_callback, resolve_local_script_path
 
 if TYPE_CHECKING:
     from act_platform.plugins import PluginContext, PluginRecord
@@ -356,6 +356,20 @@ class LuaRuntime(ScriptRuntime):
         proxy = _LuaProxy(ctx, lua)
         lua.globals()["python"] = __builtins__ if isinstance(__builtins__, dict) else vars(__builtins__)
         lua.globals()["require_python"] = __import__
+
+        plugin_base = os.path.abspath(str(record.path))
+
+        def _lua_load_script(relative_path, *, _lua=lua, _base=plugin_base):
+            target = resolve_local_script_path(_base, relative_path)
+            with open(target, "r", encoding="utf-8") as fp:
+                more_source = fp.read()
+            _lua.execute(more_source)
+            return True
+
+        lua.globals()["load_script"] = _lua_load_script
+        lua.globals()["dofile"] = _lua_load_script
+        lua.globals()["import"] = _lua_load_script
+        proxy.load_script = _lua_load_script
 
         lua.execute(source)
         g = lua.globals()

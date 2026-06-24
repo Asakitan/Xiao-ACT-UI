@@ -117,6 +117,12 @@ class SAOPlayerGUIPanelsMixin:
         if self._act_plugin_manager_panel.is_visible():
             self._act_plugin_manager_panel.hide()
         else:
+            try:
+                self._sao_panel_transition_until = 0.0
+                self._destroy_fisheye_hit_layer()
+                self._stop_fisheye_overlay()
+            except Exception:
+                pass
             self._act_plugin_manager_panel.show()
             self._apply_act_panel_theme()
             self.root.after(120, lambda: self._raise_panel_window(self._act_plugin_manager_panel))
@@ -125,6 +131,8 @@ class SAOPlayerGUIPanelsMixin:
         """打开插件管理面板并切到指定页签 (manage / panels)."""
         self._dismiss_sao_menu_for_panel()
         try:
+            self._sao_panel_transition_until = 0.0
+            self._destroy_fisheye_hit_layer()
             self._stop_fisheye_overlay()
         except Exception:
             pass

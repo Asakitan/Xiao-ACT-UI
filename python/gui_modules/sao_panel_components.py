@@ -497,6 +497,7 @@ class _SaoScroll(tk.Canvas):
         self.bind('<Configure>', lambda _e: self._draw())
         self.bind('<Button-1>', self._on_drag)
         self.bind('<B1-Motion>', self._on_drag)
+        self.bind('<ButtonRelease-1>', lambda _e: 'break')
 
     def set(self, first, last):
         self._f0 = float(first)
@@ -525,10 +526,64 @@ class _SaoScroll(tk.Canvas):
         frac = (e.y / h) - span / 2.0
         if callable(self._command):
             self._command('moveto', max(0.0, min(1.0, frac)))
+        return 'break'
 
 
 def sao_scrollbar(parent, command, *, width=9):
     return _SaoScroll(parent, command, width=width)
+
+
+def bind_canvas_mousewheel(canvas: Optional[tk.Canvas], *widgets: Optional[tk.Misc]) -> None:
+    """Route mouse-wheel events from a scroll canvas and its children to yview."""
+    if canvas is None:
+        return
+
+    key = str(canvas)
+
+    def _wheel_steps(event) -> int:
+        delta = int(getattr(event, 'delta', 0) or 0)
+        if delta:
+            steps = int(-delta / 120)
+            if steps == 0:
+                steps = -1 if delta > 0 else 1
+            return steps
+        num = getattr(event, 'num', None)
+        if num == 4:
+            return -1
+        if num == 5:
+            return 1
+        return 0
+
+    def _on_wheel(event):
+        steps = _wheel_steps(event)
+        if steps:
+            try:
+                canvas.yview_scroll(steps, 'units')
+            except Exception:
+                pass
+        return 'break'
+
+    def _bind_tree(widget: Optional[tk.Misc]) -> None:
+        if widget is None:
+            return
+        try:
+            if getattr(widget, '_sao_wheel_canvas', None) != key:
+                widget.bind('<MouseWheel>', _on_wheel, add='+')
+                widget.bind('<Button-4>', _on_wheel, add='+')
+                widget.bind('<Button-5>', _on_wheel, add='+')
+                setattr(widget, '_sao_wheel_canvas', key)
+        except Exception:
+            return
+        try:
+            children = widget.winfo_children()
+        except Exception:
+            children = ()
+        for child in children:
+            _bind_tree(child)
+
+    _bind_tree(canvas)
+    for widget in widgets:
+        _bind_tree(widget)
 
 
 def sao_entry(parent, textvariable=None, *, width=14):

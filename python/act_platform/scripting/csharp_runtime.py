@@ -110,7 +110,17 @@ def _file_signature(path: str) -> tuple[str, bool, int, int]:
 
 def _source_cache_key(source_path: str, references: list[str]) -> tuple[Any, ...]:
     ref_sigs = tuple(_file_signature(path) for path in sorted(str(p) for p in references))
-    return (_file_signature(source_path), ref_sigs)
+    source_dir = os.path.dirname(os.path.abspath(source_path))
+    sibling_sigs: tuple[Any, ...] = ()
+    try:
+        sibling_sigs = tuple(
+            _file_signature(os.path.join(source_dir, f))
+            for f in sorted(os.listdir(source_dir))
+            if f.endswith(".cs") and f != os.path.basename(source_path)
+        )
+    except OSError:
+        pass
+    return (_file_signature(source_path), sibling_sigs, ref_sigs)
 
 
 def _remember_source_assembly(key: tuple[Any, ...], assembly: Any,
@@ -194,8 +204,11 @@ def _python_runtime_reference() -> str | None:
 def _default_target_framework() -> str:
     """Return the TFM used for temporary C# source projects.
 
-    The previous hard-coded net8.0 target fails on machines that only carry a
-    newer offline SDK/ref-pack. Keep an env override for packaged runtimes.
+    Must match the CLR that pythonnet hosts.  When the active runtime is
+    .NET Framework 4.x (``Environment.Version.Major < 5``), compile for
+    ``netstandard2.0`` so the resulting assembly loads without
+    ``System.Runtime`` mismatches.  For .NET 6+ runtimes the TFM matches
+    the runtime major version.
     """
     override = str(os.environ.get("SAO_CSHARP_TARGET_FRAMEWORK") or "").strip()
     if override:
@@ -205,6 +218,7 @@ def _default_target_framework() -> str:
             runtime_major = int(_System.Environment.Version.Major)
             if runtime_major >= 6:
                 return f"net{runtime_major}.0"
+            return "netstandard2.0"
     except Exception:
         pass
     dotnet = shutil.which("dotnet") or shutil.which("dotnet.exe")
@@ -228,7 +242,7 @@ def _default_target_framework() -> str:
                 return f"net{max(majors)}.0"
         except Exception:
             pass
-    return "net8.0"
+    return "netstandard2.0"
 
 
 def _compile_cs(source_path: str, output_dir: str, references: list[str] | None = None) -> str:
@@ -243,9 +257,23 @@ def _compile_cs(source_path: str, output_dir: str, references: list[str] | None 
             "Install the .NET SDK: https://dotnet.microsoft.com/download"
         )
 
+    source_dir = os.path.dirname(os.path.abspath(source_path))
+    extra_sources: list[str] = []
+    try:
+        for fname in sorted(os.listdir(source_dir)):
+            if (
+                fname.endswith(".cs")
+                and fname != os.path.basename(source_path)
+                and not fname.startswith(".")
+            ):
+                extra_sources.append(os.path.join(source_dir, fname))
+    except OSError:
+        pass
+
     basename = os.path.basename(compiler).lower()
     if "dotnet" in basename:
-        csproj_content = _generate_csproj(stem, source_path, references)
+        csproj_content = _generate_csproj(stem, source_path, references,
+                                          extra_sources=extra_sources or None)
         proj_dir = os.path.join(output_dir, f"{stem}_proj")
         os.makedirs(proj_dir, exist_ok=True)
         csproj_path = os.path.join(proj_dir, f"{stem}.csproj")
@@ -255,6 +283,10 @@ def _compile_cs(source_path: str, output_dir: str, references: list[str] | None 
         src_dest = os.path.join(proj_dir, os.path.basename(source_path))
         if os.path.abspath(source_path) != os.path.abspath(src_dest):
             shutil.copy2(source_path, src_dest)
+        for extra in extra_sources:
+            extra_dest = os.path.join(proj_dir, os.path.basename(extra))
+            if os.path.abspath(extra) != os.path.abspath(extra_dest):
+                shutil.copy2(extra, extra_dest)
 
         proc = subprocess.run(
             [compiler, "build", "-c", "Release", "-o", output_dir, csproj_path],
@@ -268,6 +300,8 @@ def _compile_cs(source_path: str, output_dir: str, references: list[str] | None 
             for ref in references:
                 cmd.append(f"-reference:{ref}")
         cmd.append(source_path)
+        for extra in extra_sources:
+            cmd.append(extra)
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if proc.returncode != 0:
             raise RuntimeError(f"csc compilation failed:\n{proc.stderr or proc.stdout}")
@@ -284,8 +318,15 @@ def _compile_cs(source_path: str, output_dir: str, references: list[str] | None 
 
 
 def _generate_csproj(name: str, source_path: str,
-                     references: list[str] | None = None) -> str:
+                     references: list[str] | None = None,
+                     extra_sources: list[str] | None = None) -> str:
     source_name = os.path.basename(source_path)
+    compile_items = [source_name]
+    if extra_sources:
+        compile_items.extend(os.path.basename(p) for p in extra_sources)
+    compile_xml = "\n".join(
+        f'        <Compile Include="{item}" />' for item in compile_items
+    )
     refs_xml = ""
     if references:
         refs_xml = "\n  <ItemGroup>\n"
@@ -297,17 +338,20 @@ def _generate_csproj(name: str, source_path: str,
 
     target_framework = _default_target_framework()
 
+    lang_version = "7.3" if "netstandard" in target_framework or "net4" in target_framework else "latest"
+
     return f"""<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>{target_framework}</TargetFramework>
     <AssemblyName>{name}</AssemblyName>
     <OutputType>Library</OutputType>
-        <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-        <ImplicitUsings>disable</ImplicitUsings>
-        <Nullable>disable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <LangVersion>{lang_version}</LangVersion>
   </PropertyGroup>
     <ItemGroup>
-        <Compile Include="{source_name}" />
+{compile_xml}
     </ItemGroup>
 {refs_xml}</Project>
 """

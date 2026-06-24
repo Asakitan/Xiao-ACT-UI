@@ -7,9 +7,11 @@ belongs to the unified overlay compositor.
 """
 from __future__ import annotations
 
+import io
 import os
 import threading
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 try:
@@ -41,6 +43,10 @@ _TOPOLOGY_CACHE: dict[
     tuple[Any, ...],
     tuple[list[tuple[Any, Any]], list[tuple[Any, Any]]],
 ] = {}
+_SKIN_CACHE_LIMIT = 32
+_MAX_GPU_BONES = 96
+_ALPHA_STATS_CACHE_LIMIT = 64
+_ALPHA_STATS_CACHE: dict[tuple[Any, ...], dict[str, float]] = {}
 
 
 _VS_MESH = """
@@ -68,6 +74,185 @@ out vec2 v_uv;
 void main() {
     v_uv = in_uv;
     gl_Position = vec4(in_pos, 1.0);
+}
+"""
+
+_SKIN_ROTATE_GLSL = """\
+vec3 rotate_node(vec3 point) {
+    float cy = cos(u_rotation.y);
+    float sy = sin(u_rotation.y);
+    float x = point.x * cy + point.z * sy;
+    float z = -point.x * sy + point.z * cy;
+    float cx = cos(u_rotation.x);
+    float sx = sin(u_rotation.x);
+    float y = point.y * cx - z * sx;
+    z = point.y * sx + z * cx;
+    float cz = cos(u_rotation.z);
+    float sz = sin(u_rotation.z);
+    float rx = x * cz - y * sz;
+    float ry = x * sz + y * cz;
+    return vec3(rx, ry, z);
+}"""
+
+_SKIN_MATRIX_GLSL = """\
+mat4 skin_matrix() {
+    mat4 skin = mat4(0.0);
+    float total = 0.0;
+    for (int i = 0; i < 4; i++) {
+        int index = int(in_joints0[i]);
+        float weight = in_weights0[i];
+        if (weight > 0.00001 && index >= 0 && index < %(max_bones)d) {
+            skin += u_bones[index] * weight;
+            total += weight;
+        }
+    }
+    for (int i = 0; i < 4; i++) {
+        int index = int(in_joints1[i]);
+        float weight = in_weights1[i];
+        if (weight > 0.00001 && index >= 0 && index < %(max_bones)d) {
+            skin += u_bones[index] * weight;
+            total += weight;
+        }
+    }
+    if (total <= 0.00001) {
+        return mat4(1.0);
+    }
+    return skin;
+}""" % {"max_bones": _MAX_GPU_BONES}
+
+_VS_SKIN_TEXTURE = """
+#version 330
+const int MAX_BONES = %(max_bones)d;
+in vec3 in_pos;
+in vec2 in_uv;
+in vec4 in_joints0;
+in vec4 in_weights0;
+in vec4 in_joints1;
+in vec4 in_weights1;
+uniform mat4 u_bones[MAX_BONES];
+uniform vec2 u_viewport;
+uniform vec3 u_center;
+uniform vec3 u_rotation;
+uniform float u_scale;
+uniform float u_depth_scale;
+out vec2 v_uv;
+
+%(rotate_func)s
+
+%(skin_matrix_func)s
+
+void main() {
+    vec4 world = skin_matrix() * vec4(in_pos, 1.0);
+    vec3 point = rotate_node(world.xyz);
+    float ndc_x = (point.x - u_center.x) * (2.0 * u_scale / max(1.0, u_viewport.x));
+    float ndc_y = (point.y - u_center.y) * (2.0 * u_scale / max(1.0, u_viewport.y)) - 0.04;
+    float ndc_z = (point.z - u_center.z) * u_depth_scale;
+    v_uv = in_uv;
+    gl_Position = vec4(ndc_x, ndc_y, ndc_z, 1.0);
+}
+""" % {"max_bones": _MAX_GPU_BONES, "rotate_func": _SKIN_ROTATE_GLSL, "skin_matrix_func": _SKIN_MATRIX_GLSL}
+
+# -- MToon toon shading vertex shader (skin path) --
+_VS_SKIN_TOON = """
+#version 330
+const int MAX_BONES = %(max_bones)d;
+in vec3 in_pos;
+in vec2 in_uv;
+in vec4 in_joints0;
+in vec4 in_weights0;
+in vec4 in_joints1;
+in vec4 in_weights1;
+uniform mat4 u_bones[MAX_BONES];
+uniform vec2 u_viewport;
+uniform vec3 u_center;
+uniform vec3 u_rotation;
+uniform float u_scale;
+uniform float u_depth_scale;
+out vec2 v_uv;
+out vec3 v_world_normal;
+out vec3 v_world_pos;
+
+%(rotate_func)s
+
+%(skin_matrix_func)s
+
+void main() {
+    mat4 sm = skin_matrix();
+    vec4 world = sm * vec4(in_pos, 1.0);
+    // Approximate world normal from skin matrix (handles uniform scale)
+    vec3 raw_normal = normalize(mat3(sm) * vec3(0.0, 0.0, 1.0));
+    v_world_normal = normalize(mat3(1.0) * raw_normal);
+    v_world_pos = world.xyz;
+
+    vec3 point = rotate_node(world.xyz);
+    float ndc_x = (point.x - u_center.x) * (2.0 * u_scale / max(1.0, u_viewport.x));
+    float ndc_y = (point.y - u_center.y) * (2.0 * u_scale / max(1.0, u_viewport.y)) - 0.04;
+    float ndc_z = (point.z - u_center.z) * u_depth_scale;
+    v_uv = in_uv;
+    gl_Position = vec4(ndc_x, ndc_y, ndc_z, 1.0);
+}
+""" % {"max_bones": _MAX_GPU_BONES, "rotate_func": _SKIN_ROTATE_GLSL, "skin_matrix_func": _SKIN_MATRIX_GLSL}
+
+# -- MToon toon shading vertex shader (non-skin textured path) --
+_VS_TEXTURE_TOON = """
+#version 330
+in vec3 in_pos;
+in vec2 in_uv;
+out vec2 v_uv;
+out vec3 v_world_normal;
+out vec3 v_world_pos;
+void main() {
+    v_uv = in_uv;
+    // Non-skin path: positions are already in NDC-ish space, approximate normal
+    v_world_normal = vec3(0.0, 0.0, 1.0);
+    v_world_pos = in_pos;
+    gl_Position = vec4(in_pos, 1.0);
+}
+"""
+
+# -- MToon toon fragment shader --
+_FS_TOON = """
+#version 330
+uniform sampler2D u_texture;
+uniform vec4 u_tint;
+uniform vec3 u_shade_color;
+uniform float u_shade_toony;
+uniform float u_shade_shift;
+uniform float u_rim_power;
+uniform vec3 u_rim_color;
+uniform vec3 u_ambient;
+uniform vec3 u_light_dir;
+uniform vec3 u_camera_pos;
+in vec2 v_uv;
+in vec3 v_world_normal;
+in vec3 v_world_pos;
+out vec4 f_color;
+void main() {
+    vec4 texel = texture(u_texture, v_uv);
+    if (texel.a * u_tint.a < 0.03) {
+        discard;
+    }
+    vec3 baseColor = texel.rgb * u_tint.rgb;
+    vec3 N = normalize(v_world_normal);
+    vec3 L = normalize(u_light_dir);
+    vec3 V = normalize(u_camera_pos - v_world_pos);
+
+    // Half-Lambert + toony threshold for 2-step anime shadow
+    float NdotL = dot(N, L) * 0.5 + 0.5;
+    float shade = smoothstep(u_shade_shift, mix(1.0, u_shade_shift, u_shade_toony), NdotL);
+    vec3 diffuse = mix(baseColor * u_shade_color, baseColor, shade);
+
+    // Hard specular highlight
+    vec3 H = normalize(L + V);
+    float spec = pow(max(dot(N, H), 0.0), 256.0);
+    spec = smoothstep(0.005, 0.01, spec);
+
+    // Fresnel rim light (only on lit surfaces)
+    float rim = pow(1.0 - max(dot(V, N), 0.0), u_rim_power);
+    rim *= smoothstep(0.0, 0.01, NdotL);
+
+    vec3 color = diffuse * (u_ambient + vec3(1.0)) + vec3(1.0) * spec * 0.3 + u_rim_color * rim * 0.5;
+    f_color = vec4(color, texel.a * u_tint.a);
 }
 """
 
@@ -150,6 +335,10 @@ def _ensure_state() -> Any:
             ctx = _create_context(moderngl)
             program = ctx.program(vertex_shader=_VS_MESH, fragment_shader=_FS_MESH)
             texture_program = ctx.program(vertex_shader=_VS_TEXTURE, fragment_shader=_FS_TEXTURE)
+            skin_texture_program = ctx.program(vertex_shader=_VS_SKIN_TEXTURE, fragment_shader=_FS_TEXTURE)
+            # MToon toon shading programs
+            skin_toon_program = ctx.program(vertex_shader=_VS_SKIN_TOON, fragment_shader=_FS_TOON)
+            texture_toon_program = ctx.program(vertex_shader=_VS_TEXTURE_TOON, fragment_shader=_FS_TOON)
         except Exception:
             _GLOBAL_FAILED = True
             _TLS.failed = True
@@ -158,7 +347,12 @@ def _ensure_state() -> Any:
         "ctx": ctx,
         "program": program,
         "texture_program": texture_program,
+        "skin_texture_program": skin_texture_program,
+        "skin_toon_program": skin_toon_program,
+        "texture_toon_program": texture_toon_program,
         "textures": {},
+        "skin_geometry": {},
+        "skin_geometry_toon": {},
         "moderngl": moderngl,
     }
     _TLS.state = state
@@ -172,6 +366,13 @@ def _point3(value: Any) -> tuple[float, float, float] | None:
         return float(value[0]), float(value[1]), float(value[2])
     except Exception:
         return None
+
+
+def _vec_add(
+    a: tuple[float, float, float],
+    b: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    return a[0] + b[0], a[1] + b[1], a[2] + b[2]
 
 
 def _faces(value: Any, vertex_count: int) -> list[list[int]]:
@@ -244,6 +445,10 @@ def _deform_vertices(
         return vertices
     try:
         return fn(vertices, preview, node, meta)
+    except RuntimeError as exc:
+        if "pybullet physics provider" in str(exc).lower():
+            raise
+        return vertices
     except Exception:
         return vertices
 
@@ -403,6 +608,116 @@ def _material_texture_path(meta: Mapping[str, Any] | None, material_name: str) -
         return None
 
 
+def _material_tokens_match(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    norm = getattr(_software, "_norm_material_token", None) if _software is not None else None
+    if callable(norm):
+        try:
+            left_token = str(norm(left) or "")
+            right_token = str(norm(right) or "")
+        except Exception:
+            left_token = "".join(ch for ch in str(left).lower() if ch.isalnum())
+            right_token = "".join(ch for ch in str(right).lower() if ch.isalnum())
+    else:
+        left_token = "".join(ch for ch in str(left).lower() if ch.isalnum())
+        right_token = "".join(ch for ch in str(right).lower() if ch.isalnum())
+    return bool(
+        left_token
+        and right_token
+        and (left_token == right_token or left_token in right_token or right_token in left_token)
+    )
+
+
+def _embedded_texture_ref(meta: Mapping[str, Any], slot: Mapping[str, Any]) -> dict[str, Any] | None:
+    embedded_id = str(slot.get("embedded_id") or "").strip()
+    if not embedded_id:
+        return None
+    embedded = meta.get("embedded_textures")
+    if not isinstance(embedded, Mapping):
+        return None
+    item = embedded.get(embedded_id)
+    if not isinstance(item, Mapping):
+        return None
+    data = item.get("data")
+    if not isinstance(data, (bytes, bytearray)) or not data:
+        return None
+    return {
+        "kind": "embedded",
+        "embedded_id": embedded_id,
+        "sha1": str(item.get("sha1") or slot.get("sha1") or ""),
+        "size": int(item.get("size") or len(data)),
+        "format": str(item.get("format") or slot.get("format") or ""),
+        "data": bytes(data),
+    }
+
+
+def _file_texture_ref(meta: Mapping[str, Any], slot: Mapping[str, Any]) -> dict[str, Any] | None:
+    texture_path = str(slot.get("path") or "").strip()
+    if not texture_path:
+        return None
+    candidates_fn = getattr(_software, "_texture_path_candidates", None) if _software is not None else None
+    candidates: list[Path] = []
+    if callable(candidates_fn):
+        try:
+            candidates = list(candidates_fn(meta, texture_path) or [])
+        except Exception:
+            candidates = []
+    if not candidates:
+        raw = Path(texture_path)
+        if raw.is_absolute():
+            candidates.append(raw)
+        else:
+            model_path = Path(str(meta.get("resolved_path") or meta.get("path") or ""))
+            if str(model_path):
+                candidates.append(model_path.parent / raw)
+                candidates.append(model_path.parent.parent / raw)
+            candidates.append(Path.cwd() / raw)
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return {"kind": "file", "path": candidate}
+        except Exception:
+            continue
+    return None
+
+
+def _material_texture_ref(meta: Mapping[str, Any] | None, material_name: str) -> Any:
+    if not isinstance(meta, Mapping) or not material_name:
+        return None
+    material_textures = meta.get("material_textures")
+    entry: Any = None
+    if isinstance(material_textures, Mapping):
+        entry = material_textures.get(material_name)
+        if not isinstance(entry, Mapping):
+            for name, candidate in material_textures.items():
+                if isinstance(candidate, Mapping) and _material_tokens_match(str(name), material_name):
+                    entry = candidate
+                    break
+    if isinstance(entry, Mapping):
+        slot = entry.get("base_color")
+        slots = [slot] if isinstance(slot, Mapping) else []
+        raw_slots = entry.get("textures")
+        if isinstance(raw_slots, (list, tuple)):
+            slots.extend(item for item in raw_slots if isinstance(item, Mapping))
+        seen: set[tuple[str, str]] = set()
+        for item in slots:
+            key = (str(item.get("kind") or ""), str(item.get("embedded_id") or item.get("path") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            if item.get("kind") == "embedded":
+                ref = _embedded_texture_ref(meta, item)
+            elif item.get("kind") == "file":
+                ref = _file_texture_ref(meta, item)
+            else:
+                ref = None
+            if ref is not None:
+                return ref
+    path = _material_texture_path(meta, material_name)
+    return {"kind": "file", "path": path} if path is not None else None
+
+
 def _ndc(point: tuple[float, float, float], width: int, height: int) -> tuple[float, float]:
     return (
         (float(point[0]) / max(1.0, float(width))) * 2.0 - 1.0,
@@ -431,7 +746,7 @@ def _mesh_textured_arrays(
     height: int,
     preview: Mapping[str, Any],
     meta: Mapping[str, Any] | None = None,
-) -> list[tuple[Path, Any, tuple[float, float, float, float]]]:
+) -> list[tuple[Any, Any, tuple[float, float, float, float]]]:
     if np is None:
         return []
     uvs = _preview_uvs(preview, len(projected))
@@ -449,24 +764,25 @@ def _mesh_textured_arrays(
     materials = preview.get("face_materials")
     if not isinstance(materials, (list, tuple)):
         return []
-    groups: dict[Path, list[int]] = {}
-    texture_cache: dict[str, Path | None] = {}
+    groups: dict[tuple[Any, ...], tuple[Any, list[int]]] = {}
+    texture_cache: dict[str, Any] = {}
     for face_index, face in enumerate(faces):
         material_name = str(materials[face_index] or "").strip() if face_index < len(materials) else ""
         if not material_name:
             continue
-        texture_path = texture_cache.get(material_name)
+        texture_ref = texture_cache.get(material_name)
         if material_name not in texture_cache:
-            texture_path = _material_texture_path(meta, material_name)
-            texture_cache[material_name] = texture_path
-        if texture_path is None:
+            texture_ref = _material_texture_ref(meta, material_name)
+            texture_cache[material_name] = texture_ref
+        if texture_ref is None:
             continue
-        indices = groups.setdefault(texture_path, [])
+        group_key = _texture_cache_key(texture_ref)
+        _ref, indices = groups.setdefault(group_key, (texture_ref, []))
         first = face[0]
         for index in range(1, len(face) - 1):
             indices.extend((first, face[index], face[index + 1]))
-    batches: list[tuple[Path, Any, tuple[float, float, float, float]]] = []
-    for texture_path, raw_indices in groups.items():
+    batches: list[tuple[Any, Any, tuple[float, float, float, float]]] = []
+    for texture_ref, raw_indices in groups.values():
         if not raw_indices:
             continue
         indices = np.asarray(raw_indices, dtype=np.int32)
@@ -476,9 +792,276 @@ def _mesh_textured_arrays(
         array[:, 0:2] = ndc[indices]
         array[:, 2] = depth[indices]
         array[:, 3:5] = uv_array[indices, 0:2]
-        batches.append((texture_path, np.ascontiguousarray(array, dtype="f4"), (1.0, 1.0, 1.0, 1.0)))
+        batches.append((texture_ref, np.ascontiguousarray(array, dtype="f4"), (1.0, 1.0, 1.0, 1.0)))
     return batches
 
+
+def _skin_geometry_cache_key(preview: Mapping[str, Any], meta: Mapping[str, Any] | None) -> tuple[Any, ...]:
+    skin = preview.get("skin")
+    vertices = preview.get("vertices")
+    faces = preview.get("faces")
+    return (
+        tuple(meta.get("cache_key") or ()) if isinstance(meta, Mapping) else (),
+        id(vertices),
+        len(vertices) if isinstance(vertices, (list, tuple)) else 0,
+        id(faces),
+        len(faces) if isinstance(faces, (list, tuple)) else 0,
+        id(skin),
+        len(skin) if isinstance(skin, (list, tuple)) else 0,
+    )
+
+
+def _skin_static_geometry(preview: Mapping[str, Any], meta: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if np is None:
+        return None
+    raw_vertices = preview.get("vertices")
+    raw_skin = preview.get("skin")
+    raw_faces = preview.get("faces")
+    materials = preview.get("face_materials")
+    uvs = _preview_uvs(preview, len(raw_vertices) if isinstance(raw_vertices, (list, tuple)) else 0)
+    if not isinstance(raw_vertices, (list, tuple)) or not isinstance(raw_skin, (list, tuple)) or not uvs:
+        return None
+    vertices: list[tuple[float, float, float]] = []
+    for item in raw_vertices:
+        point = _point3(item)
+        if point is None:
+            return None
+        vertices.append(point)
+    if len(vertices) != len(uvs):
+        return None
+    fn = getattr(_software, "_preview_skin_influences", None) if _software is not None else None
+    if not callable(fn):
+        return None
+    skin_influences = list(fn(preview) or [])
+    if len(skin_influences) != len(vertices):
+        return None
+    joint_names: list[str] = []
+    joint_index: dict[str, int] = {}
+    for influences in skin_influences:
+        for joint, _weight in influences:
+            if joint not in joint_index:
+                if len(joint_names) >= _MAX_GPU_BONES:
+                    return None
+                joint_index[joint] = len(joint_names)
+                joint_names.append(joint)
+    positions = np.asarray(vertices, dtype=np.float32)
+    uv_array = np.asarray(uvs, dtype=np.float32)
+    joints0 = np.zeros((len(vertices), 4), dtype=np.float32)
+    weights0 = np.zeros((len(vertices), 4), dtype=np.float32)
+    joints1 = np.zeros((len(vertices), 4), dtype=np.float32)
+    weights1 = np.zeros((len(vertices), 4), dtype=np.float32)
+    for row, influences in enumerate(skin_influences):
+        for slot, (joint, weight) in enumerate(influences[:8]):
+            target_joints = joints0 if slot < 4 else joints1
+            target_weights = weights0 if slot < 4 else weights1
+            col = slot if slot < 4 else slot - 4
+            target_joints[row, col] = float(joint_index.get(joint, 0))
+            target_weights[row, col] = float(weight)
+    face_list = _faces(raw_faces, len(vertices))
+    if not face_list or not isinstance(materials, (list, tuple)):
+        return None
+    batches: list[tuple[str, np.ndarray]] = []
+    groups: dict[str, list[int]] = {}
+    for face_index, face in enumerate(face_list):
+        material_name = str(materials[face_index] or "").strip() if face_index < len(materials) else ""
+        if not material_name:
+            continue
+        bucket = groups.setdefault(material_name, [])
+        first = face[0]
+        for index in range(1, len(face) - 1):
+            bucket.extend((first, face[index], face[index + 1]))
+    for material_name, indices in groups.items():
+        if indices:
+            batches.append((material_name, np.asarray(indices, dtype=np.int32)))
+    if not batches:
+        return None
+    return {
+        "positions": positions,
+        "uvs": uv_array,
+        "joints0": joints0,
+        "weights0": weights0,
+        "joints1": joints1,
+        "weights1": weights1,
+        "joint_names": tuple(joint_names),
+        "batches": batches,
+    }
+
+
+def _rotation_tuple(node: Mapping[str, Any]) -> tuple[float, float, float]:
+    fn = getattr(_software, "_rotation", None) if _software is not None else None
+    if callable(fn):
+        try:
+            return fn(node)
+        except Exception:
+            pass
+    return 0.0, 0.0, 0.0
+
+
+def _gpu_projection_params(
+    positions: Any,
+    width: int,
+    height: int,
+    node: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    if np is None or positions is None or getattr(positions, "size", 0) <= 0:
+        return None
+    arr = np.asarray(positions, dtype=np.float32)
+    if arr.ndim != 2 or arr.shape[1] < 3:
+        return None
+    rx, ry, rz = _rotation_tuple(node)
+    x = arr[:, 0]
+    y = arr[:, 1]
+    z = arr[:, 2]
+    cy = np.cos(ry); sy = np.sin(ry)
+    x1 = x * cy + z * sy
+    z1 = -x * sy + z * cy
+    cx = np.cos(rx); sx = np.sin(rx)
+    y2 = y * cx - z1 * sx
+    z2 = y * sx + z1 * cx
+    cz = np.cos(rz); sz = np.sin(rz)
+    x3 = x1 * cz - y2 * sz
+    y3 = x1 * sz + y2 * cz
+    min_x = float(np.min(x3)); max_x = float(np.max(x3))
+    min_y = float(np.min(y3)); max_y = float(np.max(y3))
+    min_z = float(np.min(z2)); max_z = float(np.max(z2))
+    span_x = max(0.0001, max_x - min_x)
+    span_y = max(0.0001, max_y - min_y)
+    span_z = max(0.0001, max_z - min_z)
+    scale = min(width * 0.84 / span_x, height * 0.86 / span_y)
+    return {
+        "rotation": (float(rx), float(ry), float(rz)),
+        "center": ((min_x + max_x) * 0.5, (min_y + max_y) * 0.5, (min_z + max_z) * 0.5),
+        "scale": float(scale),
+        "depth_scale": float(min(0.9, 0.9 / span_z)),
+    }
+
+
+def _resolve_pose_state(preview: Mapping[str, Any], node: Mapping[str, Any], meta: Mapping[str, Any] | None) -> dict[str, Any]:
+    fn = getattr(_software, "_resolve_pose_state", None) if _software is not None else None
+    if not callable(fn):
+        return {}
+    try:
+        state = fn(preview, node, meta)
+        return dict(state) if isinstance(state, Mapping) else {}
+    except Exception:
+        return {}
+
+
+def _pose_state_from_context(preview: Mapping[str, Any], node: Mapping[str, Any], context: Mapping[str, Any], meta: Mapping[str, Any] | None) -> dict[str, Any]:
+    pose = context.get("pose") if isinstance(context.get("pose"), Mapping) else {}
+    fn = getattr(_software, "_pose_state_from_pose", None) if _software is not None else None
+    if callable(fn):
+        try:
+            state = fn(preview, node, pose, meta)
+            if isinstance(state, Mapping) and state:
+                return dict(state)
+        except Exception:
+            pass
+    return _resolve_pose_state(preview, node, meta)
+
+
+def _joint_matrix(before: tuple[float, float, float], after: tuple[float, float, float], quat: tuple[float, float, float, float] | None) -> Any:
+    if np is None:
+        return None
+    if quat is None:
+        quat = (0.0, 0.0, 0.0, 1.0)
+    x, y, z, w = quat
+    xx, yy, zz = x * x, y * y, z * z
+    xy, xz, yz = x * y, x * z, y * z
+    wx, wy, wz = w * x, w * y, w * z
+    rot = np.asarray([
+        [1.0 - 2.0 * (yy + zz), 2.0 * (xy - wz), 2.0 * (xz + wy)],
+        [2.0 * (xy + wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz - wx)],
+        [2.0 * (xz - wy), 2.0 * (yz + wx), 1.0 - 2.0 * (xx + yy)],
+    ], dtype=np.float32)
+    before_v = np.asarray(before, dtype=np.float32)
+    after_v = np.asarray(after, dtype=np.float32)
+    translation = after_v - rot.dot(before_v)
+    out = np.eye(4, dtype=np.float32)
+    out[:3, :3] = rot
+    out[:3, 3] = translation
+    return out
+
+
+def _quat_has_rotation(quat: tuple[float, float, float, float] | None) -> bool:
+    if quat is None:
+        return False
+    return (
+        abs(float(quat[0])) > 0.000001
+        or abs(float(quat[1])) > 0.000001
+        or abs(float(quat[2])) > 0.000001
+        or abs(float(quat[3]) - 1.0) > 0.000001
+    )
+
+
+def _bone_palette(joint_names: tuple[str, ...], pose_state: Mapping[str, Any]) -> Any:
+    if np is None or not joint_names:
+        return None
+    rest = pose_state.get("rest") if isinstance(pose_state.get("rest"), Mapping) else {}
+    transforms = pose_state.get("joint_transforms") if isinstance(pose_state.get("joint_transforms"), Mapping) else {}
+    physics_offsets = pose_state.get("physics_offsets") if isinstance(pose_state.get("physics_offsets"), Mapping) else {}
+    palette = np.repeat(np.eye(4, dtype=np.float32)[None, :, :], _MAX_GPU_BONES, axis=0)
+    for index, joint in enumerate(joint_names):
+        transform = transforms.get(joint)
+        before = rest.get(joint)
+        after = before
+        quat = None
+        if isinstance(transform, tuple) and len(transform) == 3:
+            before = transform[0]
+            after = transform[1]
+            quat = transform[2]
+        if before is None:
+            continue
+        if _quat_has_rotation(quat):
+            after = before
+        extra = physics_offsets.get(joint)
+        if isinstance(extra, tuple):
+            after = _vec_add(after, extra) if after is not None else _vec_add(before, extra)
+        matrix = _joint_matrix(before, after if after is not None else before, quat)
+        if matrix is not None:
+            palette[index] = matrix
+    return palette
+
+
+def _skin_gpu_resources(state: Mapping[str, Any], ctx: Any, program: Any, preview: Mapping[str, Any], meta: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    cache = state.get("skin_geometry")
+    if not isinstance(cache, dict):
+        return None
+    key = _skin_geometry_cache_key(preview, meta)
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    geometry = _skin_static_geometry(preview, meta)
+    if geometry is None:
+        return None
+    packed = np.concatenate((
+        geometry["positions"],
+        geometry["uvs"],
+        geometry["joints0"],
+        geometry["weights0"],
+        geometry["joints1"],
+        geometry["weights1"],
+    ), axis=1).astype(np.float32, copy=False)
+    vbo = ctx.buffer(np.ascontiguousarray(packed, dtype="f4").tobytes())
+    batches: list[tuple[str, Any, Any]] = []
+    for material_name, indices in geometry["batches"]:
+        ibo = ctx.buffer(np.ascontiguousarray(indices, dtype=np.int32).tobytes())
+        vao = ctx.vertex_array(
+            program,
+            [(vbo, "3f 2f 4f 4f 4f 4f", "in_pos", "in_uv", "in_joints0", "in_weights0", "in_joints1", "in_weights1")],
+            index_buffer=ibo,
+        )
+        batches.append((material_name, vao, ibo))
+    resource = {
+        "vbo": vbo,
+        "joint_names": geometry["joint_names"],
+        "positions": geometry["positions"],
+        "batches": batches,
+    }
+    if len(cache) >= _SKIN_CACHE_LIMIT:
+        cache.clear()
+    cache[key] = resource
+    return resource
 
 def _mesh_arrays_by_color(
     projected: list[tuple[float, float, float]],
@@ -561,26 +1144,50 @@ def _draw_array(ctx: Any, program: Any, mode: Any, array: Any, color: tuple[floa
                     pass
 
 
-def _texture_cache_key(path: Path) -> tuple[str, int, int]:
+def _texture_cache_key(ref: Any) -> tuple[Any, ...]:
+    if isinstance(ref, Mapping):
+        kind = str(ref.get("kind") or "")
+        if kind == "embedded":
+            return (
+                "embedded",
+                str(ref.get("sha1") or ""),
+                int(ref.get("size") or 0),
+                str(ref.get("embedded_id") or ""),
+            )
+        path = ref.get("path")
+    else:
+        path = ref
     try:
-        stat = path.stat()
-        return str(path), int(stat.st_size), int(stat.st_mtime_ns)
+        path_obj = Path(path)
     except Exception:
-        return str(path), 0, 0
+        path_obj = Path(str(path or ""))
+    try:
+        stat = path_obj.stat()
+        return "file", str(path_obj), int(stat.st_size), int(stat.st_mtime_ns)
+    except Exception:
+        return "file", str(path_obj), 0, 0
 
 
-def _texture_resource(state: Mapping[str, Any], ctx: Any, moderngl: Any, path: Path) -> Any:
+def _texture_resource(state: Mapping[str, Any], ctx: Any, moderngl: Any, ref: Any) -> Any:
     textures = state.get("textures")
     if not isinstance(textures, dict):
         return None
-    key = _texture_cache_key(path)
+    key = _texture_cache_key(ref)
     cached = textures.get(key)
     if cached is not None:
         return cached
     if Image is None:
         return None
     try:
-        with Image.open(path) as image:
+        if isinstance(ref, Mapping) and ref.get("kind") == "embedded":
+            data = ref.get("data")
+            if not isinstance(data, (bytes, bytearray)) or not data:
+                return None
+            image_source = io.BytesIO(bytes(data))
+        else:
+            raw_path = ref.get("path") if isinstance(ref, Mapping) else ref
+            image_source = Path(raw_path)
+        with Image.open(image_source) as image:
             rgba = image.convert("RGBA")
             transpose = getattr(Image, "Transpose", None)
             flip = getattr(transpose, "FLIP_TOP_BOTTOM", None) if transpose is not None else None
@@ -606,6 +1213,51 @@ def _texture_resource(state: Mapping[str, Any], ctx: Any, moderngl: Any, path: P
             pass
     textures[key] = texture
     return texture
+
+
+def _texture_alpha_stats(ref: Any) -> dict[str, float]:
+    key = _texture_cache_key(ref)
+    cached = _ALPHA_STATS_CACHE.get(key)
+    if cached is not None:
+        return cached
+    stats = {"transparent": 0.0, "coverage": 1.0, "mean": 1.0}
+    if Image is None:
+        return stats
+    try:
+        if isinstance(ref, Mapping) and ref.get("kind") == "embedded":
+            data = ref.get("data")
+            if not isinstance(data, (bytes, bytearray)) or not data:
+                return stats
+            image_source = io.BytesIO(bytes(data))
+        else:
+            raw_path = ref.get("path") if isinstance(ref, Mapping) else ref
+            image_source = Path(raw_path)
+        with Image.open(image_source) as image:
+            alpha = image.convert("RGBA").getchannel("A")
+            histogram = alpha.histogram()
+    except Exception:
+        return stats
+    total = float(sum(histogram) or 1)
+    below_opaque = float(sum(histogram[:250]))
+    visible = float(sum(histogram[8:]))
+    mean = sum(index * count for index, count in enumerate(histogram)) / (255.0 * total)
+    stats = {
+        "transparent": below_opaque / total,
+        "coverage": visible / total,
+        "mean": mean,
+    }
+    if len(_ALPHA_STATS_CACHE) >= _ALPHA_STATS_CACHE_LIMIT:
+        _ALPHA_STATS_CACHE.clear()
+    _ALPHA_STATS_CACHE[key] = stats
+    return stats
+
+
+def _material_is_transparent(model: Mapping[str, Any], material_name: str) -> bool:
+    texture_ref = _material_texture_ref(model, str(material_name))
+    if texture_ref is None:
+        return False
+    stats = _texture_alpha_stats(texture_ref)
+    return float(stats.get("transparent") or 0.0) > 0.001
 
 
 def _draw_textured_array(
@@ -649,6 +1301,202 @@ def _draw_textured_array(
                     pass
 
 
+def _set_scalar_uniform(program: Any, name: str, value: float) -> None:
+    try:
+        program[name].value = float(value)
+    except Exception:
+        pass
+
+
+def _set_vec2_uniform(program: Any, name: str, value: tuple[float, float]) -> None:
+    try:
+        program[name].value = (float(value[0]), float(value[1]))
+    except Exception:
+        pass
+
+
+def _set_vec3_uniform(program: Any, name: str, value: tuple[float, float, float]) -> None:
+    try:
+        program[name].value = (float(value[0]), float(value[1]), float(value[2]))
+    except Exception:
+        pass
+
+
+def _set_bone_palette(program: Any, palette: Any) -> None:
+    if palette is None:
+        return
+    program["u_bones"].write(np.ascontiguousarray(np.transpose(palette, (0, 2, 1)), dtype="f4").tobytes())
+
+
+def _is_toon_shading(node: Mapping[str, Any], context: Mapping[str, Any]) -> bool:
+    """Check whether toon/MToon shading is requested for this render."""
+    # Check node materials section for toon/mtoon style
+    materials = node.get("materials") if isinstance(node.get("materials"), Mapping) else {}
+    style = str(materials.get("style") or "").lower().strip()
+    if style in ("toon", "mtoon"):
+        return True
+    # Check context-level materials
+    ctx_materials = context.get("materials") if isinstance(context.get("materials"), Mapping) else {}
+    ctx_style = str(ctx_materials.get("style") or "").lower().strip()
+    if ctx_style in ("toon", "mtoon"):
+        return True
+    # Default: enable toon shading for all model3d rendering
+    return True
+
+
+def _set_toon_uniforms(program: Any, node: Mapping[str, Any]) -> None:
+    """Set MToon-style toon shading uniforms on a program."""
+    import math
+    # Defaults inspired by VRM MToon shader
+    _set_vec3_uniform(program, "u_shade_color", (0.7, 0.65, 0.75))
+    _set_scalar_uniform(program, "u_shade_toony", 0.9)
+    _set_scalar_uniform(program, "u_shade_shift", -0.05)
+    _set_scalar_uniform(program, "u_rim_power", 5.0)
+    _set_vec3_uniform(program, "u_rim_color", (1.0, 1.0, 1.0))
+    _set_vec3_uniform(program, "u_ambient", (0.12, 0.12, 0.14))
+    # Normalized light direction: top-right key light
+    inv_len = 1.0 / math.sqrt(0.3 * 0.3 + 1.0 * 1.0 + 0.5 * 0.5)
+    _set_vec3_uniform(program, "u_light_dir", (0.3 * inv_len, 1.0 * inv_len, 0.5 * inv_len))
+    # Camera position: approximate from node or default front-facing
+    _set_vec3_uniform(program, "u_camera_pos", (0.0, 0.0, 5.0))
+    # Allow node-level overrides
+    materials = node.get("materials") if isinstance(node.get("materials"), Mapping) else {}
+    toon = materials.get("toon") if isinstance(materials.get("toon"), Mapping) else {}
+    if toon:
+        shade_color = _point3(toon.get("shade_color"))
+        if shade_color is not None:
+            _set_vec3_uniform(program, "u_shade_color", shade_color)
+        if "shade_toony" in toon:
+            try:
+                _set_scalar_uniform(program, "u_shade_toony", float(toon["shade_toony"]))
+            except Exception:
+                pass
+        if "shade_shift" in toon:
+            try:
+                _set_scalar_uniform(program, "u_shade_shift", float(toon["shade_shift"]))
+            except Exception:
+                pass
+        if "rim_power" in toon:
+            try:
+                _set_scalar_uniform(program, "u_rim_power", float(toon["rim_power"]))
+            except Exception:
+                pass
+        rim_color = _point3(toon.get("rim_color"))
+        if rim_color is not None:
+            _set_vec3_uniform(program, "u_rim_color", rim_color)
+        ambient = _point3(toon.get("ambient"))
+        if ambient is not None:
+            _set_vec3_uniform(program, "u_ambient", ambient)
+
+
+def _skin_gpu_resources_toon(state: Mapping[str, Any], ctx: Any, program: Any, preview: Mapping[str, Any], meta: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Build skin GPU resources for the toon shader (different vertex layout with normals)."""
+    cache = state.get("skin_geometry_toon")
+    if not isinstance(cache, dict):
+        return None
+    key = _skin_geometry_cache_key(preview, meta)
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    geometry = _skin_static_geometry(preview, meta)
+    if geometry is None:
+        return None
+    packed = np.concatenate((
+        geometry["positions"],
+        geometry["uvs"],
+        geometry["joints0"],
+        geometry["weights0"],
+        geometry["joints1"],
+        geometry["weights1"],
+    ), axis=1).astype(np.float32, copy=False)
+    vbo = ctx.buffer(np.ascontiguousarray(packed, dtype="f4").tobytes())
+    batches: list[tuple[str, Any, Any]] = []
+    for material_name, indices in geometry["batches"]:
+        ibo = ctx.buffer(np.ascontiguousarray(indices, dtype=np.int32).tobytes())
+        vao = ctx.vertex_array(
+            program,
+            [(vbo, "3f 2f 4f 4f 4f 4f", "in_pos", "in_uv", "in_joints0", "in_weights0", "in_joints1", "in_weights1")],
+            index_buffer=ibo,
+        )
+        batches.append((material_name, vao, ibo))
+    resource = {
+        "vbo": vbo,
+        "joint_names": geometry["joint_names"],
+        "positions": geometry["positions"],
+        "batches": batches,
+    }
+    if len(cache) >= _SKIN_CACHE_LIMIT:
+        cache.clear()
+    cache[key] = resource
+    return resource
+
+
+def _draw_skin_batches(
+    state: Mapping[str, Any],
+    ctx: Any,
+    program: Any,
+    moderngl: Any,
+    model: Mapping[str, Any],
+    resources: Mapping[str, Any],
+) -> bool:
+    batches = resources.get("batches")
+    if not isinstance(batches, list) or not batches:
+        return False
+    drawn = False
+    opaque_batches: list[Any] = []
+    transparent_batches: list[Any] = []
+    for batch in batches:
+        material_name = str(batch[0]) if batch else ""
+        if _material_is_transparent(model, material_name):
+            transparent_batches.append(batch)
+        else:
+            opaque_batches.append(batch)
+
+    def draw_batch(batch: Any) -> bool:
+        material_name, vao, _ibo = batch
+        texture_ref = _material_texture_ref(model, str(material_name))
+        if texture_ref is None:
+            return False
+        texture = _texture_resource(state, ctx, moderngl, texture_ref)
+        if texture is None:
+            return False
+        try:
+            use = getattr(texture, "use", None)
+            if callable(use):
+                use(location=0)
+        except Exception:
+            pass
+        try:
+            program["u_texture"].value = 0
+        except Exception:
+            pass
+        _set_uniform(program, "u_tint", (1.0, 1.0, 1.0, 1.0))
+        try:
+            vao.render(getattr(moderngl, "TRIANGLES", 4))
+            return True
+        except Exception:
+            return False
+
+    for batch in opaque_batches:
+        drawn = draw_batch(batch) or drawn
+    if transparent_batches:
+        previous_depth_mask = None
+        try:
+            previous_depth_mask = getattr(ctx, "depth_mask")
+            ctx.depth_mask = False
+        except Exception:
+            previous_depth_mask = None
+        try:
+            for batch in transparent_batches:
+                drawn = draw_batch(batch) or drawn
+        finally:
+            try:
+                ctx.depth_mask = True if previous_depth_mask is None else previous_depth_mask
+            except Exception:
+                pass
+    return drawn
+
+
 def _read_image(fbo: Any, width: int, height: int) -> Any:
     if Image is None:
         return None
@@ -675,18 +1523,12 @@ def render_moderngl_model3d(node: Mapping[str, Any], context: Mapping[str, Any])
     if len(vertices) < 3 or not faces:
         return None
     model = context.get("model") if isinstance(context.get("model"), Mapping) else {}
-    vertices = _deform_vertices(vertices, preview, node, model)
-    projected = _project_vertices(vertices, width, height, node)
-    if len(projected) != len(vertices):
-        return None
+    pose_state = _pose_state_from_context(preview, node, context, model)
     accent = _accent_color(context)
-    textured_batches = _mesh_textured_arrays(projected, faces, width, height, preview, model)
+    projected: list[tuple[float, float, float]] = []
+    textured_batches: list[tuple[Any, Any, tuple[float, float, float, float]]] = []
     triangle_batches: list[tuple[Any, tuple[float, float, float, float]]] = []
     line_batches: list[tuple[Any, tuple[float, float, float, float]]] = []
-    if not textured_batches:
-        triangle_batches, line_batches = _mesh_arrays_by_color(projected, faces, width, height, preview, accent, model)
-    if not textured_batches and not triangle_batches:
-        return None
 
     with _RENDER_LOCK, _get_wgl_serialize_lock():
         state = _ensure_state()
@@ -695,25 +1537,98 @@ def render_moderngl_model3d(node: Mapping[str, Any], context: Mapping[str, Any])
         ctx = state["ctx"]
         program = state["program"]
         texture_program = state.get("texture_program")
+        skin_texture_program = state.get("skin_texture_program")
         moderngl = state["moderngl"]
-        tex = depth = fbo = None
+        skin_resources = _skin_gpu_resources(state, ctx, skin_texture_program, preview, model) if skin_texture_program is not None else None
+        gpu_projection = (
+            _gpu_projection_params(skin_resources.get("positions"), width, height, node)
+            if isinstance(skin_resources, Mapping)
+            else None
+        )
+        bone_palette = (
+            _bone_palette(skin_resources.get("joint_names"), pose_state)
+            if isinstance(skin_resources, Mapping) and pose_state
+            else None
+        )
+        use_gpu_skin = (
+            isinstance(skin_resources, Mapping)
+            and gpu_projection is not None
+            and bone_palette is not None
+            and len(skin_resources.get("joint_names") or ()) <= _MAX_GPU_BONES
+            and bool(skin_resources.get("batches"))
+        )
+        if not use_gpu_skin:
+            vertices = _deform_vertices(vertices, preview, node, model)
+            projected = _project_vertices(vertices, width, height, node)
+            if len(projected) != len(vertices):
+                return None
+            textured_batches = _mesh_textured_arrays(projected, faces, width, height, preview, model)
+            if not textured_batches:
+                triangle_batches, line_batches = _mesh_arrays_by_color(projected, faces, width, height, preview, accent, model)
+            if not textured_batches and not triangle_batches:
+                return None
+        # Determine toon shading mode
+        toon = _is_toon_shading(node, context)
+        skin_toon_program = state.get("skin_toon_program") if toon else None
+        texture_toon_program = state.get("texture_toon_program") if toon else None
+
+        # Build toon-specific skin resources when toon + gpu skin
+        skin_resources_toon = None
+        if toon and use_gpu_skin and skin_toon_program is not None:
+            skin_resources_toon = _skin_gpu_resources_toon(state, ctx, skin_toon_program, preview, model)
+
+        # MSAA 4x framebuffer setup with fallback to non-MSAA
+        fbo_ms = fbo_resolve = color_ms = depth_ms = tex_resolve = depth_resolve = None
+        use_msaa = False
         try:
-            tex = ctx.texture((width, height), 4, dtype="f1")
+            color_ms = ctx.renderbuffer((width, height), 4, samples=4)
+            depth_ms = ctx.depth_renderbuffer((width, height), samples=4)
+            fbo_ms = ctx.framebuffer(color_attachments=[color_ms], depth_attachment=depth_ms)
+            tex_resolve = ctx.texture((width, height), 4, dtype="f1")
             try:
-                depth = ctx.depth_renderbuffer((width, height))
-                fbo = ctx.framebuffer(color_attachments=[tex], depth_attachment=depth)
+                depth_resolve = ctx.depth_renderbuffer((width, height))
+                fbo_resolve = ctx.framebuffer(color_attachments=[tex_resolve], depth_attachment=depth_resolve)
             except Exception:
-                depth = None
-                fbo = ctx.framebuffer(color_attachments=[tex])
-            fbo.use()
-            fbo.clear(0.0, 0.0, 0.0, 0.0)
+                depth_resolve = None
+                fbo_resolve = ctx.framebuffer(color_attachments=[tex_resolve])
+            use_msaa = True
+        except Exception:
+            # MSAA not supported, fall back to non-MSAA
+            for res in (fbo_ms, fbo_resolve, color_ms, depth_ms, tex_resolve, depth_resolve):
+                release = getattr(res, "release", None)
+                if callable(release):
+                    try:
+                        release()
+                    except Exception:
+                        pass
+            fbo_ms = fbo_resolve = color_ms = depth_ms = tex_resolve = depth_resolve = None
+
+        # Non-MSAA fallback path
+        tex = depth = fbo = None
+        if not use_msaa:
+            try:
+                tex = ctx.texture((width, height), 4, dtype="f1")
+                try:
+                    depth = ctx.depth_renderbuffer((width, height))
+                    fbo = ctx.framebuffer(color_attachments=[tex], depth_attachment=depth)
+                except Exception:
+                    depth = None
+                    fbo = ctx.framebuffer(color_attachments=[tex])
+            except Exception:
+                return None
+
+        render_fbo = fbo_ms if use_msaa else fbo
+        has_depth = (depth_ms is not None) if use_msaa else (depth is not None)
+        try:
+            render_fbo.use()
+            render_fbo.clear(0.0, 0.0, 0.0, 0.0)
             enable = getattr(ctx, "enable", None)
             if callable(enable):
                 try:
                     enable(getattr(moderngl, "BLEND", 0))
                 except Exception:
                     pass
-                if textured_batches and depth is not None:
+                if (textured_batches or use_gpu_skin) and has_depth:
                     try:
                         enable(getattr(moderngl, "DEPTH_TEST", 0))
                     except Exception:
@@ -725,24 +1640,62 @@ def render_moderngl_model3d(node: Mapping[str, Any], context: Mapping[str, Any])
                 )
             except Exception:
                 pass
-            if textured_batches and texture_program is not None:
-                for texture_path, array, tint in textured_batches:
-                    texture = _texture_resource(state, ctx, moderngl, texture_path)
-                    _draw_textured_array(ctx, texture_program, moderngl, array, texture, tint)
-            for triangles, color in triangle_batches:
-                _draw_array(ctx, program, getattr(moderngl, "TRIANGLES", 4), triangles, color)
-            if not textured_batches:
-                try:
-                    ctx.line_width = 1.6
-                except Exception:
-                    pass
-                for lines, color in line_batches:
-                    _draw_array(ctx, program, getattr(moderngl, "LINES", 1), lines, color)
-            return _read_image(fbo, width, height)
+            if use_gpu_skin and isinstance(skin_resources, Mapping):
+                # Choose toon or standard program for skin path
+                if toon and skin_toon_program is not None and isinstance(skin_resources_toon, Mapping):
+                    active_program = skin_toon_program
+                    active_resources = skin_resources_toon
+                    _set_vec2_uniform(active_program, "u_viewport", (float(width), float(height)))
+                    _set_vec3_uniform(active_program, "u_center", gpu_projection["center"])
+                    _set_vec3_uniform(active_program, "u_rotation", gpu_projection["rotation"])
+                    _set_scalar_uniform(active_program, "u_scale", gpu_projection["scale"])
+                    _set_scalar_uniform(active_program, "u_depth_scale", gpu_projection["depth_scale"])
+                    _set_bone_palette(active_program, bone_palette)
+                    _set_toon_uniforms(active_program, node)
+                    if not _draw_skin_batches(state, ctx, active_program, moderngl, model, active_resources):
+                        return None
+                elif skin_texture_program is not None:
+                    _set_vec2_uniform(skin_texture_program, "u_viewport", (float(width), float(height)))
+                    _set_vec3_uniform(skin_texture_program, "u_center", gpu_projection["center"])
+                    _set_vec3_uniform(skin_texture_program, "u_rotation", gpu_projection["rotation"])
+                    _set_scalar_uniform(skin_texture_program, "u_scale", gpu_projection["scale"])
+                    _set_scalar_uniform(skin_texture_program, "u_depth_scale", gpu_projection["depth_scale"])
+                    _set_bone_palette(skin_texture_program, bone_palette)
+                    if not _draw_skin_batches(state, ctx, skin_texture_program, moderngl, model, skin_resources):
+                        return None
+                else:
+                    return None
+            else:
+                if textured_batches:
+                    # Choose toon or standard program for textured non-skin path
+                    if toon and texture_toon_program is not None:
+                        active_tex_program = texture_toon_program
+                        _set_toon_uniforms(active_tex_program, node)
+                    else:
+                        active_tex_program = texture_program
+                    if active_tex_program is not None:
+                        for texture_ref, array, tint in textured_batches:
+                            texture = _texture_resource(state, ctx, moderngl, texture_ref)
+                            _draw_textured_array(ctx, active_tex_program, moderngl, array, texture, tint)
+                for triangles, color in triangle_batches:
+                    _draw_array(ctx, program, getattr(moderngl, "TRIANGLES", 4), triangles, color)
+                if not textured_batches:
+                    try:
+                        ctx.line_width = 1.6
+                    except Exception:
+                        pass
+                    for lines, color in line_batches:
+                        _draw_array(ctx, program, getattr(moderngl, "LINES", 1), lines, color)
+
+            # MSAA resolve: blit multisample FBO to single-sample resolve FBO
+            if use_msaa and fbo_resolve is not None:
+                ctx.copy_framebuffer(fbo_resolve, fbo_ms)
+                return _read_image(fbo_resolve, width, height)
+            return _read_image(render_fbo, width, height)
         except Exception:
             return None
         finally:
-            for resource in (fbo, depth, tex):
+            for resource in (fbo_ms, fbo_resolve, color_ms, depth_ms, tex_resolve, depth_resolve, fbo, depth, tex):
                 release = getattr(resource, "release", None)
                 if callable(release):
                     try:
@@ -783,12 +1736,29 @@ def reset_builtin_renderer_resources(
                 for texture in list(textures.values()):
                     if texture is not None and _release_resource(texture):
                         released.append("texture")
-            for key in ("texture_program", "program", "ctx"):
+            for cache_name in ("skin_geometry", "skin_geometry_toon"):
+                geometry_cache = state.get(cache_name)
+                if isinstance(geometry_cache, Mapping):
+                    for item in list(geometry_cache.values()):
+                        if not isinstance(item, Mapping):
+                            continue
+                        for resource in (item.get("vbo"),):
+                            if resource is not None and _release_resource(resource):
+                                released.append("skin_vbo")
+                        batches = item.get("batches")
+                        if isinstance(batches, list):
+                            for _material_name, vao, ibo in batches:
+                                if vao is not None and _release_resource(vao):
+                                    released.append("skin_vao")
+                                if ibo is not None and _release_resource(ibo):
+                                    released.append("skin_ibo")
+            for key in ("skin_toon_program", "texture_toon_program", "skin_texture_program", "texture_program", "program", "ctx"):
                 resource = state.get(key)
                 if resource is not None and _release_resource(resource):
                     released.append(key)
         _TLS.__dict__.clear()
         _TOPOLOGY_CACHE.clear()
+        _ALPHA_STATS_CACHE.clear()
         if reset_failures:
             _GLOBAL_FAILED = False
             _IMPORT_ERROR = ""
@@ -799,6 +1769,7 @@ def reset_builtin_renderer_resources(
         "renderer": _RENDERER_NAME,
         "released": tuple(released),
         "topology_cache_size": len(_TOPOLOGY_CACHE),
+        "alpha_stats_cache_size": len(_ALPHA_STATS_CACHE),
     }
 
 

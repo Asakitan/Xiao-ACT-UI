@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import abc
 import json
 import traceback
@@ -11,6 +12,23 @@ from typing import Any, Callable, Mapping, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from act_platform.plugins import PluginContext, PluginRecord
+
+
+def resolve_local_script_path(plugin_base: str, relative_path: str) -> str:
+    """Resolve a plugin-relative script path, enforcing sandbox containment.
+
+    Used by Emma/Lua/AngelScript runtimes to let a plugin ``import``/``dofile``
+    sibling script files (``.emma``/``.lua``/``.as``) from its own directory.
+    The resolved path must stay inside ``plugin_base``; otherwise a ValueError
+    is raised so plugins cannot escape their directory via ``..`` traversal.
+    """
+    base = os.path.abspath(plugin_base)
+    target = os.path.abspath(os.path.join(base, str(relative_path or "")))
+    if os.path.commonpath([base, target]) != base:
+        raise ValueError(f"load_script path must stay inside the plugin directory: {relative_path!r}")
+    if not os.path.isfile(target):
+        raise FileNotFoundError(f"load_script target not found: {relative_path!r}")
+    return target
 
 
 class ScriptRuntime(abc.ABC):

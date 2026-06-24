@@ -26,6 +26,25 @@ from setuptools import Extension, setup
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
+def _selected_extension_names() -> set[str]:
+    raw = os.environ.get('SAO_CY_ONLY', '').strip()
+    if not raw:
+        return set()
+    return {item.strip() for item in raw.split(',') if item.strip()}
+
+
+def _filter_extensions(selected: set[str], items: list[Extension]) -> list[Extension]:
+    if not selected:
+        return items
+    out = [item for item in items if item.name in selected]
+    found = {item.name for item in out}
+    missing = sorted(selected - found)
+    if missing:
+        raise SystemExit(f'Unknown SAO_CY_ONLY target(s): {", ".join(missing)}')
+    print('Building selected Cython extensions:', ', '.join(sorted(found)))
+    return out
+
+
 def _plugin_cython_extensions() -> list[Extension]:
     out: list[Extension] = []
     for src in sorted(glob(os.path.join(HERE, 'plugins', '*', 'cython', '_sao_cy*.pyx'))):
@@ -73,6 +92,10 @@ extensions = [
         name='_sao_cy_uihelpers',
         sources=[os.path.join(HERE, '_sao_cy_uihelpers.pyx')],
     ),
+    Extension(
+        name='render.model3d_software',
+        sources=[os.path.join(HERE, 'render', 'model3d_software.py')],
+    ),
     # mem_probe: AVX2 accelerated memory scan/pattern search for the
     # mem_probe tools that import ``mem_probe.cy_memscan``.
     Extension(
@@ -98,6 +121,8 @@ if os.path.isfile(_drv_src):
         name='mem_probe.rt_io',
         sources=[_drv_src],
     ))
+
+extensions = _filter_extensions(_selected_extension_names(), extensions)
 
 
 setup(

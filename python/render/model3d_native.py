@@ -260,7 +260,7 @@ def build_native_model3d_context(
     model_meta = _safe_backend_call("get_model_metadata_view", node, errors)
     action_meta = _safe_backend_call("get_action_metadata_view", node, errors)
     retarget_plan = _safe_backend_call("get_retarget_plan_view", node, errors)
-    pose = _safe_backend_call("evaluate_retarget_pose", node, errors)
+    model_data = _safe_backend_call("get_model_data", node, errors)
     context: dict[str, Any] = {
         "width": width,
         "height": height,
@@ -272,7 +272,7 @@ def build_native_model3d_context(
         "model": dict(model_meta) if isinstance(model_meta, Mapping) else {},
         "action": dict(action_meta) if isinstance(action_meta, Mapping) else {},
         "retarget": dict(retarget_plan) if isinstance(retarget_plan, Mapping) else {},
-        "pose": dict(pose) if isinstance(pose, Mapping) else {},
+        "model_data": dict(model_data) if isinstance(model_data, Mapping) else {},
         "backend": _backend_status_context(errors),
         "errors": errors,
     }

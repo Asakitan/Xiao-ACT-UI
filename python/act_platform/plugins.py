@@ -1287,6 +1287,8 @@ class PluginContext:
 
         ``filters`` accepts ``[(label, pattern), ...]`` or small mappings with
         ``label``/``pattern`` keys. An empty string means cancelled or failed.
+        Pass ``hwnd_owner < 0`` to force an unowned dialog; this is useful when
+        opening after transient GPU/overlay UI that may still be foreground.
         """
         try:
             from . import native_dialog
@@ -1318,8 +1320,25 @@ class PluginContext:
         except Exception:
             norm_filters = []
 
+        dialog_owner = None
         try:
-            owner_hwnd = int(hwnd_owner or 0) or native_dialog.foreground_hwnd()
+            owner = self.owner
+            dialog_owner = owner
+            if owner is not None:
+                try:
+                    setattr(owner, "_sao_native_dialog_active", True)
+                except Exception:
+                    pass
+            menu = getattr(owner, "_sao_menu", None)
+            if menu is not None and getattr(menu, "visible", False):
+                close_for_dialog = getattr(owner, "_close_sao_menu_for_external_command", None)
+                if callable(close_for_dialog):
+                    try:
+                        close_for_dialog()
+                    except Exception:
+                        pass
+            requested_owner = int(hwnd_owner or 0)
+            owner_hwnd = 0 if requested_owner < 0 else (requested_owner or native_dialog.foreground_hwnd())
             path = native_dialog.open_file(
                 filters=norm_filters or None,
                 title=str(title or "选择文件"),
@@ -1330,6 +1349,17 @@ class PluginContext:
         except Exception as exc:
             self._manager._record_failure(self._record.plugin_id, exc)
             return ""
+        finally:
+            owner = dialog_owner
+            if owner is not None:
+                try:
+                    setattr(owner, "_sao_native_dialog_active", False)
+                except Exception:
+                    pass
+                try:
+                    setattr(owner, "_fisheye_close_suppress_until", time.time() + 0.35)
+                except Exception:
+                    pass
 
     # ── schedulers / loops (timing primitives for heavy plugins) ──────────
     def set_interval(self, callback: Callable[[], Any], seconds: float) -> str:
@@ -2763,12 +2793,14 @@ class PluginManager:
         return self._settings_cache.get(plugin_id, {}).get(key, default)
 
     def set_plugin_setting(self, plugin_id: str, key: str, value: Any) -> None:
+        key_text = str(key or "")
+        safe_value = _json_safe(value)
         if self.settings is not None and hasattr(self.settings, "get") and hasattr(self.settings, "set"):
             raw = self.settings.get("act_plugin_settings", {}) or {}
             if not isinstance(raw, dict):
                 raw = {}
             plug = raw.get(plugin_id) if isinstance(raw.get(plugin_id), dict) else {}
-            plug[key] = value
+            plug[key_text] = safe_value
             raw[plugin_id] = plug
             self.settings.set("act_plugin_settings", raw)
             save = getattr(self.settings, "save", None)
@@ -2778,7 +2810,7 @@ class PluginManager:
                 except Exception:
                     pass
             return
-        self._settings_cache.setdefault(plugin_id, {})[key] = value
+        self._settings_cache.setdefault(plugin_id, {})[key_text] = safe_value
 
     def _register_extension(self, kind: str, plugin_id: str, extension_id: str,
                             metadata: Optional[Mapping[str, Any]] = None,

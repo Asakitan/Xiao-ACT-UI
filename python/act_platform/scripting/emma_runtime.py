@@ -57,11 +57,12 @@ Syntax summary:
 
 from __future__ import annotations
 
+import os
 import re
 from types import ModuleType
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
-from .base import ScriptModule, ScriptRuntime, wrap_callback
+from .base import ScriptModule, ScriptRuntime, wrap_callback, resolve_local_script_path
 
 if TYPE_CHECKING:
     from act_platform.plugins import PluginContext, PluginRecord
@@ -1142,6 +1143,22 @@ class EmmaRuntime(ScriptRuntime):
         interp.register("json_decode", lambda s: __import__("json").loads(s))
         interp.register("time", lambda: __import__("time").time())
         interp.register("sleep", lambda s: __import__("time").sleep(float(s)))
+
+        plugin_base = os.path.abspath(str(record.path))
+
+        def _emma_load_script(relative_path, *, _interp=interp, _base=plugin_base):
+            target = resolve_local_script_path(_base, relative_path)
+            with open(target, "r", encoding="utf-8") as fp:
+                more_source = fp.read()
+            more_tokens = _tokenize(more_source)
+            more_stmts = _Parser(more_tokens).parse()
+            _interp.execute(more_stmts)
+            return True
+
+        interp.register("load_script", _emma_load_script)
+        interp.register("import", _emma_load_script)
+        proxy.load_script = _emma_load_script
+
         self._interpreters[record.plugin_id] = interp
 
         interp.execute(stmts)

@@ -15,6 +15,7 @@ import os
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 from act_platform.event_bus import EventBus
 from act_platform.plugins import PluginManager
@@ -314,6 +315,45 @@ class PluginCapabilityTests(unittest.TestCase):
             m.discover()
             self.assertTrue(m.load_plugin("noti"))
             self.assertEqual(alerts, [("T", "hello")])
+
+    def test_open_file_marks_native_dialog_active_until_dialog_returns(self) -> None:
+        from act_platform import native_dialog
+
+        calls = []
+
+        class Owner:
+            def __init__(self):
+                self._sao_menu = type("Menu", (), {"visible": True})()
+                self.close_seen_active = None
+
+            def _close_sao_menu_for_external_command(self):
+                self.close_seen_active = bool(
+                    getattr(self, "_sao_native_dialog_active", False))
+
+        owner = Owner()
+
+        def _open_file(**_kwargs):
+            calls.append(bool(getattr(owner, "_sao_native_dialog_active", False)))
+            return "C:/tmp/model.fbx"
+
+        with tempfile.TemporaryDirectory(prefix="act_open_file_") as root:
+            _write_plugin(
+                os.path.join(root, "chooser"),
+                {"id": "chooser", "name": "Chooser", "version": "1.0.0",
+                 "entry": "plugin.py", "enabled": True},
+                "state = {}\n"
+                "def on_load(ctx):\n"
+                "    state['path'] = ctx.open_file(title='Choose')\n")
+            with mock.patch.object(native_dialog, "open_file", side_effect=_open_file), \
+                    mock.patch.object(native_dialog, "foreground_hwnd", return_value=0):
+                m = PluginManager(plugin_dirs=[root], owner_provider=lambda: owner)
+                m.discover()
+                self.assertTrue(m.load_plugin("chooser"))
+
+        self.assertEqual(calls, [True])
+        self.assertTrue(owner.close_seen_active)
+        self.assertFalse(getattr(owner, "_sao_native_dialog_active", False))
+        self.assertGreater(getattr(owner, "_fisheye_close_suppress_until", 0.0), time.time())
 
     def test_ensure_manager_load_is_idempotent(self) -> None:
         # Regression: repeated ensure(load=True) / UI calls must NOT reload

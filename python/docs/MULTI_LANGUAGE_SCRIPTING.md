@@ -28,6 +28,8 @@ my_lua_plugin/
 └── plugin.lua
 ```
 
+> **多文件拆分**：脚本插件不限于单个入口文件。Lua/AngelScript/Emma 在主脚本里用 `load_script("相对路径")` 加载同语言子文件（Lua 也可用 `dofile`），子文件的函数和全局合并进同一解释器作用域——例如 `dofile("utils.lua")`、`load_script("cities.as")`、`load_script("levels.emma")`。C# 不用 `load_script`：源码模式下平台**自动编译同目录所有 `.cs`** 进同一程序集。详见后文 [多文件拆分](#多文件拆分)。
+
 ### 第二步：写 plugin.json
 
 在常规字段基础上，加一个 `language` 字段（也可以省略，平台会从 `entry` 扩展名自动推断）：
@@ -228,6 +230,42 @@ end
 
 lupa 自动在 Lua table 和 Python dict/list 之间双向转换。`ctx.ui` 上的方法（`.panel()`、`.text()` 等）用点号调用，因为它们是静态方法而非实例方法。
 
+### 拆分多文件
+
+Lua 插件可以用 `dofile`（或别名 `load_script` / `import`）加载同目录下的其他 `.lua` 文件，函数和全局变量会合并进同一个 Lua runtime：
+
+```
+my_lua_plugin/
+├── plugin.json
+├── plugin.lua
+├── utils.lua
+└── levels/
+    └── level1.lua
+```
+
+```lua
+-- plugin.lua
+local _ctx = nil
+
+function on_load(ctx)
+    _ctx = ctx
+    dofile("utils.lua")          -- 加载同目录 utils.lua
+    dofile("levels/level1.lua")  -- 加载子目录 level1.lua
+    local total = util_add(2, 3) -- 来自 utils.lua 的全局函数
+    _ctx:log("total=" .. tostring(total))
+end
+```
+
+```lua
+-- utils.lua
+function util_add(a, b)
+    return a + b
+end
+UTIL_PI = 3.14
+```
+
+路径以插件目录为根，必须留在插件目录内（`..` 会被拒绝）。三种写法等价：`dofile("x.lua")`、`load_script("x.lua")`、`import("x.lua")`，也可以统一用 `ctx:load_script("x.lua")`。注意平台没有覆盖原生 `require`，避免破坏 lupa 内部机制；加载同语言子文件请用 `dofile`/`load_script`。
+
 ---
 
 ## C# 插件
@@ -334,6 +372,48 @@ public class Plugin
     }
 }
 ```
+
+### 拆分多文件
+
+C# 源码模式会**自动把插件目录下所有 `.cs` 文件一起编译进同一个程序集**，无需 `load_script`。把拆分的源码文件放在插件目录顶层即可：
+
+```
+my_cs_plugin/
+├── plugin.json
+├── plugin.cs        — 入口（entry 指定）
+├── helpers.cs       — 自动一起编译
+├── poses.cs         — 自动一起编译
+└── refs/            — 外部 .NET DLL 引用（可选）
+    └── Newtonsoft.Json.dll
+```
+
+```csharp
+// plugin.cs
+public class Plugin
+{
+    public void OnLoad(dynamic ctx)
+    {
+        int v = Helper.Add(2, 3);   // Helper 定义在 helpers.cs
+        ctx.log("v=" + v.ToString());
+    }
+}
+```
+
+```csharp
+// helpers.cs
+public static class Helper
+{
+    public static int Add(int a, int b) => a + b;
+}
+```
+
+规则：
+
+- 平台扫描插件**顶层目录**下所有非入口的 `.cs` 文件（按文件名排序）一起编译；`.csproj` 的 `<Compile Include>` 会自动包含它们
+- 同一程序集内的类互相可见，不需要 `using` 同命名空间外的内部类
+- 子目录里的 `.cs` **不会**被自动包含；若要拆到子目录，可在顶层放一个 partial类文件 `include.cs` 引用，或把源码平铺在顶层
+- 外部 .NET DLL（第三方库）放 `refs/`，编译时自动加引用——这是**引用程序集**，和源码多文件是两回事
+- 程序集模式（`entry` 为 `.dll`）不涉及源码编译，多文件在发布前由作者预编译进那个 `.dll`
 
 ### C# 注意事项
 
@@ -443,6 +523,45 @@ ctx.ui_divider()                       // = ctx.ui.divider()
 ctx.ui_table(columns, rows, ...)       // = ctx.ui.table()
 ```
 
+### 拆分多文件
+
+AngelScript 插件可以用 `load_script`（或别名 `import`）加载同目录下的其他 `.as` 文件，函数和全局变量会合并进同一个解释器作用域：
+
+```
+my_as_plugin/
+├── plugin.json
+├── plugin.as
+├── cities.as
+└── phases/
+    └── day_night.as
+```
+
+```as
+// plugin.as
+PluginContext@ ctx;
+int _offset = 0;
+
+void on_load(PluginContext@ c)
+{
+    @ctx = c;
+    load_script("cities.as");
+    load_script("phases/day_night.as");
+    _offset = city_offset("sh") + phase_weight("day");
+    ctx.log("offset=" + tostring(_offset));
+}
+```
+
+```as
+// cities.as
+int city_offset(string name)
+{
+    if (name == "sh") { return 8; }
+    return 0;
+}
+```
+
+路径以插件目录为根，必须留在插件目录内（`..` 会被拒绝）。`load_script("x.as")` 与 `import("x.as")` 等价，也可用 `ctx.load_script("x.as")`。
+
 ### 解释器限制
 
 内置解释器覆盖了实用子集，以下特性**不支持**：
@@ -551,6 +670,46 @@ fn on_unload()
 end
 ```
 
+### 拆分多文件
+
+Emma 插件可以用 `load_script`（或别名 `import`）加载同目录下的其他 `.emma` 文件，子文件的 `fn` 定义和 `let` 全局会合并进同一个解释器作用域：
+
+```
+my_emma_plugin/
+├── plugin.json
+├── plugin.emma
+├── helpers.emma
+└── levels/
+    └── stage1.emma
+```
+
+```emma
+-- plugin.emma
+let _ctx = nil
+let _value = 0
+
+fn on_load(ctx)
+    _ctx = ctx
+    load_script("helpers.emma")
+    load_script("levels/stage1.emma")
+    _value = helper_add(10, 5) + stage_score()
+    ctx.log("value=" .. tostring(_value))
+end
+```
+
+```emma
+-- helpers.emma
+fn helper_add(a, b)
+    return a + b
+end
+
+fn helper_pi()
+    return 3
+end
+```
+
+路径以插件目录为根，必须留在插件目录内（`..` 会被拒绝）。`load_script("x.emma")` 与 `import("x.emma")` 等价，也可用 `ctx.load_script("x.emma")`。建议在 `on_load` 开头加载子文件，确保后续回调能引用到合并进来的函数。
+
 ### Emma 语法参考
 
 **变量**：
@@ -654,6 +813,34 @@ log(...)             -- 日志输出
 ---
 
 ## 通用注意事项
+
+### 多文件拆分
+
+每种脚本语言都能把大插件拆成多个同语言文件。Lua/AngelScript/Emma 用 `load_script("相对路径")` 在运行时加载子文件，函数和全局变量合并到同一解释器作用域；C# 在编译时自动把同目录 `.cs` 一起编进同一程序集。统一 API 是 `load_script("相对路径")`，各语言还提供等价别名：
+
+| 语言 | 多文件机制 | 推荐写法 | 等价别名 | 也可用 |
+|------|------------|----------|----------|--------|
+| Lua | 运行时加载 | `dofile("utils.lua")` | `load_script` / `import` | `ctx:load_script("utils.lua")` |
+| AngelScript | 运行时加载 | `load_script("cities.as")` | `import` | `ctx.load_script("cities.as")` |
+| Emma | 运行时加载 | `load_script("helpers.emma")` | `import` | `ctx.load_script("helpers.emma")` |
+| C# | 编译时自动包含 | 把 `.cs` 放插件顶层目录即可 | — | 外部 DLL 放 `refs/` |
+
+**`load_script` 沙箱规则**（Lua / AngelScript / Emma 一致；C# 编译时包含不涉及）：
+
+- 路径以插件目录为根，支持子目录（`levels/stage1.lua` 合法）
+- 路径必须留在插件目录内，`..` 穿越会被拒绝并抛 `ValueError`
+- 目标文件必须存在，否则抛 `FileNotFoundError`
+- 子文件用 UTF-8 编码读取
+- 子文件的函数/全局合并进主脚本的同一作用域，之后回调可直接调用
+
+**与 `ctx.load_local` 的区别**：
+
+| API | 用途 | 返回 | 适用语言 |
+|-----|------|------|----------|
+| `ctx.load_local("x.py")` | 加载插件目录下的 **Python** 辅助模块 | Python `ModuleType`（可调用模块里的类/函数） | 所有语言（加载 Python 侧 helper） |
+| `load_script` / `dofile` / `import` | 加载插件目录下的**同语言**子脚本 | `true`（函数/全局合并到当前作用域，无独立模块对象） | Lua / AngelScript / Emma |
+
+Python 插件本身就用原生 `import` 加载同目录模块，不需要 `load_script`。C# 插件的多文件机制不同：源码模式下平台**自动编译同目录所有 `.cs`** 进同一程序集，不需要 `load_script`；外部 .NET DLL 引用放 `refs/`（详见上文 [C# 拆分多文件](#拆分多文件-1)）。
 
 ### 所有语言共用同一套 SDK
 

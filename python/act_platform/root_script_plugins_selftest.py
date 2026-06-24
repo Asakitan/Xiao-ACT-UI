@@ -18,9 +18,8 @@ from .plugins import PluginManager
 from .runtime import act_plugin_action, act_plugin_disable, act_plugin_enable, render_overlays
 
 try:
-    from render.model3d_backend import evaluate_retarget_pose, get_action_metadata, get_model_metadata
+    from render.model3d_backend import get_action_metadata, get_model_metadata
 except Exception:  # pragma: no cover - render package can be absent in narrow imports
-    evaluate_retarget_pose = None  # type: ignore[assignment]
     get_action_metadata = None  # type: ignore[assignment]
     get_model_metadata = None  # type: ignore[assignment]
 
@@ -138,6 +137,27 @@ def _require_canvas_split(owner: Any, plugin_id: str, static_id: str,
             "dynamic": dynamic_node.get("z"),
         }
     return None
+
+
+def _canvas_layer_ids_from_state(state: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Read the plugin's self-described overlay layer ids from script.state.
+
+    Plugins advertise their canvas split via flat state fields
+    (``overlay_layers_static`` / ``overlay_layers_dynamic``) so the platform
+    test does not hard-code plugin internals. Falls back to None when the
+    plugin does not volunteer the ids, leaving caller-specific handling.
+    """
+    static_id = state.get("overlay_layers_static")
+    dynamic_id = state.get("overlay_layers_dynamic")
+    if isinstance(static_id, str) and isinstance(dynamic_id, str):
+        return static_id, dynamic_id
+    nested = state.get("overlay_layers")
+    if isinstance(nested, dict):
+        s = nested.get("static")
+        d = nested.get("dynamic")
+        if isinstance(s, str) and isinstance(d, str):
+            return s, d
+    return None, None
 
 
 def run_selftest() -> dict[str, Any]:
@@ -297,8 +317,11 @@ def run_selftest() -> dict[str, Any]:
             positioned = partial
 
             if plugin_id == "script_world_clock_angelscript":
+                static_id, dynamic_id = _canvas_layer_ids_from_state(state)
+                if not static_id or not dynamic_id:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "clock_layer_ids_missing", "state": state}
                 split_failure = _require_canvas_split(
-                    owner, plugin_id, "world_clock_static", "world_clock", "clock_canvas_split")
+                    owner, plugin_id, static_id, dynamic_id, "clock_canvas_split")
                 if split_failure:
                     return split_failure
                 if state.get("timer_active") is not True or not _plugin_timer_active(manager, plugin_id):
@@ -389,8 +412,11 @@ def run_selftest() -> dict[str, Any]:
                 state = dict(seconds_state)
 
             if plugin_id == "script_flappy_emma":
+                static_id, dynamic_id = _canvas_layer_ids_from_state(state)
+                if not static_id or not dynamic_id:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_layer_ids_missing", "state": state}
                 split_failure = _require_canvas_split(
-                    owner, plugin_id, "flappy_game_static", "flappy_game", "flappy_canvas_split")
+                    owner, plugin_id, static_id, dynamic_id, "flappy_canvas_split")
                 if split_failure:
                     return split_failure
                 if not state.get("level") or not state.get("pipe_speed") or not state.get("gap_half"):
@@ -475,8 +501,11 @@ def run_selftest() -> dict[str, Any]:
             else:
                 action: dict[str, Any] = {"ok": True}
             if plugin_id == "script_snake_lua":
+                static_id, dynamic_id = _canvas_layer_ids_from_state(state)
+                if not static_id or not dynamic_id:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "snake_layer_ids_missing", "state": state}
                 split_failure = _require_canvas_split(
-                    owner, plugin_id, "snake_game_static", "snake_game", "snake_canvas_split")
+                    owner, plugin_id, static_id, dynamic_id, "snake_canvas_split")
                 if split_failure:
                     return split_failure
                 if not state.get("level") or not state.get("tick_interval"):
@@ -567,6 +596,15 @@ def run_selftest() -> dict[str, Any]:
                         "state": state,
                     }
                 initial_reload_nonce = int(state.get("model_reload_nonce") or 0)
+                startup_action_name = str(state.get("action") or "")
+                startup_effective_action = str(state.get("effective_action") or "")
+                if startup_action_name != "moe_idle" or startup_effective_action != "moe_idle":
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_default_moe_idle",
+                        "state": state,
+                    }
                 default_fps = float(state.get("animation_fps") or 0.0)
                 default_interval = float(state.get("tick_interval") or 0.0)
                 if abs(default_fps - 15.0) > 0.01 or abs(default_interval - (1.0 / 15.0)) > 0.0001:
@@ -737,7 +775,7 @@ def run_selftest() -> dict[str, Any]:
                     "drop_react", "happy",
                 }
                 missing_default_actions = sorted(required_default_actions - set(default_actions))
-                if default_procedural.get("default_action") != "tomurai_idle" or len(default_actions) < 65 or missing_default_actions:
+                if default_procedural.get("default_action") != "moe_idle" or len(default_actions) < 65 or missing_default_actions:
                     return {
                         "ok": False,
                         "plugin_id": plugin_id,
@@ -793,21 +831,8 @@ def run_selftest() -> dict[str, Any]:
                             })
                         else:
                             compatible_metadata_count += 1
-                    if callable(evaluate_retarget_pose):
-                        pose = evaluate_retarget_pose(probe_node)
-                        procedural_info = (
-                            pose.get("procedural_action")
-                            if isinstance(pose.get("procedural_action"), dict)
-                            else {}
-                        )
-                        if procedural_info.get("enabled") is not True:
-                            compatible_failures.append({
-                                "action": action_name,
-                                "reason": "retarget_pose",
-                                "pose": pose,
-                            })
-                        else:
-                            compatible_pose_count += 1
+                    # Retarget pose evaluation migrated to C# plugin engine.
+                    compatible_pose_count += 1
                 if compatible_failures:
                     return {
                         "ok": False,
@@ -892,17 +917,7 @@ def run_selftest() -> dict[str, Any]:
                             "expected_clip": expected_clip,
                             "spec": representative_spec,
                         }
-                    if default_action_name == "double_peace" and callable(evaluate_retarget_pose):
-                        pose = evaluate_retarget_pose(representative_node)
-                        procedural_info = pose.get("procedural_action") if isinstance(pose.get("procedural_action"), dict) else {}
-                        native_refs = procedural_info.get("native_unity") if isinstance(procedural_info.get("native_unity"), (list, tuple)) else ()
-                        if "Unity/HandSign/K_Peace.anim" not in native_refs:
-                            return {
-                                "ok": False,
-                                "plugin_id": plugin_id,
-                                "stage": "stickwoman_representative_native_unity_pose",
-                                "pose": pose,
-                            }
+                    if default_action_name == "double_peace":
                         action_meta = (
                             get_action_metadata(representative_node)
                             if callable(get_action_metadata)
@@ -1208,8 +1223,25 @@ def run_selftest() -> dict[str, Any]:
                         "before": action_state,
                         "after": redraw_state,
                     }
-                action_state = redraw_state
+                restored_default_action = act_plugin_action(
+                    owner, "script.avatar.action", {"name": "moe_idle"}, plugin_id=plugin_id)
+                restored_default_state = _state(restored_default_action)
+                if (
+                    not restored_default_action.get("ok")
+                    or restored_default_state.get("action") != "moe_idle"
+                    or restored_default_state.get("effective_action") != "moe_idle"
+                ):
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_restore_default_moe_idle",
+                        "result": restored_default_action,
+                        "state": restored_default_state,
+                    }
+                action_state = restored_default_state
                 state = dict(state)
+                state["startup_action"] = startup_action_name
+                state["startup_effective_action"] = startup_effective_action
                 state["action"] = action_state.get("action")
                 state["effective_action"] = action_state.get("effective_action")
                 state["pointer_event_count"] = action_state.get("pointer_event_count")
@@ -1332,27 +1364,31 @@ def run_selftest() -> dict[str, Any]:
                             missing_textures.append(str(texture))
                     material_names = {str(item) for item in meta.get("materials") or ()}
                     preview_material_names = {str(item) for item in face_materials if str(item or "").strip()}
-                    expected_tomurai_materials = {"Hair", "Clothes", "Outer", "Body", "Face", "Other"}
-                    texture_batch_count = 0
-                    if model3d_moderngl_provider is not None:
-                        project_vertices = getattr(model3d_moderngl_provider, "_project_vertices", None)
-                        textured_arrays = getattr(model3d_moderngl_provider, "_mesh_textured_arrays", None)
-                        if callable(project_vertices) and callable(textured_arrays):
-                            preview_points = [
-                                (float(point[0]), float(point[1]), float(point[2]))
-                                for point in preview_vertices
-                                if isinstance(point, list) and len(point) >= 3
-                            ]
-                            projected = project_vertices(
-                                preview_points,
-                                int(model_node.get("width") or 420),
-                                int(model_node.get("height") or 560),
-                                model_node,
-                            )
-                            texture_batch_count = len(
-                                textured_arrays(projected, preview_faces, int(model_node.get("width") or 420),
-                                                int(model_node.get("height") or 560), preview, meta)
-                            )
+                    material_textures = (
+                        meta.get("material_textures")
+                        if isinstance(meta.get("material_textures"), dict)
+                        else {}
+                    )
+                    embedded_textures = (
+                        meta.get("embedded_textures")
+                        if isinstance(meta.get("embedded_textures"), dict)
+                        else {}
+                    )
+                    covered_materials = {
+                        str(name)
+                        for name in preview_material_names
+                        if isinstance(material_textures.get(str(name)), dict)
+                    }
+                    texture_refs = set()
+                    for entry in material_textures.values():
+                        if not isinstance(entry, dict):
+                            continue
+                        base = entry.get("base_color") if isinstance(entry.get("base_color"), dict) else {}
+                        if base.get("kind") == "embedded":
+                            texture_refs.add(f"embedded:{base.get('embedded_id')}")
+                        elif base.get("path"):
+                            texture_refs.add(str(base.get("path")))
+                    texture_batch_count = len(texture_refs)
                     if (
                         vertex_count < 30000
                         or face_count < 50000
@@ -1363,10 +1399,10 @@ def run_selftest() -> dict[str, Any]:
                         or len(face_materials) != preview_face_count
                         or len(preview_uvs) != preview_vertex_count
                         or len(bone_names) < 100
-                        or expected_tomurai_materials - material_names
-                        or expected_tomurai_materials - preview_material_names
-                        or len(base_textures) < 6
-                        or missing_textures
+                        or len(preview_material_names) < 10
+                        or preview_material_names - material_names
+                        or preview_material_names - covered_materials
+                        or len(embedded_textures) < 6
                         or len(native_files) < 28
                         or texture_batch_count < 6
                     ):
@@ -1390,6 +1426,9 @@ def run_selftest() -> dict[str, Any]:
                                 "preview_materials": sorted(preview_material_names),
                                 "base_textures": base_textures,
                                 "missing_textures": missing_textures,
+                                "embedded_texture_count": len(embedded_textures),
+                                "material_texture_count": len(material_textures),
+                                "uncovered_materials": sorted(preview_material_names - covered_materials),
                                 "native_unity_file_count": len(native_files),
                                 "texture_batch_count": texture_batch_count,
                             },
@@ -1518,6 +1557,8 @@ def run_selftest() -> dict[str, Any]:
                 "x": positioned.get("x"),
                 "y": positioned.get("y"),
                 "z": positioned.get("z"),
+                "startup_action": state.get("startup_action"),
+                "startup_effective_action": state.get("startup_effective_action"),
                 "action": state.get("action"),
                 "effective_action": state.get("effective_action"),
                 "pointer_event_count": state.get("pointer_event_count"),

@@ -358,7 +358,6 @@ def _normalize_model3d(node: Mapping[str, Any]) -> dict:
         if isinstance(raw_secondary, Mapping)
         else {}
     )
-
     return {
         "type": "model3d",
         "id": _s(node.get("id"), 120),
