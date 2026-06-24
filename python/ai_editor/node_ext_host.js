@@ -10,9 +10,9 @@
  *   shutdown
  *
  * Outbound (to Python):
- *   activated, webview_html, webview_post_message, command_registered,
- *   output, error, show_message, progress_start, progress_report,
- *   progress_done
+ *   activated, webview_html, webview_post_message, webview_dispose,
+ *   command_registered, output, error, show_message, progress_start,
+ *   progress_report, progress_done
  */
 'use strict';
 
@@ -818,12 +818,26 @@ class Webview {
         this._defaultLocalResourceRoots = Array.isArray(defaultLocalResourceRoots)
             ? defaultLocalResourceRoots
             : [];
+        this._disposed = false;
         this._onDidReceiveMessage = new EventEmitter();
         this.onDidReceiveMessage = this._onDidReceiveMessage.event;
         this.cspSource = WEBVIEW_CSP_SOURCE;
     }
-    get html() { return this._html; }
+    _assertAlive() {
+        if (this._disposed) throw new Error('Webview has been disposed');
+    }
+    _dispose() {
+        if (this._disposed) return;
+        this._disposed = true;
+        this._html = '';
+        this._onDidReceiveMessage.dispose();
+    }
+    get html() {
+        this._assertAlive();
+        return this._html;
+    }
     set html(value) {
+        this._assertAlive();
         this._html = value;
         send({
             type: 'webview_html',
@@ -833,13 +847,21 @@ class Webview {
             localResourceRoots: this._localResourceRootsPayload(),
         });
     }
-    get options() { return this._options; }
-    set options(value) { this._options = value && typeof value === 'object' ? value : {}; }
+    get options() {
+        this._assertAlive();
+        return this._options;
+    }
+    set options(value) {
+        this._assertAlive();
+        this._options = value && typeof value === 'object' ? value : {};
+    }
     postMessage(message) {
+        this._assertAlive();
         send({ type: 'webview_post_message', viewId: this._viewId, message });
         return Promise.resolve(true);
     }
     asWebviewUri(localUri) {
+        this._assertAlive();
         return _asWebviewResourceUri(localUri);
     }
     _localResourceRootsPayload() {
@@ -881,6 +903,7 @@ class WebviewView {
         this._description = '';
         this._badge = undefined;
         this.visible = true;
+        this._disposed = false;
         this._onDidDispose = new EventEmitter();
         this.onDidDispose = this._onDidDispose.event;
         this._onDidChangeVisibility = new EventEmitter();
@@ -892,8 +915,19 @@ class WebviewView {
     set description(v) { this._description = v; }
     get badge() { return this._badge; }
     set badge(v) { this._badge = v; }
-    show(preserveFocus) { this.visible = true; }
-    dispose() { this._onDidDispose.fire(); }
+    show(preserveFocus) {
+        if (this._disposed) throw new Error('WebviewView has been disposed');
+        this.visible = true;
+    }
+    dispose() {
+        if (this._disposed) return;
+        this._disposed = true;
+        this.visible = false;
+        this.webview._dispose();
+        this._onDidDispose.fire();
+        this._onDidDispose.dispose();
+        this._onDidChangeVisibility.dispose();
+    }
 }
 
 function _defaultLocalResourceRoots(extensionPath) {
@@ -912,33 +946,93 @@ function _webviewPanelOptionsPayload(options) {
     return payload;
 }
 
+function _webviewPanelColumnFromShowOptions(showOptions, fallback = 1) {
+    if (typeof showOptions === 'number') {
+        return showOptions === -2 ? 2 : (showOptions > 0 ? showOptions : fallback);
+    }
+    if (showOptions && typeof showOptions === 'object') {
+        const column = Number(showOptions.viewColumn);
+        if (Number.isFinite(column)) return column === -2 ? 2 : (column > 0 ? column : fallback);
+    }
+    return fallback;
+}
+
+function _webviewPanelPreserveFocusFromShowOptions(showOptions) {
+    return !!(showOptions && typeof showOptions === 'object' && showOptions.preserveFocus);
+}
+
 function _createWebviewPanelObject(
-    viewType, title, viewId, webviewOptions, extensionPath) {
+    viewType, title, viewId, webviewOptions, extensionPath, showOptions) {
     const view = new WebviewView(
         viewId, viewType, webviewOptions || {},
         _defaultLocalResourceRoots(extensionPath));
     view.title = title || '';
     _webviewViews.set(viewId, view);
     const viewStateEmitter = new EventEmitter();
+    let disposed = false;
+    let currentTitle = title || '';
+    let iconPath = undefined;
+    let visible = true;
+    let active = !_webviewPanelPreserveFocusFromShowOptions(showOptions);
+    let viewColumn = _webviewPanelColumnFromShowOptions(showOptions);
+    function assertPanelAlive() {
+        if (disposed) throw new Error('WebviewPanel has been disposed');
+    }
     const panel = {
         viewType,
-        title: title || '',
-        webview: view.webview,
-        visible: true,
-        active: true,
-        viewColumn: 1,
+        get title() {
+            assertPanelAlive();
+            return currentTitle;
+        },
+        set title(value) {
+            assertPanelAlive();
+            currentTitle = String(value || '');
+        },
+        get iconPath() {
+            assertPanelAlive();
+            return iconPath;
+        },
+        set iconPath(value) {
+            assertPanelAlive();
+            iconPath = value;
+        },
+        get webview() {
+            assertPanelAlive();
+            return view.webview;
+        },
+        get visible() {
+            assertPanelAlive();
+            return visible;
+        },
+        get active() {
+            assertPanelAlive();
+            return active;
+        },
+        get viewColumn() {
+            assertPanelAlive();
+            return viewColumn;
+        },
         options: _webviewPanelOptionsPayload(webviewOptions),
         onDidDispose: view.onDidDispose,
         onDidChangeViewState: viewStateEmitter.event,
-        reveal(viewColumn, preserveFocus) {
-            panel.visible = true;
-            panel.active = !preserveFocus;
-            if (viewColumn !== undefined) panel.viewColumn = viewColumn;
+        reveal(nextViewColumn, preserveFocus) {
+            assertPanelAlive();
+            visible = true;
+            active = !preserveFocus;
+            if (nextViewColumn !== undefined) {
+                viewColumn = _webviewPanelColumnFromShowOptions(nextViewColumn, viewColumn);
+            }
             viewStateEmitter.fire({ webviewPanel: panel });
         },
         dispose() {
+            if (disposed) return;
+            disposed = true;
+            visible = false;
+            active = false;
             view.dispose();
             _webviewViews.delete(viewId);
+            viewStateEmitter.dispose();
+            send({ type: 'webview_dispose', viewId });
         },
     };
     return panel;
@@ -3558,7 +3652,8 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 const viewId = `panel-${_nextViewHandle++}`;
                 log(`stub: createWebviewPanel ${viewType} -> ${viewId}`);
                 return _createWebviewPanelObject(
-                    viewType, title, viewId, options || {}, extensionPath);
+                    viewType, title, viewId, options || {}, extensionPath,
+                    showOptions);
             },
             createOutputChannel(name, options) {
                 const ch = new OutputChannel(typeof options === 'string' ? `${name} (${options})` : name);

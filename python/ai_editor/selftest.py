@@ -7766,6 +7766,55 @@ async function activate(context) {
       cspSource: panel.webview.cspSource,
     };
   });
+  vscode.commands.registerCommand('selftest.node.webviewDisposeProbe', async () => {
+    const panel = vscode.window.createWebviewPanel(
+      'selftest.disposeProbe',
+      'Dispose Probe',
+      { viewColumn: vscode.ViewColumn.Two, preserveFocus: true },
+      { enableScripts: true },
+    );
+    const disposeEvents = [];
+    const stateEvents = [];
+    panel.onDidDispose(() => disposeEvents.push('disposed'));
+    panel.onDidChangeViewState(event => stateEvents.push({
+      viewColumn: event.webviewPanel.viewColumn,
+      active: event.webviewPanel.active,
+      visible: event.webviewPanel.visible,
+    }));
+    const initial = {
+      title: panel.title,
+      viewType: panel.viewType,
+      viewColumn: panel.viewColumn,
+      active: panel.active,
+      visible: panel.visible,
+    };
+    panel.title = 'Disposed Title';
+    panel.webview.html = '<main data-view="dispose-probe"></main>';
+    panel.reveal(vscode.ViewColumn.Three, false);
+    const revealed = {
+      title: panel.title,
+      viewColumn: panel.viewColumn,
+      active: panel.active,
+      visible: panel.visible,
+      stateEventCount: stateEvents.length,
+    };
+    panel.dispose();
+    panel.dispose();
+    let htmlAfterDisposeThrows = false;
+    let revealAfterDisposeThrows = false;
+    let postAfterDisposeThrows = false;
+    try { panel.webview.html = '<main>after</main>'; } catch (_err) { htmlAfterDisposeThrows = true; }
+    try { panel.reveal(vscode.ViewColumn.One); } catch (_err) { revealAfterDisposeThrows = true; }
+    try { await panel.webview.postMessage({ after: true }); } catch (_err) { postAfterDisposeThrows = true; }
+    return {
+      initial,
+      revealed,
+      disposeEvents: disposeEvents.length,
+      htmlAfterDisposeThrows,
+      revealAfterDisposeThrows,
+      postAfterDisposeThrows,
+    };
+  });
   context.subscriptions.push(vscode.window.registerCustomEditorProvider(
     'selftest.node.customEditor',
     {
@@ -7911,6 +7960,7 @@ module.exports = { activate, deactivate };
                 def __init__(self) -> None:
                     self.webviews = {}
                     self.local_resource_roots = {}
+                    self.disposed = []
                     self.progress = []
 
                 def render_webview_panel(
@@ -7921,6 +7971,9 @@ module.exports = { activate, deactivate };
 
                 def post_webview_message(self, view_id: str, message) -> None:
                     self.webviews.setdefault(view_id, "")
+
+                def dispose_webview_panel(self, view_id: str) -> None:
+                    self.disposed.append(view_id)
 
                 def show_progress(self, message, increment) -> None:
                     event = {"message": message, "increment": increment}
@@ -8185,6 +8238,10 @@ module.exports = { activate, deactivate };
                     lambda: "selftest.node.webviewUriProbe"
                     in api._ext_host.commands.list_commands(),
                     timeout=3.0)
+                node_webview_dispose_command_registered = _wait_until(
+                    lambda: "selftest.node.webviewDisposeProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
                 node_language_registered = _wait_until(
                     lambda: any(
                         item.get("kind") == "completion"
@@ -8390,6 +8447,11 @@ module.exports = { activate, deactivate };
                         "selftest.node.webviewUriProbe")
                 except Exception as exc:
                     node_webview_uri_probe = {"_error": str(exc)}
+                try:
+                    node_webview_dispose_probe = api._ext_host.commands.execute(
+                        "selftest.node.webviewDisposeProbe")
+                except Exception as exc:
+                    node_webview_dispose_probe = {"_error": str(exc)}
                 _wait_until(
                     lambda: any(
                         'data-view="default-roots"' in html
@@ -8400,6 +8462,12 @@ module.exports = { activate, deactivate };
                         'data-view="empty-roots"' in html
                         for html in node_ui_bridge.webviews.values()),
                     timeout=3.0)
+                _wait_until(
+                    lambda: any(
+                        'data-view="dispose-probe"' in html
+                        for html in node_ui_bridge.webviews.values())
+                    and bool(node_ui_bridge.disposed),
+                    timeout=3.0)
                 node_default_roots_view_id = next((
                     view_id for view_id, html
                     in node_ui_bridge.webviews.items()
@@ -8409,6 +8477,11 @@ module.exports = { activate, deactivate };
                     view_id for view_id, html
                     in node_ui_bridge.webviews.items()
                     if 'data-view="empty-roots"' in html
+                ), "")
+                node_dispose_view_id = next((
+                    view_id for view_id, html
+                    in node_ui_bridge.webviews.items()
+                    if 'data-view="dispose-probe"' in html
                 ), "")
                 node_default_roots = (
                     node_ui_bridge.local_resource_roots.get(
@@ -8881,6 +8954,37 @@ module.exports = { activate, deactivate };
                        and "cdn.example.com"
                        not in node_webview_uri_probe.get("cspSource", ""),
                        json.dumps(node_webview_uri_probe, ensure_ascii=False))
+                node_webview_dispose_initial = (
+                    node_webview_dispose_probe.get("initial", {})
+                    if isinstance(node_webview_dispose_probe, dict) else {})
+                node_webview_dispose_revealed = (
+                    node_webview_dispose_probe.get("revealed", {})
+                    if isinstance(node_webview_dispose_probe, dict) else {})
+                _check("node host webview panel disposal matches VS Code lifecycle",
+                       node_webview_dispose_command_registered
+                       and node_dispose_view_id
+                       and node_ui_bridge.disposed.count(node_dispose_view_id) == 1
+                       and node_webview_dispose_initial.get("title") == "Dispose Probe"
+                       and node_webview_dispose_initial.get("viewType")
+                       == "selftest.disposeProbe"
+                       and node_webview_dispose_initial.get("viewColumn") == 2
+                       and node_webview_dispose_initial.get("active") is False
+                       and node_webview_dispose_initial.get("visible") is True
+                       and node_webview_dispose_revealed.get("title")
+                       == "Disposed Title"
+                       and node_webview_dispose_revealed.get("viewColumn") == 3
+                       and node_webview_dispose_revealed.get("active") is True
+                       and node_webview_dispose_revealed.get("visible") is True
+                       and node_webview_dispose_revealed.get("stateEventCount") == 1
+                       and node_webview_dispose_probe.get("disposeEvents") == 1
+                       and node_webview_dispose_probe.get("htmlAfterDisposeThrows") is True
+                       and node_webview_dispose_probe.get("revealAfterDisposeThrows") is True
+                       and node_webview_dispose_probe.get("postAfterDisposeThrows") is True,
+                       json.dumps({
+                           "probe": node_webview_dispose_probe,
+                           "view_id": node_dispose_view_id,
+                           "disposed": node_ui_bridge.disposed,
+                       }, ensure_ascii=False))
                 _check("node host workspace APIs read local files",
                        node_workspace_command_registered
                        and isinstance(node_workspace_probe, dict)

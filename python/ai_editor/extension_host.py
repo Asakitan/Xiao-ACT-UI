@@ -1572,6 +1572,7 @@ class NodeExtensionHost:
         {"type": "webview_html",        "viewId": "...", "html": "...",
          "localResourceRoots": [...]}
         {"type": "webview_post_message","viewId": "...", "message": {...}}
+        {"type": "webview_dispose",     "viewId": "..."}
         {"type": "command_registered",  "commandId": "...", "extensionId": "..."}
         {"type": "command_response",    "requestId": "...", "ok": true, "value": ...}
         {"type": "config_set",          "section": "...", "key": "...", "value": ...}
@@ -2065,6 +2066,15 @@ class NodeExtensionHost:
                     self._ui_bridge.post_webview_message(view_id, message)
                 except Exception:
                     _log.exception("[NodeExtHost] post_webview_message failed "
+                                   "for %s", view_id)
+
+        elif msg_type == "webview_dispose":
+            view_id = str(msg.get("viewId", ""))
+            if self._ui_bridge and view_id:
+                try:
+                    self._ui_bridge.dispose_webview_panel(view_id)
+                except Exception:
+                    _log.exception("[NodeExtHost] dispose_webview_panel failed "
                                    "for %s", view_id)
 
         elif msg_type == "command_registered":
