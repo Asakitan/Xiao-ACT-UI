@@ -2531,6 +2531,14 @@ console.log("frontend auto-close behavior ok");
             and "function readExtensionContributionValues()" in html
             and "enabled_contributions_explicit:true" in html
             and "customEditors" in html)
+    _check("frontend shows runtime extension install metadata",
+            "function mergeInstalledExtensionMetadata(items)" in html
+            and "function extensionSourceBadge(ext)" in html
+            and "function extensionActiveBadge(ext)" in html
+            and "source==='runtime'" in html
+            and "source==='persisted'" in html
+            and "renderExtCard(list,{...cached,...e,installed:true})" in html
+            and "Path: " in html)
     _check("frontend renders extension activity bar views dynamically",
             "function renderExtensionContainerContent(item)" in html
             and "function renderExtensionTreeView(view)" in html

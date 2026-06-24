@@ -909,6 +909,7 @@ pre.code-block { overflow:visible; }
 .ext-card .ext-desc { font-size:11px; color:var(--fg-dim); line-height:1.4;
   display:-webkit-box; line-clamp:2; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; margin-top:1px; }
 .ext-card .ext-meta { display:flex; align-items:center; gap:8px; margin-top:3px; font-size:10px; color:var(--fg-dim); }
+.ext-card .ext-meta.wrap { flex-wrap:wrap; row-gap:4px; }
 .ext-card .ext-publisher { color:var(--fg-accent); font-weight:500; }
 .ext-card .ext-stats { display:flex; align-items:center; gap:3px; }
 .ext-card .ext-stars { color:var(--fg-warning); }
@@ -921,6 +922,9 @@ pre.code-block { overflow:visible; }
 .ext-btn.installed { background:transparent; color:var(--fg-success); border:1px solid var(--fg-success); pointer-events:none; }
 .ext-badge { display:inline-flex; align-items:center; gap:2px; background:var(--bg3); padding:1px 5px;
   border-radius:3px; font-size:9px; color:var(--fg-dim); }
+.ext-badge.runtime { color:var(--fg-accent); border:1px solid color-mix(in srgb, var(--fg-accent) 35%, transparent); }
+.ext-badge.persisted { color:var(--fg-success); border:1px solid color-mix(in srgb, var(--fg-success) 35%, transparent); }
+.ext-badge.active { color:var(--fg-warning); border:1px solid color-mix(in srgb, var(--fg-warning) 35%, transparent); }
 .support-panel { margin:6px 10px 8px; padding:8px 10px; border:1px solid var(--border);
   border-radius:var(--radius); background:var(--bg2); font-size:11px; color:var(--fg-dim); line-height:1.45; }
 .support-panel .support-title { color:var(--fg); font-weight:600; font-size:12px; margin-bottom:3px; }
@@ -9580,16 +9584,19 @@ async function refreshInstalledExts(){
   if(!r||!r.extensions||!r.extensions.length){list.innerHTML='';header.style.display='none';return}
   header.style.display='';
   list.innerHTML='';
+  mergeInstalledExtensionMetadata(r.extensions||[]);
   r.extensions.forEach(e=>{
-    const cached=extCache.find(c=>c.id===e.id);
-    if(cached){renderExtCard(list,{...cached,installed:true})}
+    const cached=extCache.find(c=>String(c.id||'').toLowerCase()===String(e.id||'').toLowerCase());
+    if(cached){renderExtCard(list,{...cached,...e,installed:true})}
     else{
       const card=document.createElement('div');card.className='ext-card';
-      card.innerHTML='<div class="ext-icon">📦</div><div class="ext-info"><div class="ext-name">'+esc(e.name||e.id)+'</div><div class="ext-desc">'+esc(e.description||'Installed')+'</div>'
-        +(e.version?'<div class="ext-meta"><span class="ext-badge">v'+esc(e.version)+'</span></div>':'')+'</div>';
+      const badges=[extensionSourceBadge(e),extensionActiveBadge(e),e.version?'<span class="ext-badge">v'+esc(e.version)+'</span>':'',extensionContribSummary(e)?'<span class="ext-badge">'+esc(extensionContribSummary(e))+'</span>':''].filter(Boolean).join('');
+      card.innerHTML='<div class="ext-icon">📦</div><div class="ext-info"><div class="ext-name">'+esc(e.displayName||e.name||e.id)+'</div><div class="ext-desc">'+esc(e.description||'Installed')+'</div>'
+        +'<div class="ext-meta wrap"><span class="ext-publisher">'+esc(e.publisher||'')+'</span>'+badges+'</div></div>';
       list.appendChild(card);
     }
   });
+  if(extCache.length)renderExtList($('ext-marketplace-list'),extCache);
 }
 
 // Extension-contributed activity bar icons
@@ -9977,6 +9984,34 @@ function renderExtList(container,exts){
   exts.forEach(e=>renderExtCard(container,e));
 }
 
+function extensionContribSummary(ext){
+  const rows=Array.isArray(ext&&ext.contributes)?ext.contributes.filter(Boolean):[];
+  if(!rows.length)return '';
+  return rows.slice(0,3).join(', ')+(rows.length>3?' +'+(rows.length-3):'');
+}
+
+function extensionSourceBadge(ext){
+  const source=String(ext&&ext.source||'').toLowerCase();
+  if(source==='runtime')return '<span class="ext-badge runtime">Runtime</span>';
+  if(source==='persisted')return '<span class="ext-badge persisted">Installed</span>';
+  return '';
+}
+
+function extensionActiveBadge(ext){
+  return ext&&ext.activated?'<span class="ext-badge active">Active</span>':'';
+}
+
+function mergeInstalledExtensionMetadata(items){
+  const rows=Array.isArray(items)?items:[];
+  const byId=Object.create(null);
+  rows.forEach(item=>{if(item&&item.id)byId[String(item.id).toLowerCase()]=item});
+  extCache=extCache.map(ext=>{
+    const installed=byId[String(ext.id||'').toLowerCase()];
+    return installed?{...ext,...installed,installed:true}:ext;
+  });
+  return byId;
+}
+
 function renderExtCard(container,ext){
   const card=document.createElement('div');card.className='ext-card';
   const iconEl=ext.iconUrl?'<img src="'+esc(ext.iconUrl)+'" onerror="this.parentElement.textContent=\'📦\'">':'📦';
@@ -9984,17 +10019,23 @@ function renderExtCard(container,ext){
   const instCount=ext.installCount>=1000?(Math.round(ext.installCount/1000)+'K'):ext.installCount;
   const btnClass=ext.installed?'ext-btn installed':'ext-btn install';
   const btnText=ext.installed?t('installed_btn'):t('install_btn');
+  const sourceBadge=extensionSourceBadge(ext);
+  const activeBadge=extensionActiveBadge(ext);
+  const contribSummary=extensionContribSummary(ext);
 
   card.innerHTML=
     '<div class="ext-icon">'+iconEl+'</div>'+
     '<div class="ext-info">'+
       '<div class="ext-name">'+esc(ext.displayName||ext.name)+'</div>'+
       '<div class="ext-desc">'+esc(ext.description||'')+'</div>'+
-      '<div class="ext-meta">'+
+      '<div class="ext-meta wrap">'+
         '<span class="ext-publisher">'+esc(ext.publisher||'')+'</span>'+
         (instCount?'<span class="ext-stats">⬇ '+instCount+'</span>':'')+
         (stars?'<span class="ext-stats ext-stars">'+stars+'</span>':'')+
         (ext.version?'<span class="ext-badge">v'+esc(ext.version)+'</span>':'')+
+        sourceBadge+
+        activeBadge+
+        (contribSummary?'<span class="ext-badge">'+esc(contribSummary)+'</span>':'')+
       '</div>'+
     '</div>'+
     '<div style="display:flex;align-items:center;flex-shrink:0">'+
@@ -10011,7 +10052,8 @@ function showExtDetail(ext){
   const iconEl=ext.iconUrl?'<img src="'+esc(ext.iconUrl)+'" style="width:64px;height:64px;border-radius:6px" onerror="this.style.display=\'none\'">':'<div style="width:64px;height:64px;border-radius:6px;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:32px">📦</div>';
   const btnClass=ext.installed?'ext-btn installed':'ext-btn install';
   const btnText=ext.installed?t('installed_btn'):t('install_btn');
-  body.innerHTML='<div style="display:flex;gap:12px;margin-bottom:12px;align-items:flex-start">'+iconEl+'<div style="flex:1"><div style="font-size:15px;font-weight:600;color:var(--fg)">'+esc(ext.displayName||ext.name)+'</div>'+(ext.version?'<div style="font-size:11px;color:var(--fg-dim);margin-top:2px">v'+esc(ext.version)+'</div>':'')+(ext.publisher?'<div style="font-size:11px;color:var(--fg-accent);margin-top:2px">'+esc(ext.publisher)+'</div>':'')+'<div style="margin-top:6px"><span class="'+btnClass+'" data-ext-id="'+esc(ext.id)+'" data-vsix="'+esc(ext.vsixUrl||'')+'" onclick="toggleExtInstall(this,event)">'+btnText+'</span></div></div></div>'+'<div style="font-size:12px;color:var(--fg);line-height:1.5;white-space:pre-wrap">'+esc(ext.description||'No description available.')+'</div>';
+  const detailBadges=[extensionSourceBadge(ext),extensionActiveBadge(ext),ext.version?'<span class="ext-badge">v'+esc(ext.version)+'</span>':'',extensionContribSummary(ext)?'<span class="ext-badge">'+esc(extensionContribSummary(ext))+'</span>':''].filter(Boolean).join('');
+  body.innerHTML='<div style="display:flex;gap:12px;margin-bottom:12px;align-items:flex-start">'+iconEl+'<div style="flex:1"><div style="font-size:15px;font-weight:600;color:var(--fg)">'+esc(ext.displayName||ext.name)+'</div>'+(ext.publisher?'<div style="font-size:11px;color:var(--fg-accent);margin-top:2px">'+esc(ext.publisher)+'</div>':'')+(detailBadges?'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">'+detailBadges+'</div>':'')+'<div style="margin-top:6px"><span class="'+btnClass+'" data-ext-id="'+esc(ext.id)+'" data-vsix="'+esc(ext.vsixUrl||'')+'" onclick="toggleExtInstall(this,event)">'+btnText+'</span></div></div></div>'+'<div style="font-size:12px;color:var(--fg);line-height:1.5;white-space:pre-wrap">'+esc(ext.description||'No description available.')+'</div>'+(ext.ext_dir?'<div style="margin-top:10px;font:11px/1.45 var(--mono);color:var(--fg-dim)">Path: '+esc(ext.ext_dir)+'</div>':'');
   panel.style.display='flex';
   const section=panel.previousElementSibling;if(section)section.style.display='none';
 }
