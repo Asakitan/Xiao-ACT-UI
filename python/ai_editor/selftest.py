@@ -4151,11 +4151,18 @@ console.log("frontend signature help docs ok");
             and "function extensionSettingPushFilterValues(list,value)" in html
             and "function extensionSettingQueryTokens(raw)" in html
             and "function extensionSettingIsFilterToken(token)" in html
+            and "function extensionSettingFilterTokenLabel(token)" in html
+            and "function extensionSettingFilterMenuTokenActive(tokens,token)" in html
             and "function extensionSettingAppendFilterToken(token)" in html
             and "function extensionSettingToggleFilterToken(token,excludeTokens)" in html
+            and "function extensionSettingRemoveFilterToken(token)" in html
             and "function extensionSettingClearFilterTokens()" in html
+            and "function renderExtensionSettingFilterState(visibleRows,totalRows)" in html
             and "ext-settings-filter-menu-button" in html
             and "ext-settings-filter-menu" in html
+            and "ext-settings-active-filters" in html
+            and "ext-settings-empty" in html
+            and "No extension settings match the current filters." in html
             and "Clear Filter Tokens" in html
             and "function extensionSettingTargetName(target)" in html
             and "function createExtensionSettingTargetSelect(target)" in html
@@ -4289,10 +4296,13 @@ console.log("frontend signature help docs ok");
             "extensionSettingPushFilterValues",
             "extensionSettingQueryTokens",
             "extensionSettingIsFilterToken",
+            "extensionSettingFilterTokenLabel",
+            "extensionSettingFilterMenuTokenActive",
             "extensionSettingSearchTokenValue",
             "extensionSettingSetSearchTokenValue",
             "extensionSettingAppendFilterToken",
             "extensionSettingToggleFilterToken",
+            "extensionSettingRemoveFilterToken",
             "extensionSettingClearFilterTokens",
             "extensionSettingJson",
             "extensionSettingJsonRows",
@@ -4694,6 +4704,17 @@ assert(extensionSettingIsFilterToken("@feature:terminal")
        && extensionSettingIsFilterToken("@stable")
        && !extensionSettingIsFilterToken("terminal"),
        "settings filter menu identifies filter tokens");
+assert(extensionSettingFilterTokenLabel("@ext:selftest.settings-pack") === "Extension: selftest.settings-pack"
+       && extensionSettingFilterTokenLabel("@id:editor.*") === "Setting: editor.*",
+       "settings filter chips label tokens");
+assert(extensionSettingFilterMenuTokenActive(["@ext:selftest.settings-pack"], "@ext:")
+       && extensionSettingFilterMenuTokenActive(["@stable"], "@stable")
+       && !extensionSettingFilterMenuTokenActive(["@tag:preview"], "@stable"),
+       "settings filter menu checks prefix tokens");
+fakeSearch.value = "render @ext:selftest @stable";
+extensionSettingRemoveFilterToken("@ext:selftest");
+assert(fakeSearch.value === "render @stable",
+       "settings filter chip removes one token");
 const searchText = extensionSettingSearchText("demo.telemetry", searchSchema, "string",
   "Controls telemetry.", "Deprecated telemetry mode.", "");
 assert(searchText.indexOf("usesonlineservices") >= 0

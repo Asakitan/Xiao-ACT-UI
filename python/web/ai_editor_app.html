@@ -1088,6 +1088,12 @@ pre.code-block { overflow:visible; }
 .ext-settings-filter-menu button:hover { background:var(--bg-hover); }
 .ext-settings-filter-menu button.checked::before { content:'✓ '; color:var(--fg-accent); }
 .ext-settings-filter-menu .sep { height:1px; background:var(--border); margin:4px; }
+.ext-settings-active-filters { grid-column:1 / -1; display:none; flex-wrap:wrap; gap:5px; padding-top:2px; }
+.ext-settings-active-filters.open { display:flex; }
+.ext-settings-active-filters button { height:22px; max-width:220px; border:1px solid var(--border); background:var(--bg3);
+  color:var(--fg-dim); border-radius:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ext-settings-active-filters button:hover { color:var(--fg); border-color:var(--fg-accent); }
+.ext-settings-empty { display:none; grid-column:1 / -1; color:var(--fg-dim); font-size:11px; padding:3px 0 1px; }
 
 /* ── SETTINGS-05: Keyboard shortcuts editor ── */
 .kb-modal-bg { position:fixed; inset:0; background:#00000080; z-index:700; display:none; align-items:center; justify-content:center; }
@@ -12181,6 +12187,28 @@ function extensionSettingIsFilterToken(token){
   return /^@(modified|stable|policy|restricted)(?=$|\s)/i.test(token)
     || /^@(tag|ext|feature|id|lang|scope|target|type|sync):/i.test(token);
 }
+function extensionSettingFilterTokenLabel(token){
+  token=String(token||'').trim();
+  if(!token)return '';
+  const map={'@modified':'Modified','@stable':'Stable','@policy':'Policy','@restricted':'Restricted'};
+  if(map[token])return map[token];
+  if(token.startsWith('@tag:'))return 'Tag: '+token.slice(5);
+  if(token.startsWith('@ext:'))return 'Extension: '+(token.slice(5)||'...');
+  if(token.startsWith('@feature:'))return 'Feature: '+(token.slice(9)||'...');
+  if(token.startsWith('@lang:'))return 'Language: '+(token.slice(6)||'...');
+  if(token.startsWith('@id:'))return 'Setting: '+(token.slice(4)||'...');
+  if(token.startsWith('@scope:'))return 'Scope: '+token.slice(7);
+  if(token.startsWith('@target:'))return 'Target: '+token.slice(8);
+  if(token.startsWith('@type:'))return 'Type: '+token.slice(6);
+  if(token.startsWith('@sync:'))return 'Sync: '+token.slice(6);
+  return token;
+}
+function extensionSettingFilterMenuTokenActive(tokens,token){
+  const wanted=String(token||'').toLowerCase();
+  return wanted.endsWith(':')
+    ? tokens.some(item=>String(item||'').toLowerCase().startsWith(wanted))
+    : tokens.some(item=>String(item||'').toLowerCase()===wanted);
+}
 function extensionSettingSearchTokenValue(){
   const search=$('settings-search');
   return search?search.value:'';
@@ -12204,12 +12232,47 @@ function extensionSettingToggleFilterToken(token,excludeTokens){
   extensionSettingSetSearchTokenValue(next.join(' '));
   applyExtensionSettingsFilter();
 }
+function extensionSettingRemoveFilterToken(token){
+  const remove=String(token||'').toLowerCase();
+  const next=extensionSettingQueryTokens(extensionSettingSearchTokenValue())
+    .filter(item=>String(item||'').toLowerCase()!==remove);
+  extensionSettingSetSearchTokenValue(next.join(' '));
+  if(remove==='@modified'){const cb=$('ext-settings-modified');if(cb)cb.checked=false}
+  applyExtensionSettingsFilter();
+}
 function extensionSettingClearFilterTokens(){
   const text=extensionSettingQueryTokens(extensionSettingSearchTokenValue())
     .filter(token=>!extensionSettingIsFilterToken(token)).join(' ');
   extensionSettingSetSearchTokenValue(text);
   const cb=$('ext-settings-modified');if(cb)cb.checked=false;
   applyExtensionSettingsFilter();
+}
+function renderExtensionSettingFilterState(visibleRows,totalRows){
+  const chips=$('ext-settings-active-filters');
+  const empty=$('ext-settings-empty');
+  if(chips){
+    chips.innerHTML='';
+    const tokens=extensionSettingQueryTokens(extensionSettingSearchTokenValue()).filter(extensionSettingIsFilterToken);
+    if((($('ext-settings-modified')||{}).checked===true)&&!tokens.some(token=>token.toLowerCase()==='@modified'))tokens.push('@modified');
+    tokens.forEach(token=>{
+      const btn=document.createElement('button');btn.type='button';btn.title='Remove '+token;btn.textContent=extensionSettingFilterTokenLabel(token)+' ×';
+      btn.onclick=ev=>{ev.preventDefault();ev.stopPropagation();extensionSettingRemoveFilterToken(token)};
+      chips.appendChild(btn);
+    });
+    [['ext-settings-category','Category'],['ext-settings-scope','Scope'],['ext-settings-target','Target']].forEach(item=>{
+      const select=$(item[0]);
+      if(!select||!select.value)return;
+      const label=(select.selectedOptions&&select.selectedOptions[0]?select.selectedOptions[0].textContent:select.value)||select.value;
+      const btn=document.createElement('button');btn.type='button';btn.title='Clear '+item[1];btn.textContent=item[1]+': '+label+' ×';
+      btn.onclick=ev=>{ev.preventDefault();ev.stopPropagation();select.value='';applyExtensionSettingsFilter()};
+      chips.appendChild(btn);
+    });
+    chips.classList.toggle('open',chips.children.length>0);
+  }
+  if(empty){
+    empty.textContent=totalRows?'No extension settings match the current filters.':'';
+    empty.style.display=(totalRows&&visibleRows===0)?'':'none';
+  }
 }
 function extensionSettingsQuery(){
   const raw=(($('settings-search')||{}).value||'').trim();
@@ -12285,6 +12348,7 @@ function applyExtensionSettingsFilter(){
   if(divider)divider.style.display=visibleSections?'':'none';
   const toolbar=container.querySelector('[data-ext-settings-filter="1"]');
   if(toolbar)toolbar.style.display=totalRows?'':'none';
+  renderExtensionSettingFilterState(visibleRows,totalRows);
 }
 function renderExtensionLanguageDefaults(languageDefaults,container,categorySelect,seenCategories){
   (Array.isArray(languageDefaults)?languageDefaults:[]).forEach(item=>{
@@ -12555,7 +12619,7 @@ async function renderExtensionSettings(){
   filterButton.onclick=ev=>{
     ev.preventDefault();ev.stopPropagation();
     const tokens=extensionSettingQueryTokens(extensionSettingSearchTokenValue());
-    filterMenu.querySelectorAll('button[data-filter-token]').forEach(btn=>btn.classList.toggle('checked',tokens.includes(btn.dataset.filterToken)));
+    filterMenu.querySelectorAll('button[data-filter-token]').forEach(btn=>btn.classList.toggle('checked',extensionSettingFilterMenuTokenActive(tokens,btn.dataset.filterToken)));
     filterMenu.classList.toggle('open');
   };
   if(!window._extSettingsFilterMenuCloser){
@@ -12572,7 +12636,9 @@ async function renderExtensionSettings(){
     applyExtensionSettingsFilter();
   };
   const count=document.createElement('span');count.className='ext-settings-count';count.id='ext-settings-filter-count';count.textContent='0 / 0';
-  filter.appendChild(categorySelect);filter.appendChild(scopeSelect);filter.appendChild(targetSelect);filter.appendChild(modifiedLabel);filter.appendChild(filterButton);filter.appendChild(clearButton);filter.appendChild(count);filter.appendChild(filterMenu);
+  const activeFilters=document.createElement('div');activeFilters.className='ext-settings-active-filters';activeFilters.id='ext-settings-active-filters';
+  const emptyState=document.createElement('div');emptyState.className='ext-settings-empty';emptyState.id='ext-settings-empty';
+  filter.appendChild(categorySelect);filter.appendChild(scopeSelect);filter.appendChild(targetSelect);filter.appendChild(modifiedLabel);filter.appendChild(filterButton);filter.appendChild(clearButton);filter.appendChild(count);filter.appendChild(filterMenu);filter.appendChild(activeFilters);filter.appendChild(emptyState);
   fragment.appendChild(filter);
   const seenCategories=new Set();
   const orderedConfigs=configs.slice().sort((a,b)=>{
