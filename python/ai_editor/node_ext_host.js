@@ -1246,6 +1246,7 @@ class OutputChannel {
 const _extensions = new Map();           // extensionId -> { desc, module, context, deactivate }
 const _knownExtensions = new Map();      // extensionId -> { extensionPath, manifest, extensionKind }
 const _configurationDefaults = {};       // contributed default settings by dotted path
+const _configurationLanguageDefaults = {}; // languageId -> defaults by dotted path
 const _extensionActivationRequests = new Map(); // requestId -> pending activation request
 const _extensionActivationInFlight = new Map(); // extensionId -> pending activation request
 const _commands = new Map();             // commandId -> handler
@@ -4217,8 +4218,9 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
 
         // --- Namespace: workspace ---
         workspace: {
-            getConfiguration(section) {
-                return _createConfigProxy(section);
+            getConfiguration(section, scope) {
+                return _createConfigProxy(
+                    section, _configOverrideIdentifierFromScope(scope));
             },
             get workspaceFolders() { return [_workspaceFolder()]; },
             get name() { return _workspaceName; },
@@ -5041,6 +5043,17 @@ function _configSetDefault(pathParts, value) {
     _configMirrorDefaultsAlias(pathParts, value);
 }
 
+function _configSetLanguageDefault(languageId, pathParts, value) {
+    const id = String(languageId || '').trim();
+    if (!id || !Array.isArray(pathParts) || !pathParts.length) return;
+    if (!_configurationLanguageDefaults[id]) _configurationLanguageDefaults[id] = {};
+    _configSet(
+        _configurationLanguageDefaults[id],
+        pathParts,
+        _configCloneValue(value));
+    _configMirrorLanguageDefaultsAlias(id, pathParts, value);
+}
+
 function _configMirrorDefaultsAlias(pathParts, value) {
     let mirrorPath = null;
     if (pathParts[0] === 'ai_editor'
@@ -5051,6 +5064,24 @@ function _configMirrorDefaultsAlias(pathParts, value) {
     }
     if (!mirrorPath || mirrorPath.join('.') === pathParts.join('.')) return;
     _configSet(_configurationDefaults, mirrorPath, _configCloneValue(value));
+}
+
+function _configMirrorLanguageDefaultsAlias(languageId, pathParts, value) {
+    let mirrorPath = null;
+    if (pathParts[0] === 'ai_editor'
+            && _AI_EDITOR_SECTION_ALIASES.has(pathParts[1])) {
+        mirrorPath = pathParts.slice(1);
+    } else if (_AI_EDITOR_SECTION_ALIASES.has(pathParts[0])) {
+        mirrorPath = ['ai_editor'].concat(pathParts);
+    }
+    if (!mirrorPath || mirrorPath.join('.') === pathParts.join('.')) return;
+    if (!_configurationLanguageDefaults[languageId]) {
+        _configurationLanguageDefaults[languageId] = {};
+    }
+    _configSet(
+        _configurationLanguageDefaults[languageId],
+        mirrorPath,
+        _configCloneValue(value));
 }
 
 function _configMergeObjects(defaultValue, configuredValue) {
@@ -5072,24 +5103,46 @@ function _configMergeObjects(defaultValue, configuredValue) {
     return configuredValue === _CONFIG_MISSING ? base : _configCloneValue(configuredValue);
 }
 
-function _configEffectiveLookup(pathParts) {
-    const configured = _configLookup(_settings, pathParts);
-    if (configured !== _CONFIG_MISSING) return configured;
+function _configLanguageDefaultLookup(pathParts, overrideIdentifier) {
+    const id = String(overrideIdentifier || '').trim();
+    if (!id || !_configurationLanguageDefaults[id]) return _CONFIG_MISSING;
+    return _configLookup(_configurationLanguageDefaults[id], pathParts);
+}
+
+function _configDefaultLookup(pathParts, overrideIdentifier) {
+    const languageDefault = _configLanguageDefaultLookup(
+        pathParts, overrideIdentifier);
+    if (languageDefault !== _CONFIG_MISSING) return languageDefault;
     return _configLookup(_configurationDefaults, pathParts);
 }
 
-function _configEffectiveSection(sectionPath) {
+function _configEffectiveLookup(pathParts, overrideIdentifier) {
+    const configured = _configLookup(_settings, pathParts);
+    if (configured !== _CONFIG_MISSING) return configured;
+    return _configDefaultLookup(pathParts, overrideIdentifier);
+}
+
+function _configEffectiveSection(sectionPath, overrideIdentifier) {
     const configured = _configLookup(_settings, sectionPath);
     const defaults = _configLookup(_configurationDefaults, sectionPath);
+    const languageDefaults = _configLanguageDefaultLookup(
+        sectionPath, overrideIdentifier);
+    const mergedDefaults = languageDefaults === _CONFIG_MISSING
+        ? defaults
+        : (defaults === _CONFIG_MISSING
+            ? languageDefaults
+            : _configMergeObjects(defaults, languageDefaults));
     if (configured === _CONFIG_MISSING) {
-        return defaults === _CONFIG_MISSING ? {} : _configCloneValue(defaults);
+        return mergedDefaults === _CONFIG_MISSING
+            ? {}
+            : _configCloneValue(mergedDefaults);
     }
-    if (defaults !== _CONFIG_MISSING
+    if (mergedDefaults !== _CONFIG_MISSING
             && configured && typeof configured === 'object'
             && !Array.isArray(configured)
-            && defaults && typeof defaults === 'object'
-            && !Array.isArray(defaults)) {
-        return _configMergeObjects(defaults, configured);
+            && mergedDefaults && typeof mergedDefaults === 'object'
+            && !Array.isArray(mergedDefaults)) {
+        return _configMergeObjects(mergedDefaults, configured);
     }
     return _configCloneValue(configured);
 }
@@ -5144,10 +5197,41 @@ function _registerConfigurationDefaultsFromManifest(manifest) {
     const defaults = contributes.configurationDefaults;
     if (defaults && typeof defaults === 'object' && !Array.isArray(defaults)) {
         for (const [key, value] of Object.entries(defaults)) {
-            if (!key || key.startsWith('[')) continue;
-            _configSetDefault(_configPath(key), value);
+            if (!key) continue;
+            if (key.startsWith('[')) {
+                for (const languageId of _configOverrideIdentifiersFromKey(key)) {
+                    if (!value || typeof value !== 'object'
+                            || Array.isArray(value)) continue;
+                    for (const [settingKey, settingValue] of Object.entries(value)) {
+                        _configSetLanguageDefault(
+                            languageId, _configPath(settingKey), settingValue);
+                    }
+                }
+            } else {
+                _configSetDefault(_configPath(key), value);
+            }
         }
     }
+}
+
+function _configOverrideIdentifiersFromKey(key) {
+    const result = [];
+    const text = String(key || '');
+    const matcher = /\[([^\]]+)\]/g;
+    let match;
+    while ((match = matcher.exec(text)) !== null) {
+        const id = String(match[1] || '').trim();
+        if (id) result.push(id);
+    }
+    return result;
+}
+
+function _configOverrideIdentifierFromScope(scope) {
+    if (scope && typeof scope === 'object'
+            && typeof scope.languageId === 'string') {
+        return scope.languageId;
+    }
+    return '';
 }
 
 function _configFullPath(section, key) {
@@ -5167,9 +5251,10 @@ function _fireConfigurationChanged(pathParts) {
     });
 }
 
-function _createConfigProxy(section) {
+function _createConfigProxy(section, overrideIdentifier = '') {
     const sectionPath = _configPath(section);
-    const sectionData = () => _configEffectiveSection(sectionPath);
+    const sectionData = () => _configEffectiveSection(
+        sectionPath, overrideIdentifier);
     return {
         get(key, defaultValue) {
             if (arguments.length === 0 || key === undefined) {
@@ -5178,23 +5263,34 @@ function _createConfigProxy(section) {
                     ? Object.assign({}, data)
                     : data;
             }
-            const value = _configEffectiveLookup(_configFullPath(section, key));
+            const value = _configEffectiveLookup(
+                _configFullPath(section, key), overrideIdentifier);
             return value === _CONFIG_MISSING ? defaultValue : value;
         },
         has(key) {
-            return _configEffectiveLookup(_configFullPath(section, key))
+            return _configEffectiveLookup(
+                _configFullPath(section, key), overrideIdentifier)
                 !== _CONFIG_MISSING;
         },
         inspect(key) {
             const pathParts = _configFullPath(section, key);
             const value = _configLookup(_settings, pathParts);
             const defaultValue = _configLookup(_configurationDefaults, pathParts);
-            if (value === _CONFIG_MISSING && defaultValue === _CONFIG_MISSING) return undefined;
+            const defaultLanguageValue = _configLanguageDefaultLookup(
+                pathParts, overrideIdentifier);
+            if (value === _CONFIG_MISSING
+                    && defaultValue === _CONFIG_MISSING
+                    && defaultLanguageValue === _CONFIG_MISSING) {
+                return undefined;
+            }
             return {
                 key: pathParts.join('.'),
                 defaultValue: defaultValue === _CONFIG_MISSING
                     ? undefined
                     : _configCloneValue(defaultValue),
+                defaultLanguageValue: defaultLanguageValue === _CONFIG_MISSING
+                    ? undefined
+                    : _configCloneValue(defaultLanguageValue),
                 globalValue: value === _CONFIG_MISSING
                     ? undefined
                     : _configCloneValue(value),

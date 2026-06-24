@@ -7468,12 +7468,26 @@ async function activate(context) {
     const nestedConfig = vscode.workspace.getConfiguration('ai_editor.extensions');
     const rootConfig = vscode.workspace.getConfiguration();
     const manifestConfig = vscode.workspace.getConfiguration('selftest.node');
+    const manifestLanguageConfig = vscode.workspace.getConfiguration(
+      'selftest.node', { languageId: 'selflang' });
+    const editorLanguageConfig = vscode.workspace.getConfiguration(
+      'editor', { languageId: 'selflang' });
+    const editorPlainConfig = vscode.workspace.getConfiguration('editor');
     const manifestConfigBefore = {
       flag: manifestConfig.get('flag'),
       mode: manifestConfig.get('mode'),
       hasFlag: manifestConfig.has('flag'),
       inspectDefault: manifestConfig.inspect('flag').defaultValue,
       inspectWorkspace: manifestConfig.inspect('flag').workspaceValue,
+    };
+    const manifestLanguageConfigBefore = {
+      mode: manifestLanguageConfig.get('mode'),
+      plainMode: manifestConfig.get('mode'),
+      editorTabSize: editorLanguageConfig.get('tabSize'),
+      plainEditorTabSize: editorPlainConfig.get('tabSize', 'missing'),
+      inspectModeDefault: manifestLanguageConfig.inspect('mode').defaultValue,
+      inspectModeLanguageDefault: manifestLanguageConfig.inspect('mode').defaultLanguageValue,
+      inspectTabLanguageDefault: editorLanguageConfig.inspect('tabSize').defaultLanguageValue,
     };
     const configBefore = {
       aiDiagnostics: aiConfig.get('extensions.diagnostics_enabled'),
@@ -7546,6 +7560,7 @@ async function activate(context) {
       configBefore,
       configAfter,
       manifestConfigBefore,
+      manifestLanguageConfigBefore,
       manifestConfigSet,
       manifestConfigReset,
       configRemoved,
@@ -8182,6 +8197,10 @@ module.exports = { activate, deactivate };
                     },
                     "configurationDefaults": {
                         "selftest.node.mode": "manual",
+                        "[selflang]": {
+                            "editor.tabSize": 2,
+                            "selftest.node.mode": "language",
+                        },
                     },
                     "customEditors": [{
                         "viewType": "selftest.node.customEditor",
@@ -9175,6 +9194,10 @@ module.exports = { activate, deactivate };
                 node_manifest_config_before = (
                     node_workspace_probe.get("manifestConfigBefore", {})
                     if isinstance(node_workspace_probe, dict) else {})
+                node_manifest_language_config_before = (
+                    node_workspace_probe.get(
+                        "manifestLanguageConfigBefore", {})
+                    if isinstance(node_workspace_probe, dict) else {})
                 node_manifest_config_set = (
                     node_workspace_probe.get("manifestConfigSet", {})
                     if isinstance(node_workspace_probe, dict) else {})
@@ -9237,9 +9260,28 @@ module.exports = { activate, deactivate };
                        is None,
                        json.dumps({
                            "before": node_manifest_config_before,
+                           "language": node_manifest_language_config_before,
                            "set": node_manifest_config_set,
                            "reset": node_manifest_config_reset,
                        }, ensure_ascii=False, default=str))
+                _check("node host language configuration defaults match VS Code scope",
+                       node_workspace_command_registered
+                       and node_manifest_language_config_before.get(
+                           "mode") == "language"
+                       and node_manifest_language_config_before.get(
+                           "plainMode") == "manual"
+                       and node_manifest_language_config_before.get(
+                           "editorTabSize") == 2
+                       and node_manifest_language_config_before.get(
+                           "plainEditorTabSize") == "missing"
+                       and node_manifest_language_config_before.get(
+                           "inspectModeDefault") == "manual"
+                       and node_manifest_language_config_before.get(
+                           "inspectModeLanguageDefault") == "language"
+                       and node_manifest_language_config_before.get(
+                           "inspectTabLanguageDefault") == 2,
+                       json.dumps(node_manifest_language_config_before,
+                                  ensure_ascii=False, default=str))
                 _check("node host JS command awaits Python command result",
                        node_python_command_registered
                        and isinstance(node_python_command_probe, dict)
