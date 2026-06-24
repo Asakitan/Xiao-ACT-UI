@@ -2917,8 +2917,13 @@ console.log("extension setting schema helpers ok");
             and "function appendExtensionWelcomeContent(parent,entries)" in html
             and "function appendExtensionWelcomeLine(parent,line)" in html
             and "function extensionWelcomeCommandFromUri(uri)" in html
+            and "function extensionWelcomeExternalLinkTarget(uri)" in html
+            and "function openExtensionWelcomeLink(target)" in html
             and "command.startsWith('command:')" in html
+            and "/^(https?:|mailto:)$/i.test(target.protocol)" in html
             and "call('execute_command',command)" in html
+            and "call('open_external_uri',target)" in html
+            and "a.rel='noopener noreferrer'" in html
             and "const welcomeEntries=extensionWelcomeEntries(view,state)" in html
             and "appendExtensionWelcomeContent(body,welcomeEntries)" in html
             and "function extensionTreeDndState(view,state)" in html

@@ -10340,21 +10340,46 @@ function extensionWelcomeCommandFromUri(uri){
   try{command=decodeURIComponent(command)}catch(e){}
   return command.trim();
 }
+function extensionWelcomeExternalLinkTarget(uri){
+  const raw=String(uri||'').trim();
+  if(!raw)return '';
+  try{
+    const target=new URL(raw);
+    return /^(https?:|mailto:)$/i.test(target.protocol)?target.href:'';
+  }catch(e){return ''}
+}
+async function openExtensionWelcomeLink(target){
+  target=String(target||'').trim();
+  if(!target)return false;
+  const opened=await call('open_external_uri',target);
+  if(opened&&opened.ok){setStatus('Opened link');return true}
+  try{window.open(target,'_blank','noopener');setStatus('Opened link');return true}catch(e){}
+  setStatus('Cannot open link target: '+target);
+  return false;
+}
 function appendExtensionWelcomeLine(parent,line){
   const text=String(line||'');
-  const linkRe=/\[([^\]]+)\]\((command:[^)]+)\)/g;
+  const linkRe=/\[([^\]]+)\]\(([^)]+)\)/g;
   let last=0,match;
   while((match=linkRe.exec(text))){
     if(match.index>last)parent.appendChild(document.createTextNode(text.slice(last,match.index)));
-    const command=extensionWelcomeCommandFromUri(match[2]);
+    const label=match[1]||match[2];
+    const linkTarget=String(match[2]||'').trim();
+    const command=extensionWelcomeCommandFromUri(linkTarget);
+    const external=command?'':extensionWelcomeExternalLinkTarget(linkTarget);
     if(command){
       const btn=document.createElement('button');btn.type='button';btn.className='link-btn';
       btn.style.cssText='border:0;background:transparent;color:var(--fg-accent);padding:0;font:inherit;cursor:pointer;text-align:left';
-      btn.textContent=match[1]||command;btn.title=command;
+      btn.textContent=label;btn.title=command;
       btn.onclick=e=>{e.stopPropagation();call('execute_command',command)};
       parent.appendChild(btn);
+    }else if(external){
+      const a=document.createElement('a');
+      a.textContent=label;a.href=external;a.target='_blank';a.rel='noopener noreferrer';a.title=external;
+      a.onclick=e=>{e.preventDefault();e.stopPropagation();openExtensionWelcomeLink(external)};
+      parent.appendChild(a);
     }else{
-      parent.appendChild(document.createTextNode(match[0]));
+      parent.appendChild(document.createTextNode(label));
     }
     last=match.index+match[0].length;
   }
