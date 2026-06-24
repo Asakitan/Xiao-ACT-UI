@@ -1734,6 +1734,7 @@ pre.code-block { overflow:visible; }
       <label>Additional code actions on save</label>
       <textarea id="s-editor-code-actions-on-save-json" rows="3" placeholder='{"source.fixAll.eslint":"explicit"}'></textarea>
       <div class="settings-help">JSON object for extension-specific code action kinds. Values: explicit, always, never, true, false.</div>
+      <div class="settings-help" id="s-editor-code-actions-detected"></div>
       <label class="settings-check"><input id="s-editor-code-actions-trigger-focus" type="checkbox"><span><b>Trigger code actions on focus change</b><small>Runs <code>always</code> source actions when Auto Save is <code>afterDelay</code>.</small></span></label>
       <div class="sb-group" style="padding:0;margin-top:12px">Files</div>
       <div class="settings-grid">
@@ -1762,6 +1763,7 @@ pre.code-block { overflow:visible; }
       <label>Additional code actions on save</label>
       <textarea id="s-editor-lang-code-actions-on-save-json" rows="3" placeholder='{"source.fixAll.eslint":"explicit"}'></textarea>
       <div class="settings-help">Language-specific extension code action kinds, written to editor.codeActionsOnSave.</div>
+      <div class="settings-help" id="s-editor-lang-code-actions-detected"></div>
       <label class="settings-check"><input id="s-editor-lang-code-actions-trigger-focus" type="checkbox"><span><b>Trigger code actions on focus change</b><small>Language-specific editor.codeActions.triggerOnFocusChange.</small></span></label>
       <div class="settings-help" id="s-files-lang-override-info">Writes VS Code-style [language] files settings for the active editor language.</div>
       <label class="settings-check"><input id="s-files-lang-override-enabled" type="checkbox"><span><b>Override current language file saves</b><small>Use file save participants only for this language id.</small></span></label>
@@ -10555,6 +10557,51 @@ function readCodeActionsOnSaveExtras(id){
   });
   return result;
 }
+function setCodeActionExtraSetting(id,kind,mode){
+  const key=String(kind||'').trim();
+  if(!key||key==='source.organizeImports'||key==='source.fixAll')return false;
+  const current=readCodeActionsOnSaveExtras(id);
+  const value=editorCodeActionOnSaveMode(mode||'explicit');
+  if(value)current[key]=value;
+  else delete current[key];
+  setInputValue(id,stringifyJsonObjectValue(current));
+  return true;
+}
+function editorCodeActionProviderKinds(providers){
+  const map=new Map();
+  (Array.isArray(providers)?providers:[]).forEach(provider=>{
+    const label=String(provider.displayName||provider.extensionId||provider.providerId||'Extension');
+    (Array.isArray(provider.codeActionKinds)?provider.codeActionKinds:[]).forEach(kind=>{
+      const key=String(kind||'').trim();
+      if(!key||key==='source.organizeImports'||key==='source.fixAll')return;
+      if(!map.has(key))map.set(key,new Set());
+      if(label)map.get(key).add(label);
+    });
+  });
+  return [...map.entries()].map(([kind,labels])=>({kind,labels:[...labels].slice(0,3)})).sort((a,b)=>a.kind.localeCompare(b.kind));
+}
+function renderEditorCodeActionProviderKinds(hostId,inputId,items){
+  const host=$(hostId);if(!host)return;
+  host.innerHTML='';
+  const values=Array.isArray(items)?items:[];
+  if(!values.length){host.textContent='No extension-provided code action kinds detected yet.';return}
+  const prefix=document.createElement('span');prefix.textContent='Detected: ';host.appendChild(prefix);
+  values.slice(0,14).forEach(item=>{
+    const btn=document.createElement('button');
+    btn.type='button';btn.className='linklike';btn.textContent=item.kind;
+    btn.title=item.labels&&item.labels.length?item.labels.join(', '):'Add code action kind';
+    btn.onclick=()=>setCodeActionExtraSetting(inputId,item.kind,'explicit');
+    host.appendChild(btn);
+    host.appendChild(document.createTextNode(' '));
+  });
+}
+async function refreshEditorCodeActionProviderKinds(){
+  const res=await call('editor_language_provider',editorProviderPayload('providerMetadata',{providerKind:'codeActions'}));
+  const items=editorCodeActionProviderKinds(res&&res.ok?res.providers:[]);
+  renderEditorCodeActionProviderKinds('s-editor-code-actions-detected','s-editor-code-actions-on-save-json',items);
+  renderEditorCodeActionProviderKinds('s-editor-lang-code-actions-detected','s-editor-lang-code-actions-on-save-json',items);
+  return items;
+}
 function editorCodeActionsOnSaveFromSettings(base,ids){
   const inputIds=isPlainObject(ids)?ids:{};
   const organizeId=inputIds.organize||'s-editor-organize-imports-on-save';
@@ -10663,6 +10710,7 @@ function openSettings(){
   const selectedIconThemeOption=($('s-file-icon-theme').selectedOptions||[])[0];
   setFileIconThemeInfo(selectedIconThemeOption?('Active: '+selectedIconThemeOption.textContent):'',false);
   const editor=settingSection('editor');
+  refreshEditorCodeActionProviderKinds();
   setInputValue('s-editor-default-formatter',editor.defaultFormatter||editor.default_formatter||'');
   setInputValue('s-editor-tab-size',editorTabSize(editor.tabSize));
   setCheckedValue('s-editor-insert-spaces',editorInsertSpaces(editor.insertSpaces));

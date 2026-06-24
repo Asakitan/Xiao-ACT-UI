@@ -824,7 +824,13 @@ def test_app_settings_parity() -> None:
         "python", editor_provider)
     lang_api["registerOnTypeFormattingEditProvider"](
         "python", editor_provider, "}")
-    lang_api["registerCodeActionsProvider"]("python", editor_provider)
+    lang_api["registerCodeActionsProvider"]("python", editor_provider, {
+        "providedCodeActionKinds": [
+            "source.organizeImports",
+            "source.fixAll.selftest",
+            "quickfix",
+        ],
+    })
     lang_api["registerDefinitionProvider"]("python", editor_provider)
     lang_api["registerTypeDefinitionProvider"]("python", editor_provider)
     lang_api["registerDeclarationProvider"]("python", editor_provider)
@@ -914,6 +920,10 @@ def test_app_settings_parity() -> None:
                 "severity": 1,
                 "source": "frontend-selftest",
             }]))
+        provider_metadata_result = provider_api.editor_language_provider({
+            "kind": "providerMetadata",
+            "providerKind": "codeActions",
+        })
         definition_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="definition"))
         type_definition_result = provider_api.editor_language_provider(
@@ -1103,6 +1113,14 @@ def test_app_settings_parity() -> None:
         _check("editor_language_provider forwards diagnostics to code actions",
                 "editor boom" in context_messages
                 and "frontend boom" in context_messages)
+        _check("editor_language_provider exposes code action metadata",
+               provider_metadata_result.get("ok") is True
+               and any(
+                   item.get("kind") == "codeActions"
+                   and "source.fixAll.selftest" in (
+                       item.get("codeActionKinds") or [])
+                   and "quickfix" in (item.get("codeActionKinds") or [])
+                   for item in provider_metadata_result.get("providers", [])))
         _check("editor_language_provider filters organize import actions",
                organize_action_result.get("ok") is True
                and len(organize_action_result.get("actions", [])) == 1
@@ -2693,8 +2711,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "id=\"s-editor-organize-imports-on-save\"" in html
            and "id=\"s-editor-fix-all-on-save\"" in html
            and "id=\"s-editor-code-actions-on-save-json\"" in html
+           and "id=\"s-editor-code-actions-detected\"" in html
            and "id=\"s-editor-code-actions-trigger-focus\"" in html
            and "id=\"s-editor-lang-code-actions-on-save-json\"" in html
+           and "id=\"s-editor-lang-code-actions-detected\"" in html
            and "function editorFormatOnSaveEnabled()" in html
            and "function editorDefaultFormatter()" in html
            and "async function requestEditorFormattingProviders()" in html
@@ -2714,6 +2734,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function editorNormalizeCodeActionKinds(kinds,excluded,options)" in html
            and "function editorCodeActionsOnSaveExtras(setting)" in html
            and "function readCodeActionsOnSaveExtras(id)" in html
+           and "function editorCodeActionProviderKinds(providers)" in html
+           and "async function refreshEditorCodeActionProviderKinds()" in html
            and "async function triggerEditorCodeActionsOnFocusChange()" in html
            and "async function applyEditorCodeActionForSave(action)" in html
            and "async function fetchEditorCodeActionsForKind(only,range)" in html
@@ -2905,6 +2927,8 @@ def test_phase1_ai_editor_regressions() -> None:
             "readJsonObjectValue",
             "editorCodeActionsOnSaveExtras",
             "readCodeActionsOnSaveExtras",
+            "setCodeActionExtraSetting",
+            "editorCodeActionProviderKinds",
             "editorCodeActionsOnSaveFromSettings",
         ]
         save_participant_js = "\n".join(
@@ -2916,6 +2940,7 @@ let editorLang = "plaintext";
 function settingSection(name){ return config[name] || {}; }
 const inputs = {};
 function readInputValue(id){ return inputs[id] || ""; }
+function setInputValue(id,value){ inputs[id] = value || ""; }
 let config = { editor: { codeActionsOnSave: {
   "quickfix": "always",
   "source.organizeImports": "explicit",
@@ -2947,6 +2972,14 @@ inputs["s-editor-fix-all-on-save"] = "always";
 const mergedActions = editorCodeActionsOnSaveFromSettings({}, {});
 assert(mergedActions["source.organizeImports"] === "explicit" && mergedActions["source.fixAll"] === "always", "managed select modes win");
 assert(mergedActions.quickfix === "explicit" && mergedActions["source.fixAll.eslint"] === "never" && !("bad" in mergedActions), "extras normalize supported values");
+const detectedKinds = editorCodeActionProviderKinds([
+  { displayName: "ESLint", codeActionKinds: ["source.fixAll.eslint", "source.organizeImports", "quickfix"] },
+  { extensionId: "selftest.ext", codeActionKinds: ["source.fixAll.eslint", "refactor.extract"] },
+]);
+assert(detectedKinds.some(item => item.kind === "source.fixAll.eslint" && item.labels.includes("ESLint")), "provider metadata kinds are discovered");
+assert(detectedKinds.some(item => item.kind === "quickfix") && !detectedKinds.some(item => item.kind === "source.organizeImports"), "provider metadata filters managed common kinds");
+assert(setCodeActionExtraSetting("s-editor-code-actions-on-save-json", "refactor.extract", "always"), "detected kind inserted");
+assert(JSON.parse(inputs["s-editor-code-actions-on-save-json"])["refactor.extract"] === "always", "detected kind writes JSON");
 config = { editor: { tabSize: 4, insertSpaces: true }, "[python]": { "editor.tabSize": 2, "editor.insertSpaces": false } };
 editorLang = "python";
 const formatOptions = editorFormatOptions();
@@ -7083,7 +7116,12 @@ def test_vscode_api() -> None:
             "python", _DocumentSymbolProvider())
         code_action_provider = _CodeActionProvider()
         api["languages"]["registerCodeActionsProvider"](
-            "python", code_action_provider)
+            "python", code_action_provider, {
+                "providedCodeActionKinds": [
+                    api["CodeActionKind"]["SourceOrganizeImports"],
+                    "source.fixAll.selftest",
+                ],
+            })
         api["languages"]["registerDocumentFormattingEditProvider"](
             "python", _FormatProvider())
         range_format_provider = _RangeFormatProvider()

@@ -691,6 +691,34 @@ def _json_ready_language_value(value: Any, depth: int = 0) -> Any:
     return str(value)
 
 
+def _code_action_metadata_kinds(metadata: Any) -> List[str]:
+    """Return VS Code code action kinds declared by provider metadata."""
+    if not isinstance(metadata, dict):
+        return []
+    raw = (
+        metadata.get("providedCodeActionKinds")
+        or metadata.get("codeActionKinds")
+        or metadata.get("kinds")
+        or [])
+    values = raw if isinstance(raw, (list, tuple, set)) else [raw]
+    kinds: List[str] = []
+    for item in values:
+        value = ""
+        if isinstance(item, dict):
+            value = str(item.get("value") or "")
+        elif hasattr(item, "value"):
+            try:
+                value = str(getattr(item, "value") or "")
+            except Exception:
+                value = ""
+        else:
+            value = str(item or "")
+        value = value.strip()
+        if value and value not in kinds:
+            kinds.append(value)
+    return kinds
+
+
 # ---------------------------------------------------------------------------
 # Local webview resource server
 # ---------------------------------------------------------------------------
@@ -4243,6 +4271,9 @@ class AIEditorAPI:
             "drop": "documentDrop",
             "dropEdit": "documentDrop",
             "dropEdits": "documentDrop",
+            "providerMetadata": "providerMetadata",
+            "languageProviderMetadata": "providerMetadata",
+            "providers": "providerMetadata",
         }
         kind = kind_aliases.get(str(payload.get("kind") or "").strip())
         if not kind:
@@ -4269,6 +4300,75 @@ class AIEditorAPI:
         position = _editor_provider_position(pos_value, content)
 
         try:
+            if kind == "providerMetadata":
+                target_kind = str(payload.get("providerKind") or "").strip()
+                providers: List[Dict[str, Any]] = []
+                provider_map = getattr(
+                    self._vscode_ns, "_language_providers", {}) or {}
+                items = (
+                    list(provider_map.get(target_kind, []))
+                    if target_kind else [
+                        entry
+                        for group in provider_map.values()
+                        for entry in list(group or [])
+                    ])
+                for entry in items:
+                    if not isinstance(entry, dict):
+                        continue
+                    metadata = entry.get("metadata")
+                    providers.append({
+                        "source": "python",
+                        "kind": str(entry.get("kind") or ""),
+                        "providerId": str(entry.get("providerId")
+                                          or entry.get("id") or ""),
+                        "displayName": str(entry.get("displayName")
+                                           or entry.get("providerId")
+                                           or entry.get("id") or ""),
+                        "extensionId": str(entry.get("extensionId")
+                                           or entry.get("providerId")
+                                           or entry.get("id") or ""),
+                        "selector": _json_ready_language_value(
+                            entry.get("selector")),
+                        "metadata": _json_ready_language_value(metadata),
+                        "codeActionKinds": _code_action_metadata_kinds(
+                            metadata),
+                    })
+                node_host = getattr(self, "_node_ext_host", None)
+                if node_host is not None and getattr(
+                        node_host, "is_running", False):
+                    try:
+                        for entry in node_host.list_language_providers():
+                            if not isinstance(entry, dict):
+                                continue
+                            if target_kind and entry.get("kind") != target_kind:
+                                continue
+                            metadata = entry.get("metadata")
+                            providers.append({
+                                "source": "node",
+                                "kind": str(entry.get("kind") or ""),
+                                "providerId": str(entry.get("providerId")
+                                                  or entry.get("handle")
+                                                  or ""),
+                                "displayName": str(entry.get("displayName")
+                                                   or entry.get("extensionId")
+                                                   or entry.get("handle")
+                                                   or ""),
+                                "extensionId": str(entry.get("extensionId")
+                                                   or ""),
+                                "selector": _json_ready_language_value(
+                                    entry.get("selector")),
+                                "metadata": _json_ready_language_value(
+                                    metadata),
+                                "codeActionKinds": _code_action_metadata_kinds(
+                                    metadata),
+                            })
+                    except Exception:
+                        pass
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "providers": providers,
+                }
             if kind == "diagnostics":
                 diagnostics: List[Any] = []
                 seen: set[str] = set()
