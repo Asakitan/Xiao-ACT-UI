@@ -2480,6 +2480,13 @@ console.log("frontend auto-close behavior ok");
             and "@modified" in html
             and "ext-setting-badge" in html
             and "Invalid JSON" in html)
+    _check("frontend renders extension contribution toggles",
+            "id=\"s-ext-diagnostics\"" in html
+            and "id=\"s-ext-contribs-list\"" in html
+            and "function renderExtensionContributionOptions(value)" in html
+            and "function readExtensionContributionValues()" in html
+            and "enabled_contributions_explicit:true" in html
+            and "customEditors" in html)
     _check("frontend renders extension activity bar views dynamically",
             "function renderExtensionContainerContent(item)" in html
             and "function renderExtensionTreeView(view)" in html
@@ -2845,6 +2852,12 @@ console.log("frontend auto-close behavior ok");
            "views" in ext_defaults._enabled_extension_contributions())
     _check("extension custom editor contribution remains enabled for old settings",
            "customEditors" in ext_defaults._enabled_extension_contributions())
+    ext_explicit = AIEditorAPI(_SettingsGui({"ai_editor": {"extensions": {
+        "enabled_contributions": ["commands"],
+        "enabled_contributions_explicit": True,
+    }}}))
+    _check("extension contribution explicit override is respected",
+           ext_explicit._enabled_extension_contributions() == ["commands"])
     diag_settings_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     diag_result = diag_settings_api.set_extension_host_diagnostics(True)
     diag_loaded = diag_settings_api.load_config()

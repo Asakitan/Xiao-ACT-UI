@@ -173,6 +173,7 @@ _AI_EDITOR_SECTION_DEFAULTS: Dict[str, Dict[str, Any]] = {
             "views",
             "customEditors",
         ],
+        "enabled_contributions_explicit": False,
         "diagnostics_enabled": False,
     },
     "customization": {
@@ -5969,8 +5970,15 @@ class AIEditorAPI:
     def _enabled_extension_contributions(self) -> List[str]:
         ext = self._extension_settings()
         raw = ext.get("enabled_contributions", [])
-        if isinstance(raw, list) and raw:
+        explicit = ext.get("enabled_contributions_explicit") is True
+        if isinstance(raw, list):
             enabled = [str(x) for x in raw]
+            if explicit:
+                return enabled
+            if not enabled:
+                return list(
+                    _AI_EDITOR_SECTION_DEFAULTS["extensions"][
+                        "enabled_contributions"])
             for name in _AI_EDITOR_SECTION_DEFAULTS["extensions"]["enabled_contributions"]:
                 if name not in enabled:
                     enabled.append(name)

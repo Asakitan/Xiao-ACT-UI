@@ -721,6 +721,12 @@ pre.code-block code .type { color:var(--fg-type); }
 .modal label.settings-check input[type="checkbox"] { width:auto; flex:0 0 auto; margin-top:2px; }
 .modal label.settings-check b { color:var(--fg); font-weight:600; }
 .modal label.settings-check small { display:block; color:var(--fg-dim); line-height:1.35; margin-top:2px; }
+.modal .settings-option-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px; }
+.modal .settings-option-card { display:flex; align-items:flex-start; gap:8px; padding:8px 10px; border:1px solid var(--border); border-radius:6px; background:var(--bg3); color:var(--fg-dim); }
+.modal .settings-option-card:hover { background:var(--bg-hover); }
+.modal .settings-option-card input[type="checkbox"] { width:auto; flex:0 0 auto; margin-top:2px; }
+.modal .settings-option-card b { display:block; color:var(--fg); font-weight:600; }
+.modal .settings-option-card small { display:block; color:var(--fg-dim); line-height:1.35; margin-top:2px; }
 .modal label.settings-danger { border:1px solid #f14c4c80; border-radius:var(--radius); padding:8px; background:#ff000012; }
 .modal input[type="checkbox"] { width:auto; }
 
@@ -1030,6 +1036,7 @@ pre.code-block { overflow:visible; }
 .breadcrumb-seg .bc-drop .bc-item:hover { background:var(--bg-hover); }
 
 @media(max-width:900px) { .sidebar { display:none !important; } }
+@media(max-width:760px) { .modal .settings-option-grid { grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
@@ -1652,11 +1659,17 @@ pre.code-block { overflow:visible; }
     <div class="settings-section">
       <div class="sb-group" style="padding:0;margin-top:0">Extension Trust</div>
       <label class="settings-check"><input id="s-ext-confirm" type="checkbox"><span><b>Confirm extension installs</b><small>Recommended. Keep install/uninstall actions user-confirmed.</small></span></label>
+      <label class="settings-check"><input id="s-ext-diagnostics" type="checkbox"><span><b>Extension host diagnostics</b><small>Off by default. Enable only while tracing Node-backed extension activation, webviews, or custom editors.</small></span></label>
       <div class="settings-grid">
         <div><label>Allowed Publishers</label><textarea id="s-ext-allow" rows="2" placeholder="One publisher per line"></textarea></div>
         <div><label>Blocked Publishers</label><textarea id="s-ext-block" rows="2" placeholder="One publisher per line"></textarea></div>
-        <div class="full"><label>Enabled Contributions</label><textarea id="s-ext-contribs" rows="2" placeholder="chatParticipants&#10;languageModelTools&#10;commands"></textarea></div>
+        <div class="full">
+          <label>Enabled Contributions</label>
+          <div class="settings-option-grid" id="s-ext-contribs-list"></div>
+          <textarea id="s-ext-contribs" rows="2" hidden></textarea>
+        </div>
       </div>
+      <div class="settings-help">Choose which VS Code contribution types are loaded into the AI Editor runtime. Custom editors and extension views stay enabled by default for plugin parity.</div>
       <div class="settings-help" id="extension-runtime-status">Extension runtime status not loaded.</div>
     </div>
 
@@ -1772,10 +1785,17 @@ const SETTINGS_SECTION_DEFAULTS={
   codex:{cli_path:'',cli_args:[],transport:'chat_completions',model:'codex-mini-latest'},
   mcp:{access:'prompt',autostart:false,discovery_enabled:true,collision_behavior:'first',server_sampling:false},
   terminal:{profile:'PowerShell 7 (No Profile)',shell_path:'',shell_args:[],timeout:30,output_limit:8000,auto_approve:{}},
-  extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands']},
+  extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands','views','customEditors'],enabled_contributions_explicit:false,diagnostics_enabled:false},
   editor:{formatOnType:false,linkedEditing:false},
   customization:{instructions_locations:['.sao/instructions.md','.sao/instructions'],agent_locations:['.sao/agents'],workflow_locations:['.sao/workflows'],skill_locations:['.agents/skills/.local','.claude/skills/.local'],use_agent_md:true,use_claude_md:false}
 };
+const EXTENSION_CONTRIBUTION_OPTIONS=[
+  {id:'chatParticipants',label:'Chat Participants',description:'Expose extension chat participants in the assistant surface.'},
+  {id:'languageModelTools',label:'LM Tools',description:'Register extension language-model tools for tool invocation.'},
+  {id:'commands',label:'Commands',description:'Enable extension commands and command fallbacks.'},
+  {id:'views',label:'Views',description:'Load extension webview and tree view contributions.'},
+  {id:'customEditors',label:'Custom Editors',description:'Resolve extension-owned editor surfaces such as NBT viewers.'}
+];
 const SETTINGS_DEFAULTS={
   provider:'openai',api_key:'',base_url:'',model:'',temperature:0.7,max_tokens:4096,system_prompt:'',
   top_p:1.0,frequency_penalty:0,presence_penalty:0,stop:[],max_input_tokens:0,max_output_tokens:0,timeout:180,
@@ -8560,6 +8580,36 @@ function readListValue(id,splitCommas){
   const re=splitCommas?/\r?\n|,/:/\r?\n/;
   return text.split(re).map(v=>v.trim()).filter(Boolean);
 }
+function extensionContributionSelection(value){
+  const selected=new Set(Array.isArray(value)&&value.length?value.map(v=>String(v)).filter(Boolean):SETTING_SECTION_DEFAULTS.extensions.enabled_contributions.slice());
+  EXTENSION_CONTRIBUTION_OPTIONS.forEach(opt=>{if(selected.has(opt.id))selected.add(opt.id)});
+  return selected;
+}
+function syncExtensionContributionInput(){
+  const hidden=$('s-ext-contribs');if(!hidden)return;
+  const values=Array.from(document.querySelectorAll('#s-ext-contribs-list input[type=\"checkbox\"]:checked')).map(el=>String(el.value||'')).filter(Boolean);
+  hidden.value=values.join('\n');
+}
+function readExtensionContributionValues(){
+  const values=Array.from(document.querySelectorAll('#s-ext-contribs-list input[type=\"checkbox\"]:checked')).map(el=>String(el.value||'')).filter(Boolean);
+  return values;
+}
+function renderExtensionContributionOptions(value){
+  const host=$('s-ext-contribs-list');if(!host)return;
+  const selected=extensionContributionSelection(value);
+  host.innerHTML='';
+  EXTENSION_CONTRIBUTION_OPTIONS.forEach(opt=>{
+    const label=document.createElement('label');label.className='settings-option-card';label.dataset.extContribution=opt.id;
+    const box=document.createElement('input');box.type='checkbox';box.value=opt.id;box.checked=selected.has(opt.id);box.addEventListener('input',syncExtensionContributionInput);box.addEventListener('change',syncExtensionContributionInput);
+    const text=document.createElement('span');
+    const title=document.createElement('b');title.textContent=opt.label;
+    const desc=document.createElement('small');desc.textContent=opt.description;
+    text.appendChild(title);text.appendChild(desc);
+    label.appendChild(box);label.appendChild(text);
+    host.appendChild(label);
+  });
+  syncExtensionContributionInput();
+}
 function stringifyJsonValue(value){
   if(!value)return'';
   if(typeof value==='string')return value;
@@ -8621,7 +8671,7 @@ function openSettings(){
   setInputValue('s-term-profile',term.profile);setInputValue('s-term-shell',term.shell_path);setInputValue('s-term-args',listToText(term.shell_args));
   setInputValue('s-term-timeout',term.timeout??30);setInputValue('s-term-output',term.output_limit??8000);
   const ext=settingSection('extensions');
-  setCheckedValue('s-ext-confirm',ext.confirm_install!==false);setInputValue('s-ext-allow',listToText(ext.allowed_publishers));setInputValue('s-ext-block',listToText(ext.blocked_publishers));setInputValue('s-ext-contribs',listToText(ext.enabled_contributions));
+  setCheckedValue('s-ext-confirm',ext.confirm_install!==false);setCheckedValue('s-ext-diagnostics',ext.diagnostics_enabled===true);setInputValue('s-ext-allow',listToText(ext.allowed_publishers));setInputValue('s-ext-block',listToText(ext.blocked_publishers));renderExtensionContributionOptions(ext.enabled_contributions);
   const cust=settingSection('customization');
   setCheckedValue('s-cust-agent-md',cust.use_agent_md!==false);setCheckedValue('s-cust-claude-md',cust.use_claude_md===true);
   setInputValue('s-cust-instructions',listToText(cust.instructions_locations));setInputValue('s-cust-agents',listToText(cust.agent_locations));
@@ -8825,7 +8875,7 @@ async function saveSettings(){
   config.codex={...settingSection('codex'),cli_path:readInputValue('s-codex-cli'),model:readInputValue('s-codex-model'),transport:readInputValue('s-codex-transport')||'chat_completions',cli_args:readListValue('s-codex-args',false)};
   config.mcp={...settingSection('mcp'),access:readInputValue('s-mcp-access')||'prompt',collision_behavior:readInputValue('s-mcp-collision')||'first',discovery_enabled:readCheckedValue('s-mcp-discovery'),autostart:readCheckedValue('s-mcp-autostart'),server_sampling:readCheckedValue('s-mcp-sampling')};
   config.terminal={...settingSection('terminal'),profile:readInputValue('s-term-profile')||'PowerShell 7 (No Profile)',shell_path:readInputValue('s-term-shell'),shell_args:readListValue('s-term-args',false),timeout:readNumberValue('s-term-timeout',30,true),output_limit:readNumberValue('s-term-output',8000,true)};
-  config.extensions={...settingSection('extensions'),confirm_install:readCheckedValue('s-ext-confirm'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true),enabled_contributions:readListValue('s-ext-contribs',true)};
+  config.extensions={...settingSection('extensions'),confirm_install:readCheckedValue('s-ext-confirm'),diagnostics_enabled:readCheckedValue('s-ext-diagnostics'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true),enabled_contributions:readExtensionContributionValues(),enabled_contributions_explicit:true};
   config.editor={...settingSection('editor'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing')};
   config.customization={...settingSection('customization'),use_agent_md:readCheckedValue('s-cust-agent-md'),use_claude_md:readCheckedValue('s-cust-claude-md'),instructions_locations:readListValue('s-cust-instructions',true),agent_locations:readListValue('s-cust-agents',true),workflow_locations:readListValue('s-cust-workflows',true),skill_locations:readListValue('s-cust-skills',true)};
   await applyEditorColorTheme(readInputValue('s-color-theme')||config.color_theme||config.theme||'dark');
@@ -8847,6 +8897,10 @@ async function saveSettings(){
     showToast('Save failed: '+callFailedMessage(saveResult,'backend unavailable'),'error',3200);
     if(saveResult&&saveResult.applied)showToast('Current session updated, but settings were not persisted','warning',3600);
     return;
+  }
+  const diagApply=await call('set_extension_host_diagnostics',config.extensions.diagnostics_enabled);
+  if(!callSucceededOrApplied(diagApply)){
+    showToast('Extension diagnostics update failed: '+callFailedMessage(diagApply,'backend unavailable'),'warning',3200);
   }
   closeSettings();
   renderProviderTabs();
