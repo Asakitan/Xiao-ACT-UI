@@ -1247,6 +1247,10 @@ pre.code-block { overflow:visible; }
       <div class="sb-section">
         <div class="sb-group" data-i18n="workspace_files">Workspace Files</div>
         <div id="explorer-tree" class="tree-root"></div>
+        <div id="explorer-extension-views-block" style="display:none;margin-top:10px">
+          <div class="sb-group">Extension Views</div>
+          <div id="explorer-extension-views"></div>
+        </div>
       </div>
     </div>
     <!-- Assistant sidebar (default) -->
@@ -7282,6 +7286,7 @@ function switchSidebar(panel){
   if(panel==='explorer'){
     const tree=$('explorer-tree');
     if(tree&&!tree.dataset.loaded)refreshExplorer();
+    else renderExplorerExtensionViews();
   }
   if(panel==='tools'&&!$('tools-list').children.length){
     call('list_tools').then(t=>renderToolsSidebar(t&&t.tools?t.tools:[]));
@@ -7510,6 +7515,7 @@ async function refreshExplorer(relPath=''){
   const rootIcon=rootNode.querySelector('.tree-icon');if(rootIcon)applyIconVisual(rootIcon,explorerFolderIcon(explorerRootName,true,true));
   renderExplorerEntries(children,res.entries||[],1,currentPath);
   tree.dataset.loaded='1';
+  renderExplorerExtensionViews();
 }
 
 function renderExplorerEntries(container,entries,depth,activePath){
@@ -10223,7 +10229,11 @@ let _extTreeRefreshTimer=0;
 let _extTreeChildRequestSeq=0;
 function scheduleExtensionActivityRefresh(){
   clearTimeout(_extTreeRefreshTimer);
-  _extTreeRefreshTimer=setTimeout(()=>{_extTreeRefreshTimer=0;renderExtensionActivityBar()},30);
+  _extTreeRefreshTimer=setTimeout(()=>{
+    _extTreeRefreshTimer=0;
+    renderExtensionActivityBar();
+    renderExplorerExtensionViews();
+  },30);
 }
 function extensionViewTitle(view){
   return view.name||view.title||view.id||'Extension View';
@@ -10708,18 +10718,23 @@ function renderExtensionWebviewView(view){
   }
   return renderExtensionManifestView(view);
 }
-function renderExtensionContainerContent(item){
-  const contentEl=$('ext-vc-content');if(!contentEl)return;
+function renderExtensionViewsInto(contentEl,item,options){
+  if(!contentEl)return;
+  options=options||{};
   const views=Array.isArray(item.views)?item.views:[];
   contentEl.innerHTML='';
-  const meta=document.createElement('div');
-  meta.style.cssText='color:var(--fg-dim);font-size:11px;margin-bottom:8px';
-  meta.textContent='Extension: '+(item.extension_id||'unknown')+' · '+views.length+' view'+(views.length===1?'':'s');
-  contentEl.appendChild(meta);
+  if(options.showMeta!==false){
+    const meta=document.createElement('div');
+    meta.style.cssText='color:var(--fg-dim);font-size:11px;margin-bottom:8px';
+    const owner=item.extension_id||item.location||item.id||'unknown';
+    meta.textContent='Extension: '+owner+' · '+views.length+' view'+(views.length===1?'':'s');
+    contentEl.appendChild(meta);
+  }
   if(!views.length){
     const empty=document.createElement('div');empty.style.cssText='color:var(--fg-dim);font-size:12px;padding:4px 0';
-    empty.textContent='No views registered for this container.';
-    contentEl.appendChild(empty);return;
+    empty.textContent=options.emptyText||'No views registered for this container.';
+    if(empty.textContent)contentEl.appendChild(empty);
+    return;
   }
   views.forEach(view=>{
     const kind=view.runtimeKind||(view.runtimeState&&view.runtimeState.kind)||view.type||'view';
@@ -10727,6 +10742,23 @@ function renderExtensionContainerContent(item){
     else if(kind==='treeView')contentEl.appendChild(renderExtensionTreeView(view));
     else contentEl.appendChild(renderExtensionManifestView(view));
   });
+}
+function renderExtensionContainerContent(item){
+  renderExtensionViewsInto($('ext-vc-content'),item,{showMeta:true});
+}
+async function renderExplorerExtensionViews(){
+  const block=$('explorer-extension-views-block');
+  const contentEl=$('explorer-extension-views');
+  if(!block||!contentEl)return;
+  let item={views:[]};
+  try{
+    const r=await call('list_extension_container_views','explorer');
+    item=(r&&r.item)?r.item:{views:[]};
+  }catch(e){item={views:[],error:String(e)}}
+  const views=Array.isArray(item.views)?item.views:[];
+  if(!views.length){block.style.display='none';contentEl.innerHTML='';return}
+  block.style.display='';
+  renderExtensionViewsInto(contentEl,item,{showMeta:false,emptyText:''});
 }
 async function renderExtensionActivityBar(){
   try{

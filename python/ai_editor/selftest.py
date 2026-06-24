@@ -412,8 +412,10 @@ def test_app_settings_parity() -> None:
         "list_editor_languages", "list_editor_grammars",
         "list_editor_themes", "get_editor_theme", "get_editor_icon_theme",
         "list_extension_activity_bar_items",
+        "list_extension_container_views",
         "set_extension_activity_view_visibility",
         "set_extension_tree_item_checkbox_state",
+        "drop_extension_tree_items",
         "extension_quick_input_action",
         "load_history", "switch_provider", "list_chat_providers",
         "provider_send", "provider_cancel", "provider_new_chat",
@@ -2925,6 +2927,11 @@ console.log("extension setting schema helpers ok");
             and "call('drop_extension_tree_items',viewId,payload.sourceHandles,targetHandle,{})" in html
             and "row.draggable=true" in html
             and "event.dataTransfer.setData('application/x-sao-tree-view'" in html
+            and "id=\"explorer-extension-views-block\"" in html
+            and "id=\"explorer-extension-views\"" in html
+            and "function renderExtensionViewsInto(contentEl,item,options)" in html
+            and "function renderExplorerExtensionViews()" in html
+            and "call('list_extension_container_views','explorer')" in html
             and "let _extTreeChildRequestSeq=0" in html
             and "function loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion,dnd)" in html
             and "function setExtensionTreeStatus(childBox,depth,text,kind,retry)" in html
@@ -7001,6 +7008,13 @@ def test_app_extension_runtime_support() -> None:
                 "views": {"selftest.activity": [
                     {"id": "selftest.activity.tree", "name": "Activity Tree"},
                     {"id": "selftest.activity.webview", "name": "Activity Webview", "type": "webview"},
+                ], "explorer": [
+                    {"id": "selftest.explorer.tree", "name": "Explorer Runtime Tree"},
+                    {
+                        "id": "selftest.explorer.hidden",
+                        "name": "Hidden Manifest Tree",
+                        "visibility": "hidden",
+                    },
                 ]},
                 "viewsWelcome": [
                     {
@@ -7116,6 +7130,8 @@ def test_app_extension_runtime_support() -> None:
             lambda item: activity_command_log.append(("open", item)) or {"opened": str(item)})
         activity_api["window"]["registerTreeDataProvider"](
             "selftest.activity.tree", activity_tree_provider)
+        activity_api["window"]["registerTreeDataProvider"](
+            "selftest.explorer.tree", _TreeProvider())
         activity_api["window"]["registerWebviewViewProvider"](
             "selftest.activity.webview", _CommandWebviewProvider())
         activity_tree_view = api._vscode_ns._tree_views.get("selftest.activity.tree")
@@ -7177,6 +7193,19 @@ def test_app_extension_runtime_support() -> None:
                and activity_views.get("selftest.activity.tree", {}).get("runtimeState", {}).get("kind") == "treeView"
                and activity_views.get("selftest.activity.webview", {}).get("runtimeState", {}).get("kind") == "webviewView"
                and "command-webview" in activity_views.get("selftest.activity.webview", {}).get("runtimeState", {}).get("html", ""))
+        explorer_container = api.list_extension_container_views(
+            "explorer").get("item", {})
+        explorer_views = {
+            view.get("id"): view
+            for view in explorer_container.get("views", [])
+        }
+        _check("built-in Explorer container renders extension-contributed views",
+               explorer_container.get("id") == "explorer"
+               and explorer_views.get("selftest.explorer.tree", {})
+               .get("runtimeState", {}).get("kind") == "treeView"
+               and explorer_views.get("selftest.explorer.tree", {})
+               .get("runtimeAvailable") is True
+               and "selftest.explorer.hidden" not in explorer_views)
         _check("activity tree view exposes dynamic state properties",
                activity_views.get("selftest.activity.tree", {})
                .get("runtimeState", {}).get("title") == "Activity Runtime Tree"

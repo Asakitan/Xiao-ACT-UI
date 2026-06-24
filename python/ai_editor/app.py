@@ -10000,6 +10000,51 @@ class AIEditorAPI:
             pass
         return {"items": items}
 
+    def list_extension_container_views(self, container_id: str) -> Dict:
+        """Return extension views contributed to an existing VS Code container."""
+        self._ensure_engine()
+        normalized_container = str(container_id or "").strip()
+        if not normalized_container:
+            return {"error": "Extension view container id is required"}
+        views = self._extension_container_views(normalized_container)
+        return {
+            "item": {
+                "id": normalized_container,
+                "title": self._builtin_extension_container_title(
+                    normalized_container),
+                "extension_id": "",
+                "location": normalized_container,
+                "builtin": True,
+                "views": views,
+                "view_count": len(views),
+            }
+        }
+
+    def _extension_container_views(
+            self, container_id: str) -> List[Dict[str, Any]]:
+        raw_views = self._ext_host.ext_points.all_contributions.get(
+            "views", {}).get(str(container_id or ""), [])
+        views: List[Dict[str, Any]] = []
+        for view in raw_views if isinstance(raw_views, list) else []:
+            if not isinstance(view, dict):
+                continue
+            decorated = self._decorate_extension_view(view)
+            visibility = str(decorated.get("visibility", "")).lower()
+            if visibility == "hidden" and not decorated.get("runtimeAvailable"):
+                continue
+            views.append(decorated)
+        return views
+
+    @staticmethod
+    def _builtin_extension_container_title(container_id: str) -> str:
+        titles = {
+            "explorer": "Explorer",
+            "scm": "Source Control",
+            "debug": "Run and Debug",
+            "test": "Testing",
+        }
+        return titles.get(str(container_id or ""), str(container_id or ""))
+
     def list_editor_title_actions(self) -> Dict:
         """Return editor title bar actions contributed by extensions.
 
