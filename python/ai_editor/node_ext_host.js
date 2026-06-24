@@ -4915,6 +4915,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             'TypeParameter',
         ].map((n, i) => [n, i])),
         CompletionItemInsertTextRule: { None: 0, KeepWhitespace: 1, InsertAsSnippet: 4 },
+        CompletionItemTag: { Deprecated: 1 },
         SymbolKind: Object.fromEntries([
             'File', 'Module', 'Namespace', 'Package', 'Class', 'Method',
             'Property', 'Field', 'Constructor', 'Enum', 'Interface',

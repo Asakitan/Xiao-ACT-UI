@@ -1673,6 +1673,7 @@ class CompletionItem:
     def __init__(self, label: Any = "", kind: Any = None) -> None:
         self.label = label
         self.kind = kind
+        self.tags = []
         self.detail = None
         self.documentation = None
         self.sortText = None
@@ -3648,6 +3649,7 @@ class VscodeNamespace:
                 "KeepWhitespace": 1,
                 "InsertAsSnippet": 4,
             },
+            "CompletionItemTag": {"Deprecated": 1},
             "SignatureHelpTriggerKind": {
                 "Invoke": 1,
                 "TriggerCharacter": 2,

@@ -465,6 +465,7 @@ def test_app_settings_parity() -> None:
             self.seen_dirty.append(document.isDirty)
             item = CompletionItem("editorCompletion")
             item.detail = document.languageId
+            item.tags = [1]
             item.sortText = "000_editorCompletion"
             item.filterText = "editorCompletionFilter"
             item.preselect = True
@@ -1002,6 +1003,8 @@ def test_app_settings_parity() -> None:
                == "editorCompletion"
                and completion_result.get("items", [{}])[0].get("detail")
                == "python"
+               and completion_result.get("items", [{}])[0].get("tags")
+               == [1]
                and completion_result.get("items", [{}])[0].get("sortText")
                == "000_editorCompletion"
                and completion_result.get("items", [{}])[0].get("filterText")
@@ -2610,7 +2613,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function editorCompletionRangeOffsets(item,value,s,end)" in html
            and "function editorApplyCompletionAdditionalEdits(item,mainRange)" in html
            and "function editorCompletionKeepWhitespace(item)" in html
-           and "function editorInsertCompletionCommitCharacter(ch)" in html)
+           and "function editorInsertCompletionCommitCharacter(ch)" in html
+           and "function editorCompletionFuzzyMatch(pattern,text)" in html
+           and "function editorAppendCompletionLabel(target,item)" in html
+           and "editor-suggest-item.deprecated" in html)
     try:
         from ai_editor.node_runtime import get_node_path
         node_path = get_node_path()
@@ -2835,8 +2841,16 @@ console.log("frontend snippet behavior ok");
             "editorCompletionFilterText",
             "editorCompletionSortKey",
             "editorCompletionCommitCharacters",
+            "editorCompletionTags",
+            "editorCompletionIsDeprecated",
+            "editorCompletionInlineDetail",
+            "editorCompletionFuzzyMatch",
+            "editorCompletionScore",
+            "editorStoreSuggestMatch",
+            "editorCompletionMatchIndices",
             "editorCompletionMatchesPrefix",
             "editorNormalizeSuggestItems",
+            "editorAppendCompletionLabel",
             "editorLineIndentAt",
             "editorAdjustCompletionWhitespace",
             "editorCompletionAdjustedText",
@@ -2863,6 +2877,7 @@ let closedSuggest = 0;
 let undoPushes = 0;
 const COMPLETION_INSERT_TEXT_RULE_KEEP_WHITESPACE = 1;
 const COMPLETION_INSERT_TEXT_RULE_INSERT_AS_SNIPPET = 4;
+const COMPLETION_ITEM_TAG_DEPRECATED = 1;
 const ed = {
   value: "",
   selectionStart: 0,
@@ -2916,6 +2931,20 @@ function setStatus(value){ statusText = String(value || ""); }
 function runEditorCodeActionCommand(command){ ranCommands.push(command.command || command); }
 function isEditorSuggestOpen(){ return true; }
 function setEditorSuggestIndex(index){ _editorSuggestIndex = index; }
+const document = {
+  createElement(tag) {
+    return {
+      tag,
+      textContent: "",
+      className: "",
+      children: [],
+      appendChild(child) {
+        this.children.push(child);
+        this.textContent += child.textContent || "";
+      },
+    };
+  },
+};
 """ + js_functions + r"""
 const normalized = editorNormalizeSuggestItems([
   { label: "prefixSlow", sortText: "z" },
@@ -2925,6 +2954,28 @@ const normalized = editorNormalizeSuggestItems([
 ], "pre");
 assert(normalized.length === 3 && normalized[0].label === "prefixPreferred",
        "filterText/preselect normalization");
+const fuzzy = editorNormalizeSuggestItems([
+  { label: "normalCompletion" },
+  { label: "nodeCompletion" },
+  { label: "ignored" },
+], "nC");
+assert(fuzzy.length === 2 && fuzzy[0].label === "nodeCompletion",
+       "camel-case fuzzy scoring prefers compact match");
+const filterOnly = editorNormalizeSuggestItems([
+  { label: "push", filterText: "arrayPush" },
+  { label: "pop", filterText: "arrayPop" },
+], "aP");
+assert(filterOnly.length === 2 && filterOnly[0].label === "pop"
+       && editorCompletionMatchIndices(filterOnly[0]).length === 0,
+       "filterText can match independently from label highlights");
+const labelNode = document.createElement("div");
+editorAppendCompletionLabel(labelNode, fuzzy[0]);
+assert(labelNode.children.some(child => child.className === "editor-suggest-match"),
+       "suggest labels mark fuzzy match characters");
+assert(editorCompletionIsDeprecated({ tags: [1] }) === true,
+       "deprecated completion tag detected");
+assert(editorCompletionInlineDetail({ label: { label: "fn", detail: "(x)", description: "module" }, detail: "docs" }) === "(x) module docs",
+       "label object detail and description render inline");
 const sorted = editorNormalizeSuggestItems([
   { label: "zeta", sortText: "z" },
   { label: "alpha", sortText: "a" },
@@ -5214,6 +5265,8 @@ def test_vscode_api() -> None:
     _check("api.CompletionItemInsertTextRule",
            api["CompletionItemInsertTextRule"]["KeepWhitespace"] == 1
            and api["CompletionItemInsertTextRule"]["InsertAsSnippet"] == 4)
+    _check("api.CompletionItemTag",
+           api["CompletionItemTag"]["Deprecated"] == 1)
     _check("api.SignatureHelpTriggerKind",
            api["SignatureHelpTriggerKind"]["TriggerCharacter"] == 2)
 
@@ -9477,6 +9530,7 @@ async function activate(context) {
     provideCompletionItems(document, position, token, context) {
       const item = new vscode.CompletionItem('nodeCompletion', vscode.CompletionItemKind.Function);
       item.detail = document.languageId + ':' + (context.triggerCharacter || '');
+      item.tags = [vscode.CompletionItemTag.Deprecated];
       item.sortText = '000_nodeCompletion';
       item.filterText = 'nodeCompletionFilter';
       item.preselect = true;
@@ -11936,6 +11990,7 @@ module.exports = { activate, deactivate };
                        == "000_nodeCompletion"
                        and node_completion_first_get("filterText")
                        == "nodeCompletionFilter"
+                       and node_completion_first_get("tags") == [1]
                        and node_completion_first_get("preselect") is True
                        and node_completion_first_get("insertTextRules") == 4
                        and node_completion_first_get("keepWhitespace") is True
