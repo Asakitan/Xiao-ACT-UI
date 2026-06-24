@@ -1612,8 +1612,18 @@ class NodeExtensionHost:
         self._on_tree_callbacks: List[
             Callable[[str, str, Dict[str, Any]], None]
         ] = []
+        self._on_lm_tool_callbacks: List[
+            Callable[[str, str, Dict[str, Any]], None]
+        ] = []
+        self._on_chat_participant_callbacks: List[
+            Callable[[str, str, Dict[str, Any]], None]
+        ] = []
         self._tree_request_lock = threading.Lock()
         self._tree_requests: Dict[str, Dict[str, Any]] = {}
+        self._lm_tool_request_lock = threading.Lock()
+        self._lm_tool_requests: Dict[str, Dict[str, Any]] = {}
+        self._chat_participant_request_lock = threading.Lock()
+        self._chat_participant_requests: Dict[str, Dict[str, Any]] = {}
         self._language_request_lock = threading.Lock()
         self._language_requests: Dict[str, Dict[str, Any]] = {}
         self._language_providers: List[Dict[str, Any]] = []
@@ -2213,6 +2223,49 @@ class NodeExtensionHost:
                 if isinstance(event, threading.Event):
                     event.set()
 
+        elif msg_type in {"lm_tool_registered", "lm_tool_disposed"}:
+            name = str(msg.get("name") or msg.get("toolName") or "")
+            payload = dict(msg)
+            payload.pop("type", None)
+            for cb in self._on_lm_tool_callbacks:
+                try:
+                    cb(msg_type, name, payload)
+                except Exception:
+                    _log.exception("[NodeExtHost] on_lm_tool callback error")
+
+        elif msg_type == "lm_tool_response":
+            request_id = str(msg.get("requestId", ""))
+            with self._lm_tool_request_lock:
+                pending = self._lm_tool_requests.get(request_id)
+            if pending:
+                pending["response"] = msg
+                event = pending.get("event")
+                if isinstance(event, threading.Event):
+                    event.set()
+
+        elif msg_type in {
+                "chat_participant_registered",
+                "chat_participant_disposed"}:
+            participant_id = str(msg.get("id") or msg.get("participantId") or "")
+            payload = dict(msg)
+            payload.pop("type", None)
+            for cb in self._on_chat_participant_callbacks:
+                try:
+                    cb(msg_type, participant_id, payload)
+                except Exception:
+                    _log.exception(
+                        "[NodeExtHost] on_chat_participant callback error")
+
+        elif msg_type == "chat_participant_response":
+            request_id = str(msg.get("requestId", ""))
+            with self._chat_participant_request_lock:
+                pending = self._chat_participant_requests.get(request_id)
+            if pending:
+                pending["response"] = msg
+                event = pending.get("event")
+                if isinstance(event, threading.Event):
+                    event.set()
+
         elif msg_type == "tree_response":
             request_id = str(msg.get("requestId", ""))
             with self._tree_request_lock:
@@ -2346,6 +2399,18 @@ class NodeExtensionHost:
             callback: Callable[[str, str, Dict[str, Any]], None]) -> None:
         """Register a callback for Node TreeDataProvider lifecycle events."""
         self._on_tree_callbacks.append(callback)
+
+    def on_lm_tool_event(
+            self,
+            callback: Callable[[str, str, Dict[str, Any]], None]) -> None:
+        """Register a callback for Node language model tool lifecycle events."""
+        self._on_lm_tool_callbacks.append(callback)
+
+    def on_chat_participant_event(
+            self,
+            callback: Callable[[str, str, Dict[str, Any]], None]) -> None:
+        """Register a callback for Node chat participant lifecycle events."""
+        self._on_chat_participant_callbacks.append(callback)
 
     def request_command_result(
             self, command_id: str, args: Optional[List[Any]] = None,
@@ -2584,6 +2649,135 @@ class NodeExtensionHost:
                 ok=ok,
                 timeout=timed_out,
                 detail=kind,
+                error=error,
+            )
+
+    def request_lm_tool_result(
+            self, name: str, input_data: Any = None,
+            default: Any = None, timeout: float = 3.0) -> Dict[str, Any]:
+        """Synchronously invoke a Node-registered language model tool."""
+        started = time.perf_counter()
+        ok = False
+        timed_out = False
+        error = ""
+        detail = str(name or "")
+        if not self.is_running:
+            error = "Node extension host is not running"
+            self._record_diagnostic(
+                "lm_tool", 0, ok=False, detail=detail, error=error)
+            return {"ok": False, "value": default, "error": error}
+        request_id = str(uuid.uuid4())
+        event = threading.Event()
+        with self._lm_tool_request_lock:
+            self._lm_tool_requests[request_id] = {"event": event}
+        try:
+            sent = self._send({
+                "type": "lm_tool_request",
+                "requestId": request_id,
+                "name": detail,
+                "input": input_data,
+            })
+            if not sent:
+                error = "Node language model tool request could not be sent"
+                return {"ok": False, "value": default, "error": error}
+            if not event.wait(timeout):
+                timed_out = True
+                error = "Node language model tool request timed out"
+                return {
+                    "ok": False,
+                    "value": default,
+                    "error": error,
+                    "timeout": True,
+                }
+            with self._lm_tool_request_lock:
+                pending = self._lm_tool_requests.get(request_id, {})
+            response = pending.get("response", {})
+            if isinstance(response, dict) and response.get("ok"):
+                ok = True
+                return {
+                    "ok": True,
+                    "value": response.get("value", default),
+                }
+            error = (
+                response.get("error")
+                if isinstance(response, dict)
+                else "Node language model tool failed")
+            return {"ok": False, "value": default, "error": error}
+        finally:
+            with self._lm_tool_request_lock:
+                self._lm_tool_requests.pop(request_id, None)
+            self._record_diagnostic(
+                "lm_tool",
+                (time.perf_counter() - started) * 1000,
+                ok=ok,
+                timeout=timed_out,
+                detail=detail,
+                error=error,
+            )
+
+    def request_chat_participant_result(
+            self, participant_id: str, prompt: str = "",
+            request: Optional[Dict[str, Any]] = None,
+            default: Any = None, timeout: float = 3.0) -> Dict[str, Any]:
+        """Synchronously invoke a Node-registered chat participant."""
+        started = time.perf_counter()
+        ok = False
+        timed_out = False
+        error = ""
+        detail = str(participant_id or "")
+        if not self.is_running:
+            error = "Node extension host is not running"
+            self._record_diagnostic(
+                "chat_participant", 0, ok=False, detail=detail,
+                error=error)
+            return {"ok": False, "value": default, "error": error}
+        request_id = str(uuid.uuid4())
+        event = threading.Event()
+        with self._chat_participant_request_lock:
+            self._chat_participant_requests[request_id] = {"event": event}
+        try:
+            sent = self._send({
+                "type": "chat_participant_request",
+                "requestId": request_id,
+                "participantId": detail,
+                "prompt": str(prompt or ""),
+                "request": dict(request or {}),
+            })
+            if not sent:
+                error = "Node chat participant request could not be sent"
+                return {"ok": False, "value": default, "error": error}
+            if not event.wait(timeout):
+                timed_out = True
+                error = "Node chat participant request timed out"
+                return {
+                    "ok": False,
+                    "value": default,
+                    "error": error,
+                    "timeout": True,
+                }
+            with self._chat_participant_request_lock:
+                pending = self._chat_participant_requests.get(request_id, {})
+            response = pending.get("response", {})
+            if isinstance(response, dict) and response.get("ok"):
+                ok = True
+                return {
+                    "ok": True,
+                    "value": response.get("value", default),
+                }
+            error = (
+                response.get("error")
+                if isinstance(response, dict)
+                else "Node chat participant failed")
+            return {"ok": False, "value": default, "error": error}
+        finally:
+            with self._chat_participant_request_lock:
+                self._chat_participant_requests.pop(request_id, None)
+            self._record_diagnostic(
+                "chat_participant",
+                (time.perf_counter() - started) * 1000,
+                ok=ok,
+                timeout=timed_out,
+                detail=detail,
                 error=error,
             )
 

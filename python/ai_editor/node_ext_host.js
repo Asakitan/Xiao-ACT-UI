@@ -588,6 +588,19 @@ class CancellationTokenSource {
     dispose() { this._emitter.dispose(); }
 }
 
+class LanguageModelTextPart {
+    constructor(value = '', audience) {
+        this.value = value === undefined || value === null ? '' : String(value);
+        this.audience = audience;
+    }
+}
+
+class LanguageModelToolResult {
+    constructor(content = []) {
+        this.content = Array.isArray(content) ? content : [content];
+    }
+}
+
 // -------------------------------------------------------------------------
 // Memento (globalState / workspaceState)
 // -------------------------------------------------------------------------
@@ -1054,7 +1067,11 @@ const _fileSystemProviders = new Map();  // scheme -> { provider, options, exten
 const _textDocumentContentProviders = new Map(); // scheme -> { provider, extensionId }
 const _uriHandlers = new Map();          // extensionId -> { handler }
 const _languageProviders = [];           // { kind, selector, provider, triggers?, disposable }
+const _lmTools = new Map();              // name -> { handle, tool, extensionId, metadata }
+const _chatParticipants = new Map();     // id -> { handle, handler, extensionId }
 let _nextLanguageProviderHandle = 1;
+let _nextLmToolHandle = 1;
+let _nextChatParticipantHandle = 1;
 let _nextPythonCommandRequestHandle = 1;
 let _nextExtensionActivationRequestHandle = 1;
 const _languageDocumentTextCache = new Map(); // uri -> { version, text }
@@ -1063,6 +1080,7 @@ const _onDidOpenTextDocumentEmitter = new EventEmitter();
 const _onDidCloseTextDocumentEmitter = new EventEmitter();
 const _onDidChangeTextDocumentEmitter = new EventEmitter();
 const _onDidSaveTextDocumentEmitter = new EventEmitter();
+const _onDidChangeLmToolsEmitter = new EventEmitter();
 const _workspaceRoot = path.resolve(process.cwd());
 const _workspaceName = path.basename(_workspaceRoot) || _workspaceRoot;
 const _workspaceDefaultSkipDirs = new Set(['.git', 'node_modules', '__pycache__', '.venv', 'venv']);
@@ -1427,6 +1445,136 @@ function _serializeLanguageValue(value) {
         return result;
     }
     return String(value);
+}
+
+function _lmToolDefinitionName(definition) {
+    if (typeof definition === 'string') return definition;
+    return String(definition?.name || definition?.id || '');
+}
+
+function _lmToolInputSchema(tool, definition) {
+    const schema = definition?.inputSchema || definition?.schema
+        || tool?.inputSchema || tool?.schema;
+    return schema && typeof schema === 'object' ? schema : { type: 'object', properties: {} };
+}
+
+function _lmToolDescription(name, tool, definition) {
+    return String(
+        definition?.modelDescription
+        || definition?.description
+        || definition?.displayName
+        || tool?.description
+        || name
+    );
+}
+
+function _serializeLanguageModelContentPart(part) {
+    if (part === undefined || part === null) return { type: 'text', text: '' };
+    if (typeof part === 'string' || typeof part === 'number' || typeof part === 'boolean') {
+        return { type: 'text', text: String(part) };
+    }
+    if (part instanceof Uri) return { type: 'text', text: part.toString() };
+    if (part && typeof part === 'object') {
+        const text = part.text ?? part.value ?? part.markdown;
+        if (text !== undefined && text !== null) {
+            return { type: 'text', text: String(text) };
+        }
+        const serialized = _serializeLanguageValue(part);
+        if (serialized && typeof serialized === 'object') return serialized;
+    }
+    return { type: 'text', text: String(part) };
+}
+
+function _serializeLanguageModelToolResult(value) {
+    if (value === undefined || value === null) {
+        return { content: [] };
+    }
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        return { content: [{ type: 'text', text: String(value) }] };
+    }
+    if (Array.isArray(value?.content)) {
+        return {
+            content: value.content.map(_serializeLanguageModelContentPart),
+        };
+    }
+    return _serializeLanguageValue(value);
+}
+
+async function _invokeLmToolEntry(entry, input, token) {
+    const tool = entry?.tool;
+    if (!tool) throw new Error(`Language model tool not found: ${entry?.name || ''}`);
+    const options = {
+        input: _deserializeArgFromPython(input),
+        toolInvocationToken: token,
+    };
+    let result;
+    if (typeof tool.invoke === 'function') {
+        result = tool.invoke(options, token);
+    } else if (typeof tool === 'function') {
+        result = tool(options, token);
+    } else {
+        throw new Error(`Language model tool has no invoke handler: ${entry.name}`);
+    }
+    return result && typeof result.then === 'function' ? await result : result;
+}
+
+function _chatPartToText(part) {
+    if (part === undefined || part === null) return '';
+    if (typeof part === 'string' || typeof part === 'number' || typeof part === 'boolean') {
+        return String(part);
+    }
+    if (part instanceof Uri) return part.toString();
+    if (part && typeof part === 'object') {
+        const text = part.value ?? part.text ?? part.markdown ?? part.content;
+        if (text !== undefined && text !== null) return String(text);
+    }
+    return String(part);
+}
+
+function _createChatResponseStream(parts) {
+    const append = (value) => {
+        const text = _chatPartToText(value);
+        parts.push(text);
+        return text;
+    };
+    return {
+        markdown: append,
+        text: append,
+        progress() {},
+        warning: append,
+        info: append,
+        anchor(value, title) { append(title || value); },
+        button() {},
+        reference() {},
+        reference2() {},
+        filetree() {},
+        codeblockUri(value) { append(value); },
+        codeCitation(value) { append(value); },
+        textEdit() {},
+        confirmation() {},
+        notebookEdit() {},
+        workspaceEdit() {},
+        thinkingProgress: append,
+        beginToolInvocation() {},
+        updateToolInvocation() {},
+        push: append,
+    };
+}
+
+function _chatRequestFromPayload(msg) {
+    const request = msg.request && typeof msg.request === 'object'
+        ? _deserializeArgFromPython(msg.request)
+        : {};
+    return Object.assign({
+        prompt: String(msg.prompt ?? request.prompt ?? ''),
+        command: String(msg.command ?? request.command ?? ''),
+        references: [],
+        toolReferences: [],
+        attempt: 0,
+        enableCommandDetection: true,
+        location: 1,
+        tools: {},
+    }, request);
 }
 
 function _positionFromPayload(value) {
@@ -3475,23 +3623,159 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 return Promise.resolve([]);
             },
             registerTool(name, tool) {
-                log(`stub: lm.registerTool ${name}`);
-                return new Disposable(() => {});
+                const toolName = String(name || '');
+                if (!toolName) throw new Error('Language model tool name is required');
+                const entry = {
+                    handle: _nextLmToolHandle++,
+                    name: toolName,
+                    tool,
+                    extensionId: extDesc.extensionId || '',
+                    metadata: {
+                        description: _lmToolDescription(toolName, tool, null),
+                        inputSchema: _lmToolInputSchema(tool, null),
+                        tags: Array.isArray(tool?.tags) ? tool.tags : [],
+                    },
+                };
+                _lmTools.set(toolName, entry);
+                send({
+                    type: 'lm_tool_registered',
+                    handle: entry.handle,
+                    extensionId: entry.extensionId,
+                    name: entry.name,
+                    description: entry.metadata.description,
+                    inputSchema: entry.metadata.inputSchema,
+                    tags: entry.metadata.tags,
+                });
+                _onDidChangeLmToolsEmitter.fire({ added: [toolName], removed: [] });
+                const d = new Disposable(() => {
+                    if (_lmTools.get(toolName) === entry) {
+                        _lmTools.delete(toolName);
+                        send({
+                            type: 'lm_tool_disposed',
+                            handle: entry.handle,
+                            extensionId: entry.extensionId,
+                            name: entry.name,
+                        });
+                        _onDidChangeLmToolsEmitter.fire({ added: [], removed: [toolName] });
+                    }
+                });
+                subscriptions.push(d);
+                return d;
+            },
+            registerToolDefinition(definition, tool) {
+                const toolName = _lmToolDefinitionName(definition);
+                if (!toolName) throw new Error('Language model tool definition name is required');
+                const entry = {
+                    handle: _nextLmToolHandle++,
+                    name: toolName,
+                    tool,
+                    extensionId: extDesc.extensionId || '',
+                    definition: definition && typeof definition === 'object'
+                        ? _serializeLanguageValue(definition)
+                        : { name: toolName },
+                    metadata: {
+                        description: _lmToolDescription(toolName, tool, definition),
+                        inputSchema: _lmToolInputSchema(tool, definition),
+                        tags: Array.isArray(definition?.tags) ? definition.tags : [],
+                    },
+                };
+                _lmTools.set(toolName, entry);
+                send({
+                    type: 'lm_tool_registered',
+                    handle: entry.handle,
+                    extensionId: entry.extensionId,
+                    name: entry.name,
+                    definition: entry.definition,
+                    description: entry.metadata.description,
+                    inputSchema: entry.metadata.inputSchema,
+                    tags: entry.metadata.tags,
+                });
+                _onDidChangeLmToolsEmitter.fire({ added: [toolName], removed: [] });
+                const d = new Disposable(() => {
+                    if (_lmTools.get(toolName) === entry) {
+                        _lmTools.delete(toolName);
+                        send({
+                            type: 'lm_tool_disposed',
+                            handle: entry.handle,
+                            extensionId: entry.extensionId,
+                            name: entry.name,
+                        });
+                        _onDidChangeLmToolsEmitter.fire({ added: [], removed: [toolName] });
+                    }
+                });
+                subscriptions.push(d);
+                return d;
+            },
+            async invokeTool(nameOrInfo, options, token) {
+                const toolName = typeof nameOrInfo === 'string'
+                    ? nameOrInfo
+                    : String(nameOrInfo?.name || nameOrInfo?.id || '');
+                const entry = _lmTools.get(toolName);
+                if (!entry) throw new Error(`Language model tool not found: ${toolName}`);
+                const result = await _invokeLmToolEntry(
+                    entry,
+                    options && Object.prototype.hasOwnProperty.call(options, 'input')
+                        ? options.input
+                        : options,
+                    token || { isCancellationRequested: false, onCancellationRequested: new EventEmitter().event },
+                );
+                return new LanguageModelToolResult(
+                    (_serializeLanguageModelToolResult(result).content || [])
+                        .map(part => new LanguageModelTextPart(part.text ?? part.value ?? '')),
+                );
+            },
+            get tools() {
+                return Array.from(_lmTools.values()).map(entry => ({
+                    name: entry.name,
+                    id: entry.name,
+                    extensionId: entry.extensionId,
+                    description: entry.metadata.description,
+                    inputSchema: entry.metadata.inputSchema,
+                    tags: entry.metadata.tags || [],
+                }));
             },
             onDidChangeChatModels: new EventEmitter().event,
+            onDidChangeTools: _onDidChangeLmToolsEmitter.event,
         },
 
         // --- Namespace: chat ---
         chat: {
             createChatParticipant(id, handler) {
-                log(`stub: chat.createChatParticipant ${id}`);
-                return {
+                const participantId = String(id || '');
+                if (!participantId) throw new Error('Chat participant id is required');
+                const entry = {
+                    handle: _nextChatParticipantHandle++,
+                    id: participantId,
+                    handler,
+                    extensionId: extDesc.extensionId || '',
+                };
+                _chatParticipants.set(participantId, entry);
+                send({
+                    type: 'chat_participant_registered',
+                    handle: entry.handle,
+                    extensionId: entry.extensionId,
+                    id: entry.id,
+                });
+                const participant = {
                     id,
                     iconPath: undefined,
                     onDidReceiveFeedback: new EventEmitter().event,
                     requestHandler: handler,
-                    dispose() {},
+                    dispose() {
+                        if (_chatParticipants.get(participantId) === entry) {
+                            _chatParticipants.delete(participantId);
+                            send({
+                                type: 'chat_participant_disposed',
+                                handle: entry.handle,
+                                extensionId: entry.extensionId,
+                                id: entry.id,
+                            });
+                        }
+                    },
                 };
+                const d = new Disposable(() => participant.dispose());
+                subscriptions.push(d);
+                return participant;
             },
         },
 
@@ -3636,6 +3920,9 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         InlayHintLabelPart: class { constructor(value) { this.value = value === undefined || value === null ? '' : String(value); } },
         InlayHint: class { constructor(position, label, kind) { this.position = position; this.label = label; this.kind = kind; } },
         InlayHintKind: { Type: 1, Parameter: 2 },
+        LanguageModelTextPart,
+        LanguageModelToolResult,
+        LanguageModelToolResultPart: class { constructor(callId, content) { this.callId = callId; this.content = content || []; } },
         InlineCompletionItem: class { constructor(insertText, range, command) { this.insertText = insertText; this.range = range; this.command = command; } },
         InlineCompletionList: class { constructor(items) { this.items = items || []; } },
         InlineCompletionTriggerKind: { Invoke: 0, Automatic: 1 },
@@ -4374,6 +4661,83 @@ async function executeCommand(commandId, args, requestId) {
                 error: `command ${commandId}: ${message}`,
             });
         }
+    }
+}
+
+async function handleLmToolRequest(msg) {
+    const requestId = String(msg.requestId || '');
+    const name = String(msg.name || msg.toolName || '');
+    const entry = _lmTools.get(name);
+    if (!entry) {
+        send({
+            type: 'lm_tool_response',
+            requestId,
+            ok: false,
+            error: `Language model tool not found: ${name}`,
+        });
+        return;
+    }
+    const token = { isCancellationRequested: false, onCancellationRequested: new EventEmitter().event };
+    try {
+        const result = await _invokeLmToolEntry(entry, msg.input, token);
+        send({
+            type: 'lm_tool_response',
+            requestId,
+            ok: true,
+            value: _serializeLanguageModelToolResult(result),
+        });
+    } catch (err) {
+        send({
+            type: 'lm_tool_response',
+            requestId,
+            ok: false,
+            error: err?.message || String(err),
+        });
+    }
+}
+
+async function handleChatParticipantRequest(msg) {
+    const requestId = String(msg.requestId || '');
+    const participantId = String(msg.participantId || msg.id || '');
+    const entry = _chatParticipants.get(participantId);
+    if (!entry || typeof entry.handler !== 'function') {
+        send({
+            type: 'chat_participant_response',
+            requestId,
+            ok: false,
+            error: `Chat participant not found: ${participantId}`,
+        });
+        return;
+    }
+    const parts = [];
+    const request = _chatRequestFromPayload(msg);
+    const context = Object.assign({
+        history: [],
+        participant: participantId,
+    }, msg.context && typeof msg.context === 'object'
+        ? _deserializeArgFromPython(msg.context)
+        : {});
+    const stream = _createChatResponseStream(parts);
+    const token = { isCancellationRequested: false, onCancellationRequested: new EventEmitter().event };
+    try {
+        const raw = entry.handler(request, context, stream, token);
+        const result = raw && typeof raw.then === 'function' ? await raw : raw;
+        send({
+            type: 'chat_participant_response',
+            requestId,
+            ok: true,
+            value: {
+                content: parts.join(''),
+                result: result === undefined ? null : _serializeLanguageValue(result),
+            },
+        });
+    } catch (err) {
+        send({
+            type: 'chat_participant_response',
+            requestId,
+            ok: false,
+            error: err?.message || String(err),
+        });
     }
 }
 
@@ -5346,6 +5710,12 @@ async function handleMessage(msg) {
             break;
         case 'language_provider_request':
             await handleLanguageProviderRequest(msg);
+            break;
+        case 'lm_tool_request':
+            await handleLmToolRequest(msg);
+            break;
+        case 'chat_participant_request':
+            await handleChatParticipantRequest(msg);
             break;
         case 'tree_view_event':
             handleTreeViewEvent(msg);

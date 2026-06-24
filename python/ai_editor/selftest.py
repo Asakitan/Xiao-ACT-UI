@@ -6640,6 +6640,39 @@ async function activate(context) {
     packageName: context.extension && context.extension.packageJSON
       && context.extension.packageJSON.name,
   };
+  vscode.lm.registerTool('selftest_node_dynamic_tool', {
+    description: 'Node dynamic tool',
+    inputSchema: {
+      type: 'object',
+      properties: { value: { type: 'string' } },
+      required: ['value'],
+    },
+    invoke(options) {
+      const value = options && options.input && options.input.value;
+      return new vscode.LanguageModelToolResult([
+        new vscode.LanguageModelTextPart('node-tool:' + value),
+      ]);
+    },
+  });
+  vscode.chat.createChatParticipant(
+    'selftest.node.dynamicParticipant',
+    (request, context, response) => {
+      response.markdown('node-chat:' + request.prompt);
+      return { handled: true, participant: context.participant };
+    },
+  );
+  vscode.commands.registerCommand('selftest.node.lmChatProbe', async () => {
+    const localResult = await vscode.lm.invokeTool(
+      'selftest_node_dynamic_tool',
+      { input: { value: 'local' } },
+    );
+    const tools = vscode.lm.tools || [];
+    return {
+      hasTool: tools.some(tool => tool.name === 'selftest_node_dynamic_tool'),
+      localText: localResult.content[0] && (
+        localResult.content[0].value || localResult.content[0].text),
+    };
+  });
   vscode.workspace.onDidChangeConfiguration(event => {
     configEvents.count += 1;
     configEvents.aiEditor = event.affectsConfiguration('ai_editor');
@@ -7640,8 +7673,7 @@ module.exports = { activate, deactivate };
             node_diag_initial = node_host.diagnostics_snapshot()
             node_host.set_diagnostics_enabled(True)
             node_host.set_command_service(api._ext_host.commands)
-            node_host.on_tree_event(api._handle_node_tree_event)
-            node_host.on_config_set(api._handle_node_config_set)
+            api._install_node_runtime_event_bridge(node_host)
             if getattr(getattr(api, "_gui_ref", None), "settings", None):
                 settings_data = getattr(api._gui_ref.settings, "data", {})
                 settings_data.setdefault("ai_editor", {}).setdefault(
@@ -7792,6 +7824,44 @@ module.exports = { activate, deactivate };
                         "selftest.node.authenticationProbe")
                 except Exception as exc:
                     node_authentication_probe = {"_error": str(exc)}
+                node_lm_chat_command_registered = _wait_until(
+                    lambda: "selftest.node.lmChatProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                try:
+                    node_lm_chat_probe = api._ext_host.commands.execute(
+                        "selftest.node.lmChatProbe")
+                except Exception as exc:
+                    node_lm_chat_probe = {"_error": str(exc)}
+                node_dynamic_tool_registered = _wait_until(
+                    lambda: "selftest_node_dynamic_tool"
+                    in api._vscode_ns.registered_tools,
+                    timeout=3.0)
+                node_dynamic_participant_registered = _wait_until(
+                    lambda: "selftest.node.dynamicParticipant"
+                    in api._vscode_ns.chat_participants,
+                    timeout=3.0)
+                try:
+                    node_dynamic_tool_result = api.invoke_lm_tool(
+                        "selftest_node_dynamic_tool",
+                        {"value": "from-python"})
+                except Exception as exc:
+                    node_dynamic_tool_result = {"_error": str(exc)}
+                try:
+                    node_dynamic_chat_result = api.invoke_chat_participant(
+                        "selftest.node.dynamicParticipant", "from-python")
+                except Exception as exc:
+                    node_dynamic_chat_result = {"_error": str(exc)}
+                node_dynamic_tool_wrapper = api._extension_tool_wrapper_name(
+                    node_tree_desc.id, "selftest_node_dynamic_tool")
+                node_dynamic_listed_tools = {
+                    item.get("name"): item
+                    for item in api.list_tools().get("tools", [])
+                }
+                node_dynamic_chat_provider_ids = {
+                    item.get("id")
+                    for item in api.list_chat_providers().get("providers", [])
+                }
                 node_registered = _wait_until(
                     lambda: "selftest.node.tree" in api._vscode_ns._tree_data_providers,
                     timeout=3.0)
@@ -8842,7 +8912,41 @@ module.exports = { activate, deactivate };
                        and node_authentication_probe.get("afterDisposeMissing")
                        is True,
                        json.dumps(node_authentication_probe,
-                                  ensure_ascii=False))
+                                   ensure_ascii=False))
+                _check("node host registers dynamic LM tools and chat participants",
+                       node_started is True
+                       and node_lm_chat_command_registered
+                       and node_dynamic_tool_registered
+                       and node_dynamic_participant_registered
+                       and isinstance(node_lm_chat_probe, dict)
+                       and node_lm_chat_probe.get("hasTool") is True
+                       and node_lm_chat_probe.get("localText")
+                       == "node-tool:local"
+                       and node_dynamic_listed_tools.get(
+                           node_dynamic_tool_wrapper, {}).get(
+                               "runtimeAvailable") is True
+                       and "ext-selftest.node.dynamicParticipant"
+                       in node_dynamic_chat_provider_ids,
+                       json.dumps({
+                           "probe": node_lm_chat_probe,
+                           "tool": node_dynamic_listed_tools.get(
+                               node_dynamic_tool_wrapper),
+                           "providers": sorted(
+                               str(item)
+                               for item in node_dynamic_chat_provider_ids),
+                       }, ensure_ascii=False, default=str))
+                _check("node host invokes dynamic LM tool and chat participant",
+                       node_started is True
+                       and isinstance(node_dynamic_tool_result, dict)
+                       and (node_dynamic_tool_result.get("content") or [{}])[0].get(
+                           "text") == "node-tool:from-python"
+                       and isinstance(node_dynamic_chat_result, dict)
+                       and node_dynamic_chat_result.get("content")
+                       == "node-chat:from-python",
+                       json.dumps({
+                           "tool": node_dynamic_tool_result,
+                           "chat": node_dynamic_chat_result,
+                       }, ensure_ascii=False))
                 _check("node host tree provider registers dynamic activity view",
                        node_started is True
                        and sent is True

@@ -1479,6 +1479,8 @@ class AIEditorAPI:
         self._ext_host = get_extension_host()
         self._node_ext_host = None  # NodeExtensionHost, created lazily in _init_extension_host
         self._node_tree_disposables: Dict[str, Any] = {}
+        self._node_lm_tool_disposables: Dict[str, Any] = {}
+        self._node_chat_participant_disposables: Dict[str, Any] = {}
         self._extensions_inited = False
         self._vscode_ns_ready = threading.Event()
 
@@ -5667,6 +5669,16 @@ class AIEditorAPI:
             triggered += 1
         return triggered
 
+    def _install_node_runtime_event_bridge(self, host: Any) -> None:
+        if host is None or getattr(host, "_sao_runtime_bridge_installed", False):
+            return
+        host.on_tree_event(self._handle_node_tree_event)
+        host.on_config_set(self._handle_node_config_set)
+        host.on_lm_tool_event(self._handle_node_lm_tool_event)
+        host.on_chat_participant_event(
+            self._handle_node_chat_participant_event)
+        setattr(host, "_sao_runtime_bridge_installed", True)
+
     def _try_start_node_extension_host(self) -> None:
         """Start a NodeExtensionHost for extensions that declare ``main``.
 
@@ -5688,6 +5700,7 @@ class AIEditorAPI:
             existing_host.set_diagnostics_enabled(
                 self._extension_diagnostics_enabled())
             existing_host.set_command_service(self._ext_host.commands)
+            self._install_node_runtime_event_bridge(existing_host)
             existing_host.register_extensions(node_exts)
             self._install_node_activation_event_bridge()
             activated = self._activate_node_startup_extensions(wait=False)
@@ -5733,8 +5746,7 @@ class AIEditorAPI:
         )
         host.set_diagnostics_enabled(self._extension_diagnostics_enabled())
         host.set_command_service(self._ext_host.commands)
-        host.on_tree_event(self._handle_node_tree_event)
-        host.on_config_set(self._handle_node_config_set)
+        self._install_node_runtime_event_bridge(host)
 
         if not host.start():
             print("[NodeExtHost] Failed to start Node subprocess.")
@@ -5997,6 +6009,183 @@ class AIEditorAPI:
             print(f"[NodeExtHost] Failed to persist config_set "
                   f"{section}.{key}: {exc}")
 
+    def _handle_node_lm_tool_event(
+            self, event: str, name: str, payload: Dict[str, Any]) -> None:
+        """Bridge Node ``vscode.lm.registerTool`` into Python tools."""
+        tool_name = str(name or "")
+        if not tool_name:
+            return
+        if event == "lm_tool_disposed":
+            record = self._node_lm_tool_disposables.pop(tool_name, None)
+            disposable = (
+                record.get("disposable")
+                if isinstance(record, dict) else record)
+            if disposable is not None and hasattr(disposable, "dispose"):
+                disposable.dispose()
+            ext_id = str(
+                (record or {}).get("extensionId")
+                if isinstance(record, dict)
+                else payload.get("extensionId") or "")
+            if ext_id and getattr(self, "_registry", None):
+                self._registry.unregister(
+                    self._extension_tool_wrapper_name(ext_id, tool_name))
+            return
+        if event != "lm_tool_registered":
+            return
+        existing = self._node_lm_tool_disposables.pop(tool_name, None)
+        disposable = (
+            existing.get("disposable")
+            if isinstance(existing, dict) else existing)
+        if disposable is not None and hasattr(disposable, "dispose"):
+            disposable.dispose()
+        ext_id = str(payload.get("extensionId") or "runtime")
+        schema = _as_dict(payload.get("inputSchema"))
+        if not schema:
+            schema = {"type": "object", "properties": {}}
+        description = str(payload.get("description") or tool_name)
+        record = {
+            "description": description,
+            "inputSchema": schema,
+            "schema": schema,
+            "_extensionId": ext_id,
+            "extensionId": ext_id,
+            "tags": payload.get("tags") if isinstance(
+                payload.get("tags"), list) else [],
+            "handler": (
+                lambda options, token=None, _name=tool_name:
+                self._invoke_node_lm_tool(_name, options, token)),
+        }
+        disp = self._vscode_ns._register_lm_tool(
+            tool_name, record, extension_id=ext_id)
+        self._node_lm_tool_disposables[tool_name] = {
+            "disposable": disp,
+            "extensionId": ext_id,
+        }
+
+    def _invoke_node_lm_tool(
+            self, name: str, options: Any, token: Any = None) -> Any:
+        host = getattr(self, "_node_ext_host", None)
+        if host is None or not host.is_running:
+            raise RuntimeError("Node extension host is not running")
+        input_data = getattr(options, "input", options)
+        response = host.request_lm_tool_result(name, input_data)
+        if not response.get("ok"):
+            raise RuntimeError(response.get("error") or "Node tool failed")
+        return self._node_lm_tool_result(response.get("value"))
+
+    @staticmethod
+    def _node_lm_tool_result(value: Any) -> Any:
+        from ai_editor.vscode_api import LanguageModelToolResult
+        if isinstance(value, dict) and isinstance(value.get("content"), list):
+            content = []
+            for part in value.get("content", []):
+                if isinstance(part, dict):
+                    text = part.get("text")
+                    if text is None:
+                        text = part.get("value")
+                    if text is not None:
+                        content.append({
+                            "type": part.get("type") or "text",
+                            "text": str(text),
+                        })
+                    else:
+                        content.append(part)
+                else:
+                    content.append({"type": "text", "text": str(part)})
+            return LanguageModelToolResult(content=content)
+        if value is None:
+            return LanguageModelToolResult.text("")
+        if isinstance(value, str):
+            return LanguageModelToolResult.text(value)
+        return LanguageModelToolResult.text(
+            json.dumps(value, ensure_ascii=False, default=str))
+
+    def _handle_node_chat_participant_event(
+            self, event: str, participant_id: str,
+            payload: Dict[str, Any]) -> None:
+        """Bridge Node ``vscode.chat.createChatParticipant`` into providers."""
+        pid = str(participant_id or "")
+        if not pid:
+            return
+        provider_id = f"ext-{pid}"
+        if event == "chat_participant_disposed":
+            disposable = self._node_chat_participant_disposables.pop(
+                pid, None)
+            if disposable is not None and hasattr(disposable, "dispose"):
+                disposable.dispose()
+            registry = getattr(self, "_provider_registry", None)
+            if registry is not None:
+                registry.unregister(provider_id)
+            return
+        if event != "chat_participant_registered":
+            return
+        existing = self._node_chat_participant_disposables.pop(pid, None)
+        if existing is not None and hasattr(existing, "dispose"):
+            existing.dispose()
+        cp = self._vscode_ns._create_chat_participant(
+            pid,
+            lambda req, ctx, stream, token, _pid=pid:
+            self._invoke_node_chat_participant(_pid, req, ctx, stream, token),
+        )
+        self._node_chat_participant_disposables[pid] = cp
+        registry = getattr(self, "_provider_registry", None)
+        if registry is None:
+            return
+        manifest = self._manifest_chat_participant(pid)
+        from ai_editor.chat_providers import ChatProviderDef
+        ext_id = str(payload.get("extensionId") or "")
+        registry.register(ChatProviderDef(
+            id=provider_id,
+            name=str(
+                manifest.get("fullName")
+                or manifest.get("name")
+                or payload.get("name")
+                or pid),
+            provider_type=manifest.get("_provider_type", "openai"),
+            system_prompt=str(manifest.get("description") or ""),
+            auto_agent=True,
+            extension_ids=[ext_id] if ext_id else [],
+            metadata={
+                "source": "node",
+                "participant_id": pid,
+                "extension_ids": [ext_id] if ext_id else [],
+            },
+        ))
+
+    def _invoke_node_chat_participant(
+            self, participant_id: str, req: Any, ctx: Any,
+            stream: Any, token: Any = None) -> Any:
+        host = getattr(self, "_node_ext_host", None)
+        if host is None or not host.is_running:
+            raise RuntimeError("Node extension host is not running")
+        prompt = str(getattr(req, "prompt", "") or "")
+        request = {
+            "prompt": prompt,
+            "command": getattr(req, "command", ""),
+            "references": getattr(req, "references", []),
+            "toolReferences": getattr(req, "tool_references", []),
+            "attempt": getattr(req, "attempt", 0),
+            "enableCommandDetection": getattr(
+                req, "enable_command_detection", True),
+            "location": getattr(req, "location", 1),
+            "acceptedConfirmationData": getattr(
+                req, "accepted_confirmation_data", None),
+        }
+        response = host.request_chat_participant_result(
+            participant_id, prompt, request=request)
+        if not response.get("ok"):
+            raise RuntimeError(
+                response.get("error") or "Node chat participant failed")
+        value = response.get("value")
+        if isinstance(value, dict):
+            content = value.get("content")
+            if content:
+                stream.markdown(str(content))
+            return value.get("result")
+        if value:
+            stream.markdown(str(value))
+        return None
+
     def _handle_node_tree_event(
             self, event: str, view_id: str, payload: Dict[str, Any]) -> None:
         """Bridge Node TreeDataProvider events into the Python VSCode API."""
@@ -6061,6 +6250,29 @@ class AIEditorAPI:
             except Exception:
                 pass
         self._node_tree_disposables.clear()
+        for record in list(self._node_lm_tool_disposables.values()):
+            try:
+                disposable = (
+                    record.get("disposable")
+                    if isinstance(record, dict) else record)
+                dispose = getattr(disposable, "dispose", None)
+                if callable(dispose):
+                    dispose()
+            except Exception:
+                pass
+        self._node_lm_tool_disposables.clear()
+        for participant_id, disposable in list(
+                self._node_chat_participant_disposables.items()):
+            try:
+                dispose = getattr(disposable, "dispose", None)
+                if callable(dispose):
+                    dispose()
+            except Exception:
+                pass
+            registry = getattr(self, "_provider_registry", None)
+            if registry is not None:
+                registry.unregister(f"ext-{participant_id}")
+        self._node_chat_participant_disposables.clear()
         host = self._node_ext_host
         if host is not None:
             host.stop()
