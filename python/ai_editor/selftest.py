@@ -412,6 +412,8 @@ def test_app_settings_parity() -> None:
         "list_editor_languages", "list_editor_grammars",
         "list_editor_themes", "get_editor_theme", "get_editor_icon_theme",
         "list_extension_activity_bar_items",
+        "set_extension_activity_view_visibility",
+        "set_extension_tree_item_checkbox_state",
         "extension_quick_input_action",
         "load_history", "switch_provider", "list_chat_providers",
         "provider_send", "provider_cancel", "provider_new_chat",
@@ -2916,6 +2918,9 @@ console.log("extension setting schema helpers ok");
             and "function toggleExtensionTreeCheckbox(viewId,node,box,event)" in html
             and "set_extension_tree_item_checkbox_state" in html
             and "box.setAttribute('role','checkbox')" in html
+            and "function extensionContainerIdFromPanel(panel)" in html
+            and "set_extension_activity_view_visibility" in html
+            and "reportActiveExtensionActivityVisibility(false)" in html
             and "btn.textContent='Retry'" in html
             and "node.childrenLoaded=false;node.lazyChildren=true" in html
             and "state.treeError" in html
@@ -3336,7 +3341,10 @@ console.log("quick input filter helpers ok");
            and "TreeItemCheckboxState: { Unchecked: 0, Checked: 1 }" in node_ext_host_source
            and "onDidChangeCheckboxState: checkboxEmitter.event" in node_ext_host_source
            and "event === 'checkbox'" in node_ext_host_source
+           and "_setVisibleFromHost: setVisibleFromHost" in node_ext_host_source
+           and "event === 'visibility'" in node_ext_host_source
            and "def set_extension_tree_item_checkbox_state(" in app_source
+           and "def set_extension_activity_view_visibility(" in app_source
            and "\"tree_view_state_changed\"" in extension_host_source
            and "elif event == \"tree_view_state_changed\":" in app_source)
     _check("extension status bar messages round-trip through Node host",
@@ -5991,12 +5999,15 @@ def test_vscode_api() -> None:
     tree_expand_events = []
     tree_collapse_events = []
     tree_checkbox_events = []
+    tree_visibility_events = []
     tree_view.onDidExpandElement(
         lambda evt: tree_expand_events.append(evt))
     tree_view.onDidCollapseElement(
         lambda evt: tree_collapse_events.append(evt))
     tree_view.onDidChangeCheckboxState(
         lambda evt: tree_checkbox_events.append(evt))
+    tree_view.onDidChangeVisibility(
+        lambda evt: tree_visibility_events.append(evt))
     tree_view.begin_snapshot()
     tree_handle = tree_view.remember_element("node")
     tree_expanded = tree_view.set_expanded(tree_handle, True)
@@ -6012,6 +6023,11 @@ def test_vscode_api() -> None:
            and tree_checkbox_events
            and tree_checkbox_events[-1].get("items", [])[0][0] == "node"
            and tree_checkbox_events[-1].get("items", [])[0][1] == 1)
+    tree_view.apply_state({"visible": False})
+    _check("tree view visibility events expose visible state",
+           tree_view.visible is False
+           and tree_visibility_events
+           and tree_visibility_events[-1].get("visible") is False)
     tree_view.message = "Runtime message"
     tree_view.title = "Runtime title"
     tree_view.description = "Runtime description"
@@ -7046,6 +7062,7 @@ def test_app_extension_runtime_support() -> None:
         activity_expand_events = []
         activity_collapse_events = []
         activity_checkbox_events = []
+        activity_visibility_events = []
         if activity_tree_view is not None:
             activity_tree_view.title = "Activity Runtime Tree"
             activity_tree_view.description = "dynamic subtitle"
@@ -7059,6 +7076,8 @@ def test_app_extension_runtime_support() -> None:
                 lambda evt: activity_collapse_events.append(evt))
             activity_tree_view.onDidChangeCheckboxState(
                 lambda evt: activity_checkbox_events.append(evt))
+            activity_tree_view.onDidChangeVisibility(
+                lambda evt: activity_visibility_events.append(evt))
         activity_items = {
             item.get("id"): item
             for item in api.list_extension_activity_bar_items().get("items", [])
@@ -7157,6 +7176,17 @@ def test_app_extension_runtime_support() -> None:
                and activity_checkbox_events
                and activity_checkbox_events[-1].get("items", [])[0][0] == "node-a"
                and activity_checkbox_events[-1].get("items", [])[0][1] == 0)
+        hidden_activity = api.set_extension_activity_view_visibility(
+            "selftest.activity", False)
+        shown_activity = api.set_extension_activity_view_visibility(
+            "selftest.activity", True)
+        _check("activity tree visibility updates reach runtime TreeView",
+               hidden_activity.get("ok") is True
+               and shown_activity.get("ok") is True
+               and hidden_activity.get("views", [{}])[0].get("visible") is False
+               and shown_activity.get("views", [{}])[0].get("visible") is True
+               and [evt.get("visible") for evt in activity_visibility_events[-2:]]
+               == [False, True])
         item_action = api.execute_extension_tree_item_action(
             "selftest.activity.tree",
             activity_tree_handle,
@@ -7907,6 +7937,7 @@ async function activate(context) {
   view.onDidExpandElement(evt => output.appendLine('expand:' + evt.element.id));
   view.onDidCollapseElement(evt => output.appendLine('collapse:' + evt.element.id));
   view.onDidChangeCheckboxState(evt => output.appendLine('checkbox:' + evt.items.map(([item, state]) => item.id + ':' + state).join(',')));
+  view.onDidChangeVisibility(evt => output.appendLine('visible:' + evt.visible));
   void view.reveal(root, { select: false, focus: true, expand: 2 });
   const fileDecorationEmitter = new vscode.EventEmitter();
   vscode.window.registerFileDecorationProvider({
@@ -11742,6 +11773,10 @@ module.exports = { activate, deactivate };
                     "selftest.node.tree", node_handle, False)
                 api.set_extension_tree_item_checkbox_state(
                     "selftest.node.tree", node_handle, False)
+                api.set_extension_activity_view_visibility(
+                    "selftest.node", False)
+                api.set_extension_activity_view_visibility(
+                    "selftest.node", True)
                 action_result = api.execute_extension_tree_item_action(
                     "selftest.node.tree", node_handle, "selftest.node.openItem")
                 output_seen = _wait_until(
@@ -11752,6 +11787,10 @@ module.exports = { activate, deactivate };
                     and "collapse:root" in "".join(
                         node_host._output_channels.get("node-tree-selftest", []))
                     and "checkbox:root:0" in "".join(
+                        node_host._output_channels.get("node-tree-selftest", []))
+                    and "visible:false" in "".join(
+                        node_host._output_channels.get("node-tree-selftest", []))
+                    and "visible:true" in "".join(
                         node_host._output_channels.get("node-tree-selftest", []))
                     and "open:root" in "".join(
                         node_host._output_channels.get("node-tree-selftest", [])),

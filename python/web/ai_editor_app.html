@@ -7260,6 +7260,19 @@ function _appendTerminalHtml(el,html){
 function logTerminal(text){const el=$('terminal-output');_appendTerminalHtml(el,ansiToHtml('> '+text)+'\n')}
 
 // ── Sidebar ──
+function extensionContainerIdFromPanel(panel){
+  const raw=String(panel||'');
+  return raw.startsWith('ext-vc-')?raw.slice(7):'';
+}
+function reportExtensionActivityVisibilityForPanel(panel,visible){
+  const containerId=extensionContainerIdFromPanel(panel);
+  if(!containerId)return;
+  call('set_extension_activity_view_visibility',containerId,!!visible);
+}
+function reportActiveExtensionActivityVisibility(visible){
+  if(typeof _activeSidebarPanel==='undefined')return;
+  reportExtensionActivityVisibilityForPanel(_activeSidebarPanel,visible);
+}
 function switchSidebar(panel){
   if(typeof _activeSidebarPanel!=='undefined')_activeSidebarPanel=panel;
   document.querySelectorAll('.ab-icon').forEach(i=>{i.classList.toggle('active',i.dataset.panel===panel)});
@@ -7287,6 +7300,7 @@ let _activeSidebarPanel='chat';
 document.querySelectorAll('.ab-icon[data-panel]').forEach(i=>i.addEventListener('click',function(){
   const panel=i.dataset.panel;
   if(panel===_activeSidebarPanel&&_sidebarVis){toggleSidebarVis();return}
+  reportActiveExtensionActivityVisibility(false);
   if(!_sidebarVis){_sidebarVis=true;$('sidebar').style.display='';$('tb-toggle-sidebar').classList.add('active')}
   _activeSidebarPanel=panel;switchSidebar(panel);_saveLayoutImmediate();
 }));
@@ -10609,8 +10623,10 @@ async function renderExtensionActivityBar(){
     btn.addEventListener('click',function(){
       const panel='ext-vc-'+item.id;
       if(panel===_activeSidebarPanel&&_sidebarVis){toggleSidebarVis();return}
+      reportActiveExtensionActivityVisibility(false);
       if(!_sidebarVis){_sidebarVis=true;$('sidebar').style.display='';$('tb-toggle-sidebar').classList.add('active')}
       _activeSidebarPanel=panel;
+      reportExtensionActivityVisibilityForPanel(panel,true);
       // Activate the icon
       document.querySelectorAll('.ab-icon').forEach(i=>{i.classList.toggle('active',i.dataset.panel===panel)});
       // Show the extension view container sidebar
@@ -11819,7 +11835,9 @@ function focusBestTarget(){
   const ti=$('term-input');if(ti&&ti.offsetParent){ti.focus();return}
 }
 function toggleSidebarVis(){
-  _sidebarVis=!_sidebarVis;
+  const nextVisible=!_sidebarVis;
+  reportActiveExtensionActivityVisibility(nextVisible);
+  _sidebarVis=nextVisible;
   _applyPaneVisibility();
   $('tb-toggle-sidebar').classList.toggle('active',_sidebarVis);
   _clampLayoutDimensions();

@@ -3195,7 +3195,8 @@ class NodeExtensionHost:
     def send_tree_view_event(
             self, view_id: str, event: str, element: Any = None,
             selection: Optional[List[Any]] = None,
-            checkbox_state: Any = None) -> bool:
+            checkbox_state: Any = None,
+            visible: Any = None) -> bool:
         """Notify the Node TreeView object about frontend selection/expand."""
         element_handle = NodeTreeDataProvider._element_handle(element)
         selection_handles = [
@@ -3215,6 +3216,8 @@ class NodeExtensionHost:
                     1 if int(checkbox_state or 0) == 1 else 0)
             except Exception:
                 payload["checkboxState"] = 1 if bool(checkbox_state) else 0
+        if visible is not None:
+            payload["visible"] = bool(visible)
         return self._send(payload)
 
     def request_custom_editor_result(

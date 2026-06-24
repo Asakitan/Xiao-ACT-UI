@@ -3697,6 +3697,12 @@ function createTreeViewObject(viewId, treeDataProvider) {
     let title = '';
     let description = '';
     let badge = undefined;
+    const setVisibleFromHost = (nextVisible) => {
+        const normalizedVisible = !!nextVisible;
+        if (visible === normalizedVisible) return;
+        visible = normalizedVisible;
+        visibilityEmitter.fire({ visible });
+    };
     const sendStateChanged = (reason) => {
         send({
             type: 'tree_view_state_changed',
@@ -3742,6 +3748,7 @@ function createTreeViewObject(viewId, treeDataProvider) {
         _onDidChangeSelection: selectionEmitter,
         _onDidChangeVisibility: visibilityEmitter,
         _onDidChangeCheckboxState: checkboxEmitter,
+        _setVisibleFromHost: setVisibleFromHost,
     };
     Object.defineProperties(view, {
         visible: {
@@ -8092,6 +8099,8 @@ function handleTreeViewEvent(msg) {
     } else if (event === 'checkbox' && element !== undefined) {
         const state = Number(msg.checkboxState) === 1 ? 1 : 0;
         view._onDidChangeCheckboxState.fire({ items: [[element, state]] });
+    } else if (event === 'visibility') {
+        view._setVisibleFromHost?.(!!msg.visible);
     }
 }
 

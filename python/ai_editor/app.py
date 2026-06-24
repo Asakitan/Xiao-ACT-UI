@@ -7670,6 +7670,48 @@ class AIEditorAPI:
         ok = self._vscode_ns._open_external(uri_text)
         return {"ok": bool(ok)}
 
+    def set_extension_activity_view_visibility(
+            self, container_id: str, visible: bool) -> Dict:
+        """Report extension activity container visibility to runtime TreeViews."""
+        self._ensure_engine()
+        normalized_container_id = str(container_id or "").strip()
+        if not normalized_container_id:
+            return {"error": "Extension view container id is required"}
+        raw_views = self._ext_host.ext_points.all_contributions.get(
+            "views", {}).get(normalized_container_id, [])
+        changed: List[Dict[str, Any]] = []
+        next_visible = bool(visible)
+        for view_spec in raw_views if isinstance(raw_views, list) else []:
+            if not isinstance(view_spec, dict):
+                continue
+            view_id = str(view_spec.get("id") or "").strip()
+            if not view_id:
+                continue
+            tree_view = self._vscode_ns._tree_views.get(view_id)
+            if tree_view is None:
+                continue
+            apply_state = getattr(tree_view, "apply_state", None)
+            if callable(apply_state):
+                apply_state({"visible": next_visible})
+            else:
+                try:
+                    tree_view.visible = next_visible
+                except Exception:
+                    pass
+            self._notify_node_tree_view_visibility(
+                view_id, tree_view, next_visible)
+            changed.append({
+                "id": view_id,
+                "kind": "treeView",
+                "visible": bool(getattr(tree_view, "visible", False)),
+            })
+        return {
+            "ok": True,
+            "container_id": normalized_container_id,
+            "visible": next_visible,
+            "views": changed,
+        }
+
     def select_extension_tree_item(self, view_id: str, handle: str) -> Dict:
         """Select a runtime extension TreeView node by frontend snapshot handle."""
         self._ensure_engine()
@@ -7880,6 +7922,28 @@ class AIEditorAPI:
                 view_id, event, element=element,
                 selection=list(getattr(view, "selection", []) or []),
                 checkbox_state=checkbox_state)
+        except Exception:
+            pass
+
+    def _notify_node_tree_view_visibility(
+            self, view_id: str, view: Any, visible: bool) -> None:
+        host = getattr(self, "_node_ext_host", None)
+        if host is None or not getattr(host, "is_running", False):
+            return
+        provider = getattr(view, "provider", None)
+        if provider is None:
+            provider = self._vscode_ns._tree_data_providers.get(view_id)
+        try:
+            from ai_editor.extension_host import NodeTreeDataProvider
+        except Exception:
+            NodeTreeDataProvider = None
+        if (provider is None
+                or NodeTreeDataProvider is None
+                or not isinstance(provider, NodeTreeDataProvider)):
+            return
+        try:
+            host.send_tree_view_event(
+                view_id, "visibility", visible=bool(visible))
         except Exception:
             pass
 
