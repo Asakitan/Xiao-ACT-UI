@@ -2025,6 +2025,7 @@ class VscodeNamespace:
             "vscode.executeDocumentSymbolProvider": self._execute_document_symbol_provider,
             "vscode.executeCodeActionProvider": self._execute_code_action_provider,
             "vscode.executeFormatDocumentProvider": self._execute_format_document_provider,
+            "_executeFormattingProviderList": self._execute_formatting_provider_list,
             "_executeFormatRangeProvider": self._execute_format_range_provider,
             "vscode.executeFormatRangeProvider": self._execute_format_range_provider,
             "_executeFormatOnTypeProvider": self._execute_format_on_type_provider,
@@ -2062,6 +2063,183 @@ class VscodeNamespace:
                 matches.append((score, entry))
         matches.sort(key=lambda item: item[0], reverse=True)
         return [entry for _score, entry in matches]
+
+    @staticmethod
+    def _language_provider_metadata_value(metadata: Any,
+                                          *keys: str) -> Any:
+        if not isinstance(metadata, dict):
+            return None
+        for key in keys:
+            if metadata.get(key) not in (None, ""):
+                return metadata.get(key)
+        return None
+
+    @staticmethod
+    def _language_provider_attr(provider: Any, *names: str) -> Any:
+        for name in names:
+            if isinstance(provider, dict):
+                value = provider.get(name)
+            else:
+                value = getattr(provider, name, None)
+            if value not in (None, "") and not callable(value):
+                return value
+        return None
+
+    @staticmethod
+    def _language_provider_selector_label(selector: Any) -> str:
+        if isinstance(selector, str) and selector.strip():
+            return selector.strip()
+        if isinstance(selector, dict):
+            language = selector.get("language")
+            if language:
+                return str(language).strip()
+        return "provider"
+
+    @classmethod
+    def _language_provider_id(cls, kind: str, selector: Any,
+                              provider: Any, metadata: Any) -> str:
+        value = cls._language_provider_metadata_value(
+            metadata, "providerId", "extensionId", "id")
+        if value in (None, ""):
+            value = cls._language_provider_attr(
+                provider, "providerId", "provider_id",
+                "extensionId", "extension_id", "id")
+        if value in (None, ""):
+            provider_type = getattr(provider, "__class__", type(provider))
+            module = getattr(provider_type, "__module__", "") or ""
+            name = getattr(provider_type, "__name__", "") or kind
+            value = f"{module}.{name}" if module else name
+        text = str(value or "").strip()
+        if text:
+            return text
+        return f"{cls._language_provider_selector_label(selector)}:{kind}"
+
+    @classmethod
+    def _language_provider_display_name(cls, kind: str, provider: Any,
+                                        metadata: Any,
+                                        provider_id: str) -> str:
+        value = cls._language_provider_metadata_value(
+            metadata, "displayName", "name", "label")
+        if value in (None, ""):
+            value = cls._language_provider_attr(
+                provider, "displayName", "display_name", "name", "label")
+        if value in (None, ""):
+            value = provider_id
+        return str(value or provider_id or kind)
+
+    @classmethod
+    def _language_provider_entry_matches_id(
+            cls, entry: Dict[str, Any], provider_id: Any) -> bool:
+        expected = str(provider_id or "").strip().lower()
+        if not expected:
+            return True
+        values = [
+            entry.get("providerId"),
+            entry.get("id"),
+            entry.get("extensionId"),
+            entry.get("displayName"),
+        ]
+        metadata = entry.get("metadata")
+        values.extend([
+            cls._language_provider_metadata_value(
+                metadata, "providerId", "extensionId", "id"),
+            cls._language_provider_metadata_value(
+                metadata, "displayName", "name", "label"),
+        ])
+        provider = entry.get("provider")
+        values.extend([
+            cls._language_provider_attr(
+                provider, "providerId", "provider_id",
+                "extensionId", "extension_id", "id"),
+            cls._language_provider_attr(
+                provider, "displayName", "display_name", "name", "label"),
+        ])
+        return any(str(value or "").strip().lower() == expected
+                   for value in values)
+
+    @classmethod
+    def _formatting_provider_payload(
+            cls, entry: Dict[str, Any], capability: str) -> Dict[str, Any]:
+        provider_id = str(entry.get("providerId") or entry.get("id") or "")
+        if not provider_id:
+            provider_id = cls._language_provider_id(
+                str(entry.get("kind") or capability),
+                entry.get("selector"),
+                entry.get("provider"),
+                entry.get("metadata"))
+        display_name = str(
+            entry.get("displayName")
+            or cls._language_provider_display_name(
+                str(entry.get("kind") or capability),
+                entry.get("provider"),
+                entry.get("metadata"),
+                provider_id))
+        return {
+            "id": provider_id,
+            "providerId": provider_id,
+            "extensionId": str(entry.get("extensionId") or provider_id),
+            "displayName": display_name,
+            "kind": entry.get("kind") or capability,
+            "capability": capability,
+        }
+
+    @staticmethod
+    def _merge_formatting_provider(
+            providers: List[Dict[str, Any]],
+            index: Dict[str, Dict[str, Any]],
+            item: Dict[str, Any]) -> None:
+        provider_id = str(
+            item.get("providerId") or item.get("id")
+            or item.get("extensionId") or "").strip()
+        if not provider_id:
+            return
+        capability = str(
+            item.get("capability") or item.get("kind")
+            or "formatting").strip()
+        raw_capabilities = item.get("capabilities")
+        if isinstance(raw_capabilities, list):
+            capabilities = [
+                str(value).strip()
+                for value in raw_capabilities
+                if str(value or "").strip()
+            ]
+        else:
+            capabilities = []
+        if capability and capability not in capabilities:
+            capabilities.append(capability)
+        existing = index.get(provider_id.lower())
+        if existing is None:
+            payload = dict(item)
+            payload["id"] = provider_id
+            payload["providerId"] = provider_id
+            payload.setdefault("extensionId", provider_id)
+            payload.setdefault("displayName", provider_id)
+            payload["capabilities"] = capabilities or ["formatting"]
+            providers.append(payload)
+            index[provider_id.lower()] = payload
+            return
+        caps = existing.setdefault("capabilities", [])
+        for value in capabilities:
+            if value and value not in caps:
+                caps.append(value)
+
+    def _formatting_provider_list(self, document: Any) -> List[Dict[str, Any]]:
+        providers: List[Dict[str, Any]] = []
+        index: Dict[str, Dict[str, Any]] = {}
+        for kind, capability in (
+                ("formatting", "documentFormatting"),
+                ("rangeFormatting", "rangeFormatting")):
+            for entry in self._matching_language_providers(kind, document):
+                self._merge_formatting_provider(
+                    providers,
+                    index,
+                    self._formatting_provider_payload(entry, capability))
+        external = self._request_external_language_provider(
+            "formattingProviders", document)
+        for item in self._provider_values(external):
+            if isinstance(item, dict):
+                self._merge_formatting_provider(providers, index, item)
+        return providers
 
     @staticmethod
     def _position_payload(position: Any) -> Dict[str, int]:
@@ -2363,9 +2541,13 @@ class VscodeNamespace:
             kind: str,
             document: Any,
             method_name: str,
-            args: Sequence[Any]) -> List[Any]:
+            args: Sequence[Any],
+            provider_id: Any = None) -> List[Any]:
         results: List[Any] = []
         for entry in self._matching_language_providers(kind, document):
+            if not self._language_provider_entry_matches_id(
+                    entry, provider_id):
+                continue
             value = self._call_language_provider(
                 entry.get("provider"), method_name, args, default=None)
             if value is None:
@@ -3266,33 +3448,49 @@ class VscodeNamespace:
         results.extend(external_actions)
         return results
 
+    def _execute_formatting_provider_list(self, uri: Any) -> List[Any]:
+        document = self._resolve_language_document(uri)
+        return self._formatting_provider_list(document)
+
     def _execute_format_document_provider(
-            self, uri: Any, options: Any = None) -> List[Any]:
+            self, uri: Any, options: Any = None,
+            provider_id: Any = None) -> List[Any]:
         document = self._resolve_language_document(uri)
         format_options = options or {}
         results = self._collect_language_provider_results(
             "formatting", document, "provideDocumentFormattingEdits",
-            (document, format_options, CancellationToken.NONE))
+            (document, format_options, CancellationToken.NONE),
+            provider_id=provider_id)
+        external_payload = {"options": format_options}
+        if provider_id:
+            external_payload["providerId"] = str(provider_id)
         results.extend(self._provider_values(
             self._request_external_language_provider(
-                "formatting", document, options=format_options)))
+                "formatting", document, **external_payload)))
         full_range = self._document_full_range(document)
         results.extend(self._collect_language_provider_results(
             "rangeFormatting",
             document,
             "provideDocumentRangeFormattingEdits",
-            (document, full_range, format_options, CancellationToken.NONE)))
+            (document, full_range, format_options, CancellationToken.NONE),
+            provider_id=provider_id))
+        range_payload = {
+            "range": self._range_payload(full_range),
+            "options": format_options,
+        }
+        if provider_id:
+            range_payload["providerId"] = str(provider_id)
         results.extend(self._provider_values(
             self._request_external_language_provider(
                 "rangeFormatting",
                 document,
-                range=self._range_payload(full_range),
-                options=format_options)))
+                **range_payload)))
         return results
 
     def _execute_format_range_provider(
             self, uri: Any, range: Any = None,
-            options: Any = None) -> List[Any]:
+            options: Any = None,
+            provider_id: Any = None) -> List[Any]:
         document = self._resolve_language_document(uri)
         format_range = _coerce_range(range)
         format_options = options or {}
@@ -3300,13 +3498,19 @@ class VscodeNamespace:
             "rangeFormatting",
             document,
             "provideDocumentRangeFormattingEdits",
-            (document, format_range, format_options, CancellationToken.NONE))
+            (document, format_range, format_options, CancellationToken.NONE),
+            provider_id=provider_id)
+        range_payload = {
+            "range": self._range_payload(format_range),
+            "options": format_options,
+        }
+        if provider_id:
+            range_payload["providerId"] = str(provider_id)
         results.extend(self._provider_values(
             self._request_external_language_provider(
                 "rangeFormatting",
                 document,
-                range=self._range_payload(format_range),
-                options=format_options)))
+                **range_payload)))
         return results
 
     def _execute_format_on_type_provider(
@@ -4777,8 +4981,15 @@ class VscodeNamespace:
 
     def _register_language_provider(self, kind: str, selector: Any,
                                     provider: Any, metadata: Any = None) -> Disposable:
+        provider_id = self._language_provider_id(
+            kind, selector, provider, metadata)
         entry = {"kind": kind, "selector": selector,
-                 "provider": provider, "metadata": metadata}
+                 "provider": provider, "metadata": metadata,
+                 "providerId": provider_id,
+                 "id": provider_id,
+                 "extensionId": provider_id,
+                 "displayName": self._language_provider_display_name(
+                     kind, provider, metadata, provider_id)}
         self._language_providers.setdefault(kind, []).append(entry)
         return Disposable(lambda: self._language_providers.get(kind, []).remove(entry)
                           if entry in self._language_providers.get(kind, []) else None)

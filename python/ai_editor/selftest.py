@@ -453,6 +453,8 @@ def test_app_settings_parity() -> None:
 
     class _EditorProvider:
         def __init__(self):
+            self.extensionId = "selftest.localFormatter"
+            self.displayName = "Selftest Local Formatter"
             self.seen_texts = []
             self.seen_dirty = []
             self.seen_reference_context = None
@@ -1022,6 +1024,14 @@ def test_app_settings_parity() -> None:
             dict(provider_payload, kind="rename", newName="renamed"))
         format_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="formatting"))
+        format_provider_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="formattingProviders"))
+        filtered_format_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="formatting",
+                 providerId="selftest.localFormatter"))
+        missing_format_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="formatting",
+                 providerId="missing.formatter"))
         format_range_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="rangeFormatting", range={
                 "start": {"line": 0, "character": 0},
@@ -1302,6 +1312,19 @@ def test_app_settings_parity() -> None:
         _check("editor_language_provider exposes formatting edits without saving",
                format_result.get("edits", [{}])[0].get("newText") == "formatted"
                and disk_text == "disk")
+        _check("editor_language_provider exposes formatter provider metadata",
+               format_provider_result.get("ok") is True
+               and any(
+                   item.get("providerId") == "selftest.localFormatter"
+                   and "documentFormatting" in item.get("capabilities", [])
+                   and "rangeFormatting" in item.get("capabilities", [])
+                   for item in format_provider_result.get("providers", [])))
+        _check("editor_language_provider filters formatter provider id",
+               filtered_format_result.get("ok") is True
+               and filtered_format_result.get("edits", [{}])[0].get("newText")
+               == "formatted"
+               and missing_format_result.get("ok") is True
+               and missing_format_result.get("edits") == [])
         _check("editor_language_provider exposes range formatting edits",
                format_range_result.get("ok") is True
                and format_range_result.get("edits", [{}])[0]
@@ -2592,16 +2615,22 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function handleEditorInlineCompletionKey(e)" in html
            and "editorProviderPayload('inlineCompletion'" in html
            and "function editorFormatOptions()" in html
-           and "editor:{formatOnType:false,formatOnSave:false,linkedEditing:false,codeActionsOnSave:{}}" in html
+           and "editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,linkedEditing:false,codeActionsOnSave:{}}" in html
+           and "defaultFormatter:''" in html
            and "linkedEditing:false" in html
            and "formatOnSave:false" in html
            and "codeActionsOnSave:{}" in html
+           and "id=\"s-editor-default-formatter\"" in html
            and "id=\"s-editor-format-on-save\"" in html
            and "id=\"s-editor-format-on-type\"" in html
            and "id=\"s-editor-linked-editing\"" in html
            and "id=\"s-editor-organize-imports-on-save\"" in html
            and "id=\"s-editor-fix-all-on-save\"" in html
            and "function editorFormatOnSaveEnabled()" in html
+           and "function editorDefaultFormatter()" in html
+           and "async function requestEditorFormattingProviders()" in html
+           and "function showEditorFormatterPicker(providers)" in html
+           and "async function formatDocumentWithProvider()" in html
            and "function editorFormatOnTypeEnabled()" in html
            and "function editorLinkedEditingEnabled()" in html
            and "function editorCodeActionsOnSaveKinds()" in html
@@ -2623,6 +2652,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "setCheckedValue('s-editor-linked-editing',editor.linkedEditing===true)" in html
            and "setCheckedValue('s-editor-organize-imports-on-save',editorKnownCodeActionsOnSave(editor.codeActionsOnSave,'source.organizeImports'))" in html
            and "setCheckedValue('s-editor-fix-all-on-save',editorKnownCodeActionsOnSave(editor.codeActionsOnSave,'source.fixAll'))" in html
+           and "setInputValue('s-editor-default-formatter',editor.defaultFormatter||editor.default_formatter||'')" in html
+           and "defaultFormatter:readInputValue('s-editor-default-formatter').trim()" in html
            and "formatOnSave:readCheckedValue('s-editor-format-on-save')" in html
            and "formatOnType:readCheckedValue('s-editor-format-on-type')" in html
            and "linkedEditing:readCheckedValue('s-editor-linked-editing')" in html
@@ -2630,7 +2661,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "await runEditorSaveParticipants();" in html
            and "saveTextTabAs(tab,{skipSaveParticipants:true})" in html
            and "async function formatSelection()" in html
+           and "editorProviderPayload('formattingProviders'" in html
            and "editorProviderPayload('rangeFormatting'" in html
+           and "Format Document With..." in html
            and "Format Selection" in html
            and "async function handleEditorDocumentPaste(e)" in html
            and "async function handleEditorDocumentDrop(e)" in html
@@ -6754,11 +6787,17 @@ def test_vscode_api() -> None:
                 return action
 
         class _FormatProvider:
+            extensionId = "selftest.formatter"
+            displayName = "Selftest Formatter"
+
             def provideDocumentFormattingEdits(self, document, options, token):
                 return [TextEdit.replace(
                     Range(Position(0, 0), Position(0, 4)), "fmt")]
 
         class _RangeFormatProvider:
+            extensionId = "selftest.formatter"
+            displayName = "Selftest Formatter"
+
             def __init__(self):
                 self.ranges = []
 
@@ -7060,6 +7099,18 @@ def test_vscode_api() -> None:
             api["CodeActionKind"]["SourceOrganizeImports"])
         format_edits = api["commands"]["executeCommand"](
             "vscode.executeFormatDocumentProvider", doc.uri, {"tabSize": 4})
+        format_provider_list = api["commands"]["executeCommand"](
+            "_executeFormattingProviderList", doc.uri)
+        filtered_format_edits = api["commands"]["executeCommand"](
+            "vscode.executeFormatDocumentProvider",
+            doc.uri,
+            {"tabSize": 4},
+            "selftest.formatter")
+        missing_format_edits = api["commands"]["executeCommand"](
+            "vscode.executeFormatDocumentProvider",
+            doc.uri,
+            {"tabSize": 4},
+            "missing.formatter")
         range_format_edits = api["commands"]["executeCommand"](
             "vscode.executeFormatRangeProvider",
             doc.uri,
@@ -7271,6 +7322,15 @@ def test_vscode_api() -> None:
                format_edits and format_edits[0]["newText"] == "fmt"
                and any(edit.get("newText") == "rng"
                        for edit in format_edits))
+        _check("executeFormatDocumentProvider exposes and filters formatters",
+               any(
+                   item.get("providerId") == "selftest.formatter"
+                   and "documentFormatting" in item.get("capabilities", [])
+                   and "rangeFormatting" in item.get("capabilities", [])
+                   for item in format_provider_list)
+               and filtered_format_edits
+               and filtered_format_edits[0]["newText"] == "fmt"
+               and missing_format_edits == [])
         _check("executeFormatRangeProvider invokes range formatting providers",
                range_format_edits
                and range_format_edits[0]["newText"] == "rng"
@@ -12454,9 +12514,24 @@ module.exports = { activate, deactivate };
                     "content": "print('node provider')\n",
                     "position": {"line": 0, "character": 1},
                 })
+                node_editor_formatting_providers = api.editor_language_provider({
+                    "kind": "formattingProviders",
+                    "filePath": node_provider_sample,
+                    "language": "python",
+                    "content": "print('node provider')\n",
+                    "position": {"line": 0, "character": 1},
+                })
                 node_format_edits = api._ext_host.commands.execute(
                     "vscode.executeFormatDocumentProvider",
                     node_uri, {"tabSize": 2})
+                node_format_provider_list = api._ext_host.commands.execute(
+                    "_executeFormattingProviderList", node_uri)
+                node_filtered_format_edits = api._ext_host.commands.execute(
+                    "vscode.executeFormatDocumentProvider",
+                    node_uri, {"tabSize": 2}, node_tree_desc.id)
+                node_missing_format_edits = api._ext_host.commands.execute(
+                    "vscode.executeFormatDocumentProvider",
+                    node_uri, {"tabSize": 2}, "missing.formatter")
                 node_range_format_edits = api._ext_host.commands.execute(
                     "vscode.executeFormatRangeProvider",
                     node_uri,
@@ -13169,6 +13244,22 @@ module.exports = { activate, deactivate };
                        and any(
                            edit.get("newText") == "NODE_RANGE"
                            for edit in node_format_edits))
+                _check("node host exposes and filters JS formatter providers",
+                       any(
+                           item.get("providerId") == node_tree_desc.id
+                           and "documentFormatting"
+                           in item.get("capabilities", [])
+                           and "rangeFormatting"
+                           in item.get("capabilities", [])
+                           for item in node_format_provider_list)
+                       and any(
+                           item.get("providerId") == node_tree_desc.id
+                           for item in node_editor_formatting_providers.get(
+                               "providers", []))
+                       and node_filtered_format_edits
+                       and node_filtered_format_edits[0].get("newText")
+                       == "NODE"
+                       and node_missing_format_edits == [])
                 _check("node host language provider invokes JS range formatting",
                        node_range_format_edits
                        and node_range_format_edits[0].get("newText")

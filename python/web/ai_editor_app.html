@@ -1717,6 +1717,9 @@ pre.code-block { overflow:visible; }
 
     <div class="settings-section">
       <div class="sb-group" style="padding:0;margin-top:0">Editor</div>
+      <label>Default Formatter</label>
+      <input id="s-editor-default-formatter" placeholder="publisher.extension-id" style="width:100%">
+      <div class="settings-help">Matches VS Code's editor.defaultFormatter and is used by Format Document, Format Selection, and format on save.</div>
       <label class="settings-check"><input id="s-editor-format-on-save" type="checkbox"><span><b>Format on save</b><small>Runs the active formatter before explicit saves.</small></span></label>
       <label class="settings-check"><input id="s-editor-format-on-type" type="checkbox"><span><b>Format on type</b><small>Runs extension on-type formatting providers for typed trigger characters.</small></span></label>
       <label class="settings-check"><input id="s-editor-linked-editing" type="checkbox"><span><b>Linked editing</b><small>Mirrors edits across extension-provided linked ranges, such as paired HTML tags.</small></span></label>
@@ -1913,7 +1916,7 @@ const SETTINGS_SECTION_DEFAULTS={
   mcp:{access:'prompt',autostart:false,discovery_enabled:true,collision_behavior:'first',server_sampling:false},
   terminal:{profile:'PowerShell 7 (No Profile)',shell_path:'',shell_args:[],timeout:30,output_limit:8000,auto_approve:{}},
   extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands','views','customEditors'],enabled_contributions_explicit:false,diagnostics_enabled:false},
-  editor:{formatOnType:false,formatOnSave:false,linkedEditing:false,codeActionsOnSave:{}},
+  editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,linkedEditing:false,codeActionsOnSave:{}},
   customization:{instructions_locations:['.sao/instructions.md','.sao/instructions'],agent_locations:['.sao/agents'],workflow_locations:['.sao/workflows'],skill_locations:['.agents/skills/.local','.claude/skills/.local'],use_agent_md:true,use_claude_md:false}
 };
 const EXTENSION_CONTRIBUTION_OPTIONS=[
@@ -4122,6 +4125,7 @@ let _editorFoldingRanges=[],_editorFoldingRangeRequest=0,_editorFoldingRangeTime
 let _editorDocumentColors=[],_editorDocumentColorRequest=0,_editorDocumentColorTimer=null,_editorDocumentColorContentLength=-1;
 let _editorColorPresentationMenu=null;
 let _editorFormatOnTypeRequest=0;
+let _editorFormatterPickSession=null;
 let _editorLinkedEditingRanges=[],_editorLinkedEditingRequest=0,_editorLinkedEditingTimer=null,_editorLinkedEditingContentLength=-1,_editorLinkedEditingBefore=null,_editorLinkedEditingApplying=false;
 let _editorSelectionRanges=[],_editorSelectionRangeIndex=-1,_editorSelectionRangeKey='';
 let _editorPasteDropRequest=0,_editorDropPasteOptions=[],_editorDropPasteOptionIndex=0,_editorDropPasteSession=null;
@@ -7418,6 +7422,7 @@ ed.addEventListener('contextmenu',function(e){
     {label:'Go to Symbol in Editor...',shortcut:'Ctrl+Shift+O',action:()=>openDocumentSymbolPicker()},
     {label:'Go to Symbol in Workspace...',shortcut:'Ctrl+T',action:()=>openWorkspaceSymbolPicker()},
     {label:'Format Document',shortcut:'',action:()=>formatDocument()},
+    {label:'Format Document With...',shortcut:'',action:()=>formatDocumentWithProvider()},
     {label:'Format Selection',shortcut:'',action:()=>formatSelection()},
     {sep:true},
     {label:'Change Language Mode',shortcut:'',action:()=>showLanguagePicker()},
@@ -7609,6 +7614,79 @@ function editorFormatOnSaveEnabled(){
   const editor=config&&config.editor&&typeof config.editor==='object'?config.editor:{};
   return editor.formatOnSave===true;
 }
+function editorDefaultFormatter(){
+  const editor=config&&config.editor&&typeof config.editor==='object'?config.editor:{};
+  return String(editor.defaultFormatter||editor.default_formatter||'').trim();
+}
+function editorFormattingProviderId(options){
+  const opts=isPlainObject(options)?options:{};
+  if(Object.prototype.hasOwnProperty.call(opts,'providerId'))return String(opts.providerId||'').trim();
+  if(Object.prototype.hasOwnProperty.call(opts,'formatterId'))return String(opts.formatterId||'').trim();
+  return editorDefaultFormatter();
+}
+function normalizeEditorFormattingProvider(value){
+  if(!value||typeof value!=='object')return null;
+  const providerId=String(value.providerId||value.id||value.extensionId||'').trim();
+  if(!providerId)return null;
+  const displayName=String(value.displayName||value.label||value.name||providerId);
+  const capabilities=Array.isArray(value.capabilities)?value.capabilities.map(String):[String(value.capability||value.kind||'formatting')];
+  return {...value,id:providerId,providerId,displayName,capabilities:[...new Set(capabilities.filter(Boolean))]};
+}
+async function requestEditorFormattingProviders(){
+  const res=await call('editor_language_provider',editorProviderPayload('formattingProviders'));
+  if(res&&res.error){setStatus('Formatter providers failed: '+res.error);return []}
+  const providers=Array.isArray(res&&res.providers)?res.providers:[];
+  const seen=new Set(),items=[];
+  providers.map(normalizeEditorFormattingProvider).filter(Boolean).forEach(provider=>{
+    const key=provider.providerId.toLowerCase();
+    if(seen.has(key))return;
+    seen.add(key);items.push(provider);
+  });
+  return items;
+}
+function finishEditorFormatterPicker(provider){
+  const session=_editorFormatterPickSession;
+  _editorFormatterPickSession=null;
+  const input=$('cmd-input'),palette=$('cmd-palette');
+  if(input)input.placeholder='Type a command...';
+  if(palette)delete palette.dataset.mode;
+  closeCommandPalette();
+  if(session)session.resolve(provider||null);
+}
+function filterEditorFormatterPicker(){
+  const session=_editorFormatterPickSession,list=$('cmd-list'),input=$('cmd-input');
+  if(!session||!list||!input)return;
+  const q=input.value.toLowerCase().trim();list.innerHTML='';
+  session.providers.filter(provider=>{
+    const text=(provider.displayName+' '+provider.providerId+' '+(provider.capabilities||[]).join(' ')).toLowerCase();
+    return !q||text.includes(q);
+  }).forEach(provider=>{
+    const d=document.createElement('div');d.className='cmd-item';
+    const details=provider.providerId+(provider.capabilities&&provider.capabilities.length?' - '+provider.capabilities.join(', '):'');
+    d.innerHTML='<span class="label">'+esc(provider.displayName)+'</span><span class="shortcut">'+esc(details)+'</span>';
+    d.onclick=()=>finishEditorFormatterPicker(provider);
+    list.appendChild(d);
+  });
+}
+function showEditorFormatterPicker(providers){
+  return new Promise(resolve=>{
+    _editorFormatterPickSession={providers,resolve};
+    const palette=$('cmd-palette'),input=$('cmd-input');
+    if(!palette||!input){_editorFormatterPickSession=null;resolve(null);return}
+    palette.dataset.mode='formatter';
+    palette.classList.add('open');
+    input.placeholder='Select formatter...';
+    input.value='';input.focus();
+    filterEditorFormatterPicker();
+  });
+}
+async function formatDocumentWithProvider(){
+  const providers=await requestEditorFormattingProviders();
+  if(!providers.length){setStatus('No formatter providers for '+editorLang);return false}
+  const selected=providers.length===1?providers[0]:await showEditorFormatterPicker(providers);
+  if(!selected)return false;
+  return formatDocument({providerId:selected.providerId});
+}
 function editorLinkedEditingEnabled(){
   const editor=config&&config.editor&&typeof config.editor==='object'?config.editor:{};
   return editor.linkedEditing===true;
@@ -7732,7 +7810,10 @@ async function requestEditorOnTypeFormatting(ch,quiet){
 }
 async function formatDocument(options){
   const opts=isPlainObject(options)?options:{};
-  const res=await call('editor_language_provider',editorProviderPayload('formatting',{options:editorFormatOptions()}));
+  const payload={options:editorFormatOptions()};
+  const providerId=editorFormattingProviderId(opts);
+  if(providerId)payload.providerId=providerId;
+  const res=await call('editor_language_provider',editorProviderPayload('formatting',payload));
   if(res&&res.ok&&Array.isArray(res.edits)&&res.edits.length){
     _undoPush(true);
     if(editorApplyTextEdits(res.edits)){if(!opts.quiet)setStatus('Formatted via extension');return true}
@@ -7746,7 +7827,10 @@ async function formatDocument(options){
 async function formatSelection(){
   const range=editorSelectedRangePayload(),start=range.start,end=range.end;
   if(start.line===end.line&&start.character===end.character){setStatus('No selection to format');return}
-  const res=await call('editor_language_provider',editorProviderPayload('rangeFormatting',{range,options:editorFormatOptions()}));
+  const payload={range,options:editorFormatOptions()};
+  const providerId=editorDefaultFormatter();
+  if(providerId)payload.providerId=providerId;
+  const res=await call('editor_language_provider',editorProviderPayload('rangeFormatting',payload));
   if(res&&res.ok&&Array.isArray(res.edits)&&res.edits.length){
     _undoPush(true);
     if(editorApplyTextEdits(res.edits)){setStatus('Formatted selection via extension');return}
@@ -10223,6 +10307,7 @@ function openSettings(){
   const selectedIconThemeOption=($('s-file-icon-theme').selectedOptions||[])[0];
   setFileIconThemeInfo(selectedIconThemeOption?('Active: '+selectedIconThemeOption.textContent):'',false);
   const editor=settingSection('editor');
+  setInputValue('s-editor-default-formatter',editor.defaultFormatter||editor.default_formatter||'');
   setCheckedValue('s-editor-format-on-save',editor.formatOnSave===true);
   setCheckedValue('s-editor-format-on-type',editor.formatOnType===true);
   setCheckedValue('s-editor-linked-editing',editor.linkedEditing===true);
@@ -10462,7 +10547,7 @@ async function saveSettings(){
   config.terminal={...settingSection('terminal'),profile:readInputValue('s-term-profile')||'PowerShell 7 (No Profile)',shell_path:readInputValue('s-term-shell'),shell_args:readListValue('s-term-args',false),timeout:readNumberValue('s-term-timeout',30,true),output_limit:readNumberValue('s-term-output',8000,true)};
   config.extensions={...settingSection('extensions'),confirm_install:readCheckedValue('s-ext-confirm'),diagnostics_enabled:readCheckedValue('s-ext-diagnostics'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true),enabled_contributions:readExtensionContributionValues(),enabled_contributions_explicit:true};
   const editorSettings=settingSection('editor');
-  config.editor={...editorSettings,formatOnSave:readCheckedValue('s-editor-format-on-save'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing'),codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)};
+  config.editor={...editorSettings,defaultFormatter:readInputValue('s-editor-default-formatter').trim(),formatOnSave:readCheckedValue('s-editor-format-on-save'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing'),codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)};
   config.customization={...settingSection('customization'),use_agent_md:readCheckedValue('s-cust-agent-md'),use_claude_md:readCheckedValue('s-cust-claude-md'),instructions_locations:readListValue('s-cust-instructions',true),agent_locations:readListValue('s-cust-agents',true),workflow_locations:readListValue('s-cust-workflows',true),skill_locations:readListValue('s-cust-skills',true)};
   await applyEditorColorTheme(readInputValue('s-color-theme')||config.color_theme||config.theme||'dark');
   await applyEditorIconTheme(readInputValue('s-file-icon-theme')||config.file_icon_theme||defaultFileIconThemeValue());
@@ -13106,6 +13191,7 @@ const COMMANDS=[
   {label:'Go to Symbol in Editor...',shortcut:'Ctrl+Shift+O',action:()=>openDocumentSymbolPicker()},
   {label:'Go to Symbol in Workspace...',shortcut:'Ctrl+T',action:()=>openWorkspaceSymbolPicker()},
   {label:'Format Document',shortcut:'',action:()=>formatDocument()},
+  {label:'Format Document With...',shortcut:'',action:()=>formatDocumentWithProvider()},
   {label:'Format Selection',shortcut:'',action:()=>formatSelection()},
   {label:'Change Language Mode',shortcut:'',action:()=>showLanguagePicker()},
   {label:'Toggle Theme',shortcut:'',action:()=>toggleTheme()},
@@ -13122,12 +13208,23 @@ const COMMANDS=[
 ];
 
 function openCommandPalette(){
+  _editorFormatterPickSession=null;
+  delete $('cmd-palette').dataset.mode;
+  $('cmd-input').placeholder='Type a command...';
   $('cmd-palette').classList.add('open');
   $('cmd-input').value='';$('cmd-input').focus();
   filterCommands();
 }
-function closeCommandPalette(){$('cmd-palette').classList.remove('open')}
+function closeCommandPalette(){
+  if(_editorFormatterPickSession&&$('cmd-palette').dataset.mode==='formatter'){
+    finishEditorFormatterPicker(null);return;
+  }
+  delete $('cmd-palette').dataset.mode;
+  $('cmd-input').placeholder='Type a command...';
+  $('cmd-palette').classList.remove('open');
+}
 function filterCommands(){
+  if($('cmd-palette').dataset.mode==='formatter'){filterEditorFormatterPicker();return}
   const q=$('cmd-input').value.toLowerCase(),list=$('cmd-list');list.innerHTML='';
   COMMANDS.filter(c=>c.label.toLowerCase().includes(q)).forEach(c=>{
     const d=document.createElement('div');d.className='cmd-item';

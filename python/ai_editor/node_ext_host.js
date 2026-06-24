@@ -5455,9 +5455,25 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         // --- Namespace: languages ---
         languages: (() => {
             const _registerLangProvider = (kind, selector, provider, extra) => {
+                const handle = _nextLanguageProviderHandle++;
+                const extensionId = extDesc.extensionId || '';
+                const displayName = extDesc.manifest?.displayName
+                    || extDesc.displayName
+                    || extDesc.name
+                    || extensionId
+                    || kind;
+                const providerId = String(
+                    (extra && (extra.providerId || extra.id || extra.extensionId))
+                    || extensionId
+                    || `${kind}:${handle}`);
                 const entry = Object.assign({
-                    handle: _nextLanguageProviderHandle++,
-                    extensionId: extDesc.extensionId || '',
+                    handle,
+                    extensionId,
+                    providerId,
+                    id: providerId,
+                    displayName: String(
+                        (extra && (extra.displayName || extra.name))
+                        || displayName),
                     kind,
                     selector,
                     provider,
@@ -5467,6 +5483,8 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     type: 'language_provider_registered',
                     handle: entry.handle,
                     extensionId: entry.extensionId,
+                    providerId: entry.providerId,
+                    displayName: entry.displayName,
                     kind,
                     selector,
                     triggers: entry.triggers || [],
@@ -7246,6 +7264,7 @@ function _languageProviderMethod(kind) {
         codeActions: 'provideCodeActions',
         codeActionResolve: 'resolveCodeAction',
         codeActionsResolve: 'resolveCodeAction',
+        formattingProviders: 'formattingProviders',
         formatting: 'provideDocumentFormattingEdits',
         rangeFormatting: 'provideDocumentRangeFormattingEdits',
         onTypeFormatting: 'provideOnTypeFormattingEdits',
@@ -7262,6 +7281,46 @@ function _normalizeProviderItems(value) {
         try { return Array.from(value); } catch {}
     }
     return [value];
+}
+
+function _languageProviderMatchesProviderId(entry, providerId) {
+    const expected = String(providerId || '').trim().toLowerCase();
+    if (!expected) return true;
+    return [
+        entry.providerId,
+        entry.id,
+        entry.extensionId,
+        entry.displayName,
+    ].some(value => String(value || '').trim().toLowerCase() === expected);
+}
+
+function _formattingProviderPayload(entry, capability) {
+    const providerId = String(entry.providerId || entry.id || entry.extensionId || '').trim();
+    if (!providerId) return null;
+    return {
+        id: providerId,
+        providerId,
+        extensionId: String(entry.extensionId || providerId),
+        displayName: String(entry.displayName || providerId),
+        kind: entry.kind,
+        capability,
+    };
+}
+
+function _addFormattingProviderPayload(values, index, entry, capability) {
+    const payload = _formattingProviderPayload(entry, capability);
+    if (!payload) return;
+    const key = payload.providerId.toLowerCase();
+    const existing = index.get(key);
+    if (!existing) {
+        payload.capabilities = [capability];
+        values.push(payload);
+        index.set(key, payload);
+        return;
+    }
+    if (!existing.capabilities.includes(capability)) {
+        existing.capabilities.push(capability);
+    }
 }
 
 function _completionListFromProviderValue(value) {
@@ -7457,6 +7516,17 @@ async function handleLanguageProviderRequest(msg) {
         } else if (kind === 'completion' || kind === 'signatureHelp') {
             context.triggerKind = context.triggerKind || 1;
         }
+        const matchingProvidersForKind = (targetKind) => {
+            if (workspaceSymbolKind) {
+                return _languageProviders.filter(entry => entry.kind === 'workspaceSymbol');
+            }
+            return _languageProviders
+                .filter(entry => entry.kind === targetKind)
+                .map(entry => ({ entry, score: _matchDocumentSelector(entry.selector, document) }))
+                .filter(item => item.score > 0)
+                .sort((a, b) => b.score - a.score)
+                .map(item => item.entry);
+        };
 
         if (kind === 'diagnostics') {
             send({
@@ -7465,6 +7535,27 @@ async function handleLanguageProviderRequest(msg) {
                 ok: true,
                 kind,
                 value: _serializeLanguageValue(_diagnosticsForUri(document.uri)),
+            });
+            return;
+        }
+
+        if (kind === 'formattingProviders') {
+            const values = [];
+            const index = new Map();
+            for (const entry of matchingProvidersForKind('formatting')) {
+                _addFormattingProviderPayload(
+                    values, index, entry, 'documentFormatting');
+            }
+            for (const entry of matchingProvidersForKind('rangeFormatting')) {
+                _addFormattingProviderPayload(
+                    values, index, entry, 'rangeFormatting');
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: _serializeLanguageValue(values),
             });
             return;
         }
@@ -7559,14 +7650,7 @@ async function handleLanguageProviderRequest(msg) {
                     : kind === 'prepareDocumentPaste'
                         ? 'documentPaste'
                     : (kind === 'prepareRename' || kind === 'rename') ? 'rename' : kind;
-        const providers = workspaceSymbolKind
-            ? _languageProviders.filter(entry => entry.kind === 'workspaceSymbol')
-            : _languageProviders
-                .filter(entry => entry.kind === providerKind)
-                .map(entry => ({ entry, score: _matchDocumentSelector(entry.selector, document) }))
-                .filter(item => item.score > 0)
-                .sort((a, b) => b.score - a.score)
-                .map(item => item.entry);
+        const providers = matchingProvidersForKind(providerKind);
 
         if (kind === 'workspaceSymbol') {
             const values = [];
@@ -8250,6 +8334,10 @@ async function handleLanguageProviderRequest(msg) {
 
         const values = [];
         for (const entry of providers) {
+            if ((kind === 'formatting' || kind === 'rangeFormatting')
+                && !_languageProviderMatchesProviderId(entry, msg.providerId)) {
+                continue;
+            }
             const provider = entry.provider;
             const fn = provider && provider[methodName];
             if (typeof fn !== 'function') continue;

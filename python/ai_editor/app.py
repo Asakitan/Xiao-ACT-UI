@@ -4198,6 +4198,9 @@ class AIEditorAPI:
             "format": "formatting",
             "formatting": "formatting",
             "formatDocument": "formatting",
+            "formattingProvider": "formattingProviders",
+            "formattingProviders": "formattingProviders",
+            "formatters": "formattingProviders",
             "formatRange": "rangeFormatting",
             "rangeFormatting": "rangeFormatting",
             "formatSelection": "rangeFormatting",
@@ -5079,9 +5082,26 @@ class AIEditorAPI:
                     "dropEdits": value if isinstance(value, list) else (
                         [] if value is None else [value]),
                 }
+            if kind == "formattingProviders":
+                result = self._ext_host.commands.execute(
+                    "_executeFormattingProviderList", document.uri)
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "providers": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
             options = payload.get("options")
             if not isinstance(options, dict):
                 options = {"tabSize": 4, "insertSpaces": True}
+            provider_id = (
+                payload.get("providerId")
+                or payload.get("formatterId")
+                or payload.get("defaultFormatter")
+                or payload.get("provider"))
             if kind == "rangeFormatting":
                 format_range = _editor_provider_range(
                     payload.get("range"), content)
@@ -5090,6 +5110,7 @@ class AIEditorAPI:
                     document.uri,
                     format_range,
                     options,
+                    provider_id,
                 )
                 value = _json_ready_language_value(result)
                 return {
@@ -5128,6 +5149,7 @@ class AIEditorAPI:
                 "vscode.executeFormatDocumentProvider",
                 document.uri,
                 options,
+                provider_id,
             )
             value = _json_ready_language_value(result)
             return {
