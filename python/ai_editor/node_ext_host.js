@@ -2669,6 +2669,42 @@ async function _windowShowInputBox(options = {}) {
     return value;
 }
 
+function _messageArgIsItem(value) {
+    return typeof value === 'string'
+        || !!(value && typeof value === 'object'
+            && Object.prototype.hasOwnProperty.call(value, 'title'));
+}
+
+function _windowShowMessage(level, message, args) {
+    const rawArgs = Array.isArray(args) ? args : [];
+    let options = {};
+    let items = rawArgs;
+    if (rawArgs.length && !_messageArgIsItem(rawArgs[0])) {
+        options = rawArgs[0] || {};
+        items = rawArgs.slice(1);
+    }
+    const normalizedItems = items
+        .filter(_messageArgIsItem)
+        .map((item, index) => typeof item === 'string'
+            ? { title: item, handle: index, isCloseAffordance: false }
+            : {
+                title: String(item.title || ''),
+                handle: index,
+                isCloseAffordance: !!item.isCloseAffordance,
+            });
+    send({
+        type: 'show_message',
+        level,
+        message: String(message),
+        options: {
+            modal: !!options.modal,
+            detail: options.detail ? String(options.detail) : '',
+        },
+        items: normalizedItems,
+    });
+    return Promise.resolve(items.find(_messageArgIsItem));
+}
+
 function _extensionApiObject(id) {
     const active = _extensions.get(id);
     const known = _knownExtensions.get(id);
@@ -2887,16 +2923,13 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 return ch;
             },
             showInformationMessage(message, ...items) {
-                send({ type: 'show_message', level: 'info', message: String(message) });
-                return Promise.resolve(items[0]);
+                return _windowShowMessage('info', message, items);
             },
             showWarningMessage(message, ...items) {
-                send({ type: 'show_message', level: 'warn', message: String(message) });
-                return Promise.resolve(items[0]);
+                return _windowShowMessage('warn', message, items);
             },
             showErrorMessage(message, ...items) {
-                send({ type: 'show_message', level: 'error', message: String(message) });
-                return Promise.resolve(items[0]);
+                return _windowShowMessage('error', message, items);
             },
             showQuickPick(items, options) {
                 return _windowShowQuickPick(items, options || {});

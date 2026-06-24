@@ -7288,6 +7288,25 @@ async function activate(context) {
       validationError: vscode.InputBoxValidationSeverity.Error,
     };
   });
+  vscode.commands.registerCommand('selftest.node.messageOptionsProbe', async () => {
+    const info = await vscode.window.showInformationMessage(
+      'Info probe',
+      { modal: true, detail: 'details should not be returned' },
+      'Run',
+      'Skip',
+    );
+    const warning = await vscode.window.showWarningMessage(
+      'Warn probe',
+      { title: 'Object Action', isCloseAffordance: true },
+    );
+    const error = await vscode.window.showErrorMessage('Error probe');
+    return {
+      info,
+      warningTitle: warning && warning.title,
+      warningClose: warning && warning.isCloseAffordance === true,
+      errorIsUndefined: error === undefined,
+    };
+  });
   vscode.commands.registerCommand('selftest.node.pythonCommandProbe', async () => {
     const nested = await vscode.commands.executeCommand(
       'selftest.python.echo',
@@ -7693,6 +7712,16 @@ module.exports = { activate, deactivate };
                         "selftest.node.quickInputProbe")
                 except Exception as exc:
                     node_quick_input_probe = {"_error": str(exc)}
+                node_message_options_command_registered = _wait_until(
+                    lambda: "selftest.node.messageOptionsProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                try:
+                    node_message_options_probe = (
+                        api._ext_host.commands.execute(
+                            "selftest.node.messageOptionsProbe"))
+                except Exception as exc:
+                    node_message_options_probe = {"_error": str(exc)}
                 node_registered = _wait_until(
                     lambda: "selftest.node.tree" in api._vscode_ns._tree_data_providers,
                     timeout=3.0)
@@ -8710,6 +8739,19 @@ module.exports = { activate, deactivate };
                        and node_quick_input_probe.get("separatorKind") == 1
                        and node_quick_input_probe.get("validationError") == 3,
                        json.dumps(node_quick_input_probe,
+                                  ensure_ascii=False))
+                _check("node host message APIs separate options from actions",
+                       node_started is True
+                       and node_message_options_command_registered
+                       and isinstance(node_message_options_probe, dict)
+                       and node_message_options_probe.get("info") == "Run"
+                       and node_message_options_probe.get("warningTitle")
+                       == "Object Action"
+                       and node_message_options_probe.get("warningClose")
+                       is True
+                       and node_message_options_probe.get("errorIsUndefined")
+                       is True,
+                       json.dumps(node_message_options_probe,
                                   ensure_ascii=False))
                 _check("node host tree provider registers dynamic activity view",
                        node_started is True
