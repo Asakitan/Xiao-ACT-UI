@@ -2666,10 +2666,15 @@ console.log("frontend auto-close behavior ok");
             "function renderExtensionSettings()" in html
             and "function extensionSettingValidateJsonValue(value,type)" in html
             and "function extensionSettingSchemaSummary(schema,type)" in html
+            and "function extensionSettingConstraintSummary(schema,type)" in html
             and "function extensionSettingDeprecationText(schema)" in html
             and "function extensionSettingJsonRows(value,type)" in html
             and "function extensionSettingTextRows(value)" in html
             and "function extensionSettingUsesMultiline(schema,type)" in html
+            and "function applyExtensionSettingInputConstraints(input,schema,type)" in html
+            and "input.min=String(schema.minimum)" in html
+            and "input.pattern=String(schema.pattern)" in html
+            and "multipleOf" in html
             and "editPresentation" in html
             and "multilineText" in html
             and "markdownDeprecationMessage" in html
@@ -2705,6 +2710,7 @@ console.log("frontend auto-close behavior ok");
             "extensionSettingDefault",
             "extensionSettingSafeLinkTarget",
             "appendExtensionSettingMarkdown",
+            "extensionSettingConstraintSummary",
             "extensionSettingSchemaSummary",
             "extensionSettingDeprecationText",
             "extensionSettingList",
@@ -2715,6 +2721,7 @@ console.log("frontend auto-close behavior ok");
             "extensionSettingJsonRows",
             "extensionSettingTextRows",
             "extensionSettingUsesMultiline",
+            "applyExtensionSettingInputConstraints",
             "extensionSettingValidateJsonValue",
             "extensionSettingValidateSchemaValue",
             "extensionSettingParseQuery",
@@ -2776,6 +2783,9 @@ const searchSchema = {
   markdownEnumDescriptions: ["Uses **network**."]
 };
 const numberSchema = { type: "number", minimum: 1, maximum: 5 };
+const multipleIntegerSchema = { type: "integer", minimum: 0, maximum: 10, multipleOf: 2 };
+const rangedStringSchema = { type: "string", minLength: 2, maxLength: 6, pattern: "^[a-z]+$" };
+const exclusiveNumberSchema = { type: "number", exclusiveMinimum: 1, exclusiveMaximum: 5 };
 const textarea = { type: "textarea", tagName: "TEXTAREA", value: "", rows: 0 };
 setExtensionSettingInputValue(textarea, arraySchema, "array", ["a", "b"]);
 assert(textarea.value.indexOf('"a"') >= 0, "array formatted as JSON");
@@ -2805,10 +2815,34 @@ let maxRejected = false;
 try { readExtensionSettingInputValue(numberInput, numberSchema, "number"); }
 catch (err) { maxRejected = /value must be at most 5/.test(String(err.message)); }
 assert(maxRejected, "number schema rejects maximum overflow");
+const multipleInput = { type: "number", tagName: "INPUT", value: "3" };
+let multipleRejected = false;
+try { readExtensionSettingInputValue(multipleInput, multipleIntegerSchema, "integer"); }
+catch (err) { multipleRejected = /value must be a multiple of 2/.test(String(err.message)); }
+assert(multipleRejected, "integer schema rejects multipleOf mismatch");
+const exclusiveInput = { type: "number", tagName: "INPUT", value: "1" };
+let exclusiveRejected = false;
+try { readExtensionSettingInputValue(exclusiveInput, exclusiveNumberSchema, "number"); }
+catch (err) { exclusiveRejected = /value must be greater than 1/.test(String(err.message)); }
+assert(exclusiveRejected, "number schema rejects exclusive minimum");
+const numberHint = { type: "number", tagName: "INPUT", value: "" };
+applyExtensionSettingInputConstraints(numberHint, multipleIntegerSchema, "integer");
+assert(numberHint.min === "0" && numberHint.max === "10" && numberHint.step === "2",
+       "number input constraints applied");
+const stringHint = { type: "text", tagName: "INPUT", value: "" };
+applyExtensionSettingInputConstraints(stringHint, rangedStringSchema, "string");
+assert(stringHint.minLength === 2 && stringHint.maxLength === 6
+       && stringHint.pattern === "^[a-z]+$",
+       "string input constraints applied");
 assert(extensionSettingSchemaSummary(arraySchema, "array") === "items: string",
        "array schema summary");
 assert(extensionSettingSchemaSummary(objectSchema, "object").indexOf("level") >= 0,
        "object schema summary");
+assert(extensionSettingSchemaSummary(numberSchema, "number").indexOf("min: 1") >= 0
+       && extensionSettingSchemaSummary(numberSchema, "number").indexOf("max: 5") >= 0,
+       "number constraint summary");
+assert(extensionSettingSchemaSummary(rangedStringSchema, "string").indexOf("pattern: ^[a-z]+$") >= 0,
+       "string constraint summary");
 assert(extensionSettingDeprecationText(deprecatedSchema) === "**Use** `new.setting`.",
        "markdown deprecation preferred");
 assert(extensionSettingDeprecationText({ deprecationMessage: "Use fallback." }) === "Use fallback.",
