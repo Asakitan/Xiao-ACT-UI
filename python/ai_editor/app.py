@@ -1058,6 +1058,18 @@ class _AIEditorUIBridge:
             "view_type": str(view_type or ""),
         })
 
+    def update_webview_panel_icon(
+            self, view_id: str, icon_path: Any = None,
+            view_type: str = "") -> None:
+        normalized_view_id = str(view_id or "").strip()
+        if not normalized_view_id:
+            return
+        self._api._emit("update_webview_panel_icon", {
+            "view_id": normalized_view_id,
+            "view_type": str(view_type or ""),
+            "icon_path": _json_safe(icon_path),
+        })
+
     def reveal_webview_panel(
             self, view_id: str, view_type: str = "", title: str = "",
             state: Optional[Dict[str, Any]] = None) -> None:
@@ -4108,6 +4120,20 @@ class AIEditorAPI:
         if direct:
             return direct
         return self._workspace_propagated_file_decorations(full)
+
+    def _workspace_file_decorations_for_uri(
+            self, uri: Any,
+            providers_available: Optional[bool] = None) -> List[Dict[str, Any]]:
+        paths = self._workspace_file_decoration_change_paths([uri])
+        if not paths:
+            return []
+        try:
+            full = self._resolve_workspace_path(paths[0])
+        except ValueError:
+            return []
+        if not os.path.exists(full):
+            return []
+        return self._workspace_file_decorations(full, providers_available)
 
     def list_workspace_tree(self, rel_path: str = "") -> Dict:
         root = self._workspace_root()
@@ -10150,7 +10176,11 @@ class AIEditorAPI:
 
     def _extension_menu_actions(
             self, menu_id: str, context: Dict[str, str]) -> List[Dict[str, Any]]:
-        menus = self._ext_host.ext_points.all_contributions.get("menus", {})
+        ext_host = getattr(self, "_ext_host", None)
+        ext_points = getattr(ext_host, "ext_points", None)
+        if ext_points is None:
+            return []
+        menus = ext_points.all_contributions.get("menus", {})
         if not isinstance(menus, dict):
             return []
         result: List[Dict[str, Any]] = []
@@ -10525,6 +10555,11 @@ class AIEditorAPI:
         }
         if resource_uri:
             node["resourceUri"] = resource_uri
+            decorations = self._workspace_file_decorations_for_uri(
+                resource_uri)
+            if decorations:
+                node["decoration"] = decorations[0]
+                node["decorations"] = decorations
         if icon_path:
             node["iconPath"] = icon_path
             if icon_path.get("kind") == "theme":

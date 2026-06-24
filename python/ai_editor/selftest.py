@@ -2042,6 +2042,16 @@ def test_app_settings_parity() -> None:
         src_decoration = tree_api.workspace_file_decorations("src")
         _check("workspace_file_decorations returns propagated folder decorations",
                src_decoration.get("decoration", {}).get("badge") == "P")
+        readme_tree_node = tree_api._tree_node_preview(
+            {"id": "readme"},
+            {
+                "label": "README",
+                "resourceUri": Uri.file(os.path.join(tmpdir, "README.md")),
+            })
+        _check("extension TreeView nodes include file decorations",
+               readme_tree_node.get("decoration", {}).get("badge") == "M"
+               and readme_tree_node.get("decorations", [{}])[0].get(
+                   "tooltip") == "Modified by extension")
         opened = tree_api.open_workspace_file("src/sample.py")
         _check("open_workspace_file returns content and language",
                opened.get("path") == "src/sample.py"
@@ -2380,6 +2390,9 @@ def test_phase1_ai_editor_regressions() -> None:
     html_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web", "ai_editor_app.html")
     with open(html_path, "r", encoding="utf-8") as fh:
         html = fh.read()
+    with open(os.path.join(os.path.dirname(__file__), "app.py"), "r",
+              encoding="utf-8") as fh:
+        app_source = fh.read()
     _check("right-sidebar tabs use exact built-in labels",
            "tab_chat:'Assistant'" in html
            and "provider_copilot_label:'Copilot'" in html
@@ -4576,6 +4589,8 @@ console.log("extension setting schema helpers ok");
             and "wrap.dataset.resourceUri=String(node.resourceUri)" in html
             and "node.accessibilityInformation||{}" in html
             and "node.themeIcon?node.themeIcon:(node?node.iconPath:null)" in html
+            and "applyExplorerDecoration(row,label,node)" in html
+            and "def _workspace_file_decorations_for_uri(" in app_source
             and "checkbox.isChecked?'☑':'☐'" in html
             and "className='ext-tree-icon'" in html
             and "tree.setAttribute('role','tree')" in html
@@ -5122,6 +5137,15 @@ console.log("quick input filter helpers ok");
            and "function updateExtensionWebviewTitle(viewId,title,viewType)"
            in html
            and "event==='update_webview_panel_title'" in html)
+    _check("extension webview panel icon updates reach frontend",
+           "type: 'webview_icon'" in node_ext_host_source
+           and "function _serializeWebviewPanelIconPath(iconPath)" in node_ext_host_source
+           and "elif msg_type == \"webview_icon\"" in extension_host_source
+           and "def update_webview_panel_icon(" in app_source
+           and "\"update_webview_panel_icon\"" in app_source
+           and "function updateExtensionWebviewIcon(viewId,iconPath,viewType)" in html
+           and "function applyProviderTabIcon(tab,p)" in html
+           and "event==='update_webview_panel_icon'" in html)
     _check("extension webview panel view state reaches Node",
            "function notifyWebviewPanelViewState(viewId,isActive,isVisible)" in html
            and "webview_panel_view_state" in html
@@ -5142,6 +5166,7 @@ console.log("quick input filter helpers ok");
            and "function refreshVisibleExplorerDecorations(paths)" in html
            and "function scheduleExplorerDecorationRefresh(change)" in html
            and "scheduleExplorerDecorationRefresh(data)" in html
+           and "scheduleExtensionActivityRefresh();" in html
            and "change[\"paths\"] = self._workspace_file_decoration_change_paths(" in app_source
            and "const _fileDecorationChangeMaxEventSize = 250" in node_ext_host_source
            and "function _fileDecorationChangedPayload(value)" in node_ext_host_source)
@@ -11893,6 +11918,10 @@ async function activate(context) {
       visible: panel.visible,
     };
     panel.title = 'Disposed Title';
+    panel.iconPath = new vscode.ThemeIcon(
+      'rocket',
+      new vscode.ThemeColor('charts.green'),
+    );
     panel.webview.html = '<main data-view="dispose-probe"></main>';
     panel.reveal(vscode.ViewColumn.Three, false);
     const revealed = {
@@ -12128,6 +12157,7 @@ module.exports = { activate, deactivate };
                     self.webviews = {}
                     self.webview_states = {}
                     self.webview_titles = {}
+                    self.webview_icons = {}
                     self.local_resource_roots = {}
                     self.disposed = []
                     self.revealed = []
@@ -12166,6 +12196,13 @@ module.exports = { activate, deactivate };
                 def update_webview_panel_title(
                         self, view_id, title, view_type=""):
                     self.webview_titles[str(view_id)] = str(title or "")
+
+                def update_webview_panel_icon(
+                        self, view_id, icon_path=None, view_type=""):
+                    self.webview_icons[str(view_id)] = {
+                        "icon_path": icon_path,
+                        "view_type": str(view_type or ""),
+                    }
 
                 def reveal_webview_panel(
                         self, view_id, view_type="", title="", state=None):
@@ -13864,6 +13901,10 @@ module.exports = { activate, deactivate };
                     item for item in node_ui_bridge.revealed
                     if item.get("view_id") == node_dispose_view_id
                 ), {})
+                node_webview_bridge_icon = (
+                    node_ui_bridge.webview_icons.get(
+                        node_dispose_view_id, {}).get("icon_path", {})
+                    if node_dispose_view_id else {})
                 _check("node host webview panel disposal matches VS Code lifecycle",
                        node_webview_dispose_command_registered
                        and node_dispose_view_id
@@ -13882,6 +13923,9 @@ module.exports = { activate, deactivate };
                        and node_webview_dispose_revealed.get("active") is True
                        and node_webview_dispose_revealed.get("visible") is True
                        and node_webview_dispose_revealed.get("stateEventCount") == 1
+                       and node_webview_bridge_icon.get("id") == "rocket"
+                       and node_webview_bridge_icon.get(
+                           "color", {}).get("id") == "charts.green"
                        and node_webview_bridge_reveal.get("view_type")
                        == "selftest.disposeProbe"
                        and node_webview_bridge_reveal.get("title")
@@ -13902,6 +13946,7 @@ module.exports = { activate, deactivate };
                            "disposed": node_ui_bridge.disposed,
                            "revealed": node_ui_bridge.revealed,
                            "titles": node_ui_bridge.webview_titles,
+                           "icons": node_ui_bridge.webview_icons,
                        }, ensure_ascii=False))
                 node_serializer_events = (
                     node_webview_serializer_probe.get("events", [])

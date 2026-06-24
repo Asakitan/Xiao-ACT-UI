@@ -2290,6 +2290,21 @@ class NodeExtensionHost:
                         "[NodeExtHost] update_webview_panel_title failed "
                         "for %s", view_id)
 
+        elif msg_type == "webview_icon":
+            view_id = str(msg.get("viewId", ""))
+            view_type = str(msg.get("viewType", ""))
+            icon_path = msg.get("iconPath", None)
+            if self._ui_bridge and view_id:
+                try:
+                    updater = getattr(
+                        self._ui_bridge, "update_webview_panel_icon", None)
+                    if callable(updater):
+                        updater(view_id, icon_path, view_type)
+                except Exception:
+                    _log.exception(
+                        "[NodeExtHost] update_webview_panel_icon failed "
+                        "for %s", view_id)
+
         elif msg_type == "webview_reveal":
             view_id = str(msg.get("viewId", ""))
             view_type = str(msg.get("viewType", ""))

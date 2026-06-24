@@ -1136,7 +1136,14 @@ function _createWebviewPanelObject(
         },
         set iconPath(value) {
             assertPanelAlive();
+            if (iconPath === value) return;
             iconPath = value;
+            send({
+                type: 'webview_icon',
+                viewId,
+                viewType,
+                iconPath: _serializeWebviewPanelIconPath(value),
+            });
         },
         get webview() {
             assertPanelAlive();
@@ -1617,6 +1624,29 @@ function _serializeTreeIconPath(iconPath) {
         if (Object.keys(result).length) return result;
     }
     return String(iconPath);
+}
+
+function _serializeWebviewPanelIconPath(iconPath) {
+    if (!iconPath) return null;
+    if (iconPath instanceof Uri) {
+        const uri = _serializeTreeUri(iconPath);
+        return { light: uri, dark: uri };
+    }
+    if (typeof iconPath === 'string') return { path: iconPath };
+    if (typeof iconPath === 'object') {
+        if (typeof iconPath.id === 'string') {
+            const result = { id: iconPath.id, kind: 'theme' };
+            const color = _serializeThemeColor(iconPath.color);
+            if (color) result.color = { id: color };
+            return result;
+        }
+        const result = {};
+        if (iconPath.light) result.light = _serializeTreeUri(iconPath.light);
+        if (iconPath.dark) result.dark = _serializeTreeUri(iconPath.dark);
+        if (iconPath.path) result.path = _serializeTreeUri(iconPath.path);
+        return Object.keys(result).length ? result : null;
+    }
+    return { path: String(iconPath) };
 }
 
 function _serializeTreeCommand(command, viewId) {

@@ -181,6 +181,8 @@ body.window-resizing * { cursor:inherit !important; }
 .rtab { padding:0 10px; height:35px; display:flex; align-items:center; font-size:11px;
   font-weight:600; text-transform:none; letter-spacing:0; color:var(--fg-dim);
   cursor:pointer; border-bottom:1px solid transparent; white-space:nowrap; position:relative; max-width:180px; }
+.rtab-icon { width:15px; height:15px; flex:0 0 15px; display:inline-flex; align-items:center; justify-content:center; font-size:12px; opacity:.9; background-size:contain; background-position:center; background-repeat:no-repeat; }
+.rtab-icon:empty { display:none; }
 .rtab-label { overflow:hidden; text-overflow:ellipsis; }
 .rtab:hover { color:var(--fg); }
 .rtab.active { color:var(--fg); border-bottom-color:var(--fg); }
@@ -9482,6 +9484,37 @@ function providerDisplayName(pid){
 }
 function providerTabLabel(p){return t(PROVIDER_TAB_LABEL_KEYS[p.id]||'')||p.short_name||p.name||p.id}
 function providerTabTitle(p){return providerDisplayName(p.id)+(p.available===false?' — '+providerUnavailableText(p):'')}
+function providerWebviewIconVisual(iconPath){
+  if(!iconPath)return '';
+  if(typeof iconPath==='string')return {text:iconPath.length<=3?iconPath:'□',title:iconPath};
+  if(iconPath&&typeof iconPath==='object'){
+    if(iconPath.kind==='theme'||iconPath.id){
+      const color=themeColorToCss(iconPath.color,'');
+      return {text:extensionTreeThemeIconGlyph(iconPath.id),color,title:String(iconPath.id||'')};
+    }
+    const uri=extensionTreeIconPathUri(iconPath);
+    if(uri)return {uri,title:String(iconPath.path||iconPath.light||iconPath.dark||'')};
+    const raw=String(iconPath.path||iconPath.light||iconPath.dark||'');
+    if(raw)return {text:'□',title:raw};
+  }
+  return '';
+}
+function ensureProviderTabIcon(tab){
+  if(!tab)return null;
+  let icon=tab.querySelector('.rtab-icon');
+  if(!icon){
+    icon=document.createElement('span');
+    icon.className='rtab-icon';
+    tab.insertBefore(icon,tab.firstChild);
+  }
+  return icon;
+}
+function applyProviderTabIcon(tab,p){
+  const icon=ensureProviderTabIcon(tab);
+  if(!icon)return;
+  const visual=providerWebviewIconVisual(p&&p.iconPath);
+  applyIconVisual(icon,visual||'');
+}
 function normalizeExtensionProviderRecord(raw,fallbackViewId){
   const rec=raw&&typeof raw==='object'?raw:{};
   const viewId=String(rec.view_id||rec.viewId||rec.webview_id||rec.webviewId||fallbackViewId||'').trim();
@@ -9660,10 +9693,11 @@ function ensureExtensionProviderPanel(raw,viewId){
   let tab=providerTabElement(p.id);
   if(!tab&&tabs){
     tab=document.createElement('div');tab.className='rtab';tab.dataset.rtab=p.id;
+    const icon=document.createElement('span');icon.className='rtab-icon';tab.appendChild(icon);
     const label=document.createElement('span');label.className='rtab-label';tab.appendChild(label);
     tab.onclick=()=>switchRightTab(p.id);tabs.appendChild(tab);
   }
-  if(tab){const label=tab.querySelector('.rtab-label');if(label)label.textContent=providerTabLabel(p);tab.title=providerTabTitle(p);tab.setAttribute('aria-label',providerTabTitle(p))}
+  if(tab){applyProviderTabIcon(tab,p);const label=tab.querySelector('.rtab-label');if(label)label.textContent=providerTabLabel(p);tab.title=providerTabTitle(p);tab.setAttribute('aria-label',providerTabTitle(p))}
   let panel=$(providerElId('rp',p.id));
   if(!panel&&panels){panel=document.createElement('div');panel.className='right-panel';panel.id=providerElId('rp',p.id);panels.appendChild(panel)}
   if(panel){panel.dataset.providerId=p.id;panel.dataset.providerSurface='extension-webview';panel.classList.add('provider-webview-host');if(viewId)panel.dataset.viewId=viewId}
@@ -9687,6 +9721,21 @@ function updateExtensionWebviewTitle(viewId,title,viewType){
     panel.dataset.webviewTitle=label;
     if(!panel.children.length)renderProviderWebviewPlaceholder(panel,record,'loading');
   }
+  return !!panel;
+}
+function updateExtensionWebviewIcon(viewId,iconPath,viewType){
+  const id=String(viewId||'').trim();
+  if(!id)return false;
+  const customTab=findCustomEditorTabByViewId(id);
+  if(customTab){
+    customTab.customEditor={...(customTab.customEditor||{}),iconPath:iconPath||null};
+    renderTabs();
+    return true;
+  }
+  const providerId=id.startsWith('provider.')?id.slice(9):id;
+  const existing=providerDefs[providerId]||dynamicExtensionProviderDefs[providerId]||{};
+  const record={...existing,id:providerId,view_id:id,viewId:id,view_type:viewType||existing.view_type||existing.viewType||'',iconPath:iconPath||null,available:existing.available!==false,runtime_mode:existing.runtime_mode||existing.runtimeMode||'extension-webview',requested_transport:existing.requested_transport||existing.requestedTransport||'webviewView',extension_view:true};
+  const panel=ensureExtensionProviderPanel(record,id);
   return !!panel;
 }
 function revealExtensionWebviewPanel(data){
@@ -9834,7 +9883,7 @@ function localizeProviderUi(){
   Object.keys(providerDefs||{}).forEach(pid=>{
     const p=providerDefs[pid];
     const tab=providerTabElement(pid);
-    if(tab){const label=tab.querySelector('.rtab-label');if(label)label.textContent=providerTabLabel(p);tab.title=providerTabTitle(p);tab.setAttribute('aria-label',providerTabTitle(p))}
+    if(tab){applyProviderTabIcon(tab,p);const label=tab.querySelector('.rtab-label');if(label)label.textContent=providerTabLabel(p);tab.title=providerTabTitle(p);tab.setAttribute('aria-label',providerTabTitle(p))}
     const refs=providerRefs(pid);
     if(refs.panel&&refs.panel.dataset.providerSurface==='extension-webview'&&!refs.panel.querySelector('iframe')){
       renderProviderWebviewPlaceholder(refs.panel,p,refs.panel.dataset.webviewFallback||'missing-runtime');
@@ -10068,6 +10117,7 @@ async function renderProviderTabs(){
     if(p.available===false)return;
     providerDefs[p.id]=p;
     const tab=document.createElement('div');tab.className='rtab';tab.dataset.rtab=p.id;
+    const tabIcon=document.createElement('span');tabIcon.className='rtab-icon';tab.appendChild(tabIcon);applyProviderTabIcon(tab,p);
     const tabLabel=document.createElement('span');tabLabel.className='rtab-label';tabLabel.textContent=providerTabLabel(p);
     tab.appendChild(tabLabel);tab.title=providerTabTitle(p);tab.setAttribute('aria-label',providerTabTitle(p));
     tab.onclick=()=>switchRightTab(p.id);
@@ -10228,6 +10278,7 @@ window._onEditorEvent=function(event,data){
   }
   if(event==='file_decorations_changed'){
     scheduleExplorerDecorationRefresh(data);
+    scheduleExtensionActivityRefresh();
     return;
   }
   if(event==='custom_editor_changed'){
@@ -10273,6 +10324,11 @@ window._onEditorEvent=function(event,data){
   if(event==='update_webview_panel_title'){
     const viewId=data&&data.view_id,title=data&&data.title;
     if(viewId)updateExtensionWebviewTitle(viewId,title,data&&data.view_type);
+    return;
+  }
+  if(event==='update_webview_panel_icon'){
+    const viewId=data&&data.view_id;
+    if(viewId)updateExtensionWebviewIcon(viewId,data&&data.icon_path,data&&data.view_type);
     return;
   }
   if(event==='reveal_webview_panel'){
@@ -12821,6 +12877,7 @@ function renderExtensionTreeNode(viewId,node,depth,viewVersion,dnd){
   const itemTitle=extensionTreeItemTitle(node);
   const acc=node.accessibilityInformation||{};
   if(itemTitle)row.title=itemTitle;
+  row.dataset.baseTitle=row.title||'';
   if(acc.label)row.setAttribute('aria-label',String(acc.label));
   const glyph=extensionTreeIconGlyph(node,collapsible);
   const icon=document.createElement('span');icon.className='ext-tree-icon';
@@ -12854,6 +12911,7 @@ function renderExtensionTreeNode(viewId,node,depth,viewVersion,dnd){
     actionBtn.onclick=e=>{e.stopPropagation();showExtensionActionMenu(e.clientX,e.clientY,actions,action=>runExtensionTreeItemAction(viewId,node,action))};
     row.appendChild(actionBtn);
   }
+  applyExplorerDecoration(row,label,node);
   const childBox=document.createElement('div');childBox.style.display=collapsible===2?'':'none';
   if(collapsible)wrap.setAttribute('aria-expanded',collapsible===2?'true':'false');
   children.forEach(child=>childBox.appendChild(renderExtensionTreeNode(viewId,child,depth+1,viewVersion,dnd)));
