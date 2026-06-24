@@ -2203,6 +2203,15 @@ class AIEditorAPI:
             except Exception:
                 pass
 
+    def _notify_node_settings_changed_async(self) -> None:
+        """Re-sync Node settings without blocking the Node reader thread."""
+        thread = threading.Thread(
+            target=self._notify_node_settings_changed,
+            name="AIEditorNodeSettingsSync",
+            daemon=True,
+        )
+        thread.start()
+
     def _extension_diagnostics_enabled(self) -> bool:
         settings = _resolve_settings(self._gui_ref)
         ai_cfg = {}
@@ -7255,7 +7264,8 @@ class AIEditorAPI:
 
     def _handle_node_config_set(self, section: str, key: str,
                                 value: Any, remove: bool = False,
-                                override_identifier: str = "") -> None:
+                                override_identifier: str = "",
+                                target: str = "") -> None:
         """Handle a config_set message from Node.
 
         Persists the change via the Python settings manager and notifies
@@ -7306,6 +7316,36 @@ class AIEditorAPI:
                 _delete_nested(ai_cfg, path)
             else:
                 _set_nested(ai_cfg, path, next_value)
+            settings.set("ai_editor", ai_cfg)
+
+        def _config_target_key(path: List[str]) -> str:
+            return ".".join(part for part in path if part)
+
+        def _set_config_target(path: List[str], next_value: Any,
+                               target_name: str, should_remove: bool) -> None:
+            target_name = str(target_name or "").strip()
+            if target_name not in {"global", "workspace", "workspaceFolder"}:
+                return
+            target_key = _config_target_key(path)
+            if not target_key:
+                return
+            ai_cfg = settings.get("ai_editor", {}) or {}
+            if not isinstance(ai_cfg, dict):
+                ai_cfg = {}
+            targets = ai_cfg.get("configuration_targets", {}) or {}
+            if not isinstance(targets, dict):
+                targets = {}
+            if should_remove:
+                targets.pop(target_key, None)
+            else:
+                targets[target_key] = {
+                    "target": target_name,
+                    "value": next_value,
+                }
+            if targets:
+                ai_cfg["configuration_targets"] = targets
+            else:
+                ai_cfg.pop("configuration_targets", None)
             settings.set("ai_editor", ai_cfg)
 
         def _set_top_level(path: List[str], next_value: Any) -> None:
@@ -7376,8 +7416,10 @@ class AIEditorAPI:
             if str(override_identifier or "").strip():
                 _set_language_override(
                     override_identifier, full_setting_key, value)
+                _set_config_target(
+                    section_path + key_path, value, target, remove)
                 settings.save()
-                self._notify_node_settings_changed()
+                self._notify_node_settings_changed_async()
                 return
 
             if section_path == ["ai_editor"]:
@@ -7392,8 +7434,9 @@ class AIEditorAPI:
                 _set_ai_editor(key_path, value)
             else:
                 _set_top_level(section_path + key_path, value)
+            _set_config_target(section_path + key_path, value, target, remove)
             settings.save()
-            self._notify_node_settings_changed()
+            self._notify_node_settings_changed_async()
         except Exception as exc:
             print(f"[NodeExtHost] Failed to persist config_set "
                   f"{section}.{key}: {exc}")

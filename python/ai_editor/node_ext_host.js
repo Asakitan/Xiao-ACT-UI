@@ -1520,6 +1520,11 @@ const _knownExtensions = new Map();      // extensionId -> { extensionPath, mani
 const _configurationDefaults = {};       // contributed default settings by dotted path
 const _configurationLanguageDefaults = {}; // languageId -> defaults by dotted path
 const _configurationUpdateTargets = {};  // dotted path -> last VS Code ConfigurationTarget
+const _configurationTargetValues = {
+    global: {},
+    workspace: {},
+    workspaceFolder: {},
+};
 const _extensionActivationRequests = new Map(); // requestId -> pending activation request
 const _extensionActivationInFlight = new Map(); // extensionId -> pending activation request
 const _commands = new Map();             // commandId -> handler
@@ -7038,12 +7043,88 @@ function _configurationTargetName(target) {
     return '';
 }
 
+function _configurationTargetStore(targetName) {
+    const name = String(targetName || '');
+    return Object.prototype.hasOwnProperty.call(_configurationTargetValues, name)
+        ? _configurationTargetValues[name]
+        : null;
+}
+
+function _configurationDottedKey(pathParts) {
+    return Array.isArray(pathParts) ? pathParts.join('.') : '';
+}
+
+function _configurationTrackedTarget(pathParts) {
+    return _configurationUpdateTargets[_configurationDottedKey(pathParts)] || '';
+}
+
+function _configTargetLookup(pathParts, targetName) {
+    const store = _configurationTargetStore(targetName);
+    return store ? _configLookup(store, pathParts) : _CONFIG_MISSING;
+}
+
+function _configSetTargetValue(pathParts, targetName, value) {
+    const store = _configurationTargetStore(targetName);
+    const dotted = _configurationDottedKey(pathParts);
+    if (!store || !dotted) return;
+    _configSet(store, pathParts, _configCloneValue(value));
+    _configurationUpdateTargets[dotted] = targetName;
+}
+
+function _configDeleteTargetValue(pathParts, targetName) {
+    const store = _configurationTargetStore(targetName);
+    const dotted = _configurationDottedKey(pathParts);
+    if (!store || !dotted) return;
+    _configDelete(store, pathParts);
+    if (_configurationUpdateTargets[dotted] === targetName) {
+        delete _configurationUpdateTargets[dotted];
+    }
+}
+
+function _configWorkspaceLookup(pathParts) {
+    const trackedTarget = _configurationTrackedTarget(pathParts);
+    if (trackedTarget && trackedTarget !== 'workspace') return _CONFIG_MISSING;
+    const workspaceValue = _configTargetLookup(pathParts, 'workspace');
+    if (workspaceValue !== _CONFIG_MISSING) return workspaceValue;
+    return _configLookup(_settings, pathParts);
+}
+
+function _rebuildConfigurationTargetsFromSettings() {
+    for (const name of Object.keys(_configurationTargetValues)) {
+        _configurationTargetValues[name] = {};
+    }
+    for (const key of Object.keys(_configurationUpdateTargets)) {
+        delete _configurationUpdateTargets[key];
+    }
+    const aiEditor = _settings && typeof _settings === 'object'
+        ? _settings.ai_editor
+        : null;
+    const targets = aiEditor && typeof aiEditor === 'object'
+        ? aiEditor.configuration_targets
+        : null;
+    if (!targets || typeof targets !== 'object' || Array.isArray(targets)) {
+        return;
+    }
+    for (const [key, entry] of Object.entries(targets)) {
+        if (!entry || typeof entry !== 'object') continue;
+        const pathParts = _configPath(key);
+        const targetName = String(entry.target || '');
+        if (!pathParts.length || !_configurationTargetStore(targetName)) continue;
+        if (!Object.prototype.hasOwnProperty.call(entry, 'value')) continue;
+        _configSetTargetValue(pathParts, targetName, entry.value);
+    }
+}
+
 function _configEffectiveLookup(pathParts, overrideIdentifier) {
     const languageConfigured = _configLanguageOverrideLookup(
         pathParts, overrideIdentifier);
     if (languageConfigured !== _CONFIG_MISSING) return languageConfigured;
-    const configured = _configLookup(_settings, pathParts);
+    const folderConfigured = _configTargetLookup(pathParts, 'workspaceFolder');
+    if (folderConfigured !== _CONFIG_MISSING) return folderConfigured;
+    const configured = _configWorkspaceLookup(pathParts);
     if (configured !== _CONFIG_MISSING) return configured;
+    const globalConfigured = _configTargetLookup(pathParts, 'global');
+    if (globalConfigured !== _CONFIG_MISSING) return globalConfigured;
     return _configDefaultLookup(pathParts, overrideIdentifier);
 }
 
@@ -7051,13 +7132,17 @@ function _configEffectiveSection(sectionPath, overrideIdentifier) {
     const defaults = _configLookup(_configurationDefaults, sectionPath);
     const languageDefaults = _configLanguageDefaultLookup(
         sectionPath, overrideIdentifier);
-    const configured = _configLookup(_settings, sectionPath);
+    const globalConfigured = _configTargetLookup(sectionPath, 'global');
+    const configured = _configWorkspaceLookup(sectionPath);
+    const folderConfigured = _configTargetLookup(sectionPath, 'workspaceFolder');
     const languageConfigured = _configLanguageOverrideSection(
         sectionPath, overrideIdentifier);
     let result = _CONFIG_MISSING;
     result = _configMergeLayer(result, defaults);
     result = _configMergeLayer(result, languageDefaults);
+    result = _configMergeLayer(result, globalConfigured);
     result = _configMergeLayer(result, configured);
+    result = _configMergeLayer(result, folderConfigured);
     result = _configMergeLayer(result, languageConfigured);
     return result === _CONFIG_MISSING ? {} : _configCloneValue(result);
 }
@@ -7190,13 +7275,18 @@ function _createConfigProxy(section, overrideIdentifier = '') {
         inspect(key) {
             const pathParts = _configFullPath(section, key);
             const fullKey = pathParts.join('.');
-            const value = _configLookup(_settings, pathParts);
+            const globalValue = _configTargetLookup(pathParts, 'global');
+            const workspaceValue = _configWorkspaceLookup(pathParts);
+            const workspaceFolderValue = _configTargetLookup(
+                pathParts, 'workspaceFolder');
             const languageValue = _configLanguageOverrideLookup(
                 pathParts, overrideIdentifier);
             const defaultValue = _configLookup(_configurationDefaults, pathParts);
             const defaultLanguageValue = _configLanguageDefaultLookup(
                 pathParts, overrideIdentifier);
-            if (value === _CONFIG_MISSING
+            if (globalValue === _CONFIG_MISSING
+                    && workspaceValue === _CONFIG_MISSING
+                    && workspaceFolderValue === _CONFIG_MISSING
                     && languageValue === _CONFIG_MISSING
                     && defaultValue === _CONFIG_MISSING
                     && defaultLanguageValue === _CONFIG_MISSING) {
@@ -7210,19 +7300,21 @@ function _createConfigProxy(section, overrideIdentifier = '') {
                 defaultLanguageValue: defaultLanguageValue === _CONFIG_MISSING
                     ? undefined
                     : _configCloneValue(defaultLanguageValue),
-                globalValue: value === _CONFIG_MISSING
+                globalValue: globalValue === _CONFIG_MISSING
                     ? undefined
-                    : _configCloneValue(value),
-                workspaceValue: value === _CONFIG_MISSING
+                    : _configCloneValue(globalValue),
+                workspaceValue: workspaceValue === _CONFIG_MISSING
                     ? undefined
-                    : _configCloneValue(value),
+                    : _configCloneValue(workspaceValue),
                 globalLanguageValue: languageValue === _CONFIG_MISSING
                     ? undefined
                     : _configCloneValue(languageValue),
                 workspaceLanguageValue: languageValue === _CONFIG_MISSING
                     ? undefined
                     : _configCloneValue(languageValue),
-                workspaceFolderValue: undefined,
+                workspaceFolderValue: workspaceFolderValue === _CONFIG_MISSING
+                    ? undefined
+                    : _configCloneValue(workspaceFolderValue),
                 target: _configurationUpdateTargets[fullKey] || undefined,
             };
         },
@@ -7242,12 +7334,19 @@ function _createConfigProxy(section, overrideIdentifier = '') {
                         languageOverrideIdentifier, pathParts, value);
                 }
             } else {
+                const targetForStore = targetName || 'workspace';
                 if (value === undefined) {
-                    _configDelete(_settings, pathParts);
-                    _configMirrorAiEditorAlias(pathParts, value, true);
+                    _configDeleteTargetValue(pathParts, targetForStore);
+                    if (!targetName || targetName === 'workspace') {
+                        _configDelete(_settings, pathParts);
+                        _configMirrorAiEditorAlias(pathParts, value, true);
+                    }
                 } else {
-                    _configSet(_settings, pathParts, value);
-                    _configMirrorAiEditorAlias(pathParts, value, false);
+                    _configSetTargetValue(pathParts, targetForStore, value);
+                    if (!targetName || targetName === 'workspace') {
+                        _configSet(_settings, pathParts, value);
+                        _configMirrorAiEditorAlias(pathParts, value, false);
+                    }
                 }
             }
             if (targetName) _configurationUpdateTargets[fullKey] = targetName;
@@ -9376,6 +9475,7 @@ async function handleMessage(msg) {
             // Full settings replacement from Python
             if (msg.settings && typeof msg.settings === 'object') {
                 _settings = msg.settings;
+                _rebuildConfigurationTargetsFromSettings();
                 log(`settings_sync: ${Object.keys(_settings).length} section(s)`);
             }
             break;
@@ -9396,15 +9496,24 @@ async function handleMessage(msg) {
                             changedOverrideIdentifier, changedPath, msg.value);
                     }
                 } else if (msg.remove) {
-                    _configDelete(_settings, changedPath);
-                    _configMirrorAiEditorAlias(changedPath, undefined, true);
+                    const targetName = String(msg.target || '') || 'workspace';
+                    _configDeleteTargetValue(changedPath, targetName);
+                    if (!msg.target || msg.target === 'workspace') {
+                        _configDelete(_settings, changedPath);
+                        _configMirrorAiEditorAlias(changedPath, undefined, true);
+                    }
                 } else if (msg.key !== undefined) {
-                    _configSet(_settings, changedPath, msg.value);
-                    _configMirrorAiEditorAlias(changedPath, msg.value, false);
+                    const targetName = String(msg.target || '') || 'workspace';
+                    _configSetTargetValue(changedPath, targetName, msg.value);
+                    if (!msg.target || msg.target === 'workspace') {
+                        _configSet(_settings, changedPath, msg.value);
+                        _configMirrorAiEditorAlias(changedPath, msg.value, false);
+                    }
                 } else if (msg.value !== undefined && typeof msg.value === 'object') {
                     const sectionPath = _configPath(changedSection);
                     _configSet(_settings, sectionPath, msg.value);
                     _configMirrorAiEditorAlias(sectionPath, msg.value, false);
+                    _rebuildConfigurationTargetsFromSettings();
                 }
                 // Fire onDidChangeConfiguration for listening extensions
                 _fireConfigurationChanged(changedPath.length

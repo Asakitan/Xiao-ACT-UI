@@ -1801,7 +1801,7 @@ class NodeExtensionHost:
         self._on_activated_callbacks: List[Callable[[str], None]] = []
         self._on_error_callbacks: List[Callable[[str, str], None]] = []
         self._on_config_set_callbacks: List[
-            Callable[[str, str, Any, bool, str], None]
+            Callable[[str, str, Any, bool, str, str], None]
         ] = []
         self._on_tree_callbacks: List[
             Callable[[str, str, Dict[str, Any]], None]
@@ -2866,7 +2866,8 @@ class NodeExtensionHost:
                 _log.info("[NodeExtHost] config_set: %s", full_key)
                 for cb in self._on_config_set_callbacks:
                     try:
-                        cb(section, key, value, remove, override_identifier)
+                        cb(section, key, value, remove, override_identifier,
+                           str(msg.get("target", "")))
                     except Exception:
                         _log.exception("[NodeExtHost] on_config_set callback "
                                        "error for %s", full_key)
@@ -3029,12 +3030,12 @@ class NodeExtensionHost:
 
     def on_config_set(
             self,
-            callback: Callable[[str, str, Any, bool, str], None]) -> None:
+            callback: Callable[[str, str, Any, bool, str, str], None]) -> None:
         """Register a callback invoked when Node sends a config_set message.
 
         The callback receives ``(section, key, value, remove,
-        override_identifier)`` and is responsible for persisting the change on
-        the Python side.
+        override_identifier, target)`` and is responsible for persisting the
+        change on the Python side.
         """
         self._on_config_set_callbacks.append(callback)
 

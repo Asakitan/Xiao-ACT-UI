@@ -5241,6 +5241,12 @@ console.log("quick input filter helpers ok");
            and "Workspace: 2" in node_ext_host_source
            and "WorkspaceFolder: 3" in node_ext_host_source
            and "function _configurationTargetName(target)" in node_ext_host_source
+           and "const _configurationTargetValues" in node_ext_host_source
+           and "function _rebuildConfigurationTargetsFromSettings()"
+           in node_ext_host_source
+           and "workspaceFolderValue: workspaceFolderValue" in node_ext_host_source
+           and "\"configuration_targets\"" in app_source
+           and "target: str = \"\"" in app_source
            and "_configurationUpdateTargets[fullKey]" in node_ext_host_source
            and "message.target = targetName" in node_ext_host_source)
     _check("extension task and debug runtimes expose VS Code lifecycle",
@@ -11416,6 +11422,27 @@ async function activate(context) {
       inspectWorkspace: manifestConfig.inspect('flag').workspaceValue,
       inspectTarget: manifestConfig.inspect('flag').target,
     };
+    await manifestConfig.update(
+      'global_flag', 'global-target', vscode.ConfigurationTarget.Global);
+    const manifestGlobalConfigSet = {
+      flag: manifestConfig.get('global_flag'),
+      inspectGlobal: manifestConfig.inspect('global_flag').globalValue,
+      inspectWorkspace: manifestConfig.inspect('global_flag').workspaceValue,
+      inspectWorkspaceFolder:
+        manifestConfig.inspect('global_flag').workspaceFolderValue,
+      inspectTarget: manifestConfig.inspect('global_flag').target,
+    };
+    await manifestConfig.update(
+      'folder_flag', 'folder-target',
+      vscode.ConfigurationTarget.WorkspaceFolder);
+    const manifestFolderConfigSet = {
+      flag: manifestConfig.get('folder_flag'),
+      inspectGlobal: manifestConfig.inspect('folder_flag').globalValue,
+      inspectWorkspace: manifestConfig.inspect('folder_flag').workspaceValue,
+      inspectWorkspaceFolder:
+        manifestConfig.inspect('folder_flag').workspaceFolderValue,
+      inspectTarget: manifestConfig.inspect('folder_flag').target,
+    };
     await manifestConfig.update('flag', undefined);
     const manifestConfigReset = {
       flag: manifestConfig.get('flag'),
@@ -11423,6 +11450,8 @@ async function activate(context) {
       hasFlag: manifestConfig.has('flag'),
       inspectDefault: manifestConfig.inspect('flag').defaultValue,
       inspectWorkspace: manifestConfig.inspect('flag').workspaceValue,
+      globalFlag: manifestConfig.get('global_flag', 'missing'),
+      folderFlag: manifestConfig.get('folder_flag', 'missing'),
     };
     await manifestLanguageConfig.update(
       'mode', 'configured-language', undefined, true);
@@ -11517,6 +11546,8 @@ async function activate(context) {
       manifestLanguageConfigReset,
       manifestLanguageConfigPersist,
       manifestConfigSet,
+      manifestGlobalConfigSet,
+      manifestFolderConfigSet,
       manifestConfigReset,
       configRemoved,
       languageApi: {
@@ -14078,9 +14109,21 @@ module.exports = { activate, deactivate };
                 node_manifest_config_set = (
                     node_workspace_probe.get("manifestConfigSet", {})
                     if isinstance(node_workspace_probe, dict) else {})
+                node_manifest_global_config_set = (
+                    node_workspace_probe.get("manifestGlobalConfigSet", {})
+                    if isinstance(node_workspace_probe, dict) else {})
+                node_manifest_folder_config_set = (
+                    node_workspace_probe.get("manifestFolderConfigSet", {})
+                    if isinstance(node_workspace_probe, dict) else {})
                 node_manifest_config_reset = (
                     node_workspace_probe.get("manifestConfigReset", {})
                     if isinstance(node_workspace_probe, dict) else {})
+                node_settings_targets = (
+                    getattr(api._gui_ref.settings, "data", {})
+                    .get("ai_editor", {})
+                    .get("configuration_targets", {})
+                    if getattr(getattr(api, "_gui_ref", None), "settings", None)
+                    else {})
                 _check("node host workspace configuration matches VS Code sections",
                        node_workspace_command_registered
                        and node_config_before.get("aiDiagnostics") is True
@@ -14130,6 +14173,42 @@ module.exports = { activate, deactivate };
                        is False
                        and node_manifest_config_set.get("inspectTarget")
                        == "workspace"
+                       and node_manifest_global_config_set.get("flag")
+                       == "global-target"
+                       and node_manifest_global_config_set.get(
+                           "inspectGlobal") == "global-target"
+                       and node_manifest_global_config_set.get(
+                           "inspectWorkspace") is None
+                       and node_manifest_global_config_set.get(
+                           "inspectWorkspaceFolder") is None
+                       and node_manifest_global_config_set.get(
+                           "inspectTarget") == "global"
+                       and node_manifest_folder_config_set.get("flag")
+                       == "folder-target"
+                       and node_manifest_folder_config_set.get(
+                           "inspectGlobal") is None
+                       and node_manifest_folder_config_set.get(
+                           "inspectWorkspace") is None
+                       and node_manifest_folder_config_set.get(
+                           "inspectWorkspaceFolder") == "folder-target"
+                       and node_manifest_folder_config_set.get(
+                           "inspectTarget") == "workspaceFolder"
+                       and node_manifest_config_reset.get("globalFlag")
+                       == "global-target"
+                       and node_manifest_config_reset.get("folderFlag")
+                       == "folder-target"
+                       and node_settings_targets.get(
+                           "selftest.node.global_flag", {}).get("target")
+                       == "global"
+                       and node_settings_targets.get(
+                           "selftest.node.global_flag", {}).get("value")
+                       == "global-target"
+                       and node_settings_targets.get(
+                           "selftest.node.folder_flag", {}).get("target")
+                       == "workspaceFolder"
+                       and node_settings_targets.get(
+                           "selftest.node.folder_flag", {}).get("value")
+                       == "folder-target"
                        and node_manifest_config_reset.get("flag") is True
                        and node_manifest_config_reset.get("mode") == "manual"
                        and node_manifest_config_reset.get("hasFlag") is True
