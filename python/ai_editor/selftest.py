@@ -2734,6 +2734,9 @@ console.log("frontend auto-close behavior ok");
                and "window.Worker=function(url,options)" in html
                and "var _NativeSharedWorker=window.SharedWorker" in html
                and "window.SharedWorker=function(url,nameOrOptions,maybeOptions)" in html
+               and "function _patchWorkletModule(target)" in html
+               and "CSS.paintWorklet" in html
+               and "AudioWorklet&&AudioWorklet.prototype" in html
                and "window.fetch=function(input,init)" in html
                and "XMLHttpRequest.prototype.open=function(method,url)" in html
                and "Element.prototype.setAttribute=function(name,value)" in html
