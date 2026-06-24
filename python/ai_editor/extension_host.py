@@ -1414,6 +1414,9 @@ class ExtensionHost:
             self.registry, self.commands, self.ext_points)
         self._started = False
         self._policy: Optional[Callable[[ExtensionDescription], bool]] = None
+        self._activation_event_callbacks: List[
+            Callable[[str, List[ActivatedExtension]], None]
+        ] = []
         self._change_emitter = _LazyEventEmitter()
         self.registry.on_did_change(self._relay_registry_change)
 
@@ -1432,6 +1435,20 @@ class ExtensionHost:
 
     def _activate_command_extension(self, command_id: str) -> None:
         self.activate_event(f"onCommand:{command_id}")
+
+    def on_activation_event(
+            self,
+            callback: Callable[[str, List[ActivatedExtension]], None]
+    ) -> Callable[[], None]:
+        self._activation_event_callbacks.append(callback)
+
+        def dispose() -> None:
+            try:
+                self._activation_event_callbacks.remove(callback)
+            except ValueError:
+                pass
+
+        return dispose
 
     def set_policy(self, policy: Optional[Callable[[ExtensionDescription], bool]] = None,
                    enabled_contributions: Optional[Set[str]] = None) -> None:
@@ -1484,6 +1501,11 @@ class ExtensionHost:
 
     def activate_event(self, event: str) -> List[ActivatedExtension]:
         results = self.activator.activate_by_event(event)
+        for callback in list(self._activation_event_callbacks):
+            try:
+                callback(event, results)
+            except Exception:
+                pass
         if results:
             self._emit_change({
                 "event": event,
@@ -1780,15 +1802,44 @@ class NodeExtensionHost:
             "extensionId": extension_id,
         })
 
-    def activate_all(self, extensions: List[ExtensionDescription]) -> int:
+    def wait_for_activation(
+            self, extension_ids: List[str], timeout: float = 5.0) -> bool:
+        """Wait until all extension ids are activated in the Node host."""
+        pending = [str(ext_id or "") for ext_id in extension_ids if ext_id]
+        if not pending:
+            return True
+        deadline = time.time() + max(0.0, timeout)
+        while time.time() < deadline:
+            if all(ext_id in self._activated_ids for ext_id in pending):
+                return True
+            failed = [
+                ext_id for ext_id in pending
+                if ext_id not in self._activated_ids
+                and ext_id not in self._activation_sent_ids
+            ]
+            if failed:
+                return False
+            time.sleep(0.025)
+        return all(ext_id in self._activated_ids for ext_id in pending)
+
+    def activate_all(
+            self, extensions: List[ExtensionDescription],
+            wait: bool = False,
+            timeout: float = 5.0) -> int:
         """Activate a list of extensions. Returns the number successfully sent."""
         count = 0
+        waiting: List[str] = []
         for ext in extensions:
             if not ext.main:
                 continue
             manifest = self.extension_manifest(ext)
+            was_active = ext.id in self._activated_ids
             if self.activate(ext.extension_path, ext.id, manifest):
                 count += 1
+                if not was_active:
+                    waiting.append(ext.id)
+        if wait and waiting:
+            self.wait_for_activation(waiting, timeout=timeout)
         return count
 
     # -- Communication: send -------------------------------------------------

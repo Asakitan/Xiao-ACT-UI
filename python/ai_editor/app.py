@@ -3510,6 +3510,11 @@ class AIEditorAPI:
             payload.get("language")
             or payload.get("languageId")
             or "plaintext")
+        if language:
+            try:
+                self._ext_host.activate_event(f"onLanguage:{language}")
+            except Exception:
+                pass
         document = self._vscode_ns.update_text_document_snapshot(
             _editor_provider_uri(payload), content, language)
         if "dirty" in payload:
@@ -5499,7 +5504,9 @@ class AIEditorAPI:
         """Start a NodeExtensionHost for extensions that declare ``main``.
 
         Filters registered extensions, and if any have a JS entry point and
-        Node.js is available, spawns the Node subprocess and activates them.
+        Node.js is available, spawns the Node subprocess and syncs their
+        descriptions. Runtime activation follows VS Code activation events
+        instead of eagerly activating every extension at startup.
         Extensions without ``main`` are unaffected.
         """
         from ai_editor.extension_host import NodeExtensionHost
@@ -5515,16 +5522,12 @@ class AIEditorAPI:
                 self._extension_diagnostics_enabled())
             existing_host.set_command_service(self._ext_host.commands)
             existing_host.register_extensions(node_exts)
-            pending = [
-                ext for ext in node_exts
-                if not existing_host.is_extension_activated(ext.id)
-                and not existing_host.is_extension_activation_pending(ext.id)
-            ]
-            if pending:
-                activated = existing_host.activate_all(pending)
+            self._install_node_activation_event_bridge()
+            activated = self._activate_node_startup_extensions(wait=False)
+            if activated:
                 print(
-                    f"[NodeExtHost] {activated}/{len(pending)} new JS "
-                    "extension(s) sent for activation.")
+                    f"[NodeExtHost] {activated} startup JS extension(s) "
+                    "sent for activation.")
                 self._sync_settings_to_node_host()
             return
 
@@ -5564,6 +5567,7 @@ class AIEditorAPI:
         host.set_diagnostics_enabled(self._extension_diagnostics_enabled())
         host.set_command_service(self._ext_host.commands)
         host.on_tree_event(self._handle_node_tree_event)
+        host.on_config_set(self._handle_node_config_set)
 
         if not host.start():
             print("[NodeExtHost] Failed to start Node subprocess.")
@@ -5572,16 +5576,79 @@ class AIEditorAPI:
         self._node_ext_host = host
         self._vscode_ns.set_language_provider_request_callback(
             self._request_node_language_provider)
+        self._install_node_activation_event_bridge()
         host.register_extensions(node_exts)
-        activated = host.activate_all(node_exts)
-        print(f"[NodeExtHost] {activated}/{len(node_exts)} JS extension(s) "
-              "sent for activation.")
 
         # Push current settings so getConfiguration() returns real values
         self._sync_settings_to_node_host()
+        activated = self._activate_node_startup_extensions(wait=False)
+        print(f"[NodeExtHost] {len(node_exts)} JS extension(s) registered; "
+              f"{activated} startup activation(s) sent.")
 
-        # Handle config_set messages from Node (extension called config.update)
-        host.on_config_set(self._handle_node_config_set)
+    def _install_node_activation_event_bridge(self) -> None:
+        if getattr(self, "_node_activation_event_bridge_installed", False):
+            return
+        self._node_activation_event_bridge_installed = True
+        self._node_activation_event_bridge_dispose = (
+            self._ext_host.on_activation_event(
+                lambda event, results: self._activate_node_extensions_for_event(
+                    event,
+                    wait=self._node_activation_event_should_wait(event),
+                )
+            )
+        )
+
+    @staticmethod
+    def _node_activation_event_should_wait(event: str) -> bool:
+        event_text = str(event or "")
+        return event_text.startswith((
+            "onCommand:",
+            "onView:",
+            "onCustomEditor:",
+            "onLanguage:",
+        ))
+
+    def _node_extensions_for_activation_event(self, event: str) -> List[Any]:
+        try:
+            candidates = self._ext_host.registry.get_for_activation_event(event)
+        except Exception:
+            return []
+        node_exts: List[Any] = []
+        seen = set()
+        for ext in candidates:
+            ext_id = getattr(ext, "id", "")
+            if (not getattr(ext, "main", "")
+                    or not getattr(ext, "enabled", True)
+                    or ext_id in seen):
+                continue
+            if not self._extension_allowed(ext):
+                continue
+            node_exts.append(ext)
+            seen.add(ext_id)
+        return node_exts
+
+    def _activate_node_extensions_for_event(
+            self, event: str, wait: bool = True) -> int:
+        node_host = getattr(self, "_node_ext_host", None)
+        if node_host is None or not getattr(node_host, "is_running", False):
+            return 0
+        targets = [
+            ext for ext in self._node_extensions_for_activation_event(event)
+            if (not node_host.is_extension_activated(ext.id)
+                and not node_host.is_extension_activation_pending(ext.id))
+        ]
+        if not targets:
+            return 0
+        sent = node_host.activate_all(targets, wait=wait, timeout=8.0)
+        if sent:
+            self._sync_settings_to_node_host()
+        return sent
+
+    def _activate_node_startup_extensions(self, wait: bool = False) -> int:
+        activated = self._activate_node_extensions_for_event("*", wait=wait)
+        activated += self._activate_node_extensions_for_event(
+            "onStartupFinished", wait=wait)
+        return activated
 
     def _request_node_language_provider(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Bridge VS Code language-provider execution into the Node host."""

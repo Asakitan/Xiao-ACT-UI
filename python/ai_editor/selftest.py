@@ -5432,6 +5432,7 @@ def test_app_extension_runtime_support() -> None:
     settings_tmp = ""
     node_tree_tmp = ""
     node_inactive_tmp = ""
+    node_lazy_tmp = ""
     node_storage_tmp = ""
     extension_host_module._host = ExtensionHost()
     try:
@@ -6261,6 +6262,7 @@ def test_app_extension_runtime_support() -> None:
             node_tree_tmp = tempfile.mkdtemp(prefix="sao_node_tree_ext_")
             node_inactive_tmp = tempfile.mkdtemp(
                 prefix="sao_node_inactive_ext_")
+            node_lazy_tmp = tempfile.mkdtemp(prefix="sao_node_lazy_ext_")
             node_storage_tmp = tempfile.mkdtemp(prefix="sao_node_storage_")
             node_inactive_js = r"""
 async function activate(context) {
@@ -6284,6 +6286,38 @@ module.exports = { activate };
                 "main": "./extension.js",
                 "activationEvents": ["onCommand:selftest.inactive"],
             }, node_inactive_tmp)
+            node_lazy_js = r"""
+const vscode = require('vscode');
+async function activate(context) {
+  vscode.commands.registerCommand('selftest.node.lazyCommand', () => ({
+    lazy: true,
+    extensionId: context.extension && context.extension.id,
+    packageName: context.extension && context.extension.packageJSON
+      && context.extension.packageJSON.name,
+  }));
+  return { name: 'nodeLazyApi' };
+}
+module.exports = { activate };
+"""
+            with open(os.path.join(node_lazy_tmp, "extension.js"),
+                      "w", encoding="utf-8") as fh:
+                fh.write(node_lazy_js)
+            node_lazy_desc = ExtensionDescription.from_package_json({
+                "name": "node-lazy-command",
+                "publisher": "selftest",
+                "version": "0.0.1",
+                "displayName": "Node Lazy Command",
+                "main": "./extension.js",
+                "activationEvents": [
+                    "onCommand:selftest.node.lazyCommand",
+                ],
+                "contributes": {
+                    "commands": [{
+                        "command": "selftest.node.lazyCommand",
+                        "title": "Node Lazy Command",
+                    }],
+                },
+            }, node_lazy_tmp)
             node_extension_js = r"""
 const vscode = require('vscode');
 const output = vscode.window.createOutputChannel('node-tree-selftest');
@@ -7069,6 +7103,8 @@ module.exports = { activate, deactivate };
                 },
             }, node_tree_tmp)
             api._ext_host.ext_points.process(node_tree_desc)
+            api._ext_host.registry.register(node_tree_desc)
+            api._ext_host.registry.register(node_lazy_desc)
             class _NodeUiBridge:
                 def __init__(self) -> None:
                     self.webviews = {}
@@ -7118,7 +7154,9 @@ module.exports = { activate, deactivate };
                     node_host.register_extensions([
                         node_tree_desc,
                         node_inactive_desc,
+                        node_lazy_desc,
                     ])
+                    api._install_node_activation_event_bridge()
                     node_host.send_settings_sync({
                         "ai_editor": {
                             "extensions": {
@@ -7131,14 +7169,19 @@ module.exports = { activate, deactivate };
                             "probe_flag": True,
                         },
                     })
-                sent = node_host.activate(node_tree_tmp, node_tree_desc.id, {
-                    "name": node_tree_desc.name,
-                    "publisher": node_tree_desc.publisher,
-                    "version": node_tree_desc.version,
-                    "main": node_tree_desc.main,
-                    "activationEvents": node_tree_desc.activation_events,
-                    "contributes": node_tree_desc.contributes,
-                }) if node_started else False
+                sent = (
+                    api._activate_node_startup_extensions(wait=True) > 0
+                    if node_started else False
+                )
+                lazy_before_command = (
+                    node_lazy_desc.id not in node_host._activated_ids)
+                try:
+                    lazy_command_result = api._ext_host.commands.execute(
+                        "selftest.node.lazyCommand")
+                except Exception as exc:
+                    lazy_command_result = {"_error": str(exc)}
+                lazy_after_command = (
+                    node_lazy_desc.id in node_host._activated_ids)
                 node_registered = _wait_until(
                     lambda: "selftest.node.tree" in api._vscode_ns._tree_data_providers,
                     timeout=3.0)
@@ -8042,6 +8085,16 @@ module.exports = { activate, deactivate };
                 node_reveal_seen = _wait_until(
                     _node_root_focused, timeout=3.0)
                 node_nodes = node_snapshot.get("nodes", [])
+                _check("node host lazily activates command extensions",
+                       lazy_before_command is True
+                       and lazy_after_command is True
+                       and isinstance(lazy_command_result, dict)
+                       and lazy_command_result.get("lazy") is True
+                       and lazy_command_result.get("extensionId")
+                       == node_lazy_desc.id
+                       and lazy_command_result.get("packageName")
+                       == node_lazy_desc.name,
+                       json.dumps(lazy_command_result, ensure_ascii=False))
                 _check("node host tree provider registers dynamic activity view",
                        node_started is True
                        and sent is True
@@ -8301,6 +8354,8 @@ module.exports = { activate, deactivate };
             shutil.rmtree(node_tree_tmp, ignore_errors=True)
         if node_inactive_tmp:
             shutil.rmtree(node_inactive_tmp, ignore_errors=True)
+        if node_lazy_tmp:
+            shutil.rmtree(node_lazy_tmp, ignore_errors=True)
         if node_storage_tmp:
             shutil.rmtree(node_storage_tmp, ignore_errors=True)
 
