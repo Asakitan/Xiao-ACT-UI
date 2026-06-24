@@ -1301,6 +1301,7 @@ let _nextUntitledDocument = 1;
 let _nextProgressHandle = 1;
 let _nextQuickInputHandle = 1;
 let _activeQuickInput = null;
+const _quickInputs = new Map();          // quickInput id -> QuickInputBase
 
 function _workspaceDocumentIsOpened(document) {
     return !!document && document.__opened !== false;
@@ -3340,6 +3341,7 @@ class QuickInputBase {
         this._ignoreFocusOut = false;
         this._onDidHideEmitter = new EventEmitter();
         this.onDidHide = this._onDidHideEmitter.event;
+        _quickInputs.set(this._id, this);
     }
     _assertAlive() {
         if (this._disposed) throw new Error('QuickInput has been disposed');
@@ -3407,6 +3409,7 @@ class QuickInputBase {
         if (this._visible) this.hide();
         this._disposed = true;
         if (_activeQuickInput === this) _activeQuickInput = null;
+        _quickInputs.delete(this._id);
         this._send('dispose');
         this._onDidHideEmitter.dispose();
     }
@@ -3656,6 +3659,63 @@ class InputBoxInput extends QuickInputBase {
             prompt: this._prompt,
             validationMessage: this._validationMessage,
         };
+    }
+}
+
+function _quickInputItemForIndex(input, index) {
+    const items = Array.isArray(input?._items) ? input._items : [];
+    const i = Number(index);
+    return Number.isInteger(i) && i >= 0 && i < items.length ? items[i] : undefined;
+}
+
+function _quickInputItemsForIndices(input, indices) {
+    const source = Array.isArray(indices) ? indices : [];
+    return source
+        .map(index => _quickInputItemForIndex(input, index))
+        .filter(item => item !== undefined);
+}
+
+function _quickInputButtonForIndex(input, index) {
+    const buttons = Array.isArray(input?._buttons) ? input._buttons : [];
+    const i = Number(index);
+    return Number.isInteger(i) && i >= 0 && i < buttons.length ? buttons[i] : undefined;
+}
+
+function handleQuickInputAction(msg) {
+    const id = String(msg.id || '');
+    const action = String(msg.action || '');
+    const input = _quickInputs.get(id);
+    if (!input) {
+        log(`quick_input_action: unknown id=${id}`);
+        return;
+    }
+    try {
+        if (action === 'changeValue') {
+            input.value = String(msg.value ?? '');
+        } else if (action === 'changeActive' && input instanceof QuickPickInput) {
+            input.activeItems = _quickInputItemsForIndices(input, msg.itemIndices || msg.indices);
+        } else if (action === 'changeSelection' && input instanceof QuickPickInput) {
+            input.selectedItems = _quickInputItemsForIndices(input, msg.itemIndices || msg.indices);
+        } else if (action === 'triggerButton') {
+            const button = _quickInputButtonForIndex(input, msg.buttonIndex);
+            if (button !== undefined && typeof input._triggerButton === 'function') {
+                input._triggerButton(button);
+            }
+        } else if (action === 'triggerItemButton' && input instanceof QuickPickInput) {
+            const item = _quickInputItemForIndex(input, msg.itemIndex);
+            const buttons = Array.isArray(item?.buttons) ? item.buttons : [];
+            const buttonIndex = Number(msg.buttonIndex);
+            const button = Number.isInteger(buttonIndex) ? buttons[buttonIndex] : undefined;
+            if (item !== undefined && button !== undefined) {
+                input._triggerItemButton(item, button);
+            }
+        } else if (action === 'accept' && typeof input._accept === 'function') {
+            input._accept();
+        } else if (action === 'hide') {
+            input.hide();
+        }
+    } catch (err) {
+        log(`quick_input_action ${action || '?'} failed: ${err?.message || err}`);
     }
 }
 
@@ -6679,6 +6739,9 @@ async function handleMessage(msg) {
             break;
         case 'tree_view_event':
             handleTreeViewEvent(msg);
+            break;
+        case 'quick_input_action':
+            handleQuickInputAction(msg);
             break;
         case 'settings_sync':
             // Full settings replacement from Python

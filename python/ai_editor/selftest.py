@@ -411,6 +411,7 @@ def test_app_settings_parity() -> None:
         "list_editor_languages", "list_editor_grammars",
         "list_editor_themes", "get_editor_theme", "get_editor_icon_theme",
         "list_extension_activity_bar_items",
+        "extension_quick_input_action",
         "load_history", "switch_provider", "list_chat_providers",
         "provider_send", "provider_cancel", "provider_new_chat",
         "get_model_info", "test_connection", "set_mode", "save_config",
@@ -2604,6 +2605,21 @@ console.log("frontend auto-close behavior ok");
             and "function renderExtensionWebviewView(view)" in html
             and "_injectWebviewHtml(host,view.id||state.view_id||state.viewId,html,state.state)" in html
             and "renderExtensionContainerContent(item)" in html)
+    _check("frontend renders extension QuickInput dynamically",
+           "id=\"quick-input-host\"" in html
+           and ".quick-input-host" in html
+           and "const quickInputViews=Object.create(null)" in html
+           and "function renderQuickInputEvent(data)" in html
+           and "function renderQuickInputState(state)" in html
+           and "function quickInputRenderItems(list,state,input)" in html
+           and "quickInputAction(state.id,'changeValue'" in html
+           and "quickInputAction(state.id,'changeSelection'" in html
+           and "quickInputAction(state.id,'triggerItemButton'" in html
+           and "quickInputAction(state.id,'accept'" in html
+           and "quickInputAction(state.id,'hide'" in html
+           and "call('extension_quick_input_action',id,action,payload||{})" in html
+           and "if(event==='quick_input')" in html
+           and "renderQuickInputEvent(data)" in html)
     _check("webview bridge preserves raw and falsy messages",
             "postExtensionMessageToWebview(iframe,msg)" in html
             and "iframe.contentWindow.postMessage(msg,'*')" in html
@@ -2823,6 +2839,30 @@ console.log("frontend auto-close behavior ok");
            "provider_runtime_views" not in app_source
            and "CliProviderWebviewRuntime" not in app_source
            and "_register_cli_provider_view(" not in app_source)
+    extension_host_path = os.path.join(os.path.dirname(__file__), "extension_host.py")
+    with open(extension_host_path, "r", encoding="utf-8") as fh:
+        extension_host_source = fh.read()
+    node_ext_host_path = os.path.join(os.path.dirname(__file__), "node_ext_host.js")
+    with open(node_ext_host_path, "r", encoding="utf-8") as fh:
+        node_ext_host_source = fh.read()
+    _check("extension QuickInput frontend actions round-trip to Node host",
+           "def quick_input_changed(self, payload" in app_source
+           and "self._api._emit(\"quick_input\"" in app_source
+           and "def extension_quick_input_action(" in app_source
+           and "host.send_quick_input_action(input_id, action, payload or {})"
+           in app_source
+           and "handler(dict(msg))" in extension_host_source
+           and "def send_quick_input_action(" in extension_host_source
+           and "\"type\": \"quick_input_action\"" in extension_host_source
+           and "const _quickInputs = new Map()" in node_ext_host_source
+           and "_quickInputs.set(this._id, this)" in node_ext_host_source
+           and "_quickInputs.delete(this._id)" in node_ext_host_source
+           and "function handleQuickInputAction(msg)" in node_ext_host_source
+           and "case 'quick_input_action':" in node_ext_host_source
+           and "input.value = String(msg.value ?? '')" in node_ext_host_source
+           and "input._triggerItemButton(item, button)" in node_ext_host_source
+           and "input._accept()" in node_ext_host_source
+           and "input.hide()" in node_ext_host_source)
 
     runtime_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     runtime_api._controller = object()

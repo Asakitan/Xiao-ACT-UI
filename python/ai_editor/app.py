@@ -889,6 +889,10 @@ class _AIEditorUIBridge:
                       increment: Optional[float]) -> None:
         self._api._emit("show_progress", {"message": message, "increment": increment})
 
+    def quick_input_changed(self, payload: Dict[str, Any]) -> None:
+        """Forward extension-created QuickInput state to the frontend."""
+        self._api._emit("quick_input", dict(payload or {}))
+
     # -- Status bar --
     def show_status_bar_item(self, item_id: str, text: str,
                              tooltip: str, command: str,
@@ -6564,6 +6568,16 @@ class AIEditorAPI:
             return {"error": "Node extension host not running"}
         ok = host.relay_webview_message(view_id, message)
         return {"ok": ok, "view_id": view_id}
+
+    def extension_quick_input_action(
+            self, input_id: str, action: str,
+            payload: Optional[Dict[str, Any]] = None) -> Dict:
+        """Forward a visible QuickInput UI action to the Node extension host."""
+        host = self._node_ext_host
+        if host is None or not host.is_running:
+            return {"error": "Node extension host not running"}
+        ok = host.send_quick_input_action(input_id, action, payload or {})
+        return {"ok": ok, "id": input_id, "action": action}
 
     def _extension_scan_dirs(self) -> List[str]:
         """Return extension directories to scan without activating anything."""

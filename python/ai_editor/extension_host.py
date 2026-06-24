@@ -1561,6 +1561,7 @@ class NodeExtensionHost:
          "manifest": {...}, "storageRoot": "..."}
         {"type": "deactivate", "extensionId": "..."}
         {"type": "webviewMessage", "viewId": "...", "message": {...}}
+        {"type": "quick_input_action", "id": "...", "action": "..."}
         {"type": "deserialize_webview_panel", "viewType": "...",
          "state": {...}}
         {"type": "settings_sync",    "settings": {...}}
@@ -3122,6 +3123,19 @@ class NodeExtensionHost:
             "viewId": view_id,
             "message": message,
         })
+
+    def send_quick_input_action(
+            self, input_id: str, action: str,
+            payload: Optional[Dict[str, Any]] = None) -> bool:
+        """Relay a frontend QuickInput interaction to the Node subprocess."""
+        msg = {
+            "type": "quick_input_action",
+            "id": str(input_id or ""),
+            "action": str(action or ""),
+        }
+        if isinstance(payload, dict):
+            msg.update(payload)
+        return self._send(msg)
 
     # -- Integration helpers -------------------------------------------------
 
