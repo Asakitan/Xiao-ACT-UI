@@ -7235,6 +7235,59 @@ async function activate(context) {
       languageId: document.languageId,
     };
   });
+  vscode.commands.registerCommand('selftest.node.quickInputProbe', async () => {
+    let selectedLabel = '';
+    const stringPick = await vscode.window.showQuickPick(
+      Promise.resolve(['alpha', 'beta']),
+      { placeHolder: 'Pick string' },
+    );
+    const objectPick = await vscode.window.showQuickPick([
+      { label: 'Group', kind: vscode.QuickPickItemKind.Separator },
+      { label: 'first', description: 'plain' },
+      { label: 'second', picked: true },
+    ], {
+      onDidSelectItem(item) {
+        selectedLabel = item && item.label;
+      },
+    });
+    const manyPick = await vscode.window.showQuickPick([
+      { label: 'one', picked: true },
+      { label: 'two' },
+      { label: 'three', picked: true },
+    ], { canPickMany: true });
+    const fallbackMany = await vscode.window.showQuickPick(
+      ['solo', 'other'],
+      { canPickMany: true },
+    );
+    const inputOk = await vscode.window.showInputBox({
+      value: 'seed',
+      validateInput(value) {
+        return value === 'seed' ? undefined : 'unexpected';
+      },
+    });
+    const inputBlocked = await vscode.window.showInputBox({
+      value: 'bad',
+      validateInput() {
+        return {
+          message: 'blocked',
+          severity: vscode.InputBoxValidationSeverity.Error,
+        };
+      },
+    });
+    return {
+      stringPick,
+      objectPick: objectPick && objectPick.label,
+      selectedLabel,
+      manyPick: Array.isArray(manyPick)
+        ? manyPick.map(item => item.label || item)
+        : manyPick,
+      fallbackMany,
+      inputOk,
+      inputBlocked,
+      separatorKind: vscode.QuickPickItemKind.Separator,
+      validationError: vscode.InputBoxValidationSeverity.Error,
+    };
+  });
   vscode.commands.registerCommand('selftest.node.pythonCommandProbe', async () => {
     const nested = await vscode.commands.executeCommand(
       'selftest.python.echo',
@@ -7631,6 +7684,15 @@ module.exports = { activate, deactivate };
                             "selftest.node.contentProviderProbe"))
                 except Exception as exc:
                     node_content_provider_probe = {"_error": str(exc)}
+                node_quick_input_command_registered = _wait_until(
+                    lambda: "selftest.node.quickInputProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                try:
+                    node_quick_input_probe = api._ext_host.commands.execute(
+                        "selftest.node.quickInputProbe")
+                except Exception as exc:
+                    node_quick_input_probe = {"_error": str(exc)}
                 node_registered = _wait_until(
                     lambda: "selftest.node.tree" in api._vscode_ns._tree_data_providers,
                     timeout=3.0)
@@ -8631,6 +8693,23 @@ module.exports = { activate, deactivate };
                        and node_content_provider_probe.get("fileName")
                        == "selfdoc:/virtual.txt?x=1",
                        json.dumps(node_content_provider_probe,
+                                  ensure_ascii=False))
+                _check("node host quick input fallback matches VS Code data contracts",
+                       node_started is True
+                       and node_quick_input_command_registered
+                       and isinstance(node_quick_input_probe, dict)
+                       and node_quick_input_probe.get("stringPick") == "alpha"
+                       and node_quick_input_probe.get("objectPick") == "second"
+                       and node_quick_input_probe.get("selectedLabel") == "first"
+                       and node_quick_input_probe.get("manyPick")
+                       == ["one", "three"]
+                       and node_quick_input_probe.get("fallbackMany")
+                       == ["solo"]
+                       and node_quick_input_probe.get("inputOk") == "seed"
+                       and node_quick_input_probe.get("inputBlocked") is None
+                       and node_quick_input_probe.get("separatorKind") == 1
+                       and node_quick_input_probe.get("validationError") == 3,
+                       json.dumps(node_quick_input_probe,
                                   ensure_ascii=False))
                 _check("node host tree provider registers dynamic activity view",
                        node_started is True

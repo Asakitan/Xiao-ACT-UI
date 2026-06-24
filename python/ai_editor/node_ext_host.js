@@ -2630,6 +2630,45 @@ async function _dispatchUriHandler(uriInput) {
     return true;
 }
 
+function _quickPickItemIsSeparator(item) {
+    return !!(
+        item
+        && typeof item === 'object'
+        && item.kind === 1
+    );
+}
+
+async function _windowShowQuickPick(itemsOrPromise, options = {}) {
+    const rawItems = await Promise.resolve(itemsOrPromise);
+    const items = Array.isArray(rawItems) ? rawItems : [];
+    const pickable = items.filter(item => !_quickPickItemIsSeparator(item));
+    if (!pickable.length) return undefined;
+    if (typeof options?.onDidSelectItem === 'function') {
+        try { options.onDidSelectItem(pickable[0]); }
+        catch (err) { log(`showQuickPick onDidSelectItem failed: ${err.message}`); }
+    }
+    if (options?.canPickMany) {
+        const picked = pickable.filter(item => item && typeof item === 'object' && item.picked);
+        return picked.length ? picked : [pickable[0]];
+    }
+    const active = pickable.find(item => item && typeof item === 'object' && item.picked);
+    return active || pickable[0];
+}
+
+async function _windowShowInputBox(options = {}) {
+    const value = String(options?.value ?? '');
+    if (typeof options?.validateInput === 'function') {
+        const validation = await options.validateInput(value);
+        if (validation) {
+            log(`showInputBox validation blocked fallback value: ${
+                typeof validation === 'string' ? validation : validation.message || validation.content || validation
+            }`);
+            return undefined;
+        }
+    }
+    return value;
+}
+
 function _extensionApiObject(id) {
     const active = _extensions.get(id);
     const known = _knownExtensions.get(id);
@@ -2737,6 +2776,8 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         // --- Enums ---
         ViewColumn: { One: 1, Two: 2, Three: 3, Active: -1, Beside: -2 },
         StatusBarAlignment: { Left: 1, Right: 2 },
+        QuickPickItemKind: { Separator: 1 },
+        InputBoxValidationSeverity: { Info: 1, Warning: 2, Error: 3 },
         TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
         ExtensionKind: { UI: 1, Workspace: 2 },
         ExtensionMode: { Production: 1, Development: 2, Test: 3 },
@@ -2858,12 +2899,10 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 return Promise.resolve(items[0]);
             },
             showQuickPick(items, options) {
-                log('stub: showQuickPick');
-                return Promise.resolve(Array.isArray(items) ? items[0] : undefined);
+                return _windowShowQuickPick(items, options || {});
             },
             showInputBox(options) {
-                log('stub: showInputBox');
-                return Promise.resolve(options?.value || '');
+                return _windowShowInputBox(options || {});
             },
             withProgress(options, task) {
                 const progress = { report: () => {} };
