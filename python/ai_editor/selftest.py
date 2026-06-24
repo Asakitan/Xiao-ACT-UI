@@ -447,6 +447,7 @@ def test_app_settings_parity() -> None:
             self.seen_range_format_range = None
             self.seen_semantic_range = None
             self.seen_on_type_trigger = None
+            self.seen_inlay_resolves = 0
 
         def provideCompletionItems(self, document, position, token, context):
             self.seen_texts.append(document.getText())
@@ -536,6 +537,11 @@ def test_app_settings_parity() -> None:
             hint.tooltip = "buffer inlay"
             hint.paddingLeft = True
             return [hint]
+
+        def resolveInlayHint(self, hint, token):
+            self.seen_inlay_resolves += 1
+            hint.tooltip = "buffer resolved inlay"
+            return hint
 
         def provideInlineCompletionItems(
                 self, document, position, context, token):
@@ -824,7 +830,7 @@ def test_app_settings_parity() -> None:
             dict(provider_payload, kind="inlayHint", range={
                 "start": {"line": 0, "character": 0},
                 "end": {"line": 0, "character": 6},
-            }))
+            }, hintResolveCount=10))
         inline_completion_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="inlineCompletion", triggerKind=0))
         code_lens_result = provider_api.editor_language_provider(
@@ -985,9 +991,10 @@ def test_app_settings_parity() -> None:
                inlay_hint_result.get("ok") is True
                and hint.get("label") == ": str"
                and hint.get("kind") == 1
-               and hint.get("tooltip") == "buffer inlay"
+               and hint.get("tooltip") == "buffer resolved inlay"
                and hint.get("paddingLeft") is True
-               and hint.get("position", {}).get("character") == 6)
+               and hint.get("position", {}).get("character") == 6
+               and editor_provider.seen_inlay_resolves == 1)
         inline_item = inline_completion_result.get("items", [{}])[0]
         _check("editor_language_provider serializes inline completions",
                inline_completion_result.get("ok") is True
@@ -2317,6 +2324,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function renderEditorInlayHints(hints)" in html
            and "function scheduleEditorInlayHints(delay)" in html
            and "editorProviderPayload('inlayHint'" in html
+           and "hintResolveCount:8" in html
            and "function requestEditorInlineCompletions(quiet,triggerKind)" in html
            and "function renderEditorInlineCompletion()" in html
            and "function scheduleEditorInlineCompletions(delay,triggerKind)" in html
@@ -4249,6 +4257,9 @@ def test_vscode_api() -> None:
                 return link
 
         class _InlayHintProvider:
+            def __init__(self):
+                self.resolved = 0
+
             def provideInlayHints(self, document, range, token):
                 part = InlayHintLabelPart(": int")
                 part.tooltip = "type label"
@@ -4259,6 +4270,11 @@ def test_vscode_api() -> None:
                 )
                 hint.paddingRight = True
                 return [hint]
+
+            def resolveInlayHint(self, hint, token):
+                self.resolved += 1
+                hint.tooltip = "resolved inlay"
+                return hint
 
         class _InlineCompletionProvider:
             def __init__(self):
@@ -4560,8 +4576,9 @@ def test_vscode_api() -> None:
         document_link_provider = _DocumentLinkProvider()
         api["languages"]["registerDocumentLinkProvider"](
             "python", document_link_provider)
+        inlay_hint_provider = _InlayHintProvider()
         api["languages"]["registerInlayHintsProvider"](
-            "python", _InlayHintProvider())
+            "python", inlay_hint_provider)
         inline_completion_provider = _InlineCompletionProvider()
         api["languages"]["registerInlineCompletionItemProvider"](
             "python", inline_completion_provider)
@@ -4641,10 +4658,15 @@ def test_vscode_api() -> None:
             "vscode.executeLinkProvider", doc.uri)
         document_links = api["commands"]["executeCommand"](
             "vscode.executeLinkProvider", doc.uri, 1)
-        inlay_hints = api["commands"]["executeCommand"](
+        inlay_hints_unresolved = api["commands"]["executeCommand"](
             "vscode.executeInlayHintProvider",
             doc.uri,
             Range(Position(0, 0), Position(0, 5)))
+        inlay_hints = api["commands"]["executeCommand"](
+            "vscode.executeInlayHintProvider",
+            doc.uri,
+            Range(Position(0, 0), Position(0, 5)),
+            1)
         inline_completions = api["commands"]["executeCommand"](
             "_executeInlineCompletionProvider",
             doc.uri,
@@ -4801,11 +4823,15 @@ def test_vscode_api() -> None:
                and document_links[0].tooltip == "resolved link"
                and document_link_provider.resolved == 1)
         _check("executeInlayHintProvider invokes matching providers",
-               inlay_hints
+               inlay_hints_unresolved
+               and inlay_hints_unresolved[0].tooltip is None
+               and inlay_hints
                and inlay_hints[0].label[0].value == ": int"
                and inlay_hints[0].label[0].tooltip == "type label"
                and inlay_hints[0].kind == api["InlayHintKind"]["Type"]
-               and inlay_hints[0].paddingRight is True)
+               and inlay_hints[0].paddingRight is True
+               and inlay_hints[0].tooltip == "resolved inlay"
+               and inlay_hint_provider.resolved == 1)
         _check("executeInlineCompletionProvider invokes matching providers",
                inline_completions
                and inline_completions[0].insertText == "print('ghost')"
@@ -6309,6 +6335,11 @@ function activate(context) {
       hint.tooltip = 'node inlay';
       return [hint];
     },
+    resolveInlayHint(hint, token) {
+      hint.label = 'node resolved hint';
+      hint.tooltip = 'node resolved inlay';
+      return hint;
+    },
   });
   vscode.languages.registerInlineCompletionItemProvider('python', {
     provideInlineCompletionItems(document, position, context, token) {
@@ -6929,10 +6960,15 @@ module.exports = { activate, deactivate };
                     node_uri, Position(0, 1))
                 node_document_links = api._ext_host.commands.execute(
                     "vscode.executeLinkProvider", node_uri, 1)
-                node_inlay_hints = api._ext_host.commands.execute(
+                node_inlay_hints_unresolved = api._ext_host.commands.execute(
                     "vscode.executeInlayHintProvider",
                     node_uri,
                     Range(Position(0, 0), Position(0, 12)))
+                node_inlay_hints = api._ext_host.commands.execute(
+                    "vscode.executeInlayHintProvider",
+                    node_uri,
+                    Range(Position(0, 0), Position(0, 12)),
+                    1)
                 node_inline_completions = api._ext_host.commands.execute(
                     "_executeInlineCompletionProvider",
                     node_uri,
@@ -7322,11 +7358,13 @@ module.exports = { activate, deactivate };
                        and node_document_links[0].get("target", "").endswith("node-link.py")
                        and node_document_links[0].get("tooltip") == "node resolved link")
                 _check("node host language provider invokes JS inlay hints",
-                       node_inlay_hints
-                       and node_inlay_hints[0].get("label") == "node hint"
+                       node_inlay_hints_unresolved
+                       and node_inlay_hints_unresolved[0].get("label") == "node hint"
+                       and node_inlay_hints
+                       and node_inlay_hints[0].get("label") == "node resolved hint"
                        and node_inlay_hints[0].get("kind") == 2
                        and node_inlay_hints[0].get("paddingLeft") is True
-                       and node_inlay_hints[0].get("tooltip") == "node inlay")
+                       and node_inlay_hints[0].get("tooltip") == "node resolved inlay")
                 _check("node host language provider invokes JS inline completions",
                        node_inline_completions
                        and node_inline_completions[0].get("insertText") == "nodeGhost"

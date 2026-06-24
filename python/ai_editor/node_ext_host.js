@@ -4038,6 +4038,40 @@ async function handleLanguageProviderRequest(msg) {
             return;
         }
 
+        if (kind === 'inlayHint') {
+            const values = [];
+            const rawResolveCount = Number(msg.hintResolveCount || msg.resolveCount || 0);
+            let remainingResolves = Number.isFinite(rawResolveCount) ? Math.max(0, rawResolveCount) : 0;
+            for (const entry of providers) {
+                const provider = entry.provider;
+                const fn = provider && provider[methodName];
+                if (typeof fn !== 'function') continue;
+                try {
+                    const rawHints = _normalizeProviderItems(await fn.call(provider, document, range, token));
+                    for (let hint of rawHints) {
+                        if (remainingResolves > 0) {
+                            if (typeof provider.resolveInlayHint === 'function') {
+                                const resolved = await provider.resolveInlayHint.call(provider, hint, token);
+                                if (resolved !== undefined && resolved !== null) hint = resolved;
+                            }
+                            remainingResolves -= 1;
+                        }
+                        values.push(hint);
+                    }
+                } catch (err) {
+                    log(`language provider ${kind} error: ${err.message}`);
+                }
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: _serializeLanguageValue(values),
+            });
+            return;
+        }
+
         if (kind === 'codeLens') {
             const values = [];
             const rawResolveCount = Number(msg.itemResolveCount || msg.resolveCount || 0);

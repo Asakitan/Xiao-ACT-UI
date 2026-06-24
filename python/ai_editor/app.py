@@ -3717,10 +3717,18 @@ class AIEditorAPI:
             if kind == "inlayHint":
                 hint_range = _editor_provider_range(
                     payload.get("range"), content)
+                try:
+                    hint_resolve_count = int(
+                        payload.get("hintResolveCount")
+                        if payload.get("hintResolveCount") is not None
+                        else payload.get("resolveCount") or 0)
+                except Exception:
+                    hint_resolve_count = 0
                 result = self._ext_host.commands.execute(
                     "vscode.executeInlayHintProvider",
                     document.uri,
                     hint_range,
+                    max(0, hint_resolve_count),
                 )
                 value = _json_ready_language_value(result)
                 return {

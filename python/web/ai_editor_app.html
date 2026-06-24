@@ -3987,7 +3987,7 @@ async function requestEditorInlayHints(quiet){
   const wrap=$('editor-container');
   if(!ed||!wrap||wrap.style.display==='none')return;
   const requestId=++_editorInlayHintRequest;
-  const res=await call('editor_language_provider',editorProviderPayload('inlayHint',{range:editorFullRangePayload()}));
+  const res=await call('editor_language_provider',editorProviderPayload('inlayHint',{range:editorFullRangePayload(),hintResolveCount:8}));
   if(requestId!==_editorInlayHintRequest)return;
   if(res&&res.error){_editorInlayHints=[];renderEditorInlayHints([]);if(!quiet)setStatus('Inlay hints failed: '+res.error);return}
   _editorInlayHints=(res&&res.ok&&Array.isArray(res.hints)?res.hints:[]).filter(hint=>hint&&hint.position&&editorInlayHintLabelText(hint.label));

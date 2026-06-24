@@ -2268,17 +2268,51 @@ class VscodeNamespace:
         return results
 
     def _execute_inlay_hint_provider(
-            self, uri: Any, range: Any = None) -> List[Any]:
+            self, uri: Any, range: Any = None,
+            hint_resolve_count: Any = 0) -> List[Any]:
         document = self._resolve_language_document(uri)
         hint_range = _coerce_range(range)
-        results = self._collect_language_provider_results(
-            "inlayHint", document, "provideInlayHints",
-            (document, hint_range, CancellationToken.NONE))
+        try:
+            remaining_resolves = max(0, int(hint_resolve_count or 0))
+        except Exception:
+            remaining_resolves = 0
+        results: List[Any] = []
+        for entry in self._matching_language_providers("inlayHint", document):
+            provider = entry.get("provider")
+            value = self._call_language_provider(
+                provider,
+                "provideInlayHints",
+                (document, hint_range, CancellationToken.NONE),
+                default=None)
+            hints = self._provider_values(value)
+            if remaining_resolves:
+                resolved_hints: List[Any] = []
+                resolve_method = (
+                    provider.get("resolveInlayHint")
+                    if isinstance(provider, dict)
+                    else getattr(provider, "resolveInlayHint", None)
+                )
+                for hint in hints:
+                    current = hint
+                    if remaining_resolves > 0:
+                        if callable(resolve_method):
+                            resolved = self._call_language_provider(
+                                provider,
+                                "resolveInlayHint",
+                                (current, CancellationToken.NONE),
+                                default=current)
+                            current = (
+                                resolved if resolved is not None else current)
+                        remaining_resolves -= 1
+                    resolved_hints.append(current)
+                hints = resolved_hints
+            results.extend(hints)
         results.extend(self._provider_values(
             self._request_external_language_provider(
                 "inlayHint",
                 document,
-                range=self._range_payload(hint_range))))
+                range=self._range_payload(hint_range),
+                hintResolveCount=max(0, remaining_resolves))))
         return results
 
     def _execute_inline_completion_provider(
