@@ -193,6 +193,7 @@ _AI_EDITOR_SECTION_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "files": {
         "trimTrailingWhitespace": False,
         "insertFinalNewline": False,
+        "trimFinalNewlines": False,
     },
     "customization": {
         "instructions_locations": [".sao/instructions.md", ".sao/instructions"],
