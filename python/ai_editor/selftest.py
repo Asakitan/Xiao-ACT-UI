@@ -2552,11 +2552,16 @@ console.log("frontend auto-close behavior ok");
             and "Expected JSON array" in html
             and "Expected JSON object" in html
             and "ext-setting-schema" in html
-            and "markdownEnumDescriptions" in html)
+            and "markdownEnumDescriptions" in html
+            and "function appendExtensionSettingMarkdown(container,text)" in html
+            and "function extensionSettingSafeLinkTarget(href)" in html
+            and "appendExtensionSettingMarkdown(desc,description)" in html)
     if node_path:
         setting_functions = [
             "extensionSettingType",
             "extensionSettingDefault",
+            "extensionSettingSafeLinkTarget",
+            "appendExtensionSettingMarkdown",
             "extensionSettingSchemaSummary",
             "extensionSettingJson",
             "extensionSettingJsonRows",
@@ -2569,6 +2574,22 @@ console.log("frontend auto-close behavior ok");
             _extract_js_function(html, name) for name in setting_functions)
         js = setting_js + r"""
 function assert(ok,label){ if(!ok){ throw new Error(label); } }
+globalThis.window = { location: { href: "https://example.invalid/settings" } };
+function makeNode(tag, text){
+  return {
+    tagName: tag ? String(tag).toUpperCase() : "",
+    textContent: text || "",
+    children: [],
+    href: "",
+    target: "",
+    rel: "",
+    appendChild(child){ this.children.push(child); return child; },
+  };
+}
+globalThis.document = {
+  createElement(tag){ return makeNode(tag); },
+  createTextNode(text){ return makeNode("#text", String(text)); },
+};
 const arraySchema = { type: "array", items: { type: "string" } };
 const strictArraySchema = {
   type: "array",
@@ -2618,6 +2639,26 @@ assert(extensionSettingSchemaSummary(arraySchema, "array") === "items: string",
        "array schema summary");
 assert(extensionSettingSchemaSummary(objectSchema, "object").indexOf("level") >= 0,
        "object schema summary");
+assert(extensionSettingSafeLinkTarget("javascript:alert(1)") === "",
+       "unsafe markdown link blocked");
+const mdHost = makeNode("div");
+appendExtensionSettingMarkdown(
+  mdHost,
+  "Use `code`, **bold**, *em*, [docs](https://example.com), [bad](javascript:alert(1))"
+);
+assert(mdHost.children.some(n => n.tagName === "CODE" && n.textContent === "code"),
+       "inline code rendered");
+assert(mdHost.children.some(n => n.tagName === "STRONG" && n.textContent === "bold"),
+       "bold rendered");
+assert(mdHost.children.some(n => n.tagName === "EM" && n.textContent === "em"),
+       "italic rendered");
+assert(mdHost.children.some(n => n.tagName === "A"
+  && n.textContent === "docs"
+  && n.href === "https://example.com/"
+  && n.rel === "noopener noreferrer"),
+       "safe link rendered");
+assert(!mdHost.children.some(n => n.tagName === "A" && n.textContent === "bad"),
+       "unsafe link not rendered as anchor");
 console.log("extension setting schema helpers ok");
 """
         js_path = ""
