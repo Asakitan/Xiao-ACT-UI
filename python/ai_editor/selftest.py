@@ -2718,7 +2718,12 @@ console.log("frontend auto-close behavior ok");
             and "Invalid JSON" in html
             and "Expected JSON array" in html
             and "Expected JSON object" in html
+            and "function extensionSettingDeclaresType(schema)" in html
             and "function extensionSettingStableJson(value)" in html
+            and "anyOf" in html
+            and "oneOf" in html
+            and "allOf" in html
+            and "contains" in html
             and "uniqueItems" in html
             and "minProperties" in html
             and "maxProperties" in html
@@ -2736,6 +2741,7 @@ console.log("frontend auto-close behavior ok");
             "extensionSettingDefault",
             "extensionSettingSafeLinkTarget",
             "appendExtensionSettingMarkdown",
+            "extensionSettingDeclaresType",
             "extensionSettingConstraintSummary",
             "extensionSettingSchemaSummary",
             "extensionSettingDeprecationText",
@@ -2832,6 +2838,12 @@ const numberSchema = { type: "number", minimum: 1, maximum: 5 };
 const multipleIntegerSchema = { type: "integer", minimum: 0, maximum: 10, multipleOf: 2 };
 const rangedStringSchema = { type: "string", minLength: 2, maxLength: 6, pattern: "^[a-z]+$" };
 const exclusiveNumberSchema = { type: "number", exclusiveMinimum: 1, exclusiveMaximum: 5 };
+const anyOfSchema = { anyOf: [{ type: "number", minimum: 4 }, { type: "string", enum: ["auto"] }] };
+const oneOfSchema = { oneOf: [{ type: "string", pattern: "^a" }, { type: "string", pattern: "z$" }] };
+const allOfSchema = { allOf: [{ type: "number", minimum: 1 }, { type: "number", maximum: 5 }] };
+const notSchema = { type: "string", not: { enum: ["bad"] } };
+const constSchema = { const: "locked" };
+const containsArraySchema = { type: "array", contains: { type: "string", pattern: "^ok$" } };
 const textarea = { type: "textarea", tagName: "TEXTAREA", value: "", rows: 0 };
 setExtensionSettingInputValue(textarea, arraySchema, "array", ["a", "b"]);
 assert(textarea.value.indexOf('"a"') >= 0, "array formatted as JSON");
@@ -2881,6 +2893,34 @@ let additionalSchemaRejected = false;
 try { readExtensionSettingInputValue(textarea, patternObjectSchema, "object"); }
 catch (err) { additionalSchemaRejected = /value.other must be an integer/.test(String(err.message)); }
 assert(additionalSchemaRejected, "object schema validates additionalProperties schema");
+extensionSettingValidateSchemaValue(5, anyOfSchema, "value");
+extensionSettingValidateSchemaValue("auto", anyOfSchema, "value");
+let anyOfRejected = false;
+try { extensionSettingValidateSchemaValue(false, anyOfSchema, "value"); }
+catch (err) { anyOfRejected = /value must match at least one anyOf schema/.test(String(err.message)); }
+assert(anyOfRejected, "schema rejects unmatched anyOf");
+extensionSettingValidateSchemaValue("alpha", oneOfSchema, "value");
+let oneOfRejected = false;
+try { extensionSettingValidateSchemaValue("az", oneOfSchema, "value"); }
+catch (err) { oneOfRejected = /value must match exactly one oneOf schema/.test(String(err.message)); }
+assert(oneOfRejected, "schema rejects multi-match oneOf");
+let allOfRejected = false;
+try { extensionSettingValidateSchemaValue(9, allOfSchema, "value"); }
+catch (err) { allOfRejected = /value must satisfy allOf\[1\]/.test(String(err.message)); }
+assert(allOfRejected, "schema rejects failed allOf branch");
+let notRejected = false;
+try { extensionSettingValidateSchemaValue("bad", notSchema, "value"); }
+catch (err) { notRejected = /value must not match the forbidden schema/.test(String(err.message)); }
+assert(notRejected, "schema rejects not match");
+let constRejected = false;
+try { extensionSettingValidateSchemaValue("open", constSchema, "value"); }
+catch (err) { constRejected = /value must equal/.test(String(err.message)); }
+assert(constRejected, "schema rejects const mismatch");
+textarea.value = '["nope"]';
+let containsRejected = false;
+try { readExtensionSettingInputValue(textarea, containsArraySchema, "array"); }
+catch (err) { containsRejected = /value must contain an item/.test(String(err.message)); }
+assert(containsRejected, "array schema validates contains");
 const numberInput = { type: "number", tagName: "INPUT", value: "9" };
 let maxRejected = false;
 try { readExtensionSettingInputValue(numberInput, numberSchema, "number"); }
@@ -2914,6 +2954,13 @@ assert(extensionSettingSchemaSummary(strictObjectSchema, "object").indexOf("no a
        "object strict schema summary");
 assert(extensionSettingSchemaSummary(patternObjectSchema, "object").indexOf("pattern properties: ^env\\.") >= 0,
        "object patternProperties schema summary");
+assert(extensionSettingSchemaSummary(anyOfSchema, "string").indexOf("anyOf: 2") >= 0
+       && extensionSettingSchemaSummary(oneOfSchema, "string").indexOf("oneOf: 2") >= 0
+       && extensionSettingSchemaSummary(allOfSchema, "number").indexOf("allOf: 2") >= 0
+       && extensionSettingSchemaSummary(notSchema, "string").indexOf("not") >= 0
+       && extensionSettingSchemaSummary(constSchema, "string").indexOf("const") >= 0
+       && extensionSettingSchemaSummary(containsArraySchema, "array").indexOf("contains: string") >= 0,
+       "schema composition summary");
 assert(extensionSettingSchemaSummary(numberSchema, "number").indexOf("min: 1") >= 0
        && extensionSettingSchemaSummary(numberSchema, "number").indexOf("max: 5") >= 0,
        "number constraint summary");
@@ -6914,6 +6961,45 @@ def test_app_extension_runtime_support() -> None:
                             },
                             "additionalProperties": {"type": "integer"},
                         },
+                        "selftest.anyOf": {
+                            "default": "auto",
+                            "anyOf": [
+                                {"type": "string", "enum": ["auto"]},
+                                {"type": "number", "minimum": 10},
+                            ],
+                        },
+                        "selftest.oneOf": {
+                            "type": "string",
+                            "default": "alpha",
+                            "oneOf": [
+                                {"type": "string", "pattern": "^a"},
+                                {"type": "string", "pattern": "z$"},
+                            ],
+                        },
+                        "selftest.allOf": {
+                            "default": 3,
+                            "allOf": [
+                                {"type": "number", "minimum": 1},
+                                {"type": "number", "maximum": 5},
+                            ],
+                        },
+                        "selftest.not": {
+                            "type": "string",
+                            "default": "good",
+                            "not": {"enum": ["bad"]},
+                        },
+                        "selftest.const": {
+                            "default": "locked",
+                            "const": "locked",
+                        },
+                        "selftest.contains": {
+                            "type": "array",
+                            "default": ["ok"],
+                            "contains": {
+                                "type": "string",
+                                "pattern": "^ok$",
+                            },
+                        },
                         "selftest.machineOnly": {
                             "type": "string",
                             "default": "local",
@@ -7167,15 +7253,36 @@ def test_app_extension_runtime_support() -> None:
             "selftest.patternOptions", {"env.name": "BAD"})
         invalid_additional_schema = api.set_extension_setting(
             "selftest.patternOptions", {"other": "x"})
+        invalid_any_of = api.set_extension_setting(
+            "selftest.anyOf", False)
+        invalid_one_of = api.set_extension_setting(
+            "selftest.oneOf", "az")
+        invalid_all_of = api.set_extension_setting(
+            "selftest.allOf", 9)
+        invalid_not = api.set_extension_setting(
+            "selftest.not", "bad")
+        invalid_const = api.set_extension_setting(
+            "selftest.const", "open")
+        invalid_contains = api.set_extension_setting(
+            "selftest.contains", ["nope"])
         valid_options = api.set_extension_setting(
             "selftest.options", {"level": 3, "mode": "manual"})
         valid_step = api.set_extension_setting("selftest.step", 4)
         valid_pattern_options = api.set_extension_setting(
             "selftest.patternOptions", {"env.name": "ok", "other": 2})
+        valid_any_of = api.set_extension_setting("selftest.anyOf", 12)
+        valid_one_of = api.set_extension_setting("selftest.oneOf", "alpha")
+        valid_all_of = api.set_extension_setting("selftest.allOf", 3)
+        valid_not = api.set_extension_setting("selftest.not", "good")
+        valid_const = api.set_extension_setting("selftest.const", "locked")
+        valid_contains = api.set_extension_setting(
+            "selftest.contains", ["nope", "ok"])
         stored_options = api.get_extension_setting("selftest.options")
         stored_step = api.get_extension_setting("selftest.step")
         stored_pattern_options = api.get_extension_setting(
             "selftest.patternOptions")
+        stored_any_of = api.get_extension_setting("selftest.anyOf")
+        stored_contains = api.get_extension_setting("selftest.contains")
         _check("extension setting API validates structured schema constraints",
                invalid_options.get("ok") is False
                and "level is required" in invalid_options.get("error", "")
@@ -7201,14 +7308,34 @@ def test_app_extension_runtime_support() -> None:
                and invalid_additional_schema.get("ok") is False
                and "must be an integer" in invalid_additional_schema.get(
                    "error", "")
+               and invalid_any_of.get("ok") is False
+               and "anyOf" in invalid_any_of.get("error", "")
+               and invalid_one_of.get("ok") is False
+               and "oneOf" in invalid_one_of.get("error", "")
+               and invalid_all_of.get("ok") is False
+               and "allOf" in invalid_all_of.get("error", "")
+               and invalid_not.get("ok") is False
+               and "forbidden schema" in invalid_not.get("error", "")
+               and invalid_const.get("ok") is False
+               and "const value" in invalid_const.get("error", "")
+               and invalid_contains.get("ok") is False
+               and "contains schema" in invalid_contains.get("error", "")
                and valid_options.get("ok") is True
                and valid_step.get("ok") is True
                and valid_pattern_options.get("ok") is True
+               and valid_any_of.get("ok") is True
+               and valid_one_of.get("ok") is True
+               and valid_all_of.get("ok") is True
+               and valid_not.get("ok") is True
+               and valid_const.get("ok") is True
+               and valid_contains.get("ok") is True
                and stored_options.get("value") == {
                    "level": 3, "mode": "manual"}
                and stored_step.get("value") == 4
                and stored_pattern_options.get("value") == {
-                   "env.name": "ok", "other": 2})
+                   "env.name": "ok", "other": 2}
+               and stored_any_of.get("value") == 12
+               and stored_contains.get("value") == ["nope", "ok"])
         class _SettingsChangedNodeHost:
             is_running = True
 

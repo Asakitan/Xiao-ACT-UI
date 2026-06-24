@@ -8459,35 +8459,83 @@ class AIEditorAPI:
             return str(raw_type)
         return "string"
 
+    @staticmethod
+    def _extension_schema_declares_type(schema: Dict[str, Any]) -> bool:
+        if not isinstance(schema, dict) or "type" not in schema:
+            return False
+        raw_type = schema.get("type")
+        if isinstance(raw_type, list):
+            return any(str(item or "") and str(item or "") != "null"
+                       for item in raw_type)
+        return bool(raw_type)
+
     @classmethod
     def _validate_extension_setting_value(
             cls, value: Any, schema: Dict[str, Any],
             path: str = "value") -> str:
         if not isinstance(schema, dict):
             return ""
+        if "const" in schema and value != schema.get("const"):
+            return f"{path} must equal the configured const value"
+        all_of = schema.get("allOf")
+        if isinstance(all_of, list):
+            for index, item_schema in enumerate(all_of):
+                if not isinstance(item_schema, dict):
+                    continue
+                error = cls._validate_extension_setting_value(
+                    value, item_schema, path)
+                if error:
+                    return f"{path} must satisfy allOf[{index}]: {error}"
+        any_of = schema.get("anyOf")
+        if isinstance(any_of, list) and any_of:
+            matched_any = False
+            for item_schema in any_of:
+                if (isinstance(item_schema, dict)
+                        and not cls._validate_extension_setting_value(
+                            value, item_schema, path)):
+                    matched_any = True
+                    break
+            if not matched_any:
+                return f"{path} must match at least one anyOf schema"
+        one_of = schema.get("oneOf")
+        if isinstance(one_of, list) and one_of:
+            match_count = 0
+            for item_schema in one_of:
+                if (isinstance(item_schema, dict)
+                        and not cls._validate_extension_setting_value(
+                            value, item_schema, path)):
+                    match_count += 1
+            if match_count != 1:
+                return f"{path} must match exactly one oneOf schema"
+        not_schema = schema.get("not")
+        if (isinstance(not_schema, dict)
+                and not cls._validate_extension_setting_value(
+                    value, not_schema, path)):
+            return f"{path} must not match the forbidden schema"
         if isinstance(schema.get("enum"), list):
             if not any(value == item for item in schema.get("enum", [])):
                 return f"{path} must be one of the configured enum values"
-        value_type = cls._extension_schema_type(schema)
-        if value_type == "boolean":
-            if not isinstance(value, bool):
-                return f"{path} must be a boolean"
-        elif value_type == "integer":
-            if not isinstance(value, int) or isinstance(value, bool):
-                return f"{path} must be an integer"
-        elif value_type == "number":
-            if (not isinstance(value, (int, float)) or isinstance(value, bool)
-                    or not math.isfinite(float(value))):
-                return f"{path} must be a number"
-        elif value_type == "string":
-            if not isinstance(value, str):
-                return f"{path} must be a string"
-        elif value_type == "array":
-            if not isinstance(value, list):
-                return f"{path} must be an array"
-        elif value_type == "object":
-            if not isinstance(value, dict):
-                return f"{path} must be an object"
+        if cls._extension_schema_declares_type(schema):
+            value_type = cls._extension_schema_type(schema)
+            if value_type == "boolean":
+                if not isinstance(value, bool):
+                    return f"{path} must be a boolean"
+            elif value_type == "integer":
+                if not isinstance(value, int) or isinstance(value, bool):
+                    return f"{path} must be an integer"
+            elif value_type == "number":
+                if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                        or not math.isfinite(float(value))):
+                    return f"{path} must be a number"
+            elif value_type == "string":
+                if not isinstance(value, str):
+                    return f"{path} must be a string"
+            elif value_type == "array":
+                if not isinstance(value, list):
+                    return f"{path} must be an array"
+            elif value_type == "object":
+                if not isinstance(value, dict):
+                    return f"{path} must be an object"
 
         if isinstance(value, str):
             min_len = schema.get("minLength")
@@ -8568,6 +8616,17 @@ class AIEditorAPI:
                         item, item_schema, f"{path}[{index}]")
                     if error:
                         return error
+            contains_schema = schema.get("contains")
+            if isinstance(contains_schema, dict):
+                contains_match = any(
+                    not cls._validate_extension_setting_value(
+                        item, contains_schema, f"{path}[{index}]")
+                    for index, item in enumerate(value)
+                )
+                if not contains_match:
+                    return (
+                        f"{path} must contain an item matching "
+                        "the contains schema")
 
         if isinstance(value, dict):
             min_properties = schema.get("minProperties")

@@ -9755,6 +9755,12 @@ function extensionSettingType(schema){
   if(Array.isArray(t))return t.find(v=>v&&v!=='null')||'string';
   return t||'string';
 }
+function extensionSettingDeclaresType(schema){
+  if(!schema||typeof schema!=='object'||!Object.prototype.hasOwnProperty.call(schema,'type'))return false;
+  const t=schema.type;
+  if(Array.isArray(t))return t.some(v=>v&&v!=='null');
+  return !!t;
+}
 function extensionSettingTypeFromValue(value){
   if(Array.isArray(value))return 'array';
   if(value&&typeof value==='object')return 'object';
@@ -9881,6 +9887,7 @@ function extensionSettingConstraintSummary(schema,type){
     if(typeof schema.minItems==='number')parts.push('min items: '+schema.minItems);
     if(typeof schema.maxItems==='number')parts.push('max items: '+schema.maxItems);
     if(schema.uniqueItems===true)parts.push('unique items');
+    if(schema.contains&&typeof schema.contains==='object')parts.push('contains: '+extensionSettingType(schema.contains));
   }
   if(type==='object'){
     if(typeof schema.minProperties==='number')parts.push('min properties: '+schema.minProperties);
@@ -9891,6 +9898,11 @@ function extensionSettingConstraintSummary(schema,type){
     }
     if(schema.propertyNames&&typeof schema.propertyNames==='object')parts.push('property names constrained');
   }
+  if(Array.isArray(schema.anyOf)&&schema.anyOf.length)parts.push('anyOf: '+schema.anyOf.length);
+  if(Array.isArray(schema.oneOf)&&schema.oneOf.length)parts.push('oneOf: '+schema.oneOf.length);
+  if(Array.isArray(schema.allOf)&&schema.allOf.length)parts.push('allOf: '+schema.allOf.length);
+  if(schema.not&&typeof schema.not==='object')parts.push('not');
+  if(Object.prototype.hasOwnProperty.call(schema,'const'))parts.push('const');
   return parts.join(' · ');
 }
 function extensionSettingDeprecationText(schema){
@@ -9976,14 +9988,41 @@ function extensionSettingStableJson(value){
 function extensionSettingValidateSchemaValue(value,schema,path){
   schema=(schema&&typeof schema==='object')?schema:{};
   path=path||'value';
+  if(Object.prototype.hasOwnProperty.call(schema,'const')&&extensionSettingStableJson(value)!==extensionSettingStableJson(schema.const))throw new Error(path+' must equal the configured const value');
+  if(Array.isArray(schema.allOf))schema.allOf.forEach((item,idx)=>{
+    if(item&&typeof item==='object'){
+      try{extensionSettingValidateSchemaValue(value,item,path)}
+      catch(err){throw new Error(path+' must satisfy allOf['+idx+']: '+err.message)}
+    }
+  });
+  if(Array.isArray(schema.anyOf)&&schema.anyOf.length){
+    const matched=schema.anyOf.some(item=>{
+      if(!item||typeof item!=='object')return false;
+      try{extensionSettingValidateSchemaValue(value,item,path);return true}catch(e){return false}
+    });
+    if(!matched)throw new Error(path+' must match at least one anyOf schema');
+  }
+  if(Array.isArray(schema.oneOf)&&schema.oneOf.length){
+    const count=schema.oneOf.reduce((n,item)=>{
+      if(!item||typeof item!=='object')return n;
+      try{extensionSettingValidateSchemaValue(value,item,path);return n+1}catch(e){return n}
+    },0);
+    if(count!==1)throw new Error(path+' must match exactly one oneOf schema');
+  }
+  if(schema.not&&typeof schema.not==='object'){
+    let forbidden=false;try{extensionSettingValidateSchemaValue(value,schema.not,path);forbidden=true}catch(e){forbidden=false}
+    if(forbidden)throw new Error(path+' must not match the forbidden schema');
+  }
   if(Array.isArray(schema.enum)&&!schema.enum.some(opt=>JSON.stringify(opt)===JSON.stringify(value)))throw new Error(path+' must be one of the configured enum values');
   const type=extensionSettingType(schema);
-  if(type==='boolean'&&typeof value!=='boolean')throw new Error(path+' must be a boolean');
-  if(type==='integer'&&(!Number.isInteger(value)))throw new Error(path+' must be an integer');
-  if(type==='number'&&(typeof value!=='number'||!Number.isFinite(value)))throw new Error(path+' must be a number');
-  if(type==='string'&&typeof value!=='string')throw new Error(path+' must be a string');
-  if(type==='array'&&!Array.isArray(value))throw new Error(path+' must be an array');
-  if(type==='object'&&(!value||typeof value!=='object'||Array.isArray(value)))throw new Error(path+' must be an object');
+  if(extensionSettingDeclaresType(schema)){
+    if(type==='boolean'&&typeof value!=='boolean')throw new Error(path+' must be a boolean');
+    if(type==='integer'&&(!Number.isInteger(value)))throw new Error(path+' must be an integer');
+    if(type==='number'&&(typeof value!=='number'||!Number.isFinite(value)))throw new Error(path+' must be a number');
+    if(type==='string'&&typeof value!=='string')throw new Error(path+' must be a string');
+    if(type==='array'&&!Array.isArray(value))throw new Error(path+' must be an array');
+    if(type==='object'&&(!value||typeof value!=='object'||Array.isArray(value)))throw new Error(path+' must be an object');
+  }
   if(typeof value==='string'){
     if(typeof schema.minLength==='number'&&value.length<schema.minLength)throw new Error(path+' must be at least '+schema.minLength+' characters');
     if(typeof schema.maxLength==='number'&&value.length>schema.maxLength)throw new Error(path+' must be at most '+schema.maxLength+' characters');
@@ -10016,6 +10055,10 @@ function extensionSettingValidateSchemaValue(value,schema,path){
       });
     }
     if(schema.items&&typeof schema.items==='object')value.forEach((item,idx)=>extensionSettingValidateSchemaValue(item,schema.items,path+'['+idx+']'));
+    if(schema.contains&&typeof schema.contains==='object'){
+      const matched=value.some((item,idx)=>{try{extensionSettingValidateSchemaValue(item,schema.contains,path+'['+idx+']');return true}catch(e){return false}});
+      if(!matched)throw new Error(path+' must contain an item matching the contains schema');
+    }
   }
   if(value&&typeof value==='object'&&!Array.isArray(value)){
     const keys=Object.keys(value);
