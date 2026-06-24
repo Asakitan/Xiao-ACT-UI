@@ -1725,6 +1725,16 @@ pre.code-block { overflow:visible; }
       <label class="settings-check"><input id="s-editor-linked-editing" type="checkbox"><span><b>Linked editing</b><small>Mirrors edits across extension-provided linked ranges, such as paired HTML tags.</small></span></label>
       <label class="settings-check"><input id="s-editor-organize-imports-on-save" type="checkbox"><span><b>Organize imports on save</b><small>Runs <code>source.organizeImports</code> before explicit saves.</small></span></label>
       <label class="settings-check"><input id="s-editor-fix-all-on-save" type="checkbox"><span><b>Fix all on save</b><small>Runs <code>source.fixAll</code> before explicit saves.</small></span></label>
+      <div class="sb-group" style="padding:0;margin-top:12px">Current Language Override</div>
+      <div class="settings-help" id="s-editor-lang-override-info">Writes VS Code-style [language] editor settings for the active editor language.</div>
+      <label class="settings-check"><input id="s-editor-lang-override-enabled" type="checkbox"><span><b>Override current language</b><small>Use these values only when the active editor has this language id.</small></span></label>
+      <label>Default Formatter</label>
+      <input id="s-editor-lang-default-formatter" placeholder="publisher.extension-id" style="width:100%">
+      <label class="settings-check"><input id="s-editor-lang-format-on-save" type="checkbox"><span><b>Format on save</b><small>Language-specific editor.formatOnSave.</small></span></label>
+      <label class="settings-check"><input id="s-editor-lang-format-on-type" type="checkbox"><span><b>Format on type</b><small>Language-specific editor.formatOnType.</small></span></label>
+      <label class="settings-check"><input id="s-editor-lang-linked-editing" type="checkbox"><span><b>Linked editing</b><small>Language-specific editor.linkedEditing.</small></span></label>
+      <label class="settings-check"><input id="s-editor-lang-organize-imports-on-save" type="checkbox"><span><b>Organize imports on save</b><small>Language-specific source.organizeImports.</small></span></label>
+      <label class="settings-check"><input id="s-editor-lang-fix-all-on-save" type="checkbox"><span><b>Fix all on save</b><small>Language-specific source.fixAll.</small></span></label>
     </div>
 
     <div class="settings-section">
@@ -7610,12 +7620,57 @@ function deleteLine(){
 
 // ── Format document ──
 function editorFormatOptions(){return {tabSize:4,insertSpaces:true}}
+function setDottedConfigValue(target,path,value){
+  const parts=String(path||'').split('.').map(p=>p.trim()).filter(Boolean);
+  if(!parts.length||!target||typeof target!=='object')return;
+  let current=target;
+  parts.slice(0,-1).forEach(part=>{
+    if(!isPlainObject(current[part]))current[part]={};
+    current=current[part];
+  });
+  current[parts[parts.length-1]]=value;
+}
+function editorLanguageOverrideKey(language){
+  const id=String(language||editorLang||'').trim();
+  return id?'['+id+']':'';
+}
+function editorLanguageOverrideSection(language){
+  const key=editorLanguageOverrideKey(language);
+  const value=key&&config&&isPlainObject(config[key])?config[key]:{};
+  return isPlainObject(value)?value:{};
+}
+function editorLanguageOverrideSettings(language){
+  const override=editorLanguageOverrideSection(language);
+  const result={};
+  if(isPlainObject(override.editor))Object.assign(result,override.editor);
+  Object.keys(override).forEach(key=>{
+    if(key.startsWith('editor.'))setDottedConfigValue(result,key.slice('editor.'.length),override[key]);
+  });
+  return result;
+}
+function editorLanguageOverrideHasEditor(language){
+  const override=editorLanguageOverrideSection(language);
+  if(isPlainObject(override.editor)&&Object.keys(override.editor).length)return true;
+  return Object.keys(override).some(key=>key.startsWith('editor.'));
+}
+function editorEffectiveSection(section,language){
+  const base=settingSection(section);
+  const override=editorLanguageOverrideSection(language);
+  const result=isPlainObject(base)?{...base}:base;
+  if(!isPlainObject(result))return result;
+  if(isPlainObject(override[section]))Object.assign(result,override[section]);
+  const prefix=section+'.';
+  Object.keys(override).forEach(key=>{
+    if(key.startsWith(prefix))setDottedConfigValue(result,key.slice(prefix.length),override[key]);
+  });
+  return result;
+}
 function editorFormatOnSaveEnabled(){
-  const editor=config&&config.editor&&typeof config.editor==='object'?config.editor:{};
+  const editor=editorEffectiveSection('editor');
   return editor.formatOnSave===true;
 }
 function editorDefaultFormatter(){
-  const editor=config&&config.editor&&typeof config.editor==='object'?config.editor:{};
+  const editor=editorEffectiveSection('editor');
   return String(editor.defaultFormatter||editor.default_formatter||'').trim();
 }
 function editorFormattingProviderId(options){
@@ -7688,7 +7743,7 @@ async function formatDocumentWithProvider(){
   return formatDocument({providerId:selected.providerId});
 }
 function editorLinkedEditingEnabled(){
-  const editor=config&&config.editor&&typeof config.editor==='object'?config.editor:{};
+  const editor=editorEffectiveSection('editor');
   return editor.linkedEditing===true;
 }
 function normalizeEditorLinkedRanges(value){
@@ -7774,7 +7829,7 @@ function applyEditorLinkedEditingFromInput(){
   return changed;
 }
 function editorFormatOnTypeEnabled(){
-  const editor=config&&config.editor&&typeof config.editor==='object'?config.editor:{};
+  const editor=editorEffectiveSection('editor');
   return editor.formatOnType===true;
 }
 function editorCodeActionKindIsSource(kind){
@@ -7789,7 +7844,7 @@ function editorCodeActionSaveOrder(a,b){
   return 0;
 }
 function editorCodeActionsOnSaveKinds(){
-  const editor=config&&config.editor&&typeof config.editor==='object'?config.editor:{};
+  const editor=editorEffectiveSection('editor');
   const setting=editor.codeActionsOnSave;
   let kinds=[];
   if(Array.isArray(setting))kinds=setting;
@@ -10277,14 +10332,52 @@ function editorKnownCodeActionsOnSave(setting,kind){
   if(Array.isArray(setting))return setting.includes(kind);
   return isPlainObject(setting)&&editorSaveSettingEnabled(setting[kind]);
 }
-function editorCodeActionsOnSaveFromSettings(base){
+function editorCodeActionsOnSaveFromSettings(base,ids){
+  const inputIds=isPlainObject(ids)?ids:{};
+  const organizeId=inputIds.organize||'s-editor-organize-imports-on-save';
+  const fixAllId=inputIds.fixAll||'s-editor-fix-all-on-save';
   const current=isPlainObject(base)?{...base}:{};
   if(Array.isArray(base))base.forEach(kind=>{if(kind)current[String(kind)]='explicit'});
-  if(readCheckedValue('s-editor-organize-imports-on-save'))current['source.organizeImports']='explicit';
+  if(readCheckedValue(organizeId))current['source.organizeImports']='explicit';
   else delete current['source.organizeImports'];
-  if(readCheckedValue('s-editor-fix-all-on-save'))current['source.fixAll']='explicit';
+  if(readCheckedValue(fixAllId))current['source.fixAll']='explicit';
   else delete current['source.fixAll'];
   return current;
+}
+function removeManagedEditorLanguageOverrideKeys(entry){
+  if(!isPlainObject(entry))return {};
+  const next={...entry};
+  const managedFlat=[
+    'editor.defaultFormatter','editor.default_formatter','editor.formatOnSave',
+    'editor.formatOnType','editor.linkedEditing','editor.codeActionsOnSave'
+  ];
+  managedFlat.forEach(key=>delete next[key]);
+  if(isPlainObject(next.editor)){
+    const editor={...next.editor};
+    ['defaultFormatter','default_formatter','formatOnSave','formatOnType','linkedEditing','codeActionsOnSave'].forEach(key=>delete editor[key]);
+    if(Object.keys(editor).length)next.editor=editor;
+    else delete next.editor;
+  }
+  return next;
+}
+function saveEditorLanguageOverrideSettings(){
+  const key=editorLanguageOverrideKey(editorLang);
+  if(!key)return;
+  const enabled=readCheckedValue('s-editor-lang-override-enabled');
+  const entry=removeManagedEditorLanguageOverrideKeys(config[key]);
+  if(enabled){
+    const current=editorLanguageOverrideSettings(editorLang);
+    entry['editor.defaultFormatter']=readInputValue('s-editor-lang-default-formatter').trim();
+    entry['editor.formatOnSave']=readCheckedValue('s-editor-lang-format-on-save');
+    entry['editor.formatOnType']=readCheckedValue('s-editor-lang-format-on-type');
+    entry['editor.linkedEditing']=readCheckedValue('s-editor-lang-linked-editing');
+    entry['editor.codeActionsOnSave']=editorCodeActionsOnSaveFromSettings(
+      current.codeActionsOnSave,
+      {organize:'s-editor-lang-organize-imports-on-save',fixAll:'s-editor-lang-fix-all-on-save'}
+    );
+  }
+  if(Object.keys(entry).length)config[key]=entry;
+  else delete config[key];
 }
 async function showModelInfo(){
   const m=$('s-model').value.trim(),el=$('s-model-info');if(!el)return;
@@ -10313,6 +10406,17 @@ function openSettings(){
   setCheckedValue('s-editor-linked-editing',editor.linkedEditing===true);
   setCheckedValue('s-editor-organize-imports-on-save',editorKnownCodeActionsOnSave(editor.codeActionsOnSave,'source.organizeImports'));
   setCheckedValue('s-editor-fix-all-on-save',editorKnownCodeActionsOnSave(editor.codeActionsOnSave,'source.fixAll'));
+  const languageOverride=editorLanguageOverrideSettings(editorLang);
+  const languageEditor=editorLanguageOverrideHasEditor(editorLang)?{...editor,...languageOverride}:editorEffectiveSection('editor',editorLang);
+  setCheckedValue('s-editor-lang-override-enabled',editorLanguageOverrideHasEditor(editorLang));
+  setInputValue('s-editor-lang-default-formatter',languageEditor.defaultFormatter||languageEditor.default_formatter||'');
+  setCheckedValue('s-editor-lang-format-on-save',languageEditor.formatOnSave===true);
+  setCheckedValue('s-editor-lang-format-on-type',languageEditor.formatOnType===true);
+  setCheckedValue('s-editor-lang-linked-editing',languageEditor.linkedEditing===true);
+  setCheckedValue('s-editor-lang-organize-imports-on-save',editorKnownCodeActionsOnSave(languageEditor.codeActionsOnSave,'source.organizeImports'));
+  setCheckedValue('s-editor-lang-fix-all-on-save',editorKnownCodeActionsOnSave(languageEditor.codeActionsOnSave,'source.fixAll'));
+  const langInfo=$('s-editor-lang-override-info');
+  if(langInfo)langInfo.textContent='Writes VS Code-style '+editorLanguageOverrideKey(editorLang)+' editor settings for the active editor language.';
   // Provider keys
   const keys=config._provider_keys||config.provider_keys||{};
   if($('sk-openai'))$('sk-openai').value=keys.openai||'';
@@ -10548,6 +10652,7 @@ async function saveSettings(){
   config.extensions={...settingSection('extensions'),confirm_install:readCheckedValue('s-ext-confirm'),diagnostics_enabled:readCheckedValue('s-ext-diagnostics'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true),enabled_contributions:readExtensionContributionValues(),enabled_contributions_explicit:true};
   const editorSettings=settingSection('editor');
   config.editor={...editorSettings,defaultFormatter:readInputValue('s-editor-default-formatter').trim(),formatOnSave:readCheckedValue('s-editor-format-on-save'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing'),codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)};
+  saveEditorLanguageOverrideSettings();
   config.customization={...settingSection('customization'),use_agent_md:readCheckedValue('s-cust-agent-md'),use_claude_md:readCheckedValue('s-cust-claude-md'),instructions_locations:readListValue('s-cust-instructions',true),agent_locations:readListValue('s-cust-agents',true),workflow_locations:readListValue('s-cust-workflows',true),skill_locations:readListValue('s-cust-skills',true)};
   await applyEditorColorTheme(readInputValue('s-color-theme')||config.color_theme||config.theme||'dark');
   await applyEditorIconTheme(readInputValue('s-file-icon-theme')||config.file_icon_theme||defaultFileIconThemeValue());

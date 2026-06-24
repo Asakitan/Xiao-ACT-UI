@@ -1766,6 +1766,12 @@ class AIEditorAPI:
         for section in _AI_EDITOR_SECTION_DEFAULTS:
             if isinstance(ai_cfg, dict) and section in ai_cfg:
                 result[section] = ai_cfg[section]
+        if isinstance(ai_cfg, dict):
+            for key, value in ai_cfg.items():
+                if (isinstance(key, str)
+                        and re.fullmatch(r"(?:\[[^\]]+\])+", key)
+                        and isinstance(value, dict)):
+                    result[key] = value
         if isinstance(ai_cfg, dict) and "layout" in ai_cfg:
             result["layout"] = ai_cfg["layout"]
         return result

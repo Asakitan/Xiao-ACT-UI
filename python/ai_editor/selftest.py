@@ -1419,6 +1419,7 @@ def test_app_settings_parity() -> None:
         "color_theme": "ext:phase-dark",
         "file_icon_theme": "ext:phase-icons",
         "layout": {"sidebarVisible": True, "editorVisible": True, "chatVisible": True, "panelHeight": "320px"},
+        "[python]": {"editor.formatOnSave": True},
         "_provider_keys": {"openai": "new-openai", "deepseek": "new-deepseek"},
         "unknown_payload": {"preserve": True},
     }
@@ -1450,6 +1451,9 @@ def test_app_settings_parity() -> None:
            and loaded.get("color_theme") == "ext:phase-dark"
            and loaded.get("file_icon_theme") == "ext:phase-icons"
            and loaded.get("layout", {}).get("panelHeight") == "320px")
+    _check("language override settings round-trip",
+           stored.get("[python]", {}).get("editor.formatOnSave") is True
+           and loaded.get("[python]", {}).get("editor.formatOnSave") is True)
 
     from ai_editor import app as app_mod
     from config import SettingsManager
@@ -2347,6 +2351,14 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function requestWindowClose()" in html
            and "setTimeout(()=>" in html
            and "window.requestWindowClose=requestWindowClose" in html)
+    _check("frontend supports VS Code language override editor settings",
+           'id="s-editor-lang-override-enabled"' in html
+           and 'id="s-editor-lang-default-formatter"' in html
+           and 'id="s-editor-lang-organize-imports-on-save"' in html
+           and "function editorEffectiveSection(section,language)" in html
+           and "function editorLanguageOverrideSettings(language)" in html
+           and "entry['editor.defaultFormatter']" in html
+           and "saveEditorLanguageOverrideSettings();" in html)
     _check("provider webviews bridge persistent vscode state",
            'type:"webview-set-state"' in html
            and 'webview_set_state' in html
@@ -2775,6 +2787,10 @@ def test_phase1_ai_editor_regressions() -> None:
     else:
         save_participant_functions = [
             "isPlainObject",
+            "setDottedConfigValue",
+            "editorLanguageOverrideKey",
+            "editorLanguageOverrideSection",
+            "editorEffectiveSection",
             "editorSaveSettingEnabled",
             "editorKnownCodeActionsOnSave",
             "editorCodeActionKindIsSource",
@@ -2786,6 +2802,8 @@ def test_phase1_ai_editor_regressions() -> None:
             for name in save_participant_functions)
         js = save_participant_js + r"""
 function assert(ok,label){ if(!ok){ throw new Error(label); } }
+let editorLang = "plaintext";
+function settingSection(name){ return config[name] || {}; }
 let config = { editor: { codeActionsOnSave: {
   "quickfix": "always",
   "source.organizeImports": "explicit",
@@ -7672,6 +7690,12 @@ def test_vscode_api() -> None:
         "ai_editor": {
             "extensions": {"diagnostics_enabled": True},
             "mcp": {"autostart": True},
+            "editor": {"formatOnSave": False, "tabSize": 4},
+            "[selflang]": {
+                "editor.formatOnSave": True,
+                "editor.tabSize": 2,
+                "editor": {"linkedEditing": True},
+            },
         },
         "panel_themes": {"active": "neo"},
     }
@@ -7685,8 +7709,13 @@ def test_vscode_api() -> None:
     config_nested = config_workspace["getConfiguration"](
         "ai_editor.extensions")
     config_root = config_workspace["getConfiguration"]()
+    config_editor_lang = config_workspace["getConfiguration"](
+        "editor", {"languageId": "selflang"})
+    config_editor_plain = config_workspace["getConfiguration"]("editor")
     config_ai.update("extensions.probe", "ok")
+    config_editor_lang.update("defaultFormatter", "selftest.formatter", True, True)
     config_inspect = config_ai.inspect("extensions.diagnostics_enabled") or {}
+    config_editor_inspect = config_editor_lang.inspect("formatOnSave") or {}
     _check("WorkspaceConfiguration resolves section and dotted keys",
            config_ai.get("extensions.diagnostics_enabled") is True
            and config_extensions.get("diagnostics_enabled") is True
@@ -7697,6 +7726,15 @@ def test_vscode_api() -> None:
                == "ai_editor.extensions.diagnostics_enabled"
            and config_ai.get("extensions.probe") == "ok"
            and config_extensions.get("probe") == "ok")
+    _check("WorkspaceConfiguration resolves VS Code language overrides",
+           config_editor_lang.get("formatOnSave") is True
+           and config_editor_lang.get("tabSize") == 2
+           and config_editor_lang.get("linkedEditing") is True
+           and config_editor_lang.get("defaultFormatter") == "selftest.formatter"
+           and config_editor_plain.get("formatOnSave") is False
+           and config_editor_plain.get("tabSize") == 4
+           and config_editor_inspect.get("globalValue") is False
+           and config_editor_inspect.get("workspaceLanguageValue") is True)
 
     # selectChatModels (no engine)
     models = api["lm"]["selectChatModels"]()

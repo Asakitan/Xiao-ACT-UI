@@ -914,6 +914,28 @@ def _config_lookup(data: Any, path: Sequence[str]) -> Any:
     return current
 
 
+def _config_clone(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _config_clone(val) for key, val in value.items()}
+    if isinstance(value, list):
+        return [_config_clone(item) for item in value]
+    return value
+
+
+def _config_merge_layer(base: Any, layer: Any) -> Any:
+    if layer is _CONFIG_MISSING:
+        return base
+    if base is _CONFIG_MISSING:
+        return _config_clone(layer)
+    if isinstance(base, dict) and isinstance(layer, dict):
+        merged = _config_clone(base)
+        for key, value in layer.items():
+            merged[str(key)] = _config_merge_layer(
+                merged.get(str(key), _CONFIG_MISSING), value)
+        return merged
+    return _config_clone(layer)
+
+
 def _config_set(data: Dict[str, Any], path: Sequence[str], value: Any) -> None:
     if not path:
         return
@@ -943,10 +965,81 @@ def _config_mirror_ai_editor_alias(
         _config_set(data, mirror_path, value)
 
 
+def _config_override_identifier_from_scope(scope: Any) -> str:
+    if isinstance(scope, dict):
+        value = scope.get("languageId") or scope.get("language_id")
+        return str(value or "").strip()
+    value = getattr(scope, "languageId", None)
+    if value is None:
+        value = getattr(scope, "language_id", None)
+    return str(value or "").strip()
+
+
+def _config_language_override_key(override_identifier: str) -> str:
+    text = str(override_identifier or "").strip()
+    return f"[{text}]" if text else ""
+
+
+def _config_language_override_store(
+        data: Dict[str, Any],
+        override_identifier: str) -> Dict[str, Any]:
+    key = _config_language_override_key(override_identifier)
+    if not key:
+        return {}
+    value = data.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _config_language_override_lookup(
+        data: Dict[str, Any],
+        path: Sequence[str],
+        override_identifier: str) -> Any:
+    store = _config_language_override_store(data, override_identifier)
+    if not store or not path:
+        return _CONFIG_MISSING
+    dotted = ".".join(path)
+    if dotted in store:
+        return store[dotted]
+    return _config_lookup(store, path)
+
+
+def _config_language_override_section(
+        data: Dict[str, Any],
+        section_path: Sequence[str],
+        override_identifier: str) -> Any:
+    store = _config_language_override_store(data, override_identifier)
+    if not store:
+        return _CONFIG_MISSING
+    if not section_path:
+        return store
+    prefix = ".".join(section_path)
+    result = _CONFIG_MISSING
+    nested = _config_lookup(store, section_path)
+    result = _config_merge_layer(result, nested)
+    for key, value in store.items():
+        if key == prefix:
+            result = _config_merge_layer(result, value)
+            continue
+        if not key.startswith(prefix + "."):
+            continue
+        suffix = _config_path(key[len(prefix) + 1:])
+        if not suffix:
+            continue
+        if result is _CONFIG_MISSING or not isinstance(result, dict):
+            result = {}
+        _config_set(result, suffix, value)
+    return result
+
+
 class WorkspaceConfiguration:
-    def __init__(self, section: str = "", data: Dict = None) -> None:
+    def __init__(
+            self,
+            section: str = "",
+            data: Dict = None,
+            override_identifier: str = "") -> None:
         self._section = str(section or "")
         self._data = data or {}
+        self._override_identifier = str(override_identifier or "").strip()
 
     def _full_path(self, key: str = "") -> List[str]:
         path = _config_path(self._section)
@@ -954,33 +1047,70 @@ class WorkspaceConfiguration:
         return path
 
     def _section_data(self) -> Any:
-        if not self._section:
-            return self._data
-        value = _config_lookup(self._data, _config_path(self._section))
-        return {} if value is _CONFIG_MISSING else value
+        section_path = _config_path(self._section)
+        configured = (self._data if not section_path
+                      else _config_lookup(self._data, section_path))
+        override = _config_language_override_section(
+            self._data, section_path, self._override_identifier)
+        merged = _config_merge_layer(configured, override)
+        return {} if merged is _CONFIG_MISSING else merged
+
+    def _effective_lookup(self, path: Sequence[str]) -> Any:
+        override = _config_language_override_lookup(
+            self._data, path, self._override_identifier)
+        if override is not _CONFIG_MISSING:
+            return override
+        return _config_lookup(self._data, path)
+
+    def _global_lookup(self, path: Sequence[str]) -> Any:
+        return _config_lookup(self._data, path)
+
+    def _language_lookup(self, path: Sequence[str]) -> Any:
+        return _config_language_override_lookup(
+            self._data, path, self._override_identifier)
 
     def get(self, key: str = "", default: Any = None) -> Any:
-        value = _config_lookup(self._data, self._full_path(key))
+        if not key:
+            value = self._section_data()
+            return default if value is _CONFIG_MISSING else value
+        value = self._effective_lookup(self._full_path(key))
         return default if value is _CONFIG_MISSING else value
 
     def has(self, key: str) -> bool:
-        return _config_lookup(self._data, self._full_path(key)) is not _CONFIG_MISSING
+        return self._effective_lookup(self._full_path(key)) is not _CONFIG_MISSING
 
-    def update(self, key: str, value: Any, global_scope: bool = True) -> None:
+    def update(
+            self,
+            key: str,
+            value: Any,
+            global_scope: bool = True,
+            override_in_language: bool = False) -> None:
         path = self._full_path(key)
+        if override_in_language and self._override_identifier:
+            language_key = _config_language_override_key(self._override_identifier)
+            store = self._data.setdefault(language_key, {})
+            if isinstance(store, dict):
+                store[".".join(path)] = value
+            return
         _config_set(self._data, path, value)
         _config_mirror_ai_editor_alias(self._data, path, value)
 
     def inspect(self, key: str) -> Optional[Dict[str, Any]]:
-        value = _config_lookup(self._data, self._full_path(key))
-        if value is _CONFIG_MISSING:
+        path = self._full_path(key)
+        value = self._global_lookup(path)
+        language_value = self._language_lookup(path)
+        if value is _CONFIG_MISSING and language_value is _CONFIG_MISSING:
             return None
-        full_key = ".".join(self._full_path(key))
+        full_key = ".".join(path)
         return {
             "key": full_key,
             "defaultValue": None,
-            "globalValue": value,
-            "workspaceValue": value,
+            "globalValue": None if value is _CONFIG_MISSING else value,
+            "workspaceValue": None if value is _CONFIG_MISSING else value,
+            "globalLanguageValue": (
+                None if language_value is _CONFIG_MISSING else language_value),
+            "workspaceLanguageValue": (
+                None if language_value is _CONFIG_MISSING else language_value),
             "workspaceFolderValue": None,
         }
 
@@ -4382,7 +4512,10 @@ class VscodeNamespace:
             self._sync_workspace_state()
         return document
 
-    def _get_configuration(self, section: str = "") -> WorkspaceConfiguration:
+    def _get_configuration(
+            self,
+            section: str = "",
+            scope: Any = None) -> WorkspaceConfiguration:
         data: Dict[str, Any] = {}
         if self._settings_getter:
             ai_cfg = self._settings_getter("ai_editor", {}) or {}
@@ -4394,7 +4527,8 @@ class VscodeNamespace:
             themes = self._settings_getter("panel_themes", {}) or {}
             if isinstance(themes, dict):
                 data["panel_themes"] = dict(themes)
-        return WorkspaceConfiguration(section, data)
+        return WorkspaceConfiguration(
+            section, data, _config_override_identifier_from_scope(scope))
 
     def _get_workspace_folders(self) -> List[Dict]:
         try:
