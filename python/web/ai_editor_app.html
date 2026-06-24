@@ -319,6 +319,9 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-code-action-item { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center;
   padding:6px 8px; border-radius:4px; cursor:pointer; font:12px/1.35 var(--ui); }
 .editor-code-action-item.active { background:var(--selection); }
+.editor-code-action-item.disabled { cursor:default; opacity:.68; }
+.editor-code-action-item.disabled .editor-code-action-title { color:var(--fg-dim); }
+.editor-code-action-item.disabled .editor-code-action-detail { color:var(--warn); }
 .editor-code-action-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .editor-code-action-detail { color:var(--fg-dim); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .editor-drop-paste-options { min-width:260px; max-width:460px; max-height:260px; overflow:auto; padding:4px; }
@@ -385,6 +388,10 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-link-detail { color:var(--fg-dim); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .editor-hover { max-width:460px; max-height:220px; overflow:auto; padding:8px 10px;
   font:12px/1.45 var(--ui); white-space:pre-wrap; pointer-events:none; }
+.editor-hover-row strong { color:var(--fg); font-weight:600; }
+.editor-hover-row code { font:11px var(--mono); color:var(--fg); background:var(--bg3); border:1px solid var(--border); border-radius:3px; padding:0 3px; }
+.editor-hover-row a { color:var(--fg-accent); text-decoration:none; }
+.editor-hover-separator { border-top:1px solid var(--border); margin:7px 0; }
 .editor-signature-help { max-width:560px; min-width:280px; overflow:hidden; padding:8px 10px;
   font:12px/1.45 var(--ui); }
 .editor-signature-top { display:flex; align-items:center; gap:8px; }
@@ -5425,20 +5432,40 @@ async function requestEditorCompletion(triggerCharacter,quiet){
 }
 function closeEditorHover(){
   const box=$('editor-hover');if(!box)return;
-  box.classList.remove('open');box.style.display='none';
+  box.classList.remove('open');box.style.display='none';box.innerHTML='';
 }
-function showEditorHover(text,position){
-  const box=$('editor-hover');if(!box||!text)return;
-  box.textContent=text;placeEditorOverlay(box,position);box.style.display='block';
+function editorHoverParts(hover){
+  if(hover==null)return [];
+  if(Array.isArray(hover))return hover.flatMap(editorHoverParts);
+  if(hover.contents!==undefined)return editorHoverParts(hover.contents);
+  const text=editorProviderText(hover);
+  return text?[hover]:[];
+}
+function editorHoverListParts(hovers){
+  return (Array.isArray(hovers)?hovers:[]).flatMap(editorHoverParts).filter(part=>editorProviderText(part));
+}
+function showEditorHover(hovers,position){
+  const box=$('editor-hover');if(!box)return false;
+  const parts=editorHoverListParts(hovers);
+  if(!parts.length){closeEditorHover();return false}
+  box.innerHTML='';
+  parts.forEach((part,index)=>{
+    if(index){
+      const sep=document.createElement('div');sep.className='editor-hover-separator';box.appendChild(sep);
+    }
+    const row=document.createElement('div');row.className='editor-hover-row';editorProviderRenderDocs(row,part);box.appendChild(row);
+  });
+  placeEditorOverlay(box,position);box.style.display='block';
   requestAnimationFrame(()=>box.classList.add('open'));
+  return true;
 }
 async function requestEditorHover(){
   if(isEditorSuggestOpen()||isEditorSignatureOpen()||isEditorCodeActionsOpen()||isEditorReferencesOpen()||!ed||ed.offsetParent===null)return;
   const requestId=++_editorHoverRequest,position=editorPositionFromOffset(ed.value,ed.selectionStart);
   const res=await call('editor_language_provider',editorProviderPayload('hover'));
   if(requestId!==_editorHoverRequest)return;
-  const text=(res&&res.ok&&Array.isArray(res.hovers)?res.hovers:[]).map(editorProviderText).filter(Boolean).join('\n\n');
-  if(text)showEditorHover(text,position);else closeEditorHover();
+  if(res&&res.ok&&showEditorHover(Array.isArray(res.hovers)?res.hovers:[],position))return;
+  closeEditorHover();
 }
 function scheduleEditorHover(){
   clearTimeout(_editorHoverTimer);
@@ -5555,10 +5582,16 @@ function codeActionDisabledText(disabled){
   if(typeof disabled==='string')return disabled;
   return String(disabled.reason||disabled.message||'Disabled');
 }
+function codeActionKindText(kind){
+  if(!kind)return '';
+  if(typeof kind==='string')return kind;
+  return String(kind.value||kind.kind||kind.id||'');
+}
 function codeActionDetail(action){
   const disabled=codeActionDisabledText(action&&action.disabled);
   if(disabled)return disabled;
-  if(action&&action.kind)return String(action.kind);
+  const kind=codeActionKindText(action&&action.kind);
+  if(kind)return kind;
   if(action&&action.command){
     if(typeof action.command==='string')return action.command;
     return String(action.command.command||action.command.title||'command');
@@ -5577,7 +5610,9 @@ function showEditorCodeActions(actions,position){
   const box=$('editor-code-actions');if(!box)return;
   _editorCodeActions=actions.slice(0,80);_editorCodeActionIndex=0;box.innerHTML='';
   _editorCodeActions.forEach((action,index)=>{
-    const row=document.createElement('div');row.className='editor-code-action-item'+(index===0?' active':'');row.setAttribute('role','option');
+    const disabled=codeActionDisabledText(action&&action.disabled);
+    const row=document.createElement('div');row.className='editor-code-action-item'+(index===0?' active':'')+(disabled?' disabled':'');row.setAttribute('role','option');
+    if(disabled){row.setAttribute('aria-disabled','true');row.title=disabled}
     const title=document.createElement('div');title.className='editor-code-action-title';title.textContent=codeActionTitle(action);
     const detail=document.createElement('div');detail.className='editor-code-action-detail';detail.textContent=codeActionDetail(action);
     row.appendChild(title);row.appendChild(detail);
@@ -6911,7 +6946,9 @@ async function runEditorCodeActionCommand(command){
   return result;
 }
 async function applyEditorCodeAction(action){
-  if(!action||action.disabled)return;
+  if(!action)return;
+  const disabled=codeActionDisabledText(action.disabled);
+  if(disabled){setStatus(disabled);return}
   const summary=action.edit?editorCodeActionEdits({edit:action.edit}):{edits:[],tabEdits:[],workspaceEdits:[],skipped:0};
   if(action.edit&&(summary.tabEdits.length||summary.workspaceEdits.length)){
     if(!await confirmEditorWorkspaceEditApply('Apply Code Action',summary,'Apply code action "'+codeActionTitle(action)+'".')){ed.focus();return}
@@ -6931,7 +6968,7 @@ async function requestEditorCodeActions(quiet){
   const res=await call('editor_language_provider',editorProviderPayload('codeActions',{range:editorSelectedRangePayload(),itemResolveCount:20}));
   if(requestId!==_editorCodeActionRequest)return;
   if(res&&res.error){closeEditorCodeActions();if(!quiet)setStatus('Code actions failed: '+res.error);return}
-  const actions=(res&&res.ok&&Array.isArray(res.actions)?res.actions:[]).filter(action=>action&&!action.disabled);
+  const actions=(res&&res.ok&&Array.isArray(res.actions)?res.actions:[]).filter(action=>!!action);
   if(actions.length){
     closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();
     showEditorCodeActions(actions,position);setStatus(actions.length+' code action'+(actions.length===1?'':'s'));return;

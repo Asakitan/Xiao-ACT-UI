@@ -2447,6 +2447,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function applyEditorCompletion(item)" in html
            and "function handleEditorSuggestKey(e)" in html
            and "function requestEditorHover()" in html
+           and "function editorHoverListParts(hovers)" in html
+           and "function showEditorHover(hovers,position)" in html
            and "function requestEditorSignatureHelp(triggerCharacter,triggerKind,quiet)" in html
            and "function showEditorSignatureHelp(help,position)" in html
            and "function appendSignatureLabel(target,signature,activeParameter)" in html
@@ -2456,8 +2458,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function requestEditorCodeActions(quiet)" in html
            and "itemResolveCount:20" in html
            and "function showEditorCodeActions(actions,position)" in html
+           and "function codeActionKindText(kind)" in html
+           and "aria-disabled" in html
+           and ".filter(action=>!!action)" in html
            and "function editorCodeActionEdits(action)" in html
            and "function applyEditorCodeAction(action)" in html
+           and "if(disabled){setStatus(disabled);return}" in html
            and "function requestEditorDefinition(quiet)" in html
            and "function requestEditorTypeDefinition(quiet)" in html
            and "function requestEditorDeclaration(quiet)" in html
@@ -3229,6 +3235,154 @@ setTimeout(() => {
                    (result.stderr or result.stdout).strip())
         except Exception as exc:
             _check("frontend completion accept metadata", False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
+    if not node_path:
+        _check("frontend hover and code action rendering skipped without Node.js", True)
+    else:
+        hover_action_functions = [
+            "editorProviderText",
+            "editorProviderRenderDocs",
+            "closeEditorHover",
+            "editorHoverParts",
+            "editorHoverListParts",
+            "showEditorHover",
+            "codeActionTitle",
+            "codeActionDisabledText",
+            "codeActionKindText",
+            "codeActionDetail",
+            "showEditorCodeActions",
+        ]
+        hover_action_js_functions = "\n".join(
+            _extract_js_function(html, name) for name in hover_action_functions)
+        js = r"""
+function assert(ok,label){ if(!ok){ throw new Error(label); } }
+let statusText = "";
+let undoPushes = 0;
+let _editorCodeActions = [];
+let _editorCodeActionIndex = 0;
+function makeClassList(owner){
+  const classes = new Set();
+  return {
+    add(name){ classes.add(name); owner.className = Array.from(classes).join(" "); },
+    remove(name){ classes.delete(name); owner.className = Array.from(classes).join(" "); },
+    toggle(name, force){
+      const on = force === undefined ? !classes.has(name) : !!force;
+      if(on) classes.add(name); else classes.delete(name);
+      owner.className = Array.from(classes).join(" ");
+      return on;
+    },
+    contains(name){ return classes.has(name); },
+  };
+}
+function makeElement(tag,text){
+  const element = {
+    tag,
+    textContent: text || "",
+    className: "",
+    title: "",
+    style: {},
+    attrs: {},
+    children: [],
+    appendChild(child){
+      this.children.push(child);
+      this.textContent += child.textContent || "";
+      return child;
+    },
+    setAttribute(name,value){ this.attrs[name] = String(value); },
+    scrollIntoView(){},
+  };
+  Object.defineProperty(element, "innerHTML", {
+    get(){ return this._innerHTML || ""; },
+    set(value){ this._innerHTML = String(value || ""); this.children = []; this.textContent = ""; },
+  });
+  element.classList = makeClassList(element);
+  return element;
+}
+function nodeText(node){
+  if(!node) return "";
+  return String(node.textContent || "") + (node.children || []).map(nodeText).join("");
+}
+const hoverBox = makeElement("div");
+const actionsBox = makeElement("div");
+const ed = { focus(){ this.focused = true; } };
+const document = {
+  createElement(tag){ return makeElement(tag); },
+  createTextNode(text){ return makeElement("#text", String(text || "")); },
+  querySelectorAll(selector){
+    if(selector === "#editor-code-actions .editor-code-action-item") return actionsBox.children;
+    return [];
+  },
+};
+function $(id){
+  if(id === "editor-hover") return hoverBox;
+  if(id === "editor-code-actions") return actionsBox;
+  return null;
+}
+function requestAnimationFrame(fn){ fn(); }
+function placeEditorOverlay() {}
+function appendExtensionSettingMarkdown(container,text){ container.textContent += String(text || "").replace(/\*/g, ""); }
+function setStatus(text){ statusText = String(text || ""); }
+function _undoPush(){ undoPushes += 1; }
+function editorCodeActionEdits(){ return { edits: [], tabEdits: [], workspaceEdits: [], skipped: 0 }; }
+async function confirmEditorWorkspaceEditApply(){ return true; }
+async function editorApplyWorkspaceEdit(){ return { changed: false, skipped: 0, tabApplied: 0, workspaceApplied: 0, errors: [] }; }
+async function runEditorCodeActionCommand(){ return null; }
+function closeEditorCodeActions(){ actionsBox.classList.remove("open"); actionsBox.style.display = "none"; _editorCodeActions = []; }
+function callSucceeded(){ return false; }
+""" + hover_action_js_functions + r"""
+assert(editorHoverListParts([
+  { contents: [{ value: "**one**" }, "two"] },
+  { value: "`three`" },
+]).length === 3, "hover parts flatten nested contents");
+assert(showEditorHover([
+  { contents: [{ value: "**one**" }, "two"] },
+  { value: "`three`" },
+], { line: 0, character: 0 }) === true
+       && hoverBox.classList.contains("open")
+       && hoverBox.children.some(child => child.className === "editor-hover-separator")
+       && nodeText(hoverBox).includes("one")
+       && nodeText(hoverBox).includes("three"),
+       "hover renders markdown-like multi-part content");
+assert(showEditorHover([], { line: 0, character: 0 }) === false
+       && !hoverBox.classList.contains("open"),
+       "empty hover closes widget");
+showEditorCodeActions([
+  { title: "disabled fix", disabled: { reason: "needs selection" }, kind: { value: "quickfix" } },
+  { title: "enabled refactor", kind: { value: "refactor.extract" } },
+], { line: 0, character: 0 });
+assert(actionsBox.children.length === 2
+       && actionsBox.children[0].className.includes("disabled")
+       && actionsBox.children[0].attrs["aria-disabled"] === "true"
+       && nodeText(actionsBox.children[0]).includes("needs selection")
+       && codeActionDetail({ kind: { value: "refactor.extract" } }) === "refactor.extract",
+       "code actions render disabled reason and object kind");
+console.log("frontend hover and code action rendering ok");
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check("frontend hover and code action rendering",
+                   result.returncode == 0
+                   and "frontend hover and code action rendering ok" in result.stdout,
+                   (result.stderr or result.stdout).strip())
+        except Exception as exc:
+            _check("frontend hover and code action rendering", False, str(exc))
         finally:
             if js_path:
                 try:
