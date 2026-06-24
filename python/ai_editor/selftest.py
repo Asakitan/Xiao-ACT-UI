@@ -3104,6 +3104,16 @@ console.log("quick input filter helpers ok");
            and "input._triggerItemButton(item, button)" in node_ext_host_source
            and "input._accept()" in node_ext_host_source
            and "input.hide()" in node_ext_host_source)
+    _check("extension window dialogs round-trip to Node host",
+           "showOpenDialog(options, token)" in node_ext_host_source
+           and "showSaveDialog(options, token)" in node_ext_host_source
+           and "type: 'window_dialog_request'" in node_ext_host_source
+           and "case 'window_dialog_response':" in node_ext_host_source
+           and "window_dialog_request" in extension_host_source
+           and "window_dialog_response" in extension_host_source
+           and "def show_window_dialog(self, kind: str,"
+           in app_source
+           and "create_file_dialog" in app_source)
 
     runtime_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     runtime_api._controller = object()
@@ -8097,6 +8107,25 @@ async function activate(context) {
       },
     };
   });
+  vscode.commands.registerCommand('selftest.node.dialogProbe', async () => {
+    const openUris = await vscode.window.showOpenDialog({
+      title: 'Open fixture',
+      canSelectMany: true,
+      filters: { Text: ['txt', 'md'] },
+    });
+    const saveUri = await vscode.window.showSaveDialog({
+      title: 'Save fixture',
+      saveLabel: 'Save',
+      defaultUri: vscode.Uri.joinPath(context.extensionUri, 'dialog-save.md'),
+      filters: { Markdown: ['md'] },
+    });
+    return {
+      open: Array.isArray(openUris)
+        ? openUris.map(uri => uri.fsPath.replace(/\\/g, '/'))
+        : openUris,
+      save: saveUri && saveUri.fsPath.replace(/\\/g, '/'),
+    };
+  });
   vscode.commands.registerCommand('selftest.node.messageOptionsProbe', async () => {
     const info = await vscode.window.showInformationMessage(
       'Info probe',
@@ -8536,6 +8565,13 @@ module.exports = { activate, deactivate };
                     self.progress = []
                     self.quick_inputs = []
                     self.node_host = None
+                    self.window_dialogs = []
+                    self.open_dialog_paths = [
+                        os.path.join(node_tree_tmp, "dialog-open.txt"),
+                        os.path.join(node_tree_tmp, "dialog-second.md"),
+                    ]
+                    self.save_dialog_path = os.path.join(
+                        node_tree_tmp, "dialog-save.md")
 
                 def render_webview_panel(
                         self, view_id: str, html: str,
@@ -8578,6 +8614,17 @@ module.exports = { activate, deactivate };
                                     "validationMessage")):
                             self.node_host.send_quick_input_action(
                                 payload.get("id"), "hide", {})
+
+                def show_window_dialog(self, kind, options):
+                    self.window_dialogs.append({
+                        "kind": str(kind or ""),
+                        "options": dict(options or {}),
+                    })
+                    if kind == "open":
+                        return {"paths": list(self.open_dialog_paths)}
+                    if kind == "save":
+                        return {"path": self.save_dialog_path}
+                    return {"cancelled": True}
 
             node_ui_bridge = _NodeUiBridge()
             node_host = NodeExtensionHost(
@@ -8726,6 +8773,15 @@ module.exports = { activate, deactivate };
                         "selftest.node.quickInputProbe")
                 except Exception as exc:
                     node_quick_input_probe = {"_error": str(exc)}
+                node_dialog_command_registered = _wait_until(
+                    lambda: "selftest.node.dialogProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                try:
+                    node_dialog_probe = api._ext_host.commands.execute(
+                        "selftest.node.dialogProbe")
+                except Exception as exc:
+                    node_dialog_probe = {"_error": str(exc)}
                 node_message_options_command_registered = _wait_until(
                     lambda: "selftest.node.messageOptionsProbe"
                     in api._ext_host.commands.list_commands(),
@@ -10054,6 +10110,12 @@ module.exports = { activate, deactivate };
                 node_input_box_object = (
                     node_quick_input_probe.get("inputBoxObject", {})
                     if isinstance(node_quick_input_probe, dict) else {})
+                node_dialog_events = list(node_ui_bridge.window_dialogs)
+                expected_open_dialog_paths = [
+                    str(item).replace("\\", "/")
+                    for item in node_ui_bridge.open_dialog_paths]
+                expected_save_dialog_path = str(
+                    node_ui_bridge.save_dialog_path).replace("\\", "/")
                 node_quick_bridge_events = [
                     item for item in node_ui_bridge.quick_inputs
                     if isinstance(item, dict)
@@ -10134,6 +10196,31 @@ module.exports = { activate, deactivate };
                        json.dumps({
                            "probe": node_quick_input_probe,
                            "bridge": node_quick_bridge_events[-12:],
+                       }, ensure_ascii=False, default=str))
+                _check("node host window dialog APIs return VS Code URIs",
+                       node_started is True
+                       and node_dialog_command_registered
+                       and isinstance(node_dialog_probe, dict)
+                       and node_dialog_probe.get("open")
+                       == expected_open_dialog_paths
+                       and node_dialog_probe.get("save")
+                       == expected_save_dialog_path
+                       and any(
+                           item.get("kind") == "open"
+                           and item.get("options", {}).get(
+                               "canSelectMany") is True
+                           and "Text" in item.get("options", {}).get(
+                               "filters", {})
+                           for item in node_dialog_events)
+                       and any(
+                           item.get("kind") == "save"
+                           and str(item.get("options", {}).get(
+                               "defaultPath", "")).replace("\\", "/").endswith(
+                                   "/dialog-save.md")
+                           for item in node_dialog_events),
+                       json.dumps({
+                           "probe": node_dialog_probe,
+                           "dialogs": node_dialog_events,
                        }, ensure_ascii=False, default=str))
                 _check("node host message APIs separate options from actions",
                        node_started is True

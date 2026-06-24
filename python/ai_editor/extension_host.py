@@ -2285,6 +2285,34 @@ class NodeExtensionHost:
                 except Exception:
                     _log.exception("[NodeExtHost] quick_input bridge failed")
 
+        elif msg_type == "window_dialog_request":
+            request_id = str(msg.get("requestId", ""))
+            kind = str(msg.get("kind", ""))
+            options = msg.get("options")
+            value: Any = {"cancelled": True}
+            ok = True
+            error = ""
+            try:
+                handler = (
+                    getattr(self._ui_bridge, "show_window_dialog", None)
+                    if self._ui_bridge else None)
+                if callable(handler):
+                    value = handler(kind, options if isinstance(options, dict) else {})
+                else:
+                    value = {"cancelled": True}
+            except Exception as exc:
+                ok = False
+                error = str(exc)
+                _log.exception("[NodeExtHost] window dialog bridge failed")
+            if request_id:
+                self._send({
+                    "type": "window_dialog_response",
+                    "requestId": request_id,
+                    "ok": ok,
+                    "value": value,
+                    "error": error,
+                })
+
         elif msg_type == "language_provider_registered":
             kind = str(msg.get("kind", ""))
             selector = msg.get("selector")

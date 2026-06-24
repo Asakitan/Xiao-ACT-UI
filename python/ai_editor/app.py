@@ -1019,6 +1019,82 @@ class _AIEditorUIBridge:
         result = self._api._eval_js(script)
         return None if result is None else str(result)
 
+    def _dialog_file_types(self, filters: Any) -> tuple:
+        if not isinstance(filters, dict) or not filters:
+            return ('All Files (*.*)',)
+        entries: List[str] = []
+        for label, extensions in filters.items():
+            if isinstance(extensions, str):
+                ext_values = [extensions]
+            elif isinstance(extensions, (list, tuple)):
+                ext_values = list(extensions)
+            else:
+                ext_values = []
+            patterns: List[str] = []
+            for ext in ext_values:
+                value = str(ext).strip().lstrip(".")
+                if not value:
+                    continue
+                patterns.append("*.*" if value == "*" else f"*.{value}")
+            if patterns:
+                entries.append(f"{str(label)} ({';'.join(patterns)})")
+        return tuple(entries or ['All Files (*.*)'])
+
+    def show_window_dialog(self, kind: str,
+                           options: Dict[str, Any]) -> Dict[str, Any]:
+        window = getattr(self._api, "_window", None)
+        dialog = getattr(window, "create_file_dialog", None)
+        if not callable(dialog):
+            return {"cancelled": True}
+        opts = options if isinstance(options, dict) else {}
+        default_path = str(opts.get("defaultPath") or "")
+        directory = ""
+        if default_path:
+            directory = (
+                default_path if os.path.isdir(default_path)
+                else os.path.dirname(default_path))
+        try:
+            if str(kind or "") == "save":
+                suggested = (
+                    os.path.basename(default_path)
+                    if default_path and not os.path.isdir(default_path)
+                    else "untitled")
+                result = dialog(
+                    dialog_type=20,  # SAVE_DIALOG
+                    directory=directory,
+                    save_filename=suggested,
+                    file_types=self._dialog_file_types(opts.get("filters")),
+                )
+                if not result:
+                    return {"cancelled": True}
+                path_value = (
+                    result if isinstance(result, str)
+                    else result[0] if isinstance(result, (list, tuple))
+                    else str(result))
+                return {"path": path_value}
+
+            dialog_type = 10  # OPEN_DIALOG
+            if opts.get("canSelectFolders"):
+                try:
+                    import webview as _webview  # type: ignore
+                    dialog_type = int(getattr(_webview, "FOLDER_DIALOG", 30))
+                except Exception:
+                    dialog_type = 30
+            result = dialog(
+                dialog_type=dialog_type,
+                directory=directory,
+                allow_multiple=bool(opts.get("canSelectMany")),
+                file_types=self._dialog_file_types(opts.get("filters")),
+            )
+            if not result:
+                return {"cancelled": True}
+            paths = (
+                list(result) if isinstance(result, (list, tuple))
+                else [str(result)])
+            return {"paths": [str(item) for item in paths if str(item)]}
+        except Exception as exc:
+            return {"error": str(exc), "cancelled": True}
+
 
 # ---------------------------------------------------------------------------
 # JS API exposed to the webview window

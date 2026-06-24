@@ -1252,6 +1252,7 @@ const _extensionActivationInFlight = new Map(); // extensionId -> pending activa
 const _commands = new Map();             // commandId -> handler
 const _pythonCommandRequests = new Map(); // requestId -> { resolve, reject, timer }
 const _pythonLmRequests = new Map();      // requestId -> { resolve, reject, timer }
+const _windowDialogRequests = new Map();  // requestId -> { resolve, timer, cleanup, kind }
 const _webviewViewProviders = new Map(); // viewType -> { provider, options }
 const _webviewViews = new Map();         // viewId -> WebviewView
 const _webviewPanelSerializers = new Map(); // viewType -> { serializer, extensionId, extensionPath }
@@ -1274,6 +1275,7 @@ let _nextChatParticipantHandle = 1;
 let _nextPythonCommandRequestHandle = 1;
 let _nextPythonLmRequestHandle = 1;
 let _nextExtensionActivationRequestHandle = 1;
+let _nextWindowDialogRequestHandle = 1;
 const _languageDocumentTextCache = new Map(); // uri -> { version, text }
 const _workspaceTextDocuments = new Map(); // uri -> TextDocument-like object
 const _onDidOpenTextDocumentEmitter = new EventEmitter();
@@ -1797,6 +1799,83 @@ function handleExecuteCommandResponse(msg) {
     } else {
         pending.reject(new Error(msg.error || 'Python command failed'));
     }
+}
+
+function _serializeWindowDialogOptions(kind, options = {}) {
+    const result = {
+        title: options?.title === undefined ? undefined : String(options.title),
+        defaultPath: _pathFromUriLike(options?.defaultUri),
+        filters: _serializeLanguageValue(options?.filters || {}),
+    };
+    if (kind === 'open') {
+        result.openLabel = options?.openLabel === undefined ? undefined : String(options.openLabel);
+        result.canSelectFiles = options?.canSelectFiles !== false;
+        result.canSelectFolders = !!options?.canSelectFolders;
+        result.canSelectMany = !!options?.canSelectMany;
+    } else {
+        result.saveLabel = options?.saveLabel === undefined ? undefined : String(options.saveLabel);
+    }
+    return result;
+}
+
+function _urisFromDialogPaths(paths) {
+    return (Array.isArray(paths) ? paths : [paths])
+        .filter(value => value !== undefined && value !== null && String(value))
+        .map(value => Uri.file(String(value)));
+}
+
+function _handleWindowDialogResponse(msg) {
+    const requestId = String(msg.requestId || '');
+    const pending = _windowDialogRequests.get(requestId);
+    if (!pending) return;
+    pending.cleanup?.();
+    if (!msg.ok) {
+        log(`window dialog ${pending.kind} failed: ${msg.error || 'unknown error'}`);
+        pending.resolve(undefined);
+        return;
+    }
+    const value = msg.value && typeof msg.value === 'object' ? msg.value : {};
+    if (value.cancelled) {
+        pending.resolve(undefined);
+    } else if (pending.kind === 'open') {
+        const paths = value.paths !== undefined ? value.paths : value.path;
+        const uris = _urisFromDialogPaths(paths);
+        pending.resolve(uris.length ? uris : undefined);
+    } else {
+        const paths = _urisFromDialogPaths(value.path || value.paths);
+        pending.resolve(paths[0]);
+    }
+}
+
+function _requestWindowDialog(kind, options = {}, token = undefined) {
+    if (token?.isCancellationRequested) return Promise.resolve(undefined);
+    const requestId = `wndlg-${_nextWindowDialogRequestHandle++}`;
+    return new Promise(resolve => {
+        let timer;
+        let cancelSubscription;
+        const cleanup = () => {
+            _windowDialogRequests.delete(requestId);
+            if (timer) clearTimeout(timer);
+            try { cancelSubscription?.dispose?.(); } catch {}
+        };
+        const finishUndefined = () => {
+            const pending = _windowDialogRequests.get(requestId);
+            if (!pending) return;
+            cleanup();
+            resolve(undefined);
+        };
+        timer = setTimeout(finishUndefined, 30000);
+        if (token && typeof token.onCancellationRequested === 'function') {
+            cancelSubscription = token.onCancellationRequested(finishUndefined);
+        }
+        _windowDialogRequests.set(requestId, { resolve, timer, cleanup, kind });
+        send({
+            type: 'window_dialog_request',
+            requestId,
+            kind,
+            options: _serializeWindowDialogOptions(kind, options),
+        });
+    });
 }
 
 function _serializeLanguagePosition(value) {
@@ -4231,6 +4310,12 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             },
             showInputBox(options, token) {
                 return _windowShowInputBox(options || {}, token);
+            },
+            showOpenDialog(options, token) {
+                return _requestWindowDialog('open', options || {}, token);
+            },
+            showSaveDialog(options, token) {
+                return _requestWindowDialog('save', options || {}, token);
             },
             createQuickPick() {
                 return new QuickPickInput();
@@ -7135,6 +7220,9 @@ async function handleMessage(msg) {
             break;
         case 'execute_command_response':
             handleExecuteCommandResponse(msg);
+            break;
+        case 'window_dialog_response':
+            _handleWindowDialogResponse(msg);
             break;
         case 'lm_model_response':
             _handlePythonLmResponse(msg);
