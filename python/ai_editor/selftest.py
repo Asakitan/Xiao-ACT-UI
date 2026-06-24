@@ -2698,6 +2698,7 @@ console.log("frontend auto-close behavior ok");
             and "ext-setting-readonly-badge" in html
             and "languageDefaults" in html
             and "language-default" in html
+            and "const schemas=item&&item.schemas" in html
             and "set_extension_language_setting" in html
             and "reset_extension_language_setting" in html
             and "ext-settings-category" in html
@@ -6800,6 +6801,7 @@ def test_app_extension_runtime_support() -> None:
                     "selftest.mode": "manual",
                     "[selflang]": {
                         "editor.tabSize": 2,
+                        "selftest.mode": "manual",
                     },
                 },
             },
@@ -6829,11 +6831,23 @@ def test_app_extension_runtime_support() -> None:
                selflang_defaults.get("override") == "[selflang]"
                and selflang_defaults.get("settings", {}).get(
                    "editor.tabSize") == 2
+               and selflang_defaults.get("settings", {}).get(
+                   "selftest.mode") == "manual"
+               and selflang_defaults.get("schemas", {}).get(
+                   "selftest.mode", {}).get("enum") == ["auto", "manual"]
                and selflang_defaults.get("values", {}).get(
                    "editor.tabSize") == 2
                and selflang_defaults.get("modified", {}).get(
                    "editor.tabSize") is False
-               and selflang_defaults.get("count") == 1)
+               and selflang_defaults.get("count") == 2)
+        invalid_language_mode = api.set_extension_language_setting(
+            "selflang", "selftest.mode", "unsupported")
+        _check("extension language setting overrides reuse setting schema",
+               invalid_language_mode.get("ok") is False
+               and "configured enum values" in invalid_language_mode.get(
+                   "error", "")
+               and "[selflang]" not in getattr(
+                   api._gui_ref.settings, "data", {}))
         language_set = api.set_extension_language_setting(
             "selflang", "editor.tabSize", 4)
         data_after_language_set = dict(getattr(

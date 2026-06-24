@@ -8453,6 +8453,24 @@ class AIEditorAPI:
                 defaults[key_str] = value
         return defaults
 
+    def _extension_configuration_schema_by_key(self) -> Dict[str, Dict[str, Any]]:
+        try:
+            contributions = self._ext_host.ext_points.configuration_contributions
+        except Exception:
+            contributions = []
+        result: Dict[str, Dict[str, Any]] = {}
+        for entry in contributions:
+            if not isinstance(entry, dict):
+                continue
+            props = entry.get("properties", {})
+            if not isinstance(props, dict):
+                continue
+            for key, schema in props.items():
+                setting_key = str(key or "").strip()
+                if setting_key and isinstance(schema, dict):
+                    result[setting_key] = dict(schema)
+        return result
+
     def _extension_configuration_language_defaults(self) -> List[Dict[str, Any]]:
         try:
             entries = self._ext_host.ext_points.all_contributions.get(
@@ -8460,6 +8478,7 @@ class AIEditorAPI:
         except Exception:
             entries = []
         configured_by_language = self._extension_language_override_values()
+        schema_by_key = self._extension_configuration_schema_by_key()
         result: List[Dict[str, Any]] = []
         for entry in entries:
             if not isinstance(entry, dict):
@@ -8501,12 +8520,18 @@ class AIEditorAPI:
                         key: key in configured_values
                         for key in settings
                     }
+                    schemas = {
+                        key: schema_by_key[key]
+                        for key in settings
+                        if key in schema_by_key
+                    }
                     result.append({
                         "extension_id": eid,
                         "display_name": display_name,
                         "override": f"[{language_id}]",
                         "language": language_id,
                         "settings": settings,
+                        "schemas": schemas,
                         "defaults": settings,
                         "values": values,
                         "configuredValues": configured_values,
@@ -8556,6 +8581,18 @@ class AIEditorAPI:
         settings = _resolve_settings(self._gui_ref)
         if not settings:
             return {"ok": False, "error": "Settings not available"}
+        schema = self._extension_configuration_schema_by_key().get(setting_key)
+        if isinstance(schema, dict):
+            validation_error = self._validate_extension_setting_value(
+                value, schema)
+            if validation_error:
+                return {
+                    "ok": False,
+                    "error": validation_error,
+                    "language": language,
+                    "override": f"[{language}]",
+                    "key": setting_key,
+                }
         override_key = f"[{language}]"
         current = settings.get(override_key, {}) or {}
         if not isinstance(current, dict):
