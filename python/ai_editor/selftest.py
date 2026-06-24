@@ -3139,9 +3139,14 @@ console.log("quick input filter helpers ok");
            in node_ext_host_source
            and "onDidOpenTerminal: _onDidOpenTerminalEmitter.event"
            in node_ext_host_source
+           and "_bindPseudoterminal" in node_ext_host_source
+           and "type: 'terminal_write'" in node_ext_host_source
            and "type: 'terminal_command'" in node_ext_host_source
            and "msg_type == \"terminal_command\"" in extension_host_source
+           and "msg_type == \"terminal_write\"" in extension_host_source
            and "def run_terminal_command(self, name: str, text: str)"
+           in app_source
+           and "def write_terminal_data(self, name: str, text: str) -> None:"
            in app_source)
     _check("extension workspace folder picker uses dynamic QuickPick",
            "showWorkspaceFolderPick(options, token)" in node_ext_host_source
@@ -8291,8 +8296,56 @@ async function activate(context) {
       extensionExitReason: vscode.TerminalExitReason.Extension,
       panelLocation: vscode.TerminalLocation.Panel,
     };
+    const ptyWrite = new vscode.EventEmitter();
+    const ptyClose = new vscode.EventEmitter();
+    const ptyName = new vscode.EventEmitter();
+    const ptyInputs = [];
+    let ptyOpenCount = 0;
+    let ptyCloseCalled = 0;
+    const pty = {
+      onDidWrite: ptyWrite.event,
+      onDidClose: ptyClose.event,
+      onDidChangeName: ptyName.event,
+      open(initialDimensions) {
+        ptyOpenCount += 1;
+        ptyWrite.fire('pty-open\r\n');
+        ptyName.fire('Node PTY Renamed');
+      },
+      close() {
+        ptyCloseCalled += 1;
+      },
+      handleInput(data) {
+        ptyInputs.push(data);
+        ptyWrite.fire('input:' + data.replace(/\r/g, '<CR>'));
+        if (data === 'q\r') {
+          ptyClose.fire(7);
+        }
+      },
+    };
+    const ptyBeforeCount = vscode.window.terminals.length;
+    const ptyTerminal = vscode.window.createTerminal({
+      name: 'Node PTY',
+      pty,
+      isTransient: true,
+    });
+    const ptyCreatedName = ptyTerminal.name;
+    ptyTerminal.show(true);
+    ptyTerminal.sendText('typed only', false);
+    ptyTerminal.sendText('q');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const ptyAfter = {
+      beforeCount: ptyBeforeCount,
+      count: vscode.window.terminals.length,
+      createdName: ptyCreatedName,
+      currentName: ptyTerminal.name,
+      openCount: ptyOpenCount,
+      closeCalled: ptyCloseCalled,
+      inputs: ptyInputs,
+      exitCode: ptyTerminal.exitStatus && ptyTerminal.exitStatus.code,
+      exitReason: ptyTerminal.exitStatus && ptyTerminal.exitStatus.reason,
+    };
     disposables.forEach(disposable => disposable.dispose());
-    return { created, after, interacted, events };
+    return { created, after, ptyAfter, interacted, events };
   });
   vscode.commands.registerCommand('selftest.node.messageOptionsProbe', async () => {
     const info = await vscode.window.showInformationMessage(
@@ -8878,6 +8931,18 @@ module.exports = { activate, deactivate };
                         "data": event,
                     })
                     return json.dumps({"stdout": "terminal:" + str(text)})
+
+                def write_terminal_data(self, name, text):
+                    event = {
+                        "event": "write",
+                        "name": str(name),
+                        "text": str(text),
+                    }
+                    self.terminal_events.append(event)
+                    emitted_events.append({
+                        "event": "terminal",
+                        "data": event,
+                    })
 
             node_ui_bridge = _NodeUiBridge()
             node_host = NodeExtensionHost(
@@ -10598,6 +10663,9 @@ module.exports = { activate, deactivate };
                 node_terminal_after = (
                     node_terminal_probe.get("after", {})
                     if isinstance(node_terminal_probe, dict) else {})
+                node_terminal_pty = (
+                    node_terminal_probe.get("ptyAfter", {})
+                    if isinstance(node_terminal_probe, dict) else {})
                 node_terminal_runtime_events = (
                     node_terminal_probe.get("events", [])
                     if isinstance(node_terminal_probe, dict) else [])
@@ -10625,6 +10693,19 @@ module.exports = { activate, deactivate };
                        and "state:Node Terminal:true"
                        in node_terminal_runtime_events
                        and "close:Node Terminal" in node_terminal_runtime_events
+                       and node_terminal_pty.get("openCount") == 1
+                       and node_terminal_pty.get("closeCalled") == 0
+                       and node_terminal_pty.get(
+                           "currentName") == "Node PTY Renamed"
+                       and node_terminal_pty.get("inputs")
+                       == ["typed only", "q\r"]
+                       and node_terminal_pty.get("exitCode") == 7
+                       and node_terminal_pty.get("exitReason") == 2
+                       and node_terminal_pty.get("count")
+                       == node_terminal_pty.get("beforeCount")
+                       and "open:Node PTY" in node_terminal_runtime_events
+                       and "close:Node PTY Renamed"
+                       in node_terminal_runtime_events
                        and any(
                            item.get("event") == "show"
                            and item.get("name") == "Node Terminal"
@@ -10636,6 +10717,19 @@ module.exports = { activate, deactivate };
                        and any(
                            item.get("event") == "command"
                            and item.get("text") == "echo node-terminal"
+                           for item in node_terminal_events)
+                       and any(
+                           item.get("event") == "write"
+                           and item.get("name") in {
+                               "Node PTY",
+                               "Node PTY Renamed",
+                           }
+                           and "pty-open" in item.get("text", "")
+                           for item in node_terminal_events)
+                       and any(
+                           item.get("event") == "write"
+                           and item.get("name") == "Node PTY Renamed"
+                           and "input:typed only" in item.get("text", "")
                            for item in node_terminal_events)
                        and not any(
                            item.get("event") == "command"

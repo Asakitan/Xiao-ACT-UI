@@ -2566,6 +2566,17 @@ class NodeExtensionHost:
                 except Exception:
                     pass
 
+        elif msg_type == "terminal_write":
+            if self._ui_bridge:
+                try:
+                    writer = getattr(
+                        self._ui_bridge, "write_terminal_data", None)
+                    if callable(writer):
+                        writer(str(msg.get("name", "")),
+                               str(msg.get("text", "")))
+                except Exception:
+                    pass
+
         elif msg_type in ("progress_start", "progress_report", "progress_done"):
             progress_handler = (
                 getattr(self._ui_bridge, "show_progress", None)

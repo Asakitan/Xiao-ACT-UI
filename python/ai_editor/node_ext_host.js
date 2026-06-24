@@ -2505,21 +2505,113 @@ function _terminalRemove(terminal) {
     _onDidCloseTerminalEmitter.fire(terminal);
 }
 
+function _terminalSubscribeEvent(event, callback) {
+    if (typeof event !== 'function') return null;
+    try {
+        return event(callback);
+    } catch (err) {
+        log(`terminal event subscription failed: ${err?.message || err}`);
+        return null;
+    }
+}
+
 class TerminalObject {
     constructor(options = {}) {
         this._handle = _nextTerminalHandle++;
         this._disposed = false;
+        this._ptyOpened = false;
+        this._ptyDisposables = [];
         this.creationOptions = Object.assign({}, options || {});
         this.name = String(options?.name || `Terminal ${this._handle}`);
         this.processId = Promise.resolve(undefined);
         this.exitStatus = undefined;
         this.state = { isInteractedWith: false };
         this.shellIntegration = undefined;
+        this._pty = options?.pty && typeof options.pty.open === 'function'
+            ? options.pty
+            : null;
+        this._bindPseudoterminal();
+    }
+    _bindPseudoterminal() {
+        const pty = this._pty;
+        if (!pty) return;
+        const writeDisposable = _terminalSubscribeEvent(pty.onDidWrite, data => {
+            if (!this._ptyOpened || this._disposed) return;
+            send({
+                type: 'terminal_write',
+                id: this._handle,
+                name: this.name,
+                text: String(data ?? ''),
+            });
+        });
+        const closeDisposable = _terminalSubscribeEvent(pty.onDidClose, code => {
+            if (!this._ptyOpened || this._disposed) return;
+            this._closeFromPty(code);
+        });
+        const nameDisposable = _terminalSubscribeEvent(pty.onDidChangeName, name => {
+            if (!this._ptyOpened || this._disposed) return;
+            this.name = String(name || this.name);
+            send({
+                type: 'terminal_rename',
+                id: this._handle,
+                name: this.name,
+            });
+        });
+        const dimensionsDisposable = _terminalSubscribeEvent(
+            pty.onDidOverrideDimensions, dimensions => {
+                if (!this._ptyOpened || this._disposed) return;
+                send({
+                    type: 'terminal_dimensions',
+                    id: this._handle,
+                    name: this.name,
+                    dimensions: dimensions || null,
+                });
+            });
+        this._ptyDisposables = [
+            writeDisposable,
+            closeDisposable,
+            nameDisposable,
+            dimensionsDisposable,
+        ].filter(Boolean);
+    }
+    _disposePtySubscriptions() {
+        for (const disposable of this._ptyDisposables.splice(0)) {
+            try { disposable?.dispose?.(); } catch {}
+        }
+    }
+    _openPty() {
+        if (!this._pty || this._ptyOpened || this._disposed) return;
+        this._ptyOpened = true;
+        try {
+            this._pty.open(undefined);
+        } catch (err) {
+            log(`terminal pty open failed for ${this.name}: ${err?.message || err}`);
+            this._closeFromPty(1);
+        }
+    }
+    _closeFromPty(code) {
+        if (this._disposed) return;
+        this._disposed = true;
+        const numericCode = typeof code === 'number' ? code : undefined;
+        this.exitStatus = { code: numericCode, reason: 2 };
+        send({ type: 'terminal_dispose', id: this._handle, name: this.name });
+        this._disposePtySubscriptions();
+        _terminalRemove(this);
     }
     sendText(text, shouldExecute = true) {
         if (this._disposed) return;
         this.state.isInteractedWith = true;
         _onDidChangeTerminalStateEmitter.fire(this);
+        if (this._pty) {
+            this._openPty();
+            const data = String(text ?? '') + (shouldExecute === false ? '' : '\r');
+            try {
+                this._pty.handleInput?.(data);
+            } catch (err) {
+                log(`terminal pty input failed for ${this.name}: ${err?.message || err}`);
+            }
+            return;
+        }
         send({
             type: 'terminal_command',
             id: this._handle,
@@ -2531,6 +2623,7 @@ class TerminalObject {
     show(preserveFocus = false) {
         if (this._disposed) return;
         if (!preserveFocus) _terminalSetActive(this);
+        this._openPty();
         send({
             type: 'terminal_show',
             id: this._handle,
@@ -2546,6 +2639,10 @@ class TerminalObject {
         if (this._disposed) return;
         this._disposed = true;
         this.exitStatus = { code: undefined, reason: 4 };
+        if (this._pty) {
+            try { this._pty.close?.(); } catch {}
+            this._disposePtySubscriptions();
+        }
         send({ type: 'terminal_dispose', id: this._handle, name: this.name });
         _terminalRemove(this);
     }
@@ -2557,6 +2654,7 @@ function _createTerminal(nameOrOptions, shellPath, shellArgs) {
     _terminals.push(terminal);
     _terminalSetActive(terminal);
     _onDidOpenTerminalEmitter.fire(terminal);
+    terminal._openPty();
     return terminal;
 }
 

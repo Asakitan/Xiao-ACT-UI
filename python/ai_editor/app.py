@@ -858,6 +858,35 @@ class _AIEditorUIBridge:
             "runTerminal", json.dumps({"command": text}), True)
         return result
 
+    def write_terminal_data(self, name: str, text: str) -> None:
+        script = (
+            "(function(name,text){try{"
+            "document.querySelectorAll('.ptab').forEach(function(p){"
+            "p.classList.toggle('active',p.dataset.ptab==='terminal');"
+            "});"
+            "var tp=document.getElementById('terminal-panel');"
+            "if(tp){tp.style.display='flex';tp.classList.add('active');}"
+            "var term=null;"
+            "if(typeof _terminals!=='undefined'&&Array.isArray(_terminals)){"
+            "term=_terminals.find(function(t){return t&&t.name===name;});"
+            "}"
+            "if(!term&&typeof _createTerminal==='function'){"
+            "term=_createTerminal(name||'Extension Terminal');"
+            "}"
+            "if(term&&typeof _switchTerminal==='function')_switchTerminal(term.id);"
+            "var out=term&&term.outputEl?term.outputEl:"
+            "(typeof _getActiveTermOutput==='function'?_getActiveTermOutput():"
+            "document.getElementById('terminal-output'));"
+            "if(out&&typeof _appendTerminalHtml==='function'"
+            "&&typeof ansiToHtml==='function'){"
+            "_appendTerminalHtml(out,ansiToHtml(text));"
+            "}"
+            "}catch(e){}})("
+            f"{json.dumps(str(name or 'Extension Terminal'))},"
+            f"{json.dumps(str(text or ''))});"
+        )
+        self._api._eval_js(script)
+
     # -- Messages / toasts --
     def show_message(self, level: str, message: str) -> None:
         self._api._emit("show_message", {"level": level, "message": message})
