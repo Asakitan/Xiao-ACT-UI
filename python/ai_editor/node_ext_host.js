@@ -814,6 +814,7 @@ class Webview {
     constructor(viewId, options, defaultLocalResourceRoots) {
         this._viewId = viewId;
         this._html = '';
+        this._state = null;
         this._options = options && typeof options === 'object' ? options : {};
         this._defaultLocalResourceRoots = Array.isArray(defaultLocalResourceRoots)
             ? defaultLocalResourceRoots
@@ -843,6 +844,7 @@ class Webview {
             type: 'webview_html',
             viewId: this._viewId,
             html: value,
+            state: this._state,
             options: this._webviewOptionsPayload(),
             localResourceRoots: this._localResourceRootsPayload(),
         });
@@ -863,6 +865,9 @@ class Webview {
     asWebviewUri(localUri) {
         this._assertAlive();
         return _asWebviewResourceUri(localUri);
+    }
+    _setState(state) {
+        this._state = state === undefined ? null : state;
     }
     _localResourceRootsPayload() {
         const roots = (
@@ -6351,6 +6356,7 @@ async function deserializeWebviewPanel(msg) {
             (msg.webviewOptions || msg.options || {}),
             reg.extensionPath,
             msg.showOptions || msg.viewColumn || undefined);
+        panel.webview._setState(state);
         const result = reg.serializer.deserializeWebviewPanel(panel, state);
         if (result && typeof result.then === 'function') await result;
         send({

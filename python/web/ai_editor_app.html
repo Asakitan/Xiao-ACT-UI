@@ -8659,7 +8659,7 @@ window._onEditorEvent=function(event,data){
     if(panelEl){
       panelEl.dataset.viewId=viewId;
       if(data.retainContextWhenHidden)panelEl.dataset.retainContext='1';
-      _injectWebviewHtml(panelEl,viewId,html);
+      _injectWebviewHtml(panelEl,viewId,html,data.state);
     }
     return;
   }

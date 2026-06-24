@@ -2056,10 +2056,11 @@ class NodeExtensionHost:
             view_id = str(msg.get("viewId", ""))
             html = str(msg.get("html", ""))
             local_roots = msg.get("localResourceRoots", None)
+            state = msg.get("state", None)
             if self._ui_bridge and view_id:
                 try:
                     self._ui_bridge.render_webview_panel(
-                        view_id, html, local_roots)
+                        view_id, html, local_roots, state)
                 except TypeError:
                     try:
                         self._ui_bridge.render_webview_panel(view_id, html)
@@ -3122,11 +3123,19 @@ class NodeExtensionHost:
         with self._webview_serializer_request_lock:
             self._webview_serializer_requests[request_id] = {"event": event}
         try:
+            resolved_state = state
+            if resolved_state is None and view_id and self._ui_bridge:
+                try:
+                    getter = getattr(self._ui_bridge, "get_webview_state", None)
+                    if callable(getter):
+                        resolved_state = getter(str(view_id or ""))
+                except Exception:
+                    resolved_state = state
             sent = self._send({
                 "type": "deserialize_webview_panel",
                 "requestId": request_id,
                 "viewType": str(view_type or ""),
-                "state": state,
+                "state": resolved_state,
                 "title": str(title or ""),
                 "viewId": str(view_id or ""),
             })

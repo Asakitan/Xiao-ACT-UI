@@ -2118,6 +2118,7 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("provider webviews bridge persistent vscode state",
            'type:"webview-set-state"' in html
            and 'webview_set_state' in html
+           and "_injectWebviewHtml(panelEl,viewId,html,data.state)" in html
            and 'getState:function(){return _state}' in html)
     _check("frontend accepts provider webview pushes",
            "const providerId=String(viewId).startsWith('provider.')?String(viewId).slice(9):''" in html
@@ -3161,6 +3162,16 @@ console.log("quick input filter helpers ok");
            and "getWorkspaceFolder(uri)" in node_ext_host_source
            and "_onDidChangeWorkspaceFoldersEmitter.event"
            in node_ext_host_source)
+    _check("extension webview panel state restores through serializer bridge",
+           "state_to_render = state" in app_source
+           and "\"state\": state_to_render" in app_source
+           and "def get_webview_state(self, view_id: str) -> Any:"
+           in app_source
+           and "getter = getattr(self._ui_bridge, \"get_webview_state\", None)"
+           in extension_host_source
+           and "state = msg.get(\"state\", None)" in extension_host_source
+           and "state: this._state" in node_ext_host_source
+           and "panel.webview._setState(state)" in node_ext_host_source)
 
     runtime_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     runtime_api._controller = object()
@@ -8781,6 +8792,7 @@ module.exports = { activate, deactivate };
             class _NodeUiBridge:
                 def __init__(self) -> None:
                     self.webviews = {}
+                    self.webview_states = {}
                     self.local_resource_roots = {}
                     self.disposed = []
                     self.progress = []
@@ -8801,9 +8813,16 @@ module.exports = { activate, deactivate };
 
                 def render_webview_panel(
                         self, view_id: str, html: str,
-                        local_resource_roots=None) -> None:
+                        local_resource_roots=None, state=None) -> None:
                     self.webviews[view_id] = html
+                    state_to_render = (
+                        self.get_webview_state(view_id)
+                        if state is None else state)
+                    self.webview_states[view_id] = state_to_render
                     self.local_resource_roots[view_id] = local_resource_roots
+
+                def get_webview_state(self, view_id):
+                    return self.webview_states.get(str(view_id))
 
                 def post_webview_message(self, view_id: str, message) -> None:
                     self.webviews.setdefault(view_id, "")
@@ -9477,6 +9496,17 @@ module.exports = { activate, deactivate };
                         title="Serialized Title",
                         timeout=3.0)
                     if node_started else {"ok": False})
+                node_ui_bridge.webview_states[
+                    "selftest.persistedSerialized"] = {
+                        "text": "stored-state",
+                    }
+                node_webview_serializer_stored_result = (
+                    node_host.request_webview_panel_deserialization(
+                        "selftest.serializedPanel",
+                        title="Serialized Stored",
+                        view_id="selftest.persistedSerialized",
+                        timeout=3.0)
+                    if node_started else {"ok": False})
                 _wait_until(
                     lambda: any(
                         'data-view="serialized-panel"' in html
@@ -9537,6 +9567,12 @@ module.exports = { activate, deactivate };
                     if isinstance(node_webview_serializer_result, dict) else "")
                 node_serialized_html = node_ui_bridge.webviews.get(
                     node_serialized_view_id, "")
+                node_serialized_stored_view_id = str(
+                    node_webview_serializer_stored_result.get("viewId", "")
+                    if isinstance(
+                        node_webview_serializer_stored_result, dict) else "")
+                node_serialized_stored_html = node_ui_bridge.webviews.get(
+                    node_serialized_stored_view_id, "")
                 node_default_roots = (
                     node_ui_bridge.local_resource_roots.get(
                         node_default_roots_view_id, []) or [])
@@ -10145,16 +10181,33 @@ module.exports = { activate, deactivate };
                 node_serializer_events = (
                     node_webview_serializer_probe.get("events", [])
                     if isinstance(node_webview_serializer_probe, dict) else [])
-                node_serializer_event = (
-                    node_serializer_events[-1]
-                    if node_serializer_events else {})
+                node_serializer_event = next((
+                    item for item in node_serializer_events
+                    if item.get("title") == "Serialized Title"), {})
+                node_serializer_stored_event = next((
+                    item for item in node_serializer_events
+                    if item.get("title") == "Serialized Stored"), {})
                 _check("node host webview panel serializer revives persisted panels",
                        node_webview_serializer_command_registered
                        and isinstance(node_webview_serializer_result, dict)
                        and node_webview_serializer_result.get("ok") is True
+                       and isinstance(
+                           node_webview_serializer_stored_result, dict)
+                       and node_webview_serializer_stored_result.get("ok")
+                       is True
                        and node_serialized_view_id
                        and 'data-view="serialized-panel"' in node_serialized_html
                        and "revived-state" in node_serialized_html
+                       and node_ui_bridge.webview_states.get(
+                           node_serialized_view_id) == {
+                               "text": "revived-state",
+                           }
+                       and node_serialized_stored_view_id
+                       and "stored-state" in node_serialized_stored_html
+                       and node_ui_bridge.webview_states.get(
+                           node_serialized_stored_view_id) == {
+                               "text": "stored-state",
+                           }
                        and isinstance(node_webview_serializer_probe, dict)
                        and node_webview_serializer_probe.get("hasApi") is True
                        and "already registered" in node_webview_serializer_probe.get(
@@ -10163,11 +10216,15 @@ module.exports = { activate, deactivate };
                        and node_serializer_event.get("viewType")
                        == "selftest.serializedPanel"
                        and node_serializer_event.get("state", {}).get("text")
-                       == "revived-state",
+                       == "revived-state"
+                       and node_serializer_stored_event.get(
+                           "state", {}).get("text") == "stored-state",
                        json.dumps({
                            "result": node_webview_serializer_result,
+                           "stored": node_webview_serializer_stored_result,
                            "probe": node_webview_serializer_probe,
                            "html": node_serialized_html,
+                           "storedHtml": node_serialized_stored_html,
                        }, ensure_ascii=False))
                 _check("node host webview panel serializer disposable unregisters",
                        node_webview_serializer_dispose_command_registered
