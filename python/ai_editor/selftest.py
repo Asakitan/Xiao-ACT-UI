@@ -5933,6 +5933,25 @@ def test_app_extension_runtime_support() -> None:
                and settings_cfg.get("modified", {}).get("selftest.flag") is False)
         _check("extension configurationDefaults override schema defaults",
                api.get_extension_setting("selftest.mode").get("value") == "manual")
+        class _SettingsChangedNodeHost:
+            is_running = True
+
+            def __init__(self) -> None:
+                self.messages = []
+
+            def send_settings_changed(
+                    self, section, key, value=None, remove=False):
+                self.messages.append({
+                    "section": section,
+                    "key": key,
+                    "value": value,
+                    "remove": remove,
+                })
+                return True
+
+        previous_settings_node_host = api._node_ext_host
+        settings_node_host = _SettingsChangedNodeHost()
+        api._node_ext_host = settings_node_host
         set_setting = api.set_extension_setting("selftest.flag", True)
         after_set = next(
             (item for item in api.list_extension_settings().get("configurations", [])
@@ -5953,6 +5972,17 @@ def test_app_extension_runtime_support() -> None:
                and after_reset.get("values", {}).get("selftest.flag") is False
                and "selftest.flag" not in after_reset.get("configuredValues", {})
                and after_reset.get("modified", {}).get("selftest.flag") is False)
+        _check("extension setting reset notifies Node as remove",
+               settings_node_host.messages[:1] == [{
+                   "section": "selftest",
+                   "key": "flag",
+                   "value": True,
+                   "remove": False,
+               }]
+               and settings_node_host.messages[-1].get("section") == "selftest"
+               and settings_node_host.messages[-1].get("key") == "flag"
+               and settings_node_host.messages[-1].get("remove") is True)
+        api._node_ext_host = previous_settings_node_host
 
         manifest_tool_name = api._extension_tool_wrapper_name(
             "selftest.manifest-only", "manifest_tool")
@@ -7437,6 +7467,14 @@ async function activate(context) {
     const aliasConfig = vscode.workspace.getConfiguration('extensions');
     const nestedConfig = vscode.workspace.getConfiguration('ai_editor.extensions');
     const rootConfig = vscode.workspace.getConfiguration();
+    const manifestConfig = vscode.workspace.getConfiguration('selftest.node');
+    const manifestConfigBefore = {
+      flag: manifestConfig.get('flag'),
+      mode: manifestConfig.get('mode'),
+      hasFlag: manifestConfig.has('flag'),
+      inspectDefault: manifestConfig.inspect('flag').defaultValue,
+      inspectWorkspace: manifestConfig.inspect('flag').workspaceValue,
+    };
     const configBefore = {
       aiDiagnostics: aiConfig.get('extensions.diagnostics_enabled'),
       aliasDiagnostics: aliasConfig.get('diagnostics_enabled'),
@@ -7462,6 +7500,20 @@ async function activate(context) {
       eventCount: configEvents.count,
       eventExtensions: configEvents.extensions,
       eventUnrelated: configEvents.unrelated,
+    };
+    await manifestConfig.update('flag', false);
+    const manifestConfigSet = {
+      flag: manifestConfig.get('flag'),
+      inspectDefault: manifestConfig.inspect('flag').defaultValue,
+      inspectWorkspace: manifestConfig.inspect('flag').workspaceValue,
+    };
+    await manifestConfig.update('flag', undefined);
+    const manifestConfigReset = {
+      flag: manifestConfig.get('flag'),
+      mode: manifestConfig.get('mode'),
+      hasFlag: manifestConfig.has('flag'),
+      inspectDefault: manifestConfig.inspect('flag').defaultValue,
+      inspectWorkspace: manifestConfig.inspect('flag').workspaceValue,
     };
     await nestedConfig.update('transient_probe', 'present');
     await nestedConfig.update('transient_probe', undefined);
@@ -7493,6 +7545,9 @@ async function activate(context) {
       deleteMissing,
       configBefore,
       configAfter,
+      manifestConfigBefore,
+      manifestConfigSet,
+      manifestConfigReset,
       configRemoved,
     };
   });
@@ -8112,6 +8167,22 @@ module.exports = { activate, deactivate };
                         "id": "selftest.node.tree",
                         "name": "Node Tree",
                     }]},
+                    "configuration": {
+                        "title": "Node Selftest",
+                        "properties": {
+                            "selftest.node.flag": {
+                                "type": "boolean",
+                                "default": True,
+                            },
+                            "selftest.node.mode": {
+                                "type": "string",
+                                "default": "auto",
+                            },
+                        },
+                    },
+                    "configurationDefaults": {
+                        "selftest.node.mode": "manual",
+                    },
                     "customEditors": [{
                         "viewType": "selftest.node.customEditor",
                         "displayName": "Node Custom Editor",
@@ -9101,6 +9172,15 @@ module.exports = { activate, deactivate };
                 node_config_after = (
                     node_workspace_probe.get("configAfter", {})
                     if isinstance(node_workspace_probe, dict) else {})
+                node_manifest_config_before = (
+                    node_workspace_probe.get("manifestConfigBefore", {})
+                    if isinstance(node_workspace_probe, dict) else {})
+                node_manifest_config_set = (
+                    node_workspace_probe.get("manifestConfigSet", {})
+                    if isinstance(node_workspace_probe, dict) else {})
+                node_manifest_config_reset = (
+                    node_workspace_probe.get("manifestConfigReset", {})
+                    if isinstance(node_workspace_probe, dict) else {})
                 _check("node host workspace configuration matches VS Code sections",
                        node_workspace_command_registered
                        and node_config_before.get("aiDiagnostics") is True
@@ -9134,6 +9214,32 @@ module.exports = { activate, deactivate };
                                getattr(api, "_gui_ref", None),
                                "settings", None), "data", {}),
                        }, ensure_ascii=False))
+                _check("node host configuration defaults reset like VS Code",
+                       node_workspace_command_registered
+                       and node_manifest_config_before.get("flag") is True
+                       and node_manifest_config_before.get("mode") == "manual"
+                       and node_manifest_config_before.get("hasFlag") is True
+                       and node_manifest_config_before.get("inspectDefault")
+                       is True
+                       and node_manifest_config_before.get("inspectWorkspace")
+                       is None
+                       and node_manifest_config_set.get("flag") is False
+                       and node_manifest_config_set.get("inspectDefault")
+                       is True
+                       and node_manifest_config_set.get("inspectWorkspace")
+                       is False
+                       and node_manifest_config_reset.get("flag") is True
+                       and node_manifest_config_reset.get("mode") == "manual"
+                       and node_manifest_config_reset.get("hasFlag") is True
+                       and node_manifest_config_reset.get("inspectDefault")
+                       is True
+                       and node_manifest_config_reset.get("inspectWorkspace")
+                       is None,
+                       json.dumps({
+                           "before": node_manifest_config_before,
+                           "set": node_manifest_config_set,
+                           "reset": node_manifest_config_reset,
+                       }, ensure_ascii=False, default=str))
                 _check("node host JS command awaits Python command result",
                        node_python_command_registered
                        and isinstance(node_python_command_probe, dict)

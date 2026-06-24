@@ -7690,7 +7690,8 @@ class AIEditorAPI:
                 default_value = (
                     default_overrides[key]
                     if key in default_overrides else schema.get("default"))
-                self._notify_extension_setting_changed(key, default_value)
+                self._notify_extension_setting_changed(
+                    key, default_value, remove=True)
                 return {
                     "ok": True,
                     "key": key,
@@ -7719,13 +7720,16 @@ class AIEditorAPI:
                 defaults[key_str] = value
         return defaults
 
-    def _notify_extension_setting_changed(self, key: str, value: Any) -> None:
+    def _notify_extension_setting_changed(
+            self, key: str, value: Any,
+            remove: bool = False) -> None:
         section = key.rsplit(".", 1)[0] if "." in key else ""
         short_key = key.rsplit(".", 1)[-1] if "." in key else key
         host = getattr(self, "_node_ext_host", None)
         if host is not None and host.is_running:
             try:
-                host.send_settings_changed(section, short_key, value)
+                host.send_settings_changed(
+                    section, short_key, value, remove=remove)
             except Exception:
                 pass
 

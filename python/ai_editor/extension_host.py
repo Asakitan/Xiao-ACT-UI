@@ -2500,14 +2500,19 @@ class NodeExtensionHost:
         return self._send({"type": "settings_sync", "settings": settings})
 
     def send_settings_changed(self, section: str, key: str,
-                              value: Any) -> bool:
+                              value: Any = None,
+                              remove: bool = False) -> bool:
         """Notify Node of an incremental settings change."""
-        return self._send({
+        msg = {
             "type": "settings_changed",
             "section": section,
             "key": key,
-            "value": value,
-        })
+        }
+        if remove:
+            msg["remove"] = True
+        else:
+            msg["value"] = value
+        return self._send(msg)
 
     def on_config_set(
             self,

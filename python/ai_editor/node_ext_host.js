@@ -1245,6 +1245,7 @@ class OutputChannel {
 // -------------------------------------------------------------------------
 const _extensions = new Map();           // extensionId -> { desc, module, context, deactivate }
 const _knownExtensions = new Map();      // extensionId -> { extensionPath, manifest, extensionKind }
+const _configurationDefaults = {};       // contributed default settings by dotted path
 const _extensionActivationRequests = new Map(); // requestId -> pending activation request
 const _extensionActivationInFlight = new Map(); // extensionId -> pending activation request
 const _commands = new Map();             // commandId -> handler
@@ -3119,6 +3120,7 @@ function _registerKnownExtensions(extensions) {
             storageRoot: String(item?.storageRoot || ''),
             extensionKind: item?.extensionKind || manifest.extensionKind || 'workspace',
         });
+        _registerConfigurationDefaultsFromManifest(manifest);
     }
 }
 
@@ -5024,6 +5026,74 @@ function _configSet(data, pathParts, value) {
     current[pathParts[pathParts.length - 1]] = value;
 }
 
+function _configCloneValue(value) {
+    if (!value || typeof value !== 'object') return value;
+    try {
+        return JSON.parse(JSON.stringify(value));
+    } catch {
+        return Array.isArray(value) ? Array.from(value) : Object.assign({}, value);
+    }
+}
+
+function _configSetDefault(pathParts, value) {
+    if (!Array.isArray(pathParts) || !pathParts.length) return;
+    _configSet(_configurationDefaults, pathParts, _configCloneValue(value));
+    _configMirrorDefaultsAlias(pathParts, value);
+}
+
+function _configMirrorDefaultsAlias(pathParts, value) {
+    let mirrorPath = null;
+    if (pathParts[0] === 'ai_editor'
+            && _AI_EDITOR_SECTION_ALIASES.has(pathParts[1])) {
+        mirrorPath = pathParts.slice(1);
+    } else if (_AI_EDITOR_SECTION_ALIASES.has(pathParts[0])) {
+        mirrorPath = ['ai_editor'].concat(pathParts);
+    }
+    if (!mirrorPath || mirrorPath.join('.') === pathParts.join('.')) return;
+    _configSet(_configurationDefaults, mirrorPath, _configCloneValue(value));
+}
+
+function _configMergeObjects(defaultValue, configuredValue) {
+    const base = defaultValue && typeof defaultValue === 'object'
+        && !Array.isArray(defaultValue) ? _configCloneValue(defaultValue) : {};
+    if (configuredValue && typeof configuredValue === 'object'
+            && !Array.isArray(configuredValue)) {
+        for (const [key, value] of Object.entries(configuredValue)) {
+            if (value && typeof value === 'object' && !Array.isArray(value)
+                    && base[key] && typeof base[key] === 'object'
+                    && !Array.isArray(base[key])) {
+                base[key] = _configMergeObjects(base[key], value);
+            } else {
+                base[key] = _configCloneValue(value);
+            }
+        }
+        return base;
+    }
+    return configuredValue === _CONFIG_MISSING ? base : _configCloneValue(configuredValue);
+}
+
+function _configEffectiveLookup(pathParts) {
+    const configured = _configLookup(_settings, pathParts);
+    if (configured !== _CONFIG_MISSING) return configured;
+    return _configLookup(_configurationDefaults, pathParts);
+}
+
+function _configEffectiveSection(sectionPath) {
+    const configured = _configLookup(_settings, sectionPath);
+    const defaults = _configLookup(_configurationDefaults, sectionPath);
+    if (configured === _CONFIG_MISSING) {
+        return defaults === _CONFIG_MISSING ? {} : _configCloneValue(defaults);
+    }
+    if (defaults !== _CONFIG_MISSING
+            && configured && typeof configured === 'object'
+            && !Array.isArray(configured)
+            && defaults && typeof defaults === 'object'
+            && !Array.isArray(defaults)) {
+        return _configMergeObjects(defaults, configured);
+    }
+    return _configCloneValue(configured);
+}
+
 function _configDelete(data, pathParts) {
     if (!pathParts.length) return;
     let current = data;
@@ -5051,6 +5121,35 @@ function _configMirrorAiEditorAlias(pathParts, value, remove) {
     }
 }
 
+function _registerConfigurationDefaultsFromManifest(manifest) {
+    const contributes = manifest && typeof manifest === 'object'
+        ? manifest.contributes || {}
+        : {};
+    const rawConfigurations = contributes.configuration;
+    const configurations = Array.isArray(rawConfigurations)
+        ? rawConfigurations
+        : (rawConfigurations ? [rawConfigurations] : []);
+    for (const entry of configurations) {
+        const properties = entry && typeof entry === 'object'
+            ? entry.properties || {}
+            : {};
+        for (const [key, schema] of Object.entries(properties)) {
+            if (!key || key.startsWith('[')) continue;
+            if (schema && typeof schema === 'object'
+                    && Object.prototype.hasOwnProperty.call(schema, 'default')) {
+                _configSetDefault(_configPath(key), schema.default);
+            }
+        }
+    }
+    const defaults = contributes.configurationDefaults;
+    if (defaults && typeof defaults === 'object' && !Array.isArray(defaults)) {
+        for (const [key, value] of Object.entries(defaults)) {
+            if (!key || key.startsWith('[')) continue;
+            _configSetDefault(_configPath(key), value);
+        }
+    }
+}
+
 function _configFullPath(section, key) {
     return _configPath(section).concat(_configPath(key));
 }
@@ -5070,10 +5169,7 @@ function _fireConfigurationChanged(pathParts) {
 
 function _createConfigProxy(section) {
     const sectionPath = _configPath(section);
-    const sectionData = () => {
-        const value = _configLookup(_settings, sectionPath);
-        return value === _CONFIG_MISSING ? {} : value;
-    };
+    const sectionData = () => _configEffectiveSection(sectionPath);
     return {
         get(key, defaultValue) {
             if (arguments.length === 0 || key === undefined) {
@@ -5082,22 +5178,29 @@ function _createConfigProxy(section) {
                     ? Object.assign({}, data)
                     : data;
             }
-            const value = _configLookup(_settings, _configFullPath(section, key));
+            const value = _configEffectiveLookup(_configFullPath(section, key));
             return value === _CONFIG_MISSING ? defaultValue : value;
         },
         has(key) {
-            return _configLookup(_settings, _configFullPath(section, key))
+            return _configEffectiveLookup(_configFullPath(section, key))
                 !== _CONFIG_MISSING;
         },
         inspect(key) {
             const pathParts = _configFullPath(section, key);
             const value = _configLookup(_settings, pathParts);
-            if (value === _CONFIG_MISSING) return undefined;
+            const defaultValue = _configLookup(_configurationDefaults, pathParts);
+            if (value === _CONFIG_MISSING && defaultValue === _CONFIG_MISSING) return undefined;
             return {
                 key: pathParts.join('.'),
-                defaultValue: undefined,
-                globalValue: value,
-                workspaceValue: value,
+                defaultValue: defaultValue === _CONFIG_MISSING
+                    ? undefined
+                    : _configCloneValue(defaultValue),
+                globalValue: value === _CONFIG_MISSING
+                    ? undefined
+                    : _configCloneValue(value),
+                workspaceValue: value === _CONFIG_MISSING
+                    ? undefined
+                    : _configCloneValue(value),
                 workspaceFolderValue: undefined,
             };
         },
@@ -6755,7 +6858,10 @@ async function handleMessage(msg) {
             const changedSection = msg.section;
             if (changedSection !== undefined) {
                 const changedPath = _configFullPath(changedSection, msg.key);
-                if (msg.key !== undefined) {
+                if (msg.remove) {
+                    _configDelete(_settings, changedPath);
+                    _configMirrorAiEditorAlias(changedPath, undefined, true);
+                } else if (msg.key !== undefined) {
                     _configSet(_settings, changedPath, msg.value);
                     _configMirrorAiEditorAlias(changedPath, msg.value, false);
                 } else if (msg.value !== undefined && typeof msg.value === 'object') {
