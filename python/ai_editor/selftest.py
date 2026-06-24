@@ -2685,13 +2685,16 @@ def test_phase1_ai_editor_regressions() -> None:
            and "linkedEditing:false" in html
            and "formatOnSave:false" in html
            and "codeActionsOnSave:{}" in html
+           and "codeActions:{triggerOnFocusChange:false}" in html
            and "id=\"s-editor-default-formatter\"" in html
            and "id=\"s-editor-format-on-save\"" in html
            and "id=\"s-editor-format-on-type\"" in html
            and "id=\"s-editor-linked-editing\"" in html
            and "id=\"s-editor-organize-imports-on-save\"" in html
            and "id=\"s-editor-fix-all-on-save\"" in html
+           and "id=\"s-editor-code-actions-on-save-json\"" in html
            and "id=\"s-editor-code-actions-trigger-focus\"" in html
+           and "id=\"s-editor-lang-code-actions-on-save-json\"" in html
            and "function editorFormatOnSaveEnabled()" in html
            and "function editorDefaultFormatter()" in html
            and "async function requestEditorFormattingProviders()" in html
@@ -2705,9 +2708,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function editorCodeActionsOnSaveKinds(reason)" in html
            and "async function runEditorSaveParticipants(options)" in html
            and "async function runEditorCodeActionsOnSave(options)" in html
+           and "function editorCodeActionKindIsRunnable(kind,sourceOnly)" in html
            and "function editorCodeActionKindContains(parent,child)" in html
            and "function editorCodeActionOnSaveMode(value)" in html
-           and "function editorNormalizeCodeActionKinds(kinds,excluded)" in html
+           and "function editorNormalizeCodeActionKinds(kinds,excluded,options)" in html
+           and "function editorCodeActionsOnSaveExtras(setting)" in html
+           and "function readCodeActionsOnSaveExtras(id)" in html
            and "async function triggerEditorCodeActionsOnFocusChange()" in html
            and "async function applyEditorCodeActionForSave(action)" in html
            and "async function fetchEditorCodeActionsForKind(only,range)" in html
@@ -2725,6 +2731,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "setCheckedValue('s-editor-linked-editing',editor.linkedEditing===true)" in html
            and "setInputValue('s-editor-organize-imports-on-save',editorCodeActionsOnSaveMode(editor.codeActionsOnSave,'source.organizeImports'))" in html
            and "setInputValue('s-editor-fix-all-on-save',editorCodeActionsOnSaveMode(editor.codeActionsOnSave,'source.fixAll'))" in html
+           and "setInputValue('s-editor-code-actions-on-save-json',stringifyJsonObjectValue(editorCodeActionsOnSaveExtras(editor.codeActionsOnSave)))" in html
            and "setCheckedValue('s-editor-code-actions-trigger-focus',isPlainObject(editor.codeActions)&&editor.codeActions.triggerOnFocusChange===true)" in html
            and "setCheckedValue('s-files-trim-trailing-whitespace',files.trimTrailingWhitespace===true)" in html
            and "setInputValue('s-files-auto-save',filesAutoSaveMode(files))" in html
@@ -2888,11 +2895,17 @@ def test_phase1_ai_editor_regressions() -> None:
             "editorKnownCodeActionsOnSave",
             "editorCodeActionsOnSaveMode",
             "editorCodeActionKindIsSource",
+            "editorCodeActionKindIsRunnable",
             "editorCodeActionKindContains",
             "editorCodeActionSaveOrder",
             "editorCodeActionOnSaveMode",
             "editorNormalizeCodeActionKinds",
             "editorCodeActionsOnSaveKinds",
+            "stringifyJsonObjectValue",
+            "readJsonObjectValue",
+            "editorCodeActionsOnSaveExtras",
+            "readCodeActionsOnSaveExtras",
+            "editorCodeActionsOnSaveFromSettings",
         ]
         save_participant_js = "\n".join(
             _extract_js_function(html, name)
@@ -2901,6 +2914,8 @@ def test_phase1_ai_editor_regressions() -> None:
 function assert(ok,label){ if(!ok){ throw new Error(label); } }
 let editorLang = "plaintext";
 function settingSection(name){ return config[name] || {}; }
+const inputs = {};
+function readInputValue(id){ return inputs[id] || ""; }
 let config = { editor: { codeActionsOnSave: {
   "quickfix": "always",
   "source.organizeImports": "explicit",
@@ -2913,7 +2928,7 @@ let kinds = editorCodeActionsOnSaveKinds("explicit");
 assert(kinds[0] === "source.fixAll", "fixAll is first");
 assert(kinds.includes("source.organizeImports"), "organize imports kept");
 assert(kinds.includes("source.custom"), "custom source action kept");
-assert(!kinds.includes("quickfix"), "non-source action filtered");
+assert(kinds.includes("quickfix"), "explicit save keeps non-source action kinds");
 assert(!kinds.includes("source.never"), "never action filtered");
 assert(!kinds.includes("source.never.child"), "never parent excludes child action");
 assert(editorKnownCodeActionsOnSave(config.editor.codeActionsOnSave, "source.organizeImports"), "known object setting detected");
@@ -2922,8 +2937,16 @@ kinds = editorCodeActionsOnSaveKinds("always");
 assert(kinds.length === 1 && kinds[0] === "source.fixAll", "always reason only keeps always source actions");
 config = { editor: { codeActionsOnSave: ["quickfix", "source.organizeImports", "source.fixAll.eslint"] } };
 kinds = editorCodeActionsOnSaveKinds("explicit");
-assert(kinds[0] === "source.fixAll.eslint" && kinds[1] === "source.organizeImports", "array settings filtered and sorted");
+assert(kinds[0] === "source.fixAll.eslint" && kinds.includes("quickfix") && kinds.includes("source.organizeImports"), "array settings kept and sorted");
 assert(editorCodeActionsOnSaveKinds("always").length === 0, "array settings do not run for always focus trigger");
+let extras = editorCodeActionsOnSaveExtras({ "source.organizeImports": "explicit", "source.fixAll": "always", "quickfix": "explicit", "source.fixAll.eslint": "never" });
+assert(!("source.organizeImports" in extras) && !("source.fixAll" in extras) && extras.quickfix === "explicit" && extras["source.fixAll.eslint"] === "never", "extras strip managed common actions");
+inputs["s-editor-code-actions-on-save-json"] = JSON.stringify({ "source.organizeImports": "always", "quickfix": true, "source.fixAll.eslint": "never", "bad": false });
+inputs["s-editor-organize-imports-on-save"] = "explicit";
+inputs["s-editor-fix-all-on-save"] = "always";
+const mergedActions = editorCodeActionsOnSaveFromSettings({}, {});
+assert(mergedActions["source.organizeImports"] === "explicit" && mergedActions["source.fixAll"] === "always", "managed select modes win");
+assert(mergedActions.quickfix === "explicit" && mergedActions["source.fixAll.eslint"] === "never" && !("bad" in mergedActions), "extras normalize supported values");
 config = { editor: { tabSize: 4, insertSpaces: true }, "[python]": { "editor.tabSize": 2, "editor.insertSpaces": false } };
 editorLang = "python";
 const formatOptions = editorFormatOptions();

@@ -187,6 +187,7 @@ _AI_EDITOR_SECTION_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "formatOnSave": False,
         "linkedEditing": False,
         "codeActionsOnSave": {},
+        "codeActions": {"triggerOnFocusChange": False},
         "tabSize": 4,
         "insertSpaces": True,
     },
