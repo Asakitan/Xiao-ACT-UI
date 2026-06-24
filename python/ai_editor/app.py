@@ -4092,6 +4092,9 @@ class AIEditorAPI:
         kind_aliases = {
             "completion": "completion",
             "completions": "completion",
+            "completionResolve": "completionResolve",
+            "resolveCompletion": "completionResolve",
+            "resolveCompletionItem": "completionResolve",
             "hover": "hover",
             "signatureHelp": "signatureHelp",
             "signature": "signatureHelp",
@@ -4224,6 +4227,37 @@ class AIEditorAPI:
         position = _editor_provider_position(pos_value, content)
 
         try:
+            if kind == "completionResolve":
+                item = payload.get("item")
+                if not isinstance(item, dict):
+                    item = {}
+                result = self._request_node_language_provider({
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "languageId": language,
+                    "version": document.version,
+                    "text": content,
+                    "item": item,
+                })
+                if isinstance(result, dict) and result.get("ok"):
+                    return {
+                        "ok": True,
+                        "kind": kind,
+                        "uri": str(document.uri),
+                        "version": document.version,
+                        "item": _json_ready_language_value(result.get("value")),
+                    }
+                return {
+                    "ok": False,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "item": item,
+                    "error": (
+                        result.get("error")
+                        if isinstance(result, dict)
+                        else "Completion resolve failed"),
+                }
             if kind == "completion":
                 try:
                     item_resolve_count = int(

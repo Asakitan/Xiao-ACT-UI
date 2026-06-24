@@ -1421,6 +1421,8 @@ const _onDidChangeTerminalStateEmitter = new EventEmitter();
 const _workspaceDefaultSkipDirs = new Set(['.git', 'node_modules', '__pycache__', '.venv', 'venv']);
 const _workspaceSymbolCache = new Map(); // handle -> { provider, symbol }
 let _nextWorkspaceSymbolHandle = 1;
+const _completionItemCache = new Map(); // handle -> { provider, item, resolved }
+let _nextCompletionItemHandle = 1;
 const _hierarchyItemCache = new Map(); // handle -> { provider, item, kind }
 let _nextHierarchyItemHandle = 1;
 const _diagnosticCollections = new Map(); // name -> DiagnosticCollection
@@ -7122,6 +7124,7 @@ async function handleChatParticipantRequest(msg) {
 function _languageProviderMethod(kind) {
     return ({
         completion: 'provideCompletionItems',
+        completionResolve: 'resolveCompletionItem',
         hover: 'provideHover',
         signatureHelp: 'provideSignatureHelp',
         definition: 'provideDefinition',
@@ -7206,6 +7209,25 @@ function _cacheWorkspaceSymbol(provider, symbol) {
     return value;
 }
 
+function _serializeCompletionItemHandle(handle, item) {
+    const value = _serializeLanguageValue(item);
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+        value._nodeCompletionHandle = String(handle || '');
+    }
+    return value;
+}
+
+function _cacheCompletionItem(provider, item, resolved = false) {
+    const handle = String(_nextCompletionItemHandle++);
+    _completionItemCache.set(handle, { provider, item, resolved: !!resolved });
+    while (_completionItemCache.size > 2000) {
+        const first = _completionItemCache.keys().next().value;
+        if (first === undefined) break;
+        _completionItemCache.delete(first);
+    }
+    return _serializeCompletionItemHandle(handle, item);
+}
+
 function _hierarchyHandleKey(kind) {
     return kind === 'typeHierarchy' ? '_nodeTypeHierarchyHandle' : '_nodeHierarchyHandle';
 }
@@ -7275,6 +7297,44 @@ async function handleLanguageProviderRequest(msg) {
             context.triggerCharacter = trigger;
         } else if (kind === 'completion' || kind === 'signatureHelp') {
             context.triggerKind = context.triggerKind || 1;
+        }
+
+        if (kind === 'completionResolve') {
+            const handle = String(
+                msg.item?._nodeCompletionHandle
+                || msg._nodeCompletionHandle
+                || msg.handle
+                || '');
+            const cached = handle ? _completionItemCache.get(handle) : null;
+            if (cached) {
+                try {
+                    if (!cached.resolved && typeof cached.provider?.resolveCompletionItem === 'function') {
+                        const resolved = await cached.provider.resolveCompletionItem.call(
+                            cached.provider, cached.item, token);
+                        if (resolved !== undefined && resolved !== null) cached.item = resolved;
+                        cached.resolved = true;
+                        _completionItemCache.set(handle, cached);
+                    }
+                    send({
+                        type: 'language_provider_response',
+                        requestId,
+                        ok: true,
+                        kind,
+                        value: _serializeCompletionItemHandle(handle, cached.item),
+                    });
+                    return;
+                } catch (err) {
+                    log(`language provider ${kind} error: ${err.message}`);
+                }
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: msg.item || null,
+            });
+            return;
         }
         const providerKind = kind === 'semanticTokensLegend'
             ? 'semanticTokens'
@@ -7382,12 +7442,14 @@ async function handleLanguageProviderRequest(msg) {
                     const value = await fn.call(provider, document, position, token, context);
                     const normalized = _completionListFromProviderValue(value);
                     for (let item of normalized.items) {
+                        let didResolve = false;
                         if (remainingResolves > 0 && typeof provider.resolveCompletionItem === 'function') {
                             const resolved = await provider.resolveCompletionItem.call(provider, item, token);
                             if (resolved !== undefined && resolved !== null) item = resolved;
                             remainingResolves -= 1;
+                            didResolve = true;
                         }
-                        items.push(item);
+                        items.push(_cacheCompletionItem(provider, item, didResolve));
                     }
                     isIncomplete = isIncomplete || normalized.isIncomplete;
                 } catch (err) {
@@ -7400,7 +7462,7 @@ async function handleLanguageProviderRequest(msg) {
                 ok: true,
                 kind,
                 value: {
-                    items: _serializeLanguageValue(items),
+                    items,
                     isIncomplete,
                 },
             });

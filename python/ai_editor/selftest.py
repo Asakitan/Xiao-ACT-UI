@@ -2438,8 +2438,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "call('editor_language_provider'" in html
            and "function editorProviderPayload(kind,extra)" in html
            and "function requestEditorCompletion(triggerCharacter,quiet)" in html
-           and "itemResolveCount:8" in html
+           and "itemResolveCount:0" in html
            and "function showEditorSuggest(items,position)" in html
+           and "function editorCompletionCanResolve(item)" in html
+           and "function resolveEditorSuggestItem(item)" in html
+           and "editorProviderPayload('completionResolve'" in html
            and "text.value||text.snippet||text.text" in html
            and "function applyEditorCompletion(item)" in html
            and "function handleEditorSuggestKey(e)" in html
@@ -2850,9 +2853,14 @@ console.log("frontend snippet behavior ok");
             "editorCompletionDocumentationText",
             "editorCompletionDetailText",
             "editorCompletionHasDetails",
+            "editorCompletionCanResolve",
+            "editorCompletionHasDetailsOrResolve",
+            "editorMergeResolvedCompletionItem",
             "editorCompletionRenderDocs",
             "closeEditorSuggestDetails",
             "placeEditorSuggestDetails",
+            "renderEditorSuggestDetails",
+            "resolveEditorSuggestItem",
             "showEditorSuggestDetails",
             "refreshEditorSuggestDetails",
             "editorSuggestMemoryLoad",
@@ -2888,6 +2896,7 @@ console.log("frontend snippet behavior ok");
 let editorDirty = false;
 let _editorSuggestItems = [];
 let _editorSuggestIndex = 0;
+let _editorSuggestResolveRequest = 0;
 let _editorSnippetSession = null;
 let _editorSuggestDetailsOpen = false;
 let _editorSuggestMemory = { seq: 0, entries: [] };
@@ -2895,6 +2904,8 @@ let statusText = "";
 let ranCommands = [];
 let closedSuggest = 0;
 let undoPushes = 0;
+let resolveCalls = 0;
+let lastResolvePayload = null;
 let editorLang = "python";
 const COMPLETION_INSERT_TEXT_RULE_KEEP_WHITESPACE = 1;
 const COMPLETION_INSERT_TEXT_RULE_INSERT_AS_SNIPPET = 4;
@@ -3001,6 +3012,29 @@ function setStatus(value){ statusText = String(value || ""); }
 function runEditorCodeActionCommand(command){ ranCommands.push(command.command || command); }
 function isEditorSuggestOpen(){ return true; }
 function setEditorSuggestIndex(index){ _editorSuggestIndex = index; refreshEditorSuggestDetails(); }
+function editorProviderPayload(kind, extra){ return Object.assign({ kind }, extra || {}); }
+async function call(method, payload){
+  if(method !== "editor_language_provider" || !payload || payload.kind !== "completionResolve"){
+    return { ok: false, error: "unexpected call" };
+  }
+  resolveCalls += 1;
+  lastResolvePayload = payload;
+  return {
+    ok: true,
+    item: {
+      _nodeCompletionHandle: payload.item && payload.item._nodeCompletionHandle,
+      label: "changedLabel",
+      insertText: "changedInsert",
+      sortText: "zz",
+      filterText: "changedFilter",
+      range: { start: { line: 9, character: 0 }, end: { line: 9, character: 1 } },
+      detail: "resolved detail",
+      documentation: { value: "resolved docs" },
+      additionalTextEdits: [{ newText: "// resolved\n" }],
+      command: { command: "selftest.resolved" },
+    },
+  };
+}
 const document = {
   createElement: makeElement,
 };
@@ -3055,6 +3089,35 @@ assert(showEditorSuggestDetails({ label: "fn", detail: "fn(a)", documentation: {
 closeEditorSuggestDetails();
 assert(!detailsBox.classList.contains("open") && detailsBox.style.display === "none",
        "suggest details closes");
+const mergeItem = {
+  label: "stableLabel",
+  insertText: "stableInsert",
+  sortText: "aa",
+  filterText: "stableFilter",
+  range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+  _nodeCompletionHandle: "merge-handle",
+};
+editorMergeResolvedCompletionItem(mergeItem, {
+  label: "changedLabel",
+  insertText: "changedInsert",
+  sortText: "zz",
+  filterText: "changedFilter",
+  range: { start: { line: 9, character: 0 }, end: { line: 9, character: 1 } },
+  detail: "merged detail",
+  documentation: "merged docs",
+  additionalTextEdits: [{ newText: "// merged\n" }],
+  command: { command: "selftest.merged" },
+});
+assert(mergeItem.label === "stableLabel"
+       && mergeItem.insertText === "stableInsert"
+       && mergeItem.sortText === "aa"
+       && mergeItem.filterText === "stableFilter"
+       && mergeItem.range.start.line === 0
+       && mergeItem.detail === "merged detail"
+       && mergeItem.documentation === "merged docs"
+       && mergeItem.additionalTextEdits[0].newText === "// merged\n"
+       && mergeItem.command.command === "selftest.merged",
+       "resolved completion merge preserves insert/filter fields");
 editorRememberSuggestItem({ label: "memoryChoice", kind: 2, insertText: "memoryChoice()" }, "mem");
 const memorySorted = editorNormalizeSuggestItems([
   { label: "memoryOther", kind: 2, insertText: "memoryOther()" },
@@ -3118,7 +3181,30 @@ const leftEvent = { key: "ArrowLeft", preventDefault(){ this.prevented = true; }
 assert(handleEditorSuggestKey(leftEvent) && leftEvent.prevented
        && !detailsBox.classList.contains("open"),
        "arrow left closes suggest details");
-console.log("frontend completion accept behavior ok");
+const lazyItem = { label: "lazyCompletion", insertText: "lazyCompletion()", _nodeCompletionHandle: "lazy-handle" };
+_editorSuggestItems = [lazyItem];
+_editorSuggestIndex = 0;
+assert(!editorCompletionHasDetails(lazyItem) && editorCompletionHasDetailsOrResolve(lazyItem),
+       "completion resolve handle exposes details affordance");
+assert(showEditorSuggestDetails(lazyItem) === true
+       && detailsBox.textContent.includes("Loading"),
+       "suggest details shows loading state for resolvable item");
+setTimeout(() => {
+  assert(resolveCalls === 1
+         && lastResolvePayload
+         && lastResolvePayload.item === lazyItem,
+         "completion resolve requested selected item once");
+  assert(lazyItem._editorSuggestResolved === true
+         && lazyItem.label === "lazyCompletion"
+         && lazyItem.insertText === "lazyCompletion()"
+         && lazyItem.detail === "resolved detail"
+         && editorCompletionDocumentationText(lazyItem.documentation) === "resolved docs",
+         "completion resolve merges docs without changing insert identity");
+  assert(detailsBox.textContent.includes("resolved detail")
+         && detailsBox.textContent.includes("resolved docs"),
+         "suggest details refresh after async completion resolve");
+  console.log("frontend completion accept behavior ok");
+}, 0);
 """
         js_path = ""
         try:
@@ -12079,10 +12165,24 @@ module.exports = { activate, deactivate };
                     if isinstance(node_completion_first, dict)
                     else lambda key, default=None: getattr(
                         node_completion_first, key, default))
+                node_completion_editor_resolve = api.editor_language_provider({
+                    "kind": "completionResolve",
+                    "filePath": node_provider_sample,
+                    "language": "python",
+                    "content": "print('node provider')\n",
+                    "position": {"line": 0, "character": 1},
+                    "item": (
+                        node_completion_first
+                        if isinstance(node_completion_first, dict)
+                        else {}),
+                })
                 _check("node host language provider invokes JS completion",
                        node_language_registered
                        and getattr(node_completion, "isIncomplete", False) is True
                        and "nodeCompletion" in node_completion_labels
+                       and bool(node_completion_first_get(
+                           "_nodeCompletionHandle"))
+                       and node_completion_first_get("documentation") is None
                        and node_completion_first_get("sortText")
                        == "000_nodeCompletion"
                        and node_completion_first_get("filterText")
@@ -12107,6 +12207,14 @@ module.exports = { activate, deactivate };
                 _check("node host language provider resolves JS completion items",
                        node_completion_resolved_doc
                        == "node resolved completion docs")
+                _check("editor_language_provider resolves selected Node completion",
+                       node_completion_editor_resolve.get("ok") is True
+                       and node_completion_editor_resolve.get("item", {})
+                       .get("documentation")
+                       == "node resolved completion docs"
+                       and node_completion_editor_resolve.get("item", {})
+                       .get("_nodeCompletionHandle")
+                       == node_completion_first_get("_nodeCompletionHandle"))
                 _check("node host language provider invokes JS hover",
                        node_hover
                        and node_hover[0].get("contents") == ["node hover prin"])

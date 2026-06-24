@@ -4068,7 +4068,7 @@ function _editorInputWithUndo(e){
   requestEditorOnTypeFormatting(ch,true);
 }
 
-let _editorSuggestItems=[],_editorSuggestIndex=0,_editorSuggestRequest=0,_editorSuggestDetailsOpen=false;
+let _editorSuggestItems=[],_editorSuggestIndex=0,_editorSuggestRequest=0,_editorSuggestResolveRequest=0,_editorSuggestDetailsOpen=false;
 let _editorSuggestMemory={seq:0,entries:[]};
 let _editorHoverTimer=null,_editorHoverRequest=0;
 let _editorSignatureRequest=0;
@@ -4763,6 +4763,21 @@ function editorCompletionHasDetails(item){
   const label=completionLabelText(item.label);
   return !!docs||!!(detail&&detail!==label);
 }
+function editorCompletionCanResolve(item){
+  return !!(item&&item._nodeCompletionHandle&&!item._editorSuggestResolved&&!item._editorSuggestResolveFailed);
+}
+function editorCompletionHasDetailsOrResolve(item){
+  return editorCompletionHasDetails(item)||editorCompletionCanResolve(item);
+}
+function editorMergeResolvedCompletionItem(item,resolved){
+  if(!item||!resolved||typeof resolved!=='object')return item;
+  ['detail','documentation','additionalTextEdits','command','tags','deprecated'].forEach(key=>{
+    if(Object.prototype.hasOwnProperty.call(resolved,key))item[key]=resolved[key];
+  });
+  if(resolved._nodeCompletionHandle)item._nodeCompletionHandle=resolved._nodeCompletionHandle;
+  item._editorSuggestResolved=true;
+  return item;
+}
 function editorCompletionRenderDocs(container,text){
   container.textContent='';
   text=String(text||'');
@@ -4785,15 +4800,17 @@ function placeEditorSuggestDetails(){
   detail.style.left=Math.max(8,nextLeft)+'px';
   detail.style.top=Math.max(8,Math.min(maxTop,top))+'px';
 }
-function showEditorSuggestDetails(item){
-  const box=$('editor-suggest-details');if(!box||!editorCompletionHasDetails(item)){closeEditorSuggestDetails();return false}
+function renderEditorSuggestDetails(item,loading){
+  const box=$('editor-suggest-details');if(!box)return false;
   box.innerHTML='';
-  const detail=editorCompletionDetailText(item),docs=editorCompletionDocumentationText(item.documentation);
+  const detail=editorCompletionDetailText(item),docs=editorCompletionDocumentationText(item&&item.documentation);
   if(detail){
     const type=document.createElement('div');type.className='editor-suggest-details-type';type.textContent=detail;box.appendChild(type);
   }
   if(docs){
     const doc=document.createElement('div');doc.className='editor-suggest-details-docs';editorCompletionRenderDocs(doc,docs);box.appendChild(doc);
+  }else if(loading){
+    const doc=document.createElement('div');doc.className='editor-suggest-details-docs';doc.textContent='Loading...';box.appendChild(doc);
   }
   box.classList.toggle('no-docs',!docs);
   box.style.display='block';
@@ -4801,6 +4818,30 @@ function showEditorSuggestDetails(item){
   requestAnimationFrame(()=>box.classList.add('open'));
   _editorSuggestDetailsOpen=true;
   return true;
+}
+function resolveEditorSuggestItem(item){
+  if(!editorCompletionCanResolve(item)||item._editorSuggestResolving)return Promise.resolve(item);
+  const requestId=++_editorSuggestResolveRequest;
+  item._editorSuggestResolving=true;
+  return Promise.resolve(call('editor_language_provider',editorProviderPayload('completionResolve',{item}))).then(res=>{
+    if(res&&res.ok&&res.item)editorMergeResolvedCompletionItem(item,res.item);
+    else item._editorSuggestResolveFailed=true;
+  }).catch(()=>{
+    item._editorSuggestResolveFailed=true;
+  }).then(()=>{
+    item._editorSuggestResolving=false;
+    if(_editorSuggestDetailsOpen&&_editorSuggestItems[_editorSuggestIndex]===item&&requestId===_editorSuggestResolveRequest){
+      showEditorSuggestDetails(item);
+    }
+    return item;
+  });
+}
+function showEditorSuggestDetails(item){
+  const box=$('editor-suggest-details');if(!box||!editorCompletionHasDetailsOrResolve(item)){closeEditorSuggestDetails();return false}
+  const loading=editorCompletionCanResolve(item);
+  const shown=renderEditorSuggestDetails(item,loading);
+  if(loading)resolveEditorSuggestItem(item);
+  return shown;
 }
 function refreshEditorSuggestDetails(){
   if(_editorSuggestDetailsOpen)showEditorSuggestDetails(_editorSuggestItems[_editorSuggestIndex]);
@@ -5296,7 +5337,7 @@ function showEditorSuggest(items,position){
   _editorSuggestItems=editorNormalizeSuggestItems(items,prefix);_editorSuggestIndex=0;box.innerHTML='';
   if(!_editorSuggestItems.length){box.classList.remove('open');box.style.display='none';closeEditorSuggestDetails();return false}
   _editorSuggestItems.forEach((item,index)=>{
-    const hasDetails=editorCompletionHasDetails(item);
+    const hasDetails=editorCompletionHasDetailsOrResolve(item);
     const row=document.createElement('div');row.className='editor-suggest-item'+(index===0?' active':'')+(editorCompletionIsDeprecated(item)?' deprecated':'')+(hasDetails?' can-details':'');row.setAttribute('role','option');
     const label=document.createElement('div');label.className='editor-suggest-label';editorAppendCompletionLabel(label,item);
     const detail=document.createElement('div');detail.className='editor-suggest-detail';detail.textContent=editorCompletionInlineDetail(item);
@@ -5360,7 +5401,7 @@ function editorCompletionTriggerCharacter(ch){
 async function requestEditorCompletion(triggerCharacter,quiet){
   const requestId=++_editorSuggestRequest;
   const position=editorPositionFromOffset(ed.value,ed.selectionStart);
-  const res=await call('editor_language_provider',editorProviderPayload('completion',{triggerCharacter:triggerCharacter||null,itemResolveCount:8}));
+  const res=await call('editor_language_provider',editorProviderPayload('completion',{triggerCharacter:triggerCharacter||null,itemResolveCount:0}));
   if(requestId!==_editorSuggestRequest)return;
   const items=res&&res.ok&&Array.isArray(res.items)?res.items:[];
   if(items.length){
