@@ -3469,6 +3469,21 @@ async function _windowShowInputBox(options = {}, token = undefined) {
     });
 }
 
+async function _windowShowWorkspaceFolderPick(options = {}, token = undefined) {
+    const folders = [_workspaceFolder()].filter(folder => folder && folder.uri);
+    if (!folders.length || token?.isCancellationRequested) return undefined;
+    const items = folders.map(folder => ({
+        label: folder.name || path.basename(folder.uri.fsPath || folder.uri.path || ''),
+        description: folder.uri.fsPath || folder.uri.toString(),
+        folder,
+    }));
+    const picked = await _windowShowQuickPick(items, {
+        placeHolder: options?.placeHolder || 'Select workspace folder',
+        ignoreFocusOut: !!options?.ignoreFocusOut,
+    }, token);
+    return picked && picked.folder ? picked.folder : undefined;
+}
+
 function _quickInputSafePayload(value) {
     try {
         return _serializeLanguageValue(value);
@@ -4316,6 +4331,9 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             },
             showSaveDialog(options, token) {
                 return _requestWindowDialog('save', options || {}, token);
+            },
+            showWorkspaceFolderPick(options, token) {
+                return _windowShowWorkspaceFolderPick(options || {}, token);
             },
             createQuickPick() {
                 return new QuickPickInput();

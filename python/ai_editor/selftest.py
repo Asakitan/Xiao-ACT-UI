@@ -3114,6 +3114,12 @@ console.log("quick input filter helpers ok");
            and "def show_window_dialog(self, kind: str,"
            in app_source
            and "create_file_dialog" in app_source)
+    _check("extension workspace folder picker uses dynamic QuickPick",
+           "showWorkspaceFolderPick(options, token)" in node_ext_host_source
+           and "function _windowShowWorkspaceFolderPick" in node_ext_host_source
+           and "_windowShowQuickPick(items" in node_ext_host_source
+           and "return picked && picked.folder ? picked.folder : undefined"
+           in node_ext_host_source)
 
     runtime_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     runtime_api._controller = object()
@@ -7704,6 +7710,10 @@ async function activate(context) {
   });
   vscode.commands.registerCommand('selftest.node.workspaceProbe', async () => {
     const folders = vscode.workspace.workspaceFolders || [];
+    const pickedFolder = await vscode.window.showWorkspaceFolderPick({
+      placeHolder: 'Pick workspace folder',
+      ignoreFocusOut: true,
+    });
     const found = await vscode.workspace.findFiles('python/ai_editor/selftest.py', undefined, 2);
     const doc = found[0] ? await vscode.workspace.openTextDocument(found[0]) : null;
     const pyMatches = await vscode.workspace.findFiles(
@@ -7848,6 +7858,8 @@ async function activate(context) {
       && !aliasConfig.has('transient_probe');
     return {
       folderName: folders[0] && folders[0].name,
+      pickedFolderName: pickedFolder && pickedFolder.name,
+      pickedFolderUri: pickedFolder && pickedFolder.uri && pickedFolder.uri.toString(),
       rootPath: vscode.workspace.rootPath,
       found: found.map(uri => uri.toString()),
       relative: found[0] ? vscode.workspace.asRelativePath(found[0]) : '',
@@ -9838,6 +9850,10 @@ module.exports = { activate, deactivate };
                        node_workspace_command_registered
                        and isinstance(node_workspace_probe, dict)
                        and node_workspace_probe.get("folderName")
+                       and node_workspace_probe.get("pickedFolderName")
+                       == node_workspace_probe.get("folderName")
+                       and str(node_workspace_probe.get(
+                           "pickedFolderUri", "")).startswith("file:")
                        and node_workspace_probe.get("rootPath")
                        and any("python/ai_editor/selftest.py" in item.replace("\\", "/")
                                for item in node_workspace_probe.get("found", []))
