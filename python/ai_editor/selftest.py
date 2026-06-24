@@ -2847,6 +2847,21 @@ console.log("frontend snippet behavior ok");
             "editorCompletionTags",
             "editorCompletionIsDeprecated",
             "editorCompletionInlineDetail",
+            "editorCompletionDocumentationText",
+            "editorCompletionDetailText",
+            "editorCompletionHasDetails",
+            "editorCompletionRenderDocs",
+            "closeEditorSuggestDetails",
+            "placeEditorSuggestDetails",
+            "showEditorSuggestDetails",
+            "refreshEditorSuggestDetails",
+            "editorSuggestMemoryLoad",
+            "editorSuggestMemorySave",
+            "editorCompletionIdentity",
+            "editorSuggestMemoryKey",
+            "editorSuggestMemoryEntry",
+            "editorSuggestMemoryIndex",
+            "editorRememberSuggestItem",
             "editorCompletionFuzzyMatch",
             "editorCompletionScore",
             "editorStoreSuggestMatch",
@@ -2874,18 +2889,70 @@ let editorDirty = false;
 let _editorSuggestItems = [];
 let _editorSuggestIndex = 0;
 let _editorSnippetSession = null;
+let _editorSuggestDetailsOpen = false;
+let _editorSuggestMemory = { seq: 0, entries: [] };
 let statusText = "";
 let ranCommands = [];
 let closedSuggest = 0;
 let undoPushes = 0;
+let editorLang = "python";
 const COMPLETION_INSERT_TEXT_RULE_KEEP_WHITESPACE = 1;
 const COMPLETION_INSERT_TEXT_RULE_INSERT_AS_SNIPPET = 4;
 const COMPLETION_ITEM_TAG_DEPRECATED = 1;
+const EDITOR_SUGGEST_MEMORY_KEY = "selftest.suggestMemory";
 const ed = {
   value: "",
   selectionStart: 0,
   selectionEnd: 0,
   focus() { this.focused = true; },
+};
+function makeClassList(owner){
+  const classes = new Set();
+  return {
+    add(name){ classes.add(name); owner.className = Array.from(classes).join(" "); },
+    remove(name){ classes.delete(name); owner.className = Array.from(classes).join(" "); },
+    toggle(name, force){
+      const on = force === undefined ? !classes.has(name) : !!force;
+      if(on) classes.add(name); else classes.delete(name);
+      owner.className = Array.from(classes).join(" ");
+      return on;
+    },
+    contains(name){ return classes.has(name); },
+  };
+}
+function makeElement(tag){
+  const element = {
+    tag,
+    textContent: "",
+    innerHTML: "",
+    className: "",
+    style: {},
+    children: [],
+    offsetWidth: 300,
+    offsetHeight: 90,
+    clientWidth: 900,
+    clientHeight: 500,
+    appendChild(child) {
+      this.children.push(child);
+      this.textContent += child.textContent || "";
+      return child;
+    },
+  };
+  element.classList = makeClassList(element);
+  return element;
+}
+const detailsBox = makeElement("div");
+const suggestBox = makeElement("div");
+suggestBox.style.left = "100px";
+suggestBox.style.top = "50px";
+suggestBox.offsetWidth = 320;
+const editorContainer = makeElement("div");
+editorContainer.clientWidth = 900;
+editorContainer.clientHeight = 500;
+const localStore = {};
+const localStorage = {
+  getItem(key){ return localStore[key] || ""; },
+  setItem(key,value){ localStore[key] = String(value); },
 };
 function assert(ok, label){ if(!ok){ throw new Error(label); } }
 function editorOffsetFromPosition(value,pos){
@@ -2933,21 +3000,18 @@ function closeEditorSuggest(){ closedSuggest += 1; }
 function setStatus(value){ statusText = String(value || ""); }
 function runEditorCodeActionCommand(command){ ranCommands.push(command.command || command); }
 function isEditorSuggestOpen(){ return true; }
-function setEditorSuggestIndex(index){ _editorSuggestIndex = index; }
+function setEditorSuggestIndex(index){ _editorSuggestIndex = index; refreshEditorSuggestDetails(); }
 const document = {
-  createElement(tag) {
-    return {
-      tag,
-      textContent: "",
-      className: "",
-      children: [],
-      appendChild(child) {
-        this.children.push(child);
-        this.textContent += child.textContent || "";
-      },
-    };
-  },
+  createElement: makeElement,
 };
+function requestAnimationFrame(fn){ fn(); }
+function appendExtensionSettingMarkdown(container,text){ container.textContent += String(text || ""); }
+function $(id){
+  if(id === "editor-suggest-details") return detailsBox;
+  if(id === "editor-suggest") return suggestBox;
+  if(id === "editor-container") return editorContainer;
+  return null;
+}
 """ + js_functions + r"""
 const normalized = editorNormalizeSuggestItems([
   { label: "prefixSlow", sortText: "z" },
@@ -2979,6 +3043,25 @@ assert(editorCompletionIsDeprecated({ tags: [1] }) === true,
        "deprecated completion tag detected");
 assert(editorCompletionInlineDetail({ label: { label: "fn", detail: "(x)", description: "module" }, detail: "docs" }) === "(x) module docs",
        "label object detail and description render inline");
+assert(editorCompletionHasDetails({ label: "fn", detail: "fn(a)", documentation: { value: "**docs**" } }),
+       "completion details detect resolved docs");
+assert(editorCompletionDocumentationText([{ value: "one" }, "two" ]) === "one\ntwo",
+       "completion documentation arrays flatten");
+assert(showEditorSuggestDetails({ label: "fn", detail: "fn(a)", documentation: { value: "**docs**" } }) === true
+       && detailsBox.classList.contains("open")
+       && detailsBox.textContent.includes("fn(a)")
+       && detailsBox.textContent.includes("docs"),
+       "suggest details render resolved detail and docs");
+closeEditorSuggestDetails();
+assert(!detailsBox.classList.contains("open") && detailsBox.style.display === "none",
+       "suggest details closes");
+editorRememberSuggestItem({ label: "memoryChoice", kind: 2, insertText: "memoryChoice()" }, "mem");
+const memorySorted = editorNormalizeSuggestItems([
+  { label: "memoryOther", kind: 2, insertText: "memoryOther()" },
+  { label: "memoryChoice", kind: 2, insertText: "memoryChoice()" },
+], "memo");
+assert(memorySorted[0].label === "memoryChoice",
+       "suggest memory promotes remembered prefix item");
 const sorted = editorNormalizeSuggestItems([
   { label: "zeta", sortText: "z" },
   { label: "alpha", sortText: "a" },
@@ -3024,6 +3107,17 @@ _editorSuggestIndex = 0;
 const event = { key: ".", ctrlKey: false, altKey: false, metaKey: false, preventDefault(){ this.prevented = true; } };
 assert(handleEditorSuggestKey(event) && event.prevented, "commit character accepts selected item");
 assert(ed.value === "bar.", "commit character inserted after completion");
+ed.value = "docs"; ed.selectionStart = ed.selectionEnd = 4;
+_editorSuggestItems = [{ label: "docs", insertText: "docs", detail: "docs()", documentation: "Docs text" }];
+_editorSuggestIndex = 0;
+const rightEvent = { key: "ArrowRight", preventDefault(){ this.prevented = true; } };
+assert(handleEditorSuggestKey(rightEvent) && rightEvent.prevented
+       && detailsBox.classList.contains("open"),
+       "arrow right opens suggest details");
+const leftEvent = { key: "ArrowLeft", preventDefault(){ this.prevented = true; } };
+assert(handleEditorSuggestKey(leftEvent) && leftEvent.prevented
+       && !detailsBox.classList.contains("open"),
+       "arrow left closes suggest details");
 console.log("frontend completion accept behavior ok");
 """
         js_path = ""
