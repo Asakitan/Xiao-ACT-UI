@@ -1036,6 +1036,7 @@ pre.code-block { overflow:visible; }
 .ext-setting-row { position:relative; margin-bottom:10px; padding:6px 28px 6px 8px;
   border-left:2px solid transparent; border-radius:3px; }
 .ext-setting-row.modified { border-left-color:var(--fg-accent); background:var(--bg-hover); }
+.ext-setting-row.hidden-setting { border-left-color:color-mix(in srgb,var(--fg-dim) 45%,transparent); opacity:.78; }
 .ext-setting-row.settings-field.modified { padding-left:8px; }
 .ext-setting-row .s-reset { top:8px; right:6px; transform:none; }
 .ext-setting-head { display:flex; align-items:center; gap:6px; margin-bottom:2px; }
@@ -1060,8 +1061,11 @@ pre.code-block { overflow:visible; }
   font-size:10px; }
 .ext-setting-deprecated-badge { font-size:9px; color:var(--fg-warning); border:1px solid color-mix(in srgb,var(--fg-warning) 70%,var(--border));
   border-radius:3px; padding:0 4px; line-height:15px; }
+.ext-setting-hidden-badge { font-size:9px; color:var(--fg-dim); border:1px solid var(--border);
+  border-radius:3px; padding:0 4px; line-height:15px; background:var(--bg3); }
 .ext-setting-row.deprecated:not(.modified) { border-left-color:color-mix(in srgb,var(--fg-warning) 45%,transparent); }
-.ext-setting-row.scope-readonly input,.ext-setting-row.scope-readonly select,.ext-setting-row.scope-readonly textarea {
+.ext-setting-row.scope-readonly input,.ext-setting-row.scope-readonly select,.ext-setting-row.scope-readonly textarea,
+.ext-setting-row.hidden-setting input,.ext-setting-row.hidden-setting select,.ext-setting-row.hidden-setting textarea {
   opacity:.66; cursor:not-allowed; }
 .ext-setting-key { font-size:11px; font-family:var(--mono); color:var(--fg-dim); user-select:all; margin-bottom:4px; }
 .ext-setting-desc { font-size:11px; color:var(--fg-dim); line-height:1.35; margin-bottom:4px; }
@@ -1083,7 +1087,7 @@ pre.code-block { overflow:visible; }
 .ext-setting-schema-chip strong { color:var(--fg); font-weight:600; font-family:var(--sans); }
 .ext-setting-error { display:none; color:var(--fg-error); font-size:11px; margin-top:3px; }
 .ext-setting-row.invalid .ext-setting-error { display:block; }
-.ext-settings-filter { position:relative; display:grid; grid-template-columns:minmax(140px,1fr) minmax(96px,auto) minmax(116px,auto) auto auto auto auto; align-items:center;
+.ext-settings-filter { position:relative; display:grid; grid-template-columns:minmax(140px,1fr) minmax(96px,auto) minmax(116px,auto) auto auto auto auto auto; align-items:center;
   gap:6px; margin:8px 0 4px; padding:6px 8px; background:var(--bg2); border:1px solid var(--border); border-radius:4px; }
 .ext-settings-filter select { min-width:0; }
 .ext-settings-filter button { height:24px; padding:2px 8px; font-size:11px; }
@@ -12343,13 +12347,13 @@ function extensionSettingQueryTokens(raw){
   return tokens;
 }
 function extensionSettingIsFilterToken(token){
-  return /^@(modified|stable|policy|restricted)(?=$|\s)/i.test(token)
+  return /^@(modified|hidden|stable|policy|restricted)(?=$|\s)/i.test(token)
     || /^@(tag|ext|feature|id|lang|scope|target|type|sync):/i.test(token);
 }
 function extensionSettingFilterTokenLabel(token){
   token=String(token||'').trim();
   if(!token)return '';
-  const map={'@modified':'Modified','@stable':'Stable','@policy':'Policy','@restricted':'Restricted'};
+  const map={'@modified':'Modified','@hidden':'Hidden','@stable':'Stable','@policy':'Policy','@restricted':'Restricted'};
   if(map[token])return map[token];
   if(token.startsWith('@tag:'))return 'Tag: '+token.slice(5);
   if(token.startsWith('@ext:'))return 'Extension: '+(token.slice(5)||'...');
@@ -12397,6 +12401,7 @@ function extensionSettingRemoveFilterToken(token){
     .filter(item=>String(item||'').toLowerCase()!==remove);
   extensionSettingSetSearchTokenValue(next.join(' '));
   if(remove==='@modified'){const cb=$('ext-settings-modified');if(cb)cb.checked=false}
+  if(remove==='@hidden'){const cb=$('ext-settings-hidden');if(cb)cb.checked=false}
   applyExtensionSettingsFilter();
 }
 function extensionSettingClearFilterTokens(){
@@ -12404,6 +12409,7 @@ function extensionSettingClearFilterTokens(){
     .filter(token=>!extensionSettingIsFilterToken(token)).join(' ');
   extensionSettingSetSearchTokenValue(text);
   const cb=$('ext-settings-modified');if(cb)cb.checked=false;
+  const hidden=$('ext-settings-hidden');if(hidden)hidden.checked=false;
   applyExtensionSettingsFilter();
 }
 function renderExtensionSettingFilterState(visibleRows,totalRows){
@@ -12413,6 +12419,7 @@ function renderExtensionSettingFilterState(visibleRows,totalRows){
     chips.innerHTML='';
     const tokens=extensionSettingQueryTokens(extensionSettingSearchTokenValue()).filter(extensionSettingIsFilterToken);
     if((($('ext-settings-modified')||{}).checked===true)&&!tokens.some(token=>token.toLowerCase()==='@modified'))tokens.push('@modified');
+    if((($('ext-settings-hidden')||{}).checked===true)&&!tokens.some(token=>token.toLowerCase()==='@hidden'))tokens.push('@hidden');
     tokens.forEach(token=>{
       const btn=document.createElement('button');btn.type='button';btn.title='Remove '+token;btn.textContent=extensionSettingFilterTokenLabel(token)+' ×';
       btn.onclick=ev=>{ev.preventDefault();ev.stopPropagation();extensionSettingRemoveFilterToken(token)};
@@ -12435,15 +12442,17 @@ function renderExtensionSettingFilterState(visibleRows,totalRows){
 }
 function extensionSettingsQuery(){
   const raw=(($('settings-search')||{}).value||'').trim();
-  return extensionSettingParseQuery(raw,(($('ext-settings-modified')||{}).checked===true));
+  return extensionSettingParseQuery(raw,(($('ext-settings-modified')||{}).checked===true),(($('ext-settings-hidden')||{}).checked===true));
 }
-function extensionSettingParseQuery(raw,modifiedChecked){
+function extensionSettingParseQuery(raw,modifiedChecked,hiddenChecked){
   raw=String(raw||'').trim();
   const tags=[],scopes=[],targets=[],extensions=[],types=[],policies=[],syncs=[],ids=[],features=[],languages=[];
   let restrictedOnly=false,stableOnly=false;
   const modifiedOnly=modifiedChecked===true||/(^|\s)@modified(?=\s|$)/i.test(raw);
+  const hiddenOnly=hiddenChecked===true||/(^|\s)@hidden(?=\s|$)/i.test(raw);
   const text=raw
     .replace(/(^|\s)@modified(?=\s|$)/ig,' ')
+    .replace(/(^|\s)@hidden(?=\s|$)/ig,' ')
     .replace(/(^|\s)@stable(?=\s|$)/ig,()=>{stableOnly=true;return ' ';})
     .replace(new RegExp('(^|\\s)@scope:("[^"]*"|[^\\s]+)','ig'),(match,prefix,scope)=>{extensionSettingPushFilterValues(scopes,scope);return ' ';})
     .replace(new RegExp('(^|\\s)@target:("[^"]*"|[^\\s]+)','ig'),(match,prefix,target)=>{extensionSettingSplitFilterValues(target).forEach(item=>targets.push(extensionSettingTargetName(item)));return ' ';})
@@ -12461,7 +12470,7 @@ function extensionSettingParseQuery(raw,modifiedChecked){
     })
     .replace(new RegExp('(^|\\s)@tag:("[^"]*"|[^\\s]+)','ig'),(match,prefix,tag)=>{extensionSettingPushFilterValues(tags,tag);return ' ';})
     .trim().toLowerCase();
-  return {modifiedOnly,tags,scopes,targets,extensions,types,policies,syncs,ids,features,languages,restrictedOnly,stableOnly,text};
+  return {modifiedOnly,hiddenOnly,tags,scopes,targets,extensions,types,policies,syncs,ids,features,languages,restrictedOnly,stableOnly,text};
 }
 function applyExtensionSettingsFilter(){
   const container=$('ext-settings-container');if(!container)return;
@@ -12470,6 +12479,7 @@ function applyExtensionSettingsFilter(){
   const targetFilter=(($('ext-settings-target')||{}).value)||'';
   const query=extensionSettingsQuery();
   const cb=$('ext-settings-modified');if(cb)cb.checked=query.modifiedOnly;
+  const hiddenCb=$('ext-settings-hidden');if(hiddenCb)hiddenCb.checked=query.hiddenOnly;
   const sections=container.querySelectorAll('details[data-ext-settings-section]');
   let visibleRows=0,totalRows=0,visibleSections=0;
   sections.forEach(section=>{
@@ -12484,6 +12494,7 @@ function applyExtensionSettingsFilter(){
         &&(!query.targets.length||query.targets.some(target=>(row.dataset.extSettingTarget||'')===target||rowTags.includes('target:'+target)));
       const textOk=!query.text||(row.dataset.extSettingSearch||row.textContent).toLowerCase().includes(query.text);
       const tagOk=!query.tags.length||query.tags.every(tag=>rowTags.includes(tag));
+      const hiddenOk=query.hiddenOnly?rowTags.includes('hidden'):!rowTags.includes('hidden');
       const extOk=!query.extensions.length||query.extensions.some(ext=>(row.dataset.extSettingExtension||'').includes(ext));
       const typeOk=!query.types.length||query.types.includes(row.dataset.extSettingType||'');
       const policyOk=!query.policies.length||query.policies.some(policy=>rowTags.includes('policy')&&(policy==='policy'||(row.dataset.extSettingPolicy||'').includes(policy)));
@@ -12494,12 +12505,12 @@ function applyExtensionSettingsFilter(){
       const langOk=!query.languages.length||query.languages.some(lang=>(row.dataset.extSettingLanguage||'')===lang);
       const stableOk=!query.stableOnly||(!rowTags.includes('experimental')&&!rowTags.includes('preview'));
       const modifiedOk=!query.modifiedOnly||row.dataset.extSettingModified==='1';
-      const show=categoryOk&&scopeOk&&targetOk&&textOk&&tagOk&&extOk&&typeOk&&policyOk&&restrictedOk&&syncOk&&idOk&&featureOk&&langOk&&stableOk&&modifiedOk;
+      const show=categoryOk&&scopeOk&&targetOk&&textOk&&tagOk&&hiddenOk&&extOk&&typeOk&&policyOk&&restrictedOk&&syncOk&&idOk&&featureOk&&langOk&&stableOk&&modifiedOk;
       row.style.display=show?'':'none';
       if(show){visibleRows++;sectionRows++}
     });
     section.style.display=sectionRows?'':'none';
-    if(sectionRows){visibleSections++;if(query.text||query.tags.length||query.scopes.length||query.targets.length||query.extensions.length||query.types.length||query.policies.length||query.syncs.length||query.ids.length||query.features.length||query.languages.length||query.restrictedOnly||query.stableOnly||query.modifiedOnly||category||scopeFilter||targetFilter)section.open=true}
+    if(sectionRows){visibleSections++;if(query.text||query.tags.length||query.scopes.length||query.targets.length||query.extensions.length||query.types.length||query.policies.length||query.syncs.length||query.ids.length||query.features.length||query.languages.length||query.restrictedOnly||query.stableOnly||query.modifiedOnly||query.hiddenOnly||category||scopeFilter||targetFilter)section.open=true}
   });
   const count=$('ext-settings-filter-count');
   if(count)count.textContent=visibleRows+' / '+totalRows;
@@ -12596,6 +12607,11 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       appendExtensionSettingDefaultOverrideBadge(head,defaultOverrideMeta);
       appendExtensionSettingPolicyBadge(head,policyMeta);
       appendExtensionSettingTagBadges(head,schema);
+      if(isHiddenSetting){
+        const hiddenEl=document.createElement('span');hiddenEl.className='ext-setting-hidden-badge';hiddenEl.textContent='Hidden';
+        hiddenEl.title='Excluded from the VS Code configuration registry';
+        head.appendChild(hiddenEl);
+      }
       if(schema.restricted===true){
         const restrictedEl=document.createElement('span');restrictedEl.className='ext-setting-scope-badge';restrictedEl.textContent='Restricted';
         head.appendChild(restrictedEl);
@@ -12771,6 +12787,9 @@ async function renderExtensionSettings(){
   const modifiedLabel=document.createElement('label');
   const modifiedBox=document.createElement('input');modifiedBox.type='checkbox';modifiedBox.id='ext-settings-modified';
   modifiedLabel.appendChild(modifiedBox);modifiedLabel.appendChild(document.createTextNode('@modified'));
+  const hiddenLabel=document.createElement('label');
+  const hiddenBox=document.createElement('input');hiddenBox.type='checkbox';hiddenBox.id='ext-settings-hidden';
+  hiddenLabel.appendChild(hiddenBox);hiddenLabel.appendChild(document.createTextNode('@hidden'));
   const filterButton=document.createElement('button');filterButton.type='button';filterButton.id='ext-settings-filter-menu-button';filterButton.textContent='Filters';
   const filterMenu=document.createElement('div');filterMenu.className='ext-settings-filter-menu';filterMenu.id='ext-settings-filter-menu';
   const addFilterAction=(label,token,opts)=>{
@@ -12785,6 +12804,7 @@ async function renderExtensionSettings(){
     return btn;
   };
   addFilterAction('Modified','@modified');
+  addFilterAction('Hidden Settings','@hidden');
   addFilterAction('Extension ID...','@ext:',{append:true});
   addFilterAction('Feature...','@feature:',{append:true});
   addFilterAction('Tag...','@tag:',{append:true});
@@ -12829,13 +12849,13 @@ async function renderExtensionSettings(){
   const clearButton=document.createElement('button');clearButton.type='button';clearButton.id='ext-settings-clear-filters';clearButton.textContent='Clear';
   clearButton.onclick=()=>{
     const search=$('settings-search');if(search)search.value='';
-    categorySelect.value='';scopeSelect.value='';targetSelect.value='';modifiedBox.checked=false;
+    categorySelect.value='';scopeSelect.value='';targetSelect.value='';modifiedBox.checked=false;hiddenBox.checked=false;
     applyExtensionSettingsFilter();
   };
   const count=document.createElement('span');count.className='ext-settings-count';count.id='ext-settings-filter-count';count.textContent='0 / 0';
   const activeFilters=document.createElement('div');activeFilters.className='ext-settings-active-filters';activeFilters.id='ext-settings-active-filters';
   const emptyState=document.createElement('div');emptyState.className='ext-settings-empty';emptyState.id='ext-settings-empty';
-  filter.appendChild(categorySelect);filter.appendChild(scopeSelect);filter.appendChild(targetSelect);filter.appendChild(modifiedLabel);filter.appendChild(filterButton);filter.appendChild(clearButton);filter.appendChild(count);filter.appendChild(filterMenu);filter.appendChild(activeFilters);filter.appendChild(emptyState);
+  filter.appendChild(categorySelect);filter.appendChild(scopeSelect);filter.appendChild(targetSelect);filter.appendChild(modifiedLabel);filter.appendChild(hiddenLabel);filter.appendChild(filterButton);filter.appendChild(clearButton);filter.appendChild(count);filter.appendChild(filterMenu);filter.appendChild(activeFilters);filter.appendChild(emptyState);
   fragment.appendChild(filter);
   const seenCategories=new Set();
   const orderedConfigs=configs.slice().sort((a,b)=>{
@@ -12852,15 +12872,24 @@ async function renderExtensionSettings(){
     const title=cfg.title||'';
     const configId=cfg.id||'';
     const sectionDescription=cfg.description||'';
-    const properties=cfg.properties;
+    const properties=cfg.properties||{};
+    const hiddenProperties=cfg.hiddenProperties||{};
     const values=cfg.values||{};
     const defaults=cfg.defaults||{};
     const modified=cfg.modified||{};
     const targets=cfg.targets||{};
     const targetScopedValues=cfg.targetScopedValues||{};
-    if(!properties||typeof properties!=='object')return;
-    const propKeys=Object.keys(properties).sort((a,b)=>{
-      const ao=Number((properties[a]||{}).order||0),bo=Number((properties[b]||{}).order||0);
+    const hiddenValues=cfg.hiddenValues||{};
+    const hiddenDefaults=cfg.hiddenDefaults||{};
+    const hiddenModified=cfg.hiddenModified||{};
+    const hiddenTargets=cfg.hiddenTargets||{};
+    const hiddenTargetScopedValues=cfg.hiddenTargetScopedValues||{};
+    if(!properties||typeof properties!=='object'||!hiddenProperties||typeof hiddenProperties!=='object')return;
+    const allProperties=Object.assign({},properties,hiddenProperties);
+    const visibleCount=Object.keys(properties).length;
+    const hiddenCount=Object.keys(hiddenProperties).length;
+    const propKeys=Object.keys(allProperties).sort((a,b)=>{
+      const ao=Number((allProperties[a]||{}).order||0),bo=Number((allProperties[b]||{}).order||0);
       return ao===bo?a.localeCompare(b):ao-bo;
     });
     if(!propKeys.length)return;
@@ -12876,7 +12905,7 @@ async function renderExtensionSettings(){
       const opt=document.createElement('option');opt.value=categoryId;opt.textContent=headerLabel;
       categorySelect.appendChild(opt);
     }
-    summary.textContent='▸ '+headerLabel+' ('+propKeys.length+')';
+    summary.textContent='▸ '+headerLabel+' ('+visibleCount+(hiddenCount?' +'+hiddenCount+' hidden':'')+')';
     if(configId)summary.title=configId;
     section.appendChild(summary);
     const inner=document.createElement('div');inner.style.cssText='padding:8px 0';
@@ -12888,15 +12917,21 @@ async function renderExtensionSettings(){
     }
     const sectionSearch=[displayName,title,configId,sectionDescription].filter(Boolean).join(' ');
     propKeys.forEach(key=>{
-      const schema=properties[key];
+      const isHiddenSetting=Object.prototype.hasOwnProperty.call(hiddenProperties,key);
+      const schema=allProperties[key];
       if(!schema||typeof schema!=='object')return;
       const type=extensionSettingType(schema);
-      const defaultVal=extensionSettingDefault(schema,defaults,key);
-      const hasDefaultValue=Object.prototype.hasOwnProperty.call(defaults,key)||Object.prototype.hasOwnProperty.call(schema,'default');
+      const valueMap=isHiddenSetting?hiddenValues:values;
+      const defaultMap=isHiddenSetting?hiddenDefaults:defaults;
+      const modifiedMap=isHiddenSetting?hiddenModified:modified;
+      const targetMap=isHiddenSetting?hiddenTargets:targets;
+      const scopedMap=isHiddenSetting?hiddenTargetScopedValues:targetScopedValues;
+      const defaultVal=extensionSettingDefault(schema,defaultMap,key);
+      const hasDefaultValue=Object.prototype.hasOwnProperty.call(defaultMap,key)||Object.prototype.hasOwnProperty.call(schema,'default');
       const description=schema.markdownDescription||schema.description||'';
       const deprecation=extensionSettingDeprecationText(schema);
-      const workspaceWritable=extensionSettingWorkspaceWritable(schema);
-      const readOnlyReason=extensionSettingReadOnlyReason(schema);
+      const workspaceWritable=!isHiddenSetting&&extensionSettingWorkspaceWritable(schema);
+      const readOnlyReason=isHiddenSetting?'Hidden setting: excluded from the VS Code configuration registry and shown here for diagnostics only.':extensionSettingReadOnlyReason(schema);
       const scopeName=extensionSettingScopeName(schema);
       const scopeBadge=extensionSettingScopeBadge(schema);
       const syncMeta=extensionSettingSyncMetadata(schema);
@@ -12904,12 +12939,13 @@ async function renderExtensionSettings(){
       const policyMeta=extensionSettingPolicyMetadata(schema);
       const schemaSummary=extensionSettingSchemaSummary(schema,type);
       const shortKey=key.split('.').pop()||key;
-      const targetName=extensionSettingTargetName(targets[key]);
-      const scopedValues=Object.assign({},extensionSettingScopedValues(targetScopedValues[key]));
+      const targetName=extensionSettingTargetName(targetMap[key]);
+      const scopedValues=Object.assign({},extensionSettingScopedValues(scopedMap[key]));
       const currentVal=extensionSettingHasTargetValue(scopedValues,targetName)
         ?extensionSettingValueForTarget(scopedValues,targetName,defaultVal)
-        :(Object.prototype.hasOwnProperty.call(values,key)?values[key]:defaultVal);
+        :(Object.prototype.hasOwnProperty.call(valueMap,key)?valueMap[key]:defaultVal);
       const row=document.createElement('div');row.className='ext-setting-row settings-field';row.dataset.extSettingKey=key;
+      if(isHiddenSetting)row.classList.add('hidden-setting');
       row.dataset.extSettingScope=scopeName;
       row.dataset.extSettingTarget=targetName;
       row.dataset.extSettingType=type;
@@ -12917,6 +12953,7 @@ async function renderExtensionSettings(){
       row.dataset.extSettingFeature=[displayName,title,configId,sectionDescription].join(' ').toLowerCase();
       row.dataset.extSettingLanguage='';
       row.dataset.extSettingPolicy=policyMeta.name.toLowerCase();
+      row.dataset.extSettingHidden=isHiddenSetting?'1':'0';
       if(!workspaceWritable)row.classList.add('scope-readonly');
       const head=document.createElement('div');head.className='ext-setting-head';
       const name=document.createElement('span');name.className='ext-setting-title';name.textContent=schema.title||shortKey;
@@ -12950,11 +12987,13 @@ async function renderExtensionSettings(){
           setExtensionSettingInputValue(input,schema,type,nextValue);
           if(enumHelp)renderExtensionSettingEnumDescription(enumHelp,schema,input);
           markExtensionSettingRow(row,extensionSettingHasTargetValue(scopedValues,row.dataset.extSettingTarget));
-          row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues).join('\n');
+          row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,
+            [isHiddenSetting?'hidden':'',isHiddenSetting?'excluded':'']).join('\n');
           keyLabel.textContent=key+(scopeName!=='window'?' · '+scopeName:'')+' · '+type+' · '+extensionSettingTargetLabel(row.dataset.extSettingTarget);
           row.dataset.extSettingSearch=(
             sectionSearch+' '+extensionSettingSearchText(
               key,schema,type,description,deprecation,schemaSummary)+' '+
+              (isHiddenSetting?'hidden excluded included false diagnostics ':'')+
               extensionSettingTargetSearchText(scopedValues,type)+' '+
               extensionSettingTargetLabel(row.dataset.extSettingTarget)
           ).trim().toLowerCase();
@@ -12972,10 +13011,12 @@ async function renderExtensionSettings(){
       if(readOnlyReason){const note=document.createElement('div');note.className='ext-setting-note';note.textContent=readOnlyReason;row.appendChild(note)}
       if(description){const desc=document.createElement('div');desc.className='ext-setting-desc';appendExtensionSettingMarkdown(desc,description);row.appendChild(desc)}
       if(deprecation){const dep=document.createElement('div');dep.className='ext-setting-deprecated';appendExtensionSettingMarkdown(dep,deprecation);row.appendChild(dep)}
-      row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,targetName,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues).join('\n');
+      row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,targetName,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,
+        [isHiddenSetting?'hidden':'',isHiddenSetting?'excluded':'']).join('\n');
       row.dataset.extSettingSearch=(
         sectionSearch+' '+extensionSettingSearchText(
           key,schema,type,description,deprecation,schemaSummary)+' '+
+          (isHiddenSetting?'hidden excluded included false diagnostics ':'')+
           extensionSettingTargetSearchText(scopedValues,type)+' '+
           extensionSettingTargetLabel(targetName)
       ).trim().toLowerCase();
@@ -13032,16 +13073,19 @@ async function renderExtensionSettings(){
       const reset=document.createElement('span');reset.className='s-reset';reset.textContent='↻';reset.title='Reset to default';
       reset.onclick=async ev=>{
         ev.preventDefault();ev.stopPropagation();setExtensionSettingError(row,'');
+        if(isHiddenSetting){setExtensionSettingError(row,'Hidden settings are shown for diagnostics only');return}
         const r=await call('reset_extension_setting',key,extensionSettingRowTarget(row));
         if(r&&r.ok){
           delete scopedValues[extensionSettingRowTarget(row)];
           setExtensionSettingInputValue(input,schema,type,hasDefaultValue?r.value:defaultVal);
           row.dataset.extSettingTarget=extensionSettingRowTarget(row);
           markExtensionSettingRow(row,false);
-          row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues).join('\n');
+          row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,
+            [isHiddenSetting?'hidden':'',isHiddenSetting?'excluded':'']).join('\n');
           row.dataset.extSettingSearch=(
             sectionSearch+' '+extensionSettingSearchText(
               key,schema,type,description,deprecation,schemaSummary)+' '+
+              (isHiddenSetting?'hidden excluded included false diagnostics ':'')+
               extensionSettingJson(hasDefaultValue?r.value:defaultVal,type)+' '+
               extensionSettingTargetSearchText(scopedValues,type)+' '+
               extensionSettingTargetLabel(row.dataset.extSettingTarget)
@@ -13064,10 +13108,12 @@ async function renderExtensionSettings(){
           row.dataset.extSettingTarget=r.target||extensionSettingRowTarget(row);
           scopedValues[row.dataset.extSettingTarget]=nextValue;
           markExtensionSettingRow(row,true);
-          row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues).join('\n');
+          row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,
+            [isHiddenSetting?'hidden':'',isHiddenSetting?'excluded':'']).join('\n');
           row.dataset.extSettingSearch=(
             sectionSearch+' '+extensionSettingSearchText(
               key,schema,type,description,deprecation,schemaSummary)+' '+
+              (isHiddenSetting?'hidden excluded included false diagnostics ':'')+
               extensionSettingJson(nextValue,type)+' '+
               extensionSettingTargetSearchText(scopedValues,type)+' '+
               extensionSettingTargetLabel(row.dataset.extSettingTarget)
@@ -13078,7 +13124,7 @@ async function renderExtensionSettings(){
         else showToast('Setting save failed: '+((r&&r.error)||'unknown'),'error');
       });
       if(type==='array'||type==='object')input.addEventListener('input',()=>setExtensionSettingError(row,''));
-      markExtensionSettingRow(row,modified[key]===true);
+      markExtensionSettingRow(row,modifiedMap[key]===true);
       inner.appendChild(row);
     });
     section.appendChild(inner);
@@ -13090,6 +13136,7 @@ async function renderExtensionSettings(){
   scopeSelect.onchange=applyExtensionSettingsFilter;
   targetSelect.onchange=applyExtensionSettingsFilter;
   modifiedBox.onchange=applyExtensionSettingsFilter;
+  hiddenBox.onchange=applyExtensionSettingsFilter;
   applyExtensionSettingsFilter();
 }
 

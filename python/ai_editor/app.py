@@ -9234,10 +9234,61 @@ class AIEditorAPI:
             target_scoped_values: Dict[str, Dict[str, Any]] = {}
             configured_keys = set(ws_state.keys()) if ws_state else set()
             visible_props: Dict[str, Dict[str, Any]] = {}
+            hidden_props: Dict[str, Dict[str, Any]] = {}
+            hidden_values: Dict[str, Any] = {}
+            hidden_defaults: Dict[str, Any] = {}
+            hidden_modified: Dict[str, bool] = {}
+            hidden_targets: Dict[str, str] = {}
+            hidden_target_values: Dict[str, Any] = {}
+            hidden_target_scoped_values: Dict[str, Dict[str, Any]] = {}
+            hidden_scopes: Dict[str, str] = {}
+            hidden_workspace_writable: Dict[str, bool] = {}
+            hidden_restricted: Dict[str, bool] = {}
+            hidden_sync_ignored: Dict[str, bool] = {}
+            hidden_sync_ignore_locked: Dict[str, bool] = {}
             for key, schema in props.items():
                 if not isinstance(schema, dict):
                     continue
                 if not self._extension_setting_included(schema):
+                    hidden_props[key] = schema
+                    hidden_scopes[key] = self._extension_setting_scope(schema)
+                    hidden_workspace_writable[key] = (
+                        self._extension_setting_workspace_writable(schema))
+                    hidden_restricted[key] = bool(
+                        schema.get("restricted") is True)
+                    hidden_sync_ignored[key] = (
+                        self._extension_setting_sync_ignored(schema))
+                    hidden_sync_ignore_locked[key] = (
+                        self._extension_setting_sync_ignore_locked(schema))
+                    hidden_has_default = "default" in schema
+                    if hidden_has_default:
+                        hidden_defaults[key] = schema["default"]
+                    hidden_target_entry = (
+                        self._extension_setting_target_entry(key))
+                    hidden_target_name = (
+                        self._extension_setting_active_target(
+                            hidden_target_entry))
+                    hidden_scoped_values = (
+                        self._extension_setting_target_scoped_values(
+                            hidden_target_entry))
+                    hidden_targets[key] = hidden_target_name
+                    if hidden_scoped_values:
+                        hidden_target_scoped_values[key] = (
+                            hidden_scoped_values)
+                    if hidden_target_name in hidden_scoped_values:
+                        stored = hidden_scoped_values[hidden_target_name]
+                        hidden_values[key] = stored
+                        hidden_target_values[key] = stored
+                        hidden_modified[key] = True
+                    elif key in configured_keys:
+                        stored = ws_state.get(key) if ws_state else None
+                        hidden_values[key] = stored
+                        hidden_modified[key] = True
+                    elif hidden_has_default:
+                        hidden_values[key] = hidden_defaults[key]
+                        hidden_modified[key] = False
+                    else:
+                        hidden_modified[key] = False
                     continue
                 visible_props[key] = schema
                 scopes[key] = self._extension_setting_scope(schema)
@@ -9298,6 +9349,18 @@ class AIEditorAPI:
                 "targets": targets,
                 "targetValues": target_values,
                 "targetScopedValues": target_scoped_values,
+                "hiddenProperties": hidden_props,
+                "hiddenValues": hidden_values,
+                "hiddenDefaults": hidden_defaults,
+                "hiddenModified": hidden_modified,
+                "hiddenTargets": hidden_targets,
+                "hiddenTargetValues": hidden_target_values,
+                "hiddenTargetScopedValues": hidden_target_scoped_values,
+                "hiddenScopes": hidden_scopes,
+                "hiddenWorkspaceWritable": hidden_workspace_writable,
+                "hiddenRestricted": hidden_restricted,
+                "hiddenSyncIgnored": hidden_sync_ignored,
+                "hiddenSyncIgnoreLocked": hidden_sync_ignore_locked,
                 "scopes": scopes,
                 "workspaceWritable": workspace_writable,
                 "restricted": restricted,

@@ -4143,7 +4143,7 @@ console.log("frontend signature help docs ok");
             and "deprecationMessage" in html
             and "ext-setting-deprecated-badge" in html
             and "appendExtensionSettingMarkdown(dep,deprecation)" in html
-            and "function extensionSettingParseQuery(raw,modifiedChecked)" in html
+            and "function extensionSettingParseQuery(raw,modifiedChecked,hiddenChecked)" in html
             and "function extensionSettingSearchText(key,schema,type,description,deprecation,schemaSummary)" in html
             and "function extensionSettingEnumDescription(schema,index)" in html
             and "function renderExtensionSettingEnumDescription(el,schema,input)" in html
@@ -4151,6 +4151,8 @@ console.log("frontend signature help docs ok");
             and "ext-setting-schema-details" in html
             and "ext-setting-schema-chip" in html
             and "ext-setting-tag-badge" in html
+            and "ext-setting-hidden-badge" in html
+            and "hidden-setting" in html
             and "dataset.extSettingSearch" in html
             and "dataset.extSettingTags" in html
             and "dataset.extSettingType=type" in html
@@ -4158,8 +4160,18 @@ console.log("frontend signature help docs ok");
             and "dataset.extSettingFeature" in html
             and "dataset.extSettingLanguage" in html
             and "dataset.extSettingOverride" in html
+            and "dataset.extSettingHidden" in html
+            and "const hiddenProperties=cfg.hiddenProperties||{}" in html
+            and "const allProperties=Object.assign({},properties,hiddenProperties)" in html
+            and "hiddenValues" in html
+            and "hiddenDefaults" in html
+            and "hiddenModified" in html
+            and "hiddenTargets" in html
+            and "hiddenTargetScopedValues" in html
+            and "Hidden setting: excluded from the VS Code configuration registry" in html
             and "dataset.extSettingPolicy" in html
             and "@tag:" in html
+            and "@hidden" in html
             and "function extensionSettingSplitFilterValues(value)" in html
             and "function extensionSettingPushFilterValues(list,value)" in html
             and "function extensionSettingQueryTokens(raw)" in html
@@ -4186,6 +4198,7 @@ console.log("frontend signature help docs ok");
             and "ext-setting-target-select" in html
             and "ext-settings-scope" in html
             and "ext-settings-target" in html
+            and "ext-settings-hidden" in html
             and "@scope:" in html
             and "@target:" in html
             and "@ext:" in html
@@ -4200,6 +4213,7 @@ console.log("frontend signature help docs ok");
             and "Configured Globally" in html
             and "Configured in Workspace" in html
             and "Configured in Folder" in html
+            and "Hidden Settings" in html
             and "Online services" in html
             and "Conditional Schema" in html
             and "Required Fields" in html
@@ -4213,6 +4227,7 @@ console.log("frontend signature help docs ok");
             and "&&(!query.scopes.length||query.scopes.includes(row.dataset.extSettingScope||''))" in html
             and "const targetOk=(!targetFilter||row.dataset.extSettingTarget===targetFilter)" in html
             and "rowTags.includes('target:'+target)" in html
+            and "const hiddenOk=query.hiddenOnly?rowTags.includes('hidden'):!rowTags.includes('hidden')" in html
             and "const extOk=!query.extensions.length||query.extensions.some" in html
             and "const typeOk=!query.types.length||query.types.includes(row.dataset.extSettingType||'')" in html
             and "const policyOk=!query.policies.length||query.policies.some" in html
@@ -4223,7 +4238,7 @@ console.log("frontend signature help docs ok");
             and "const langOk=!query.languages.length||query.languages.some" in html
             and "const stableOk=!query.stableOnly" in html
             and "ext-settings-clear-filters" in html
-            and "categorySelect.value='';scopeSelect.value='';targetSelect.value='';modifiedBox.checked=false" in html
+            and "categorySelect.value='';scopeSelect.value='';targetSelect.value='';modifiedBox.checked=false;hiddenBox.checked=false" in html
             and "Application/Machine" in html
             and "Machine Overridable" in html
             and "default: '+extensionSettingJson(defaultVal,type)" in html
@@ -4381,7 +4396,10 @@ globalThis.document = {
 };
 const fakeSearch = { value: "", focused: false, focus(){ this.focused = true; } };
 const fakeModified = { checked: true };
-globalThis.$ = id => id === "settings-search" ? fakeSearch : (id === "ext-settings-modified" ? fakeModified : null);
+const fakeHidden = { checked: true };
+globalThis.$ = id => id === "settings-search" ? fakeSearch : (
+  id === "ext-settings-modified" ? fakeModified : (
+  id === "ext-settings-hidden" ? fakeHidden : null));
 let filterApplyCount = 0;
 globalThis.applyExtensionSettingsFilter = () => { filterApplyCount++; };
 const arraySchema = { type: "array", items: { type: "string" } };
@@ -4723,6 +4741,10 @@ assert(parsedQuery.modifiedOnly === true && parsedQuery.tags[0] === "experimenta
        "settings query parses modified and tag filters");
 assert(extensionSettingParseQuery("", true).modifiedOnly === true,
        "settings query keeps checkbox modified filter");
+assert(extensionSettingParseQuery("@hidden internal", false, false).hiddenOnly === true
+       && extensionSettingParseQuery("@hidden internal", false, false).text === "internal"
+       && extensionSettingParseQuery("", false, true).hiddenOnly === true,
+       "settings query parses hidden filter");
 const metadataQuery = extensionSettingParseQuery(
   "@ext:selftest @type:boolean @policy:SelftestPolicy @restricted @sync:locked render",
   false);
@@ -4760,17 +4782,21 @@ assert(fakeSearch.value === "render @tag:experimental",
 extensionSettingToggleFilterToken("@tag:experimental", ["@stable", "@tag:preview"]);
 assert(fakeSearch.value === "render",
        "settings filter menu toggles existing filter off");
-fakeSearch.value = "render @modified @tag:preview @id:selftest.*";
+fakeSearch.value = "render @modified @hidden @tag:preview @id:selftest.*";
 fakeModified.checked = true;
+fakeHidden.checked = true;
 extensionSettingClearFilterTokens();
-assert(fakeSearch.value === "render" && fakeModified.checked === false,
+assert(fakeSearch.value === "render" && fakeModified.checked === false
+       && fakeHidden.checked === false,
        "settings filter menu clears filter tokens and preserves text");
 assert(extensionSettingIsFilterToken("@feature:terminal")
        && extensionSettingIsFilterToken("@stable")
+       && extensionSettingIsFilterToken("@hidden")
        && !extensionSettingIsFilterToken("terminal"),
        "settings filter menu identifies filter tokens");
 assert(extensionSettingFilterTokenLabel("@ext:selftest.settings-pack") === "Extension: selftest.settings-pack"
-       && extensionSettingFilterTokenLabel("@id:editor.*") === "Setting: editor.*",
+       && extensionSettingFilterTokenLabel("@id:editor.*") === "Setting: editor.*"
+       && extensionSettingFilterTokenLabel("@hidden") === "Hidden",
        "settings filter chips label tokens");
 assert(extensionSettingFilterMenuTokenActive(["@ext:selftest.settings-pack"], "@ext:")
        && extensionSettingFilterMenuTokenActive(["@stable"], "@stable")
@@ -4780,6 +4806,11 @@ fakeSearch.value = "render @ext:selftest @stable";
 extensionSettingRemoveFilterToken("@ext:selftest");
 assert(fakeSearch.value === "render @stable",
        "settings filter chip removes one token");
+fakeSearch.value = "render @hidden";
+fakeHidden.checked = true;
+extensionSettingRemoveFilterToken("@hidden");
+assert(fakeSearch.value === "render" && fakeHidden.checked === false,
+       "settings filter chip removes hidden token");
 const searchText = extensionSettingSearchText("demo.telemetry", searchSchema, "string",
   "Controls telemetry.", "Deprecated telemetry mode.", "");
 assert(searchText.indexOf("usesonlineservices") >= 0
@@ -9486,6 +9517,20 @@ def test_app_extension_runtime_support() -> None:
         _check("extension settings hide included false entries",
                api.get_extension_setting(
                    "selftest.hidden", "fallback").get("value") == "fallback"
+               and "selftest.hidden" in settings_cfg.get(
+                   "hiddenProperties", {})
+               and settings_cfg.get("hiddenValues", {}).get(
+                   "selftest.hidden") == "internal"
+               and settings_cfg.get("hiddenDefaults", {}).get(
+                   "selftest.hidden") == "internal"
+               and settings_cfg.get("hiddenModified", {}).get(
+                   "selftest.hidden") is False
+               and settings_cfg.get("hiddenTargets", {}).get(
+                   "selftest.hidden") == "workspace"
+               and settings_cfg.get("hiddenScopes", {}).get(
+                   "selftest.hidden") == "window"
+               and settings_cfg.get("hiddenWorkspaceWritable", {}).get(
+                   "selftest.hidden") is True
                and hidden_set.get("ok") is False
                and "hidden" in hidden_set.get("error", "").lower()
                and hidden_save.get("ok") is False
