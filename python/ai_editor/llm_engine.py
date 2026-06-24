@@ -149,6 +149,7 @@ class StreamDelta:
     content: str = ""
     thinking: str = ""
     tool_calls: List[Dict[str, Any]] = field(default_factory=list)
+    data_parts: List[Dict[str, Any]] = field(default_factory=list)
     finish_reason: Optional[str] = None
     usage: Optional[Dict[str, int]] = None
     refusal: Optional[str] = None

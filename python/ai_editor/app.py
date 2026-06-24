@@ -6028,6 +6028,8 @@ class AIEditorAPI:
     @classmethod
     def _serialize_node_lm_response_part(cls, part: Any) -> Dict[str, Any]:
         if isinstance(part, dict) and part.get("type"):
+            if str(part.get("type") or "").lower() in {"data", "data_part", "datapart"}:
+                return cls._serialize_node_lm_data_part(part)
             return dict(part)
         if hasattr(part, "call_id") and hasattr(part, "name"):
             return {
@@ -6037,15 +6039,7 @@ class AIEditorAPI:
                 "input": getattr(part, "input", None) or {},
             }
         if hasattr(part, "data") and hasattr(part, "mime_type"):
-            data = getattr(part, "data", b"") or b""
-            if isinstance(data, str):
-                data = data.encode("utf-8")
-            return {
-                "type": "data",
-                "data": base64.b64encode(bytes(data)).decode("ascii"),
-                "encoding": "base64",
-                "mimeType": str(getattr(part, "mime_type", "") or "application/octet-stream"),
-            }
+            return cls._serialize_node_lm_data_part(part)
         if hasattr(part, "metadata") and hasattr(part, "id"):
             return {
                 "type": "thinking",
@@ -6054,6 +6048,65 @@ class AIEditorAPI:
                 "metadata": getattr(part, "metadata", None) or {},
             }
         return {"type": "text", "value": cls._node_lm_response_part_text(part)}
+
+    @staticmethod
+    def _node_lm_data_bytes(value: Any, encoding: Any = None) -> bytes:
+        if value is None:
+            return b""
+        if isinstance(value, bytes):
+            return value
+        if isinstance(value, bytearray):
+            return bytes(value)
+        if isinstance(value, memoryview):
+            return value.tobytes()
+        if isinstance(value, (list, tuple)):
+            try:
+                return bytes(int(item) & 0xff for item in value)
+            except Exception:
+                return json.dumps(value, ensure_ascii=False).encode("utf-8")
+        if isinstance(value, str):
+            if str(encoding or "").lower() == "base64":
+                try:
+                    return base64.b64decode(value)
+                except Exception:
+                    return value.encode("utf-8")
+            return value.encode("utf-8")
+        try:
+            return json.dumps(value, ensure_ascii=False).encode("utf-8")
+        except Exception:
+            return str(value).encode("utf-8")
+
+    @classmethod
+    def _serialize_node_lm_data_part(cls, part: Any) -> Dict[str, Any]:
+        if isinstance(part, dict):
+            raw_data = (
+                part.get("data")
+                if "data" in part else part.get("value")
+                if "value" in part else part.get("content", b"")
+            )
+            mime_type = (
+                part.get("mimeType")
+                or part.get("mime_type")
+                or part.get("mime")
+                or "application/octet-stream"
+            )
+            encoding = part.get("encoding") or ("base64" if part.get("base64") else None)
+        else:
+            raw_data = getattr(part, "data", b"") or b""
+            mime_type = (
+                getattr(part, "mime_type", None)
+                or getattr(part, "mimeType", None)
+                or getattr(part, "mime", None)
+                or "application/octet-stream"
+            )
+            encoding = getattr(part, "encoding", None)
+        data = cls._node_lm_data_bytes(raw_data, encoding)
+        return {
+            "type": "data",
+            "data": base64.b64encode(data).decode("ascii"),
+            "encoding": "base64",
+            "mimeType": str(mime_type or "application/octet-stream"),
+        }
 
     def _send_node_lm_request(
             self, model: Any, messages: Any,

@@ -19,6 +19,7 @@ Implemented namespaces:
 from __future__ import annotations
 
 import asyncio
+import base64
 import inspect
 import json
 import os
@@ -256,6 +257,105 @@ class LanguageModelChat:
             input=cls._parse_tool_call_input(raw_input),
         )
 
+    @staticmethod
+    def _data_bytes(value: Any, encoding: Any = None) -> bytes:
+        if value is None:
+            return b""
+        if isinstance(value, bytes):
+            return value
+        if isinstance(value, bytearray):
+            return bytes(value)
+        if isinstance(value, memoryview):
+            return value.tobytes()
+        if isinstance(value, (list, tuple)):
+            try:
+                return bytes(int(item) & 0xff for item in value)
+            except Exception:
+                return json.dumps(value, ensure_ascii=False).encode("utf-8")
+        if isinstance(value, str):
+            if str(encoding or "").lower() == "base64":
+                try:
+                    return base64.b64decode(value)
+                except Exception:
+                    return value.encode("utf-8")
+            return value.encode("utf-8")
+        try:
+            return json.dumps(value, ensure_ascii=False).encode("utf-8")
+        except Exception:
+            return str(value).encode("utf-8")
+
+    @classmethod
+    def _data_part(cls, value: Any) -> Optional["LanguageModelDataPart"]:
+        if isinstance(value, LanguageModelDataPart):
+            return value
+        if isinstance(value, dict):
+            part_type = str(value.get("type") or value.get("kind") or "").lower()
+            has_data_shape = (
+                "data" in value or "value" in value or "content" in value
+                or "mimeType" in value or "mime_type" in value or "mime" in value
+            )
+            if part_type and part_type not in {"data", "data_part", "datapart"}:
+                return None
+            if not has_data_shape:
+                return None
+            raw_data = (
+                value.get("data")
+                if "data" in value else value.get("value")
+                if "value" in value else value.get("content", b"")
+            )
+            mime = (
+                value.get("mimeType")
+                or value.get("mime_type")
+                or value.get("mime")
+                or "application/octet-stream"
+            )
+            encoding = value.get("encoding") or ("base64" if value.get("base64") else None)
+            return LanguageModelDataPart(
+                data=cls._data_bytes(raw_data, encoding),
+                mime_type=str(mime or "application/octet-stream"),
+            )
+        raw_data = getattr(value, "data", None)
+        mime = (
+            getattr(value, "mime_type", None)
+            or getattr(value, "mimeType", None)
+            or getattr(value, "mime", None)
+        )
+        if raw_data is None and mime is None:
+            return None
+        return LanguageModelDataPart(
+            data=cls._data_bytes(raw_data),
+            mime_type=str(mime or "application/octet-stream"),
+        )
+
+    @classmethod
+    def _data_parts(cls, value: Any) -> List["LanguageModelDataPart"]:
+        if value is None:
+            return []
+        if isinstance(value, (list, tuple)):
+            parts = []
+            for item in value:
+                part = cls._data_part(item)
+                if part is not None:
+                    parts.append(part)
+            return parts
+        part = cls._data_part(value)
+        return [part] if part is not None else []
+
+    @classmethod
+    def _data_parts_from_message_part(
+            cls, value: Any) -> List["LanguageModelDataPart"]:
+        parts: List[LanguageModelDataPart] = []
+        for attr in ("data_parts", "dataParts"):
+            raw = (
+                value.get(attr) if isinstance(value, dict)
+                else getattr(value, attr, None)
+            )
+            parts.extend(cls._data_parts(raw))
+        part = cls._data_part(value)
+        if part is not None:
+            parts.append(part)
+        return parts
+
     def send_request(self, messages: Any, options: Dict = None,
                      token: Any = None) -> "LanguageModelChatResponse":
         resp = LanguageModelChatResponse()
@@ -288,6 +388,9 @@ class LanguageModelChat:
                         seen_tool_call_ids.add(part.call_id)
                     resp._chunks.append(part)
 
+                def _append_data_parts(value: Any) -> None:
+                    resp._chunks.extend(self._data_parts_from_message_part(value))
+
                 def _on_delta(delta: Any) -> None:
                     content = getattr(delta, "content", "") or ""
                     if content:
@@ -297,6 +400,7 @@ class LanguageModelChat:
                         resp._chunks.append(LanguageModelThinkingPart(value=thinking))
                     for tool_call in getattr(delta, "tool_calls", []) or []:
                         _append_tool_call(tool_call)
+                    _append_data_parts(delta)
 
                 r = self._engine.chat_completion_stream(
                     messages=api_msgs, tools=tools_schema,
@@ -309,6 +413,7 @@ class LanguageModelChat:
                         LanguageModelThinkingPart(value=r.thinking))
                 for tool_call in getattr(r, "tool_calls", []) or []:
                     _append_tool_call(tool_call)
+                _append_data_parts(r)
                 if not resp._chunks:
                     resp._chunks = (
                         [LanguageModelTextPart(resp.text)] if resp.text else [])

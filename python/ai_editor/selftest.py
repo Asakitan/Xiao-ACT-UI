@@ -5474,9 +5474,17 @@ def test_app_extension_runtime_support() -> None:
                             "name": "delta_tool",
                             "arguments": '{"delta": true}',
                         }],
+                        data_parts=[{
+                            "data": "payload-data",
+                            "mime_type": "text/plain",
+                        }, {
+                            "data": base64.b64encode(b"\x89PNG\r\n").decode("ascii"),
+                            "encoding": "base64",
+                            "mimeType": "image/png",
+                        }],
                     ))
                     on_delta(StreamDelta(content="done"))
-                return LLMResponse(
+                response = LLMResponse(
                     content="parts:done",
                     thinking="think-final",
                     tool_calls=[ToolCall(
@@ -5485,6 +5493,11 @@ def test_app_extension_runtime_support() -> None:
                         arguments='{"final": true}',
                     )],
                 )
+                response.data_parts = [{
+                    "data": {"final": True},
+                    "mimeType": "application/json",
+                }]
+                return response
             if on_delta:
                 on_delta(StreamDelta(content="node-stream:"))
                 on_delta(StreamDelta(content="ok"))
@@ -6757,6 +6770,7 @@ async function activate(context) {
       ]);
       const partTypes = [];
       const toolCalls = [];
+      const dataParts = [];
       const thinkingValues = [];
       for await (const chunk of partResponse.stream) {
         partTypes.push(chunk && chunk.constructor && chunk.constructor.name);
@@ -6765,6 +6779,13 @@ async function activate(context) {
             callId: chunk.callId,
             name: chunk.name,
             input: chunk.input,
+          });
+        }
+        if (chunk instanceof vscode.LanguageModelDataPart) {
+          dataParts.push({
+            mimeType: chunk.mimeType,
+            byteLength: chunk.data.length,
+            text: Buffer.from(chunk.data).toString('utf8'),
           });
         }
         if (chunk instanceof vscode.LanguageModelThinkingPart) {
@@ -6782,6 +6803,7 @@ async function activate(context) {
           partResponse.text && partResponse.text[Symbol.asyncIterator]),
         partTypes,
         toolCalls,
+        dataParts,
         thinkingValues,
         textAggregate: partTextAggregate,
       };
@@ -9208,6 +9230,9 @@ module.exports = { activate, deactivate };
                 node_lm_provider_tool_calls = (
                     node_lm_send_request_parts.get("toolCalls", [])
                     if isinstance(node_lm_send_request_parts, dict) else [])
+                node_lm_provider_data_parts = (
+                    node_lm_send_request_parts.get("dataParts", [])
+                    if isinstance(node_lm_send_request_parts, dict) else [])
                 _check("node host preserves provider LM response parts",
                        node_started is True
                        and isinstance(node_lm_send_request_parts, dict)
@@ -9218,6 +9243,8 @@ module.exports = { activate, deactivate };
                        and "LanguageModelThinkingPart"
                        in node_lm_provider_part_types
                        and "LanguageModelToolCallPart"
+                       in node_lm_provider_part_types
+                       and "LanguageModelDataPart"
                        in node_lm_provider_part_types
                        and node_lm_send_request_parts.get("textAggregate")
                        == "parts:done"
@@ -9233,6 +9260,21 @@ module.exports = { activate, deactivate };
                            item.get("name") == "final_tool"
                            and item.get("input", {}).get("final") is True
                            for item in node_lm_provider_tool_calls
+                           if isinstance(item, dict))
+                       and any(
+                           item.get("mimeType") == "text/plain"
+                           and item.get("text") == "payload-data"
+                           for item in node_lm_provider_data_parts
+                           if isinstance(item, dict))
+                       and any(
+                           item.get("mimeType") == "image/png"
+                           and item.get("byteLength", 0) >= 6
+                           for item in node_lm_provider_data_parts
+                           if isinstance(item, dict))
+                       and any(
+                           item.get("mimeType") == "application/json"
+                           and '"final": true' in str(item.get("text", ""))
+                           for item in node_lm_provider_data_parts
                            if isinstance(item, dict)),
                        json.dumps({
                            "sendRequestParts": node_lm_send_request_parts,
