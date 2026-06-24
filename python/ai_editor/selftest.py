@@ -7307,6 +7307,67 @@ async function activate(context) {
       errorIsUndefined: error === undefined,
     };
   });
+  vscode.commands.registerCommand('selftest.node.authenticationProbe', async () => {
+    const authEvents = [];
+    const eventDisposable = vscode.authentication.onDidChangeSessions(event => {
+      authEvents.push({
+        provider: event.provider,
+        added: Array.isArray(event.added)
+          ? event.added.map(session => session && session.id ? session.id : session)
+          : [],
+      });
+    });
+    const cachedDisposable = vscode.authentication.registerAuthenticationProvider(
+      'selftest-node-auth',
+      'Selftest Node Auth',
+      {
+        getSessions(scopes, options) {
+          return [{
+            id: 'cached-session',
+            accessToken: 'cached-token',
+            account: { id: 'cached', label: 'Cached Account' },
+            scopes,
+          }];
+        },
+      },
+      { supportsMultipleAccounts: true },
+    );
+    const createDisposable = vscode.authentication.registerAuthenticationProvider(
+      'selftest-node-create',
+      'Selftest Node Create',
+      {
+        getSessions() {
+          return [];
+        },
+        async createSession(scopes, options) {
+          return {
+            id: 'created-session',
+            accessToken: 'created-token',
+            account: { id: 'created', label: 'Created Account' },
+            scopes,
+          };
+        },
+      },
+    );
+    const cached = await vscode.authentication.getSession(
+      'selftest-node-auth', ['read:user'], {});
+    const created = await vscode.authentication.getSession(
+      'selftest-node-create', ['repo'], { createIfNone: true });
+    createDisposable.dispose();
+    const afterDispose = await vscode.authentication.getSession(
+      'selftest-node-create', ['repo'], {});
+    cachedDisposable.dispose();
+    eventDisposable.dispose();
+    return {
+      cachedToken: cached && cached.accessToken,
+      cachedScope: cached && cached.scopes && cached.scopes[0],
+      createdToken: created && created.accessToken,
+      createdScope: created && created.scopes && created.scopes[0],
+      eventProviders: authEvents.map(event => event.provider),
+      eventAdded: authEvents.flatMap(event => event.added),
+      afterDisposeMissing: afterDispose === undefined,
+    };
+  });
   vscode.commands.registerCommand('selftest.node.pythonCommandProbe', async () => {
     const nested = await vscode.commands.executeCommand(
       'selftest.python.echo',
@@ -7722,6 +7783,15 @@ module.exports = { activate, deactivate };
                             "selftest.node.messageOptionsProbe"))
                 except Exception as exc:
                     node_message_options_probe = {"_error": str(exc)}
+                node_authentication_command_registered = _wait_until(
+                    lambda: "selftest.node.authenticationProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                try:
+                    node_authentication_probe = api._ext_host.commands.execute(
+                        "selftest.node.authenticationProbe")
+                except Exception as exc:
+                    node_authentication_probe = {"_error": str(exc)}
                 node_registered = _wait_until(
                     lambda: "selftest.node.tree" in api._vscode_ns._tree_data_providers,
                     timeout=3.0)
@@ -8752,6 +8822,26 @@ module.exports = { activate, deactivate };
                        and node_message_options_probe.get("errorIsUndefined")
                        is True,
                        json.dumps(node_message_options_probe,
+                                  ensure_ascii=False))
+                _check("node host authentication providers supply sessions",
+                       node_started is True
+                       and node_authentication_command_registered
+                       and isinstance(node_authentication_probe, dict)
+                       and node_authentication_probe.get("cachedToken")
+                       == "cached-token"
+                       and node_authentication_probe.get("cachedScope")
+                       == "read:user"
+                       and node_authentication_probe.get("createdToken")
+                       == "created-token"
+                       and node_authentication_probe.get("createdScope")
+                       == "repo"
+                       and "selftest-node-create"
+                       in node_authentication_probe.get("eventProviders", [])
+                       and "created-session"
+                       in node_authentication_probe.get("eventAdded", [])
+                       and node_authentication_probe.get("afterDisposeMissing")
+                       is True,
+                       json.dumps(node_authentication_probe,
                                   ensure_ascii=False))
                 _check("node host tree provider registers dynamic activity view",
                        node_started is True

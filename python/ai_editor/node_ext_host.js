@@ -1077,6 +1077,9 @@ const _debugAdapterFactories = new Map();   // type -> factory
 const _debugConfigProviders = new Map();    // type -> provider
 const _taskProviders = new Map();           // type -> provider
 const _scmProviders = new Map();            // id -> SourceControl
+const _authenticationProviders = new Map(); // id -> { label, provider, options, listener }
+const _authenticationSessions = new Map();  // id -> AuthenticationSession[]
+const _onDidChangeAuthenticationSessionsEmitter = new EventEmitter();
 const _onDidChangeConfigurationEmitter = new EventEmitter();
 let _nextUntitledDocument = 1;
 
@@ -2705,6 +2708,116 @@ function _windowShowMessage(level, message, args) {
     return Promise.resolve(items.find(_messageArgIsItem));
 }
 
+function _authProviderMethod(provider, names) {
+    for (const name of names) {
+        if (provider && typeof provider[name] === 'function') {
+            return provider[name].bind(provider);
+        }
+    }
+    return null;
+}
+
+function _normalizeAuthenticationSession(raw, providerId, scopes = []) {
+    if (!raw || typeof raw !== 'object') return null;
+    const account = raw.account && typeof raw.account === 'object'
+        ? raw.account
+        : {};
+    const accountLabel = account.label || raw.accountLabel || raw.accountName || 'Account';
+    const accountId = account.id || raw.accountId || accountLabel;
+    return {
+        id: String(raw.id || `${providerId}:${accountId}`),
+        accessToken: String(raw.accessToken || raw.access_token || raw.token || ''),
+        account: {
+            id: String(accountId),
+            label: String(accountLabel),
+        },
+        scopes: Array.isArray(raw.scopes) ? raw.scopes.map(String) : scopes.map(String),
+    };
+}
+
+async function _authProviderSessions(providerId, scopes = [], options = {}) {
+    const entry = _authenticationProviders.get(String(providerId || ''));
+    if (!entry) return [];
+    const getter = _authProviderMethod(entry.provider, ['getSessions', 'get_sessions']);
+    if (!getter) {
+        return _authenticationSessions.get(providerId) || [];
+    }
+    const raw = await getter(scopes || [], options || {}) || [];
+    const sessions = (Array.isArray(raw) ? raw : [])
+        .map(item => _normalizeAuthenticationSession(item, providerId, scopes || []))
+        .filter(Boolean);
+    _authenticationSessions.set(providerId, sessions);
+    return sessions;
+}
+
+async function _authGetSession(providerId, scopes = [], options = {}) {
+    const normalizedId = String(providerId || '');
+    const normalizedScopes = Array.isArray(scopes) ? scopes.map(String) : [];
+    let sessions = await _authProviderSessions(
+        normalizedId, normalizedScopes, options || {});
+    if (sessions.length && !options?.forceNewSession) return sessions[0];
+    const entry = _authenticationProviders.get(normalizedId);
+    const creator = _authProviderMethod(entry?.provider, ['createSession', 'create_session']);
+    if (creator && (options?.createIfNone || options?.forceNewSession)) {
+        const created = _normalizeAuthenticationSession(
+            await creator(normalizedScopes, options || {}),
+            normalizedId,
+            normalizedScopes,
+        );
+        if (created) {
+            sessions = [...(_authenticationSessions.get(normalizedId) || []), created];
+            _authenticationSessions.set(normalizedId, sessions);
+            _onDidChangeAuthenticationSessionsEmitter.fire({
+                provider: normalizedId,
+                added: [created],
+                removed: [],
+                changed: [],
+            });
+            return created;
+        }
+    }
+    return undefined;
+}
+
+function _authRegisterProvider(id, label, provider, options) {
+    const providerId = String(id || '');
+    if (!providerId) throw new Error('Authentication provider id is required');
+    if (_authenticationProviders.has(providerId)) {
+        throw new Error(`Authentication provider already registered: ${providerId}`);
+    }
+    let listener = null;
+    const eventSource = provider && (
+        provider.onDidChangeSessions || provider.on_did_change_sessions);
+    if (typeof eventSource === 'function') {
+        listener = eventSource.call(provider, (event = {}) => {
+            _authProviderSessions(providerId, [], {})
+                .catch(err => log(
+                    `authentication session refresh failed for ${providerId}: ${err.message}`));
+            _onDidChangeAuthenticationSessionsEmitter.fire({
+                provider: providerId,
+                added: event.added || [],
+                removed: event.removed || [],
+                changed: event.changed || [],
+            });
+        });
+    }
+    const entry = {
+        label: String(label || providerId),
+        provider,
+        options: options || {},
+        listener,
+    };
+    _authenticationProviders.set(providerId, entry);
+    return new Disposable(() => {
+        const current = _authenticationProviders.get(providerId);
+        if (current === entry) {
+            current.listener?.dispose?.();
+            _authenticationProviders.delete(providerId);
+            _authenticationSessions.delete(providerId);
+        }
+    });
+}
+
 function _extensionApiObject(id) {
     const active = _extensions.get(id);
     const known = _knownExtensions.get(id);
@@ -3385,14 +3498,12 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         // --- Namespace: authentication ---
         authentication: {
             getSession(providerId, scopes, options) {
-                log(`stub: authentication.getSession ${providerId}`);
-                return Promise.resolve(undefined);
+                return _authGetSession(providerId, scopes || [], options || {});
             },
-            registerAuthenticationProvider(id, label, provider) {
-                log(`stub: registerAuthenticationProvider ${id}`);
-                return new Disposable(() => {});
+            registerAuthenticationProvider(id, label, provider, options) {
+                return _authRegisterProvider(id, label, provider, options || {});
             },
-            onDidChangeSessions: new EventEmitter().event,
+            onDidChangeSessions: _onDidChangeAuthenticationSessionsEmitter.event,
         },
 
         // --- Namespace: scm ---
