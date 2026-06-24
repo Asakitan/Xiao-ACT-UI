@@ -4122,6 +4122,13 @@ console.log("frontend signature help docs ok");
             and "function extensionSettingSchemaFeatureTags(schema,type)" in html
             and "function extensionSettingSchemaDetailItems(schema,type,defaultValue)" in html
             and "function appendExtensionSettingSchemaDetails(row,schema,type,defaultValue)" in html
+            and "function extensionSettingTagLabel(tag)" in html
+            and "function appendExtensionSettingTagBadges(head,schema)" in html
+            and "function extensionSettingConfiguredTargets(scopedValues)" in html
+            and "function extensionSettingTargetTags(scopedValues,currentTarget)" in html
+            and "function extensionSettingTargetSearchText(scopedValues,type)" in html
+            and "function extensionSettingMetadataTags(schema,type,scopeName,currentTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,extraTags)" in html
+            and "function renderExtensionSettingTargetOverrides(el,scopedValues)" in html
             and "function extensionSettingDeprecationText(schema)" in html
             and "function extensionSettingJsonRows(value,type)" in html
             and "function extensionSettingTextRows(value)" in html
@@ -4143,6 +4150,7 @@ console.log("frontend signature help docs ok");
             and "ext-setting-enum-desc" in html
             and "ext-setting-schema-details" in html
             and "ext-setting-schema-chip" in html
+            and "ext-setting-tag-badge" in html
             and "dataset.extSettingSearch" in html
             and "dataset.extSettingTags" in html
             and "dataset.extSettingType=type" in html
@@ -4189,6 +4197,9 @@ console.log("frontend signature help docs ok");
             and "Extension ID..." in html
             and "Feature..." in html
             and "Setting ID..." in html
+            and "Configured Globally" in html
+            and "Configured in Workspace" in html
+            and "Configured in Folder" in html
             and "Online services" in html
             and "Conditional Schema" in html
             and "Required Fields" in html
@@ -4201,7 +4212,7 @@ console.log("frontend signature help docs ok");
             and "const scopeOk=(!scopeFilter||row.dataset.extSettingScope===scopeFilter)" in html
             and "&&(!query.scopes.length||query.scopes.includes(row.dataset.extSettingScope||''))" in html
             and "const targetOk=(!targetFilter||row.dataset.extSettingTarget===targetFilter)" in html
-            and "&&(!query.targets.length||query.targets.includes(row.dataset.extSettingTarget||''))" in html
+            and "rowTags.includes('target:'+target)" in html
             and "const extOk=!query.extensions.length||query.extensions.some" in html
             and "const typeOk=!query.types.length||query.types.includes(row.dataset.extSettingType||'')" in html
             and "const policyOk=!query.policies.length||query.policies.some" in html
@@ -4302,6 +4313,8 @@ console.log("frontend signature help docs ok");
             "appendExtensionSettingDefaultOverrideBadge",
             "extensionSettingPolicyMetadata",
             "appendExtensionSettingPolicyBadge",
+            "extensionSettingTagLabel",
+            "appendExtensionSettingTagBadges",
             "extensionSettingDeprecationText",
             "extensionSettingList",
             "extensionSettingEnumDescription",
@@ -4319,6 +4332,14 @@ console.log("frontend signature help docs ok");
             "extensionSettingToggleFilterToken",
             "extensionSettingRemoveFilterToken",
             "extensionSettingClearFilterTokens",
+            "extensionSettingTargetName",
+            "extensionSettingTargetLabel",
+            "extensionSettingScopedValues",
+            "extensionSettingConfiguredTargets",
+            "extensionSettingTargetTags",
+            "extensionSettingTargetSearchText",
+            "extensionSettingMetadataTags",
+            "renderExtensionSettingTargetOverrides",
             "extensionSettingJson",
             "extensionSettingJsonRows",
             "extensionSettingTextRows",
@@ -4797,6 +4818,47 @@ const policyBadgeHost = makeNode("div");
 appendExtensionSettingPolicyBadge(policyBadgeHost, policyMeta);
 assert(policyBadgeHost.children.some(n => n.textContent === "Policy: SelftestPolicy"),
        "policy badge rendered");
+assert(extensionSettingTagLabel("usesOnlineServices") === "Online"
+       && extensionSettingTagLabel("preview") === "Preview",
+       "setting tag labels normalized");
+const tagBadgeHost = makeNode("div");
+appendExtensionSettingTagBadges(tagBadgeHost, searchSchema);
+assert(tagBadgeHost.children.some(n => n.className.indexOf("ext-setting-tag-badge") >= 0
+       && n.className.indexOf("experimental") >= 0
+       && n.textContent === "Experimental")
+       && tagBadgeHost.children.some(n => n.className.indexOf("online") >= 0
+       && n.textContent === "Online"),
+       "setting tag badges rendered");
+const scopedTargets = { global: true, workspace_folder: ["folder"] };
+assert(extensionSettingConfiguredTargets(scopedTargets).includes("global")
+       && extensionSettingConfiguredTargets(scopedTargets).includes("workspaceFolder"),
+       "configured targets normalized");
+const targetTags = extensionSettingTargetTags(scopedTargets, "workspace");
+assert(targetTags.includes("target:workspace")
+       && targetTags.includes("target:global")
+       && targetTags.includes("configured-target:workspaceFolder"),
+       "target tags include current and configured targets");
+const targetSearchText = extensionSettingTargetSearchText(scopedTargets, "array");
+assert(targetSearchText.indexOf("configured in Global") >= 0
+       && targetSearchText.indexOf("configured in Workspace Folder") >= 0
+       && targetSearchText.indexOf("folder") >= 0,
+       "target scoped values indexed for search");
+const metadataTags = extensionSettingMetadataTags(searchSchema, "string", "window", "workspace", true,
+  { tag: "", ignored: false, locked: false }, { tag: "" }, { tag: "", name: "" },
+  scopedTargets, ["language-default"]);
+assert(metadataTags.includes("experimental")
+       && metadataTags.includes("enum")
+       && metadataTags.includes("target:global")
+       && metadataTags.includes("language-default"),
+       "metadata tags combine schema tags target tags and extras");
+const targetOverrideHost = makeNode("div");
+renderExtensionSettingTargetOverrides(targetOverrideHost, scopedTargets);
+assert(targetOverrideHost.textContent === "Configured in: Global, Workspace Folder"
+       && targetOverrideHost.style.display === "",
+       "target override note rendered");
+renderExtensionSettingTargetOverrides(targetOverrideHost, {});
+assert(targetOverrideHost.textContent === "" && targetOverrideHost.style.display === "none",
+       "target override note hidden when empty");
 assert(extensionSettingReadOnlyReason({ scope: "machine" }).indexOf("Machine setting") === 0
        && extensionSettingReadOnlyReason({ scope: "application-machine" }).indexOf("Application/machine setting") === 0
        && extensionSettingReadOnlyReason({ scope: "resource" }) === "",
