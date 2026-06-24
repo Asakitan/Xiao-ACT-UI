@@ -2697,6 +2697,11 @@ console.log("frontend auto-close behavior ok");
             and "function extensionSettingTypeFromValue(value)" in html
             and "function extensionSettingScopeName(schema)" in html
             and "function extensionSettingWorkspaceWritable(schema)" in html
+            and "function extensionSettingSyncMetadata(schema)" in html
+            and "appendExtensionSettingSyncBadge(head,syncMeta)" in html
+            and "ext-setting-sync-badge" in html
+            and "sync-ignored" in html
+            and "sync-locked" in html
             and "ext-setting-readonly-badge" in html
             and "ext-setting-scope-badge" in html
             and "languageDefaults" in html
@@ -6813,6 +6818,18 @@ def test_app_extension_runtime_support() -> None:
                             "restricted": True,
                             "description": "Restricted setting",
                         },
+                        "selftest.syncIgnored": {
+                            "type": "string",
+                            "default": "local",
+                            "ignoreSync": True,
+                            "description": "Ignored by Settings Sync",
+                        },
+                        "selftest.syncLocked": {
+                            "type": "string",
+                            "default": "secret",
+                            "disallowSyncIgnore": True,
+                            "description": "Always ignored by Settings Sync",
+                        },
                         "selftest.hidden": {
                             "type": "string",
                             "default": "internal",
@@ -6828,6 +6845,8 @@ def test_app_extension_runtime_support() -> None:
                         "editor.tabSize": 2,
                         "selftest.mode": "manual",
                         "selftest.machineOnly": "local",
+                        "selftest.syncIgnored": "language-local",
+                        "selftest.syncLocked": "language-secret",
                         "selftest.hidden": "override-internal",
                     },
                 },
@@ -6882,6 +6901,14 @@ def test_app_extension_runtime_support() -> None:
                    "selftest.machineOnly") is False
                and settings_cfg.get("restricted", {}).get(
                    "selftest.restricted") is True
+               and settings_cfg.get("syncIgnored", {}).get(
+                   "selftest.syncIgnored") is True
+               and settings_cfg.get("syncIgnored", {}).get(
+                   "selftest.syncLocked") is True
+               and settings_cfg.get("syncIgnoreLocked", {}).get(
+                   "selftest.syncIgnored") is False
+               and settings_cfg.get("syncIgnoreLocked", {}).get(
+                   "selftest.syncLocked") is True
                and "selftest.hidden" not in settings_cfg.get(
                    "properties", {}))
         _check("extension configurationDefaults override schema defaults",
@@ -6934,13 +6961,19 @@ def test_app_extension_runtime_support() -> None:
                    "settings", {})
                and selflang_defaults.get("workspaceWritable", {}).get(
                    "selftest.machineOnly") is False
+               and selflang_defaults.get("syncIgnored", {}).get(
+                   "selftest.syncIgnored") is True
+               and selflang_defaults.get("syncIgnored", {}).get(
+                   "selftest.syncLocked") is True
+               and selflang_defaults.get("syncIgnoreLocked", {}).get(
+                   "selftest.syncLocked") is True
                and selflang_defaults.get("schemas", {}).get(
                    "selftest.mode", {}).get("enum") == ["auto", "manual"]
                and selflang_defaults.get("values", {}).get(
                    "editor.tabSize") == 2
                and selflang_defaults.get("modified", {}).get(
                    "editor.tabSize") is False
-               and selflang_defaults.get("count") == 3)
+               and selflang_defaults.get("count") == 5)
         invalid_language_machine = api.set_extension_language_setting(
             "selflang", "selftest.machineOnly", "changed",
             "selftest.settings-pack")

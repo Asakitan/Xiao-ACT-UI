@@ -1012,6 +1012,8 @@ pre.code-block { overflow:visible; }
   border-radius:3px; padding:0 4px; line-height:15px; }
 .ext-setting-scope-badge { font-size:9px; color:var(--fg-dim); border:1px solid var(--border);
   border-radius:3px; padding:0 4px; line-height:15px; }
+.ext-setting-sync-badge { font-size:9px; color:var(--fg-dim); border:1px solid var(--border);
+  border-radius:3px; padding:0 4px; line-height:15px; }
 .ext-setting-deprecated-badge { font-size:9px; color:var(--fg-warning); border:1px solid color-mix(in srgb,var(--fg-warning) 70%,var(--border));
   border-radius:3px; padding:0 4px; line-height:15px; }
 .ext-setting-row.deprecated:not(.modified) { border-left-color:color-mix(in srgb,var(--fg-warning) 45%,transparent); }
@@ -9777,6 +9779,24 @@ function extensionSettingScopeBadge(schema){
   if(extensionSettingWorkspaceWritable(schema))return scope==='window'?'':scope;
   return scope+' · user scope';
 }
+function extensionSettingSyncMetadata(schema){
+  schema=(schema&&typeof schema==='object')?schema:{};
+  const locked=schema.disallowSyncIgnore===true;
+  const ignored=locked||schema.ignoreSync===true;
+  if(locked)return {ignored:true,locked:true,label:'Sync Locked',tag:'sync-locked',
+    title:'Ignored during Settings Sync and cannot be opted back in'};
+  if(ignored)return {ignored:true,locked:false,label:'Sync Ignored',tag:'sync-ignored',
+    title:'Ignored during Settings Sync by default'};
+  return {ignored:false,locked:false,label:'',tag:'',title:''};
+}
+function appendExtensionSettingSyncBadge(head,syncMeta){
+  if(!head||!syncMeta||!syncMeta.ignored)return;
+  const el=document.createElement('span');
+  el.className='ext-setting-sync-badge';
+  el.textContent=syncMeta.label;
+  el.title=syncMeta.title;
+  head.appendChild(el);
+}
 function extensionSettingDefault(schema,defaults,key){
   if(defaults&&Object.prototype.hasOwnProperty.call(defaults,key))return defaults[key];
   if(schema&&Object.prototype.hasOwnProperty.call(schema,'default'))return schema.default;
@@ -9890,7 +9910,9 @@ function renderExtensionSettingEnumDescription(el,schema,input){
 }
 function extensionSettingSearchText(key,schema,type,description,deprecation,schemaSummary){
   schema=(schema&&typeof schema==='object')?schema:{};
-  const parts=[key,schema.title,type,schema.scope,description,deprecation,schemaSummary];
+  const parts=[key,schema.title,type,schema.scope,description,deprecation,schemaSummary,
+    schema.ignoreSync===true?'ignoreSync sync ignored':'',
+    schema.disallowSyncIgnore===true?'disallowSyncIgnore sync locked':''];
   ['tags','keywords','enumItemLabels','enumDescriptions','markdownEnumDescriptions'].forEach(name=>{
     extensionSettingList(schema,name).forEach(value=>parts.push(value));
   });
@@ -10109,6 +10131,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       const workspaceWritable=extensionSettingWorkspaceWritable(schema);
       const scopeName=extensionSettingScopeName(schema);
       const scopeBadge=extensionSettingScopeBadge(schema);
+      const syncMeta=extensionSettingSyncMetadata(schema);
       const shortKey=key.split('.').pop()||key;
       const row=document.createElement('div');row.className='ext-setting-row settings-field';
       if(!workspaceWritable)row.classList.add('scope-readonly');
@@ -10117,7 +10140,9 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       row.dataset.modified=modified[key]?'1':'0';
       const tagList=['language-default',String(item.language||'').toLowerCase()]
         .concat(extensionSettingList(schema,'tags').map(value=>value.toLowerCase()))
-        .concat([scopeName,schema.restricted===true?'restricted':'',workspaceWritable?'':'scope-readonly']);
+        .concat([scopeName,schema.restricted===true?'restricted':'',
+          workspaceWritable?'':'scope-readonly',syncMeta.tag,
+          syncMeta.ignored?'sync-ignored':'',syncMeta.locked?'sync-locked':'']);
       row.dataset.extSettingTags=tagList.filter(Boolean).join('\n');
       row.dataset.extSettingSearch=[
         displayName,extId,override,item.language,
@@ -10133,6 +10158,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
         const scopeEl=document.createElement('span');scopeEl.className='ext-setting-scope-badge';scopeEl.textContent=scopeBadge;
         head.appendChild(scopeEl);
       }
+      appendExtensionSettingSyncBadge(head,syncMeta);
       if(schema.restricted===true){
         const restrictedEl=document.createElement('span');restrictedEl.className='ext-setting-scope-badge';restrictedEl.textContent='Restricted';
         head.appendChild(restrictedEl);
@@ -10287,6 +10313,7 @@ async function renderExtensionSettings(){
       const workspaceWritable=extensionSettingWorkspaceWritable(schema);
       const scopeName=extensionSettingScopeName(schema);
       const scopeBadge=extensionSettingScopeBadge(schema);
+      const syncMeta=extensionSettingSyncMetadata(schema);
       const shortKey=key.split('.').pop()||key;
       const row=document.createElement('div');row.className='ext-setting-row settings-field';row.dataset.extSettingKey=key;
       if(!workspaceWritable)row.classList.add('scope-readonly');
@@ -10298,6 +10325,7 @@ async function renderExtensionSettings(){
         const scopeEl=document.createElement('span');scopeEl.className='ext-setting-scope-badge';scopeEl.textContent=scopeBadge;
         head.appendChild(scopeEl);
       }
+      appendExtensionSettingSyncBadge(head,syncMeta);
       if(schema.restricted===true){
         const restrictedEl=document.createElement('span');restrictedEl.className='ext-setting-scope-badge';restrictedEl.textContent='Restricted';
         head.appendChild(restrictedEl);
@@ -10316,7 +10344,9 @@ async function renderExtensionSettings(){
       if(deprecation){const dep=document.createElement('div');dep.className='ext-setting-deprecated';appendExtensionSettingMarkdown(dep,deprecation);row.appendChild(dep)}
       const schemaSummary=extensionSettingSchemaSummary(schema,type);
       row.dataset.extSettingTags=extensionSettingList(schema,'tags').map(value=>value.toLowerCase())
-        .concat([scopeName,schema.restricted===true?'restricted':'',workspaceWritable?'':'scope-readonly'])
+        .concat([scopeName,schema.restricted===true?'restricted':'',
+          workspaceWritable?'':'scope-readonly',syncMeta.tag,
+          syncMeta.ignored?'sync-ignored':'',syncMeta.locked?'sync-locked':''])
         .filter(Boolean).join('\n');
       row.dataset.extSettingSearch=extensionSettingSearchText(key,schema,type,description,deprecation,schemaSummary);
       if(schemaSummary){const meta=document.createElement('div');meta.className='ext-setting-schema';meta.textContent=schemaSummary;row.appendChild(meta)}

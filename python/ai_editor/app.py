@@ -8184,6 +8184,11 @@ class AIEditorAPI:
             ws_state = ctx.workspace_state if ctx else None
             properties = cfg.get("properties", {})
             values: Dict[str, Any] = {}
+            scopes: Dict[str, str] = {}
+            workspace_writable: Dict[str, bool] = {}
+            restricted: Dict[str, bool] = {}
+            sync_ignored: Dict[str, bool] = {}
+            sync_ignore_locked: Dict[str, bool] = {}
             if isinstance(properties, dict):
                 properties = {
                     key: schema
@@ -8191,6 +8196,15 @@ class AIEditorAPI:
                     if isinstance(schema, dict)
                     and self._extension_setting_included(schema)
                 }
+                for key, schema in properties.items():
+                    scopes[key] = self._extension_setting_scope(schema)
+                    workspace_writable[key] = (
+                        self._extension_setting_workspace_writable(schema))
+                    restricted[key] = bool(schema.get("restricted") is True)
+                    sync_ignored[key] = (
+                        self._extension_setting_sync_ignored(schema))
+                    sync_ignore_locked[key] = (
+                        self._extension_setting_sync_ignore_locked(schema))
             else:
                 properties = {}
             if properties and ws_state:
@@ -8203,6 +8217,11 @@ class AIEditorAPI:
                 "title": cfg.get("title", eid),
                 "properties": properties,
                 "values": values,
+                "scopes": scopes,
+                "workspaceWritable": workspace_writable,
+                "restricted": restricted,
+                "syncIgnored": sync_ignored,
+                "syncIgnoreLocked": sync_ignore_locked,
             })
         return {"configurations": result}
 
@@ -8247,6 +8266,8 @@ class AIEditorAPI:
             scopes: Dict[str, str] = {}
             workspace_writable: Dict[str, bool] = {}
             restricted: Dict[str, bool] = {}
+            sync_ignored: Dict[str, bool] = {}
+            sync_ignore_locked: Dict[str, bool] = {}
             configured_keys = set(ws_state.keys()) if ws_state else set()
             visible_props: Dict[str, Dict[str, Any]] = {}
             for key, schema in props.items():
@@ -8259,6 +8280,10 @@ class AIEditorAPI:
                 workspace_writable[key] = (
                     self._extension_setting_workspace_writable(schema))
                 restricted[key] = bool(schema.get("restricted") is True)
+                sync_ignored[key] = (
+                    self._extension_setting_sync_ignored(schema))
+                sync_ignore_locked[key] = (
+                    self._extension_setting_sync_ignore_locked(schema))
                 has_default = key in default_overrides or "default" in schema
                 if has_default:
                     defaults[key] = (
@@ -8286,6 +8311,8 @@ class AIEditorAPI:
                 "scopes": scopes,
                 "workspaceWritable": workspace_writable,
                 "restricted": restricted,
+                "syncIgnored": sync_ignored,
+                "syncIgnoreLocked": sync_ignore_locked,
             })
         return {"configurations": result, "languageDefaults": language_defaults}
 
@@ -8404,6 +8431,20 @@ class AIEditorAPI:
         scope = cls._extension_setting_scope(schema)
         return (
             f"Setting scope '{scope}' does not support workspace overrides")
+
+    @staticmethod
+    def _extension_setting_sync_ignored(schema: Dict[str, Any]) -> bool:
+        if not isinstance(schema, dict):
+            return False
+        return (
+            schema.get("ignoreSync") is True
+            or schema.get("disallowSyncIgnore") is True)
+
+    @staticmethod
+    def _extension_setting_sync_ignore_locked(schema: Dict[str, Any]) -> bool:
+        return (
+            isinstance(schema, dict)
+            and schema.get("disallowSyncIgnore") is True)
 
     @staticmethod
     def _extension_schema_type(schema: Dict[str, Any]) -> str:
@@ -8700,6 +8741,17 @@ class AIEditorAPI:
                             schemas.get(setting_key, {}).get("restricted") is True)
                         for setting_key in settings
                     }
+                    sync_ignored = {
+                        setting_key: self._extension_setting_sync_ignored(
+                            schemas.get(setting_key, {}))
+                        for setting_key in settings
+                    }
+                    sync_ignore_locked = {
+                        setting_key: (
+                            self._extension_setting_sync_ignore_locked(
+                                schemas.get(setting_key, {})))
+                        for setting_key in settings
+                    }
                     result.append({
                         "extension_id": eid,
                         "display_name": display_name,
@@ -8714,6 +8766,8 @@ class AIEditorAPI:
                         "scopes": scopes,
                         "workspaceWritable": workspace_writable,
                         "restricted": restricted,
+                        "syncIgnored": sync_ignored,
+                        "syncIgnoreLocked": sync_ignore_locked,
                         "count": len(settings),
                     })
         result.sort(key=lambda item: (
