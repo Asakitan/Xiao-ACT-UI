@@ -5435,6 +5435,8 @@ def test_app_extension_runtime_support() -> None:
     node_inactive_tmp = ""
     node_lazy_tmp = ""
     node_workspace_contains_tmp = ""
+    node_dependency_tmp = ""
+    node_dependent_tmp = ""
     node_storage_tmp = ""
     extension_host_module._host = ExtensionHost()
     try:
@@ -6315,6 +6317,10 @@ def test_app_extension_runtime_support() -> None:
             node_lazy_tmp = tempfile.mkdtemp(prefix="sao_node_lazy_ext_")
             node_workspace_contains_tmp = tempfile.mkdtemp(
                 prefix="sao_node_workspace_contains_ext_")
+            node_dependency_tmp = tempfile.mkdtemp(
+                prefix="sao_node_dependency_ext_")
+            node_dependent_tmp = tempfile.mkdtemp(
+                prefix="sao_node_dependent_ext_")
             node_storage_tmp = tempfile.mkdtemp(prefix="sao_node_storage_")
             node_inactive_js = r"""
 async function activate(context) {
@@ -6406,6 +6412,69 @@ module.exports = { activate };
                         }],
                     },
                 }, node_workspace_contains_tmp))
+            node_dependency_js = r"""
+async function activate(context) {
+  globalThis.__saoNodeDependencyOrder =
+    globalThis.__saoNodeDependencyOrder || [];
+  globalThis.__saoNodeDependencyOrder.push('dependency');
+  return {
+    name: 'nodeDependencyApi',
+    extensionId: context.extension && context.extension.id,
+  };
+}
+module.exports = { activate };
+"""
+            with open(os.path.join(node_dependency_tmp, "extension.js"),
+                      "w", encoding="utf-8") as fh:
+                fh.write(node_dependency_js)
+            node_dependency_desc = ExtensionDescription.from_package_json({
+                "name": "node-dependency",
+                "publisher": "selftest",
+                "version": "0.0.1",
+                "displayName": "Node Dependency",
+                "main": "./extension.js",
+            }, node_dependency_tmp)
+            node_dependent_js = r"""
+const vscode = require('vscode');
+async function activate(context) {
+  const order = globalThis.__saoNodeDependencyOrder || [];
+  globalThis.__saoNodeDependencyOrder = order;
+  order.push('dependent');
+  vscode.commands.registerCommand('selftest.node.dependentCommand', () => ({
+    order: [...order],
+    dependencyBeforeDependent:
+      order.indexOf('dependency') >= 0
+      && order.indexOf('dependency') < order.indexOf('dependent'),
+    extensionId: context.extension && context.extension.id,
+    packageName: context.extension && context.extension.packageJSON
+      && context.extension.packageJSON.name,
+  }));
+  return { name: 'nodeDependentApi' };
+}
+module.exports = { activate };
+"""
+            with open(os.path.join(node_dependent_tmp, "extension.js"),
+                      "w", encoding="utf-8") as fh:
+                fh.write(node_dependent_js)
+            node_dependent_desc = ExtensionDescription.from_package_json({
+                "name": "node-dependent",
+                "publisher": "selftest",
+                "version": "0.0.1",
+                "displayName": "Node Dependent",
+                "main": "./extension.js",
+                "activationEvents": [
+                    "onCommand:selftest.node.dependentCommand",
+                ],
+                "extensionDependencies": [
+                    "selftest.node-dependency",
+                ],
+                "contributes": {
+                    "commands": [{
+                        "command": "selftest.node.dependentCommand",
+                        "title": "Node Dependent Command",
+                    }],
+                },
+            }, node_dependent_tmp)
             node_extension_js = r"""
 const vscode = require('vscode');
 const output = vscode.window.createOutputChannel('node-tree-selftest');
@@ -7194,6 +7263,8 @@ module.exports = { activate, deactivate };
             api._ext_host.registry.register(node_tree_desc)
             api._ext_host.registry.register(node_lazy_desc)
             api._ext_host.registry.register(node_workspace_contains_desc)
+            api._ext_host.registry.register(node_dependency_desc)
+            api._ext_host.registry.register(node_dependent_desc)
             class _NodeUiBridge:
                 def __init__(self) -> None:
                     self.webviews = {}
@@ -7245,6 +7316,8 @@ module.exports = { activate, deactivate };
                         node_inactive_desc,
                         node_lazy_desc,
                         node_workspace_contains_desc,
+                        node_dependency_desc,
+                        node_dependent_desc,
                     ])
                     api._install_node_activation_event_bridge()
                     node_host.send_settings_sync({
@@ -7302,6 +7375,18 @@ module.exports = { activate, deactivate };
                     except Exception as exc:
                         node_workspace_contains_command_result = {
                             "_error": str(exc)}
+                node_dependency_before_command = (
+                    node_dependency_desc.id not in node_host._activated_ids
+                    and node_dependent_desc.id not in node_host._activated_ids)
+                try:
+                    node_dependent_command_result = (
+                        api._ext_host.commands.execute(
+                            "selftest.node.dependentCommand"))
+                except Exception as exc:
+                    node_dependent_command_result = {"_error": str(exc)}
+                node_dependency_after_command = (
+                    node_dependency_desc.id in node_host._activated_ids
+                    and node_dependent_desc.id in node_host._activated_ids)
                 node_registered = _wait_until(
                     lambda: "selftest.node.tree" in api._vscode_ns._tree_data_providers,
                     timeout=3.0)
@@ -8231,6 +8316,22 @@ module.exports = { activate, deactivate };
                        json.dumps(
                            node_workspace_contains_command_result,
                            ensure_ascii=False))
+                _check("node host activates extension dependencies first",
+                       node_started is True
+                       and node_dependency_before_command is True
+                       and node_dependency_after_command is True
+                       and isinstance(node_dependent_command_result, dict)
+                       and node_dependent_command_result.get(
+                           "dependencyBeforeDependent") is True
+                       and node_dependent_command_result.get(
+                           "order") == ["dependency", "dependent"]
+                       and node_dependent_command_result.get(
+                           "extensionId") == node_dependent_desc.id
+                       and node_dependent_command_result.get(
+                           "packageName") == node_dependent_desc.name,
+                       json.dumps(
+                           node_dependent_command_result,
+                           ensure_ascii=False))
                 _check("node host tree provider registers dynamic activity view",
                        node_started is True
                        and sent is True
@@ -8496,6 +8597,10 @@ module.exports = { activate, deactivate };
             shutil.rmtree(node_lazy_tmp, ignore_errors=True)
         if node_workspace_contains_tmp:
             shutil.rmtree(node_workspace_contains_tmp, ignore_errors=True)
+        if node_dependency_tmp:
+            shutil.rmtree(node_dependency_tmp, ignore_errors=True)
+        if node_dependent_tmp:
+            shutil.rmtree(node_dependent_tmp, ignore_errors=True)
         if node_storage_tmp:
             shutil.rmtree(node_storage_tmp, ignore_errors=True)
 

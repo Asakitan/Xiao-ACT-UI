@@ -5795,13 +5795,45 @@ class AIEditorAPI:
             seen.add(ext_id)
         return node_exts
 
+    def _node_extensions_with_dependencies(
+            self, extensions: List[Any]) -> List[Any]:
+        ordered: List[Any] = []
+        seen = set()
+        visiting = set()
+
+        def visit(ext: Any) -> None:
+            ext_id = getattr(ext, "id", "")
+            if not ext_id or ext_id in seen or ext_id in visiting:
+                return
+            visiting.add(ext_id)
+            for dep_id in getattr(ext, "extension_dependencies", []) or []:
+                try:
+                    dep = self._ext_host.registry.get(str(dep_id))
+                except Exception:
+                    dep = None
+                if (dep is None
+                        or not getattr(dep, "main", "")
+                        or not getattr(dep, "enabled", True)):
+                    continue
+                if self._extension_allowed(dep):
+                    visit(dep)
+            visiting.discard(ext_id)
+            seen.add(ext_id)
+            ordered.append(ext)
+
+        for ext in extensions:
+            visit(ext)
+        return ordered
+
     def _activate_node_extensions_for_event(
             self, event: str, wait: bool = True) -> int:
         node_host = getattr(self, "_node_ext_host", None)
         if node_host is None or not getattr(node_host, "is_running", False):
             return 0
+        candidates = self._node_extensions_with_dependencies(
+            self._node_extensions_for_activation_event(event))
         targets = [
-            ext for ext in self._node_extensions_for_activation_event(event)
+            ext for ext in candidates
             if (not node_host.is_extension_activated(ext.id)
                 and not node_host.is_extension_activation_pending(ext.id))
         ]
