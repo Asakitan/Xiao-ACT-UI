@@ -2547,6 +2547,10 @@ console.log("frontend auto-close behavior ok");
             and "function extensionSettingValidateJsonValue(value,type)" in html
             and "function extensionSettingSchemaSummary(schema,type)" in html
             and "function extensionSettingJsonRows(value,type)" in html
+            and "function extensionSettingTextRows(value)" in html
+            and "function extensionSettingUsesMultiline(schema,type)" in html
+            and "editPresentation" in html
+            and "multilineText" in html
             and "reset_extension_setting" in html
             and "markExtensionSettingRow" in html
             and "function applyExtensionSettingsFilter()" in html
@@ -2571,6 +2575,8 @@ console.log("frontend auto-close behavior ok");
             "extensionSettingSchemaSummary",
             "extensionSettingJson",
             "extensionSettingJsonRows",
+            "extensionSettingTextRows",
+            "extensionSettingUsesMultiline",
             "extensionSettingValidateJsonValue",
             "extensionSettingValidateSchemaValue",
             "setExtensionSettingInputValue",
@@ -2611,6 +2617,7 @@ const objectSchema = {
     mode: { type: "string", enum: ["auto", "manual"] }
   }
 };
+const multilineSchema = { type: "string", editPresentation: "multilineText" };
 const numberSchema = { type: "number", minimum: 1, maximum: 5 };
 const textarea = { type: "textarea", tagName: "TEXTAREA", value: "", rows: 0 };
 setExtensionSettingInputValue(textarea, arraySchema, "array", ["a", "b"]);
@@ -2645,6 +2652,13 @@ assert(extensionSettingSchemaSummary(arraySchema, "array") === "items: string",
        "array schema summary");
 assert(extensionSettingSchemaSummary(objectSchema, "object").indexOf("level") >= 0,
        "object schema summary");
+const textAreaSetting = { type: "textarea", tagName: "TEXTAREA", value: "", rows: 0 };
+setExtensionSettingInputValue(textAreaSetting, multilineSchema, "string", "alpha\nbeta\ncharlie");
+assert(extensionSettingUsesMultiline(multilineSchema, "string") === true,
+       "multiline string schema detected");
+assert(textAreaSetting.rows === 3, "multiline string rows");
+assert(readExtensionSettingInputValue(textAreaSetting, multilineSchema, "string") === "alpha\nbeta\ncharlie",
+       "multiline string value roundtrip");
 assert(extensionSettingSafeLinkTarget("javascript:alert(1)") === "",
        "unsafe markdown link blocked");
 const mdHost = makeNode("div");

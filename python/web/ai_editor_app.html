@@ -9731,6 +9731,13 @@ function extensionSettingJsonRows(value,type){
   const lines=extensionSettingJson(value,type).split('\n').length;
   return Math.max(3,Math.min(10,lines));
 }
+function extensionSettingTextRows(value){
+  const lines=String(value??'').split(/\r?\n/).length;
+  return Math.max(3,Math.min(10,lines));
+}
+function extensionSettingUsesMultiline(schema,type){
+  return type==='string'&&String(schema&&schema.editPresentation||'')==='multilineText';
+}
 function extensionSettingValidateJsonValue(value,type){
   if(type==='array'&&!Array.isArray(value))throw new Error('Expected JSON array');
   if(type==='object'&&(!value||typeof value!=='object'||Array.isArray(value)))throw new Error('Expected JSON object');
@@ -9783,7 +9790,10 @@ function setExtensionSettingInputValue(input,schema,type,value){
     input.value=extensionSettingJson(value,type);
     input.rows=extensionSettingJsonRows(value,type);
   }
-  else input.value=value!=null?String(value):'';
+  else {
+    input.value=value!=null?String(value):'';
+    if(input.tagName==='TEXTAREA')input.rows=extensionSettingTextRows(input.value);
+  }
 }
 function readExtensionSettingInputValue(input,schema,type){
   if(input.type==='checkbox')return !!input.checked;
@@ -9945,6 +9955,9 @@ async function renderExtensionSettings(){
         row.appendChild(input);
       } else if(type==='array'||type==='object'){
         input=document.createElement('textarea');input.rows=3;input.spellcheck=false;
+        row.appendChild(input);
+      } else if(extensionSettingUsesMultiline(schema,type)){
+        input=document.createElement('textarea');input.rows=3;input.spellcheck=true;
         row.appendChild(input);
       } else {
         input=document.createElement('input');input.type='text';
