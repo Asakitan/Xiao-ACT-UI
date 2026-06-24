@@ -227,6 +227,15 @@ class DocumentHighlight {
     }
 }
 
+class EvaluatableExpression {
+    constructor(range, expression) {
+        this.range = range instanceof Range ? range : _rangeFromPayload(range);
+        if (expression !== undefined && expression !== null) {
+            this.expression = String(expression);
+        }
+    }
+}
+
 class DataTransferFile {
     constructor(name, uri, data) {
         this.name = name === undefined || name === null ? '' : String(name);
@@ -4597,6 +4606,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         Selection,
         Location,
         DocumentHighlight,
+        EvaluatableExpression,
         SymbolInformation,
         CallHierarchyItem,
         CallHierarchyIncomingCall,
@@ -5132,6 +5142,9 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 registerDocumentHighlightProvider(selector, provider) {
                     return _registerLangProvider('documentHighlight', selector, provider);
                 },
+                registerEvaluatableExpressionProvider(selector, provider) {
+                    return _registerLangProvider('evaluatableExpression', selector, provider);
+                },
                 registerLinkedEditingRangeProvider(selector, provider) {
                     return _registerLangProvider('linkedEditing', selector, provider);
                 },
@@ -5557,6 +5570,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         DataTransfer,
         DataTransferItem,
         DocumentHighlight,
+        EvaluatableExpression,
         SymbolInformation,
         Color,
         ColorInformation,
@@ -6796,6 +6810,7 @@ function _languageProviderMethod(kind) {
         implementation: 'provideImplementation',
         references: 'provideReferences',
         documentHighlight: 'provideDocumentHighlights',
+        evaluatableExpression: 'provideEvaluatableExpression',
         prepareRename: 'prepareRename',
         rename: 'provideRenameEdits',
         documentLink: 'provideDocumentLinks',
@@ -7233,6 +7248,37 @@ async function handleLanguageProviderRequest(msg) {
                             ok: true,
                             kind,
                             value: _serializeHierarchyItems(provider, value, 'typeHierarchy'),
+                        });
+                        return;
+                    }
+                } catch (err) {
+                    log(`language provider ${kind} error: ${err.message}`);
+                }
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: null,
+            });
+            return;
+        }
+
+        if (kind === 'evaluatableExpression') {
+            for (const entry of providers) {
+                const provider = entry.provider;
+                const fn = provider && provider[methodName];
+                if (typeof fn !== 'function') continue;
+                try {
+                    const value = await fn.call(provider, document, position, token);
+                    if (value !== undefined && value !== null) {
+                        send({
+                            type: 'language_provider_response',
+                            requestId,
+                            ok: true,
+                            kind,
+                            value: _serializeLanguageValue(value),
                         });
                         return;
                     }

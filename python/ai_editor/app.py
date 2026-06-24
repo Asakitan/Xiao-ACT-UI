@@ -508,7 +508,7 @@ def load_provider_config(gui_ref: Any = None) -> ProviderConfig:
 
 _LANGUAGE_RESULT_ATTRS = (
     "items", "isIncomplete", "label", "kind", "detail", "documentation",
-    "sortText", "filterText", "insertText", "range", "textEdit",
+    "sortText", "filterText", "insertText", "range", "expression", "textEdit",
     "additionalTextEdits", "command", "arguments", "contents", "uri", "targetUri",
     "targetRange", "originSelectionRange", "name", "containerName",
     "children", "selectionRange", "diagnostics", "edit", "title",
@@ -3731,6 +3731,10 @@ class AIEditorAPI:
             "documentHighlight": "documentHighlight",
             "documentHighlights": "documentHighlight",
             "highlights": "documentHighlight",
+            "evaluatableExpression": "evaluatableExpression",
+            "evaluatableExpressions": "evaluatableExpression",
+            "evaluateExpression": "evaluatableExpression",
+            "debugHoverExpression": "evaluatableExpression",
             "prepareRename": "prepareRename",
             "prepare_rename": "prepareRename",
             "rename": "rename",
@@ -3981,6 +3985,19 @@ class AIEditorAPI:
                     "version": document.version,
                     "highlights": value if isinstance(value, list) else (
                         [] if value is None else [value]),
+                }
+            if kind == "evaluatableExpression":
+                result = self._ext_host.commands.execute(
+                    "_executeEvaluatableExpressionProvider",
+                    document.uri,
+                    position,
+                )
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "expression": _json_ready_language_value(result),
                 }
             if kind == "prepareRename":
                 result = self._ext_host.commands.execute(

@@ -1041,6 +1041,13 @@ class DocumentHighlight:
     kind: int = 0
 
 
+class EvaluatableExpression:
+    def __init__(self, range: Any, expression: Any = None) -> None:
+        self.range = range
+        if expression is not None:
+            self.expression = str(expression)
+
+
 class SymbolInformation:
     def __init__(
             self,
@@ -1910,6 +1917,7 @@ class VscodeNamespace:
             "vscode.executeReferenceProvider": self._execute_reference_provider,
             "_executeDocumentHighlightProvider": self._execute_document_highlight_provider,
             "vscode.executeDocumentHighlightProvider": self._execute_document_highlight_provider,
+            "_executeEvaluatableExpressionProvider": self._execute_evaluatable_expression_provider,
             "_executeDocumentRenameProvider": self._execute_rename_provider,
             "vscode.executeDocumentRenameProvider": self._execute_rename_provider,
             "_executePrepareRename": self._execute_prepare_rename_provider,
@@ -2032,7 +2040,8 @@ class VscodeNamespace:
             return [cls._language_value_payload(item, depth + 1)
                     for item in value]
         attrs = (
-            "name", "kind", "detail", "uri", "range", "selectionRange",
+            "name", "kind", "detail", "uri", "range", "expression",
+            "selectionRange",
             "tags", "from", "fromRanges", "to",
         )
         data: Dict[str, Any] = {}
@@ -2439,6 +2448,26 @@ class VscodeNamespace:
                 document,
                 position=self._position_payload(pos))))
         return results
+
+    def _execute_evaluatable_expression_provider(
+            self, uri: Any, position: Any = None) -> Any:
+        document = self._resolve_language_document(uri)
+        pos = _coerce_position(position)
+        for entry in self._matching_language_providers(
+                "evaluatableExpression", document):
+            value = self._call_language_provider(
+                entry.get("provider"), "provideEvaluatableExpression",
+                (document, pos, CancellationToken.NONE),
+                default=None)
+            if value is not None:
+                return value
+        external = self._request_external_language_provider(
+            "evaluatableExpression",
+            document,
+            position=self._position_payload(pos))
+        if isinstance(external, list):
+            return external[0] if external else None
+        return external
 
     def _execute_prepare_rename_provider(
             self, uri: Any, position: Any = None) -> Any:
@@ -3457,6 +3486,7 @@ class VscodeNamespace:
             "LanguageModelError": LanguageModelError,
             "Location": Location,
             "DocumentHighlight": DocumentHighlight,
+            "EvaluatableExpression": EvaluatableExpression,
             "SymbolInformation": SymbolInformation,
             "DataTransfer": DataTransfer,
             "DataTransferItem": DataTransferItem,
@@ -4366,6 +4396,7 @@ class VscodeNamespace:
             "registerImplementationProvider": lambda selector, provider: self._register_language_provider("implementation", selector, provider),
             "registerReferenceProvider": lambda selector, provider: self._register_language_provider("references", selector, provider),
             "registerDocumentHighlightProvider": lambda selector, provider: self._register_language_provider("documentHighlight", selector, provider),
+            "registerEvaluatableExpressionProvider": lambda selector, provider: self._register_language_provider("evaluatableExpression", selector, provider),
             "registerRenameProvider": lambda selector, provider: self._register_language_provider("rename", selector, provider),
             "registerDocumentSymbolProvider": lambda selector, provider: self._register_language_provider("documentSymbol", selector, provider),
             "registerWorkspaceSymbolProvider": lambda provider: self._register_language_provider("workspaceSymbol", None, provider),

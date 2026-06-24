@@ -431,7 +431,8 @@ def test_app_settings_parity() -> None:
         CodeLens, FoldingRange, SelectionRange, SemanticTokensLegend,
         SemanticTokensBuilder, WorkspaceEdit, Location, Color,
         ColorInformation, ColorPresentation, SymbolInformation,
-        DocumentHighlight, CallHierarchyItem, CallHierarchyIncomingCall,
+        DocumentHighlight, EvaluatableExpression, CallHierarchyItem,
+        CallHierarchyIncomingCall,
         CallHierarchyOutgoingCall, TypeHierarchyItem, Uri,
         DocumentDropOrPasteEditKind, DocumentDropEdit, DocumentPasteEdit,
     )
@@ -678,6 +679,13 @@ def test_app_settings_parity() -> None:
             return [DocumentHighlight(
                 Range(Position(0, 0), Position(0, 6)), 2)]
 
+        def provideEvaluatableExpression(self, document, position, token):
+            self.seen_evaluatable_position = position
+            return EvaluatableExpression(
+                Range(Position(0, 0), Position(0, 6)),
+                "buffer.eval",
+            )
+
         def provideWorkspaceSymbols(self, query, token):
             self.seen_workspace_query = query
             return [SymbolInformation(
@@ -795,6 +803,7 @@ def test_app_settings_parity() -> None:
         "dropMimeTypes": ["text/plain"],
     })
     lang_api["registerDocumentHighlightProvider"]("python", editor_provider)
+    lang_api["registerEvaluatableExpressionProvider"]("python", editor_provider)
     lang_api["registerWorkspaceSymbolProvider"](editor_provider)
     lang_api["registerColorProvider"]("python", editor_provider)
     lang_api["registerDocumentSemanticTokensProvider"](
@@ -894,6 +903,9 @@ def test_app_settings_parity() -> None:
         document_highlight_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="documentHighlight",
                  position={"line": 0, "character": 1}))
+        evaluatable_expression_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="evaluatableExpression",
+                 position={"line": 0, "character": 2}))
         workspace_symbol_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="workspaceSymbol", query="buf"))
         workspace_symbol = workspace_symbol_result.get("symbols", [{}])[0]
@@ -1084,6 +1096,13 @@ def test_app_settings_parity() -> None:
                and editor_provider.seen_highlight_position.character == 1
                and highlight.get("kind") == 2
                and highlight.get("range", {}).get("end", {})
+               .get("character") == 6)
+        expression = evaluatable_expression_result.get("expression", {})
+        _check("editor_language_provider serializes evaluatable expressions",
+               evaluatable_expression_result.get("ok") is True
+               and editor_provider.seen_evaluatable_position.character == 2
+               and expression.get("expression") == "buffer.eval"
+               and expression.get("range", {}).get("end", {})
                .get("character") == 6)
         _check("editor_language_provider serializes workspace symbols",
                workspace_symbol_result.get("ok") is True
@@ -4314,7 +4333,8 @@ def test_vscode_api() -> None:
         CodeLens, FoldingRange, SelectionRange, SemanticTokensLegend,
         SemanticTokensBuilder, TextEdit, Location, SignatureHelp,
         SignatureInformation, Color, ColorInformation, ColorPresentation,
-        SymbolInformation, DocumentHighlight, ParameterInformation,
+        SymbolInformation, DocumentHighlight, EvaluatableExpression,
+        ParameterInformation,
         CallHierarchyItem, CallHierarchyIncomingCall,
         CallHierarchyOutgoingCall, TypeHierarchyItem,
         DocumentDropOrPasteEditKind, DocumentDropEdit, DocumentPasteEdit,
@@ -4360,6 +4380,8 @@ def test_vscode_api() -> None:
            api["SymbolInformation"] is SymbolInformation)
     _check("api.DocumentHighlight",
            api["DocumentHighlight"] is DocumentHighlight)
+    _check("api.EvaluatableExpression",
+           api["EvaluatableExpression"] is EvaluatableExpression)
     _check("api.DocumentDropEdit",
            api["DocumentDropEdit"] is DocumentDropEdit
            and api["DocumentPasteEdit"] is DocumentPasteEdit)
@@ -4917,6 +4939,17 @@ def test_vscode_api() -> None:
                     api["DocumentHighlightKind"]["Write"],
                 )]
 
+        class _EvaluatableExpressionProvider:
+            def __init__(self):
+                self.positions = []
+
+            def provideEvaluatableExpression(self, document, position, token):
+                self.positions.append(position)
+                return EvaluatableExpression(
+                    Range(Position(0, 0), Position(0, 4)),
+                    "selftest.eval",
+                )
+
         class _WorkspaceSymbolProvider:
             def __init__(self):
                 self.queries = []
@@ -5110,6 +5143,9 @@ def test_vscode_api() -> None:
         document_highlight_provider = _DocumentHighlightProvider()
         api["languages"]["registerDocumentHighlightProvider"](
             "python", document_highlight_provider)
+        evaluatable_expression_provider = _EvaluatableExpressionProvider()
+        api["languages"]["registerEvaluatableExpressionProvider"](
+            "python", evaluatable_expression_provider)
         workspace_symbol_provider = _WorkspaceSymbolProvider()
         api["languages"]["registerWorkspaceSymbolProvider"](
             workspace_symbol_provider)
@@ -5221,6 +5257,10 @@ def test_vscode_api() -> None:
             "vscode.executeDocumentHighlightProvider",
             doc.uri,
             Position(0, 2))
+        evaluatable_expression = api["commands"]["executeCommand"](
+            "_executeEvaluatableExpressionProvider",
+            doc.uri,
+            Position(0, 3))
         workspace_symbols = api["commands"]["executeCommand"](
             "vscode.executeWorkspaceSymbolProvider", "self")
         workspace_symbol_resolved = api["commands"]["executeCommand"](
@@ -5398,6 +5438,11 @@ def test_vscode_api() -> None:
                and document_highlights[0].kind
                == api["DocumentHighlightKind"]["Write"]
                and document_highlights[0].range.end.character == 4)
+        _check("executeEvaluatableExpressionProvider invokes matching providers",
+               isinstance(evaluatable_expression, EvaluatableExpression)
+               and evaluatable_expression_provider.positions[-1].character == 3
+               and evaluatable_expression.expression == "selftest.eval"
+               and evaluatable_expression.range.end.character == 4)
         _check("executeWorkspaceSymbolProvider invokes matching providers",
                workspace_symbols
                and workspace_symbols[0].name == "selftestWorkspaceSymbol"
@@ -5516,6 +5561,8 @@ def test_vscode_api() -> None:
                and "vscode.provideSubtypes"
                in api["commands"]["getCommands"]()
                and "vscode.executeDocumentHighlightProvider"
+               in api["commands"]["getCommands"]()
+               and "_executeEvaluatableExpressionProvider"
                in api["commands"]["getCommands"]()
                and "vscode.executeWorkspaceSymbolProvider"
                in api["commands"]["getCommands"]()
@@ -7594,6 +7641,14 @@ async function activate(context) {
       )];
     },
   });
+  vscode.languages.registerEvaluatableExpressionProvider('python', {
+    provideEvaluatableExpression(document, position, token) {
+      return new vscode.EvaluatableExpression(
+        new vscode.Range(0, 0, 0, 4),
+        'node.eval',
+      );
+    },
+  });
   vscode.languages.registerDocumentLinkProvider('python', {
     provideDocumentLinks(document, token) {
       const link = new vscode.DocumentLink(new vscode.Range(0, 0, 0, 4));
@@ -9430,6 +9485,9 @@ module.exports = { activate, deactivate };
                 node_document_highlights = api._ext_host.commands.execute(
                     "vscode.executeDocumentHighlightProvider",
                     node_uri, Position(0, 1))
+                node_evaluatable_expression = api._ext_host.commands.execute(
+                    "_executeEvaluatableExpressionProvider",
+                    node_uri, Position(0, 1))
                 node_document_links = api._ext_host.commands.execute(
                     "vscode.executeLinkProvider", node_uri, 1)
                 node_inlay_hints_unresolved = api._ext_host.commands.execute(
@@ -9936,6 +9994,12 @@ module.exports = { activate, deactivate };
                        and node_document_highlights[0].get("kind") == 1
                        and node_document_highlights[0].get("range", {})
                        .get("start", {}).get("character") == 1)
+                _check("node host language provider invokes JS evaluatable expressions",
+                       node_evaluatable_expression
+                       and node_evaluatable_expression.get("expression")
+                       == "node.eval"
+                       and node_evaluatable_expression.get("range", {})
+                       .get("end", {}).get("character") == 4)
                 _check("node host language provider invokes JS document links",
                        node_document_links
                        and node_document_links[0].get("target", "").endswith("node-link.py")
