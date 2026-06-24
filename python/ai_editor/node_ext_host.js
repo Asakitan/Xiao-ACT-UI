@@ -1253,6 +1253,7 @@ const _commands = new Map();             // commandId -> handler
 const _pythonCommandRequests = new Map(); // requestId -> { resolve, reject, timer }
 const _pythonLmRequests = new Map();      // requestId -> { resolve, reject, timer }
 const _windowDialogRequests = new Map();  // requestId -> { resolve, timer, cleanup, kind }
+const _envClipboardRequests = new Map();  // requestId -> { resolve, timer, cleanup, action }
 const _webviewViewProviders = new Map(); // viewType -> { provider, options }
 const _webviewViews = new Map();         // viewId -> WebviewView
 const _webviewPanelSerializers = new Map(); // viewType -> { serializer, extensionId, extensionPath }
@@ -1276,6 +1277,8 @@ let _nextPythonCommandRequestHandle = 1;
 let _nextPythonLmRequestHandle = 1;
 let _nextExtensionActivationRequestHandle = 1;
 let _nextWindowDialogRequestHandle = 1;
+let _nextEnvClipboardRequestHandle = 1;
+let _envClipboardFallbackText = '';
 const _languageDocumentTextCache = new Map(); // uri -> { version, text }
 const _workspaceTextDocuments = new Map(); // uri -> TextDocument-like object
 const _onDidOpenTextDocumentEmitter = new EventEmitter();
@@ -1874,6 +1877,54 @@ function _requestWindowDialog(kind, options = {}, token = undefined) {
             requestId,
             kind,
             options: _serializeWindowDialogOptions(kind, options),
+        });
+    });
+}
+
+function _handleEnvClipboardResponse(msg) {
+    const requestId = String(msg.requestId || '');
+    const pending = _envClipboardRequests.get(requestId);
+    if (!pending) return;
+    pending.cleanup?.();
+    if (msg.ok && pending.action === 'read') {
+        const value = msg.value && typeof msg.value === 'object' ? msg.value : {};
+        const text = value.text ?? msg.text ?? '';
+        _envClipboardFallbackText = String(text);
+        pending.resolve(_envClipboardFallbackText);
+    } else {
+        if (!msg.ok) {
+            log(`env.clipboard.${pending.action} failed: ${msg.error || 'unknown error'}`);
+        }
+        pending.resolve(
+            pending.action === 'read' ? _envClipboardFallbackText : undefined);
+    }
+}
+
+function _requestEnvClipboard(action, text = '', token = undefined) {
+    if (action === 'write') _envClipboardFallbackText = String(text ?? '');
+    if (token?.isCancellationRequested) {
+        return Promise.resolve(
+            action === 'read' ? _envClipboardFallbackText : undefined);
+    }
+    const requestId = `clip-${_nextEnvClipboardRequestHandle++}`;
+    return new Promise(resolve => {
+        let timer;
+        const cleanup = () => {
+            _envClipboardRequests.delete(requestId);
+            if (timer) clearTimeout(timer);
+        };
+        timer = setTimeout(() => {
+            const pending = _envClipboardRequests.get(requestId);
+            if (!pending) return;
+            cleanup();
+            resolve(action === 'read' ? _envClipboardFallbackText : undefined);
+        }, 3000);
+        _envClipboardRequests.set(requestId, { resolve, timer, cleanup, action });
+        send({
+            type: 'env_clipboard_request',
+            requestId,
+            action,
+            text: String(text ?? ''),
         });
     });
 }
@@ -4534,8 +4585,8 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             sessionId: `session-${Date.now()}`,
             uriScheme: 'vscode',
             clipboard: {
-                readText: () => Promise.resolve(''),
-                writeText: () => Promise.resolve(),
+                readText: () => _requestEnvClipboard('read'),
+                writeText: value => _requestEnvClipboard('write', value),
             },
             async openExternal(uri) {
                 const parsed = _workspaceUriFromInput(uri);
@@ -7241,6 +7292,9 @@ async function handleMessage(msg) {
             break;
         case 'window_dialog_response':
             _handleWindowDialogResponse(msg);
+            break;
+        case 'env_clipboard_response':
+            _handleEnvClipboardResponse(msg);
             break;
         case 'lm_model_response':
             _handlePythonLmResponse(msg);

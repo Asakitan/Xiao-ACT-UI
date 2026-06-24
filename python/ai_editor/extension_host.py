@@ -2313,6 +2313,43 @@ class NodeExtensionHost:
                     "error": error,
                 })
 
+        elif msg_type == "env_clipboard_request":
+            request_id = str(msg.get("requestId", ""))
+            action = str(msg.get("action", ""))
+            value: Any = {}
+            ok = True
+            error = ""
+            try:
+                if action == "read":
+                    handler = (
+                        getattr(self._ui_bridge, "read_clipboard_text", None)
+                        if self._ui_bridge else None)
+                    value = {
+                        "text": str(handler() if callable(handler) else "")
+                    }
+                elif action == "write":
+                    handler = (
+                        getattr(self._ui_bridge, "write_clipboard_text", None)
+                        if self._ui_bridge else None)
+                    if callable(handler):
+                        handler(str(msg.get("text", "")))
+                    value = {}
+                else:
+                    ok = False
+                    error = f"Unknown clipboard action: {action}"
+            except Exception as exc:
+                ok = False
+                error = str(exc)
+                _log.exception("[NodeExtHost] clipboard bridge failed")
+            if request_id:
+                self._send({
+                    "type": "env_clipboard_response",
+                    "requestId": request_id,
+                    "ok": ok,
+                    "value": value,
+                    "error": error,
+                })
+
         elif msg_type == "language_provider_registered":
             kind = str(msg.get("kind", ""))
             selector = msg.get("selector")

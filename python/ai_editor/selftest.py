@@ -3114,6 +3114,17 @@ console.log("quick input filter helpers ok");
            and "def show_window_dialog(self, kind: str,"
            in app_source
            and "create_file_dialog" in app_source)
+    _check("extension clipboard round-trips through Node host",
+           "env_clipboard_request" in node_ext_host_source
+           and "env_clipboard_response" in node_ext_host_source
+           and "readText: () => _requestEnvClipboard('read')" in node_ext_host_source
+           and "writeText: value => _requestEnvClipboard('write', value)"
+           in node_ext_host_source
+           and "env_clipboard_request" in extension_host_source
+           and "env_clipboard_response" in extension_host_source
+           and "def read_clipboard_text(self) -> str:" in app_source
+           and "def write_clipboard_text(self, text: str) -> None:"
+           in app_source)
     _check("extension workspace folder picker uses dynamic QuickPick",
            "showWorkspaceFolderPick(options, token)" in node_ext_host_source
            and "function _windowShowWorkspaceFolderPick" in node_ext_host_source
@@ -8138,6 +8149,11 @@ async function activate(context) {
       save: saveUri && saveUri.fsPath.replace(/\\/g, '/'),
     };
   });
+  vscode.commands.registerCommand('selftest.node.clipboardProbe', async () => {
+    await vscode.env.clipboard.writeText('node-clipboard-value');
+    const text = await vscode.env.clipboard.readText();
+    return { text };
+  });
   vscode.commands.registerCommand('selftest.node.messageOptionsProbe', async () => {
     const info = await vscode.window.showInformationMessage(
       'Info probe',
@@ -8577,6 +8593,8 @@ module.exports = { activate, deactivate };
                     self.progress = []
                     self.quick_inputs = []
                     self.node_host = None
+                    self.clipboard_text = ""
+                    self.clipboard_events = []
                     self.window_dialogs = []
                     self.open_dialog_paths = [
                         os.path.join(node_tree_tmp, "dialog-open.txt"),
@@ -8637,6 +8655,14 @@ module.exports = { activate, deactivate };
                     if kind == "save":
                         return {"path": self.save_dialog_path}
                     return {"cancelled": True}
+
+                def read_clipboard_text(self):
+                    self.clipboard_events.append(("read", self.clipboard_text))
+                    return self.clipboard_text
+
+                def write_clipboard_text(self, text):
+                    self.clipboard_text = str(text)
+                    self.clipboard_events.append(("write", self.clipboard_text))
 
             node_ui_bridge = _NodeUiBridge()
             node_host = NodeExtensionHost(
@@ -8794,6 +8820,15 @@ module.exports = { activate, deactivate };
                         "selftest.node.dialogProbe")
                 except Exception as exc:
                     node_dialog_probe = {"_error": str(exc)}
+                node_clipboard_command_registered = _wait_until(
+                    lambda: "selftest.node.clipboardProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                try:
+                    node_clipboard_probe = api._ext_host.commands.execute(
+                        "selftest.node.clipboardProbe")
+                except Exception as exc:
+                    node_clipboard_probe = {"_error": str(exc)}
                 node_message_options_command_registered = _wait_until(
                     lambda: "selftest.node.messageOptionsProbe"
                     in api._ext_host.commands.list_commands(),
@@ -10237,6 +10272,20 @@ module.exports = { activate, deactivate };
                        json.dumps({
                            "probe": node_dialog_probe,
                            "dialogs": node_dialog_events,
+                       }, ensure_ascii=False, default=str))
+                _check("node host clipboard APIs use Python bridge",
+                       node_started is True
+                       and node_clipboard_command_registered
+                       and isinstance(node_clipboard_probe, dict)
+                       and node_clipboard_probe.get("text")
+                       == "node-clipboard-value"
+                       and ("write", "node-clipboard-value")
+                       in node_ui_bridge.clipboard_events
+                       and ("read", "node-clipboard-value")
+                       in node_ui_bridge.clipboard_events,
+                       json.dumps({
+                           "probe": node_clipboard_probe,
+                           "events": node_ui_bridge.clipboard_events,
                        }, ensure_ascii=False, default=str))
                 _check("node host message APIs separate options from actions",
                        node_started is True

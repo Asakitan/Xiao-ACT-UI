@@ -893,6 +893,34 @@ class _AIEditorUIBridge:
         """Forward extension-created QuickInput state to the frontend."""
         self._api._emit("quick_input", dict(payload or {}))
 
+    def read_clipboard_text(self) -> str:
+        try:
+            import tkinter as _tk
+            root = _tk.Tk()
+            root.withdraw()
+            try:
+                return str(root.clipboard_get())
+            finally:
+                root.destroy()
+        except Exception:
+            return str(getattr(self._api, "_clipboard_text", ""))
+
+    def write_clipboard_text(self, text: str) -> None:
+        value = str(text or "")
+        setattr(self._api, "_clipboard_text", value)
+        try:
+            import tkinter as _tk
+            root = _tk.Tk()
+            root.withdraw()
+            try:
+                root.clipboard_clear()
+                root.clipboard_append(value)
+                root.update()
+            finally:
+                root.destroy()
+        except Exception:
+            pass
+
     # -- Status bar --
     def show_status_bar_item(self, item_id: str, text: str,
                              tooltip: str, command: str,
