@@ -206,6 +206,56 @@ class LanguageModelChat:
     capabilities: _LMCapabilities = field(default_factory=_LMCapabilities)
     pricing: Optional[Dict[str, float]] = None
 
+    @staticmethod
+    def _parse_tool_call_input(value: Any) -> Any:
+        if value is None or value == "":
+            return {}
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return value
+        return value
+
+    @classmethod
+    def _tool_call_part(cls, value: Any) -> Optional["LanguageModelToolCallPart"]:
+        if isinstance(value, dict):
+            fn = value.get("function") if isinstance(value.get("function"), dict) else {}
+            call_id = (
+                value.get("call_id")
+                or value.get("toolCallId")
+                or value.get("callId")
+                or value.get("id")
+                or value.get("item_id")
+                or ""
+            )
+            name = value.get("name") or fn.get("name") or ""
+            raw_input = (
+                value.get("input")
+                if "input" in value else value.get("parameters")
+                if "parameters" in value else value.get("arguments")
+                if "arguments" in value else fn.get("arguments")
+            )
+            if not call_id and not name:
+                return None
+            return LanguageModelToolCallPart(
+                call_id=str(call_id or ""),
+                name=str(name or ""),
+                input=cls._parse_tool_call_input(raw_input),
+            )
+        call_id = getattr(value, "id", "") or getattr(value, "call_id", "")
+        name = getattr(value, "name", "")
+        raw_input = getattr(value, "input", None)
+        if raw_input is None:
+            raw_input = getattr(value, "arguments", None)
+        if not call_id and not name:
+            return None
+        return LanguageModelToolCallPart(
+            call_id=str(call_id or ""),
+            name=str(name or ""),
+            input=cls._parse_tool_call_input(raw_input),
+        )
+
     def send_request(self, messages: Any, options: Dict = None,
                      token: Any = None) -> "LanguageModelChatResponse":
         resp = LanguageModelChatResponse()
@@ -226,16 +276,46 @@ class LanguageModelChat:
                                 for t in options["tools"]]
             try:
                 self._engine.reset_cancel()
+                seen_tool_call_ids: set[str] = set()
+
+                def _append_tool_call(value: Any) -> None:
+                    part = self._tool_call_part(value)
+                    if not part:
+                        return
+                    if part.call_id:
+                        if part.call_id in seen_tool_call_ids:
+                            return
+                        seen_tool_call_ids.add(part.call_id)
+                    resp._chunks.append(part)
+
+                def _on_delta(delta: Any) -> None:
+                    content = getattr(delta, "content", "") or ""
+                    if content:
+                        resp._chunks.append(LanguageModelTextPart(content))
+                    thinking = getattr(delta, "thinking", "") or ""
+                    if thinking:
+                        resp._chunks.append(LanguageModelThinkingPart(value=thinking))
+                    for tool_call in getattr(delta, "tool_calls", []) or []:
+                        _append_tool_call(tool_call)
+
                 r = self._engine.chat_completion_stream(
                     messages=api_msgs, tools=tools_schema,
-                    on_delta=lambda d: resp._chunks.append(d.content or "") if d.content else None)
+                    on_delta=_on_delta)
                 resp.text = r.content or ""
+                if getattr(r, "thinking", "") and not any(
+                        isinstance(item, LanguageModelThinkingPart)
+                        for item in resp._chunks):
+                    resp._chunks.append(
+                        LanguageModelThinkingPart(value=r.thinking))
+                for tool_call in getattr(r, "tool_calls", []) or []:
+                    _append_tool_call(tool_call)
                 if not resp._chunks:
-                    resp._chunks = [resp.text] if resp.text else []
+                    resp._chunks = (
+                        [LanguageModelTextPart(resp.text)] if resp.text else [])
                 resp._done = True
             except Exception as exc:
                 resp.text = f"Error: {exc}"
-                resp._chunks = [resp.text]
+                resp._chunks = [LanguageModelTextPart(resp.text)]
                 resp._done = True
         return resp
 
@@ -255,7 +335,7 @@ class LanguageModelChat:
 @dataclass
 class LanguageModelChatResponse:
     text: str = ""
-    _chunks: List[str] = field(default_factory=list)
+    _chunks: List[Any] = field(default_factory=list)
     _done: bool = False
 
     @property

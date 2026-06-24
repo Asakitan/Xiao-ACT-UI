@@ -5424,7 +5424,7 @@ def test_app_extension_runtime_support() -> None:
     from ai_editor.extension_host import (
         EventEmitter, ExtensionDescription, ExtensionHost, NodeExtensionHost,
         NodeTreeDataProvider, Position, Range, Uri)
-    from ai_editor.llm_engine import LLMResponse, StreamDelta
+    from ai_editor.llm_engine import LLMResponse, StreamDelta, ToolCall
     from ai_editor.node_runtime import get_node_path
     from ai_editor.vscode_api import LanguageModelToolResult
 
@@ -5458,6 +5458,27 @@ def test_app_extension_runtime_support() -> None:
                     time.sleep(0.01)
                 node_lm_cancel_observed.append(False)
                 return LLMResponse(content="not-cancelled")
+            if "parts model" in raw_messages:
+                if on_delta:
+                    on_delta(StreamDelta(
+                        content="parts:",
+                        thinking="think-delta",
+                        tool_calls=[{
+                            "id": "delta-call",
+                            "name": "delta_tool",
+                            "arguments": '{"delta": true}',
+                        }],
+                    ))
+                    on_delta(StreamDelta(content="done"))
+                return LLMResponse(
+                    content="parts:done",
+                    thinking="think-final",
+                    tool_calls=[ToolCall(
+                        id="final-call",
+                        name="final_tool",
+                        arguments='{"final": true}',
+                    )],
+                )
             if on_delta:
                 on_delta(StreamDelta(content="node-stream:"))
                 on_delta(StreamDelta(content="ok"))
@@ -6699,6 +6720,7 @@ async function activate(context) {
       ? await firstModel.countTokens('hello from node model')
       : 0;
     let sendRequest = null;
+    let sendRequestParts = null;
     let cancellation = null;
     if (firstModel) {
       const response = await firstModel.sendRequest([
@@ -6723,6 +6745,39 @@ async function activate(context) {
         textParts,
         textAggregate,
         value: response.value,
+      };
+      const partResponse = await firstModel.sendRequest([
+        vscode.LanguageModelChatMessage.User('parts model'),
+      ]);
+      const partTypes = [];
+      const toolCalls = [];
+      const thinkingValues = [];
+      for await (const chunk of partResponse.stream) {
+        partTypes.push(chunk && chunk.constructor && chunk.constructor.name);
+        if (chunk instanceof vscode.LanguageModelToolCallPart) {
+          toolCalls.push({
+            callId: chunk.callId,
+            name: chunk.name,
+            input: chunk.input,
+          });
+        }
+        if (chunk instanceof vscode.LanguageModelThinkingPart) {
+          thinkingValues.push(chunk.value);
+        }
+      }
+      let partTextAggregate = '';
+      for await (const text of partResponse.text) {
+        partTextAggregate += text;
+      }
+      sendRequestParts = {
+        streamAsync: !!(
+          partResponse.stream && partResponse.stream[Symbol.asyncIterator]),
+        textAsync: !!(
+          partResponse.text && partResponse.text[Symbol.asyncIterator]),
+        partTypes,
+        toolCalls,
+        thinkingValues,
+        textAggregate: partTextAggregate,
       };
       const cts = new vscode.CancellationTokenSource();
       const cancelled = firstModel.sendRequest([
@@ -6766,6 +6821,7 @@ async function activate(context) {
       missingCount: missing.length,
       tokenCount,
       sendRequest,
+      sendRequestParts,
       cancellation,
       partProbe: {
         toolCall: toolCallPart.callId === 'call-node'
@@ -9069,6 +9125,9 @@ module.exports = { activate, deactivate };
                 node_lm_send_request = (
                     node_lm_chat_probe.get("sendRequest")
                     if isinstance(node_lm_chat_probe, dict) else {})
+                node_lm_send_request_parts = (
+                    node_lm_chat_probe.get("sendRequestParts")
+                    if isinstance(node_lm_chat_probe, dict) else {})
                 node_lm_part_probe = (
                     node_lm_chat_probe.get("partProbe")
                     if isinstance(node_lm_chat_probe, dict) else {})
@@ -9087,8 +9146,43 @@ module.exports = { activate, deactivate };
                        and isinstance(node_lm_part_probe, dict)
                        and all(node_lm_part_probe.values()),
                        json.dumps({
-                           "sendRequest": node_lm_send_request,
-                           "partProbe": node_lm_part_probe,
+                            "sendRequest": node_lm_send_request,
+                            "partProbe": node_lm_part_probe,
+                        }, ensure_ascii=False, default=str))
+                node_lm_provider_part_types = (
+                    node_lm_send_request_parts.get("partTypes", [])
+                    if isinstance(node_lm_send_request_parts, dict) else [])
+                node_lm_provider_tool_calls = (
+                    node_lm_send_request_parts.get("toolCalls", [])
+                    if isinstance(node_lm_send_request_parts, dict) else [])
+                _check("node host preserves provider LM response parts",
+                       node_started is True
+                       and isinstance(node_lm_send_request_parts, dict)
+                       and node_lm_send_request_parts.get("streamAsync") is True
+                       and node_lm_send_request_parts.get("textAsync") is True
+                       and "LanguageModelTextPart"
+                       in node_lm_provider_part_types
+                       and "LanguageModelThinkingPart"
+                       in node_lm_provider_part_types
+                       and "LanguageModelToolCallPart"
+                       in node_lm_provider_part_types
+                       and node_lm_send_request_parts.get("textAggregate")
+                       == "parts:done"
+                       and "think-delta" in (
+                           node_lm_send_request_parts.get(
+                               "thinkingValues", []) or [])
+                       and any(
+                           item.get("name") == "delta_tool"
+                           and item.get("input", {}).get("delta") is True
+                           for item in node_lm_provider_tool_calls
+                           if isinstance(item, dict))
+                       and any(
+                           item.get("name") == "final_tool"
+                           and item.get("input", {}).get("final") is True
+                           for item in node_lm_provider_tool_calls
+                           if isinstance(item, dict)),
+                       json.dumps({
+                           "sendRequestParts": node_lm_send_request_parts,
                        }, ensure_ascii=False, default=str))
                 node_lm_cancellation = (
                     node_lm_chat_probe.get("cancellation")
