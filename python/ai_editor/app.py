@@ -77,6 +77,9 @@ _WORKSPACE_TREE_IGNORED_DIRS = {
     ".tox", ".nox", ".venv", "venv", "env", "node_modules",
     "build", "dist", "publish", "out", "tmp", "temp",
 }
+_WORKSPACE_CONTAINS_PREFIX = "workspaceContains:"
+_WORKSPACE_CONTAINS_MAX_FILES = 8000
+_WORKSPACE_CONTAINS_MAX_SECONDS = 2.0
 _WORKSPACE_FILE_PREVIEW_BYTES = 1024 * 1024
 _WEBVIEW_LOCAL_URL_RE = re.compile(
     r"https://(?:webview\.local|[^/\s\"'<>)]*\.vscode-resource\.webview\.local)"
@@ -2579,6 +2582,122 @@ class AIEditorAPI:
             return os.path.commonpath([root_norm, path_norm]) == root_norm
         except (OSError, ValueError):
             return False
+
+    @staticmethod
+    def _normalize_workspace_contains_pattern(pattern: str) -> str:
+        text = str(pattern or "").strip().replace("\\", "/")
+        while text.startswith("./"):
+            text = text[2:]
+        return text.lstrip("/")
+
+    @staticmethod
+    def _workspace_contains_pattern_variants(pattern: str) -> List[str]:
+        variants = [pattern]
+        for _ in range(4):
+            next_variants: List[str] = []
+            expanded = False
+            for item in variants:
+                match = re.search(r"\{([^{}]+)\}", item)
+                if not match:
+                    next_variants.append(item)
+                    continue
+                expanded = True
+                for raw_part in match.group(1).split(","):
+                    part = raw_part.strip()
+                    if not part:
+                        continue
+                    next_variants.append(
+                        item[:match.start()] + part + item[match.end():])
+                    if len(next_variants) >= 20:
+                        break
+                if len(next_variants) >= 20:
+                    break
+            variants = list(dict.fromkeys(next_variants))
+            if not expanded:
+                break
+        return variants
+
+    @staticmethod
+    def _workspace_contains_is_glob(pattern: str) -> bool:
+        return any(ch in pattern for ch in "*?[")
+
+    @staticmethod
+    def _workspace_contains_rel_matches(rel_path: str, pattern: str) -> bool:
+        rel = rel_path.replace("\\", "/")
+        if fnmatch.fnmatch(rel, pattern):
+            return True
+        if pattern.startswith("**/"):
+            tail = pattern[3:]
+            if rel == tail or fnmatch.fnmatch(rel, tail):
+                return True
+        if ("/" not in pattern
+                and fnmatch.fnmatch(os.path.basename(rel), pattern)):
+            return True
+        return False
+
+    def _workspace_contains_match_map(
+            self, root: str, patterns: List[str]) -> Dict[str, bool]:
+        result = {str(pattern or ""): False for pattern in patterns}
+        root_abs = os.path.abspath(root or "")
+        if not root_abs or not os.path.isdir(root_abs):
+            return result
+
+        glob_entries: List[tuple[str, str]] = []
+        for raw_pattern in result:
+            normalized = self._normalize_workspace_contains_pattern(raw_pattern)
+            if not normalized:
+                continue
+            variants = self._workspace_contains_pattern_variants(normalized)
+            for item in variants:
+                if self._workspace_contains_is_glob(item):
+                    glob_entries.append((raw_pattern, item))
+                    continue
+                target = os.path.abspath(
+                    os.path.join(root_abs, *item.split("/")))
+                if (self._is_workspace_safe_path(root_abs, target)
+                        and os.path.exists(target)):
+                    result[raw_pattern] = True
+                    break
+
+        glob_entries = [
+            item for item in glob_entries
+            if not result.get(item[0], False)
+        ]
+        if not glob_entries:
+            return result
+
+        checked = 0
+        deadline = time.monotonic() + _WORKSPACE_CONTAINS_MAX_SECONDS
+        root_real = os.path.realpath(root_abs)
+        remaining = {raw_pattern for raw_pattern, _ in glob_entries}
+        for current, dirs, files in os.walk(root_real):
+            dirs[:] = [
+                name for name in dirs
+                if name not in _WORKSPACE_TREE_IGNORED_DIRS
+            ]
+            for name in files:
+                checked += 1
+                if (checked > _WORKSPACE_CONTAINS_MAX_FILES
+                        or time.monotonic() > deadline):
+                    return result
+                full = os.path.join(current, name)
+                try:
+                    rel = os.path.relpath(full, root_real).replace("\\", "/")
+                except ValueError:
+                    continue
+                for raw_pattern, glob_pattern in glob_entries:
+                    if raw_pattern not in remaining:
+                        continue
+                    if self._workspace_contains_rel_matches(rel, glob_pattern):
+                        result[raw_pattern] = True
+                        remaining.discard(raw_pattern)
+                if not remaining:
+                    return result
+        return result
+
+    def _workspace_contains_matches(self, root: str, pattern: str) -> bool:
+        return self._workspace_contains_match_map(
+            root, [pattern]).get(str(pattern or ""), False)
 
     def _resolve_workspace_path(self, rel_path: str = "") -> str:
         root = self._workspace_root()
@@ -5499,6 +5618,54 @@ class AIEditorAPI:
 
         # --- Node.js extension host for extensions with "main" ---
         self._try_start_node_extension_host()
+        workspace_activated = self._activate_workspace_contains_extensions()
+        if workspace_activated:
+            print("[ExtHost] "
+                  f"{workspace_activated} workspaceContains activation "
+                  "event(s) triggered.")
+            self._register_ext_tools()
+
+    def _workspace_contains_activation_events(self) -> List[str]:
+        try:
+            root = self._workspace_root()
+        except Exception:
+            return []
+        if not root or not os.path.isdir(root):
+            return []
+        entries: List[tuple[str, str]] = []
+        patterns: List[str] = []
+        seen_patterns = set()
+        for ext in self._ext_host.registry.list_all():
+            if not getattr(ext, "enabled", True):
+                continue
+            for raw_event in getattr(ext, "activation_events", []) or []:
+                event = str(raw_event or "")
+                if not event.startswith(_WORKSPACE_CONTAINS_PREFIX):
+                    continue
+                pattern = event[len(_WORKSPACE_CONTAINS_PREFIX):].strip()
+                if not pattern:
+                    continue
+                entries.append((event, pattern))
+                if pattern not in seen_patterns:
+                    seen_patterns.add(pattern)
+                    patterns.append(pattern)
+        match_map = self._workspace_contains_match_map(root, patterns)
+        matched: List[str] = []
+        seen_events = set()
+        for event, pattern in entries:
+            if event in seen_events:
+                continue
+            if match_map.get(pattern, False):
+                seen_events.add(event)
+                matched.append(event)
+        return matched
+
+    def _activate_workspace_contains_extensions(self) -> int:
+        triggered = 0
+        for event in self._workspace_contains_activation_events():
+            self._ext_host.activate_event(event)
+            triggered += 1
+        return triggered
 
     def _try_start_node_extension_host(self) -> None:
         """Start a NodeExtensionHost for extensions that declare ``main``.
@@ -5606,6 +5773,7 @@ class AIEditorAPI:
             "onView:",
             "onCustomEditor:",
             "onLanguage:",
+            _WORKSPACE_CONTAINS_PREFIX,
         ))
 
     def _node_extensions_for_activation_event(self, event: str) -> List[Any]:
@@ -8017,6 +8185,7 @@ class AIEditorAPI:
             if not self._extension_allowed(desc):
                 return {"error": f"Extension blocked by trust policy: {desc.id}"}
             self._try_start_node_extension_host()
+            self._activate_workspace_contains_extensions()
             self._register_ext_tools()
             return {"ok": True, "id": desc.id, "name": desc.display_name}
         return {"error": "Failed to install from directory"}

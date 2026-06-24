@@ -5430,9 +5430,11 @@ def test_app_extension_runtime_support() -> None:
     previous_host = extension_host_module._host
     language_tmp = ""
     settings_tmp = ""
+    workspace_contains_tmp = ""
     node_tree_tmp = ""
     node_inactive_tmp = ""
     node_lazy_tmp = ""
+    node_workspace_contains_tmp = ""
     node_storage_tmp = ""
     extension_host_module._host = ExtensionHost()
     try:
@@ -6255,6 +6257,54 @@ def test_app_extension_runtime_support() -> None:
                decorated_views.get("selftest.command.tree.view", {}).get("runtimeState", {}).get("kind") == "treeView"
                and decorated_views.get("selftest.command.webview.view", {}).get("runtimeState", {}).get("kind") == "webviewView")
 
+        workspace_contains_tmp = tempfile.mkdtemp(
+            prefix="sao_workspace_contains_")
+        os.makedirs(os.path.join(workspace_contains_tmp, "nested"),
+                    exist_ok=True)
+        with open(os.path.join(workspace_contains_tmp, "pyproject.toml"),
+                  "w", encoding="utf-8") as fh:
+            fh.write("[project]\nname = 'selftest'\n")
+        with open(os.path.join(workspace_contains_tmp, "nested", "marker.sao"),
+                  "w", encoding="utf-8") as fh:
+            fh.write("workspace contains")
+        workspace_contains_desc = ExtensionDescription.from_package_json({
+            "name": "workspace-contains",
+            "publisher": "selftest",
+            "version": "0.0.1",
+            "activationEvents": [
+                "workspaceContains:pyproject.toml",
+                "workspaceContains:**/*.sao",
+                "workspaceContains:missing.lock",
+            ],
+            "contributes": {
+                "commands": [{
+                    "command": "selftest.workspaceContains.root",
+                    "title": "Workspace Contains Root",
+                }],
+            },
+        }, workspace_contains_tmp)
+        api._ext_host.registry.register(workspace_contains_desc)
+        previous_workspace_root = api._workspace_root
+        api._workspace_root = lambda: workspace_contains_tmp
+        try:
+            workspace_contains_events = (
+                api._workspace_contains_activation_events())
+            workspace_contains_triggered = (
+                api._activate_workspace_contains_extensions())
+        finally:
+            api._workspace_root = previous_workspace_root
+        _check("workspaceContains activates manifest extensions",
+               workspace_contains_triggered == 2
+               and "workspaceContains:pyproject.toml"
+               in workspace_contains_events
+               and "workspaceContains:**/*.sao" in workspace_contains_events
+               and "workspaceContains:missing.lock"
+               not in workspace_contains_events
+               and api._ext_host.activator.is_activated(
+                   workspace_contains_desc.id)
+               and "selftest.workspaceContains.root"
+               in api._ext_host.commands.list_commands())
+
         node_path = get_node_path()
         if not node_path:
             _check("node extension host tree provider bridge skipped without Node.js", True)
@@ -6263,6 +6313,8 @@ def test_app_extension_runtime_support() -> None:
             node_inactive_tmp = tempfile.mkdtemp(
                 prefix="sao_node_inactive_ext_")
             node_lazy_tmp = tempfile.mkdtemp(prefix="sao_node_lazy_ext_")
+            node_workspace_contains_tmp = tempfile.mkdtemp(
+                prefix="sao_node_workspace_contains_ext_")
             node_storage_tmp = tempfile.mkdtemp(prefix="sao_node_storage_")
             node_inactive_js = r"""
 async function activate(context) {
@@ -6318,6 +6370,42 @@ module.exports = { activate };
                     }],
                 },
             }, node_lazy_tmp)
+            node_workspace_contains_js = r"""
+const vscode = require('vscode');
+async function activate(context) {
+  vscode.commands.registerCommand(
+    'selftest.node.workspaceContainsCommand',
+    () => ({
+      workspaceContains: true,
+      extensionId: context.extension && context.extension.id,
+      packageName: context.extension && context.extension.packageJSON
+        && context.extension.packageJSON.name,
+    }),
+  );
+  return { name: 'nodeWorkspaceContainsApi' };
+}
+module.exports = { activate };
+"""
+            with open(os.path.join(node_workspace_contains_tmp, "extension.js"),
+                      "w", encoding="utf-8") as fh:
+                fh.write(node_workspace_contains_js)
+            node_workspace_contains_desc = (
+                ExtensionDescription.from_package_json({
+                    "name": "node-workspace-contains",
+                    "publisher": "selftest",
+                    "version": "0.0.1",
+                    "displayName": "Node Workspace Contains",
+                    "main": "./extension.js",
+                    "activationEvents": [
+                        "workspaceContains:node-workspace-marker.txt",
+                    ],
+                    "contributes": {
+                        "commands": [{
+                            "command": "selftest.node.workspaceContainsCommand",
+                            "title": "Node Workspace Contains Command",
+                        }],
+                    },
+                }, node_workspace_contains_tmp))
             node_extension_js = r"""
 const vscode = require('vscode');
 const output = vscode.window.createOutputChannel('node-tree-selftest');
@@ -7105,6 +7193,7 @@ module.exports = { activate, deactivate };
             api._ext_host.ext_points.process(node_tree_desc)
             api._ext_host.registry.register(node_tree_desc)
             api._ext_host.registry.register(node_lazy_desc)
+            api._ext_host.registry.register(node_workspace_contains_desc)
             class _NodeUiBridge:
                 def __init__(self) -> None:
                     self.webviews = {}
@@ -7155,6 +7244,7 @@ module.exports = { activate, deactivate };
                         node_tree_desc,
                         node_inactive_desc,
                         node_lazy_desc,
+                        node_workspace_contains_desc,
                     ])
                     api._install_node_activation_event_bridge()
                     node_host.send_settings_sync({
@@ -7182,6 +7272,36 @@ module.exports = { activate, deactivate };
                     lazy_command_result = {"_error": str(exc)}
                 lazy_after_command = (
                     node_lazy_desc.id in node_host._activated_ids)
+                node_workspace_contains_before = (
+                    node_workspace_contains_desc.id
+                    not in node_host._activated_ids)
+                node_workspace_contains_triggered = 0
+                node_workspace_contains_after = False
+                node_workspace_contains_command_result = {}
+                if node_started:
+                    with open(os.path.join(
+                            node_tree_tmp, "node-workspace-marker.txt"),
+                            "w", encoding="utf-8") as fh:
+                        fh.write("workspace marker")
+                    previous_workspace_root = api._workspace_root
+                    api._workspace_root = lambda: node_tree_tmp
+                    try:
+                        node_workspace_contains_triggered = (
+                            api._activate_workspace_contains_extensions())
+                    finally:
+                        api._workspace_root = previous_workspace_root
+                    node_workspace_contains_after = _wait_until(
+                        lambda: (
+                            node_workspace_contains_desc.id
+                            in node_host._activated_ids),
+                        timeout=3.0)
+                    try:
+                        node_workspace_contains_command_result = (
+                            api._ext_host.commands.execute(
+                                "selftest.node.workspaceContainsCommand"))
+                    except Exception as exc:
+                        node_workspace_contains_command_result = {
+                            "_error": str(exc)}
                 node_registered = _wait_until(
                     lambda: "selftest.node.tree" in api._vscode_ns._tree_data_providers,
                     timeout=3.0)
@@ -8095,6 +8215,22 @@ module.exports = { activate, deactivate };
                        and lazy_command_result.get("packageName")
                        == node_lazy_desc.name,
                        json.dumps(lazy_command_result, ensure_ascii=False))
+                _check("node host activates workspaceContains extensions",
+                       node_started is True
+                       and node_workspace_contains_before is True
+                       and node_workspace_contains_triggered >= 1
+                       and node_workspace_contains_after is True
+                       and isinstance(
+                           node_workspace_contains_command_result, dict)
+                       and node_workspace_contains_command_result.get(
+                           "workspaceContains") is True
+                       and node_workspace_contains_command_result.get(
+                           "extensionId") == node_workspace_contains_desc.id
+                       and node_workspace_contains_command_result.get(
+                           "packageName") == node_workspace_contains_desc.name,
+                       json.dumps(
+                           node_workspace_contains_command_result,
+                           ensure_ascii=False))
                 _check("node host tree provider registers dynamic activity view",
                        node_started is True
                        and sent is True
@@ -8350,12 +8486,16 @@ module.exports = { activate, deactivate };
             shutil.rmtree(language_tmp, ignore_errors=True)
         if settings_tmp:
             shutil.rmtree(settings_tmp, ignore_errors=True)
+        if workspace_contains_tmp:
+            shutil.rmtree(workspace_contains_tmp, ignore_errors=True)
         if node_tree_tmp:
             shutil.rmtree(node_tree_tmp, ignore_errors=True)
         if node_inactive_tmp:
             shutil.rmtree(node_inactive_tmp, ignore_errors=True)
         if node_lazy_tmp:
             shutil.rmtree(node_lazy_tmp, ignore_errors=True)
+        if node_workspace_contains_tmp:
+            shutil.rmtree(node_workspace_contains_tmp, ignore_errors=True)
         if node_storage_tmp:
             shutil.rmtree(node_storage_tmp, ignore_errors=True)
 
