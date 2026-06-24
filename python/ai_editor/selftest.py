@@ -2913,6 +2913,9 @@ console.log("extension setting schema helpers ok");
             and "function loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion)" in html
             and "function setExtensionTreeStatus(childBox,depth,text,kind,retry)" in html
             and "function extensionTreeErrorText(error,fallback)" in html
+            and "function toggleExtensionTreeCheckbox(viewId,node,box,event)" in html
+            and "set_extension_tree_item_checkbox_state" in html
+            and "box.setAttribute('role','checkbox')" in html
             and "btn.textContent='Retry'" in html
             and "node.childrenLoaded=false;node.lazyChildren=true" in html
             and "state.treeError" in html
@@ -3330,6 +3333,10 @@ console.log("quick input filter helpers ok");
            and "type: 'tree_view_state_changed'" in node_ext_host_source
            and "Object.defineProperties(view, {" in node_ext_host_source
            and "set: (value) => {" in node_ext_host_source
+           and "TreeItemCheckboxState: { Unchecked: 0, Checked: 1 }" in node_ext_host_source
+           and "onDidChangeCheckboxState: checkboxEmitter.event" in node_ext_host_source
+           and "event === 'checkbox'" in node_ext_host_source
+           and "def set_extension_tree_item_checkbox_state(" in app_source
            and "\"tree_view_state_changed\"" in extension_host_source
            and "elif event == \"tree_view_state_changed\":" in app_source)
     _check("extension status bar messages round-trip through Node host",
@@ -5983,10 +5990,13 @@ def test_vscode_api() -> None:
            and tree_view.reveal_version == 2)
     tree_expand_events = []
     tree_collapse_events = []
+    tree_checkbox_events = []
     tree_view.onDidExpandElement(
         lambda evt: tree_expand_events.append(evt))
     tree_view.onDidCollapseElement(
         lambda evt: tree_collapse_events.append(evt))
+    tree_view.onDidChangeCheckboxState(
+        lambda evt: tree_checkbox_events.append(evt))
     tree_view.begin_snapshot()
     tree_handle = tree_view.remember_element("node")
     tree_expanded = tree_view.set_expanded(tree_handle, True)
@@ -5996,6 +6006,12 @@ def test_vscode_api() -> None:
            and tree_collapsed is True
            and tree_expand_events[-1].get("element") == "node"
            and tree_collapse_events[-1].get("element") == "node")
+    tree_checked = tree_view.set_checkbox_state(tree_handle, 1)
+    _check("tree view checkbox events expose element and state",
+           tree_checked is True
+           and tree_checkbox_events
+           and tree_checkbox_events[-1].get("items", [])[0][0] == "node"
+           and tree_checkbox_events[-1].get("items", [])[0][1] == 1)
     tree_view.message = "Runtime message"
     tree_view.title = "Runtime title"
     tree_view.description = "Runtime description"
@@ -7029,6 +7045,7 @@ def test_app_extension_runtime_support() -> None:
         activity_selection_events = []
         activity_expand_events = []
         activity_collapse_events = []
+        activity_checkbox_events = []
         if activity_tree_view is not None:
             activity_tree_view.title = "Activity Runtime Tree"
             activity_tree_view.description = "dynamic subtitle"
@@ -7040,6 +7057,8 @@ def test_app_extension_runtime_support() -> None:
                 lambda evt: activity_expand_events.append(evt))
             activity_tree_view.onDidCollapseElement(
                 lambda evt: activity_collapse_events.append(evt))
+            activity_tree_view.onDidChangeCheckboxState(
+                lambda evt: activity_checkbox_events.append(evt))
         activity_items = {
             item.get("id"): item
             for item in api.list_extension_activity_bar_items().get("items", [])
@@ -7130,6 +7149,14 @@ def test_app_extension_runtime_support() -> None:
                and activity_selection_events
                and activity_selection_events[-1].get("selection") == ["node-a"]
                and selected_tree.get("runtimeState", {}).get("nodes", [{}])[0].get("selected") is True)
+        checked_activity = api.set_extension_tree_item_checkbox_state(
+            "selftest.activity.tree", activity_tree_handle, False)
+        _check("activity tree checkbox updates reach runtime TreeView",
+               checked_activity.get("ok") is True
+               and checked_activity.get("state") == 0
+               and activity_checkbox_events
+               and activity_checkbox_events[-1].get("items", [])[0][0] == "node-a"
+               and activity_checkbox_events[-1].get("items", [])[0][1] == 0)
         item_action = api.execute_extension_tree_item_action(
             "selftest.activity.tree",
             activity_tree_handle,
@@ -7867,6 +7894,7 @@ async function activate(context) {
       item.contextValue = element.children ? 'nodeRoot' : 'nodeLeaf';
       item.resourceUri = vscode.Uri.file('/workspace/' + element.id + '.txt');
       item.iconPath = new vscode.ThemeIcon(element.children ? 'folder' : 'file');
+      item.checkboxState = element.children ? vscode.TreeItemCheckboxState.Checked : vscode.TreeItemCheckboxState.Unchecked;
       return item;
     },
   };
@@ -7878,6 +7906,7 @@ async function activate(context) {
   view.onDidChangeSelection(evt => output.appendLine('selection:' + evt.selection.map(item => item.id).join(',')));
   view.onDidExpandElement(evt => output.appendLine('expand:' + evt.element.id));
   view.onDidCollapseElement(evt => output.appendLine('collapse:' + evt.element.id));
+  view.onDidChangeCheckboxState(evt => output.appendLine('checkbox:' + evt.items.map(([item, state]) => item.id + ':' + state).join(',')));
   void view.reveal(root, { select: false, focus: true, expand: 2 });
   const fileDecorationEmitter = new vscode.EventEmitter();
   vscode.window.registerFileDecorationProvider({
@@ -11692,6 +11721,7 @@ module.exports = { activate, deactivate };
                        and node_nodes[0].get("tooltip") == "tooltip:root"
                        and node_nodes[0].get("contextValue") == "nodeRoot"
                        and node_nodes[0].get("themeIcon", {}).get("id") == "folder"
+                       and node_nodes[0].get("checkbox", {}).get("isChecked") is True
                        and node_nodes[0].get("resourceUri") == "file:///workspace/root.txt"
                        and node_nodes[0].get("focused") is True
                        and node_nodes[0].get("selected") is False
@@ -11710,6 +11740,8 @@ module.exports = { activate, deactivate };
                     "selftest.node.tree", node_handle, True)
                 api.set_extension_tree_item_expanded(
                     "selftest.node.tree", node_handle, False)
+                api.set_extension_tree_item_checkbox_state(
+                    "selftest.node.tree", node_handle, False)
                 action_result = api.execute_extension_tree_item_action(
                     "selftest.node.tree", node_handle, "selftest.node.openItem")
                 output_seen = _wait_until(
@@ -11718,6 +11750,8 @@ module.exports = { activate, deactivate };
                     and "expand:root" in "".join(
                         node_host._output_channels.get("node-tree-selftest", []))
                     and "collapse:root" in "".join(
+                        node_host._output_channels.get("node-tree-selftest", []))
+                    and "checkbox:root:0" in "".join(
                         node_host._output_channels.get("node-tree-selftest", []))
                     and "open:root" in "".join(
                         node_host._output_channels.get("node-tree-selftest", [])),

@@ -6223,6 +6223,7 @@ class _TreeView:
         self._selection_change = EventEmitter()
         self._active_change = EventEmitter()
         self._visibility_change = EventEmitter()
+        self._checkbox_change = EventEmitter()
         if provider is not None:
             self.bind_provider(provider)
 
@@ -6281,6 +6282,10 @@ class _TreeView:
     @property
     def onDidChangeVisibility(self):
         return self._visibility_change.event
+
+    @property
+    def onDidChangeCheckboxState(self):
+        return self._checkbox_change.event
 
     def bind_provider(self, provider: Any,
                       change_callback: Optional[
@@ -6402,6 +6407,25 @@ class _TreeView:
         self._notify_changed("expanded", {
             "handle": normalized_handle,
             "expanded": next_expanded,
+            "refreshVersion": self.refresh_version,
+        })
+        return True
+
+    def set_checkbox_state(self, handle: str, state: Any) -> bool:
+        normalized_handle = str(handle or "")
+        if normalized_handle not in self._handle_elements:
+            return False
+        try:
+            next_state = 1 if int(state or 0) == 1 else 0
+        except Exception:
+            next_state = 1 if bool(state) else 0
+        element = self._handle_elements[normalized_handle]
+        self._checkbox_change.fire({
+            "items": [(element, next_state)],
+        })
+        self._notify_changed("checkbox", {
+            "handle": normalized_handle,
+            "state": next_state,
             "refreshVersion": self.refresh_version,
         })
         return True

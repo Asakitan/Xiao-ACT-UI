@@ -3690,6 +3690,7 @@ function createTreeViewObject(viewId, treeDataProvider) {
     const collapseEmitter = new EventEmitter();
     const selectionEmitter = new EventEmitter();
     const visibilityEmitter = new EventEmitter();
+    const checkboxEmitter = new EventEmitter();
     let visible = true;
     let selection = [];
     let message = '';
@@ -3719,6 +3720,7 @@ function createTreeViewObject(viewId, treeDataProvider) {
         onDidCollapseElement: collapseEmitter.event,
         onDidChangeSelection: selectionEmitter.event,
         onDidChangeVisibility: visibilityEmitter.event,
+        onDidChangeCheckboxState: checkboxEmitter.event,
         reveal(element, options) {
             send({
                 type: 'tree_view_reveal',
@@ -3739,6 +3741,7 @@ function createTreeViewObject(viewId, treeDataProvider) {
         _onDidCollapseElement: collapseEmitter,
         _onDidChangeSelection: selectionEmitter,
         _onDidChangeVisibility: visibilityEmitter,
+        _onDidChangeCheckboxState: checkboxEmitter,
     };
     Object.defineProperties(view, {
         visible: {
@@ -4856,6 +4859,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             }),
         },
         TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
+        TreeItemCheckboxState: { Unchecked: 0, Checked: 1 },
         ExtensionKind: { UI: 1, Workspace: 2 },
         ExtensionMode: { Production: 1, Development: 2, Test: 3 },
         DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2, Hint: 3 },
@@ -8085,6 +8089,9 @@ function handleTreeViewEvent(msg) {
         view._onDidExpandElement.fire({ element });
     } else if (event === 'collapse' && element !== undefined) {
         view._onDidCollapseElement.fire({ element });
+    } else if (event === 'checkbox' && element !== undefined) {
+        const state = Number(msg.checkboxState) === 1 ? 1 : 0;
+        view._onDidChangeCheckboxState.fire({ items: [[element, state]] });
     }
 }
 

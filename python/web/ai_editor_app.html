@@ -10363,6 +10363,21 @@ async function loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion)
 function reportExtensionTreeExpanded(viewId,node,expanded){
   if(viewId&&node&&node.handle)call('set_extension_tree_item_expanded',viewId,node.handle,!!expanded);
 }
+async function toggleExtensionTreeCheckbox(viewId,node,box,event){
+  if(event){event.preventDefault();event.stopPropagation()}
+  if(!viewId||!node||!node.handle||!node.checkbox)return;
+  const previous=!!node.checkbox.isChecked;
+  const next=!previous;
+  node.checkbox.isChecked=next;
+  box.textContent=next?'☑':'☐';
+  box.setAttribute('aria-checked',next?'true':'false');
+  const r=await call('set_extension_tree_item_checkbox_state',viewId,node.handle,next);
+  if(!r||r.error){
+    node.checkbox.isChecked=previous;
+    box.textContent=previous?'☑':'☐';
+    box.setAttribute('aria-checked',previous?'true':'false');
+  }
+}
 function focusRevealedExtensionTree(tree){
   if(!tree)return;
   const target=tree.querySelector('.ext-tree-node[data-revealed="1"]>.sb-item');
@@ -10480,7 +10495,10 @@ function renderExtensionTreeNode(viewId,node,depth,viewVersion){
     const box=document.createElement('span');box.className='ext-tree-checkbox';
     box.style.cssText='width:14px;flex:0 0 14px;text-align:center;color:var(--fg-dim);font-size:12px;line-height:18px';
     box.textContent=checkbox.isChecked?'☑':'☐';
+    box.tabIndex=0;box.setAttribute('role','checkbox');box.setAttribute('aria-checked',checkbox.isChecked?'true':'false');
     if(checkbox.tooltip)box.title=checkbox.tooltip;
+    box.onclick=e=>toggleExtensionTreeCheckbox(viewId,node,box,e);
+    box.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){void toggleExtensionTreeCheckbox(viewId,node,box,e)}};
     row.appendChild(twist);row.appendChild(box);
   }else{
     row.appendChild(twist);

@@ -3194,20 +3194,28 @@ class NodeExtensionHost:
 
     def send_tree_view_event(
             self, view_id: str, event: str, element: Any = None,
-            selection: Optional[List[Any]] = None) -> bool:
+            selection: Optional[List[Any]] = None,
+            checkbox_state: Any = None) -> bool:
         """Notify the Node TreeView object about frontend selection/expand."""
         element_handle = NodeTreeDataProvider._element_handle(element)
         selection_handles = [
             NodeTreeDataProvider._element_handle(item)
             for item in (selection or [])
         ]
-        return self._send({
+        payload = {
             "type": "tree_view_event",
             "viewId": str(view_id or ""),
             "event": str(event or ""),
             "elementHandle": element_handle,
             "selectionHandles": selection_handles,
-        })
+        }
+        if checkbox_state is not None:
+            try:
+                payload["checkboxState"] = (
+                    1 if int(checkbox_state or 0) == 1 else 0)
+            except Exception:
+                payload["checkboxState"] = 1 if bool(checkbox_state) else 0
+        return self._send(payload)
 
     def request_custom_editor_result(
             self, view_type: str, uri: str, title: str = "",

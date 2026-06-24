@@ -7781,6 +7781,38 @@ class AIEditorAPI:
             "expanded": bool(expanded),
         }
 
+    def set_extension_tree_item_checkbox_state(
+            self, view_id: str, handle: str, checked: bool) -> Dict:
+        """Report frontend TreeView checkbox changes to extensions."""
+        self._ensure_engine()
+        normalized_view_id = str(view_id or "")
+        normalized_handle = str(handle or "")
+        if not normalized_view_id or not normalized_handle:
+            return {"error": "Tree view id and node handle are required"}
+        view = self._vscode_ns._tree_views.get(normalized_view_id)
+        if view is None:
+            return {"error": f"Tree view not found: {normalized_view_id}"}
+        state = 1 if bool(checked) else 0
+        set_checkbox_state = getattr(view, "set_checkbox_state", None)
+        if not callable(set_checkbox_state) or not set_checkbox_state(
+                normalized_handle, state):
+            return {
+                "error": "Tree node handle is stale or unknown",
+                "view_id": normalized_view_id,
+                "handle": normalized_handle,
+            }
+        self._notify_node_tree_view_event(
+            normalized_view_id, "checkbox", view, normalized_handle,
+            checkbox_state=state)
+        return {
+            "ok": True,
+            "view_id": normalized_view_id,
+            "handle": normalized_handle,
+            "checked": bool(checked),
+            "state": state,
+            "runtimeState": self._extension_view_snapshot(normalized_view_id),
+        }
+
     def execute_extension_tree_item_action(
             self, view_id: str, handle: str, command_id: str) -> Dict:
         """Execute a contributed TreeView item action with the item as argument."""
@@ -7823,7 +7855,8 @@ class AIEditorAPI:
             return {"error": str(exc), "command": normalized_command}
 
     def _notify_node_tree_view_event(
-            self, view_id: str, event: str, view: Any, handle: str) -> None:
+            self, view_id: str, event: str, view: Any, handle: str,
+            checkbox_state: Any = None) -> None:
         host = getattr(self, "_node_ext_host", None)
         if host is None or not getattr(host, "is_running", False):
             return
@@ -7845,7 +7878,8 @@ class AIEditorAPI:
         try:
             host.send_tree_view_event(
                 view_id, event, element=element,
-                selection=list(getattr(view, "selection", []) or []))
+                selection=list(getattr(view, "selection", []) or []),
+                checkbox_state=checkbox_state)
         except Exception:
             pass
 
