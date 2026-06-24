@@ -5445,7 +5445,19 @@ def test_app_extension_runtime_support() -> None:
     try:
         api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
         api._ensure_engine()
+        node_lm_cancel_observed = []
+
         def _node_lm_completion(messages, tools=None, on_delta=None):
+            raw_messages = json.dumps(messages, ensure_ascii=False, default=str)
+            if "cancel model" in raw_messages:
+                deadline = time.time() + 2.0
+                while time.time() < deadline:
+                    if api._engine._cancel.is_set():
+                        node_lm_cancel_observed.append(True)
+                        return LLMResponse(content="", finish_reason="cancelled")
+                    time.sleep(0.01)
+                node_lm_cancel_observed.append(False)
+                return LLMResponse(content="not-cancelled")
             if on_delta:
                 on_delta(StreamDelta(content="node-stream:"))
                 on_delta(StreamDelta(content="ok"))
@@ -6687,6 +6699,7 @@ async function activate(context) {
       ? await firstModel.countTokens('hello from node model')
       : 0;
     let sendRequest = null;
+    let cancellation = null;
     if (firstModel) {
       const response = await firstModel.sendRequest([
         vscode.LanguageModelChatMessage.User('hello model'),
@@ -6711,6 +6724,19 @@ async function activate(context) {
         textAggregate,
         value: response.value,
       };
+      const cts = new vscode.CancellationTokenSource();
+      const cancelled = firstModel.sendRequest([
+        vscode.LanguageModelChatMessage.User('cancel model'),
+      ], {}, cts.token).then(
+        () => ({ resolved: true }),
+        error => ({
+          rejected: true,
+          message: String(error && error.message || error),
+        }),
+      );
+      setTimeout(() => cts.cancel(), 10);
+      cancellation = await cancelled;
+      cts.dispose();
     }
     const toolCallPart = new vscode.LanguageModelToolCallPart(
       'call-node', 'selftest_node_dynamic_tool', { value: 'from-part' });
@@ -6740,6 +6766,7 @@ async function activate(context) {
       missingCount: missing.length,
       tokenCount,
       sendRequest,
+      cancellation,
       partProbe: {
         toolCall: toolCallPart.callId === 'call-node'
           && toolCallPart.name === 'selftest_node_dynamic_tool'
@@ -7915,6 +7942,9 @@ module.exports = { activate, deactivate };
                         "selftest.node.lmChatProbe")
                 except Exception as exc:
                     node_lm_chat_probe = {"_error": str(exc)}
+                node_lm_cancel_bridge_seen = _wait_until(
+                    lambda: bool(node_lm_cancel_observed),
+                    timeout=3.0)
                 node_dynamic_tool_registered = _wait_until(
                     lambda: "selftest_node_dynamic_tool"
                     in api._vscode_ns.registered_tools,
@@ -9059,6 +9089,21 @@ module.exports = { activate, deactivate };
                        json.dumps({
                            "sendRequest": node_lm_send_request,
                            "partProbe": node_lm_part_probe,
+                       }, ensure_ascii=False, default=str))
+                node_lm_cancellation = (
+                    node_lm_chat_probe.get("cancellation")
+                    if isinstance(node_lm_chat_probe, dict) else {})
+                _check("node host cancels Python LM requests",
+                       node_started is True
+                       and isinstance(node_lm_cancellation, dict)
+                       and node_lm_cancellation.get("rejected") is True
+                       and "cancelled" in str(
+                           node_lm_cancellation.get("message", "")).lower()
+                       and node_lm_cancel_bridge_seen is True
+                       and node_lm_cancel_observed[-1] is True,
+                       json.dumps({
+                           "cancellation": node_lm_cancellation,
+                           "observed": node_lm_cancel_observed,
                        }, ensure_ascii=False, default=str))
                 _check("node host invokes dynamic LM tool and chat participant",
                        node_started is True

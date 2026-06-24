@@ -5673,6 +5673,7 @@ class AIEditorAPI:
         if host is None or getattr(host, "_sao_runtime_bridge_installed", False):
             return
         host.set_lm_model_request_callback(self._handle_node_lm_model_request)
+        host.set_lm_model_cancel_callback(self._handle_node_lm_model_cancel)
         host.on_tree_event(self._handle_node_tree_event)
         host.on_config_set(self._handle_node_config_set)
         host.on_lm_tool_event(self._handle_node_lm_tool_event)
@@ -5914,6 +5915,24 @@ class AIEditorAPI:
             return {"ok": False, "error": f"Unknown LM model action: {action}"}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+
+    def _handle_node_lm_model_cancel(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Cancel an in-flight Python-backed Node language model request."""
+        action = str(payload.get("action") or "")
+        if action != "sendRequest":
+            return {"ok": True, "cancelled": False}
+        engine = getattr(self, "_engine", None)
+        if engine is None:
+            return {"ok": True, "cancelled": False}
+        cancel = getattr(engine, "cancel", None)
+        if not callable(cancel):
+            return {"ok": True, "cancelled": False}
+        cancel()
+        return {
+            "ok": True,
+            "cancelled": True,
+            "requestId": str(payload.get("requestId") or ""),
+        }
 
     def _node_lm_model_by_id(self, model_id: str) -> Any:
         models = self._vscode_ns._select_chat_models(
@@ -6470,6 +6489,7 @@ class AIEditorAPI:
         if host is not None:
             try:
                 host.set_lm_model_request_callback(None)
+                host.set_lm_model_cancel_callback(None)
             except Exception:
                 pass
             host.stop()

@@ -1480,14 +1480,39 @@ function _executePythonCommand(commandId, args) {
     });
 }
 
-function _requestPythonLm(action, payload, timeoutMs = 30000) {
+function _requestPythonLm(action, payload, timeoutMs = 30000, token) {
     const requestId = `pylm-${_nextPythonLmRequestHandle++}`;
+    if (token?.isCancellationRequested) {
+        return Promise.reject(new Error(`Python LM request cancelled: ${action}`));
+    }
     return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
+        let cancelSubscription;
+        let timer;
+        const cleanup = () => {
             _pythonLmRequests.delete(requestId);
-            reject(new Error(`Python LM request timed out: ${action}`));
+            if (timer) clearTimeout(timer);
+            try { cancelSubscription?.dispose?.(); } catch {}
+        };
+        const cancelPending = (reason) => {
+            const pending = _pythonLmRequests.get(requestId);
+            if (!pending) return;
+            cleanup();
+            send({
+                type: 'lm_model_cancel',
+                requestId,
+                action,
+            });
+            reject(new Error(reason));
+        };
+        timer = setTimeout(() => {
+            cancelPending(`Python LM request timed out: ${action}`);
         }, timeoutMs);
-        _pythonLmRequests.set(requestId, { resolve, reject, timer });
+        if (token && typeof token.onCancellationRequested === 'function') {
+            cancelSubscription = token.onCancellationRequested(() => {
+                cancelPending(`Python LM request cancelled: ${action}`);
+            });
+        }
+        _pythonLmRequests.set(requestId, { resolve, reject, timer, cleanup });
         send(Object.assign({
             type: 'lm_model_request',
             requestId,
@@ -1500,8 +1525,7 @@ function _handlePythonLmResponse(msg) {
     const requestId = String(msg.requestId || '');
     const pending = _pythonLmRequests.get(requestId);
     if (!pending) return;
-    _pythonLmRequests.delete(requestId);
-    clearTimeout(pending.timer);
+    pending.cleanup?.();
     if (msg.ok) {
         pending.resolve(_deserializeArgFromPython(msg.value));
     } else {
@@ -1640,14 +1664,14 @@ function _languageModelChatFromPayload(model) {
             return _requestPythonLm('countTokens', {
                 modelId: id,
                 text: _serializeLanguageValue(text),
-            }, 5000);
+            }, 5000, token);
         },
         async sendRequest(messages, options, token) {
             const value = await _requestPythonLm('sendRequest', {
                 modelId: id,
                 messages: _serializeLanguageValue(messages || []),
                 options: _serializeLanguageValue(options || {}),
-            }, 120000);
+            }, 120000, token);
             return _languageModelResponseFromPayload(value);
         },
     };
@@ -1696,6 +1720,14 @@ function _serializeLanguageValue(value) {
     if (value instanceof DataTransfer) return value.toJSON();
     if (value instanceof DataTransferItem) return _serializeLanguageValue(value.value);
     if (value instanceof DocumentDropOrPasteEditKind) return { value: value.value };
+    if (value instanceof LanguageModelChatMessage) {
+        const result = {
+            role: value.role,
+            content: _serializeLanguageValue(value.content),
+        };
+        if (value.name !== undefined) result.name = value.name;
+        return result;
+    }
     if (value instanceof RegExp) {
         return { source: value.source, flags: value.flags, pattern: String(value) };
     }
