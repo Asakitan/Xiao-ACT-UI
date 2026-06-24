@@ -2119,6 +2119,8 @@ def test_phase1_ai_editor_regressions() -> None:
            'type:"webview-set-state"' in html
            and 'webview_set_state' in html
            and "_injectWebviewHtml(panelEl,viewId,html,data.state)" in html
+           and "updateExtensionWebviewTitle(viewId,title" in html
+           and "event==='update_webview_panel_title'" in html
            and 'getState:function(){return _state}' in html)
     _check("frontend accepts provider webview pushes",
            "const providerId=String(viewId).startsWith('provider.')?String(viewId).slice(9):''" in html
@@ -3172,6 +3174,15 @@ console.log("quick input filter helpers ok");
            and "state = msg.get(\"state\", None)" in extension_host_source
            and "state: this._state" in node_ext_host_source
            and "panel.webview._setState(state)" in node_ext_host_source)
+    _check("extension webview panel title updates reach frontend",
+           "type: 'webview_title'" in node_ext_host_source
+           and "title: this._title" in node_ext_host_source
+           and "elif msg_type == \"webview_title\"" in extension_host_source
+           and "def update_webview_panel_title(" in app_source
+           and "\"update_webview_panel_title\"" in app_source
+           and "function updateExtensionWebviewTitle(viewId,title,viewType)"
+           in html
+           and "event==='update_webview_panel_title'" in html)
 
     runtime_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     runtime_api._controller = object()
@@ -8793,6 +8804,7 @@ module.exports = { activate, deactivate };
                 def __init__(self) -> None:
                     self.webviews = {}
                     self.webview_states = {}
+                    self.webview_titles = {}
                     self.local_resource_roots = {}
                     self.disposed = []
                     self.progress = []
@@ -8813,16 +8825,23 @@ module.exports = { activate, deactivate };
 
                 def render_webview_panel(
                         self, view_id: str, html: str,
-                        local_resource_roots=None, state=None) -> None:
+                        local_resource_roots=None, state=None,
+                        title: str = "") -> None:
                     self.webviews[view_id] = html
                     state_to_render = (
                         self.get_webview_state(view_id)
                         if state is None else state)
                     self.webview_states[view_id] = state_to_render
+                    if title:
+                        self.webview_titles[view_id] = str(title)
                     self.local_resource_roots[view_id] = local_resource_roots
 
                 def get_webview_state(self, view_id):
                     return self.webview_states.get(str(view_id))
+
+                def update_webview_panel_title(
+                        self, view_id, title, view_type=""):
+                    self.webview_titles[str(view_id)] = str(title or "")
 
                 def post_webview_message(self, view_id: str, message) -> None:
                     self.webviews.setdefault(view_id, "")
@@ -10165,6 +10184,8 @@ module.exports = { activate, deactivate };
                        and node_webview_dispose_initial.get("visible") is True
                        and node_webview_dispose_revealed.get("title")
                        == "Disposed Title"
+                       and node_ui_bridge.webview_titles.get(
+                           node_dispose_view_id) == "Disposed Title"
                        and node_webview_dispose_revealed.get("viewColumn") == 3
                        and node_webview_dispose_revealed.get("active") is True
                        and node_webview_dispose_revealed.get("visible") is True
@@ -10177,6 +10198,7 @@ module.exports = { activate, deactivate };
                            "probe": node_webview_dispose_probe,
                            "view_id": node_dispose_view_id,
                            "disposed": node_ui_bridge.disposed,
+                           "titles": node_ui_bridge.webview_titles,
                        }, ensure_ascii=False))
                 node_serializer_events = (
                     node_webview_serializer_probe.get("events", [])

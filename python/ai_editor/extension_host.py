@@ -2057,13 +2057,31 @@ class NodeExtensionHost:
             html = str(msg.get("html", ""))
             local_roots = msg.get("localResourceRoots", None)
             state = msg.get("state", None)
+            title = str(msg.get("title", ""))
             if self._ui_bridge and view_id:
                 try:
                     self._ui_bridge.render_webview_panel(
-                        view_id, html, local_roots, state)
+                        view_id, html, local_roots, state, title)
                 except TypeError:
                     try:
-                        self._ui_bridge.render_webview_panel(view_id, html)
+                        self._ui_bridge.render_webview_panel(
+                            view_id, html, local_roots, state)
+                    except TypeError:
+                        try:
+                            self._ui_bridge.render_webview_panel(
+                                view_id, html, local_roots)
+                        except TypeError:
+                            try:
+                                self._ui_bridge.render_webview_panel(
+                                    view_id, html)
+                            except Exception:
+                                _log.exception(
+                                    "[NodeExtHost] render_webview_panel failed "
+                                    "for %s", view_id)
+                        except Exception:
+                            _log.exception(
+                                "[NodeExtHost] render_webview_panel failed "
+                                "for %s", view_id)
                     except Exception:
                         _log.exception(
                             "[NodeExtHost] render_webview_panel failed "
@@ -2071,6 +2089,21 @@ class NodeExtensionHost:
                 except Exception:
                     _log.exception("[NodeExtHost] render_webview_panel failed "
                                    "for %s", view_id)
+
+        elif msg_type == "webview_title":
+            view_id = str(msg.get("viewId", ""))
+            title = str(msg.get("title", ""))
+            view_type = str(msg.get("viewType", ""))
+            if self._ui_bridge and view_id:
+                try:
+                    updater = getattr(
+                        self._ui_bridge, "update_webview_panel_title", None)
+                    if callable(updater):
+                        updater(view_id, title, view_type)
+                except Exception:
+                    _log.exception(
+                        "[NodeExtHost] update_webview_panel_title failed "
+                        "for %s", view_id)
 
         elif msg_type == "webview_post_message":
             view_id = str(msg.get("viewId", ""))

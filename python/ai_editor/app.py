@@ -972,7 +972,8 @@ class _AIEditorUIBridge:
     def render_webview_panel(
             self, view_id: str, html: str,
             local_resource_roots: Any = None,
-            state: Any = None) -> None:
+            state: Any = None,
+            title: str = "") -> None:
         """Push HTML content for a webview panel to the frontend."""
         state_to_render = state
         if state_to_render is None:
@@ -985,6 +986,7 @@ class _AIEditorUIBridge:
             "view_id": view_id,
             "html": prepared,
             "state": state_to_render,
+            "title": str(title or ""),
         })
 
     def get_webview_state(self, view_id: str) -> Any:
@@ -992,6 +994,17 @@ class _AIEditorUIBridge:
         if not normalized_view_id:
             return None
         return self._api._webview_states.get(normalized_view_id)
+
+    def update_webview_panel_title(
+            self, view_id: str, title: str, view_type: str = "") -> None:
+        normalized_view_id = str(view_id or "").strip()
+        if not normalized_view_id:
+            return
+        self._api._emit("update_webview_panel_title", {
+            "view_id": normalized_view_id,
+            "title": str(title or ""),
+            "view_type": str(view_type or ""),
+        })
 
     def dispose_webview_panel(self, view_id: str) -> None:
         """Dispose a webview panel by emitting a dispose event to the frontend."""

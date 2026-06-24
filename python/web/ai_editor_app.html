@@ -8115,6 +8115,26 @@ function ensureExtensionProviderPanel(raw,viewId){
   if(panel){panel.dataset.providerId=p.id;panel.dataset.providerSurface='extension-webview';panel.classList.add('provider-webview-host');if(viewId)panel.dataset.viewId=viewId}
   return panel;
 }
+function updateExtensionWebviewTitle(viewId,title,viewType){
+  const id=String(viewId||'').trim(),label=String(title||'').trim();
+  if(!id||!label)return false;
+  const customTab=findCustomEditorTabByViewId(id);
+  if(customTab){
+    customTab.name=label;
+    customTab.customEditor={...(customTab.customEditor||{}),display_name:label,panel_title:label};
+    renderTabs();
+    return true;
+  }
+  const providerId=id.startsWith('provider.')?id.slice(9):id;
+  const existing=providerDefs[providerId]||dynamicExtensionProviderDefs[providerId]||{};
+  const record={...existing,id:providerId,view_id:id,viewId:id,view_type:viewType||existing.view_type||existing.viewType||'',name:label,short_name:label,title:label,available:existing.available!==false,runtime_mode:existing.runtime_mode||existing.runtimeMode||'extension-webview',requested_transport:existing.requested_transport||existing.requestedTransport||'webviewView',extension_view:true};
+  const panel=ensureExtensionProviderPanel(record,id);
+  if(panel){
+    panel.dataset.webviewTitle=label;
+    if(!panel.children.length)renderProviderWebviewPlaceholder(panel,record,'loading');
+  }
+  return !!panel;
+}
 function providerModelLabel(pid){const p=providerDefs[pid]||{};return p.model||p.provider_type||''}
 function providerModeHint(p){return p&&p.id==='copilot'?t('provider_mode_copilot'):((p&&p.auto_agent)?t('provider_mode_agent'):t('provider_mode_chat'))}
 function providerBackendLabel(raw){return t('provider_backend_'+String(raw||'').replace(/-/g,'_'))||raw||''}
@@ -8661,6 +8681,11 @@ window._onEditorEvent=function(event,data){
       if(data.retainContextWhenHidden)panelEl.dataset.retainContext='1';
       _injectWebviewHtml(panelEl,viewId,html,data.state);
     }
+    return;
+  }
+  if(event==='update_webview_panel_title'){
+    const viewId=data&&data.view_id,title=data&&data.title;
+    if(viewId)updateExtensionWebviewTitle(viewId,title,data&&data.view_type);
     return;
   }
   // ── dispose_webview_panel: remove iframe and clean up panel ──

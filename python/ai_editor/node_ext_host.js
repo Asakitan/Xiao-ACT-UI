@@ -815,6 +815,8 @@ class Webview {
         this._viewId = viewId;
         this._html = '';
         this._state = null;
+        this._viewType = '';
+        this._title = '';
         this._options = options && typeof options === 'object' ? options : {};
         this._defaultLocalResourceRoots = Array.isArray(defaultLocalResourceRoots)
             ? defaultLocalResourceRoots
@@ -845,6 +847,8 @@ class Webview {
             viewId: this._viewId,
             html: value,
             state: this._state,
+            title: this._title,
+            viewType: this._viewType,
             options: this._webviewOptionsPayload(),
             localResourceRoots: this._localResourceRootsPayload(),
         });
@@ -868,6 +872,10 @@ class Webview {
     }
     _setState(state) {
         this._state = state === undefined ? null : state;
+    }
+    _setPanelMetadata(viewType, title) {
+        this._viewType = String(viewType || '');
+        this._title = String(title || '');
     }
     _localResourceRootsPayload() {
         const roots = (
@@ -980,6 +988,7 @@ function _createWebviewPanelObject(
     let visible = true;
     let active = !_webviewPanelPreserveFocusFromShowOptions(showOptions);
     let viewColumn = _webviewPanelColumnFromShowOptions(showOptions);
+    view.webview._setPanelMetadata(viewType, currentTitle);
     function assertPanelAlive() {
         if (disposed) throw new Error('WebviewPanel has been disposed');
     }
@@ -991,7 +1000,17 @@ function _createWebviewPanelObject(
         },
         set title(value) {
             assertPanelAlive();
-            currentTitle = String(value || '');
+            const nextTitle = String(value || '');
+            if (currentTitle === nextTitle) return;
+            currentTitle = nextTitle;
+            view.title = nextTitle;
+            view.webview._setPanelMetadata(viewType, nextTitle);
+            send({
+                type: 'webview_title',
+                viewId,
+                viewType,
+                title: nextTitle,
+            });
         },
         get iconPath() {
             assertPanelAlive();
