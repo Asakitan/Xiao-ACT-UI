@@ -2561,6 +2561,7 @@ console.log("frontend auto-close behavior ok");
             "extensionSettingJson",
             "extensionSettingJsonRows",
             "extensionSettingValidateJsonValue",
+            "extensionSettingValidateSchemaValue",
             "setExtensionSettingInputValue",
             "readExtensionSettingInputValue",
         ]
@@ -2569,10 +2570,21 @@ console.log("frontend auto-close behavior ok");
         js = setting_js + r"""
 function assert(ok,label){ if(!ok){ throw new Error(label); } }
 const arraySchema = { type: "array", items: { type: "string" } };
+const strictArraySchema = {
+  type: "array",
+  items: { type: "string", pattern: "^[a-z]+$" },
+  minItems: 1,
+  maxItems: 2
+};
 const objectSchema = {
   type: "object",
-  properties: { level: { type: "number" }, mode: { type: "string" } }
+  required: ["level"],
+  properties: {
+    level: { type: "integer", minimum: 1, maximum: 5 },
+    mode: { type: "string", enum: ["auto", "manual"] }
+  }
 };
+const numberSchema = { type: "number", minimum: 1, maximum: 5 };
 const textarea = { type: "textarea", tagName: "TEXTAREA", value: "", rows: 0 };
 setExtensionSettingInputValue(textarea, arraySchema, "array", ["a", "b"]);
 assert(textarea.value.indexOf('"a"') >= 0, "array formatted as JSON");
@@ -2587,6 +2599,21 @@ let objectRejected = false;
 try { readExtensionSettingInputValue(textarea, objectSchema, "object"); }
 catch (err) { objectRejected = /Expected JSON object/.test(String(err.message)); }
 assert(objectRejected, "object schema rejects array JSON");
+textarea.value = '{"mode":"auto"}';
+let requiredRejected = false;
+try { readExtensionSettingInputValue(textarea, objectSchema, "object"); }
+catch (err) { requiredRejected = /value.level is required/.test(String(err.message)); }
+assert(requiredRejected, "object schema rejects missing required field");
+textarea.value = '["ok","BAD"]';
+let patternRejected = false;
+try { readExtensionSettingInputValue(textarea, strictArraySchema, "array"); }
+catch (err) { patternRejected = /value\[1\] must match pattern/.test(String(err.message)); }
+assert(patternRejected, "array item schema rejects invalid string");
+const numberInput = { type: "number", tagName: "INPUT", value: "9" };
+let maxRejected = false;
+try { readExtensionSettingInputValue(numberInput, numberSchema, "number"); }
+catch (err) { maxRejected = /value must be at most 5/.test(String(err.message)); }
+assert(maxRejected, "number schema rejects maximum overflow");
 assert(extensionSettingSchemaSummary(arraySchema, "array") === "items: string",
        "array schema summary");
 assert(extensionSettingSchemaSummary(objectSchema, "object").indexOf("level") >= 0,
@@ -5981,7 +6008,35 @@ def test_app_extension_runtime_support() -> None:
                         },
                         "selftest.options": {
                             "type": "object",
-                            "default": {"level": 1},
+                            "default": {"level": 1, "mode": "auto"},
+                            "required": ["level"],
+                            "properties": {
+                                "level": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 5,
+                                },
+                                "mode": {
+                                    "type": "string",
+                                    "enum": ["auto", "manual"],
+                                },
+                            },
+                        },
+                        "selftest.tags": {
+                            "type": "array",
+                            "default": ["alpha"],
+                            "items": {
+                                "type": "string",
+                                "pattern": "^[a-z]+$",
+                            },
+                            "minItems": 1,
+                            "maxItems": 3,
+                        },
+                        "selftest.limit": {
+                            "type": "number",
+                            "default": 2,
+                            "minimum": 1,
+                            "maximum": 5,
                         },
                     },
                 },
@@ -6007,6 +6062,24 @@ def test_app_extension_runtime_support() -> None:
                and settings_cfg.get("modified", {}).get("selftest.flag") is False)
         _check("extension configurationDefaults override schema defaults",
                api.get_extension_setting("selftest.mode").get("value") == "manual")
+        invalid_options = api.set_extension_setting(
+            "selftest.options", {"mode": "auto"})
+        invalid_tags = api.set_extension_setting(
+            "selftest.tags", ["ok", "BAD"])
+        invalid_limit = api.set_extension_setting("selftest.limit", 9)
+        valid_options = api.set_extension_setting(
+            "selftest.options", {"level": 3, "mode": "manual"})
+        stored_options = api.get_extension_setting("selftest.options")
+        _check("extension setting API validates structured schema constraints",
+               invalid_options.get("ok") is False
+               and "level is required" in invalid_options.get("error", "")
+               and invalid_tags.get("ok") is False
+               and "must match pattern" in invalid_tags.get("error", "")
+               and invalid_limit.get("ok") is False
+               and "at most 5" in invalid_limit.get("error", "")
+               and valid_options.get("ok") is True
+               and stored_options.get("value") == {
+                   "level": 3, "mode": "manual"})
         class _SettingsChangedNodeHost:
             is_running = True
 

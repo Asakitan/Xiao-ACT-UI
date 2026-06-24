@@ -7720,10 +7720,119 @@ class AIEditorAPI:
                 ctx = self._ext_host.activator.get_context(eid)
                 if not ctx:
                     return {"error": f"Extension context not found: {eid}"}
+                schema = props[key] if isinstance(props[key], dict) else {}
+                validation_error = self._validate_extension_setting_value(
+                    value, schema)
+                if validation_error:
+                    return {
+                        "ok": False,
+                        "error": validation_error,
+                        "key": key,
+                        "extension_id": eid,
+                    }
                 ctx.workspace_state.update(key, value)
                 self._notify_extension_setting_changed(key, value)
                 return {"ok": True, "key": key, "extension_id": eid}
         return {"error": f"Setting key not found in any extension: {key}"}
+
+    @staticmethod
+    def _extension_schema_type(schema: Dict[str, Any]) -> str:
+        raw_type = schema.get("type") if isinstance(schema, dict) else None
+        if isinstance(raw_type, list):
+            for item in raw_type:
+                item_str = str(item or "")
+                if item_str and item_str != "null":
+                    return item_str
+            return "string"
+        if raw_type:
+            return str(raw_type)
+        return "string"
+
+    @classmethod
+    def _validate_extension_setting_value(
+            cls, value: Any, schema: Dict[str, Any],
+            path: str = "value") -> str:
+        if not isinstance(schema, dict):
+            return ""
+        if isinstance(schema.get("enum"), list):
+            if not any(value == item for item in schema.get("enum", [])):
+                return f"{path} must be one of the configured enum values"
+        value_type = cls._extension_schema_type(schema)
+        if value_type == "boolean":
+            if not isinstance(value, bool):
+                return f"{path} must be a boolean"
+        elif value_type == "integer":
+            if not isinstance(value, int) or isinstance(value, bool):
+                return f"{path} must be an integer"
+        elif value_type == "number":
+            if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                    or not math.isfinite(float(value))):
+                return f"{path} must be a number"
+        elif value_type == "string":
+            if not isinstance(value, str):
+                return f"{path} must be a string"
+        elif value_type == "array":
+            if not isinstance(value, list):
+                return f"{path} must be an array"
+        elif value_type == "object":
+            if not isinstance(value, dict):
+                return f"{path} must be an object"
+
+        if isinstance(value, str):
+            min_len = schema.get("minLength")
+            max_len = schema.get("maxLength")
+            if isinstance(min_len, (int, float)) and len(value) < int(min_len):
+                return f"{path} must be at least {int(min_len)} characters"
+            if isinstance(max_len, (int, float)) and len(value) > int(max_len):
+                return f"{path} must be at most {int(max_len)} characters"
+            pattern = schema.get("pattern")
+            if isinstance(pattern, str) and pattern:
+                try:
+                    if re.search(pattern, value) is None:
+                        return f"{path} must match pattern {pattern}"
+                except re.error:
+                    pass
+
+        if (isinstance(value, (int, float)) and not isinstance(value, bool)):
+            minimum = schema.get("minimum")
+            maximum = schema.get("maximum")
+            if isinstance(minimum, (int, float)) and value < minimum:
+                return f"{path} must be at least {minimum}"
+            if isinstance(maximum, (int, float)) and value > maximum:
+                return f"{path} must be at most {maximum}"
+
+        if isinstance(value, list):
+            min_items = schema.get("minItems")
+            max_items = schema.get("maxItems")
+            if isinstance(min_items, (int, float)) and len(value) < int(min_items):
+                return f"{path} must contain at least {int(min_items)} item(s)"
+            if isinstance(max_items, (int, float)) and len(value) > int(max_items):
+                return f"{path} must contain at most {int(max_items)} item(s)"
+            item_schema = schema.get("items")
+            if isinstance(item_schema, dict):
+                for index, item in enumerate(value):
+                    error = cls._validate_extension_setting_value(
+                        item, item_schema, f"{path}[{index}]")
+                    if error:
+                        return error
+
+        if isinstance(value, dict):
+            required = schema.get("required")
+            if isinstance(required, list):
+                for item in required:
+                    item_key = str(item or "")
+                    if item_key and item_key not in value:
+                        return f"{path}.{item_key} is required"
+            properties = schema.get("properties")
+            if isinstance(properties, dict):
+                for prop_key, prop_schema in properties.items():
+                    if prop_key in value and isinstance(prop_schema, dict):
+                        error = cls._validate_extension_setting_value(
+                            value[prop_key], prop_schema,
+                            f"{path}.{prop_key}")
+                        if error:
+                            return error
+        return ""
 
     def reset_extension_setting(self, key: str) -> Dict:
         """Remove a workspace override for an extension setting."""
