@@ -9880,6 +9880,16 @@ function extensionSettingConstraintSummary(schema,type){
   if(type==='array'){
     if(typeof schema.minItems==='number')parts.push('min items: '+schema.minItems);
     if(typeof schema.maxItems==='number')parts.push('max items: '+schema.maxItems);
+    if(schema.uniqueItems===true)parts.push('unique items');
+  }
+  if(type==='object'){
+    if(typeof schema.minProperties==='number')parts.push('min properties: '+schema.minProperties);
+    if(typeof schema.maxProperties==='number')parts.push('max properties: '+schema.maxProperties);
+    if(schema.additionalProperties===false)parts.push('no additional properties');
+    if(schema.patternProperties&&typeof schema.patternProperties==='object'){
+      parts.push('pattern properties: '+Object.keys(schema.patternProperties).slice(0,3).join(', '));
+    }
+    if(schema.propertyNames&&typeof schema.propertyNames==='object')parts.push('property names constrained');
   }
   return parts.join(' · ');
 }
@@ -9956,6 +9966,13 @@ function extensionSettingValidateJsonValue(value,type){
   if(type==='object'&&(!value||typeof value!=='object'||Array.isArray(value)))throw new Error('Expected JSON object');
   return value;
 }
+function extensionSettingStableJson(value){
+  if(Array.isArray(value))return '['+value.map(extensionSettingStableJson).join(',')+']';
+  if(value&&typeof value==='object'){
+    return '{'+Object.keys(value).sort().map(key=>JSON.stringify(key)+':'+extensionSettingStableJson(value[key])).join(',')+'}';
+  }
+  return JSON.stringify(value);
+}
 function extensionSettingValidateSchemaValue(value,schema,path){
   schema=(schema&&typeof schema==='object')?schema:{};
   path=path||'value';
@@ -9990,13 +10007,38 @@ function extensionSettingValidateSchemaValue(value,schema,path){
   if(Array.isArray(value)){
     if(typeof schema.minItems==='number'&&value.length<schema.minItems)throw new Error(path+' must contain at least '+schema.minItems+' item(s)');
     if(typeof schema.maxItems==='number'&&value.length>schema.maxItems)throw new Error(path+' must contain at most '+schema.maxItems+' item(s)');
+    if(schema.uniqueItems===true){
+      const seen=new Set();
+      value.forEach((item,idx)=>{
+        const key=extensionSettingStableJson(item);
+        if(seen.has(key))throw new Error(path+'['+idx+'] must be unique');
+        seen.add(key);
+      });
+    }
     if(schema.items&&typeof schema.items==='object')value.forEach((item,idx)=>extensionSettingValidateSchemaValue(item,schema.items,path+'['+idx+']'));
   }
   if(value&&typeof value==='object'&&!Array.isArray(value)){
+    const keys=Object.keys(value);
+    if(typeof schema.minProperties==='number'&&keys.length<schema.minProperties)throw new Error(path+' must contain at least '+schema.minProperties+' property/properties');
+    if(typeof schema.maxProperties==='number'&&keys.length>schema.maxProperties)throw new Error(path+' must contain at most '+schema.maxProperties+' property/properties');
     if(Array.isArray(schema.required))schema.required.forEach(key=>{if(key&&!Object.prototype.hasOwnProperty.call(value,key))throw new Error(path+'.'+key+' is required')});
+    if(schema.propertyNames&&typeof schema.propertyNames==='object')keys.forEach(key=>extensionSettingValidateSchemaValue(key,schema.propertyNames,path+'.'+key));
+    const matched=new Set();
     if(schema.properties&&typeof schema.properties==='object')Object.keys(schema.properties).forEach(key=>{
-      if(Object.prototype.hasOwnProperty.call(value,key))extensionSettingValidateSchemaValue(value[key],schema.properties[key],path+'.'+key);
+      if(Object.prototype.hasOwnProperty.call(value,key)){matched.add(key)}
+      if(Object.prototype.hasOwnProperty.call(value,key)&&schema.properties[key]&&typeof schema.properties[key]==='object')extensionSettingValidateSchemaValue(value[key],schema.properties[key],path+'.'+key);
     });
+    if(schema.patternProperties&&typeof schema.patternProperties==='object')keys.forEach(key=>{
+      Object.keys(schema.patternProperties).forEach(pattern=>{
+        const propSchema=schema.patternProperties[pattern];
+        if(!propSchema||typeof propSchema!=='object')return;
+        let re;try{re=new RegExp(pattern)}catch(e){re=null}
+        if(re&&re.test(key)){matched.add(key);extensionSettingValidateSchemaValue(value[key],propSchema,path+'.'+key)}
+      });
+    });
+    const unknown=keys.filter(key=>!matched.has(key));
+    if(schema.additionalProperties===false&&unknown.length)throw new Error(path+'.'+unknown[0]+' is not allowed');
+    if(schema.additionalProperties&&typeof schema.additionalProperties==='object')unknown.forEach(key=>extensionSettingValidateSchemaValue(value[key],schema.additionalProperties,path+'.'+key));
   }
   return value;
 }

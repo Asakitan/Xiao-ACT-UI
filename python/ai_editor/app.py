@@ -8507,10 +8507,41 @@ class AIEditorAPI:
         if (isinstance(value, (int, float)) and not isinstance(value, bool)):
             minimum = schema.get("minimum")
             maximum = schema.get("maximum")
-            if isinstance(minimum, (int, float)) and value < minimum:
+            exclusive_minimum = schema.get("exclusiveMinimum")
+            exclusive_maximum = schema.get("exclusiveMaximum")
+            multiple_of = schema.get("multipleOf")
+            if (isinstance(exclusive_minimum, (int, float))
+                    and not isinstance(exclusive_minimum, bool)
+                    and value <= exclusive_minimum):
+                return f"{path} must be greater than {exclusive_minimum}"
+            if (exclusive_minimum is True
+                    and isinstance(minimum, (int, float))
+                    and not isinstance(minimum, bool)
+                    and value <= minimum):
+                return f"{path} must be greater than {minimum}"
+            if (isinstance(minimum, (int, float))
+                    and not isinstance(minimum, bool)
+                    and value < minimum):
                 return f"{path} must be at least {minimum}"
-            if isinstance(maximum, (int, float)) and value > maximum:
+            if (isinstance(exclusive_maximum, (int, float))
+                    and not isinstance(exclusive_maximum, bool)
+                    and value >= exclusive_maximum):
+                return f"{path} must be less than {exclusive_maximum}"
+            if (exclusive_maximum is True
+                    and isinstance(maximum, (int, float))
+                    and not isinstance(maximum, bool)
+                    and value >= maximum):
+                return f"{path} must be less than {maximum}"
+            if (isinstance(maximum, (int, float))
+                    and not isinstance(maximum, bool)
+                    and value > maximum):
                 return f"{path} must be at most {maximum}"
+            if (isinstance(multiple_of, (int, float))
+                    and not isinstance(multiple_of, bool)
+                    and multiple_of > 0):
+                ratio = float(value) / float(multiple_of)
+                if not math.isclose(ratio, round(ratio), rel_tol=1e-9, abs_tol=1e-9):
+                    return f"{path} must be a multiple of {multiple_of}"
 
         if isinstance(value, list):
             min_items = schema.get("minItems")
@@ -8519,6 +8550,17 @@ class AIEditorAPI:
                 return f"{path} must contain at least {int(min_items)} item(s)"
             if isinstance(max_items, (int, float)) and len(value) > int(max_items):
                 return f"{path} must contain at most {int(max_items)} item(s)"
+            if schema.get("uniqueItems") is True:
+                seen_items = set()
+                for index, item in enumerate(value):
+                    try:
+                        item_key = json.dumps(
+                            item, ensure_ascii=False, sort_keys=True)
+                    except Exception:
+                        item_key = repr(item)
+                    if item_key in seen_items:
+                        return f"{path}[{index}] must be unique"
+                    seen_items.add(item_key)
             item_schema = schema.get("items")
             if isinstance(item_schema, dict):
                 for index, item in enumerate(value):
@@ -8528,21 +8570,73 @@ class AIEditorAPI:
                         return error
 
         if isinstance(value, dict):
+            min_properties = schema.get("minProperties")
+            max_properties = schema.get("maxProperties")
+            if (isinstance(min_properties, (int, float))
+                    and len(value) < int(min_properties)):
+                return (
+                    f"{path} must contain at least "
+                    f"{int(min_properties)} property/properties")
+            if (isinstance(max_properties, (int, float))
+                    and len(value) > int(max_properties)):
+                return (
+                    f"{path} must contain at most "
+                    f"{int(max_properties)} property/properties")
             required = schema.get("required")
             if isinstance(required, list):
                 for item in required:
                     item_key = str(item or "")
                     if item_key and item_key not in value:
                         return f"{path}.{item_key} is required"
+            property_names = schema.get("propertyNames")
+            if isinstance(property_names, dict):
+                for prop_key in value:
+                    error = cls._validate_extension_setting_value(
+                        str(prop_key), property_names, f"{path}.{prop_key}")
+                    if error:
+                        return error
             properties = schema.get("properties")
+            matched_keys = set()
             if isinstance(properties, dict):
                 for prop_key, prop_schema in properties.items():
+                    if prop_key in value:
+                        matched_keys.add(prop_key)
                     if prop_key in value and isinstance(prop_schema, dict):
                         error = cls._validate_extension_setting_value(
                             value[prop_key], prop_schema,
                             f"{path}.{prop_key}")
                         if error:
                             return error
+            pattern_properties = schema.get("patternProperties")
+            if isinstance(pattern_properties, dict):
+                for prop_key, prop_value in value.items():
+                    for pattern, prop_schema in pattern_properties.items():
+                        if not isinstance(prop_schema, dict):
+                            continue
+                        try:
+                            matches = re.search(str(pattern), str(prop_key)) is not None
+                        except re.error:
+                            matches = False
+                        if not matches:
+                            continue
+                        matched_keys.add(prop_key)
+                        error = cls._validate_extension_setting_value(
+                            prop_value, prop_schema, f"{path}.{prop_key}")
+                        if error:
+                            return error
+            additional = schema.get("additionalProperties", True)
+            unknown_keys = [
+                prop_key for prop_key in value
+                if prop_key not in matched_keys
+            ]
+            if additional is False and unknown_keys:
+                return f"{path}.{unknown_keys[0]} is not allowed"
+            if isinstance(additional, dict):
+                for prop_key in unknown_keys:
+                    error = cls._validate_extension_setting_value(
+                        value[prop_key], additional, f"{path}.{prop_key}")
+                    if error:
+                        return error
         return ""
 
     def reset_extension_setting(self, key: str) -> Dict:

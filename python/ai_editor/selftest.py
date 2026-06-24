@@ -2718,6 +2718,13 @@ console.log("frontend auto-close behavior ok");
             and "Invalid JSON" in html
             and "Expected JSON array" in html
             and "Expected JSON object" in html
+            and "function extensionSettingStableJson(value)" in html
+            and "uniqueItems" in html
+            and "minProperties" in html
+            and "maxProperties" in html
+            and "additionalProperties" in html
+            and "patternProperties" in html
+            and "propertyNames" in html
             and "ext-setting-schema" in html
             and "markdownEnumDescriptions" in html
             and "function appendExtensionSettingMarkdown(container,text)" in html
@@ -2742,6 +2749,7 @@ console.log("frontend auto-close behavior ok");
             "extensionSettingUsesMultiline",
             "applyExtensionSettingInputConstraints",
             "extensionSettingValidateJsonValue",
+            "extensionSettingStableJson",
             "extensionSettingValidateSchemaValue",
             "extensionSettingParseQuery",
             "setExtensionSettingInputValue",
@@ -2778,7 +2786,8 @@ const strictArraySchema = {
   type: "array",
   items: { type: "string", pattern: "^[a-z]+$" },
   minItems: 1,
-  maxItems: 2
+  maxItems: 2,
+  uniqueItems: true
 };
 const objectSchema = {
   type: "object",
@@ -2787,6 +2796,24 @@ const objectSchema = {
     level: { type: "integer", minimum: 1, maximum: 5 },
     mode: { type: "string", enum: ["auto", "manual"] }
   }
+};
+const strictObjectSchema = {
+  type: "object",
+  minProperties: 1,
+  maxProperties: 2,
+  propertyNames: { type: "string", pattern: "^[a-z]+$" },
+  additionalProperties: false,
+  properties: {
+    level: { type: "integer", minimum: 1, maximum: 5 },
+    mode: { type: "string", enum: ["auto", "manual"] }
+  }
+};
+const patternObjectSchema = {
+  type: "object",
+  patternProperties: {
+    "^env\\.": { type: "string", pattern: "^[a-z]+$" }
+  },
+  additionalProperties: { type: "integer" }
 };
 const multilineSchema = { type: "string", editPresentation: "multilineText" };
 const deprecatedSchema = {
@@ -2829,6 +2856,31 @@ let patternRejected = false;
 try { readExtensionSettingInputValue(textarea, strictArraySchema, "array"); }
 catch (err) { patternRejected = /value\[1\] must match pattern/.test(String(err.message)); }
 assert(patternRejected, "array item schema rejects invalid string");
+textarea.value = '[{"a":1,"b":2},{"b":2,"a":1}]';
+let uniqueRejected = false;
+try { readExtensionSettingInputValue(textarea, strictArraySchema, "array"); }
+catch (err) { uniqueRejected = /value\[1\] must be unique/.test(String(err.message)); }
+assert(uniqueRejected, "array schema rejects duplicate JSON-equivalent items");
+textarea.value = '{"level":1,"extra":true}';
+let additionalRejected = false;
+try { readExtensionSettingInputValue(textarea, strictObjectSchema, "object"); }
+catch (err) { additionalRejected = /value.extra is not allowed/.test(String(err.message)); }
+assert(additionalRejected, "object schema rejects additional properties");
+textarea.value = '{"Bad":1}';
+let propertyNameRejected = false;
+try { readExtensionSettingInputValue(textarea, strictObjectSchema, "object"); }
+catch (err) { propertyNameRejected = /value.Bad must match pattern/.test(String(err.message)); }
+assert(propertyNameRejected, "object schema validates propertyNames");
+textarea.value = '{"env.name":"BAD"}';
+let patternPropRejected = false;
+try { readExtensionSettingInputValue(textarea, patternObjectSchema, "object"); }
+catch (err) { patternPropRejected = /value.env.name must match pattern/.test(String(err.message)); }
+assert(patternPropRejected, "object schema validates patternProperties");
+textarea.value = '{"other":"x"}';
+let additionalSchemaRejected = false;
+try { readExtensionSettingInputValue(textarea, patternObjectSchema, "object"); }
+catch (err) { additionalSchemaRejected = /value.other must be an integer/.test(String(err.message)); }
+assert(additionalSchemaRejected, "object schema validates additionalProperties schema");
 const numberInput = { type: "number", tagName: "INPUT", value: "9" };
 let maxRejected = false;
 try { readExtensionSettingInputValue(numberInput, numberSchema, "number"); }
@@ -2855,8 +2907,13 @@ assert(stringHint.minLength === 2 && stringHint.maxLength === 6
        "string input constraints applied");
 assert(extensionSettingSchemaSummary(arraySchema, "array") === "items: string",
        "array schema summary");
-assert(extensionSettingSchemaSummary(objectSchema, "object").indexOf("level") >= 0,
-       "object schema summary");
+assert(extensionSettingSchemaSummary(strictArraySchema, "array").indexOf("unique items") >= 0,
+       "array uniqueItems schema summary");
+assert(extensionSettingSchemaSummary(strictObjectSchema, "object").indexOf("no additional properties") >= 0
+       && extensionSettingSchemaSummary(strictObjectSchema, "object").indexOf("property names constrained") >= 0,
+       "object strict schema summary");
+assert(extensionSettingSchemaSummary(patternObjectSchema, "object").indexOf("pattern properties: ^env\\.") >= 0,
+       "object patternProperties schema summary");
 assert(extensionSettingSchemaSummary(numberSchema, "number").indexOf("min: 1") >= 0
        && extensionSettingSchemaSummary(numberSchema, "number").indexOf("max: 5") >= 0,
        "number constraint summary");
@@ -6805,6 +6862,58 @@ def test_app_extension_runtime_support() -> None:
                             "minimum": 1,
                             "maximum": 5,
                         },
+                        "selftest.step": {
+                            "type": "integer",
+                            "default": 2,
+                            "minimum": 0,
+                            "maximum": 10,
+                            "multipleOf": 2,
+                        },
+                        "selftest.exclusive": {
+                            "type": "number",
+                            "default": 2,
+                            "exclusiveMinimum": 1,
+                            "exclusiveMaximum": 5,
+                        },
+                        "selftest.uniqueTags": {
+                            "type": "array",
+                            "default": ["alpha"],
+                            "items": {"type": "string"},
+                            "uniqueItems": True,
+                        },
+                        "selftest.strictOptions": {
+                            "type": "object",
+                            "default": {"level": 1, "mode": "auto"},
+                            "minProperties": 1,
+                            "maxProperties": 2,
+                            "propertyNames": {
+                                "type": "string",
+                                "pattern": "^[a-z]+$",
+                            },
+                            "additionalProperties": False,
+                            "properties": {
+                                "level": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 5,
+                                },
+                                "mode": {
+                                    "type": "string",
+                                    "enum": ["auto", "manual"],
+                                },
+                            },
+                        },
+                        "selftest.patternOptions": {
+                            "type": "object",
+                            "default": {"env.alpha": "ok", "retries": 2},
+                            "patternProperties": {
+                                "^env\\.": {
+                                    "type": "string",
+                                    "pattern": "^[a-z]+$",
+                                },
+                            },
+                            "additionalProperties": {"type": "integer"},
+                        },
                         "selftest.machineOnly": {
                             "type": "string",
                             "default": "local",
@@ -7045,9 +7154,28 @@ def test_app_extension_runtime_support() -> None:
         invalid_tags = api.set_extension_setting(
             "selftest.tags", ["ok", "BAD"])
         invalid_limit = api.set_extension_setting("selftest.limit", 9)
+        invalid_step = api.set_extension_setting("selftest.step", 3)
+        invalid_exclusive = api.set_extension_setting(
+            "selftest.exclusive", 1)
+        invalid_unique_tags = api.set_extension_setting(
+            "selftest.uniqueTags", ["alpha", "alpha"])
+        invalid_strict_extra = api.set_extension_setting(
+            "selftest.strictOptions", {"level": 3, "extra": 1})
+        invalid_strict_name = api.set_extension_setting(
+            "selftest.strictOptions", {"Bad": 1})
+        invalid_pattern_prop = api.set_extension_setting(
+            "selftest.patternOptions", {"env.name": "BAD"})
+        invalid_additional_schema = api.set_extension_setting(
+            "selftest.patternOptions", {"other": "x"})
         valid_options = api.set_extension_setting(
             "selftest.options", {"level": 3, "mode": "manual"})
+        valid_step = api.set_extension_setting("selftest.step", 4)
+        valid_pattern_options = api.set_extension_setting(
+            "selftest.patternOptions", {"env.name": "ok", "other": 2})
         stored_options = api.get_extension_setting("selftest.options")
+        stored_step = api.get_extension_setting("selftest.step")
+        stored_pattern_options = api.get_extension_setting(
+            "selftest.patternOptions")
         _check("extension setting API validates structured schema constraints",
                invalid_options.get("ok") is False
                and "level is required" in invalid_options.get("error", "")
@@ -7055,9 +7183,32 @@ def test_app_extension_runtime_support() -> None:
                and "must match pattern" in invalid_tags.get("error", "")
                and invalid_limit.get("ok") is False
                and "at most 5" in invalid_limit.get("error", "")
+               and invalid_step.get("ok") is False
+               and "multiple of 2" in invalid_step.get("error", "")
+               and invalid_exclusive.get("ok") is False
+               and "greater than 1" in invalid_exclusive.get("error", "")
+               and invalid_unique_tags.get("ok") is False
+               and "must be unique" in invalid_unique_tags.get("error", "")
+               and invalid_strict_extra.get("ok") is False
+               and "extra is not allowed" in invalid_strict_extra.get(
+                   "error", "")
+               and invalid_strict_name.get("ok") is False
+               and "must match pattern" in invalid_strict_name.get(
+                   "error", "")
+               and invalid_pattern_prop.get("ok") is False
+               and "must match pattern" in invalid_pattern_prop.get(
+                   "error", "")
+               and invalid_additional_schema.get("ok") is False
+               and "must be an integer" in invalid_additional_schema.get(
+                   "error", "")
                and valid_options.get("ok") is True
+               and valid_step.get("ok") is True
+               and valid_pattern_options.get("ok") is True
                and stored_options.get("value") == {
-                   "level": 3, "mode": "manual"})
+                   "level": 3, "mode": "manual"}
+               and stored_step.get("value") == 4
+               and stored_pattern_options.get("value") == {
+                   "env.name": "ok", "other": 2})
         class _SettingsChangedNodeHost:
             is_running = True
 
