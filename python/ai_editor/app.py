@@ -8453,23 +8453,52 @@ class AIEditorAPI:
                 defaults[key_str] = value
         return defaults
 
-    def _extension_configuration_schema_by_key(self) -> Dict[str, Dict[str, Any]]:
+    def _extension_configuration_schema_indexes(
+            self) -> tuple[
+                Dict[str, Dict[str, Any]],
+                Dict[str, Dict[str, Dict[str, Any]]]]:
         try:
             contributions = self._ext_host.ext_points.configuration_contributions
         except Exception:
             contributions = []
-        result: Dict[str, Dict[str, Any]] = {}
+        by_key: Dict[str, Dict[str, Any]] = {}
+        by_extension: Dict[str, Dict[str, Dict[str, Any]]] = {}
         for entry in contributions:
             if not isinstance(entry, dict):
                 continue
+            eid = str(
+                entry.get("extension_id")
+                or entry.get("_extensionId")
+                or "").strip()
             props = entry.get("properties", {})
             if not isinstance(props, dict):
                 continue
             for key, schema in props.items():
                 setting_key = str(key or "").strip()
                 if setting_key and isinstance(schema, dict):
-                    result[setting_key] = dict(schema)
-        return result
+                    schema_copy = dict(schema)
+                    by_key.setdefault(setting_key, schema_copy)
+                    if eid:
+                        by_extension.setdefault(
+                            setting_key, {})[eid] = schema_copy
+        return by_key, by_extension
+
+    def _extension_configuration_schema_by_key(self) -> Dict[str, Dict[str, Any]]:
+        by_key, _by_extension = self._extension_configuration_schema_indexes()
+        return by_key
+
+    @staticmethod
+    def _extension_configuration_schema_for_key(
+            setting_key: str, extension_id: str,
+            by_key: Dict[str, Dict[str, Any]],
+            by_extension: Dict[str, Dict[str, Dict[str, Any]]]
+    ) -> Optional[Dict[str, Any]]:
+        key = str(setting_key or "").strip()
+        eid = str(extension_id or "").strip()
+        extension_schemas = by_extension.get(key, {})
+        if eid and eid in extension_schemas:
+            return extension_schemas[eid]
+        return by_key.get(key)
 
     def _extension_configuration_language_defaults(self) -> List[Dict[str, Any]]:
         try:
@@ -8478,7 +8507,8 @@ class AIEditorAPI:
         except Exception:
             entries = []
         configured_by_language = self._extension_language_override_values()
-        schema_by_key = self._extension_configuration_schema_by_key()
+        schema_by_key, schema_by_extension = (
+            self._extension_configuration_schema_indexes())
         result: List[Dict[str, Any]] = []
         for entry in entries:
             if not isinstance(entry, dict):
@@ -8520,11 +8550,13 @@ class AIEditorAPI:
                         key: key in configured_values
                         for key in settings
                     }
-                    schemas = {
-                        key: schema_by_key[key]
-                        for key in settings
-                        if key in schema_by_key
-                    }
+                    schemas: Dict[str, Dict[str, Any]] = {}
+                    for setting_key in settings:
+                        schema = self._extension_configuration_schema_for_key(
+                            setting_key, eid,
+                            schema_by_key, schema_by_extension)
+                        if isinstance(schema, dict):
+                            schemas[setting_key] = schema
                     result.append({
                         "extension_id": eid,
                         "display_name": display_name,
@@ -8569,11 +8601,13 @@ class AIEditorAPI:
         return result
 
     def set_extension_language_setting(
-            self, language_id: str, key: str, value: Any) -> Dict:
+            self, language_id: str, key: str, value: Any,
+            extension_id: str = "") -> Dict:
         """Write a workspace language override for an extension default."""
         self._ensure_engine()
         language = str(language_id or "").strip()
         setting_key = str(key or "").strip()
+        ext_id = str(extension_id or "").strip()
         if not language:
             return {"ok": False, "error": "Language id is required"}
         if not setting_key:
@@ -8581,7 +8615,10 @@ class AIEditorAPI:
         settings = _resolve_settings(self._gui_ref)
         if not settings:
             return {"ok": False, "error": "Settings not available"}
-        schema = self._extension_configuration_schema_by_key().get(setting_key)
+        schema_by_key, schema_by_extension = (
+            self._extension_configuration_schema_indexes())
+        schema = self._extension_configuration_schema_for_key(
+            setting_key, ext_id, schema_by_key, schema_by_extension)
         if isinstance(schema, dict):
             validation_error = self._validate_extension_setting_value(
                 value, schema)
@@ -8592,6 +8629,7 @@ class AIEditorAPI:
                     "language": language,
                     "override": f"[{language}]",
                     "key": setting_key,
+                    "extension_id": ext_id,
                 }
         override_key = f"[{language}]"
         current = settings.get(override_key, {}) or {}
@@ -8609,16 +8647,19 @@ class AIEditorAPI:
             "language": language,
             "override": override_key,
             "key": setting_key,
+            "extension_id": ext_id,
             "value": value,
             "modified": True,
         }
 
     def reset_extension_language_setting(
-            self, language_id: str, key: str) -> Dict:
+            self, language_id: str, key: str,
+            extension_id: str = "") -> Dict:
         """Remove a workspace language override for an extension default."""
         self._ensure_engine()
         language = str(language_id or "").strip()
         setting_key = str(key or "").strip()
+        ext_id = str(extension_id or "").strip()
         if not language:
             return {"ok": False, "error": "Language id is required"}
         if not setting_key:
@@ -8648,7 +8689,8 @@ class AIEditorAPI:
         self._notify_node_settings_changed()
         default_value = None
         for item in self._extension_configuration_language_defaults():
-            if item.get("language") == language:
+            if (item.get("language") == language
+                    and (not ext_id or item.get("extension_id") == ext_id)):
                 defaults = item.get("defaults", {})
                 if isinstance(defaults, dict) and setting_key in defaults:
                     default_value = defaults.get(setting_key)
@@ -8658,6 +8700,7 @@ class AIEditorAPI:
             "language": language,
             "override": override_key,
             "key": setting_key,
+            "extension_id": ext_id,
             "value": default_value,
             "modified": False,
         }

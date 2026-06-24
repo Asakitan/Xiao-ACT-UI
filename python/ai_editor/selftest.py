@@ -2701,6 +2701,8 @@ console.log("frontend auto-close behavior ok");
             and "const schemas=item&&item.schemas" in html
             and "set_extension_language_setting" in html
             and "reset_extension_language_setting" in html
+            and "set_extension_language_setting',item.language,key,nextValue,item.extension_id||''" in html
+            and "reset_extension_language_setting',item.language,key,item.extension_id||''" in html
             and "ext-settings-category" in html
             and "dataset.extSettingsCategory" in html
             and "@modified" in html
@@ -6808,6 +6810,33 @@ def test_app_extension_runtime_support() -> None:
         }, settings_tmp)
         api._ext_host.registry.register(settings_desc)
         api._ext_host.activator.activate(settings_desc.id)
+        conflict_tmp = tempfile.mkdtemp(prefix="sao_ext_settings_conflict_")
+        conflict_desc = ExtensionDescription.from_package_json({
+            "name": "settings-conflict",
+            "publisher": "selftest",
+            "version": "0.0.1",
+            "activationEvents": ["*"],
+            "contributes": {
+                "configuration": {
+                    "title": "Conflict Settings",
+                    "properties": {
+                        "selftest.mode": {
+                            "type": "string",
+                            "default": "other",
+                            "enum": ["other"],
+                            "description": "Conflicting mode schema",
+                        },
+                    },
+                },
+                "configurationDefaults": {
+                    "[selflang]": {
+                        "selftest.mode": "other",
+                    },
+                },
+            },
+        }, conflict_tmp)
+        api._ext_host.registry.register(conflict_desc)
+        api._ext_host.activator.activate(conflict_desc.id)
         ext_settings_payload = api.list_extension_settings()
         ext_settings = ext_settings_payload.get("configurations", [])
         language_defaults = ext_settings_payload.get("languageDefaults", [])
@@ -6827,6 +6856,11 @@ def test_app_extension_runtime_support() -> None:
              if item.get("extension_id") == "selftest.settings-pack"
              and item.get("language") == "selflang"),
             {})
+        conflict_selflang_defaults = next(
+            (item for item in language_defaults
+             if item.get("extension_id") == "selftest.settings-conflict"
+             and item.get("language") == "selflang"),
+            {})
         _check("extension language configurationDefaults are surfaced",
                selflang_defaults.get("override") == "[selflang]"
                and selflang_defaults.get("settings", {}).get(
@@ -6840,8 +6874,20 @@ def test_app_extension_runtime_support() -> None:
                and selflang_defaults.get("modified", {}).get(
                    "editor.tabSize") is False
                and selflang_defaults.get("count") == 2)
+        conflict_invalid_language_mode = api.set_extension_language_setting(
+            "selflang", "selftest.mode", "manual",
+            "selftest.settings-conflict")
+        _check("extension language override schemas prefer owning extension",
+               conflict_selflang_defaults.get("schemas", {}).get(
+                   "selftest.mode", {}).get("enum") == ["other"]
+               and conflict_invalid_language_mode.get("ok") is False
+               and "configured enum values" in conflict_invalid_language_mode.get(
+                   "error", "")
+               and "[selflang]" not in getattr(
+                   api._gui_ref.settings, "data", {}))
         invalid_language_mode = api.set_extension_language_setting(
-            "selflang", "selftest.mode", "unsupported")
+            "selflang", "selftest.mode", "unsupported",
+            "selftest.settings-pack")
         _check("extension language setting overrides reuse setting schema",
                invalid_language_mode.get("ok") is False
                and "configured enum values" in invalid_language_mode.get(

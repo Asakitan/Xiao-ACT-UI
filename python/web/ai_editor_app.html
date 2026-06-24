@@ -10159,7 +10159,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       const reset=document.createElement('span');reset.className='s-reset';reset.textContent='↻';reset.title='Reset language override';
       reset.onclick=async ev=>{
         ev.preventDefault();ev.stopPropagation();setExtensionSettingError(row,'');
-        const r=await call('reset_extension_language_setting',item.language,key);
+        const r=await call('reset_extension_language_setting',item.language,key,item.extension_id||'');
         if(r&&r.ok){setExtensionSettingInputValue(input,schema,type,defaultValue);if(enumHelp)renderExtensionSettingEnumDescription(enumHelp,schema,input);markExtensionSettingRow(row,false);applyExtensionSettingsFilter()}
         else showToast('Reset failed: '+((r&&r.error)||'unknown'),'error');
       };
@@ -10170,7 +10170,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
         let nextValue;
         try{nextValue=readExtensionSettingInputValue(input,schema,type)}
         catch(e){setExtensionSettingError(row,'Invalid JSON: '+e.message);return}
-        const r=await call('set_extension_language_setting',item.language,key,nextValue);
+        const r=await call('set_extension_language_setting',item.language,key,nextValue,item.extension_id||'');
         if(r&&r.ok){markExtensionSettingRow(row,true);applyExtensionSettingsFilter()}
         else showToast('Setting save failed: '+((r&&r.error)||'unknown'),'error');
       });
