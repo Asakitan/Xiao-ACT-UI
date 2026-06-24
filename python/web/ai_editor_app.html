@@ -1072,7 +1072,7 @@ pre.code-block { overflow:visible; }
 .ext-setting-schema { font-size:10px; color:var(--fg-dim); font-family:var(--mono); margin-bottom:4px; }
 .ext-setting-error { display:none; color:var(--fg-error); font-size:11px; margin-top:3px; }
 .ext-setting-row.invalid .ext-setting-error { display:block; }
-.ext-settings-filter { display:grid; grid-template-columns:minmax(140px,1fr) auto auto; align-items:center;
+.ext-settings-filter { display:grid; grid-template-columns:minmax(140px,1fr) minmax(96px,auto) minmax(116px,auto) auto auto; align-items:center;
   gap:6px; margin:8px 0 4px; padding:6px 8px; background:var(--bg2); border:1px solid var(--border); border-radius:4px; }
 .ext-settings-filter select { min-width:0; }
 .ext-settings-filter label { display:flex; align-items:center; gap:5px; margin:0; color:var(--fg-dim); font-size:11px; }
@@ -12158,6 +12158,8 @@ function extensionSettingParseQuery(raw,modifiedChecked){
 function applyExtensionSettingsFilter(){
   const container=$('ext-settings-container');if(!container)return;
   const category=(($('ext-settings-category')||{}).value)||'';
+  const scopeFilter=(($('ext-settings-scope')||{}).value)||'';
+  const targetFilter=(($('ext-settings-target')||{}).value)||'';
   const query=extensionSettingsQuery();
   const cb=$('ext-settings-modified');if(cb)cb.checked=query.modifiedOnly;
   const sections=container.querySelectorAll('details[data-ext-settings-section]');
@@ -12167,16 +12169,18 @@ function applyExtensionSettingsFilter(){
     let sectionRows=0;
     section.querySelectorAll('.ext-setting-row').forEach(row=>{
       totalRows++;
+      const scopeOk=!scopeFilter||row.dataset.extSettingScope===scopeFilter;
+      const targetOk=!targetFilter||row.dataset.extSettingTarget===targetFilter;
       const textOk=!query.text||(row.dataset.extSettingSearch||row.textContent).toLowerCase().includes(query.text);
       const rowTags=(row.dataset.extSettingTags||'').split('\n').filter(Boolean);
       const tagOk=!query.tags.length||query.tags.every(tag=>rowTags.includes(tag));
       const modifiedOk=!query.modifiedOnly||row.dataset.extSettingModified==='1';
-      const show=categoryOk&&textOk&&tagOk&&modifiedOk;
+      const show=categoryOk&&scopeOk&&targetOk&&textOk&&tagOk&&modifiedOk;
       row.style.display=show?'':'none';
       if(show){visibleRows++;sectionRows++}
     });
     section.style.display=sectionRows?'':'none';
-    if(sectionRows){visibleSections++;if(query.text||query.tags.length||query.modifiedOnly||category)section.open=true}
+    if(sectionRows){visibleSections++;if(query.text||query.tags.length||query.modifiedOnly||category||scopeFilter||targetFilter)section.open=true}
   });
   const count=$('ext-settings-filter-count');
   if(count)count.textContent=visibleRows+' / '+totalRows;
@@ -12238,6 +12242,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       const row=document.createElement('div');row.className='ext-setting-row settings-field';
       if(!workspaceWritable)row.classList.add('scope-readonly');
       row.dataset.extSettingKey=override+'.'+key;
+      row.dataset.extSettingScope=scopeName;
       row.dataset.extSettingTarget=targetName;
       row.dataset.extSettingModified=modified[key]?'1':'0';
       row.dataset.modified=modified[key]?'1':'0';
@@ -12394,20 +12399,25 @@ async function renderExtensionSettings(){
     languageDefaults=r&&r.languageDefaults?r.languageDefaults:[];
   }catch(e){return}
   if(!configs.length&&!languageDefaults.length)return;
+  const fragment=document.createDocumentFragment();
   // Extensions divider
   const divider=document.createElement('div');divider.className='sb-group';
   divider.style.cssText='padding:0;margin-top:16px;border-top:1px solid var(--border);padding-top:12px';
   divider.dataset.extSettingsDivider='1';
-  divider.textContent='Extensions';container.appendChild(divider);
+  divider.textContent='Extensions';fragment.appendChild(divider);
   const filter=document.createElement('div');filter.className='ext-settings-filter';filter.dataset.extSettingsFilter='1';
   const categorySelect=document.createElement('select');categorySelect.id='ext-settings-category';
   categorySelect.innerHTML='<option value="">All Extension Settings</option>';
+  const scopeSelect=document.createElement('select');scopeSelect.id='ext-settings-scope';scopeSelect.title='Filter by setting scope';
+  scopeSelect.innerHTML='<option value="">All Scopes</option><option value="application">Application</option><option value="machine">Machine</option><option value="window">Window</option><option value="resource">Resource</option><option value="language-overridable">Language</option>';
+  const targetSelect=document.createElement('select');targetSelect.id='ext-settings-target';targetSelect.title='Filter by configuration target';
+  targetSelect.innerHTML='<option value="">All Targets</option><option value="global">Global</option><option value="workspace">Workspace</option><option value="workspaceFolder">Workspace Folder</option>';
   const modifiedLabel=document.createElement('label');
   const modifiedBox=document.createElement('input');modifiedBox.type='checkbox';modifiedBox.id='ext-settings-modified';
   modifiedLabel.appendChild(modifiedBox);modifiedLabel.appendChild(document.createTextNode('@modified'));
   const count=document.createElement('span');count.className='ext-settings-count';count.id='ext-settings-filter-count';count.textContent='0 / 0';
-  filter.appendChild(categorySelect);filter.appendChild(modifiedLabel);filter.appendChild(count);
-  container.appendChild(filter);
+  filter.appendChild(categorySelect);filter.appendChild(scopeSelect);filter.appendChild(targetSelect);filter.appendChild(modifiedLabel);filter.appendChild(count);
+  fragment.appendChild(filter);
   const seenCategories=new Set();
   const orderedConfigs=configs.slice().sort((a,b)=>{
     const ao=Number(a&&a.order),bo=Number(b&&b.order);
@@ -12479,6 +12489,7 @@ async function renderExtensionSettings(){
         ?extensionSettingValueForTarget(scopedValues,targetName,defaultVal)
         :(Object.prototype.hasOwnProperty.call(values,key)?values[key]:defaultVal);
       const row=document.createElement('div');row.className='ext-setting-row settings-field';row.dataset.extSettingKey=key;
+      row.dataset.extSettingScope=scopeName;
       row.dataset.extSettingTarget=targetName;
       if(!workspaceWritable)row.classList.add('scope-readonly');
       const head=document.createElement('div');head.className='ext-setting-head';
@@ -12617,10 +12628,13 @@ async function renderExtensionSettings(){
       inner.appendChild(row);
     });
     section.appendChild(inner);
-    container.appendChild(section);
+    fragment.appendChild(section);
   });
-  renderExtensionLanguageDefaults(languageDefaults,container,categorySelect,seenCategories);
+  renderExtensionLanguageDefaults(languageDefaults,fragment,categorySelect,seenCategories);
+  container.appendChild(fragment);
   categorySelect.onchange=applyExtensionSettingsFilter;
+  scopeSelect.onchange=applyExtensionSettingsFilter;
+  targetSelect.onchange=applyExtensionSettingsFilter;
   modifiedBox.onchange=applyExtensionSettingsFilter;
   applyExtensionSettingsFilter();
 }

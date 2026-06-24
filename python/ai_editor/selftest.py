@@ -4148,6 +4148,13 @@ console.log("frontend signature help docs ok");
             and "function extensionSettingValueForTarget(scopedValues,target,fallback)" in html
             and "const targetScopedValues=cfg.targetScopedValues||{}" in html
             and "ext-setting-target-select" in html
+            and "ext-settings-scope" in html
+            and "ext-settings-target" in html
+            and "const scopeOk=!scopeFilter||row.dataset.extSettingScope===scopeFilter" in html
+            and "const targetOk=!targetFilter||row.dataset.extSettingTarget===targetFilter" in html
+            and "const fragment=document.createDocumentFragment()" in html
+            and "fragment.appendChild(section)" in html
+            and "container.appendChild(fragment)" in html
             and "set_extension_setting',key,nextValue,extensionSettingRowTarget(row)" in html
             and "reset_extension_setting',key,extensionSettingRowTarget(row)" in html
             and "reset_extension_setting" in html
