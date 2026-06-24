@@ -1621,6 +1621,48 @@ def test_app_settings_parity() -> None:
            ext_api.install_extension("allowed.sample").get("requires_confirmation") is True)
     _check("blocked extension publisher rejected",
            "blocked" in ext_api.install_extension("blocked.sample", confirmed=True).get("error", ""))
+    ext_api._ensure_engine()
+    ext_api._extensions_inited = True
+    ext_api._ext_host.list_extensions = lambda: [{
+        "id": "Misodee.vscode-nbt",
+        "name": "vscode-nbt",
+        "displayName": "NBT Viewer",
+        "publisher": "Misodee",
+        "version": "0.9.5",
+        "description": "Runtime custom editor",
+        "extensionPath": "C:/runtime/misodee.vscode-nbt",
+        "contributes_keys": ["customEditors"],
+        "activated": True,
+    }]
+    with patch("ai_editor.extensions.list_installed", return_value=[]):
+        installed_rows = ext_api.list_installed_extensions().get("extensions", [])
+        _check("installed extensions merge runtime registry entries",
+               any(row.get("id") == "Misodee.vscode-nbt"
+                   and row.get("displayName") == "NBT Viewer"
+                   and row.get("activated") is True
+                   and "customEditors" in row.get("contributes", [])
+                   for row in installed_rows),
+               json.dumps(installed_rows, ensure_ascii=False))
+    with patch("ai_editor.extensions.list_installed", return_value=[]), \
+            patch("ai_editor.extensions.search_extensions", return_value=[{
+                "id": "Misodee.vscode-nbt",
+                "displayName": "NBT Viewer",
+            }]):
+        searched_exts = ext_api.search_extensions("nbt").get("extensions", [])
+        _check("marketplace search marks runtime extensions installed",
+               searched_exts
+               and searched_exts[0].get("installed") is True,
+               json.dumps(searched_exts, ensure_ascii=False))
+    with patch("ai_editor.extensions.list_installed", return_value=[]), \
+            patch("ai_editor.extensions.get_extension_detail", return_value={
+                "id": "Misodee.vscode-nbt",
+                "displayName": "NBT Viewer",
+            }):
+        detail = ext_api.get_extension_detail("Misodee", "vscode-nbt")
+        _check("extension detail marks runtime extensions installed",
+               detail.get("installed") is True
+               and detail.get("id") == "Misodee.vscode-nbt",
+               json.dumps(detail, ensure_ascii=False))
 
     controls_gui = _SettingsGui({"ai_editor": {
         "provider": "openai",

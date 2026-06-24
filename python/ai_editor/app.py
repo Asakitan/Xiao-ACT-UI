@@ -6010,6 +6010,87 @@ class AIEditorAPI:
         ext.publisher = self._publisher_from_extension_id(ext_id)
         return self._extension_allowed(ext)
 
+    @staticmethod
+    def _normalize_extension_list_row(row: Dict[str, Any]) -> Dict[str, Any]:
+        ext_id = str(row.get("id") or "").strip()
+        ext_dir = str(
+            row.get("ext_dir")
+            or row.get("extensionPath")
+            or row.get("extension_path")
+            or ""
+        ).strip()
+        manifest_path = str(row.get("manifest_path") or "").strip()
+        if not manifest_path and ext_dir:
+            manifest_path = os.path.join(ext_dir, "package.json")
+        contributes = row.get("contributes") or row.get("contributes_keys") or []
+        if not isinstance(contributes, list):
+            contributes = []
+        return {
+            "id": ext_id,
+            "name": str(row.get("name") or (ext_id.split(".", 1)[-1] if ext_id else "")),
+            "displayName": str(row.get("displayName") or row.get("display_name") or row.get("name") or ext_id),
+            "description": str(row.get("description") or ""),
+            "version": str(row.get("version") or ""),
+            "publisher": str(row.get("publisher") or ""),
+            "ext_dir": ext_dir,
+            "manifest_path": manifest_path,
+            "contributes": [str(item) for item in contributes if str(item)],
+            "installed_at": float(row.get("installed_at") or 0),
+            "activated": bool(row.get("activated")),
+            "activationTimeMs": float(row.get("activationTimeMs") or 0),
+            "isBuiltin": bool(row.get("isBuiltin")),
+            "has_manifest": bool(row.get("has_manifest", True)),
+            "source": str(row.get("source") or ("persisted" if row.get("installed_at") else "runtime")),
+        }
+
+    def _installed_extension_rows(self) -> List[Dict[str, Any]]:
+        self._ensure_engine()
+        rows_by_id: Dict[str, Dict[str, Any]] = {}
+        try:
+            from ai_editor.extensions import list_installed
+            for item in list_installed():
+                if not isinstance(item, dict):
+                    continue
+                normalized = self._normalize_extension_list_row(item)
+                ext_id = normalized.get("id", "")
+                if ext_id:
+                    rows_by_id[ext_id.casefold()] = normalized
+        except Exception:
+            pass
+        try:
+            for item in self._ext_host.list_extensions():
+                if not isinstance(item, dict):
+                    continue
+                normalized = self._normalize_extension_list_row(item)
+                ext_id = normalized.get("id", "")
+                if not ext_id:
+                    continue
+                key = ext_id.casefold()
+                previous = rows_by_id.get(key, {})
+                merged = dict(previous)
+                merged.update({k: v for k, v in normalized.items() if v not in ("", [], 0, 0.0) or k in {"id", "name", "displayName", "source", "activated", "isBuiltin"}})
+                if previous:
+                    merged["source"] = previous.get("source", merged.get("source", "runtime"))
+                    merged["installed_at"] = previous.get("installed_at", merged.get("installed_at", 0))
+                    merged["has_manifest"] = previous.get("has_manifest", True) or merged.get("has_manifest", False)
+                rows_by_id[key] = merged
+        except Exception:
+            pass
+        rows = list(rows_by_id.values())
+        rows.sort(key=lambda item: (
+            -int(bool(item.get("installed_at"))),
+            -float(item.get("installed_at") or 0),
+            str(item.get("displayName") or item.get("name") or item.get("id") or "").casefold(),
+        ))
+        return rows
+
+    def _installed_extension_id_set(self) -> set[str]:
+        return {
+            str(item.get("id") or "").casefold()
+            for item in self._installed_extension_rows()
+            if str(item.get("id") or "").strip()
+        }
+
     def _count_extension_manifests(self) -> int:
         """Count VS Code-compatible package.json manifests without activation."""
         try:
@@ -8256,11 +8337,12 @@ class AIEditorAPI:
     def search_extensions(self, query: str = "ai chat model", page: int = 1) -> Dict:
         """Search VSCode Marketplace. Returns list of extensions."""
         try:
-            from ai_editor.extensions import search_extensions, is_installed
+            from ai_editor.extensions import search_extensions
             results = search_extensions(query, page=page)
+            installed_ids = self._installed_extension_id_set()
             for r in results:
                 if isinstance(r, dict) and "id" in r:
-                    r["installed"] = is_installed(r["id"])
+                    r["installed"] = str(r["id"]).casefold() in installed_ids
             return {"extensions": results}
         except Exception as exc:
             return {"error": str(exc)}
@@ -8326,18 +8408,19 @@ class AIEditorAPI:
     def list_installed_extensions(self) -> Dict:
         """List locally installed VSCode-style extensions."""
         try:
-            from ai_editor.extensions import list_installed
-            return {"extensions": list_installed()}
+            return {"extensions": self._installed_extension_rows()}
         except Exception as exc:
             return {"error": str(exc)}
 
     def get_extension_detail(self, publisher: str, name: str) -> Dict:
         """Fetch a single extension detail from marketplace."""
         try:
-            from ai_editor.extensions import get_extension_detail, is_installed
+            from ai_editor.extensions import get_extension_detail
             result = get_extension_detail(publisher, name)
             if result:
-                result["installed"] = is_installed(result["id"])
+                result["installed"] = (
+                    str(result.get("id") or "").casefold()
+                    in self._installed_extension_id_set())
                 return result
             return {"error": "Not found"}
         except Exception as exc:
