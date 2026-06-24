@@ -4195,6 +4195,12 @@ console.log("frontend signature help docs ok");
             and "function extensionSettingScopedValues(raw)" in html
             and "function applyExtensionSettingResponseTargets(scopedValues,response,target,value,modified)" in html
             and "function extensionSettingValueForTarget(scopedValues,target,fallback)" in html
+            and "function extensionSettingFixMarkdownLinks(text)" in html
+            and "function extensionSettingEnumLabel(schema,index,value)" in html
+            and "function extensionSettingEnumOptionTitle(schema,index,value,defaultValue)" in html
+            and "function appendExtensionSettingEnumChoices(row,schema,type,defaultValue)" in html
+            and "ext-setting-enum-choices" in html
+            and "ext-setting-default-badge" in html
             and "const targetScopedValues=cfg.targetScopedValues||{}" in html
             and "ext-setting-target-select" in html
             and "ext-settings-scope" in html
@@ -4307,6 +4313,8 @@ console.log("frontend signature help docs ok");
             and "ext-setting-schema-details" in html
             and "ext-setting-schema-chip" in html
             and "markdownEnumDescriptions" in html
+            and "o.dataset.enumJson=extensionSettingStableJson(opt)" in html
+            and "o.title=extensionSettingEnumOptionTitle(schema,idx,opt,defaultVal)" in html
             and "function appendExtensionSettingMarkdown(container,text)" in html
             and "function extensionSettingSafeLinkTarget(href)" in html
             and "appendExtensionSettingMarkdown(desc,description)" in html)
@@ -4315,6 +4323,7 @@ console.log("frontend signature help docs ok");
             "extensionSettingType",
             "extensionSettingDefault",
             "extensionSettingSafeLinkTarget",
+            "extensionSettingFixMarkdownLinks",
             "appendExtensionSettingMarkdown",
             "extensionSettingDeclaresType",
             "extensionSettingScopeName",
@@ -4334,7 +4343,10 @@ console.log("frontend signature help docs ok");
             "extensionSettingDeprecationText",
             "extensionSettingList",
             "extensionSettingEnumDescription",
+            "extensionSettingEnumLabel",
+            "extensionSettingEnumOptionTitle",
             "renderExtensionSettingEnumDescription",
+            "appendExtensionSettingEnumChoices",
             "extensionSettingSearchText",
             "extensionSettingSplitFilterValues",
             "extensionSettingPushFilterValues",
@@ -4390,6 +4402,10 @@ function makeNode(tag, text){
     set(value){ this._innerHTML = String(value || ""); this.children = []; },
   });
   return node;
+}
+function nodeTreeHas(node,predicate){
+  if(predicate(node))return true;
+  return (node.children||[]).some(child=>nodeTreeHas(child,predicate));
 }
 globalThis.document = {
   createElement(tag){ return makeNode(tag); },
@@ -4897,6 +4913,11 @@ assert(extensionSettingReadOnlyReason({ scope: "machine" }).indexOf("Machine set
        "read-only setting scope reason detected");
 assert(extensionSettingEnumDescription(searchSchema, 0) === "Uses **network**.",
        "markdown enum description preferred");
+assert(extensionSettingEnumLabel(searchSchema, 0, "always") === "Always send",
+       "enum label prefers enumItemLabels");
+assert(extensionSettingEnumOptionTitle(searchSchema, 0, "always", "always").indexOf("Default") >= 0
+       && extensionSettingEnumOptionTitle(searchSchema, 0, "always", "always").indexOf("Value: always") >= 0,
+       "enum option title includes raw value and default marker");
 const enumDescHost = makeNode("div");
 renderExtensionSettingEnumDescription(enumDescHost, searchSchema, {
   selectedIndex: 0,
@@ -4910,6 +4931,16 @@ renderExtensionSettingEnumDescription(enumDescHost, searchSchema, {
 });
 assert(enumDescHost.children.length === 0 && enumDescHost.style.display === "none",
        "missing enum description hidden");
+const enumChoicesHost = makeNode("div");
+appendExtensionSettingEnumChoices(enumChoicesHost, searchSchema, "string", "always");
+assert(enumChoicesHost.children.some(n => n.className === "ext-setting-enum-choices")
+       && nodeTreeHas(enumChoicesHost, n => n.className === "ext-setting-default-badge"
+         && n.textContent === "Default")
+       && nodeTreeHas(enumChoicesHost, n => n.tagName === "CODE"
+         && n.textContent === "always")
+       && nodeTreeHas(enumChoicesHost, n => n.tagName === "STRONG"
+         && n.textContent === "network"),
+       "enum choices render label raw value default marker and markdown description");
 const textAreaSetting = { type: "textarea", tagName: "TEXTAREA", value: "", rows: 0 };
 setExtensionSettingInputValue(textAreaSetting, multilineSchema, "string", "alpha\nbeta\ncharlie");
 assert(extensionSettingUsesMultiline(multilineSchema, "string") === true,
@@ -4919,10 +4950,13 @@ assert(readExtensionSettingInputValue(textAreaSetting, multilineSchema, "string"
        "multiline string value roundtrip");
 assert(extensionSettingSafeLinkTarget("javascript:alert(1)") === "",
        "unsafe markdown link blocked");
+assert(extensionSettingSafeLinkTarget("#editor.fontSize") === "#editor.fontSize"
+       && extensionSettingFixMarkdownLinks("See #editor.fontSize#").indexOf("[editor.fontSize](#editor.fontSize)") >= 0,
+       "setting markdown links normalized");
 const mdHost = makeNode("div");
 appendExtensionSettingMarkdown(
   mdHost,
-  "Use `code`, **bold**, *em*, [docs](https://example.com), [bad](javascript:alert(1))"
+  "Use `code`, **bold**, *em*, [docs](https://example.com), #editor.fontSize#, [bad](javascript:alert(1))"
 );
 assert(mdHost.children.some(n => n.tagName === "CODE" && n.textContent === "code"),
        "inline code rendered");
@@ -4935,6 +4969,11 @@ assert(mdHost.children.some(n => n.tagName === "A"
   && n.href === "https://example.com/"
   && n.rel === "noopener noreferrer"),
        "safe link rendered");
+assert(mdHost.children.some(n => n.tagName === "A"
+  && n.textContent === "editor.fontSize"
+  && n.href === "#editor.fontSize"
+  && n.title === "Filter setting editor.fontSize"),
+       "setting link rendered as local filter anchor");
 assert(!mdHost.children.some(n => n.tagName === "A" && n.textContent === "bad"),
        "unsafe link not rendered as anchor");
 console.log("extension setting schema helpers ok");

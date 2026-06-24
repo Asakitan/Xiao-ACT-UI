@@ -1070,15 +1070,21 @@ pre.code-block { overflow:visible; }
 .ext-setting-key { font-size:11px; font-family:var(--mono); color:var(--fg-dim); user-select:all; margin-bottom:4px; }
 .ext-setting-desc { font-size:11px; color:var(--fg-dim); line-height:1.35; margin-bottom:4px; }
 .ext-setting-enum-desc { font-size:11px; color:var(--fg-dim); line-height:1.35; margin-top:4px; }
+.ext-setting-enum-choices { display:grid; gap:3px; margin:4px 0 5px; color:var(--fg-dim); font-size:10px; }
+.ext-setting-enum-choice { display:grid; grid-template-columns:minmax(96px, max-content) 1fr; gap:6px; align-items:start; }
+.ext-setting-enum-choice-name { color:var(--fg); font-weight:600; overflow:hidden; text-overflow:ellipsis; }
+.ext-setting-enum-choice-desc { overflow:hidden; text-overflow:ellipsis; }
+.ext-setting-default-badge { display:inline-flex; align-items:center; padding:1px 5px; border-radius:999px;
+  border:1px solid color-mix(in srgb,var(--fg-accent) 36%,transparent); color:var(--fg-accent); font:10px var(--sans); }
 .ext-setting-note { font-size:10px; color:var(--fg-dim); line-height:1.35; margin-bottom:4px; }
 .ext-setting-deprecated { font-size:11px; color:var(--fg-warning); line-height:1.35; margin-bottom:4px;
   padding:4px 6px; background:color-mix(in srgb,var(--fg-warning) 9%,transparent); border-left:2px solid color-mix(in srgb,var(--fg-warning) 55%,transparent); }
-.ext-setting-desc code,.ext-setting-enum-desc code,.ext-setting-deprecated code { font:10px var(--mono); color:var(--fg); background:var(--bg3);
+.ext-setting-desc code,.ext-setting-enum-desc code,.ext-setting-deprecated code,.ext-setting-enum-choices code { font:10px var(--mono); color:var(--fg); background:var(--bg3);
   border:1px solid var(--border); border-radius:3px; padding:1px 3px; }
-.ext-setting-desc a,.ext-setting-enum-desc a,.ext-setting-deprecated a { color:var(--fg-accent); text-decoration:none; }
-.ext-setting-desc a:hover,.ext-setting-enum-desc a:hover,.ext-setting-deprecated a:hover { text-decoration:underline; }
-.ext-setting-desc strong,.ext-setting-enum-desc strong,.ext-setting-deprecated strong { color:var(--fg); font-weight:600; }
-.ext-setting-desc em,.ext-setting-enum-desc em,.ext-setting-deprecated em { color:var(--fg); font-style:italic; }
+.ext-setting-desc a,.ext-setting-enum-desc a,.ext-setting-deprecated a,.ext-setting-enum-choices a { color:var(--fg-accent); text-decoration:none; }
+.ext-setting-desc a:hover,.ext-setting-enum-desc a:hover,.ext-setting-deprecated a:hover,.ext-setting-enum-choices a:hover { text-decoration:underline; }
+.ext-setting-desc strong,.ext-setting-enum-desc strong,.ext-setting-deprecated strong,.ext-setting-enum-choices strong { color:var(--fg); font-weight:600; }
+.ext-setting-desc em,.ext-setting-enum-desc em,.ext-setting-deprecated em,.ext-setting-enum-choices em { color:var(--fg); font-style:italic; }
 .ext-setting-schema { font-size:10px; color:var(--fg-dim); font-family:var(--mono); margin-bottom:4px; }
 .ext-setting-schema-details { display:flex; flex-wrap:wrap; gap:4px; margin:0 0 5px; }
 .ext-setting-schema-chip { display:inline-flex; align-items:center; max-width:100%; gap:3px; padding:1px 5px;
@@ -11770,6 +11776,7 @@ function extensionSettingDefault(schema,defaults,key){
 function extensionSettingSafeLinkTarget(href){
   const raw=String(href||'').trim();
   if(!raw)return '';
+  if(/^#[A-Za-z0-9._-]+$/.test(raw))return raw;
   try{
     const base=(typeof window!=='undefined'&&window.location&&window.location.href)
       ? window.location.href
@@ -11778,8 +11785,11 @@ function extensionSettingSafeLinkTarget(href){
     return /^(https?:|mailto:)$/i.test(u.protocol)?u.href:'';
   }catch(e){return ''}
 }
+function extensionSettingFixMarkdownLinks(text){
+  return String(text||'').replace(/#([A-Za-z0-9._-]+)#/g,'[$1](#$1)');
+}
 function appendExtensionSettingMarkdown(container,text){
-  const raw=String(text||'');
+  const raw=extensionSettingFixMarkdownLinks(text);
   const token=new RegExp(
     '(`[^`]+`|\\[[^\\]]+\\]\\([^)]+\\)|\\*\\*[^*]+\\*\\*|\\*[^*]+\\*)',
     'g');
@@ -11802,6 +11812,18 @@ function appendExtensionSettingMarkdown(container,text){
         const target=linkMatch?extensionSettingSafeLinkTarget(linkMatch[2]):'';
         if(target){
           const a=document.createElement('a');a.textContent=linkMatch[1];a.href=target;a.target='_blank';a.rel='noopener noreferrer';container.appendChild(a);
+          if(target.startsWith('#')){
+            a.target='';
+            a.title='Filter setting '+target.slice(1);
+            a.onclick=ev=>{
+              ev.preventDefault();
+              const input=$('settings-search');
+              if(input&&typeof extensionSettingAppendFilterToken==='function'){
+                input.value='@id:'+target.slice(1);
+                applyExtensionSettingsFilter();
+              }
+            };
+          }
         }else{
           container.appendChild(document.createTextNode(linkMatch?linkMatch[1]:part));
         }
@@ -11977,6 +11999,21 @@ function extensionSettingEnumDescription(schema,index){
   index=Number(index);
   return index>=0&&index<descriptions.length?descriptions[index]:'';
 }
+function extensionSettingEnumLabel(schema,index,value){
+  const labels=Array.isArray(schema&&schema.enumItemLabels)?schema.enumItemLabels:[];
+  const label=String(labels[index]??'').trim();
+  return label||String(value??'');
+}
+function extensionSettingEnumOptionTitle(schema,index,value,defaultValue){
+  const label=extensionSettingEnumLabel(schema,index,value);
+  const raw=String(value??'');
+  const parts=[label];
+  if(label!==raw)parts.push('Value: '+raw);
+  if(extensionSettingStableJson(value)===extensionSettingStableJson(defaultValue))parts.push('Default');
+  const desc=extensionSettingEnumDescription(schema,index);
+  if(desc)parts.push(desc.replace(/\s+/g,' ').trim());
+  return parts.filter(Boolean).join(' - ');
+}
 function renderExtensionSettingEnumDescription(el,schema,input){
   if(!el)return;
   const selected=input&&input.selectedOptions&&input.selectedOptions[0];
@@ -11984,8 +12021,47 @@ function renderExtensionSettingEnumDescription(el,schema,input){
   if(!(index>=0)&&input)index=Number(input.selectedIndex);
   const text=extensionSettingEnumDescription(schema,index);
   el.innerHTML='';
-  if(text){el.style.display='';appendExtensionSettingMarkdown(el,text)}
+  if(text){
+    el.style.display='';
+    if(selected&&selected.textContent){
+      const name=document.createElement('strong');
+      name.textContent=selected.textContent+': ';
+      el.appendChild(name);
+    }
+    appendExtensionSettingMarkdown(el,text);
+  }
   else el.style.display='none';
+}
+function appendExtensionSettingEnumChoices(row,schema,type,defaultValue){
+  if(!row||!schema||!Array.isArray(schema.enum)||!schema.enum.length)return;
+  const wrap=document.createElement('div');wrap.className='ext-setting-enum-choices';
+  schema.enum.slice(0,8).forEach((value,index)=>{
+    const choice=document.createElement('div');choice.className='ext-setting-enum-choice';
+    const name=document.createElement('span');name.className='ext-setting-enum-choice-name';
+    const label=extensionSettingEnumLabel(schema,index,value);
+    name.textContent=label;
+    name.title=extensionSettingEnumOptionTitle(schema,index,value,defaultValue);
+    const desc=document.createElement('span');desc.className='ext-setting-enum-choice-desc';
+    if(label!==String(value??'')){
+      const code=document.createElement('code');code.textContent=String(value??'');
+      desc.appendChild(code);
+      desc.appendChild(document.createTextNode(' '));
+    }
+    if(extensionSettingStableJson(value)===extensionSettingStableJson(defaultValue)){
+      const badge=document.createElement('span');badge.className='ext-setting-default-badge';badge.textContent='Default';
+      desc.appendChild(badge);
+      desc.appendChild(document.createTextNode(' '));
+    }
+    const markdown=extensionSettingEnumDescription(schema,index);
+    if(markdown)appendExtensionSettingMarkdown(desc,markdown);
+    choice.appendChild(name);choice.appendChild(desc);wrap.appendChild(choice);
+  });
+  if(schema.enum.length>8){
+    const more=document.createElement('div');more.className='ext-setting-note';
+    more.textContent='+'+(schema.enum.length-8)+' more enum choices';
+    wrap.appendChild(more);
+  }
+  row.appendChild(wrap);
 }
 function extensionSettingSearchText(key,schema,type,description,deprecation,schemaSummary){
   schema=(schema&&typeof schema==='object')?schema:{};
@@ -12692,15 +12768,16 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
         input=document.createElement('select');
         schema.enum.forEach((opt,idx)=>{
           const o=document.createElement('option');o.value=String(opt);o.dataset.enumIndex=String(idx);
-          const enumLabels=schema.enumItemLabels||[];
-          const enumDescriptions=schema.markdownEnumDescriptions||schema.enumDescriptions||[];
-          o.textContent=enumLabels[idx]||String(opt);input.appendChild(o);
-          if(enumDescriptions[idx])o.title=String(enumDescriptions[idx]);
+          o.dataset.enumJson=extensionSettingStableJson(opt);
+          o.textContent=extensionSettingEnumLabel(schema,idx,opt);
+          o.title=extensionSettingEnumOptionTitle(schema,idx,opt,defaultValue);
+          input.appendChild(o);
         });
         row.appendChild(input);
         if(extensionSettingList(schema,'markdownEnumDescriptions').length||extensionSettingList(schema,'enumDescriptions').length){
           enumHelp=document.createElement('div');enumHelp.className='ext-setting-enum-desc';row.appendChild(enumHelp);
         }
+        appendExtensionSettingEnumChoices(row,schema,type,defaultValue);
       }else if(type==='number'||type==='integer'){
         input=document.createElement('input');input.type='number';
         if(type==='integer')input.step='1';
@@ -13059,15 +13136,16 @@ async function renderExtensionSettings(){
         input=document.createElement('select');
         schema.enum.forEach((opt,idx)=>{
           const o=document.createElement('option');o.value=String(opt);o.dataset.enumIndex=String(idx);
-          const enumLabels=schema.enumItemLabels||[];
-          const enumDescriptions=schema.markdownEnumDescriptions||schema.enumDescriptions||[];
-          o.textContent=enumLabels[idx]||String(opt);input.appendChild(o);
-          if(enumDescriptions[idx])o.title=String(enumDescriptions[idx]);
+          o.dataset.enumJson=extensionSettingStableJson(opt);
+          o.textContent=extensionSettingEnumLabel(schema,idx,opt);
+          o.title=extensionSettingEnumOptionTitle(schema,idx,opt,defaultVal);
+          input.appendChild(o);
         });
         row.appendChild(input);
         if(extensionSettingList(schema,'markdownEnumDescriptions').length||extensionSettingList(schema,'enumDescriptions').length){
           enumHelp=document.createElement('div');enumHelp.className='ext-setting-enum-desc';row.appendChild(enumHelp);
         }
+        appendExtensionSettingEnumChoices(row,schema,type,defaultVal);
       } else if(type==='number'||type==='integer'){
         input=document.createElement('input');input.type='number';
         if(type==='integer')input.step='1';
