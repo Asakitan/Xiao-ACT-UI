@@ -2200,6 +2200,23 @@ function createTreeViewObject(viewId, treeDataProvider) {
 // -------------------------------------------------------------------------
 let _sbiCounter = 0;
 
+function _extensionApiObject(id, ext) {
+    if (!ext) return undefined;
+    const extensionPath = ext.context.extensionPath;
+    const extensionUri = Uri.file(extensionPath);
+    const exportsValue = ext.activationExports;
+    return {
+        id,
+        extensionUri,
+        extensionPath,
+        isActive: true,
+        packageJSON: ext.desc.manifest || {},
+        exports: exportsValue,
+        extensionKind: ext.context.extension?.extensionKind || 2,
+        activate: () => Promise.resolve(exportsValue),
+    };
+}
+
 function buildVscodeModule(extDesc, extensionPath, storageRoot) {
     const subscriptions = [];
     const storagePaths = _extensionStoragePaths(
@@ -2590,11 +2607,11 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         extensions: {
             getExtension(id) {
                 const ext = _extensions.get(id);
-                if (!ext) return undefined;
-                return { id, extensionUri: Uri.file(ext.context.extensionPath), extensionPath: ext.context.extensionPath, isActive: true, packageJSON: ext.desc.manifest || {}, exports: ext.module?.exports, extensionKind: 2, activate: () => Promise.resolve(ext.module?.exports) };
+                return _extensionApiObject(id, ext);
             },
             get all() {
-                return [..._extensions.entries()].map(([id, e]) => ({ id, extensionPath: e.context.extensionPath, isActive: true, packageJSON: e.desc.manifest || {}, exports: e.module?.exports }));
+                return [..._extensions.entries()]
+                    .map(([id, e]) => _extensionApiObject(id, e));
             },
             onDidChange: new EventEmitter().event,
         },
@@ -3250,13 +3267,15 @@ async function activateExtension(msg) {
 
         const extModule = require(pkgPath);
         const deactivateFn = extModule.deactivate || null;
+        let activationExports = undefined;
 
         if (typeof extModule.activate === 'function') {
             const result = extModule.activate(context);
-            if (result && typeof result.then === 'function') {
-                await result;
-            }
+            activationExports = result && typeof result.then === 'function'
+                ? await result
+                : result;
         }
+        context.extension.exports = activationExports;
 
         _extensions.set(extensionId, {
             desc: { extensionId, manifest },
@@ -3264,6 +3283,7 @@ async function activateExtension(msg) {
             context,
             deactivate: deactivateFn,
             vscode,
+            activationExports,
         });
 
         // Resolve any pending webview view providers that were registered

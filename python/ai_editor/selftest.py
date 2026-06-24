@@ -6820,6 +6820,28 @@ async function activate(context) {
   vscode.commands.registerCommand('selftest.node.contextProbe', async () => {
     return contextProbe;
   });
+  vscode.commands.registerCommand('selftest.node.extensionApiProbe', async () => {
+    const own = vscode.extensions.getExtension(context.extension.id);
+    const activatedExports = own ? await own.activate() : null;
+    const allOwn = vscode.extensions.all.find(ext => ext.id === context.extension.id);
+    return {
+      exists: !!own,
+      isActive: own && own.isActive,
+      extensionKind: own && own.extensionKind,
+      extensionUri: own && own.extensionUri && own.extensionUri.toString(),
+      extensionPath: own && own.extensionPath,
+      packageName: own && own.packageJSON && own.packageJSON.name,
+      exportsName: own && own.exports && own.exports.name,
+      exportsActivationCount: own && own.exports && own.exports.activationCount,
+      activatedName: activatedExports && activatedExports.name,
+      sameExports: own && activatedExports === own.exports,
+      allCount: vscode.extensions.all.length,
+      allHasUri: allOwn && !!allOwn.extensionUri,
+      allExportsName: allOwn && allOwn.exports && allOwn.exports.name,
+      contextExportsName: context.extension.exports && context.extension.exports.name,
+      missing: vscode.extensions.getExtension('missing.extension') === undefined,
+    };
+  });
   vscode.commands.registerCommand('selftest.node.webviewDefaultRoots', () => {
     const panel = vscode.window.createWebviewPanel(
       'selftest.defaultRoots',
@@ -6949,6 +6971,11 @@ async function activate(context) {
     return true;
   });
   context.subscriptions.push(view);
+  return {
+    name: 'nodeActivationApi',
+    activationCount: contextProbe.globalAfter,
+    extensionId: contextProbe.extensionId,
+  };
 }
 
 function deactivate() {}
@@ -7073,6 +7100,10 @@ module.exports = { activate, deactivate };
                     timeout=3.0)
                 node_context_command_registered = _wait_until(
                     lambda: "selftest.node.contextProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                node_extension_api_command_registered = _wait_until(
+                    lambda: "selftest.node.extensionApiProbe"
                     in api._ext_host.commands.list_commands(),
                     timeout=3.0)
                 node_python_command_registered = _wait_until(
@@ -8023,6 +8054,36 @@ module.exports = { activate, deactivate };
                        and node_diag_categories.get("workspace.applyEdit", {}).get("count", 0) >= 2
                        and node_diag_categories.get("workspace.findFiles", {}).get("count", 0) >= 1,
                        json.dumps(node_diagnostics, ensure_ascii=False))
+                try:
+                    node_extension_api_probe = api._ext_host.commands.execute(
+                        "selftest.node.extensionApiProbe")
+                except Exception as exc:
+                    node_extension_api_probe = {"_error": str(exc)}
+                _check("node extensions API exposes activation exports",
+                       node_extension_api_command_registered
+                       and isinstance(node_extension_api_probe, dict)
+                       and node_extension_api_probe.get("exists") is True
+                       and node_extension_api_probe.get("isActive") is True
+                       and node_extension_api_probe.get("extensionKind") == 2
+                       and node_extension_api_probe.get("packageName")
+                       == node_tree_desc.name
+                       and node_extension_api_probe.get("exportsName")
+                       == "nodeActivationApi"
+                       and node_extension_api_probe.get("activatedName")
+                       == "nodeActivationApi"
+                       and node_extension_api_probe.get("contextExportsName")
+                       == "nodeActivationApi"
+                       and node_extension_api_probe.get("sameExports") is True
+                       and node_extension_api_probe.get("allCount", 0) >= 1
+                       and node_extension_api_probe.get("allHasUri") is True
+                       and node_extension_api_probe.get("allExportsName")
+                       == "nodeActivationApi"
+                       and node_extension_api_probe.get("missing") is True
+                       and str(node_extension_api_probe.get("extensionUri", ""))
+                       .startswith("file:///")
+                       and str(node_extension_api_probe.get("extensionPath", "")),
+                       json.dumps(node_extension_api_probe,
+                                  ensure_ascii=False))
                 try:
                     node_context_first = api._ext_host.commands.execute(
                         "selftest.node.contextProbe")
