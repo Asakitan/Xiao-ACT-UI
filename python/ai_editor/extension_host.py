@@ -2513,10 +2513,63 @@ class NodeExtensionHost:
                 or msg.get("channelName")
                 or "Extension Output")
             text = str(msg.get("text", ""))
+            content = str(msg.get("content", text))
             self._output_channels.setdefault(channel, []).append(text)
             if self._ui_bridge:
                 try:
-                    self._ui_bridge.show_output(channel, text)
+                    self._ui_bridge.show_output(channel, content)
+                except Exception:
+                    pass
+
+        elif msg_type == "output_clear":
+            channel = str(
+                msg.get("channel")
+                or msg.get("channelName")
+                or "Extension Output")
+            self._output_channels[channel] = []
+            if self._ui_bridge:
+                try:
+                    self._ui_bridge.clear_output(channel)
+                except Exception:
+                    pass
+
+        elif msg_type == "output_show":
+            channel = str(
+                msg.get("channel")
+                or msg.get("channelName")
+                or "Extension Output")
+            content = str(
+                msg.get("content")
+                if msg.get("content") is not None
+                else "".join(self._output_channels.get(channel, [])))
+            if self._ui_bridge:
+                try:
+                    self._ui_bridge.show_output(channel, content)
+                except Exception:
+                    pass
+
+        elif msg_type == "output_hide":
+            channel = str(
+                msg.get("channel")
+                or msg.get("channelName")
+                or "Extension Output")
+            if self._ui_bridge:
+                try:
+                    hide = getattr(self._ui_bridge, "hide_output", None)
+                    if hide:
+                        hide(channel)
+                except Exception:
+                    pass
+
+        elif msg_type == "output_dispose":
+            channel = str(
+                msg.get("channel")
+                or msg.get("channelName")
+                or "Extension Output")
+            self._output_channels.pop(channel, None)
+            if self._ui_bridge:
+                try:
+                    self._ui_bridge.dispose_output(channel)
                 except Exception:
                     pass
 

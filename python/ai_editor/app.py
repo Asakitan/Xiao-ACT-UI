@@ -890,6 +890,9 @@ class _AIEditorUIBridge:
     def clear_output(self, channel_name: str) -> None:
         self._api._emit("clear_output", {"name": channel_name})
 
+    def hide_output(self, channel_name: str) -> None:
+        self._api._emit("hide_output", {"name": channel_name})
+
     def dispose_output(self, channel_name: str) -> None:
         self._api._emit("dispose_output", {"name": channel_name})
 

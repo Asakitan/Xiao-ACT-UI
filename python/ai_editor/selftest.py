@@ -4150,6 +4150,11 @@ console.log("frontend signature help docs ok");
             and "function extensionSettingWorkspaceWritable(schema)" in html
             and "function extensionSettingSyncMetadata(schema)" in html
             and "appendExtensionSettingSyncBadge(head,syncMeta)" in html
+            and "function extensionSettingDefaultOverrideMetadata(schema)" in html
+            and "appendExtensionSettingDefaultOverrideBadge(head,defaultOverrideMeta)" in html
+            and "Default Locked" in html
+            and "default-locked" in html
+            and "configurationDefaults disabled" in html
             and "ext-setting-sync-badge" in html
             and "sync-ignored" in html
             and "sync-locked" in html
@@ -4199,6 +4204,8 @@ console.log("frontend signature help docs ok");
             "extensionSettingDeclaresType",
             "extensionSettingConstraintSummary",
             "extensionSettingSchemaSummary",
+            "extensionSettingDefaultOverrideMetadata",
+            "appendExtensionSettingDefaultOverrideBadge",
             "extensionSettingDeprecationText",
             "extensionSettingList",
             "extensionSettingEnumDescription",
@@ -4288,6 +4295,10 @@ const searchSchema = {
   enum: ["always"],
   enumItemLabels: ["Always send"],
   markdownEnumDescriptions: ["Uses **network**."]
+};
+const defaultLockedSchema = {
+  type: "boolean",
+  disallowConfigurationDefault: true
 };
 const numberSchema = { type: "number", minimum: 1, maximum: 5 };
 const multipleIntegerSchema = { type: "integer", minimum: 0, maximum: 10, multipleOf: 2 };
@@ -4524,6 +4535,8 @@ assert(extensionSettingSchemaSummary(numberSchema, "number").indexOf("min: 1") >
        "number constraint summary");
 assert(extensionSettingSchemaSummary(rangedStringSchema, "string").indexOf("pattern: ^[a-z]+$") >= 0,
        "string constraint summary");
+assert(extensionSettingSchemaSummary(defaultLockedSchema, "boolean").indexOf("configurationDefaults disabled") >= 0,
+       "default override lock schema summary");
 assert(extensionSettingDeprecationText(deprecatedSchema) === "**Use** `new.setting`.",
        "markdown deprecation preferred");
 assert(extensionSettingDeprecationText({ deprecationMessage: "Use fallback." }) === "Use fallback.",
@@ -4543,6 +4556,17 @@ assert(searchText.indexOf("usesonlineservices") >= 0
        && searchText.indexOf("always send") >= 0
        && searchText.indexOf("deprecated telemetry mode") >= 0,
        "settings search text includes tags keywords enum labels and deprecation");
+const lockedSearchText = extensionSettingSearchText("demo.locked", defaultLockedSchema, "boolean", "", "", "");
+assert(lockedSearchText.indexOf("default locked") >= 0
+       && lockedSearchText.indexOf("configuration defaults") >= 0,
+       "settings search text includes default override lock metadata");
+const lockedMeta = extensionSettingDefaultOverrideMetadata(defaultLockedSchema);
+assert(lockedMeta.locked === true && lockedMeta.tag === "default-locked",
+       "default override lock metadata detected");
+const lockedBadgeHost = makeNode("div");
+appendExtensionSettingDefaultOverrideBadge(lockedBadgeHost, lockedMeta);
+assert(lockedBadgeHost.children.some(n => n.textContent === "Default Locked"),
+       "default override lock badge rendered");
 assert(extensionSettingEnumDescription(searchSchema, 0) === "Uses **network**.",
        "markdown enum description preferred");
 const enumDescHost = makeNode("div");
@@ -5104,6 +5128,17 @@ console.log("quick input filter helpers ok");
            and "input._triggerItemButton(item, button)" in node_ext_host_source
            and "input._accept()" in node_ext_host_source
            and "input.hide()" in node_ext_host_source)
+    _check("extension OutputChannel lifecycle round-trips to UI bridge",
+           "type: 'output_clear'" in node_ext_host_source
+           and "type: 'output_show'" in node_ext_host_source
+           and "type: 'output_hide'" in node_ext_host_source
+           and "type: 'output_dispose'" in node_ext_host_source
+           and "elif msg_type == \"output_clear\":" in extension_host_source
+           and "elif msg_type == \"output_show\":" in extension_host_source
+           and "elif msg_type == \"output_hide\":" in extension_host_source
+           and "elif msg_type == \"output_dispose\":" in extension_host_source
+           and "def hide_output(self, channel_name: str)" in app_source
+           and "event==='hide_output'" in html)
     _check("extension window dialogs round-trip to Node host",
            "showOpenDialog(options, token)" in node_ext_host_source
            and "showSaveDialog(options, token)" in node_ext_host_source
@@ -10431,6 +10466,14 @@ let webviewStateEvents = [];
 
 async function activate(context) {
   console.log('node console probe', { source: 'selftest' });
+  const lifecycleOutput = vscode.window.createOutputChannel('node-output-lifecycle', { languageId: 'log' });
+  lifecycleOutput.append('first');
+  lifecycleOutput.show(true);
+  lifecycleOutput.replace('second');
+  lifecycleOutput.hide();
+  const disposedOutput = vscode.window.createOutputChannel('node-output-dispose', 'log');
+  disposedOutput.appendLine('gone');
+  disposedOutput.dispose();
   const secretEvents = [];
   context.secrets.onDidChange(event => {
     secretEvents.push(event && event.key);
@@ -14975,6 +15018,19 @@ module.exports = { activate, deactivate };
                        console_seen,
                        "".join(node_host._output_channels.get(
                            "Extension Console", [])))
+                output_lifecycle_seen = _wait_until(
+                    lambda: "".join(node_host._output_channels.get(
+                        "node-output-lifecycle", [])) == "second"
+                    and "node-output-dispose" not in node_host._output_channels,
+                    timeout=3.0)
+                _check("node host output channels bridge lifecycle actions",
+                       output_lifecycle_seen,
+                       json.dumps({
+                           "lifecycle": node_host._output_channels.get(
+                               "node-output-lifecycle", []),
+                           "disposed": node_host._output_channels.get(
+                               "node-output-dispose", []),
+                       }, ensure_ascii=False))
                 node_diagnostics = node_host.diagnostics_snapshot()
                 node_diag_categories = node_diagnostics.get("categories", {})
                 _check("node host diagnostics are default-off and record enabled probes",

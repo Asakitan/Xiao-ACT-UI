@@ -1385,20 +1385,53 @@ function _markCustomTextEditorsSaved(document, kind = 'save') {
 // OutputChannel
 // -------------------------------------------------------------------------
 class OutputChannel {
-    constructor(name) {
+    constructor(name, languageId = '') {
         this.name = name;
+        this.languageId = languageId || '';
         this._lines = [];
+        this._disposed = false;
     }
+    get _content() { return this._lines.join(''); }
     append(text) {
-        this._lines.push(text);
-        send({ type: 'output', channelName: this.name, text });
+        if (this._disposed) return;
+        const value = String(text);
+        this._lines.push(value);
+        send({
+            type: 'output',
+            channelName: this.name,
+            languageId: this.languageId,
+            text: value,
+            content: this._content,
+        });
     }
     appendLine(text) { this.append(text + '\n'); }
-    clear() { this._lines.length = 0; }
-    show() {}
-    hide() {}
+    clear() {
+        if (this._disposed) return;
+        this._lines.length = 0;
+        send({ type: 'output_clear', channelName: this.name });
+    }
+    show(preserveFocus) {
+        if (this._disposed) return;
+        send({
+            type: 'output_show',
+            channelName: this.name,
+            languageId: this.languageId,
+            preserveFocus: !!preserveFocus,
+            content: this._content,
+        });
+    }
+    hide() {
+        if (this._disposed) return;
+        send({ type: 'output_hide', channelName: this.name });
+    }
     replace(value) { this.clear(); this.append(value); }
-    dispose() {}
+    dispose() {
+        if (this._disposed) return;
+        this._disposed = true;
+        this._lines.length = 0;
+        _outputChannels.delete(this.name);
+        send({ type: 'output_dispose', channelName: this.name });
+    }
 }
 
 // -------------------------------------------------------------------------
@@ -5228,7 +5261,10 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     showOptions);
             },
             createOutputChannel(name, options) {
-                const ch = new OutputChannel(typeof options === 'string' ? `${name} (${options})` : name);
+                const languageId = typeof options === 'string'
+                    ? options
+                    : (options && typeof options.languageId === 'string' ? options.languageId : '');
+                const ch = new OutputChannel(name, languageId);
                 _outputChannels.set(ch.name, ch);
                 return ch;
             },
