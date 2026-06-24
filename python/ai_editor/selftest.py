@@ -4140,6 +4140,9 @@ console.log("frontend signature help docs ok");
             and "ext-setting-enum-desc" in html
             and "dataset.extSettingSearch" in html
             and "dataset.extSettingTags" in html
+            and "dataset.extSettingType=type" in html
+            and "dataset.extSettingExtension" in html
+            and "dataset.extSettingPolicy" in html
             and "@tag:" in html
             and "function extensionSettingTargetName(target)" in html
             and "function createExtensionSettingTargetSelect(target)" in html
@@ -4152,12 +4155,25 @@ console.log("frontend signature help docs ok");
             and "ext-settings-target" in html
             and "@scope:" in html
             and "@target:" in html
+            and "@ext:" in html
+            and "@type:" in html
+            and "@policy" in html
+            and "@restricted" in html
+            and "@sync" in html
             and "const scopeOk=(!scopeFilter||row.dataset.extSettingScope===scopeFilter)" in html
             and "&&(!query.scopes.length||query.scopes.includes(row.dataset.extSettingScope||''))" in html
             and "const targetOk=(!targetFilter||row.dataset.extSettingTarget===targetFilter)" in html
             and "&&(!query.targets.length||query.targets.includes(row.dataset.extSettingTarget||''))" in html
+            and "const extOk=!query.extensions.length||query.extensions.some" in html
+            and "const typeOk=!query.types.length||query.types.includes(row.dataset.extSettingType||'')" in html
+            and "const policyOk=!query.policies.length||query.policies.some" in html
+            and "const restrictedOk=!query.restrictedOnly||rowTags.includes('restricted')" in html
+            and "const syncOk=!query.syncs.length||query.syncs.some" in html
             and "ext-settings-clear-filters" in html
             and "categorySelect.value='';scopeSelect.value='';targetSelect.value='';modifiedBox.checked=false" in html
+            and "Application/Machine" in html
+            and "Machine Overridable" in html
+            and "default: '+extensionSettingJson(defaultVal,type)" in html
             and "const fragment=document.createDocumentFragment()" in html
             and "fragment.appendChild(section)" in html
             and "container.appendChild(fragment)" in html
@@ -4170,6 +4186,8 @@ console.log("frontend signature help docs ok");
             and "function extensionSettingTypeFromValue(value)" in html
             and "function extensionSettingScopeName(schema)" in html
             and "function extensionSettingWorkspaceWritable(schema)" in html
+            and "function extensionSettingReadOnlyReason(schema)" in html
+            and "ext-setting-note" in html
             and "function extensionSettingSyncMetadata(schema)" in html
             and "appendExtensionSettingSyncBadge(head,syncMeta)" in html
             and "function extensionSettingDefaultOverrideMetadata(schema)" in html
@@ -4228,6 +4246,9 @@ console.log("frontend signature help docs ok");
             "extensionSettingSafeLinkTarget",
             "appendExtensionSettingMarkdown",
             "extensionSettingDeclaresType",
+            "extensionSettingScopeName",
+            "extensionSettingWorkspaceWritable",
+            "extensionSettingReadOnlyReason",
             "extensionSettingConstraintSummary",
             "extensionSettingSchemaSummary",
             "extensionSettingDefaultOverrideMetadata",
@@ -4331,6 +4352,11 @@ const defaultLockedSchema = {
 const policySchema = {
   type: "string",
   policy: { name: "SelftestPolicy", minimumVersion: "1.2.3" }
+};
+const sourceSchema = {
+  type: "string",
+  source: { id: "selftest.settings-pack" },
+  section: { id: "selftest.core" }
 };
 const numberSchema = { type: "number", minimum: 1, maximum: 5 };
 const multipleIntegerSchema = { type: "integer", minimum: 0, maximum: 10, multipleOf: 2 };
@@ -4583,6 +4609,16 @@ assert(parsedQuery.modifiedOnly === true && parsedQuery.tags[0] === "experimenta
        "settings query parses modified and tag filters");
 assert(extensionSettingParseQuery("", true).modifiedOnly === true,
        "settings query keeps checkbox modified filter");
+const metadataQuery = extensionSettingParseQuery(
+  "@ext:selftest @type:boolean @policy:SelftestPolicy @restricted @sync:locked render",
+  false);
+assert(metadataQuery.extensions[0] === "selftest"
+       && metadataQuery.types[0] === "boolean"
+       && metadataQuery.policies[0] === "selftestpolicy"
+       && metadataQuery.restrictedOnly === true
+       && metadataQuery.syncs[0] === "sync-locked"
+       && metadataQuery.text === "render",
+       "settings query parses extension metadata filters");
 const searchText = extensionSettingSearchText("demo.telemetry", searchSchema, "string",
   "Controls telemetry.", "Deprecated telemetry mode.", "");
 assert(searchText.indexOf("usesonlineservices") >= 0
@@ -4605,6 +4641,10 @@ const policySearchText = extensionSettingSearchText("demo.policy", policySchema,
 assert(policySearchText.indexOf("policy managed") >= 0
        && policySearchText.indexOf("selftestpolicy") >= 0,
        "settings search text includes policy metadata");
+const sourceSearchText = extensionSettingSearchText("demo.source", sourceSchema, "string", "", "", "");
+assert(sourceSearchText.indexOf("selftest.settings-pack") >= 0
+       && sourceSearchText.indexOf("selftest.core") >= 0,
+       "settings search text includes source and section metadata");
 const policyMeta = extensionSettingPolicyMetadata(policySchema);
 assert(policyMeta.managed === true && policyMeta.tag === "policy"
        && policyMeta.name === "SelftestPolicy",
@@ -4613,6 +4653,10 @@ const policyBadgeHost = makeNode("div");
 appendExtensionSettingPolicyBadge(policyBadgeHost, policyMeta);
 assert(policyBadgeHost.children.some(n => n.textContent === "Policy: SelftestPolicy"),
        "policy badge rendered");
+assert(extensionSettingReadOnlyReason({ scope: "machine" }).indexOf("Machine setting") === 0
+       && extensionSettingReadOnlyReason({ scope: "application-machine" }).indexOf("Application/machine setting") === 0
+       && extensionSettingReadOnlyReason({ scope: "resource" }) === "",
+       "read-only setting scope reason detected");
 assert(extensionSettingEnumDescription(searchSchema, 0) === "Uses **network**.",
        "markdown enum description preferred");
 const enumDescHost = makeNode("div");

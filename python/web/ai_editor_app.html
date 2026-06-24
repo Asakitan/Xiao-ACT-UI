@@ -1061,6 +1061,7 @@ pre.code-block { overflow:visible; }
 .ext-setting-key { font-size:11px; font-family:var(--mono); color:var(--fg-dim); user-select:all; margin-bottom:4px; }
 .ext-setting-desc { font-size:11px; color:var(--fg-dim); line-height:1.35; margin-bottom:4px; }
 .ext-setting-enum-desc { font-size:11px; color:var(--fg-dim); line-height:1.35; margin-top:4px; }
+.ext-setting-note { font-size:10px; color:var(--fg-dim); line-height:1.35; margin-bottom:4px; }
 .ext-setting-deprecated { font-size:11px; color:var(--fg-warning); line-height:1.35; margin-bottom:4px;
   padding:4px 6px; background:color-mix(in srgb,var(--fg-warning) 9%,transparent); border-left:2px solid color-mix(in srgb,var(--fg-warning) 55%,transparent); }
 .ext-setting-desc code,.ext-setting-enum-desc code,.ext-setting-deprecated code { font:10px var(--mono); color:var(--fg); background:var(--bg3);
@@ -11648,6 +11649,14 @@ function extensionSettingWorkspaceWritable(schema){
   const scope=extensionSettingScopeName(schema);
   return !['application','machine','application-machine'].includes(scope);
 }
+function extensionSettingReadOnlyReason(schema){
+  const scope=extensionSettingScopeName(schema);
+  if(extensionSettingWorkspaceWritable(schema))return '';
+  if(scope==='application')return 'Application setting: edit it in the global user target.';
+  if(scope==='machine')return 'Machine setting: this workspace target cannot override it.';
+  if(scope==='application-machine')return 'Application/machine setting: this workspace target cannot override it.';
+  return 'This setting scope does not support workspace overrides.';
+}
 function extensionSettingScopeBadge(schema){
   const scope=extensionSettingScopeName(schema);
   if(extensionSettingWorkspaceWritable(schema))return scope==='window'?'':scope;
@@ -11852,7 +11861,8 @@ function renderExtensionSettingEnumDescription(el,schema,input){
 }
 function extensionSettingSearchText(key,schema,type,description,deprecation,schemaSummary){
   schema=(schema&&typeof schema==='object')?schema:{};
-  const parts=[key,schema.title,type,schema.scope,description,deprecation,schemaSummary,
+  const parts=[key,schema.title,type,schema.scope,schema.source&&schema.source.id,
+    schema.section&&schema.section.id,description,deprecation,schemaSummary,
     schema.ignoreSync===true?'ignoreSync sync ignored':'',
     schema.disallowSyncIgnore===true?'disallowSyncIgnore sync locked':'',
     schema.disallowConfigurationDefault===true?'disallowConfigurationDefault default locked configuration defaults':''];
@@ -12148,15 +12158,25 @@ function extensionSettingsQuery(){
 }
 function extensionSettingParseQuery(raw,modifiedChecked){
   raw=String(raw||'').trim();
-  const tags=[],scopes=[],targets=[];
+  const tags=[],scopes=[],targets=[],extensions=[],types=[],policies=[],syncs=[];
+  let restrictedOnly=false;
   const modifiedOnly=modifiedChecked===true||/(^|\s)@modified(?=\s|$)/i.test(raw);
   const text=raw
     .replace(/(^|\s)@modified(?=\s|$)/ig,' ')
     .replace(/(^|\s)@scope:([^\s]+)/ig,(match,prefix,scope)=>{if(scope)scopes.push(String(scope).toLowerCase());return ' ';})
     .replace(/(^|\s)@target:([^\s]+)/ig,(match,prefix,target)=>{if(target)targets.push(extensionSettingTargetName(target));return ' ';})
+    .replace(/(^|\s)@ext:([^\s]+)/ig,(match,prefix,ext)=>{if(ext)extensions.push(String(ext).toLowerCase());return ' ';})
+    .replace(/(^|\s)@type:([^\s]+)/ig,(match,prefix,type)=>{if(type)types.push(String(type).toLowerCase());return ' ';})
+    .replace(/(^|\s)@policy(?::([^\s]+))?(?=\s|$)/ig,(match,prefix,policy)=>{policies.push(policy?String(policy).toLowerCase():'policy');return ' ';})
+    .replace(/(^|\s)@restricted(?=\s|$)/ig,()=>{restrictedOnly=true;return ' ';})
+    .replace(/(^|\s)@sync(?::([^\s]+))?(?=\s|$)/ig,(match,prefix,sync)=>{
+      const value=String(sync||'sync').toLowerCase();
+      syncs.push(value==='locked'?'sync-locked':(value==='ignored'?'sync-ignored':value));
+      return ' ';
+    })
     .replace(/(^|\s)@tag:([^\s]+)/ig,(match,prefix,tag)=>{if(tag)tags.push(String(tag).toLowerCase());return ' ';})
     .trim().toLowerCase();
-  return {modifiedOnly,tags,scopes,targets,text};
+  return {modifiedOnly,tags,scopes,targets,extensions,types,policies,syncs,restrictedOnly,text};
 }
 function applyExtensionSettingsFilter(){
   const container=$('ext-settings-container');if(!container)return;
@@ -12179,13 +12199,18 @@ function applyExtensionSettingsFilter(){
       const textOk=!query.text||(row.dataset.extSettingSearch||row.textContent).toLowerCase().includes(query.text);
       const rowTags=(row.dataset.extSettingTags||'').split('\n').filter(Boolean);
       const tagOk=!query.tags.length||query.tags.every(tag=>rowTags.includes(tag));
+      const extOk=!query.extensions.length||query.extensions.some(ext=>(row.dataset.extSettingExtension||'').includes(ext));
+      const typeOk=!query.types.length||query.types.includes(row.dataset.extSettingType||'');
+      const policyOk=!query.policies.length||query.policies.some(policy=>rowTags.includes('policy')&&(policy==='policy'||(row.dataset.extSettingPolicy||'').includes(policy)));
+      const restrictedOk=!query.restrictedOnly||rowTags.includes('restricted');
+      const syncOk=!query.syncs.length||query.syncs.some(sync=>sync==='sync'?rowTags.includes('sync-ignored')||rowTags.includes('sync-locked'):rowTags.includes(sync));
       const modifiedOk=!query.modifiedOnly||row.dataset.extSettingModified==='1';
-      const show=categoryOk&&scopeOk&&targetOk&&textOk&&tagOk&&modifiedOk;
+      const show=categoryOk&&scopeOk&&targetOk&&textOk&&tagOk&&extOk&&typeOk&&policyOk&&restrictedOk&&syncOk&&modifiedOk;
       row.style.display=show?'':'none';
       if(show){visibleRows++;sectionRows++}
     });
     section.style.display=sectionRows?'':'none';
-    if(sectionRows){visibleSections++;if(query.text||query.tags.length||query.scopes.length||query.targets.length||query.modifiedOnly||category||scopeFilter||targetFilter)section.open=true}
+    if(sectionRows){visibleSections++;if(query.text||query.tags.length||query.scopes.length||query.targets.length||query.extensions.length||query.types.length||query.policies.length||query.syncs.length||query.restrictedOnly||query.modifiedOnly||category||scopeFilter||targetFilter)section.open=true}
   });
   const count=$('ext-settings-filter-count');
   if(count)count.textContent=visibleRows+' / '+totalRows;
@@ -12238,6 +12263,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       const deprecation=extensionSettingDeprecationText(schema);
       const schemaSummary=extensionSettingSchemaSummary(schema,type);
       const workspaceWritable=extensionSettingWorkspaceWritable(schema);
+      const readOnlyReason=extensionSettingReadOnlyReason(schema);
       const scopeName=extensionSettingScopeName(schema);
       const scopeBadge=extensionSettingScopeBadge(schema);
       const syncMeta=extensionSettingSyncMetadata(schema);
@@ -12249,11 +12275,14 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       row.dataset.extSettingKey=override+'.'+key;
       row.dataset.extSettingScope=scopeName;
       row.dataset.extSettingTarget=targetName;
+      row.dataset.extSettingType=type;
+      row.dataset.extSettingExtension=[extId,displayName].join(' ').toLowerCase();
+      row.dataset.extSettingPolicy=policyMeta.name.toLowerCase();
       row.dataset.extSettingModified=modified[key]?'1':'0';
       row.dataset.modified=modified[key]?'1':'0';
       const tagList=['language-default',String(item.language||'').toLowerCase()]
         .concat(extensionSettingList(schema,'tags').map(value=>value.toLowerCase()))
-        .concat([scopeName,schema.restricted===true?'restricted':'',
+        .concat([scopeName,'type:'+type,type,schema.restricted===true?'restricted':'',
           workspaceWritable?'':'scope-readonly',syncMeta.tag,
           syncMeta.ignored?'sync-ignored':'',syncMeta.locked?'sync-locked':'',
           defaultOverrideMeta.tag,policyMeta.tag,policyMeta.name.toLowerCase(),
@@ -12300,7 +12329,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
           keyLabel.textContent=override+' · '+key+(scopeName!=='window'?' · '+scopeName:'')+' · '+type+' · '+extensionSettingTargetLabel(row.dataset.extSettingTarget);
           const nextTagList=['language-default',String(item.language||'').toLowerCase()]
             .concat(extensionSettingList(schema,'tags').map(value=>value.toLowerCase()))
-            .concat([scopeName,schema.restricted===true?'restricted':'',
+            .concat([scopeName,'type:'+type,type,schema.restricted===true?'restricted':'',
               workspaceWritable?'':'scope-readonly',syncMeta.tag,
               syncMeta.ignored?'sync-ignored':'',syncMeta.locked?'sync-locked':'',
               defaultOverrideMeta.tag,policyMeta.tag,policyMeta.name.toLowerCase(),
@@ -12319,6 +12348,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       const keyLabel=document.createElement('div');keyLabel.className='ext-setting-key';
       keyLabel.textContent=override+' · '+key+(scopeName!=='window'?' · '+scopeName:'')+' · '+type+' · '+extensionSettingTargetLabel(targetName);
       row.appendChild(keyLabel);
+      if(readOnlyReason){const note=document.createElement('div');note.className='ext-setting-note';note.textContent=readOnlyReason;row.appendChild(note)}
       if(description){const desc=document.createElement('div');desc.className='ext-setting-desc';appendExtensionSettingMarkdown(desc,description);row.appendChild(desc)}
       if(deprecation){const dep=document.createElement('div');dep.className='ext-setting-deprecated';appendExtensionSettingMarkdown(dep,deprecation);row.appendChild(dep)}
       const metaParts=[];
@@ -12360,7 +12390,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       input.title=override+' '+key;
       if(!workspaceWritable){
         input.disabled=true;
-        input.title='This setting scope does not support workspace overrides';
+        input.title=readOnlyReason||'This setting scope does not support workspace overrides';
       }
       applyExtensionSettingInputConstraints(input,schema,type);
       setExtensionSettingInputValue(input,schema,type,value);
@@ -12414,7 +12444,7 @@ async function renderExtensionSettings(){
   const categorySelect=document.createElement('select');categorySelect.id='ext-settings-category';
   categorySelect.innerHTML='<option value="">All Extension Settings</option>';
   const scopeSelect=document.createElement('select');scopeSelect.id='ext-settings-scope';scopeSelect.title='Filter by setting scope';
-  scopeSelect.innerHTML='<option value="">All Scopes</option><option value="application">Application</option><option value="machine">Machine</option><option value="window">Window</option><option value="resource">Resource</option><option value="language-overridable">Language</option>';
+  scopeSelect.innerHTML='<option value="">All Scopes</option><option value="application">Application</option><option value="machine">Machine</option><option value="application-machine">Application/Machine</option><option value="machine-overridable">Machine Overridable</option><option value="window">Window</option><option value="resource">Resource</option><option value="language-overridable">Language</option>';
   const targetSelect=document.createElement('select');targetSelect.id='ext-settings-target';targetSelect.title='Filter by configuration target';
   targetSelect.innerHTML='<option value="">All Targets</option><option value="global">Global</option><option value="workspace">Workspace</option><option value="workspaceFolder">Workspace Folder</option>';
   const modifiedLabel=document.createElement('label');
@@ -12488,6 +12518,7 @@ async function renderExtensionSettings(){
       const description=schema.markdownDescription||schema.description||'';
       const deprecation=extensionSettingDeprecationText(schema);
       const workspaceWritable=extensionSettingWorkspaceWritable(schema);
+      const readOnlyReason=extensionSettingReadOnlyReason(schema);
       const scopeName=extensionSettingScopeName(schema);
       const scopeBadge=extensionSettingScopeBadge(schema);
       const syncMeta=extensionSettingSyncMetadata(schema);
@@ -12502,6 +12533,9 @@ async function renderExtensionSettings(){
       const row=document.createElement('div');row.className='ext-setting-row settings-field';row.dataset.extSettingKey=key;
       row.dataset.extSettingScope=scopeName;
       row.dataset.extSettingTarget=targetName;
+      row.dataset.extSettingType=type;
+      row.dataset.extSettingExtension=[extId,displayName,title,configId].join(' ').toLowerCase();
+      row.dataset.extSettingPolicy=policyMeta.name.toLowerCase();
       if(!workspaceWritable)row.classList.add('scope-readonly');
       const head=document.createElement('div');head.className='ext-setting-head';
       const name=document.createElement('span');name.className='ext-setting-title';name.textContent=schema.title||shortKey;
@@ -12535,7 +12569,7 @@ async function renderExtensionSettings(){
           if(enumHelp)renderExtensionSettingEnumDescription(enumHelp,schema,input);
           markExtensionSettingRow(row,extensionSettingHasTargetValue(scopedValues,row.dataset.extSettingTarget));
           row.dataset.extSettingTags=extensionSettingList(schema,'tags').map(value=>value.toLowerCase())
-            .concat([scopeName,schema.restricted===true?'restricted':'',
+            .concat([scopeName,'type:'+type,type,schema.restricted===true?'restricted':'',
               workspaceWritable?'':'scope-readonly',syncMeta.tag,
               syncMeta.ignored?'sync-ignored':'',syncMeta.locked?'sync-locked':'',
               defaultOverrideMeta.tag,policyMeta.tag,policyMeta.name.toLowerCase(),
@@ -12555,11 +12589,12 @@ async function renderExtensionSettings(){
       keyLabel.className='ext-setting-key';
       keyLabel.textContent=key+(scopeName!=='window'?' · '+scopeName:'')+' · '+type+' · '+extensionSettingTargetLabel(targetName);
       row.appendChild(keyLabel);
+      if(readOnlyReason){const note=document.createElement('div');note.className='ext-setting-note';note.textContent=readOnlyReason;row.appendChild(note)}
       if(description){const desc=document.createElement('div');desc.className='ext-setting-desc';appendExtensionSettingMarkdown(desc,description);row.appendChild(desc)}
       if(deprecation){const dep=document.createElement('div');dep.className='ext-setting-deprecated';appendExtensionSettingMarkdown(dep,deprecation);row.appendChild(dep)}
       const schemaSummary=extensionSettingSchemaSummary(schema,type);
       row.dataset.extSettingTags=extensionSettingList(schema,'tags').map(value=>value.toLowerCase())
-        .concat([scopeName,schema.restricted===true?'restricted':'',
+        .concat([scopeName,'type:'+type,type,schema.restricted===true?'restricted':'',
           workspaceWritable?'':'scope-readonly',syncMeta.tag,
           syncMeta.ignored?'sync-ignored':'',syncMeta.locked?'sync-locked':'',
           defaultOverrideMeta.tag,policyMeta.tag,policyMeta.name.toLowerCase(),
@@ -12570,7 +12605,11 @@ async function renderExtensionSettings(){
           key,schema,type,description,deprecation,schemaSummary)+' '+
           extensionSettingTargetLabel(targetName)
       ).trim().toLowerCase();
-      if(schemaSummary){const meta=document.createElement('div');meta.className='ext-setting-schema';meta.textContent=schemaSummary;row.appendChild(meta)}
+      const metaParts=[];
+      if(schemaSummary)metaParts.push(schemaSummary);
+      metaParts.push('default: '+extensionSettingJson(defaultVal,type).replace(/\s+/g,' ').trim());
+      const meta=document.createElement('div');meta.className='ext-setting-schema';meta.textContent=metaParts.join(' · ');
+      row.appendChild(meta);
       let input,enumHelp;
       if(type==='boolean'){
         const lbl=document.createElement('label');lbl.className='settings-check';
@@ -12608,7 +12647,7 @@ async function renderExtensionSettings(){
       input.title=key;
       if(!workspaceWritable){
         input.disabled=true;
-        input.title='This setting scope does not support workspace overrides';
+        input.title=readOnlyReason||'This setting scope does not support workspace overrides';
       }
       applyExtensionSettingInputConstraints(input,schema,type);
       setExtensionSettingInputValue(input,schema,type,currentVal);
