@@ -4197,6 +4197,7 @@ console.log("frontend signature help docs ok");
             and "function extensionSettingValueForTarget(scopedValues,target,fallback)" in html
             and "function extensionSettingFixMarkdownLinks(text)" in html
             and "function appendExtensionSettingMarkdownInline(container,line)" in html
+            and "function updateExtensionSettingRowValueMetadata(row,value,defaultValue,type)" in html
             and "function extensionSettingEnumLabel(schema,index,value)" in html
             and "function extensionSettingEnumOptionTitle(schema,index,value,defaultValue)" in html
             and "function extensionSettingEnumEntries(schema,defaultValue)" in html
@@ -4220,6 +4221,8 @@ console.log("frontend signature help docs ok");
             and "Extension ID..." in html
             and "Feature..." in html
             and "Setting ID..." in html
+            and "Current Value..." in html
+            and "Default Value..." in html
             and "Configured Globally" in html
             and "Configured in Workspace" in html
             and "Configured in Folder" in html
@@ -4246,6 +4249,8 @@ console.log("frontend signature help docs ok");
             and "const idOk=!query.ids.length||query.ids.some" in html
             and "const featureOk=!query.features.length||query.features.some" in html
             and "const langOk=!query.languages.length||query.languages.some" in html
+            and "const valueOk=!query.values.length||query.values.some" in html
+            and "const defaultOk=!query.defaults.length||query.defaults.some" in html
             and "const stableOk=!query.stableOnly" in html
             and "ext-settings-clear-filters" in html
             and "categorySelect.value='';scopeSelect.value='';targetSelect.value='';modifiedBox.checked=false;hiddenBox.checked=false" in html
@@ -4384,6 +4389,7 @@ console.log("frontend signature help docs ok");
             "extensionSettingJson",
             "extensionSettingCompactValue",
             "appendExtensionSettingDefaultValue",
+            "updateExtensionSettingRowValueMetadata",
             "extensionSettingJsonRows",
             "extensionSettingTextRows",
             "extensionSettingUsesMultiline",
@@ -4787,15 +4793,17 @@ assert(extensionSettingParseQuery("@hidden internal", false, false).hiddenOnly =
        && extensionSettingParseQuery("", false, true).hiddenOnly === true,
        "settings query parses hidden filter");
 const metadataQuery = extensionSettingParseQuery(
-  "@ext:selftest @type:boolean @policy:SelftestPolicy @restricted @sync:locked render",
+  '@ext:selftest @type:boolean @policy:SelftestPolicy @restricted @sync:locked @value:"auto mode" @default:false render',
   false);
 assert(metadataQuery.extensions[0] === "selftest"
        && metadataQuery.types[0] === "boolean"
        && metadataQuery.policies[0] === "selftestpolicy"
        && metadataQuery.restrictedOnly === true
        && metadataQuery.syncs[0] === "sync-locked"
+       && metadataQuery.values[0] === "auto mode"
+       && metadataQuery.defaults[0] === "false"
        && metadataQuery.text === "render",
-       "settings query parses extension metadata filters");
+       "settings query parses extension metadata and value filters");
 const vscodeStyleQuery = extensionSettingParseQuery(
   '@id:selftest.* @feature:"Selftest Settings" @lang:selflang @tag:preview,experimental @ext:"selftest.settings-pack" @stable render',
   false);
@@ -4833,10 +4841,14 @@ assert(fakeSearch.value === "render" && fakeModified.checked === false
 assert(extensionSettingIsFilterToken("@feature:terminal")
        && extensionSettingIsFilterToken("@stable")
        && extensionSettingIsFilterToken("@hidden")
+       && extensionSettingIsFilterToken("@value:auto")
+       && extensionSettingIsFilterToken("@default:false")
        && !extensionSettingIsFilterToken("terminal"),
        "settings filter menu identifies filter tokens");
 assert(extensionSettingFilterTokenLabel("@ext:selftest.settings-pack") === "Extension: selftest.settings-pack"
        && extensionSettingFilterTokenLabel("@id:editor.*") === "Setting: editor.*"
+       && extensionSettingFilterTokenLabel("@value:auto") === "Value: auto"
+       && extensionSettingFilterTokenLabel("@default:false") === "Default: false"
        && extensionSettingFilterTokenLabel("@hidden") === "Hidden",
        "settings filter chips label tokens");
 assert(extensionSettingFilterMenuTokenActive(["@ext:selftest.settings-pack"], "@ext:")
@@ -5064,6 +5076,11 @@ assert(defaultValueHost.children.some(n => n.className === "ext-setting-default-
        "default value metadata block rendered");
 assert(extensionSettingCompactValue({ mode: "auto" }, "object") === '{"mode": "auto"}',
        "default compact value removes multiline whitespace");
+const valueMetaRow = { dataset: {} };
+updateExtensionSettingRowValueMetadata(valueMetaRow, { mode: "auto" }, false, "object");
+assert(valueMetaRow.dataset.extSettingValue.indexOf('"mode": "auto"') >= 0
+       && valueMetaRow.dataset.extSettingDefault === "false",
+       "row value/default metadata indexed");
 console.log("extension setting schema helpers ok");
 """
         js_path = ""
