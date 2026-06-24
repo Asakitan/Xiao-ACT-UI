@@ -2572,6 +2572,13 @@ def test_phase1_ai_editor_regressions() -> None:
            and "Rename Symbol" in html
            and "Quick Fix..." in html
            and "Formatted via extension" in html)
+    _check("frontend expands VS Code snippet completion sessions",
+           "function editorParseSnippet(snippet,context)" in html
+           and "function editorApplySnippetText(raw,start,finish,context)" in html
+           and "function editorHandleSnippetInput()" in html
+           and "function handleEditorSnippetKey(e)" in html
+           and "ed.addEventListener('beforeinput',captureEditorSnippetBefore)" in html
+           and "if(handleEditorSnippetKey(e))return;" in html)
     try:
         from ai_editor.node_runtime import get_node_path
         node_path = get_node_path()
@@ -2658,6 +2665,124 @@ console.log("frontend auto-close behavior ok");
                    (result.stderr or result.stdout).strip())
         except Exception as exc:
             _check("frontend auto-close notIn behavior", False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
+    if not node_path:
+        _check("frontend snippet tabstop behavior skipped without Node.js", True)
+    else:
+        snippet_functions = [
+            "completionLabelText",
+            "editorCompletionInsertTextRaw",
+            "editorCompletionTextValue",
+            "editorCompletionUsesSnippet",
+            "editorSnippetFileContext",
+            "editorSnippetVariable",
+            "editorSnippetFindClosingBrace",
+            "editorSnippetSplitChoiceOptions",
+            "editorParseSnippet",
+            "editorSnippetPlainText",
+            "editorSnippetShiftRanges",
+            "editorSnippetReplaceRange",
+            "editorCancelSnippetSession",
+            "editorSelectActiveSnippetStop",
+            "captureEditorSnippetBefore",
+            "editorHandleSnippetInput",
+            "editorNavigateSnippet",
+            "handleEditorSnippetKey",
+            "editorApplySnippetText",
+            "editorInsertText",
+        ]
+        js_functions = "\n".join(
+            _extract_js_function(html, name) for name in snippet_functions)
+        js = r"""
+let editorFileName = "demo.self";
+let activeTab = "tab1";
+let tabs = [{
+  id: "tab1",
+  name: "demo.self",
+  filePath: "C:/workspace/demo.self",
+  workspacePath: "demo.self"
+}];
+let _editorSnippetSession = null;
+let editorDirty = false;
+const ed = {
+  value: "",
+  selectionStart: 0,
+  selectionEnd: 0,
+  focus() {},
+};
+function activeEditorTab(){ return tabs[0]; }
+function updateLineNums() {}
+function updateCursorPos() {}
+function scheduleEditorSyntaxHighlight() {}
+function clearEditorInlineCompletions() {}
+function scheduleEditorInlineCompletions() {}
+""" + js_functions + r"""
+function assert(ok, label){ if(!ok){ throw new Error(label); } }
+const parsed = editorParseSnippet(
+  "fn ${1:name}(${2|arg,alt|}) {\n  $1;\n  ${TM_FILENAME_BASE:fallback};\n  $0\n}",
+  { filePath: "C:/workspace/demo.self" }
+);
+assert(parsed.text === "fn name(arg) {\n  name;\n  demo;\n  \n}", "snippet default choice mirror variable text");
+assert(parsed.stops[0].index === 1 && parsed.stops[parsed.stops.length - 1].index === 0,
+       "tabstop order keeps zero last");
+assert(parsed.stops.find(stop => stop.index === 1).ranges.length === 2,
+       "mirrored placeholder ranges preserved");
+const options = editorSnippetSplitChoiceOptions("one\\,two,three\\|four");
+assert(options[0] === "one,two" && options[1] === "three|four",
+       "choice options unescape comma and pipe");
+assert(editorCompletionUsesSnippet({ insertTextFormat: 2, insertText: "${1:x}" }) === true,
+       "insertTextFormat snippet detected");
+assert(editorSnippetPlainText({ snippet: "${1:abc} $1 $0" }) === "abc abc ",
+       "plain snippet text strips tabstops");
+assert(editorInsertText({ label: "sf", insertText: { snippet: "${1:abc} $1 $0" } }) === "abc abc ",
+       "completion preview uses snippet plain text");
+ed.value = "pre sf post";
+ed.selectionStart = 4;
+ed.selectionEnd = 6;
+editorApplySnippetText({ snippet: "${1:name} = $1;$0" }, 4, 6, {});
+assert(ed.value === "pre name = name; post", "snippet replaces completion range");
+assert(ed.selectionStart === 4 && ed.selectionEnd === 8, "first placeholder selected");
+captureEditorSnippetBefore();
+ed.value = ed.value.slice(0, 4) + "total" + ed.value.slice(8);
+ed.selectionStart = ed.selectionEnd = 9;
+assert(editorHandleSnippetInput() === true, "snippet input handled");
+assert(ed.value === "pre total = total; post", "mirror placeholder synced after input");
+const tabEvent = { key: "Tab", ctrlKey: false, altKey: false, shiftKey: false, preventDefault(){ this.prevented = true; } };
+assert(handleEditorSnippetKey(tabEvent) && tabEvent.prevented, "tab navigates snippet");
+assert(ed.selectionStart === 18 && ed.selectionEnd === 18, "tab reaches final cursor");
+const backEvent = { key: "Tab", ctrlKey: false, altKey: false, shiftKey: true, preventDefault(){ this.prevented = true; } };
+assert(handleEditorSnippetKey(backEvent) && backEvent.prevented, "shift tab navigates back");
+assert(ed.selectionStart === 4 && ed.selectionEnd === 9, "shift tab selects previous placeholder");
+const escEvent = { key: "Escape", ctrlKey: false, altKey: false, shiftKey: false, preventDefault(){ this.prevented = true; } };
+assert(handleEditorSnippetKey(escEvent) && escEvent.prevented, "escape cancels snippet");
+assert(_editorSnippetSession === null, "snippet session cleared");
+console.log("frontend snippet behavior ok");
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check("frontend snippet tabstop behavior",
+                   result.returncode == 0
+                   and "frontend snippet behavior ok" in result.stdout,
+                   (result.stderr or result.stdout).strip())
+        except Exception as exc:
+            _check("frontend snippet tabstop behavior", False, str(exc))
         finally:
             if js_path:
                 try:

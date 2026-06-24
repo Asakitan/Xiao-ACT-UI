@@ -3960,6 +3960,7 @@ async function runCustomEditorEditLifecycle(tab,action){
   return r;
 }
 async function editorUndo(){
+  if(typeof editorCancelSnippetSession==='function')editorCancelSnippetSession(false);
   const active=tabs.find(t=>t.id===activeTab);
   if(isExtensionCustomEditorTab(active)){
     await runCustomEditorEditLifecycle(active,'undo');
@@ -3986,6 +3987,7 @@ async function editorUndo(){
   if(typeof scheduleEditorDocumentColors==='function')scheduleEditorDocumentColors(500);
 }
 async function editorRedo(){
+  if(typeof editorCancelSnippetSession==='function')editorCancelSnippetSession(false);
   const active=tabs.find(t=>t.id===activeTab);
   if(isExtensionCustomEditorTab(active)){
     await runCustomEditorEditLifecycle(active,'redo');
@@ -4013,6 +4015,7 @@ async function editorRedo(){
 }
 function _editorInputWithUndo(e){
   updateLineNums();updateCursorPos();editorDirty=true;
+  editorHandleSnippetInput();
   clearTimeout(_undoTimer);
   _undoTimer=setTimeout(()=>_undoPush(false),_UNDO_DEBOUNCE);
   closeEditorHover();
@@ -4070,6 +4073,7 @@ let _editorFormatOnTypeRequest=0;
 let _editorLinkedEditingRanges=[],_editorLinkedEditingRequest=0,_editorLinkedEditingTimer=null,_editorLinkedEditingContentLength=-1,_editorLinkedEditingBefore=null,_editorLinkedEditingApplying=false;
 let _editorSelectionRanges=[],_editorSelectionRangeIndex=-1,_editorSelectionRangeKey='';
 let _editorPasteDropRequest=0,_editorDropPasteOptions=[],_editorDropPasteOptionIndex=0,_editorDropPasteSession=null;
+let _editorSnippetSession=null;
 function activeEditorTab(){
   return (typeof tabs!=='undefined'&&Array.isArray(tabs)?tabs.find(t=>t.id===activeTab):null)||{};
 }
@@ -4666,11 +4670,241 @@ function editorProviderText(value){
   if(value.name!==undefined)return String(value.name);
   return String(value);
 }
+function editorCompletionInsertTextRaw(item){
+  if(!item)return '';
+  if(item.textEdit&&item.textEdit.newText!==undefined)return item.textEdit.newText;
+  if(item.insertText!==undefined)return item.insertText;
+  return completionLabelText(item.label);
+}
+function editorCompletionTextValue(value){
+  if(value&&typeof value==='object')return value.value??value.snippet??value.text??'';
+  return value===undefined||value===null?'':String(value);
+}
+function editorCompletionUsesSnippet(item){
+  if(!item)return false;
+  const raw=editorCompletionInsertTextRaw(item);
+  if(raw&&typeof raw==='object'&&raw.snippet!==undefined)return true;
+  return Number(item.insertTextFormat)===2;
+}
+function editorSnippetFileContext(context){
+  context=context||{};
+  const tab=typeof activeEditorTab==='function'?activeEditorTab():{};
+  const filePath=String(context.filePath||tab.filePath||'');
+  const name=String(context.name||tab.name||editorFileName||'');
+  const fileName=filePath?filePath.split(/[\\/]/).pop():(name||'');
+  const base=fileName.replace(/\.[^.\\/]+$/,'');
+  const directory=filePath?filePath.replace(/[\\/][^\\/]*$/,''):'';
+  return Object.assign({},context,{filePath,fileName,fileNameBase:base,directory});
+}
+function editorSnippetVariable(name,context){
+  const ctx=editorSnippetFileContext(context),now=new Date();
+  const pad=value=>String(value).padStart(2,'0');
+  const variables={
+    TM_SELECTED_TEXT:ctx.selectedText||'',
+    TM_FILENAME:ctx.fileName||'',
+    TM_FILENAME_BASE:ctx.fileNameBase||'',
+    TM_DIRECTORY:ctx.directory||'',
+    TM_FILEPATH:ctx.filePath||'',
+    RELATIVE_FILEPATH:ctx.workspacePath||ctx.fileName||'',
+    CURRENT_YEAR:String(now.getFullYear()),
+    CURRENT_MONTH:pad(now.getMonth()+1),
+    CURRENT_DATE:pad(now.getDate()),
+    CURRENT_HOUR:pad(now.getHours()),
+    CURRENT_MINUTE:pad(now.getMinutes()),
+    CURRENT_SECOND:pad(now.getSeconds())
+  };
+  return Object.prototype.hasOwnProperty.call(variables,name)?variables[name]:null;
+}
+function editorSnippetFindClosingBrace(value,start){
+  let depth=0,escaped=false;
+  for(let i=start;i<value.length;i++){
+    const ch=value[i],next=value[i+1];
+    if(escaped){escaped=false;continue}
+    if(ch==='\\'){escaped=true;continue}
+    if(ch==='$'&&next==='{'){depth++;i++;continue}
+    if(ch==='}'){
+      if(depth===0)return i;
+      depth--;
+    }
+  }
+  return -1;
+}
+function editorSnippetSplitChoiceOptions(value){
+  const out=[];let current='',escaped=false;
+  for(let i=0;i<String(value||'').length;i++){
+    const ch=value[i];
+    if(escaped){current+=ch;escaped=false;continue}
+    if(ch==='\\'){escaped=true;continue}
+    if(ch===','){out.push(current);current='';continue}
+    current+=ch;
+  }
+  out.push(current);
+  return out;
+}
+function editorParseSnippet(snippet,context){
+  snippet=editorCompletionTextValue(snippet);
+  const state={text:'',stops:Object.create(null),stopValues:Object.create(null)};
+  function addText(text){state.text+=String(text??'')}
+  function plain(value){return editorParseSnippet(value,context).text}
+  function addStop(index,start,end){
+    index=Number(index);
+    if(!Number.isFinite(index)||index<0)return;
+    const key=String(index);
+    if(!state.stops[key])state.stops[key]={index,ranges:[]};
+    state.stops[key].ranges.push({start,end});
+  }
+  function insertStop(index,text){
+    const key=String(Number(index));
+    if(Number(index)>0&&Object.prototype.hasOwnProperty.call(state.stopValues,key))text=state.stopValues[key];
+    else if(Number(index)>0)state.stopValues[key]=String(text??'');
+    const start=state.text.length;
+    addText(text);
+    addStop(index,start,state.text.length);
+  }
+  function parseBody(body){
+    let match=String(body).match(/^(\d+)\|(.*)\|$/s);
+    if(match){insertStop(Number(match[1]),editorSnippetSplitChoiceOptions(match[2])[0]||'');return}
+    match=String(body).match(/^(\d+):(.*)$/s);
+    if(match){insertStop(Number(match[1]),plain(match[2]));return}
+    if(/^\d+$/.test(String(body))){insertStop(Number(body),'');return}
+    match=String(body).match(/^([A-Za-z_][A-Za-z0-9_]*):(.*)$/s);
+    if(match){const value=editorSnippetVariable(match[1],context);addText(value===null?plain(match[2]):value);return}
+    if(/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(body))){
+      const value=editorSnippetVariable(String(body),context);
+      addText(value===null?'':value);
+      return;
+    }
+    addText('${'+body+'}');
+  }
+  for(let i=0;i<snippet.length;i++){
+    const ch=snippet[i],next=snippet[i+1];
+    if(ch==='\\'&&next!==undefined){
+      if('$}\\,|'.includes(next)){addText(next);i++;continue}
+      addText(next);i++;continue;
+    }
+    if(ch==='$'&&/[0-9]/.test(next||'')){
+      let j=i+1,digits='';
+      while(j<snippet.length&&/[0-9]/.test(snippet[j])){digits+=snippet[j];j++}
+      insertStop(Number(digits),'');i=j-1;continue;
+    }
+    if(ch==='$'&&next==='{'){
+      const close=editorSnippetFindClosingBrace(snippet,i+2);
+      if(close>=0){parseBody(snippet.slice(i+2,close));i=close;continue}
+    }
+    addText(ch);
+  }
+  const stops=Object.keys(state.stops).map(key=>state.stops[key]).sort((a,b)=>{
+    if(a.index===0&&b.index!==0)return 1;
+    if(b.index===0&&a.index!==0)return -1;
+    return a.index-b.index;
+  });
+  return {text:state.text,stops};
+}
+function editorSnippetShiftRanges(session,pivot,delta,skipRange){
+  if(!delta)return;
+  (session.stops||[]).forEach(stop=>(stop.ranges||[]).forEach(range=>{
+    if(range===skipRange)return;
+    if(range.start>=pivot){range.start+=delta;range.end+=delta}
+    else if(range.end>=pivot)range.end+=delta;
+  }));
+}
+function editorSnippetReplaceRange(session,range,text,cursor){
+  const oldEnd=range.end,delta=String(text).length-(range.end-range.start);
+  ed.value=ed.value.slice(0,range.start)+String(text)+ed.value.slice(range.end);
+  range.end=range.start+String(text).length;
+  editorSnippetShiftRanges(session,oldEnd,delta,range);
+  return range.start<cursor?cursor+delta:cursor;
+}
+function editorCancelSnippetSession(collapse){
+  if(collapse&&_editorSnippetSession){
+    const stop=_editorSnippetSession.stops[_editorSnippetSession.active]||null,range=stop&&stop.ranges?stop.ranges[0]:null;
+    if(range)ed.selectionStart=ed.selectionEnd=range.end;
+  }
+  _editorSnippetSession=null;
+}
+function editorSelectActiveSnippetStop(){
+  const session=_editorSnippetSession;
+  if(!session||!session.stops.length){editorCancelSnippetSession(false);return false}
+  const stop=session.stops[session.active],range=stop&&stop.ranges&&stop.ranges[0];
+  if(!range){editorCancelSnippetSession(false);return false}
+  ed.selectionStart=range.start;ed.selectionEnd=range.end;
+  session.value=ed.value;session.activeValue=ed.value.slice(range.start,range.end);session.before=null;
+  return true;
+}
+function captureEditorSnippetBefore(){
+  const session=_editorSnippetSession;
+  if(!session||session.applying)return;
+  const stop=session.stops[session.active],range=stop&&stop.ranges&&stop.ranges[0];
+  if(!range)return;
+  session.before={value:ed.value,start:ed.selectionStart,end:ed.selectionEnd,primaryStart:range.start,primaryEnd:range.end};
+}
+function editorHandleSnippetInput(){
+  const session=_editorSnippetSession;
+  if(!session||session.applying)return false;
+  const stop=session.stops[session.active],range=stop&&stop.ranges&&stop.ranges[0],before=session.before;
+  session.before=null;
+  if(!stop||!range||!before)return false;
+  if(stop.index===0){editorCancelSnippetSession(false);return false}
+  if(before.start<before.primaryStart||before.end>before.primaryEnd){editorCancelSnippetSession(false);return false}
+  const delta=ed.value.length-before.value.length,newEnd=before.primaryEnd+delta;
+  if(newEnd<before.primaryStart||newEnd>ed.value.length){editorCancelSnippetSession(false);return false}
+  range.start=before.primaryStart;range.end=newEnd;
+  editorSnippetShiftRanges(session,before.primaryEnd,delta,range);
+  const nextText=ed.value.slice(range.start,range.end);
+  let cursor=ed.selectionStart;
+  session.applying=true;
+  try{
+    (stop.ranges||[]).slice(1).sort((a,b)=>b.start-a.start).forEach(mirror=>{
+      cursor=editorSnippetReplaceRange(session,mirror,nextText,cursor);
+    });
+    ed.selectionStart=ed.selectionEnd=cursor;
+  }finally{
+    session.applying=false;
+  }
+  session.value=ed.value;session.activeValue=nextText;
+  updateLineNums();updateCursorPos();
+  return true;
+}
+function editorNavigateSnippet(forward){
+  const session=_editorSnippetSession;
+  if(!session)return false;
+  let next=session.active+(forward?1:-1);
+  if(next<0)next=0;
+  if(next>=session.stops.length){editorCancelSnippetSession(true);return true}
+  session.active=next;
+  return editorSelectActiveSnippetStop();
+}
+function handleEditorSnippetKey(e){
+  if(!_editorSnippetSession)return false;
+  if(e.key==='Tab'&&!e.ctrlKey&&!e.altKey){e.preventDefault();editorNavigateSnippet(!e.shiftKey);return true}
+  if(e.key==='Escape'){e.preventDefault();editorCancelSnippetSession(false);return true}
+  return false;
+}
+function editorApplySnippetText(raw,start,finish,context){
+  const parsed=editorParseSnippet(raw,context);
+  const value=ed.value;
+  ed.value=value.slice(0,start)+parsed.text+value.slice(finish);
+  const stops=(parsed.stops||[]).map(stop=>({
+    index:stop.index,
+    ranges:(stop.ranges||[]).map(range=>({start:start+range.start,end:start+range.end}))
+  })).filter(stop=>stop.ranges.length);
+  if(stops.length){
+    _editorSnippetSession={stops,active:0,value:ed.value,before:null,applying:false};
+    editorSelectActiveSnippetStop();
+  }else{
+    _editorSnippetSession=null;
+    ed.selectionStart=ed.selectionEnd=start+parsed.text.length;
+  }
+  editorDirty=true;
+  updateLineNums();updateCursorPos();scheduleEditorSyntaxHighlight();
+  clearEditorInlineCompletions();scheduleEditorInlineCompletions(240);
+  return true;
+}
 function editorInsertText(item){
-  let text=item&&item.textEdit&&item.textEdit.newText!==undefined?item.textEdit.newText:item&&item.insertText;
-  if(text&&typeof text==='object')text=text.value||text.snippet||text.text||'';
+  let text=editorCompletionInsertTextRaw(item);
   if(text===undefined||text===null||text==='')text=completionLabelText(item&&item.label);
-  return String(text||'').replace(/\$\{\d+:([^}]+)\}/g,'$1').replace(/\$\d+/g,'');
+  text=editorCompletionUsesSnippet(item)?editorSnippetPlainText(text):editorCompletionTextValue(text);
+  return String(text||'');
 }
 function editorApplyTextEditsToValue(value,edits){
   if(!Array.isArray(edits)||!edits.length)return false;
@@ -4738,6 +4972,23 @@ function showEditorSuggest(items,position){
 function applyEditorCompletion(item){
   if(!item)return;
   _undoPush(true);
+  editorCancelSnippetSession(false);
+  const usesSnippet=editorCompletionUsesSnippet(item);
+  if(usesSnippet&&!(Array.isArray(item.additionalTextEdits)&&item.additionalTextEdits.length)){
+    const value=ed.value,s=ed.selectionStart,end=ed.selectionEnd,word=editorWordRangeAt(value,s,end);
+    let start=word?word.start:s,finish=word?word.end:end;
+    if(item.textEdit&&item.textEdit.range){
+      start=editorOffsetFromPosition(value,item.textEdit.range.start);
+      finish=editorOffsetFromPosition(value,item.textEdit.range.end||item.textEdit.range.start);
+      if(finish<start){const tmp=start;start=finish;finish=tmp}
+    }
+    editorApplySnippetText(editorCompletionInsertTextRaw(item),start,finish,{
+      selectedText:value.slice(Math.min(s,end),Math.max(s,end)),
+      filePath:(activeEditorTab()||{}).filePath||'',
+      workspacePath:(activeEditorTab()||{}).workspacePath||''
+    });
+    closeEditorSuggest();ed.focus();return;
+  }
   const edits=[];
   if(item.textEdit)edits.push(item.textEdit);
   if(Array.isArray(item.additionalTextEdits))edits.push(...item.additionalTextEdits);
@@ -5959,9 +6210,8 @@ function editorPlainTextFromTransfer(payload){
   const text=payload&&payload['text/plain'];
   return text===undefined||text===null?'':String(text);
 }
-function editorSnippetPlainText(value){
-  if(value&&typeof value==='object')value=value.value??value.snippet??value.text??'';
-  return String(value??'').replace(/\$\{\d+:([^}]+)\}/g,'$1').replace(/\$\d+/g,'');
+function editorSnippetPlainText(value,context){
+  return editorParseSnippet(value,context).text;
 }
 function editorDropPasteStateChanged(snapshot){
   if(!snapshot)return true;
@@ -6278,12 +6528,13 @@ const ed=$('editor-text');
 // Seed initial undo state
 _undoPush(true);
 ed.addEventListener('beforeinput',captureEditorLinkedEditingBefore);
+ed.addEventListener('beforeinput',captureEditorSnippetBefore);
 ed.addEventListener('input',_editorInputWithUndo);
 ed.addEventListener('paste',handleEditorDocumentPaste);
 ed.addEventListener('dragenter',handleEditorDocumentDragOver);
 ed.addEventListener('dragover',handleEditorDocumentDragOver);
 ed.addEventListener('drop',handleEditorDocumentDrop);
-ed.addEventListener('click',e=>{closeEditorDropPasteOptions();updateCursorPos();renderEditorInlineCompletion();scheduleEditorDocumentHighlights();scheduleEditorLinkedEditingRanges();if(e.ctrlKey||e.metaKey){requestEditorDocumentLinks(true,true);return}scheduleEditorHover()});
+ed.addEventListener('click',e=>{editorCancelSnippetSession(false);closeEditorDropPasteOptions();updateCursorPos();renderEditorInlineCompletion();scheduleEditorDocumentHighlights();scheduleEditorLinkedEditingRanges();if(e.ctrlKey||e.metaKey){requestEditorDocumentLinks(true,true);return}scheduleEditorHover()});
 ed.addEventListener('dblclick',()=>editorSelectWordAtCursor());
 ed.addEventListener('keyup',()=>{updateCursorPos();renderEditorInlineCompletion();scheduleEditorDocumentHighlights();scheduleEditorLinkedEditingRanges();scheduleEditorHover()});
 ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();renderEditorInlayHints(_editorInlayHints);renderEditorDocumentHighlights(_editorDocumentHighlights);if(_editorSemanticTokensRangeActive)scheduleEditorSemanticTokens(260);updateCursorPos();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorDropPasteOptions();closeEditorReferences();closeEditorHierarchy();closeEditorLinks();closeEditorColorPresentationMenu()});
@@ -6295,6 +6546,7 @@ ed.addEventListener('keydown',function(e){
   if(handleEditorCodeActionKey(e))return;
   if(handleEditorSignatureKey(e))return;
   if(handleEditorSuggestKey(e))return;
+  if(handleEditorSnippetKey(e))return;
   if(handleEditorInlineCompletionKey(e))return;
   if(e.key==='F2'&&!e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorRename(false);return}
   if(e.key==='F12'&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorImplementation(false);return}
