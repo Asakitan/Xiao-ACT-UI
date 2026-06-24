@@ -159,6 +159,11 @@ body.window-resizing * { cursor:inherit !important; }
   color:transparent; font-size:0;
 }
 .tree-label { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tree-decoration-badge { margin-left:auto; min-width:14px; height:14px; padding:0 4px;
+  display:inline-flex; align-items:center; justify-content:center; flex-shrink:0;
+  border-radius:7px; border:1px solid color-mix(in srgb, currentColor 45%, transparent);
+  background:color-mix(in srgb, currentColor 14%, transparent); color:var(--fg-accent);
+  font:10px/14px var(--mono); }
 .tree-children { display:none; }
 .tree-node.open > .tree-children { display:block; }
 .tree-note { padding:6px 16px; font-size:11px; color:var(--fg-dim); }
@@ -7511,6 +7516,28 @@ function highlightExplorerSelection(){
   });
 }
 
+function explorerDecoration(entry){
+  const list=Array.isArray(entry&&entry.decorations)?entry.decorations:[entry&&entry.decoration];
+  return list.find(dec=>dec&&(dec.badge||dec.tooltip||dec.color))||null;
+}
+
+function applyExplorerDecoration(row,label,entry){
+  const decoration=explorerDecoration(entry);
+  if(!decoration)return;
+  const tooltip=String(decoration.tooltip||'');
+  const color=themeColorToCss(decoration.color,'');
+  if(tooltip)row.title=(row.title?row.title+'\n':'')+tooltip;
+  if(color)label.style.color=color;
+  const badgeText=String(decoration.badge||'').slice(0,2);
+  if(!badgeText)return;
+  const badge=document.createElement('span');
+  badge.className='tree-decoration-badge';
+  badge.textContent=badgeText;
+  if(color)badge.style.color=color;
+  if(tooltip)badge.title=tooltip;
+  row.appendChild(badge);
+}
+
 function createExplorerNode(entry,depth,isRoot,activePath=''){
   const node=document.createElement('div');node.className='tree-node';
   const row=document.createElement('div');row.className='tree-row';
@@ -7529,6 +7556,7 @@ function createExplorerNode(entry,depth,isRoot,activePath=''){
     :explorerFileIcon(entry.name));
   const label=document.createElement('span');label.className='tree-label';label.textContent=entry.name;
   row.appendChild(twist);row.appendChild(icon);row.appendChild(label);
+  applyExplorerDecoration(row,label,entry);
   node.appendChild(row);
 
   const children=document.createElement('div');children.className='tree-children';
@@ -11001,6 +11029,13 @@ const THEME_COLOR_VAR_MAP={
   'list.hoverBackground':'--bg-hover',
   'list.activeSelectionBackground':'--bg-active',
   'badge.background':'--bg-badge',
+  'gitDecoration.addedResourceForeground':'--fg-success',
+  'gitDecoration.modifiedResourceForeground':'--fg-warning',
+  'gitDecoration.deletedResourceForeground':'--fg-error',
+  'gitDecoration.untrackedResourceForeground':'--fg-success',
+  'gitDecoration.ignoredResourceForeground':'--fg-dim',
+  'gitDecoration.conflictingResourceForeground':'--fg-error',
+  'gitDecoration.submoduleResourceForeground':'--fg-accent',
   'statusBar.background':'--statusbar-bg',
   'statusBar.foreground':'--statusbar-fg',
   'editorWidget.background':'--bg2',
@@ -11036,6 +11071,14 @@ function parseSemanticTokenSelector(selector){
 function safeThemeColor(value){
   const v=String(value||'').trim();
   return /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(v)?v:'';
+}
+function themeColorToCss(value,fallback=''){
+  const raw=value&&typeof value==='object'
+    ?String(value.id||value.value||'')
+    :String(value||'');
+  const mapped=THEME_COLOR_VAR_MAP[raw];
+  if(mapped)return 'var('+mapped+')';
+  return safeThemeColor(raw)||fallback;
 }
 function semanticTokenThemeRule(selector,value){
   const parsed=parseSemanticTokenSelector(selector);

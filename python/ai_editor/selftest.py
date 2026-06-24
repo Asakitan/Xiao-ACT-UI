@@ -1811,6 +1811,24 @@ def test_app_settings_parity() -> None:
             fh.write("# hi\n")
         tree_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
         tree_api._workspace_root = lambda: tmpdir
+        from ai_editor.extension_host import ExtensionHost
+        from ai_editor.vscode_api import VscodeNamespace
+        tree_api._vscode_ns = VscodeNamespace(ExtensionHost())
+
+        class _WorkspaceDecorationProvider:
+            def provideFileDecoration(self, uri, token):
+                if str(uri).endswith("README.md"):
+                    return {
+                        "badge": "M",
+                        "tooltip": "Modified by extension",
+                        "color": {
+                            "id": "gitDecoration.modifiedResourceForeground",
+                        },
+                    }
+                return None
+
+        tree_api._vscode_ns.build()["window"][
+            "registerFileDecorationProvider"](_WorkspaceDecorationProvider())
         tree = tree_api.list_workspace_tree()
         root_names = {entry.get("name") for entry in tree.get("entries", [])}
         _check("workspace tree filters ignored directories",
@@ -1819,6 +1837,16 @@ def test_app_settings_parity() -> None:
         _check("workspace tree keeps directories before files",
                tree.get("entries", [{}])[0].get("type") == "directory"
                and tree.get("entries", [{}])[0].get("name") == "src")
+        readme_entry = next(
+            (entry for entry in tree.get("entries", [])
+             if entry.get("name") == "README.md"),
+            {})
+        _check("workspace tree includes extension file decorations",
+               readme_entry.get("decoration", {}).get("badge") == "M"
+               and readme_entry.get("decoration", {}).get("tooltip")
+               == "Modified by extension"
+               and readme_entry.get("decoration", {}).get("color", {})
+               .get("id") == "gitDecoration.modifiedResourceForeground")
         opened = tree_api.open_workspace_file("src/sample.py")
         _check("open_workspace_file returns content and language",
                opened.get("path") == "src/sample.py"
@@ -2997,7 +3025,12 @@ console.log("quick input filter helpers ok");
            "call('list_workspace_tree',relPath||'')" in html
            and "call('list_workspace_tree',entry.path||'')" in html
            and "openWorkspaceFile(entry.path)" in html
-           and "call('open_workspace_file',relPath||'')" in html)
+           and "call('open_workspace_file',relPath||'')" in html
+           and "tree-decoration-badge" in html
+           and "function applyExplorerDecoration" in html
+           and "themeColorToCss(decoration.color" in html
+           and "'gitDecoration.modifiedResourceForeground':'--fg-warning'"
+           in html)
     _check("frontend routes custom editor files into editor tabs",
            "function openExtensionCustomEditorFile(res,relPath)" in html
            and "runtimeMode:'extension-custom-editor'" in html

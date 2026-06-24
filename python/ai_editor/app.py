@@ -3646,6 +3646,69 @@ class AIEditorAPI:
             "view_id": view_id,
         }
 
+    @staticmethod
+    def _safe_file_decoration_payload(value: Any) -> Dict[str, Any]:
+        if not isinstance(value, dict):
+            return {}
+        result: Dict[str, Any] = {}
+        badge = value.get("badge")
+        if badge is not None:
+            result["badge"] = str(badge)[:2]
+        tooltip = value.get("tooltip")
+        if tooltip is not None:
+            result["tooltip"] = str(tooltip)
+        color = value.get("color")
+        color_id = ""
+        if isinstance(color, dict):
+            color_id = str(color.get("id") or color.get("value") or "")
+        elif color is not None:
+            color_id = str(getattr(color, "id", "") or color)
+        if color_id:
+            result["color"] = {"id": color_id}
+        if "propagate" in value:
+            result["propagate"] = bool(value.get("propagate"))
+        return result if any(
+            key in result for key in ("badge", "tooltip", "color")
+        ) else {}
+
+    def _workspace_has_file_decoration_providers(self) -> bool:
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        if vscode_ns is None:
+            return False
+        if getattr(vscode_ns, "_file_decoration_providers", None):
+            return True
+        host = getattr(self, "_node_ext_host", None)
+        if host is None or not getattr(host, "is_running", False):
+            return False
+        providers = getattr(host, "list_file_decoration_providers", None)
+        if not callable(providers):
+            return False
+        try:
+            return bool(providers())
+        except Exception:
+            return False
+
+    def _workspace_file_decorations(
+            self, full: str,
+            providers_available: Optional[bool] = None) -> List[Dict[str, Any]]:
+        if providers_available is None:
+            providers_available = self._workspace_has_file_decoration_providers()
+        if not providers_available:
+            return []
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        if vscode_ns is None:
+            return []
+        try:
+            raw = vscode_ns.provide_file_decorations(Uri.file(full))
+        except Exception:
+            return []
+        decorations: List[Dict[str, Any]] = []
+        for item in raw or []:
+            payload = self._safe_file_decoration_payload(item)
+            if payload:
+                decorations.append(payload)
+        return decorations
+
     def list_workspace_tree(self, rel_path: str = "") -> Dict:
         root = self._workspace_root()
         try:
@@ -3659,6 +3722,7 @@ class AIEditorAPI:
         except Exception as exc:
             return {"error": str(exc), "entries": []}
         entries: List[Dict[str, Any]] = []
+        decorate_entries = self._workspace_has_file_decoration_providers()
         for name in names:
             full = os.path.join(current, name)
             if not self._is_workspace_safe_path(root, full):
@@ -3666,11 +3730,18 @@ class AIEditorAPI:
             is_dir = os.path.isdir(full)
             if is_dir and name.casefold() in _WORKSPACE_TREE_IGNORED_DIRS:
                 continue
-            entries.append({
+            entry = {
                 "name": name,
                 "path": self._workspace_rel_path(root, full),
                 "type": "directory" if is_dir else "file",
-            })
+            }
+            decorations = (
+                self._workspace_file_decorations(full, decorate_entries)
+                if decorate_entries else [])
+            if decorations:
+                entry["decoration"] = decorations[0]
+                entry["decorations"] = decorations
+            entries.append(entry)
         entries.sort(key=lambda entry: (
             entry.get("type") != "directory", str(entry.get("name", "")).casefold()))
         return {
