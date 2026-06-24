@@ -70,10 +70,10 @@ def _candidate_nbt_payloads() -> List[tuple[str, bytes]]:
     raw_empty = b"\x0a\x00\x00\x00"
     raw_named = b"\x0a\x00\x04root\x00"
     return [
-        ("raw-empty", raw_empty),
-        ("raw-named-root", raw_named),
         ("gzip-empty", gzip.compress(raw_empty)),
         ("gzip-named-root", gzip.compress(raw_named)),
+        ("raw-empty", raw_empty),
+        ("raw-named-root", raw_named),
     ]
 
 
