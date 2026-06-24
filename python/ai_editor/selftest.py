@@ -3087,6 +3087,11 @@ console.log("quick input filter helpers ok");
            and "const _quickInputs = new Map()" in node_ext_host_source
            and "_quickInputs.set(this._id, this)" in node_ext_host_source
            and "_quickInputs.delete(this._id)" in node_ext_host_source
+           and "async function _windowShowQuickPick(itemsOrPromise, options = {}, token = undefined)"
+           in node_ext_host_source
+           and "const input = new QuickPickInput()" in node_ext_host_source
+           and "input.onDidAccept(() =>" in node_ext_host_source
+           and "token.onCancellationRequested" in node_ext_host_source
            and "function handleQuickInputAction(msg)" in node_ext_host_source
            and "case 'quick_input_action':" in node_ext_host_source
            and "input.value = String(msg.value ?? '')" in node_ext_host_source
@@ -8524,6 +8529,7 @@ module.exports = { activate, deactivate };
                     self.disposed = []
                     self.progress = []
                     self.quick_inputs = []
+                    self.node_host = None
 
                 def render_webview_panel(
                         self, view_id: str, html: str,
@@ -8551,6 +8557,12 @@ module.exports = { activate, deactivate };
                         "event": "quick_input",
                         "data": dict(payload or {}),
                     })
+                    if (isinstance(payload, dict)
+                            and payload.get("event") == "show"
+                            and payload.get("kind") == "quickPick"
+                            and self.node_host is not None):
+                        self.node_host.send_quick_input_action(
+                            payload.get("id"), "accept", {})
 
             node_ui_bridge = _NodeUiBridge()
             node_host = NodeExtensionHost(
@@ -8561,6 +8573,7 @@ module.exports = { activate, deactivate };
                 ui_bridge=node_ui_bridge,
                 storage_root=node_storage_tmp,
             )
+            node_ui_bridge.node_host = node_host
             previous_node_host = api._node_ext_host
             api._node_ext_host = node_host
             node_diag_initial = node_host.diagnostics_snapshot()
@@ -10030,13 +10043,13 @@ module.exports = { activate, deactivate };
                     item for item in node_ui_bridge.quick_inputs
                     if isinstance(item, dict)
                 ]
-                _check("node host quick input fallback matches VS Code data contracts",
+                _check("node host showQuickPick uses dynamic QuickInput UI",
                        node_started is True
                        and node_quick_input_command_registered
                        and isinstance(node_quick_input_probe, dict)
                        and node_quick_input_probe.get("stringPick") == "alpha"
                        and node_quick_input_probe.get("objectPick") == "second"
-                       and node_quick_input_probe.get("selectedLabel") == "first"
+                       and node_quick_input_probe.get("selectedLabel") == "second"
                        and node_quick_input_probe.get("manyPick")
                        == ["one", "three"]
                        and node_quick_input_probe.get("fallbackMany")

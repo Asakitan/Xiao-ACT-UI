@@ -3271,21 +3271,66 @@ function _quickPickItemIsSeparator(item) {
     );
 }
 
-async function _windowShowQuickPick(itemsOrPromise, options = {}) {
+async function _windowShowQuickPick(itemsOrPromise, options = {}, token = undefined) {
     const rawItems = await Promise.resolve(itemsOrPromise);
-    const items = Array.isArray(rawItems) ? rawItems : [];
+    const items = Array.isArray(rawItems) ? Array.from(rawItems) : [];
     const pickable = items.filter(item => !_quickPickItemIsSeparator(item));
     if (!pickable.length) return undefined;
-    if (typeof options?.onDidSelectItem === 'function') {
-        try { options.onDidSelectItem(pickable[0]); }
+    if (token?.isCancellationRequested) return undefined;
+    const input = new QuickPickInput();
+    const picked = pickable.filter(item => item && typeof item === 'object' && item.picked);
+    const initialActive = picked[0] || pickable[0];
+    let settled = false;
+    const disposables = [];
+    function notifySelected(item) {
+        if (item === undefined || typeof options?.onDidSelectItem !== 'function') return;
+        try { options.onDidSelectItem(item); }
         catch (err) { log(`showQuickPick onDidSelectItem failed: ${err.message}`); }
     }
-    if (options?.canPickMany) {
-        const picked = pickable.filter(item => item && typeof item === 'object' && item.picked);
-        return picked.length ? picked : [pickable[0]];
+    function finish(resolve, value) {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+        queueMicrotask(() => {
+            disposables.forEach(disposable => disposable?.dispose?.());
+            input.dispose();
+        });
     }
-    const active = pickable.find(item => item && typeof item === 'object' && item.picked);
-    return active || pickable[0];
+    return new Promise(resolve => {
+        input._title = options?.title === undefined ? undefined : String(options.title);
+        input._placeholder = options?.placeHolder === undefined ? undefined : String(options.placeHolder);
+        input._prompt = options?.prompt === undefined ? undefined : String(options.prompt);
+        input._ignoreFocusOut = !!options?.ignoreFocusOut;
+        input._canSelectMany = !!options?.canPickMany;
+        input._matchOnDescription = !!options?.matchOnDescription;
+        input._matchOnDetail = !!options?.matchOnDetail;
+        input._items = items;
+        input._activeItems = initialActive === undefined ? [] : [initialActive];
+        input._selectedItems = input._canSelectMany
+            ? (picked.length ? picked : [pickable[0]])
+            : (picked[0] ? [picked[0]] : []);
+        disposables.push(input.onDidChangeActive(activeItems => {
+            notifySelected(Array.isArray(activeItems) ? activeItems[0] : undefined);
+        }));
+        disposables.push(input.onDidAccept(() => {
+            if (input._canSelectMany) {
+                finish(resolve, input.selectedItems.filter(item => !_quickPickItemIsSeparator(item)));
+                return;
+            }
+            const active = (Array.isArray(input.activeItems) ? input.activeItems[0] : undefined)
+                || (Array.isArray(input.selectedItems) ? input.selectedItems[0] : undefined);
+            finish(resolve, active);
+        }));
+        disposables.push(input.onDidHide(() => finish(resolve, undefined)));
+        if (token && typeof token.onCancellationRequested === 'function') {
+            disposables.push(token.onCancellationRequested(() => {
+                input.hide();
+                finish(resolve, undefined);
+            }));
+        }
+        input.show();
+        notifySelected(initialActive);
+    });
 }
 
 async function _windowShowInputBox(options = {}) {
@@ -4138,8 +4183,8 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             showErrorMessage(message, ...items) {
                 return _windowShowMessage('error', message, items);
             },
-            showQuickPick(items, options) {
-                return _windowShowQuickPick(items, options || {});
+            showQuickPick(items, options, token) {
+                return _windowShowQuickPick(items, options || {}, token);
             },
             showInputBox(options) {
                 return _windowShowInputBox(options || {});
