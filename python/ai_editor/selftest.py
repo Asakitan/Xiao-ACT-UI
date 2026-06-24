@@ -3125,6 +3125,14 @@ console.log("quick input filter helpers ok");
            and "def read_clipboard_text(self) -> str:" in app_source
            and "def write_clipboard_text(self, text: str) -> None:"
            in app_source)
+    _check("extension status bar messages round-trip through Node host",
+           "setStatusBarMessage(text, hideAfterTimeoutOrThenable)"
+           in node_ext_host_source
+           and "function _windowSetStatusBarMessage" in node_ext_host_source
+           and "status_bar_hide" in node_ext_host_source
+           and "self._ui_bridge.hide_status_bar_item" in extension_host_source
+           and "def hide_status_bar_item(self, item_id: str) -> None:"
+           in app_source)
     _check("extension workspace folder picker uses dynamic QuickPick",
            "showWorkspaceFolderPick(options, token)" in node_ext_host_source
            and "function _windowShowWorkspaceFolderPick" in node_ext_host_source
@@ -8154,6 +8162,26 @@ async function activate(context) {
     const text = await vscode.env.clipboard.readText();
     return { text };
   });
+  vscode.commands.registerCommand('selftest.node.statusBarMessageProbe', async () => {
+    const persistent = vscode.window.setStatusBarMessage('node persistent message');
+    persistent.dispose();
+    const timed = vscode.window.setStatusBarMessage('node timeout message', 5);
+    await new Promise(resolve => setTimeout(resolve, 25));
+    const done = Promise.resolve('done');
+    const thenable = vscode.window.setStatusBarMessage('node thenable message', done);
+    await done;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const delayed = new Promise(resolve => setTimeout(resolve, 25));
+    const cancelled = vscode.window.setStatusBarMessage('node cancel thenable', delayed);
+    cancelled.dispose();
+    await delayed;
+    return {
+      persistentDisposable: !!(persistent && persistent.dispose),
+      timedDisposable: !!(timed && timed.dispose),
+      thenableDisposable: !!(thenable && thenable.dispose),
+      cancelledDisposable: !!(cancelled && cancelled.dispose),
+    };
+  });
   vscode.commands.registerCommand('selftest.node.messageOptionsProbe', async () => {
     const info = await vscode.window.showInformationMessage(
       'Info probe',
@@ -8595,6 +8623,8 @@ module.exports = { activate, deactivate };
                     self.node_host = None
                     self.clipboard_text = ""
                     self.clipboard_events = []
+                    self.status_bar_items = {}
+                    self.status_bar_events = []
                     self.window_dialogs = []
                     self.open_dialog_paths = [
                         os.path.join(node_tree_tmp, "dialog-open.txt"),
@@ -8663,6 +8693,49 @@ module.exports = { activate, deactivate };
                 def write_clipboard_text(self, text):
                     self.clipboard_text = str(text)
                     self.clipboard_events.append(("write", self.clipboard_text))
+
+                def show_status_bar_item(self, item_id, text, tooltip,
+                                         command, alignment=2, priority=0,
+                                         color="", backgroundColor=""):
+                    item = {
+                        "id": str(item_id),
+                        "text": str(text),
+                        "tooltip": str(tooltip),
+                        "command": str(command),
+                        "alignment": int(alignment),
+                        "priority": int(priority),
+                        "color": str(color),
+                        "backgroundColor": str(backgroundColor),
+                    }
+                    self.status_bar_items[item["id"]] = item
+                    event = {"event": "show", **item}
+                    self.status_bar_events.append(event)
+                    emitted_events.append({
+                        "event": "status_bar",
+                        "data": event,
+                    })
+
+                def hide_status_bar_item(self, item_id):
+                    item = self.status_bar_items.get(str(item_id), {
+                        "id": str(item_id),
+                    })
+                    event = {"event": "hide", **item}
+                    self.status_bar_events.append(event)
+                    emitted_events.append({
+                        "event": "status_bar",
+                        "data": event,
+                    })
+
+                def dispose_status_bar_item(self, item_id):
+                    item = self.status_bar_items.pop(str(item_id), {
+                        "id": str(item_id),
+                    })
+                    event = {"event": "dispose", **item}
+                    self.status_bar_events.append(event)
+                    emitted_events.append({
+                        "event": "status_bar",
+                        "data": event,
+                    })
 
             node_ui_bridge = _NodeUiBridge()
             node_host = NodeExtensionHost(
@@ -8829,6 +8902,16 @@ module.exports = { activate, deactivate };
                         "selftest.node.clipboardProbe")
                 except Exception as exc:
                     node_clipboard_probe = {"_error": str(exc)}
+                node_status_bar_command_registered = _wait_until(
+                    lambda: "selftest.node.statusBarMessageProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                try:
+                    node_status_bar_probe = api._ext_host.commands.execute(
+                        "selftest.node.statusBarMessageProbe")
+                except Exception as exc:
+                    node_status_bar_probe = {"_error": str(exc)}
+                node_status_bar_events = list(node_ui_bridge.status_bar_events)
                 node_message_options_command_registered = _wait_until(
                     lambda: "selftest.node.messageOptionsProbe"
                     in api._ext_host.commands.list_commands(),
@@ -10286,6 +10369,47 @@ module.exports = { activate, deactivate };
                        json.dumps({
                            "probe": node_clipboard_probe,
                            "events": node_ui_bridge.clipboard_events,
+                       }, ensure_ascii=False, default=str))
+                _check("node host status bar messages use dynamic UI bridge",
+                       node_started is True
+                       and node_status_bar_command_registered
+                       and isinstance(node_status_bar_probe, dict)
+                       and node_status_bar_probe.get(
+                           "persistentDisposable") is True
+                       and node_status_bar_probe.get("timedDisposable") is True
+                       and node_status_bar_probe.get(
+                           "thenableDisposable") is True
+                       and node_status_bar_probe.get(
+                           "cancelledDisposable") is True
+                       and {
+                           "node persistent message",
+                           "node timeout message",
+                           "node thenable message",
+                           "node cancel thenable",
+                       }.issubset({
+                           item.get("text")
+                           for item in node_status_bar_events
+                           if item.get("event") == "show"
+                       })
+                       and any(
+                           item.get("event") == "dispose"
+                           and item.get("text") == "node persistent message"
+                           for item in node_status_bar_events)
+                       and any(
+                           item.get("event") == "hide"
+                           and item.get("text") == "node timeout message"
+                           for item in node_status_bar_events)
+                       and any(
+                           item.get("event") == "hide"
+                           and item.get("text") == "node thenable message"
+                           for item in node_status_bar_events)
+                       and any(
+                           item.get("event") == "dispose"
+                           and item.get("text") == "node cancel thenable"
+                           for item in node_status_bar_events),
+                       json.dumps({
+                           "probe": node_status_bar_probe,
+                           "events": node_status_bar_events,
                        }, ensure_ascii=False, default=str))
                 _check("node host message APIs separate options from actions",
                        node_started is True

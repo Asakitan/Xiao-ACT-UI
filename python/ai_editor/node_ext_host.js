@@ -3991,6 +3991,50 @@ function _windowShowMessage(level, message, args) {
     return Promise.resolve(items.find(_messageArgIsItem));
 }
 
+function _windowSetStatusBarMessage(text, hideAfterTimeoutOrThenable) {
+    const id = 'sbm-node-' + (++_sbiCounter);
+    let closed = false;
+    let timer = null;
+    function clearTimer() {
+        if (timer !== null) {
+            clearTimeout(timer);
+            timer = null;
+        }
+    }
+    function close(messageType) {
+        if (closed) return;
+        closed = true;
+        clearTimer();
+        send({ type: messageType, id });
+    }
+    send({
+        type: 'status_bar_show',
+        id,
+        text: String(text ?? ''),
+        tooltip: '',
+        command: '',
+        alignment: 1,
+        priority: Number.MAX_SAFE_INTEGER,
+        color: '',
+        backgroundColor: '',
+    });
+    if (typeof hideAfterTimeoutOrThenable === 'number') {
+        const timeout = Math.max(0, Number(hideAfterTimeoutOrThenable));
+        if (Number.isFinite(timeout)) {
+            timer = setTimeout(() => close('status_bar_hide'), timeout);
+        }
+    } else if (
+        hideAfterTimeoutOrThenable
+        && typeof hideAfterTimeoutOrThenable.then === 'function'
+    ) {
+        Promise.resolve(hideAfterTimeoutOrThenable).then(
+            () => close('status_bar_hide'),
+            () => close('status_bar_hide'),
+        );
+    }
+    return new Disposable(() => close('status_bar_dispose'));
+}
+
 function _authProviderMethod(provider, names) {
     for (const name of names) {
         if (provider && typeof provider[name] === 'function') {
@@ -4401,6 +4445,9 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                             progress.report({ increment: Number(value) || 0 });
                         },
                     }));
+            },
+            setStatusBarMessage(text, hideAfterTimeoutOrThenable) {
+                return _windowSetStatusBarMessage(text, hideAfterTimeoutOrThenable);
             },
             createStatusBarItem(alignmentOrId, priorityOrAlignment, priority) {
                 const align = typeof alignmentOrId === 'number' ? alignmentOrId : 2;

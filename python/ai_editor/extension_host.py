@@ -2523,7 +2523,14 @@ class NodeExtensionHost:
                 except Exception:
                     pass
 
-        elif msg_type in ("status_bar_hide", "status_bar_dispose"):
+        elif msg_type == "status_bar_hide":
+            if self._ui_bridge:
+                try:
+                    self._ui_bridge.hide_status_bar_item(str(msg.get("id", "")))
+                except Exception:
+                    pass
+
+        elif msg_type == "status_bar_dispose":
             if self._ui_bridge:
                 try:
                     self._ui_bridge.dispose_status_bar_item(str(msg.get("id", "")))
