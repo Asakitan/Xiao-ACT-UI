@@ -2197,6 +2197,57 @@ class VscodeNamespace:
             "code": getattr(diagnostic, "code", None),
         }
 
+    @classmethod
+    def _diagnostic_from_payload(cls, diagnostic: Any) -> Any:
+        if isinstance(diagnostic, Diagnostic):
+            return diagnostic
+        if not isinstance(diagnostic, dict):
+            return diagnostic
+        value = Diagnostic(
+            _coerce_range(diagnostic.get("range")),
+            str(diagnostic.get("message") or ""),
+            diagnostic.get("severity", 0),
+            str(diagnostic.get("source") or ""),
+            diagnostic.get("code"),
+        )
+        tags = diagnostic.get("tags")
+        if isinstance(tags, list):
+            value.tags = list(tags)
+        related = (
+            diagnostic.get("relatedInformation")
+            or diagnostic.get("related_information"))
+        if isinstance(related, list):
+            value.related_information = list(related)
+        return value
+
+    @classmethod
+    def _diagnostic_key(cls, diagnostic: Any) -> str:
+        payload = cls._diagnostic_payload(diagnostic)
+        if not isinstance(payload, dict):
+            return repr(payload)
+        comparable = {
+            "range": payload.get("range"),
+            "message": payload.get("message"),
+            "severity": payload.get("severity"),
+            "source": payload.get("source"),
+            "code": payload.get("code"),
+        }
+        return json.dumps(comparable, sort_keys=True, default=str)
+
+    def _code_action_context_diagnostics(
+            self, resource: Any, diagnostics: Any = None) -> List[Any]:
+        values = list(self._get_diagnostics(resource))
+        seen = {self._diagnostic_key(item) for item in values}
+        incoming = diagnostics if isinstance(diagnostics, list) else []
+        for item in incoming:
+            diagnostic = self._diagnostic_from_payload(item)
+            key = self._diagnostic_key(diagnostic)
+            if key in seen:
+                continue
+            seen.add(key)
+            values.append(diagnostic)
+        return values
+
     @staticmethod
     def _provider_values(value: Any) -> List[Any]:
         if value is None:
@@ -3118,12 +3169,18 @@ class VscodeNamespace:
 
     def _execute_code_action_provider(
             self, uri: Any, range: Any = None, kind: Any = None,
-            item_resolve_count: Any = 0) -> List[Any]:
+            item_resolve_count: Any = 0, diagnostics: Any = None,
+            trigger_kind: Any = None) -> List[Any]:
         document = self._resolve_language_document(uri)
         action_range = _coerce_range(range)
-        context = {"diagnostics": self._get_diagnostics(document.uri)}
+        context = {
+            "diagnostics": self._code_action_context_diagnostics(
+                document.uri, diagnostics)
+        }
         if kind is not None:
             context["only"] = kind
+        if trigger_kind is not None:
+            context["triggerKind"] = trigger_kind
         try:
             remaining_resolves = max(0, int(item_resolve_count or 0))
         except Exception:
@@ -3169,6 +3226,7 @@ class VscodeNamespace:
                     for item in context.get("diagnostics", [])
                 ],
                 only=kind,
+                triggerKind=trigger_kind,
                 itemResolveCount=max(0, remaining_resolves))))
         return results
 

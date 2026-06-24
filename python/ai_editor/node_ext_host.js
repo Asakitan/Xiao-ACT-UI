@@ -7186,6 +7186,7 @@ function _languageProviderMethod(kind) {
         semanticTokensRange: 'provideDocumentRangeSemanticTokens',
         semanticTokensRangeLegend: 'provideDocumentRangeSemanticTokens',
         documentSymbol: 'provideDocumentSymbols',
+        diagnostics: 'getDiagnostics',
         codeActions: 'provideCodeActions',
         codeActionResolve: 'resolveCodeAction',
         codeActionsResolve: 'resolveCodeAction',
@@ -7399,6 +7400,17 @@ async function handleLanguageProviderRequest(msg) {
             context.triggerCharacter = trigger;
         } else if (kind === 'completion' || kind === 'signatureHelp') {
             context.triggerKind = context.triggerKind || 1;
+        }
+
+        if (kind === 'diagnostics') {
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: _serializeLanguageValue(_diagnosticsForUri(document.uri)),
+            });
+            return;
         }
 
         if (kind === 'completionResolve') {

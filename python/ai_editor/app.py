@@ -516,7 +516,9 @@ _LANGUAGE_RESULT_ATTRS = (
     "textEdit",
     "additionalTextEdits", "commitCharacters", "command", "arguments", "contents", "uri", "targetUri",
     "targetRange", "originSelectionRange", "name", "containerName",
-    "children", "selectionRange", "diagnostics", "edit", "title",
+    "children", "selectionRange", "diagnostics", "message", "severity",
+    "source", "code", "tags", "relatedInformation", "related_information",
+    "edit", "title",
     "isPreferred", "disabled", "newText", "position", "value",
     "signatures", "activeSignature", "activeParameter", "parameters",
     "placeholder", "rejectReason", "target", "tooltip", "textEdits",
@@ -4184,6 +4186,10 @@ class AIEditorAPI:
             "workspaceSymbol": "workspaceSymbol",
             "workspaceSymbols": "workspaceSymbol",
             "resolveWorkspaceSymbol": "resolveWorkspaceSymbol",
+            "diagnostic": "diagnostics",
+            "diagnostics": "diagnostics",
+            "documentDiagnostic": "diagnostics",
+            "documentDiagnostics": "diagnostics",
             "codeAction": "codeActions",
             "codeActions": "codeActions",
             "codeActionResolve": "codeActionResolve",
@@ -4237,6 +4243,48 @@ class AIEditorAPI:
         position = _editor_provider_position(pos_value, content)
 
         try:
+            if kind == "diagnostics":
+                diagnostics: List[Any] = []
+                seen: set[str] = set()
+
+                def add_diagnostics(items: Any) -> None:
+                    values = items if isinstance(items, list) else (
+                        [] if items is None else [items])
+                    for item in values:
+                        value = _json_ready_language_value(item)
+                        if not isinstance(value, dict):
+                            continue
+                        comparable = {
+                            "range": value.get("range"),
+                            "message": value.get("message"),
+                            "severity": value.get("severity"),
+                            "source": value.get("source"),
+                            "code": value.get("code"),
+                        }
+                        key = json.dumps(
+                            comparable, sort_keys=True, default=str)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        diagnostics.append(value)
+
+                add_diagnostics(self._vscode_ns._get_diagnostics(document.uri))
+                node_result = self._request_node_language_provider({
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "languageId": language,
+                    "version": document.version,
+                    "text": content,
+                })
+                if isinstance(node_result, dict) and node_result.get("ok"):
+                    add_diagnostics(node_result.get("value"))
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "diagnostics": diagnostics,
+                }
             if kind == "completionResolve":
                 item = payload.get("item")
                 if not isinstance(item, dict):
@@ -4915,6 +4963,8 @@ class AIEditorAPI:
                     action_range,
                     payload.get("only"),
                     max(0, item_resolve_count),
+                    payload.get("diagnostics"),
+                    payload.get("triggerKind"),
                 )
                 value = _json_ready_language_value(result)
                 return {
@@ -8354,6 +8404,59 @@ class AIEditorAPI:
             "commands": self._ext_host.commands.list_commands(),
             "contributes": self._ext_host.get_contributes_summary(),
         }
+
+    @staticmethod
+    def _diagnostic_file_label(uri: Any) -> str:
+        text = str(uri or "")
+        if not text:
+            return ""
+        parsed = urlparse(text)
+        if parsed.scheme == "file":
+            path = unquote(parsed.path or "")
+            if re.match(r"^/[A-Za-z]:/", path):
+                path = path[1:]
+            return path.replace("/", os.sep)
+        return text
+
+    def get_diagnostics(
+            self, uri: str = "", filePath: str = "") -> Dict[str, Any]:
+        """Return current VS Code diagnostic collections for Problems UI."""
+        self._ensure_engine()
+        target_uri: Any = None
+        if filePath:
+            target_uri = Uri.file(os.path.abspath(os.path.expanduser(filePath)))
+        elif uri:
+            target_uri = uri
+
+        rows: List[Dict[str, Any]] = []
+
+        def add_row(row_uri: Any, diagnostic: Any) -> None:
+            value = _json_ready_language_value(diagnostic)
+            if not isinstance(value, dict):
+                return
+            range_value = value.get("range")
+            start = range_value.get("start", {}) if isinstance(
+                range_value, dict) else {}
+            def int_or_zero(raw: Any) -> int:
+                try:
+                    return int(raw)
+                except Exception:
+                    return 0
+            value.setdefault("uri", str(row_uri or ""))
+            value.setdefault("file", self._diagnostic_file_label(row_uri))
+            value.setdefault("line", int_or_zero(start.get("line", 0)) + 1)
+            value.setdefault(
+                "character", int_or_zero(start.get("character", 0)) + 1)
+            rows.append(value)
+
+        if target_uri is not None:
+            for item in self._vscode_ns._get_diagnostics(target_uri):
+                add_row(target_uri, item)
+        else:
+            for row_uri, diagnostics in self._vscode_ns._get_diagnostics():
+                for item in diagnostics or []:
+                    add_row(row_uri, item)
+        return {"diagnostics": rows, "count": len(rows)}
 
     def get_extension_contributions(self) -> Dict:
         """Return processed VSCode contribution details with runtime metadata."""

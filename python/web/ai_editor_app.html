@@ -232,6 +232,13 @@ body.window-resizing * { cursor:inherit !important; }
   border-color:color-mix(in srgb,var(--fg-success) 45%,transparent); }
 .editor-document-highlight.kind-2 { background:color-mix(in srgb,var(--fg-warning) 18%,transparent);
   border-color:color-mix(in srgb,var(--fg-warning) 55%,transparent); }
+.editor-diagnostic-layer { position:absolute; inset:0 0 0 50px; z-index:4; pointer-events:none;
+  font:13px/1.5 var(--mono); padding:8px 12px; overflow:hidden; white-space:pre; tab-size:4; }
+.editor-diagnostic-marker { position:absolute; height:0; min-width:7px; border-bottom:2px dotted var(--fg-error);
+  box-sizing:border-box; opacity:.96; }
+.editor-diagnostic-marker.severity-1 { border-bottom-color:var(--fg-warning); }
+.editor-diagnostic-marker.severity-2 { border-bottom-color:var(--fg-accent); }
+.editor-diagnostic-marker.severity-3 { border-bottom-color:var(--fg-dim); opacity:.78; }
 .editor-inlay-layer { position:absolute; inset:0 0 0 50px; z-index:3; pointer-events:none;
   font:13px/1.5 var(--mono); padding:8px 12px; overflow:hidden; white-space:pre; tab-size:4; }
 .editor-inlay-hint { position:absolute; max-width:260px; overflow:hidden; text-overflow:ellipsis;
@@ -278,6 +285,7 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-container.custom-editor .editor-textarea,
 .editor-container.custom-editor .editor-syntax-layer,
 .editor-container.custom-editor .editor-highlight-layer,
+.editor-container.custom-editor .editor-diagnostic-layer,
 .editor-container.custom-editor .editor-inlay-layer,
 .editor-container.custom-editor .editor-ghost-layer,
 .editor-container.custom-editor .editor-codelens-layer,
@@ -1445,6 +1453,7 @@ pre.code-block { overflow:visible; }
         <div class="line-numbers" id="line-nums">1</div>
         <pre class="editor-syntax-layer" id="editor-syntax-highlight" aria-hidden="true"></pre>
         <div class="editor-highlight-layer" id="editor-highlight-layer" aria-hidden="true"></div>
+        <div class="editor-diagnostic-layer" id="editor-diagnostic-layer" aria-hidden="true"></div>
         <div class="editor-inlay-layer" id="editor-inlay-layer" aria-hidden="true"></div>
         <div class="editor-ghost-layer" id="editor-ghost-layer" aria-hidden="true"></div>
         <div class="editor-codelens-layer" id="editor-codelens-layer" aria-hidden="true"></div>
@@ -3007,6 +3016,7 @@ function openInEditor(code,lang){
   if(typeof clearEditorInlineCompletions==='function')clearEditorInlineCompletions();
   if(typeof clearEditorCodeLenses==='function')clearEditorCodeLenses();
   if(typeof clearEditorDocumentHighlights==='function')clearEditorDocumentHighlights();
+  if(typeof clearEditorDiagnostics==='function')clearEditorDiagnostics();
   if(typeof clearEditorSemanticTokens==='function')clearEditorSemanticTokens();
   if(typeof clearEditorFoldingRanges==='function')clearEditorFoldingRanges();
   if(typeof clearEditorDocumentColors==='function')clearEditorDocumentColors();
@@ -3018,6 +3028,7 @@ function openInEditor(code,lang){
   if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(220);
   if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(260);
   if(typeof scheduleEditorDocumentHighlights==='function')scheduleEditorDocumentHighlights(280);
+  if(typeof scheduleEditorDiagnostics==='function')scheduleEditorDiagnostics(300);
   if(typeof scheduleEditorSemanticTokens==='function')scheduleEditorSemanticTokens(300);
   if(typeof scheduleEditorFoldingRanges==='function')scheduleEditorFoldingRanges(360);
   if(typeof scheduleEditorDocumentColors==='function')scheduleEditorDocumentColors(420);
@@ -3916,6 +3927,7 @@ function setEditorLanguage(lang){
   if(configBits.length)bits.push('Config: '+configBits.join(', '));
   $('status-language').title=bits.filter(Boolean).join(' · ');
   if(typeof clearEditorDocumentHighlights==='function')clearEditorDocumentHighlights();
+  if(typeof clearEditorDiagnostics==='function')clearEditorDiagnostics();
   if(typeof clearEditorSemanticTokens==='function')clearEditorSemanticTokens();
   if(typeof clearEditorFoldingRanges==='function')clearEditorFoldingRanges();
   if(typeof clearEditorDocumentColors==='function')clearEditorDocumentColors();
@@ -3924,6 +3936,7 @@ function setEditorLanguage(lang){
   if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(260);
   if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(320);
   if(typeof scheduleEditorDocumentHighlights==='function')scheduleEditorDocumentHighlights(340);
+  if(typeof scheduleEditorDiagnostics==='function')scheduleEditorDiagnostics(350);
   if(typeof scheduleEditorSemanticTokens==='function')scheduleEditorSemanticTokens(360);
   if(typeof scheduleEditorFoldingRanges==='function')scheduleEditorFoldingRanges(420);
   if(typeof scheduleEditorDocumentColors==='function')scheduleEditorDocumentColors(460);
@@ -3944,6 +3957,7 @@ function syncEditorSyntaxScroll(){
   if(typeof renderEditorInlayHints==='function')renderEditorInlayHints(_editorInlayHints);
   if(typeof renderEditorInlineCompletion==='function')renderEditorInlineCompletion();
   if(typeof renderEditorDocumentHighlights==='function')renderEditorDocumentHighlights(_editorDocumentHighlights);
+  if(typeof renderEditorDiagnostics==='function')renderEditorDiagnostics(_editorDiagnostics);
   if(typeof renderEditorDocumentColors==='function')renderEditorDocumentColors(_editorDocumentColors);
   if(typeof renderEditorCodeLenses==='function')renderEditorCodeLenses(_editorCodeLenses);
 }
@@ -4006,6 +4020,8 @@ async function editorUndo(){
   if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(360);
   if(typeof clearEditorDocumentHighlights==='function')clearEditorDocumentHighlights();
   if(typeof scheduleEditorDocumentHighlights==='function')scheduleEditorDocumentHighlights(400);
+  if(typeof clearEditorDiagnostics==='function')clearEditorDiagnostics();
+  if(typeof scheduleEditorDiagnostics==='function')scheduleEditorDiagnostics(410);
   if(typeof clearEditorSemanticTokens==='function')clearEditorSemanticTokens();
   if(typeof scheduleEditorSemanticTokens==='function')scheduleEditorSemanticTokens(420);
   if(typeof clearEditorFoldingRanges==='function')clearEditorFoldingRanges();
@@ -4033,6 +4049,8 @@ async function editorRedo(){
   if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(360);
   if(typeof clearEditorDocumentHighlights==='function')clearEditorDocumentHighlights();
   if(typeof scheduleEditorDocumentHighlights==='function')scheduleEditorDocumentHighlights(400);
+  if(typeof clearEditorDiagnostics==='function')clearEditorDiagnostics();
+  if(typeof scheduleEditorDiagnostics==='function')scheduleEditorDiagnostics(410);
   if(typeof clearEditorSemanticTokens==='function')clearEditorSemanticTokens();
   if(typeof scheduleEditorSemanticTokens==='function')scheduleEditorSemanticTokens(420);
   if(typeof clearEditorFoldingRanges==='function')clearEditorFoldingRanges();
@@ -4066,6 +4084,8 @@ function _editorInputWithUndo(e){
   scheduleEditorCodeLenses();
   clearEditorDocumentHighlights();
   scheduleEditorDocumentHighlights();
+  clearEditorDiagnostics();
+  scheduleEditorDiagnostics();
   clearEditorSemanticTokens();
   scheduleEditorSemanticTokens();
   clearEditorFoldingRanges();
@@ -4083,6 +4103,7 @@ let _editorSignatureRequest=0;
 let _editorCodeActions=[],_editorCodeActionIndex=0,_editorCodeActionRequest=0;
 let _editorDefinitionRequest=0;
 let _editorDocumentHighlights=[],_editorDocumentHighlightRequest=0,_editorDocumentHighlightTimer=null,_editorDocumentHighlightContentLength=-1;
+let _editorDiagnostics=[],_editorDiagnosticRequest=0,_editorDiagnosticTimer=null,_editorDiagnosticContentLength=-1;
 let _editorReferences=[],_editorReferenceIndex=0,_editorReferencesRequest=0;
 let _editorReferenceGroups=[],_editorLocationPeekLabel='';
 let _editorHierarchyMode='',_editorHierarchyDirection='',_editorHierarchyRoot=null,_editorHierarchyRows=[],_editorHierarchyIndex=0,_editorHierarchyRequest=0;
@@ -5401,6 +5422,8 @@ function editorApplyTextEdits(edits){
   scheduleEditorInlineCompletions(240);
   clearEditorCodeLenses();
   scheduleEditorCodeLenses(420);
+  clearEditorDiagnostics();
+  scheduleEditorDiagnostics(440);
   clearEditorDocumentColors();
   scheduleEditorDocumentColors(460);
   return true;
@@ -6207,6 +6230,108 @@ async function requestEditorDocumentHighlights(quiet){
 function scheduleEditorDocumentHighlights(delay){
   clearTimeout(_editorDocumentHighlightTimer);
   _editorDocumentHighlightTimer=setTimeout(()=>requestEditorDocumentHighlights(true),delay==null?360:delay);
+}
+function editorDiagnosticSeverityValue(severity){
+  if(typeof severity==='number'&&Number.isFinite(severity))return Math.max(0,Math.min(3,Math.floor(severity)));
+  const value=String(severity||'').toLowerCase();
+  if(value==='error')return 0;
+  if(value==='warning'||value==='warn')return 1;
+  if(value==='information'||value==='info')return 2;
+  if(value==='hint')return 3;
+  return 2;
+}
+function editorDiagnosticSeverityLabel(severity){
+  return ['error','warning','info','hint'][editorDiagnosticSeverityValue(severity)]||'info';
+}
+function normalizeEditorDiagnostic(item){
+  if(!item||typeof item!=='object'||!item.range||!item.range.start)return null;
+  const range={start:item.range.start,end:item.range.end||item.range.start};
+  const message=String(item.message||'').trim();
+  if(!message)return null;
+  return {
+    range,
+    message,
+    severity:editorDiagnosticSeverityValue(item.severity),
+    source:item.source==null?'':String(item.source),
+    code:item.code,
+    uri:item.uri,
+    file:item.file
+  };
+}
+function editorDiagnosticRangeIntersects(diagnosticRange,targetRange){
+  if(!diagnosticRange||!diagnosticRange.start||!targetRange||!targetRange.start)return false;
+  const diagEnd=diagnosticRange.end||diagnosticRange.start;
+  const targetEnd=targetRange.end||targetRange.start;
+  const targetEmpty=editorPositionCompare(targetRange.start,targetEnd)===0;
+  if(targetEmpty){
+    if(editorPositionInRange(targetRange.start,diagnosticRange))return true;
+    return Number(targetRange.start.line)===Number(diagnosticRange.start.line);
+  }
+  return editorPositionCompare(diagEnd,targetRange.start)>=0&&editorPositionCompare(diagnosticRange.start,targetEnd)<=0;
+}
+function editorDiagnosticsForRange(range){
+  const contentLength=String(ed&&ed.value||'').length;
+  if(_editorDiagnosticContentLength!==contentLength)return [];
+  const target=range||editorSelectedRangePayload();
+  return (_editorDiagnostics||[])
+    .filter(diag=>diag&&editorDiagnosticRangeIntersects(diag.range,target))
+    .map(diag=>Object.assign({},diag));
+}
+function clearEditorDiagnostics(){
+  _editorDiagnosticRequest++;
+  clearTimeout(_editorDiagnosticTimer);
+  _editorDiagnostics=[];_editorDiagnosticContentLength=-1;
+  const layer=$('editor-diagnostic-layer');if(layer)layer.innerHTML='';
+}
+function renderEditorDiagnostics(diagnostics){
+  const layer=$('editor-diagnostic-layer'),ta=$('editor-text'),wrap=$('editor-container');
+  if(!layer||!ta||!wrap)return;
+  layer.innerHTML='';
+  if(wrap.style.display==='none'||wrap.offsetParent===null||!Array.isArray(diagnostics)||!diagnostics.length)return;
+  if(_editorDiagnosticContentLength!==String(ta.value||'').length)return;
+  const style=getComputedStyle(ta),lineHeight=parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.5;
+  const fontSize=parseFloat(style.fontSize)||13,charWidth=fontSize*.62;
+  const paddingTop=parseFloat(style.paddingTop)||8,paddingLeft=parseFloat(style.paddingLeft)||12;
+  const lines=String(ta.value||'').split('\n'),maxTop=wrap.clientHeight+lineHeight,maxLeft=layer.clientWidth||wrap.clientWidth;
+  diagnostics.slice(0,500).forEach(item=>{
+    const diag=normalizeEditorDiagnostic(item);if(!diag)return;
+    const start=diag.range.start,end=diag.range.end||start;
+    const startLine=Math.max(0,Number(start.line)||0),endLine=Math.min(lines.length-1,Math.max(startLine,Number(end.line)||0));
+    for(let line=startLine;line<=endLine;line++){
+      const lineText=lines[line]||'';
+      const from=line===startLine?Math.max(0,Number(start.character)||0):0;
+      let to=line===endLine?Math.max(from,Number(end.character)||0):lineText.length;
+      to=Math.min(Math.max(to,from+1),Math.max(lineText.length,from+1));
+      const top=paddingTop+line*lineHeight+lineHeight-3-ta.scrollTop;
+      const left=paddingLeft+from*charWidth-ta.scrollLeft;
+      const width=Math.max(7,(to-from)*charWidth);
+      if(top<-4||top>maxTop||left+width<0||left>maxLeft)return;
+      const el=document.createElement('span');
+      el.className='editor-diagnostic-marker severity-'+diag.severity;
+      el.title=(diag.source?diag.source+': ':'')+diag.message;
+      el.style.top=top+'px';el.style.left=Math.max(0,left)+'px';
+      el.style.width=Math.min(width,maxLeft-Math.max(0,left))+'px';
+      layer.appendChild(el);
+    }
+  });
+}
+async function requestEditorDiagnostics(quiet){
+  const wrap=$('editor-container');
+  if(!ed||!wrap||wrap.style.display==='none')return;
+  const requestId=++_editorDiagnosticRequest;
+  const contentSnapshot=String(ed.value||''),contentLength=contentSnapshot.length;
+  const res=await call('editor_language_provider',editorProviderPayload('diagnostics'));
+  if(requestId!==_editorDiagnosticRequest||contentSnapshot!==String(ed.value||''))return;
+  if(res&&res.error){_editorDiagnostics=[];_editorDiagnosticContentLength=-1;renderEditorDiagnostics([]);if(!quiet)setStatus('Diagnostics failed: '+res.error);return}
+  _editorDiagnostics=(res&&res.ok&&Array.isArray(res.diagnostics)?res.diagnostics:[])
+    .map(normalizeEditorDiagnostic).filter(Boolean);
+  _editorDiagnosticContentLength=contentLength;
+  renderEditorDiagnostics(_editorDiagnostics);
+  if(!quiet)setStatus(_editorDiagnostics.length+' problem'+(_editorDiagnostics.length===1?'':'s'));
+}
+function scheduleEditorDiagnostics(delay){
+  clearTimeout(_editorDiagnosticTimer);
+  _editorDiagnosticTimer=setTimeout(()=>requestEditorDiagnostics(true),delay==null?650:delay);
 }
 function isWorkspaceSymbolPickerOpen(){
   const box=$('workspace-symbol-palette');return !!(box&&box.classList.contains('open'));
@@ -7100,7 +7225,10 @@ async function applyEditorCodeAction(action){
 }
 async function requestEditorCodeActions(quiet){
   const requestId=++_editorCodeActionRequest,position=editorPositionFromOffset(ed.value,ed.selectionStart);
-  const res=await call('editor_language_provider',editorProviderPayload('codeActions',{range:editorSelectedRangePayload(),itemResolveCount:0}));
+  const range=editorSelectedRangePayload();
+  const res=await call('editor_language_provider',editorProviderPayload('codeActions',{
+    range,itemResolveCount:0,triggerKind:1,diagnostics:editorDiagnosticsForRange(range)
+  }));
   if(requestId!==_editorCodeActionRequest)return;
   if(res&&res.error){closeEditorCodeActions();if(!quiet)setStatus('Code actions failed: '+res.error);return}
   const actions=(res&&res.ok&&Array.isArray(res.actions)?res.actions:[]).filter(action=>!!action);
@@ -7132,7 +7260,7 @@ ed.addEventListener('drop',handleEditorDocumentDrop);
 ed.addEventListener('click',e=>{editorCancelSnippetSession(false);closeEditorDropPasteOptions();updateCursorPos();renderEditorInlineCompletion();scheduleEditorDocumentHighlights();scheduleEditorLinkedEditingRanges();if(e.ctrlKey||e.metaKey){requestEditorDocumentLinks(true,true);return}scheduleEditorHover()});
 ed.addEventListener('dblclick',()=>editorSelectWordAtCursor());
 ed.addEventListener('keyup',()=>{updateCursorPos();renderEditorInlineCompletion();scheduleEditorDocumentHighlights();scheduleEditorLinkedEditingRanges();scheduleEditorHover()});
-ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();renderEditorInlayHints(_editorInlayHints);renderEditorDocumentHighlights(_editorDocumentHighlights);if(_editorSemanticTokensRangeActive)scheduleEditorSemanticTokens(260);updateCursorPos();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorDropPasteOptions();closeEditorReferences();closeEditorHierarchy();closeEditorLinks();closeEditorColorPresentationMenu()});
+ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();renderEditorInlayHints(_editorInlayHints);renderEditorDocumentHighlights(_editorDocumentHighlights);renderEditorDiagnostics(_editorDiagnostics);if(_editorSemanticTokensRangeActive)scheduleEditorSemanticTokens(260);updateCursorPos();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorDropPasteOptions();closeEditorReferences();closeEditorHierarchy();closeEditorLinks();closeEditorColorPresentationMenu()});
 ed.addEventListener('keydown',function(e){
   if(handleEditorDropPasteOptionsKey(e))return;
   if(handleEditorLinksKey(e))return;
@@ -8771,26 +8899,57 @@ document.querySelectorAll('.ptab').forEach(t=>t.addEventListener('click',functio
   if(panel==='problems')_refreshProblems();
   _saveLayoutImmediate();
 }));
+function editorProblemRowsFromDiagnostics(diagnostics){
+  const tab=activeEditorTab();
+  return (Array.isArray(diagnostics)?diagnostics:[]).map(item=>{
+    const diag=normalizeEditorDiagnostic(item);
+    if(!diag)return null;
+    const start=(diag.range&&diag.range.start)||{};
+    return Object.assign({},diag,{
+      severity:editorDiagnosticSeverityLabel(diag.severity),
+      file:diag.file||tab.filePath||tab.name||editorFileName||'untitled',
+      line:(Number(start.line)||0)+1,
+      character:(Number(start.character)||0)+1
+    });
+  }).filter(Boolean);
+}
+function renderProblemsRows(rows){
+  const el=$('problems-content');if(!el)return;
+  const badge=document.querySelector('.ptab[data-ptab="problems"] .count');
+  const count=Array.isArray(rows)?rows.length:0;
+  if(badge)badge.textContent=count;
+  if(!count){el.style.color='var(--fg-dim)';el.textContent='No problems detected.';return}
+  el.innerHTML='';el.style.color='';
+  rows.forEach(d=>{
+    const row=document.createElement('div');row.style.padding='2px 8px';
+    const sev=editorDiagnosticSeverityLabel(d.severity);
+    const color=sev==='error'?'var(--fg-error)':sev==='warning'?'var(--fg-warning)':sev==='info'?'var(--fg-accent)':'var(--fg-dim)';
+    const location=d.file?String(d.file)+(d.line?':'+d.line:''):'';
+    row.innerHTML='<span style="color:'+color+'">'+esc(sev.toUpperCase())+'</span> '
+      +(location?'<span style="color:var(--fg-accent)">'+esc(location)+'</span> ':'')+esc(d.message||'');
+    row.title=(d.source?String(d.source)+': ':'')+String(d.message||'');
+    row.onmousedown=()=>{if(d.range&&d.range.start){ed.focus();const off=editorOffsetFromPosition(ed.value,d.range.start);ed.selectionStart=ed.selectionEnd=off;updateCursorPos();renderEditorDiagnostics(_editorDiagnostics)}};
+    el.appendChild(row);
+  });
+}
 // PANEL-001: Populate the Problems panel from backend diagnostics or editor analysis
 async function _refreshProblems(){
   const el=$('problems-content');if(!el)return;
   el.style.color='var(--fg-dim)';el.textContent='Checking...';
+  const currentRows=editorProblemRowsFromDiagnostics(_editorDiagnostics);
+  if(currentRows.length){renderProblemsRows(currentRows);return}
+  const wrap=$('editor-container');
+  if(wrap&&wrap.style.display!=='none'&&typeof requestEditorDiagnostics==='function'){
+    await requestEditorDiagnostics(true);
+    const refreshedRows=editorProblemRowsFromDiagnostics(_editorDiagnostics);
+    if(refreshedRows.length){renderProblemsRows(refreshedRows);return}
+  }
   try{
     const r=await call('get_diagnostics');
     if(r&&Array.isArray(r.diagnostics)&&r.diagnostics.length>0){
-      el.innerHTML='';el.style.color='';
-      const badge=document.querySelector('.ptab[data-ptab="problems"] .count');
-      if(badge)badge.textContent=r.diagnostics.length;
-      r.diagnostics.forEach(d=>{
-        const row=document.createElement('div');row.style.padding='2px 8px';
-        const sev=d.severity||'info';
-        const color=sev==='error'?'var(--fg-error)':sev==='warning'?'var(--fg-warning)':'var(--fg-dim)';
-        row.innerHTML='<span style="color:'+color+'">'+esc(sev.toUpperCase())+'</span> '
-          +(d.file?'<span style="color:var(--fg-accent)">'+esc(d.file)+(d.line?':'+d.line:'')+'</span> ':'')+esc(d.message||'');
-        el.appendChild(row);
-      });
-    }else{el.style.color='var(--fg-dim)';el.textContent='No problems detected.'}
-  }catch(e){el.style.color='var(--fg-dim)';el.textContent='No problems detected.'}
+      renderProblemsRows(r.diagnostics);
+    }else{renderProblemsRows([])}
+  }catch(e){renderProblemsRows([])}
 }
 
 // ── Right sidebar: dynamic provider tabs ──
@@ -12327,6 +12486,7 @@ function closeEditorTransientUi(){
   if(typeof clearEditorInlayHints==='function')clearEditorInlayHints();
   if(typeof clearEditorInlineCompletions==='function')clearEditorInlineCompletions();
   if(typeof clearEditorCodeLenses==='function')clearEditorCodeLenses();
+  if(typeof clearEditorDiagnostics==='function')clearEditorDiagnostics();
   if(typeof clearEditorSemanticTokens==='function')clearEditorSemanticTokens();
   if(typeof clearEditorFoldingRanges==='function')clearEditorFoldingRanges();
   if(typeof clearEditorDocumentColors==='function')clearEditorDocumentColors();
@@ -12365,6 +12525,7 @@ function switchTab(id){
     if(typeof clearEditorInlayHints==='function')clearEditorInlayHints();
     if(typeof clearEditorInlineCompletions==='function')clearEditorInlineCompletions();
     if(typeof clearEditorCodeLenses==='function')clearEditorCodeLenses();
+    if(typeof clearEditorDiagnostics==='function')clearEditorDiagnostics();
     if(typeof clearEditorSemanticTokens==='function')clearEditorSemanticTokens();
     if(typeof clearEditorFoldingRanges==='function')clearEditorFoldingRanges();
     if(typeof clearEditorDocumentColors==='function')clearEditorDocumentColors();
@@ -12373,6 +12534,7 @@ function switchTab(id){
     if(typeof scheduleEditorInlayHints==='function')scheduleEditorInlayHints(160);
     if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(220);
     if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(280);
+    if(typeof scheduleEditorDiagnostics==='function')scheduleEditorDiagnostics(320);
     if(typeof scheduleEditorSemanticTokens==='function')scheduleEditorSemanticTokens(340);
     if(typeof scheduleEditorFoldingRanges==='function')scheduleEditorFoldingRanges(380);
     if(typeof scheduleEditorDocumentColors==='function')scheduleEditorDocumentColors(440);

@@ -398,7 +398,7 @@ def test_app_settings_parity() -> None:
         "list_workspace_tree", "workspace_file_decorations",
         "open_workspace_file",
         "apply_workspace_text_edits", "open_external_uri",
-        "editor_language_provider",
+        "editor_language_provider", "get_diagnostics",
         "get_chat_controls", "set_active_provider", "set_active_model",
         "set_active_mode", "set_provider_model", "set_chat_provider",
         "set_chat_controls",
@@ -444,7 +444,8 @@ def test_app_settings_parity() -> None:
         InlineValueText, InlineValueVariableLookup,
         InlineValueEvaluatableExpression,
         CallHierarchyOutgoingCall, TypeHierarchyItem, Uri,
-        DocumentDropOrPasteEditKind, DocumentDropEdit, DocumentPasteEdit,
+        Diagnostic, DocumentDropOrPasteEditKind, DocumentDropEdit,
+        DocumentPasteEdit,
     )
     provider_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     provider_api._extension_scan_dirs = lambda: []
@@ -504,6 +505,7 @@ def test_app_settings_parity() -> None:
 
         def provideCodeActions(self, document, range, context, token):
             action = CodeAction("Replace buffer", "quickfix")
+            action.diagnostics = context.get("diagnostics", [])
             edit = WorkspaceEdit()
             edit.replace(document.uri, Range(Position(0, 0), Position(0, 6)),
                          "fixed")
@@ -858,6 +860,17 @@ def test_app_settings_parity() -> None:
         with open(provider_path, "w", encoding="utf-8") as fh:
             fh.write("disk")
         editor_provider.workspace_uri = Uri.file(provider_path)
+        editor_diagnostics = lang_api["createDiagnosticCollection"](
+            "editor-selftest")
+        editor_diagnostics.set(Uri.file(provider_path), [
+            Diagnostic(
+                Range(Position(0, 1), Position(0, 5)),
+                "editor boom",
+                0,
+                "editor-selftest",
+                "editor-code",
+            )
+        ])
         provider_payload = {
             "filePath": provider_path,
             "language": "python",
@@ -871,11 +884,26 @@ def test_app_settings_parity() -> None:
             dict(provider_payload, kind="hover"))
         signature_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="signatureHelp", triggerCharacter="("))
+        diagnostics_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="diagnostics"))
         code_action_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="codeActions", range={
                 "start": {"line": 0, "character": 0},
                 "end": {"line": 0, "character": 6},
             }, itemResolveCount=20))
+        code_action_context_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="codeActions", range={
+                "start": {"line": 0, "character": 0},
+                "end": {"line": 0, "character": 6},
+            }, itemResolveCount=0, triggerKind=1, diagnostics=[{
+                "range": {
+                    "start": {"line": 0, "character": 2},
+                    "end": {"line": 0, "character": 4},
+                },
+                "message": "frontend boom",
+                "severity": 1,
+                "source": "frontend-selftest",
+            }]))
         definition_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="definition"))
         type_definition_result = provider_api.editor_language_provider(
@@ -1033,6 +1061,12 @@ def test_app_settings_parity() -> None:
                and signature_result.get("signatureHelp", {})
                .get("signatures", [{}])[0].get("parameters", [{}])[0]
                .get("documentation") == "value docs")
+        _check("editor_language_provider returns document diagnostics",
+               diagnostics_result.get("ok") is True
+               and diagnostics_result.get("diagnostics", [{}])[0]
+               .get("message") == "editor boom"
+               and diagnostics_result.get("diagnostics", [{}])[0]
+               .get("range", {}).get("start", {}).get("character") == 1)
         action = code_action_result.get("actions", [{}])[0]
         _check("editor_language_provider serializes code actions",
                code_action_result.get("ok") is True
@@ -1042,6 +1076,15 @@ def test_app_settings_parity() -> None:
                and action.get("command", {}).get("arguments") == ["resolved-ok"]
                and action.get("isPreferred") is True
                and editor_provider.seen_code_action_resolves == 1)
+        context_action = code_action_context_result.get("actions", [{}])[0]
+        context_messages = [
+            item.get("message")
+            for item in context_action.get("diagnostics", [])
+            if isinstance(item, dict)
+        ]
+        _check("editor_language_provider forwards diagnostics to code actions",
+               "editor boom" in context_messages
+               and "frontend boom" in context_messages)
         definition = definition_result.get("definitions", [{}])[0]
         _check("editor_language_provider serializes definitions",
                definition_result.get("ok") is True
@@ -2457,9 +2500,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function editorSignatureParameterLabelText(signature,activeParameter)" in html
            and "function editorProviderRenderDocs(container,value)" in html
            and "editor-signature-doc-title" in html
-           and "function requestEditorCodeActions(quiet)" in html
-           and "itemResolveCount:0" in html
-           and "function showEditorCodeActions(actions,position)" in html
+            and "function requestEditorCodeActions(quiet)" in html
+            and "itemResolveCount:0" in html
+            and "id=\"editor-diagnostic-layer\"" in html
+            and "function requestEditorDiagnostics(quiet)" in html
+            and "editorProviderPayload('diagnostics'" in html
+            and "function editorDiagnosticsForRange(range)" in html
+            and "diagnostics:editorDiagnosticsForRange(range)" in html
+            and "function renderProblemsRows(rows)" in html
+            and "function showEditorCodeActions(actions,position)" in html
            and "function codeActionKindText(kind)" in html
            and "async function resolveEditorCodeAction(action)" in html
            and "editorProviderPayload('codeActionResolve'" in html
@@ -6885,6 +6934,18 @@ def test_vscode_api() -> None:
             "vscode.executeCodeActionProvider", doc.uri,
             Range(Position(0, 0), Position(0, 1)),
             api["CodeActionKind"]["QuickFix"], 1)
+        actions_with_incoming_diagnostics = api["commands"]["executeCommand"](
+            "vscode.executeCodeActionProvider", doc.uri,
+            Range(Position(0, 0), Position(0, 1)),
+            api["CodeActionKind"]["QuickFix"], 0, [{
+                "range": {
+                    "start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 1},
+                },
+                "message": "frontend boom",
+                "severity": api["DiagnosticSeverity"]["Warning"],
+                "source": "frontend-selftest",
+            }], 1)
         format_edits = api["commands"]["executeCommand"](
             "vscode.executeFormatDocumentProvider", doc.uri, {"tabSize": 4})
         range_format_edits = api["commands"]["executeCommand"](
@@ -7077,6 +7138,12 @@ def test_vscode_api() -> None:
                and actions[0].diagnostics[0].message == "boom"
                and actions[0].command["title"] == "Fix Boom"
                and code_action_provider.resolved == 1)
+        _check("executeCodeActionProvider merges incoming diagnostics context",
+               actions_with_incoming_diagnostics
+               and sorted(
+                   item.message
+                   for item in actions_with_incoming_diagnostics[0].diagnostics)
+               == ["boom", "frontend boom"])
         _check("executeFormatDocumentProvider invokes formatting providers",
                format_edits and format_edits[0]["newText"] == "fmt"
                and any(edit.get("newText") == "rng"
@@ -12239,6 +12306,13 @@ module.exports = { activate, deactivate };
                     "vscode.executeCodeActionProvider",
                     node_uri, Range(Position(0, 0), Position(0, 1)),
                     "quickfix", 1)
+                node_editor_diagnostics = api.editor_language_provider({
+                    "kind": "diagnostics",
+                    "filePath": node_provider_sample,
+                    "language": "python",
+                    "content": "print('node provider')\n",
+                    "position": {"line": 0, "character": 1},
+                })
                 node_format_edits = api._ext_host.commands.execute(
                     "vscode.executeFormatDocumentProvider",
                     node_uri, {"tabSize": 2})
@@ -12922,6 +12996,11 @@ module.exports = { activate, deactivate };
                        == "Node Fix"
                        and node_actions[0].get("command", {})
                        .get("arguments", [{}])[0].get("id") == "action-root")
+                _check("editor_language_provider returns Node diagnostics",
+                       node_editor_diagnostics.get("ok") is True
+                       and (node_editor_diagnostics.get(
+                           "diagnostics") or [{}])[0].get("message")
+                       == "node diagnostic quickfix")
                 _check("editor_language_provider resolves selected Node code action",
                        node_code_action_editor_resolve.get("ok") is True
                        and node_code_action_editor_resolve.get("action", {})
