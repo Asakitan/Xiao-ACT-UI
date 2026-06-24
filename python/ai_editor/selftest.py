@@ -1421,6 +1421,8 @@ def test_app_settings_parity() -> None:
         "layout": {"sidebarVisible": True, "editorVisible": True, "chatVisible": True, "panelHeight": "320px"},
         "editor": {"tabSize": 2, "insertSpaces": False},
         "files": {
+            "autoSave": "afterDelay",
+            "autoSaveDelay": 1500,
             "trimTrailingWhitespace": True,
             "insertFinalNewline": False,
             "trimFinalNewlines": True,
@@ -1476,9 +1478,13 @@ def test_app_settings_parity() -> None:
            and loaded.get("editor", {}).get("insertSpaces") is False)
     _check("files save participant settings round-trip",
            stored.get("files", {}).get("trimTrailingWhitespace") is True
+           and stored.get("files", {}).get("autoSave") == "afterDelay"
+           and stored.get("files", {}).get("autoSaveDelay") == 1500
            and stored.get("files", {}).get("insertFinalNewline") is False
            and stored.get("files", {}).get("trimFinalNewlines") is True
            and loaded.get("files", {}).get("trimTrailingWhitespace") is True
+           and loaded.get("files", {}).get("autoSave") == "afterDelay"
+           and loaded.get("files", {}).get("autoSaveDelay") == 1500
            and loaded.get("files", {}).get("insertFinalNewline") is False
            and loaded.get("files", {}).get("trimFinalNewlines") is True)
 
@@ -2388,11 +2394,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function editorEffectiveSection(section,language)" in html
            and "function editorLanguageOverrideSettings(language)" in html
            and 'id="s-files-trim-trailing-whitespace"' in html
+           and 'id="s-files-auto-save"' in html
+           and 'id="s-files-auto-save-delay"' in html
            and 'id="s-files-insert-final-newline"' in html
            and 'id="s-files-trim-final-newlines"' in html
            and 'id="s-files-lang-override-enabled"' in html
            and 'id="s-files-lang-trim-final-newlines"' in html
            and "function filesEffectiveSection(language)" in html
+           and "function filesAutoSaveMode(files)" in html
+           and "function scheduleEditorAutoSave()" in html
            and "function editorApplyFilesSaveParticipantsToText(value,files)" in html
            and "entry['editor.defaultFormatter']" in html
            and "entry['editor.tabSize']" in html
@@ -2670,7 +2680,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "editorProviderPayload('inlineCompletion'" in html
            and "function editorFormatOptions()" in html
            and "editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,linkedEditing:false,codeActionsOnSave:{},tabSize:4,insertSpaces:true}" in html
-           and "files:{trimTrailingWhitespace:false,insertFinalNewline:false,trimFinalNewlines:false}" in html
+           and "files:{autoSave:'off',autoSaveDelay:1000,trimTrailingWhitespace:false,insertFinalNewline:false,trimFinalNewlines:false}" in html
            and "defaultFormatter:''" in html
            and "linkedEditing:false" in html
            and "formatOnSave:false" in html
@@ -2692,7 +2702,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function editorApplyFilesSaveParticipantsToText(value,files)" in html
            and "function applyEditorFilesSaveParticipants()" in html
            and "function editorCodeActionsOnSaveKinds()" in html
-           and "function runEditorSaveParticipants()" in html
+           and "async function runEditorSaveParticipants(options)" in html
            and "function runEditorCodeActionsOnSave()" in html
            and "async function applyEditorCodeActionForSave(action)" in html
            and "async function fetchEditorCodeActionsForKind(only,range)" in html
@@ -2711,6 +2721,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "setCheckedValue('s-editor-organize-imports-on-save',editorKnownCodeActionsOnSave(editor.codeActionsOnSave,'source.organizeImports'))" in html
            and "setCheckedValue('s-editor-fix-all-on-save',editorKnownCodeActionsOnSave(editor.codeActionsOnSave,'source.fixAll'))" in html
            and "setCheckedValue('s-files-trim-trailing-whitespace',files.trimTrailingWhitespace===true)" in html
+           and "setInputValue('s-files-auto-save',filesAutoSaveMode(files))" in html
+           and "setInputValue('s-files-auto-save-delay',filesAutoSaveDelay(files))" in html
            and "setCheckedValue('s-files-insert-final-newline',files.insertFinalNewline===true)" in html
            and "setCheckedValue('s-files-trim-final-newlines',files.trimFinalNewlines===true)" in html
            and "setInputValue('s-editor-default-formatter',editor.defaultFormatter||editor.default_formatter||'')" in html
@@ -2720,8 +2732,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "linkedEditing:readCheckedValue('s-editor-linked-editing')" in html
            and "codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)" in html
            and "trimTrailingWhitespace:readCheckedValue('s-files-trim-trailing-whitespace')" in html
+           and "autoSave:filesAutoSaveMode({autoSave:readInputValue('s-files-auto-save')})" in html
+           and "autoSaveDelay:filesAutoSaveDelay({autoSaveDelay:readNumberValue('s-files-auto-save-delay',1000,true)})" in html
            and "insertFinalNewline:readCheckedValue('s-files-insert-final-newline')" in html
            and "trimFinalNewlines:readCheckedValue('s-files-trim-final-newlines')" in html
+           and "if(!opts.autoSave&&editorFormatOnSaveEnabled())" in html
+           and "if(opts.autoSave&&!(tab&&tab.filePath))" in html
            and "changed=applyEditorFilesSaveParticipants()||changed" in html
            and "await runEditorSaveParticipants();" in html
            and "saveTextTabAs(tab,{skipSaveParticipants:true})" in html
@@ -2849,6 +2865,8 @@ def test_phase1_ai_editor_regressions() -> None:
             "editorInsertSpaces",
             "editorFormatOptions",
             "filesEffectiveSection",
+            "filesAutoSaveMode",
+            "filesAutoSaveDelay",
             "editorPreferredEol",
             "editorApplyFilesSaveParticipantsToText",
             "editorSaveSettingEnabled",
@@ -2894,6 +2912,9 @@ assert(filesEffectiveSection().trimTrailingWhitespace === true && filesEffective
 assert(editorApplyFilesSaveParticipantsToText("a  \r\nb\t\r\n\r\n", filesEffectiveSection()) === "a\r\nb\r\n", "files save participant trims final newlines and preserves CRLF final newline");
 assert(editorApplyFilesSaveParticipantsToText("   ", { trimTrailingWhitespace: false, insertFinalNewline: true }) === "   ", "final newline skips whitespace-only last line");
 assert(editorApplyFilesSaveParticipantsToText("a\n\n\n", { trimFinalNewlines: true }) === "a\n", "trim final newlines leaves one final newline");
+assert(filesAutoSaveMode({ autoSave: "afterDelay" }) === "afterDelay", "auto save afterDelay accepted");
+assert(filesAutoSaveMode({ autoSave: "bogus" }) === "off", "invalid auto save mode falls back to off");
+assert(filesAutoSaveDelay({ autoSaveDelay: 2500 }) === 2500 && filesAutoSaveDelay({ autoSaveDelay: -1 }) === 1000, "auto save delay normalized");
 console.log("frontend save participant settings ok");
 """
         js_path = ""
@@ -7765,6 +7786,8 @@ def test_vscode_api() -> None:
             "mcp": {"autostart": True},
             "editor": {"formatOnSave": False, "tabSize": 4},
             "files": {
+                "autoSave": "off",
+                "autoSaveDelay": 1000,
                 "trimTrailingWhitespace": False,
                 "insertFinalNewline": False,
                 "trimFinalNewlines": False,

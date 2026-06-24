@@ -191,6 +191,8 @@ _AI_EDITOR_SECTION_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "insertSpaces": True,
     },
     "files": {
+        "autoSave": "off",
+        "autoSaveDelay": 1000,
         "trimTrailingWhitespace": False,
         "insertFinalNewline": False,
         "trimFinalNewlines": False,

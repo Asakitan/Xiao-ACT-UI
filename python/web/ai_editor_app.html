@@ -1730,6 +1730,10 @@ pre.code-block { overflow:visible; }
       <label class="settings-check"><input id="s-editor-organize-imports-on-save" type="checkbox"><span><b>Organize imports on save</b><small>Runs <code>source.organizeImports</code> before explicit saves.</small></span></label>
       <label class="settings-check"><input id="s-editor-fix-all-on-save" type="checkbox"><span><b>Fix all on save</b><small>Runs <code>source.fixAll</code> before explicit saves.</small></span></label>
       <div class="sb-group" style="padding:0;margin-top:12px">Files</div>
+      <div class="settings-grid">
+        <div><label>Auto Save</label><select id="s-files-auto-save" style="width:100%"><option value="off">off</option><option value="afterDelay">afterDelay</option><option value="onFocusChange">onFocusChange</option><option value="onWindowChange">onWindowChange</option></select></div>
+        <div><label>Auto Save Delay</label><input id="s-files-auto-save-delay" type="number" min="0" step="100" style="width:100%"></div>
+      </div>
       <label class="settings-check"><input id="s-files-trim-trailing-whitespace" type="checkbox"><span><b>Trim trailing whitespace</b><small>Matches files.trimTrailingWhitespace during explicit saves.</small></span></label>
       <label class="settings-check"><input id="s-files-insert-final-newline" type="checkbox"><span><b>Insert final newline</b><small>Matches files.insertFinalNewline during explicit saves.</small></span></label>
       <label class="settings-check"><input id="s-files-trim-final-newlines" type="checkbox"><span><b>Trim final newlines</b><small>Matches files.trimFinalNewlines during explicit saves.</small></span></label>
@@ -1944,7 +1948,7 @@ const SETTINGS_SECTION_DEFAULTS={
   terminal:{profile:'PowerShell 7 (No Profile)',shell_path:'',shell_args:[],timeout:30,output_limit:8000,auto_approve:{}},
   extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands','views','customEditors'],enabled_contributions_explicit:false,diagnostics_enabled:false},
   editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,linkedEditing:false,codeActionsOnSave:{},tabSize:4,insertSpaces:true},
-  files:{trimTrailingWhitespace:false,insertFinalNewline:false,trimFinalNewlines:false},
+  files:{autoSave:'off',autoSaveDelay:1000,trimTrailingWhitespace:false,insertFinalNewline:false,trimFinalNewlines:false},
   customization:{instructions_locations:['.sao/instructions.md','.sao/instructions'],agent_locations:['.sao/agents'],workflow_locations:['.sao/workflows'],skill_locations:['.agents/skills/.local','.claude/skills/.local'],use_agent_md:true,use_claude_md:false}
 };
 const EXTENSION_CONTRIBUTION_OPTIONS=[
@@ -7711,6 +7715,16 @@ function editorFormatOnSaveEnabled(){
 function filesEffectiveSection(language){
   return editorEffectiveSection('files',language);
 }
+function filesAutoSaveMode(files){
+  const settings=isPlainObject(files)?files:filesEffectiveSection();
+  const mode=String(settings.autoSave||'off');
+  return ['off','afterDelay','onFocusChange','onWindowChange'].includes(mode)?mode:'off';
+}
+function filesAutoSaveDelay(files){
+  const settings=isPlainObject(files)?files:filesEffectiveSection();
+  const n=Math.trunc(Number(settings.autoSaveDelay));
+  return Number.isFinite(n)&&n>=0?n:1000;
+}
 function editorPreferredEol(value){
   const text=String(value??'');
   return text.includes('\r\n')?'\r\n':'\n';
@@ -7982,13 +7996,46 @@ async function runEditorCodeActionsOnSave(){
   if(changed)setStatus('Applied code actions on save');
   return changed;
 }
-async function runEditorSaveParticipants(){
+async function runEditorSaveParticipants(options){
+  const opts=isPlainObject(options)?options:{};
   let changed=false;
-  if(editorFormatOnSaveEnabled())changed=await formatDocument({quiet:true,onSave:true})||changed;
-  changed=await runEditorCodeActionsOnSave()||changed;
+  if(!opts.autoSave&&editorFormatOnSaveEnabled())changed=await formatDocument({quiet:true,onSave:true})||changed;
+  if(!opts.autoSave)changed=await runEditorCodeActionsOnSave()||changed;
   changed=applyEditorFilesSaveParticipants()||changed;
   if(changed)saveCurrentTab();
   return changed;
+}
+let _editorAutoSaveTimer=null,_editorAutoSaveInFlight=false,_editorAutoSavePending=false;
+function clearEditorAutoSaveTimer(){
+  if(_editorAutoSaveTimer){clearTimeout(_editorAutoSaveTimer);_editorAutoSaveTimer=null}
+}
+function editorAutoSaveCandidateTab(){
+  const tab=tabs.find(t=>t.id===activeTab);
+  if(!tab||!tab.filePath||isExtensionCustomEditorTab(tab))return null;
+  return tab;
+}
+function scheduleEditorAutoSave(){
+  clearEditorAutoSaveTimer();
+  if(filesAutoSaveMode()!=='afterDelay'||!editorDirty)return;
+  if(!editorAutoSaveCandidateTab())return;
+  const delay=Math.min(Math.max(filesAutoSaveDelay(),0),600000);
+  _editorAutoSaveTimer=setTimeout(runEditorAutoSave,delay);
+}
+async function runEditorAutoSave(){
+  _editorAutoSaveTimer=null;
+  if(_editorAutoSaveInFlight){_editorAutoSavePending=true;return}
+  const tab=editorAutoSaveCandidateTab();
+  if(!tab||!editorDirty)return;
+  _editorAutoSaveInFlight=true;
+  try{
+    await saveFile({autoSave:true});
+  }finally{
+    _editorAutoSaveInFlight=false;
+    if(_editorAutoSavePending){
+      _editorAutoSavePending=false;
+      scheduleEditorAutoSave();
+    }
+  }
 }
 
 // ── Language picker ──
@@ -10513,6 +10560,8 @@ function openSettings(){
   setCheckedValue('s-editor-organize-imports-on-save',editorKnownCodeActionsOnSave(editor.codeActionsOnSave,'source.organizeImports'));
   setCheckedValue('s-editor-fix-all-on-save',editorKnownCodeActionsOnSave(editor.codeActionsOnSave,'source.fixAll'));
   const files=settingSection('files');
+  setInputValue('s-files-auto-save',filesAutoSaveMode(files));
+  setInputValue('s-files-auto-save-delay',filesAutoSaveDelay(files));
   setCheckedValue('s-files-trim-trailing-whitespace',files.trimTrailingWhitespace===true);
   setCheckedValue('s-files-insert-final-newline',files.insertFinalNewline===true);
   setCheckedValue('s-files-trim-final-newlines',files.trimFinalNewlines===true);
@@ -10772,8 +10821,9 @@ async function saveSettings(){
   const editorSettings=settingSection('editor');
   config.editor={...editorSettings,defaultFormatter:readInputValue('s-editor-default-formatter').trim(),tabSize:editorTabSize(readNumberValue('s-editor-tab-size',4,true)),insertSpaces:readCheckedValue('s-editor-insert-spaces'),formatOnSave:readCheckedValue('s-editor-format-on-save'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing'),codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)};
   saveEditorLanguageOverrideSettings();
-  config.files={...settingSection('files'),trimTrailingWhitespace:readCheckedValue('s-files-trim-trailing-whitespace'),insertFinalNewline:readCheckedValue('s-files-insert-final-newline'),trimFinalNewlines:readCheckedValue('s-files-trim-final-newlines')};
+  config.files={...settingSection('files'),autoSave:filesAutoSaveMode({autoSave:readInputValue('s-files-auto-save')}),autoSaveDelay:filesAutoSaveDelay({autoSaveDelay:readNumberValue('s-files-auto-save-delay',1000,true)}),trimTrailingWhitespace:readCheckedValue('s-files-trim-trailing-whitespace'),insertFinalNewline:readCheckedValue('s-files-insert-final-newline'),trimFinalNewlines:readCheckedValue('s-files-trim-final-newlines')};
   saveFilesLanguageOverrideSettings();
+  scheduleEditorAutoSave();
   config.customization={...settingSection('customization'),use_agent_md:readCheckedValue('s-cust-agent-md'),use_claude_md:readCheckedValue('s-cust-claude-md'),instructions_locations:readListValue('s-cust-instructions',true),agent_locations:readListValue('s-cust-agents',true),workflow_locations:readListValue('s-cust-workflows',true),skill_locations:readListValue('s-cust-skills',true)};
   await applyEditorColorTheme(readInputValue('s-color-theme')||config.color_theme||config.theme||'dark');
   await applyEditorIconTheme(readInputValue('s-file-icon-theme')||config.file_icon_theme||defaultFileIconThemeValue());
@@ -13609,6 +13659,7 @@ ed.addEventListener('input',function(){
   editorDirty=true;
   const tab=document.querySelector('.tab[data-tab-id="'+activeTab+'"]');
   if(tab&&!tab.classList.contains('dirty'))tab.classList.add('dirty');
+  scheduleEditorAutoSave();
 });
 
 // ── Enhanced Find with regex/case/word toggles ──
@@ -14089,20 +14140,25 @@ async function revertFile(){
   }
   showToast('Revert is available for extension custom editors','warning',2200);
 }
-async function saveFile(){
+async function saveFile(options){
+  const opts=isPlainObject(options)?options:{};
   const tab=tabs.find(t=>t.id===activeTab);
   if(isExtensionCustomEditorTab(tab)){
+    if(opts.autoSave)return {ok:false,skipped:true};
     await saveCustomEditorTab(tab);
     return;
   }
-  await runEditorSaveParticipants();
+  if(opts.autoSave&&!(tab&&tab.filePath))return {ok:false,skipped:true};
+  await runEditorSaveParticipants({autoSave:opts.autoSave===true});
   const content=$('editor-text').value;
   if(tab&&tab.filePath){
     const r=await call('execute_tool','editFile',JSON.stringify({path:tab.filePath,content:content}),true);
-    if(r==null){showToast('Save failed: backend unavailable','error');return}
-    if(r){try{const d=JSON.parse(r);if(d.error){showToast('Save failed: '+d.error,'error');return}}catch(e){}}
+    if(r==null){if(!opts.autoSave)showToast('Save failed: backend unavailable','error');return {ok:false,error:'backend unavailable'}}
+    if(r){try{const d=JSON.parse(r);if(d.error){if(!opts.autoSave)showToast('Save failed: '+d.error,'error');return {ok:false,error:d.error}}}catch(e){}}
     editorDirty=false;const tabEl=document.querySelector('.tab[data-tab-id="'+activeTab+'"]');if(tabEl)tabEl.classList.remove('dirty');
-    showToast('Saved: '+tab.filePath,'success',1500);
+    if(opts.autoSave)setStatus('Auto saved: '+tab.filePath);
+    else showToast('Saved: '+tab.filePath,'success',1500);
+    return {ok:true,path:tab.filePath,autoSave:opts.autoSave===true};
   }else{
     await saveTextTabAs(tab,{skipSaveParticipants:true});
   }
