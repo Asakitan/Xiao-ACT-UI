@@ -7426,6 +7426,26 @@ def test_vscode_api() -> None:
         _check("languages.setTextDocumentLanguage updates snapshots",
                changed_language_doc is language_doc
                and language_doc.languageId == "self-runtime-lang")
+        selector_doc = ns.update_text_document_snapshot(
+            "file:///workspace/src/demo.selector.py", "print(1)", "python")
+        _check("languages.match scores VS Code document selectors",
+               api["languages"]["match"]("*", selector_doc) == 5
+               and api["languages"]["match"](
+                   {"language": "*"}, selector_doc) == 5
+               and api["languages"]["match"](
+                   {"language": "python", "scheme": "file"}, selector_doc) == 10
+               and api["languages"]["match"](
+                   {"language": "python", "scheme": "untitled"}, selector_doc) == 0
+               and api["languages"]["match"](
+                   {"pattern": "**/*.{py,pyi}"}, selector_doc) == 10
+               and api["languages"]["match"](
+                   {"filenamePattern": "*.py"}, selector_doc) == 10
+               and api["languages"]["match"]([
+                   {"language": "plaintext"},
+                   {"language": "python", "pattern": "**/*.py"},
+               ], selector_doc) == 10
+               and api["languages"]["match"](
+                   {"pattern": "**/*.js"}, selector_doc) == 0)
 
         class _BadCompletionProvider:
             def provideCompletionItems(self, document, position, token, context):
@@ -11632,6 +11652,23 @@ async function activate(context) {
       progressLocation,
     };
   });
+  vscode.commands.registerCommand('selftest.node.selectorScores', uriText => {
+    const uri = typeof uriText === 'string' ? vscode.Uri.parse(uriText) : uriText;
+    const document = { languageId: 'python', uri };
+    return {
+      star: vscode.languages.match('*', document),
+      wildcardLanguage: vscode.languages.match({ language: '*' }, document),
+      exactScheme: vscode.languages.match({ language: 'python', scheme: 'file' }, document),
+      wrongScheme: vscode.languages.match({ language: 'python', scheme: 'untitled' }, document),
+      pattern: vscode.languages.match({ language: 'python', pattern: '**/node_provider.py' }, document),
+      basenamePattern: vscode.languages.match({ filenamePattern: 'node_provider.py' }, document),
+      arrayBest: vscode.languages.match([
+        { language: 'plaintext' },
+        { language: 'python', pattern: '**/*.py' },
+      ], document),
+      miss: vscode.languages.match({ language: 'python', pattern: '**/*.js' }, document),
+    };
+  });
   vscode.workspace.onDidChangeConfiguration(event => {
     configEvents.count += 1;
     configEvents.aiEditor = event.affectsConfiguration('ai_editor');
@@ -11776,6 +11813,11 @@ async function activate(context) {
     resolveCompletionItem(item, token) {
       item.documentation = 'node resolved completion docs';
       return item;
+    },
+  }, '.');
+  vscode.languages.registerCompletionItemProvider({ language: 'python', pattern: '**/node_provider.py' }, {
+    provideCompletionItems(document, position, token, context) {
+      return [new vscode.CompletionItem('nodePatternCompletion', vscode.CompletionItemKind.Text)];
     },
   }, '.');
   vscode.languages.registerHoverProvider('python', {
@@ -13944,6 +13986,8 @@ module.exports = { activate, deactivate };
                 with open(node_provider_sample, "w", encoding="utf-8") as fh:
                     fh.write("print('node provider')\n")
                 node_uri = Uri.file(node_provider_sample)
+                node_selector_scores = api._ext_host.commands.execute(
+                    "selftest.node.selectorScores", node_uri)
                 node_decoration_sample = os.path.join(
                     node_tree_tmp, "node-decoration.txt")
                 with open(node_decoration_sample, "w", encoding="utf-8") as fh:
@@ -14526,11 +14570,17 @@ module.exports = { activate, deactivate };
                 ]
                 node_completion_first = (
                     node_completion_items[0] if node_completion_items else {})
+                node_completion_target = next((
+                    item for item in node_completion_items
+                    if (
+                        item.get("label") if isinstance(item, dict)
+                        else getattr(item, "label", "")
+                    ) == "nodeCompletion"), node_completion_first)
                 node_completion_first_get = (
-                    node_completion_first.get
-                    if isinstance(node_completion_first, dict)
+                    node_completion_target.get
+                    if isinstance(node_completion_target, dict)
                     else lambda key, default=None: getattr(
-                        node_completion_first, key, default))
+                        node_completion_target, key, default))
                 node_completion_editor_resolve = api.editor_language_provider({
                     "kind": "completionResolve",
                     "filePath": node_provider_sample,
@@ -14538,8 +14588,8 @@ module.exports = { activate, deactivate };
                     "content": "print('node provider')\n",
                     "position": {"line": 0, "character": 1},
                     "item": (
-                        node_completion_first
-                        if isinstance(node_completion_first, dict)
+                        node_completion_target
+                        if isinstance(node_completion_target, dict)
                         else {}),
                 })
                 node_document_link_editor_resolve = api.editor_language_provider({
@@ -14586,6 +14636,7 @@ module.exports = { activate, deactivate };
                        node_language_registered
                        and getattr(node_completion, "isIncomplete", False) is True
                        and "nodeCompletion" in node_completion_labels
+                       and "nodePatternCompletion" in node_completion_labels
                        and bool(node_completion_first_get(
                            "_nodeCompletionHandle"))
                        and node_completion_first_get("documentation") is None
@@ -14603,6 +14654,15 @@ module.exports = { activate, deactivate };
                        and (node_completion_first_get(
                            "additionalTextEdits") or [{}])[0].get("newText")
                        == "// node completion\n")
+                _check("node host languages.match scores VS Code selectors",
+                       node_selector_scores.get("star") == 5
+                       and node_selector_scores.get("wildcardLanguage") == 5
+                       and node_selector_scores.get("exactScheme") == 10
+                       and node_selector_scores.get("wrongScheme") == 0
+                       and node_selector_scores.get("pattern") == 10
+                       and node_selector_scores.get("basenamePattern") == 10
+                       and node_selector_scores.get("arrayBest") == 10
+                       and node_selector_scores.get("miss") == 0)
                 node_completion_resolved_doc = (
                     node_completion_resolved.items[0].get("documentation")
                     if node_completion_resolved.items

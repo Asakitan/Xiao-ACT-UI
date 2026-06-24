@@ -5111,14 +5111,83 @@ class VscodeNamespace:
 
     def _language_match(self, selector: Any, document: Any) -> int:
         language_id = getattr(document, "languageId", "")
+        uri = getattr(document, "uri", None)
+        scheme = str(getattr(uri, "scheme", "") or "file")
         if isinstance(selector, str):
+            if selector == "*":
+                return 5
             return 10 if selector == language_id else 0
         if isinstance(selector, list):
             return max((self._language_match(item, document) for item in selector), default=0)
         if isinstance(selector, dict):
-            wanted = selector.get("language")
-            return 10 if wanted in (None, language_id) else 0
+            score = 0
+            wanted_scheme = selector.get("scheme")
+            if wanted_scheme:
+                wanted_scheme = str(wanted_scheme)
+                if wanted_scheme == scheme:
+                    score = 10
+                elif wanted_scheme == "*":
+                    score = max(score, 5)
+                else:
+                    return 0
+            wanted_language = selector.get("language")
+            if wanted_language:
+                wanted_language = str(wanted_language)
+                if wanted_language == language_id:
+                    score = 10
+                elif wanted_language == "*":
+                    score = max(score, 5)
+                else:
+                    return 0
+            pattern = selector.get("pattern")
+            if pattern is None:
+                pattern = selector.get("filenamePattern")
+            if pattern:
+                if self._document_pattern_match(pattern, uri):
+                    score = 10
+                else:
+                    return 0
+            return score
         return 0
+
+    @staticmethod
+    def _document_pattern_match(pattern: Any, uri: Any) -> bool:
+        if uri is None:
+            return False
+        if isinstance(pattern, dict):
+            pattern_text = str(pattern.get("pattern") or "")
+        else:
+            pattern_text = str(pattern or "")
+        if not pattern_text:
+            return False
+        candidates = {
+            str(getattr(uri, "path", "") or "").replace("\\", "/"),
+            str(getattr(uri, "fs_path", "") or "").replace("\\", "/"),
+            os.path.basename(str(getattr(uri, "path", "") or "")),
+        }
+        candidates = {item for item in candidates if item}
+        patterns = VscodeNamespace._expand_glob_braces(
+            pattern_text.replace("\\", "/"))
+        for candidate in candidates:
+            if candidate in patterns:
+                return True
+            for item in patterns:
+                if fnmatch.fnmatchcase(candidate, item):
+                    return True
+        return False
+
+    @staticmethod
+    def _expand_glob_braces(pattern: str) -> List[str]:
+        match = re.search(r"\{([^{}]+)\}", pattern)
+        if not match:
+            return [pattern]
+        before, after = pattern[:match.start()], pattern[match.end():]
+        expanded: List[str] = []
+        for option in match.group(1).split(","):
+            expanded.extend(
+                VscodeNamespace._expand_glob_braces(
+                    before + option.strip() + after))
+        return expanded
 
     @staticmethod
     def _signature_help_registration_metadata(values: Sequence[Any]) -> Any:

@@ -4188,16 +4188,44 @@ function _matchDocumentSelector(selector, document) {
     for (const sel of selectors) {
         let score = 0;
         if (typeof sel === 'string') {
-            score = (sel === docLang) ? 10 : 0;
+            score = sel === '*' ? 5 : (sel === docLang ? 10 : 0);
         } else if (typeof sel === 'object' && sel !== null) {
-            const langMatch = !sel.language || sel.language === docLang || sel.language === '*';
-            const schemeMatch = !sel.scheme || sel.scheme === docScheme || sel.scheme === '*';
-            if (langMatch && schemeMatch) score = 10;
-            if (sel.pattern) score = Math.max(score, 5);
+            if (sel.scheme) {
+                if (sel.scheme === docScheme) score = 10;
+                else if (sel.scheme === '*') score = Math.max(score, 5);
+                else continue;
+            }
+            if (sel.language) {
+                if (sel.language === docLang) score = 10;
+                else if (sel.language === '*') score = Math.max(score, 5);
+                else continue;
+            }
+            const pattern = sel.pattern === undefined ? sel.filenamePattern : sel.pattern;
+            if (pattern) {
+                if (_documentSelectorPatternMatches(pattern, document.uri)) score = 10;
+                else continue;
+            }
         }
         best = Math.max(best, score);
     }
     return best;
+}
+
+function _documentSelectorPatternMatches(pattern, uri) {
+    if (!pattern || !uri) return false;
+    const rawPattern = _workspacePatternText(pattern, '');
+    if (!rawPattern) return false;
+    const normalizedPath = String(uri.fsPath || uri.path || uri.toString?.() || '').replace(/\\/g, '/');
+    const candidates = new Set([
+        normalizedPath,
+        String(uri.path || '').replace(/\\/g, '/'),
+        path.posix.basename(normalizedPath),
+    ].filter(Boolean));
+    const regex = _globToRegExp(rawPattern);
+    for (const candidate of candidates) {
+        if (candidate === rawPattern || regex.test(candidate)) return true;
+    }
+    return false;
 }
 
 function _subscribeTreeDataChanges(viewId, provider) {
