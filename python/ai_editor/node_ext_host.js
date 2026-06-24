@@ -395,6 +395,38 @@ DocumentDropOrPasteEditKind.Empty = new DocumentDropOrPasteEditKind('');
 DocumentDropOrPasteEditKind.Text = new DocumentDropOrPasteEditKind('text');
 DocumentDropOrPasteEditKind.TextUpdateImports = new DocumentDropOrPasteEditKind('text.updateImports');
 
+class CodeActionKind {
+    constructor(value) {
+        this.value = value === undefined || value === null ? '' : String(value);
+    }
+    append(...parts) {
+        const suffix = parts.filter(part => part !== undefined && part !== null && String(part))
+            .map(part => String(part).replace(/^\.+|\.+$/g, ''))
+            .join('.');
+        return new CodeActionKind([this.value, suffix].filter(Boolean).join('.'));
+    }
+    intersects(other) {
+        const otherKind = _codeActionKindFromPayload(other);
+        return this.contains(otherKind) || otherKind.contains(this);
+    }
+    contains(other) {
+        const otherValue = _codeActionKindFromPayload(other).value;
+        return otherValue === this.value || otherValue.startsWith(`${this.value}.`);
+    }
+    toString() { return this.value; }
+}
+CodeActionKind.Empty = new CodeActionKind('');
+CodeActionKind.QuickFix = CodeActionKind.Empty.append('quickfix');
+CodeActionKind.Refactor = CodeActionKind.Empty.append('refactor');
+CodeActionKind.RefactorExtract = CodeActionKind.Refactor.append('extract');
+CodeActionKind.RefactorInline = CodeActionKind.Refactor.append('inline');
+CodeActionKind.RefactorMove = CodeActionKind.Refactor.append('move');
+CodeActionKind.RefactorRewrite = CodeActionKind.Refactor.append('rewrite');
+CodeActionKind.Source = CodeActionKind.Empty.append('source');
+CodeActionKind.SourceOrganizeImports = CodeActionKind.Source.append('organizeImports');
+CodeActionKind.SourceFixAll = CodeActionKind.Source.append('fixAll');
+CodeActionKind.Notebook = CodeActionKind.Empty.append('notebook');
+
 class DocumentDropEdit {
     constructor(insertText, title, kind) {
         this.insertText = insertText;
@@ -2092,6 +2124,7 @@ function _serializeLanguageValue(value) {
     if (value instanceof DataTransfer) return value.toJSON();
     if (value instanceof DataTransferItem) return _serializeLanguageValue(value.value);
     if (value instanceof DocumentDropOrPasteEditKind) return { value: value.value };
+    if (value instanceof CodeActionKind) return { value: value.value };
     if (value instanceof LanguageModelChatMessage) {
         const result = {
             role: value.role,
@@ -2141,6 +2174,14 @@ function _codeActionDiagnostics(document, msg) {
     if (!incoming.length) return local;
     if (!local.length) return incoming;
     return [...incoming, ...local];
+}
+
+function _codeActionMatchesKind(action, only) {
+    const onlyValue = _codeActionKindFromPayload(only).value;
+    if (!onlyValue) return true;
+    const actionValue = _codeActionKindFromPayload(action?.kind).value;
+    if (!actionValue) return false;
+    return _codeActionKindFromPayload(only).contains(actionValue);
 }
 
 function _lmToolDefinitionName(definition) {
@@ -2360,6 +2401,14 @@ function _dropOrPasteKindFromPayload(value) {
         return new DocumentDropOrPasteEditKind(value.value);
     }
     return new DocumentDropOrPasteEditKind(value === undefined || value === null ? '' : String(value));
+}
+
+function _codeActionKindFromPayload(value) {
+    if (value instanceof CodeActionKind) return value;
+    if (value && typeof value === 'object' && value.value !== undefined) {
+        return new CodeActionKind(value.value);
+    }
+    return new CodeActionKind(value === undefined || value === null ? '' : String(value));
 }
 
 function _dataTransferFromPayload(value) {
@@ -5902,8 +5951,15 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         SignatureInformation: class { constructor(label, documentation) { this.label = label || ''; this.documentation = documentation; this.parameters = []; } },
         SignatureHelp: class { constructor() { this.signatures = []; this.activeSignature = 0; this.activeParameter = 0; } },
         SignatureHelpTriggerKind: { Invoke: 1, TriggerCharacter: 2, ContentChange: 3 },
-        CodeAction: class { constructor(title, kind) { this.title = title; this.kind = kind; } },
-        CodeActionKind: { QuickFix: 'quickfix', Refactor: 'refactor', Source: 'source', Empty: '' },
+        CodeAction: class {
+            constructor(title, kind) {
+                this.title = title;
+                this.kind = kind === undefined || kind === null
+                    ? undefined
+                    : _codeActionKindFromPayload(kind);
+            }
+        },
+        CodeActionKind,
         Hover: class { constructor(contents, range) { this.contents = Array.isArray(contents) ? contents : [contents]; this.range = range; } },
         DocumentLink: class { constructor(range, target) { this.range = range; this.target = target; } },
         DocumentDropOrPasteEditKind,
@@ -8166,6 +8222,7 @@ async function handleLanguageProviderRequest(msg) {
                     const rawActions = _normalizeProviderItems(await fn.call(
                         provider, document, range, codeActionContext, token));
                     for (let action of rawActions) {
+                        if (!_codeActionMatchesKind(action, msg.only)) continue;
                         let didResolve = false;
                         if (remainingResolves > 0) {
                             if (typeof provider.resolveCodeAction === 'function') {

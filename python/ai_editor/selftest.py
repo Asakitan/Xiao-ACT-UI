@@ -515,7 +515,10 @@ def test_app_settings_parity() -> None:
                 "title": "Run editor action",
                 "arguments": ["ok"],
             }
-            return [action]
+            organize = CodeAction("Organize imports", "source.organizeImports")
+            organize.edit = WorkspaceEdit()
+            organize.edit.insert(document.uri, Position(0, 0), "# imports\n")
+            return [action, organize]
 
         def resolveCodeAction(self, action, token):
             self.seen_code_action_resolves += 1
@@ -890,7 +893,12 @@ def test_app_settings_parity() -> None:
             dict(provider_payload, kind="codeActions", range={
                 "start": {"line": 0, "character": 0},
                 "end": {"line": 0, "character": 6},
-            }, itemResolveCount=20))
+            }, itemResolveCount=1))
+        organize_action_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="codeActions", range={
+                "start": {"line": 0, "character": 0},
+                "end": {"line": 0, "character": 6},
+            }, itemResolveCount=0, only="source.organizeImports"))
         code_action_context_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="codeActions", range={
                 "start": {"line": 0, "character": 0},
@@ -1083,8 +1091,15 @@ def test_app_settings_parity() -> None:
             if isinstance(item, dict)
         ]
         _check("editor_language_provider forwards diagnostics to code actions",
-               "editor boom" in context_messages
-               and "frontend boom" in context_messages)
+                "editor boom" in context_messages
+                and "frontend boom" in context_messages)
+        _check("editor_language_provider filters organize import actions",
+               organize_action_result.get("ok") is True
+               and len(organize_action_result.get("actions", [])) == 1
+               and organize_action_result.get("actions", [{}])[0].get("title")
+               == "Organize imports"
+               and organize_action_result.get("actions", [{}])[0].get("kind")
+               == "source.organizeImports")
         definition = definition_result.get("definitions", [{}])[0]
         _check("editor_language_provider serializes definitions",
                definition_result.get("ok") is True
@@ -2500,9 +2515,13 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function editorSignatureParameterLabelText(signature,activeParameter)" in html
            and "function editorProviderRenderDocs(container,value)" in html
            and "editor-signature-doc-title" in html
+            and "function requestEditorCodeActionsForKind(quiet,only,label)" in html
             and "function requestEditorCodeActions(quiet)" in html
-            and "itemResolveCount:0" in html
-            and "id=\"editor-diagnostic-layer\"" in html
+            and "function requestEditorSourceActions(quiet)" in html
+            and "function requestEditorOrganizeImports(quiet)" in html
+             and "itemResolveCount:0" in html
+             and "if(only)payload.only=only" in html
+             and "id=\"editor-diagnostic-layer\"" in html
             and "function requestEditorDiagnostics(quiet)" in html
             and "editorProviderPayload('diagnostics'" in html
             and "function editorDiagnosticsForRange(range)" in html
@@ -2669,9 +2688,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "Go to Implementation" in html
            and "Find All References" in html
            and "Open Link" in html
-           and "Rename Symbol" in html
-           and "Quick Fix..." in html
-           and "Formatted via extension" in html)
+            and "Rename Symbol" in html
+            and "Quick Fix..." in html
+            and "Source Action..." in html
+            and "Organize Imports" in html
+            and "Shift+Alt+O" in html
+            and "Formatted via extension" in html)
     _check("frontend expands VS Code snippet completion sessions",
            "function editorParseSnippet(snippet,context)" in html
            and "function editorApplySnippetText(raw,start,finish,context)" in html
@@ -6639,7 +6661,10 @@ def test_vscode_api() -> None:
             def provideCodeActions(self, document, range, context, token):
                 action = CodeAction("Fix boom", api["CodeActionKind"]["QuickFix"])
                 action.diagnostics = context["diagnostics"]
-                return [action]
+                organize = CodeAction(
+                    "Organize imports",
+                    api["CodeActionKind"]["SourceOrganizeImports"])
+                return [action, organize]
 
             def resolveCodeAction(self, action, token):
                 self.resolved += 1
@@ -6946,6 +6971,14 @@ def test_vscode_api() -> None:
                 "severity": api["DiagnosticSeverity"]["Warning"],
                 "source": "frontend-selftest",
             }], 1)
+        source_actions = api["commands"]["executeCommand"](
+            "vscode.executeCodeActionProvider", doc.uri,
+            Range(Position(0, 0), Position(0, 1)),
+            api["CodeActionKind"]["Source"])
+        organize_actions = api["commands"]["executeCommand"](
+            "vscode.executeCodeActionProvider", doc.uri,
+            Range(Position(0, 0), Position(0, 1)),
+            api["CodeActionKind"]["SourceOrganizeImports"])
         format_edits = api["commands"]["executeCommand"](
             "vscode.executeFormatDocumentProvider", doc.uri, {"tabSize": 4})
         range_format_edits = api["commands"]["executeCommand"](
@@ -7139,11 +7172,22 @@ def test_vscode_api() -> None:
                and actions[0].command["title"] == "Fix Boom"
                and code_action_provider.resolved == 1)
         _check("executeCodeActionProvider merges incoming diagnostics context",
-               actions_with_incoming_diagnostics
-               and sorted(
-                   item.message
-                   for item in actions_with_incoming_diagnostics[0].diagnostics)
-               == ["boom", "frontend boom"])
+                actions_with_incoming_diagnostics
+                and sorted(
+                    item.message
+                    for item in actions_with_incoming_diagnostics[0].diagnostics)
+                == ["boom", "frontend boom"])
+        _check("executeCodeActionProvider filters code action kinds",
+               actions_unresolved
+               and len(actions_unresolved) == 1
+               and actions_unresolved[0].kind == api["CodeActionKind"]["QuickFix"]
+               and source_actions
+               and len(source_actions) == 1
+               and source_actions[0].kind
+               == api["CodeActionKind"]["SourceOrganizeImports"]
+               and organize_actions
+               and len(organize_actions) == 1
+               and organize_actions[0].title == "Organize imports")
         _check("executeFormatDocumentProvider invokes formatting providers",
                format_edits and format_edits[0]["newText"] == "fmt"
                and any(edit.get("newText") == "rng"
@@ -10518,11 +10562,21 @@ async function activate(context) {
       return symbol;
     },
   });
+  const organizeKind = vscode.CodeActionKind.Source.append('organizeImports');
+  if (
+    organizeKind.value !== vscode.CodeActionKind.SourceOrganizeImports.value
+    || !vscode.CodeActionKind.Source.contains(organizeKind)
+    || !organizeKind.intersects(vscode.CodeActionKind.Source)
+    || organizeKind.contains(vscode.CodeActionKind.Source)
+  ) {
+    throw new Error('CodeActionKind hierarchy mismatch');
+  }
   vscode.languages.registerCodeActionsProvider('python', {
     provideCodeActions(document, range, context, token) {
       const action = new vscode.CodeAction('node quick fix', vscode.CodeActionKind.QuickFix);
       action.diagnostics = context.diagnostics || [];
-      return [action];
+      const organize = new vscode.CodeAction('node organize imports', vscode.CodeActionKind.SourceOrganizeImports);
+      return [action, organize];
     },
     resolveCodeAction(action, token) {
       action.command = {
@@ -12306,6 +12360,14 @@ module.exports = { activate, deactivate };
                     "vscode.executeCodeActionProvider",
                     node_uri, Range(Position(0, 0), Position(0, 1)),
                     "quickfix", 1)
+                node_source_actions = api._ext_host.commands.execute(
+                    "vscode.executeCodeActionProvider",
+                    node_uri, Range(Position(0, 0), Position(0, 1)),
+                    "source")
+                node_organize_actions = api._ext_host.commands.execute(
+                    "vscode.executeCodeActionProvider",
+                    node_uri, Range(Position(0, 0), Position(0, 1)),
+                    "source.organizeImports")
                 node_editor_diagnostics = api.editor_language_provider({
                     "kind": "diagnostics",
                     "filePath": node_provider_sample,
@@ -12991,13 +13053,26 @@ module.exports = { activate, deactivate };
                            "diagnostics") or [{}])[0].get("message")
                        == "node diagnostic quickfix"
                        and node_actions
-                       and node_actions[0].get("title") == "node quick fix"
-                       and node_actions[0].get("command", {}).get("title")
-                       == "Node Fix"
-                       and node_actions[0].get("command", {})
-                       .get("arguments", [{}])[0].get("id") == "action-root")
+                        and node_actions[0].get("title") == "node quick fix"
+                        and node_actions[0].get("command", {}).get("title")
+                        == "Node Fix"
+                        and node_actions[0].get("command", {})
+                        .get("arguments", [{}])[0].get("id") == "action-root")
+                _check("node host filters JS code action kinds",
+                       node_actions_unresolved
+                       and len(node_actions_unresolved) == 1
+                       and node_source_actions
+                       and len(node_source_actions) == 1
+                       and node_source_actions[0].get("title")
+                       == "node organize imports"
+                       and node_source_actions[0].get("kind", {}).get("value")
+                       == "source.organizeImports"
+                       and node_organize_actions
+                       and len(node_organize_actions) == 1
+                       and node_organize_actions[0].get("title")
+                       == "node organize imports")
                 _check("editor_language_provider returns Node diagnostics",
-                       node_editor_diagnostics.get("ok") is True
+                        node_editor_diagnostics.get("ok") is True
                        and (node_editor_diagnostics.get(
                            "diagnostics") or [{}])[0].get("message")
                        == "node diagnostic quickfix")

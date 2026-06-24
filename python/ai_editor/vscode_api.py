@@ -2256,6 +2256,31 @@ class VscodeNamespace:
             return value
         return [value]
 
+    @staticmethod
+    def _code_action_kind_value(kind: Any) -> str:
+        if kind is None:
+            return ""
+        if isinstance(kind, dict):
+            kind = kind.get("value", kind.get("kind", ""))
+        else:
+            kind = getattr(kind, "value", kind)
+        return str(kind or "")
+
+    @classmethod
+    def _code_action_matches_kind(cls, action: Any, only: Any) -> bool:
+        only_value = cls._code_action_kind_value(only)
+        if not only_value:
+            return True
+        if isinstance(action, dict):
+            action_kind = action.get("kind")
+        else:
+            action_kind = getattr(action, "kind", None)
+        action_value = cls._code_action_kind_value(action_kind)
+        return bool(action_value) and (
+            action_value == only_value
+            or action_value.startswith(only_value + ".")
+        )
+
     @classmethod
     def _inline_completion_items(cls, value: Any) -> List[Any]:
         if value is None:
@@ -3194,6 +3219,11 @@ class VscodeNamespace:
                 (document, action_range, context, CancellationToken.NONE),
                 default=None)
             actions = self._provider_values(value)
+            if kind is not None:
+                actions = [
+                    action for action in actions
+                    if self._code_action_matches_kind(action, kind)
+                ]
             if remaining_resolves:
                 resolved_actions: List[Any] = []
                 resolve_method = (
@@ -3216,7 +3246,7 @@ class VscodeNamespace:
                     resolved_actions.append(current)
                 actions = resolved_actions
             results.extend(actions)
-        results.extend(self._provider_values(
+        external_actions = self._provider_values(
             self._request_external_language_provider(
                 "codeActions",
                 document,
@@ -3227,7 +3257,13 @@ class VscodeNamespace:
                 ],
                 only=kind,
                 triggerKind=trigger_kind,
-                itemResolveCount=max(0, remaining_resolves))))
+                itemResolveCount=max(0, remaining_resolves)))
+        if kind is not None:
+            external_actions = [
+                action for action in external_actions
+                if self._code_action_matches_kind(action, kind)
+            ]
+        results.extend(external_actions)
         return results
 
     def _execute_format_document_provider(
