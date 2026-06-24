@@ -2712,6 +2712,10 @@ console.log("frontend auto-close behavior ok");
             and "set_extension_language_setting',item.language,key,nextValue,item.extension_id||''" in html
             and "reset_extension_language_setting',item.language,key,item.extension_id||''" in html
             and "ext-settings-category" in html
+            and "const orderedConfigs=configs.slice().sort" in html
+            and "sectionDescription" in html
+            and "cfg.nodePath" in html
+            and "summary.title=configId" in html
             and "dataset.extSettingsCategory" in html
             and "@modified" in html
             and "ext-setting-badge" in html
@@ -6967,6 +6971,9 @@ def test_app_extension_runtime_support() -> None:
             "activationEvents": ["*"],
             "contributes": {
                 "configuration": {
+                    "id": "selftest.core",
+                    "description": "Core selftest configuration",
+                    "order": 20,
                     "title": "Selftest Settings",
                     "properties": {
                         "selftest.flag": {
@@ -7212,6 +7219,28 @@ def test_app_extension_runtime_support() -> None:
                             "description": "Hidden internal setting",
                         },
                     },
+                    "allOf": [
+                        {
+                            "id": "selftest.advanced",
+                            "title": "Advanced Selftest",
+                            "description": "Nested advanced settings",
+                            "order": -5,
+                            "scope": "machine",
+                            "restrictedProperties": [
+                                "selftest.allOfRestricted",
+                            ],
+                            "properties": {
+                                "selftest.allOfInheritedScope": {
+                                    "type": "string",
+                                    "default": "locked",
+                                },
+                                "selftest.allOfRestricted": {
+                                    "type": "boolean",
+                                    "default": True,
+                                },
+                            },
+                        },
+                    ],
                 },
                 "configurationDefaults": {
                     "selftest.mode": "manual",
@@ -7265,6 +7294,17 @@ def test_app_extension_runtime_support() -> None:
             (item for item in ext_settings
              if item.get("extension_id") == "selftest.settings-pack"),
             {})
+        nested_settings_cfg = next(
+            (item for item in ext_settings
+             if item.get("extension_id") == "selftest.settings-pack"
+             and item.get("id") == "selftest.advanced"),
+            {})
+        legacy_nested_settings_cfg = next(
+            (item for item in legacy_settings_payload.get(
+                "configurations", [])
+             if item.get("_extensionId") == "selftest.settings-pack"
+             and item.get("id") == "selftest.advanced"),
+            {})
         _check("extension settings expose defaults and modified map",
                settings_cfg.get("values", {}).get("selftest.flag") is False
                and settings_cfg.get("values", {}).get("selftest.mode") == "manual"
@@ -7286,6 +7326,33 @@ def test_app_extension_runtime_support() -> None:
                    "selftest.syncLocked") is True
                and "selftest.hidden" not in settings_cfg.get(
                    "properties", {}))
+        _check("extension settings expose configuration node metadata",
+               settings_cfg.get("id") == "selftest.core"
+               and settings_cfg.get("description") == "Core selftest configuration"
+               and settings_cfg.get("order") == 20
+               and nested_settings_cfg.get("title") == "Advanced Selftest"
+               and nested_settings_cfg.get("description") == (
+                   "Nested advanced settings")
+               and nested_settings_cfg.get("order") == -5
+               and nested_settings_cfg.get("nodePath") == "allOf[0]"
+               and nested_settings_cfg.get("values", {}).get(
+                   "selftest.allOfInheritedScope") == "locked"
+               and nested_settings_cfg.get("scopes", {}).get(
+                   "selftest.allOfInheritedScope") == "machine"
+               and nested_settings_cfg.get("workspaceWritable", {}).get(
+                   "selftest.allOfInheritedScope") is False
+               and nested_settings_cfg.get("restricted", {}).get(
+                   "selftest.allOfRestricted") is True
+               and nested_settings_cfg.get("properties", {}).get(
+                   "selftest.allOfInheritedScope", {}).get(
+                       "section", {}).get("id") == "selftest.advanced"
+               and nested_settings_cfg.get("properties", {}).get(
+                   "selftest.allOfRestricted", {}).get(
+                       "source", {}).get("id") == "selftest.settings-pack"
+               and legacy_nested_settings_cfg.get("title") == (
+                   "Advanced Selftest")
+               and "selftest.allOfInheritedScope" in
+                   legacy_nested_settings_cfg.get("properties", {}))
         _check("extension configurationDefaults override schema defaults",
                api.get_extension_setting("selftest.mode").get("value") == "manual")
         hidden_set = api.set_extension_setting(
@@ -7309,13 +7376,20 @@ def test_app_extension_runtime_support() -> None:
             "selftest.machineOnly", "changed")
         machine_save = api.save_extension_setting(
             "selftest.settings-pack", "selftest.machineOnly", "changed")
+        allof_machine_set = api.set_extension_setting(
+            "selftest.allOfInheritedScope", "changed")
         _check("extension setting API blocks non-workspace scopes",
                machine_set.get("ok") is False
                and "does not support workspace overrides" in machine_set.get(
                    "error", "")
                and machine_save.get("ok") is False
                and api.get_extension_setting(
-                   "selftest.machineOnly").get("value") == "local")
+                   "selftest.machineOnly").get("value") == "local"
+               and allof_machine_set.get("ok") is False
+               and "does not support workspace overrides" in
+                   allof_machine_set.get("error", "")
+               and api.get_extension_setting(
+                   "selftest.allOfInheritedScope").get("value") == "locked")
         selflang_defaults = next(
             (item for item in language_defaults
              if item.get("extension_id") == "selftest.settings-pack"

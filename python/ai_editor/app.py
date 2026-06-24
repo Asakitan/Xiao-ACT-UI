@@ -8174,12 +8174,15 @@ class AIEditorAPI:
         Otherwise return all extension configurations.
         """
         self._ensure_engine()
-        configs = list(self._ext_host.ext_points._configurations)
+        configs = list(self._ext_host.ext_points.configuration_contributions)
         if ext_id:
-            configs = [c for c in configs if c.get("_extensionId") == ext_id]
+            configs = [
+                c for c in configs
+                if (c.get("extension_id") or c.get("_extensionId")) == ext_id
+            ]
         result: List[Dict[str, Any]] = []
         for cfg in configs:
-            eid = cfg.get("_extensionId", "")
+            eid = cfg.get("extension_id") or cfg.get("_extensionId", "")
             ctx = self._ext_host.activator.get_context(eid)
             ws_state = ctx.workspace_state if ctx else None
             properties = cfg.get("properties", {})
@@ -8214,7 +8217,15 @@ class AIEditorAPI:
                         values[key] = stored
             result.append({
                 "_extensionId": eid,
+                "id": cfg.get("id", ""),
                 "title": cfg.get("title", eid),
+                "description": cfg.get("description", ""),
+                "order": cfg.get("order", 0),
+                "extensionInfo": cfg.get("extensionInfo", {}),
+                "configurationIndex": cfg.get("configurationIndex", 0),
+                "nodePath": cfg.get("nodePath", ""),
+                "scope": cfg.get("scope"),
+                "restrictedProperties": cfg.get("restrictedProperties", []),
                 "properties": properties,
                 "values": values,
                 "scopes": scopes,
@@ -8301,8 +8312,16 @@ class AIEditorAPI:
                     modified[key] = False
             result.append({
                 "extension_id": eid,
+                "id": entry.get("id", ""),
                 "display_name": display_name,
                 "title": entry.get("title", ""),
+                "description": entry.get("description", ""),
+                "order": entry.get("order", 0),
+                "extensionInfo": entry.get("extensionInfo", {}),
+                "configurationIndex": entry.get("configurationIndex", 0),
+                "nodePath": entry.get("nodePath", ""),
+                "scope": entry.get("scope"),
+                "restrictedProperties": entry.get("restrictedProperties", []),
                 "properties": visible_props,
                 "values": values,
                 "defaults": defaults,

@@ -705,6 +705,105 @@ class ExtensionPoints:
             result.append(item)
         return result
 
+    @classmethod
+    def _configuration_node_contributions(
+            cls,
+            node: Dict[str, Any],
+            extension_id: str,
+            display_name: str = "",
+            configuration_index: int = 0,
+            inherited_scope: Any = None,
+            restricted_properties: Optional[Set[str]] = None,
+            node_path: str = "") -> List[Dict[str, Any]]:
+        if not isinstance(node, dict):
+            return []
+        node_scope = (
+            node.get("scope")
+            if node.get("scope") is not None
+            else inherited_scope)
+        if restricted_properties is None:
+            restricted_properties = {
+                str(item or "")
+                for item in node.get("restrictedProperties", [])
+                if str(item or "")
+            }
+        elif isinstance(node.get("restrictedProperties"), list):
+            restricted_properties = set(restricted_properties).union({
+                str(item or "")
+                for item in node.get("restrictedProperties", [])
+                if str(item or "")
+            })
+        extension_info = {
+            "id": extension_id,
+            "displayName": display_name or extension_id,
+        }
+        node_id = str(node.get("id") or "")
+        title = str(node.get("title") or "")
+        order = node.get("order")
+        section = {
+            "id": node_id,
+            "title": title,
+            "order": order,
+            "extensionInfo": dict(extension_info),
+        }
+        properties: Dict[str, Dict[str, Any]] = {}
+        raw_properties = node.get("properties", {})
+        if isinstance(raw_properties, dict):
+            for key, raw_schema in raw_properties.items():
+                setting_key = str(key or "")
+                if not setting_key or not isinstance(raw_schema, dict):
+                    continue
+                schema = {
+                    schema_key: schema_value
+                    for schema_key, schema_value in raw_schema.items()
+                    if schema_key != "_extensionId"
+                }
+                if (not setting_key.startswith("[")
+                        and node_scope is not None
+                        and schema.get("scope") is None):
+                    schema["scope"] = node_scope
+                if (setting_key in restricted_properties
+                        and schema.get("restricted") is None):
+                    schema["restricted"] = True
+                schema["section"] = dict(section)
+                schema["source"] = dict(extension_info)
+                properties[setting_key] = schema
+
+        result: List[Dict[str, Any]] = []
+        if properties:
+            result.append({
+                "id": node_id,
+                "title": title,
+                "description": (
+                    node.get("markdownDescription")
+                    or node.get("description")
+                    or ""),
+                "order": order,
+                "extension_id": extension_id,
+                "extensionInfo": dict(extension_info),
+                "configurationIndex": configuration_index,
+                "nodePath": node_path,
+                "scope": node_scope,
+                "restrictedProperties": sorted(restricted_properties),
+                "properties": properties,
+            })
+
+        for index, child in enumerate(node.get("allOf", []) or []):
+            if not isinstance(child, dict):
+                continue
+            child_path = (
+                f"{node_path}.allOf[{index}]"
+                if node_path else f"allOf[{index}]")
+            result.extend(cls._configuration_node_contributions(
+                child,
+                extension_id,
+                display_name=display_name,
+                configuration_index=configuration_index,
+                inherited_scope=node_scope,
+                restricted_properties=restricted_properties,
+                node_path=child_path))
+        return result
+
     def process(self, ext: ExtensionDescription) -> None:
         c = ext.contributes
         if not c:
@@ -766,24 +865,16 @@ class ExtensionPoints:
         cfg = c.get("configuration")
         if cfg:
             self._configurations.extend(self._tag_items(cfg, eid))
-            # Build structured configuration_contributions
             cfg_items = cfg if isinstance(cfg, list) else [cfg]
-            for ci in cfg_items:
+            for config_index, ci in enumerate(cfg_items):
                 if not isinstance(ci, dict):
                     continue
-                props = ci.get("properties")
-                if not isinstance(props, dict) or not props:
-                    continue
-                self.configuration_contributions.append({
-                    "title": ci.get("title", ""),
-                    "extension_id": eid,
-                    "properties": {
-                        k: {sk: sv for sk, sv in v.items()
-                             if sk != "_extensionId"}
-                        for k, v in props.items()
-                        if isinstance(v, dict)
-                    },
-                })
+                self.configuration_contributions.extend(
+                    self._configuration_node_contributions(
+                        ci,
+                        eid,
+                        display_name=ext.display_name,
+                        configuration_index=config_index))
 
         for loc, vcs in c.get("viewsContainers", {}).items():
             if isinstance(vcs, list):

@@ -10418,10 +10418,20 @@ async function renderExtensionSettings(){
   filter.appendChild(categorySelect);filter.appendChild(modifiedLabel);filter.appendChild(count);
   container.appendChild(filter);
   const seenCategories=new Set();
-  configs.forEach(cfg=>{
+  const orderedConfigs=configs.slice().sort((a,b)=>{
+    const ao=Number(a&&a.order),bo=Number(b&&b.order);
+    const an=Number.isFinite(ao)?ao:0,bn=Number.isFinite(bo)?bo:0;
+    if(an!==bn)return an-bn;
+    const al=[a&&a.display_name,a&&a.title,a&&a.id].filter(Boolean).join(' ');
+    const bl=[b&&b.display_name,b&&b.title,b&&b.id].filter(Boolean).join(' ');
+    return al.localeCompare(bl);
+  });
+  orderedConfigs.forEach((cfg,cfgIndex)=>{
     const extId=cfg.extension_id||'';
     const displayName=cfg.display_name||cfg.title||extId;
     const title=cfg.title||'';
+    const configId=cfg.id||'';
+    const sectionDescription=cfg.description||'';
     const properties=cfg.properties;
     const values=cfg.values||{};
     const defaults=cfg.defaults||{};
@@ -10437,7 +10447,7 @@ async function renderExtensionSettings(){
     const summary=document.createElement('summary');
     summary.style.cssText='cursor:pointer;font-size:12px;font-weight:600;color:var(--fg-dim);user-select:none;padding:4px 0';
     const headerLabel=title?(displayName+' — '+title):displayName;
-    const categoryId=extId+'::'+headerLabel;
+    const categoryId=extId+'::'+(configId||headerLabel)+'::'+(cfg.nodePath||cfgIndex);
     section.dataset.extSettingsCategory=categoryId;
     if(!seenCategories.has(categoryId)){
       seenCategories.add(categoryId);
@@ -10445,8 +10455,16 @@ async function renderExtensionSettings(){
       categorySelect.appendChild(opt);
     }
     summary.textContent='▸ '+headerLabel+' ('+propKeys.length+')';
+    if(configId)summary.title=configId;
     section.appendChild(summary);
     const inner=document.createElement('div');inner.style.cssText='padding:8px 0';
+    if(sectionDescription){
+      const sectionDesc=document.createElement('div');sectionDesc.className='ext-setting-desc';
+      sectionDesc.style.margin='0 0 8px';
+      appendExtensionSettingMarkdown(sectionDesc,sectionDescription);
+      inner.appendChild(sectionDesc);
+    }
+    const sectionSearch=[displayName,title,configId,sectionDescription].filter(Boolean).join(' ');
     propKeys.forEach(key=>{
       const schema=properties[key];
       if(!schema||typeof schema!=='object')return;
@@ -10494,7 +10512,10 @@ async function renderExtensionSettings(){
           workspaceWritable?'':'scope-readonly',syncMeta.tag,
           syncMeta.ignored?'sync-ignored':'',syncMeta.locked?'sync-locked':''])
         .filter(Boolean).join('\n');
-      row.dataset.extSettingSearch=extensionSettingSearchText(key,schema,type,description,deprecation,schemaSummary);
+      row.dataset.extSettingSearch=(
+        sectionSearch+' '+extensionSettingSearchText(
+          key,schema,type,description,deprecation,schemaSummary)
+      ).trim().toLowerCase();
       if(schemaSummary){const meta=document.createElement('div');meta.className='ext-setting-schema';meta.textContent=schemaSummary;row.appendChild(meta)}
       let input,enumHelp;
       if(type==='boolean'){
