@@ -2695,7 +2695,10 @@ console.log("frontend auto-close behavior ok");
             and "function applyExtensionSettingsFilter()" in html
             and "function renderExtensionLanguageDefaults(languageDefaults,container,categorySelect,seenCategories)" in html
             and "function extensionSettingTypeFromValue(value)" in html
+            and "function extensionSettingScopeName(schema)" in html
+            and "function extensionSettingWorkspaceWritable(schema)" in html
             and "ext-setting-readonly-badge" in html
+            and "ext-setting-scope-badge" in html
             and "languageDefaults" in html
             and "language-default" in html
             and "const schemas=item&&item.schemas" in html
@@ -6797,6 +6800,19 @@ def test_app_extension_runtime_support() -> None:
                             "minimum": 1,
                             "maximum": 5,
                         },
+                        "selftest.machineOnly": {
+                            "type": "string",
+                            "default": "local",
+                            "scope": "machine",
+                            "description": "Machine-only setting",
+                        },
+                        "selftest.restricted": {
+                            "type": "boolean",
+                            "default": False,
+                            "scope": "resource",
+                            "restricted": True,
+                            "description": "Restricted setting",
+                        },
                     },
                 },
                 "configurationDefaults": {
@@ -6804,6 +6820,7 @@ def test_app_extension_runtime_support() -> None:
                     "[selflang]": {
                         "editor.tabSize": 2,
                         "selftest.mode": "manual",
+                        "selftest.machineOnly": "local",
                     },
                 },
             },
@@ -6848,9 +6865,26 @@ def test_app_extension_runtime_support() -> None:
                settings_cfg.get("values", {}).get("selftest.flag") is False
                and settings_cfg.get("values", {}).get("selftest.mode") == "manual"
                and settings_cfg.get("defaults", {}).get("selftest.mode") == "manual"
-               and settings_cfg.get("modified", {}).get("selftest.flag") is False)
+               and settings_cfg.get("modified", {}).get("selftest.flag") is False
+               and settings_cfg.get("scopes", {}).get(
+                   "selftest.machineOnly") == "machine"
+               and settings_cfg.get("workspaceWritable", {}).get(
+                   "selftest.machineOnly") is False
+               and settings_cfg.get("restricted", {}).get(
+                   "selftest.restricted") is True)
         _check("extension configurationDefaults override schema defaults",
                api.get_extension_setting("selftest.mode").get("value") == "manual")
+        machine_set = api.set_extension_setting(
+            "selftest.machineOnly", "changed")
+        machine_save = api.save_extension_setting(
+            "selftest.settings-pack", "selftest.machineOnly", "changed")
+        _check("extension setting API blocks non-workspace scopes",
+               machine_set.get("ok") is False
+               and "does not support workspace overrides" in machine_set.get(
+                   "error", "")
+               and machine_save.get("ok") is False
+               and api.get_extension_setting(
+                   "selftest.machineOnly").get("value") == "local")
         selflang_defaults = next(
             (item for item in language_defaults
              if item.get("extension_id") == "selftest.settings-pack"
@@ -6867,13 +6901,24 @@ def test_app_extension_runtime_support() -> None:
                    "editor.tabSize") == 2
                and selflang_defaults.get("settings", {}).get(
                    "selftest.mode") == "manual"
+               and selflang_defaults.get("workspaceWritable", {}).get(
+                   "selftest.machineOnly") is False
                and selflang_defaults.get("schemas", {}).get(
                    "selftest.mode", {}).get("enum") == ["auto", "manual"]
                and selflang_defaults.get("values", {}).get(
                    "editor.tabSize") == 2
                and selflang_defaults.get("modified", {}).get(
                    "editor.tabSize") is False
-               and selflang_defaults.get("count") == 2)
+               and selflang_defaults.get("count") == 3)
+        invalid_language_machine = api.set_extension_language_setting(
+            "selflang", "selftest.machineOnly", "changed",
+            "selftest.settings-pack")
+        _check("extension language setting blocks non-workspace scopes",
+               invalid_language_machine.get("ok") is False
+               and "does not support workspace overrides" in
+               invalid_language_machine.get("error", "")
+               and "[selflang]" not in getattr(
+                   api._gui_ref.settings, "data", {}))
         conflict_invalid_language_mode = api.set_extension_language_setting(
             "selflang", "selftest.mode", "manual",
             "selftest.settings-conflict")

@@ -1010,9 +1010,13 @@ pre.code-block { overflow:visible; }
 .ext-setting-row.modified .ext-setting-badge { display:inline-flex; }
 .ext-setting-readonly-badge { font-size:9px; color:var(--fg-dim); border:1px solid var(--border);
   border-radius:3px; padding:0 4px; line-height:15px; }
+.ext-setting-scope-badge { font-size:9px; color:var(--fg-dim); border:1px solid var(--border);
+  border-radius:3px; padding:0 4px; line-height:15px; }
 .ext-setting-deprecated-badge { font-size:9px; color:var(--fg-warning); border:1px solid color-mix(in srgb,var(--fg-warning) 70%,var(--border));
   border-radius:3px; padding:0 4px; line-height:15px; }
 .ext-setting-row.deprecated:not(.modified) { border-left-color:color-mix(in srgb,var(--fg-warning) 45%,transparent); }
+.ext-setting-row.scope-readonly input,.ext-setting-row.scope-readonly select,.ext-setting-row.scope-readonly textarea {
+  opacity:.66; cursor:not-allowed; }
 .ext-setting-key { font-size:11px; font-family:var(--mono); color:var(--fg-dim); user-select:all; margin-bottom:4px; }
 .ext-setting-desc { font-size:11px; color:var(--fg-dim); line-height:1.35; margin-bottom:4px; }
 .ext-setting-enum-desc { font-size:11px; color:var(--fg-dim); line-height:1.35; margin-top:4px; }
@@ -9756,6 +9760,23 @@ function extensionSettingTypeFromValue(value){
   if(typeof value==='number')return Number.isInteger(value)?'integer':'number';
   return 'string';
 }
+function extensionSettingScopeName(schema){
+  const raw=schema&&schema.scope;
+  if(typeof raw==='number'){
+    return ({1:'application',2:'machine',3:'application-machine',4:'window',5:'resource',6:'language-overridable',7:'machine-overridable'})[raw]||'window';
+  }
+  const scope=String(raw||'').trim().toLowerCase().replace(/_/g,'-');
+  return scope||'window';
+}
+function extensionSettingWorkspaceWritable(schema){
+  const scope=extensionSettingScopeName(schema);
+  return !['application','machine','application-machine'].includes(scope);
+}
+function extensionSettingScopeBadge(schema){
+  const scope=extensionSettingScopeName(schema);
+  if(extensionSettingWorkspaceWritable(schema))return scope==='window'?'':scope;
+  return scope+' · user scope';
+}
 function extensionSettingDefault(schema,defaults,key){
   if(defaults&&Object.prototype.hasOwnProperty.call(defaults,key))return defaults[key];
   if(schema&&Object.prototype.hasOwnProperty.call(schema,'default'))return schema.default;
@@ -10085,13 +10106,18 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       const description=schema.markdownDescription||schema.description||'';
       const deprecation=extensionSettingDeprecationText(schema);
       const schemaSummary=extensionSettingSchemaSummary(schema,type);
+      const workspaceWritable=extensionSettingWorkspaceWritable(schema);
+      const scopeName=extensionSettingScopeName(schema);
+      const scopeBadge=extensionSettingScopeBadge(schema);
       const shortKey=key.split('.').pop()||key;
       const row=document.createElement('div');row.className='ext-setting-row settings-field';
+      if(!workspaceWritable)row.classList.add('scope-readonly');
       row.dataset.extSettingKey=override+'.'+key;
       row.dataset.extSettingModified=modified[key]?'1':'0';
       row.dataset.modified=modified[key]?'1':'0';
       const tagList=['language-default',String(item.language||'').toLowerCase()]
-        .concat(extensionSettingList(schema,'tags').map(value=>value.toLowerCase()));
+        .concat(extensionSettingList(schema,'tags').map(value=>value.toLowerCase()))
+        .concat([scopeName,schema.restricted===true?'restricted':'',workspaceWritable?'':'scope-readonly']);
       row.dataset.extSettingTags=tagList.filter(Boolean).join('\n');
       row.dataset.extSettingSearch=[
         displayName,extId,override,item.language,
@@ -10103,6 +10129,14 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       const modifiedBadge=document.createElement('span');modifiedBadge.className='ext-setting-badge';modifiedBadge.textContent='Modified';
       const badge=document.createElement('span');badge.className='ext-setting-readonly-badge';badge.textContent='Language Default';
       head.appendChild(name);head.appendChild(modifiedBadge);head.appendChild(badge);
+      if(scopeBadge){
+        const scopeEl=document.createElement('span');scopeEl.className='ext-setting-scope-badge';scopeEl.textContent=scopeBadge;
+        head.appendChild(scopeEl);
+      }
+      if(schema.restricted===true){
+        const restrictedEl=document.createElement('span');restrictedEl.className='ext-setting-scope-badge';restrictedEl.textContent='Restricted';
+        head.appendChild(restrictedEl);
+      }
       if(deprecation){
         row.classList.add('deprecated');
         const depBadge=document.createElement('span');depBadge.className='ext-setting-deprecated-badge';depBadge.textContent='Deprecated';
@@ -10110,7 +10144,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       }
       row.appendChild(head);
       const keyLabel=document.createElement('div');keyLabel.className='ext-setting-key';
-      keyLabel.textContent=override+' · '+key+(schema.scope?' · '+schema.scope:'')+' · '+type;
+      keyLabel.textContent=override+' · '+key+(scopeName!=='window'?' · '+scopeName:'')+' · '+type;
       row.appendChild(keyLabel);
       if(description){const desc=document.createElement('div');desc.className='ext-setting-desc';appendExtensionSettingMarkdown(desc,description);row.appendChild(desc)}
       if(deprecation){const dep=document.createElement('div');dep.className='ext-setting-deprecated';appendExtensionSettingMarkdown(dep,deprecation);row.appendChild(dep)}
@@ -10151,6 +10185,10 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       }
       input.dataset.extSettingInput='1';
       input.title=override+' '+key;
+      if(!workspaceWritable){
+        input.disabled=true;
+        input.title='This setting scope does not support workspace overrides';
+      }
       applyExtensionSettingInputConstraints(input,schema,type);
       setExtensionSettingInputValue(input,schema,type,value);
       if(enumHelp)renderExtensionSettingEnumDescription(enumHelp,schema,input);
@@ -10166,6 +10204,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       row.appendChild(reset);
       input.addEventListener('change',async()=>{
         setExtensionSettingError(row,'');
+        if(!workspaceWritable){setExtensionSettingError(row,'This setting scope does not support workspace overrides');return}
         if(enumHelp)renderExtensionSettingEnumDescription(enumHelp,schema,input);
         let nextValue;
         try{nextValue=readExtensionSettingInputValue(input,schema,type)}
@@ -10245,12 +10284,24 @@ async function renderExtensionSettings(){
       const currentVal=Object.prototype.hasOwnProperty.call(values,key)?values[key]:defaultVal;
       const description=schema.markdownDescription||schema.description||'';
       const deprecation=extensionSettingDeprecationText(schema);
+      const workspaceWritable=extensionSettingWorkspaceWritable(schema);
+      const scopeName=extensionSettingScopeName(schema);
+      const scopeBadge=extensionSettingScopeBadge(schema);
       const shortKey=key.split('.').pop()||key;
       const row=document.createElement('div');row.className='ext-setting-row settings-field';row.dataset.extSettingKey=key;
+      if(!workspaceWritable)row.classList.add('scope-readonly');
       const head=document.createElement('div');head.className='ext-setting-head';
       const name=document.createElement('span');name.className='ext-setting-title';name.textContent=schema.title||shortKey;
       const badge=document.createElement('span');badge.className='ext-setting-badge';badge.textContent='Modified';
       head.appendChild(name);head.appendChild(badge);
+      if(scopeBadge){
+        const scopeEl=document.createElement('span');scopeEl.className='ext-setting-scope-badge';scopeEl.textContent=scopeBadge;
+        head.appendChild(scopeEl);
+      }
+      if(schema.restricted===true){
+        const restrictedEl=document.createElement('span');restrictedEl.className='ext-setting-scope-badge';restrictedEl.textContent='Restricted';
+        head.appendChild(restrictedEl);
+      }
       if(deprecation){
         row.classList.add('deprecated');
         const depBadge=document.createElement('span');depBadge.className='ext-setting-deprecated-badge';depBadge.textContent='Deprecated';
@@ -10259,12 +10310,14 @@ async function renderExtensionSettings(){
       row.appendChild(head);
       const keyLabel=document.createElement('div');
       keyLabel.className='ext-setting-key';
-      keyLabel.textContent=key+(schema.scope?' · '+schema.scope:'')+' · '+type;
+      keyLabel.textContent=key+(scopeName!=='window'?' · '+scopeName:'')+' · '+type;
       row.appendChild(keyLabel);
       if(description){const desc=document.createElement('div');desc.className='ext-setting-desc';appendExtensionSettingMarkdown(desc,description);row.appendChild(desc)}
       if(deprecation){const dep=document.createElement('div');dep.className='ext-setting-deprecated';appendExtensionSettingMarkdown(dep,deprecation);row.appendChild(dep)}
       const schemaSummary=extensionSettingSchemaSummary(schema,type);
-      row.dataset.extSettingTags=extensionSettingList(schema,'tags').map(value=>value.toLowerCase()).join('\n');
+      row.dataset.extSettingTags=extensionSettingList(schema,'tags').map(value=>value.toLowerCase())
+        .concat([scopeName,schema.restricted===true?'restricted':'',workspaceWritable?'':'scope-readonly'])
+        .filter(Boolean).join('\n');
       row.dataset.extSettingSearch=extensionSettingSearchText(key,schema,type,description,deprecation,schemaSummary);
       if(schemaSummary){const meta=document.createElement('div');meta.className='ext-setting-schema';meta.textContent=schemaSummary;row.appendChild(meta)}
       let input,enumHelp;
@@ -10302,6 +10355,10 @@ async function renderExtensionSettings(){
       }
       input.dataset.extSettingInput='1';
       input.title=key;
+      if(!workspaceWritable){
+        input.disabled=true;
+        input.title='This setting scope does not support workspace overrides';
+      }
       applyExtensionSettingInputConstraints(input,schema,type);
       setExtensionSettingInputValue(input,schema,type,currentVal);
       if(enumHelp)renderExtensionSettingEnumDescription(enumHelp,schema,input);
@@ -10317,6 +10374,7 @@ async function renderExtensionSettings(){
       row.appendChild(reset);
       input.addEventListener('change',async()=>{
         setExtensionSettingError(row,'');
+        if(!workspaceWritable){setExtensionSettingError(row,'This setting scope does not support workspace overrides');return}
         if(enumHelp)renderExtensionSettingEnumDescription(enumHelp,schema,input);
         let nextValue;
         try{nextValue=readExtensionSettingInputValue(input,schema,type)}

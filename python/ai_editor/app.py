@@ -8203,6 +8203,13 @@ class AIEditorAPI:
         ctx = self._ext_host.activator.get_context(ext_id)
         if not ctx:
             return {"error": f"Extension context not found: {ext_id}"}
+        schema = self._extension_configuration_schema_for_extension(
+            ext_id, key)
+        if isinstance(schema, dict):
+            scope_error = self._extension_setting_workspace_scope_error(schema)
+            if scope_error:
+                return {"ok": False, "error": scope_error,
+                        "extension": ext_id, "key": key}
         ctx.workspace_state.update(key, value)
         return {"ok": True, "extension": ext_id, "key": key}
 
@@ -8224,10 +8231,17 @@ class AIEditorAPI:
             defaults: Dict[str, Any] = {}
             configured_values: Dict[str, Any] = {}
             modified: Dict[str, bool] = {}
+            scopes: Dict[str, str] = {}
+            workspace_writable: Dict[str, bool] = {}
+            restricted: Dict[str, bool] = {}
             configured_keys = set(ws_state.keys()) if ws_state else set()
             for key, schema in props.items():
                 if not isinstance(schema, dict):
                     continue
+                scopes[key] = self._extension_setting_scope(schema)
+                workspace_writable[key] = (
+                    self._extension_setting_workspace_writable(schema))
+                restricted[key] = bool(schema.get("restricted") is True)
                 has_default = key in default_overrides or "default" in schema
                 if has_default:
                     defaults[key] = (
@@ -8252,6 +8266,9 @@ class AIEditorAPI:
                 "defaults": defaults,
                 "configuredValues": configured_values,
                 "modified": modified,
+                "scopes": scopes,
+                "workspaceWritable": workspace_writable,
+                "restricted": restricted,
             })
         return {"configurations": result, "languageDefaults": language_defaults}
 
@@ -8293,6 +8310,15 @@ class AIEditorAPI:
                 if not ctx:
                     return {"error": f"Extension context not found: {eid}"}
                 schema = props[key] if isinstance(props[key], dict) else {}
+                scope_error = self._extension_setting_workspace_scope_error(
+                    schema)
+                if scope_error:
+                    return {
+                        "ok": False,
+                        "error": scope_error,
+                        "key": key,
+                        "extension_id": eid,
+                    }
                 validation_error = self._validate_extension_setting_value(
                     value, schema)
                 if validation_error:
@@ -8306,6 +8332,40 @@ class AIEditorAPI:
                 self._notify_extension_setting_changed(key, value)
                 return {"ok": True, "key": key, "extension_id": eid}
         return {"error": f"Setting key not found in any extension: {key}"}
+
+    @staticmethod
+    def _extension_setting_scope(schema: Dict[str, Any]) -> str:
+        if not isinstance(schema, dict):
+            return "window"
+        raw_scope = schema.get("scope")
+        numeric_scopes = {
+            1: "application",
+            2: "machine",
+            3: "application-machine",
+            4: "window",
+            5: "resource",
+            6: "language-overridable",
+            7: "machine-overridable",
+        }
+        if isinstance(raw_scope, (int, float)) and not isinstance(raw_scope, bool):
+            return numeric_scopes.get(int(raw_scope), "window")
+        scope = str(raw_scope or "").strip().lower().replace("_", "-")
+        return scope or "window"
+
+    @classmethod
+    def _extension_setting_workspace_writable(
+            cls, schema: Dict[str, Any]) -> bool:
+        scope = cls._extension_setting_scope(schema)
+        return scope not in {"application", "machine", "application-machine"}
+
+    @classmethod
+    def _extension_setting_workspace_scope_error(
+            cls, schema: Dict[str, Any]) -> str:
+        if cls._extension_setting_workspace_writable(schema):
+            return ""
+        scope = cls._extension_setting_scope(schema)
+        return (
+            f"Setting scope '{scope}' does not support workspace overrides")
 
     @staticmethod
     def _extension_schema_type(schema: Dict[str, Any]) -> str:
@@ -8487,6 +8547,12 @@ class AIEditorAPI:
         by_key, _by_extension = self._extension_configuration_schema_indexes()
         return by_key
 
+    def _extension_configuration_schema_for_extension(
+            self, extension_id: str, setting_key: str) -> Optional[Dict[str, Any]]:
+        by_key, by_extension = self._extension_configuration_schema_indexes()
+        return self._extension_configuration_schema_for_key(
+            setting_key, extension_id, by_key, by_extension)
+
     @staticmethod
     def _extension_configuration_schema_for_key(
             setting_key: str, extension_id: str,
@@ -8557,6 +8623,21 @@ class AIEditorAPI:
                             schema_by_key, schema_by_extension)
                         if isinstance(schema, dict):
                             schemas[setting_key] = schema
+                    scopes = {
+                        setting_key: self._extension_setting_scope(
+                            schemas.get(setting_key, {}))
+                        for setting_key in settings
+                    }
+                    workspace_writable = {
+                        setting_key: self._extension_setting_workspace_writable(
+                            schemas.get(setting_key, {}))
+                        for setting_key in settings
+                    }
+                    restricted = {
+                        setting_key: bool(
+                            schemas.get(setting_key, {}).get("restricted") is True)
+                        for setting_key in settings
+                    }
                     result.append({
                         "extension_id": eid,
                         "display_name": display_name,
@@ -8568,6 +8649,9 @@ class AIEditorAPI:
                         "values": values,
                         "configuredValues": configured_values,
                         "modified": modified,
+                        "scopes": scopes,
+                        "workspaceWritable": workspace_writable,
+                        "restricted": restricted,
                         "count": len(settings),
                     })
         result.sort(key=lambda item: (
@@ -8620,6 +8704,16 @@ class AIEditorAPI:
         schema = self._extension_configuration_schema_for_key(
             setting_key, ext_id, schema_by_key, schema_by_extension)
         if isinstance(schema, dict):
+            scope_error = self._extension_setting_workspace_scope_error(schema)
+            if scope_error:
+                return {
+                    "ok": False,
+                    "error": scope_error,
+                    "language": language,
+                    "override": f"[{language}]",
+                    "key": setting_key,
+                    "extension_id": ext_id,
+                }
             validation_error = self._validate_extension_setting_value(
                 value, schema)
             if validation_error:
