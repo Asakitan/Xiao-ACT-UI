@@ -2437,6 +2437,23 @@ class AIEditorAPI:
             "view_id": normalized_view_id,
         }
 
+    def webview_panel_dispose(self, view_id: str) -> Dict:
+        """Relay a frontend-initiated webview panel close to the extension host."""
+        normalized_view_id = str(view_id or "").strip()
+        if not normalized_view_id:
+            return {"error": "view_id is required"}
+        node_host = getattr(self, "_node_ext_host", None)
+        if node_host is None or not getattr(node_host, "is_running", False):
+            return {"error": "Node extension host is not running"}
+        try:
+            ok = node_host.dispose_webview_panel(normalized_view_id)
+        except Exception as exc:
+            return {"error": str(exc), "view_id": normalized_view_id}
+        return {
+            "ok": bool(ok),
+            "view_id": normalized_view_id,
+        }
+
     def get_provider_webview(self, provider_id: str) -> Dict:
         """Return the real provider webview surface when the runtime exposes one."""
         self._ensure_engine()
@@ -4123,7 +4140,9 @@ class AIEditorAPI:
 
     def _workspace_file_decorations_for_uri(
             self, uri: Any,
-            providers_available: Optional[bool] = None) -> List[Dict[str, Any]]:
+            providers_available: Optional[bool] = None,
+            cache: Optional[Dict[str, List[Dict[str, Any]]]] = None
+            ) -> List[Dict[str, Any]]:
         paths = self._workspace_file_decoration_change_paths([uri])
         if not paths:
             return []
@@ -4133,7 +4152,16 @@ class AIEditorAPI:
             return []
         if not os.path.exists(full):
             return []
-        return self._workspace_file_decorations(full, providers_available)
+        cache_key = os.path.normcase(os.path.abspath(full))
+        if cache is not None:
+            cached = cache.get(cache_key)
+            if cached is not None:
+                return list(cached)
+        decorations = self._workspace_file_decorations(
+            full, providers_available)
+        if cache is not None:
+            cache[cache_key] = list(decorations)
+        return decorations
 
     def list_workspace_tree(self, rel_path: str = "") -> Dict:
         root = self._workspace_root()
@@ -10415,12 +10443,21 @@ class AIEditorAPI:
                                  tree_view: Any = None,
                                  max_depth: int = 2,
                                  errors: Optional[
-                                     List[Dict[str, Any]]] = None
+                                     List[Dict[str, Any]]] = None,
+                                 decoration_cache: Optional[
+                                     Dict[str, List[Dict[str, Any]]]] = None,
+                                 decoration_providers_available: Optional[
+                                     bool] = None
                                  ) -> List[Dict[str, Any]]:
         if provider is None or not hasattr(provider, "getChildren"):
             return []
         if seen is None:
             seen = set()
+        if decoration_cache is None:
+            decoration_cache = {}
+        if decoration_providers_available is None:
+            decoration_providers_available = (
+                self._workspace_has_file_decoration_providers())
         if depth > max_depth:
             return []
         try:
@@ -10458,7 +10495,11 @@ class AIEditorAPI:
             child_seen.add(marker)
             item = self._tree_item_for_element(provider, child, errors=errors)
             node = self._tree_node_preview(
-                child, item, tree_view=tree_view, view_id=getattr(tree_view, "id", ""))
+                child, item, tree_view=tree_view,
+                view_id=getattr(tree_view, "id", ""),
+                decoration_cache=decoration_cache,
+                decoration_providers_available=(
+                    decoration_providers_available))
             force_reveal_children = False
             reveal_ancestor = getattr(tree_view, "is_reveal_ancestor", None)
             if callable(reveal_ancestor):
@@ -10493,7 +10534,9 @@ class AIEditorAPI:
                 child_nodes = self._tree_view_nodes_preview(
                     provider, child, depth + 1, child_seen,
                     tree_view=tree_view, max_depth=child_max_depth,
-                    errors=errors)
+                    errors=errors, decoration_cache=decoration_cache,
+                    decoration_providers_available=(
+                        decoration_providers_available))
                 if child_nodes and not node.get("collapsibleState", 0):
                     node["collapsibleState"] = 2 if force_reveal_children else 1
                 elif force_reveal_children and node.get("collapsibleState", 0):
@@ -10523,7 +10566,11 @@ class AIEditorAPI:
 
     def _tree_node_preview(self, element: Any, item: Any,
                            tree_view: Any = None,
-                           view_id: str = "") -> Dict[str, Any]:
+                           view_id: str = "",
+                           decoration_cache: Optional[
+                               Dict[str, List[Dict[str, Any]]]] = None,
+                           decoration_providers_available: Optional[
+                               bool] = None) -> Dict[str, Any]:
         label = self._tree_value(item, "label")
         if isinstance(label, dict):
             label = label.get("label") or label.get("text") or ""
@@ -10556,7 +10603,8 @@ class AIEditorAPI:
         if resource_uri:
             node["resourceUri"] = resource_uri
             decorations = self._workspace_file_decorations_for_uri(
-                resource_uri)
+                resource_uri, decoration_providers_available,
+                decoration_cache)
             if decorations:
                 node["decoration"] = decorations[0]
                 node["decorations"] = decorations

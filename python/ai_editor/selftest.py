@@ -380,6 +380,10 @@ class _FakeNodeCustomEditorHost:
         self.relayed.append((view_id, message))
         return True
 
+    def dispose_webview_panel(self, view_id):
+        self.relayed.append(("dispose", view_id))
+        return True
+
 
 def test_app_settings_parity() -> None:
     print("── App Settings Parity ──")
@@ -419,6 +423,7 @@ def test_app_settings_parity() -> None:
         "set_extension_activity_view_visibility",
         "set_extension_tree_item_checkbox_state",
         "drop_extension_tree_items",
+        "webview_panel_dispose",
         "extension_quick_input_action",
         "load_history", "switch_provider", "list_chat_providers",
         "provider_send", "provider_cancel", "provider_new_chat",
@@ -1988,7 +1993,11 @@ def test_app_settings_parity() -> None:
         tree_api._vscode_ns = VscodeNamespace(ExtensionHost())
 
         class _WorkspaceDecorationProvider:
+            def __init__(self):
+                self.calls = []
+
             def provideFileDecoration(self, uri, token):
+                self.calls.append(str(uri))
                 if str(uri).endswith("sample.py"):
                     return {
                         "badge": "P",
@@ -2005,11 +2014,12 @@ def test_app_settings_parity() -> None:
                         "color": {
                             "id": "gitDecoration.modifiedResourceForeground",
                         },
-                    }
+                        }
                 return None
 
+        decoration_provider = _WorkspaceDecorationProvider()
         tree_api._vscode_ns.build()["window"][
-            "registerFileDecorationProvider"](_WorkspaceDecorationProvider())
+            "registerFileDecorationProvider"](decoration_provider)
         tree = tree_api.list_workspace_tree()
         root_names = {entry.get("name") for entry in tree.get("entries", [])}
         _check("workspace tree filters ignored directories",
@@ -2052,6 +2062,30 @@ def test_app_settings_parity() -> None:
                readme_tree_node.get("decoration", {}).get("badge") == "M"
                and readme_tree_node.get("decorations", [{}])[0].get(
                    "tooltip") == "Modified by extension")
+
+        class _RepeatedResourceTreeProvider:
+            def getChildren(self, element=None):
+                return ["readme-a", "readme-b"] if element is None else []
+
+            def getTreeItem(self, element):
+                return {
+                    "label": str(element),
+                    "resourceUri": Uri.file(
+                        os.path.join(tmpdir, "README.md")),
+                }
+
+        decoration_provider.calls.clear()
+        repeated_nodes = tree_api._tree_view_nodes_preview(
+            _RepeatedResourceTreeProvider(), max_depth=0)
+        readme_decoration_calls = [
+            item for item in decoration_provider.calls
+            if item.endswith("README.md")
+        ]
+        _check("extension TreeView decoration lookup is cached per snapshot",
+               len(repeated_nodes) == 2
+               and len(readme_decoration_calls) == 1
+               and all(node.get("decoration", {}).get("badge") == "M"
+                       for node in repeated_nodes))
         opened = tree_api.open_workspace_file("src/sample.py")
         _check("open_workspace_file returns content and language",
                opened.get("path") == "src/sample.py"
@@ -5146,6 +5180,14 @@ console.log("quick input filter helpers ok");
            and "function updateExtensionWebviewIcon(viewId,iconPath,viewType)" in html
            and "function applyProviderTabIcon(tab,p)" in html
            and "event==='update_webview_panel_icon'" in html)
+    _check("extension webview panel frontend dispose reaches Node",
+           "function disposeExtensionWebviewPanel(viewId,providerId)" in html
+           and "function clearDisposedWebviewPanel(viewId,providerId)" in html
+           and "webview_panel_dispose" in html
+           and "def webview_panel_dispose(" in app_source
+           and "def dispose_webview_panel(self, view_id: str)" in extension_host_source
+           and "function handleDisposeWebviewPanel(msg)" in node_ext_host_source
+           and "case 'dispose_webview_panel':" in node_ext_host_source)
     _check("extension webview panel view state reaches Node",
            "function notifyWebviewPanelViewState(viewId,isActive,isVisible)" in html
            and "webview_panel_view_state" in html
@@ -5168,6 +5210,7 @@ console.log("quick input filter helpers ok");
            and "scheduleExplorerDecorationRefresh(data)" in html
            and "scheduleExtensionActivityRefresh();" in html
            and "change[\"paths\"] = self._workspace_file_decoration_change_paths(" in app_source
+           and "decoration_cache=decoration_cache" in app_source
            and "const _fileDecorationChangeMaxEventSize = 250" in node_ext_host_source
            and "function _fileDecorationChangedPayload(value)" in node_ext_host_source)
 
@@ -5196,6 +5239,11 @@ console.log("quick input filter helpers ok");
            and fallback_api._node_ext_host.relayed == [
                ("custom-selftest-1", {"type": "ready"})
            ])
+    dispose_result = fallback_api.webview_panel_dispose("custom-selftest-1")
+    _check("webview panel dispose relays frontend close to node host",
+           dispose_result.get("ok") is True
+           and ("dispose", "custom-selftest-1")
+           in fallback_api._node_ext_host.relayed)
 
     manifest_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     manifest_api._controller = object()

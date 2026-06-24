@@ -184,6 +184,9 @@ body.window-resizing * { cursor:inherit !important; }
 .rtab-icon { width:15px; height:15px; flex:0 0 15px; display:inline-flex; align-items:center; justify-content:center; font-size:12px; opacity:.9; background-size:contain; background-position:center; background-repeat:no-repeat; }
 .rtab-icon:empty { display:none; }
 .rtab-label { overflow:hidden; text-overflow:ellipsis; }
+.rtab-close { width:15px; height:15px; margin-left:2px; border:0; background:transparent; color:var(--fg-dim); display:none; align-items:center; justify-content:center; border-radius:4px; padding:0; font-size:13px; line-height:15px; cursor:pointer; }
+.rtab:hover .rtab-close { display:inline-flex; }
+.rtab-close:hover { color:var(--fg); background:var(--bg-hover); }
 .rtab:hover { color:var(--fg); }
 .rtab.active { color:var(--fg); border-bottom-color:var(--fg); }
 .rtab.unavailable { opacity:.68; }
@@ -9515,6 +9518,36 @@ function applyProviderTabIcon(tab,p){
   const visual=providerWebviewIconVisual(p&&p.iconPath);
   applyIconVisual(icon,visual||'');
 }
+function providerTabWebviewId(p){
+  const ids=providerCandidateViewIds(p);
+  return String((p&&(p.view_id||p.viewId||p.webview_id||p.webviewId))||ids[0]||'').trim();
+}
+function ensureProviderTabClose(tab,p){
+  if(!tab)return;
+  let close=tab.querySelector('.rtab-close');
+  const viewId=providerTabWebviewId(p);
+  if(!isExtensionWebviewProvider(p)||!viewId||String(p&&p.id||'')==='chat'||!(p&&p.extension_view)){
+    if(close)close.remove();
+    return;
+  }
+  if(!close){
+    close=document.createElement('button');
+    close.type='button';
+    close.className='rtab-close';
+    close.textContent='×';
+    close.title='Close';
+    close.setAttribute('aria-label','Close webview');
+    tab.appendChild(close);
+  }
+  close.onclick=e=>{
+    e.preventDefault();e.stopPropagation();
+    disposeExtensionWebviewPanel(viewId,p&&p.id);
+  };
+}
+function applyProviderTabChrome(tab,p){
+  applyProviderTabIcon(tab,p);
+  ensureProviderTabClose(tab,p);
+}
 function normalizeExtensionProviderRecord(raw,fallbackViewId){
   const rec=raw&&typeof raw==='object'?raw:{};
   const viewId=String(rec.view_id||rec.viewId||rec.webview_id||rec.webviewId||fallbackViewId||'').trim();
@@ -9697,7 +9730,7 @@ function ensureExtensionProviderPanel(raw,viewId){
     const label=document.createElement('span');label.className='rtab-label';tab.appendChild(label);
     tab.onclick=()=>switchRightTab(p.id);tabs.appendChild(tab);
   }
-  if(tab){applyProviderTabIcon(tab,p);const label=tab.querySelector('.rtab-label');if(label)label.textContent=providerTabLabel(p);tab.title=providerTabTitle(p);tab.setAttribute('aria-label',providerTabTitle(p))}
+  if(tab){applyProviderTabChrome(tab,p);const label=tab.querySelector('.rtab-label');if(label)label.textContent=providerTabLabel(p);tab.title=providerTabTitle(p);tab.setAttribute('aria-label',providerTabTitle(p))}
   let panel=$(providerElId('rp',p.id));
   if(!panel&&panels){panel=document.createElement('div');panel.className='right-panel';panel.id=providerElId('rp',p.id);panels.appendChild(panel)}
   if(panel){panel.dataset.providerId=p.id;panel.dataset.providerSurface='extension-webview';panel.classList.add('provider-webview-host');if(viewId)panel.dataset.viewId=viewId}
@@ -9843,6 +9876,50 @@ function notifyWebviewPanelViewState(viewId,isActive,isVisible){
   const visible=isVisible===undefined?!!isActive:!!isVisible;
   try{window.pywebview.api.webview_panel_view_state(String(viewId),{active:!!isActive,visible:visible,viewColumn:1})}catch(e){}
 }
+function clearDisposedWebviewPanel(viewId,providerId){
+  const id=String(viewId||'').trim();if(!id)return false;
+  delete _webviewTokens[id];
+  delete webviewRuntimeCache[id];
+  const frameId='webview-frame-'+providerDomKey(id);
+  const iframe=document.getElementById(frameId);
+  if(iframe)iframe.remove();
+  const customTab=findCustomEditorTabByViewId(id);
+  if(customTab){
+    customTab.webview={...(customTab.webview||{}),html:''};
+    if(customTab.id===activeTab)showCustomEditorPlaceholder($('editor-custom-webview-host'),customTab);
+    return true;
+  }
+  const viewSelector=(window.CSS&&CSS.escape)?CSS.escape(id):id.replace(/["\\]/g,'\\$&');
+  const panelEl=document.querySelector('.right-panel[data-view-id="'+viewSelector+'"]');
+  const pid=String(providerId||panelEl&&panelEl.dataset.providerId||(id.startsWith('provider.')?id.slice(9):id)||'').trim();
+  if(panelEl){
+    panelEl.innerHTML='';
+    delete panelEl.dataset.viewId;
+    delete panelEl.dataset.webviewSource;
+    delete panelEl.dataset.retainContext;
+  }
+  if(pid&&dynamicExtensionProviderDefs[pid])delete dynamicExtensionProviderDefs[pid];
+  if(pid&&providerDefs[pid]&&providerDefs[pid].extension_view&&isExtensionWebviewProvider(providerDefs[pid])){
+    delete providerDefs[pid];
+  }
+  const tab=pid?providerTabElement(pid):null;
+  if(tab)tab.remove();
+  if(pid){
+    const panel=$(providerElId('rp',pid));
+    if(panel)panel.remove();
+  }
+  if(activeProviderId===pid||activeProviderId===id){
+    switchRightTab('chat');
+  }
+  return true;
+}
+function disposeExtensionWebviewPanel(viewId,providerId){
+  const id=String(viewId||'').trim();if(!id)return false;
+  if(window.pywebview&&window.pywebview.api&&window.pywebview.api.webview_panel_dispose){
+    try{window.pywebview.api.webview_panel_dispose(id)}catch(e){}
+  }
+  return clearDisposedWebviewPanel(id,providerId);
+}
 function switchRightTab(pid){
   activeProviderId=pid;
   config.active_chat_provider=pid;
@@ -9883,7 +9960,7 @@ function localizeProviderUi(){
   Object.keys(providerDefs||{}).forEach(pid=>{
     const p=providerDefs[pid];
     const tab=providerTabElement(pid);
-    if(tab){applyProviderTabIcon(tab,p);const label=tab.querySelector('.rtab-label');if(label)label.textContent=providerTabLabel(p);tab.title=providerTabTitle(p);tab.setAttribute('aria-label',providerTabTitle(p))}
+    if(tab){applyProviderTabChrome(tab,p);const label=tab.querySelector('.rtab-label');if(label)label.textContent=providerTabLabel(p);tab.title=providerTabTitle(p);tab.setAttribute('aria-label',providerTabTitle(p))}
     const refs=providerRefs(pid);
     if(refs.panel&&refs.panel.dataset.providerSurface==='extension-webview'&&!refs.panel.querySelector('iframe')){
       renderProviderWebviewPlaceholder(refs.panel,p,refs.panel.dataset.webviewFallback||'missing-runtime');
@@ -10117,7 +10194,7 @@ async function renderProviderTabs(){
     if(p.available===false)return;
     providerDefs[p.id]=p;
     const tab=document.createElement('div');tab.className='rtab';tab.dataset.rtab=p.id;
-    const tabIcon=document.createElement('span');tabIcon.className='rtab-icon';tab.appendChild(tabIcon);applyProviderTabIcon(tab,p);
+    const tabIcon=document.createElement('span');tabIcon.className='rtab-icon';tab.appendChild(tabIcon);applyProviderTabChrome(tab,p);
     const tabLabel=document.createElement('span');tabLabel.className='rtab-label';tabLabel.textContent=providerTabLabel(p);
     tab.appendChild(tabLabel);tab.title=providerTabTitle(p);tab.setAttribute('aria-label',providerTabTitle(p));
     tab.onclick=()=>switchRightTab(p.id);
@@ -10339,32 +10416,7 @@ window._onEditorEvent=function(event,data){
   if(event==='dispose_webview_panel'){
     const viewId=data&&data.view_id;
     if(!viewId)return;
-    // Remove token
-    delete _webviewTokens[viewId];
-    // Find and remove the iframe
-    const frameId='webview-frame-'+providerDomKey(viewId);
-    const iframe=document.getElementById(frameId);
-    if(iframe)iframe.remove();
-    const customTab=findCustomEditorTabByViewId(viewId);
-    if(customTab){
-      delete webviewRuntimeCache[viewId];
-      customTab.webview={...(customTab.webview||{}),html:''};
-      if(customTab.id===activeTab)showCustomEditorPlaceholder($('editor-custom-webview-host'),customTab);
-      return;
-    }
-    // Find the panel container by view_id and clear it
-    const viewSelector=(window.CSS&&CSS.escape)?CSS.escape(viewId):String(viewId).replace(/["\\]/g,'\\$&');
-    const panelEl=document.querySelector('.right-panel[data-view-id="'+viewSelector+'"]');
-    if(panelEl){
-      panelEl.innerHTML='';
-      delete panelEl.dataset.viewId;
-      delete panelEl.dataset.webviewSource;
-    }
-    // If disposed view was the active tab, switch to chat
-    const providerId=String(viewId).startsWith('provider.')?String(viewId).slice(9):viewId;
-    if(activeProviderId===providerId||activeProviderId===viewId){
-      switchRightTab('chat');
-    }
+    clearDisposedWebviewPanel(viewId,data&&data.provider_id);
     return;
   }
   // ── webview_message: relay message from Python to webview iframe ──

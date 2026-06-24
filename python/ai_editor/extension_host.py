@@ -3729,6 +3729,13 @@ class NodeExtensionHost:
                     payload[key] = state.get(key)
         return self._send(payload)
 
+    def dispose_webview_panel(self, view_id: str) -> bool:
+        """Relay a frontend-initiated webview panel close to Node."""
+        return self._send({
+            "type": "dispose_webview_panel",
+            "viewId": str(view_id or ""),
+        })
+
     def send_quick_input_action(
             self, input_id: str, action: str,
             payload: Optional[Dict[str, Any]] = None) -> bool:

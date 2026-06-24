@@ -7210,6 +7210,15 @@ function handleWebviewPanelViewState(msg) {
     panel._updateViewStateFromHost(nextState);
 }
 
+function handleDisposeWebviewPanel(msg) {
+    const viewId = String(msg.viewId || msg.view_id || '');
+    if (!viewId) return;
+    const panel = _webviewPanels.get(viewId);
+    if (panel && typeof panel.dispose === 'function') {
+        panel.dispose();
+    }
+}
+
 // -------------------------------------------------------------------------
 // Execute a registered command
 // -------------------------------------------------------------------------
@@ -8717,6 +8726,9 @@ async function handleMessage(msg) {
             break;
         case 'webview_panel_view_state':
             handleWebviewPanelViewState(msg);
+            break;
+        case 'dispose_webview_panel':
+            handleDisposeWebviewPanel(msg);
             break;
         case 'resolve_webview_view':
             resolveWebviewView(msg.viewType, msg.state);
