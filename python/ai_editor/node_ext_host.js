@@ -1434,6 +1434,61 @@ class OutputChannel {
     }
 }
 
+class ProcessExecution {
+    constructor(processValue, argsOrOptions, options) {
+        this.process = String(processValue || '');
+        if (Array.isArray(argsOrOptions)) {
+            this.args = argsOrOptions.map(item => String(item));
+            this.options = options || {};
+        } else {
+            this.args = [];
+            this.options = argsOrOptions || {};
+        }
+    }
+}
+
+class ShellExecution {
+    constructor(commandLineOrCommand, argsOrOptions, options) {
+        if (Array.isArray(argsOrOptions)) {
+            this.command = String(commandLineOrCommand || '');
+            this.args = argsOrOptions.map(item => String(item));
+            this.options = options || {};
+            this.commandLine = undefined;
+        } else {
+            this.commandLine = String(commandLineOrCommand || '');
+            this.command = undefined;
+            this.args = [];
+            this.options = argsOrOptions || {};
+        }
+    }
+}
+
+class Task {
+    constructor(definition, scopeOrName, nameOrSource, sourceOrExecution,
+            executionOrProblemMatchers, problemMatchers) {
+        this.definition = definition && typeof definition === 'object'
+            ? definition
+            : {};
+        if (typeof scopeOrName === 'string') {
+            this.scope = undefined;
+            this.name = scopeOrName;
+            this.source = String(nameOrSource || '');
+            this.execution = sourceOrExecution;
+            this.problemMatchers = executionOrProblemMatchers || [];
+        } else {
+            this.scope = scopeOrName;
+            this.name = String(nameOrSource || this.definition.type || 'task');
+            this.source = String(sourceOrExecution || '');
+            this.execution = executionOrProblemMatchers;
+            this.problemMatchers = problemMatchers || [];
+        }
+        this.isBackground = false;
+        this.group = undefined;
+        this.presentationOptions = {};
+        this.runOptions = {};
+    }
+}
+
 // -------------------------------------------------------------------------
 // Global registries
 // -------------------------------------------------------------------------
@@ -1460,6 +1515,7 @@ const _treeDataProviders = new Map();    // viewId -> { provider, disposable? }
 const _treeViews = new Map();            // viewId -> TreeView-like object
 const _treeElementStores = new Map();    // viewId -> element handle store
 const _outputChannels = new Map();       // name -> OutputChannel
+const _taskExecutions = [];              // active TaskExecution-like objects
 const _fileSystemProviders = new Map();  // scheme -> { provider, options, extensionId }
 const _textDocumentContentProviders = new Map(); // scheme -> { provider, extensionId }
 const _uriHandlers = new Map();          // extensionId -> { handler }
@@ -1479,6 +1535,9 @@ let _nextPythonLmRequestHandle = 1;
 let _nextExtensionActivationRequestHandle = 1;
 let _nextWindowDialogRequestHandle = 1;
 let _nextEnvClipboardRequestHandle = 1;
+let _nextTaskExecutionHandle = 1;
+let _nextDebugSessionHandle = 1;
+let _activeDebugSession = null;
 let _envClipboardFallbackText = '';
 const _languageDocumentTextCache = new Map(); // uri -> { version, text }
 const _workspaceTextDocuments = new Map(); // uri -> TextDocument-like object
@@ -2898,6 +2957,97 @@ function _terminalOptionValue(value) {
         return result;
     }
     return value;
+}
+
+function _plainBridgeValue(value) {
+    if (value === undefined || value === null) return value;
+    if (value instanceof Uri) return value.toString();
+    if (value instanceof ProcessExecution) {
+        return {
+            type: 'process',
+            command: value.process,
+            args: value.args || [],
+            options: _plainBridgeValue(value.options || {}),
+        };
+    }
+    if (value instanceof ShellExecution) {
+        return {
+            type: 'shell',
+            command: value.command,
+            commandLine: value.commandLine,
+            args: value.args || [],
+            options: _plainBridgeValue(value.options || {}),
+        };
+    }
+    if (value instanceof ThemeIcon || value instanceof ThemeColor) {
+        return _terminalOptionValue(value);
+    }
+    if (Array.isArray(value)) return value.map(_plainBridgeValue);
+    if (typeof value === 'object') {
+        const result = {};
+        for (const [key, item] of Object.entries(value)) {
+            if (typeof item !== 'function') result[key] = _plainBridgeValue(item);
+        }
+        return result;
+    }
+    return value;
+}
+
+function _taskType(task) {
+    if (!task || typeof task !== 'object') return '';
+    const definition = task.definition && typeof task.definition === 'object'
+        ? task.definition
+        : {};
+    return String(task.type || definition.type || '');
+}
+
+function _taskMatchesFilter(task, filter) {
+    if (!filter || typeof filter !== 'object') return true;
+    const filterType = String(filter.type || '');
+    return !filterType || _taskType(task) === filterType;
+}
+
+function _serializeTask(task) {
+    if (!task || typeof task !== 'object') return { name: String(task || 'task') };
+    return {
+        name: String(task.name || task.label || _taskType(task) || 'task'),
+        source: task.source === undefined ? undefined : String(task.source),
+        type: _taskType(task) || undefined,
+        definition: _plainBridgeValue(task.definition || {}),
+        scope: _plainBridgeValue(task.scope),
+        execution: _plainBridgeValue(task.execution),
+        problemMatchers: _plainBridgeValue(task.problemMatchers || []),
+        presentationOptions: _plainBridgeValue(task.presentationOptions || {}),
+        runOptions: _plainBridgeValue(task.runOptions || {}),
+    };
+}
+
+async function _callTaskProvider(provider, methodName, ...args) {
+    if (!provider || typeof provider !== 'object') return undefined;
+    const method = provider[methodName];
+    if (typeof method !== 'function') return undefined;
+    return await Promise.resolve(method.apply(provider, args));
+}
+
+async function _resolveTask(task) {
+    const provider = _taskProviders.get(_taskType(task));
+    const resolved = await _callTaskProvider(provider, 'resolveTask', task);
+    return resolved || task;
+}
+
+function _debugSessionPayload(session) {
+    if (!session) return undefined;
+    return {
+        id: session.id,
+        type: session.type,
+        name: session.name,
+        configuration: _plainBridgeValue(session.configuration || {}),
+    };
+}
+
+function _debugUpdateActive(session, emitter) {
+    _activeDebugSession = session || null;
+    if (emitter) emitter.fire(_activeDebugSession);
 }
 
 function _terminalSetActive(terminal) {
@@ -5253,6 +5403,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             WorkspaceFolder: 3,
         },
         TerminalLocation: { Panel: 1, Editor: 2 },
+        TaskScope: { Global: 1, Workspace: 2 },
         TerminalExitReason: {
             Unknown: 0,
             Shutdown: 1,
@@ -6192,6 +6343,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         debug: (() => {
             const _onDidStartDebugSession = new EventEmitter();
             const _onDidTerminateDebugSession = new EventEmitter();
+            const _onDidChangeActiveDebugSession = new EventEmitter();
             return {
                 registerDebugAdapterDescriptorFactory(type, factory) {
                     _debugAdapterFactories.set(type, factory);
@@ -6203,19 +6355,56 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     log(`debug: registered config provider for "${type}"`);
                     return new Disposable(() => _debugConfigProviders.delete(type));
                 },
-                startDebugging(folder, config) {
+                async startDebugging(folder, config, options) {
                     log('debug: startDebugging');
-                    send({ type: 'debug_start', config: config || {} });
-                    return Promise.resolve(true);
+                    if (!config || typeof config !== 'object') return false;
+                    const debugType = String(config.type || '');
+                    const provider = _debugConfigProviders.get(debugType);
+                    if (provider && typeof provider.resolveDebugConfiguration === 'function') {
+                        const resolved = await Promise.resolve(
+                            provider.resolveDebugConfiguration(folder, { ...config }));
+                        if (!resolved) return false;
+                        config = resolved;
+                    }
+                    const session = {
+                        id: `debug-${_nextDebugSessionHandle++}`,
+                        type: String(config.type || debugType || 'debug'),
+                        name: String(config.name || config.type || 'Debug'),
+                        workspaceFolder: folder || undefined,
+                        configuration: { ...config },
+                        parentSession: options && options.parentSession,
+                    };
+                    _debugUpdateActive(session, _onDidChangeActiveDebugSession);
+                    _onDidStartDebugSession.fire(session);
+                    send({
+                        type: 'debug_start',
+                        session: _debugSessionPayload(session),
+                        config: _plainBridgeValue(config || {}),
+                    });
+                    return true;
                 },
-                get activeDebugSession() { return null; },
+                stopDebugging(session) {
+                    const target = session || _activeDebugSession;
+                    if (!target) return Promise.resolve();
+                    if (_activeDebugSession && _activeDebugSession.id === target.id) {
+                        _debugUpdateActive(null, _onDidChangeActiveDebugSession);
+                    }
+                    _onDidTerminateDebugSession.fire(target);
+                    send({
+                        type: 'debug_stop',
+                        session: _debugSessionPayload(target),
+                    });
+                    return Promise.resolve();
+                },
+                get activeDebugSession() { return _activeDebugSession; },
                 get breakpoints() { return []; },
-                onDidChangeActiveDebugSession: new EventEmitter().event,
+                onDidChangeActiveDebugSession: _onDidChangeActiveDebugSession.event,
                 onDidStartDebugSession: _onDidStartDebugSession.event,
                 onDidTerminateDebugSession: _onDidTerminateDebugSession.event,
                 onDidChangeBreakpoints: new EventEmitter().event,
                 _onDidStartDebugSession,
                 _onDidTerminateDebugSession,
+                _onDidChangeActiveDebugSession,
             };
         })(),
 
@@ -6223,35 +6412,74 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         tasks: (() => {
             const _onDidStartTask = new EventEmitter();
             const _onDidEndTask = new EventEmitter();
+            const _onDidStartTaskProcess = new EventEmitter();
+            const _onDidEndTaskProcess = new EventEmitter();
+            const endExecution = (execution, exitCode = undefined) => {
+                const index = _taskExecutions.indexOf(execution);
+                if (index >= 0) _taskExecutions.splice(index, 1);
+                _onDidEndTask.fire({ execution, task: execution.task });
+                _onDidEndTaskProcess.fire({ execution, exitCode });
+            };
             return {
                 registerTaskProvider(type, provider) {
                     _taskProviders.set(type, provider);
                     log(`tasks: registered provider for "${type}"`);
                     return new Disposable(() => _taskProviders.delete(type));
                 },
-                fetchTasks(filter) {
+                async fetchTasks(filter) {
                     log('tasks: fetchTasks');
-                    return Promise.resolve([]);
+                    const result = [];
+                    for (const [taskType, provider] of _taskProviders.entries()) {
+                        const provided = await _callTaskProvider(provider, 'provideTasks');
+                        for (const task of Array.isArray(provided) ? provided : []) {
+                            if (task && typeof task === 'object'
+                                    && task.definition && !task.definition.type) {
+                                task.definition.type = taskType;
+                            }
+                            if (_taskMatchesFilter(task, filter)) result.push(task);
+                        }
+                    }
+                    return result;
                 },
-                executeTask(task) {
+                async executeTask(task) {
                     log('tasks: executeTask');
-                    send({ type: 'task_execute', task: { name: task?.name, source: task?.source, definition: task?.definition } });
-                    const execution = { task, terminate() {} };
-                    return Promise.resolve(execution);
+                    const resolved = await _resolveTask(task);
+                    const execution = {
+                        id: `task-${_nextTaskExecutionHandle++}`,
+                        task: resolved,
+                        terminate() {
+                            endExecution(execution, undefined);
+                            return Promise.resolve();
+                        },
+                    };
+                    _taskExecutions.push(execution);
+                    _onDidStartTask.fire({ execution, task: resolved });
+                    _onDidStartTaskProcess.fire({ execution, processId: 0 });
+                    send({
+                        type: 'task_execute',
+                        executionId: execution.id,
+                        task: _serializeTask(resolved),
+                    });
+                    return execution;
                 },
                 onDidStartTask: _onDidStartTask.event,
                 onDidEndTask: _onDidEndTask.event,
-                onDidStartTaskProcess: new EventEmitter().event,
-                onDidEndTaskProcess: new EventEmitter().event,
-                taskExecutions: [],
+                onDidStartTaskProcess: _onDidStartTaskProcess.event,
+                onDidEndTaskProcess: _onDidEndTaskProcess.event,
+                get taskExecutions() { return _taskExecutions.slice(); },
                 _onDidStartTask,
                 _onDidEndTask,
+                _onDidStartTaskProcess,
+                _onDidEndTaskProcess,
             };
         })(),
 
         // --- Types used by some extensions ---
         ThemeIcon,
         ThemeColor,
+        ProcessExecution,
+        ShellExecution,
+        Task,
         FileDecoration,
         MarkdownString: class {
             constructor(value = '', supportThemeIcons = false) {

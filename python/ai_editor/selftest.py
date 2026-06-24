@@ -5243,6 +5243,18 @@ console.log("quick input filter helpers ok");
            and "function _configurationTargetName(target)" in node_ext_host_source
            and "_configurationUpdateTargets[fullKey]" in node_ext_host_source
            and "message.target = targetName" in node_ext_host_source)
+    _check("extension task and debug runtimes expose VS Code lifecycle",
+           "class ProcessExecution" in node_ext_host_source
+           and "class ShellExecution" in node_ext_host_source
+           and "class Task" in node_ext_host_source
+           and "TaskScope: { Global: 1, Workspace: 2 }" in node_ext_host_source
+           and "async fetchTasks(filter)" in node_ext_host_source
+           and "async executeTask(task)" in node_ext_host_source
+           and "get taskExecutions()" in node_ext_host_source
+           and "async startDebugging(folder, config, options)"
+           in node_ext_host_source
+           and "stopDebugging(session)" in node_ext_host_source
+           and "get activeDebugSession()" in node_ext_host_source)
     _check("extension workspace folder picker uses dynamic QuickPick",
            "showWorkspaceFolderPick(options, token)" in node_ext_host_source
            and "function _windowShowWorkspaceFolderPick" in node_ext_host_source
@@ -11907,6 +11919,99 @@ async function activate(context) {
     disposables.forEach(disposable => disposable.dispose());
     return { created, after, ptyAfter, interacted, events };
   });
+  vscode.commands.registerCommand('selftest.node.taskDebugProbe', async () => {
+    const taskEvents = [];
+    const debugEvents = [];
+    const disposables = [
+      vscode.tasks.onDidStartTask(event => {
+        taskEvents.push('start:' + event.execution.task.name);
+      }),
+      vscode.tasks.onDidStartTaskProcess(event => {
+        taskEvents.push('process:' + event.processId);
+      }),
+      vscode.tasks.onDidEndTask(event => {
+        taskEvents.push('end:' + event.execution.task.name);
+      }),
+      vscode.tasks.onDidEndTaskProcess(event => {
+        taskEvents.push('processEnd:' + event.exitCode);
+      }),
+      vscode.debug.onDidChangeActiveDebugSession(session => {
+        debugEvents.push('active:' + (session ? session.name : 'none'));
+      }),
+      vscode.debug.onDidStartDebugSession(session => {
+        debugEvents.push('start:' + session.name + ':' + session.type);
+      }),
+      vscode.debug.onDidTerminateDebugSession(session => {
+        debugEvents.push('end:' + session.name);
+      }),
+    ];
+    let resolvedTask = false;
+    let resolvedDebug = false;
+    const providerDisposable = vscode.tasks.registerTaskProvider('node-selftest', {
+      provideTasks() {
+        return [
+          new vscode.Task(
+            { type: 'node-selftest', command: 'echo' },
+            vscode.TaskScope.Workspace,
+            'Node Selftest Task',
+            'selftest',
+            new vscode.ShellExecution('echo node-task'),
+            []
+          ),
+        ];
+      },
+      resolveTask(task) {
+        resolvedTask = true;
+        task.presentationOptions = { reveal: 1 };
+        return task;
+      },
+    });
+    const debugDisposable = vscode.debug.registerDebugConfigurationProvider(
+      'node-debug',
+      {
+        resolveDebugConfiguration(folder, config) {
+          resolvedDebug = true;
+          return { ...config, name: config.name + ' Resolved' };
+        },
+      }
+    );
+    const fetched = await vscode.tasks.fetchTasks({ type: 'node-selftest' });
+    const execution = await vscode.tasks.executeTask(fetched[0]);
+    const activeDuringTask = vscode.tasks.taskExecutions.length;
+    await execution.terminate();
+    const activeAfterTask = vscode.tasks.taskExecutions.length;
+    const debugStarted = await vscode.debug.startDebugging(undefined, {
+      type: 'node-debug',
+      name: 'Node Debug',
+      request: 'launch',
+      program: 'debug-target.js',
+    });
+    const activeDebugName = vscode.debug.activeDebugSession
+      && vscode.debug.activeDebugSession.name;
+    await vscode.debug.stopDebugging(vscode.debug.activeDebugSession);
+    const activeAfterDebug = vscode.debug.activeDebugSession
+      && vscode.debug.activeDebugSession.name;
+    providerDisposable.dispose();
+    debugDisposable.dispose();
+    disposables.forEach(disposable => disposable.dispose());
+    return {
+      taskCount: fetched.length,
+      taskName: fetched[0] && fetched[0].name,
+      taskType: fetched[0] && fetched[0].definition && fetched[0].definition.type,
+      taskExecutionId: execution && execution.id,
+      activeDuringTask,
+      activeAfterTask,
+      resolvedTask,
+      taskEvents,
+      debugStarted,
+      activeDebugName,
+      activeAfterDebug,
+      resolvedDebug,
+      debugEvents,
+      hasTaskClasses: !!(vscode.Task && vscode.ShellExecution && vscode.ProcessExecution),
+      taskScopeWorkspace: vscode.TaskScope.Workspace,
+    };
+  });
   vscode.commands.registerCommand('selftest.node.messageOptionsProbe', async () => {
     const info = await vscode.window.showInformationMessage(
       'Info probe',
@@ -12763,6 +12868,15 @@ module.exports = { activate, deactivate };
                 except Exception as exc:
                     node_terminal_probe = {"_error": str(exc)}
                 node_terminal_events = list(node_ui_bridge.terminal_events)
+                node_task_debug_command_registered = _wait_until(
+                    lambda: "selftest.node.taskDebugProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                try:
+                    node_task_debug_probe = api._ext_host.commands.execute(
+                        "selftest.node.taskDebugProbe")
+                except Exception as exc:
+                    node_task_debug_probe = {"_error": str(exc)}
                 node_message_options_command_registered = _wait_until(
                     lambda: "selftest.node.messageOptionsProbe"
                     in api._ext_host.commands.list_commands(),
@@ -14862,6 +14976,45 @@ module.exports = { activate, deactivate };
                            "probe": node_terminal_probe,
                            "bridge": node_terminal_events,
                        }, ensure_ascii=False, default=str))
+                node_task_debug_events = (
+                    node_task_debug_probe.get("taskEvents", [])
+                    if isinstance(node_task_debug_probe, dict) else [])
+                node_debug_events = (
+                    node_task_debug_probe.get("debugEvents", [])
+                    if isinstance(node_task_debug_probe, dict) else [])
+                _check("node host task and debug lifecycles match VS Code API",
+                       node_started is True
+                       and node_task_debug_command_registered
+                       and isinstance(node_task_debug_probe, dict)
+                       and node_task_debug_probe.get("hasTaskClasses") is True
+                       and node_task_debug_probe.get("taskScopeWorkspace") == 2
+                       and node_task_debug_probe.get("taskCount") == 1
+                       and node_task_debug_probe.get("taskName")
+                       == "Node Selftest Task"
+                       and node_task_debug_probe.get("taskType")
+                       == "node-selftest"
+                       and node_task_debug_probe.get("taskExecutionId")
+                       and node_task_debug_probe.get("activeDuringTask") == 1
+                       and node_task_debug_probe.get("activeAfterTask") == 0
+                       and node_task_debug_probe.get("resolvedTask") is True
+                       and "start:Node Selftest Task"
+                       in node_task_debug_events
+                       and "process:0" in node_task_debug_events
+                       and "end:Node Selftest Task" in node_task_debug_events
+                       and "processEnd:undefined" in node_task_debug_events
+                       and node_task_debug_probe.get("debugStarted") is True
+                       and node_task_debug_probe.get("activeDebugName")
+                       == "Node Debug Resolved"
+                       and node_task_debug_probe.get("activeAfterDebug")
+                       in {None, ""}
+                       and node_task_debug_probe.get("resolvedDebug") is True
+                       and "active:Node Debug Resolved" in node_debug_events
+                       and "start:Node Debug Resolved:node-debug"
+                       in node_debug_events
+                       and "active:none" in node_debug_events
+                       and "end:Node Debug Resolved" in node_debug_events,
+                       json.dumps(node_task_debug_probe,
+                                  ensure_ascii=False, default=str))
                 _check("node host message APIs separate options from actions",
                        node_started is True
                        and node_message_options_command_registered
