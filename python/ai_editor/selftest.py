@@ -4142,8 +4142,13 @@ console.log("frontend signature help docs ok");
             and "dataset.extSettingTags" in html
             and "dataset.extSettingType=type" in html
             and "dataset.extSettingExtension" in html
+            and "dataset.extSettingFeature" in html
+            and "dataset.extSettingLanguage" in html
+            and "dataset.extSettingOverride" in html
             and "dataset.extSettingPolicy" in html
             and "@tag:" in html
+            and "function extensionSettingSplitFilterValues(value)" in html
+            and "function extensionSettingPushFilterValues(list,value)" in html
             and "function extensionSettingTargetName(target)" in html
             and "function createExtensionSettingTargetSelect(target)" in html
             and "function extensionSettingRowTarget(row)" in html
@@ -4157,6 +4162,10 @@ console.log("frontend signature help docs ok");
             and "@target:" in html
             and "@ext:" in html
             and "@type:" in html
+            and "@id:" in html
+            and "@feature:" in html
+            and "@lang:" in html
+            and "@stable" in html
             and "@policy" in html
             and "@restricted" in html
             and "@sync" in html
@@ -4169,6 +4178,10 @@ console.log("frontend signature help docs ok");
             and "const policyOk=!query.policies.length||query.policies.some" in html
             and "const restrictedOk=!query.restrictedOnly||rowTags.includes('restricted')" in html
             and "const syncOk=!query.syncs.length||query.syncs.some" in html
+            and "const idOk=!query.ids.length||query.ids.some" in html
+            and "const featureOk=!query.features.length||query.features.some" in html
+            and "const langOk=!query.languages.length||query.languages.some" in html
+            and "const stableOk=!query.stableOnly" in html
             and "ext-settings-clear-filters" in html
             and "categorySelect.value='';scopeSelect.value='';targetSelect.value='';modifiedBox.checked=false" in html
             and "Application/Machine" in html
@@ -4260,6 +4273,8 @@ console.log("frontend signature help docs ok");
             "extensionSettingEnumDescription",
             "renderExtensionSettingEnumDescription",
             "extensionSettingSearchText",
+            "extensionSettingSplitFilterValues",
+            "extensionSettingPushFilterValues",
             "extensionSettingJson",
             "extensionSettingJsonRows",
             "extensionSettingTextRows",
@@ -4619,6 +4634,20 @@ assert(metadataQuery.extensions[0] === "selftest"
        && metadataQuery.syncs[0] === "sync-locked"
        && metadataQuery.text === "render",
        "settings query parses extension metadata filters");
+const vscodeStyleQuery = extensionSettingParseQuery(
+  '@id:selftest.* @feature:"Selftest Settings" @lang:selflang @tag:preview,experimental @ext:"selftest.settings-pack" @stable render',
+  false);
+assert(vscodeStyleQuery.ids[0] === "selftest.*"
+       && vscodeStyleQuery.features[0] === "selftest settings"
+       && vscodeStyleQuery.languages[0] === "selflang"
+       && vscodeStyleQuery.tags[0] === "preview"
+       && vscodeStyleQuery.tags[1] === "experimental"
+       && vscodeStyleQuery.extensions[0] === "selftest.settings-pack"
+       && vscodeStyleQuery.stableOnly === true
+       && vscodeStyleQuery.text === "render",
+       "settings query parses vscode id feature language quoted comma filters");
+assert(extensionSettingSplitFilterValues('"one,two",three').length === 3,
+       "settings query filter values split comma lists");
 const searchText = extensionSettingSearchText("demo.telemetry", searchSchema, "string",
   "Controls telemetry.", "Deprecated telemetry mode.", "");
 assert(searchText.indexOf("usesonlineservices") >= 0
