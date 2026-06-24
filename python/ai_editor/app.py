@@ -181,6 +181,15 @@ _AI_EDITOR_SECTION_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "enabled_contributions_explicit": False,
         "diagnostics_enabled": False,
     },
+    "editor": {
+        "defaultFormatter": "",
+        "formatOnType": False,
+        "formatOnSave": False,
+        "linkedEditing": False,
+        "codeActionsOnSave": {},
+        "tabSize": 4,
+        "insertSpaces": True,
+    },
     "customization": {
         "instructions_locations": [".sao/instructions.md", ".sao/instructions"],
         "agent_locations": [".sao/agents"],

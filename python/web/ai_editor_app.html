@@ -1720,6 +1720,10 @@ pre.code-block { overflow:visible; }
       <label>Default Formatter</label>
       <input id="s-editor-default-formatter" placeholder="publisher.extension-id" style="width:100%">
       <div class="settings-help">Matches VS Code's editor.defaultFormatter and is used by Format Document, Format Selection, and format on save.</div>
+      <div class="settings-grid">
+        <div><label>Tab Size</label><input id="s-editor-tab-size" type="number" min="1" max="16" step="1" style="width:100%"></div>
+        <label class="settings-check"><input id="s-editor-insert-spaces" type="checkbox"><span><b>Insert spaces</b><small>Use spaces instead of tab characters when formatting.</small></span></label>
+      </div>
       <label class="settings-check"><input id="s-editor-format-on-save" type="checkbox"><span><b>Format on save</b><small>Runs the active formatter before explicit saves.</small></span></label>
       <label class="settings-check"><input id="s-editor-format-on-type" type="checkbox"><span><b>Format on type</b><small>Runs extension on-type formatting providers for typed trigger characters.</small></span></label>
       <label class="settings-check"><input id="s-editor-linked-editing" type="checkbox"><span><b>Linked editing</b><small>Mirrors edits across extension-provided linked ranges, such as paired HTML tags.</small></span></label>
@@ -1730,6 +1734,10 @@ pre.code-block { overflow:visible; }
       <label class="settings-check"><input id="s-editor-lang-override-enabled" type="checkbox"><span><b>Override current language</b><small>Use these values only when the active editor has this language id.</small></span></label>
       <label>Default Formatter</label>
       <input id="s-editor-lang-default-formatter" placeholder="publisher.extension-id" style="width:100%">
+      <div class="settings-grid">
+        <div><label>Tab Size</label><input id="s-editor-lang-tab-size" type="number" min="1" max="16" step="1" style="width:100%"></div>
+        <label class="settings-check"><input id="s-editor-lang-insert-spaces" type="checkbox"><span><b>Insert spaces</b><small>Language-specific editor.insertSpaces.</small></span></label>
+      </div>
       <label class="settings-check"><input id="s-editor-lang-format-on-save" type="checkbox"><span><b>Format on save</b><small>Language-specific editor.formatOnSave.</small></span></label>
       <label class="settings-check"><input id="s-editor-lang-format-on-type" type="checkbox"><span><b>Format on type</b><small>Language-specific editor.formatOnType.</small></span></label>
       <label class="settings-check"><input id="s-editor-lang-linked-editing" type="checkbox"><span><b>Linked editing</b><small>Language-specific editor.linkedEditing.</small></span></label>
@@ -1926,7 +1934,7 @@ const SETTINGS_SECTION_DEFAULTS={
   mcp:{access:'prompt',autostart:false,discovery_enabled:true,collision_behavior:'first',server_sampling:false},
   terminal:{profile:'PowerShell 7 (No Profile)',shell_path:'',shell_args:[],timeout:30,output_limit:8000,auto_approve:{}},
   extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands','views','customEditors'],enabled_contributions_explicit:false,diagnostics_enabled:false},
-  editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,linkedEditing:false,codeActionsOnSave:{}},
+  editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,linkedEditing:false,codeActionsOnSave:{},tabSize:4,insertSpaces:true},
   customization:{instructions_locations:['.sao/instructions.md','.sao/instructions'],agent_locations:['.sao/agents'],workflow_locations:['.sao/workflows'],skill_locations:['.agents/skills/.local','.claude/skills/.local'],use_agent_md:true,use_claude_md:false}
 };
 const EXTENSION_CONTRIBUTION_OPTIONS=[
@@ -7619,7 +7627,15 @@ function deleteLine(){
 }
 
 // ── Format document ──
-function editorFormatOptions(){return {tabSize:4,insertSpaces:true}}
+function editorTabSize(value){
+  const n=Math.trunc(Number(value));
+  return Number.isFinite(n)&&n>=1&&n<=16?n:4;
+}
+function editorInsertSpaces(value){return value!==false}
+function editorFormatOptions(){
+  const editor=editorEffectiveSection('editor');
+  return {tabSize:editorTabSize(editor.tabSize),insertSpaces:editorInsertSpaces(editor.insertSpaces)};
+}
 function setDottedConfigValue(target,path,value){
   const parts=String(path||'').split('.').map(p=>p.trim()).filter(Boolean);
   if(!parts.length||!target||typeof target!=='object')return;
@@ -10349,12 +10365,13 @@ function removeManagedEditorLanguageOverrideKeys(entry){
   const next={...entry};
   const managedFlat=[
     'editor.defaultFormatter','editor.default_formatter','editor.formatOnSave',
-    'editor.formatOnType','editor.linkedEditing','editor.codeActionsOnSave'
+    'editor.formatOnType','editor.linkedEditing','editor.codeActionsOnSave',
+    'editor.tabSize','editor.insertSpaces'
   ];
   managedFlat.forEach(key=>delete next[key]);
   if(isPlainObject(next.editor)){
     const editor={...next.editor};
-    ['defaultFormatter','default_formatter','formatOnSave','formatOnType','linkedEditing','codeActionsOnSave'].forEach(key=>delete editor[key]);
+    ['defaultFormatter','default_formatter','formatOnSave','formatOnType','linkedEditing','codeActionsOnSave','tabSize','insertSpaces'].forEach(key=>delete editor[key]);
     if(Object.keys(editor).length)next.editor=editor;
     else delete next.editor;
   }
@@ -10368,6 +10385,8 @@ function saveEditorLanguageOverrideSettings(){
   if(enabled){
     const current=editorLanguageOverrideSettings(editorLang);
     entry['editor.defaultFormatter']=readInputValue('s-editor-lang-default-formatter').trim();
+    entry['editor.tabSize']=editorTabSize(readNumberValue('s-editor-lang-tab-size',4,true));
+    entry['editor.insertSpaces']=readCheckedValue('s-editor-lang-insert-spaces');
     entry['editor.formatOnSave']=readCheckedValue('s-editor-lang-format-on-save');
     entry['editor.formatOnType']=readCheckedValue('s-editor-lang-format-on-type');
     entry['editor.linkedEditing']=readCheckedValue('s-editor-lang-linked-editing');
@@ -10401,6 +10420,8 @@ function openSettings(){
   setFileIconThemeInfo(selectedIconThemeOption?('Active: '+selectedIconThemeOption.textContent):'',false);
   const editor=settingSection('editor');
   setInputValue('s-editor-default-formatter',editor.defaultFormatter||editor.default_formatter||'');
+  setInputValue('s-editor-tab-size',editorTabSize(editor.tabSize));
+  setCheckedValue('s-editor-insert-spaces',editorInsertSpaces(editor.insertSpaces));
   setCheckedValue('s-editor-format-on-save',editor.formatOnSave===true);
   setCheckedValue('s-editor-format-on-type',editor.formatOnType===true);
   setCheckedValue('s-editor-linked-editing',editor.linkedEditing===true);
@@ -10410,6 +10431,8 @@ function openSettings(){
   const languageEditor=editorLanguageOverrideHasEditor(editorLang)?{...editor,...languageOverride}:editorEffectiveSection('editor',editorLang);
   setCheckedValue('s-editor-lang-override-enabled',editorLanguageOverrideHasEditor(editorLang));
   setInputValue('s-editor-lang-default-formatter',languageEditor.defaultFormatter||languageEditor.default_formatter||'');
+  setInputValue('s-editor-lang-tab-size',editorTabSize(languageEditor.tabSize));
+  setCheckedValue('s-editor-lang-insert-spaces',editorInsertSpaces(languageEditor.insertSpaces));
   setCheckedValue('s-editor-lang-format-on-save',languageEditor.formatOnSave===true);
   setCheckedValue('s-editor-lang-format-on-type',languageEditor.formatOnType===true);
   setCheckedValue('s-editor-lang-linked-editing',languageEditor.linkedEditing===true);
@@ -10651,7 +10674,7 @@ async function saveSettings(){
   config.terminal={...settingSection('terminal'),profile:readInputValue('s-term-profile')||'PowerShell 7 (No Profile)',shell_path:readInputValue('s-term-shell'),shell_args:readListValue('s-term-args',false),timeout:readNumberValue('s-term-timeout',30,true),output_limit:readNumberValue('s-term-output',8000,true)};
   config.extensions={...settingSection('extensions'),confirm_install:readCheckedValue('s-ext-confirm'),diagnostics_enabled:readCheckedValue('s-ext-diagnostics'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true),enabled_contributions:readExtensionContributionValues(),enabled_contributions_explicit:true};
   const editorSettings=settingSection('editor');
-  config.editor={...editorSettings,defaultFormatter:readInputValue('s-editor-default-formatter').trim(),formatOnSave:readCheckedValue('s-editor-format-on-save'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing'),codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)};
+  config.editor={...editorSettings,defaultFormatter:readInputValue('s-editor-default-formatter').trim(),tabSize:editorTabSize(readNumberValue('s-editor-tab-size',4,true)),insertSpaces:readCheckedValue('s-editor-insert-spaces'),formatOnSave:readCheckedValue('s-editor-format-on-save'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing'),codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)};
   saveEditorLanguageOverrideSettings();
   config.customization={...settingSection('customization'),use_agent_md:readCheckedValue('s-cust-agent-md'),use_claude_md:readCheckedValue('s-cust-claude-md'),instructions_locations:readListValue('s-cust-instructions',true),agent_locations:readListValue('s-cust-agents',true),workflow_locations:readListValue('s-cust-workflows',true),skill_locations:readListValue('s-cust-skills',true)};
   await applyEditorColorTheme(readInputValue('s-color-theme')||config.color_theme||config.theme||'dark');

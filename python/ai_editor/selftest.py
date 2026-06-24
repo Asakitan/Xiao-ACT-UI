@@ -1419,6 +1419,7 @@ def test_app_settings_parity() -> None:
         "color_theme": "ext:phase-dark",
         "file_icon_theme": "ext:phase-icons",
         "layout": {"sidebarVisible": True, "editorVisible": True, "chatVisible": True, "panelHeight": "320px"},
+        "editor": {"tabSize": 2, "insertSpaces": False},
         "[python]": {"editor.formatOnSave": True},
         "_provider_keys": {"openai": "new-openai", "deepseek": "new-deepseek"},
         "unknown_payload": {"preserve": True},
@@ -1454,6 +1455,11 @@ def test_app_settings_parity() -> None:
     _check("language override settings round-trip",
            stored.get("[python]", {}).get("editor.formatOnSave") is True
            and loaded.get("[python]", {}).get("editor.formatOnSave") is True)
+    _check("editor format option settings round-trip",
+           stored.get("editor", {}).get("tabSize") == 2
+           and stored.get("editor", {}).get("insertSpaces") is False
+           and loaded.get("editor", {}).get("tabSize") == 2
+           and loaded.get("editor", {}).get("insertSpaces") is False)
 
     from ai_editor import app as app_mod
     from config import SettingsManager
@@ -2355,9 +2361,13 @@ def test_phase1_ai_editor_regressions() -> None:
            'id="s-editor-lang-override-enabled"' in html
            and 'id="s-editor-lang-default-formatter"' in html
            and 'id="s-editor-lang-organize-imports-on-save"' in html
+           and 'id="s-editor-tab-size"' in html
+           and 'id="s-editor-lang-tab-size"' in html
+           and "function editorFormatOptions()" in html
            and "function editorEffectiveSection(section,language)" in html
            and "function editorLanguageOverrideSettings(language)" in html
            and "entry['editor.defaultFormatter']" in html
+           and "entry['editor.tabSize']" in html
            and "saveEditorLanguageOverrideSettings();" in html)
     _check("provider webviews bridge persistent vscode state",
            'type:"webview-set-state"' in html
@@ -2627,7 +2637,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function handleEditorInlineCompletionKey(e)" in html
            and "editorProviderPayload('inlineCompletion'" in html
            and "function editorFormatOptions()" in html
-           and "editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,linkedEditing:false,codeActionsOnSave:{}}" in html
+           and "editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,linkedEditing:false,codeActionsOnSave:{},tabSize:4,insertSpaces:true}" in html
            and "defaultFormatter:''" in html
            and "linkedEditing:false" in html
            and "formatOnSave:false" in html
@@ -2791,6 +2801,9 @@ def test_phase1_ai_editor_regressions() -> None:
             "editorLanguageOverrideKey",
             "editorLanguageOverrideSection",
             "editorEffectiveSection",
+            "editorTabSize",
+            "editorInsertSpaces",
+            "editorFormatOptions",
             "editorSaveSettingEnabled",
             "editorKnownCodeActionsOnSave",
             "editorCodeActionKindIsSource",
@@ -2821,6 +2834,13 @@ assert(editorKnownCodeActionsOnSave(config.editor.codeActionsOnSave, "source.org
 config = { editor: { codeActionsOnSave: ["quickfix", "source.organizeImports", "source.fixAll.eslint"] } };
 kinds = editorCodeActionsOnSaveKinds();
 assert(kinds[0] === "source.fixAll.eslint" && kinds[1] === "source.organizeImports", "array settings filtered and sorted");
+config = { editor: { tabSize: 4, insertSpaces: true }, "[python]": { "editor.tabSize": 2, "editor.insertSpaces": false } };
+editorLang = "python";
+const formatOptions = editorFormatOptions();
+assert(formatOptions.tabSize === 2 && formatOptions.insertSpaces === false, "language format options override global settings");
+config = { editor: { tabSize: 99, insertSpaces: "truthy" } };
+editorLang = "plaintext";
+assert(editorFormatOptions().tabSize === 4 && editorFormatOptions().insertSpaces === true, "format options clamp invalid settings");
 console.log("frontend save participant settings ok");
 """
         js_path = ""
