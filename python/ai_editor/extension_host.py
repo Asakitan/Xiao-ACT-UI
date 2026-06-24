@@ -1561,6 +1561,8 @@ class NodeExtensionHost:
          "manifest": {...}, "storageRoot": "..."}
         {"type": "deactivate", "extensionId": "..."}
         {"type": "webviewMessage", "viewId": "...", "message": {...}}
+        {"type": "deserialize_webview_panel", "viewType": "...",
+         "state": {...}}
         {"type": "settings_sync",    "settings": {...}}
         {"type": "settings_changed", "section": "...", "key": "...", "value": ...}
         {"type": "shutdown"}
@@ -1573,6 +1575,8 @@ class NodeExtensionHost:
          "localResourceRoots": [...]}
         {"type": "webview_post_message","viewId": "...", "message": {...}}
         {"type": "webview_dispose",     "viewId": "..."}
+        {"type": "webview_panel_deserialized", "requestId": "...",
+         "ok": true, "viewId": "..."}
         {"type": "command_registered",  "commandId": "...", "extensionId": "..."}
         {"type": "command_response",    "requestId": "...", "ok": true, "value": ...}
         {"type": "config_set",          "section": "...", "key": "...", "value": ...}
@@ -1643,6 +1647,8 @@ class NodeExtensionHost:
         self._custom_editor_lifecycle_requests: Dict[str, Dict[str, Any]] = {}
         self._custom_editor_state_lock = threading.Lock()
         self._custom_editor_states: Dict[str, Dict[str, Any]] = {}
+        self._webview_serializer_request_lock = threading.Lock()
+        self._webview_serializer_requests: Dict[str, Dict[str, Any]] = {}
         self._shutting_down = False
 
     # -- Lifecycle -----------------------------------------------------------
@@ -2359,6 +2365,16 @@ class NodeExtensionHost:
                 if isinstance(event, threading.Event):
                     event.set()
 
+        elif msg_type == "webview_panel_deserialized":
+            request_id = str(msg.get("requestId", ""))
+            with self._webview_serializer_request_lock:
+                pending = self._webview_serializer_requests.get(request_id)
+            if pending:
+                pending["response"] = msg
+                event = pending.get("event")
+                if isinstance(event, threading.Event):
+                    event.set()
+
         elif msg_type == "custom_editor_changed":
             state = self._store_custom_editor_state(msg)
             if self._ui_bridge:
@@ -2951,6 +2967,65 @@ class NodeExtensionHost:
                 error=error,
             )
 
+    def request_webview_panel_deserialization(
+            self, view_type: str, state: Any = None, title: str = "",
+            view_id: str = "", timeout: float = 2.0) -> Dict[str, Any]:
+        """Ask Node to revive a WebviewPanel via a registered serializer."""
+        started = time.perf_counter()
+        ok = False
+        timed_out = False
+        error = ""
+        detail = str(view_type or "")
+        if not self.is_running:
+            error = "Node extension host is not running"
+            self._record_diagnostic(
+                "webview_serializer", 0, ok=False, detail=detail,
+                error=error)
+            return {"ok": False, "error": error}
+        request_id = str(uuid.uuid4())
+        event = threading.Event()
+        with self._webview_serializer_request_lock:
+            self._webview_serializer_requests[request_id] = {"event": event}
+        try:
+            sent = self._send({
+                "type": "deserialize_webview_panel",
+                "requestId": request_id,
+                "viewType": str(view_type or ""),
+                "state": state,
+                "title": str(title or ""),
+                "viewId": str(view_id or ""),
+            })
+            if not sent:
+                error = "Node webview panel serializer request could not be sent"
+                return {"ok": False, "error": error}
+            if not event.wait(timeout):
+                timed_out = True
+                error = "Node webview panel serializer request timed out"
+                return {"ok": False, "error": error, "timeout": True}
+            with self._webview_serializer_request_lock:
+                pending = self._webview_serializer_requests.get(
+                    request_id, {})
+            response = pending.get("response", {})
+            if isinstance(response, dict) and response.get("ok"):
+                ok = True
+                return dict(response)
+            error = (
+                response.get("error")
+                if isinstance(response, dict)
+                else "Node webview panel serializer failed")
+            return {"ok": False, "error": error}
+        finally:
+            with self._webview_serializer_request_lock:
+                self._webview_serializer_requests.pop(request_id, None)
+            self._record_diagnostic(
+                "webview_serializer",
+                (time.perf_counter() - started) * 1000,
+                ok=ok,
+                timeout=timed_out,
+                detail=detail,
+                error=error,
+            )
+
     def request_custom_editor_lifecycle(
             self, action: str, view_type: str = "", uri: str = "",
             view_id: str = "", target: str = "",
@@ -3112,6 +3187,8 @@ class NodeExtensionHost:
                 "customEditors": len(self._custom_editor_requests),
                 "customEditorLifecycle": len(
                     self._custom_editor_lifecycle_requests),
+                "webviewSerializers": len(
+                    self._webview_serializer_requests),
             },
             "categories": categories,
         }

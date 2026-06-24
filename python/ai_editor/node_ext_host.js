@@ -1252,6 +1252,7 @@ const _pythonCommandRequests = new Map(); // requestId -> { resolve, reject, tim
 const _pythonLmRequests = new Map();      // requestId -> { resolve, reject, timer }
 const _webviewViewProviders = new Map(); // viewType -> { provider, options }
 const _webviewViews = new Map();         // viewId -> WebviewView
+const _webviewPanelSerializers = new Map(); // viewType -> { serializer, extensionId, extensionPath }
 const _customEditorProviders = new Map(); // viewType -> { provider, options, extensionId }
 const _customEditorDocuments = new Map(); // viewType|uri|viewId -> resolved custom document state
 const _customEditorViewKeys = new Map();  // viewId -> custom editor document key
@@ -3601,6 +3602,40 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
 
         // --- Namespace: window ---
         window: {
+            registerWebviewPanelSerializer(viewType, serializer) {
+                const normalized = String(viewType || '');
+                if (!normalized) {
+                    throw new Error('Webview panel serializer viewType is required');
+                }
+                if (!serializer || typeof serializer.deserializeWebviewPanel !== 'function') {
+                    throw new Error('WebviewPanelSerializer must implement deserializeWebviewPanel');
+                }
+                if (_webviewPanelSerializers.has(normalized)) {
+                    throw new Error(
+                        `WebviewPanelSerializer already registered for viewType: ${normalized}`);
+                }
+                const entry = {
+                    serializer,
+                    extensionId: extDesc.extensionId || '',
+                    extensionPath,
+                };
+                _webviewPanelSerializers.set(normalized, entry);
+                send({
+                    type: 'webview_panel_serializer_registered',
+                    viewType: normalized,
+                    extensionId: extDesc.extensionId || '',
+                });
+                log(`registered WebviewPanelSerializer: ${normalized}`);
+                return new Disposable(() => {
+                    if (_webviewPanelSerializers.get(normalized) !== entry) return;
+                    _webviewPanelSerializers.delete(normalized);
+                    send({
+                        type: 'webview_panel_serializer_disposed',
+                        viewType: normalized,
+                        extensionId: extDesc.extensionId || '',
+                    });
+                });
+            },
             registerWebviewViewProvider(viewType, provider, options) {
                 _webviewViewProviders.set(viewType, {
                     provider,
@@ -4886,6 +4921,62 @@ async function resolveCustomEditor(msg) {
         _webviewViews.delete(viewId);
         log(`resolveCustomEditor error for ${viewType}: ${error}`);
         send({ type: 'custom_editor_resolved', requestId: msg.requestId, viewType, viewId, uri: uri.toString(), ok: false, error });
+        send({ type: 'error', extensionId: viewType, error });
+    }
+}
+
+async function deserializeWebviewPanel(msg) {
+    const requestId = String(msg.requestId || '');
+    const viewType = String(msg.viewType || '');
+    const reg = _webviewPanelSerializers.get(viewType);
+    const state = msg.state === undefined ? null : msg.state;
+    let viewId = String(msg.viewId || '');
+    let panel = null;
+    if (!reg) {
+        const error = `No webview panel serializer registered for viewType=${viewType}`;
+        log(error);
+        send({
+            type: 'webview_panel_deserialized',
+            requestId,
+            viewType,
+            viewId,
+            ok: false,
+            error,
+        });
+        return;
+    }
+    try {
+        viewId = viewId || `serialized-${_safeViewIdPart(viewType)}-${_nextViewHandle++}`;
+        panel = _createWebviewPanelObject(
+            viewType,
+            String(msg.title || viewType),
+            viewId,
+            (msg.webviewOptions || msg.options || {}),
+            reg.extensionPath,
+            msg.showOptions || msg.viewColumn || undefined);
+        const result = reg.serializer.deserializeWebviewPanel(panel, state);
+        if (result && typeof result.then === 'function') await result;
+        send({
+            type: 'webview_panel_deserialized',
+            requestId,
+            viewType,
+            viewId,
+            ok: true,
+            state,
+        });
+    } catch (err) {
+        const error = err && err.message ? err.message : String(err);
+        try { panel?.dispose?.(); } catch {}
+        _webviewViews.delete(viewId);
+        log(`deserializeWebviewPanel error for ${viewType}: ${error}`);
+        send({
+            type: 'webview_panel_deserialized',
+            requestId,
+            viewType,
+            viewId,
+            ok: false,
+            error,
+        });
         send({ type: 'error', extensionId: viewType, error });
     }
 }
@@ -6180,6 +6271,9 @@ async function handleMessage(msg) {
             break;
         case 'resolve_custom_editor':
             await resolveCustomEditor(msg);
+            break;
+        case 'deserialize_webview_panel':
+            await deserializeWebviewPanel(msg);
             break;
         case 'custom_editor_lifecycle':
             await handleCustomEditorLifecycle(msg);

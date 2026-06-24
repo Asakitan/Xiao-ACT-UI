@@ -7815,6 +7815,44 @@ async function activate(context) {
       postAfterDisposeThrows,
     };
   });
+  const serializerEvents = [];
+  const serializerDisposable = vscode.window.registerWebviewPanelSerializer(
+    'selftest.serializedPanel',
+    {
+      async deserializeWebviewPanel(panel, state) {
+        serializerEvents.push({
+          title: panel.title,
+          viewType: panel.viewType,
+          state,
+        });
+        panel.webview.options = {
+          enableScripts: true,
+          localResourceRoots: [context.extensionUri],
+        };
+        panel.webview.html = '<main data-view="serialized-panel">'
+          + String(state && state.text || '') + '</main>';
+      },
+    },
+  );
+  context.subscriptions.push(serializerDisposable);
+  let duplicateSerializerError = '';
+  try {
+    vscode.window.registerWebviewPanelSerializer(
+      'selftest.serializedPanel',
+      { deserializeWebviewPanel() {} },
+    );
+  } catch (err) {
+    duplicateSerializerError = String(err && err.message || err);
+  }
+  vscode.commands.registerCommand('selftest.node.webviewSerializerProbe', () => ({
+    hasApi: typeof vscode.window.registerWebviewPanelSerializer === 'function',
+    duplicateSerializerError,
+    events: serializerEvents,
+  }));
+  vscode.commands.registerCommand('selftest.node.webviewSerializerDispose', () => {
+    serializerDisposable.dispose();
+    return true;
+  });
   context.subscriptions.push(vscode.window.registerCustomEditorProvider(
     'selftest.node.customEditor',
     {
@@ -8242,6 +8280,14 @@ module.exports = { activate, deactivate };
                     lambda: "selftest.node.webviewDisposeProbe"
                     in api._ext_host.commands.list_commands(),
                     timeout=3.0)
+                node_webview_serializer_command_registered = _wait_until(
+                    lambda: "selftest.node.webviewSerializerProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                node_webview_serializer_dispose_command_registered = _wait_until(
+                    lambda: "selftest.node.webviewSerializerDispose"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
                 node_language_registered = _wait_until(
                     lambda: any(
                         item.get("kind") == "completion"
@@ -8452,6 +8498,37 @@ module.exports = { activate, deactivate };
                         "selftest.node.webviewDisposeProbe")
                 except Exception as exc:
                     node_webview_dispose_probe = {"_error": str(exc)}
+                node_webview_serializer_result = (
+                    node_host.request_webview_panel_deserialization(
+                        "selftest.serializedPanel",
+                        {"text": "revived-state"},
+                        title="Serialized Title",
+                        timeout=3.0)
+                    if node_started else {"ok": False})
+                _wait_until(
+                    lambda: any(
+                        'data-view="serialized-panel"' in html
+                        for html in node_ui_bridge.webviews.values()),
+                    timeout=3.0)
+                try:
+                    node_webview_serializer_probe = (
+                        api._ext_host.commands.execute(
+                            "selftest.node.webviewSerializerProbe"))
+                except Exception as exc:
+                    node_webview_serializer_probe = {"_error": str(exc)}
+                try:
+                    node_webview_serializer_dispose = (
+                        api._ext_host.commands.execute(
+                            "selftest.node.webviewSerializerDispose"))
+                except Exception as exc:
+                    node_webview_serializer_dispose = {"_error": str(exc)}
+                node_webview_serializer_after_dispose = (
+                    node_host.request_webview_panel_deserialization(
+                        "selftest.serializedPanel",
+                        {"text": "after-dispose"},
+                        title="Serialized After Dispose",
+                        timeout=3.0)
+                    if node_started else {"ok": False})
                 _wait_until(
                     lambda: any(
                         'data-view="default-roots"' in html
@@ -8483,6 +8560,11 @@ module.exports = { activate, deactivate };
                     in node_ui_bridge.webviews.items()
                     if 'data-view="dispose-probe"' in html
                 ), "")
+                node_serialized_view_id = str(
+                    node_webview_serializer_result.get("viewId", "")
+                    if isinstance(node_webview_serializer_result, dict) else "")
+                node_serialized_html = node_ui_bridge.webviews.get(
+                    node_serialized_view_id, "")
                 node_default_roots = (
                     node_ui_bridge.local_resource_roots.get(
                         node_default_roots_view_id, []) or [])
@@ -8984,6 +9066,45 @@ module.exports = { activate, deactivate };
                            "probe": node_webview_dispose_probe,
                            "view_id": node_dispose_view_id,
                            "disposed": node_ui_bridge.disposed,
+                       }, ensure_ascii=False))
+                node_serializer_events = (
+                    node_webview_serializer_probe.get("events", [])
+                    if isinstance(node_webview_serializer_probe, dict) else [])
+                node_serializer_event = (
+                    node_serializer_events[-1]
+                    if node_serializer_events else {})
+                _check("node host webview panel serializer revives persisted panels",
+                       node_webview_serializer_command_registered
+                       and isinstance(node_webview_serializer_result, dict)
+                       and node_webview_serializer_result.get("ok") is True
+                       and node_serialized_view_id
+                       and 'data-view="serialized-panel"' in node_serialized_html
+                       and "revived-state" in node_serialized_html
+                       and isinstance(node_webview_serializer_probe, dict)
+                       and node_webview_serializer_probe.get("hasApi") is True
+                       and "already registered" in node_webview_serializer_probe.get(
+                           "duplicateSerializerError", "")
+                       and node_serializer_event.get("title") == "Serialized Title"
+                       and node_serializer_event.get("viewType")
+                       == "selftest.serializedPanel"
+                       and node_serializer_event.get("state", {}).get("text")
+                       == "revived-state",
+                       json.dumps({
+                           "result": node_webview_serializer_result,
+                           "probe": node_webview_serializer_probe,
+                           "html": node_serialized_html,
+                       }, ensure_ascii=False))
+                _check("node host webview panel serializer disposable unregisters",
+                       node_webview_serializer_dispose_command_registered
+                       and node_webview_serializer_dispose is True
+                       and isinstance(node_webview_serializer_after_dispose, dict)
+                       and node_webview_serializer_after_dispose.get("ok") is False
+                       and "No webview panel serializer" in (
+                           node_webview_serializer_after_dispose.get("error")
+                           or ""),
+                       json.dumps({
+                           "dispose": node_webview_serializer_dispose,
+                           "after": node_webview_serializer_after_dispose,
                        }, ensure_ascii=False))
                 _check("node host workspace APIs read local files",
                        node_workspace_command_registered
