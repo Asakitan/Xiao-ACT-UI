@@ -1299,6 +1299,8 @@ const _onDidChangeAuthenticationSessionsEmitter = new EventEmitter();
 const _onDidChangeConfigurationEmitter = new EventEmitter();
 let _nextUntitledDocument = 1;
 let _nextProgressHandle = 1;
+let _nextQuickInputHandle = 1;
+let _activeQuickInput = null;
 
 function _workspaceDocumentIsOpened(document) {
     return !!document && document.__opened !== false;
@@ -3296,6 +3298,367 @@ async function _windowShowInputBox(options = {}) {
     return value;
 }
 
+function _quickInputSafePayload(value) {
+    try {
+        return _serializeLanguageValue(value);
+    } catch {
+        if (Array.isArray(value)) return value.map(item => _quickInputSafePayload(item));
+        if (value && typeof value === 'object') {
+            const result = {};
+            for (const [key, item] of Object.entries(value)) {
+                if (typeof item !== 'function') result[key] = String(item);
+            }
+            return result;
+        }
+        return value === undefined ? null : value;
+    }
+}
+
+function _quickInputEventPayload(input, event, extra = {}) {
+    return {
+        type: 'quick_input',
+        event,
+        id: input._id,
+        kind: input._kind,
+        visible: !!input._visible,
+        state: _quickInputSafePayload(input._snapshot()),
+        ..._quickInputSafePayload(extra),
+    };
+}
+
+class QuickInputBase {
+    constructor(kind) {
+        this._kind = kind;
+        this._id = `quick-input-${_nextQuickInputHandle++}`;
+        this._visible = false;
+        this._disposed = false;
+        this._title = undefined;
+        this._step = undefined;
+        this._totalSteps = undefined;
+        this._enabled = true;
+        this._busy = false;
+        this._ignoreFocusOut = false;
+        this._onDidHideEmitter = new EventEmitter();
+        this.onDidHide = this._onDidHideEmitter.event;
+    }
+    _assertAlive() {
+        if (this._disposed) throw new Error('QuickInput has been disposed');
+    }
+    _send(event, extra = {}) {
+        try { send(_quickInputEventPayload(this, event, extra)); } catch {}
+    }
+    get title() { this._assertAlive(); return this._title; }
+    set title(value) {
+        this._assertAlive();
+        this._title = value === undefined ? undefined : String(value);
+        this._send('update', { changed: 'title' });
+    }
+    get step() { this._assertAlive(); return this._step; }
+    set step(value) {
+        this._assertAlive();
+        const next = Number(value);
+        this._step = Number.isFinite(next) ? next : undefined;
+        this._send('update', { changed: 'step' });
+    }
+    get totalSteps() { this._assertAlive(); return this._totalSteps; }
+    set totalSteps(value) {
+        this._assertAlive();
+        const next = Number(value);
+        this._totalSteps = Number.isFinite(next) ? next : undefined;
+        this._send('update', { changed: 'totalSteps' });
+    }
+    get enabled() { this._assertAlive(); return this._enabled; }
+    set enabled(value) {
+        this._assertAlive();
+        this._enabled = value !== false;
+        this._send('update', { changed: 'enabled' });
+    }
+    get busy() { this._assertAlive(); return this._busy; }
+    set busy(value) {
+        this._assertAlive();
+        this._busy = !!value;
+        this._send('update', { changed: 'busy' });
+    }
+    get ignoreFocusOut() { this._assertAlive(); return this._ignoreFocusOut; }
+    set ignoreFocusOut(value) {
+        this._assertAlive();
+        this._ignoreFocusOut = !!value;
+        this._send('update', { changed: 'ignoreFocusOut' });
+    }
+    show() {
+        this._assertAlive();
+        if (_activeQuickInput && _activeQuickInput !== this) {
+            _activeQuickInput.hide();
+        }
+        _activeQuickInput = this;
+        this._visible = true;
+        this._send('show');
+    }
+    hide() {
+        this._assertAlive();
+        if (!this._visible) return;
+        this._visible = false;
+        if (_activeQuickInput === this) _activeQuickInput = null;
+        this._send('hide');
+        this._onDidHideEmitter.fire();
+    }
+    dispose() {
+        if (this._disposed) return;
+        if (this._visible) this.hide();
+        this._disposed = true;
+        if (_activeQuickInput === this) _activeQuickInput = null;
+        this._send('dispose');
+        this._onDidHideEmitter.dispose();
+    }
+    _snapshot() {
+        return {
+            title: this._title,
+            step: this._step,
+            totalSteps: this._totalSteps,
+            enabled: this._enabled,
+            busy: this._busy,
+            ignoreFocusOut: this._ignoreFocusOut,
+        };
+    }
+}
+
+class QuickPickInput extends QuickInputBase {
+    constructor() {
+        super('quickPick');
+        this._value = '';
+        this._placeholder = undefined;
+        this._prompt = undefined;
+        this._buttons = [];
+        this._items = [];
+        this._canSelectMany = false;
+        this._matchOnDescription = false;
+        this._matchOnDetail = false;
+        this._keepScrollPosition = false;
+        this._activeItems = [];
+        this._selectedItems = [];
+        this._onDidChangeValueEmitter = new EventEmitter();
+        this._onDidAcceptEmitter = new EventEmitter();
+        this._onDidTriggerButtonEmitter = new EventEmitter();
+        this._onDidTriggerItemButtonEmitter = new EventEmitter();
+        this._onDidChangeActiveEmitter = new EventEmitter();
+        this._onDidChangeSelectionEmitter = new EventEmitter();
+        this.onDidChangeValue = this._onDidChangeValueEmitter.event;
+        this.onDidAccept = this._onDidAcceptEmitter.event;
+        this.onDidTriggerButton = this._onDidTriggerButtonEmitter.event;
+        this.onDidTriggerItemButton = this._onDidTriggerItemButtonEmitter.event;
+        this.onDidChangeActive = this._onDidChangeActiveEmitter.event;
+        this.onDidChangeSelection = this._onDidChangeSelectionEmitter.event;
+    }
+    get value() { this._assertAlive(); return this._value; }
+    set value(value) {
+        this._assertAlive();
+        const next = String(value ?? '');
+        if (next === this._value) return;
+        this._value = next;
+        this._onDidChangeValueEmitter.fire(this._value);
+        this._send('changeValue', { value: this._value });
+    }
+    get placeholder() { this._assertAlive(); return this._placeholder; }
+    set placeholder(value) {
+        this._assertAlive();
+        this._placeholder = value === undefined ? undefined : String(value);
+        this._send('update', { changed: 'placeholder' });
+    }
+    get prompt() { this._assertAlive(); return this._prompt; }
+    set prompt(value) {
+        this._assertAlive();
+        this._prompt = value === undefined ? undefined : String(value);
+        this._send('update', { changed: 'prompt' });
+    }
+    get buttons() { this._assertAlive(); return this._buttons; }
+    set buttons(value) {
+        this._assertAlive();
+        this._buttons = Array.isArray(value) ? Array.from(value) : [];
+        this._send('update', { changed: 'buttons' });
+    }
+    get items() { this._assertAlive(); return this._items; }
+    set items(value) {
+        this._assertAlive();
+        this._items = Array.isArray(value) ? Array.from(value) : [];
+        this._send('update', { changed: 'items' });
+    }
+    get canSelectMany() { this._assertAlive(); return this._canSelectMany; }
+    set canSelectMany(value) {
+        this._assertAlive();
+        this._canSelectMany = !!value;
+        this._send('update', { changed: 'canSelectMany' });
+    }
+    get matchOnDescription() { this._assertAlive(); return this._matchOnDescription; }
+    set matchOnDescription(value) {
+        this._assertAlive();
+        this._matchOnDescription = !!value;
+        this._send('update', { changed: 'matchOnDescription' });
+    }
+    get matchOnDetail() { this._assertAlive(); return this._matchOnDetail; }
+    set matchOnDetail(value) {
+        this._assertAlive();
+        this._matchOnDetail = !!value;
+        this._send('update', { changed: 'matchOnDetail' });
+    }
+    get keepScrollPosition() { this._assertAlive(); return this._keepScrollPosition; }
+    set keepScrollPosition(value) {
+        this._assertAlive();
+        this._keepScrollPosition = !!value;
+        this._send('update', { changed: 'keepScrollPosition' });
+    }
+    get activeItems() { this._assertAlive(); return this._activeItems; }
+    set activeItems(value) {
+        this._assertAlive();
+        this._activeItems = Array.isArray(value) ? Array.from(value) : [];
+        this._onDidChangeActiveEmitter.fire(this._activeItems);
+        this._send('changeActive', { activeItems: this._activeItems });
+    }
+    get selectedItems() { this._assertAlive(); return this._selectedItems; }
+    set selectedItems(value) {
+        this._assertAlive();
+        this._selectedItems = Array.isArray(value) ? Array.from(value) : [];
+        this._onDidChangeSelectionEmitter.fire(this._selectedItems);
+        this._send('changeSelection', { selectedItems: this._selectedItems });
+    }
+    _accept() {
+        this._assertAlive();
+        this._onDidAcceptEmitter.fire();
+        this._send('accept');
+    }
+    _triggerButton(button) {
+        this._assertAlive();
+        this._onDidTriggerButtonEmitter.fire(button);
+        this._send('triggerButton', { button });
+    }
+    _triggerItemButton(item, button) {
+        this._assertAlive();
+        const event = { item, button };
+        this._onDidTriggerItemButtonEmitter.fire(event);
+        this._send('triggerItemButton', event);
+    }
+    dispose() {
+        if (this._disposed) return;
+        super.dispose();
+        this._onDidChangeValueEmitter.dispose();
+        this._onDidAcceptEmitter.dispose();
+        this._onDidTriggerButtonEmitter.dispose();
+        this._onDidTriggerItemButtonEmitter.dispose();
+        this._onDidChangeActiveEmitter.dispose();
+        this._onDidChangeSelectionEmitter.dispose();
+    }
+    _snapshot() {
+        return {
+            ...super._snapshot(),
+            value: this._value,
+            placeholder: this._placeholder,
+            prompt: this._prompt,
+            buttons: this._buttons,
+            items: this._items,
+            canSelectMany: this._canSelectMany,
+            matchOnDescription: this._matchOnDescription,
+            matchOnDetail: this._matchOnDetail,
+            keepScrollPosition: this._keepScrollPosition,
+            activeItems: this._activeItems,
+            selectedItems: this._selectedItems,
+        };
+    }
+}
+
+class InputBoxInput extends QuickInputBase {
+    constructor() {
+        super('inputBox');
+        this._value = '';
+        this._valueSelection = undefined;
+        this._placeholder = undefined;
+        this._password = false;
+        this._buttons = [];
+        this._prompt = undefined;
+        this._validationMessage = undefined;
+        this._onDidChangeValueEmitter = new EventEmitter();
+        this._onDidAcceptEmitter = new EventEmitter();
+        this._onDidTriggerButtonEmitter = new EventEmitter();
+        this.onDidChangeValue = this._onDidChangeValueEmitter.event;
+        this.onDidAccept = this._onDidAcceptEmitter.event;
+        this.onDidTriggerButton = this._onDidTriggerButtonEmitter.event;
+    }
+    get value() { this._assertAlive(); return this._value; }
+    set value(value) {
+        this._assertAlive();
+        const next = String(value ?? '');
+        if (next === this._value) return;
+        this._value = next;
+        this._onDidChangeValueEmitter.fire(this._value);
+        this._send('changeValue', { value: this._value });
+    }
+    get valueSelection() { this._assertAlive(); return this._valueSelection; }
+    set valueSelection(value) {
+        this._assertAlive();
+        this._valueSelection = Array.isArray(value)
+            ? [Number(value[0]) || 0, Number(value[1]) || 0]
+            : undefined;
+        this._send('update', { changed: 'valueSelection' });
+    }
+    get placeholder() { this._assertAlive(); return this._placeholder; }
+    set placeholder(value) {
+        this._assertAlive();
+        this._placeholder = value === undefined ? undefined : String(value);
+        this._send('update', { changed: 'placeholder' });
+    }
+    get password() { this._assertAlive(); return this._password; }
+    set password(value) {
+        this._assertAlive();
+        this._password = !!value;
+        this._send('update', { changed: 'password' });
+    }
+    get buttons() { this._assertAlive(); return this._buttons; }
+    set buttons(value) {
+        this._assertAlive();
+        this._buttons = Array.isArray(value) ? Array.from(value) : [];
+        this._send('update', { changed: 'buttons' });
+    }
+    get prompt() { this._assertAlive(); return this._prompt; }
+    set prompt(value) {
+        this._assertAlive();
+        this._prompt = value === undefined ? undefined : String(value);
+        this._send('update', { changed: 'prompt' });
+    }
+    get validationMessage() { this._assertAlive(); return this._validationMessage; }
+    set validationMessage(value) {
+        this._assertAlive();
+        this._validationMessage = value;
+        this._send('update', { changed: 'validationMessage' });
+    }
+    _accept() {
+        this._assertAlive();
+        this._onDidAcceptEmitter.fire();
+        this._send('accept');
+    }
+    _triggerButton(button) {
+        this._assertAlive();
+        this._onDidTriggerButtonEmitter.fire(button);
+        this._send('triggerButton', { button });
+    }
+    dispose() {
+        if (this._disposed) return;
+        super.dispose();
+        this._onDidChangeValueEmitter.dispose();
+        this._onDidAcceptEmitter.dispose();
+        this._onDidTriggerButtonEmitter.dispose();
+    }
+    _snapshot() {
+        return {
+            ...super._snapshot(),
+            value: this._value,
+            valueSelection: this._valueSelection,
+            placeholder: this._placeholder,
+            password: this._password,
+            buttons: this._buttons,
+            prompt: this._prompt,
+            validationMessage: this._validationMessage,
+        };
+    }
+}
+
 function _messageArgIsItem(value) {
     return typeof value === 'string'
         || !!(value && typeof value === 'object'
@@ -3551,6 +3914,14 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         StatusBarAlignment: { Left: 1, Right: 2 },
         QuickPickItemKind: { Separator: 1 },
         InputBoxValidationSeverity: { Info: 1, Warning: 2, Error: 3 },
+        QuickInputButtonLocation: { Title: 1, Inline: 2, Input: 3 },
+        QuickInputButtons: {
+            Back: Object.freeze({
+                iconPath: Object.freeze({ id: 'arrow-left' }),
+                tooltip: 'Back',
+                location: 1,
+            }),
+        },
         TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
         ExtensionKind: { UI: 1, Workspace: 2 },
         ExtensionMode: { Production: 1, Development: 2, Test: 3 },
@@ -3709,6 +4080,12 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             },
             showInputBox(options) {
                 return _windowShowInputBox(options || {});
+            },
+            createQuickPick() {
+                return new QuickPickInput();
+            },
+            createInputBox() {
+                return new InputBoxInput();
             },
             withProgress: _withProgress,
             withScmProgress(task) {

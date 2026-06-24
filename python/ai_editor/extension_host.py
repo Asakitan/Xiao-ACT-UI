@@ -1582,6 +1582,8 @@ class NodeExtensionHost:
         {"type": "config_set",          "section": "...", "key": "...", "value": ...}
         {"type": "output",              "channel": "...", "text": "..."}
         {"type": "show_message",        "level": "info|warn|error", "message": "..."}
+        {"type": "quick_input",         "event": "show|update|hide|dispose",
+         "id": "...", "kind": "quickPick|inputBox", "state": {...}}
         {"type": "progress_start",      "message": "..."}
         {"type": "progress_report",     "message": "...", "increment": 10}
         {"type": "progress_done",       "ok": true}
@@ -2268,6 +2270,15 @@ class NodeExtensionHost:
                     pass
             else:
                 _log.info("[NodeExtHost] %s: %s", level, message)
+
+        elif msg_type == "quick_input":
+            if self._ui_bridge:
+                try:
+                    handler = getattr(self._ui_bridge, "quick_input_changed", None)
+                    if callable(handler):
+                        handler(dict(msg))
+                except Exception:
+                    _log.exception("[NodeExtHost] quick_input bridge failed")
 
         elif msg_type == "language_provider_registered":
             kind = str(msg.get("kind", ""))

@@ -7569,6 +7569,70 @@ async function activate(context) {
         };
       },
     });
+    const quickPickEvents = [];
+    const quickPick = vscode.window.createQuickPick();
+    quickPick.onDidChangeValue(value => quickPickEvents.push('value:' + value));
+    quickPick.onDidChangeActive(items => quickPickEvents.push(
+      'active:' + items.map(item => item.label).join(',')));
+    quickPick.onDidChangeSelection(items => quickPickEvents.push(
+      'selection:' + items.map(item => item.label).join(',')));
+    quickPick.onDidTriggerButton(button => quickPickEvents.push(
+      'button:' + (button && button.tooltip)));
+    quickPick.onDidTriggerItemButton(event => quickPickEvents.push(
+      'itemButton:' + event.item.label + ':' + event.button.tooltip));
+    quickPick.onDidAccept(() => quickPickEvents.push('accept'));
+    quickPick.onDidHide(() => quickPickEvents.push('hide'));
+    quickPick.title = 'Quick Flow';
+    quickPick.step = 1;
+    quickPick.totalSteps = 2;
+    quickPick.placeholder = 'Filter items';
+    quickPick.prompt = 'Choose with state';
+    quickPick.canSelectMany = true;
+    quickPick.matchOnDescription = true;
+    quickPick.matchOnDetail = true;
+    quickPick.keepScrollPosition = true;
+    quickPick.buttons = [vscode.QuickInputButtons.Back];
+    quickPick.items = [
+      { label: 'alpha-object', description: 'A' },
+      { label: 'beta-object', buttons: [{ tooltip: 'Inline' }] },
+    ];
+    quickPick.value = 'alp';
+    quickPick.activeItems = [quickPick.items[1]];
+    quickPick.selectedItems = [quickPick.items[0], quickPick.items[1]];
+    quickPick.show();
+    quickPick._triggerButton(vscode.QuickInputButtons.Back);
+    quickPick._triggerItemButton(quickPick.items[1], quickPick.items[1].buttons[0]);
+    quickPick._accept();
+    quickPick.hide();
+    quickPick.dispose();
+    let quickPickDisposedThrows = false;
+    try { quickPick.value = 'after-dispose'; } catch (_err) { quickPickDisposedThrows = true; }
+    const inputBoxEvents = [];
+    const inputBox = vscode.window.createInputBox();
+    inputBox.onDidChangeValue(value => inputBoxEvents.push('value:' + value));
+    inputBox.onDidTriggerButton(button => inputBoxEvents.push(
+      'button:' + (button && button.tooltip)));
+    inputBox.onDidAccept(() => inputBoxEvents.push('accept'));
+    inputBox.onDidHide(() => inputBoxEvents.push('hide'));
+    inputBox.title = 'Input Flow';
+    inputBox.step = 2;
+    inputBox.totalSteps = 2;
+    inputBox.placeholder = 'Type value';
+    inputBox.prompt = 'Input with validation';
+    inputBox.value = 'typed';
+    inputBox.valueSelection = [1, 3];
+    inputBox.password = true;
+    inputBox.buttons = [vscode.QuickInputButtons.Back];
+    inputBox.validationMessage = {
+      message: 'warn only',
+      severity: vscode.InputBoxValidationSeverity.Warning,
+    };
+    inputBox.show();
+    inputBox._triggerButton(vscode.QuickInputButtons.Back);
+    inputBox._accept();
+    inputBox.dispose();
+    let inputBoxDisposedThrows = false;
+    try { inputBox.value = 'after-dispose'; } catch (_err) { inputBoxDisposedThrows = true; }
     return {
       stringPick,
       objectPick: objectPick && objectPick.label,
@@ -7581,6 +7645,30 @@ async function activate(context) {
       inputBlocked,
       separatorKind: vscode.QuickPickItemKind.Separator,
       validationError: vscode.InputBoxValidationSeverity.Error,
+      quickInputButtonLocationInput: vscode.QuickInputButtonLocation.Input,
+      quickInputBackTooltip: vscode.QuickInputButtons.Back.tooltip,
+      quickPickObject: {
+        title: 'Quick Flow',
+        step: 1,
+        totalSteps: 2,
+        canSelectMany: true,
+        matchOnDescription: true,
+        matchOnDetail: true,
+        keepScrollPosition: true,
+        activeLabels: ['beta-object'],
+        selectedLabels: ['alpha-object', 'beta-object'],
+        events: quickPickEvents,
+        disposedThrows: quickPickDisposedThrows,
+      },
+      inputBoxObject: {
+        title: 'Input Flow',
+        value: 'typed',
+        valueSelection: [1, 3],
+        password: true,
+        validationSeverity: vscode.InputBoxValidationSeverity.Warning,
+        events: inputBoxEvents,
+        disposedThrows: inputBoxDisposedThrows,
+      },
     };
   });
   vscode.commands.registerCommand('selftest.node.messageOptionsProbe', async () => {
@@ -8000,6 +8088,7 @@ module.exports = { activate, deactivate };
                     self.local_resource_roots = {}
                     self.disposed = []
                     self.progress = []
+                    self.quick_inputs = []
 
                 def render_webview_panel(
                         self, view_id: str, html: str,
@@ -8019,6 +8108,13 @@ module.exports = { activate, deactivate };
                     emitted_events.append({
                         "event": "show_progress",
                         "data": event,
+                    })
+
+                def quick_input_changed(self, payload) -> None:
+                    self.quick_inputs.append(dict(payload or {}))
+                    emitted_events.append({
+                        "event": "quick_input",
+                        "data": dict(payload or {}),
                     })
 
             node_ui_bridge = _NodeUiBridge()
@@ -9376,6 +9472,16 @@ module.exports = { activate, deactivate };
                        == "selfdoc:/virtual.txt?x=1",
                        json.dumps(node_content_provider_probe,
                                   ensure_ascii=False))
+                node_quick_pick_object = (
+                    node_quick_input_probe.get("quickPickObject", {})
+                    if isinstance(node_quick_input_probe, dict) else {})
+                node_input_box_object = (
+                    node_quick_input_probe.get("inputBoxObject", {})
+                    if isinstance(node_quick_input_probe, dict) else {})
+                node_quick_bridge_events = [
+                    item for item in node_ui_bridge.quick_inputs
+                    if isinstance(item, dict)
+                ]
                 _check("node host quick input fallback matches VS Code data contracts",
                        node_started is True
                        and node_quick_input_command_registered
@@ -9393,6 +9499,66 @@ module.exports = { activate, deactivate };
                        and node_quick_input_probe.get("validationError") == 3,
                        json.dumps(node_quick_input_probe,
                                   ensure_ascii=False))
+                _check("node host object QuickInput APIs match VS Code lifecycle",
+                       node_started is True
+                       and node_quick_input_command_registered
+                       and node_quick_input_probe.get(
+                           "quickInputButtonLocationInput") == 3
+                       and node_quick_input_probe.get(
+                           "quickInputBackTooltip") == "Back"
+                       and node_quick_pick_object.get("canSelectMany") is True
+                       and node_quick_pick_object.get(
+                           "matchOnDescription") is True
+                       and node_quick_pick_object.get("matchOnDetail") is True
+                       and node_quick_pick_object.get(
+                           "keepScrollPosition") is True
+                       and node_quick_pick_object.get("activeLabels")
+                       == ["beta-object"]
+                       and node_quick_pick_object.get("selectedLabels")
+                       == ["alpha-object", "beta-object"]
+                       and "value:alp" in node_quick_pick_object.get(
+                           "events", [])
+                       and "active:beta-object" in node_quick_pick_object.get(
+                           "events", [])
+                       and "selection:alpha-object,beta-object"
+                       in node_quick_pick_object.get("events", [])
+                       and "button:Back" in node_quick_pick_object.get(
+                           "events", [])
+                       and "itemButton:beta-object:Inline"
+                       in node_quick_pick_object.get("events", [])
+                       and "accept" in node_quick_pick_object.get(
+                           "events", [])
+                       and "hide" in node_quick_pick_object.get("events", [])
+                       and node_quick_pick_object.get("disposedThrows") is True
+                       and node_input_box_object.get("value") == "typed"
+                       and node_input_box_object.get("valueSelection")
+                       == [1, 3]
+                       and node_input_box_object.get("password") is True
+                       and node_input_box_object.get(
+                           "validationSeverity") == 2
+                       and "value:typed" in node_input_box_object.get(
+                           "events", [])
+                       and "button:Back" in node_input_box_object.get(
+                           "events", [])
+                       and "accept" in node_input_box_object.get("events", [])
+                       and "hide" in node_input_box_object.get("events", [])
+                       and node_input_box_object.get("disposedThrows") is True
+                       and any(
+                           item.get("event") == "show"
+                           and item.get("kind") == "quickPick"
+                           for item in node_quick_bridge_events)
+                       and any(
+                           item.get("event") == "show"
+                           and item.get("kind") == "inputBox"
+                           for item in node_quick_bridge_events)
+                       and any(
+                           item.get("event") == "dispose"
+                           and item.get("kind") == "inputBox"
+                           for item in node_quick_bridge_events),
+                       json.dumps({
+                           "probe": node_quick_input_probe,
+                           "bridge": node_quick_bridge_events[-12:],
+                       }, ensure_ascii=False, default=str))
                 _check("node host message APIs separate options from actions",
                        node_started is True
                        and node_message_options_command_registered
