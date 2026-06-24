@@ -2556,6 +2556,11 @@ console.log("frontend auto-close behavior ok");
             and "deprecationMessage" in html
             and "ext-setting-deprecated-badge" in html
             and "appendExtensionSettingMarkdown(dep,deprecation)" in html
+            and "function extensionSettingParseQuery(raw,modifiedChecked)" in html
+            and "function extensionSettingSearchText(key,schema,type,description,deprecation,schemaSummary)" in html
+            and "dataset.extSettingSearch" in html
+            and "dataset.extSettingTags" in html
+            and "@tag:" in html
             and "reset_extension_setting" in html
             and "markExtensionSettingRow" in html
             and "function applyExtensionSettingsFilter()" in html
@@ -2579,12 +2584,15 @@ console.log("frontend auto-close behavior ok");
             "appendExtensionSettingMarkdown",
             "extensionSettingSchemaSummary",
             "extensionSettingDeprecationText",
+            "extensionSettingList",
+            "extensionSettingSearchText",
             "extensionSettingJson",
             "extensionSettingJsonRows",
             "extensionSettingTextRows",
             "extensionSettingUsesMultiline",
             "extensionSettingValidateJsonValue",
             "extensionSettingValidateSchemaValue",
+            "extensionSettingParseQuery",
             "setExtensionSettingInputValue",
             "readExtensionSettingInputValue",
         ]
@@ -2628,6 +2636,14 @@ const deprecatedSchema = {
   deprecationMessage: "Use the new setting.",
   markdownDeprecationMessage: "**Use** `new.setting`."
 };
+const searchSchema = {
+  title: "Telemetry Mode",
+  tags: ["experimental", "usesOnlineServices"],
+  keywords: ["network", "upload"],
+  enum: ["always"],
+  enumItemLabels: ["Always send"],
+  markdownEnumDescriptions: ["Uses **network**."]
+};
 const numberSchema = { type: "number", minimum: 1, maximum: 5 };
 const textarea = { type: "textarea", tagName: "TEXTAREA", value: "", rows: 0 };
 setExtensionSettingInputValue(textarea, arraySchema, "array", ["a", "b"]);
@@ -2668,6 +2684,19 @@ assert(extensionSettingDeprecationText({ deprecationMessage: "Use fallback." }) 
        "deprecation fallback");
 assert(extensionSettingDeprecationText({}) === "",
        "empty deprecation text");
+const parsedQuery = extensionSettingParseQuery("@modified @tag:experimental render", false);
+assert(parsedQuery.modifiedOnly === true && parsedQuery.tags[0] === "experimental"
+       && parsedQuery.text === "render",
+       "settings query parses modified and tag filters");
+assert(extensionSettingParseQuery("", true).modifiedOnly === true,
+       "settings query keeps checkbox modified filter");
+const searchText = extensionSettingSearchText("demo.telemetry", searchSchema, "string",
+  "Controls telemetry.", "Deprecated telemetry mode.", "");
+assert(searchText.indexOf("usesonlineservices") >= 0
+       && searchText.indexOf("upload") >= 0
+       && searchText.indexOf("always send") >= 0
+       && searchText.indexOf("deprecated telemetry mode") >= 0,
+       "settings search text includes tags keywords enum labels and deprecation");
 const textAreaSetting = { type: "textarea", tagName: "TEXTAREA", value: "", rows: 0 };
 setExtensionSettingInputValue(textAreaSetting, multilineSchema, "string", "alpha\nbeta\ncharlie");
 assert(extensionSettingUsesMultiline(multilineSchema, "string") === true,

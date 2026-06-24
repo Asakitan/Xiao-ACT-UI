@@ -9731,6 +9731,19 @@ function extensionSettingDeprecationText(schema){
   if(!schema||typeof schema!=='object')return '';
   return schema.markdownDeprecationMessage||schema.deprecationMessage||'';
 }
+function extensionSettingList(schema,name){
+  const value=schema&&schema[name];
+  return Array.isArray(value)?value.map(v=>String(v??'').trim()).filter(Boolean):[];
+}
+function extensionSettingSearchText(key,schema,type,description,deprecation,schemaSummary){
+  schema=(schema&&typeof schema==='object')?schema:{};
+  const parts=[key,schema.title,type,schema.scope,description,deprecation,schemaSummary];
+  ['tags','keywords','enumItemLabels','enumDescriptions','markdownEnumDescriptions'].forEach(name=>{
+    extensionSettingList(schema,name).forEach(value=>parts.push(value));
+  });
+  if(Array.isArray(schema.enum))schema.enum.forEach(value=>parts.push(String(value??'')));
+  return parts.filter(value=>value!=null&&String(value).trim()).join(' ').toLowerCase();
+}
 function extensionSettingJson(value,type){
   const fallback=type==='array'?[]:(type==='object'?{}:'');
   const v=value===undefined?fallback:value;
@@ -9837,11 +9850,17 @@ function setExtensionSettingError(row,message){
 }
 function extensionSettingsQuery(){
   const raw=(($('settings-search')||{}).value||'').trim();
-  const hasModified=/(^|\s)@modified(?=\s|$)/i.test(raw);
-  return {
-    modifiedOnly:(($('ext-settings-modified')||{}).checked===true)||hasModified,
-    text:raw.replace(/(^|\s)@modified(?=\s|$)/ig,' ').trim().toLowerCase(),
-  };
+  return extensionSettingParseQuery(raw,(($('ext-settings-modified')||{}).checked===true));
+}
+function extensionSettingParseQuery(raw,modifiedChecked){
+  raw=String(raw||'').trim();
+  const tags=[];
+  const modifiedOnly=modifiedChecked===true||/(^|\s)@modified(?=\s|$)/i.test(raw);
+  const text=raw
+    .replace(/(^|\s)@modified(?=\s|$)/ig,' ')
+    .replace(/(^|\s)@tag:([^\s]+)/ig,(match,prefix,tag)=>{if(tag)tags.push(String(tag).toLowerCase());return ' ';})
+    .trim().toLowerCase();
+  return {modifiedOnly,tags,text};
 }
 function applyExtensionSettingsFilter(){
   const container=$('ext-settings-container');if(!container)return;
@@ -9855,14 +9874,16 @@ function applyExtensionSettingsFilter(){
     let sectionRows=0;
     section.querySelectorAll('.ext-setting-row').forEach(row=>{
       totalRows++;
-      const textOk=!query.text||row.textContent.toLowerCase().includes(query.text);
+      const textOk=!query.text||(row.dataset.extSettingSearch||row.textContent).toLowerCase().includes(query.text);
+      const rowTags=(row.dataset.extSettingTags||'').split('\n').filter(Boolean);
+      const tagOk=!query.tags.length||query.tags.every(tag=>rowTags.includes(tag));
       const modifiedOk=!query.modifiedOnly||row.dataset.extSettingModified==='1';
-      const show=categoryOk&&textOk&&modifiedOk;
+      const show=categoryOk&&textOk&&tagOk&&modifiedOk;
       row.style.display=show?'':'none';
       if(show){visibleRows++;sectionRows++}
     });
     section.style.display=sectionRows?'':'none';
-    if(sectionRows){visibleSections++;if(query.text||query.modifiedOnly||category)section.open=true}
+    if(sectionRows){visibleSections++;if(query.text||query.tags.length||query.modifiedOnly||category)section.open=true}
   });
   const count=$('ext-settings-filter-count');
   if(count)count.textContent=visibleRows+' / '+totalRows;
@@ -9949,6 +9970,8 @@ async function renderExtensionSettings(){
       if(description){const desc=document.createElement('div');desc.className='ext-setting-desc';appendExtensionSettingMarkdown(desc,description);row.appendChild(desc)}
       if(deprecation){const dep=document.createElement('div');dep.className='ext-setting-deprecated';appendExtensionSettingMarkdown(dep,deprecation);row.appendChild(dep)}
       const schemaSummary=extensionSettingSchemaSummary(schema,type);
+      row.dataset.extSettingTags=extensionSettingList(schema,'tags').map(value=>value.toLowerCase()).join('\n');
+      row.dataset.extSettingSearch=extensionSettingSearchText(key,schema,type,description,deprecation,schemaSummary);
       if(schemaSummary){const meta=document.createElement('div');meta.className='ext-setting-schema';meta.textContent=schemaSummary;row.appendChild(meta)}
       let input;
       if(type==='boolean'){
