@@ -7159,9 +7159,11 @@ async function activate(context) {
     const helloUri = vscode.Uri.parse('selfmem:/hello.txt');
     const createdUri = vscode.Uri.parse('selfmem:/created.txt');
     const renamedUri = vscode.Uri.parse('selfmem:/renamed.txt');
-    const helloText = decoder.decode(await vscode.workspace.fs.readFile(helloUri));
+    const helloDoc = await vscode.workspace.openTextDocument(helloUri);
+    const helloDocText = helloDoc.getText();
     const fsExtAfter = vscode.extensions.getExtension('selftest.node-filesystem');
     const afterActive = fsExtAfter && fsExtAfter.isActive === true;
+    const helloText = decoder.decode(await vscode.workspace.fs.readFile(helloUri));
     await vscode.workspace.fs.writeFile(createdUri, encoder.encode('created-data'));
     const createdText = decoder.decode(await vscode.workspace.fs.readFile(createdUri));
     const createdStat = await vscode.workspace.fs.stat(createdUri);
@@ -7174,6 +7176,9 @@ async function activate(context) {
       beforeActive,
       afterActive,
       helloText,
+      helloDocText,
+      helloDocDirty: helloDoc.isDirty,
+      helloDocFileName: helloDoc.fileName,
       createdText,
       createdType: createdStat.type,
       beforeRename: beforeRename.map(([name]) => name).sort(),
@@ -8579,6 +8584,11 @@ module.exports = { activate, deactivate };
                        and node_file_system_probe.get("afterActive") is True
                        and node_file_system_probe.get("helloText")
                        == "from-selfmem"
+                       and node_file_system_probe.get("helloDocText")
+                       == "from-selfmem"
+                       and node_file_system_probe.get("helloDocDirty") is False
+                       and node_file_system_probe.get("helloDocFileName")
+                       == "selfmem:/hello.txt"
                        and node_file_system_probe.get("createdText")
                        == "created-data"
                        and node_file_system_probe.get("createdType") == 1

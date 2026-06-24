@@ -1884,7 +1884,10 @@ async function _workspaceOpenTextDocument(uriOrPath) {
     }
     const cached = _workspaceTextDocuments.get(uri.toString());
     if (cached) return _workspacePromoteTextDocument(cached);
-    const text = uri.scheme === 'file' ? await fsp.readFile(uri.fsPath, 'utf8') : '';
+    const providerText = await _workspaceFileSystemDocumentText(uri);
+    const text = providerText === undefined
+        ? (uri.scheme === 'file' ? await fsp.readFile(uri.fsPath, 'utf8') : '')
+        : providerText;
     const doc = _createLanguageDocument({
         uri,
         text,
@@ -1892,6 +1895,21 @@ async function _workspaceOpenTextDocument(uriOrPath) {
         version: Date.now(),
     });
     return _workspaceStoreTextDocument(doc, true);
+}
+
+async function _workspaceFileSystemDocumentText(uri) {
+    const scheme = _normalizeFileSystemScheme(uri?.scheme);
+    if (!scheme || scheme === 'file' || scheme === 'untitled') {
+        return undefined;
+    }
+    let entry = _fileSystemProviders.get(scheme);
+    if (!entry) {
+        await _activateKnownExtensionsForEvent(`onFileSystem:${scheme}`);
+        entry = _fileSystemProviders.get(scheme);
+    }
+    if (!entry) return undefined;
+    const content = await _workspaceFsReadFile(uri);
+    return _workspaceContentToText(content);
 }
 
 function _textDocumentProviderToken() {
