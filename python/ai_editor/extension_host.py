@@ -1648,6 +1648,9 @@ class NodeExtensionHost:
         self._language_request_lock = threading.Lock()
         self._language_requests: Dict[str, Dict[str, Any]] = {}
         self._language_providers: List[Dict[str, Any]] = []
+        self._file_decoration_request_lock = threading.Lock()
+        self._file_decoration_requests: Dict[str, Dict[str, Any]] = {}
+        self._file_decoration_providers: List[Dict[str, Any]] = []
         self._custom_editor_request_lock = threading.Lock()
         self._custom_editor_requests: Dict[str, Dict[str, Any]] = {}
         self._custom_editor_lifecycle_lock = threading.Lock()
@@ -2415,6 +2418,39 @@ class NodeExtensionHost:
                 if isinstance(event, threading.Event):
                     event.set()
 
+        elif msg_type == "file_decoration_provider_registered":
+            self._file_decoration_providers.append({
+                "handle": msg.get("handle"),
+                "extensionId": str(msg.get("extensionId", "")),
+            })
+            _log.info("[NodeExtHost] File decoration provider registered: %s",
+                      msg.get("handle"))
+
+        elif msg_type == "file_decoration_provider_disposed":
+            handle = msg.get("handle")
+            self._file_decoration_providers = [
+                item for item in self._file_decoration_providers
+                if item.get("handle") != handle
+            ]
+
+        elif msg_type == "file_decoration_response":
+            request_id = str(msg.get("requestId", ""))
+            with self._file_decoration_request_lock:
+                pending = self._file_decoration_requests.get(request_id)
+            if pending:
+                pending["response"] = msg
+                event = pending.get("event")
+                if isinstance(event, threading.Event):
+                    event.set()
+
+        elif msg_type == "file_decoration_changed":
+            self._record_diagnostic(
+                "file_decoration",
+                0,
+                ok=True,
+                detail=str(msg.get("handle", "")),
+            )
+
         elif msg_type in {"lm_tool_registered", "lm_tool_disposed"}:
             name = str(msg.get("name") or msg.get("toolName") or "")
             payload = dict(msg)
@@ -2934,6 +2970,81 @@ class NodeExtensionHost:
                 error=error,
             )
 
+    def request_file_decoration_result(
+            self, payload: Dict[str, Any], default: Any = None,
+            timeout: float = 0.85) -> Dict[str, Any]:
+        """Return a structured Node file-decoration request result."""
+        started = time.perf_counter()
+        ok = False
+        timed_out = False
+        error = ""
+        detail = str((payload or {}).get("uri", ""))
+        if not self.is_running:
+            error = "Node extension host is not running"
+            self._record_diagnostic(
+                "file_decoration", 0, ok=False, detail=detail, error=error)
+            return {
+                "ok": False,
+                "value": default,
+                "error": error,
+            }
+        request_id = str(uuid.uuid4())
+        event = threading.Event()
+        with self._file_decoration_request_lock:
+            self._file_decoration_requests[request_id] = {"event": event}
+        try:
+            msg = {
+                "type": "file_decoration_request",
+                "requestId": request_id,
+            }
+            msg.update(dict(payload or {}))
+            sent = self._send(msg)
+            if not sent:
+                error = "Node file decoration request could not be sent"
+                return {
+                    "ok": False,
+                    "value": default,
+                    "error": error,
+                }
+            if not event.wait(timeout):
+                timed_out = True
+                error = "Node file decoration request timed out"
+                return {
+                    "ok": False,
+                    "value": default,
+                    "error": error,
+                    "timeout": True,
+                }
+            with self._file_decoration_request_lock:
+                pending = self._file_decoration_requests.get(request_id, {})
+            response = pending.get("response", {})
+            if isinstance(response, dict) and response.get("ok"):
+                ok = True
+                return {
+                    "ok": True,
+                    "value": response.get("value", default),
+                }
+            error = (
+                response.get("error")
+                if isinstance(response, dict)
+                else "Node file decoration provider failed")
+            return {
+                "ok": False,
+                "value": default,
+                "error": error,
+            }
+        finally:
+            with self._file_decoration_request_lock:
+                self._file_decoration_requests.pop(request_id, None)
+            self._record_diagnostic(
+                "file_decoration",
+                (time.perf_counter() - started) * 1000,
+                ok=ok,
+                timeout=timed_out,
+                detail=detail,
+                error=error,
+            )
+
     def request_lm_tool_result(
             self, name: str, input_data: Any = None,
             default: Any = None, timeout: float = 3.0) -> Dict[str, Any]:
@@ -3362,6 +3473,10 @@ class NodeExtensionHost:
         """Return registered language provider capabilities from Node."""
         return list(self._language_providers)
 
+    def list_file_decoration_providers(self) -> List[Dict[str, Any]]:
+        """Return registered file decoration providers from Node."""
+        return list(self._file_decoration_providers)
+
     def set_diagnostics_enabled(self, enabled: bool) -> None:
         """Enable lightweight in-memory request diagnostics."""
         self._diagnostics_enabled = bool(enabled)
@@ -3387,6 +3502,7 @@ class NodeExtensionHost:
                 "commands": len(self._command_requests),
                 "tree": len(self._tree_requests),
                 "language": len(self._language_requests),
+                "fileDecoration": len(self._file_decoration_requests),
                 "customEditors": len(self._custom_editor_requests),
                 "customEditorLifecycle": len(
                     self._custom_editor_lifecycle_requests),

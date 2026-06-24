@@ -1035,6 +1035,23 @@ class Location:
     range: Range = field(default_factory=Range)
 
 
+class ThemeColor:
+    def __init__(self, id: Any) -> None:
+        self.id = "" if id is None else str(id)
+
+
+class FileDecoration:
+    def __init__(self, badge: Any = None, tooltip: Any = None,
+                 color: Any = None) -> None:
+        if badge is not None:
+            self.badge = str(badge)
+        if tooltip is not None:
+            self.tooltip = str(tooltip)
+        if color is not None:
+            self.color = color
+        self.propagate = False
+
+
 @dataclass
 class DocumentHighlight:
     range: Range = field(default_factory=Range)
@@ -1897,6 +1914,10 @@ class VscodeNamespace:
         self._webview_view_change_callback: Optional[
             Callable[[Dict[str, Any]], None]
         ] = None
+        self._file_decoration_providers: List[Any] = []
+        self._file_decoration_request_callback: Optional[
+            Callable[[Dict[str, Any]], Any]
+        ] = None
         self._task_providers: Dict[str, Any] = {}
         self._debug_providers: Dict[str, Any] = {}
         self._task_executions: List[_TaskExecution] = []
@@ -2075,6 +2096,7 @@ class VscodeNamespace:
                     for item in value]
         attrs = (
             "name", "kind", "detail", "uri", "range", "text", "expression",
+            "badge", "tooltip", "color", "propagate", "id",
             "variableName", "caseSensitiveLookup", "frameId",
             "stoppedLocation", "selectionRange",
             "tags", "from", "fromRanges", "to",
@@ -3446,6 +3468,12 @@ class VscodeNamespace:
         self._language_provider_request_callback = callback
         self._external_language_document_versions.clear()
 
+    def set_file_decoration_request_callback(
+            self,
+            callback: Optional[Callable[[Dict[str, Any]], Any]]) -> None:
+        """Ask an external extension host for file-decoration results."""
+        self._file_decoration_request_callback = callback
+
     def _notify_tree_view_changed(
             self,
             event: str,
@@ -3541,6 +3569,8 @@ class VscodeNamespace:
             "LanguageModelThinkingPart": LanguageModelThinkingPart,
             "LanguageModelError": LanguageModelError,
             "Location": Location,
+            "ThemeColor": ThemeColor,
+            "FileDecoration": FileDecoration,
             "DocumentHighlight": DocumentHighlight,
             "EvaluatableExpression": EvaluatableExpression,
             "InlineValueText": InlineValueText,
@@ -3690,6 +3720,7 @@ class VscodeNamespace:
                 "createTreeView": self._create_tree_view,
                 "registerTreeDataProvider": self._register_tree_data_provider,
                 "registerWebviewViewProvider": self._register_webview_view_provider,
+                "registerFileDecorationProvider": self._register_file_decoration_provider,
                 "createTerminal": self._create_terminal,
                 "withProgress": lambda opts, task: task(_UIProgress(self._ui_bridge), CancellationToken.NONE),
                 "activeTextEditor": None,
@@ -3715,6 +3746,62 @@ class VscodeNamespace:
         self._window_api["visibleTextEditors"] = list(self._visible_text_editors)
         self._window_api["activeTerminal"] = self._active_terminal
         self._window_api["terminals"] = list(self._terminals)
+
+    def _register_file_decoration_provider(self, provider: Any) -> Disposable:
+        self._file_decoration_providers.append(provider)
+
+        def _dispose() -> None:
+            try:
+                self._file_decoration_providers.remove(provider)
+            except ValueError:
+                pass
+
+        return Disposable(_dispose)
+
+    def provide_file_decorations(self, uri: Any) -> List[Dict[str, Any]]:
+        """Return extension-provided VS Code FileDecoration payloads."""
+        uri_obj = _coerce_uri(uri) or Uri.file(str(uri or ""))
+        results: List[Dict[str, Any]] = []
+        for provider in list(self._file_decoration_providers):
+            method = (
+                provider.get("provideFileDecoration")
+                if isinstance(provider, dict)
+                else getattr(provider, "provideFileDecoration", None)
+            )
+            if not callable(method):
+                continue
+            try:
+                value = method(uri_obj, CancellationToken.NONE)
+            except TypeError:
+                try:
+                    value = method(uri_obj)
+                except Exception:
+                    continue
+            except Exception:
+                continue
+            for item in self._provider_values(
+                    _resolve_provider_result(value, default=None)):
+                payload = self._language_value_payload(item)
+                if isinstance(payload, dict):
+                    results.append(payload)
+
+        callback = self._file_decoration_request_callback
+        if callback is not None:
+            try:
+                external = _resolve_provider_result(
+                    callback({"uri": str(uri_obj)}), default=None)
+            except Exception:
+                external = None
+            if isinstance(external, dict) and "ok" in external:
+                external = external.get("value") if external.get("ok") else None
+            for item in self._provider_values(external):
+                if isinstance(item, dict):
+                    results.append(dict(item))
+                else:
+                    payload = self._language_value_payload(item)
+                    if isinstance(payload, dict):
+                        results.append(payload)
+        return results
 
     def _show_message(self, level: str, message: Any,
                       items: Sequence[Any]) -> Any:

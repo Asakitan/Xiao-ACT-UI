@@ -4379,6 +4379,7 @@ def test_vscode_api() -> None:
         SemanticTokensBuilder, TextEdit, Location, SignatureHelp,
         SignatureInformation, Color, ColorInformation, ColorPresentation,
         SymbolInformation, DocumentHighlight, EvaluatableExpression,
+        ThemeColor, FileDecoration,
         InlineValueText, InlineValueVariableLookup,
         InlineValueEvaluatableExpression, InlineValueContext,
         ParameterInformation,
@@ -4429,6 +4430,9 @@ def test_vscode_api() -> None:
            api["DocumentHighlight"] is DocumentHighlight)
     _check("api.EvaluatableExpression",
            api["EvaluatableExpression"] is EvaluatableExpression)
+    _check("api.FileDecoration",
+           api["ThemeColor"] is ThemeColor
+           and api["FileDecoration"] is FileDecoration)
     _check("api.InlineValue types",
            api["InlineValueText"] is InlineValueText
            and api["InlineValueVariableLookup"] is InlineValueVariableLookup
@@ -4577,6 +4581,32 @@ def test_vscode_api() -> None:
         _check("workspace.findFiles returns real matches",
                len(found) == 1 and found[0].fs_path == sample
                and len(found_recursive) == 1)
+
+        class _FileDecorationProvider:
+            def provideFileDecoration(self, uri, token):
+                if str(uri) != str(doc.uri):
+                    return None
+                decoration = FileDecoration(
+                    "P",
+                    "Python decoration",
+                    ThemeColor("gitDecoration.modifiedResourceForeground"),
+                )
+                decoration.propagate = True
+                return decoration
+
+        file_decoration_dispose = api["window"][
+            "registerFileDecorationProvider"](_FileDecorationProvider())
+        file_decorations = ns.provide_file_decorations(doc.uri)
+        _check("window.registerFileDecorationProvider provides decorations",
+               file_decorations
+               and file_decorations[0].get("badge") == "P"
+               and file_decorations[0].get("tooltip") == "Python decoration"
+               and file_decorations[0].get("color", {}).get("id")
+               == "gitDecoration.modifiedResourceForeground"
+               and file_decorations[0].get("propagate") is True)
+        file_decoration_dispose.dispose()
+        _check("window.registerFileDecorationProvider disposable unregisters",
+               ns.provide_file_decorations(doc.uri) == [])
         edit = WorkspaceEdit()
         edit.replace(doc.uri, Range(Position(0, 0), Position(0, 5)), "echo")
         _check("workspace.applyEdit rejects malformed payloads",
@@ -7714,6 +7744,21 @@ async function activate(context) {
   view.onDidExpandElement(evt => output.appendLine('expand:' + evt.element.id));
   view.onDidCollapseElement(evt => output.appendLine('collapse:' + evt.element.id));
   void view.reveal(root, { select: false, focus: true, expand: 2 });
+  const fileDecorationEmitter = new vscode.EventEmitter();
+  vscode.window.registerFileDecorationProvider({
+    onDidChangeFileDecorations: fileDecorationEmitter.event,
+    provideFileDecoration(uri, token) {
+      if (!uri.toString().endsWith('node-decoration.txt')) return undefined;
+      const decoration = new vscode.FileDecoration(
+        'N',
+        'Node decoration',
+        new vscode.ThemeColor('gitDecoration.modifiedResourceForeground'),
+      );
+      decoration.propagate = true;
+      return decoration;
+    },
+  });
+  fileDecorationEmitter.fire(vscode.Uri.file('/workspace/node-decoration.txt'));
   vscode.languages.registerCompletionItemProvider('python', {
     provideCompletionItems(document, position, token, context) {
       const item = new vscode.CompletionItem('nodeCompletion', vscode.CompletionItemKind.Function);
@@ -9640,10 +9685,28 @@ module.exports = { activate, deactivate };
                         payload, default=None)
                 api._vscode_ns.set_language_provider_request_callback(
                     _node_language_request)
+                node_file_decoration_payloads = []
+                def _node_file_decoration_request(payload):
+                    node_file_decoration_payloads.append(dict(payload))
+                    return node_host.request_file_decoration_result(
+                        payload, default=[])
+                api._vscode_ns.set_file_decoration_request_callback(
+                    _node_file_decoration_request)
                 node_provider_sample = os.path.join(node_tree_tmp, "node_provider.py")
                 with open(node_provider_sample, "w", encoding="utf-8") as fh:
                     fh.write("print('node provider')\n")
                 node_uri = Uri.file(node_provider_sample)
+                node_decoration_sample = os.path.join(
+                    node_tree_tmp, "node-decoration.txt")
+                with open(node_decoration_sample, "w", encoding="utf-8") as fh:
+                    fh.write("decorated\n")
+                node_file_decoration_registered = _wait_until(
+                    lambda: bool(node_host.list_file_decoration_providers()),
+                    timeout=3.0)
+                node_file_decorations = (
+                    api._vscode_ns.provide_file_decorations(
+                        Uri.file(node_decoration_sample))
+                    if node_file_decoration_registered else [])
                 node_completion = api._ext_host.commands.execute(
                     "vscode.executeCompletionItemProvider",
                     node_uri, Position(0, 1), ".")
@@ -10166,6 +10229,20 @@ module.exports = { activate, deactivate };
                            payload.get("kind") == "hover"
                            and "text" not in payload
                            for payload in node_language_payloads))
+                _check("node host file decoration provider invokes JS decorations",
+                       node_file_decoration_registered
+                       and node_file_decorations
+                       and node_file_decorations[0].get("badge") == "N"
+                       and node_file_decorations[0].get("tooltip")
+                       == "Node decoration"
+                       and node_file_decorations[0].get("color", {}).get("id")
+                       == "gitDecoration.modifiedResourceForeground"
+                       and node_file_decorations[0].get("propagate") is True
+                       and node_file_decoration_payloads
+                       and node_file_decoration_payloads[-1].get("uri", "")
+                       .endswith("node-decoration.txt"),
+                       json.dumps(node_file_decorations,
+                                  ensure_ascii=False, default=str))
                 _check("node host language provider invokes JS definition",
                        node_definition
                        and node_definition[0].get("uri", "").endswith("node_provider.py"))
@@ -11520,6 +11597,7 @@ module.exports = { activate, deactivate };
                        and node_diag_categories.get("command", {}).get("count", 0) >= 3
                        and node_diag_categories.get("python_command", {}).get("count", 0) >= 1
                        and node_diag_categories.get("language", {}).get("count", 0) >= 5
+                       and node_diag_categories.get("file_decoration", {}).get("count", 0) >= 1
                        and node_diag_categories.get("tree", {}).get("count", 0) >= 1
                        and node_diag_categories.get("workspace.applyEdit", {}).get("count", 0) >= 2
                        and node_diag_categories.get("workspace.findFiles", {}).get("count", 0) >= 1,
@@ -11631,6 +11709,7 @@ module.exports = { activate, deactivate };
                        }, ensure_ascii=False))
             finally:
                 api._vscode_ns.set_language_provider_request_callback(None)
+                api._vscode_ns.set_file_decoration_request_callback(None)
                 try:
                     python_echo_dispose()
                 except Exception:

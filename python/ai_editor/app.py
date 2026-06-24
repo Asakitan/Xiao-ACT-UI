@@ -5958,6 +5958,10 @@ class AIEditorAPI:
                 self._extension_diagnostics_enabled())
             existing_host.set_command_service(self._ext_host.commands)
             self._install_node_runtime_event_bridge(existing_host)
+            self._vscode_ns.set_language_provider_request_callback(
+                self._request_node_language_provider)
+            self._vscode_ns.set_file_decoration_request_callback(
+                self._request_node_file_decorations)
             existing_host.register_extensions(node_exts)
             self._install_node_activation_event_bridge()
             activated = self._activate_node_startup_extensions(wait=False)
@@ -6012,6 +6016,8 @@ class AIEditorAPI:
         self._node_ext_host = host
         self._vscode_ns.set_language_provider_request_callback(
             self._request_node_language_provider)
+        self._vscode_ns.set_file_decoration_request_callback(
+            self._request_node_file_decorations)
         self._install_node_activation_event_bridge()
         host.register_extensions(node_exts)
 
@@ -6129,6 +6135,18 @@ class AIEditorAPI:
                 "error": "Node extension host is not running",
             }
         return host.request_language_provider_result(payload, default=None)
+
+    def _request_node_file_decorations(
+            self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Bridge VS Code file-decoration providers into the Node host."""
+        host = getattr(self, "_node_ext_host", None)
+        if host is None or not host.is_running:
+            return {
+                "ok": False,
+                "value": [],
+                "error": "Node extension host is not running",
+            }
+        return host.request_file_decoration_result(payload, default=[])
 
     def _handle_node_lm_model_request(
             self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -6855,6 +6873,7 @@ class AIEditorAPI:
             host.stop()
             self._node_ext_host = None
         self._vscode_ns.set_language_provider_request_callback(None)
+        self._vscode_ns.set_file_decoration_request_callback(None)
 
     def relay_node_webview_message(self, view_id: str, message: Any) -> Dict:
         """Forward a webview message to the Node extension host."""

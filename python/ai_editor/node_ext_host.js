@@ -220,6 +220,28 @@ class Location {
     }
 }
 
+class ThemeColor {
+    constructor(id) {
+        this.id = id === undefined || id === null ? '' : String(id);
+    }
+}
+
+class ThemeIcon {
+    constructor(id, color) {
+        this.id = id === undefined || id === null ? '' : String(id);
+        if (color !== undefined && color !== null) this.color = color;
+    }
+}
+
+class FileDecoration {
+    constructor(badge, tooltip, color) {
+        if (badge !== undefined && badge !== null) this.badge = String(badge);
+        if (tooltip !== undefined && tooltip !== null) this.tooltip = String(tooltip);
+        if (color !== undefined && color !== null) this.color = color;
+        this.propagate = false;
+    }
+}
+
 class DocumentHighlight {
     constructor(range, kind) {
         this.range = range instanceof Range ? range : _rangeFromPayload(range);
@@ -1359,10 +1381,12 @@ const _fileSystemProviders = new Map();  // scheme -> { provider, options, exten
 const _textDocumentContentProviders = new Map(); // scheme -> { provider, extensionId }
 const _uriHandlers = new Map();          // extensionId -> { handler }
 const _languageProviders = [];           // { kind, selector, provider, triggers?, disposable }
+const _fileDecorationProviders = [];     // { handle, extensionId, provider, disposable? }
 const _runtimeLanguageConfigurations = new Map(); // languageId -> [{ handle, configuration }]
 const _lmTools = new Map();              // name -> { handle, tool, extensionId, metadata }
 const _chatParticipants = new Map();     // id -> { handle, handler, extensionId }
 let _nextLanguageProviderHandle = 1;
+let _nextFileDecorationProviderHandle = 1;
 let _nextLanguageConfigurationHandle = 1;
 let _nextLmToolHandle = 1;
 let _nextChatParticipantHandle = 1;
@@ -4697,6 +4721,9 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         Range,
         Selection,
         Location,
+        ThemeColor,
+        ThemeIcon,
+        FileDecoration,
         DocumentHighlight,
         EvaluatableExpression,
         InlineValueText,
@@ -4939,6 +4966,43 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             registerTreeDataProvider(viewId, treeDataProvider) {
                 log(`registerTreeDataProvider ${viewId}`);
                 const d = registerTreeDataProviderInternal(viewId, treeDataProvider);
+                subscriptions.push(d);
+                return d;
+            },
+            registerFileDecorationProvider(provider) {
+                const handle = _nextFileDecorationProviderHandle++;
+                const entry = {
+                    handle,
+                    extensionId: extDesc.extensionId || '',
+                    provider,
+                };
+                _fileDecorationProviders.push(entry);
+                let changeSubscription = null;
+                if (provider && typeof provider.onDidChangeFileDecorations === 'function') {
+                    changeSubscription = provider.onDidChangeFileDecorations((value) => {
+                        send({
+                            type: 'file_decoration_changed',
+                            handle,
+                            extensionId: entry.extensionId,
+                            value: _serializeLanguageValue(value),
+                        });
+                    });
+                }
+                send({
+                    type: 'file_decoration_provider_registered',
+                    handle,
+                    extensionId: entry.extensionId,
+                });
+                const d = new Disposable(() => {
+                    const idx = _fileDecorationProviders.indexOf(entry);
+                    if (idx >= 0) _fileDecorationProviders.splice(idx, 1);
+                    changeSubscription?.dispose?.();
+                    send({
+                        type: 'file_decoration_provider_disposed',
+                        handle,
+                        extensionId: entry.extensionId,
+                    });
+                });
                 subscriptions.push(d);
                 return d;
             },
@@ -5643,8 +5707,9 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         })(),
 
         // --- Types used by some extensions ---
-        ThemeIcon: class { constructor(id, color) { this.id = id; this.color = color; } },
-        ThemeColor: class { constructor(id) { this.id = id; } },
+        ThemeIcon,
+        ThemeColor,
+        FileDecoration,
         MarkdownString: class {
             constructor(value = '', supportThemeIcons = false) {
                 this.value = value; this.isTrusted = false; this.supportThemeIcons = supportThemeIcons; this.supportHtml = false;
@@ -7824,6 +7889,46 @@ async function handleLanguageProviderRequest(msg) {
     }
 }
 
+async function handleFileDecorationRequest(msg) {
+    const requestId = String(msg.requestId || '');
+    const uri = _uriFromPayload(msg.uri || msg);
+    const token = {
+        isCancellationRequested: false,
+        onCancellationRequested: new EventEmitter().event,
+    };
+    const values = [];
+    try {
+        if (!requestId) throw new Error('Missing file decoration requestId');
+        for (const entry of [..._fileDecorationProviders]) {
+            const provider = entry.provider;
+            const fn = provider && provider.provideFileDecoration;
+            if (typeof fn !== 'function') continue;
+            try {
+                const value = await fn.call(provider, uri, token);
+                if (value !== undefined && value !== null) {
+                    values.push(_serializeLanguageValue(value));
+                }
+            } catch (err) {
+                log(`file decoration provider error: ${err.message}`);
+            }
+        }
+        send({
+            type: 'file_decoration_response',
+            requestId,
+            ok: true,
+            value: values,
+        });
+    } catch (err) {
+        send({
+            type: 'file_decoration_response',
+            requestId,
+            ok: false,
+            error: err?.message || String(err),
+            value: [],
+        });
+    }
+}
+
 async function handleTreeRequest(msg) {
     const requestId = String(msg.requestId || '');
     const viewId = String(msg.viewId || '');
@@ -7957,6 +8062,9 @@ async function handleMessage(msg) {
             break;
         case 'language_provider_request':
             await handleLanguageProviderRequest(msg);
+            break;
+        case 'file_decoration_request':
+            await handleFileDecorationRequest(msg);
             break;
         case 'lm_tool_request':
             await handleLmToolRequest(msg);
