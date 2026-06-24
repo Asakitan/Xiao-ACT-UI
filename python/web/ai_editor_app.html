@@ -3044,6 +3044,8 @@ const DEFAULT_AUTO_CLOSING_PAIRS=[
 ];
 const INDENT_UNIT='    ';
 const DEFAULT_WORD_PATTERN='[A-Za-z_][A-Za-z0-9_]*';
+const COMPLETION_INSERT_TEXT_RULE_KEEP_WHITESPACE=1;
+const COMPLETION_INSERT_TEXT_RULE_INSERT_AS_SNIPPET=4;
 
 let _prevLineCount=1;
 function updateLineNums(){
@@ -4673,6 +4675,7 @@ function editorProviderText(value){
 function editorCompletionInsertTextRaw(item){
   if(!item)return '';
   if(item.textEdit&&item.textEdit.newText!==undefined)return item.textEdit.newText;
+  if(item.textEdit&&item.textEdit.text!==undefined)return item.textEdit.text;
   if(item.insertText!==undefined)return item.insertText;
   return completionLabelText(item.label);
 }
@@ -4684,7 +4687,58 @@ function editorCompletionUsesSnippet(item){
   if(!item)return false;
   const raw=editorCompletionInsertTextRaw(item);
   if(raw&&typeof raw==='object'&&raw.snippet!==undefined)return true;
+  if((Number(item.insertTextRules)||0)&COMPLETION_INSERT_TEXT_RULE_INSERT_AS_SNIPPET)return true;
   return Number(item.insertTextFormat)===2;
+}
+function editorCompletionKeepWhitespace(item){
+  return !!(item&&(item.keepWhitespace||((Number(item.insertTextRules)||0)&COMPLETION_INSERT_TEXT_RULE_KEEP_WHITESPACE)));
+}
+function editorCompletionFilterText(item){
+  return String((item&&item.filterText)||completionLabelText(item&&item.label)||editorCompletionTextValue(editorCompletionInsertTextRaw(item))||'');
+}
+function editorCompletionSortKey(item,index){
+  const key=String((item&&item.sortText)||completionLabelText(item&&item.label)||editorCompletionFilterText(item)||'').toLowerCase();
+  return key+'\u0000'+String(index).padStart(5,'0');
+}
+function editorCompletionCommitCharacters(item){
+  return Array.isArray(item&&item.commitCharacters)?item.commitCharacters.map(ch=>String(ch||'')).filter(ch=>ch.length===1):[];
+}
+function editorCompletionMatchesPrefix(item,prefix){
+  prefix=String(prefix||'').toLowerCase();
+  if(!prefix)return true;
+  const filter=editorCompletionFilterText(item).toLowerCase();
+  const label=completionLabelText(item&&item.label).toLowerCase();
+  return filter.startsWith(prefix)||label.startsWith(prefix);
+}
+function editorNormalizeSuggestItems(items,prefix){
+  const rows=(Array.isArray(items)?items:[]).filter(Boolean).map((item,index)=>({item,index}));
+  const matching=rows.filter(row=>editorCompletionMatchesPrefix(row.item,prefix));
+  const source=prefix&&matching.length?matching:rows;
+  source.sort((a,b)=>{
+    const pa=a.item&&a.item.preselect?1:0,pb=b.item&&b.item.preselect?1:0;
+    if(pa!==pb)return pb-pa;
+    const ak=editorCompletionSortKey(a.item,a.index),bk=editorCompletionSortKey(b.item,b.index);
+    return ak<bk?-1:(ak>bk?1:0);
+  });
+  return source.map(row=>row.item).slice(0,80);
+}
+function editorLineIndentAt(value,offset){
+  value=String(value||'');offset=Math.max(0,Math.min(value.length,Number(offset)||0));
+  const lineStart=value.lastIndexOf('\n',Math.max(0,offset-1))+1;
+  const match=value.slice(lineStart).match(/^[\t ]*/);
+  return match?match[0]:'';
+}
+function editorAdjustCompletionWhitespace(text,value,start,keepWhitespace){
+  text=String(text??'');
+  if(keepWhitespace||!text.includes('\n'))return text;
+  const indent=editorLineIndentAt(value,start);
+  if(!indent)return text;
+  const lines=text.split('\n');
+  for(let i=1;i<lines.length;i++)lines[i]=indent+lines[i];
+  return lines.join('\n');
+}
+function editorCompletionAdjustedText(raw,item,start,value){
+  return editorAdjustCompletionWhitespace(editorCompletionTextValue(raw),value,start,editorCompletionKeepWhitespace(item));
 }
 function editorSnippetFileContext(context){
   context=context||{};
@@ -4906,6 +4960,66 @@ function editorInsertText(item){
   text=editorCompletionUsesSnippet(item)?editorSnippetPlainText(text):editorCompletionTextValue(text);
   return String(text||'');
 }
+function editorCompletionRangeOffsets(item,value,s,end){
+  value=String(value||'');
+  let range=null;
+  if(item&&item.textEdit&&item.textEdit.range)range=item.textEdit.range;
+  else if(item&&item.range){
+    const candidate=item.range;
+    range=candidate.replacing||candidate.replace||candidate.inserting||candidate.insert||candidate;
+  }
+  if(range&&range.start){
+    let start=editorOffsetFromPosition(value,range.start),finish=editorOffsetFromPosition(value,range.end||range.start);
+    if(finish<start){const tmp=start;start=finish;finish=tmp}
+    return {start,finish};
+  }
+  const word=editorWordRangeAt(value,s,end);
+  return {start:word?word.start:s,finish:word?word.end:end};
+}
+function editorCompletionAdditionalEdits(item){
+  return Array.isArray(item&&item.additionalTextEdits)?item.additionalTextEdits.filter(Boolean):[];
+}
+function editorCompletionTextEditText(edit){
+  return String(edit&&edit.newText!==undefined?edit.newText:(edit&&edit.text!==undefined?edit.text:''));
+}
+function editorApplyCompletionAdditionalEdits(item,mainRange){
+  const edits=editorCompletionAdditionalEdits(item);
+  if(!edits.length)return mainRange;
+  const value=String(ed.value||''),ops=[];
+  for(const edit of edits){
+    if(!edit||!edit.range)continue;
+    let start=editorOffsetFromPosition(value,edit.range.start),finish=editorOffsetFromPosition(value,edit.range.end||edit.range.start);
+    if(finish<start){const tmp=start;start=finish;finish=tmp}
+    if(start<mainRange.finish&&finish>mainRange.start)return null;
+    ops.push({start,finish,text:editorCompletionTextEditText(edit)});
+  }
+  if(!ops.length)return mainRange;
+  let next=value,start=mainRange.start,finish=mainRange.finish;
+  ops.sort((a,b)=>b.start-a.start||b.finish-a.finish).forEach(op=>{
+    next=next.slice(0,op.start)+op.text+next.slice(op.finish);
+    const delta=op.text.length-(op.finish-op.start);
+    if(op.finish<=start){start+=delta;finish+=delta}
+    else if(op.finish<=finish)finish+=delta;
+  });
+  ed.value=next;
+  return {start,finish};
+}
+function editorCompletionChanged(cursor){
+  ed.selectionStart=ed.selectionEnd=Math.max(0,Math.min(ed.value.length,Number(cursor)||0));
+  editorDirty=true;
+  updateLineNums();updateCursorPos();scheduleEditorSyntaxHighlight();
+  clearEditorInlayHints();scheduleEditorInlayHints(200);
+  clearEditorInlineCompletions();scheduleEditorInlineCompletions(240);
+  clearEditorCodeLenses();scheduleEditorCodeLenses(420);
+  clearEditorDocumentColors();scheduleEditorDocumentColors(460);
+}
+function editorInsertCompletionCommitCharacter(ch){
+  if(!ch)return;
+  editorCancelSnippetSession(false);
+  const s=ed.selectionStart,end=ed.selectionEnd,value=ed.value;
+  ed.value=value.slice(0,s)+ch+value.slice(end);
+  editorCompletionChanged(s+String(ch).length);
+}
 function editorApplyTextEditsToValue(value,edits){
   if(!Array.isArray(edits)||!edits.length)return false;
   value=String(value||'');
@@ -4957,7 +5071,9 @@ function setEditorSuggestIndex(index){
 }
 function showEditorSuggest(items,position){
   const box=$('editor-suggest');if(!box)return;
-  _editorSuggestItems=items.slice(0,80);_editorSuggestIndex=0;box.innerHTML='';
+  const value=ed.value,s=ed.selectionStart,end=ed.selectionEnd,word=editorWordRangeAt(value,s,end);
+  const prefix=word?value.slice(word.start,s):'';
+  _editorSuggestItems=editorNormalizeSuggestItems(items,prefix);_editorSuggestIndex=0;box.innerHTML='';
   _editorSuggestItems.forEach((item,index)=>{
     const row=document.createElement('div');row.className='editor-suggest-item'+(index===0?' active':'');row.setAttribute('role','option');
     const label=document.createElement('div');label.className='editor-suggest-label';label.textContent=completionLabelText(item.label)||editorInsertText(item);
@@ -4970,34 +5086,31 @@ function showEditorSuggest(items,position){
   placeEditorOverlay(box,position);box.style.display='block';requestAnimationFrame(()=>box.classList.add('open'));
 }
 function applyEditorCompletion(item){
+  const options=arguments.length>1&&arguments[1]?arguments[1]:{};
   if(!item)return;
   _undoPush(true);
   editorCancelSnippetSession(false);
+  let value=ed.value,s=ed.selectionStart,end=ed.selectionEnd,range=editorCompletionRangeOffsets(item,value,s,end);
+  range=editorApplyCompletionAdditionalEdits(item,range);
+  if(!range){setStatus('Completion additional edits overlap the main edit');closeEditorSuggest();ed.focus();return}
+  value=ed.value;
   const usesSnippet=editorCompletionUsesSnippet(item);
-  if(usesSnippet&&!(Array.isArray(item.additionalTextEdits)&&item.additionalTextEdits.length)){
-    const value=ed.value,s=ed.selectionStart,end=ed.selectionEnd,word=editorWordRangeAt(value,s,end);
-    let start=word?word.start:s,finish=word?word.end:end;
-    if(item.textEdit&&item.textEdit.range){
-      start=editorOffsetFromPosition(value,item.textEdit.range.start);
-      finish=editorOffsetFromPosition(value,item.textEdit.range.end||item.textEdit.range.start);
-      if(finish<start){const tmp=start;start=finish;finish=tmp}
-    }
-    editorApplySnippetText(editorCompletionInsertTextRaw(item),start,finish,{
+  if(usesSnippet){
+    const raw=editorCompletionAdjustedText(editorCompletionInsertTextRaw(item),item,range.start,value);
+    editorApplySnippetText(raw,range.start,range.finish,{
       selectedText:value.slice(Math.min(s,end),Math.max(s,end)),
       filePath:(activeEditorTab()||{}).filePath||'',
       workspacePath:(activeEditorTab()||{}).workspacePath||''
     });
-    closeEditorSuggest();ed.focus();return;
+  }else{
+    const text=editorCompletionAdjustedText(editorCompletionInsertTextRaw(item)||completionLabelText(item&&item.label),item,range.start,value);
+    ed.value=value.slice(0,range.start)+text+value.slice(range.finish);
+    editorCompletionChanged(range.start+text.length);
   }
-  const edits=[];
-  if(item.textEdit)edits.push(item.textEdit);
-  if(Array.isArray(item.additionalTextEdits))edits.push(...item.additionalTextEdits);
-  if(edits.length&&editorApplyTextEdits(edits)){closeEditorSuggest();ed.focus();return}
-  const value=ed.value,s=ed.selectionStart,end=ed.selectionEnd,word=editorWordRangeAt(value,s,end);
-  const start=word?word.start:s,finish=word?word.end:end,text=editorInsertText(item);
-  ed.value=value.slice(0,start)+text+value.slice(finish);
-  ed.selectionStart=ed.selectionEnd=start+text.length;editorDirty=true;
-  updateLineNums();updateCursorPos();closeEditorSuggest();ed.focus();
+  closeEditorSuggest();
+  if(options.commitCharacter)editorInsertCompletionCommitCharacter(options.commitCharacter);
+  if(item.command)runEditorCodeActionCommand(item.command);
+  ed.focus();
 }
 function handleEditorSuggestKey(e){
   if(!isEditorSuggestOpen())return false;
@@ -5005,6 +5118,12 @@ function handleEditorSuggestKey(e){
   if(e.key==='ArrowUp'){e.preventDefault();setEditorSuggestIndex(_editorSuggestIndex-1);return true}
   if(e.key==='Enter'||e.key==='Tab'){e.preventDefault();applyEditorCompletion(_editorSuggestItems[_editorSuggestIndex]);return true}
   if(e.key==='Escape'){e.preventDefault();closeEditorSuggest();return true}
+  if(e.key&&e.key.length===1&&!e.ctrlKey&&!e.altKey&&!e.metaKey){
+    const item=_editorSuggestItems[_editorSuggestIndex];
+    if(editorCompletionCommitCharacters(item).includes(e.key)){
+      e.preventDefault();applyEditorCompletion(item,{commitCharacter:e.key});return true;
+    }
+  }
   return false;
 }
 function editorCompletionTriggerCharacter(ch){

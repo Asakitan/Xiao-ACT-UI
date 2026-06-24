@@ -4914,6 +4914,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             'Folder', 'EnumMember', 'Constant', 'Struct', 'Event', 'Operator',
             'TypeParameter',
         ].map((n, i) => [n, i])),
+        CompletionItemInsertTextRule: { None: 0, KeepWhitespace: 1, InsertAsSnippet: 4 },
         SymbolKind: Object.fromEntries([
             'File', 'Module', 'Namespace', 'Package', 'Class', 'Method',
             'Property', 'Field', 'Constructor', 'Enum', 'Interface',

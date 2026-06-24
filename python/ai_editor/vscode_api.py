@@ -1677,9 +1677,13 @@ class CompletionItem:
         self.documentation = None
         self.sortText = None
         self.filterText = None
+        self.preselect = None
         self.insertText = None
+        self.insertTextRules = None
+        self.keepWhitespace = None
         self.range = None
         self.textEdit = None
+        self.commitCharacters = None
         self.additionalTextEdits = []
         self.command = None
 
@@ -3638,6 +3642,11 @@ class VscodeNamespace:
                 "EnumMember": 19, "Constant": 20, "Struct": 21,
                 "Event": 22, "Operator": 23, "TypeParameter": 24,
                 "User": 25, "Issue": 26,
+            },
+            "CompletionItemInsertTextRule": {
+                "None": 0,
+                "KeepWhitespace": 1,
+                "InsertAsSnippet": 4,
             },
             "SignatureHelpTriggerKind": {
                 "Invoke": 1,

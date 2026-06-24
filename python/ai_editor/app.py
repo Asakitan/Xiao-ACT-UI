@@ -510,10 +510,11 @@ def load_provider_config(gui_ref: Any = None) -> ProviderConfig:
 
 _LANGUAGE_RESULT_ATTRS = (
     "items", "isIncomplete", "label", "kind", "detail", "documentation",
-    "sortText", "filterText", "insertText", "range", "text", "expression",
+    "sortText", "filterText", "preselect", "insertText", "insertTextRules",
+    "keepWhitespace", "range", "text", "expression",
     "variableName", "caseSensitiveLookup", "frameId", "stoppedLocation",
     "textEdit",
-    "additionalTextEdits", "command", "arguments", "contents", "uri", "targetUri",
+    "additionalTextEdits", "commitCharacters", "command", "arguments", "contents", "uri", "targetUri",
     "targetRange", "originSelectionRange", "name", "containerName",
     "children", "selectionRange", "diagnostics", "edit", "title",
     "isPreferred", "disabled", "newText", "position", "value",

@@ -465,6 +465,16 @@ def test_app_settings_parity() -> None:
             self.seen_dirty.append(document.isDirty)
             item = CompletionItem("editorCompletion")
             item.detail = document.languageId
+            item.sortText = "000_editorCompletion"
+            item.filterText = "editorCompletionFilter"
+            item.preselect = True
+            item.insertText = "${1:editorCompletion}"
+            item.insertTextRules = 4
+            item.keepWhitespace = True
+            item.commitCharacters = ["."]
+            item.additionalTextEdits = [
+                TextEdit.insert(Position(0, 0), "# completion\n")
+            ]
             return CompletionList([item], False)
 
         def provideHover(self, document, position, token):
@@ -992,6 +1002,21 @@ def test_app_settings_parity() -> None:
                == "editorCompletion"
                and completion_result.get("items", [{}])[0].get("detail")
                == "python"
+               and completion_result.get("items", [{}])[0].get("sortText")
+               == "000_editorCompletion"
+               and completion_result.get("items", [{}])[0].get("filterText")
+               == "editorCompletionFilter"
+               and completion_result.get("items", [{}])[0].get("preselect")
+               is True
+               and completion_result.get("items", [{}])[0].get("insertTextRules")
+               == 4
+               and completion_result.get("items", [{}])[0].get("keepWhitespace")
+               is True
+               and completion_result.get("items", [{}])[0].get("commitCharacters")
+               == ["."]
+               and completion_result.get("items", [{}])[0]
+               .get("additionalTextEdits", [{}])[0].get("newText")
+               == "# completion\n"
                and editor_provider.seen_texts[-1] == "buffer"
                and editor_provider.seen_dirty[-1] is True)
         _check("editor_language_provider serializes hover contents",
@@ -2579,6 +2604,13 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function handleEditorSnippetKey(e)" in html
            and "ed.addEventListener('beforeinput',captureEditorSnippetBefore)" in html
            and "if(handleEditorSnippetKey(e))return;" in html)
+    _check("frontend honors VS Code completion accept metadata",
+           "function editorNormalizeSuggestItems(items,prefix)" in html
+           and "function editorCompletionCommitCharacters(item)" in html
+           and "function editorCompletionRangeOffsets(item,value,s,end)" in html
+           and "function editorApplyCompletionAdditionalEdits(item,mainRange)" in html
+           and "function editorCompletionKeepWhitespace(item)" in html
+           and "function editorInsertCompletionCommitCharacter(ch)" in html)
     try:
         from ai_editor.node_runtime import get_node_path
         node_path = get_node_path()
@@ -2721,6 +2753,8 @@ function updateCursorPos() {}
 function scheduleEditorSyntaxHighlight() {}
 function clearEditorInlineCompletions() {}
 function scheduleEditorInlineCompletions() {}
+const COMPLETION_INSERT_TEXT_RULE_KEEP_WHITESPACE = 1;
+const COMPLETION_INSERT_TEXT_RULE_INSERT_AS_SNIPPET = 4;
 """ + js_functions + r"""
 function assert(ok, label){ if(!ok){ throw new Error(label); } }
 const parsed = editorParseSnippet(
@@ -2783,6 +2817,181 @@ console.log("frontend snippet behavior ok");
                    (result.stderr or result.stdout).strip())
         except Exception as exc:
             _check("frontend snippet tabstop behavior", False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
+    if not node_path:
+        _check("frontend completion accept metadata skipped without Node.js", True)
+    else:
+        completion_functions = [
+            "completionLabelText",
+            "editorCompletionInsertTextRaw",
+            "editorCompletionTextValue",
+            "editorCompletionUsesSnippet",
+            "editorCompletionKeepWhitespace",
+            "editorCompletionFilterText",
+            "editorCompletionSortKey",
+            "editorCompletionCommitCharacters",
+            "editorCompletionMatchesPrefix",
+            "editorNormalizeSuggestItems",
+            "editorLineIndentAt",
+            "editorAdjustCompletionWhitespace",
+            "editorCompletionAdjustedText",
+            "editorCompletionRangeOffsets",
+            "editorCompletionAdditionalEdits",
+            "editorCompletionTextEditText",
+            "editorApplyCompletionAdditionalEdits",
+            "editorCompletionChanged",
+            "editorInsertCompletionCommitCharacter",
+            "editorInsertText",
+            "applyEditorCompletion",
+            "handleEditorSuggestKey",
+        ]
+        js_functions = "\n".join(
+            _extract_js_function(html, name) for name in completion_functions)
+        js = r"""
+let editorDirty = false;
+let _editorSuggestItems = [];
+let _editorSuggestIndex = 0;
+let _editorSnippetSession = null;
+let statusText = "";
+let ranCommands = [];
+let closedSuggest = 0;
+let undoPushes = 0;
+const COMPLETION_INSERT_TEXT_RULE_KEEP_WHITESPACE = 1;
+const COMPLETION_INSERT_TEXT_RULE_INSERT_AS_SNIPPET = 4;
+const ed = {
+  value: "",
+  selectionStart: 0,
+  selectionEnd: 0,
+  focus() { this.focused = true; },
+};
+function assert(ok, label){ if(!ok){ throw new Error(label); } }
+function editorOffsetFromPosition(value,pos){
+  value = String(value || ""); pos = pos || {};
+  let line = Math.max(0, Number(pos.line) || 0);
+  const character = Math.max(0, Number(pos.character) || 0);
+  let offset = 0;
+  while(line > 0){
+    const next = value.indexOf("\n", offset);
+    if(next < 0) return value.length;
+    offset = next + 1; line -= 1;
+  }
+  const end = value.indexOf("\n", offset);
+  const max = end < 0 ? value.length : end;
+  return Math.max(offset, Math.min(max, offset + character));
+}
+function editorWordRangeAt(value,start,end){
+  if(start !== end) return { start, end };
+  value = String(value || "");
+  let a = start, b = start;
+  while(a > 0 && /[A-Za-z0-9_$-]/.test(value[a - 1])) a -= 1;
+  while(b < value.length && /[A-Za-z0-9_$-]/.test(value[b])) b += 1;
+  return a === b ? null : { start: a, end: b };
+}
+function updateLineNums() {}
+function updateCursorPos() {}
+function scheduleEditorSyntaxHighlight() {}
+function clearEditorInlayHints() {}
+function scheduleEditorInlayHints() {}
+function clearEditorInlineCompletions() {}
+function scheduleEditorInlineCompletions() {}
+function clearEditorCodeLenses() {}
+function scheduleEditorCodeLenses() {}
+function clearEditorDocumentColors() {}
+function scheduleEditorDocumentColors() {}
+function _undoPush(force){ undoPushes += 1; }
+function editorCancelSnippetSession(){ _editorSnippetSession = null; }
+function editorApplySnippetText(raw,start,finish,context){
+  const text = editorCompletionTextValue(raw);
+  ed.value = ed.value.slice(0, start) + text + ed.value.slice(finish);
+  ed.selectionStart = ed.selectionEnd = start + text.length;
+  editorDirty = true;
+}
+function closeEditorSuggest(){ closedSuggest += 1; }
+function setStatus(value){ statusText = String(value || ""); }
+function runEditorCodeActionCommand(command){ ranCommands.push(command.command || command); }
+function isEditorSuggestOpen(){ return true; }
+function setEditorSuggestIndex(index){ _editorSuggestIndex = index; }
+""" + js_functions + r"""
+const normalized = editorNormalizeSuggestItems([
+  { label: "prefixSlow", sortText: "z" },
+  { label: "prefixFast", sortText: "a" },
+  { label: "prefixPreferred", sortText: "m", preselect: true },
+  { label: "ignored", filterText: "qqq" },
+], "pre");
+assert(normalized.length === 3 && normalized[0].label === "prefixPreferred",
+       "filterText/preselect normalization");
+const sorted = editorNormalizeSuggestItems([
+  { label: "zeta", sortText: "z" },
+  { label: "alpha", sortText: "a" },
+], "");
+assert(sorted[0].label === "alpha" && sorted[1].label === "zeta",
+       "sortText ordering");
+assert(editorCompletionCommitCharacters({ commitCharacters: [".", "xx", ""] }).join("") === ".",
+       "commit characters are single character only");
+assert(editorCompletionUsesSnippet({ insertText: "${1:x}", insertTextRules: 4 }),
+       "insertTextRules marks snippet");
+assert(editorCompletionAdjustedText("one\n  two", {}, 4, "    old") === "one\n      two",
+       "completion whitespace follows current indent");
+assert(editorCompletionAdjustedText("one\n  two", { insertTextRules: 1 }, 4, "    old") === "one\n  two",
+       "keepWhitespace preserves snippet indentation");
+ed.value = "abcTail"; ed.selectionStart = ed.selectionEnd = 3;
+applyEditorCompletion({
+  label: "abc",
+  insertText: "X",
+  range: { replacing: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } } },
+});
+assert(ed.value === "XTail", "completion replacing range object applied");
+ed.value = "abcTail"; ed.selectionStart = ed.selectionEnd = 3;
+applyEditorCompletion({
+  label: "labelFallback",
+  textEdit: {
+    range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } },
+    newText: "textEditMain",
+  },
+});
+assert(ed.value === "textEditMainTail", "completion textEdit newText wins over label");
+ed.value = "foo"; ed.selectionStart = ed.selectionEnd = 3;
+applyEditorCompletion({
+  label: "foo",
+  insertText: "bar",
+  additionalTextEdits: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, newText: "const x=1;\n" }],
+  command: { command: "selftest.afterCompletion" },
+});
+assert(ed.value === "const x=1;\nbar", "completion applies additional edits and main insert");
+assert(ranCommands.includes("selftest.afterCompletion"), "completion command invoked after insert");
+ed.value = "foo"; ed.selectionStart = ed.selectionEnd = 3;
+_editorSuggestItems = [{ label: "foo", insertText: "bar", commitCharacters: ["."] }];
+_editorSuggestIndex = 0;
+const event = { key: ".", ctrlKey: false, altKey: false, metaKey: false, preventDefault(){ this.prevented = true; } };
+assert(handleEditorSuggestKey(event) && event.prevented, "commit character accepts selected item");
+assert(ed.value === "bar.", "commit character inserted after completion");
+console.log("frontend completion accept behavior ok");
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check("frontend completion accept metadata",
+                   result.returncode == 0
+                   and "frontend completion accept behavior ok" in result.stdout,
+                   (result.stderr or result.stdout).strip())
+        except Exception as exc:
+            _check("frontend completion accept metadata", False, str(exc))
         finally:
             if js_path:
                 try:
@@ -5002,6 +5211,9 @@ def test_vscode_api() -> None:
     _check("api.SemanticTokensBuilder",
            api["SemanticTokensBuilder"] is SemanticTokensBuilder)
     _check("api.CompletionItemKind", api["CompletionItemKind"]["Function"] == 2)
+    _check("api.CompletionItemInsertTextRule",
+           api["CompletionItemInsertTextRule"]["KeepWhitespace"] == 1
+           and api["CompletionItemInsertTextRule"]["InsertAsSnippet"] == 4)
     _check("api.SignatureHelpTriggerKind",
            api["SignatureHelpTriggerKind"]["TriggerCharacter"] == 2)
 
@@ -9265,6 +9477,16 @@ async function activate(context) {
     provideCompletionItems(document, position, token, context) {
       const item = new vscode.CompletionItem('nodeCompletion', vscode.CompletionItemKind.Function);
       item.detail = document.languageId + ':' + (context.triggerCharacter || '');
+      item.sortText = '000_nodeCompletion';
+      item.filterText = 'nodeCompletionFilter';
+      item.preselect = true;
+      item.insertText = '${1:nodeCompletion}';
+      item.insertTextRules = vscode.CompletionItemInsertTextRule.InsertAsSnippet;
+      item.keepWhitespace = true;
+      item.commitCharacters = ['.'];
+      item.additionalTextEdits = [
+        vscode.TextEdit.insert(new vscode.Position(0, 0), '// node completion\n'),
+      ];
       return new vscode.CompletionList([item], true);
     },
     resolveCompletionItem(item, token) {
@@ -11699,10 +11921,28 @@ module.exports = { activate, deactivate };
                     else getattr(item, "label", "")
                     for item in node_completion_items
                 ]
+                node_completion_first = (
+                    node_completion_items[0] if node_completion_items else {})
+                node_completion_first_get = (
+                    node_completion_first.get
+                    if isinstance(node_completion_first, dict)
+                    else lambda key, default=None: getattr(
+                        node_completion_first, key, default))
                 _check("node host language provider invokes JS completion",
                        node_language_registered
                        and getattr(node_completion, "isIncomplete", False) is True
-                       and "nodeCompletion" in node_completion_labels)
+                       and "nodeCompletion" in node_completion_labels
+                       and node_completion_first_get("sortText")
+                       == "000_nodeCompletion"
+                       and node_completion_first_get("filterText")
+                       == "nodeCompletionFilter"
+                       and node_completion_first_get("preselect") is True
+                       and node_completion_first_get("insertTextRules") == 4
+                       and node_completion_first_get("keepWhitespace") is True
+                       and node_completion_first_get("commitCharacters") == ["."]
+                       and (node_completion_first_get(
+                           "additionalTextEdits") or [{}])[0].get("newText")
+                       == "// node completion\n")
                 node_completion_resolved_doc = (
                     node_completion_resolved.items[0].get("documentation")
                     if node_completion_resolved.items
