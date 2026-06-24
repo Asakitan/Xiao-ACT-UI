@@ -1054,6 +1054,7 @@ const _extensionActivationRequests = new Map(); // requestId -> pending activati
 const _extensionActivationInFlight = new Map(); // extensionId -> pending activation request
 const _commands = new Map();             // commandId -> handler
 const _pythonCommandRequests = new Map(); // requestId -> { resolve, reject, timer }
+const _pythonLmRequests = new Map();      // requestId -> { resolve, reject, timer }
 const _webviewViewProviders = new Map(); // viewType -> { provider, options }
 const _webviewViews = new Map();         // viewId -> WebviewView
 const _customEditorProviders = new Map(); // viewType -> { provider, options, extensionId }
@@ -1073,6 +1074,7 @@ let _nextLanguageProviderHandle = 1;
 let _nextLmToolHandle = 1;
 let _nextChatParticipantHandle = 1;
 let _nextPythonCommandRequestHandle = 1;
+let _nextPythonLmRequestHandle = 1;
 let _nextExtensionActivationRequestHandle = 1;
 const _languageDocumentTextCache = new Map(); // uri -> { version, text }
 const _workspaceTextDocuments = new Map(); // uri -> TextDocument-like object
@@ -1382,6 +1384,109 @@ function _executePythonCommand(commandId, args) {
             args: (args || []).map(item => _serializeArgForPython(item)),
         });
     });
+}
+
+function _requestPythonLm(action, payload, timeoutMs = 30000) {
+    const requestId = `pylm-${_nextPythonLmRequestHandle++}`;
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            _pythonLmRequests.delete(requestId);
+            reject(new Error(`Python LM request timed out: ${action}`));
+        }, timeoutMs);
+        _pythonLmRequests.set(requestId, { resolve, reject, timer });
+        send(Object.assign({
+            type: 'lm_model_request',
+            requestId,
+            action,
+        }, payload || {}));
+    });
+}
+
+function _handlePythonLmResponse(msg) {
+    const requestId = String(msg.requestId || '');
+    const pending = _pythonLmRequests.get(requestId);
+    if (!pending) return;
+    _pythonLmRequests.delete(requestId);
+    clearTimeout(pending.timer);
+    if (msg.ok) {
+        pending.resolve(_deserializeArgFromPython(msg.value));
+    } else {
+        pending.reject(new Error(msg.error || 'Python LM request failed'));
+    }
+}
+
+function _normalizeLmCapabilities(value) {
+    const caps = value && typeof value === 'object' ? value : {};
+    return {
+        supportsImageToText: !!(
+            caps.supportsImageToText
+            ?? caps.supports_image_to_text
+            ?? caps.vision),
+        supportsToolCalling: !!(
+            caps.supportsToolCalling
+            ?? caps.supports_tool_calling
+            ?? caps.toolCalling
+            ?? caps.tools
+            ?? true),
+        editToolsHint: !!(caps.editToolsHint ?? caps.edit_tools_hint),
+    };
+}
+
+function _languageModelTextFromChunk(chunk) {
+    if (chunk === undefined || chunk === null) return '';
+    if (typeof chunk === 'string' || typeof chunk === 'number' || typeof chunk === 'boolean') {
+        return String(chunk);
+    }
+    if (chunk && typeof chunk === 'object') {
+        const text = chunk.value ?? chunk.text ?? chunk.content;
+        if (text !== undefined && text !== null) return String(text);
+    }
+    return String(chunk);
+}
+
+function _languageModelResponseFromPayload(value) {
+    const payload = value && typeof value === 'object' ? value : {};
+    const chunks = Array.isArray(payload.chunks)
+        ? payload.chunks
+        : (payload.text !== undefined && payload.text !== null ? [payload.text] : []);
+    const stream = async function* () {
+        for (const chunk of chunks) {
+            yield new LanguageModelTextPart(_languageModelTextFromChunk(chunk));
+        }
+    };
+    return {
+        text: String(payload.text ?? chunks.map(_languageModelTextFromChunk).join('')),
+        stream: stream(),
+    };
+}
+
+function _languageModelChatFromPayload(model) {
+    const meta = model && typeof model === 'object' ? model : {};
+    const id = String(meta.id || '');
+    const apiObject = {
+        id,
+        name: String(meta.name || id),
+        vendor: String(meta.vendor || ''),
+        family: String(meta.family || ''),
+        version: String(meta.version || ''),
+        maxInputTokens: Number(meta.maxInputTokens ?? meta.max_input_tokens ?? 0) || undefined,
+        capabilities: _normalizeLmCapabilities(meta.capabilities),
+        countTokens(text, token) {
+            return _requestPythonLm('countTokens', {
+                modelId: id,
+                text: _serializeLanguageValue(text),
+            }, 5000);
+        },
+        async sendRequest(messages, options, token) {
+            const value = await _requestPythonLm('sendRequest', {
+                modelId: id,
+                messages: _serializeLanguageValue(messages || []),
+                options: _serializeLanguageValue(options || {}),
+            }, 120000);
+            return _languageModelResponseFromPayload(value);
+        },
+    };
+    return Object.freeze(apiObject);
 }
 
 function handleExecuteCommandResponse(msg) {
@@ -3097,7 +3202,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         ColorThemeKind: { Light: 1, Dark: 2, HighContrast: 3, HighContrastLight: 4 },
         UIKind: { Desktop: 1, Web: 2 },
         LogLevel: { Off: 0, Trace: 1, Debug: 2, Info: 3, Warning: 4, Error: 5 },
-        LanguageModelChatMessageRole: { User: 1, Assistant: 2 },
+        LanguageModelChatMessageRole: { System: 0, User: 1, Assistant: 2 },
         ChatResultFeedbackKind: { Unhelpful: 0, Helpful: 1 },
 
         // --- Namespace: commands ---
@@ -3618,9 +3723,14 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
 
         // --- Namespace: lm (Language Models) ---
         lm: {
-            selectChatModels(selector) {
-                log('stub: lm.selectChatModels');
-                return Promise.resolve([]);
+            async selectChatModels(selector) {
+                const models = await _requestPythonLm('selectChatModels', {
+                    selector: _serializeLanguageValue(selector || {}),
+                    extensionId: extDesc.extensionId || '',
+                }, 5000);
+                return (Array.isArray(models) ? models : [])
+                    .map(_languageModelChatFromPayload)
+                    .filter(model => !!model.id);
             },
             registerTool(name, tool) {
                 const toolName = String(name || '');
@@ -4008,6 +4118,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         // Placeholder for LanguageModelChatMessage
         LanguageModelChatMessage: class {
             constructor(role, content, name) { this.role = role; this.content = content; this.name = name; }
+            static System(content, name) { return new vscode.LanguageModelChatMessage(0, content, name); }
             static User(content, name) { return new vscode.LanguageModelChatMessage(1, content, name); }
             static Assistant(content, name) { return new vscode.LanguageModelChatMessage(2, content, name); }
         },
@@ -5704,6 +5815,9 @@ async function handleMessage(msg) {
             break;
         case 'execute_command_response':
             handleExecuteCommandResponse(msg);
+            break;
+        case 'lm_model_response':
+            _handlePythonLmResponse(msg);
             break;
         case 'tree_request':
             await handleTreeRequest(msg);

@@ -1618,6 +1618,9 @@ class NodeExtensionHost:
         self._on_chat_participant_callbacks: List[
             Callable[[str, str, Dict[str, Any]], None]
         ] = []
+        self._lm_model_request_callback: Optional[
+            Callable[[Dict[str, Any]], Dict[str, Any]]
+        ] = None
         self._tree_request_lock = threading.Lock()
         self._tree_requests: Dict[str, Dict[str, Any]] = {}
         self._lm_tool_request_lock = threading.Lock()
@@ -2130,6 +2133,41 @@ class NodeExtensionHost:
                 detail=command_id,
                 error=error,
             )
+
+        elif msg_type == "lm_model_request":
+            request_id = str(msg.get("requestId", ""))
+            ok = False
+            value: Any = None
+            error = ""
+            try:
+                if self._lm_model_request_callback is None:
+                    if str(msg.get("action") or "") == "selectChatModels":
+                        ok = True
+                        value = []
+                    else:
+                        raise RuntimeError("LM model provider is not available")
+                else:
+                    result = self._lm_model_request_callback(dict(msg))
+                    if isinstance(result, dict) and result.get("ok") is False:
+                        error = str(
+                            result.get("error") or "LM model request failed")
+                        value = result.get("value")
+                    else:
+                        ok = True
+                        value = (
+                            result.get("value")
+                            if isinstance(result, dict) and "value" in result
+                            else result)
+            except Exception as exc:
+                error = str(exc)
+            if request_id:
+                self._send({
+                    "type": "lm_model_response",
+                    "requestId": request_id,
+                    "ok": ok,
+                    "value": value,
+                    "error": error,
+                })
 
         elif msg_type == "activate_extension":
             request_id = str(msg.get("requestId", ""))
@@ -2949,6 +2987,13 @@ class NodeExtensionHost:
     def set_ui_bridge(self, bridge: Any) -> None:
         """Update the UI bridge after construction."""
         self._ui_bridge = bridge
+
+    def set_lm_model_request_callback(
+            self,
+            callback: Optional[
+                Callable[[Dict[str, Any]], Dict[str, Any]]]) -> None:
+        """Wire Python-backed language model selection/count/request APIs."""
+        self._lm_model_request_callback = callback
 
     def on_activated(self, callback: Callable[[str], None]) -> None:
         """Register a callback invoked when a Node extension confirms activation."""

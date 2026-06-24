@@ -5672,6 +5672,7 @@ class AIEditorAPI:
     def _install_node_runtime_event_bridge(self, host: Any) -> None:
         if host is None or getattr(host, "_sao_runtime_bridge_installed", False):
             return
+        host.set_lm_model_request_callback(self._handle_node_lm_model_request)
         host.on_tree_event(self._handle_node_tree_event)
         host.on_config_set(self._handle_node_config_set)
         host.on_lm_tool_event(self._handle_node_lm_tool_event)
@@ -5872,6 +5873,135 @@ class AIEditorAPI:
                 "error": "Node extension host is not running",
             }
         return host.request_language_provider_result(payload, default=None)
+
+    def _handle_node_lm_model_request(
+            self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Bridge Node ``vscode.lm.selectChatModels`` model APIs."""
+        action = str(payload.get("action") or "")
+        try:
+            self._ensure_engine()
+            if action == "selectChatModels":
+                selector = _as_dict(payload.get("selector"))
+                models = self._vscode_ns._select_chat_models(selector or None)
+                return {
+                    "ok": True,
+                    "value": [
+                        self._serialize_node_lm_model(model)
+                        for model in models
+                    ],
+                }
+            model_id = str(payload.get("modelId") or "")
+            model = self._node_lm_model_by_id(model_id)
+            if model is None:
+                return {
+                    "ok": False,
+                    "error": f"Language model not found: {model_id}",
+                }
+            if action == "countTokens":
+                return {
+                    "ok": True,
+                    "value": model.count_tokens(payload.get("text", "")),
+                }
+            if action == "sendRequest":
+                return {
+                    "ok": True,
+                    "value": self._send_node_lm_request(
+                        model,
+                        payload.get("messages") or [],
+                        _as_dict(payload.get("options")),
+                    ),
+                }
+            return {"ok": False, "error": f"Unknown LM model action: {action}"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def _node_lm_model_by_id(self, model_id: str) -> Any:
+        models = self._vscode_ns._select_chat_models(
+            {"id": model_id} if model_id else None)
+        for model in models:
+            if str(getattr(model, "id", "")) == model_id:
+                return model
+        return models[0] if models and not model_id else None
+
+    @staticmethod
+    def _serialize_node_lm_model(model: Any) -> Dict[str, Any]:
+        caps = getattr(model, "capabilities", None)
+        return {
+            "id": str(getattr(model, "id", "") or ""),
+            "name": str(getattr(model, "name", "") or getattr(model, "id", "")),
+            "vendor": str(getattr(model, "vendor", "") or ""),
+            "family": str(getattr(model, "family", "") or ""),
+            "version": str(getattr(model, "version", "") or ""),
+            "maxInputTokens": int(getattr(model, "max_input_tokens", 0) or 0),
+            "capabilities": {
+                "supportsImageToText": bool(
+                    getattr(caps, "supports_image_to_text", False)),
+                "supportsToolCalling": bool(
+                    getattr(caps, "supports_tool_calling", True)),
+                "editToolsHint": bool(getattr(caps, "edit_tools_hint", False)),
+            },
+        }
+
+    @staticmethod
+    def _node_lm_role(value: Any) -> str:
+        if value == 0:
+            return "system"
+        if value == 2:
+            return "assistant"
+        text = str(value or "user").lower()
+        if text in {"system", "assistant", "user", "tool"}:
+            return text
+        return "user"
+
+    @classmethod
+    def _node_lm_content_text(cls, value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, (str, int, float, bool)):
+            return str(value)
+        if isinstance(value, list):
+            return "".join(cls._node_lm_content_text(item) for item in value)
+        if isinstance(value, dict):
+            for key in ("value", "text", "content"):
+                if key in value:
+                    return cls._node_lm_content_text(value.get(key))
+            return json.dumps(value, ensure_ascii=False, default=str)
+        return str(value)
+
+    @classmethod
+    def _node_lm_messages(cls, messages: Any) -> List[Dict[str, Any]]:
+        if not isinstance(messages, list):
+            messages = [messages]
+        result = []
+        for message in messages:
+            if isinstance(message, dict):
+                result.append({
+                    "role": cls._node_lm_role(message.get("role")),
+                    "content": cls._node_lm_content_text(
+                        message.get("content")),
+                })
+            else:
+                result.append({"role": "user", "content": str(message)})
+        return result
+
+    def _send_node_lm_request(
+            self, model: Any, messages: Any,
+            options: Dict[str, Any]) -> Dict[str, Any]:
+        response = model.send_request(
+            self._node_lm_messages(messages),
+            options or {},
+            None,
+        )
+        chunks = list(getattr(response, "_chunks", []) or [])
+        if not chunks:
+            stream = getattr(response, "stream", None)
+            if stream is not None:
+                try:
+                    chunks = [str(item) for item in stream]
+                except Exception:
+                    chunks = []
+        text = str(getattr(response, "text", "") or "".join(chunks))
+        return {"text": text, "chunks": chunks or ([text] if text else [])}
 
     def _sync_settings_to_node_host(self) -> None:
         """Push the full settings dict to the Node extension host.
@@ -6275,6 +6405,10 @@ class AIEditorAPI:
         self._node_chat_participant_disposables.clear()
         host = self._node_ext_host
         if host is not None:
+            try:
+                host.set_lm_model_request_callback(None)
+            except Exception:
+                pass
             host.stop()
             self._node_ext_host = None
         self._vscode_ns.set_language_provider_request_callback(None)

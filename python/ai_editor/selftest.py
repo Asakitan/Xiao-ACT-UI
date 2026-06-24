@@ -6667,10 +6667,35 @@ async function activate(context) {
       { input: { value: 'local' } },
     );
     const tools = vscode.lm.tools || [];
+    const models = await vscode.lm.selectChatModels();
+    const firstModel = models[0];
+    const filtered = firstModel
+      ? await vscode.lm.selectChatModels({ id: firstModel.id })
+      : [];
+    const missing = await vscode.lm.selectChatModels({
+      vendor: 'selftest-missing-vendor',
+    });
+    const tokenCount = firstModel
+      ? await firstModel.countTokens('hello from node model')
+      : 0;
     return {
       hasTool: tools.some(tool => tool.name === 'selftest_node_dynamic_tool'),
       localText: localResult.content[0] && (
         localResult.content[0].value || localResult.content[0].text),
+      modelCount: models.length,
+      firstModel: firstModel && {
+        id: firstModel.id,
+        name: firstModel.name,
+        vendor: firstModel.vendor,
+        family: firstModel.family,
+        maxInputTokens: firstModel.maxInputTokens,
+        supportsToolCalling: firstModel.capabilities
+          && firstModel.capabilities.supportsToolCalling,
+        hasSendRequest: typeof firstModel.sendRequest === 'function',
+      },
+      filteredCount: filtered.length,
+      missingCount: missing.length,
+      tokenCount,
     };
   });
   vscode.workspace.onDidChangeConfiguration(event => {
@@ -8935,6 +8960,25 @@ module.exports = { activate, deactivate };
                                str(item)
                                for item in node_dynamic_chat_provider_ids),
                        }, ensure_ascii=False, default=str))
+                _check("node host selects Python language models",
+                       node_started is True
+                       and isinstance(node_lm_chat_probe, dict)
+                       and node_lm_chat_probe.get("modelCount", 0) >= 1
+                       and isinstance(
+                           node_lm_chat_probe.get("firstModel"), dict)
+                       and bool(node_lm_chat_probe.get("firstModel", {}).get(
+                           "id"))
+                       and bool(node_lm_chat_probe.get("firstModel", {}).get(
+                           "vendor"))
+                       and node_lm_chat_probe.get("firstModel", {}).get(
+                           "supportsToolCalling") is True
+                       and node_lm_chat_probe.get("firstModel", {}).get(
+                           "hasSendRequest") is True
+                       and node_lm_chat_probe.get("filteredCount") == 1
+                       and node_lm_chat_probe.get("missingCount") == 0
+                       and node_lm_chat_probe.get("tokenCount", 0) > 0,
+                       json.dumps(node_lm_chat_probe,
+                                  ensure_ascii=False, default=str))
                 _check("node host invokes dynamic LM tool and chat participant",
                        node_started is True
                        and isinstance(node_dynamic_tool_result, dict)
