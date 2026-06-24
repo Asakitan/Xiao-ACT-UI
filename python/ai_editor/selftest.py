@@ -2736,8 +2736,16 @@ def test_phase1_ai_editor_regressions() -> None:
            and "autoSaveDelay:filesAutoSaveDelay({autoSaveDelay:readNumberValue('s-files-auto-save-delay',1000,true)})" in html
            and "insertFinalNewline:readCheckedValue('s-files-insert-final-newline')" in html
            and "trimFinalNewlines:readCheckedValue('s-files-trim-final-newlines')" in html
-           and "if(!opts.autoSave&&editorFormatOnSaveEnabled())" in html
+           and "const skipExplicitSaveParticipants=opts.autoSaveMode==='afterDelay'" in html
+           and "if(!skipExplicitSaveParticipants&&editorFormatOnSaveEnabled())" in html
+           and "if(!skipExplicitSaveParticipants)changed=await runEditorCodeActionsOnSave()||changed" in html
            and "if(opts.autoSave&&!(tab&&tab.filePath))" in html
+           and "function triggerEditorAutoSave(mode)" in html
+           and "ed.addEventListener('blur',()=>{triggerEditorAutoSave('onFocusChange')})" in html
+           and "window.addEventListener('blur',()=>{triggerEditorAutoSave('onWindowChange')})" in html
+           and "document.visibilityState==='hidden'" in html
+           and "await saveFile({autoSave:true,autoSaveMode:autoSaveMode})" in html
+           and "await runEditorSaveParticipants({autoSave:opts.autoSave===true,autoSaveMode:opts.autoSaveMode||''})" in html
            and "changed=applyEditorFilesSaveParticipants()||changed" in html
            and "await runEditorSaveParticipants();" in html
            and "saveTextTabAs(tab,{skipSaveParticipants:true})" in html

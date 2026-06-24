@@ -7998,9 +7998,10 @@ async function runEditorCodeActionsOnSave(){
 }
 async function runEditorSaveParticipants(options){
   const opts=isPlainObject(options)?options:{};
+  const skipExplicitSaveParticipants=opts.autoSaveMode==='afterDelay';
   let changed=false;
-  if(!opts.autoSave&&editorFormatOnSaveEnabled())changed=await formatDocument({quiet:true,onSave:true})||changed;
-  if(!opts.autoSave)changed=await runEditorCodeActionsOnSave()||changed;
+  if(!skipExplicitSaveParticipants&&editorFormatOnSaveEnabled())changed=await formatDocument({quiet:true,onSave:true})||changed;
+  if(!skipExplicitSaveParticipants)changed=await runEditorCodeActionsOnSave()||changed;
   changed=applyEditorFilesSaveParticipants()||changed;
   if(changed)saveCurrentTab();
   return changed;
@@ -8019,24 +8020,38 @@ function scheduleEditorAutoSave(){
   if(filesAutoSaveMode()!=='afterDelay'||!editorDirty)return;
   if(!editorAutoSaveCandidateTab())return;
   const delay=Math.min(Math.max(filesAutoSaveDelay(),0),600000);
-  _editorAutoSaveTimer=setTimeout(runEditorAutoSave,delay);
+  _editorAutoSaveTimer=setTimeout(()=>runEditorAutoSave('afterDelay'),delay);
 }
-async function runEditorAutoSave(){
+function triggerEditorAutoSave(mode){
+  if(filesAutoSaveMode()!==mode)return false;
+  clearEditorAutoSaveTimer();
+  runEditorAutoSave(mode);
+  return true;
+}
+async function runEditorAutoSave(mode){
   _editorAutoSaveTimer=null;
   if(_editorAutoSaveInFlight){_editorAutoSavePending=true;return}
+  const autoSaveMode=filesAutoSaveMode({autoSave:mode||filesAutoSaveMode()});
+  if(autoSaveMode==='off')return;
   const tab=editorAutoSaveCandidateTab();
   if(!tab||!editorDirty)return;
   _editorAutoSaveInFlight=true;
   try{
-    await saveFile({autoSave:true});
+    await saveFile({autoSave:true,autoSaveMode:autoSaveMode});
   }finally{
     _editorAutoSaveInFlight=false;
     if(_editorAutoSavePending){
       _editorAutoSavePending=false;
-      scheduleEditorAutoSave();
+      if(filesAutoSaveMode()==='afterDelay')scheduleEditorAutoSave();
+      else if(filesAutoSaveMode()===autoSaveMode)runEditorAutoSave(autoSaveMode);
     }
   }
 }
+ed.addEventListener('blur',()=>{triggerEditorAutoSave('onFocusChange')});
+window.addEventListener('blur',()=>{triggerEditorAutoSave('onWindowChange')});
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='hidden')triggerEditorAutoSave('onWindowChange');
+});
 
 // ── Language picker ──
 function showLanguagePicker(){
@@ -14149,7 +14164,7 @@ async function saveFile(options){
     return;
   }
   if(opts.autoSave&&!(tab&&tab.filePath))return {ok:false,skipped:true};
-  await runEditorSaveParticipants({autoSave:opts.autoSave===true});
+  await runEditorSaveParticipants({autoSave:opts.autoSave===true,autoSaveMode:opts.autoSaveMode||''});
   const content=$('editor-text').value;
   if(tab&&tab.filePath){
     const r=await call('execute_tool','editFile',JSON.stringify({path:tab.filePath,content:content}),true);
