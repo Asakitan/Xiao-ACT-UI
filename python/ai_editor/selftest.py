@@ -6813,14 +6813,22 @@ def test_app_extension_runtime_support() -> None:
                             "restricted": True,
                             "description": "Restricted setting",
                         },
+                        "selftest.hidden": {
+                            "type": "string",
+                            "default": "internal",
+                            "included": False,
+                            "description": "Hidden internal setting",
+                        },
                     },
                 },
                 "configurationDefaults": {
                     "selftest.mode": "manual",
+                    "selftest.hidden": "override-internal",
                     "[selflang]": {
                         "editor.tabSize": 2,
                         "selftest.mode": "manual",
                         "selftest.machineOnly": "local",
+                        "selftest.hidden": "override-internal",
                     },
                 },
             },
@@ -6857,6 +6865,8 @@ def test_app_extension_runtime_support() -> None:
         ext_settings_payload = api.list_extension_settings()
         ext_settings = ext_settings_payload.get("configurations", [])
         language_defaults = ext_settings_payload.get("languageDefaults", [])
+        legacy_settings_payload = api.get_extension_settings(
+            "selftest.settings-pack")
         settings_cfg = next(
             (item for item in ext_settings
              if item.get("extension_id") == "selftest.settings-pack"),
@@ -6871,9 +6881,28 @@ def test_app_extension_runtime_support() -> None:
                and settings_cfg.get("workspaceWritable", {}).get(
                    "selftest.machineOnly") is False
                and settings_cfg.get("restricted", {}).get(
-                   "selftest.restricted") is True)
+                   "selftest.restricted") is True
+               and "selftest.hidden" not in settings_cfg.get(
+                   "properties", {}))
         _check("extension configurationDefaults override schema defaults",
                api.get_extension_setting("selftest.mode").get("value") == "manual")
+        hidden_set = api.set_extension_setting(
+            "selftest.hidden", "changed")
+        hidden_save = api.save_extension_setting(
+            "selftest.settings-pack", "selftest.hidden", "changed")
+        legacy_hidden_props = [
+            cfg.get("properties", {})
+            for cfg in legacy_settings_payload.get("configurations", [])
+        ]
+        _check("extension settings hide included false entries",
+               api.get_extension_setting(
+                   "selftest.hidden", "fallback").get("value") == "fallback"
+               and hidden_set.get("ok") is False
+               and "hidden" in hidden_set.get("error", "").lower()
+               and hidden_save.get("ok") is False
+               and "hidden" in hidden_save.get("error", "").lower()
+               and all("selftest.hidden" not in props
+                       for props in legacy_hidden_props))
         machine_set = api.set_extension_setting(
             "selftest.machineOnly", "changed")
         machine_save = api.save_extension_setting(
@@ -6901,6 +6930,8 @@ def test_app_extension_runtime_support() -> None:
                    "editor.tabSize") == 2
                and selflang_defaults.get("settings", {}).get(
                    "selftest.mode") == "manual"
+               and "selftest.hidden" not in selflang_defaults.get(
+                   "settings", {})
                and selflang_defaults.get("workspaceWritable", {}).get(
                    "selftest.machineOnly") is False
                and selflang_defaults.get("schemas", {}).get(

@@ -8184,7 +8184,16 @@ class AIEditorAPI:
             ws_state = ctx.workspace_state if ctx else None
             properties = cfg.get("properties", {})
             values: Dict[str, Any] = {}
-            if isinstance(properties, dict) and ws_state:
+            if isinstance(properties, dict):
+                properties = {
+                    key: schema
+                    for key, schema in properties.items()
+                    if isinstance(schema, dict)
+                    and self._extension_setting_included(schema)
+                }
+            else:
+                properties = {}
+            if properties and ws_state:
                 for key in properties:
                     stored = ws_state.get(key)
                     if stored is not None:
@@ -8204,8 +8213,12 @@ class AIEditorAPI:
         if not ctx:
             return {"error": f"Extension context not found: {ext_id}"}
         schema = self._extension_configuration_schema_for_extension(
-            ext_id, key)
+            ext_id, key, include_hidden=True)
         if isinstance(schema, dict):
+            include_error = self._extension_setting_included_error(schema)
+            if include_error:
+                return {"ok": False, "error": include_error,
+                        "extension": ext_id, "key": key}
             scope_error = self._extension_setting_workspace_scope_error(schema)
             if scope_error:
                 return {"ok": False, "error": scope_error,
@@ -8235,9 +8248,13 @@ class AIEditorAPI:
             workspace_writable: Dict[str, bool] = {}
             restricted: Dict[str, bool] = {}
             configured_keys = set(ws_state.keys()) if ws_state else set()
+            visible_props: Dict[str, Dict[str, Any]] = {}
             for key, schema in props.items():
                 if not isinstance(schema, dict):
                     continue
+                if not self._extension_setting_included(schema):
+                    continue
+                visible_props[key] = schema
                 scopes[key] = self._extension_setting_scope(schema)
                 workspace_writable[key] = (
                     self._extension_setting_workspace_writable(schema))
@@ -8261,7 +8278,7 @@ class AIEditorAPI:
                 "extension_id": eid,
                 "display_name": display_name,
                 "title": entry.get("title", ""),
-                "properties": props,
+                "properties": visible_props,
                 "values": values,
                 "defaults": defaults,
                 "configuredValues": configured_values,
@@ -8281,6 +8298,9 @@ class AIEditorAPI:
             props = entry.get("properties", {})
             if key in props:
                 eid = entry.get("extension_id", "")
+                schema = props[key] if isinstance(props[key], dict) else {}
+                if not self._extension_setting_included(schema):
+                    return {"ok": True, "key": key, "value": default}
                 ctx = self._ext_host.activator.get_context(eid)
                 if ctx:
                     keys = set(ctx.workspace_state.keys())
@@ -8290,7 +8310,6 @@ class AIEditorAPI:
                 if key in default_overrides:
                     return {"ok": True, "key": key,
                             "value": default_overrides[key]}
-                schema = props[key] if isinstance(props[key], dict) else {}
                 if "default" in schema:
                     return {"ok": True, "key": key,
                             "value": schema["default"]}
@@ -8310,6 +8329,14 @@ class AIEditorAPI:
                 if not ctx:
                     return {"error": f"Extension context not found: {eid}"}
                 schema = props[key] if isinstance(props[key], dict) else {}
+                include_error = self._extension_setting_included_error(schema)
+                if include_error:
+                    return {
+                        "ok": False,
+                        "error": include_error,
+                        "key": key,
+                        "extension_id": eid,
+                    }
                 scope_error = self._extension_setting_workspace_scope_error(
                     schema)
                 if scope_error:
@@ -8332,6 +8359,17 @@ class AIEditorAPI:
                 self._notify_extension_setting_changed(key, value)
                 return {"ok": True, "key": key, "extension_id": eid}
         return {"error": f"Setting key not found in any extension: {key}"}
+
+    @staticmethod
+    def _extension_setting_included(schema: Dict[str, Any]) -> bool:
+        return not (isinstance(schema, dict) and schema.get("included") is False)
+
+    @classmethod
+    def _extension_setting_included_error(
+            cls, schema: Dict[str, Any]) -> str:
+        if cls._extension_setting_included(schema):
+            return ""
+        return "Setting is hidden from the VS Code configuration registry"
 
     @staticmethod
     def _extension_setting_scope(schema: Dict[str, Any]) -> str:
@@ -8478,8 +8516,10 @@ class AIEditorAPI:
                 ctx = self._ext_host.activator.get_context(eid)
                 if not ctx:
                     return {"error": f"Extension context not found: {eid}"}
-                ctx.workspace_state.delete(key)
                 schema = props[key] if isinstance(props[key], dict) else {}
+                if not self._extension_setting_included(schema):
+                    return {"error": f"Setting key not found in any extension: {key}"}
+                ctx.workspace_state.delete(key)
                 default_value = (
                     default_overrides[key]
                     if key in default_overrides else schema.get("default"))
@@ -8501,6 +8541,8 @@ class AIEditorAPI:
         except Exception:
             entries = []
         defaults: Dict[str, Any] = {}
+        schema_by_key, schema_by_extension = (
+            self._extension_configuration_schema_indexes(include_hidden=True))
         for entry in entries:
             if not isinstance(entry, dict):
                 continue
@@ -8510,11 +8552,16 @@ class AIEditorAPI:
                     continue
                 if key_str.startswith("["):
                     continue
+                schema = self._extension_configuration_schema_for_key(
+                    key_str, str(entry.get("_extensionId", "") or ""),
+                    schema_by_key, schema_by_extension) or {}
+                if isinstance(schema, dict) and not self._extension_setting_included(schema):
+                    continue
                 defaults[key_str] = value
         return defaults
 
     def _extension_configuration_schema_indexes(
-            self) -> tuple[
+            self, include_hidden: bool = False) -> tuple[
                 Dict[str, Dict[str, Any]],
                 Dict[str, Dict[str, Dict[str, Any]]]]:
         try:
@@ -8536,6 +8583,9 @@ class AIEditorAPI:
             for key, schema in props.items():
                 setting_key = str(key or "").strip()
                 if setting_key and isinstance(schema, dict):
+                    if (not include_hidden
+                            and not self._extension_setting_included(schema)):
+                        continue
                     schema_copy = dict(schema)
                     by_key.setdefault(setting_key, schema_copy)
                     if eid:
@@ -8548,8 +8598,10 @@ class AIEditorAPI:
         return by_key
 
     def _extension_configuration_schema_for_extension(
-            self, extension_id: str, setting_key: str) -> Optional[Dict[str, Any]]:
-        by_key, by_extension = self._extension_configuration_schema_indexes()
+            self, extension_id: str, setting_key: str,
+            include_hidden: bool = False) -> Optional[Dict[str, Any]]:
+        by_key, by_extension = self._extension_configuration_schema_indexes(
+            include_hidden=include_hidden)
         return self._extension_configuration_schema_for_key(
             setting_key, extension_id, by_key, by_extension)
 
@@ -8575,6 +8627,8 @@ class AIEditorAPI:
         configured_by_language = self._extension_language_override_values()
         schema_by_key, schema_by_extension = (
             self._extension_configuration_schema_indexes())
+        raw_schema_by_key, raw_schema_by_extension = (
+            self._extension_configuration_schema_indexes(include_hidden=True))
         result: List[Dict[str, Any]] = []
         for entry in entries:
             if not isinstance(entry, dict):
@@ -8597,6 +8651,14 @@ class AIEditorAPI:
                         str(setting_key): setting_value
                         for setting_key, setting_value in value.items()
                         if str(setting_key or "").strip()
+                    }
+                    settings = {
+                        setting_key: setting_value
+                        for setting_key, setting_value in settings.items()
+                        if self._extension_setting_included(
+                            self._extension_configuration_schema_for_key(
+                                setting_key, eid,
+                                raw_schema_by_key, raw_schema_by_extension) or {})
                     }
                     if not settings:
                         continue
@@ -8700,10 +8762,20 @@ class AIEditorAPI:
         if not settings:
             return {"ok": False, "error": "Settings not available"}
         schema_by_key, schema_by_extension = (
-            self._extension_configuration_schema_indexes())
+            self._extension_configuration_schema_indexes(include_hidden=True))
         schema = self._extension_configuration_schema_for_key(
             setting_key, ext_id, schema_by_key, schema_by_extension)
         if isinstance(schema, dict):
+            include_error = self._extension_setting_included_error(schema)
+            if include_error:
+                return {
+                    "ok": False,
+                    "error": include_error,
+                    "language": language,
+                    "override": f"[{language}]",
+                    "key": setting_key,
+                    "extension_id": ext_id,
+                }
             scope_error = self._extension_setting_workspace_scope_error(schema)
             if scope_error:
                 return {
