@@ -6180,12 +6180,22 @@ class AIEditorAPI:
             themes = settings.get("panel_themes", {})
             if isinstance(themes, dict):
                 raw["panel_themes"] = dict(themes)
+            settings_data = getattr(settings, "data", None)
+            if not isinstance(settings_data, dict):
+                settings_data = getattr(settings, "_data", None)
+            if isinstance(settings_data, dict):
+                for key, value in settings_data.items():
+                    key_str = str(key)
+                    if (key_str.startswith("[") and key_str.endswith("]")
+                            and isinstance(value, dict)):
+                        raw[key_str] = dict(value)
             host.send_settings_sync(raw)
         except Exception as exc:
             print(f"[NodeExtHost] Failed to sync settings: {exc}")
 
     def _handle_node_config_set(self, section: str, key: str,
-                                value: Any, remove: bool = False) -> None:
+                                value: Any, remove: bool = False,
+                                override_identifier: str = "") -> None:
         """Handle a config_set message from Node.
 
         Persists the change via the Python settings manager and notifies
@@ -6262,10 +6272,52 @@ class AIEditorAPI:
                 _set_nested(current, rest, next_value)
             settings.set(top_key, current)
 
+        def _delete_top_level_key(top_key: str) -> None:
+            current_data = getattr(settings, "data", None)
+            if not isinstance(current_data, dict):
+                current_data = getattr(settings, "_data", None)
+            if isinstance(current_data, dict):
+                current_data.pop(top_key, None)
+
+        def _set_language_override(language_id: str, setting_key: str,
+                                   next_value: Any) -> None:
+            language_id = str(language_id or "").strip()
+            setting_key = str(setting_key or "").strip(".")
+            if not language_id or not setting_key:
+                return
+            override_key = f"[{language_id}]"
+            current = settings.get(override_key, {}) or {}
+            if not isinstance(current, dict):
+                current = {}
+            setting_keys = [setting_key]
+            setting_parts = _parts(setting_key)
+            if (len(setting_parts) > 1 and setting_parts[0] == "ai_editor"
+                    and setting_parts[1] in _AI_EDITOR_SECTION_DEFAULTS):
+                setting_keys.append(".".join(setting_parts[1:]))
+            elif (setting_parts
+                    and setting_parts[0] in _AI_EDITOR_SECTION_DEFAULTS):
+                setting_keys.append("ai_editor." + setting_key)
+            for item_key in dict.fromkeys(setting_keys):
+                if remove:
+                    current.pop(item_key, None)
+                else:
+                    current[item_key] = next_value
+            if current:
+                settings.set(override_key, current)
+            else:
+                _delete_top_level_key(override_key)
+
         try:
             section_path = _parts(section)
             key_path = _parts(key)
             if not key_path:
+                return
+            full_setting_key = ".".join(section_path + key_path)
+            if str(override_identifier or "").strip():
+                _set_language_override(
+                    override_identifier, full_setting_key, value)
+                settings.save()
+                self._notify_node_settings_changed()
                 return
 
             if section_path == ["ai_editor"]:

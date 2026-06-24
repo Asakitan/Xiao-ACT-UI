@@ -7529,6 +7529,32 @@ async function activate(context) {
       inspectDefault: manifestConfig.inspect('flag').defaultValue,
       inspectWorkspace: manifestConfig.inspect('flag').workspaceValue,
     };
+    await manifestLanguageConfig.update(
+      'mode', 'configured-language', undefined, true);
+    const manifestLanguageConfigSet = {
+      mode: manifestLanguageConfig.get('mode'),
+      plainMode: manifestConfig.get('mode'),
+      inspectModeLanguageWorkspace:
+        manifestLanguageConfig.inspect('mode').workspaceLanguageValue,
+      inspectModeLanguageGlobal:
+        manifestLanguageConfig.inspect('mode').globalLanguageValue,
+    };
+    await manifestLanguageConfig.update('mode', undefined, undefined, true);
+    const manifestLanguageConfigReset = {
+      mode: manifestLanguageConfig.get('mode'),
+      plainMode: manifestConfig.get('mode'),
+      inspectModeLanguageWorkspace:
+        manifestLanguageConfig.inspect('mode').workspaceLanguageValue,
+      inspectModeLanguageDefault:
+        manifestLanguageConfig.inspect('mode').defaultLanguageValue,
+    };
+    await manifestLanguageConfig.update(
+      'persist_probe', 'language-persisted', undefined, true);
+    const manifestLanguageConfigPersist = {
+      scoped: manifestLanguageConfig.get('persist_probe'),
+      plain: manifestConfig.get('persist_probe', 'missing'),
+      hasScoped: manifestLanguageConfig.has('persist_probe'),
+    };
     await nestedConfig.update('transient_probe', 'present');
     await nestedConfig.update('transient_probe', undefined);
     const configRemoved = !nestedConfig.has('transient_probe')
@@ -7561,6 +7587,9 @@ async function activate(context) {
       configAfter,
       manifestConfigBefore,
       manifestLanguageConfigBefore,
+      manifestLanguageConfigSet,
+      manifestLanguageConfigReset,
+      manifestLanguageConfigPersist,
       manifestConfigSet,
       manifestConfigReset,
       configRemoved,
@@ -8710,6 +8739,16 @@ module.exports = { activate, deactivate };
                         .get("extensions", {})
                     ),
                     timeout=3.0)
+                node_language_config_persisted = _wait_until(
+                    lambda: (
+                        getattr(getattr(api, "_gui_ref", None),
+                                "settings", None) is not None
+                        and getattr(api._gui_ref.settings, "data", {})
+                        .get("[selflang]", {})
+                        .get("selftest.node.persist_probe")
+                        == "language-persisted"
+                    ),
+                    timeout=3.0)
                 try:
                     node_python_command_probe = api._ext_host.commands.execute(
                         "selftest.node.pythonCommandProbe")
@@ -9198,6 +9237,15 @@ module.exports = { activate, deactivate };
                     node_workspace_probe.get(
                         "manifestLanguageConfigBefore", {})
                     if isinstance(node_workspace_probe, dict) else {})
+                node_manifest_language_config_set = (
+                    node_workspace_probe.get("manifestLanguageConfigSet", {})
+                    if isinstance(node_workspace_probe, dict) else {})
+                node_manifest_language_config_reset = (
+                    node_workspace_probe.get("manifestLanguageConfigReset", {})
+                    if isinstance(node_workspace_probe, dict) else {})
+                node_manifest_language_config_persist = (
+                    node_workspace_probe.get("manifestLanguageConfigPersist", {})
+                    if isinstance(node_workspace_probe, dict) else {})
                 node_manifest_config_set = (
                     node_workspace_probe.get("manifestConfigSet", {})
                     if isinstance(node_workspace_probe, dict) else {})
@@ -9282,6 +9330,42 @@ module.exports = { activate, deactivate };
                            "inspectTabLanguageDefault") == 2,
                        json.dumps(node_manifest_language_config_before,
                                   ensure_ascii=False, default=str))
+                _check("node host language configuration overrides persist like VS Code",
+                       node_workspace_command_registered
+                       and node_manifest_language_config_set.get(
+                           "mode") == "configured-language"
+                       and node_manifest_language_config_set.get(
+                           "plainMode") == "manual"
+                       and node_manifest_language_config_set.get(
+                           "inspectModeLanguageWorkspace")
+                       == "configured-language"
+                       and node_manifest_language_config_set.get(
+                           "inspectModeLanguageGlobal")
+                       == "configured-language"
+                       and node_manifest_language_config_reset.get(
+                           "mode") == "language"
+                       and node_manifest_language_config_reset.get(
+                           "plainMode") == "manual"
+                       and node_manifest_language_config_reset.get(
+                           "inspectModeLanguageWorkspace") is None
+                       and node_manifest_language_config_reset.get(
+                           "inspectModeLanguageDefault") == "language"
+                       and node_manifest_language_config_persist.get(
+                           "scoped") == "language-persisted"
+                       and node_manifest_language_config_persist.get(
+                           "plain") == "missing"
+                       and node_manifest_language_config_persist.get(
+                           "hasScoped") is True
+                       and node_language_config_persisted is True,
+                       json.dumps({
+                           "set": node_manifest_language_config_set,
+                           "reset": node_manifest_language_config_reset,
+                           "persist": node_manifest_language_config_persist,
+                           "persisted": node_language_config_persisted,
+                           "settings": getattr(getattr(
+                               getattr(api, "_gui_ref", None),
+                               "settings", None), "data", {}),
+                       }, ensure_ascii=False, default=str))
                 _check("node host JS command awaits Python command result",
                        node_python_command_registered
                        and isinstance(node_python_command_probe, dict)

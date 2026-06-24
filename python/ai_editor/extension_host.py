@@ -1566,6 +1566,8 @@ class NodeExtensionHost:
          "state": {...}}
         {"type": "settings_sync",    "settings": {...}}
         {"type": "settings_changed", "section": "...", "key": "...", "value": ...}
+        {"type": "settings_changed", "section": "...", "key": "...",
+         "overrideIdentifier": "python", "value": ...}
         {"type": "shutdown"}
 
     Protocol (Node -> Python, one JSON object per line on stdout):
@@ -1581,6 +1583,8 @@ class NodeExtensionHost:
         {"type": "command_registered",  "commandId": "...", "extensionId": "..."}
         {"type": "command_response",    "requestId": "...", "ok": true, "value": ...}
         {"type": "config_set",          "section": "...", "key": "...", "value": ...}
+        {"type": "config_set",          "section": "...", "key": "...",
+         "overrideIdentifier": "python", "value": ...}
         {"type": "output",              "channel": "...", "text": "..."}
         {"type": "show_message",        "level": "info|warn|error", "message": "..."}
         {"type": "quick_input",         "event": "show|update|hide|dispose",
@@ -1618,7 +1622,7 @@ class NodeExtensionHost:
         self._on_activated_callbacks: List[Callable[[str], None]] = []
         self._on_error_callbacks: List[Callable[[str, str], None]] = []
         self._on_config_set_callbacks: List[
-            Callable[[str, str, Any, bool], None]
+            Callable[[str, str, Any, bool, str], None]
         ] = []
         self._on_tree_callbacks: List[
             Callable[[str, str, Dict[str, Any]], None]
@@ -2432,12 +2436,13 @@ class NodeExtensionHost:
             key = str(msg.get("key", ""))
             value = msg.get("value")
             remove = bool(msg.get("remove"))
+            override_identifier = str(msg.get("overrideIdentifier", ""))
             if key:
                 full_key = f"{section}.{key}" if section else key
                 _log.info("[NodeExtHost] config_set: %s", full_key)
                 for cb in self._on_config_set_callbacks:
                     try:
-                        cb(section, key, value, remove)
+                        cb(section, key, value, remove, override_identifier)
                     except Exception:
                         _log.exception("[NodeExtHost] on_config_set callback "
                                        "error for %s", full_key)
@@ -2516,11 +2521,12 @@ class NodeExtensionHost:
 
     def on_config_set(
             self,
-            callback: Callable[[str, str, Any, bool], None]) -> None:
+            callback: Callable[[str, str, Any, bool, str], None]) -> None:
         """Register a callback invoked when Node sends a config_set message.
 
-        The callback receives ``(section, key, value, remove)`` and is responsible
-        for persisting the change on the Python side.
+        The callback receives ``(section, key, value, remove,
+        override_identifier)`` and is responsible for persisting the change on
+        the Python side.
         """
         self._on_config_set_callbacks.append(callback)
 

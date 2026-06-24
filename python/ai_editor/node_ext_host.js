@@ -5054,6 +5054,48 @@ function _configSetLanguageDefault(languageId, pathParts, value) {
     _configMirrorLanguageDefaultsAlias(id, pathParts, value);
 }
 
+function _configLanguageOverrideKey(overrideIdentifier) {
+    const id = String(overrideIdentifier || '').trim();
+    return id ? `[${id}]` : '';
+}
+
+function _configLanguageOverrideStore(overrideIdentifier, create = false) {
+    const key = _configLanguageOverrideKey(overrideIdentifier);
+    if (!key) return null;
+    let store = _settings[key];
+    if (!store || typeof store !== 'object' || Array.isArray(store)) {
+        if (!create) return null;
+        store = {};
+        _settings[key] = store;
+    }
+    return store;
+}
+
+function _configSetLanguageOverridePath(overrideIdentifier, pathParts, value) {
+    const store = _configLanguageOverrideStore(overrideIdentifier, true);
+    if (!store || !Array.isArray(pathParts) || !pathParts.length) return;
+    store[pathParts.join('.')] = _configCloneValue(value);
+}
+
+function _configDeleteLanguageOverridePath(overrideIdentifier, pathParts) {
+    const key = _configLanguageOverrideKey(overrideIdentifier);
+    const store = _configLanguageOverrideStore(overrideIdentifier, false);
+    if (!key || !store || !Array.isArray(pathParts) || !pathParts.length) return;
+    delete store[pathParts.join('.')];
+    _configDelete(store, pathParts);
+    if (!Object.keys(store).length) delete _settings[key];
+}
+
+function _configSetLanguageOverride(overrideIdentifier, pathParts, value) {
+    _configSetLanguageOverridePath(overrideIdentifier, pathParts, value);
+    _configMirrorLanguageOverrideAlias(overrideIdentifier, pathParts, value, false);
+}
+
+function _configDeleteLanguageOverride(overrideIdentifier, pathParts) {
+    _configDeleteLanguageOverridePath(overrideIdentifier, pathParts);
+    _configMirrorLanguageOverrideAlias(overrideIdentifier, pathParts, undefined, true);
+}
+
 function _configMirrorDefaultsAlias(pathParts, value) {
     let mirrorPath = null;
     if (pathParts[0] === 'ai_editor'
@@ -5084,6 +5126,23 @@ function _configMirrorLanguageDefaultsAlias(languageId, pathParts, value) {
         _configCloneValue(value));
 }
 
+function _configMirrorLanguageOverrideAlias(
+        overrideIdentifier, pathParts, value, remove) {
+    let mirrorPath = null;
+    if (pathParts[0] === 'ai_editor'
+            && _AI_EDITOR_SECTION_ALIASES.has(pathParts[1])) {
+        mirrorPath = pathParts.slice(1);
+    } else if (_AI_EDITOR_SECTION_ALIASES.has(pathParts[0])) {
+        mirrorPath = ['ai_editor'].concat(pathParts);
+    }
+    if (!mirrorPath || mirrorPath.join('.') === pathParts.join('.')) return;
+    if (remove) {
+        _configDeleteLanguageOverridePath(overrideIdentifier, mirrorPath);
+    } else {
+        _configSetLanguageOverridePath(overrideIdentifier, mirrorPath, value);
+    }
+}
+
 function _configMergeObjects(defaultValue, configuredValue) {
     const base = defaultValue && typeof defaultValue === 'object'
         && !Array.isArray(defaultValue) ? _configCloneValue(defaultValue) : {};
@@ -5103,6 +5162,56 @@ function _configMergeObjects(defaultValue, configuredValue) {
     return configuredValue === _CONFIG_MISSING ? base : _configCloneValue(configuredValue);
 }
 
+function _configMergeLayer(base, value) {
+    if (value === _CONFIG_MISSING) return base;
+    if (base === _CONFIG_MISSING) return _configCloneValue(value);
+    if (base && typeof base === 'object' && !Array.isArray(base)
+            && value && typeof value === 'object' && !Array.isArray(value)) {
+        return _configMergeObjects(base, value);
+    }
+    return _configCloneValue(value);
+}
+
+function _configLanguageOverrideLookup(pathParts, overrideIdentifier) {
+    const store = _configLanguageOverrideStore(overrideIdentifier, false);
+    if (!store || !Array.isArray(pathParts) || !pathParts.length) {
+        return _CONFIG_MISSING;
+    }
+    const dotted = pathParts.join('.');
+    if (Object.prototype.hasOwnProperty.call(store, dotted)) {
+        return store[dotted];
+    }
+    return _configLookup(store, pathParts);
+}
+
+function _configLanguageOverrideSection(sectionPath, overrideIdentifier) {
+    const store = _configLanguageOverrideStore(overrideIdentifier, false);
+    if (!store || !Array.isArray(sectionPath)) return _CONFIG_MISSING;
+    if (!sectionPath.length) return _configCloneValue(store);
+    const prefix = sectionPath.join('.');
+    let result = _CONFIG_MISSING;
+    const nested = _configLookup(store, sectionPath);
+    if (nested !== _CONFIG_MISSING) {
+        result = _configMergeLayer(result, nested);
+    }
+    for (const [key, value] of Object.entries(store)) {
+        if (key === prefix) {
+            result = _configMergeLayer(result, value);
+            continue;
+        }
+        if (!key.startsWith(prefix + '.')) continue;
+        const suffix = _configPath(key.slice(prefix.length + 1));
+        if (!suffix.length) continue;
+        if (result === _CONFIG_MISSING
+                || !result || typeof result !== 'object'
+                || Array.isArray(result)) {
+            result = {};
+        }
+        _configSet(result, suffix, _configCloneValue(value));
+    }
+    return result;
+}
+
 function _configLanguageDefaultLookup(pathParts, overrideIdentifier) {
     const id = String(overrideIdentifier || '').trim();
     if (!id || !_configurationLanguageDefaults[id]) return _CONFIG_MISSING;
@@ -5117,34 +5226,27 @@ function _configDefaultLookup(pathParts, overrideIdentifier) {
 }
 
 function _configEffectiveLookup(pathParts, overrideIdentifier) {
+    const languageConfigured = _configLanguageOverrideLookup(
+        pathParts, overrideIdentifier);
+    if (languageConfigured !== _CONFIG_MISSING) return languageConfigured;
     const configured = _configLookup(_settings, pathParts);
     if (configured !== _CONFIG_MISSING) return configured;
     return _configDefaultLookup(pathParts, overrideIdentifier);
 }
 
 function _configEffectiveSection(sectionPath, overrideIdentifier) {
-    const configured = _configLookup(_settings, sectionPath);
     const defaults = _configLookup(_configurationDefaults, sectionPath);
     const languageDefaults = _configLanguageDefaultLookup(
         sectionPath, overrideIdentifier);
-    const mergedDefaults = languageDefaults === _CONFIG_MISSING
-        ? defaults
-        : (defaults === _CONFIG_MISSING
-            ? languageDefaults
-            : _configMergeObjects(defaults, languageDefaults));
-    if (configured === _CONFIG_MISSING) {
-        return mergedDefaults === _CONFIG_MISSING
-            ? {}
-            : _configCloneValue(mergedDefaults);
-    }
-    if (mergedDefaults !== _CONFIG_MISSING
-            && configured && typeof configured === 'object'
-            && !Array.isArray(configured)
-            && mergedDefaults && typeof mergedDefaults === 'object'
-            && !Array.isArray(mergedDefaults)) {
-        return _configMergeObjects(mergedDefaults, configured);
-    }
-    return _configCloneValue(configured);
+    const configured = _configLookup(_settings, sectionPath);
+    const languageConfigured = _configLanguageOverrideSection(
+        sectionPath, overrideIdentifier);
+    let result = _CONFIG_MISSING;
+    result = _configMergeLayer(result, defaults);
+    result = _configMergeLayer(result, languageDefaults);
+    result = _configMergeLayer(result, configured);
+    result = _configMergeLayer(result, languageConfigured);
+    return result === _CONFIG_MISSING ? {} : _configCloneValue(result);
 }
 
 function _configDelete(data, pathParts) {
@@ -5275,10 +5377,13 @@ function _createConfigProxy(section, overrideIdentifier = '') {
         inspect(key) {
             const pathParts = _configFullPath(section, key);
             const value = _configLookup(_settings, pathParts);
+            const languageValue = _configLanguageOverrideLookup(
+                pathParts, overrideIdentifier);
             const defaultValue = _configLookup(_configurationDefaults, pathParts);
             const defaultLanguageValue = _configLanguageDefaultLookup(
                 pathParts, overrideIdentifier);
             if (value === _CONFIG_MISSING
+                    && languageValue === _CONFIG_MISSING
                     && defaultValue === _CONFIG_MISSING
                     && defaultLanguageValue === _CONFIG_MISSING) {
                 return undefined;
@@ -5297,23 +5402,45 @@ function _createConfigProxy(section, overrideIdentifier = '') {
                 workspaceValue: value === _CONFIG_MISSING
                     ? undefined
                     : _configCloneValue(value),
+                globalLanguageValue: languageValue === _CONFIG_MISSING
+                    ? undefined
+                    : _configCloneValue(languageValue),
+                workspaceLanguageValue: languageValue === _CONFIG_MISSING
+                    ? undefined
+                    : _configCloneValue(languageValue),
                 workspaceFolderValue: undefined,
             };
         },
         update(key, value, configTarget, overrideInLanguage) {
             const pathParts = _configFullPath(section, key);
-            if (value === undefined) {
-                _configDelete(_settings, pathParts);
-                _configMirrorAiEditorAlias(pathParts, value, true);
+            const languageOverrideIdentifier = overrideInLanguage
+                ? overrideIdentifier
+                : '';
+            if (languageOverrideIdentifier) {
+                if (value === undefined) {
+                    _configDeleteLanguageOverride(
+                        languageOverrideIdentifier, pathParts);
+                } else {
+                    _configSetLanguageOverride(
+                        languageOverrideIdentifier, pathParts, value);
+                }
             } else {
-                _configSet(_settings, pathParts, value);
-                _configMirrorAiEditorAlias(pathParts, value, false);
+                if (value === undefined) {
+                    _configDelete(_settings, pathParts);
+                    _configMirrorAiEditorAlias(pathParts, value, true);
+                } else {
+                    _configSet(_settings, pathParts, value);
+                    _configMirrorAiEditorAlias(pathParts, value, false);
+                }
             }
             const message = {
                 type: 'config_set',
                 section: section || '',
                 key: String(key),
             };
+            if (languageOverrideIdentifier) {
+                message.overrideIdentifier = languageOverrideIdentifier;
+            }
             if (value === undefined) {
                 message.remove = true;
             } else {
@@ -6954,7 +7081,18 @@ async function handleMessage(msg) {
             const changedSection = msg.section;
             if (changedSection !== undefined) {
                 const changedPath = _configFullPath(changedSection, msg.key);
-                if (msg.remove) {
+                const changedOverrideIdentifier =
+                    _configOverrideIdentifierFromScope(msg)
+                        || String(msg.overrideIdentifier || '');
+                if (changedOverrideIdentifier) {
+                    if (msg.remove) {
+                        _configDeleteLanguageOverride(
+                            changedOverrideIdentifier, changedPath);
+                    } else {
+                        _configSetLanguageOverride(
+                            changedOverrideIdentifier, changedPath, msg.value);
+                    }
+                } else if (msg.remove) {
                     _configDelete(_settings, changedPath);
                     _configMirrorAiEditorAlias(changedPath, undefined, true);
                 } else if (msg.key !== undefined) {
