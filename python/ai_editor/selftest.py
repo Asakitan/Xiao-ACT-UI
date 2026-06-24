@@ -2512,9 +2512,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "linkResolveCount:0" in html
            and "function requestEditorInlayHints(quiet)" in html
            and "function renderEditorInlayHints(hints)" in html
+           and "async function resolveEditorInlayHint(hint)" in html
+           and "editorProviderPayload('inlayHintResolve'" in html
+           and "hintResolveCount:0" in html
            and "function scheduleEditorInlayHints(delay)" in html
            and "editorProviderPayload('inlayHint'" in html
-           and "hintResolveCount:8" in html
            and "function requestEditorInlineCompletions(quiet,triggerKind)" in html
            and "function renderEditorInlineCompletion()" in html
            and "function scheduleEditorInlineCompletions(delay,triggerKind)" in html
@@ -3407,6 +3409,10 @@ console.log("frontend hover and code action rendering ok");
             "editorDocumentLinkNeedsResolve",
             "editorMergeResolvedDocumentLink",
             "resolveEditorDocumentLink",
+            "editorInlayHintLabelText",
+            "editorInlayHintNeedsResolve",
+            "editorMergeResolvedInlayHint",
+            "resolveEditorInlayHint",
             "editorCodeLensTitle",
             "editorCodeLensNeedsResolve",
             "editorMergeResolvedCodeLens",
@@ -3448,6 +3454,15 @@ async function call(method,payload){
       tooltip: "resolved link",
     }};
   }
+  if(payload.kind === "inlayHintResolve"){
+    return { ok: true, hint: {
+      _nodeInlayHintHandle: payload.hint._nodeInlayHintHandle,
+      position: payload.hint.position,
+      label: [{ value: "resolved hint" }],
+      tooltip: { value: "resolved hint docs" },
+      paddingRight: true,
+    }};
+  }
   if(payload.kind === "codeLensResolve"){
     return { ok: true, lens: {
       _nodeCodeLensHandle: payload.lens._nodeCodeLensHandle,
@@ -3473,6 +3488,14 @@ async function call(method,payload){
          && link.tooltip === "resolved link",
          "document link resolves target and tooltip");
 
+  const hint = { position: { line: 0, character: 4 }, label: "hint", _nodeInlayHintHandle: "hint-handle" };
+  assert(editorInlayHintNeedsResolve(hint), "inlay hint exposes resolve need");
+  await resolveEditorInlayHint(hint);
+  assert(editorInlayHintLabelText(hint.label) === "resolved hint"
+         && hint.tooltip.value === "resolved hint docs"
+         && hint.paddingRight === true,
+         "inlay hint resolves label and tooltip");
+
   const lens = { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } }, _nodeCodeLensHandle: "lens-handle" };
   assert(editorCodeLensNeedsResolve(lens), "CodeLens exposes resolve need");
   await runEditorCodeLens(lens);
@@ -3490,7 +3513,7 @@ async function call(method,payload){
          && statusText.includes("Ran code action"),
          "code action resolves before apply");
 
-  assert(resolveKinds.join(",") === "documentLinkResolve,codeLensResolve,codeActionResolve",
+  assert(resolveKinds.join(",") === "documentLinkResolve,inlayHintResolve,codeLensResolve,codeActionResolve",
          "all resolve requests use dedicated provider kinds");
   console.log("frontend resolvable language items ok");
 })().catch(err => { console.error(err && err.stack || err); process.exitCode = 1; });
@@ -9782,6 +9805,18 @@ async function activate(context) {
   await context.globalState.update('deleteProbe', undefined);
   await context.secrets.store('token', 'secret-' + (globalBefore + 1));
   context.globalState.setKeysForSync(['activationCount']);
+  const nodeDiagnostics = vscode.languages.createDiagnosticCollection(
+    'node-selftest');
+  if (context.extensionUri) {
+    nodeDiagnostics.set(vscode.Uri.joinPath(context.extensionUri, 'node_provider.py'), [{
+      range: new vscode.Range(0, 0, 0, 4),
+      message: 'node diagnostic quickfix',
+      severity: vscode.DiagnosticSeverity.Warning,
+      source: 'node-selftest',
+      code: 'node-code',
+    }]);
+  }
+  context.subscriptions.push(nodeDiagnostics);
   contextProbe = {
     globalBefore,
     globalAfter: context.globalState.get('activationCount'),
@@ -12600,6 +12635,16 @@ module.exports = { activate, deactivate };
                         node_document_links_unresolved[0]
                         if node_document_links_unresolved else {}),
                 })
+                node_inlay_hint_editor_resolve = api.editor_language_provider({
+                    "kind": "inlayHintResolve",
+                    "filePath": node_provider_sample,
+                    "language": "python",
+                    "content": "print('node provider')\n",
+                    "position": {"line": 0, "character": 1},
+                    "hint": (
+                        node_inlay_hints_unresolved[0]
+                        if node_inlay_hints_unresolved else {}),
+                })
                 node_code_lens_editor_resolve = api.editor_language_provider({
                     "kind": "codeLensResolve",
                     "filePath": node_provider_sample,
@@ -12748,11 +12793,20 @@ module.exports = { activate, deactivate };
                 _check("node host language provider invokes JS inlay hints",
                        node_inlay_hints_unresolved
                        and node_inlay_hints_unresolved[0].get("label") == "node hint"
+                       and node_inlay_hints_unresolved[0].get("_nodeInlayHintHandle")
                        and node_inlay_hints
                        and node_inlay_hints[0].get("label") == "node resolved hint"
                        and node_inlay_hints[0].get("kind") == 2
                        and node_inlay_hints[0].get("paddingLeft") is True
                        and node_inlay_hints[0].get("tooltip") == "node resolved inlay")
+                _check("editor_language_provider resolves selected Node inlay hint",
+                       node_inlay_hint_editor_resolve.get("ok") is True
+                       and node_inlay_hint_editor_resolve.get("hint", {})
+                       .get("label") == "node resolved hint"
+                       and node_inlay_hint_editor_resolve.get("hint", {})
+                       .get("_nodeInlayHintHandle")
+                       == node_inlay_hints_unresolved[0].get(
+                           "_nodeInlayHintHandle"))
                 _check("node host language provider invokes JS inline completions",
                        node_inline_completions
                        and node_inline_completions[0].get("insertText") == "nodeGhost"
@@ -12859,6 +12913,9 @@ module.exports = { activate, deactivate };
                        node_actions_unresolved
                        and node_actions_unresolved[0].get("command") is None
                        and node_actions_unresolved[0].get("_nodeCodeActionHandle")
+                       and (node_actions_unresolved[0].get(
+                           "diagnostics") or [{}])[0].get("message")
+                       == "node diagnostic quickfix"
                        and node_actions
                        and node_actions[0].get("title") == "node quick fix"
                        and node_actions[0].get("command", {}).get("title")

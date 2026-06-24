@@ -4344,6 +4344,31 @@ function editorInlayHintLabelText(label){
   if(label&&typeof label==='object')return String(label.value??label.label??label.name??'');
   return String(label);
 }
+function editorInlayHintNeedsResolve(hint){
+  return !!(hint&&hint._nodeInlayHintHandle&&!hint._editorInlayHintResolved&&!hint._editorInlayHintResolving&&!hint._editorInlayHintResolveFailed);
+}
+function editorMergeResolvedInlayHint(hint,resolved){
+  if(!hint||!resolved||typeof resolved!=='object')return hint;
+  ['label','tooltip','kind','paddingLeft','paddingRight','position','textEdits'].forEach(key=>{
+    if(resolved[key]!==undefined)hint[key]=resolved[key];
+  });
+  if(resolved._nodeInlayHintHandle)hint._nodeInlayHintHandle=resolved._nodeInlayHintHandle;
+  hint._editorInlayHintResolved=true;
+  hint._editorInlayHintResolving=false;
+  hint._editorInlayHintResolveFailed=false;
+  return hint;
+}
+async function resolveEditorInlayHint(hint){
+  if(!editorInlayHintNeedsResolve(hint))return hint;
+  hint._editorInlayHintResolving=true;
+  try{
+    const res=await call('editor_language_provider',editorProviderPayload('inlayHintResolve',{hint,item:hint}));
+    if(res&&res.ok&&res.hint){editorMergeResolvedInlayHint(hint,res.hint);return hint}
+    hint._editorInlayHintResolveFailed=true;
+  }catch(e){hint._editorInlayHintResolveFailed=true}
+  hint._editorInlayHintResolving=false;
+  return hint;
+}
 function clearEditorInlayHints(){
   _editorInlayHintRequest++;
   clearTimeout(_editorInlayHintTimer);
@@ -4372,9 +4397,20 @@ function renderEditorInlayHints(hints){
     el.textContent=label;
     const tooltip=editorProviderText(hint.tooltip);
     if(tooltip)el.title=tooltip;
+    else if(editorInlayHintNeedsResolve(hint))el.title='Resolve inlay hint details';
     if(hint.paddingLeft)el.style.marginLeft='3px';
     if(hint.paddingRight)el.style.marginRight='3px';
     el.style.top=top+'px';el.style.left=left+'px';
+    if(editorInlayHintNeedsResolve(hint)){
+      const resolveVisibleHint=()=>{
+        const resolveRequestId=_editorInlayHintRequest;
+        resolveEditorInlayHint(hint).then(()=>{
+          if(resolveRequestId===_editorInlayHintRequest)renderEditorInlayHints(_editorInlayHints);
+        });
+      };
+      el.onmouseenter=resolveVisibleHint;
+      el.onfocus=resolveVisibleHint;
+    }
     layer.appendChild(el);
   });
 }
@@ -4382,7 +4418,7 @@ async function requestEditorInlayHints(quiet){
   const wrap=$('editor-container');
   if(!ed||!wrap||wrap.style.display==='none')return;
   const requestId=++_editorInlayHintRequest;
-  const res=await call('editor_language_provider',editorProviderPayload('inlayHint',{range:editorFullRangePayload(),hintResolveCount:8}));
+  const res=await call('editor_language_provider',editorProviderPayload('inlayHint',{range:editorFullRangePayload(),hintResolveCount:0}));
   if(requestId!==_editorInlayHintRequest)return;
   if(res&&res.error){_editorInlayHints=[];renderEditorInlayHints([]);if(!quiet)setStatus('Inlay hints failed: '+res.error);return}
   _editorInlayHints=(res&&res.ok&&Array.isArray(res.hints)?res.hints:[]).filter(hint=>hint&&hint.position&&editorInlayHintLabelText(hint.label));

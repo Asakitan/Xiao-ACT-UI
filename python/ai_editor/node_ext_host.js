@@ -2121,6 +2121,28 @@ function _serializeLanguageValue(value) {
     return String(value);
 }
 
+function _diagnosticsForUri(uri) {
+    const key = uri && typeof uri.toString === 'function' ? uri.toString() : String(uri || '');
+    if (!key) return [];
+    const values = [];
+    for (const collection of _diagnosticCollections.values()) {
+        const diagnostics = collection && typeof collection.get === 'function'
+            ? collection.get(key)
+            : null;
+        if (Array.isArray(diagnostics)) values.push(...diagnostics);
+        else if (diagnostics) values.push(diagnostics);
+    }
+    return values;
+}
+
+function _codeActionDiagnostics(document, msg) {
+    const incoming = Array.isArray(msg.diagnostics) ? msg.diagnostics : [];
+    const local = _diagnosticsForUri(document && document.uri);
+    if (!incoming.length) return local;
+    if (!local.length) return incoming;
+    return [...incoming, ...local];
+}
+
 function _lmToolDefinitionName(definition) {
     if (typeof definition === 'string') return definition;
     return String(definition?.name || definition?.id || '');
@@ -8119,16 +8141,18 @@ async function handleLanguageProviderRequest(msg) {
             const values = [];
             const rawResolveCount = Number(msg.itemResolveCount || msg.resolveCount || 0);
             let remainingResolves = Number.isFinite(rawResolveCount) ? Math.max(0, rawResolveCount) : 0;
+            const codeActionContext = {
+                diagnostics: _codeActionDiagnostics(document, msg),
+                only: msg.only,
+                triggerKind: msg.triggerKind,
+            };
             for (const entry of providers) {
                 const provider = entry.provider;
                 const fn = provider && provider[methodName];
                 if (typeof fn !== 'function') continue;
                 try {
-                    const rawActions = _normalizeProviderItems(await fn.call(provider, document, range, {
-                        diagnostics: msg.diagnostics || [],
-                        only: msg.only,
-                        triggerKind: msg.triggerKind,
-                    }, token));
+                    const rawActions = _normalizeProviderItems(await fn.call(
+                        provider, document, range, codeActionContext, token));
                     for (let action of rawActions) {
                         let didResolve = false;
                         if (remainingResolves > 0) {
@@ -8164,7 +8188,7 @@ async function handleLanguageProviderRequest(msg) {
                 let value;
                 if (kind === 'codeActions') {
                     value = await fn.call(provider, document, range, {
-                        diagnostics: msg.diagnostics || [],
+                        diagnostics: _codeActionDiagnostics(document, msg),
                         only: msg.only,
                         triggerKind: msg.triggerKind,
                     }, token);
