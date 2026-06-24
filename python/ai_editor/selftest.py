@@ -2612,7 +2612,18 @@ console.log("frontend auto-close behavior ok");
            and "function renderQuickInputEvent(data)" in html
            and "function renderQuickInputState(state)" in html
            and "function quickInputRenderItems(list,state,input)" in html
+           and "function quickInputMoveActive(state,delta)" in html
+           and "quickInputSelectableIndices(state)" in html
+           and "e.key==='ArrowDown'" in html
+           and "e.key==='ArrowUp'" in html
+           and "aria-activedescendant" in html
+           and "scrollIntoView({block:'nearest'})" in html
+           and ".quick-input.busy::before" in html
+           and ".quick-input.disabled" in html
+           and "list.setAttribute('role','listbox')" in html
+           and "row.setAttribute('role','option')" in html
            and "quickInputAction(state.id,'changeValue'" in html
+           and "quickInputAction(state.id,'changeActive',{itemIndices:[next]})" in html
            and "quickInputAction(state.id,'changeSelection'" in html
            and "quickInputAction(state.id,'triggerItemButton'" in html
            and "quickInputAction(state.id,'accept'" in html
