@@ -4251,6 +4251,44 @@ async function handleLanguageProviderRequest(msg) {
             return;
         }
 
+        if (kind === 'codeActions') {
+            const values = [];
+            const rawResolveCount = Number(msg.itemResolveCount || msg.resolveCount || 0);
+            let remainingResolves = Number.isFinite(rawResolveCount) ? Math.max(0, rawResolveCount) : 0;
+            for (const entry of providers) {
+                const provider = entry.provider;
+                const fn = provider && provider[methodName];
+                if (typeof fn !== 'function') continue;
+                try {
+                    const rawActions = _normalizeProviderItems(await fn.call(provider, document, range, {
+                        diagnostics: msg.diagnostics || [],
+                        only: msg.only,
+                        triggerKind: msg.triggerKind,
+                    }, token));
+                    for (let action of rawActions) {
+                        if (remainingResolves > 0) {
+                            if (typeof provider.resolveCodeAction === 'function') {
+                                const resolved = await provider.resolveCodeAction.call(provider, action, token);
+                                if (resolved !== undefined && resolved !== null) action = resolved;
+                            }
+                            remainingResolves -= 1;
+                        }
+                        values.push(action);
+                    }
+                } catch (err) {
+                    log(`language provider ${kind} error: ${err.message}`);
+                }
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: _serializeLanguageValue(values),
+            });
+            return;
+        }
+
         const values = [];
         for (const entry of providers) {
             const provider = entry.provider;

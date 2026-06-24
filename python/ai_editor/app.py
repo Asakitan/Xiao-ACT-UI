@@ -4050,11 +4050,19 @@ class AIEditorAPI:
             if kind == "codeActions":
                 action_range = _editor_provider_range(
                     payload.get("range"), content)
+                try:
+                    item_resolve_count = int(
+                        payload.get("itemResolveCount")
+                        if payload.get("itemResolveCount") is not None
+                        else payload.get("resolveCount") or 0)
+                except Exception:
+                    item_resolve_count = 0
                 result = self._ext_host.commands.execute(
                     "vscode.executeCodeActionProvider",
                     document.uri,
                     action_range,
                     payload.get("only"),
+                    max(0, item_resolve_count),
                 )
                 value = _json_ready_language_value(result)
                 return {

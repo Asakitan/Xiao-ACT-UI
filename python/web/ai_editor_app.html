@@ -5892,7 +5892,7 @@ async function applyEditorCodeAction(action){
 }
 async function requestEditorCodeActions(quiet){
   const requestId=++_editorCodeActionRequest,position=editorPositionFromOffset(ed.value,ed.selectionStart);
-  const res=await call('editor_language_provider',editorProviderPayload('codeActions',{range:editorSelectedRangePayload()}));
+  const res=await call('editor_language_provider',editorProviderPayload('codeActions',{range:editorSelectedRangePayload(),itemResolveCount:20}));
   if(requestId!==_editorCodeActionRequest)return;
   if(res&&res.error){closeEditorCodeActions();if(!quiet)setStatus('Code actions failed: '+res.error);return}
   const actions=(res&&res.ok&&Array.isArray(res.actions)?res.actions:[]).filter(action=>action&&!action.disabled);

@@ -2742,15 +2742,48 @@ class VscodeNamespace:
         return external if external is not None else symbol
 
     def _execute_code_action_provider(
-            self, uri: Any, range: Any = None, kind: Any = None) -> List[Any]:
+            self, uri: Any, range: Any = None, kind: Any = None,
+            item_resolve_count: Any = 0) -> List[Any]:
         document = self._resolve_language_document(uri)
         action_range = _coerce_range(range)
         context = {"diagnostics": self._get_diagnostics(document.uri)}
         if kind is not None:
             context["only"] = kind
-        results = self._collect_language_provider_results(
-            "codeActions", document, "provideCodeActions",
-            (document, action_range, context, CancellationToken.NONE))
+        try:
+            remaining_resolves = max(0, int(item_resolve_count or 0))
+        except Exception:
+            remaining_resolves = 0
+        results: List[Any] = []
+        for entry in self._matching_language_providers("codeActions", document):
+            provider = entry.get("provider")
+            value = self._call_language_provider(
+                provider,
+                "provideCodeActions",
+                (document, action_range, context, CancellationToken.NONE),
+                default=None)
+            actions = self._provider_values(value)
+            if remaining_resolves:
+                resolved_actions: List[Any] = []
+                resolve_method = (
+                    provider.get("resolveCodeAction")
+                    if isinstance(provider, dict)
+                    else getattr(provider, "resolveCodeAction", None)
+                )
+                for action in actions:
+                    current = action
+                    if remaining_resolves > 0:
+                        if callable(resolve_method):
+                            resolved = self._call_language_provider(
+                                provider,
+                                "resolveCodeAction",
+                                (current, CancellationToken.NONE),
+                                default=current)
+                            current = (
+                                resolved if resolved is not None else current)
+                        remaining_resolves -= 1
+                    resolved_actions.append(current)
+                actions = resolved_actions
+            results.extend(actions)
         results.extend(self._provider_values(
             self._request_external_language_provider(
                 "codeActions",
@@ -2760,7 +2793,8 @@ class VscodeNamespace:
                     self._diagnostic_payload(item)
                     for item in context.get("diagnostics", [])
                 ],
-                only=kind)))
+                only=kind,
+                itemResolveCount=max(0, remaining_resolves))))
         return results
 
     def _execute_format_document_provider(

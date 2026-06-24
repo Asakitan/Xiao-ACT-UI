@@ -448,6 +448,7 @@ def test_app_settings_parity() -> None:
             self.seen_semantic_range = None
             self.seen_on_type_trigger = None
             self.seen_inlay_resolves = 0
+            self.seen_code_action_resolves = 0
 
         def provideCompletionItems(self, document, position, token, context):
             self.seen_texts.append(document.getText())
@@ -490,6 +491,16 @@ def test_app_settings_parity() -> None:
                 "arguments": ["ok"],
             }
             return [action]
+
+        def resolveCodeAction(self, action, token):
+            self.seen_code_action_resolves += 1
+            action.command = {
+                "command": "selftest.editorAction",
+                "title": "Run resolved editor action",
+                "arguments": ["resolved-ok"],
+            }
+            action.isPreferred = True
+            return action
 
         def provideDefinition(self, document, position, token):
             return Location(
@@ -813,7 +824,7 @@ def test_app_settings_parity() -> None:
             dict(provider_payload, kind="codeActions", range={
                 "start": {"line": 0, "character": 0},
                 "end": {"line": 0, "character": 6},
-            }))
+            }, itemResolveCount=20))
         definition_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="definition"))
         type_definition_result = provider_api.editor_language_provider(
@@ -946,7 +957,9 @@ def test_app_settings_parity() -> None:
                and action.get("title") == "Replace buffer"
                and action.get("edit", {}).get("_edits", [{}])[0]
                .get("newText") == "fixed"
-               and action.get("command", {}).get("arguments") == ["ok"])
+               and action.get("command", {}).get("arguments") == ["resolved-ok"]
+               and action.get("isPreferred") is True
+               and editor_provider.seen_code_action_resolves == 1)
         definition = definition_result.get("definitions", [{}])[0]
         _check("editor_language_provider serializes definitions",
                definition_result.get("ok") is True
@@ -2278,6 +2291,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function showEditorSignatureHelp(help,position)" in html
            and "function appendSignatureLabel(target,signature,activeParameter)" in html
            and "function requestEditorCodeActions(quiet)" in html
+           and "itemResolveCount:20" in html
            and "function showEditorCodeActions(actions,position)" in html
            and "function editorCodeActionEdits(action)" in html
            and "function applyEditorCodeAction(action)" in html
@@ -4489,10 +4503,21 @@ def test_vscode_api() -> None:
                          "kind": api["SymbolKind"]["Function"]}]
 
         class _CodeActionProvider:
+            def __init__(self):
+                self.resolved = 0
+
             def provideCodeActions(self, document, range, context, token):
                 action = CodeAction("Fix boom", api["CodeActionKind"]["QuickFix"])
                 action.diagnostics = context["diagnostics"]
                 return [action]
+
+            def resolveCodeAction(self, action, token):
+                self.resolved += 1
+                action.command = {
+                    "command": "selftest.fixBoom",
+                    "title": "Fix Boom",
+                }
+                return action
 
         class _FormatProvider:
             def provideDocumentFormattingEdits(self, document, options, token):
@@ -4617,8 +4642,9 @@ def test_vscode_api() -> None:
             "python", rename_provider)
         api["languages"]["registerDocumentSymbolProvider"](
             "python", _DocumentSymbolProvider())
+        code_action_provider = _CodeActionProvider()
         api["languages"]["registerCodeActionsProvider"](
-            "python", _CodeActionProvider())
+            "python", code_action_provider)
         api["languages"]["registerDocumentFormattingEditProvider"](
             "python", _FormatProvider())
         range_format_provider = _RangeFormatProvider()
@@ -4753,9 +4779,13 @@ def test_vscode_api() -> None:
             "renamed")
         symbols = api["commands"]["executeCommand"](
             "vscode.executeDocumentSymbolProvider", doc.uri)
-        actions = api["commands"]["executeCommand"](
+        actions_unresolved = api["commands"]["executeCommand"](
             "vscode.executeCodeActionProvider", doc.uri,
             Range(Position(0, 0), Position(0, 1)), api["CodeActionKind"]["QuickFix"])
+        actions = api["commands"]["executeCommand"](
+            "vscode.executeCodeActionProvider", doc.uri,
+            Range(Position(0, 0), Position(0, 1)),
+            api["CodeActionKind"]["QuickFix"], 1)
         format_edits = api["commands"]["executeCommand"](
             "vscode.executeFormatDocumentProvider", doc.uri, {"tabSize": 4})
         range_format_edits = api["commands"]["executeCommand"](
@@ -4926,7 +4956,12 @@ def test_vscode_api() -> None:
         _check("executeDocumentSymbolProvider invokes matching providers",
                symbols and symbols[0]["name"] == "selftest_symbol")
         _check("executeCodeActionProvider passes diagnostics context",
-               actions and actions[0].diagnostics[0].message == "boom")
+               actions_unresolved
+               and actions_unresolved[0].command is None
+               and actions
+               and actions[0].diagnostics[0].message == "boom"
+               and actions[0].command["title"] == "Fix Boom"
+               and code_action_provider.resolved == 1)
         _check("executeFormatDocumentProvider invokes formatting providers",
                format_edits and format_edits[0]["newText"] == "fmt"
                and any(edit.get("newText") == "rng"
@@ -6520,6 +6555,14 @@ function activate(context) {
       action.diagnostics = context.diagnostics || [];
       return [action];
     },
+    resolveCodeAction(action, token) {
+      action.command = {
+        command: 'selftest.node.openItem',
+        title: 'Node Fix',
+        arguments: [{ id: 'action-root' }],
+      };
+      return action;
+    },
   });
   vscode.languages.registerDocumentFormattingEditProvider('python', {
     provideDocumentFormattingEdits(document, options, token) {
@@ -7034,10 +7077,14 @@ module.exports = { activate, deactivate };
                 node_workspace_symbol_resolved = api._ext_host.commands.execute(
                     "_resolveWorkspaceSymbolProvider",
                     node_workspace_symbols[0] if node_workspace_symbols else {})
-                node_actions = api._ext_host.commands.execute(
+                node_actions_unresolved = api._ext_host.commands.execute(
                     "vscode.executeCodeActionProvider",
                     node_uri, Range(Position(0, 0), Position(0, 1)),
                     "quickfix")
+                node_actions = api._ext_host.commands.execute(
+                    "vscode.executeCodeActionProvider",
+                    node_uri, Range(Position(0, 0), Position(0, 1)),
+                    "quickfix", 1)
                 node_format_edits = api._ext_host.commands.execute(
                     "vscode.executeFormatDocumentProvider",
                     node_uri, {"tabSize": 2})
@@ -7460,8 +7507,14 @@ module.exports = { activate, deactivate };
                        and node_workspace_symbol_resolved.get("location", {})
                        .get("uri", "").endswith("node-symbol-resolved.py"))
                 _check("node host language provider invokes JS code actions",
-                       node_actions
-                       and node_actions[0].get("title") == "node quick fix")
+                       node_actions_unresolved
+                       and node_actions_unresolved[0].get("command") is None
+                       and node_actions
+                       and node_actions[0].get("title") == "node quick fix"
+                       and node_actions[0].get("command", {}).get("title")
+                       == "Node Fix"
+                       and node_actions[0].get("command", {})
+                       .get("arguments", [{}])[0].get("id") == "action-root")
                 _check("node host language provider invokes JS formatting",
                        node_format_edits
                        and node_format_edits[0].get("newText") == "NODE"
