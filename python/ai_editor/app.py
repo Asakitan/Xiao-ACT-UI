@@ -508,7 +508,9 @@ def load_provider_config(gui_ref: Any = None) -> ProviderConfig:
 
 _LANGUAGE_RESULT_ATTRS = (
     "items", "isIncomplete", "label", "kind", "detail", "documentation",
-    "sortText", "filterText", "insertText", "range", "expression", "textEdit",
+    "sortText", "filterText", "insertText", "range", "text", "expression",
+    "variableName", "caseSensitiveLookup", "frameId", "stoppedLocation",
+    "textEdit",
     "additionalTextEdits", "command", "arguments", "contents", "uri", "targetUri",
     "targetRange", "originSelectionRange", "name", "containerName",
     "children", "selectionRange", "diagnostics", "edit", "title",
@@ -3735,6 +3737,10 @@ class AIEditorAPI:
             "evaluatableExpressions": "evaluatableExpression",
             "evaluateExpression": "evaluatableExpression",
             "debugHoverExpression": "evaluatableExpression",
+            "inlineValue": "inlineValue",
+            "inlineValues": "inlineValue",
+            "debugInlineValue": "inlineValue",
+            "debugInlineValues": "inlineValue",
             "prepareRename": "prepareRename",
             "prepare_rename": "prepareRename",
             "rename": "rename",
@@ -3998,6 +4004,47 @@ class AIEditorAPI:
                     "uri": str(document.uri),
                     "version": document.version,
                     "expression": _json_ready_language_value(result),
+                }
+            if kind == "inlineValue":
+                view_range = _editor_provider_range(
+                    payload.get("range")
+                    or payload.get("viewPort")
+                    or payload.get("viewport"),
+                    content)
+                context = payload.get("context")
+                if not isinstance(context, dict):
+                    context = {}
+                try:
+                    frame_id = int(
+                        payload.get("frameId")
+                        if payload.get("frameId") is not None
+                        else context.get("frameId", 0))
+                except Exception:
+                    frame_id = 0
+                stopped_location = (
+                    payload.get("stoppedLocation")
+                    or payload.get("stoppedRange")
+                    or context.get("stoppedLocation")
+                    or view_range)
+                inline_context = {
+                    **context,
+                    "frameId": frame_id,
+                    "stoppedLocation": stopped_location,
+                }
+                result = self._ext_host.commands.execute(
+                    "_executeInlineValueProvider",
+                    document.uri,
+                    view_range,
+                    inline_context,
+                )
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "values": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
                 }
             if kind == "prepareRename":
                 result = self._ext_host.commands.execute(

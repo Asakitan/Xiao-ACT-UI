@@ -433,6 +433,8 @@ def test_app_settings_parity() -> None:
         ColorInformation, ColorPresentation, SymbolInformation,
         DocumentHighlight, EvaluatableExpression, CallHierarchyItem,
         CallHierarchyIncomingCall,
+        InlineValueText, InlineValueVariableLookup,
+        InlineValueEvaluatableExpression,
         CallHierarchyOutgoingCall, TypeHierarchyItem, Uri,
         DocumentDropOrPasteEditKind, DocumentDropEdit, DocumentPasteEdit,
     )
@@ -686,6 +688,25 @@ def test_app_settings_parity() -> None:
                 "buffer.eval",
             )
 
+        def provideInlineValues(self, document, viewPort, context, token):
+            self.seen_inline_value_range = viewPort
+            self.seen_inline_value_context = context
+            return [
+                InlineValueText(
+                    Range(Position(0, 6), Position(0, 6)),
+                    " = 42",
+                ),
+                InlineValueVariableLookup(
+                    Range(Position(0, 0), Position(0, 6)),
+                    "bufferVar",
+                    False,
+                ),
+                InlineValueEvaluatableExpression(
+                    Range(Position(0, 0), Position(0, 6)),
+                    "buffer.eval",
+                ),
+            ]
+
         def provideWorkspaceSymbols(self, query, token):
             self.seen_workspace_query = query
             return [SymbolInformation(
@@ -804,6 +825,7 @@ def test_app_settings_parity() -> None:
     })
     lang_api["registerDocumentHighlightProvider"]("python", editor_provider)
     lang_api["registerEvaluatableExpressionProvider"]("python", editor_provider)
+    lang_api["registerInlineValuesProvider"]("python", editor_provider)
     lang_api["registerWorkspaceSymbolProvider"](editor_provider)
     lang_api["registerColorProvider"]("python", editor_provider)
     lang_api["registerDocumentSemanticTokensProvider"](
@@ -906,6 +928,17 @@ def test_app_settings_parity() -> None:
         evaluatable_expression_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="evaluatableExpression",
                  position={"line": 0, "character": 2}))
+        inline_value_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="inlineValue", range={
+                "start": {"line": 0, "character": 0},
+                "end": {"line": 0, "character": 6},
+            }, context={
+                "frameId": 7,
+                "stoppedLocation": {
+                    "start": {"line": 0, "character": 3},
+                    "end": {"line": 0, "character": 6},
+                },
+            }))
         workspace_symbol_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="workspaceSymbol", query="buf"))
         workspace_symbol = workspace_symbol_result.get("symbols", [{}])[0]
@@ -1104,6 +1137,18 @@ def test_app_settings_parity() -> None:
                and expression.get("expression") == "buffer.eval"
                and expression.get("range", {}).get("end", {})
                .get("character") == 6)
+        inline_values = inline_value_result.get("values", [])
+        _check("editor_language_provider serializes inline values",
+               inline_value_result.get("ok") is True
+               and editor_provider.seen_inline_value_range.end.character == 6
+               and editor_provider.seen_inline_value_context.frameId == 7
+               and editor_provider.seen_inline_value_context
+               .stoppedLocation.start.character == 3
+               and len(inline_values) == 3
+               and inline_values[0].get("text") == " = 42"
+               and inline_values[1].get("variableName") == "bufferVar"
+               and inline_values[1].get("caseSensitiveLookup") is False
+               and inline_values[2].get("expression") == "buffer.eval")
         _check("editor_language_provider serializes workspace symbols",
                workspace_symbol_result.get("ok") is True
                and editor_provider.seen_workspace_query == "buf"
@@ -4334,6 +4379,8 @@ def test_vscode_api() -> None:
         SemanticTokensBuilder, TextEdit, Location, SignatureHelp,
         SignatureInformation, Color, ColorInformation, ColorPresentation,
         SymbolInformation, DocumentHighlight, EvaluatableExpression,
+        InlineValueText, InlineValueVariableLookup,
+        InlineValueEvaluatableExpression, InlineValueContext,
         ParameterInformation,
         CallHierarchyItem, CallHierarchyIncomingCall,
         CallHierarchyOutgoingCall, TypeHierarchyItem,
@@ -4382,6 +4429,12 @@ def test_vscode_api() -> None:
            api["DocumentHighlight"] is DocumentHighlight)
     _check("api.EvaluatableExpression",
            api["EvaluatableExpression"] is EvaluatableExpression)
+    _check("api.InlineValue types",
+           api["InlineValueText"] is InlineValueText
+           and api["InlineValueVariableLookup"] is InlineValueVariableLookup
+           and api["InlineValueEvaluatableExpression"]
+           is InlineValueEvaluatableExpression
+           and api["InlineValueContext"] is InlineValueContext)
     _check("api.DocumentDropEdit",
            api["DocumentDropEdit"] is DocumentDropEdit
            and api["DocumentPasteEdit"] is DocumentPasteEdit)
@@ -4950,6 +5003,28 @@ def test_vscode_api() -> None:
                     "selftest.eval",
                 )
 
+        class _InlineValueProvider:
+            def __init__(self):
+                self.requests = []
+
+            def provideInlineValues(self, document, viewPort, context, token):
+                self.requests.append((viewPort, context))
+                return [
+                    InlineValueText(
+                        Range(Position(0, 4), Position(0, 4)),
+                        " = api",
+                    ),
+                    InlineValueVariableLookup(
+                        Range(Position(0, 0), Position(0, 4)),
+                        "apiVar",
+                        False,
+                    ),
+                    InlineValueEvaluatableExpression(
+                        Range(Position(0, 0), Position(0, 4)),
+                        "api.eval",
+                    ),
+                ]
+
         class _WorkspaceSymbolProvider:
             def __init__(self):
                 self.queries = []
@@ -5146,6 +5221,9 @@ def test_vscode_api() -> None:
         evaluatable_expression_provider = _EvaluatableExpressionProvider()
         api["languages"]["registerEvaluatableExpressionProvider"](
             "python", evaluatable_expression_provider)
+        inline_value_provider = _InlineValueProvider()
+        api["languages"]["registerInlineValuesProvider"](
+            "python", inline_value_provider)
         workspace_symbol_provider = _WorkspaceSymbolProvider()
         api["languages"]["registerWorkspaceSymbolProvider"](
             workspace_symbol_provider)
@@ -5261,6 +5339,14 @@ def test_vscode_api() -> None:
             "_executeEvaluatableExpressionProvider",
             doc.uri,
             Position(0, 3))
+        inline_values = api["commands"]["executeCommand"](
+            "_executeInlineValueProvider",
+            doc.uri,
+            Range(Position(0, 0), Position(0, 4)),
+            InlineValueContext(
+                11,
+                Range(Position(0, 2), Position(0, 4)),
+            ))
         workspace_symbols = api["commands"]["executeCommand"](
             "vscode.executeWorkspaceSymbolProvider", "self")
         workspace_symbol_resolved = api["commands"]["executeCommand"](
@@ -5443,6 +5529,17 @@ def test_vscode_api() -> None:
                and evaluatable_expression_provider.positions[-1].character == 3
                and evaluatable_expression.expression == "selftest.eval"
                and evaluatable_expression.range.end.character == 4)
+        _check("executeInlineValueProvider invokes matching providers",
+               inline_values
+               and len(inline_values) == 3
+               and inline_value_provider.requests[-1][0].end.character == 4
+               and inline_value_provider.requests[-1][1].frameId == 11
+               and inline_value_provider.requests[-1][1]
+               .stoppedLocation.start.character == 2
+               and inline_values[0].text == " = api"
+               and inline_values[1].variableName == "apiVar"
+               and inline_values[1].caseSensitiveLookup is False
+               and inline_values[2].expression == "api.eval")
         _check("executeWorkspaceSymbolProvider invokes matching providers",
                workspace_symbols
                and workspace_symbols[0].name == "selftestWorkspaceSymbol"
@@ -5563,6 +5660,8 @@ def test_vscode_api() -> None:
                and "vscode.executeDocumentHighlightProvider"
                in api["commands"]["getCommands"]()
                and "_executeEvaluatableExpressionProvider"
+               in api["commands"]["getCommands"]()
+               and "_executeInlineValueProvider"
                in api["commands"]["getCommands"]()
                and "vscode.executeWorkspaceSymbolProvider"
                in api["commands"]["getCommands"]()
@@ -7649,6 +7748,25 @@ async function activate(context) {
       );
     },
   });
+  vscode.languages.registerInlineValuesProvider('python', {
+    provideInlineValues(document, viewPort, context, token) {
+      return [
+        new vscode.InlineValueText(
+          new vscode.Range(0, 4, 0, 4),
+          ' = node',
+        ),
+        new vscode.InlineValueVariableLookup(
+          new vscode.Range(0, 0, 0, 4),
+          'nodeVar',
+          false,
+        ),
+        new vscode.InlineValueEvaluatableExpression(
+          new vscode.Range(0, 0, 0, 4),
+          'node.eval',
+        ),
+      ];
+    },
+  });
   vscode.languages.registerDocumentLinkProvider('python', {
     provideDocumentLinks(document, token) {
       const link = new vscode.DocumentLink(new vscode.Range(0, 0, 0, 4));
@@ -9488,6 +9606,17 @@ module.exports = { activate, deactivate };
                 node_evaluatable_expression = api._ext_host.commands.execute(
                     "_executeEvaluatableExpressionProvider",
                     node_uri, Position(0, 1))
+                node_inline_values = api._ext_host.commands.execute(
+                    "_executeInlineValueProvider",
+                    node_uri,
+                    Range(Position(0, 0), Position(0, 4)),
+                    {
+                        "frameId": 19,
+                        "stoppedLocation": {
+                            "start": {"line": 0, "character": 1},
+                            "end": {"line": 0, "character": 4},
+                        },
+                    })
                 node_document_links = api._ext_host.commands.execute(
                     "vscode.executeLinkProvider", node_uri, 1)
                 node_inlay_hints_unresolved = api._ext_host.commands.execute(
@@ -10000,6 +10129,16 @@ module.exports = { activate, deactivate };
                        == "node.eval"
                        and node_evaluatable_expression.get("range", {})
                        .get("end", {}).get("character") == 4)
+                _check("node host language provider invokes JS inline values",
+                       node_inline_values
+                       and len(node_inline_values) == 3
+                       and node_inline_values[0].get("text") == " = node"
+                       and node_inline_values[1].get("variableName")
+                       == "nodeVar"
+                       and node_inline_values[1].get("caseSensitiveLookup")
+                       is False
+                       and node_inline_values[2].get("expression")
+                       == "node.eval")
                 _check("node host language provider invokes JS document links",
                        node_document_links
                        and node_document_links[0].get("target", "").endswith("node-link.py")

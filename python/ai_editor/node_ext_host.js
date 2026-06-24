@@ -236,6 +236,41 @@ class EvaluatableExpression {
     }
 }
 
+class InlineValueText {
+    constructor(range, text) {
+        this.range = range instanceof Range ? range : _rangeFromPayload(range);
+        this.text = text === undefined || text === null ? '' : String(text);
+    }
+}
+
+class InlineValueVariableLookup {
+    constructor(range, variableName, caseSensitiveLookup = true) {
+        this.range = range instanceof Range ? range : _rangeFromPayload(range);
+        if (variableName !== undefined && variableName !== null) {
+            this.variableName = String(variableName);
+        }
+        this.caseSensitiveLookup = Boolean(caseSensitiveLookup);
+    }
+}
+
+class InlineValueEvaluatableExpression {
+    constructor(range, expression) {
+        this.range = range instanceof Range ? range : _rangeFromPayload(range);
+        if (expression !== undefined && expression !== null) {
+            this.expression = String(expression);
+        }
+    }
+}
+
+class InlineValueContext {
+    constructor(frameId, stoppedLocation) {
+        this.frameId = Number.isFinite(Number(frameId)) ? Number(frameId) : 0;
+        this.stoppedLocation = stoppedLocation instanceof Range
+            ? stoppedLocation
+            : _rangeFromPayload(stoppedLocation);
+    }
+}
+
 class DataTransferFile {
     constructor(name, uri, data) {
         this.name = name === undefined || name === null ? '' : String(name);
@@ -4607,6 +4642,10 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         Location,
         DocumentHighlight,
         EvaluatableExpression,
+        InlineValueText,
+        InlineValueVariableLookup,
+        InlineValueEvaluatableExpression,
+        InlineValueContext,
         SymbolInformation,
         CallHierarchyItem,
         CallHierarchyIncomingCall,
@@ -5145,6 +5184,9 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 registerEvaluatableExpressionProvider(selector, provider) {
                     return _registerLangProvider('evaluatableExpression', selector, provider);
                 },
+                registerInlineValuesProvider(selector, provider) {
+                    return _registerLangProvider('inlineValue', selector, provider);
+                },
                 registerLinkedEditingRangeProvider(selector, provider) {
                     return _registerLangProvider('linkedEditing', selector, provider);
                 },
@@ -5571,6 +5613,10 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         DataTransferItem,
         DocumentHighlight,
         EvaluatableExpression,
+        InlineValueText,
+        InlineValueVariableLookup,
+        InlineValueEvaluatableExpression,
+        InlineValueContext,
         SymbolInformation,
         Color,
         ColorInformation,
@@ -6811,6 +6857,7 @@ function _languageProviderMethod(kind) {
         references: 'provideReferences',
         documentHighlight: 'provideDocumentHighlights',
         evaluatableExpression: 'provideEvaluatableExpression',
+        inlineValue: 'provideInlineValues',
         prepareRename: 'prepareRename',
         rename: 'provideRenameEdits',
         documentLink: 'provideDocumentLinks',
@@ -7292,6 +7339,38 @@ async function handleLanguageProviderRequest(msg) {
                 ok: true,
                 kind,
                 value: null,
+            });
+            return;
+        }
+
+        if (kind === 'inlineValue') {
+            const values = [];
+            const contextPayload = msg.context && typeof msg.context === 'object'
+                ? msg.context
+                : {};
+            const stoppedLocation = _rangeFromPayload(
+                contextPayload.stoppedLocation || msg.stoppedLocation || msg.range || range);
+            const frameId = Number.isFinite(Number(contextPayload.frameId))
+                ? Number(contextPayload.frameId)
+                : 0;
+            const inlineContext = new InlineValueContext(frameId, stoppedLocation);
+            for (const entry of providers) {
+                const provider = entry.provider;
+                const fn = provider && provider[methodName];
+                if (typeof fn !== 'function') continue;
+                try {
+                    const value = await fn.call(provider, document, range, inlineContext, token);
+                    values.push(..._normalizeProviderItems(value));
+                } catch (err) {
+                    log(`language provider ${kind} error: ${err.message}`);
+                }
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: _serializeLanguageValue(values),
             });
             return;
         }

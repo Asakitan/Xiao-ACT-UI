@@ -1048,6 +1048,38 @@ class EvaluatableExpression:
             self.expression = str(expression)
 
 
+class InlineValueText:
+    def __init__(self, range: Any, text: Any) -> None:
+        self.range = _coerce_range(range)
+        self.text = "" if text is None else str(text)
+
+
+class InlineValueVariableLookup:
+    def __init__(
+            self, range: Any, variableName: Any = None,
+            caseSensitiveLookup: Any = True) -> None:
+        self.range = _coerce_range(range)
+        if variableName is not None:
+            self.variableName = str(variableName)
+        self.caseSensitiveLookup = bool(caseSensitiveLookup)
+
+
+class InlineValueEvaluatableExpression:
+    def __init__(self, range: Any, expression: Any = None) -> None:
+        self.range = _coerce_range(range)
+        if expression is not None:
+            self.expression = str(expression)
+
+
+class InlineValueContext:
+    def __init__(self, frameId: Any = 0, stoppedLocation: Any = None) -> None:
+        try:
+            self.frameId = int(frameId)
+        except Exception:
+            self.frameId = 0
+        self.stoppedLocation = _coerce_range(stoppedLocation)
+
+
 class SymbolInformation:
     def __init__(
             self,
@@ -1918,6 +1950,7 @@ class VscodeNamespace:
             "_executeDocumentHighlightProvider": self._execute_document_highlight_provider,
             "vscode.executeDocumentHighlightProvider": self._execute_document_highlight_provider,
             "_executeEvaluatableExpressionProvider": self._execute_evaluatable_expression_provider,
+            "_executeInlineValueProvider": self._execute_inline_value_provider,
             "_executeDocumentRenameProvider": self._execute_rename_provider,
             "vscode.executeDocumentRenameProvider": self._execute_rename_provider,
             "_executePrepareRename": self._execute_prepare_rename_provider,
@@ -2040,8 +2073,9 @@ class VscodeNamespace:
             return [cls._language_value_payload(item, depth + 1)
                     for item in value]
         attrs = (
-            "name", "kind", "detail", "uri", "range", "expression",
-            "selectionRange",
+            "name", "kind", "detail", "uri", "range", "text", "expression",
+            "variableName", "caseSensitiveLookup", "frameId",
+            "stoppedLocation", "selectionRange",
             "tags", "from", "fromRanges", "to",
         )
         data: Dict[str, Any] = {}
@@ -2468,6 +2502,27 @@ class VscodeNamespace:
         if isinstance(external, list):
             return external[0] if external else None
         return external
+
+    def _execute_inline_value_provider(
+            self, uri: Any, range: Any = None,
+            context: Any = None) -> List[Any]:
+        document = self._resolve_language_document(uri)
+        view_range = _coerce_range(range)
+        inline_context = _coerce_inline_value_context(context, view_range)
+        results: List[Any] = []
+        for entry in self._matching_language_providers("inlineValue", document):
+            value = self._call_language_provider(
+                entry.get("provider"), "provideInlineValues",
+                (document, view_range, inline_context, CancellationToken.NONE),
+                default=None)
+            results.extend(self._provider_values(value))
+        external = self._request_external_language_provider(
+            "inlineValue",
+            document,
+            range=self._range_payload(view_range),
+            context=self._language_value_payload(inline_context))
+        results.extend(self._provider_values(external))
+        return results
 
     def _execute_prepare_rename_provider(
             self, uri: Any, position: Any = None) -> Any:
@@ -3487,6 +3542,10 @@ class VscodeNamespace:
             "Location": Location,
             "DocumentHighlight": DocumentHighlight,
             "EvaluatableExpression": EvaluatableExpression,
+            "InlineValueText": InlineValueText,
+            "InlineValueVariableLookup": InlineValueVariableLookup,
+            "InlineValueEvaluatableExpression": InlineValueEvaluatableExpression,
+            "InlineValueContext": InlineValueContext,
             "SymbolInformation": SymbolInformation,
             "DataTransfer": DataTransfer,
             "DataTransferItem": DataTransferItem,
@@ -4397,6 +4456,7 @@ class VscodeNamespace:
             "registerReferenceProvider": lambda selector, provider: self._register_language_provider("references", selector, provider),
             "registerDocumentHighlightProvider": lambda selector, provider: self._register_language_provider("documentHighlight", selector, provider),
             "registerEvaluatableExpressionProvider": lambda selector, provider: self._register_language_provider("evaluatableExpression", selector, provider),
+            "registerInlineValuesProvider": lambda selector, provider: self._register_language_provider("inlineValue", selector, provider),
             "registerRenameProvider": lambda selector, provider: self._register_language_provider("rename", selector, provider),
             "registerDocumentSymbolProvider": lambda selector, provider: self._register_language_provider("documentSymbol", selector, provider),
             "registerWorkspaceSymbolProvider": lambda provider: self._register_language_provider("workspaceSymbol", None, provider),
@@ -6481,6 +6541,28 @@ def _coerce_range(value: Any) -> Range:
     if isinstance(value, dict):
         return Range(_coerce_position(value.get("start")), _coerce_position(value.get("end")))
     return Range()
+
+
+def _coerce_inline_value_context(
+        value: Any, fallback_range: Any = None) -> InlineValueContext:
+    if isinstance(value, InlineValueContext):
+        return value
+    frame_id = 0
+    stopped_location = fallback_range
+    if isinstance(value, dict):
+        frame_id = value.get("frameId", value.get("frame_id", 0))
+        stopped_location = (
+            value.get("stoppedLocation")
+            or value.get("stopped_location")
+            or value.get("range")
+            or fallback_range)
+    else:
+        frame_id = getattr(value, "frameId", 0)
+        stopped_location = (
+            getattr(value, "stoppedLocation", None)
+            or getattr(value, "range", None)
+            or fallback_range)
+    return InlineValueContext(frame_id, stopped_location)
 
 
 def _coerce_color(value: Any) -> Color:
