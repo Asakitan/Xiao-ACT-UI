@@ -4144,6 +4144,9 @@ console.log("frontend signature help docs ok");
             and "function extensionSettingTargetName(target)" in html
             and "function createExtensionSettingTargetSelect(target)" in html
             and "function extensionSettingRowTarget(row)" in html
+            and "function extensionSettingScopedValues(raw)" in html
+            and "function extensionSettingValueForTarget(scopedValues,target,fallback)" in html
+            and "const targetScopedValues=cfg.targetScopedValues||{}" in html
             and "ext-setting-target-select" in html
             and "set_extension_setting',key,nextValue,extensionSettingRowTarget(row)" in html
             and "reset_extension_setting',key,extensionSettingRowTarget(row)" in html
@@ -9590,21 +9593,32 @@ def test_app_extension_runtime_support() -> None:
                and settings_node_host.messages[-1].get("remove") is True)
         target_set = api.set_extension_setting(
             "selftest.flag", True, "global")
-        target_get = api.get_extension_setting("selftest.flag")
+        workspace_target_set = api.set_extension_setting(
+            "selftest.flag", False, "workspace")
+        target_get = api.get_extension_setting(
+            "selftest.flag", target="global")
+        workspace_target_get = api.get_extension_setting(
+            "selftest.flag", target="workspace")
         after_target_set = next(
             (item for item in api.list_extension_settings().get("configurations", [])
              if item.get("extension_id") == "selftest.settings-pack"),
             {})
-        target_data = dict(getattr(api._gui_ref.settings, "data", {}).get(
-            "ai_editor", {}).get("configuration_targets", {}))
+        target_data = json.loads(json.dumps(getattr(
+            api._gui_ref.settings, "data", {}).get(
+                "ai_editor", {}).get("configuration_targets", {})))
         target_reset = api.reset_extension_setting("selftest.flag", "global")
         after_target_reset = next(
             (item for item in api.list_extension_settings().get("configurations", [])
              if item.get("extension_id") == "selftest.settings-pack"),
             {})
-        target_data_after_reset = dict(getattr(
+        target_data_after_reset = json.loads(json.dumps(getattr(
             api._gui_ref.settings, "data", {}).get(
-                "ai_editor", {}).get("configuration_targets", {}))
+                "ai_editor", {}).get("configuration_targets", {})))
+        workspace_target_reset = api.reset_extension_setting(
+            "selftest.flag", "workspace")
+        target_data_after_all_reset = json.loads(json.dumps(getattr(
+            api._gui_ref.settings, "data", {}).get(
+                "ai_editor", {}).get("configuration_targets", {})))
         folder_set = api.set_extension_setting(
             "selftest.flag", False, "workspaceFolder")
         folder_get = api.get_extension_setting("selftest.flag")
@@ -9617,20 +9631,40 @@ def test_app_extension_runtime_support() -> None:
         _check("extension setting targets persist and reset by scope",
                target_set.get("ok") is True
                and target_set.get("target") == "global"
+               and workspace_target_set.get("ok") is True
+               and workspace_target_set.get("target") == "workspace"
                and target_get.get("value") is True
                and target_get.get("target") == "global"
+               and workspace_target_get.get("value") is False
+               and workspace_target_get.get("target") == "workspace"
                and after_target_set.get("targets", {}).get(
-                   "selftest.flag") == "global"
+                   "selftest.flag") == "workspace"
                and after_target_set.get("targetValues", {}).get(
-                   "selftest.flag") is True
-               and target_data.get("selftest.flag", {}).get(
-                   "target") == "global"
-               and target_data.get("selftest.flag", {}).get(
-                   "value") is True
-               and target_reset.get("ok") is True
-               and "selftest.flag" not in target_data_after_reset
-               and after_target_reset.get("modified", {}).get(
                    "selftest.flag") is False
+               and after_target_set.get("targetScopedValues", {}).get(
+                   "selftest.flag", {}).get("global") is True
+               and after_target_set.get("targetScopedValues", {}).get(
+                   "selftest.flag", {}).get("workspace") is False
+               and target_data.get("selftest.flag", {}).get(
+                   "target") == "workspace"
+               and target_data.get("selftest.flag", {}).get(
+                   "value") is False
+               and target_data.get("selftest.flag", {}).get(
+                   "values", {}).get("global") is True
+               and target_data.get("selftest.flag", {}).get(
+                   "values", {}).get("workspace") is False
+               and target_reset.get("ok") is True
+               and target_data_after_reset.get(
+                   "selftest.flag", {}).get("target") == "workspace"
+               and "global" not in target_data_after_reset.get(
+                   "selftest.flag", {}).get("values", {})
+               and target_data_after_reset.get(
+                   "selftest.flag", {}).get("values", {}).get(
+                       "workspace") is False
+               and after_target_reset.get("modified", {}).get(
+                   "selftest.flag") is True
+               and workspace_target_reset.get("ok") is True
+               and "selftest.flag" not in target_data_after_all_reset
                and folder_set.get("ok") is True
                and folder_set.get("target") == "workspaceFolder"
                and folder_get.get("target") == "workspaceFolder"
@@ -9657,6 +9691,10 @@ def test_app_extension_runtime_support() -> None:
                        "modified": after_target_reset.get("modified", {}),
                    },
                    "target_data_after_reset": target_data_after_reset,
+                   "workspace_target_set": workspace_target_set,
+                   "workspace_target_get": workspace_target_get,
+                   "workspace_target_reset": workspace_target_reset,
+                   "target_data_after_all_reset": target_data_after_all_reset,
                    "folder_set": folder_set,
                    "folder_get": folder_get,
                    "after_folder_set": {

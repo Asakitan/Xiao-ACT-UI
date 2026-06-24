@@ -7335,12 +7335,43 @@ class AIEditorAPI:
             targets = ai_cfg.get("configuration_targets", {}) or {}
             if not isinstance(targets, dict):
                 targets = {}
+            current = targets.get(target_key)
+            current_entry = current if isinstance(current, dict) else {}
+            scoped_values: Dict[str, Any] = {}
+            raw_values = current_entry.get("values")
+            if isinstance(raw_values, dict):
+                for raw_target, raw_value in raw_values.items():
+                    if raw_target in {"global", "workspace", "workspaceFolder"}:
+                        scoped_values[raw_target] = raw_value
+            if "value" in current_entry:
+                current_target = str(
+                    current_entry.get("target") or "workspace").strip()
+                if current_target in {
+                        "global", "workspace", "workspaceFolder"}:
+                    scoped_values.setdefault(
+                        current_target, current_entry.get("value"))
             if should_remove:
-                targets.pop(target_key, None)
+                scoped_values.pop(target_name, None)
+                if scoped_values:
+                    active_target = (
+                        target_name if target_name in scoped_values else
+                        next((name for name in (
+                            "workspace", "workspaceFolder", "global")
+                              if name in scoped_values), next(iter(scoped_values)))
+                    )
+                    targets[target_key] = {
+                        "target": active_target,
+                        "value": scoped_values[active_target],
+                        "values": scoped_values,
+                    }
+                else:
+                    targets.pop(target_key, None)
             else:
+                scoped_values[target_name] = next_value
                 targets[target_key] = {
                     "target": target_name,
                     "value": next_value,
+                    "values": scoped_values,
                 }
             if targets:
                 ai_cfg["configuration_targets"] = targets
@@ -8065,6 +8096,41 @@ class AIEditorAPI:
     def _extension_setting_target_entry(self, key: str) -> Dict[str, Any]:
         return self._extension_setting_target_entries().get(str(key), {})
 
+    def _extension_setting_target_scoped_values(
+            self, entry: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(entry, dict):
+            return {}
+        values: Dict[str, Any] = {}
+        raw_values = entry.get("values")
+        if isinstance(raw_values, dict):
+            for target, target_value in raw_values.items():
+                values[self._extension_setting_target_name(target)] = target_value
+        if "value" in entry:
+            values.setdefault(
+                self._extension_setting_target_name(entry.get("target")),
+                entry.get("value"),
+            )
+        return values
+
+    def _extension_setting_active_target(
+            self, entry: Dict[str, Any],
+            requested_target: Any = "") -> str:
+        if str(requested_target or "").strip():
+            return self._extension_setting_target_name(requested_target)
+        if isinstance(entry, dict):
+            return self._extension_setting_target_name(entry.get("target"))
+        return "workspace"
+
+    @staticmethod
+    def _extension_setting_pick_target(
+            values: Dict[str, Any], preferred: str = "") -> str:
+        if preferred in values:
+            return preferred
+        for target in ("workspace", "workspaceFolder", "global"):
+            if target in values:
+                return target
+        return next(iter(values), "workspace")
+
     def _persist_extension_setting_target(
             self, key: str, value: Any, target: Any,
             remove: bool = False, explicit_target: bool = False) -> Optional[str]:
@@ -8079,18 +8145,34 @@ class AIEditorAPI:
         setting_key = str(key or "").strip()
         if not setting_key:
             return None
+        current = targets.get(setting_key)
+        current_entry = current if isinstance(current, dict) else {}
+        scoped_values = self._extension_setting_target_scoped_values(
+            current_entry)
         if remove:
-            current = targets.get(setting_key)
-            current_target = ""
-            if isinstance(current, dict):
-                current_target = self._extension_setting_target_name(
-                    current.get("target"))
-            if not explicit_target or current_target == target_name:
+            if explicit_target:
+                scoped_values.pop(target_name, None)
+            else:
+                scoped_values.clear()
+            if scoped_values:
+                active_target = self._extension_setting_pick_target(
+                    scoped_values,
+                    self._extension_setting_target_name(
+                        current_entry.get("target")),
+                )
+                targets[setting_key] = {
+                    "target": active_target,
+                    "value": scoped_values[active_target],
+                    "values": scoped_values,
+                }
+            else:
                 targets.pop(setting_key, None)
         else:
+            scoped_values[target_name] = value
             targets[setting_key] = {
                 "target": target_name,
                 "value": value,
+                "values": scoped_values,
             }
         if targets:
             ai["configuration_targets"] = targets
@@ -9024,6 +9106,7 @@ class AIEditorAPI:
             values: Dict[str, Any] = {}
             targets: Dict[str, str] = {}
             target_values: Dict[str, Any] = {}
+            target_scoped_values: Dict[str, Dict[str, Any]] = {}
             scopes: Dict[str, str] = {}
             workspace_writable: Dict[str, bool] = {}
             restricted: Dict[str, bool] = {}
@@ -9046,10 +9129,16 @@ class AIEditorAPI:
                     sync_ignore_locked[key] = (
                         self._extension_setting_sync_ignore_locked(schema))
                     target_entry = self._extension_setting_target_entry(key)
-                    targets[key] = self._extension_setting_target_name(
-                        target_entry.get("target"))
-                    if "value" in target_entry:
-                        target_values[key] = target_entry.get("value")
+                    target_name = self._extension_setting_active_target(
+                        target_entry)
+                    scoped_values = (
+                        self._extension_setting_target_scoped_values(
+                            target_entry))
+                    targets[key] = target_name
+                    if scoped_values:
+                        target_scoped_values[key] = scoped_values
+                    if target_name in scoped_values:
+                        target_values[key] = scoped_values[target_name]
             else:
                 properties = {}
             if properties and ws_state:
@@ -9075,6 +9164,7 @@ class AIEditorAPI:
                 "values": values,
                 "targets": targets,
                 "targetValues": target_values,
+                "targetScopedValues": target_scoped_values,
                 "scopes": scopes,
                 "workspaceWritable": workspace_writable,
                 "restricted": restricted,
@@ -9137,6 +9227,7 @@ class AIEditorAPI:
             sync_ignore_locked: Dict[str, bool] = {}
             targets: Dict[str, str] = {}
             target_values: Dict[str, Any] = {}
+            target_scoped_values: Dict[str, Dict[str, Any]] = {}
             configured_keys = set(ws_state.keys()) if ws_state else set()
             visible_props: Dict[str, Dict[str, Any]] = {}
             for key, schema in props.items():
@@ -9159,11 +9250,16 @@ class AIEditorAPI:
                         default_overrides[key]
                         if key in default_overrides else schema["default"])
                 target_entry = self._extension_setting_target_entry(key)
-                target_name = self._extension_setting_target_name(
-                    target_entry.get("target"))
+                target_name = self._extension_setting_active_target(
+                    target_entry)
+                scoped_values = (
+                    self._extension_setting_target_scoped_values(
+                        target_entry))
                 targets[key] = target_name
-                if "value" in target_entry:
-                    stored = target_entry.get("value")
+                if scoped_values:
+                    target_scoped_values[key] = scoped_values
+                if target_name in scoped_values:
+                    stored = scoped_values[target_name]
                     values[key] = stored
                     target_values[key] = stored
                     configured_values[key] = stored
@@ -9197,6 +9293,7 @@ class AIEditorAPI:
                 "modified": modified,
                 "targets": targets,
                 "targetValues": target_values,
+                "targetScopedValues": target_scoped_values,
                 "scopes": scopes,
                 "workspaceWritable": workspace_writable,
                 "restricted": restricted,
@@ -9205,34 +9302,41 @@ class AIEditorAPI:
             })
         return {"configurations": result, "languageDefaults": language_defaults}
 
-    def get_extension_setting(self, key: str, default: Any = None) -> Dict:
+    def get_extension_setting(
+            self, key: str, default: Any = None,
+            target: str = "") -> Dict:
         """Read a single extension setting value from workspace state."""
         self._ensure_engine()
         contributions = self._ext_host.ext_points.configuration_contributions
         default_overrides = self._extension_configuration_default_overrides()
+        explicit_target = bool(str(target or "").strip())
         for entry in contributions:
             props = entry.get("properties", {})
             if key in props:
                 eid = entry.get("extension_id", "")
                 schema = props[key] if isinstance(props[key], dict) else {}
                 target_entry = self._extension_setting_target_entry(key)
-                target_name = self._extension_setting_target_name(
-                    target_entry.get("target"))
+                target_name = self._extension_setting_active_target(
+                    target_entry, target)
+                scoped_values = self._extension_setting_target_scoped_values(
+                    target_entry)
                 if not self._extension_setting_included(schema):
                     return {"ok": True, "key": key, "value": default,
                             "target": target_name, "modified": False}
-                if "value" in target_entry:
+                if target_name in scoped_values:
                     return {
                         "ok": True,
                         "key": key,
-                        "value": target_entry.get("value"),
+                        "value": scoped_values[target_name],
                         "target": target_name,
+                        "targetValues": scoped_values,
                         "modified": True,
                     }
                 ctx = self._ext_host.activator.get_context(eid)
                 if ctx:
                     keys = set(ctx.workspace_state.keys())
-                    if key in keys:
+                    if key in keys and (not explicit_target
+                                        or target_name == "workspace"):
                         stored = ctx.workspace_state.get(key)
                         return {"ok": True, "key": key, "value": stored,
                                 "target": target_name, "modified": True}
@@ -9731,7 +9835,6 @@ class AIEditorAPI:
                 schema = props[key] if isinstance(props[key], dict) else {}
                 if not self._extension_setting_included(schema):
                     return {"error": f"Setting key not found in any extension: {key}"}
-                ctx.workspace_state.delete(key)
                 persist_error = self._persist_extension_setting_target(
                     key, None, target_name, remove=True,
                     explicit_target=explicit_target)
@@ -9743,6 +9846,12 @@ class AIEditorAPI:
                         "extension_id": eid,
                         "target": target_name,
                     }
+                next_target_entry = self._extension_setting_target_entry(key)
+                if "value" in next_target_entry:
+                    ctx.workspace_state.update(
+                        key, next_target_entry.get("value"))
+                else:
+                    ctx.workspace_state.delete(key)
                 default_value = (
                     default_overrides[key]
                     if key in default_overrides else schema.get("default"))

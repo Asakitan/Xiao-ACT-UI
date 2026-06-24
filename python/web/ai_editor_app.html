@@ -12124,6 +12124,18 @@ function extensionSettingRowTarget(row){
   const select=row&&row.querySelector?row.querySelector('.ext-setting-target-select'):null;
   return extensionSettingTargetName(select?select.value:(row&&row.dataset?row.dataset.extSettingTarget:'workspace'));
 }
+function extensionSettingScopedValues(raw){
+  return raw&&typeof raw==='object'&&!Array.isArray(raw)?raw:{};
+}
+function extensionSettingHasTargetValue(scopedValues,target){
+  return Object.prototype.hasOwnProperty.call(
+    extensionSettingScopedValues(scopedValues),extensionSettingTargetName(target));
+}
+function extensionSettingValueForTarget(scopedValues,target,fallback){
+  const scoped=extensionSettingScopedValues(scopedValues);
+  const name=extensionSettingTargetName(target);
+  return Object.prototype.hasOwnProperty.call(scoped,name)?scoped[name]:fallback;
+}
 function setExtensionSettingError(row,message){
   row.classList.toggle('invalid',!!message);
   const el=row.querySelector('.ext-setting-error');
@@ -12378,6 +12390,7 @@ async function renderExtensionSettings(){
     const defaults=cfg.defaults||{};
     const modified=cfg.modified||{};
     const targets=cfg.targets||{};
+    const targetScopedValues=cfg.targetScopedValues||{};
     if(!properties||typeof properties!=='object')return;
     const propKeys=Object.keys(properties).sort((a,b)=>{
       const ao=Number((properties[a]||{}).order||0),bo=Number((properties[b]||{}).order||0);
@@ -12413,7 +12426,6 @@ async function renderExtensionSettings(){
       const type=extensionSettingType(schema);
       const defaultVal=extensionSettingDefault(schema,defaults,key);
       const hasDefaultValue=Object.prototype.hasOwnProperty.call(defaults,key)||Object.prototype.hasOwnProperty.call(schema,'default');
-      const currentVal=Object.prototype.hasOwnProperty.call(values,key)?values[key]:defaultVal;
       const description=schema.markdownDescription||schema.description||'';
       const deprecation=extensionSettingDeprecationText(schema);
       const workspaceWritable=extensionSettingWorkspaceWritable(schema);
@@ -12424,6 +12436,10 @@ async function renderExtensionSettings(){
       const policyMeta=extensionSettingPolicyMetadata(schema);
       const shortKey=key.split('.').pop()||key;
       const targetName=extensionSettingTargetName(targets[key]);
+      const scopedValues=Object.assign({},extensionSettingScopedValues(targetScopedValues[key]));
+      const currentVal=extensionSettingHasTargetValue(scopedValues,targetName)
+        ?extensionSettingValueForTarget(scopedValues,targetName,defaultVal)
+        :(Object.prototype.hasOwnProperty.call(values,key)?values[key]:defaultVal);
       const row=document.createElement('div');row.className='ext-setting-row settings-field';row.dataset.extSettingKey=key;
       row.dataset.extSettingTarget=targetName;
       if(!workspaceWritable)row.classList.add('scope-readonly');
@@ -12454,6 +12470,10 @@ async function renderExtensionSettings(){
         targetSelect.disabled=!workspaceWritable;
         targetSelect.onchange=()=>{
           row.dataset.extSettingTarget=extensionSettingTargetName(targetSelect.value);
+          const nextValue=extensionSettingValueForTarget(scopedValues,row.dataset.extSettingTarget,defaultVal);
+          setExtensionSettingInputValue(input,schema,type,nextValue);
+          if(enumHelp)renderExtensionSettingEnumDescription(enumHelp,schema,input);
+          markExtensionSettingRow(row,extensionSettingHasTargetValue(scopedValues,row.dataset.extSettingTarget));
           row.dataset.extSettingTags=extensionSettingList(schema,'tags').map(value=>value.toLowerCase())
             .concat([scopeName,schema.restricted===true?'restricted':'',
               workspaceWritable?'':'scope-readonly',syncMeta.tag,
@@ -12539,7 +12559,7 @@ async function renderExtensionSettings(){
       reset.onclick=async ev=>{
         ev.preventDefault();ev.stopPropagation();setExtensionSettingError(row,'');
         const r=await call('reset_extension_setting',key,extensionSettingRowTarget(row));
-        if(r&&r.ok){setExtensionSettingInputValue(input,schema,type,hasDefaultValue?r.value:defaultVal);row.dataset.extSettingTarget=extensionSettingRowTarget(row);markExtensionSettingRow(row,false);applyExtensionSettingsFilter()}
+        if(r&&r.ok){delete scopedValues[extensionSettingRowTarget(row)];setExtensionSettingInputValue(input,schema,type,hasDefaultValue?r.value:defaultVal);row.dataset.extSettingTarget=extensionSettingRowTarget(row);markExtensionSettingRow(row,false);applyExtensionSettingsFilter()}
         else showToast('Reset failed: '+((r&&r.error)||'unknown'),'error');
       };
       row.appendChild(reset);
@@ -12551,7 +12571,7 @@ async function renderExtensionSettings(){
         try{nextValue=readExtensionSettingInputValue(input,schema,type)}
         catch(e){setExtensionSettingError(row,'Invalid JSON: '+e.message);return}
         const r=await call('set_extension_setting',key,nextValue,extensionSettingRowTarget(row));
-        if(r&&r.ok){row.dataset.extSettingTarget=r.target||extensionSettingRowTarget(row);markExtensionSettingRow(row,true);applyExtensionSettingsFilter()}
+        if(r&&r.ok){row.dataset.extSettingTarget=r.target||extensionSettingRowTarget(row);scopedValues[row.dataset.extSettingTarget]=nextValue;markExtensionSettingRow(row,true);applyExtensionSettingsFilter()}
         else showToast('Setting save failed: '+((r&&r.error)||'unknown'),'error');
       });
       if(type==='array'||type==='object')input.addEventListener('input',()=>setExtensionSettingError(row,''));
