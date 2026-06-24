@@ -2891,7 +2891,7 @@ console.log("extension setting schema helpers ok");
     _check("frontend renders extension activity bar views dynamically",
             "function renderExtensionContainerContent(item)" in html
             and "function renderExtensionTreeView(view)" in html
-            and "function renderExtensionTreeNode(viewId,node,depth,viewVersion)" in html
+            and "function renderExtensionTreeNode(viewId,node,depth,viewVersion,dnd)" in html
             and "function extensionTreeViewBadgeElement(badge)" in html
             and "titleLabel.textContent=state.title||extensionViewTitle(view)" in html
             and "const viewBadge=extensionTreeViewBadgeElement(state.badge)" in html
@@ -2919,8 +2919,14 @@ console.log("extension setting schema helpers ok");
             and "call('execute_command',command)" in html
             and "const welcomeEntries=extensionWelcomeEntries(view,state)" in html
             and "appendExtensionWelcomeContent(body,welcomeEntries)" in html
+            and "function extensionTreeDndState(view,state)" in html
+            and "function startExtensionTreeDrag(event,viewId,node,dnd)" in html
+            and "function dropExtensionTreeItems(event,viewId,targetNode,dnd)" in html
+            and "call('drop_extension_tree_items',viewId,payload.sourceHandles,targetHandle,{})" in html
+            and "row.draggable=true" in html
+            and "event.dataTransfer.setData('application/x-sao-tree-view'" in html
             and "let _extTreeChildRequestSeq=0" in html
-            and "function loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion)" in html
+            and "function loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion,dnd)" in html
             and "function setExtensionTreeStatus(childBox,depth,text,kind,retry)" in html
             and "function extensionTreeErrorText(error,fallback)" in html
             and "function toggleExtensionTreeCheckbox(viewId,node,box,event)" in html
@@ -5981,8 +5987,27 @@ def test_vscode_api() -> None:
             self._emitter.fire(element)
 
     tree_provider = _RefreshTreeProvider()
+    tree_dnd_events = []
+
+    class _TreeDragAndDrop:
+        dragMimeTypes = ["text/plain"]
+        dropMimeTypes = ["application/vnd.code.tree.selftesttree", "text/plain"]
+
+        def handleDrag(self, source, dataTransfer, token):
+            tree_dnd_events.append(("drag", list(source)))
+            dataTransfer.set("text/plain", "drag:" + ",".join(source))
+
+        def handleDrop(self, target, dataTransfer, token):
+            item = dataTransfer.get("text/plain")
+            tree_dnd_events.append((
+                "drop",
+                target,
+                item.asString() if item else "",
+            ))
+
     tree_view = api["window"]["createTreeView"](
-        "selftest.tree", treeDataProvider=tree_provider)
+        "selftest.tree", treeDataProvider=tree_provider,
+        dragAndDropController=_TreeDragAndDrop())
     tree_selection_events = []
     tree_view.onDidChangeSelection(
         lambda evt: tree_selection_events.append(evt))
@@ -6018,6 +6043,7 @@ def test_vscode_api() -> None:
         lambda evt: tree_visibility_events.append(evt))
     tree_view.begin_snapshot()
     tree_handle = tree_view.remember_element("node")
+    tree_target_handle = tree_view.remember_element("node-b")
     tree_expanded = tree_view.set_expanded(tree_handle, True)
     tree_collapsed = tree_view.set_expanded(tree_handle, False)
     _check("tree view expand and collapse events expose element",
@@ -6031,6 +6057,16 @@ def test_vscode_api() -> None:
            and tree_checkbox_events
            and tree_checkbox_events[-1].get("items", [])[0][0] == "node"
            and tree_checkbox_events[-1].get("items", [])[0][1] == 1)
+    tree_drop = tree_view.perform_drag_and_drop(
+        [tree_handle], tree_target_handle)
+    _check("tree view drag/drop controller receives source target and transfer",
+           tree_drop.get("ok") is True
+           and tree_view.drag_and_drop_payload().get("canDrag") is True
+           and tree_view.drag_and_drop_payload().get("canDrop") is True
+           and tree_dnd_events == [
+               ("drag", ["node"]),
+               ("drop", "node-b", "drag:node"),
+           ])
     tree_view.apply_state({"visible": False})
     _check("tree view visibility events expose visible state",
            tree_view.visible is False
@@ -7088,11 +7124,36 @@ def test_app_extension_runtime_support() -> None:
         activity_collapse_events = []
         activity_checkbox_events = []
         activity_visibility_events = []
+        activity_dnd_events = []
+
+        class _ActivityTreeDragAndDrop:
+            dragMimeTypes = ["text/plain"]
+            dropMimeTypes = [
+                "application/vnd.code.tree.selftestactivitytree",
+                "text/plain",
+            ]
+
+            def handleDrag(self, source, dataTransfer, token):
+                activity_dnd_events.append(("drag", list(source)))
+                dataTransfer.set(
+                    "text/plain",
+                    "activity:" + ",".join(str(item) for item in source))
+
+            def handleDrop(self, target, dataTransfer, token):
+                item = dataTransfer.get("text/plain")
+                activity_dnd_events.append((
+                    "drop",
+                    target,
+                    item.asString() if item else "",
+                ))
+
         if activity_tree_view is not None:
             activity_tree_view.title = "Activity Runtime Tree"
             activity_tree_view.description = "dynamic subtitle"
             activity_tree_view.message = "dynamic tree message"
             activity_tree_view.badge = {"value": 8, "tooltip": "dynamic badge"}
+            activity_tree_view.bind_drag_and_drop_controller(
+                _ActivityTreeDragAndDrop())
             activity_tree_view.onDidChangeSelection(
                 lambda evt: activity_selection_events.append(evt))
             activity_tree_view.onDidExpandElement(
@@ -7126,7 +7187,11 @@ def test_app_extension_runtime_support() -> None:
                and activity_views.get("selftest.activity.tree", {})
                .get("runtimeState", {}).get("badge", {}).get("value") == 8
                and activity_views.get("selftest.activity.tree", {})
-               .get("runtimeState", {}).get("badge", {}).get("tooltip") == "dynamic badge")
+               .get("runtimeState", {}).get("badge", {}).get("tooltip") == "dynamic badge"
+               and activity_views.get("selftest.activity.tree", {})
+               .get("runtimeState", {}).get("dragAndDrop", {}).get("canDrag") is True
+               and activity_views.get("selftest.activity.tree", {})
+               .get("runtimeState", {}).get("dragAndDrop", {}).get("canDrop") is True)
         activity_tree_welcome = activity_views.get(
             "selftest.activity.tree", {}).get(
                 "runtimeState", {}).get("welcome", [])
@@ -7218,6 +7283,21 @@ def test_app_extension_runtime_support() -> None:
                and activity_checkbox_events
                and activity_checkbox_events[-1].get("items", [])[0][0] == "node-a"
                and activity_checkbox_events[-1].get("items", [])[0][1] == 0)
+        activity_target_handle = (
+            activity_tree_nodes[1].get("handle", "")
+            if len(activity_tree_nodes) > 1 else "")
+        dropped_activity = api.drop_extension_tree_items(
+            "selftest.activity.tree",
+            [activity_tree_handle],
+            activity_target_handle)
+        _check("activity tree drag/drop controller receives frontend drop",
+               dropped_activity.get("ok") is True
+               and activity_dnd_events == [
+                   ("drag", ["node-a"]),
+                   ("drop", "node-b", "activity:node-a"),
+               ]
+               and dropped_activity.get("runtimeState", {})
+               .get("dragAndDrop", {}).get("canDrop") is True)
         hidden_activity = api.set_extension_activity_view_visibility(
             "selftest.activity", False)
         shown_activity = api.set_extension_activity_view_visibility(
@@ -7970,7 +8050,23 @@ async function activate(context) {
       return item;
     },
   };
-  const view = vscode.window.createTreeView('selftest.node.tree', { treeDataProvider: provider });
+  const treeDragAndDrop = {
+    dragMimeTypes: ['text/plain'],
+    dropMimeTypes: ['application/vnd.code.tree.selftestnodetree', 'text/plain'],
+    handleDrag(source, dataTransfer, token) {
+      output.appendLine('drag:' + source.map(item => item.id).join(','));
+      dataTransfer.set('text/plain', new vscode.DataTransferItem('node-drag:' + source.map(item => item.id).join(',')));
+    },
+    async handleDrop(target, dataTransfer, token) {
+      const item = dataTransfer.get('text/plain');
+      const text = item ? await item.asString() : '';
+      output.appendLine('drop:' + (target ? target.id : 'root') + ':' + text);
+    },
+  };
+  const view = vscode.window.createTreeView('selftest.node.tree', {
+    treeDataProvider: provider,
+    dragAndDropController: treeDragAndDrop,
+  });
   view.title = 'Node Runtime Tree';
   view.description = 'node subtitle';
   view.message = 'node tree message';
@@ -11799,6 +11895,8 @@ module.exports = { activate, deactivate };
                        and node_nodes[0].get("focused") is True
                        and node_nodes[0].get("selected") is False
                        and node_nodes[0].get("revealExpand") == 2
+                       and node_tree_state.get("dragAndDrop", {}).get("canDrag") is True
+                       and node_tree_state.get("dragAndDrop", {}).get("canDrop") is True
                        and node_nodes[0].get("actions", [{}])[0].get("command") == "selftest.node.openItem")
                 node_handle = node_nodes[0].get("handle", "") if node_nodes else ""
                 loaded_node_children = api.load_extension_tree_children(
@@ -11808,6 +11906,10 @@ module.exports = { activate, deactivate };
                        and loaded_node_children.get("nodes", [{}])[0].get("label") == "Node Leaf"
                        and loaded_node_children.get("nodes", [{}])[0].get("contextValue") == "nodeLeaf"
                        and loaded_node_children.get("nodes", [{}])[0].get("themeIcon", {}).get("id") == "file")
+                node_leaf_handle = loaded_node_children.get(
+                    "nodes", [{}])[0].get("handle", "")
+                node_drop_result = api.drop_extension_tree_items(
+                    "selftest.node.tree", [node_handle], node_leaf_handle)
                 api.select_extension_tree_item("selftest.node.tree", node_handle)
                 api.set_extension_tree_item_expanded(
                     "selftest.node.tree", node_handle, True)
@@ -11835,10 +11937,16 @@ module.exports = { activate, deactivate };
                     and "visible:true" in "".join(
                         node_host._output_channels.get("node-tree-selftest", []))
                     and "open:root" in "".join(
+                        node_host._output_channels.get("node-tree-selftest", []))
+                    and "drag:root" in "".join(
+                        node_host._output_channels.get("node-tree-selftest", []))
+                    and "drop:leaf:node-drag:root" in "".join(
                         node_host._output_channels.get("node-tree-selftest", [])),
                     timeout=3.0)
                 _check("node host tree view events and item actions receive JS element",
-                       action_result.get("ok") is True and output_seen)
+                       action_result.get("ok") is True
+                       and node_drop_result.get("ok") is True
+                       and output_seen)
                 console_seen = _wait_until(
                     lambda: "node console probe" in "".join(
                         node_host._output_channels.get("Extension Console", [])),

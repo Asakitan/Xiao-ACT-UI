@@ -6974,6 +6974,32 @@ class AIEditorAPI:
                         NodeTreeElement(element),
                         payload.get("options") if isinstance(
                             payload.get("options"), dict) else None)
+            elif event == "tree_drag_drop_controller_registered":
+                host = self._node_ext_host
+                if host is None:
+                    return
+                provider = self._vscode_ns._tree_data_providers.get(
+                    normalized_view_id)
+                view = self._vscode_ns._tree_views.get(normalized_view_id)
+                if view is None:
+                    view = self._vscode_ns._create_tree_view(
+                        normalized_view_id, treeDataProvider=provider)
+                bind_dnd = getattr(view, "bind_drag_and_drop_controller", None)
+                if callable(bind_dnd):
+                    from ai_editor.extension_host import NodeTreeDragAndDropController
+                    bind_dnd(NodeTreeDragAndDropController(
+                        host,
+                        normalized_view_id,
+                        payload.get("dragMimeTypes", []),
+                        payload.get("dropMimeTypes", []),
+                        can_drag=bool(payload.get("canDrag", False)),
+                        can_drop=bool(payload.get("canDrop", False)),
+                    ))
+            elif event == "tree_drag_drop_controller_disposed":
+                view = self._vscode_ns._tree_views.get(normalized_view_id)
+                bind_dnd = getattr(view, "bind_drag_and_drop_controller", None)
+                if callable(bind_dnd):
+                    bind_dnd(None)
         except Exception as exc:
             print(f"[NodeExtHost] Failed to bridge tree event "
                   f"{event}:{normalized_view_id}: {exc}")
@@ -7855,6 +7881,35 @@ class AIEditorAPI:
             "runtimeState": self._extension_view_snapshot(normalized_view_id),
         }
 
+    def drop_extension_tree_items(
+            self, view_id: str, source_handles: Any,
+            target_handle: str = "",
+            data_transfer: Any = None) -> Dict:
+        """Run an extension TreeView drag/drop controller for a frontend drop."""
+        self._ensure_engine()
+        normalized_view_id = str(view_id or "")
+        if not normalized_view_id:
+            return {"error": "Tree view id is required"}
+        view = self._vscode_ns._tree_views.get(normalized_view_id)
+        if view is None:
+            return {"error": f"Tree view not found: {normalized_view_id}"}
+        perform = getattr(view, "perform_drag_and_drop", None)
+        if not callable(perform):
+            return {
+                "error": f"Tree drag/drop is not supported: {normalized_view_id}",
+                "view_id": normalized_view_id,
+            }
+        result = perform(
+            source_handles,
+            str(target_handle or ""),
+            data_transfer if isinstance(data_transfer, dict) else {})
+        payload = result if isinstance(result, dict) else {"result": result}
+        if payload.get("ok"):
+            payload["runtimeState"] = self._extension_view_snapshot(
+                normalized_view_id)
+        return json.loads(json.dumps(
+            payload, ensure_ascii=False, default=str))
+
     def execute_extension_tree_item_action(
             self, view_id: str, handle: str, command_id: str) -> Dict:
         """Execute a contributed TreeView item action with the item as argument."""
@@ -8593,6 +8648,9 @@ class AIEditorAPI:
                 "description": getattr(tree_view, "description", ""),
                 "badge": getattr(tree_view, "badge", None),
                 "visible": bool(getattr(tree_view, "visible", True)),
+                "dragAndDrop": (
+                    tree_view.drag_and_drop_payload()
+                    if hasattr(tree_view, "drag_and_drop_payload") else {}),
                 "titleActions": self._view_title_actions(view_id),
                 "selection": [
                     str(item)

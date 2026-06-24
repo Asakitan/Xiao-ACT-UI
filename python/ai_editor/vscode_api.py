@@ -24,6 +24,7 @@ import inspect
 import json
 import os
 import fnmatch
+import re
 import secrets
 import subprocess
 import threading
@@ -3852,6 +3853,9 @@ class VscodeNamespace:
         }
         if initial_state:
             view.apply_state(initial_state, notify=False)
+        if "dragAndDropController" in kw:
+            view.bind_drag_and_drop_controller(
+                kw.get("dragAndDropController"))
         if provider is not None:
             self._tree_data_providers[view_id] = provider
             view.bind_provider(provider, self._notify_tree_view_changed)
@@ -6206,6 +6210,7 @@ class _TreeView:
         self._title = view_id
         self._description = ""
         self._badge = None
+        self.dragAndDropController = None
         self.refresh_version = 0
         self.reveal_version = 0
         self._snapshot_counter = 0
@@ -6337,7 +6342,156 @@ class _TreeView:
             "description": self._description,
             "badge": self.badge,
             "visible": bool(self.visible),
+            "dragAndDrop": self.drag_and_drop_payload(),
             "selection": [str(item) for item in list(self.selection or [])],
+            "refreshVersion": self.refresh_version,
+        }
+
+    @staticmethod
+    def _mime_list(value: Any) -> List[str]:
+        if isinstance(value, str):
+            return [value] if value else []
+        try:
+            return [str(item) for item in (value or []) if str(item or "")]
+        except Exception:
+            return []
+
+    def bind_drag_and_drop_controller(self, controller: Any) -> None:
+        self.dragAndDropController = controller
+        self._notify_changed("state", self.state_payload())
+
+    def drag_and_drop_payload(self) -> Dict[str, Any]:
+        controller = self.dragAndDropController
+        if controller is None:
+            return {
+                "enabled": False,
+                "canDrag": False,
+                "canDrop": False,
+                "dragMimeTypes": [],
+                "dropMimeTypes": [],
+            }
+        drag_mime_types = self._mime_list(
+            getattr(controller, "dragMimeTypes", None)
+            if not isinstance(controller, dict)
+            else controller.get("dragMimeTypes"))
+        drop_mime_types = self._mime_list(
+            getattr(controller, "dropMimeTypes", None)
+            if not isinstance(controller, dict)
+            else controller.get("dropMimeTypes"))
+        handle_drag = (
+            controller.get("handleDrag")
+            if isinstance(controller, dict)
+            else getattr(controller, "handleDrag", None))
+        handle_drop = (
+            controller.get("handleDrop")
+            if isinstance(controller, dict)
+            else getattr(controller, "handleDrop", None))
+        can_drag = (
+            bool(controller.get("canDrag"))
+            if isinstance(controller, dict) and "canDrag" in controller
+            else bool(getattr(controller, "canDrag", callable(handle_drag))))
+        can_drop = (
+            bool(controller.get("canDrop"))
+            if isinstance(controller, dict) and "canDrop" in controller
+            else bool(getattr(controller, "canDrop", callable(handle_drop))))
+        return {
+            "enabled": can_drag or can_drop,
+            "canDrag": can_drag,
+            "canDrop": can_drop,
+            "dragMimeTypes": drag_mime_types,
+            "dropMimeTypes": drop_mime_types,
+            "treeMimeType": self.tree_drag_mime_type(self.id),
+        }
+
+    @staticmethod
+    def tree_drag_mime_type(view_id: Any) -> str:
+        normalized = re.sub(
+            r"[^a-z0-9_-]+", "",
+            str(view_id or "").lower())
+        return f"application/vnd.code.tree.{normalized}"
+
+    def perform_drag_and_drop(
+            self,
+            source_handles: Any,
+            target_handle: str = "",
+            data_transfer: Any = None) -> Dict[str, Any]:
+        controller = self.dragAndDropController
+        if controller is None:
+            return {"error": f"Tree drag/drop controller not found: {self.id}"}
+        handles = [
+            str(handle or "")
+            for handle in (
+                source_handles if isinstance(source_handles, list)
+                else [source_handles])
+            if str(handle or "")
+        ]
+        sources: List[Any] = []
+        for handle in handles:
+            element = self.element_for_handle(handle)
+            if element is None:
+                return {
+                    "error": "Tree source handle is stale or unknown",
+                    "view_id": self.id,
+                    "handle": handle,
+                }
+            sources.append(element)
+        if not sources:
+            return {"error": "At least one tree source handle is required"}
+        target = None
+        if target_handle:
+            target = self.element_for_handle(target_handle)
+            if target is None:
+                return {
+                    "error": "Tree target handle is stale or unknown",
+                    "view_id": self.id,
+                    "handle": str(target_handle or ""),
+                }
+        transfer = DataTransfer(data_transfer or {})
+        tree_mime = self.tree_drag_mime_type(self.id)
+        if not transfer.has(tree_mime):
+            transfer.set(tree_mime, sources)
+        handle_drag = (
+            controller.get("handleDrag")
+            if isinstance(controller, dict)
+            else getattr(controller, "handleDrag", None))
+        handle_drop = (
+            controller.get("handleDrop")
+            if isinstance(controller, dict)
+            else getattr(controller, "handleDrop", None))
+        can_drag = (
+            bool(controller.get("canDrag"))
+            if isinstance(controller, dict) and "canDrag" in controller
+            else bool(getattr(controller, "canDrag", callable(handle_drag))))
+        can_drop = (
+            bool(controller.get("canDrop"))
+            if isinstance(controller, dict) and "canDrop" in controller
+            else bool(getattr(controller, "canDrop", callable(handle_drop))))
+        try:
+            if can_drag and callable(handle_drag):
+                _resolve_provider_result(_call_with_compatible_args(
+                    handle_drag,
+                    (sources, transfer, CancellationToken.NONE)),
+                    default=None)
+            if not can_drop or not callable(handle_drop):
+                return {
+                    "error": "Tree drag/drop controller does not implement handleDrop",
+                    "view_id": self.id,
+                }
+            _resolve_provider_result(_call_with_compatible_args(
+                handle_drop,
+                (target, transfer, CancellationToken.NONE)),
+                default=None)
+        except Exception as exc:
+            return {
+                "error": str(exc),
+                "view_id": self.id,
+            }
+        return {
+            "ok": True,
+            "view_id": self.id,
+            "sourceHandles": handles,
+            "targetHandle": str(target_handle or ""),
+            "dataTransfer": transfer.to_payload(),
             "refreshVersion": self.refresh_version,
         }
 

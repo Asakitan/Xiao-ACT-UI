@@ -1388,6 +1388,94 @@ class NodeTreeDataProvider:
         return str(getattr(element, "handle", "") or "")
 
 
+class NodeTreeDragAndDropController:
+    """TreeDragAndDropController adapter for Node-owned TreeView objects."""
+
+    def __init__(
+            self,
+            host: Any,
+            view_id: str,
+            drag_mime_types: Any = None,
+            drop_mime_types: Any = None,
+            can_drag: bool = True,
+            can_drop: bool = True) -> None:
+        self._host = host
+        self.view_id = str(view_id or "")
+        self.dragMimeTypes = self._mime_list(drag_mime_types)
+        self.dropMimeTypes = self._mime_list(drop_mime_types)
+        self.canDrag = bool(can_drag)
+        self.canDrop = bool(can_drop)
+
+    @staticmethod
+    def _mime_list(value: Any) -> List[str]:
+        if isinstance(value, str):
+            return [value] if value else []
+        try:
+            return [str(item) for item in (value or []) if str(item or "")]
+        except Exception:
+            return []
+
+    @staticmethod
+    def _data_transfer_payload(data_transfer: Any) -> Dict[str, Any]:
+        to_payload = getattr(data_transfer, "to_payload", None)
+        if callable(to_payload):
+            value = to_payload()
+            return value if isinstance(value, dict) else {}
+        if isinstance(data_transfer, dict):
+            return dict(data_transfer)
+        return {}
+
+    @staticmethod
+    def _apply_data_transfer_payload(
+            data_transfer: Any, payload: Any) -> None:
+        if not isinstance(payload, dict):
+            return
+        setter = getattr(data_transfer, "set", None)
+        if not callable(setter):
+            return
+        for mime, value in payload.items():
+            setter(mime, value)
+
+    def handleDrag(self, source: List[Any], dataTransfer: Any,
+                   token: Any = None) -> None:
+        if not self.canDrag:
+            return
+        result = self._host.request_tree_drag_drop_result(
+            self.view_id,
+            "handleDrag",
+            source_handles=[
+                NodeTreeDataProvider._element_handle(item)
+                for item in (source or [])
+            ],
+            data_transfer=self._data_transfer_payload(dataTransfer),
+        )
+        if not result.get("ok"):
+            raise RuntimeError(
+                result.get("error") or "Node tree drag failed")
+        value = result.get("value")
+        if isinstance(value, dict):
+            self._apply_data_transfer_payload(
+                dataTransfer, value.get("dataTransfer"))
+
+    def handleDrop(self, target: Any, dataTransfer: Any,
+                   token: Any = None) -> None:
+        if not self.canDrop:
+            return
+        result = self._host.request_tree_drag_drop_result(
+            self.view_id,
+            "handleDrop",
+            target_handle=NodeTreeDataProvider._element_handle(target),
+            data_transfer=self._data_transfer_payload(dataTransfer),
+        )
+        if not result.get("ok"):
+            raise RuntimeError(
+                result.get("error") or "Node tree drop failed")
+        value = result.get("value")
+        if isinstance(value, dict):
+            self._apply_data_transfer_payload(
+                dataTransfer, value.get("dataTransfer"))
+
+
 # ---------------------------------------------------------------------------
 # ExtensionHost — top-level orchestrator (Loading Pipeline)
 # ---------------------------------------------------------------------------
@@ -2505,7 +2593,7 @@ class NodeExtensionHost:
                 if isinstance(event, threading.Event):
                     event.set()
 
-        elif msg_type == "tree_response":
+        elif msg_type in {"tree_response", "tree_drag_drop_response"}:
             request_id = str(msg.get("requestId", ""))
             with self._tree_request_lock:
                 pending = self._tree_requests.get(request_id)
@@ -2568,7 +2656,9 @@ class NodeExtensionHost:
                 "tree_data_provider_disposed",
                 "tree_data_changed",
                 "tree_view_state_changed",
-                "tree_view_reveal"}:
+                "tree_view_reveal",
+                "tree_drag_drop_controller_registered",
+                "tree_drag_drop_controller_disposed"}:
             view_id = str(msg.get("viewId", ""))
             payload = dict(msg)
             payload.pop("type", None)
@@ -2893,6 +2983,76 @@ class NodeExtensionHost:
                 "value": default,
                 "error": error,
             }
+        finally:
+            with self._tree_request_lock:
+                self._tree_requests.pop(request_id, None)
+            self._record_diagnostic(
+                "tree",
+                (time.perf_counter() - started) * 1000,
+                ok=ok,
+                timeout=timed_out,
+                detail=detail,
+                error=error,
+            )
+
+    def request_tree_drag_drop_result(
+            self,
+            view_id: str,
+            op: str,
+            source_handles: Optional[List[str]] = None,
+            target_handle: str = "",
+            data_transfer: Optional[Dict[str, Any]] = None,
+            timeout: float = 1.5) -> Dict[str, Any]:
+        """Synchronously request TreeDragAndDropController work from Node."""
+        started = time.perf_counter()
+        ok = False
+        timed_out = False
+        error = ""
+        detail = f"{view_id}:{op}"
+        if not self.is_running:
+            error = "Node extension host is not running"
+            self._record_diagnostic(
+                "tree", 0, ok=False, detail=detail, error=error)
+            return {"ok": False, "error": error}
+        request_id = str(uuid.uuid4())
+        event = threading.Event()
+        with self._tree_request_lock:
+            self._tree_requests[request_id] = {"event": event}
+        try:
+            sent = self._send({
+                "type": "tree_drag_drop_request",
+                "requestId": request_id,
+                "viewId": str(view_id or ""),
+                "op": str(op or ""),
+                "sourceHandles": [
+                    str(item or "") for item in (source_handles or [])
+                    if str(item or "")
+                ],
+                "targetHandle": str(target_handle or ""),
+                "dataTransfer": (
+                    data_transfer if isinstance(data_transfer, dict) else {}),
+            })
+            if not sent:
+                error = "Node tree drag/drop request could not be sent"
+                return {"ok": False, "error": error}
+            if not event.wait(timeout):
+                timed_out = True
+                error = "Node tree drag/drop request timed out"
+                return {"ok": False, "error": error, "timeout": True}
+            with self._tree_request_lock:
+                pending = self._tree_requests.get(request_id, {})
+            response = pending.get("response", {})
+            if isinstance(response, dict) and response.get("ok"):
+                ok = True
+                return {
+                    "ok": True,
+                    "value": response.get("value", {}),
+                }
+            error = (
+                response.get("error")
+                if isinstance(response, dict)
+                else "Node tree drag/drop failed")
+            return {"ok": False, "error": error}
         finally:
             with self._tree_request_lock:
                 self._tree_requests.pop(request_id, None)

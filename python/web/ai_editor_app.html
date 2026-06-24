@@ -10400,7 +10400,7 @@ function extensionTreeErrorText(error,fallback){
   const msg=error&&error.error?error.error:(error&&error.message?error.message:'');
   return msg?fallback+': '+String(msg):fallback;
 }
-async function loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion){
+async function loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion,dnd){
   if(!viewId||!node||!node.handle||node.childrenLoaded)return true;
   const requestId=++_extTreeChildRequestSeq;
   node._childRequestId=requestId;
@@ -10418,14 +10418,14 @@ async function loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion)
     node.childrenLoaded=false;node.lazyChildren=true;
     setExtensionTreeStatus(
       childBox,depth,extensionTreeErrorText(r,'Unable to load children'),'error',
-      ()=>{node.childrenLoaded=false;node.lazyChildren=true;void loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion)});
+      ()=>{node.childrenLoaded=false;node.lazyChildren=true;void loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion,dnd)});
     return false;
   }
   const nodes=Array.isArray(r.nodes)?r.nodes:[];
   const nextVersion=responseVersion||expectedVersion;
   node.children=nodes;node.childrenLoaded=true;node.lazyChildren=false;
   childBox.innerHTML='';
-  nodes.forEach(child=>childBox.appendChild(renderExtensionTreeNode(viewId,child,depth+1,nextVersion)));
+  nodes.forEach(child=>childBox.appendChild(renderExtensionTreeNode(viewId,child,depth+1,nextVersion,dnd)));
   return true;
 }
 function reportExtensionTreeExpanded(viewId,node,expanded){
@@ -10445,6 +10445,46 @@ async function toggleExtensionTreeCheckbox(viewId,node,box,event){
     box.textContent=previous?'☑':'☐';
     box.setAttribute('aria-checked',previous?'true':'false');
   }
+}
+let _extTreeDragPayload=null;
+function extensionTreeDndState(view,state){
+  const dnd=(state&&state.dragAndDrop)||(view&&view.dragAndDrop)||{};
+  return dnd&&typeof dnd==='object'?dnd:{};
+}
+function startExtensionTreeDrag(event,viewId,node,dnd){
+  if(!dnd||!dnd.canDrag||!viewId||!node||!node.handle)return;
+  const payload={viewId:String(viewId),sourceHandles:[String(node.handle)]};
+  _extTreeDragPayload=payload;
+  try{
+    event.dataTransfer.effectAllowed='move';
+    event.dataTransfer.setData('application/x-sao-tree-view',JSON.stringify(payload));
+    event.dataTransfer.setData('text/plain',node.label||'');
+  }catch(e){}
+}
+function extensionTreeDragPayload(event){
+  try{
+    const raw=event&&event.dataTransfer?event.dataTransfer.getData('application/x-sao-tree-view'):'';
+    if(raw){
+      const parsed=JSON.parse(raw);
+      if(parsed&&parsed.viewId&&Array.isArray(parsed.sourceHandles))return parsed;
+    }
+  }catch(e){}
+  return _extTreeDragPayload;
+}
+function allowExtensionTreeDrop(event,viewId,dnd){
+  const payload=extensionTreeDragPayload(event);
+  if(!payload||!dnd||!dnd.canDrop||String(payload.viewId)!==String(viewId||''))return false;
+  event.preventDefault();event.stopPropagation();
+  try{event.dataTransfer.dropEffect='move'}catch(e){}
+  return true;
+}
+async function dropExtensionTreeItems(event,viewId,targetNode,dnd){
+  if(!allowExtensionTreeDrop(event,viewId,dnd))return;
+  const payload=extensionTreeDragPayload(event);
+  const targetHandle=targetNode&&targetNode.handle?String(targetNode.handle):'';
+  const r=await call('drop_extension_tree_items',viewId,payload.sourceHandles,targetHandle,{});
+  _extTreeDragPayload=null;
+  if(r&&r.ok)renderExtensionActivityBar();
 }
 function focusRevealedExtensionTree(tree){
   if(!tree)return;
@@ -10486,6 +10526,7 @@ function renderExtensionTreeView(view){
   const card=document.createElement('div');card.className='tool-call';card.style.margin='0 0 8px 0';
   const state=view.runtimeState||{};
   const welcomeEntries=extensionWelcomeEntries(view,state);
+  const dnd=extensionTreeDndState(view,state);
   const title=document.createElement('div');title.className='tool-header open';
   title.style.display='flex';title.style.alignItems='center';title.style.gap='6px';
   const titleLabel=document.createElement('span');titleLabel.style.cssText='overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
@@ -10515,7 +10556,11 @@ function renderExtensionTreeView(view){
     tree.dataset.viewId=view.id||state.view_id||state.viewId||'';
     const viewVersion=Number(state.refreshVersion)||0;
     tree.dataset.refreshVersion=String(viewVersion);
-    nodes.forEach(node=>tree.appendChild(renderExtensionTreeNode(tree.dataset.viewId,node,0,viewVersion)));
+    if(dnd.canDrop){
+      tree.ondragover=e=>allowExtensionTreeDrop(e,tree.dataset.viewId,dnd);
+      tree.ondrop=e=>dropExtensionTreeItems(e,tree.dataset.viewId,null,dnd);
+    }
+    nodes.forEach(node=>tree.appendChild(renderExtensionTreeNode(tree.dataset.viewId,node,0,viewVersion,dnd)));
     body.appendChild(tree);
     if(state.treeError){
       body.appendChild(extensionTreeStatusRow(-1,extensionTreeErrorText(state.treeError,'Unable to load tree items'),'error',()=>renderExtensionActivityBar()));
@@ -10534,7 +10579,7 @@ function renderExtensionTreeView(view){
   }
   card.appendChild(title);card.appendChild(body);return card;
 }
-function renderExtensionTreeNode(viewId,node,depth,viewVersion){
+function renderExtensionTreeNode(viewId,node,depth,viewVersion,dnd){
   const wrap=document.createElement('div');wrap.className='ext-tree-node';wrap.setAttribute('role','treeitem');
   if(node.handle)wrap.dataset.handle=String(node.handle);
   if(node.contextValue)wrap.dataset.contextValue=String(node.contextValue);
@@ -10544,6 +10589,15 @@ function renderExtensionTreeNode(viewId,node,depth,viewVersion){
   node.refreshVersion=Number(viewVersion||node.refreshVersion||0)||0;
   const row=document.createElement('div');row.className='sb-item';row.style.cssText='display:flex;align-items:center;gap:4px;padding:3px 0 3px '+(depth*12)+'px;min-height:22px';
   row.tabIndex=0;row.setAttribute('role','button');
+  if(dnd&&dnd.canDrag&&node.handle){
+    row.draggable=true;
+    row.ondragstart=e=>startExtensionTreeDrag(e,viewId,node,dnd);
+    row.ondragend=()=>{_extTreeDragPayload=null};
+  }
+  if(dnd&&dnd.canDrop&&node.handle){
+    row.ondragover=e=>allowExtensionTreeDrop(e,viewId,dnd);
+    row.ondrop=e=>dropExtensionTreeItems(e,viewId,node,dnd);
+  }
   if(node.handle)row.dataset.handle=String(node.handle);
   if(node.selected||node.focused){row.classList.add('active');wrap.setAttribute('aria-selected',node.selected?'true':'false')}else wrap.setAttribute('aria-selected','false');
   if(!Array.isArray(node.children))node.children=[];
@@ -10591,10 +10645,10 @@ function renderExtensionTreeNode(viewId,node,depth,viewVersion){
   }
   const childBox=document.createElement('div');childBox.style.display=collapsible===2?'':'none';
   if(collapsible)wrap.setAttribute('aria-expanded',collapsible===2?'true':'false');
-  children.forEach(child=>childBox.appendChild(renderExtensionTreeNode(viewId,child,depth+1,viewVersion)));
+  children.forEach(child=>childBox.appendChild(renderExtensionTreeNode(viewId,child,depth+1,viewVersion,dnd)));
   const setOpen=async (open,notify=true)=>{
     if(open&&collapsible&&node.lazyChildren&&!node.childrenLoaded){
-      const loaded=await loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion);
+      const loaded=await loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion,dnd);
       if(!loaded)return;
     }
     childBox.style.display=open?'':'none';twist.textContent=open?'▾':'▸';wrap.setAttribute('aria-expanded',open?'true':'false');

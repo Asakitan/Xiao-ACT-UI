@@ -3684,7 +3684,33 @@ function _normalizeTreeViewBadge(value) {
     };
 }
 
-function createTreeViewObject(viewId, treeDataProvider) {
+function _treeDndMimeTypes(value) {
+    if (typeof value === 'string') return value ? [value] : [];
+    if (!Array.isArray(value)) return [];
+    return value.map(item => String(item || '')).filter(Boolean);
+}
+
+function _treeDragDropPayload(controller) {
+    if (!controller || typeof controller !== 'object') return undefined;
+    return {
+        dragMimeTypes: _treeDndMimeTypes(controller.dragMimeTypes),
+        dropMimeTypes: _treeDndMimeTypes(controller.dropMimeTypes),
+        canDrag: typeof controller.handleDrag === 'function',
+        canDrop: typeof controller.handleDrop === 'function',
+    };
+}
+
+function _sendTreeDragDropControllerRegistered(viewId, controller) {
+    const payload = _treeDragDropPayload(controller);
+    if (!payload) return;
+    send({
+        type: 'tree_drag_drop_controller_registered',
+        viewId,
+        ...payload,
+    });
+}
+
+function createTreeViewObject(viewId, treeDataProvider, dragAndDropController) {
     const normalized = String(viewId || '');
     const expandEmitter = new EventEmitter();
     const collapseEmitter = new EventEmitter();
@@ -3720,6 +3746,7 @@ function createTreeViewObject(viewId, treeDataProvider) {
     const providerDisposable = treeDataProvider
         ? registerTreeDataProviderInternal(normalized, treeDataProvider)
         : undefined;
+    const dndController = dragAndDropController || undefined;
     const view = {
         id: normalized,
         onDidExpandElement: expandEmitter.event,
@@ -3741,6 +3768,12 @@ function createTreeViewObject(viewId, treeDataProvider) {
             _treeViews.delete(normalized);
             visible = false;
             visibilityEmitter.fire({ visible: false });
+            if (dndController) {
+                send({
+                    type: 'tree_drag_drop_controller_disposed',
+                    viewId: normalized,
+                });
+            }
             sendStateChanged('visible');
         },
         _onDidExpandElement: expandEmitter,
@@ -3748,6 +3781,7 @@ function createTreeViewObject(viewId, treeDataProvider) {
         _onDidChangeSelection: selectionEmitter,
         _onDidChangeVisibility: visibilityEmitter,
         _onDidChangeCheckboxState: checkboxEmitter,
+        _dragAndDropController: dndController,
         _setVisibleFromHost: setVisibleFromHost,
     };
     Object.defineProperties(view, {
@@ -3810,6 +3844,7 @@ function createTreeViewObject(viewId, treeDataProvider) {
         },
     });
     _treeViews.set(normalized, view);
+    _sendTreeDragDropControllerRegistered(normalized, dndController);
     return view;
 }
 
@@ -5114,7 +5149,10 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             },
             createTreeView(viewId, options) {
                 log(`createTreeView ${viewId}`);
-                const view = createTreeViewObject(viewId, options?.treeDataProvider);
+                const view = createTreeViewObject(
+                    viewId,
+                    options?.treeDataProvider,
+                    options?.dragAndDropController);
                 const d = new Disposable(() => view.dispose());
                 subscriptions.push(d);
                 return view;
@@ -8078,6 +8116,61 @@ async function handleTreeRequest(msg) {
     }
 }
 
+async function handleTreeDragDropRequest(msg) {
+    const requestId = String(msg.requestId || '');
+    const viewId = String(msg.viewId || '');
+    const op = String(msg.op || '');
+    const view = _treeViews.get(viewId);
+    const controller = view?._dragAndDropController;
+    try {
+        if (!controller) throw new Error(`Tree drag/drop controller not found: ${viewId}`);
+        const token = {
+            isCancellationRequested: false,
+            onCancellationRequested: new EventEmitter().event,
+        };
+        const dataTransfer = _dataTransferFromPayload(msg.dataTransfer || {});
+        if (op === 'handleDrag') {
+            const sourceHandles = Array.isArray(msg.sourceHandles)
+                ? msg.sourceHandles.map(handle => String(handle || '')).filter(Boolean)
+                : [];
+            const source = sourceHandles.map(handle => _treeElementForHandle(viewId, handle));
+            if (source.some(item => item === undefined)) {
+                throw new Error('Tree drag source handle is stale or unknown');
+            }
+            if (typeof controller.handleDrag === 'function') {
+                await controller.handleDrag(source, dataTransfer, token);
+            }
+        } else if (op === 'handleDrop') {
+            const targetHandle = String(msg.targetHandle || '');
+            const target = targetHandle
+                ? _treeElementForHandle(viewId, targetHandle)
+                : undefined;
+            if (targetHandle && target === undefined) {
+                throw new Error('Tree drop target handle is stale or unknown');
+            }
+            if (typeof controller.handleDrop !== 'function') {
+                throw new Error('Tree drag/drop controller does not implement handleDrop');
+            }
+            await controller.handleDrop(target, dataTransfer, token);
+        } else {
+            throw new Error(`Unsupported tree drag/drop op: ${op}`);
+        }
+        send({
+            type: 'tree_drag_drop_response',
+            requestId,
+            ok: true,
+            value: { dataTransfer: _dataTransferToPayload(dataTransfer) },
+        });
+    } catch (err) {
+        send({
+            type: 'tree_drag_drop_response',
+            requestId,
+            ok: false,
+            error: err?.message || String(err),
+        });
+    }
+}
+
 function handleTreeViewEvent(msg) {
     const viewId = String(msg.viewId || '');
     const view = _treeViews.get(viewId);
@@ -8170,6 +8263,9 @@ async function handleMessage(msg) {
             break;
         case 'tree_request':
             await handleTreeRequest(msg);
+            break;
+        case 'tree_drag_drop_request':
+            await handleTreeDragDropRequest(msg);
             break;
         case 'language_provider_request':
             await handleLanguageProviderRequest(msg);
