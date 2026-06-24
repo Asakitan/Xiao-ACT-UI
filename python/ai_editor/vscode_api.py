@@ -5004,7 +5004,7 @@ class VscodeNamespace:
             "registerEvaluatableExpressionProvider": lambda selector, provider: self._register_language_provider("evaluatableExpression", selector, provider),
             "registerInlineValuesProvider": lambda selector, provider: self._register_language_provider("inlineValue", selector, provider),
             "registerRenameProvider": lambda selector, provider: self._register_language_provider("rename", selector, provider),
-            "registerDocumentSymbolProvider": lambda selector, provider: self._register_language_provider("documentSymbol", selector, provider),
+            "registerDocumentSymbolProvider": lambda selector, provider, metadata=None: self._register_language_provider("documentSymbol", selector, provider, metadata),
             "registerWorkspaceSymbolProvider": lambda provider: self._register_language_provider("workspaceSymbol", None, provider),
             "registerDocumentFormattingEditProvider": lambda selector, provider: self._register_language_provider("formatting", selector, provider),
             "registerDocumentRangeFormattingEditProvider": lambda selector, provider: self._register_language_provider("rangeFormatting", selector, provider),

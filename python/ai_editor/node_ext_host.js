@@ -5683,8 +5683,10 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 registerRenameProvider(selector, provider) {
                     return _registerLangProvider('rename', selector, provider);
                 },
-                registerDocumentSymbolProvider(selector, provider) {
-                    return _registerLangProvider('documentSymbol', selector, provider);
+                registerDocumentSymbolProvider(selector, provider, metadata) {
+                    const extra = { metadata: metadata || null };
+                    if (metadata && metadata.label) extra.displayName = metadata.label;
+                    return _registerLangProvider('documentSymbol', selector, provider, extra);
                 },
                 registerWorkspaceSymbolProvider(provider) {
                     return _registerLangProvider('workspaceSymbol', null, provider);

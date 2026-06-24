@@ -758,6 +758,15 @@ def test_app_settings_parity() -> None:
                     Position(0, 1), Position(0, 6))),
             )
 
+        def provideDocumentSymbols(self, document, token):
+            return [SymbolInformation(
+                "bufferDocumentSymbol",
+                11,
+                "document",
+                Location(document.uri, Range(
+                    Position(0, 0), Position(0, 6))),
+            )]
+
         def provideDocumentColors(self, document, token):
             return [ColorInformation(
                 Range(Position(0, 0), Position(0, 6)),
@@ -864,6 +873,8 @@ def test_app_settings_parity() -> None:
     lang_api["registerEvaluatableExpressionProvider"]("python", editor_provider)
     lang_api["registerInlineValuesProvider"]("python", editor_provider)
     lang_api["registerWorkspaceSymbolProvider"](editor_provider)
+    lang_api["registerDocumentSymbolProvider"](
+        "python", editor_provider, {"label": "Selftest Outline"})
     lang_api["registerColorProvider"]("python", editor_provider)
     lang_api["registerDocumentSemanticTokensProvider"](
         "python", editor_provider, editor_provider.semantic_legend)
@@ -928,6 +939,10 @@ def test_app_settings_parity() -> None:
         provider_metadata_result = provider_api.editor_language_provider({
             "kind": "providerMetadata",
             "providerKind": "codeActions",
+        })
+        document_symbol_metadata_result = provider_api.editor_language_provider({
+            "kind": "providerMetadata",
+            "providerKind": "documentSymbol",
         })
         definition_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="definition"))
@@ -1126,6 +1141,15 @@ def test_app_settings_parity() -> None:
                        item.get("codeActionKinds") or [])
                    and "quickfix" in (item.get("codeActionKinds") or [])
                    for item in provider_metadata_result.get("providers", [])))
+        _check("editor_language_provider exposes document symbol provider metadata",
+               document_symbol_metadata_result.get("ok") is True
+               and any(
+                   item.get("kind") == "documentSymbol"
+                   and item.get("metadata", {}).get("label")
+                   == "Selftest Outline"
+                   and item.get("displayName") == "Selftest Outline"
+                   for item in document_symbol_metadata_result.get(
+                       "providers", [])))
         _check("editor_language_provider filters organize import actions",
                organize_action_result.get("ok") is True
                and len(organize_action_result.get("actions", [])) == 1
@@ -7227,7 +7251,7 @@ def test_vscode_api() -> None:
         api["languages"]["registerRenameProvider"](
             "python", rename_provider)
         api["languages"]["registerDocumentSymbolProvider"](
-            "python", _DocumentSymbolProvider())
+            "python", _DocumentSymbolProvider(), {"label": "Selftest Outline"})
         code_action_provider = _CodeActionProvider()
         api["languages"]["registerCodeActionsProvider"](
             "python", code_action_provider, {
@@ -8915,6 +8939,12 @@ def test_app_extension_runtime_support() -> None:
                             "disallowSyncIgnore": True,
                             "description": "Always ignored by Settings Sync",
                         },
+                        "selftest.noDefaultOverride": {
+                            "type": "string",
+                            "default": "schema-default",
+                            "disallowConfigurationDefault": True,
+                            "description": "Do not allow configurationDefaults",
+                        },
                         "selftest.hidden": {
                             "type": "string",
                             "default": "internal",
@@ -8947,6 +8977,7 @@ def test_app_extension_runtime_support() -> None:
                 },
                 "configurationDefaults": {
                     "selftest.mode": "manual",
+                    "selftest.noDefaultOverride": "blocked-default",
                     "selftest.hidden": "override-internal",
                     "[selflang]": {
                         "editor.tabSize": 2,
@@ -9012,6 +9043,10 @@ def test_app_extension_runtime_support() -> None:
                settings_cfg.get("values", {}).get("selftest.flag") is False
                and settings_cfg.get("values", {}).get("selftest.mode") == "manual"
                and settings_cfg.get("defaults", {}).get("selftest.mode") == "manual"
+               and settings_cfg.get("values", {}).get(
+                   "selftest.noDefaultOverride") == "schema-default"
+               and settings_cfg.get("defaults", {}).get(
+                   "selftest.noDefaultOverride") == "schema-default"
                and settings_cfg.get("modified", {}).get("selftest.flag") is False
                and settings_cfg.get("scopes", {}).get(
                    "selftest.machineOnly") == "machine"
@@ -9057,7 +9092,10 @@ def test_app_extension_runtime_support() -> None:
                and "selftest.allOfInheritedScope" in
                    legacy_nested_settings_cfg.get("properties", {}))
         _check("extension configurationDefaults override schema defaults",
-               api.get_extension_setting("selftest.mode").get("value") == "manual")
+               api.get_extension_setting("selftest.mode").get("value") == "manual"
+               and api.get_extension_setting(
+                   "selftest.noDefaultOverride").get("value")
+               == "schema-default")
         hidden_set = api.set_extension_setting(
             "selftest.hidden", "changed")
         hidden_save = api.save_extension_setting(
@@ -11036,7 +11074,7 @@ async function activate(context) {
     provideDocumentSymbols(document, token) {
       return [{ name: 'nodeSymbol', kind: vscode.SymbolKind.Function, range: new vscode.Range(0, 0, 0, 4) }];
     },
-  });
+  }, { label: 'Node Outline' });
   vscode.languages.registerWorkspaceSymbolProvider({
     provideWorkspaceSymbols(query, token) {
       return [new vscode.SymbolInformation(
@@ -12910,6 +12948,14 @@ module.exports = { activate, deactivate };
                     "content": "print('node provider')\n",
                     "position": {"line": 0, "character": 1},
                 })
+                node_editor_document_symbol_providers = (
+                    api.editor_language_provider({
+                        "kind": "providerMetadata",
+                        "providerKind": "documentSymbol",
+                        "filePath": node_provider_sample,
+                        "language": "python",
+                        "content": "print('node provider')\n",
+                    }))
                 node_format_edits = api._ext_host.commands.execute(
                     "vscode.executeFormatDocumentProvider",
                     node_uri, {"tabSize": 2})
@@ -13604,6 +13650,16 @@ module.exports = { activate, deactivate };
                 _check("node host language provider invokes JS document symbols",
                        node_symbols
                        and node_symbols[0].get("name") == "nodeSymbol")
+                _check("node host exposes JS document symbol provider metadata",
+                       any(
+                           item.get("source") == "node"
+                           and item.get("kind") == "documentSymbol"
+                           and item.get("metadata", {}).get("label")
+                           == "Node Outline"
+                           and item.get("displayName") == "Node Outline"
+                           for item in
+                           node_editor_document_symbol_providers.get(
+                               "providers", [])))
                 _check("node host language provider invokes JS workspace symbols",
                        node_workspace_symbols
                        and node_workspace_symbols[0].get("name")

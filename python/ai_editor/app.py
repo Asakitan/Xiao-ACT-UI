@@ -9557,6 +9557,9 @@ class AIEditorAPI:
                     schema_by_key, schema_by_extension) or {}
                 if isinstance(schema, dict) and not self._extension_setting_included(schema):
                     continue
+                if (isinstance(schema, dict)
+                        and schema.get("disallowConfigurationDefault") is True):
+                    continue
                 defaults[key_str] = value
         return defaults
 

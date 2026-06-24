@@ -2611,6 +2611,13 @@ class NodeExtensionHost:
             self._language_providers.append({
                 "handle": msg.get("handle"),
                 "extensionId": str(msg.get("extensionId", "")),
+                "providerId": str(
+                    msg.get("providerId") or msg.get("handle") or ""),
+                "displayName": str(
+                    msg.get("displayName")
+                    or msg.get("extensionId")
+                    or msg.get("handle")
+                    or ""),
                 "kind": kind,
                 "selector": selector,
                 "triggers": list(msg.get("triggers") or []),
