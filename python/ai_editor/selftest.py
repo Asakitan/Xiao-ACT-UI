@@ -2450,6 +2450,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function requestEditorSignatureHelp(triggerCharacter,triggerKind,quiet)" in html
            and "function showEditorSignatureHelp(help,position)" in html
            and "function appendSignatureLabel(target,signature,activeParameter)" in html
+           and "function editorSignatureParameterLabelText(signature,activeParameter)" in html
+           and "function editorProviderRenderDocs(container,value)" in html
+           and "editor-signature-doc-title" in html
            and "function requestEditorCodeActions(quiet)" in html
            and "itemResolveCount:20" in html
            and "function showEditorCodeActions(actions,position)" in html
@@ -3226,6 +3229,127 @@ setTimeout(() => {
                    (result.stderr or result.stdout).strip())
         except Exception as exc:
             _check("frontend completion accept metadata", False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
+    if not node_path:
+        _check("frontend signature help docs skipped without Node.js", True)
+    else:
+        signature_functions = [
+            "editorProviderText",
+            "editorProviderRenderDocs",
+            "appendSignatureLabel",
+            "editorSignatureParameterLabelText",
+            "closeEditorSignatureHelp",
+            "isEditorSignatureOpen",
+            "showEditorSignatureHelp",
+        ]
+        signature_js_functions = "\n".join(
+            _extract_js_function(html, name) for name in signature_functions)
+        js = r"""
+function assert(ok,label){ if(!ok){ throw new Error(label); } }
+function makeClassList(owner){
+  const classes = new Set();
+  return {
+    add(name){ classes.add(name); owner.className = Array.from(classes).join(" "); },
+    remove(name){ classes.delete(name); owner.className = Array.from(classes).join(" "); },
+    contains(name){ return classes.has(name); },
+  };
+}
+function makeElement(tag,text){
+  const element = {
+    tag,
+    textContent: text || "",
+    className: "",
+    style: {},
+    children: [],
+    appendChild(child){
+      this.children.push(child);
+      this.textContent += child.textContent || "";
+      return child;
+    },
+  };
+  Object.defineProperty(element, "innerHTML", {
+    get(){ return this._innerHTML || ""; },
+    set(value){ this._innerHTML = String(value || ""); this.children = []; this.textContent = ""; },
+  });
+  element.classList = makeClassList(element);
+  return element;
+}
+function nodeText(node){
+  if(!node) return "";
+  return String(node.textContent || "") + (node.children || []).map(nodeText).join("");
+}
+const signatureBox = makeElement("div");
+const document = {
+  createElement(tag){ return makeElement(tag); },
+  createTextNode(text){ return makeElement("#text", String(text || "")); },
+};
+function $(id){ return id === "editor-signature-help" ? signatureBox : null; }
+function requestAnimationFrame(fn){ fn(); }
+function placeEditorOverlay() {}
+function appendExtensionSettingMarkdown(container,text){ container.textContent += String(text || "").replace(/\*/g, ""); }
+""" + signature_js_functions + r"""
+const rangeSignature = { label: "call(value)", parameters: [{ label: [5, 500] }] };
+assert(editorSignatureParameterLabelText(rangeSignature, 0) === "value)",
+       "signature parameter range is clamped to label length");
+const labelNode = makeElement("div");
+appendSignatureLabel(labelNode, rangeSignature, 0);
+assert(labelNode.children.some(child => child.className === "editor-signature-param" && child.textContent === "value)"),
+       "signature label highlights clamped range parameter");
+showEditorSignatureHelp({
+  signatures: [{
+    label: "fn(alpha, beta)",
+    documentation: { value: "**signature docs**" },
+    parameters: [
+      { label: [3, 8], documentation: { value: "**alpha docs**" } },
+      { label: "beta", documentation: "beta docs" },
+    ],
+  }],
+  activeSignature: 0,
+  activeParameter: 0,
+}, { line: 0, character: 0 });
+assert(signatureBox.classList.contains("open")
+       && nodeText(signatureBox).includes("alpha")
+       && nodeText(signatureBox).includes("alpha docs")
+       && !nodeText(signatureBox).includes("signature docs"),
+       "signature help renders active parameter docs before signature docs");
+showEditorSignatureHelp({
+  signatures: [{
+    label: "fn(x)",
+    documentation: { value: "**signature docs**" },
+    parameters: [{ label: "x" }],
+  }],
+  activeSignature: 0,
+  activeParameter: 9,
+}, { line: 0, character: 0 });
+assert(nodeText(signatureBox).includes("signature docs"),
+       "signature help falls back to signature docs and clamps active parameter");
+console.log("frontend signature help docs ok");
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check("frontend signature help docs",
+                   result.returncode == 0
+                   and "frontend signature help docs ok" in result.stdout,
+                   (result.stderr or result.stdout).strip())
+        except Exception as exc:
+            _check("frontend signature help docs", False, str(exc))
         finally:
             if js_path:
                 try:

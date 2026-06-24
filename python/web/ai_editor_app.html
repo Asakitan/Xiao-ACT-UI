@@ -392,6 +392,7 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-signature-param { color:var(--fg-accent); font-weight:600; }
 .editor-signature-count { color:var(--fg-dim); font-size:11px; }
 .editor-signature-doc { margin-top:5px; color:var(--fg-dim); white-space:pre-wrap; max-height:86px; overflow:auto; }
+.editor-signature-doc-title { color:var(--fg); font-size:11px; font-weight:600; margin-bottom:3px; }
 .editor-welcome { display:flex; align-items:center; justify-content:center; flex:1;
   color:var(--fg-dim); font-size:14px; flex-direction:column; gap:12px; }
 .editor-welcome kbd { background:var(--bg3); padding:2px 6px; border-radius:3px;
@@ -4690,6 +4691,15 @@ function editorProviderText(value){
   if(value.name!==undefined)return String(value.name);
   return String(value);
 }
+function editorProviderRenderDocs(container,value){
+  if(!container)return '';
+  const text=editorProviderText(value);
+  container.textContent='';
+  if(!text)return '';
+  if(typeof appendExtensionSettingMarkdown==='function')appendExtensionSettingMarkdown(container,text);
+  else container.textContent=text;
+  return text;
+}
 function editorCompletionInsertTextRaw(item){
   if(!item)return '';
   if(item.textEdit&&item.textEdit.newText!==undefined)return item.textEdit.newText;
@@ -5452,7 +5462,7 @@ function appendSignatureLabel(target,signature,activeParameter){
   const active=params[Math.max(0,Math.min(params.length-1,Number(activeParameter)||0))]||null;
   let start=-1,end=-1,paramLabel=active?active.label:null;
   if(Array.isArray(paramLabel)&&paramLabel.length>=2){
-    start=Math.max(0,Number(paramLabel[0])||0);end=Math.max(start,Number(paramLabel[1])||start);
+    start=Math.min(label.length,Math.max(0,Number(paramLabel[0])||0));end=Math.min(label.length,Math.max(start,Number(paramLabel[1])||start));
   }else if(paramLabel!=null){
     const needle=String(paramLabel);
     start=label.indexOf(needle);
@@ -5467,23 +5477,42 @@ function appendSignatureLabel(target,signature,activeParameter){
     target.textContent=label;
   }
 }
+function editorSignatureParameterLabelText(signature,activeParameter){
+  const label=String(signature&&signature.label||''),params=Array.isArray(signature&&signature.parameters)?signature.parameters:[];
+  const active=params[Math.max(0,Math.min(params.length-1,Number(activeParameter)||0))]||null;
+  const paramLabel=active?active.label:null;
+  if(Array.isArray(paramLabel)&&paramLabel.length>=2){
+    const start=Math.min(label.length,Math.max(0,Number(paramLabel[0])||0));
+    const end=Math.min(label.length,Math.max(start,Number(paramLabel[1])||start));
+    return label.slice(start,end);
+  }
+  return paramLabel==null?'':String(paramLabel);
+}
 function showEditorSignatureHelp(help,position){
   const box=$('editor-signature-help');if(!box||!help)return;
   const signatures=Array.isArray(help.signatures)?help.signatures:[];
   if(!signatures.length){closeEditorSignatureHelp();return}
   const activeSignature=Math.max(0,Math.min(signatures.length-1,Number(help.activeSignature)||0));
-  const activeParameter=Math.max(0,Number(help.activeParameter)||0);
   const signature=signatures[activeSignature]||{};
+  const parameters=Array.isArray(signature.parameters)?signature.parameters:[];
+  const activeParameter=Math.max(0,Math.min(Math.max(0,parameters.length-1),Number(help.activeParameter)||0));
   box.innerHTML='';
   const top=document.createElement('div');top.className='editor-signature-top';
   const label=document.createElement('div');label.className='editor-signature-label';
   appendSignatureLabel(label,signature,activeParameter);
   const count=document.createElement('div');count.className='editor-signature-count';count.textContent=(activeSignature+1)+'/'+signatures.length;
   top.appendChild(label);top.appendChild(count);box.appendChild(top);
-  const param=Array.isArray(signature.parameters)?signature.parameters[activeParameter]:null;
-  const docText=editorProviderText((param&&param.documentation)||signature.documentation||'');
+  const param=parameters[activeParameter]||null;
+  const paramDoc=param&&param.documentation;
+  const docSource=editorProviderText(paramDoc)?paramDoc:(signature.documentation||'');
+  const docText=editorProviderText(docSource);
   if(docText){
-    const doc=document.createElement('div');doc.className='editor-signature-doc';doc.textContent=docText;box.appendChild(doc);
+    const doc=document.createElement('div');doc.className='editor-signature-doc';box.appendChild(doc);
+    const paramLabel=param?editorSignatureParameterLabelText(signature,activeParameter):'';
+    if(paramLabel){
+      const title=document.createElement('div');title.className='editor-signature-doc-title';title.textContent=paramLabel;doc.appendChild(title);
+    }
+    const body=document.createElement('div');body.className='editor-signature-doc-body';editorProviderRenderDocs(body,docSource);doc.appendChild(body);
   }
   placeEditorOverlay(box,position);box.style.display='block';requestAnimationFrame(()=>box.classList.add('open'));
 }
