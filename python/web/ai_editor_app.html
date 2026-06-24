@@ -12014,11 +12014,57 @@ function extensionSettingEnumOptionTitle(schema,index,value,defaultValue){
   if(desc)parts.push(desc.replace(/\s+/g,' ').trim());
   return parts.filter(Boolean).join(' - ');
 }
+function extensionSettingEnumValueToken(value){
+  return value===undefined?'__undefined__':extensionSettingStableJson(value);
+}
+function extensionSettingEnumEntries(schema,defaultValue){
+  const values=Array.isArray(schema&&schema.enum)?schema.enum:[];
+  const entries=values.map((value,index)=>({value,index,createdDefault:false}));
+  const hasDefault=values.some(value=>extensionSettingEnumValueToken(value)===extensionSettingEnumValueToken(defaultValue));
+  if(!hasDefault)entries.unshift({value:defaultValue,index:-1,createdDefault:true});
+  return entries;
+}
+function writeExtensionSettingEnumOptionValue(option,value){
+  if(!option)return;
+  option.dataset.enumValueKind=value===undefined?'undefined':'json';
+  if(value!==undefined)option.dataset.enumValueJson=JSON.stringify(value);
+}
+function readExtensionSettingEnumOptionValue(option){
+  if(!option)return undefined;
+  if(option.dataset&&option.dataset.enumValueKind==='undefined')return undefined;
+  if(option.dataset&&Object.prototype.hasOwnProperty.call(option.dataset,'enumValueJson')){
+    try{return JSON.parse(option.dataset.enumValueJson)}catch(e){return option.value}
+  }
+  return option.value;
+}
+function extensionSettingSelectOptions(input){
+  return Array.from((input&&(input.options||input.children))||[]);
+}
+function extensionSettingSelectedOption(input){
+  const selected=input&&input.selectedOptions&&input.selectedOptions[0];
+  if(selected)return selected;
+  const options=extensionSettingSelectOptions(input);
+  return options[input&&input.selectedIndex>=0?input.selectedIndex:0]||null;
+}
+function appendExtensionSettingEnumOptions(input,schema,defaultValue){
+  if(!input)return;
+  extensionSettingEnumEntries(schema,defaultValue).forEach(entry=>{
+    const o=document.createElement('option');
+    o.value=String(entry.value??'');
+    o.dataset.enumIndex=String(entry.index);
+    o.dataset.enumJson=extensionSettingEnumValueToken(entry.value);
+    if(entry.createdDefault)o.dataset.enumDefault='1';
+    writeExtensionSettingEnumOptionValue(o,entry.value);
+    o.textContent=extensionSettingEnumLabel(schema,entry.index,entry.value);
+    o.title=extensionSettingEnumOptionTitle(schema,entry.index,entry.value,defaultValue);
+    input.appendChild(o);
+  });
+}
 function renderExtensionSettingEnumDescription(el,schema,input){
   if(!el)return;
-  const selected=input&&input.selectedOptions&&input.selectedOptions[0];
+  const selected=extensionSettingSelectedOption(input);
   let index=selected?Number(selected.dataset.enumIndex):-1;
-  if(!(index>=0)&&input)index=Number(input.selectedIndex);
+  if(!(index>=0)&&input&&!(selected&&selected.dataset&&selected.dataset.enumDefault==='1'))index=Number(input.selectedIndex);
   const text=extensionSettingEnumDescription(schema,index);
   el.innerHTML='';
   if(text){
@@ -12035,7 +12081,9 @@ function renderExtensionSettingEnumDescription(el,schema,input){
 function appendExtensionSettingEnumChoices(row,schema,type,defaultValue){
   if(!row||!schema||!Array.isArray(schema.enum)||!schema.enum.length)return;
   const wrap=document.createElement('div');wrap.className='ext-setting-enum-choices';
-  schema.enum.slice(0,8).forEach((value,index)=>{
+  const entries=extensionSettingEnumEntries(schema,defaultValue);
+  entries.slice(0,8).forEach(entry=>{
+    const value=entry.value,index=entry.index;
     const choice=document.createElement('div');choice.className='ext-setting-enum-choice';
     const name=document.createElement('span');name.className='ext-setting-enum-choice-name';
     const label=extensionSettingEnumLabel(schema,index,value);
@@ -12056,9 +12104,9 @@ function appendExtensionSettingEnumChoices(row,schema,type,defaultValue){
     if(markdown)appendExtensionSettingMarkdown(desc,markdown);
     choice.appendChild(name);choice.appendChild(desc);wrap.appendChild(choice);
   });
-  if(schema.enum.length>8){
+  if(entries.length>8){
     const more=document.createElement('div');more.className='ext-setting-note';
-    more.textContent='+'+(schema.enum.length-8)+' more enum choices';
+    more.textContent='+'+(entries.length-8)+' more enum choices';
     wrap.appendChild(more);
   }
   row.appendChild(wrap);
@@ -12273,8 +12321,9 @@ function extensionSettingValidateSchemaValue(value,schema,path){
 function setExtensionSettingInputValue(input,schema,type,value){
   if(input.type==='checkbox'){input.checked=!!value;return}
   if(input.tagName==='SELECT'&&Array.isArray(schema.enum)){
-    const wanted=JSON.stringify(value);
-    const idx=schema.enum.findIndex(opt=>JSON.stringify(opt)===wanted);
+    const wanted=extensionSettingEnumValueToken(value);
+    const options=extensionSettingSelectOptions(input);
+    const idx=options.findIndex(opt=>opt.dataset&&opt.dataset.enumJson===wanted);
     input.selectedIndex=idx>=0?idx:0;return;
   }
   if(type==='array'||type==='object'){
@@ -12289,7 +12338,10 @@ function setExtensionSettingInputValue(input,schema,type,value){
 function readExtensionSettingInputValue(input,schema,type){
   if(input.type==='checkbox')return !!input.checked;
   if(input.tagName==='SELECT'&&Array.isArray(schema.enum)){
-    const opt=input.selectedOptions&&input.selectedOptions[0];
+    const opt=extensionSettingSelectedOption(input);
+    if(opt&&opt.dataset&&opt.dataset.enumDefault==='1'){
+      return readExtensionSettingEnumOptionValue(opt);
+    }
     const idx=opt?Number(opt.dataset.enumIndex):-1;
     return idx>=0&&idx<schema.enum.length?schema.enum[idx]:input.value;
   }
@@ -12766,13 +12818,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
         lbl.appendChild(input);lbl.appendChild(span);row.appendChild(lbl);
       }else if(Array.isArray(schema.enum)){
         input=document.createElement('select');
-        schema.enum.forEach((opt,idx)=>{
-          const o=document.createElement('option');o.value=String(opt);o.dataset.enumIndex=String(idx);
-          o.dataset.enumJson=extensionSettingStableJson(opt);
-          o.textContent=extensionSettingEnumLabel(schema,idx,opt);
-          o.title=extensionSettingEnumOptionTitle(schema,idx,opt,defaultValue);
-          input.appendChild(o);
-        });
+        appendExtensionSettingEnumOptions(input,schema,defaultValue);
         row.appendChild(input);
         if(extensionSettingList(schema,'markdownEnumDescriptions').length||extensionSettingList(schema,'enumDescriptions').length){
           enumHelp=document.createElement('div');enumHelp.className='ext-setting-enum-desc';row.appendChild(enumHelp);
@@ -13134,13 +13180,7 @@ async function renderExtensionSettings(){
         lbl.appendChild(input);lbl.appendChild(span);row.appendChild(lbl);
       } else if(Array.isArray(schema.enum)){
         input=document.createElement('select');
-        schema.enum.forEach((opt,idx)=>{
-          const o=document.createElement('option');o.value=String(opt);o.dataset.enumIndex=String(idx);
-          o.dataset.enumJson=extensionSettingStableJson(opt);
-          o.textContent=extensionSettingEnumLabel(schema,idx,opt);
-          o.title=extensionSettingEnumOptionTitle(schema,idx,opt,defaultVal);
-          input.appendChild(o);
-        });
+        appendExtensionSettingEnumOptions(input,schema,defaultVal);
         row.appendChild(input);
         if(extensionSettingList(schema,'markdownEnumDescriptions').length||extensionSettingList(schema,'enumDescriptions').length){
           enumHelp=document.createElement('div');enumHelp.className='ext-setting-enum-desc';row.appendChild(enumHelp);

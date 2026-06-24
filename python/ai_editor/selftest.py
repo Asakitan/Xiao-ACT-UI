@@ -4198,6 +4198,8 @@ console.log("frontend signature help docs ok");
             and "function extensionSettingFixMarkdownLinks(text)" in html
             and "function extensionSettingEnumLabel(schema,index,value)" in html
             and "function extensionSettingEnumOptionTitle(schema,index,value,defaultValue)" in html
+            and "function extensionSettingEnumEntries(schema,defaultValue)" in html
+            and "function appendExtensionSettingEnumOptions(input,schema,defaultValue)" in html
             and "function appendExtensionSettingEnumChoices(row,schema,type,defaultValue)" in html
             and "ext-setting-enum-choices" in html
             and "ext-setting-default-badge" in html
@@ -4313,8 +4315,8 @@ console.log("frontend signature help docs ok");
             and "ext-setting-schema-details" in html
             and "ext-setting-schema-chip" in html
             and "markdownEnumDescriptions" in html
-            and "o.dataset.enumJson=extensionSettingStableJson(opt)" in html
-            and "o.title=extensionSettingEnumOptionTitle(schema,idx,opt,defaultVal)" in html
+            and "appendExtensionSettingEnumOptions(input,schema,defaultVal)" in html
+            and "appendExtensionSettingEnumOptions(input,schema,defaultValue)" in html
             and "function appendExtensionSettingMarkdown(container,text)" in html
             and "function extensionSettingSafeLinkTarget(href)" in html
             and "appendExtensionSettingMarkdown(desc,description)" in html)
@@ -4345,6 +4347,13 @@ console.log("frontend signature help docs ok");
             "extensionSettingEnumDescription",
             "extensionSettingEnumLabel",
             "extensionSettingEnumOptionTitle",
+            "extensionSettingEnumValueToken",
+            "extensionSettingEnumEntries",
+            "writeExtensionSettingEnumOptionValue",
+            "readExtensionSettingEnumOptionValue",
+            "extensionSettingSelectOptions",
+            "extensionSettingSelectedOption",
+            "appendExtensionSettingEnumOptions",
             "renderExtensionSettingEnumDescription",
             "appendExtensionSettingEnumChoices",
             "extensionSettingSearchText",
@@ -4465,6 +4474,12 @@ const searchSchema = {
   enum: ["always"],
   enumItemLabels: ["Always send"],
   markdownEnumDescriptions: ["Uses **network**."]
+};
+const enumDefaultOutsideSchema = {
+  type: "string",
+  enum: ["manual", "auto"],
+  enumItemLabels: ["Manual", "Automatic"],
+  default: "inherit"
 };
 const defaultLockedSchema = {
   type: "boolean",
@@ -4918,6 +4933,41 @@ assert(extensionSettingEnumLabel(searchSchema, 0, "always") === "Always send",
 assert(extensionSettingEnumOptionTitle(searchSchema, 0, "always", "always").indexOf("Default") >= 0
        && extensionSettingEnumOptionTitle(searchSchema, 0, "always", "always").indexOf("Value: always") >= 0,
        "enum option title includes raw value and default marker");
+const enumEntries = extensionSettingEnumEntries(enumDefaultOutsideSchema, "inherit");
+assert(enumEntries.length === 3 && enumEntries[0].createdDefault === true
+       && enumEntries[0].value === "inherit" && enumEntries[1].value === "manual",
+       "enum entries prepend default outside enum like VS Code");
+assert(extensionSettingEnumEntries(searchSchema, "always").length === 1
+       && extensionSettingEnumEntries(searchSchema, "always")[0].createdDefault === false,
+       "enum entries do not duplicate default inside enum");
+const enumSelect = makeNode("select");
+enumSelect.tagName = "SELECT";
+enumSelect.selectedIndex = 0;
+appendExtensionSettingEnumOptions(enumSelect, enumDefaultOutsideSchema, "inherit");
+assert(enumSelect.children.length === 3
+       && enumSelect.children[0].dataset.enumDefault === "1"
+       && enumSelect.children[0].textContent === "inherit"
+       && enumSelect.children[1].textContent === "Manual",
+       "enum options include synthetic default and labeled choices");
+setExtensionSettingInputValue(enumSelect, enumDefaultOutsideSchema, "string", "inherit");
+assert(enumSelect.selectedIndex === 0
+       && readExtensionSettingInputValue(enumSelect, enumDefaultOutsideSchema, "string") === "inherit",
+       "enum select roundtrips synthetic default value");
+const enumDefaultDescHost = makeNode("div");
+renderExtensionSettingEnumDescription(enumDefaultDescHost, enumDefaultOutsideSchema, enumSelect);
+assert(enumDefaultDescHost.children.length === 0 && enumDefaultDescHost.style.display === "none",
+       "synthetic enum default does not reuse first enum description");
+setExtensionSettingInputValue(enumSelect, enumDefaultOutsideSchema, "string", "auto");
+assert(enumSelect.selectedIndex === 2
+       && readExtensionSettingInputValue(enumSelect, enumDefaultOutsideSchema, "string") === "auto",
+       "enum select roundtrips real enum value after synthetic default");
+const undefinedEnumSelect = makeNode("select");
+undefinedEnumSelect.tagName = "SELECT";
+undefinedEnumSelect.selectedIndex = 0;
+appendExtensionSettingEnumOptions(undefinedEnumSelect, { enum: ["manual"] }, undefined);
+assert(undefinedEnumSelect.children[0].dataset.enumValueKind === "undefined"
+       && readExtensionSettingInputValue(undefinedEnumSelect, { enum: ["manual"] }, "string") === undefined,
+       "enum synthetic undefined default is preserved");
 const enumDescHost = makeNode("div");
 renderExtensionSettingEnumDescription(enumDescHost, searchSchema, {
   selectedIndex: 0,
@@ -4941,6 +4991,13 @@ assert(enumChoicesHost.children.some(n => n.className === "ext-setting-enum-choi
        && nodeTreeHas(enumChoicesHost, n => n.tagName === "STRONG"
          && n.textContent === "network"),
        "enum choices render label raw value default marker and markdown description");
+const enumDefaultChoicesHost = makeNode("div");
+appendExtensionSettingEnumChoices(enumDefaultChoicesHost, enumDefaultOutsideSchema, "string", "inherit");
+assert(nodeTreeHas(enumDefaultChoicesHost, n => n.className === "ext-setting-default-badge"
+         && n.textContent === "Default")
+       && nodeTreeHas(enumDefaultChoicesHost, n => n.className === "ext-setting-enum-choice-name"
+         && n.textContent === "inherit"),
+       "enum choices render synthetic default outside enum");
 const textAreaSetting = { type: "textarea", tagName: "TEXTAREA", value: "", rows: 0 };
 setExtensionSettingInputValue(textAreaSetting, multilineSchema, "string", "alpha\nbeta\ncharlie");
 assert(extensionSettingUsesMultiline(multilineSchema, "string") === true,
