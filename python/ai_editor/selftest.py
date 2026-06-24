@@ -5217,6 +5217,9 @@ console.log("quick input filter helpers ok");
            "class TerminalObject" in node_ext_host_source
            and "createTerminal(nameOrOptions, shellPath, shellArgs)"
            in node_ext_host_source
+           and "metadata()" in node_ext_host_source
+           and "cwd: _terminalOptionValue(options.cwd)" in node_ext_host_source
+           and "metadata: this.metadata()" in node_ext_host_source
            and "onDidOpenTerminal: _onDidOpenTerminalEmitter.event"
            in node_ext_host_source
            and "_bindPseudoterminal" in node_ext_host_source
@@ -5224,10 +5227,22 @@ console.log("quick input filter helpers ok");
            and "type: 'terminal_command'" in node_ext_host_source
            and "msg_type == \"terminal_command\"" in extension_host_source
            and "msg_type == \"terminal_write\"" in extension_host_source
+           and "msg.get(\"metadata\")" in extension_host_source
            and "def run_terminal_command(self, name: str, text: str)"
            in app_source
+           and "metadata: Optional[Dict[str, Any]] = None" in app_source
+           and "_createTerminal(name,metadata||{})" in app_source
+           and "metadata:(metadata&&typeof metadata==='object')?metadata:{}"
+           in html
            and "def write_terminal_data(self, name: str, text: str) -> None:"
            in app_source)
+    _check("extension configuration target constants match VS Code API",
+           "ConfigurationTarget: {" in node_ext_host_source
+           and "Workspace: 2" in node_ext_host_source
+           and "WorkspaceFolder: 3" in node_ext_host_source
+           and "function _configurationTargetName(target)" in node_ext_host_source
+           and "_configurationUpdateTargets[fullKey]" in node_ext_host_source
+           and "message.target = targetName" in node_ext_host_source)
     _check("extension workspace folder picker uses dynamic QuickPick",
            "showWorkspaceFolderPick(options, token)" in node_ext_host_source
            and "function _windowShowWorkspaceFolderPick" in node_ext_host_source
@@ -11372,11 +11387,13 @@ async function activate(context) {
       eventExtensions: configEvents.extensions,
       eventUnrelated: configEvents.unrelated,
     };
-    await manifestConfig.update('flag', false);
+    await manifestConfig.update(
+      'flag', false, vscode.ConfigurationTarget.Workspace);
     const manifestConfigSet = {
       flag: manifestConfig.get('flag'),
       inspectDefault: manifestConfig.inspect('flag').defaultValue,
       inspectWorkspace: manifestConfig.inspect('flag').workspaceValue,
+      inspectTarget: manifestConfig.inspect('flag').target,
     };
     await manifestConfig.update('flag', undefined);
     const manifestConfigReset = {
@@ -11803,6 +11820,12 @@ async function activate(context) {
     const terminal = vscode.window.createTerminal({
       name: 'Node Terminal',
       cwd: context.extensionUri,
+      env: { NODE_TERMINAL_SELFTEST: '1' },
+      shellPath: 'pwsh',
+      shellArgs: ['-NoProfile'],
+      message: 'node terminal ready',
+      iconPath: new vscode.ThemeIcon('terminal-powershell'),
+      color: new vscode.ThemeColor('terminal.ansiGreen'),
       isTransient: true,
     });
     const created = {
@@ -11810,6 +11833,11 @@ async function activate(context) {
       inList: vscode.window.terminals.includes(terminal),
       activeName: vscode.window.activeTerminal && vscode.window.activeTerminal.name,
       creationName: terminal.creationOptions.name,
+      creationCwd: terminal.creationOptions.cwd && terminal.creationOptions.cwd.toString(),
+      creationEnv: terminal.creationOptions.env,
+      creationShellPath: terminal.creationOptions.shellPath,
+      creationShellArgs: terminal.creationOptions.shellArgs,
+      creationMessage: terminal.creationOptions.message,
       transient: terminal.creationOptions.isTransient === true,
       processId: await terminal.processId,
       shellIntegrationMissing: terminal.shellIntegration === undefined,
@@ -12505,8 +12533,12 @@ module.exports = { activate, deactivate };
                         "data": event,
                     })
 
-                def show_terminal(self, name):
-                    event = {"event": "show", "name": str(name)}
+                def show_terminal(self, name, metadata=None):
+                    event = {
+                        "event": "show",
+                        "name": str(name),
+                        "metadata": metadata if isinstance(metadata, dict) else {},
+                    }
                     self.terminal_events.append(event)
                     emitted_events.append({
                         "event": "terminal",
@@ -13944,6 +13976,8 @@ module.exports = { activate, deactivate };
                        is True
                        and node_manifest_config_set.get("inspectWorkspace")
                        is False
+                       and node_manifest_config_set.get("inspectTarget")
+                       == "workspace"
                        and node_manifest_config_reset.get("flag") is True
                        and node_manifest_config_reset.get("mode") == "manual"
                        and node_manifest_config_reset.get("hasFlag") is True
@@ -14748,6 +14782,14 @@ module.exports = { activate, deactivate };
                            "activeName") == "Node Terminal"
                        and node_terminal_created.get(
                            "creationName") == "Node Terminal"
+                       and node_terminal_created.get(
+                           "creationEnv", {}).get("NODE_TERMINAL_SELFTEST")
+                       == "1"
+                       and node_terminal_created.get("creationShellPath") == "pwsh"
+                       and node_terminal_created.get("creationShellArgs")
+                       == ["-NoProfile"]
+                       and node_terminal_created.get(
+                           "creationMessage") == "node terminal ready"
                        and node_terminal_created.get("transient") is True
                        and node_terminal_created.get(
                            "shellIntegrationMissing") is True
@@ -14779,6 +14821,17 @@ module.exports = { activate, deactivate };
                        and any(
                            item.get("event") == "show"
                            and item.get("name") == "Node Terminal"
+                           and item.get("metadata", {}).get("env", {})
+                           .get("NODE_TERMINAL_SELFTEST") == "1"
+                           and item.get("metadata", {}).get("shellPath") == "pwsh"
+                           and item.get("metadata", {}).get("shellArgs")
+                           == ["-NoProfile"]
+                           and item.get("metadata", {}).get("message")
+                           == "node terminal ready"
+                           and item.get("metadata", {}).get("iconPath", {})
+                           .get("id") == "terminal-powershell"
+                           and item.get("metadata", {}).get("color", {})
+                           .get("id") == "terminal.ansiGreen"
                            for item in node_terminal_events)
                        and any(
                            item.get("event") == "hide"

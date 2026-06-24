@@ -2901,7 +2901,10 @@ class NodeExtensionHost:
         elif msg_type == "terminal_show":
             if self._ui_bridge:
                 try:
-                    self._ui_bridge.show_terminal(str(msg.get("name", "")))
+                    self._ui_bridge.show_terminal(
+                        str(msg.get("name", "")),
+                        msg.get("metadata") if isinstance(
+                            msg.get("metadata"), dict) else {})
                 except Exception:
                     pass
 

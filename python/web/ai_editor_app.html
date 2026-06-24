@@ -14683,13 +14683,13 @@ function _minimapScrollTo(e){
 let _terminals=[];
 let _activeTermId=null;
 let _nextTermId=1;
-function _createTerminal(name){
+function _createTerminal(name,metadata){
   const id=_nextTermId++;
   const outputEl=document.createElement('div');
   outputEl.className='terminal-output';outputEl.id='term-out-'+id;
   outputEl.style.display='none';
   $('terminal-panel').appendChild(outputEl);
-  const term={id:id,name:name||('Terminal '+id),outputEl:outputEl,history:[],historyIdx:-1,inputText:''};
+  const term={id:id,name:name||('Terminal '+id),metadata:(metadata&&typeof metadata==='object')?metadata:{},outputEl:outputEl,history:[],historyIdx:-1,inputText:''};
   _terminals.push(term);
   _renderTermTabs();_switchTerminal(id);
   $('term-tab-bar').style.display='flex';

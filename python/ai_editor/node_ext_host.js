@@ -1441,6 +1441,7 @@ const _extensions = new Map();           // extensionId -> { desc, module, conte
 const _knownExtensions = new Map();      // extensionId -> { extensionPath, manifest, extensionKind }
 const _configurationDefaults = {};       // contributed default settings by dotted path
 const _configurationLanguageDefaults = {}; // languageId -> defaults by dotted path
+const _configurationUpdateTargets = {};  // dotted path -> last VS Code ConfigurationTarget
 const _extensionActivationRequests = new Map(); // requestId -> pending activation request
 const _extensionActivationInFlight = new Map(); // extensionId -> pending activation request
 const _commands = new Map();             // commandId -> handler
@@ -2878,6 +2879,27 @@ function _terminalOptionsFromArgs(nameOrOptions, shellPath, shellArgs) {
     return options;
 }
 
+function _terminalOptionValue(value) {
+    if (value === undefined || value === null) return undefined;
+    if (value instanceof Uri) return value.toString();
+    if (value instanceof ThemeIcon) return {
+        id: value.id,
+        color: value.color instanceof ThemeColor
+            ? { id: value.color.id }
+            : _terminalOptionValue(value.color),
+    };
+    if (value instanceof ThemeColor) return { id: value.id };
+    if (Array.isArray(value)) return value.map(_terminalOptionValue);
+    if (typeof value === 'object') {
+        const result = {};
+        for (const [key, item] of Object.entries(value)) {
+            if (typeof item !== 'function') result[key] = _terminalOptionValue(item);
+        }
+        return result;
+    }
+    return value;
+}
+
 function _terminalSetActive(terminal) {
     if (_activeTerminal === terminal) return;
     _activeTerminal = terminal;
@@ -3008,7 +3030,24 @@ class TerminalObject {
             name: this.name,
             text: String(text ?? ''),
             shouldExecute: shouldExecute !== false,
+            metadata: this.metadata(),
         });
+    }
+    metadata() {
+        const options = this.creationOptions || {};
+        return {
+            name: this.name,
+            cwd: _terminalOptionValue(options.cwd),
+            env: _terminalOptionValue(options.env),
+            shellPath: _terminalOptionValue(options.shellPath),
+            shellArgs: _terminalOptionValue(options.shellArgs),
+            message: _terminalOptionValue(options.message),
+            location: _terminalOptionValue(options.location),
+            iconPath: _terminalOptionValue(options.iconPath),
+            color: _terminalOptionValue(options.color),
+            isTransient: options.isTransient === true,
+            isPseudoterminal: !!this._pty,
+        };
     }
     show(preserveFocus = false) {
         if (this._disposed) return;
@@ -3019,6 +3058,7 @@ class TerminalObject {
             id: this._handle,
             name: this.name,
             preserveFocus: !!preserveFocus,
+            metadata: this.metadata(),
         });
     }
     hide() {
@@ -5207,6 +5247,11 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         // --- Enums ---
         ViewColumn: { One: 1, Two: 2, Three: 3, Active: -1, Beside: -2 },
         StatusBarAlignment: { Left: 1, Right: 2 },
+        ConfigurationTarget: {
+            Global: 1,
+            Workspace: 2,
+            WorkspaceFolder: 3,
+        },
         TerminalLocation: { Panel: 1, Editor: 2 },
         TerminalExitReason: {
             Unknown: 0,
@@ -6599,6 +6644,13 @@ function _configDefaultLookup(pathParts, overrideIdentifier) {
     return _configLookup(_configurationDefaults, pathParts);
 }
 
+function _configurationTargetName(target) {
+    if (target === true || target === 1) return 'global';
+    if (target === false || target === 2) return 'workspace';
+    if (target === 3) return 'workspaceFolder';
+    return '';
+}
+
 function _configEffectiveLookup(pathParts, overrideIdentifier) {
     const languageConfigured = _configLanguageOverrideLookup(
         pathParts, overrideIdentifier);
@@ -6750,6 +6802,7 @@ function _createConfigProxy(section, overrideIdentifier = '') {
         },
         inspect(key) {
             const pathParts = _configFullPath(section, key);
+            const fullKey = pathParts.join('.');
             const value = _configLookup(_settings, pathParts);
             const languageValue = _configLanguageOverrideLookup(
                 pathParts, overrideIdentifier);
@@ -6783,10 +6836,13 @@ function _createConfigProxy(section, overrideIdentifier = '') {
                     ? undefined
                     : _configCloneValue(languageValue),
                 workspaceFolderValue: undefined,
+                target: _configurationUpdateTargets[fullKey] || undefined,
             };
         },
         update(key, value, configTarget, overrideInLanguage) {
             const pathParts = _configFullPath(section, key);
+            const fullKey = pathParts.join('.');
+            const targetName = _configurationTargetName(configTarget);
             const languageOverrideIdentifier = overrideInLanguage
                 ? overrideIdentifier
                 : '';
@@ -6807,11 +6863,13 @@ function _createConfigProxy(section, overrideIdentifier = '') {
                     _configMirrorAiEditorAlias(pathParts, value, false);
                 }
             }
+            if (targetName) _configurationUpdateTargets[fullKey] = targetName;
             const message = {
                 type: 'config_set',
                 section: section || '',
                 key: String(key),
             };
+            if (targetName) message.target = targetName;
             if (languageOverrideIdentifier) {
                 message.overrideIdentifier = languageOverrideIdentifier;
             }

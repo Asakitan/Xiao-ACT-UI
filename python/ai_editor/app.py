@@ -897,10 +897,26 @@ class _AIEditorUIBridge:
         self._api._emit("dispose_output", {"name": channel_name})
 
     # -- Terminal --
-    def show_terminal(self, name: str) -> None:
+    def show_terminal(
+            self, name: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        terminal_name = str(name or "Extension Terminal")
+        terminal_metadata = metadata if isinstance(metadata, dict) else {}
         self._api._eval_js(
-            "document.querySelectorAll('.ptab').forEach(p=>p.classList.toggle('active',p.dataset.ptab==='terminal'));"
-            "var tp=document.getElementById('terminal-panel');if(tp){tp.style.display='flex';tp.classList.add('active')}"
+            "(function(name,metadata){try{"
+            "document.querySelectorAll('.ptab').forEach(function(p){"
+            "p.classList.toggle('active',p.dataset.ptab==='terminal');});"
+            "var tp=document.getElementById('terminal-panel');"
+            "if(tp){tp.style.display='flex';tp.classList.add('active');}"
+            "var term=null;"
+            "if(typeof _terminals!=='undefined'&&Array.isArray(_terminals)){"
+            "term=_terminals.find(function(t){return t&&t.name===name;});}"
+            "if(!term&&typeof _createTerminal==='function'){"
+            "term=_createTerminal(name,metadata||{});}"
+            "if(term){term.metadata=Object.assign({},term.metadata||{},metadata||{});"
+            "if(typeof _switchTerminal==='function')_switchTerminal(term.id);}"
+            "}catch(e){}})("
+            f"{json.dumps(terminal_name)},"
+            f"{json.dumps(terminal_metadata, ensure_ascii=False)});"
         )
 
     def hide_terminal(self, name: str) -> None:
