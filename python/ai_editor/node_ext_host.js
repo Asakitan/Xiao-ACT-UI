@@ -1051,6 +1051,7 @@ const _treeViews = new Map();            // viewId -> TreeView-like object
 const _treeElementStores = new Map();    // viewId -> element handle store
 const _outputChannels = new Map();       // name -> OutputChannel
 const _fileSystemProviders = new Map();  // scheme -> { provider, options, extensionId }
+const _textDocumentContentProviders = new Map(); // scheme -> { provider, extensionId }
 const _uriHandlers = new Map();          // extensionId -> { handler }
 const _languageProviders = [];           // { kind, selector, provider, triggers?, disposable }
 let _nextLanguageProviderHandle = 1;
@@ -1875,6 +1876,12 @@ async function _workspaceOpenTextDocument(uriOrPath) {
         return _workspaceStoreTextDocument(doc, true);
     }
     const uri = _workspaceUriFromInput(uriOrPath);
+    const contentEntry = _textDocumentContentProviders.get(
+        _normalizeFileSystemScheme(uri.scheme));
+    if (contentEntry) {
+        return _workspaceOpenTextDocumentFromContentProvider(
+            uri, contentEntry, true);
+    }
     const cached = _workspaceTextDocuments.get(uri.toString());
     if (cached) return _workspacePromoteTextDocument(cached);
     const text = uri.scheme === 'file' ? await fsp.readFile(uri.fsPath, 'utf8') : '';
@@ -1885,6 +1892,73 @@ async function _workspaceOpenTextDocument(uriOrPath) {
         version: Date.now(),
     });
     return _workspaceStoreTextDocument(doc, true);
+}
+
+function _textDocumentProviderToken() {
+    return {
+        isCancellationRequested: false,
+        onCancellationRequested: new EventEmitter().event,
+    };
+}
+
+async function _provideTextDocumentContent(uri, entry) {
+    const provider = entry && entry.provider;
+    if (!provider || typeof provider.provideTextDocumentContent !== 'function') {
+        throw new Error(`No text document content provider for scheme: ${uri.scheme}`);
+    }
+    const value = await provider.provideTextDocumentContent.call(
+        provider, uri, _textDocumentProviderToken());
+    return value === undefined || value === null ? '' : String(value);
+}
+
+async function _workspaceOpenTextDocumentFromContentProvider(uri, entry, fireOpen) {
+    const text = await _provideTextDocumentContent(uri, entry);
+    const existing = _workspaceTextDocuments.get(uri.toString());
+    if (existing && typeof existing._setText === 'function') {
+        existing._setText(text, Date.now());
+        existing.isDirty = false;
+        existing.__contentProviderScheme = _normalizeFileSystemScheme(uri.scheme);
+        return fireOpen ? _workspacePromoteTextDocument(existing) : existing;
+    }
+    const doc = _createLanguageDocument({
+        uri,
+        text,
+        languageId: _languageIdForUri(uri),
+        version: Date.now(),
+    });
+    doc.isDirty = false;
+    doc.__contentProviderScheme = _normalizeFileSystemScheme(uri.scheme);
+    return _workspaceStoreTextDocument(doc, fireOpen);
+}
+
+async function _refreshTextDocumentContentProvider(scheme, uriLike) {
+    const uri = _workspaceUriFromInput(uriLike);
+    const normalized = _normalizeFileSystemScheme(scheme);
+    if (_normalizeFileSystemScheme(uri.scheme) !== normalized) {
+        log(`content provider ${normalized} ignored change for ${uri.scheme}`);
+        return;
+    }
+    const key = uri.toString();
+    const doc = _workspaceTextDocuments.get(key);
+    if (!_workspaceDocumentIsOpened(doc)) return;
+    const entry = _textDocumentContentProviders.get(normalized);
+    if (!entry) return;
+    const previousText = doc.getText();
+    const nextText = await _provideTextDocumentContent(uri, entry);
+    if (nextText === previousText) return;
+    if (typeof doc._setText === 'function') {
+        doc._setText(nextText, Date.now());
+    }
+    doc.isDirty = false;
+    _onDidChangeTextDocumentEmitter.fire({
+        document: doc,
+        contentChanges: [{
+            range: _workspaceFullDocumentRange(previousText),
+            rangeOffset: 0,
+            rangeLength: previousText.length,
+            text: nextText,
+        }],
+    });
 }
 
 function _workspaceEditEntries(edit) {
@@ -2922,8 +2996,32 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 return _workspaceRelativePath(pathOrUri, includeWorkspaceFolder);
             },
             registerTextDocumentContentProvider(scheme, provider) {
-                log(`stub: registerTextDocumentContentProvider ${scheme}`);
-                return new Disposable(() => {});
+                const normalized = _normalizeFileSystemScheme(scheme);
+                if (!normalized || normalized === 'file' || normalized === 'untitled') {
+                    throw new Error(`Invalid text document provider scheme: ${scheme}`);
+                }
+                if (_textDocumentContentProviders.has(normalized)) {
+                    throw new Error(`Text document provider already registered: ${normalized}`);
+                }
+                const entry = {
+                    provider,
+                    extensionId: extDesc.extensionId || '',
+                };
+                _textDocumentContentProviders.set(normalized, entry);
+                let changeSubscription;
+                if (provider && typeof provider.onDidChange === 'function') {
+                    changeSubscription = provider.onDidChange((uri) => {
+                        _refreshTextDocumentContentProvider(normalized, uri)
+                            .catch(err => log(
+                                `content provider refresh failed for ${normalized}: ${err.message}`));
+                    });
+                }
+                return new Disposable(() => {
+                    if (_textDocumentContentProviders.get(normalized) === entry) {
+                        _textDocumentContentProviders.delete(normalized);
+                    }
+                    changeSubscription?.dispose?.();
+                });
             },
         },
 

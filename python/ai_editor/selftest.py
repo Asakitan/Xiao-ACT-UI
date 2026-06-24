@@ -6599,6 +6599,8 @@ const configEvents = { count: 0 };
 let contextProbe = {};
 const lifecycleEvents = new vscode.EventEmitter();
 const lifecycleDocs = new Map();
+const contentProviderEmitter = new vscode.EventEmitter();
+let contentProviderText = 'virtual-one';
 
 async function activate(context) {
   console.log('node console probe', { source: 'selftest' });
@@ -6664,6 +6666,15 @@ async function activate(context) {
     workspaceEvents.save += 1;
     workspaceEvents.lastSave = document.uri.toString();
   }, null, context.subscriptions);
+  context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider(
+    'selfdoc',
+    {
+      onDidChange: contentProviderEmitter.event,
+      provideTextDocumentContent(uri, token) {
+        return contentProviderText + ':' + uri.path + ':' + token.isCancellationRequested;
+      },
+    },
+  ));
   const root = {
     id: 'root',
     label: 'Node Root',
@@ -7184,6 +7195,41 @@ async function activate(context) {
       hits: [...globalThis.__saoNodeUriHits],
     };
   });
+  vscode.commands.registerCommand('selftest.node.contentProviderProbe', async () => {
+    const uri = vscode.Uri.parse('selfdoc:/virtual.txt?x=1');
+    const beforeCount = vscode.workspace.textDocuments
+      .filter(document => document.uri.scheme === 'selfdoc').length;
+    const document = await vscode.workspace.openTextDocument(uri);
+    const firstText = document.getText();
+    const changeEvents = [];
+    const disposable = vscode.workspace.onDidChangeTextDocument(event => {
+      if (event.document.uri.toString() === uri.toString()) {
+        changeEvents.push({
+          text: event.document.getText(),
+          changeText: event.contentChanges.map(change => change.text).join('|'),
+        });
+      }
+    });
+    contentProviderText = 'virtual-two';
+    contentProviderEmitter.fire(uri);
+    for (let i = 0; i < 20 && document.getText() !== 'virtual-two:/virtual.txt:false'; i += 1) {
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    disposable.dispose();
+    return {
+      beforeCount,
+      openCount: vscode.workspace.textDocuments
+        .filter(item => item.uri.scheme === 'selfdoc').length,
+      firstText,
+      afterText: document.getText(),
+      eventCount: changeEvents.length,
+      eventText: changeEvents[0] && changeEvents[0].text,
+      changeText: changeEvents[0] && changeEvents[0].changeText,
+      dirty: document.isDirty,
+      fileName: document.fileName,
+      languageId: document.languageId,
+    };
+  });
   vscode.commands.registerCommand('selftest.node.pythonCommandProbe', async () => {
     const nested = await vscode.commands.executeCommand(
       'selftest.python.echo',
@@ -7570,6 +7616,16 @@ module.exports = { activate, deactivate };
                         "selftest.node.uriHandlerProbe")
                 except Exception as exc:
                     node_uri_handler_probe = {"_error": str(exc)}
+                node_content_provider_command_registered = _wait_until(
+                    lambda: "selftest.node.contentProviderProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                try:
+                    node_content_provider_probe = (
+                        api._ext_host.commands.execute(
+                            "selftest.node.contentProviderProbe"))
+                except Exception as exc:
+                    node_content_provider_probe = {"_error": str(exc)}
                 node_registered = _wait_until(
                     lambda: "selftest.node.tree" in api._vscode_ns._tree_data_providers,
                     timeout=3.0)
@@ -8545,6 +8601,26 @@ module.exports = { activate, deactivate };
                            "vscode://selftest.node-uri/callback?code=42#frag"
                        ],
                        json.dumps(node_uri_handler_probe,
+                                  ensure_ascii=False))
+                _check("node host opens text document content providers",
+                       node_started is True
+                       and node_content_provider_command_registered
+                       and isinstance(node_content_provider_probe, dict)
+                       and node_content_provider_probe.get("beforeCount") == 0
+                       and node_content_provider_probe.get("openCount") == 1
+                       and node_content_provider_probe.get("firstText")
+                       == "virtual-one:/virtual.txt:false"
+                       and node_content_provider_probe.get("afterText")
+                       == "virtual-two:/virtual.txt:false"
+                       and node_content_provider_probe.get("eventCount") == 1
+                       and node_content_provider_probe.get("eventText")
+                       == "virtual-two:/virtual.txt:false"
+                       and node_content_provider_probe.get("changeText")
+                       == "virtual-two:/virtual.txt:false"
+                       and node_content_provider_probe.get("dirty") is False
+                       and node_content_provider_probe.get("fileName")
+                       == "selfdoc:/virtual.txt?x=1",
+                       json.dumps(node_content_provider_probe,
                                   ensure_ascii=False))
                 _check("node host tree provider registers dynamic activity view",
                        node_started is True
