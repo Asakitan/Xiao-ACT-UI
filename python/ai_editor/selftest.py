@@ -15,7 +15,7 @@ import tempfile
 import threading
 import time
 import tkinter as tk
-from urllib.parse import quote
+from urllib.parse import quote, urljoin
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -2646,11 +2646,17 @@ console.log("frontend auto-close behavior ok");
         import urllib.request
         script_path = os.path.join(webview_tmp, "panel.js")
         large_script_path = os.path.join(webview_tmp, "panel-large.js")
+        worklet_path = os.path.join(webview_tmp, "paint-worklet.mjs")
+        module_dep_path = os.path.join(webview_tmp, "dep.js")
         style_path = os.path.join(webview_tmp, "panel.css")
         font_path = os.path.join(webview_tmp, "panel.woff")
         outside_script_path = os.path.join(outside_tmp, "blocked.js")
         with open(script_path, "w", encoding="utf-8") as fh:
             fh.write("window.__panelLoaded = true;\n")
+        with open(worklet_path, "w", encoding="utf-8") as fh:
+            fh.write('import "./dep.js"; registerPaint("sao-selftest", class { paint() {} });\n')
+        with open(module_dep_path, "w", encoding="utf-8") as fh:
+            fh.write("export const loaded = true;\n")
         with open(large_script_path, "wb") as fh:
             fh.write(b"/" + b"x" * (2 * 1024 * 1024 + 32))
         with open(outside_script_path, "w", encoding="utf-8") as fh:
@@ -2685,6 +2691,11 @@ console.log("frontend auto-close behavior ok");
             '<meta http-equiv="Content-Security-Policy" '
             'content="default-src \'none\'; script-src https://webview.local">'
             '<main data-dynamic="true"></main>')
+        module_loader_html = (
+            '<script>'
+            f'CSS.paintWorklet.addModule("{_wv_url(worklet_path)}");'
+            f'new Worker("{_wv_url(worklet_path)}",{{type:"module"}});'
+            '</script>')
         blocked_webview_html = f'<script src="{_wv_url(outside_script_path)}"></script>'
         webview_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
         prepared_webview_html = webview_api._prepare_extension_webview_html(
@@ -2700,31 +2711,54 @@ console.log("frontend auto-close behavior ok");
         runtime_only_prepared_html = webview_api._prepare_extension_webview_html(
             runtime_only_html, [{"fsPath": webview_tmp}],
             view_id="selftest.runtime")
+        module_loader_prepared_html = webview_api._prepare_extension_webview_html(
+            module_loader_html, [{"fsPath": webview_tmp}],
+            view_id="selftest.module-loader")
         blocked_prepared_html = webview_api._prepare_extension_webview_html(
             blocked_webview_html, [{"fsPath": webview_tmp}])
+        script_endpoint_url = prepared_webview_html.split(
+            '<script nonce="a" src="', 1)[1].split('"', 1)[0]
+        script_endpoint_data = urllib.request.urlopen(
+            script_endpoint_url, timeout=2).read()
+        encoded_endpoint_url = encoded_prepared_html.split(
+            'src="', 1)[1].split('"', 1)[0]
+        encoded_endpoint_data = urllib.request.urlopen(
+            encoded_endpoint_url, timeout=2).read()
         large_endpoint_url = large_prepared_html.split('src="', 1)[1].split('"', 1)[0]
         large_endpoint_data = urllib.request.urlopen(
             large_endpoint_url, timeout=2).read()
+        worklet_endpoint_url = module_loader_prepared_html.split(
+            'addModule("', 1)[1].split('"', 1)[0]
+        worker_endpoint_url = module_loader_prepared_html.split(
+            'new Worker("', 1)[1].split('"', 1)[0]
+        worklet_endpoint_data = urllib.request.urlopen(
+            worklet_endpoint_url, timeout=2).read()
+        worklet_dep_data = urllib.request.urlopen(
+            urljoin(worklet_endpoint_url, "./dep.js"), timeout=2).read()
         css_payload = prepared_webview_html.split(
             "data:text/css;base64,", 1)[1].split('"', 1)[0]
         decoded_css = base64.b64decode(css_payload).decode(
             "utf-8", errors="replace")
-        _check("webview local resources are inlined for srcdoc iframes",
+        _check("webview local resources resolve in srcdoc iframes",
                "sao-webview-resource-map" in prepared_webview_html
                and f'src="{_wv_url(script_path)}"' not in prepared_webview_html
                and f'href="{_wv_url(style_path)}"' not in prepared_webview_html
-               and "data:text/javascript;base64," in prepared_webview_html
+               and script_endpoint_url.startswith("http://127.0.0.1:")
+               and "/__sao_webview_resource__/" in script_endpoint_url
+               and script_endpoint_data.startswith(b"window.__panelLoaded")
                and "data:text/css;base64," in prepared_webview_html
                and base64.b64encode(b"font-bytes").decode("ascii")
                in decoded_css
-               and "script-src 'nonce-a' data:" in prepared_webview_html
+               and "script-src 'nonce-a' data: http://127.0.0.1:"
+               in prepared_webview_html
                and "style-src https://webview.local data: 'unsafe-inline'"
                in prepared_webview_html)
-        _check("webview VS Code-style resource URLs are inlined",
+        _check("webview VS Code-style resource URLs use scoped endpoint",
                f'src="{_wv_resource_url(script_path)}?v=1#main"'
                not in encoded_prepared_html
-               and "data:text/javascript;base64," in encoded_prepared_html
-               and "sao-webview-resource-map" in encoded_prepared_html)
+               and encoded_endpoint_url.startswith("http://127.0.0.1:")
+               and encoded_endpoint_data.startswith(b"window.__panelLoaded")
+               and "sao-webview-resource-endpoint" in encoded_prepared_html)
         _check("webview oversized local resources fall back to local endpoint",
                large_endpoint_url.startswith("http://127.0.0.1:")
                and "/__sao_webview_resource__/" in large_endpoint_url
@@ -2737,6 +2771,12 @@ console.log("frontend auto-close behavior ok");
                "sao-webview-resource-endpoint" in runtime_only_prepared_html
                and "default-src 'none' http://127.0.0.1:"
                in runtime_only_prepared_html)
+        _check("webview module loaders preserve relative resource base",
+               worklet_endpoint_url.startswith("http://127.0.0.1:")
+               and worker_endpoint_url == worklet_endpoint_url
+               and "data:text/javascript;base64," not in module_loader_prepared_html
+               and b'import "./dep.js"' in worklet_endpoint_data
+               and worklet_dep_data.startswith(b"export const loaded"))
         _check("webview local resource roots block outside files",
                "https://webview.local/" in blocked_prepared_html
                and "data:text/javascript;base64," not in blocked_prepared_html)
@@ -2744,13 +2784,18 @@ console.log("frontend auto-close behavior ok");
                "function _resourceMap()" in html
                and "sao-webview-resource-map" in html
                and "function _resourceEndpointBase()" in html
+               and "function _rewriteModuleResourceUrl(v)" in html
                and "var _NativeWorker=window.Worker" in html
                and "window.Worker=function(url,options)" in html
+               and "_NativeWorker(_rewriteModuleResourceUrl(String(url)),options)"
+               in html
                and "var _NativeSharedWorker=window.SharedWorker" in html
                and "window.SharedWorker=function(url,nameOrOptions,maybeOptions)" in html
                and "function _patchWorkletModule(target)" in html
                and "CSS.paintWorklet" in html
                and "AudioWorklet&&AudioWorklet.prototype" in html
+               and "var rewritten=_rewriteModuleResourceUrl(String(url))"
+               in html
                and "window.fetch=function(input,init)" in html
                and "XMLHttpRequest.prototype.open=function(method,url)" in html
                and "Element.prototype.setAttribute=function(name,value)" in html

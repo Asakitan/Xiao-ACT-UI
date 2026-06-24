@@ -1082,11 +1082,15 @@ class AIEditorAPI:
     @staticmethod
     def _webview_mime_for_path(path: str) -> str:
         ext = os.path.splitext(path)[1].lower()
-        if ext in {".js", ".mjs"}:
+        if ext in {".js", ".mjs", ".cjs"}:
             return "text/javascript"
         if ext == ".css":
             return "text/css"
         return mimetypes.guess_type(path)[0] or "application/octet-stream"
+
+    @staticmethod
+    def _webview_should_endpoint_resource(path: str) -> bool:
+        return os.path.splitext(path)[1].lower() in {".js", ".mjs", ".cjs"}
 
     @staticmethod
     def _webview_resource_root_path(value: Any) -> str:
@@ -1231,6 +1235,10 @@ class AIEditorAPI:
             path = self._webview_local_path_from_url(url)
             if not path or not self._webview_path_allowed(path, allowed_roots):
                 return url
+            if endpoint_base and self._webview_should_endpoint_resource(path):
+                server = self.__class__._webview_resource_server
+                if server is not None:
+                    return server.resource_url(view_key, url)
             data_uri = file_to_data_uri(path)
             if data_uri:
                 resource_map[url] = data_uri
