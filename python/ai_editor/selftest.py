@@ -4196,6 +4196,7 @@ console.log("frontend signature help docs ok");
             and "function applyExtensionSettingResponseTargets(scopedValues,response,target,value,modified)" in html
             and "function extensionSettingValueForTarget(scopedValues,target,fallback)" in html
             and "function extensionSettingFixMarkdownLinks(text)" in html
+            and "function appendExtensionSettingMarkdownInline(container,line)" in html
             and "function extensionSettingEnumLabel(schema,index,value)" in html
             and "function extensionSettingEnumOptionTitle(schema,index,value,defaultValue)" in html
             and "function extensionSettingEnumEntries(schema,defaultValue)" in html
@@ -4250,7 +4251,7 @@ console.log("frontend signature help docs ok");
             and "categorySelect.value='';scopeSelect.value='';targetSelect.value='';modifiedBox.checked=false;hiddenBox.checked=false" in html
             and "Application/Machine" in html
             and "Machine Overridable" in html
-            and "default: '+extensionSettingJson(defaultVal,type)" in html
+            and "default: '+extensionSettingCompactValue(defaultVal,type)" in html
             and "const fragment=document.createDocumentFragment()" in html
             and "fragment.appendChild(section)" in html
             and "container.appendChild(fragment)" in html
@@ -4319,6 +4320,8 @@ console.log("frontend signature help docs ok");
             and "appendExtensionSettingEnumOptions(input,schema,defaultValue)" in html
             and "function appendExtensionSettingMarkdown(container,text)" in html
             and "function extensionSettingSafeLinkTarget(href)" in html
+            and "function appendExtensionSettingDefaultValue(row,value,type)" in html
+            and "ext-setting-default-value" in html
             and "appendExtensionSettingMarkdown(desc,description)" in html)
     if node_path:
         setting_functions = [
@@ -4326,6 +4329,7 @@ console.log("frontend signature help docs ok");
             "extensionSettingDefault",
             "extensionSettingSafeLinkTarget",
             "extensionSettingFixMarkdownLinks",
+            "appendExtensionSettingMarkdownInline",
             "appendExtensionSettingMarkdown",
             "extensionSettingDeclaresType",
             "extensionSettingScopeName",
@@ -4378,6 +4382,8 @@ console.log("frontend signature help docs ok");
             "extensionSettingMetadataTags",
             "renderExtensionSettingTargetOverrides",
             "extensionSettingJson",
+            "extensionSettingCompactValue",
+            "appendExtensionSettingDefaultValue",
             "extensionSettingJsonRows",
             "extensionSettingTextRows",
             "extensionSettingUsesMultiline",
@@ -4415,6 +4421,9 @@ function makeNode(tag, text){
 function nodeTreeHas(node,predicate){
   if(predicate(node))return true;
   return (node.children||[]).some(child=>nodeTreeHas(child,predicate));
+}
+function nodeTreeText(node){
+  return String(node.textContent || "") + (node.children||[]).map(nodeTreeText).join("");
 }
 globalThis.document = {
   createElement(tag){ return makeNode(tag); },
@@ -5033,6 +5042,28 @@ assert(mdHost.children.some(n => n.tagName === "A"
        "setting link rendered as local filter anchor");
 assert(!mdHost.children.some(n => n.tagName === "A" && n.textContent === "bad"),
        "unsafe link not rendered as anchor");
+const blockMdHost = makeNode("div");
+appendExtensionSettingMarkdown(
+  blockMdHost,
+  "First paragraph with `code`.\n\n- **alpha** item\n- beta item\n\n1. one\n2. #editor.tabSize#"
+);
+assert(blockMdHost.children.some(n => n.tagName === "P"
+       && nodeTreeText(n).indexOf("First paragraph") >= 0)
+       && blockMdHost.children.some(n => n.tagName === "UL"
+         && n.children.length === 2
+         && nodeTreeHas(n, ch => ch.tagName === "STRONG" && ch.textContent === "alpha"))
+       && blockMdHost.children.some(n => n.tagName === "OL"
+         && nodeTreeHas(n, ch => ch.tagName === "A" && ch.href === "#editor.tabSize")),
+       "markdown renderer handles paragraphs bullet lists numbered lists and setting links");
+const defaultValueHost = makeNode("div");
+appendExtensionSettingDefaultValue(defaultValueHost, { mode: "auto", retries: 2 }, "object");
+assert(defaultValueHost.children.some(n => n.className === "ext-setting-default-value"
+       && nodeTreeHas(n, ch => ch.tagName === "STRONG" && ch.textContent === "Default")
+       && nodeTreeHas(n, ch => ch.tagName === "CODE"
+         && ch.textContent.indexOf('"mode": "auto"') >= 0)),
+       "default value metadata block rendered");
+assert(extensionSettingCompactValue({ mode: "auto" }, "object") === '{"mode": "auto"}',
+       "default compact value removes multiline whitespace");
 console.log("extension setting schema helpers ok");
 """
         js_path = ""

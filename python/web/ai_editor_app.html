@@ -1076,10 +1076,17 @@ pre.code-block { overflow:visible; }
 .ext-setting-enum-choice-desc { overflow:hidden; text-overflow:ellipsis; }
 .ext-setting-default-badge { display:inline-flex; align-items:center; padding:1px 5px; border-radius:999px;
   border:1px solid color-mix(in srgb,var(--fg-accent) 36%,transparent); color:var(--fg-accent); font:10px var(--sans); }
+.ext-setting-markdown-block { margin:0 0 4px; }
+.ext-setting-desc ul,.ext-setting-desc ol,.ext-setting-enum-desc ul,.ext-setting-enum-desc ol,
+.ext-setting-deprecated ul,.ext-setting-deprecated ol,.ext-setting-enum-choices ul,.ext-setting-enum-choices ol {
+  margin:2px 0 4px 18px; padding:0; }
+.ext-setting-desc li,.ext-setting-enum-desc li,.ext-setting-deprecated li,.ext-setting-enum-choices li { margin:1px 0; }
+.ext-setting-default-value { display:flex; align-items:flex-start; gap:6px; margin:0 0 5px; color:var(--fg-dim); font-size:10px; }
+.ext-setting-default-value strong { flex:0 0 auto; color:var(--fg); font-weight:600; }
 .ext-setting-note { font-size:10px; color:var(--fg-dim); line-height:1.35; margin-bottom:4px; }
 .ext-setting-deprecated { font-size:11px; color:var(--fg-warning); line-height:1.35; margin-bottom:4px;
   padding:4px 6px; background:color-mix(in srgb,var(--fg-warning) 9%,transparent); border-left:2px solid color-mix(in srgb,var(--fg-warning) 55%,transparent); }
-.ext-setting-desc code,.ext-setting-enum-desc code,.ext-setting-deprecated code,.ext-setting-enum-choices code { font:10px var(--mono); color:var(--fg); background:var(--bg3);
+.ext-setting-desc code,.ext-setting-enum-desc code,.ext-setting-deprecated code,.ext-setting-enum-choices code,.ext-setting-default-value code { font:10px var(--mono); color:var(--fg); background:var(--bg3);
   border:1px solid var(--border); border-radius:3px; padding:1px 3px; }
 .ext-setting-desc a,.ext-setting-enum-desc a,.ext-setting-deprecated a,.ext-setting-enum-choices a { color:var(--fg-accent); text-decoration:none; }
 .ext-setting-desc a:hover,.ext-setting-enum-desc a:hover,.ext-setting-deprecated a:hover,.ext-setting-enum-choices a:hover { text-decoration:underline; }
@@ -11788,49 +11795,78 @@ function extensionSettingSafeLinkTarget(href){
 function extensionSettingFixMarkdownLinks(text){
   return String(text||'').replace(/#([A-Za-z0-9._-]+)#/g,'[$1](#$1)');
 }
-function appendExtensionSettingMarkdown(container,text){
-  const raw=extensionSettingFixMarkdownLinks(text);
+function appendExtensionSettingMarkdownInline(container,line){
   const token=new RegExp(
     '(`[^`]+`|\\[[^\\]]+\\]\\([^)]+\\)|\\*\\*[^*]+\\*\\*|\\*[^*]+\\*)',
     'g');
-  const lines=raw.split(/\r?\n/);
-  lines.forEach((line,lineIndex)=>{
-    if(lineIndex){container.appendChild(document.createElement('br'))}
-    let last=0,match;
-    token.lastIndex=0;
-    while((match=token.exec(line))!==null){
-      if(match.index>last)container.appendChild(document.createTextNode(line.slice(last,match.index)));
-      const part=match[0];
-      if(part.startsWith('`')&&part.endsWith('`')){
-        const code=document.createElement('code');code.textContent=part.slice(1,-1);container.appendChild(code);
-      }else if(part.startsWith('**')&&part.endsWith('**')){
-        const strong=document.createElement('strong');strong.textContent=part.slice(2,-2);container.appendChild(strong);
-      }else if(part.startsWith('*')&&part.endsWith('*')){
-        const em=document.createElement('em');em.textContent=part.slice(1,-1);container.appendChild(em);
-      }else{
-        const linkMatch=new RegExp('^\\[([^\\]]+)\\]\\(([^)]+)\\)$').exec(part);
-        const target=linkMatch?extensionSettingSafeLinkTarget(linkMatch[2]):'';
-        if(target){
-          const a=document.createElement('a');a.textContent=linkMatch[1];a.href=target;a.target='_blank';a.rel='noopener noreferrer';container.appendChild(a);
-          if(target.startsWith('#')){
-            a.target='';
-            a.title='Filter setting '+target.slice(1);
-            a.onclick=ev=>{
-              ev.preventDefault();
-              const input=$('settings-search');
-              if(input&&typeof extensionSettingAppendFilterToken==='function'){
-                input.value='@id:'+target.slice(1);
-                applyExtensionSettingsFilter();
-              }
-            };
-          }
-        }else{
-          container.appendChild(document.createTextNode(linkMatch?linkMatch[1]:part));
+  let last=0,match;
+  token.lastIndex=0;
+  while((match=token.exec(line))!==null){
+    if(match.index>last)container.appendChild(document.createTextNode(line.slice(last,match.index)));
+    const part=match[0];
+    if(part.startsWith('`')&&part.endsWith('`')){
+      const code=document.createElement('code');code.textContent=part.slice(1,-1);container.appendChild(code);
+    }else if(part.startsWith('**')&&part.endsWith('**')){
+      const strong=document.createElement('strong');strong.textContent=part.slice(2,-2);container.appendChild(strong);
+    }else if(part.startsWith('*')&&part.endsWith('*')){
+      const em=document.createElement('em');em.textContent=part.slice(1,-1);container.appendChild(em);
+    }else{
+      const linkMatch=new RegExp('^\\[([^\\]]+)\\]\\(([^)]+)\\)$').exec(part);
+      const target=linkMatch?extensionSettingSafeLinkTarget(linkMatch[2]):'';
+      if(target){
+        const a=document.createElement('a');a.textContent=linkMatch[1];a.href=target;a.target='_blank';a.rel='noopener noreferrer';container.appendChild(a);
+        if(target.startsWith('#')){
+          a.target='';
+          a.title='Filter setting '+target.slice(1);
+          a.onclick=ev=>{
+            ev.preventDefault();
+            const input=$('settings-search');
+            if(input&&typeof extensionSettingAppendFilterToken==='function'){
+              input.value='@id:'+target.slice(1);
+              applyExtensionSettingsFilter();
+            }
+          };
         }
+      }else{
+        container.appendChild(document.createTextNode(linkMatch?linkMatch[1]:part));
       }
-      last=token.lastIndex;
     }
-    if(last<line.length)container.appendChild(document.createTextNode(line.slice(last)));
+    last=token.lastIndex;
+  }
+  if(last<line.length)container.appendChild(document.createTextNode(line.slice(last)));
+}
+function appendExtensionSettingMarkdown(container,text){
+  const raw=extensionSettingFixMarkdownLinks(text);
+  const blocks=raw.split(/\r?\n\s*\r?\n/).map(block=>block.trim()).filter(Boolean);
+  const singlePlainBlock=blocks.length<=1
+    && !/^\s*(?:[-*]\s+|\d+\.\s+)/m.test(blocks[0]||'');
+  if(singlePlainBlock){
+    raw.split(/\r?\n/).forEach((line,lineIndex)=>{
+      if(lineIndex){container.appendChild(document.createElement('br'))}
+      appendExtensionSettingMarkdownInline(container,line);
+    });
+    return;
+  }
+  blocks.forEach(block=>{
+    const lines=block.split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
+    const bullet=lines.every(line=>/^[-*]\s+/.test(line));
+    const numbered=lines.every(line=>/^\d+\.\s+/.test(line));
+    if(bullet||numbered){
+      const list=document.createElement(bullet?'ul':'ol');list.className='ext-setting-markdown-block';
+      lines.forEach(line=>{
+        const li=document.createElement('li');
+        appendExtensionSettingMarkdownInline(li,line.replace(bullet?/^[-*]\s+/:/^\d+\.\s+/,''));
+        list.appendChild(li);
+      });
+      container.appendChild(list);
+    }else{
+      const p=document.createElement('p');p.className='ext-setting-markdown-block';
+      lines.forEach((line,index)=>{
+        if(index)p.appendChild(document.createElement('br'));
+        appendExtensionSettingMarkdownInline(p,line);
+      });
+      container.appendChild(p);
+    }
   });
 }
 function extensionSettingSchemaSummary(schema,type){
@@ -12133,6 +12169,22 @@ function extensionSettingJson(value,type){
   const fallback=type==='array'?[]:(type==='object'?{}:'');
   const v=value===undefined?fallback:value;
   try{return JSON.stringify(v,null,2)}catch(e){return String(v??'')}
+}
+function extensionSettingCompactValue(value,type){
+  return extensionSettingJson(value,type)
+    .replace(/\r?\n\s*/g,' ')
+    .replace(/\{\s+/g,'{')
+    .replace(/\s+\}/g,'}')
+    .replace(/\[\s+/g,'[')
+    .replace(/\s+\]/g,']')
+    .trim();
+}
+function appendExtensionSettingDefaultValue(row,value,type){
+  if(!row)return;
+  const wrap=document.createElement('div');wrap.className='ext-setting-default-value';
+  const label=document.createElement('strong');label.textContent='Default';
+  const code=document.createElement('code');code.textContent=extensionSettingCompactValue(value,type);
+  wrap.appendChild(label);wrap.appendChild(code);row.appendChild(wrap);
 }
 function extensionSettingJsonRows(value,type){
   const lines=extensionSettingJson(value,type).split('\n').length;
@@ -12806,9 +12858,10 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       if(deprecation){const dep=document.createElement('div');dep.className='ext-setting-deprecated';appendExtensionSettingMarkdown(dep,deprecation);row.appendChild(dep)}
       const metaParts=[];
       if(schemaSummary)metaParts.push(schemaSummary);
-      metaParts.push('default: '+extensionSettingJson(defaultValue,type).replace(/\s+/g,' ').trim());
+      metaParts.push('default: '+extensionSettingCompactValue(defaultValue,type));
       const meta=document.createElement('div');meta.className='ext-setting-schema';meta.textContent=metaParts.join(' · ');
       row.appendChild(meta);
+      appendExtensionSettingDefaultValue(row,defaultValue,type);
       appendExtensionSettingSchemaDetails(row,schema,type,defaultValue);
       let input,enumHelp;
       if(type==='boolean'){
@@ -13168,9 +13221,10 @@ async function renderExtensionSettings(){
       ).trim().toLowerCase();
       const metaParts=[];
       if(schemaSummary)metaParts.push(schemaSummary);
-      metaParts.push('default: '+extensionSettingJson(defaultVal,type).replace(/\s+/g,' ').trim());
+      metaParts.push('default: '+extensionSettingCompactValue(defaultVal,type));
       const meta=document.createElement('div');meta.className='ext-setting-schema';meta.textContent=metaParts.join(' · ');
       row.appendChild(meta);
+      appendExtensionSettingDefaultValue(row,defaultVal,type);
       appendExtensionSettingSchemaDetails(row,schema,type,defaultVal);
       let input,enumHelp;
       if(type==='boolean'){
