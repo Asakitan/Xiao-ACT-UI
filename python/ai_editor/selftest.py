@@ -5247,14 +5247,23 @@ console.log("quick input filter helpers ok");
            "class ProcessExecution" in node_ext_host_source
            and "class ShellExecution" in node_ext_host_source
            and "class Task" in node_ext_host_source
+           and "class DebugAdapterExecutable" in node_ext_host_source
+           and "class DebugAdapterServer" in node_ext_host_source
+           and "class DebugAdapterNamedPipeServer" in node_ext_host_source
            and "TaskScope: { Global: 1, Workspace: 2 }" in node_ext_host_source
            and "async fetchTasks(filter)" in node_ext_host_source
            and "async executeTask(task)" in node_ext_host_source
+           and "commandLine: executionSpec.commandLine || ''"
+           in node_ext_host_source
            and "get taskExecutions()" in node_ext_host_source
            and "async startDebugging(folder, config, options)"
            in node_ext_host_source
            and "stopDebugging(session)" in node_ext_host_source
-           and "get activeDebugSession()" in node_ext_host_source)
+           and "get activeDebugSession()" in node_ext_host_source
+           and "createDebugAdapterDescriptor" in node_ext_host_source
+           and "DebugAdapterExecutable," in node_ext_host_source
+           and "msg_type == \"task_execute\"" in extension_host_source
+           and "self._ui_bridge.run_terminal_command" in extension_host_source)
     _check("extension workspace folder picker uses dynamic QuickPick",
            "showWorkspaceFolderPick(options, token)" in node_ext_host_source
            and "function _windowShowWorkspaceFolderPick" in node_ext_host_source
@@ -11947,6 +11956,7 @@ async function activate(context) {
     ];
     let resolvedTask = false;
     let resolvedDebug = false;
+    let descriptorCalls = 0;
     const providerDisposable = vscode.tasks.registerTaskProvider('node-selftest', {
       provideTasks() {
         return [
@@ -11975,6 +11985,22 @@ async function activate(context) {
         },
       }
     );
+    const factoryDisposable = vscode.debug.registerDebugAdapterDescriptorFactory(
+      'node-debug',
+      {
+        createDebugAdapterDescriptor(session, executable) {
+          descriptorCalls += 1;
+          return new vscode.DebugAdapterExecutable(
+            'node-debug-adapter',
+            ['--session', session.name],
+            {
+              cwd: context.extensionUri.fsPath,
+              env: { NODE_DEBUG_SELFTEST: '1' },
+            }
+          );
+        },
+      }
+    );
     const fetched = await vscode.tasks.fetchTasks({ type: 'node-selftest' });
     const execution = await vscode.tasks.executeTask(fetched[0]);
     const activeDuringTask = vscode.tasks.taskExecutions.length;
@@ -11988,11 +12014,14 @@ async function activate(context) {
     });
     const activeDebugName = vscode.debug.activeDebugSession
       && vscode.debug.activeDebugSession.name;
+    const activeDescriptor = vscode.debug.activeDebugSession
+      && vscode.debug.activeDebugSession.adapterDescriptor;
     await vscode.debug.stopDebugging(vscode.debug.activeDebugSession);
     const activeAfterDebug = vscode.debug.activeDebugSession
       && vscode.debug.activeDebugSession.name;
     providerDisposable.dispose();
     debugDisposable.dispose();
+    factoryDisposable.dispose();
     disposables.forEach(disposable => disposable.dispose());
     return {
       taskCount: fetched.length,
@@ -12007,6 +12036,12 @@ async function activate(context) {
       activeDebugName,
       activeAfterDebug,
       resolvedDebug,
+      descriptorCalls,
+      adapterCommand: activeDescriptor && activeDescriptor.command,
+      adapterArgs: activeDescriptor && activeDescriptor.args,
+      adapterEnv: activeDescriptor
+        && activeDescriptor.options
+        && activeDescriptor.options.env,
       debugEvents,
       hasTaskClasses: !!(vscode.Task && vscode.ShellExecution && vscode.ProcessExecution),
       taskScopeWorkspace: vscode.TaskScope.Workspace,
@@ -12868,6 +12903,7 @@ module.exports = { activate, deactivate };
                 except Exception as exc:
                     node_terminal_probe = {"_error": str(exc)}
                 node_terminal_events = list(node_ui_bridge.terminal_events)
+                node_task_terminal_start = len(node_ui_bridge.terminal_events)
                 node_task_debug_command_registered = _wait_until(
                     lambda: "selftest.node.taskDebugProbe"
                     in api._ext_host.commands.list_commands(),
@@ -12877,6 +12913,8 @@ module.exports = { activate, deactivate };
                         "selftest.node.taskDebugProbe")
                 except Exception as exc:
                     node_task_debug_probe = {"_error": str(exc)}
+                node_task_terminal_events = list(
+                    node_ui_bridge.terminal_events[node_task_terminal_start:])
                 node_message_options_command_registered = _wait_until(
                     lambda: "selftest.node.messageOptionsProbe"
                     in api._ext_host.commands.list_commands(),
@@ -15002,19 +15040,42 @@ module.exports = { activate, deactivate };
                        and "process:0" in node_task_debug_events
                        and "end:Node Selftest Task" in node_task_debug_events
                        and "processEnd:undefined" in node_task_debug_events
+                       and any(
+                           item.get("event") == "show"
+                           and item.get("name") == "Task: Node Selftest Task"
+                           and item.get("metadata", {}).get("kind") == "shell"
+                           for item in node_task_terminal_events)
+                       and any(
+                           item.get("event") == "command"
+                           and item.get("name") == "Task: Node Selftest Task"
+                           and item.get("text") == "echo node-task"
+                           for item in node_task_terminal_events)
+                       and any(
+                           item.get("event") == "hide"
+                           and item.get("name") == "Task: Node Selftest Task"
+                           for item in node_task_terminal_events)
                        and node_task_debug_probe.get("debugStarted") is True
                        and node_task_debug_probe.get("activeDebugName")
                        == "Node Debug Resolved"
                        and node_task_debug_probe.get("activeAfterDebug")
                        in {None, ""}
                        and node_task_debug_probe.get("resolvedDebug") is True
+                       and node_task_debug_probe.get("descriptorCalls") == 1
+                       and node_task_debug_probe.get("adapterCommand")
+                       == "node-debug-adapter"
+                       and node_task_debug_probe.get("adapterArgs")
+                       == ["--session", "Node Debug Resolved"]
+                       and node_task_debug_probe.get("adapterEnv", {}).get(
+                           "NODE_DEBUG_SELFTEST") == "1"
                        and "active:Node Debug Resolved" in node_debug_events
                        and "start:Node Debug Resolved:node-debug"
                        in node_debug_events
                        and "active:none" in node_debug_events
                        and "end:Node Debug Resolved" in node_debug_events,
-                       json.dumps(node_task_debug_probe,
-                                  ensure_ascii=False, default=str))
+                       json.dumps({
+                           "probe": node_task_debug_probe,
+                           "terminal": node_task_terminal_events,
+                       }, ensure_ascii=False, default=str))
                 _check("node host message APIs separate options from actions",
                        node_started is True
                        and node_message_options_command_registered

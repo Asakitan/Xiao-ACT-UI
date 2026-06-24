@@ -1489,6 +1489,29 @@ class Task {
     }
 }
 
+class DebugAdapterExecutable {
+    constructor(command, args = [], options = undefined) {
+        this.command = String(command || '');
+        this.args = Array.isArray(args) ? args.map(item => String(item)) : [];
+        this.options = options;
+    }
+}
+
+class DebugAdapterServer {
+    constructor(port, host = undefined) {
+        this.port = Number(port);
+        this.host = host === undefined || host === null
+            ? undefined
+            : String(host);
+    }
+}
+
+class DebugAdapterNamedPipeServer {
+    constructor(pathValue) {
+        this.path = String(pathValue || '');
+    }
+}
+
 // -------------------------------------------------------------------------
 // Global registries
 // -------------------------------------------------------------------------
@@ -3009,6 +3032,7 @@ function _taskMatchesFilter(task, filter) {
 
 function _serializeTask(task) {
     if (!task || typeof task !== 'object') return { name: String(task || 'task') };
+    const executionSpec = _taskExecutionSpec(task);
     return {
         name: String(task.name || task.label || _taskType(task) || 'task'),
         source: task.source === undefined ? undefined : String(task.source),
@@ -3016,9 +3040,93 @@ function _serializeTask(task) {
         definition: _plainBridgeValue(task.definition || {}),
         scope: _plainBridgeValue(task.scope),
         execution: _plainBridgeValue(task.execution),
+        commandLine: executionSpec.commandLine || undefined,
         problemMatchers: _plainBridgeValue(task.problemMatchers || []),
         presentationOptions: _plainBridgeValue(task.presentationOptions || {}),
         runOptions: _plainBridgeValue(task.runOptions || {}),
+    };
+}
+
+function _quoteCommandToken(value) {
+    const text = String(value ?? '');
+    if (!text) return '""';
+    if (!/[\s"'`$&|<>]/.test(text)) return text;
+    return JSON.stringify(text);
+}
+
+function _taskExecutionSpec(task) {
+    if (!task || typeof task !== 'object') return {};
+    const execution = task.execution;
+    let commandLine = '';
+    let cwd;
+    let env;
+    let kind = '';
+    if (execution instanceof ShellExecution) {
+        kind = 'shell';
+        if (execution.commandLine) {
+            commandLine = String(execution.commandLine);
+        } else if (execution.command) {
+            commandLine = [
+                execution.command,
+                ...(execution.args || []),
+            ].map(_quoteCommandToken).join(' ');
+        }
+        cwd = execution.options && execution.options.cwd;
+        env = execution.options && execution.options.env;
+    } else if (execution instanceof ProcessExecution) {
+        kind = 'process';
+        commandLine = [
+            execution.process,
+            ...(execution.args || []),
+        ].map(_quoteCommandToken).join(' ');
+        cwd = execution.options && execution.options.cwd;
+        env = execution.options && execution.options.env;
+    } else if (execution && typeof execution === 'object') {
+        kind = String(
+            execution.type
+            || (execution.commandLine || execution.command ? 'shell' : '')
+            || (execution.process ? 'process' : ''));
+        if (execution.commandLine) {
+            commandLine = String(execution.commandLine);
+        } else {
+            const command = execution.command || execution.process;
+            if (command) {
+                commandLine = [
+                    command,
+                    ...(
+                        Array.isArray(execution.args)
+                            ? execution.args
+                            : []
+                    ),
+                ].map(_quoteCommandToken).join(' ');
+            }
+        }
+        if (!commandLine && execution.process) {
+            commandLine = [
+                execution.process,
+                ...(
+                    Array.isArray(execution.args)
+                        ? execution.args
+                        : []
+                ),
+            ].map(_quoteCommandToken).join(' ');
+        }
+        cwd = execution.cwd || (execution.options && execution.options.cwd);
+        env = execution.env || (execution.options && execution.options.env);
+    } else if (typeof task.command === 'string') {
+        kind = task.shell ? 'shell' : 'process';
+        commandLine = [
+            task.command,
+            ...(Array.isArray(task.args) ? task.args : []),
+        ].map(_quoteCommandToken).join(' ');
+        cwd = task.cwd || (task.options && task.options.cwd);
+        env = task.env || (task.options && task.options.env);
+    }
+    return {
+        commandLine,
+        cwd: _terminalOptionValue(cwd),
+        env: _terminalOptionValue(env),
+        kind,
     };
 }
 
@@ -3042,7 +3150,35 @@ function _debugSessionPayload(session) {
         type: session.type,
         name: session.name,
         configuration: _plainBridgeValue(session.configuration || {}),
+        adapterDescriptor: _debugAdapterDescriptorPayload(
+            session.adapterDescriptor),
     };
+}
+
+function _debugAdapterDescriptorPayload(descriptor) {
+    if (!descriptor) return undefined;
+    if (descriptor instanceof DebugAdapterExecutable) {
+        return {
+            type: 'executable',
+            command: descriptor.command,
+            args: descriptor.args || [],
+            options: _plainBridgeValue(descriptor.options || {}),
+        };
+    }
+    if (descriptor instanceof DebugAdapterServer) {
+        return {
+            type: 'server',
+            port: descriptor.port,
+            host: descriptor.host,
+        };
+    }
+    if (descriptor instanceof DebugAdapterNamedPipeServer) {
+        return {
+            type: 'pipeServer',
+            path: descriptor.path,
+        };
+    }
+    return _plainBridgeValue(descriptor);
 }
 
 function _debugUpdateActive(session, emitter) {
@@ -6374,6 +6510,14 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                         configuration: { ...config },
                         parentSession: options && options.parentSession,
                     };
+                    const descriptorFactory = _debugAdapterFactories.get(session.type);
+                    if (descriptorFactory
+                            && typeof descriptorFactory.createDebugAdapterDescriptor === 'function') {
+                        session.adapterDescriptor = await Promise.resolve(
+                            descriptorFactory.createDebugAdapterDescriptor(
+                                session,
+                                undefined));
+                    }
                     _debugUpdateActive(session, _onDidChangeActiveDebugSession);
                     _onDidStartDebugSession.fire(session);
                     send({
@@ -6448,10 +6592,16 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                         id: `task-${_nextTaskExecutionHandle++}`,
                         task: resolved,
                         terminate() {
+                            send({
+                                type: 'task_terminate',
+                                executionId: execution.id,
+                                task: _serializeTask(resolved),
+                            });
                             endExecution(execution, undefined);
                             return Promise.resolve();
                         },
                     };
+                    const executionSpec = _taskExecutionSpec(resolved);
                     _taskExecutions.push(execution);
                     _onDidStartTask.fire({ execution, task: resolved });
                     _onDidStartTaskProcess.fire({ execution, processId: 0 });
@@ -6459,6 +6609,12 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                         type: 'task_execute',
                         executionId: execution.id,
                         task: _serializeTask(resolved),
+                        commandLine: executionSpec.commandLine || '',
+                        metadata: {
+                            cwd: executionSpec.cwd,
+                            env: executionSpec.env,
+                            kind: executionSpec.kind,
+                        },
                     });
                     return execution;
                 },
@@ -6480,6 +6636,9 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         ProcessExecution,
         ShellExecution,
         Task,
+        DebugAdapterExecutable,
+        DebugAdapterServer,
+        DebugAdapterNamedPipeServer,
         FileDecoration,
         MarkdownString: class {
             constructor(value = '', supportThemeIcons = false) {

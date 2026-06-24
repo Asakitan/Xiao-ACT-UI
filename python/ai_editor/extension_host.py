@@ -2941,6 +2941,38 @@ class NodeExtensionHost:
                 except Exception:
                     pass
 
+        elif msg_type == "task_execute":
+            if self._ui_bridge:
+                try:
+                    task = msg.get("task")
+                    task_name = "Extension Task"
+                    if isinstance(task, dict):
+                        task_name = str(task.get("name") or task_name)
+                    terminal_name = f"Task: {task_name}"
+                    metadata = msg.get("metadata")
+                    if not isinstance(metadata, dict):
+                        metadata = {}
+                    metadata = dict(metadata)
+                    metadata["executionId"] = str(msg.get("executionId", ""))
+                    self._ui_bridge.show_terminal(terminal_name, metadata)
+                    command_line = str(msg.get("commandLine") or "")
+                    if command_line:
+                        self._ui_bridge.run_terminal_command(
+                            terminal_name, command_line)
+                except Exception:
+                    pass
+
+        elif msg_type == "task_terminate":
+            if self._ui_bridge:
+                try:
+                    task = msg.get("task")
+                    task_name = "Extension Task"
+                    if isinstance(task, dict):
+                        task_name = str(task.get("name") or task_name)
+                    self._ui_bridge.hide_terminal(f"Task: {task_name}")
+                except Exception:
+                    pass
+
         elif msg_type in ("progress_start", "progress_report", "progress_done"):
             progress_handler = (
                 getattr(self._ui_bridge, "show_progress", None)
