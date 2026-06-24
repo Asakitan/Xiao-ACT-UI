@@ -2390,9 +2390,29 @@ function quickInputButtonGlyph(button){
   return tip?esc(tip.slice(0,1).toUpperCase()):'·';
 }
 function quickInputButtonTitle(button){return String(button&&button.tooltip||'')}
+function quickInputResourceUriPath(resource){
+  if(!resource)return'';
+  if(typeof resource==='string')return resource;
+  if(resource.fsPath)return String(resource.fsPath);
+  if(resource.path)return String(resource.path);
+  if(resource.uri)return quickInputResourceUriPath(resource.uri);
+  return'';
+}
+function quickInputResourceBasename(value){
+  const path=String(value||'').replace(/[?#].*$/,'').replace(/\\/g,'/');
+  const parts=path.split('/').filter(Boolean);
+  return parts.length?parts[parts.length-1]:path;
+}
+function quickInputDisplayItem(item){
+  if(!item||typeof item!=='object')return {label:String(item||''),description:'',detail:''};
+  const resourcePath=quickInputResourceUriPath(item.resourceUri);
+  const label=item.label!==undefined&&String(item.label).trim()?String(item.label):(resourcePath?quickInputResourceBasename(resourcePath):'');
+  const description=item.description!==undefined&&String(item.description).trim()?String(item.description):(resourcePath?String(resourcePath):'');
+  return {...item,label,description,detail:item.detail!==undefined?String(item.detail):''};
+}
 function quickInputItemKey(item){
-  if(!item||typeof item!=='object')return String(item||'');
-  return [item.label,item.description,item.detail].map(v=>String(v||'')).join('|#|');
+  const display=quickInputDisplayItem(item);
+  return [display.label,display.description,display.detail].map(v=>String(v||'')).join('|#|');
 }
 function quickInputSelectedKeySet(items){
   const set=new Set();(Array.isArray(items)?items:[]).forEach(item=>set.add(quickInputItemKey(item)));return set;
@@ -2402,9 +2422,10 @@ function quickInputItemMatchesFilter(item,state){
   const query=quickInputFilterText(state);
   if(!query)return true;
   if(item&&typeof item==='object'&&Number(item.kind)===1)return false;
-  const fields=[item&&typeof item==='object'?item.label:item];
-  if(state&&state.matchOnDescription)fields.push(item&&item.description);
-  if(state&&state.matchOnDetail)fields.push(item&&item.detail);
+  const display=quickInputDisplayItem(item);
+  const fields=[display.label];
+  if(state&&state.matchOnDescription)fields.push(display.description);
+  if(state&&state.matchOnDetail)fields.push(display.detail);
   return fields.some(value=>String(value||'').toLowerCase().includes(query));
 }
 function quickInputSelectedIndices(state){
@@ -2505,6 +2526,7 @@ function quickInputRenderItems(list,state,input){
     }
     if(!quickInputItemMatchesFilter(item,state))return;
     if(hasFilter&&pendingSeparator){appendSeparator(pendingSeparator);pendingSeparator=null}
+    const display=quickInputDisplayItem(item);
     const row=document.createElement('div');row.className='quick-input-item';row.tabIndex=0;row.dataset.index=String(index);
     row.id=quickInputDomId(state.id,'item-'+index);row.setAttribute('role','option');
     const key=quickInputItemKey(item);
@@ -2515,10 +2537,10 @@ function quickInputRenderItems(list,state,input){
     const main=document.createElement('div');main.className='quick-input-item-main';
     const title=document.createElement('div');title.className='quick-input-item-title';
     const mark=document.createElement('span');mark.className='quick-input-item-picked';mark.textContent=selected.has(key)?'✓':'';
-    const label=document.createElement('span');label.className='quick-input-item-label';label.textContent=String(item&&item.label!==undefined?item.label:item||'');
+    const label=document.createElement('span');label.className='quick-input-item-label';label.textContent=display.label;
     title.appendChild(mark);title.appendChild(label);main.appendChild(title);
-    if(item&&item.description){const desc=document.createElement('div');desc.className='quick-input-item-desc';desc.textContent=String(item.description);main.appendChild(desc)}
-    if(item&&item.detail){const detail=document.createElement('div');detail.className='quick-input-item-detail';detail.textContent=String(item.detail);main.appendChild(detail)}
+    if(display.description){const desc=document.createElement('div');desc.className='quick-input-item-desc';desc.textContent=display.description;main.appendChild(desc)}
+    if(display.detail){const detail=document.createElement('div');detail.className='quick-input-item-detail';detail.textContent=display.detail;main.appendChild(detail)}
     const btns=document.createElement('div');btns.className='quick-input-btns';
     (Array.isArray(item&&item.buttons)?item.buttons:[]).forEach((button,buttonIndex)=>{
       const btn=document.createElement('button');btn.type='button';btn.className='quick-input-btn';btn.title=quickInputButtonTitle(button);

@@ -1993,6 +1993,19 @@ function _urisFromDialogPaths(paths) {
         .map(value => Uri.file(String(value)));
 }
 
+function _urisFromDialogValue(value) {
+    const values = Array.isArray(value) ? value : [value];
+    return values
+        .filter(item => item !== undefined && item !== null)
+        .map(item => {
+            if (item instanceof Uri) return item;
+            if (item && typeof item === 'object' && (item.scheme || item.uri || item.fsPath || item.path)) {
+                return _workspaceUriFromInput(item);
+            }
+            return Uri.file(String(item));
+        });
+}
+
 function _handleWindowDialogResponse(msg) {
     const requestId = String(msg.requestId || '');
     const pending = _windowDialogRequests.get(requestId);
@@ -2007,11 +2020,11 @@ function _handleWindowDialogResponse(msg) {
     if (value.cancelled) {
         pending.resolve(undefined);
     } else if (pending.kind === 'open') {
-        const paths = value.paths !== undefined ? value.paths : value.path;
-        const uris = _urisFromDialogPaths(paths);
+        const paths = value.uris !== undefined ? value.uris : value.uri !== undefined ? value.uri : value.paths !== undefined ? value.paths : value.path;
+        const uris = _urisFromDialogValue(paths);
         pending.resolve(uris.length ? uris : undefined);
     } else {
-        const paths = _urisFromDialogPaths(value.path || value.paths);
+        const paths = _urisFromDialogValue(value.uri || value.uris || value.path || value.paths);
         pending.resolve(paths[0]);
     }
 }
@@ -2588,6 +2601,9 @@ function _workspaceUriFromInput(value) {
         return Uri.file(path.isAbsolute(value) ? value : path.join(_workspaceRoot, value));
     }
     if (value && typeof value === 'object') {
+        if (value.fsPath && (!value.scheme || value.scheme === 'file')) {
+            return Uri.file(String(value.fsPath));
+        }
         if (value.scheme) return _uriFromPayload(value);
         if (value.uri || value.path || value.fsPath) {
             return _workspaceUriFromInput(value.uri || value.fsPath || value.path);

@@ -4641,6 +4641,9 @@ console.log("extension setting schema helpers ok");
            and "function renderQuickInputEvent(data)" in html
            and "function renderQuickInputState(state)" in html
            and "function quickInputRenderItems(list,state,input)" in html
+           and "function quickInputDisplayItem(item)" in html
+           and "function quickInputResourceUriPath(resource)" in html
+           and "function quickInputResourceBasename(value)" in html
            and "function quickInputMoveActive(state,delta)" in html
            and "function quickInputItemMatchesFilter(item,state)" in html
            and "function quickInputFilterText(state)" in html
@@ -4670,6 +4673,9 @@ console.log("extension setting schema helpers ok");
            and "renderQuickInputEvent(data)" in html)
     if node_path:
         quick_input_functions = [
+            "quickInputResourceUriPath",
+            "quickInputResourceBasename",
+            "quickInputDisplayItem",
             "quickInputItemKey",
             "quickInputSelectedKeySet",
             "quickInputFilterText",
@@ -4696,6 +4702,23 @@ const state = {
   activeItems: [{ label: "Alpha", description: "beta desc", detail: "gamma detail" }],
   selectedItems: [{ label: "Beta", description: "plain", detail: "plain" }],
 };
+const resourceItem = { resourceUri: { fsPath: "C:\\\\repo\\\\src\\\\main.ts" } };
+const resourceDisplay = quickInputDisplayItem(resourceItem);
+assert(resourceDisplay.label === "main.ts" && resourceDisplay.description === "C:\\\\repo\\\\src\\\\main.ts",
+       "resourceUri derives label and description");
+state.items.push(resourceItem);
+state.value = "main.ts";
+assert(JSON.stringify(quickInputSelectableIndices(state)) === "[4]",
+       "resourceUri-derived label participates in filtering");
+state.value = "repo";
+state.matchOnDescription = true;
+state.matchOnDetail = false;
+assert(JSON.stringify(quickInputSelectableIndices(state)) === "[4]",
+       "resourceUri-derived description participates in filtering");
+state.items.pop();
+state.value = "beta";
+state.matchOnDescription = false;
+state.matchOnDetail = false;
 assert(JSON.stringify(quickInputSelectableIndices(state)) === "[2]",
        "label filter excludes separator and nonmatching items");
 assert(quickInputActiveIndex(state) === 2,
@@ -5011,6 +5034,7 @@ console.log("quick input filter helpers ok");
            and "showSaveDialog(options, token)" in node_ext_host_source
            and "type: 'window_dialog_request'" in node_ext_host_source
            and "case 'window_dialog_response':" in node_ext_host_source
+           and "function _urisFromDialogValue(value)" in node_ext_host_source
            and "window_dialog_request" in extension_host_source
            and "window_dialog_response" in extension_host_source
            and "def show_window_dialog(self, kind: str,"
@@ -12167,9 +12191,15 @@ module.exports = { activate, deactivate };
                         "options": dict(options or {}),
                     })
                     if kind == "open":
-                        return {"paths": list(self.open_dialog_paths)}
+                        return {"uris": [
+                            {"scheme": "file", "fsPath": str(path)}
+                            for path in self.open_dialog_paths
+                        ]}
                     if kind == "save":
-                        return {"path": self.save_dialog_path}
+                        return {"uri": {
+                            "scheme": "file",
+                            "fsPath": str(self.save_dialog_path),
+                        }}
                     return {"cancelled": True}
 
                 def read_clipboard_text(self):
