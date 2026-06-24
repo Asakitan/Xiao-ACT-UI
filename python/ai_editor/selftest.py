@@ -5437,6 +5437,7 @@ def test_app_extension_runtime_support() -> None:
     node_workspace_contains_tmp = ""
     node_dependency_tmp = ""
     node_dependent_tmp = ""
+    node_fs_tmp = ""
     node_storage_tmp = ""
     extension_host_module._host = ExtensionHost()
     try:
@@ -6321,6 +6322,7 @@ def test_app_extension_runtime_support() -> None:
                 prefix="sao_node_dependency_ext_")
             node_dependent_tmp = tempfile.mkdtemp(
                 prefix="sao_node_dependent_ext_")
+            node_fs_tmp = tempfile.mkdtemp(prefix="sao_node_fs_ext_")
             node_storage_tmp = tempfile.mkdtemp(prefix="sao_node_storage_")
             node_inactive_js = r"""
 async function activate(context) {
@@ -6475,6 +6477,88 @@ module.exports = { activate };
                     }],
                 },
             }, node_dependent_tmp)
+            node_fs_js = r"""
+const vscode = require('vscode');
+const encoder = new TextEncoder();
+const files = new Map([
+  ['/hello.txt', encoder.encode('from-selfmem')],
+]);
+
+function key(uri) {
+  return uri && uri.path ? uri.path : '/';
+}
+
+function bytes(value) {
+  if (value instanceof Uint8Array) return value;
+  if (Array.isArray(value)) return Uint8Array.from(value);
+  return encoder.encode(String(value || ''));
+}
+
+async function activate(context) {
+  const provider = {
+    watch() {
+      return new vscode.Disposable(() => {});
+    },
+    stat(uri) {
+      const name = key(uri);
+      if (name === '/') {
+        return { type: vscode.FileType.Directory, ctime: 1, mtime: 1, size: 0 };
+      }
+      const data = files.get(name);
+      if (!data) throw new Error('missing: ' + name);
+      return { type: vscode.FileType.File, ctime: 1, mtime: 2, size: data.length };
+    },
+    readDirectory(uri) {
+      if (key(uri) !== '/') return [];
+      return [...files.keys()].map(name => [
+        name.replace(/^\//, ''),
+        vscode.FileType.File,
+      ]);
+    },
+    readFile(uri) {
+      const data = files.get(key(uri));
+      if (!data) throw new Error('missing: ' + key(uri));
+      return data;
+    },
+    writeFile(uri, content) {
+      files.set(key(uri), bytes(content));
+    },
+    createDirectory(uri) {},
+    delete(uri) {
+      files.delete(key(uri));
+    },
+    rename(oldUri, newUri) {
+      const data = files.get(key(oldUri));
+      if (!data) throw new Error('missing: ' + key(oldUri));
+      files.set(key(newUri), data);
+      files.delete(key(oldUri));
+    },
+  };
+  context.subscriptions.push(vscode.workspace.registerFileSystemProvider(
+    'selfmem',
+    provider,
+    { isCaseSensitive: true },
+  ));
+  return {
+    name: 'nodeFileSystemApi',
+    extensionId: context.extension && context.extension.id,
+  };
+}
+module.exports = { activate };
+"""
+            with open(os.path.join(node_fs_tmp, "extension.js"),
+                      "w", encoding="utf-8") as fh:
+                fh.write(node_fs_js)
+            node_fs_desc = ExtensionDescription.from_package_json({
+                "name": "node-filesystem",
+                "publisher": "selftest",
+                "version": "0.0.1",
+                "displayName": "Node FileSystem",
+                "main": "./extension.js",
+                "activationEvents": [
+                    "onFileSystem:selfmem",
+                ],
+            }, node_fs_tmp)
             node_extension_js = r"""
 const vscode = require('vscode');
 const output = vscode.window.createOutputChannel('node-tree-selftest');
@@ -7023,6 +7107,37 @@ async function activate(context) {
       configRemoved,
     };
   });
+  vscode.commands.registerCommand('selftest.node.fileSystemActivationProbe', async () => {
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    const fsExt = vscode.extensions.getExtension('selftest.node-filesystem');
+    const beforeActive = fsExt && fsExt.isActive === false;
+    const rootUri = vscode.Uri.parse('selfmem:/');
+    const helloUri = vscode.Uri.parse('selfmem:/hello.txt');
+    const createdUri = vscode.Uri.parse('selfmem:/created.txt');
+    const renamedUri = vscode.Uri.parse('selfmem:/renamed.txt');
+    const helloText = decoder.decode(await vscode.workspace.fs.readFile(helloUri));
+    const fsExtAfter = vscode.extensions.getExtension('selftest.node-filesystem');
+    const afterActive = fsExtAfter && fsExtAfter.isActive === true;
+    await vscode.workspace.fs.writeFile(createdUri, encoder.encode('created-data'));
+    const createdText = decoder.decode(await vscode.workspace.fs.readFile(createdUri));
+    const createdStat = await vscode.workspace.fs.stat(createdUri);
+    const beforeRename = await vscode.workspace.fs.readDirectory(rootUri);
+    await vscode.workspace.fs.rename(createdUri, renamedUri, { overwrite: true });
+    const renamedText = decoder.decode(await vscode.workspace.fs.readFile(renamedUri));
+    await vscode.workspace.fs.delete(renamedUri);
+    const afterDelete = await vscode.workspace.fs.readDirectory(rootUri);
+    return {
+      beforeActive,
+      afterActive,
+      helloText,
+      createdText,
+      createdType: createdStat.type,
+      beforeRename: beforeRename.map(([name]) => name).sort(),
+      renamedText,
+      afterDelete: afterDelete.map(([name]) => name).sort(),
+    };
+  });
   vscode.commands.registerCommand('selftest.node.pythonCommandProbe', async () => {
     const nested = await vscode.commands.executeCommand(
       'selftest.python.echo',
@@ -7265,6 +7380,7 @@ module.exports = { activate, deactivate };
             api._ext_host.registry.register(node_workspace_contains_desc)
             api._ext_host.registry.register(node_dependency_desc)
             api._ext_host.registry.register(node_dependent_desc)
+            api._ext_host.registry.register(node_fs_desc)
             class _NodeUiBridge:
                 def __init__(self) -> None:
                     self.webviews = {}
@@ -7318,6 +7434,7 @@ module.exports = { activate, deactivate };
                         node_workspace_contains_desc,
                         node_dependency_desc,
                         node_dependent_desc,
+                        node_fs_desc,
                     ])
                     api._install_node_activation_event_bridge()
                     node_host.send_settings_sync({
@@ -7387,6 +7504,15 @@ module.exports = { activate, deactivate };
                 node_dependency_after_command = (
                     node_dependency_desc.id in node_host._activated_ids
                     and node_dependent_desc.id in node_host._activated_ids)
+                node_file_system_command_registered = _wait_until(
+                    lambda: "selftest.node.fileSystemActivationProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                try:
+                    node_file_system_probe = api._ext_host.commands.execute(
+                        "selftest.node.fileSystemActivationProbe")
+                except Exception as exc:
+                    node_file_system_probe = {"_error": str(exc)}
                 node_registered = _wait_until(
                     lambda: "selftest.node.tree" in api._vscode_ns._tree_data_providers,
                     timeout=3.0)
@@ -8332,6 +8458,25 @@ module.exports = { activate, deactivate };
                        json.dumps(
                            node_dependent_command_result,
                            ensure_ascii=False))
+                _check("node host activates onFileSystem providers dynamically",
+                       node_started is True
+                       and node_file_system_command_registered
+                       and isinstance(node_file_system_probe, dict)
+                       and node_file_system_probe.get("beforeActive") is True
+                       and node_file_system_probe.get("afterActive") is True
+                       and node_file_system_probe.get("helloText")
+                       == "from-selfmem"
+                       and node_file_system_probe.get("createdText")
+                       == "created-data"
+                       and node_file_system_probe.get("createdType") == 1
+                       and node_file_system_probe.get("renamedText")
+                       == "created-data"
+                       and node_file_system_probe.get("beforeRename")
+                       == ["created.txt", "hello.txt"]
+                       and node_file_system_probe.get("afterDelete")
+                       == ["hello.txt"],
+                       json.dumps(node_file_system_probe,
+                                  ensure_ascii=False))
                 _check("node host tree provider registers dynamic activity view",
                        node_started is True
                        and sent is True
@@ -8601,6 +8746,8 @@ module.exports = { activate, deactivate };
             shutil.rmtree(node_dependency_tmp, ignore_errors=True)
         if node_dependent_tmp:
             shutil.rmtree(node_dependent_tmp, ignore_errors=True)
+        if node_fs_tmp:
+            shutil.rmtree(node_fs_tmp, ignore_errors=True)
         if node_storage_tmp:
             shutil.rmtree(node_storage_tmp, ignore_errors=True)
 

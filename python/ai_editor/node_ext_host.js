@@ -1050,6 +1050,7 @@ const _treeDataProviders = new Map();    // viewId -> { provider, disposable? }
 const _treeViews = new Map();            // viewId -> TreeView-like object
 const _treeElementStores = new Map();    // viewId -> element handle store
 const _outputChannels = new Map();       // name -> OutputChannel
+const _fileSystemProviders = new Map();  // scheme -> { provider, options, extensionId }
 const _languageProviders = [];           // { kind, selector, provider, triggers?, disposable }
 let _nextLanguageProviderHandle = 1;
 let _nextPythonCommandRequestHandle = 1;
@@ -1581,6 +1582,176 @@ function _workspaceRelativePath(value, includeWorkspaceFolder) {
     let rel = path.relative(_workspaceRoot, absPath).replace(/\\/g, '/');
     if (!rel || rel.startsWith('..')) rel = absPath.replace(/\\/g, '/');
     return includeWorkspaceFolder ? `${_workspaceName}/${rel}` : rel;
+}
+
+function _normalizeFileSystemScheme(scheme) {
+    return String(scheme || '').trim().toLowerCase();
+}
+
+function _contentToUint8Array(value) {
+    if (value instanceof Uint8Array) return value;
+    if (Buffer.isBuffer(value)) return new Uint8Array(value);
+    if (Array.isArray(value)) return Uint8Array.from(value);
+    if (value instanceof ArrayBuffer) return new Uint8Array(value);
+    if (value === undefined || value === null) return new Uint8Array();
+    return new TextEncoder().encode(String(value));
+}
+
+async function _fileSystemProviderForUri(uri) {
+    const scheme = _normalizeFileSystemScheme(uri?.scheme);
+    if (!scheme || scheme === 'file') return null;
+    let entry = _fileSystemProviders.get(scheme);
+    if (entry) return entry;
+    await _activateKnownExtensionsForEvent(`onFileSystem:${scheme}`);
+    entry = _fileSystemProviders.get(scheme);
+    if (!entry) {
+        throw new Error(`No filesystem provider registered for scheme: ${scheme}`);
+    }
+    return entry;
+}
+
+async function _callFileSystemProvider(uri, methodNames, args, fallback) {
+    const entry = await _fileSystemProviderForUri(uri);
+    if (!entry) return fallback();
+    for (const name of methodNames) {
+        const method = entry.provider && entry.provider[name];
+        if (typeof method === 'function') {
+            return await method.apply(entry.provider, args);
+        }
+    }
+    throw new Error(`Filesystem provider for ${uri.scheme} is missing ${methodNames[0]}`);
+}
+
+async function _workspaceFsReadFile(uriInput) {
+    const uri = _workspaceUriFromInput(uriInput);
+    const value = await _callFileSystemProvider(
+        uri,
+        ['readFile', 'read_file'],
+        [uri],
+        () => fsp.readFile(uri.fsPath),
+    );
+    return _contentToUint8Array(value);
+}
+
+async function _workspaceFsWriteFile(uriInput, content) {
+    const uri = _workspaceUriFromInput(uriInput);
+    const bytes = _contentToUint8Array(content);
+    return _callFileSystemProvider(
+        uri,
+        ['writeFile', 'write_file'],
+        [uri, bytes, { create: true, overwrite: true }],
+        async () => {
+            await fsp.writeFile(uri.fsPath, bytes);
+            const cached = _workspaceTextDocuments.get(uri.toString());
+            if (cached) {
+                const oldText = cached.getText();
+                const text = _workspaceContentToText(bytes);
+                _workspaceSetDocumentText(uri, text, _languageIdForUri(uri), [{
+                    range: _workspaceFullDocumentRange(oldText),
+                    rangeOffset: 0,
+                    rangeLength: oldText.length,
+                    text,
+                }]);
+            }
+        },
+    );
+}
+
+async function _workspaceFsStat(uriInput) {
+    const uri = _workspaceUriFromInput(uriInput);
+    const value = await _callFileSystemProvider(
+        uri,
+        ['stat'],
+        [uri],
+        async () => {
+            const s = await fsp.stat(uri.fsPath);
+            return {
+                type: s.isDirectory() ? 2 : 1,
+                size: s.size,
+                ctime: s.ctimeMs,
+                mtime: s.mtimeMs,
+            };
+        },
+    );
+    return Object.assign({ type: 0, size: 0, ctime: 0, mtime: 0 }, value || {});
+}
+
+async function _workspaceFsReadDirectory(uriInput) {
+    const uri = _workspaceUriFromInput(uriInput);
+    return _callFileSystemProvider(
+        uri,
+        ['readDirectory', 'read_directory'],
+        [uri],
+        () => fsp.readdir(uri.fsPath, { withFileTypes: true })
+            .then(ents => ents.map(e => [e.name, e.isDirectory() ? 2 : 1])),
+    );
+}
+
+async function _workspaceFsCreateDirectory(uriInput) {
+    const uri = _workspaceUriFromInput(uriInput);
+    return _callFileSystemProvider(
+        uri,
+        ['createDirectory', 'create_directory'],
+        [uri],
+        () => fsp.mkdir(uri.fsPath, { recursive: true }),
+    );
+}
+
+async function _workspaceFsDelete(uriInput, options) {
+    const uri = _workspaceUriFromInput(uriInput);
+    return _callFileSystemProvider(
+        uri,
+        ['delete', 'deleteFile', 'delete_file'],
+        [uri, options || {}],
+        async () => {
+            await fsp.rm(uri.fsPath, { force: true });
+            _workspaceCloseTextDocument(uri);
+        },
+    );
+}
+
+async function _workspaceFsRename(srcInput, dstInput, options) {
+    const src = _workspaceUriFromInput(srcInput);
+    const dst = _workspaceUriFromInput(dstInput);
+    if (src.scheme !== dst.scheme) {
+        throw new Error('rename across filesystem providers is unsupported');
+    }
+    return _callFileSystemProvider(
+        src,
+        ['rename', 'renameFile', 'rename_file'],
+        [src, dst, options || {}],
+        async () => {
+            await fsp.rename(src.fsPath, dst.fsPath);
+            const cached = _workspaceCloseTextDocument(src);
+            if (cached) {
+                const text = await fsp.readFile(dst.fsPath, 'utf8');
+                _workspaceStoreTextDocument(_createLanguageDocument({
+                    uri: dst,
+                    text,
+                    languageId: _languageIdForUri(dst),
+                    version: Date.now(),
+                }), true);
+            }
+        },
+    );
+}
+
+async function _workspaceFsCopy(srcInput, dstInput, options) {
+    const src = _workspaceUriFromInput(srcInput);
+    const dst = _workspaceUriFromInput(dstInput);
+    if (src.scheme !== dst.scheme) {
+        throw new Error('copy across filesystem providers is unsupported');
+    }
+    const entry = await _fileSystemProviderForUri(src);
+    if (entry) {
+        const copy = entry.provider && entry.provider.copy;
+        if (typeof copy === 'function') {
+            return await copy.call(entry.provider, src, dst, options || {});
+        }
+        const content = await _workspaceFsReadFile(src);
+        return _workspaceFsWriteFile(dst, content);
+    }
+    return fsp.copyFile(src.fsPath, dst.fsPath);
 }
 
 function _workspacePatternText(pattern, fallback = '**/*') {
@@ -2255,15 +2426,28 @@ function _handleActivateExtensionResponse(msg) {
     }
 }
 
-function _activateKnownExtension(id) {
+async function _activateKnownExtension(id, visiting = new Set()) {
     const extensionId = String(id || '');
     const active = _extensions.get(extensionId);
-    if (active) return Promise.resolve(active.activationExports);
+    if (active) return active.activationExports;
     if (!_knownExtensions.has(extensionId)) {
-        return Promise.reject(new Error(`Unknown extension: ${extensionId}`));
+        throw new Error(`Unknown extension: ${extensionId}`);
     }
     const existing = _extensionActivationInFlight.get(extensionId);
     if (existing) return existing.promise;
+    if (visiting.has(extensionId)) return undefined;
+    visiting.add(extensionId);
+
+    const known = _knownExtensions.get(extensionId);
+    const dependencyIds = Array.isArray(known?.manifest?.extensionDependencies)
+        ? known.manifest.extensionDependencies
+        : [];
+    for (const depId of dependencyIds) {
+        const depKey = String(depId || '');
+        if (!depKey || !_knownExtensions.has(depKey)) continue;
+        await _activateKnownExtension(depKey, visiting);
+    }
+    visiting.delete(extensionId);
 
     const requestId = `extact-${_nextExtensionActivationRequestHandle++}`;
     let resolvePromise;
@@ -2289,6 +2473,34 @@ function _activateKnownExtension(id) {
     _extensionActivationInFlight.set(extensionId, pending);
     send({ type: 'activate_extension', requestId, extensionId });
     return promise;
+}
+
+function _activationEventMatches(events, event) {
+    if (!Array.isArray(events)) return false;
+    if (events.includes(event)) return true;
+    if (event.includes(':')) {
+        const wildcard = event.split(':')[0] + ':*';
+        return events.includes(wildcard);
+    }
+    return false;
+}
+
+async function _activateKnownExtensionsForEvent(event) {
+    const targets = [];
+    for (const [extensionId, known] of _knownExtensions.entries()) {
+        if (_extensions.has(extensionId)) continue;
+        if (_activationEventMatches(known?.manifest?.activationEvents, event)) {
+            targets.push(extensionId);
+        }
+    }
+    for (const extensionId of targets) {
+        try {
+            await _activateKnownExtension(extensionId);
+        } catch (err) {
+            log(`activation event ${event} failed for ${extensionId}: ${err.message}`);
+        }
+    }
+    return targets.length;
 }
 
 function _extensionApiObject(id) {
@@ -2590,64 +2802,47 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             fs: {
                 readFile: (uri) => _diagnoseAsync(
                     'workspace.fs.readFile', _workspaceRelativePath(uri),
-                    () => fsp.readFile(uri.fsPath)),
+                    () => _workspaceFsReadFile(uri)),
                 writeFile: (uri, content) => _diagnoseAsync(
                     'workspace.fs.writeFile', _workspaceRelativePath(uri),
-                    async () => {
-                        await fsp.writeFile(uri.fsPath, content);
-                        const cached = _workspaceTextDocuments.get(uri.toString());
-                        if (cached) {
-                            const oldText = cached.getText();
-                            const text = _workspaceContentToText(content);
-                            _workspaceSetDocumentText(uri, text, _languageIdForUri(uri), [{
-                                range: _workspaceFullDocumentRange(oldText),
-                                rangeOffset: 0,
-                                rangeLength: oldText.length,
-                                text,
-                            }]);
-                        }
-                    }),
+                    () => _workspaceFsWriteFile(uri, content)),
                 stat: (uri) => _diagnoseAsync(
                     'workspace.fs.stat', _workspaceRelativePath(uri),
-                    () => fsp.stat(uri.fsPath).then(s => ({
-                        type: s.isDirectory() ? 2 : 1,
-                        size: s.size,
-                        ctime: s.ctimeMs,
-                        mtime: s.mtimeMs,
-                    }))),
+                    () => _workspaceFsStat(uri)),
                 readDirectory: (uri) => _diagnoseAsync(
                     'workspace.fs.readDirectory', _workspaceRelativePath(uri),
-                    () => fsp.readdir(uri.fsPath, { withFileTypes: true })
-                        .then(ents => ents.map(e => [e.name, e.isDirectory() ? 2 : 1]))),
+                    () => _workspaceFsReadDirectory(uri)),
                 createDirectory: (uri) => _diagnoseAsync(
                     'workspace.fs.createDirectory', _workspaceRelativePath(uri),
-                    () => fsp.mkdir(uri.fsPath, { recursive: true })),
-                delete: (uri) => _diagnoseAsync(
+                    () => _workspaceFsCreateDirectory(uri)),
+                delete: (uri, options) => _diagnoseAsync(
                     'workspace.fs.delete', _workspaceRelativePath(uri),
-                    async () => {
-                        await fsp.rm(uri.fsPath, { force: true });
-                        _workspaceCloseTextDocument(uri);
-                    }),
-                rename: (src, dst) => _diagnoseAsync(
+                    () => _workspaceFsDelete(uri, options)),
+                rename: (src, dst, options) => _diagnoseAsync(
                     'workspace.fs.rename',
                     `${_workspaceRelativePath(src)} -> ${_workspaceRelativePath(dst)}`,
-                    async () => {
-                        await fsp.rename(src.fsPath, dst.fsPath);
-                        const cached = _workspaceCloseTextDocument(src);
-                        if (cached) {
-                            const text = await fsp.readFile(dst.fsPath, 'utf8');
-                            _workspaceStoreTextDocument(_createLanguageDocument({
-                                uri: dst,
-                                text,
-                                languageId: _languageIdForUri(dst),
-                                version: Date.now(),
-                            }), true);
-                        }
-                    }),
-                copy: (src, dst) => _diagnoseAsync(
+                    () => _workspaceFsRename(src, dst, options)),
+                copy: (src, dst, options) => _diagnoseAsync(
                     'workspace.fs.copy',
                     `${_workspaceRelativePath(src)} -> ${_workspaceRelativePath(dst)}`,
-                    () => fsp.copyFile(src.fsPath, dst.fsPath)),
+                    () => _workspaceFsCopy(src, dst, options)),
+            },
+            registerFileSystemProvider(scheme, provider, options) {
+                const normalized = _normalizeFileSystemScheme(scheme);
+                if (!normalized || normalized === 'file') {
+                    throw new Error(`Invalid filesystem provider scheme: ${scheme}`);
+                }
+                const entry = {
+                    provider,
+                    options: options || {},
+                    extensionId: extDesc.extensionId || '',
+                };
+                _fileSystemProviders.set(normalized, entry);
+                return new Disposable(() => {
+                    if (_fileSystemProviders.get(normalized) === entry) {
+                        _fileSystemProviders.delete(normalized);
+                    }
+                });
             },
             onDidChangeConfiguration: _onDidChangeConfigurationEmitter.event,
             onDidChangeWorkspaceFolders: new EventEmitter().event,
