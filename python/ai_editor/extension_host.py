@@ -2290,6 +2290,27 @@ class NodeExtensionHost:
                         "[NodeExtHost] update_webview_panel_title failed "
                         "for %s", view_id)
 
+        elif msg_type == "webview_reveal":
+            view_id = str(msg.get("viewId", ""))
+            view_type = str(msg.get("viewType", ""))
+            title = str(msg.get("title", ""))
+            if self._ui_bridge and view_id:
+                try:
+                    revealer = getattr(
+                        self._ui_bridge, "reveal_webview_panel", None)
+                    if callable(revealer):
+                        revealer(view_id, view_type, title, {
+                            "viewColumn": msg.get("viewColumn", 1),
+                            "preserveFocus": bool(
+                                msg.get("preserveFocus", False)),
+                            "active": bool(msg.get("active", False)),
+                            "visible": bool(msg.get("visible", True)),
+                        })
+                except Exception:
+                    _log.exception(
+                        "[NodeExtHost] reveal_webview_panel failed for %s",
+                        view_id)
+
         elif msg_type == "webview_post_message":
             view_id = str(msg.get("viewId", ""))
             message = msg.get("message")

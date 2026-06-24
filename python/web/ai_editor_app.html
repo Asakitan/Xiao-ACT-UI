@@ -8982,12 +8982,26 @@ function applyExplorerDecoration(row,label,entry){
 }
 
 let explorerDecorationRefreshTimer=0;
-async function refreshVisibleExplorerDecorations(){
+let explorerDecorationRefreshAll=false;
+let explorerDecorationRefreshPaths=[];
+function normalizeExplorerPath(value){return String(value||'').replace(/\\/g,'/').replace(/^\/+/,'').replace(/\/+$/,'')}
+function explorerDecorationPathMatches(rowPath,changedPath){
+  const row=normalizeExplorerPath(rowPath),changed=normalizeExplorerPath(changedPath);
+  if(!changed)return false;
+  if(row===changed)return true;
+  if(row&&changed.startsWith(row+'/'))return true;
+  if(changed&&row.startsWith(changed+'/'))return true;
+  return false;
+}
+async function refreshVisibleExplorerDecorations(paths){
   const tree=$('explorer-tree');
   if(!tree||!tree.dataset.loaded)return;
+  const targets=Array.isArray(paths)?paths.map(normalizeExplorerPath).filter(Boolean):[];
+  const refreshAll=!targets.length;
   const rows=[...tree.querySelectorAll('.tree-row[data-workspace-path]')]
     .filter(row=>row.dataset.workspacePath);
   for(const row of rows){
+    if(!refreshAll&&!targets.some(path=>explorerDecorationPathMatches(row.dataset.workspacePath,path)))continue;
     const label=row.querySelector('.tree-label');
     if(!label)continue;
     const res=await call('workspace_file_decorations',row.dataset.workspacePath||'');
@@ -8995,11 +9009,20 @@ async function refreshVisibleExplorerDecorations(){
     applyExplorerDecoration(row,label,res);
   }
 }
-function scheduleExplorerDecorationRefresh(){
+function scheduleExplorerDecorationRefresh(change){
   const tree=$('explorer-tree');
   if(!tree||!tree.dataset.loaded)return;
+  const payload=change&&typeof change==='object'?(change.change&&typeof change.change==='object'?change.change:change):{};
+  const paths=Array.isArray(payload.paths)?payload.paths.map(normalizeExplorerPath).filter(Boolean):[];
+  if(payload.all===false&&!paths.length)return;
+  if(payload.all||!paths.length)explorerDecorationRefreshAll=true;
+  else paths.forEach(path=>{if(!explorerDecorationRefreshPaths.includes(path))explorerDecorationRefreshPaths.push(path)});
   clearTimeout(explorerDecorationRefreshTimer);
-  explorerDecorationRefreshTimer=setTimeout(()=>{void refreshVisibleExplorerDecorations()},80);
+  explorerDecorationRefreshTimer=setTimeout(()=>{
+    const paths=explorerDecorationRefreshAll?[]:explorerDecorationRefreshPaths.slice();
+    explorerDecorationRefreshAll=false;explorerDecorationRefreshPaths=[];
+    void refreshVisibleExplorerDecorations(paths);
+  },80);
 }
 
 function createExplorerNode(entry,depth,isRoot,activePath=''){
@@ -9666,6 +9689,27 @@ function updateExtensionWebviewTitle(viewId,title,viewType){
   }
   return !!panel;
 }
+function revealExtensionWebviewPanel(data){
+  const viewId=String(data&&data.view_id||data&&data.viewId||'').trim();
+  if(!viewId)return false;
+  const customTab=findCustomEditorTabByViewId(viewId);
+  if(customTab){
+    if(!data||!data.preserveFocus)switchTab(customTab.id);
+    return true;
+  }
+  const providerId=viewId.startsWith('provider.')?viewId.slice(9):String(data&&data.provider_id||data&&data.providerId||viewId);
+  const existing=providerDefs[providerId]||dynamicExtensionProviderDefs[providerId]||webviewRuntimeCache[viewId]||{};
+  const record={...existing,...(data||{}),id:providerId,view_id:viewId,viewId:viewId,name:(data&&data.title)||existing.name||existing.title||providerId,short_name:(data&&data.title)||existing.short_name||existing.shortName||existing.name||providerId,available:existing.available!==false,runtime_mode:existing.runtime_mode||existing.runtimeMode||'extension-webview',requested_transport:existing.requested_transport||existing.requestedTransport||'webviewView',extension_view:true};
+  const panel=ensureExtensionProviderPanel(record,viewId);
+  if(!panel)return false;
+  const cached=webviewRuntimeCache[viewId];
+  if(cached&&cached.html&&!panel.querySelector('iframe'))_injectWebviewHtml(panel,viewId,cached.html,cached.state);
+  else if(!panel.children.length)renderProviderWebviewPlaceholder(panel,record,'loading');
+  if(data&&data.title)updateExtensionWebviewTitle(viewId,data.title,data.view_type||data.viewType);
+  if(!data||!data.preserveFocus)switchRightTab(providerId);
+  else notifyWebviewPanelViewState(viewId,false,true);
+  return true;
+}
 function providerModelLabel(pid){const p=providerDefs[pid]||{};return p.model||p.provider_type||''}
 function providerModeHint(p){return p&&p.id==='copilot'?t('provider_mode_copilot'):((p&&p.auto_agent)?t('provider_mode_agent'):t('provider_mode_chat'))}
 function providerBackendLabel(raw){return t('provider_backend_'+String(raw||'').replace(/-/g,'_'))||raw||''}
@@ -9745,9 +9789,10 @@ function setProviderRunning(pid,running,status,kind){
   if(refs.stop)refs.stop.style.display=running?'inline-flex':'none';
   updateProviderStatus(pid,status||(running?t('provider_status_thinking'):t('provider_status_ready')),kind||(running?'running':''));
 }
-function notifyWebviewPanelViewState(viewId,isActive){
+function notifyWebviewPanelViewState(viewId,isActive,isVisible){
   if(!viewId||!window.pywebview||!window.pywebview.api||!window.pywebview.api.webview_panel_view_state)return;
-  try{window.pywebview.api.webview_panel_view_state(String(viewId),{active:!!isActive,visible:!!isActive,viewColumn:1})}catch(e){}
+  const visible=isVisible===undefined?!!isActive:!!isVisible;
+  try{window.pywebview.api.webview_panel_view_state(String(viewId),{active:!!isActive,visible:visible,viewColumn:1})}catch(e){}
 }
 function switchRightTab(pid){
   activeProviderId=pid;
@@ -10182,7 +10227,7 @@ window._onEditorEvent=function(event,data){
     return;
   }
   if(event==='file_decorations_changed'){
-    scheduleExplorerDecorationRefresh();
+    scheduleExplorerDecorationRefresh(data);
     return;
   }
   if(event==='custom_editor_changed'){
@@ -10228,6 +10273,10 @@ window._onEditorEvent=function(event,data){
   if(event==='update_webview_panel_title'){
     const viewId=data&&data.view_id,title=data&&data.title;
     if(viewId)updateExtensionWebviewTitle(viewId,title,data&&data.view_type);
+    return;
+  }
+  if(event==='reveal_webview_panel'){
+    revealExtensionWebviewPanel(data);
     return;
   }
   // ── dispose_webview_panel: remove iframe and clean up panel ──

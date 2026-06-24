@@ -1058,6 +1058,20 @@ class _AIEditorUIBridge:
             "view_type": str(view_type or ""),
         })
 
+    def reveal_webview_panel(
+            self, view_id: str, view_type: str = "", title: str = "",
+            state: Optional[Dict[str, Any]] = None) -> None:
+        normalized_view_id = str(view_id or "").strip()
+        if not normalized_view_id:
+            return
+        payload = dict(state or {})
+        payload.update({
+            "view_id": normalized_view_id,
+            "view_type": str(view_type or ""),
+            "title": str(title or ""),
+        })
+        self._api._emit("reveal_webview_panel", payload)
+
     def dispose_webview_panel(self, view_id: str) -> None:
         """Dispose a webview panel by emitting a dispose event to the frontend."""
         self._api._unregister_webview_resource_view(view_id)
@@ -3967,6 +3981,47 @@ class AIEditorAPI:
         return result if any(
             key in result for key in ("badge", "tooltip", "color")
         ) else {}
+
+    def _workspace_file_decoration_change_paths(
+            self, value: Any) -> List[str]:
+        root = self._workspace_root()
+        paths: List[str] = []
+        raw_values = value if isinstance(value, list) else [value]
+        for raw in raw_values:
+            try:
+                fs_path = ""
+                if isinstance(raw, Uri):
+                    fs_path = raw.fs_path if raw.scheme == "file" else ""
+                elif isinstance(raw, dict):
+                    if str(raw.get("scheme") or "") == "file":
+                        fs_path = str(raw.get("fsPath") or raw.get("path") or "")
+                    elif raw.get("uri") is not None:
+                        nested = self._workspace_file_decoration_change_paths(
+                            raw.get("uri"))
+                        for item in nested:
+                            if item not in paths:
+                                paths.append(item)
+                        continue
+                else:
+                    text = str(raw or "")
+                    parsed = urlparse(text)
+                    if parsed.scheme == "file":
+                        fs_path = unquote(parsed.path or "")
+                    elif not parsed.scheme:
+                        fs_path = text
+                if re.match(r"^/[A-Za-z]:", fs_path):
+                    fs_path = fs_path[1:]
+                if not fs_path:
+                    continue
+                full = os.path.abspath(os.path.normpath(fs_path))
+                if not self._is_workspace_safe_path(root, full):
+                    continue
+                rel = self._workspace_rel_path(root, full)
+                if rel not in paths:
+                    paths.append(rel)
+            except Exception:
+                continue
+        return paths
 
     def _workspace_has_file_decoration_providers(self) -> bool:
         vscode_ns = getattr(self, "_vscode_ns", None)
@@ -7538,9 +7593,13 @@ class AIEditorAPI:
     def _handle_node_file_decoration_event(
             self, event: str, payload: Dict[str, Any]) -> None:
         """Notify the frontend that extension file decorations changed."""
+        change = _as_dict(payload)
+        change["paths"] = self._workspace_file_decoration_change_paths(
+            change.get("value"))
+        change["all"] = bool(change.get("all"))
         self._emit("file_decorations_changed", {
             "event": str(event or ""),
-            "change": _as_dict(payload),
+            "change": change,
         })
 
     def _shutdown_node_extension_host(self) -> None:

@@ -1162,6 +1162,16 @@ function _createWebviewPanelObject(
             const nextState = { visible: true, active: !preserveFocus };
             if (nextViewColumn !== undefined) nextState.viewColumn = nextViewColumn;
             updateViewState(nextState);
+            send({
+                type: 'webview_reveal',
+                viewId,
+                viewType,
+                title: currentTitle,
+                viewColumn,
+                preserveFocus: !!preserveFocus,
+                active,
+                visible,
+            });
         },
         _updateViewStateFromHost(nextState) {
             return updateViewState(nextState && typeof nextState === 'object' ? nextState : {});
@@ -1414,6 +1424,7 @@ const _textDocumentContentProviders = new Map(); // scheme -> { provider, extens
 const _uriHandlers = new Map();          // extensionId -> { handler }
 const _languageProviders = [];           // { kind, selector, provider, triggers?, disposable }
 const _fileDecorationProviders = [];     // { handle, extensionId, provider, disposable? }
+const _fileDecorationChangeMaxEventSize = 250;
 const _runtimeLanguageConfigurations = new Map(); // languageId -> [{ handle, configuration }]
 const _lmTools = new Map();              // name -> { handle, tool, extensionId, metadata }
 const _chatParticipants = new Map();     // id -> { handle, handler, extensionId }
@@ -2027,6 +2038,59 @@ function _handleWindowDialogResponse(msg) {
         const paths = _urisFromDialogValue(value.uri || value.uris || value.path || value.paths);
         pending.resolve(paths[0]);
     }
+}
+
+function _fileDecorationUriFromChangeItem(value) {
+    if (value === undefined || value === null) return null;
+    try {
+        if (value instanceof Uri) return value;
+        if (value && typeof value === 'object' && (value.scheme || value.uri || value.fsPath || value.path)) {
+            return _workspaceUriFromInput(value);
+        }
+        if (typeof value === 'string' && value) return _workspaceUriFromInput(value);
+    } catch {
+        return null;
+    }
+    return null;
+}
+
+function _fileDecorationChangedPayload(value) {
+    if (value === undefined || value === null) {
+        return { all: true, uris: [], count: 0, capped: false };
+    }
+    const rawItems = Array.isArray(value) ? value : [value];
+    const uriItems = rawItems
+        .map(item => _fileDecorationUriFromChangeItem(item))
+        .filter(Boolean);
+    if (uriItems.length <= _fileDecorationChangeMaxEventSize) {
+        return {
+            all: false,
+            uris: uriItems.map(uri => _serializeLanguageUri(uri)),
+            count: uriItems.length,
+            capped: false,
+        };
+    }
+    const sorted = uriItems
+        .map(uri => ({
+            uri,
+            rank: String(uri.path || '').split('/').filter(Boolean).length,
+        }))
+        .sort((a, b) => a.rank - b.rank || String(a.uri.path || '').localeCompare(String(b.uri.path || '')));
+    const picked = [];
+    let lastDir = null;
+    for (const item of sorted) {
+        const dir = path.posix.dirname(String(item.uri.path || '').replace(/\\/g, '/'));
+        if (dir === lastDir) continue;
+        lastDir = dir;
+        picked.push(item.uri);
+        if (picked.length >= _fileDecorationChangeMaxEventSize) break;
+    }
+    return {
+        all: false,
+        uris: picked.map(uri => _serializeLanguageUri(uri)),
+        count: uriItems.length,
+        capped: true,
+    };
 }
 
 function _requestWindowDialog(kind, options = {}, token = undefined) {
@@ -5214,11 +5278,15 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 let changeSubscription = null;
                 if (provider && typeof provider.onDidChangeFileDecorations === 'function') {
                     changeSubscription = provider.onDidChangeFileDecorations((value) => {
+                        const change = _fileDecorationChangedPayload(value);
                         send({
                             type: 'file_decoration_changed',
                             handle,
                             extensionId: entry.extensionId,
-                            value: _serializeLanguageValue(value),
+                            all: change.all,
+                            value: change.uris,
+                            count: change.count,
+                            capped: change.capped,
                         });
                     });
                 }

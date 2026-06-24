@@ -2435,8 +2435,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "_injectWebviewHtml(panelEl,viewId,html,data.state)" in html
            and "updateExtensionWebviewTitle(viewId,title" in html
            and "event==='update_webview_panel_title'" in html
-           and "function notifyWebviewPanelViewState(viewId,isActive)"
+           and "function notifyWebviewPanelViewState(viewId,isActive,isVisible)"
            in html
+           and "function revealExtensionWebviewPanel(data)" in html
+           and "event==='reveal_webview_panel'" in html
            and "webview_panel_view_state" in html
            and 'getState:function(){return _state}' in html)
     _check("frontend accepts provider webview pushes",
@@ -4782,7 +4784,7 @@ console.log("quick input filter helpers ok");
            and "tree-decoration-badge" in html
            and "function applyExplorerDecoration" in html
            and "themeColorToCss(decoration.color" in html
-           and "function refreshVisibleExplorerDecorations()" in html
+           and "function refreshVisibleExplorerDecorations(paths)" in html
            and "call('workspace_file_decorations'" in html
            and "event==='file_decorations_changed'" in html
            and "'gitDecoration.modifiedResourceForeground':'--fg-warning'"
@@ -5121,13 +5123,28 @@ console.log("quick input filter helpers ok");
            in html
            and "event==='update_webview_panel_title'" in html)
     _check("extension webview panel view state reaches Node",
-           "function notifyWebviewPanelViewState(viewId,isActive)" in html
+           "function notifyWebviewPanelViewState(viewId,isActive,isVisible)" in html
            and "webview_panel_view_state" in html
            and "def webview_panel_view_state(" in app_source
            and "def update_webview_panel_view_state(" in extension_host_source
            and "function handleWebviewPanelViewState(msg)" in node_ext_host_source
            and "case 'webview_panel_view_state':" in node_ext_host_source
            and "_updateViewStateFromHost(nextState)" in node_ext_host_source)
+    _check("extension webview panel reveal reaches frontend",
+           "type: 'webview_reveal'" in node_ext_host_source
+           and "elif msg_type == \"webview_reveal\"" in extension_host_source
+           and "def reveal_webview_panel(" in app_source
+           and "\"reveal_webview_panel\"" in app_source
+           and "function revealExtensionWebviewPanel(data)" in html
+           and "notifyWebviewPanelViewState(viewId,false,true)" in html)
+    _check("frontend refreshes file decorations by changed paths",
+           "function explorerDecorationPathMatches(rowPath,changedPath)" in html
+           and "function refreshVisibleExplorerDecorations(paths)" in html
+           and "function scheduleExplorerDecorationRefresh(change)" in html
+           and "scheduleExplorerDecorationRefresh(data)" in html
+           and "change[\"paths\"] = self._workspace_file_decoration_change_paths(" in app_source
+           and "const _fileDecorationChangeMaxEventSize = 250" in node_ext_host_source
+           and "function _fileDecorationChangedPayload(value)" in node_ext_host_source)
 
     runtime_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     runtime_api._controller = object()
@@ -12113,6 +12130,7 @@ module.exports = { activate, deactivate };
                     self.webview_titles = {}
                     self.local_resource_roots = {}
                     self.disposed = []
+                    self.revealed = []
                     self.progress = []
                     self.quick_inputs = []
                     self.node_host = None
@@ -12148,6 +12166,15 @@ module.exports = { activate, deactivate };
                 def update_webview_panel_title(
                         self, view_id, title, view_type=""):
                     self.webview_titles[str(view_id)] = str(title or "")
+
+                def reveal_webview_panel(
+                        self, view_id, view_type="", title="", state=None):
+                    self.revealed.append({
+                        "view_id": str(view_id or ""),
+                        "view_type": str(view_type or ""),
+                        "title": str(title or ""),
+                        "state": dict(state or {}),
+                    })
 
                 def post_webview_message(self, view_id: str, message) -> None:
                     self.webviews.setdefault(view_id, "")
@@ -12640,6 +12667,16 @@ module.exports = { activate, deactivate };
                     api._vscode_ns.provide_file_decorations(
                         Uri.file(node_decoration_sample))
                     if node_file_decoration_registered else [])
+                _wait_until(
+                    lambda: any(
+                        item.get("event") == "file_decorations_changed"
+                        for item in emitted_events),
+                    timeout=2.0)
+                node_file_decoration_change_events = [
+                    item.get("data", {})
+                    for item in emitted_events
+                    if item.get("event") == "file_decorations_changed"
+                ]
                 node_completion = api._ext_host.commands.execute(
                     "vscode.executeCompletionItemProvider",
                     node_uri, Position(0, 1), ".")
@@ -13291,6 +13328,33 @@ module.exports = { activate, deactivate };
                        .endswith("node-decoration.txt"),
                        json.dumps(node_file_decorations,
                                   ensure_ascii=False, default=str))
+                node_file_decoration_change = (
+                    node_file_decoration_change_events[-1]
+                    if node_file_decoration_change_events else {})
+                node_file_decoration_change_payload = (
+                    node_file_decoration_change.get("change", {})
+                    if isinstance(node_file_decoration_change, dict) else {})
+                workspace_decoration_paths = (
+                    api._workspace_file_decoration_change_paths([
+                        Uri.file(os.path.join(
+                            api._workspace_root(), "README.md")).to_string()
+                    ]))
+                _check("node host file decoration changes carry scoped paths",
+                       node_file_decoration_change_payload.get("all") is False
+                       and node_file_decoration_change_payload.get(
+                           "capped") is False
+                       and node_file_decoration_change_payload.get(
+                           "count") == 1
+                       and any(
+                           str(uri).startswith("file:")
+                           for uri in node_file_decoration_change_payload.get(
+                               "value", []))
+                       and "README.md" in workspace_decoration_paths,
+                       json.dumps({
+                           "events": node_file_decoration_change_events[-3:],
+                           "workspace_paths": workspace_decoration_paths,
+                       },
+                                  ensure_ascii=False, default=str))
                 _check("node host language provider invokes JS definition",
                        node_definition
                        and node_definition[0].get("uri", "").endswith("node_provider.py"))
@@ -13796,6 +13860,10 @@ module.exports = { activate, deactivate };
                 node_webview_dispose_revealed = (
                     node_webview_dispose_probe.get("revealed", {})
                     if isinstance(node_webview_dispose_probe, dict) else {})
+                node_webview_bridge_reveal = next((
+                    item for item in node_ui_bridge.revealed
+                    if item.get("view_id") == node_dispose_view_id
+                ), {})
                 _check("node host webview panel disposal matches VS Code lifecycle",
                        node_webview_dispose_command_registered
                        and node_dispose_view_id
@@ -13814,6 +13882,16 @@ module.exports = { activate, deactivate };
                        and node_webview_dispose_revealed.get("active") is True
                        and node_webview_dispose_revealed.get("visible") is True
                        and node_webview_dispose_revealed.get("stateEventCount") == 1
+                       and node_webview_bridge_reveal.get("view_type")
+                       == "selftest.disposeProbe"
+                       and node_webview_bridge_reveal.get("title")
+                       == "Disposed Title"
+                       and node_webview_bridge_reveal.get(
+                           "state", {}).get("active") is True
+                       and node_webview_bridge_reveal.get(
+                           "state", {}).get("visible") is True
+                       and node_webview_bridge_reveal.get(
+                           "state", {}).get("viewColumn") == 3
                        and node_webview_dispose_probe.get("disposeEvents") == 1
                        and node_webview_dispose_probe.get("htmlAfterDisposeThrows") is True
                        and node_webview_dispose_probe.get("revealAfterDisposeThrows") is True
@@ -13822,6 +13900,7 @@ module.exports = { activate, deactivate };
                            "probe": node_webview_dispose_probe,
                            "view_id": node_dispose_view_id,
                            "disposed": node_ui_bridge.disposed,
+                           "revealed": node_ui_bridge.revealed,
                            "titles": node_ui_bridge.webview_titles,
                        }, ensure_ascii=False))
                 node_serializer_events = (
