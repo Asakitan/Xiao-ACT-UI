@@ -2692,6 +2692,10 @@ console.log("frontend auto-close behavior ok");
             and "reset_extension_setting" in html
             and "markExtensionSettingRow" in html
             and "function applyExtensionSettingsFilter()" in html
+            and "function renderExtensionLanguageDefaults(languageDefaults,container,categorySelect,seenCategories)" in html
+            and "ext-setting-readonly-badge" in html
+            and "languageDefaults" in html
+            and "language-default" in html
             and "ext-settings-category" in html
             and "dataset.extSettingsCategory" in html
             and "@modified" in html
@@ -6798,7 +6802,9 @@ def test_app_extension_runtime_support() -> None:
         }, settings_tmp)
         api._ext_host.registry.register(settings_desc)
         api._ext_host.activator.activate(settings_desc.id)
-        ext_settings = api.list_extension_settings().get("configurations", [])
+        ext_settings_payload = api.list_extension_settings()
+        ext_settings = ext_settings_payload.get("configurations", [])
+        language_defaults = ext_settings_payload.get("languageDefaults", [])
         settings_cfg = next(
             (item for item in ext_settings
              if item.get("extension_id") == "selftest.settings-pack"),
@@ -6810,6 +6816,16 @@ def test_app_extension_runtime_support() -> None:
                and settings_cfg.get("modified", {}).get("selftest.flag") is False)
         _check("extension configurationDefaults override schema defaults",
                api.get_extension_setting("selftest.mode").get("value") == "manual")
+        selflang_defaults = next(
+            (item for item in language_defaults
+             if item.get("extension_id") == "selftest.settings-pack"
+             and item.get("language") == "selflang"),
+            {})
+        _check("extension language configurationDefaults are surfaced",
+               selflang_defaults.get("override") == "[selflang]"
+               and selflang_defaults.get("settings", {}).get(
+                   "editor.tabSize") == 2
+               and selflang_defaults.get("count") == 1)
         invalid_options = api.set_extension_setting(
             "selftest.options", {"mode": "auto"})
         invalid_tags = api.set_extension_setting(

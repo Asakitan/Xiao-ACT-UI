@@ -1008,6 +1008,8 @@ pre.code-block { overflow:visible; }
 .ext-setting-badge { display:none; font-size:9px; color:var(--fg-accent); border:1px solid var(--fg-accent);
   border-radius:3px; padding:0 4px; line-height:15px; }
 .ext-setting-row.modified .ext-setting-badge { display:inline-flex; }
+.ext-setting-readonly-badge { font-size:9px; color:var(--fg-dim); border:1px solid var(--border);
+  border-radius:3px; padding:0 4px; line-height:15px; }
 .ext-setting-deprecated-badge { font-size:9px; color:var(--fg-warning); border:1px solid color-mix(in srgb,var(--fg-warning) 70%,var(--border));
   border-radius:3px; padding:0 4px; line-height:15px; }
 .ext-setting-row.deprecated:not(.modified) { border-left-color:color-mix(in srgb,var(--fg-warning) 45%,transparent); }
@@ -10039,12 +10041,63 @@ function applyExtensionSettingsFilter(){
   const toolbar=container.querySelector('[data-ext-settings-filter="1"]');
   if(toolbar)toolbar.style.display=totalRows?'':'none';
 }
+function renderExtensionLanguageDefaults(languageDefaults,container,categorySelect,seenCategories){
+  (Array.isArray(languageDefaults)?languageDefaults:[]).forEach(item=>{
+    const settings=item&&item.settings&&typeof item.settings==='object'?item.settings:{};
+    const keys=Object.keys(settings).sort((a,b)=>a.localeCompare(b));
+    if(!keys.length)return;
+    const extId=item.extension_id||'';
+    const displayName=item.display_name||extId||'Extension';
+    const override=item.override||('['+(item.language||'language')+']');
+    const headerLabel=displayName+' — '+override+' Language Defaults';
+    const categoryId='languageDefaults::'+extId+'::'+override;
+    const section=document.createElement('details');section.className='settings-section';section.open=true;
+    section.dataset.extSettingsSection='1';
+    section.dataset.extSettingsCategory=categoryId;
+    if(!seenCategories.has(categoryId)){
+      seenCategories.add(categoryId);
+      const opt=document.createElement('option');opt.value=categoryId;opt.textContent=headerLabel;
+      categorySelect.appendChild(opt);
+    }
+    const summary=document.createElement('summary');
+    summary.style.cssText='cursor:pointer;font-size:12px;font-weight:600;color:var(--fg-dim);user-select:none;padding:4px 0';
+    summary.textContent='▸ '+headerLabel+' ('+keys.length+')';
+    section.appendChild(summary);
+    const inner=document.createElement('div');inner.style.cssText='padding:8px 0';
+    keys.forEach(key=>{
+      const value=settings[key];
+      const row=document.createElement('div');row.className='ext-setting-row settings-field';
+      row.dataset.extSettingKey=override+'.'+key;
+      row.dataset.extSettingModified='0';
+      row.dataset.modified='0';
+      row.dataset.extSettingTags=['language-default',String(item.language||'').toLowerCase()].filter(Boolean).join('\n');
+      row.dataset.extSettingSearch=[displayName,extId,override,item.language,key,extensionSettingJson(value,'')].join(' ').toLowerCase();
+      const head=document.createElement('div');head.className='ext-setting-head';
+      const name=document.createElement('span');name.className='ext-setting-title';name.textContent=key;
+      const badge=document.createElement('span');badge.className='ext-setting-readonly-badge';badge.textContent='Language Default';
+      head.appendChild(name);head.appendChild(badge);row.appendChild(head);
+      const keyLabel=document.createElement('div');keyLabel.className='ext-setting-key';
+      keyLabel.textContent=override+' · '+key+' · contributed default';
+      row.appendChild(keyLabel);
+      const meta=document.createElement('div');meta.className='ext-setting-schema';
+      meta.textContent='default: '+extensionSettingJson(value,'').replace(/\s+/g,' ').trim();
+      row.appendChild(meta);
+      inner.appendChild(row);
+    });
+    section.appendChild(inner);
+    container.appendChild(section);
+  });
+}
 async function renderExtensionSettings(){
   const container=$('ext-settings-container');if(!container)return;
   container.innerHTML='';
-  let configs;
-  try{const r=await call('list_extension_settings');configs=r&&r.configurations?r.configurations:[]}catch(e){return}
-  if(!configs.length)return;
+  let configs,languageDefaults;
+  try{
+    const r=await call('list_extension_settings');
+    configs=r&&r.configurations?r.configurations:[];
+    languageDefaults=r&&r.languageDefaults?r.languageDefaults:[];
+  }catch(e){return}
+  if(!configs.length&&!languageDefaults.length)return;
   // Extensions divider
   const divider=document.createElement('div');divider.className='sb-group';
   divider.style.cssText='padding:0;margin-top:16px;border-top:1px solid var(--border);padding-top:12px';
@@ -10185,6 +10238,7 @@ async function renderExtensionSettings(){
     section.appendChild(inner);
     container.appendChild(section);
   });
+  renderExtensionLanguageDefaults(languageDefaults,container,categorySelect,seenCategories);
   categorySelect.onchange=applyExtensionSettingsFilter;
   modifiedBox.onchange=applyExtensionSettingsFilter;
   applyExtensionSettingsFilter();

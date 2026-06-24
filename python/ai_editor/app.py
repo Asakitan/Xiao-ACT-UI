@@ -8211,6 +8211,7 @@ class AIEditorAPI:
         self._ensure_engine()
         contributions = self._ext_host.ext_points.configuration_contributions
         default_overrides = self._extension_configuration_default_overrides()
+        language_defaults = self._extension_configuration_language_defaults()
         result: List[Dict[str, Any]] = []
         for entry in contributions:
             eid = entry.get("extension_id", "")
@@ -8252,7 +8253,7 @@ class AIEditorAPI:
                 "configuredValues": configured_values,
                 "modified": modified,
             })
-        return {"configurations": result}
+        return {"configurations": result, "languageDefaults": language_defaults}
 
     def get_extension_setting(self, key: str, default: Any = None) -> Dict:
         """Read a single extension setting value from workspace state."""
@@ -8451,6 +8452,51 @@ class AIEditorAPI:
                     continue
                 defaults[key_str] = value
         return defaults
+
+    def _extension_configuration_language_defaults(self) -> List[Dict[str, Any]]:
+        try:
+            entries = self._ext_host.ext_points.all_contributions.get(
+                "configurationDefaults", [])
+        except Exception:
+            entries = []
+        result: List[Dict[str, Any]] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            eid = str(entry.get("_extensionId", "") or "")
+            ext = self._ext_host.registry.get(eid)
+            display_name = ext.display_name if ext else eid
+            for key, value in entry.items():
+                key_str = str(key or "").strip()
+                if not key_str.startswith("["):
+                    continue
+                if not isinstance(value, dict) or isinstance(value, list):
+                    continue
+                languages = [
+                    str(match.group(1) or "").strip()
+                    for match in re.finditer(r"\[([^\]]+)\]", key_str)
+                ]
+                for language_id in [item for item in languages if item]:
+                    settings = {
+                        str(setting_key): setting_value
+                        for setting_key, setting_value in value.items()
+                        if str(setting_key or "").strip()
+                    }
+                    if not settings:
+                        continue
+                    result.append({
+                        "extension_id": eid,
+                        "display_name": display_name,
+                        "override": f"[{language_id}]",
+                        "language": language_id,
+                        "settings": settings,
+                        "count": len(settings),
+                    })
+        result.sort(key=lambda item: (
+            str(item.get("display_name", "")).lower(),
+            str(item.get("language", "")).lower(),
+        ))
+        return result
 
     def _notify_extension_setting_changed(
             self, key: str, value: Any,
