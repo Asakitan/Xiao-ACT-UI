@@ -2537,6 +2537,35 @@ class NodeExtensionHost:
                 except Exception:
                     pass
 
+        elif msg_type == "terminal_show":
+            if self._ui_bridge:
+                try:
+                    self._ui_bridge.show_terminal(str(msg.get("name", "")))
+                except Exception:
+                    pass
+
+        elif msg_type == "terminal_hide":
+            if self._ui_bridge:
+                try:
+                    self._ui_bridge.hide_terminal(str(msg.get("name", "")))
+                except Exception:
+                    pass
+
+        elif msg_type == "terminal_dispose":
+            if self._ui_bridge:
+                try:
+                    self._ui_bridge.hide_terminal(str(msg.get("name", "")))
+                except Exception:
+                    pass
+
+        elif msg_type == "terminal_command":
+            if self._ui_bridge and bool(msg.get("shouldExecute", True)):
+                try:
+                    self._ui_bridge.run_terminal_command(
+                        str(msg.get("name", "")), str(msg.get("text", "")))
+                except Exception:
+                    pass
+
         elif msg_type in ("progress_start", "progress_report", "progress_done"):
             progress_handler = (
                 getattr(self._ui_bridge, "show_progress", None)

@@ -3133,6 +3133,16 @@ console.log("quick input filter helpers ok");
            and "self._ui_bridge.hide_status_bar_item" in extension_host_source
            and "def hide_status_bar_item(self, item_id: str) -> None:"
            in app_source)
+    _check("extension terminals bridge through Node host",
+           "class TerminalObject" in node_ext_host_source
+           and "createTerminal(nameOrOptions, shellPath, shellArgs)"
+           in node_ext_host_source
+           and "onDidOpenTerminal: _onDidOpenTerminalEmitter.event"
+           in node_ext_host_source
+           and "type: 'terminal_command'" in node_ext_host_source
+           and "msg_type == \"terminal_command\"" in extension_host_source
+           and "def run_terminal_command(self, name: str, text: str)"
+           in app_source)
     _check("extension workspace folder picker uses dynamic QuickPick",
            "showWorkspaceFolderPick(options, token)" in node_ext_host_source
            and "function _windowShowWorkspaceFolderPick" in node_ext_host_source
@@ -8236,6 +8246,54 @@ async function activate(context) {
       cancelledDisposable: !!(cancelled && cancelled.dispose),
     };
   });
+  vscode.commands.registerCommand('selftest.node.terminalProbe', async () => {
+    const events = [];
+    const disposables = [
+      vscode.window.onDidOpenTerminal(terminal => {
+        events.push('open:' + terminal.name);
+      }),
+      vscode.window.onDidChangeActiveTerminal(terminal => {
+        events.push('active:' + (terminal ? terminal.name : 'none'));
+      }),
+      vscode.window.onDidChangeTerminalState(terminal => {
+        events.push('state:' + terminal.name + ':' + terminal.state.isInteractedWith);
+      }),
+      vscode.window.onDidCloseTerminal(terminal => {
+        events.push('close:' + terminal.name);
+      }),
+    ];
+    const beforeCount = vscode.window.terminals.length;
+    const terminal = vscode.window.createTerminal({
+      name: 'Node Terminal',
+      cwd: context.extensionUri,
+      isTransient: true,
+    });
+    const created = {
+      name: terminal.name,
+      inList: vscode.window.terminals.includes(terminal),
+      activeName: vscode.window.activeTerminal && vscode.window.activeTerminal.name,
+      creationName: terminal.creationOptions.name,
+      transient: terminal.creationOptions.isTransient === true,
+      processId: await terminal.processId,
+      shellIntegrationMissing: terminal.shellIntegration === undefined,
+    };
+    terminal.show();
+    terminal.sendText('echo node-terminal');
+    terminal.sendText('typed only', false);
+    terminal.hide();
+    const interacted = terminal.state.isInteractedWith === true;
+    terminal.dispose();
+    const after = {
+      beforeCount,
+      count: vscode.window.terminals.length,
+      activeName: vscode.window.activeTerminal && vscode.window.activeTerminal.name,
+      exitReason: terminal.exitStatus && terminal.exitStatus.reason,
+      extensionExitReason: vscode.TerminalExitReason.Extension,
+      panelLocation: vscode.TerminalLocation.Panel,
+    };
+    disposables.forEach(disposable => disposable.dispose());
+    return { created, after, interacted, events };
+  });
   vscode.commands.registerCommand('selftest.node.messageOptionsProbe', async () => {
     const info = await vscode.window.showInformationMessage(
       'Info probe',
@@ -8679,6 +8737,7 @@ module.exports = { activate, deactivate };
                     self.clipboard_events = []
                     self.status_bar_items = {}
                     self.status_bar_events = []
+                    self.terminal_events = []
                     self.window_dialogs = []
                     self.open_dialog_paths = [
                         os.path.join(node_tree_tmp, "dialog-open.txt"),
@@ -8790,6 +8849,35 @@ module.exports = { activate, deactivate };
                         "event": "status_bar",
                         "data": event,
                     })
+
+                def show_terminal(self, name):
+                    event = {"event": "show", "name": str(name)}
+                    self.terminal_events.append(event)
+                    emitted_events.append({
+                        "event": "terminal",
+                        "data": event,
+                    })
+
+                def hide_terminal(self, name):
+                    event = {"event": "hide", "name": str(name)}
+                    self.terminal_events.append(event)
+                    emitted_events.append({
+                        "event": "terminal",
+                        "data": event,
+                    })
+
+                def run_terminal_command(self, name, text):
+                    event = {
+                        "event": "command",
+                        "name": str(name),
+                        "text": str(text),
+                    }
+                    self.terminal_events.append(event)
+                    emitted_events.append({
+                        "event": "terminal",
+                        "data": event,
+                    })
+                    return json.dumps({"stdout": "terminal:" + str(text)})
 
             node_ui_bridge = _NodeUiBridge()
             node_host = NodeExtensionHost(
@@ -8966,6 +9054,16 @@ module.exports = { activate, deactivate };
                 except Exception as exc:
                     node_status_bar_probe = {"_error": str(exc)}
                 node_status_bar_events = list(node_ui_bridge.status_bar_events)
+                node_terminal_command_registered = _wait_until(
+                    lambda: "selftest.node.terminalProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                try:
+                    node_terminal_probe = api._ext_host.commands.execute(
+                        "selftest.node.terminalProbe")
+                except Exception as exc:
+                    node_terminal_probe = {"_error": str(exc)}
+                node_terminal_events = list(node_ui_bridge.terminal_events)
                 node_message_options_command_registered = _wait_until(
                     lambda: "selftest.node.messageOptionsProbe"
                     in api._ext_host.commands.list_commands(),
@@ -10493,6 +10591,59 @@ module.exports = { activate, deactivate };
                        json.dumps({
                            "probe": node_status_bar_probe,
                            "events": node_status_bar_events,
+                       }, ensure_ascii=False, default=str))
+                node_terminal_created = (
+                    node_terminal_probe.get("created", {})
+                    if isinstance(node_terminal_probe, dict) else {})
+                node_terminal_after = (
+                    node_terminal_probe.get("after", {})
+                    if isinstance(node_terminal_probe, dict) else {})
+                node_terminal_runtime_events = (
+                    node_terminal_probe.get("events", [])
+                    if isinstance(node_terminal_probe, dict) else [])
+                _check("node host terminal APIs use existing UI bridge",
+                       node_started is True
+                       and node_terminal_command_registered
+                       and node_terminal_created.get("name") == "Node Terminal"
+                       and node_terminal_created.get("inList") is True
+                       and node_terminal_created.get(
+                           "activeName") == "Node Terminal"
+                       and node_terminal_created.get(
+                           "creationName") == "Node Terminal"
+                       and node_terminal_created.get("transient") is True
+                       and node_terminal_created.get(
+                           "shellIntegrationMissing") is True
+                       and node_terminal_probe.get("interacted") is True
+                       and node_terminal_after.get("count")
+                       == node_terminal_after.get("beforeCount")
+                       and node_terminal_after.get("exitReason")
+                       == node_terminal_after.get("extensionExitReason")
+                       == 4
+                       and node_terminal_after.get("panelLocation") == 1
+                       and "open:Node Terminal" in node_terminal_runtime_events
+                       and "active:Node Terminal" in node_terminal_runtime_events
+                       and "state:Node Terminal:true"
+                       in node_terminal_runtime_events
+                       and "close:Node Terminal" in node_terminal_runtime_events
+                       and any(
+                           item.get("event") == "show"
+                           and item.get("name") == "Node Terminal"
+                           for item in node_terminal_events)
+                       and any(
+                           item.get("event") == "hide"
+                           and item.get("name") == "Node Terminal"
+                           for item in node_terminal_events)
+                       and any(
+                           item.get("event") == "command"
+                           and item.get("text") == "echo node-terminal"
+                           for item in node_terminal_events)
+                       and not any(
+                           item.get("event") == "command"
+                           and item.get("text") == "typed only"
+                           for item in node_terminal_events),
+                       json.dumps({
+                           "probe": node_terminal_probe,
+                           "bridge": node_terminal_events,
                        }, ensure_ascii=False, default=str))
                 _check("node host message APIs separate options from actions",
                        node_started is True

@@ -1294,6 +1294,13 @@ let _workspaceFolders = [{
     name: _workspaceName,
     index: 0,
 }];
+const _terminals = [];
+let _activeTerminal = undefined;
+let _nextTerminalHandle = 1;
+const _onDidChangeActiveTerminalEmitter = new EventEmitter();
+const _onDidOpenTerminalEmitter = new EventEmitter();
+const _onDidCloseTerminalEmitter = new EventEmitter();
+const _onDidChangeTerminalStateEmitter = new EventEmitter();
 const _workspaceDefaultSkipDirs = new Set(['.git', 'node_modules', '__pycache__', '.venv', 'venv']);
 const _workspaceSymbolCache = new Map(); // handle -> { provider, symbol }
 let _nextWorkspaceSymbolHandle = 1;
@@ -2462,6 +2469,95 @@ function _workspaceRelativePath(value, includeWorkspaceFolder) {
         ? _workspaceFolders.length > 1
         : !!includeWorkspaceFolder;
     return includeFolder && folder ? `${folder.name}/${rel}` : rel;
+}
+
+function _terminalOptionsFromArgs(nameOrOptions, shellPath, shellArgs) {
+    if (nameOrOptions && typeof nameOrOptions === 'object') {
+        return Object.assign({}, nameOrOptions);
+    }
+    const options = {};
+    if (nameOrOptions !== undefined && nameOrOptions !== null) {
+        options.name = String(nameOrOptions);
+    }
+    if (shellPath !== undefined && shellPath !== null) {
+        options.shellPath = String(shellPath);
+    }
+    if (shellArgs !== undefined && shellArgs !== null) {
+        options.shellArgs = shellArgs;
+    }
+    return options;
+}
+
+function _terminalSetActive(terminal) {
+    if (_activeTerminal === terminal) return;
+    _activeTerminal = terminal;
+    _onDidChangeActiveTerminalEmitter.fire(terminal);
+}
+
+function _terminalRemove(terminal) {
+    const index = _terminals.indexOf(terminal);
+    if (index < 0) return;
+    _terminals.splice(index, 1);
+    if (_activeTerminal === terminal) {
+        _activeTerminal = _terminals.length ? _terminals[_terminals.length - 1] : undefined;
+        _onDidChangeActiveTerminalEmitter.fire(_activeTerminal);
+    }
+    _onDidCloseTerminalEmitter.fire(terminal);
+}
+
+class TerminalObject {
+    constructor(options = {}) {
+        this._handle = _nextTerminalHandle++;
+        this._disposed = false;
+        this.creationOptions = Object.assign({}, options || {});
+        this.name = String(options?.name || `Terminal ${this._handle}`);
+        this.processId = Promise.resolve(undefined);
+        this.exitStatus = undefined;
+        this.state = { isInteractedWith: false };
+        this.shellIntegration = undefined;
+    }
+    sendText(text, shouldExecute = true) {
+        if (this._disposed) return;
+        this.state.isInteractedWith = true;
+        _onDidChangeTerminalStateEmitter.fire(this);
+        send({
+            type: 'terminal_command',
+            id: this._handle,
+            name: this.name,
+            text: String(text ?? ''),
+            shouldExecute: shouldExecute !== false,
+        });
+    }
+    show(preserveFocus = false) {
+        if (this._disposed) return;
+        if (!preserveFocus) _terminalSetActive(this);
+        send({
+            type: 'terminal_show',
+            id: this._handle,
+            name: this.name,
+            preserveFocus: !!preserveFocus,
+        });
+    }
+    hide() {
+        if (this._disposed) return;
+        send({ type: 'terminal_hide', id: this._handle, name: this.name });
+    }
+    dispose() {
+        if (this._disposed) return;
+        this._disposed = true;
+        this.exitStatus = { code: undefined, reason: 4 };
+        send({ type: 'terminal_dispose', id: this._handle, name: this.name });
+        _terminalRemove(this);
+    }
+}
+
+function _createTerminal(nameOrOptions, shellPath, shellArgs) {
+    const terminal = new TerminalObject(
+        _terminalOptionsFromArgs(nameOrOptions, shellPath, shellArgs));
+    _terminals.push(terminal);
+    _terminalSetActive(terminal);
+    _onDidOpenTerminalEmitter.fire(terminal);
+    return terminal;
 }
 
 function _normalizeFileSystemScheme(scheme) {
@@ -4368,6 +4464,14 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         // --- Enums ---
         ViewColumn: { One: 1, Two: 2, Three: 3, Active: -1, Beside: -2 },
         StatusBarAlignment: { Left: 1, Right: 2 },
+        TerminalLocation: { Panel: 1, Editor: 2 },
+        TerminalExitReason: {
+            Unknown: 0,
+            Shutdown: 1,
+            Process: 2,
+            User: 3,
+            Extension: 4,
+        },
         QuickPickItemKind: { Separator: 1 },
         InputBoxValidationSeverity: { Info: 1, Warning: 2, Error: 3 },
         QuickInputButtonLocation: { Title: 1, Inline: 2, Input: 3 },
@@ -4610,6 +4714,15 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 subscriptions.push(disposable);
                 return disposable;
             },
+            createTerminal(nameOrOptions, shellPath, shellArgs) {
+                return _createTerminal(nameOrOptions, shellPath, shellArgs);
+            },
+            get terminals() { return _terminals.slice(); },
+            get activeTerminal() { return _activeTerminal; },
+            onDidChangeActiveTerminal: _onDidChangeActiveTerminalEmitter.event,
+            onDidOpenTerminal: _onDidOpenTerminalEmitter.event,
+            onDidCloseTerminal: _onDidCloseTerminalEmitter.event,
+            onDidChangeTerminalState: _onDidChangeTerminalStateEmitter.event,
             get activeTextEditor() { return undefined; },
             get visibleTextEditors() { return []; },
             get activeColorTheme() { return { kind: 2 }; }, // Dark
