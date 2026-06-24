@@ -2844,6 +2844,51 @@ const allOfSchema = { allOf: [{ type: "number", minimum: 1 }, { type: "number", 
 const notSchema = { type: "string", not: { enum: ["bad"] } };
 const constSchema = { const: "locked" };
 const containsArraySchema = { type: "array", contains: { type: "string", pattern: "^ok$" } };
+const conditionalSchema = {
+  type: "object",
+  properties: {
+    mode: { type: "string" },
+    threshold: { type: "number" },
+    label: { type: "string" }
+  },
+  if: { properties: { mode: { const: "strict" } }, required: ["mode"] },
+  then: { required: ["threshold"] },
+  else: { required: ["label"] }
+};
+const dependencySchema = {
+  type: "object",
+  dependencies: {
+    mode: ["threshold"],
+    advanced: {
+      required: ["level"],
+      properties: { level: { type: "integer", minimum: 1 } }
+    }
+  }
+};
+const dependentRequiredSchema = {
+  type: "object",
+  dependentRequired: { token: ["endpoint"] }
+};
+const dependentSchemasSchema = {
+  type: "object",
+  dependentSchemas: {
+    feature: {
+      required: ["enabled"],
+      properties: { enabled: { const: true } }
+    }
+  }
+};
+const tupleArraySchema = {
+  type: "array",
+  items: [{ type: "string" }, { type: "integer" }],
+  additionalItems: false
+};
+const containsCountSchema = {
+  type: "array",
+  contains: { type: "string", pattern: "^ok$" },
+  minContains: 2,
+  maxContains: 2
+};
 const textarea = { type: "textarea", tagName: "TEXTAREA", value: "", rows: 0 };
 setExtensionSettingInputValue(textarea, arraySchema, "array", ["a", "b"]);
 assert(textarea.value.indexOf('"a"') >= 0, "array formatted as JSON");
@@ -2921,6 +2966,52 @@ let containsRejected = false;
 try { readExtensionSettingInputValue(textarea, containsArraySchema, "array"); }
 catch (err) { containsRejected = /value must contain an item/.test(String(err.message)); }
 assert(containsRejected, "array schema validates contains");
+extensionSettingValidateSchemaValue({ mode: "strict", threshold: 1 }, conditionalSchema, "value");
+extensionSettingValidateSchemaValue({ mode: "loose", label: "ok" }, conditionalSchema, "value");
+let conditionalThenRejected = false;
+try { extensionSettingValidateSchemaValue({ mode: "strict" }, conditionalSchema, "value"); }
+catch (err) { conditionalThenRejected = /must satisfy then/.test(String(err.message)) && /threshold is required/.test(String(err.message)); }
+assert(conditionalThenRejected, "schema rejects failed then branch");
+let conditionalElseRejected = false;
+try { extensionSettingValidateSchemaValue({ mode: "loose" }, conditionalSchema, "value"); }
+catch (err) { conditionalElseRejected = /must satisfy else/.test(String(err.message)) && /label is required/.test(String(err.message)); }
+assert(conditionalElseRejected, "schema rejects failed else branch");
+extensionSettingValidateSchemaValue({ mode: "strict", threshold: 1 }, dependencySchema, "value");
+extensionSettingValidateSchemaValue({ advanced: true, level: 2 }, dependencySchema, "value");
+let dependencyArrayRejected = false;
+try { extensionSettingValidateSchemaValue({ mode: "strict" }, dependencySchema, "value"); }
+catch (err) { dependencyArrayRejected = /threshold is required by dependency on mode/.test(String(err.message)); }
+assert(dependencyArrayRejected, "schema rejects dependencies array miss");
+let dependencySchemaRejected = false;
+try { extensionSettingValidateSchemaValue({ advanced: true }, dependencySchema, "value"); }
+catch (err) { dependencySchemaRejected = /dependency schema for advanced/.test(String(err.message)); }
+assert(dependencySchemaRejected, "schema rejects dependencies schema miss");
+let dependentRequiredRejected = false;
+try { extensionSettingValidateSchemaValue({ token: "abc" }, dependentRequiredSchema, "value"); }
+catch (err) { dependentRequiredRejected = /endpoint is required by dependency on token/.test(String(err.message)); }
+assert(dependentRequiredRejected, "schema rejects dependentRequired miss");
+let dependentSchemasRejected = false;
+try { extensionSettingValidateSchemaValue({ feature: true, enabled: false }, dependentSchemasSchema, "value"); }
+catch (err) { dependentSchemasRejected = /dependent schema for feature/.test(String(err.message)); }
+assert(dependentSchemasRejected, "schema rejects dependentSchemas miss");
+extensionSettingValidateSchemaValue(["name", 2], tupleArraySchema, "value");
+let tupleTypeRejected = false;
+try { extensionSettingValidateSchemaValue(["name", "bad"], tupleArraySchema, "value"); }
+catch (err) { tupleTypeRejected = /value\[1\] must be an integer/.test(String(err.message)); }
+assert(tupleTypeRejected, "tuple array validates indexed item schema");
+let tupleExtraRejected = false;
+try { extensionSettingValidateSchemaValue(["name", 2, true], tupleArraySchema, "value"); }
+catch (err) { tupleExtraRejected = /value\[2\] is not allowed/.test(String(err.message)); }
+assert(tupleExtraRejected, "tuple array rejects additionalItems false");
+extensionSettingValidateSchemaValue(["ok", "ok"], containsCountSchema, "value");
+let minContainsRejected = false;
+try { extensionSettingValidateSchemaValue(["ok"], containsCountSchema, "value"); }
+catch (err) { minContainsRejected = /must contain an item matching/.test(String(err.message)); }
+assert(minContainsRejected, "array schema validates minContains");
+let maxContainsRejected = false;
+try { extensionSettingValidateSchemaValue(["ok", "ok", "ok"], containsCountSchema, "value"); }
+catch (err) { maxContainsRejected = /at most 2 item/.test(String(err.message)); }
+assert(maxContainsRejected, "array schema validates maxContains");
 const numberInput = { type: "number", tagName: "INPUT", value: "9" };
 let maxRejected = false;
 try { readExtensionSettingInputValue(numberInput, numberSchema, "number"); }
@@ -2961,6 +3052,18 @@ assert(extensionSettingSchemaSummary(anyOfSchema, "string").indexOf("anyOf: 2") 
        && extensionSettingSchemaSummary(constSchema, "string").indexOf("const") >= 0
        && extensionSettingSchemaSummary(containsArraySchema, "array").indexOf("contains: string") >= 0,
        "schema composition summary");
+assert(extensionSettingSchemaSummary(conditionalSchema, "object").indexOf("if") >= 0
+       && extensionSettingSchemaSummary(conditionalSchema, "object").indexOf("then") >= 0
+       && extensionSettingSchemaSummary(conditionalSchema, "object").indexOf("else") >= 0
+       && extensionSettingSchemaSummary(dependencySchema, "object").indexOf("dependencies: 2") >= 0
+       && extensionSettingSchemaSummary(dependentRequiredSchema, "object").indexOf("dependent required: 1") >= 0
+       && extensionSettingSchemaSummary(dependentSchemasSchema, "object").indexOf("dependent schemas: 1") >= 0,
+       "conditional and dependency schema summary");
+assert(extensionSettingSchemaSummary(tupleArraySchema, "array").indexOf("tuple items: 2") >= 0
+       && extensionSettingSchemaSummary(tupleArraySchema, "array").indexOf("no additional items") >= 0
+       && extensionSettingSchemaSummary(containsCountSchema, "array").indexOf("min 2") >= 0
+       && extensionSettingSchemaSummary(containsCountSchema, "array").indexOf("max 2") >= 0,
+       "tuple and contains count schema summary");
 assert(extensionSettingSchemaSummary(numberSchema, "number").indexOf("min: 1") >= 0
        && extensionSettingSchemaSummary(numberSchema, "number").indexOf("max: 5") >= 0,
        "number constraint summary");
@@ -7000,6 +7103,83 @@ def test_app_extension_runtime_support() -> None:
                                 "pattern": "^ok$",
                             },
                         },
+                        "selftest.conditional": {
+                            "type": "object",
+                            "default": {"mode": "loose", "label": "ok"},
+                            "properties": {
+                                "mode": {"type": "string"},
+                                "threshold": {"type": "number"},
+                                "label": {"type": "string"},
+                            },
+                            "if": {
+                                "properties": {
+                                    "mode": {"const": "strict"},
+                                },
+                                "required": ["mode"],
+                            },
+                            "then": {"required": ["threshold"]},
+                            "else": {"required": ["label"]},
+                        },
+                        "selftest.dependencies": {
+                            "type": "object",
+                            "default": {"mode": "loose", "threshold": 1},
+                            "dependencies": {
+                                "mode": ["threshold"],
+                                "advanced": {
+                                    "required": ["level"],
+                                    "properties": {
+                                        "level": {
+                                            "type": "integer",
+                                            "minimum": 1,
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                        "selftest.dependentRequired": {
+                            "type": "object",
+                            "default": {
+                                "token": "abc",
+                                "endpoint": "local",
+                            },
+                            "dependentRequired": {
+                                "token": ["endpoint"],
+                            },
+                        },
+                        "selftest.dependentSchemas": {
+                            "type": "object",
+                            "default": {
+                                "feature": True,
+                                "enabled": True,
+                            },
+                            "dependentSchemas": {
+                                "feature": {
+                                    "required": ["enabled"],
+                                    "properties": {
+                                        "enabled": {"const": True},
+                                    },
+                                },
+                            },
+                        },
+                        "selftest.tuple": {
+                            "type": "array",
+                            "default": ["name", 1],
+                            "items": [
+                                {"type": "string"},
+                                {"type": "integer"},
+                            ],
+                            "additionalItems": False,
+                        },
+                        "selftest.containsCount": {
+                            "type": "array",
+                            "default": ["ok", "ok"],
+                            "contains": {
+                                "type": "string",
+                                "pattern": "^ok$",
+                            },
+                            "minContains": 2,
+                            "maxContains": 2,
+                        },
                         "selftest.machineOnly": {
                             "type": "string",
                             "default": "local",
@@ -7265,6 +7445,29 @@ def test_app_extension_runtime_support() -> None:
             "selftest.const", "open")
         invalid_contains = api.set_extension_setting(
             "selftest.contains", ["nope"])
+        invalid_conditional_then = api.set_extension_setting(
+            "selftest.conditional", {"mode": "strict"})
+        invalid_conditional_else = api.set_extension_setting(
+            "selftest.conditional", {"mode": "loose"})
+        invalid_dependency_array = api.set_extension_setting(
+            "selftest.dependencies", {"mode": "strict"})
+        invalid_dependency_schema = api.set_extension_setting(
+            "selftest.dependencies", {"advanced": True})
+        invalid_dependent_required = api.set_extension_setting(
+            "selftest.dependentRequired", {"token": "abc"})
+        invalid_dependent_schemas = api.set_extension_setting(
+            "selftest.dependentSchemas", {
+                "feature": True,
+                "enabled": False,
+            })
+        invalid_tuple_type = api.set_extension_setting(
+            "selftest.tuple", ["name", "bad"])
+        invalid_tuple_extra = api.set_extension_setting(
+            "selftest.tuple", ["name", 2, True])
+        invalid_contains_min = api.set_extension_setting(
+            "selftest.containsCount", ["ok"])
+        invalid_contains_max = api.set_extension_setting(
+            "selftest.containsCount", ["ok", "ok", "ok"])
         valid_options = api.set_extension_setting(
             "selftest.options", {"level": 3, "mode": "manual"})
         valid_step = api.set_extension_setting("selftest.step", 4)
@@ -7277,12 +7480,41 @@ def test_app_extension_runtime_support() -> None:
         valid_const = api.set_extension_setting("selftest.const", "locked")
         valid_contains = api.set_extension_setting(
             "selftest.contains", ["nope", "ok"])
+        valid_conditional = api.set_extension_setting(
+            "selftest.conditional", {
+                "mode": "strict",
+                "threshold": 2,
+            })
+        valid_dependencies = api.set_extension_setting(
+            "selftest.dependencies", {
+                "advanced": True,
+                "level": 2,
+            })
+        valid_dependent_required = api.set_extension_setting(
+            "selftest.dependentRequired", {
+                "token": "abc",
+                "endpoint": "local",
+            })
+        valid_dependent_schemas = api.set_extension_setting(
+            "selftest.dependentSchemas", {
+                "feature": True,
+                "enabled": True,
+            })
+        valid_tuple = api.set_extension_setting(
+            "selftest.tuple", ["name", 2])
+        valid_contains_count = api.set_extension_setting(
+            "selftest.containsCount", ["ok", "ok"])
         stored_options = api.get_extension_setting("selftest.options")
         stored_step = api.get_extension_setting("selftest.step")
         stored_pattern_options = api.get_extension_setting(
             "selftest.patternOptions")
         stored_any_of = api.get_extension_setting("selftest.anyOf")
         stored_contains = api.get_extension_setting("selftest.contains")
+        stored_conditional = api.get_extension_setting(
+            "selftest.conditional")
+        stored_tuple = api.get_extension_setting("selftest.tuple")
+        stored_contains_count = api.get_extension_setting(
+            "selftest.containsCount")
         _check("extension setting API validates structured schema constraints",
                invalid_options.get("ok") is False
                and "level is required" in invalid_options.get("error", "")
@@ -7320,6 +7552,34 @@ def test_app_extension_runtime_support() -> None:
                and "const value" in invalid_const.get("error", "")
                and invalid_contains.get("ok") is False
                and "contains schema" in invalid_contains.get("error", "")
+               and invalid_conditional_then.get("ok") is False
+               and "must satisfy then" in invalid_conditional_then.get(
+                   "error", "")
+               and invalid_conditional_else.get("ok") is False
+               and "must satisfy else" in invalid_conditional_else.get(
+                   "error", "")
+               and invalid_dependency_array.get("ok") is False
+               and "dependency on mode" in invalid_dependency_array.get(
+                   "error", "")
+               and invalid_dependency_schema.get("ok") is False
+               and "dependency schema for advanced" in (
+                   invalid_dependency_schema.get("error", ""))
+               and invalid_dependent_required.get("ok") is False
+               and "dependency on token" in invalid_dependent_required.get(
+                   "error", "")
+               and invalid_dependent_schemas.get("ok") is False
+               and "dependent schema for feature" in (
+                   invalid_dependent_schemas.get("error", ""))
+               and invalid_tuple_type.get("ok") is False
+               and "must be an integer" in invalid_tuple_type.get(
+                   "error", "")
+               and invalid_tuple_extra.get("ok") is False
+               and "not allowed" in invalid_tuple_extra.get("error", "")
+               and invalid_contains_min.get("ok") is False
+               and "contains schema" in invalid_contains_min.get(
+                   "error", "")
+               and invalid_contains_max.get("ok") is False
+               and "at most 2" in invalid_contains_max.get("error", "")
                and valid_options.get("ok") is True
                and valid_step.get("ok") is True
                and valid_pattern_options.get("ok") is True
@@ -7329,13 +7589,25 @@ def test_app_extension_runtime_support() -> None:
                and valid_not.get("ok") is True
                and valid_const.get("ok") is True
                and valid_contains.get("ok") is True
+               and valid_conditional.get("ok") is True
+               and valid_dependencies.get("ok") is True
+               and valid_dependent_required.get("ok") is True
+               and valid_dependent_schemas.get("ok") is True
+               and valid_tuple.get("ok") is True
+               and valid_contains_count.get("ok") is True
                and stored_options.get("value") == {
                    "level": 3, "mode": "manual"}
                and stored_step.get("value") == 4
                and stored_pattern_options.get("value") == {
                    "env.name": "ok", "other": 2}
                and stored_any_of.get("value") == 12
-               and stored_contains.get("value") == ["nope", "ok"])
+               and stored_contains.get("value") == ["nope", "ok"]
+               and stored_conditional.get("value") == {
+                   "mode": "strict",
+                   "threshold": 2,
+               }
+               and stored_tuple.get("value") == ["name", 2]
+               and stored_contains_count.get("value") == ["ok", "ok"])
         class _SettingsChangedNodeHost:
             is_running = True
 

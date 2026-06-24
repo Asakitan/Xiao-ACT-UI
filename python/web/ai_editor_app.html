@@ -9857,8 +9857,11 @@ function extensionSettingSchemaSummary(schema,type){
   if(!schema||typeof schema!=='object')return '';
   const parts=[];
   if(type==='array'&&schema.items&&typeof schema.items==='object'){
-    const itemType=extensionSettingType(schema.items);
-    parts.push('items: '+itemType);
+    if(Array.isArray(schema.items))parts.push('tuple items: '+schema.items.length);
+    else {
+      const itemType=extensionSettingType(schema.items);
+      parts.push('items: '+itemType);
+    }
   }
   if(type==='object'&&schema.properties&&typeof schema.properties==='object'){
     const keys=Object.keys(schema.properties);
@@ -9887,7 +9890,14 @@ function extensionSettingConstraintSummary(schema,type){
     if(typeof schema.minItems==='number')parts.push('min items: '+schema.minItems);
     if(typeof schema.maxItems==='number')parts.push('max items: '+schema.maxItems);
     if(schema.uniqueItems===true)parts.push('unique items');
-    if(schema.contains&&typeof schema.contains==='object')parts.push('contains: '+extensionSettingType(schema.contains));
+    if(schema.additionalItems===false)parts.push('no additional items');
+    else if(schema.additionalItems&&typeof schema.additionalItems==='object')parts.push('additional items: '+extensionSettingType(schema.additionalItems));
+    if(schema.contains&&typeof schema.contains==='object'){
+      let text='contains: '+extensionSettingType(schema.contains);
+      if(typeof schema.minContains==='number')text+=' min '+schema.minContains;
+      if(typeof schema.maxContains==='number')text+=' max '+schema.maxContains;
+      parts.push(text);
+    }
   }
   if(type==='object'){
     if(typeof schema.minProperties==='number')parts.push('min properties: '+schema.minProperties);
@@ -9897,11 +9907,17 @@ function extensionSettingConstraintSummary(schema,type){
       parts.push('pattern properties: '+Object.keys(schema.patternProperties).slice(0,3).join(', '));
     }
     if(schema.propertyNames&&typeof schema.propertyNames==='object')parts.push('property names constrained');
+    if(schema.dependencies&&typeof schema.dependencies==='object')parts.push('dependencies: '+Object.keys(schema.dependencies).length);
+    if(schema.dependentRequired&&typeof schema.dependentRequired==='object')parts.push('dependent required: '+Object.keys(schema.dependentRequired).length);
+    if(schema.dependentSchemas&&typeof schema.dependentSchemas==='object')parts.push('dependent schemas: '+Object.keys(schema.dependentSchemas).length);
   }
   if(Array.isArray(schema.anyOf)&&schema.anyOf.length)parts.push('anyOf: '+schema.anyOf.length);
   if(Array.isArray(schema.oneOf)&&schema.oneOf.length)parts.push('oneOf: '+schema.oneOf.length);
   if(Array.isArray(schema.allOf)&&schema.allOf.length)parts.push('allOf: '+schema.allOf.length);
   if(schema.not&&typeof schema.not==='object')parts.push('not');
+  if(schema.if&&typeof schema.if==='object')parts.push('if');
+  if(schema.then&&typeof schema.then==='object')parts.push('then');
+  if(schema.else&&typeof schema.else==='object')parts.push('else');
   if(Object.prototype.hasOwnProperty.call(schema,'const'))parts.push('const');
   return parts.join(' · ');
 }
@@ -10013,6 +10029,16 @@ function extensionSettingValidateSchemaValue(value,schema,path){
     let forbidden=false;try{extensionSettingValidateSchemaValue(value,schema.not,path);forbidden=true}catch(e){forbidden=false}
     if(forbidden)throw new Error(path+' must not match the forbidden schema');
   }
+  if(schema.if&&typeof schema.if==='object'){
+    let ifMatches=false;
+    try{extensionSettingValidateSchemaValue(value,schema.if,path);ifMatches=true}catch(e){ifMatches=false}
+    const branch=ifMatches?schema.then:schema.else;
+    const branchName=ifMatches?'then':'else';
+    if(branch&&typeof branch==='object'){
+      try{extensionSettingValidateSchemaValue(value,branch,path)}
+      catch(err){throw new Error(path+' must satisfy '+branchName+': '+err.message)}
+    }
+  }
   if(Array.isArray(schema.enum)&&!schema.enum.some(opt=>JSON.stringify(opt)===JSON.stringify(value)))throw new Error(path+' must be one of the configured enum values');
   const type=extensionSettingType(schema);
   if(extensionSettingDeclaresType(schema)){
@@ -10054,10 +10080,24 @@ function extensionSettingValidateSchemaValue(value,schema,path){
         seen.add(key);
       });
     }
-    if(schema.items&&typeof schema.items==='object')value.forEach((item,idx)=>extensionSettingValidateSchemaValue(item,schema.items,path+'['+idx+']'));
+    if(Array.isArray(schema.items)){
+      schema.items.forEach((itemSchema,idx)=>{
+        if(idx>=value.length||!itemSchema||typeof itemSchema!=='object')return;
+        extensionSettingValidateSchemaValue(value[idx],itemSchema,path+'['+idx+']');
+      });
+      if(value.length>schema.items.length){
+        const start=schema.items.length;
+        if(schema.additionalItems===false)throw new Error(path+'['+start+'] is not allowed');
+        if(schema.additionalItems&&typeof schema.additionalItems==='object'){
+          value.slice(start).forEach((item,offset)=>extensionSettingValidateSchemaValue(item,schema.additionalItems,path+'['+(start+offset)+']'));
+        }
+      }
+    }else if(schema.items&&typeof schema.items==='object')value.forEach((item,idx)=>extensionSettingValidateSchemaValue(item,schema.items,path+'['+idx+']'));
     if(schema.contains&&typeof schema.contains==='object'){
-      const matched=value.some((item,idx)=>{try{extensionSettingValidateSchemaValue(item,schema.contains,path+'['+idx+']');return true}catch(e){return false}});
-      if(!matched)throw new Error(path+' must contain an item matching the contains schema');
+      const matched=value.reduce((count,item,idx)=>{try{extensionSettingValidateSchemaValue(item,schema.contains,path+'['+idx+']');return count+1}catch(e){return count}},0);
+      const minContains=(typeof schema.minContains==='number'&&schema.minContains>=0)?Math.trunc(schema.minContains):1;
+      if(matched<minContains)throw new Error(path+' must contain an item matching the contains schema');
+      if(typeof schema.maxContains==='number'&&schema.maxContains>=0&&matched>Math.trunc(schema.maxContains))throw new Error(path+' must contain at most '+Math.trunc(schema.maxContains)+' item(s) matching the contains schema');
     }
   }
   if(value&&typeof value==='object'&&!Array.isArray(value)){
@@ -10065,6 +10105,27 @@ function extensionSettingValidateSchemaValue(value,schema,path){
     if(typeof schema.minProperties==='number'&&keys.length<schema.minProperties)throw new Error(path+' must contain at least '+schema.minProperties+' property/properties');
     if(typeof schema.maxProperties==='number'&&keys.length>schema.maxProperties)throw new Error(path+' must contain at most '+schema.maxProperties+' property/properties');
     if(Array.isArray(schema.required))schema.required.forEach(key=>{if(key&&!Object.prototype.hasOwnProperty.call(value,key))throw new Error(path+'.'+key+' is required')});
+    if(schema.dependencies&&typeof schema.dependencies==='object')Object.keys(schema.dependencies).forEach(key=>{
+      if(!Object.prototype.hasOwnProperty.call(value,key))return;
+      const dependency=schema.dependencies[key];
+      if(Array.isArray(dependency))dependency.forEach(depKey=>{if(depKey&&!Object.prototype.hasOwnProperty.call(value,depKey))throw new Error(path+'.'+depKey+' is required by dependency on '+key)});
+      else if(dependency&&typeof dependency==='object'){
+        try{extensionSettingValidateSchemaValue(value,dependency,path)}
+        catch(err){throw new Error(path+' must satisfy dependency schema for '+key+': '+err.message)}
+      }
+    });
+    if(schema.dependentRequired&&typeof schema.dependentRequired==='object')Object.keys(schema.dependentRequired).forEach(key=>{
+      if(!Object.prototype.hasOwnProperty.call(value,key)||!Array.isArray(schema.dependentRequired[key]))return;
+      schema.dependentRequired[key].forEach(depKey=>{if(depKey&&!Object.prototype.hasOwnProperty.call(value,depKey))throw new Error(path+'.'+depKey+' is required by dependency on '+key)});
+    });
+    if(schema.dependentSchemas&&typeof schema.dependentSchemas==='object')Object.keys(schema.dependentSchemas).forEach(key=>{
+      if(!Object.prototype.hasOwnProperty.call(value,key))return;
+      const dependency=schema.dependentSchemas[key];
+      if(dependency&&typeof dependency==='object'){
+        try{extensionSettingValidateSchemaValue(value,dependency,path)}
+        catch(err){throw new Error(path+' must satisfy dependent schema for '+key+': '+err.message)}
+      }
+    });
     if(schema.propertyNames&&typeof schema.propertyNames==='object')keys.forEach(key=>extensionSettingValidateSchemaValue(key,schema.propertyNames,path+'.'+key));
     const matched=new Set();
     if(schema.properties&&typeof schema.properties==='object')Object.keys(schema.properties).forEach(key=>{

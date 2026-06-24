@@ -8512,6 +8512,17 @@ class AIEditorAPI:
                 and not cls._validate_extension_setting_value(
                     value, not_schema, path)):
             return f"{path} must not match the forbidden schema"
+        if_schema = schema.get("if")
+        if isinstance(if_schema, dict):
+            if_matches = not cls._validate_extension_setting_value(
+                value, if_schema, path)
+            branch_schema = schema.get("then") if if_matches else schema.get("else")
+            branch_name = "then" if if_matches else "else"
+            if isinstance(branch_schema, dict):
+                error = cls._validate_extension_setting_value(
+                    value, branch_schema, path)
+                if error:
+                    return f"{path} must satisfy {branch_name}: {error}"
         if isinstance(schema.get("enum"), list):
             if not any(value == item for item in schema.get("enum", [])):
                 return f"{path} must be one of the configured enum values"
@@ -8616,16 +8627,53 @@ class AIEditorAPI:
                         item, item_schema, f"{path}[{index}]")
                     if error:
                         return error
+            elif isinstance(item_schema, list):
+                for index, item_schema_entry in enumerate(item_schema):
+                    if index >= len(value):
+                        break
+                    if not isinstance(item_schema_entry, dict):
+                        continue
+                    error = cls._validate_extension_setting_value(
+                        value[index], item_schema_entry, f"{path}[{index}]")
+                    if error:
+                        return error
+                additional_items = schema.get("additionalItems", True)
+                if len(value) > len(item_schema):
+                    extra_indexes = range(len(item_schema), len(value))
+                    if additional_items is False:
+                        return f"{path}[{len(item_schema)}] is not allowed"
+                    if isinstance(additional_items, dict):
+                        for index in extra_indexes:
+                            error = cls._validate_extension_setting_value(
+                                value[index], additional_items,
+                                f"{path}[{index}]")
+                            if error:
+                                return error
             contains_schema = schema.get("contains")
             if isinstance(contains_schema, dict):
-                contains_match = any(
-                    not cls._validate_extension_setting_value(
-                        item, contains_schema, f"{path}[{index}]")
-                    for index, item in enumerate(value)
-                )
-                if not contains_match:
+                contains_count = sum(
+                    1 for index, item in enumerate(value)
+                    if not cls._validate_extension_setting_value(
+                        item, contains_schema, f"{path}[{index}]"))
+                min_contains = schema.get("minContains")
+                max_contains = schema.get("maxContains")
+                min_contains_count = (
+                    int(min_contains)
+                    if (isinstance(min_contains, (int, float))
+                        and not isinstance(min_contains, bool)
+                        and min_contains >= 0)
+                    else 1)
+                if contains_count < min_contains_count:
                     return (
                         f"{path} must contain an item matching "
+                        "the contains schema")
+                if (isinstance(max_contains, (int, float))
+                        and not isinstance(max_contains, bool)
+                        and max_contains >= 0
+                        and contains_count > int(max_contains)):
+                    return (
+                        f"{path} must contain at most "
+                        f"{int(max_contains)} item(s) matching "
                         "the contains schema")
 
         if isinstance(value, dict):
@@ -8647,6 +8695,48 @@ class AIEditorAPI:
                     item_key = str(item or "")
                     if item_key and item_key not in value:
                         return f"{path}.{item_key} is required"
+            dependencies = schema.get("dependencies")
+            if isinstance(dependencies, dict):
+                for prop_key, dependency in dependencies.items():
+                    if prop_key not in value:
+                        continue
+                    if isinstance(dependency, list):
+                        for dependency_key in dependency:
+                            dependency_key = str(dependency_key or "")
+                            if dependency_key and dependency_key not in value:
+                                return (
+                                    f"{path}.{dependency_key} is required "
+                                    f"by dependency on {prop_key}")
+                    elif isinstance(dependency, dict):
+                        error = cls._validate_extension_setting_value(
+                            value, dependency, path)
+                        if error:
+                            return (
+                                f"{path} must satisfy dependency schema "
+                                f"for {prop_key}: {error}")
+            dependent_required = schema.get("dependentRequired")
+            if isinstance(dependent_required, dict):
+                for prop_key, dependency_keys in dependent_required.items():
+                    if prop_key not in value or not isinstance(dependency_keys, list):
+                        continue
+                    for dependency_key in dependency_keys:
+                        dependency_key = str(dependency_key or "")
+                        if dependency_key and dependency_key not in value:
+                            return (
+                                f"{path}.{dependency_key} is required "
+                                f"by dependency on {prop_key}")
+            dependent_schemas = schema.get("dependentSchemas")
+            if isinstance(dependent_schemas, dict):
+                for prop_key, dependency_schema in dependent_schemas.items():
+                    if prop_key not in value or not isinstance(
+                            dependency_schema, dict):
+                        continue
+                    error = cls._validate_extension_setting_value(
+                        value, dependency_schema, path)
+                    if error:
+                        return (
+                            f"{path} must satisfy dependent schema "
+                            f"for {prop_key}: {error}")
             property_names = schema.get("propertyNames")
             if isinstance(property_names, dict):
                 for prop_key in value:
