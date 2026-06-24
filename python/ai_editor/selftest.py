@@ -5438,6 +5438,7 @@ def test_app_extension_runtime_support() -> None:
     node_dependency_tmp = ""
     node_dependent_tmp = ""
     node_fs_tmp = ""
+    node_uri_tmp = ""
     node_storage_tmp = ""
     extension_host_module._host = ExtensionHost()
     try:
@@ -6323,6 +6324,7 @@ def test_app_extension_runtime_support() -> None:
             node_dependent_tmp = tempfile.mkdtemp(
                 prefix="sao_node_dependent_ext_")
             node_fs_tmp = tempfile.mkdtemp(prefix="sao_node_fs_ext_")
+            node_uri_tmp = tempfile.mkdtemp(prefix="sao_node_uri_ext_")
             node_storage_tmp = tempfile.mkdtemp(prefix="sao_node_storage_")
             node_inactive_js = r"""
 async function activate(context) {
@@ -6559,6 +6561,36 @@ module.exports = { activate };
                     "onFileSystem:selfmem",
                 ],
             }, node_fs_tmp)
+            node_uri_js = r"""
+const vscode = require('vscode');
+async function activate(context) {
+  globalThis.__saoNodeUriHits = globalThis.__saoNodeUriHits || [];
+  context.subscriptions.push(vscode.window.registerUriHandler({
+    handleUri(uri) {
+      globalThis.__saoNodeUriHits.push(uri.toString());
+    },
+  }));
+  return {
+    name: 'nodeUriApi',
+    extensionId: context.extension && context.extension.id,
+    hits: globalThis.__saoNodeUriHits,
+  };
+}
+module.exports = { activate };
+"""
+            with open(os.path.join(node_uri_tmp, "extension.js"),
+                      "w", encoding="utf-8") as fh:
+                fh.write(node_uri_js)
+            node_uri_desc = ExtensionDescription.from_package_json({
+                "name": "node-uri",
+                "publisher": "selftest",
+                "version": "0.0.1",
+                "displayName": "Node URI",
+                "main": "./extension.js",
+                "activationEvents": [
+                    "onUri:selftest.node-uri",
+                ],
+            }, node_uri_tmp)
             node_extension_js = r"""
 const vscode = require('vscode');
 const output = vscode.window.createOutputChannel('node-tree-selftest');
@@ -7138,6 +7170,20 @@ async function activate(context) {
       afterDelete: afterDelete.map(([name]) => name).sort(),
     };
   });
+  vscode.commands.registerCommand('selftest.node.uriHandlerProbe', async () => {
+    globalThis.__saoNodeUriHits = globalThis.__saoNodeUriHits || [];
+    const uriExt = vscode.extensions.getExtension('selftest.node-uri');
+    const beforeActive = uriExt && uriExt.isActive === false;
+    const ok = await vscode.env.openExternal(
+      vscode.Uri.parse('vscode://selftest.node-uri/callback?code=42#frag'));
+    const uriExtAfter = vscode.extensions.getExtension('selftest.node-uri');
+    return {
+      ok,
+      beforeActive,
+      afterActive: uriExtAfter && uriExtAfter.isActive === true,
+      hits: [...globalThis.__saoNodeUriHits],
+    };
+  });
   vscode.commands.registerCommand('selftest.node.pythonCommandProbe', async () => {
     const nested = await vscode.commands.executeCommand(
       'selftest.python.echo',
@@ -7381,6 +7427,7 @@ module.exports = { activate, deactivate };
             api._ext_host.registry.register(node_dependency_desc)
             api._ext_host.registry.register(node_dependent_desc)
             api._ext_host.registry.register(node_fs_desc)
+            api._ext_host.registry.register(node_uri_desc)
             class _NodeUiBridge:
                 def __init__(self) -> None:
                     self.webviews = {}
@@ -7435,6 +7482,7 @@ module.exports = { activate, deactivate };
                         node_dependency_desc,
                         node_dependent_desc,
                         node_fs_desc,
+                        node_uri_desc,
                     ])
                     api._install_node_activation_event_bridge()
                     node_host.send_settings_sync({
@@ -7513,6 +7561,15 @@ module.exports = { activate, deactivate };
                         "selftest.node.fileSystemActivationProbe")
                 except Exception as exc:
                     node_file_system_probe = {"_error": str(exc)}
+                node_uri_handler_command_registered = _wait_until(
+                    lambda: "selftest.node.uriHandlerProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                try:
+                    node_uri_handler_probe = api._ext_host.commands.execute(
+                        "selftest.node.uriHandlerProbe")
+                except Exception as exc:
+                    node_uri_handler_probe = {"_error": str(exc)}
                 node_registered = _wait_until(
                     lambda: "selftest.node.tree" in api._vscode_ns._tree_data_providers,
                     timeout=3.0)
@@ -8476,6 +8533,18 @@ module.exports = { activate, deactivate };
                        and node_file_system_probe.get("afterDelete")
                        == ["hello.txt"],
                        json.dumps(node_file_system_probe,
+                                   ensure_ascii=False))
+                _check("node host activates URI handlers dynamically",
+                       node_started is True
+                       and node_uri_handler_command_registered
+                       and isinstance(node_uri_handler_probe, dict)
+                       and node_uri_handler_probe.get("ok") is True
+                       and node_uri_handler_probe.get("beforeActive") is True
+                       and node_uri_handler_probe.get("afterActive") is True
+                       and node_uri_handler_probe.get("hits") == [
+                           "vscode://selftest.node-uri/callback?code=42#frag"
+                       ],
+                       json.dumps(node_uri_handler_probe,
                                   ensure_ascii=False))
                 _check("node host tree provider registers dynamic activity view",
                        node_started is True
@@ -8748,6 +8817,8 @@ module.exports = { activate, deactivate };
             shutil.rmtree(node_dependent_tmp, ignore_errors=True)
         if node_fs_tmp:
             shutil.rmtree(node_fs_tmp, ignore_errors=True)
+        if node_uri_tmp:
+            shutil.rmtree(node_uri_tmp, ignore_errors=True)
         if node_storage_tmp:
             shutil.rmtree(node_storage_tmp, ignore_errors=True)
 

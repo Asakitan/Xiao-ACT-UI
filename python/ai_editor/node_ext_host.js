@@ -1051,6 +1051,7 @@ const _treeViews = new Map();            // viewId -> TreeView-like object
 const _treeElementStores = new Map();    // viewId -> element handle store
 const _outputChannels = new Map();       // name -> OutputChannel
 const _fileSystemProviders = new Map();  // scheme -> { provider, options, extensionId }
+const _uriHandlers = new Map();          // extensionId -> { handler }
 const _languageProviders = [];           // { kind, selector, provider, triggers?, disposable }
 let _nextLanguageProviderHandle = 1;
 let _nextPythonCommandRequestHandle = 1;
@@ -2503,6 +2504,40 @@ async function _activateKnownExtensionsForEvent(event) {
     return targets.length;
 }
 
+function _extensionIdKey(value) {
+    return String(value || '').trim().toLowerCase();
+}
+
+function _targetExtensionIdForUri(uri) {
+    const parsed = _workspaceUriFromInput(uri);
+    if (parsed.scheme !== 'vscode' && parsed.scheme !== 'sao-ai-editor') {
+        return '';
+    }
+    const authority = _extensionIdKey(parsed.authority);
+    if (authority) return authority;
+    const firstPathPart = String(parsed.path || '')
+        .replace(/^\/+/, '')
+        .split('/')[0];
+    return _extensionIdKey(firstPathPart);
+}
+
+async function _dispatchUriHandler(uriInput) {
+    const uri = _workspaceUriFromInput(uriInput);
+    const targetId = _targetExtensionIdForUri(uri);
+    if (!targetId) return false;
+    let entry = _uriHandlers.get(targetId);
+    if (!entry) {
+        await _activateKnownExtensionsForEvent(`onUri:${targetId}`);
+        entry = _uriHandlers.get(targetId);
+    }
+    const handler = entry && entry.handler;
+    if (!handler || typeof handler.handleUri !== 'function') {
+        return false;
+    }
+    await handler.handleUri(uri);
+    return true;
+}
+
 function _extensionApiObject(id) {
     const active = _extensions.get(id);
     const known = _knownExtensions.get(id);
@@ -2772,6 +2807,22 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 subscriptions.push(d);
                 return view;
             },
+            registerUriHandler(handler) {
+                const id = _extensionIdKey(extDesc.extensionId);
+                if (!id) throw new Error('Cannot register URI handler without extension id');
+                if (_uriHandlers.has(id)) {
+                    throw new Error(`Protocol handler already registered for extension ${id}`);
+                }
+                const entry = { handler };
+                _uriHandlers.set(id, entry);
+                const disposable = new Disposable(() => {
+                    if (_uriHandlers.get(id) === entry) {
+                        _uriHandlers.delete(id);
+                    }
+                });
+                subscriptions.push(disposable);
+                return disposable;
+            },
             get activeTextEditor() { return undefined; },
             get visibleTextEditors() { return []; },
             get activeColorTheme() { return { kind: 2 }; }, // Dark
@@ -2888,9 +2939,16 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 readText: () => Promise.resolve(''),
                 writeText: () => Promise.resolve(),
             },
-            openExternal(uri) {
-                log(`stub: openExternal ${uri}`);
-                return Promise.resolve(true);
+            async openExternal(uri) {
+                const parsed = _workspaceUriFromInput(uri);
+                if (await _dispatchUriHandler(parsed)) return true;
+                await _activateKnownExtensionsForEvent(
+                    `onOpenExternalUri:${parsed.scheme}`);
+                log(`stub: openExternal ${parsed.toString()}`);
+                return true;
+            },
+            asExternalUri(uri) {
+                return Promise.resolve(_workspaceUriFromInput(uri));
             },
             get shell() { return process.platform === 'win32' ? 'powershell.exe' : '/bin/bash'; },
             get uiKind() { return 1; }, // Desktop
