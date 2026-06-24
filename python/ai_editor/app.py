@@ -5514,6 +5514,7 @@ class AIEditorAPI:
             existing_host.set_diagnostics_enabled(
                 self._extension_diagnostics_enabled())
             existing_host.set_command_service(self._ext_host.commands)
+            existing_host.register_extensions(node_exts)
             pending = [
                 ext for ext in node_exts
                 if not existing_host.is_extension_activated(ext.id)
@@ -5571,6 +5572,7 @@ class AIEditorAPI:
         self._node_ext_host = host
         self._vscode_ns.set_language_provider_request_callback(
             self._request_node_language_provider)
+        host.register_extensions(node_exts)
         activated = host.activate_all(node_exts)
         print(f"[NodeExtHost] {activated}/{len(node_exts)} JS extension(s) "
               "sent for activation.")
@@ -8455,15 +8457,12 @@ class AIEditorAPI:
                     # Activate in Node host if extension has a JS entry point
                     node_host = getattr(self, "_node_ext_host", None)
                     if desc.main and node_host is not None and node_host.is_running:
-                        manifest = {
-                            "name": desc.name,
-                            "publisher": desc.publisher,
-                            "version": desc.version,
-                            "main": desc.main,
-                            "activationEvents": desc.activation_events,
-                            "contributes": desc.contributes,
-                        }
-                        node_host.activate(desc.extension_path, desc.id, manifest)
+                        node_host.register_extensions([desc])
+                        node_host.activate(
+                            desc.extension_path,
+                            desc.id,
+                            node_host.extension_manifest(desc),
+                        )
                         result["node_activated"] = True
 
                     # Emit event so the frontend refreshes the extensions list

@@ -6,7 +6,8 @@
  * per line). stderr is used for debug logging only.
  *
  * Inbound (from Python):
- *   activate, deactivate, webview_message, command, shutdown
+ *   register_extensions, activate, deactivate, webview_message, command,
+ *   shutdown
  *
  * Outbound (to Python):
  *   activated, webview_html, webview_post_message, command_registered,
@@ -1035,6 +1036,9 @@ class OutputChannel {
 // Global registries
 // -------------------------------------------------------------------------
 const _extensions = new Map();           // extensionId -> { desc, module, context, deactivate }
+const _knownExtensions = new Map();      // extensionId -> { extensionPath, manifest, extensionKind }
+const _extensionActivationRequests = new Map(); // requestId -> pending activation request
+const _extensionActivationInFlight = new Map(); // extensionId -> pending activation request
 const _commands = new Map();             // commandId -> handler
 const _pythonCommandRequests = new Map(); // requestId -> { resolve, reject, timer }
 const _webviewViewProviders = new Map(); // viewType -> { provider, options }
@@ -1049,6 +1053,7 @@ const _outputChannels = new Map();       // name -> OutputChannel
 const _languageProviders = [];           // { kind, selector, provider, triggers?, disposable }
 let _nextLanguageProviderHandle = 1;
 let _nextPythonCommandRequestHandle = 1;
+let _nextExtensionActivationRequestHandle = 1;
 const _languageDocumentTextCache = new Map(); // uri -> { version, text }
 const _workspaceTextDocuments = new Map(); // uri -> TextDocument-like object
 const _onDidOpenTextDocumentEmitter = new EventEmitter();
@@ -2200,20 +2205,115 @@ function createTreeViewObject(viewId, treeDataProvider) {
 // -------------------------------------------------------------------------
 let _sbiCounter = 0;
 
-function _extensionApiObject(id, ext) {
-    if (!ext) return undefined;
-    const extensionPath = ext.context.extensionPath;
+function _extensionKindValue(raw) {
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    return String(value || '').toLowerCase() === 'ui' ? 1 : 2;
+}
+
+function _registerKnownExtensions(extensions) {
+    for (const item of Array.isArray(extensions) ? extensions : []) {
+        const id = String(item?.extensionId || item?.id || '').trim();
+        const extensionPath = String(item?.extensionPath || item?.path || '').trim();
+        if (!id || !extensionPath) continue;
+        const manifest = item?.manifest && typeof item.manifest === 'object'
+            ? item.manifest
+            : {};
+        _knownExtensions.set(id, {
+            extensionId: id,
+            extensionPath,
+            manifest,
+            storageRoot: String(item?.storageRoot || ''),
+            extensionKind: item?.extensionKind || manifest.extensionKind || 'workspace',
+        });
+    }
+}
+
+function _completeExtensionActivation(extensionId, ok, error) {
+    const id = String(extensionId || '');
+    const pending = _extensionActivationInFlight.get(id);
+    if (!pending) return;
+    _extensionActivationInFlight.delete(id);
+    _extensionActivationRequests.delete(pending.requestId);
+    clearTimeout(pending.timer);
+    if (ok) {
+        const active = _extensions.get(id);
+        pending.resolve(active ? active.activationExports : undefined);
+    } else {
+        pending.reject(new Error(error || `Extension activation failed: ${id}`));
+    }
+}
+
+function _handleActivateExtensionResponse(msg) {
+    const requestId = String(msg.requestId || '');
+    const pending = _extensionActivationRequests.get(requestId);
+    if (!pending) return;
+    if (!msg.ok) {
+        _completeExtensionActivation(
+            pending.extensionId,
+            false,
+            msg.error || 'Extension activation request failed');
+    }
+}
+
+function _activateKnownExtension(id) {
+    const extensionId = String(id || '');
+    const active = _extensions.get(extensionId);
+    if (active) return Promise.resolve(active.activationExports);
+    if (!_knownExtensions.has(extensionId)) {
+        return Promise.reject(new Error(`Unknown extension: ${extensionId}`));
+    }
+    const existing = _extensionActivationInFlight.get(extensionId);
+    if (existing) return existing.promise;
+
+    const requestId = `extact-${_nextExtensionActivationRequestHandle++}`;
+    let resolvePromise;
+    let rejectPromise;
+    const promise = new Promise((resolve, reject) => {
+        resolvePromise = resolve;
+        rejectPromise = reject;
+    });
+    const pending = {
+        requestId,
+        extensionId,
+        promise,
+        resolve: resolvePromise,
+        reject: rejectPromise,
+        timer: setTimeout(() => {
+            _completeExtensionActivation(
+                extensionId,
+                false,
+                `Extension activation timed out: ${extensionId}`);
+        }, 5000),
+    };
+    _extensionActivationRequests.set(requestId, pending);
+    _extensionActivationInFlight.set(extensionId, pending);
+    send({ type: 'activate_extension', requestId, extensionId });
+    return promise;
+}
+
+function _extensionApiObject(id) {
+    const active = _extensions.get(id);
+    const known = _knownExtensions.get(id);
+    if (!active && !known) return undefined;
+    const extensionPath = active
+        ? active.context.extensionPath
+        : known.extensionPath;
     const extensionUri = Uri.file(extensionPath);
-    const exportsValue = ext.activationExports;
+    const manifest = active
+        ? (active.desc.manifest || {})
+        : (known.manifest || {});
+    const exportsValue = active ? active.activationExports : undefined;
     return {
         id,
         extensionUri,
         extensionPath,
-        isActive: true,
-        packageJSON: ext.desc.manifest || {},
+        isActive: !!active,
+        packageJSON: manifest,
         exports: exportsValue,
-        extensionKind: ext.context.extension?.extensionKind || 2,
-        activate: () => Promise.resolve(exportsValue),
+        extensionKind: active
+            ? (active.context.extension?.extensionKind || 2)
+            : _extensionKindValue(known.extensionKind),
+        activate: () => _activateKnownExtension(id),
     };
 }
 
@@ -2231,6 +2331,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
     const workspaceState = new Memento(storagePaths.workspaceState);
     const secretStorage = new SecretStorage(storagePaths.secrets);
     const extensionUri = Uri.file(extensionPath);
+    const extensionKind = _extensionKindValue(extDesc.manifest?.extensionKind);
 
     const context = {
         subscriptions,
@@ -2255,7 +2356,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             extensionPath,
             isActive: true,
             packageJSON: extDesc.manifest || {},
-            extensionKind: 2, // Workspace
+            extensionKind,
             exports: undefined,
         },
         environmentVariableCollection: {
@@ -2606,12 +2707,15 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         // --- Namespace: extensions ---
         extensions: {
             getExtension(id) {
-                const ext = _extensions.get(id);
-                return _extensionApiObject(id, ext);
+                return _extensionApiObject(String(id || ''));
             },
             get all() {
-                return [..._extensions.entries()]
-                    .map(([id, e]) => _extensionApiObject(id, e));
+                const ids = new Set([
+                    ..._knownExtensions.keys(),
+                    ..._extensions.keys(),
+                ]);
+                return [...ids].map(id => _extensionApiObject(id))
+                    .filter(ext => !!ext);
             },
             onDidChange: new EventEmitter().event,
         },
@@ -3231,7 +3335,15 @@ function _createConfigProxy(section) {
 // -------------------------------------------------------------------------
 async function activateExtension(msg) {
     const { extensionPath, extensionId, manifest, storageRoot } = msg;
+    _registerKnownExtensions([{
+        extensionId,
+        extensionPath,
+        manifest,
+        storageRoot,
+        extensionKind: manifest?.extensionKind || 'workspace',
+    }]);
     if (_extensions.has(extensionId)) {
+        _completeExtensionActivation(extensionId, true, '');
         send({ type: 'activated', extensionId, ok: true, already: true });
         return;
     }
@@ -3292,9 +3404,12 @@ async function activateExtension(msg) {
             resolveWebviewView(viewType);
         }
 
+        _completeExtensionActivation(extensionId, true, '');
         send({ type: 'activated', extensionId, ok: true });
     } catch (err) {
         log(`activation failed for ${extensionId}: ${err.stack || err.message}`);
+        _completeExtensionActivation(
+            extensionId, false, err?.message || String(err));
         send({ type: 'error', extensionId, error: err.message || String(err) });
         send({ type: 'activated', extensionId, ok: false, error: err.message });
     } finally {
@@ -4642,6 +4757,12 @@ async function shutdown() {
 // -------------------------------------------------------------------------
 async function handleMessage(msg) {
     switch (msg.type) {
+        case 'register_extensions':
+            _registerKnownExtensions(msg.extensions);
+            break;
+        case 'activate_extension_response':
+            _handleActivateExtensionResponse(msg);
+            break;
         case 'activate':
             await activateExtension(msg);
             break;

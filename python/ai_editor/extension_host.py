@@ -1581,6 +1581,7 @@ class NodeExtensionHost:
         self._diagnostics_enabled = False
         self._diagnostics_lock = threading.Lock()
         self._diagnostics: Dict[str, Dict[str, Any]] = {}
+        self._registered_extensions: Dict[str, Dict[str, Any]] = {}
         self._on_activated_callbacks: List[Callable[[str], None]] = []
         self._on_error_callbacks: List[Callable[[str, str], None]] = []
         self._on_config_set_callbacks: List[
@@ -1694,6 +1695,45 @@ class NodeExtensionHost:
 
     # -- Extension activation -----------------------------------------------
 
+    @staticmethod
+    def extension_manifest(ext: ExtensionDescription) -> Dict[str, Any]:
+        return {
+            "name": ext.name,
+            "displayName": ext.display_name,
+            "publisher": ext.publisher,
+            "version": ext.version,
+            "description": ext.description,
+            "main": ext.main,
+            "browser": ext.browser,
+            "icon": ext.icon,
+            "categories": list(ext.categories),
+            "activationEvents": list(ext.activation_events),
+            "extensionDependencies": list(ext.extension_dependencies),
+            "extensionKind": ext.extension_kind,
+            "contributes": ext.contributes,
+        }
+
+    def register_extensions(self, extensions: List[ExtensionDescription]) -> int:
+        """Sync known Node extension descriptions without activating them."""
+        records: List[Dict[str, Any]] = []
+        for ext in extensions:
+            if not ext.main:
+                continue
+            manifest = self.extension_manifest(ext)
+            record = {
+                "extensionId": ext.id,
+                "extensionPath": ext.extension_path,
+                "manifest": manifest,
+                "extensionKind": ext.extension_kind,
+            }
+            if self._storage_root:
+                record["storageRoot"] = self._storage_root
+            self._registered_extensions[ext.id] = record
+            records.append(record)
+        if records and self.is_running:
+            self._send({"type": "register_extensions", "extensions": records})
+        return len(records)
+
     def activate(self, extension_path: str, extension_id: str,
                  manifest: Dict[str, Any]) -> bool:
         """Send an activate message for a single extension.
@@ -1708,6 +1748,14 @@ class NodeExtensionHost:
             return True
         if extension_id in self._activation_sent_ids:
             return True
+        record = {
+            "extensionId": extension_id,
+            "extensionPath": extension_path,
+            "manifest": dict(manifest or {}),
+        }
+        if self._storage_root:
+            record["storageRoot"] = self._storage_root
+        self._registered_extensions[extension_id] = record
         msg = {
             "type": "activate",
             "extensionPath": extension_path,
@@ -1738,14 +1786,7 @@ class NodeExtensionHost:
         for ext in extensions:
             if not ext.main:
                 continue
-            manifest = {
-                "name": ext.name,
-                "publisher": ext.publisher,
-                "version": ext.version,
-                "main": ext.main,
-                "activationEvents": ext.activation_events,
-                "contributes": ext.contributes,
-            }
+            manifest = self.extension_manifest(ext)
             if self.activate(ext.extension_path, ext.id, manifest):
                 count += 1
         return count
@@ -1894,18 +1935,28 @@ class NodeExtensionHost:
 
         if msg_type == "activated":
             ext_id = str(msg.get("extensionId", ""))
-            self._activated_ids.add(ext_id)
-            self._activation_sent_ids.add(ext_id)
-            _log.info("[NodeExtHost] Extension activated: %s", ext_id)
-            for cb in self._on_activated_callbacks:
-                try:
-                    cb(ext_id)
-                except Exception:
-                    _log.exception("[NodeExtHost] on_activated callback error")
+            if bool(msg.get("ok", True)):
+                self._activated_ids.add(ext_id)
+                self._activation_sent_ids.add(ext_id)
+                _log.info("[NodeExtHost] Extension activated: %s", ext_id)
+                for cb in self._on_activated_callbacks:
+                    try:
+                        cb(ext_id)
+                    except Exception:
+                        _log.exception(
+                            "[NodeExtHost] on_activated callback error")
+            else:
+                self._activated_ids.discard(ext_id)
+                self._activation_sent_ids.discard(ext_id)
+                _log.warning(
+                    "[NodeExtHost] Extension activation failed: %s (%s)",
+                    ext_id,
+                    msg.get("error") or msg.get("message") or "Unknown error")
 
         elif msg_type == "error":
             ext_id = str(msg.get("extensionId", ""))
-            message = str(msg.get("message", "Unknown error"))
+            message = str(
+                msg.get("message") or msg.get("error") or "Unknown error")
             if ext_id and ext_id not in self._activated_ids:
                 self._activation_sent_ids.discard(ext_id)
             _log.error("[NodeExtHost] Extension error (%s): %s",
@@ -2018,6 +2069,33 @@ class NodeExtensionHost:
                 detail=command_id,
                 error=error,
             )
+
+        elif msg_type == "activate_extension":
+            request_id = str(msg.get("requestId", ""))
+            ext_id = str(msg.get("extensionId", ""))
+            record = self._registered_extensions.get(ext_id)
+            ok = False
+            error = ""
+            if not ext_id:
+                error = "Extension id is required"
+            elif not record:
+                error = f"Extension is not registered: {ext_id}"
+            else:
+                ok = self.activate(
+                    str(record.get("extensionPath") or ""),
+                    ext_id,
+                    dict(record.get("manifest") or {}),
+                )
+                if not ok:
+                    error = f"Extension activation could not be sent: {ext_id}"
+            if request_id:
+                self._send({
+                    "type": "activate_extension_response",
+                    "requestId": request_id,
+                    "extensionId": ext_id,
+                    "ok": ok,
+                    "error": error,
+                })
 
         elif msg_type == "diagnostic_event":
             self._record_diagnostic(

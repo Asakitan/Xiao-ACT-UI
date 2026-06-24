@@ -5431,6 +5431,7 @@ def test_app_extension_runtime_support() -> None:
     language_tmp = ""
     settings_tmp = ""
     node_tree_tmp = ""
+    node_inactive_tmp = ""
     node_storage_tmp = ""
     extension_host_module._host = ExtensionHost()
     try:
@@ -6258,7 +6259,31 @@ def test_app_extension_runtime_support() -> None:
             _check("node extension host tree provider bridge skipped without Node.js", True)
         else:
             node_tree_tmp = tempfile.mkdtemp(prefix="sao_node_tree_ext_")
+            node_inactive_tmp = tempfile.mkdtemp(
+                prefix="sao_node_inactive_ext_")
             node_storage_tmp = tempfile.mkdtemp(prefix="sao_node_storage_")
+            node_inactive_js = r"""
+async function activate(context) {
+  return {
+    name: 'nodeInactiveApi',
+    extensionId: context.extension && context.extension.id,
+    packageName: context.extension && context.extension.packageJSON
+      && context.extension.packageJSON.name,
+  };
+}
+module.exports = { activate };
+"""
+            with open(os.path.join(node_inactive_tmp, "extension.js"),
+                      "w", encoding="utf-8") as fh:
+                fh.write(node_inactive_js)
+            node_inactive_desc = ExtensionDescription.from_package_json({
+                "name": "node-inactive",
+                "publisher": "selftest",
+                "version": "0.0.1",
+                "displayName": "Node Inactive",
+                "main": "./extension.js",
+                "activationEvents": ["onCommand:selftest.inactive"],
+            }, node_inactive_tmp)
             node_extension_js = r"""
 const vscode = require('vscode');
 const output = vscode.window.createOutputChannel('node-tree-selftest');
@@ -6824,6 +6849,13 @@ async function activate(context) {
     const own = vscode.extensions.getExtension(context.extension.id);
     const activatedExports = own ? await own.activate() : null;
     const allOwn = vscode.extensions.all.find(ext => ext.id === context.extension.id);
+    const inactive = vscode.extensions.getExtension('selftest.node-inactive');
+    const inactiveFromAllBefore = vscode.extensions.all.find(
+      ext => ext.id === 'selftest.node-inactive');
+    const inactiveActivated = inactive ? await inactive.activate() : null;
+    const inactiveAfter = vscode.extensions.getExtension('selftest.node-inactive');
+    const inactiveFromAllAfter = vscode.extensions.all.find(
+      ext => ext.id === 'selftest.node-inactive');
     return {
       exists: !!own,
       isActive: own && own.isActive,
@@ -6840,6 +6872,22 @@ async function activate(context) {
       allExportsName: allOwn && allOwn.exports && allOwn.exports.name,
       contextExportsName: context.extension.exports && context.extension.exports.name,
       missing: vscode.extensions.getExtension('missing.extension') === undefined,
+      inactiveExists: !!inactive,
+      inactiveBeforeActive: inactive && inactive.isActive === false,
+      inactiveAllBeforeActive: inactiveFromAllBefore
+        && inactiveFromAllBefore.isActive === false,
+      inactiveExportsBefore: inactive && inactive.exports === undefined,
+      inactivePackageName: inactive && inactive.packageJSON
+        && inactive.packageJSON.name,
+      inactiveActivatedName: inactiveActivated && inactiveActivated.name,
+      inactiveAfterActive: inactiveAfter && inactiveAfter.isActive,
+      inactiveAfterExportsName: inactiveAfter && inactiveAfter.exports
+        && inactiveAfter.exports.name,
+      inactiveAllAfterActive: inactiveFromAllAfter
+        && inactiveFromAllAfter.isActive,
+      inactiveAllAfterExportsName: inactiveFromAllAfter
+        && inactiveFromAllAfter.exports
+        && inactiveFromAllAfter.exports.name,
     };
   });
   vscode.commands.registerCommand('selftest.node.webviewDefaultRoots', () => {
@@ -7067,6 +7115,10 @@ module.exports = { activate, deactivate };
             try:
                 node_started = node_host.start()
                 if node_started:
+                    node_host.register_extensions([
+                        node_tree_desc,
+                        node_inactive_desc,
+                    ])
                     node_host.send_settings_sync({
                         "ai_editor": {
                             "extensions": {
@@ -8079,6 +8131,20 @@ module.exports = { activate, deactivate };
                        and node_extension_api_probe.get("allExportsName")
                        == "nodeActivationApi"
                        and node_extension_api_probe.get("missing") is True
+                       and node_extension_api_probe.get("inactiveExists") is True
+                       and node_extension_api_probe.get("inactiveBeforeActive") is True
+                       and node_extension_api_probe.get("inactiveAllBeforeActive") is True
+                       and node_extension_api_probe.get("inactiveExportsBefore") is True
+                       and node_extension_api_probe.get("inactivePackageName")
+                       == node_inactive_desc.name
+                       and node_extension_api_probe.get("inactiveActivatedName")
+                       == "nodeInactiveApi"
+                       and node_extension_api_probe.get("inactiveAfterActive") is True
+                       and node_extension_api_probe.get("inactiveAfterExportsName")
+                       == "nodeInactiveApi"
+                       and node_extension_api_probe.get("inactiveAllAfterActive") is True
+                       and node_extension_api_probe.get("inactiveAllAfterExportsName")
+                       == "nodeInactiveApi"
                        and str(node_extension_api_probe.get("extensionUri", ""))
                        .startswith("file:///")
                        and str(node_extension_api_probe.get("extensionPath", "")),
@@ -8233,6 +8299,8 @@ module.exports = { activate, deactivate };
             shutil.rmtree(settings_tmp, ignore_errors=True)
         if node_tree_tmp:
             shutil.rmtree(node_tree_tmp, ignore_errors=True)
+        if node_inactive_tmp:
+            shutil.rmtree(node_inactive_tmp, ignore_errors=True)
         if node_storage_tmp:
             shutil.rmtree(node_storage_tmp, ignore_errors=True)
 
