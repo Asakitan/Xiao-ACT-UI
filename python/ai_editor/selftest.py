@@ -2762,6 +2762,8 @@ console.log("extension setting schema helpers ok");
            and "state.matchOnDetail" in html
            and "state.keepScrollPosition" in html
            and "previousScrollTop" in html
+           and "state.valueSelection" in html
+           and "input.setSelectionRange" in html
            and "e.key==='ArrowDown'" in html
            and "e.key==='ArrowUp'" in html
            and "aria-activedescendant" in html
@@ -3092,6 +3094,10 @@ console.log("quick input filter helpers ok");
            and "const input = new QuickPickInput()" in node_ext_host_source
            and "input.onDidAccept(() =>" in node_ext_host_source
            and "token.onCancellationRequested" in node_ext_host_source
+           and "async function _windowShowInputBox(options = {}, token = undefined)"
+           in node_ext_host_source
+           and "const input = new InputBoxInput()" in node_ext_host_source
+           and "validateCurrentValue" in node_ext_host_source
            and "function handleQuickInputAction(msg)" in node_ext_host_source
            and "case 'quick_input_action':" in node_ext_host_source
            and "input.value = String(msg.value ?? '')" in node_ext_host_source
@@ -8557,12 +8563,21 @@ module.exports = { activate, deactivate };
                         "event": "quick_input",
                         "data": dict(payload or {}),
                     })
-                    if (isinstance(payload, dict)
-                            and payload.get("event") == "show"
-                            and payload.get("kind") == "quickPick"
-                            and self.node_host is not None):
-                        self.node_host.send_quick_input_action(
-                            payload.get("id"), "accept", {})
+                    if isinstance(payload, dict) and self.node_host is not None:
+                        if (payload.get("event") == "show"
+                                and payload.get("kind") == "quickPick"):
+                            self.node_host.send_quick_input_action(
+                                payload.get("id"), "accept", {})
+                        elif (payload.get("event") == "show"
+                                and payload.get("kind") == "inputBox"):
+                            self.node_host.send_quick_input_action(
+                                payload.get("id"), "accept", {})
+                        elif (payload.get("event") == "update"
+                                and payload.get("kind") == "inputBox"
+                                and (payload.get("state") or {}).get(
+                                    "validationMessage")):
+                            self.node_host.send_quick_input_action(
+                                payload.get("id"), "hide", {})
 
             node_ui_bridge = _NodeUiBridge()
             node_host = NodeExtensionHost(
@@ -10043,7 +10058,7 @@ module.exports = { activate, deactivate };
                     item for item in node_ui_bridge.quick_inputs
                     if isinstance(item, dict)
                 ]
-                _check("node host showQuickPick uses dynamic QuickInput UI",
+                _check("node host quick input convenience APIs use dynamic UI",
                        node_started is True
                        and node_quick_input_command_registered
                        and isinstance(node_quick_input_probe, dict)

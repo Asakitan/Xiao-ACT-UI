@@ -2465,6 +2465,16 @@ function renderQuickInputState(state){
     input.type=state.kind==='inputBox'&&state.password?'password':'text';
     input.placeholder=state.placeholder||'';
     if(input.value!==String(state.value||''))input.value=String(state.value||'');
+    if(state.kind==='inputBox'){
+      const selection=Array.isArray(state.valueSelection)?state.valueSelection:null;
+      const selectionKey=selection?String(state.id)+':'+selection.join(':')+':'+String(state.value||''):'';
+      if(selection&&input.dataset.valueSelectionKey!==selectionKey){
+        input.dataset.valueSelectionKey=selectionKey;
+        setTimeout(()=>{try{input.setSelectionRange(Number(selection[0])||0,Number(selection[1])||0)}catch(_err){}},0);
+      }else if(!selection){
+        delete input.dataset.valueSelectionKey;
+      }
+    }
     input.disabled=state.enabled===false;
     input.setAttribute('aria-label',quickInputAriaLabel(state));
     if(state.kind==='quickPick'){

@@ -3333,18 +3333,61 @@ async function _windowShowQuickPick(itemsOrPromise, options = {}, token = undefi
     });
 }
 
-async function _windowShowInputBox(options = {}) {
-    const value = String(options?.value ?? '');
-    if (typeof options?.validateInput === 'function') {
-        const validation = await options.validateInput(value);
-        if (validation) {
-            log(`showInputBox validation blocked fallback value: ${
-                typeof validation === 'string' ? validation : validation.message || validation.content || validation
-            }`);
-            return undefined;
-        }
+async function _windowShowInputBox(options = {}, token = undefined) {
+    if (token?.isCancellationRequested) return undefined;
+    const input = new InputBoxInput();
+    let settled = false;
+    let validationRun = 0;
+    const disposables = [];
+    function finish(resolve, value) {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+        queueMicrotask(() => {
+            disposables.forEach(disposable => disposable?.dispose?.());
+            input.dispose();
+        });
     }
-    return value;
+    async function validateCurrentValue() {
+        if (typeof options?.validateInput !== 'function') return undefined;
+        const run = ++validationRun;
+        let validation;
+        try {
+            validation = await options.validateInput(String(input._value ?? ''));
+        } catch (err) {
+            validation = String(err?.message || err || 'Invalid input');
+            log(`showInputBox validateInput failed: ${validation}`);
+        }
+        if (run === validationRun && !settled) {
+            input.validationMessage = validation || undefined;
+        }
+        return validation;
+    }
+    return new Promise(resolve => {
+        input._title = options?.title === undefined ? undefined : String(options.title);
+        input._value = String(options?.value ?? '');
+        input._valueSelection = Array.isArray(options?.valueSelection)
+            ? [Number(options.valueSelection[0]) || 0, Number(options.valueSelection[1]) || 0]
+            : undefined;
+        input._placeholder = options?.placeHolder === undefined ? undefined : String(options.placeHolder);
+        input._prompt = options?.prompt === undefined ? undefined : String(options.prompt);
+        input._password = !!options?.password;
+        input._ignoreFocusOut = !!options?.ignoreFocusOut;
+        disposables.push(input.onDidChangeValue(() => { void validateCurrentValue(); }));
+        disposables.push(input.onDidAccept(async () => {
+            const validation = await validateCurrentValue();
+            if (validation) return;
+            finish(resolve, input.value);
+        }));
+        disposables.push(input.onDidHide(() => finish(resolve, undefined)));
+        if (token && typeof token.onCancellationRequested === 'function') {
+            disposables.push(token.onCancellationRequested(() => {
+                input.hide();
+                finish(resolve, undefined);
+            }));
+        }
+        input.show();
+    });
 }
 
 function _quickInputSafePayload(value) {
@@ -4186,8 +4229,8 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             showQuickPick(items, options, token) {
                 return _windowShowQuickPick(items, options || {}, token);
             },
-            showInputBox(options) {
-                return _windowShowInputBox(options || {});
+            showInputBox(options, token) {
+                return _windowShowInputBox(options || {}, token);
             },
             createQuickPick() {
                 return new QuickPickInput();
