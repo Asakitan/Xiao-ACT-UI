@@ -7448,7 +7448,8 @@ class AIEditorAPI:
                 _set_language_override(
                     override_identifier, full_setting_key, value)
                 _set_config_target(
-                    section_path + key_path, value, target, remove)
+                    [f"[{override_identifier}]"] + section_path + key_path,
+                    value, target, remove)
                 settings.save()
                 self._notify_node_settings_changed_async()
                 return
@@ -8133,7 +8134,8 @@ class AIEditorAPI:
 
     def _persist_extension_setting_target(
             self, key: str, value: Any, target: Any,
-            remove: bool = False, explicit_target: bool = False) -> Optional[str]:
+            remove: bool = False, explicit_target: bool = False,
+            save: bool = True) -> Optional[str]:
         settings = _resolve_settings(self._gui_ref)
         if not settings:
             return None
@@ -8179,6 +8181,8 @@ class AIEditorAPI:
         else:
             ai.pop("configuration_targets", None)
         settings.set("ai_editor", ai)
+        if not save:
+            return None
         try:
             settings.save()
         except Exception as exc:
@@ -9999,11 +10003,27 @@ class AIEditorAPI:
                     if not settings:
                         continue
                     configured = configured_by_language.get(language_id, {})
-                    configured_values = {
-                        key: configured[key]
-                        for key in settings
-                        if key in configured
-                    }
+                    configured_values: Dict[str, Any] = {}
+                    targets: Dict[str, str] = {}
+                    target_values: Dict[str, Any] = {}
+                    target_scoped_values: Dict[str, Dict[str, Any]] = {}
+                    for setting_key in settings:
+                        target_entry = self._extension_language_target_entry(
+                            language_id, setting_key)
+                        target_name = self._extension_setting_active_target(
+                            target_entry)
+                        scoped_values = (
+                            self._extension_setting_target_scoped_values(
+                                target_entry))
+                        targets[setting_key] = target_name
+                        if scoped_values:
+                            target_scoped_values[setting_key] = scoped_values
+                        if target_name in scoped_values:
+                            target_values[setting_key] = scoped_values[target_name]
+                            configured_values[setting_key] = (
+                                scoped_values[target_name])
+                        elif setting_key in configured:
+                            configured_values[setting_key] = configured[setting_key]
                     values = {
                         key: (
                             configured_values[key]
@@ -10058,6 +10078,9 @@ class AIEditorAPI:
                         "values": values,
                         "configuredValues": configured_values,
                         "modified": modified,
+                        "targets": targets,
+                        "targetValues": target_values,
+                        "targetScopedValues": target_scoped_values,
                         "scopes": scopes,
                         "workspaceWritable": workspace_writable,
                         "restricted": restricted,
@@ -10095,9 +10118,46 @@ class AIEditorAPI:
             }
         return result
 
+    @staticmethod
+    def _extension_language_target_key(language_id: str, setting_key: str) -> str:
+        language = str(language_id or "").strip()
+        key = str(setting_key or "").strip()
+        return f"[{language}].{key}" if language and key else key
+
+    def _extension_language_target_entry(
+            self, language_id: str, setting_key: str) -> Dict[str, Any]:
+        return self._extension_setting_target_entry(
+            self._extension_language_target_key(language_id, setting_key))
+
+    @staticmethod
+    def _remove_raw_settings_key(settings: Any, key: str) -> None:
+        raw_data = getattr(settings, "data", None)
+        if not isinstance(raw_data, dict):
+            raw_data = getattr(settings, "_data", None)
+        if isinstance(raw_data, dict):
+            raw_data.pop(key, None)
+
+    def _write_extension_language_override_current(
+            self, settings: Any, language_id: str, setting_key: str,
+            value: Any, remove: bool = False) -> None:
+        override_key = f"[{language_id}]"
+        current = settings.get(override_key, {}) or {}
+        if not isinstance(current, dict):
+            current = {}
+        else:
+            current = dict(current)
+        if remove:
+            current.pop(setting_key, None)
+        else:
+            current[setting_key] = value
+        if current:
+            settings.set(override_key, current)
+        else:
+            self._remove_raw_settings_key(settings, override_key)
+
     def set_extension_language_setting(
             self, language_id: str, key: str, value: Any,
-            extension_id: str = "") -> Dict:
+            extension_id: str = "", target: str = "workspace") -> Dict:
         """Write a workspace language override for an extension default."""
         self._ensure_engine()
         language = str(language_id or "").strip()
@@ -10146,12 +10206,23 @@ class AIEditorAPI:
                     "key": setting_key,
                     "extension_id": ext_id,
                 }
+        target_name = self._extension_setting_target_name(target)
+        target_key = self._extension_language_target_key(language, setting_key)
+        persist_error = self._persist_extension_setting_target(
+            target_key, value, target_name, save=False)
+        if persist_error:
+            return {
+                "ok": False,
+                "error": persist_error,
+                "language": language,
+                "override": f"[{language}]",
+                "key": setting_key,
+                "extension_id": ext_id,
+                "target": target_name,
+            }
         override_key = f"[{language}]"
-        current = settings.get(override_key, {}) or {}
-        if not isinstance(current, dict):
-            current = {}
-        current[setting_key] = value
-        settings.set(override_key, current)
+        self._write_extension_language_override_current(
+            settings, language, setting_key, value)
         try:
             settings.save()
         except Exception as exc:
@@ -10164,12 +10235,13 @@ class AIEditorAPI:
             "key": setting_key,
             "extension_id": ext_id,
             "value": value,
+            "target": target_name,
             "modified": True,
         }
 
     def reset_extension_language_setting(
             self, language_id: str, key: str,
-            extension_id: str = "") -> Dict:
+            extension_id: str = "", target: str = "") -> Dict:
         """Remove a workspace language override for an extension default."""
         self._ensure_engine()
         language = str(language_id or "").strip()
@@ -10183,20 +10255,31 @@ class AIEditorAPI:
         if not settings:
             return {"ok": False, "error": "Settings not available"}
         override_key = f"[{language}]"
-        current = settings.get(override_key, {}) or {}
-        if isinstance(current, dict):
-            current = dict(current)
-            current.pop(setting_key, None)
+        target_name = self._extension_setting_target_name(target)
+        explicit_target = bool(str(target or "").strip())
+        target_key = self._extension_language_target_key(language, setting_key)
+        persist_error = self._persist_extension_setting_target(
+            target_key, None, target_name, remove=True,
+            explicit_target=explicit_target, save=False)
+        if persist_error:
+            return {
+                "ok": False,
+                "error": persist_error,
+                "language": language,
+                "override": override_key,
+                "key": setting_key,
+                "extension_id": ext_id,
+                "target": target_name,
+            }
+        next_target_entry = self._extension_language_target_entry(
+            language, setting_key)
+        if "value" in next_target_entry:
+            self._write_extension_language_override_current(
+                settings, language, setting_key,
+                next_target_entry.get("value"))
         else:
-            current = {}
-        if current:
-            settings.set(override_key, current)
-        else:
-            raw_data = getattr(settings, "data", None)
-            if not isinstance(raw_data, dict):
-                raw_data = getattr(settings, "_data", None)
-            if isinstance(raw_data, dict):
-                raw_data.pop(override_key, None)
+            self._write_extension_language_override_current(
+                settings, language, setting_key, None, remove=True)
         try:
             settings.save()
         except Exception as exc:
@@ -10217,6 +10300,7 @@ class AIEditorAPI:
             "key": setting_key,
             "extension_id": ext_id,
             "value": default_value,
+            "target": target_name,
             "modified": False,
         }
 

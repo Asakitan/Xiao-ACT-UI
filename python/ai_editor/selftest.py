@@ -4178,8 +4178,8 @@ console.log("frontend signature help docs ok");
             and "const schemas=item&&item.schemas" in html
             and "set_extension_language_setting" in html
             and "reset_extension_language_setting" in html
-            and "set_extension_language_setting',item.language,key,nextValue,item.extension_id||''" in html
-            and "reset_extension_language_setting',item.language,key,item.extension_id||''" in html
+            and "set_extension_language_setting',item.language,key,nextValue,item.extension_id||'',extensionSettingRowTarget(row)" in html
+            and "reset_extension_language_setting',item.language,key,item.extension_id||'',extensionSettingRowTarget(row)" in html
             and "ext-settings-category" in html
             and "const orderedConfigs=configs.slice().sort" in html
             and "sectionDescription" in html
@@ -9331,6 +9331,7 @@ def test_app_extension_runtime_support() -> None:
             {})
         _check("extension language setting overrides write and reset",
                language_set.get("ok") is True
+               and language_set.get("target") == "workspace"
                and data_after_language_set.get(
                    "[selflang]", {}).get("editor.tabSize") == 4
                and selflang_after_set.get("values", {}).get(
@@ -9346,6 +9347,79 @@ def test_app_extension_runtime_support() -> None:
                    "editor.tabSize") == 2
                and selflang_after_reset.get("modified", {}).get(
                    "editor.tabSize") is False)
+        language_global_set = api.set_extension_language_setting(
+            "selflang", "editor.tabSize", 6,
+            "selftest.settings-pack", "global")
+        language_workspace_set = api.set_extension_language_setting(
+            "selflang", "editor.tabSize", 4,
+            "selftest.settings-pack", "workspace")
+        language_target_settings = api.list_extension_settings().get(
+            "languageDefaults", [])
+        selflang_targets_set = next(
+            (item for item in language_target_settings
+             if item.get("extension_id") == "selftest.settings-pack"
+             and item.get("language") == "selflang"),
+            {})
+        language_target_data = json.loads(json.dumps(getattr(
+            api._gui_ref.settings, "data", {}).get(
+                "ai_editor", {}).get("configuration_targets", {})))
+        language_global_reset = api.reset_extension_language_setting(
+            "selflang", "editor.tabSize",
+            "selftest.settings-pack", "global")
+        language_target_after_global_reset = next(
+            (item for item in api.list_extension_settings().get(
+                "languageDefaults", [])
+             if item.get("extension_id") == "selftest.settings-pack"
+             and item.get("language") == "selflang"),
+            {})
+        data_after_language_global_reset = dict(getattr(
+            api._gui_ref.settings, "data", {}))
+        language_workspace_reset = api.reset_extension_language_setting(
+            "selflang", "editor.tabSize",
+            "selftest.settings-pack", "workspace")
+        language_target_data_after_reset = json.loads(json.dumps(getattr(
+            api._gui_ref.settings, "data", {}).get(
+                "ai_editor", {}).get("configuration_targets", {})))
+        _check("extension language settings preserve target-specific values",
+               language_global_set.get("ok") is True
+               and language_global_set.get("target") == "global"
+               and language_workspace_set.get("ok") is True
+               and language_workspace_set.get("target") == "workspace"
+               and selflang_targets_set.get("targets", {}).get(
+                   "editor.tabSize") == "workspace"
+               and selflang_targets_set.get("targetValues", {}).get(
+                   "editor.tabSize") == 4
+               and selflang_targets_set.get("targetScopedValues", {}).get(
+                   "editor.tabSize", {}).get("global") == 6
+               and selflang_targets_set.get("targetScopedValues", {}).get(
+                   "editor.tabSize", {}).get("workspace") == 4
+               and language_target_data.get(
+                   "[selflang].editor.tabSize", {}).get(
+                       "values", {}).get("global") == 6
+               and language_target_data.get(
+                   "[selflang].editor.tabSize", {}).get(
+                       "values", {}).get("workspace") == 4
+               and language_global_reset.get("ok") is True
+               and data_after_language_global_reset.get(
+                   "[selflang]", {}).get("editor.tabSize") == 4
+               and language_target_after_global_reset.get(
+                   "targetScopedValues", {}).get(
+                       "editor.tabSize", {}).get("workspace") == 4
+               and "global" not in language_target_after_global_reset.get(
+                   "targetScopedValues", {}).get("editor.tabSize", {})
+               and language_workspace_reset.get("ok") is True
+               and "[selflang].editor.tabSize"
+               not in language_target_data_after_reset,
+               json.dumps({
+                   "global_set": language_global_set,
+                   "workspace_set": language_workspace_set,
+                   "targets_set": selflang_targets_set,
+                   "target_data": language_target_data,
+                   "global_reset": language_global_reset,
+                   "after_global_reset": language_target_after_global_reset,
+                   "workspace_reset": language_workspace_reset,
+                   "target_data_after_reset": language_target_data_after_reset,
+               }, ensure_ascii=False, default=str))
         invalid_options = api.set_extension_setting(
             "selftest.options", {"mode": "auto"})
         invalid_tags = api.set_extension_setting(
