@@ -2693,14 +2693,13 @@ class VscodeNamespace:
             document_or_uri: Any,
             position: Any = None,
             trigger_character: Any = None,
-            item_resolve_count: Any = None) -> CompletionList:
+            item_resolve_count: Any = None,
+            context: Any = None) -> CompletionList:
         document = self._resolve_language_document(document_or_uri)
         pos = _coerce_position(position)
-        trigger = "" if trigger_character is None else str(trigger_character)
-        context = {
-            "triggerKind": 2 if trigger else 1,
-            "triggerCharacter": trigger or None,
-        }
+        context = self._completion_context(trigger_character, context)
+        trigger = "" if context.get("triggerCharacter") is None else str(
+            context.get("triggerCharacter"))
         items: List[Any] = []
         incomplete = False
         try:
@@ -2761,9 +2760,30 @@ class VscodeNamespace:
             uri: Any,
             position: Any = None,
             trigger_character: Any = None,
-            item_resolve_count: Any = None) -> CompletionList:
+            item_resolve_count: Any = None,
+            context: Any = None) -> CompletionList:
         return self._provide_completion_items(
-            uri, position, trigger_character, item_resolve_count)
+            uri, position, trigger_character, item_resolve_count, context)
+
+    @staticmethod
+    def _completion_context(
+            trigger_character: Any = None,
+            context: Any = None) -> Dict[str, Any]:
+        payload = dict(context) if isinstance(context, dict) else {}
+        trigger = payload.get("triggerCharacter")
+        if trigger is None and trigger_character is not None:
+            trigger = trigger_character
+        trigger_text = "" if trigger is None else str(trigger)
+        try:
+            trigger_kind = int(payload.get("triggerKind"))
+        except Exception:
+            trigger_kind = 1 if trigger_text else 0
+        if trigger_kind not in (0, 1, 2):
+            trigger_kind = 1 if trigger_text else 0
+        return {
+            "triggerKind": trigger_kind,
+            "triggerCharacter": trigger_text or None,
+        }
 
     def _execute_hover_provider(
             self, uri: Any, position: Any = None) -> List[Any]:
@@ -4060,6 +4080,11 @@ class VscodeNamespace:
             "ExtensionMode": {"Production": 1, "Development": 2, "Test": 3},
             "InlayHintKind": {"Type": 1, "Parameter": 2},
             "InlineCompletionTriggerKind": {"Invoke": 0, "Automatic": 1},
+            "CompletionTriggerKind": {
+                "Invoke": 0,
+                "TriggerCharacter": 1,
+                "TriggerForIncompleteCompletions": 2,
+            },
             "DocumentPasteTriggerKind": {"Automatic": 0, "PasteAs": 1},
             "FoldingRangeKind": {"Comment": 1, "Imports": 2, "Region": 3},
             "CompletionItemKind": {

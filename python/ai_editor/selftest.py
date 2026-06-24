@@ -2730,17 +2730,23 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function editorProviderPayload(kind,extra)" in html
            and "function requestEditorCompletion(triggerCharacter,quiet)" in html
            and "itemResolveCount:0" in html
+           and "const COMPLETION_TRIGGER_INVOKE=0" in html
+           and "const COMPLETION_TRIGGER_CHARACTER=1" in html
+           and "triggerKind:triggerCharacter?COMPLETION_TRIGGER_CHARACTER:COMPLETION_TRIGGER_INVOKE" in html
            and "function showEditorSuggest(items,position)" in html
            and "function editorCompletionCanResolve(item)" in html
            and "function resolveEditorSuggestItem(item)" in html
            and "editorProviderPayload('completionResolve'" in html
            and "text.value||text.snippet||text.text" in html
+           and "function editorSelectedCompletionInfo()" in html
+           and "selectedCompletionInfo:editorSelectedCompletionInfo()" in html
            and "function applyEditorCompletion(item)" in html
            and "function handleEditorSuggestKey(e)" in html
            and "function requestEditorHover()" in html
            and "function editorHoverListParts(hovers)" in html
            and "function showEditorHover(hovers,position)" in html
            and "function requestEditorSignatureHelp(triggerCharacter,triggerKind,quiet)" in html
+           and "activeSignatureHelp:_editorActiveSignatureHelp" in html
            and "function showEditorSignatureHelp(help,position)" in html
            and "function appendSignatureLabel(target,signature,activeParameter)" in html
            and "function editorSignatureParameterLabelText(signature,activeParameter)" in html
@@ -7354,16 +7360,21 @@ def test_vscode_api() -> None:
                 return item
 
         class _DotCompletionProvider:
+            def __init__(self):
+                self.contexts = []
+
             def provideCompletionItems(self, document, position, token, context):
+                self.contexts.append(context)
                 return [CompletionItem("selftestDot")]
 
         generic_completion = _GenericCompletionProvider()
+        dot_completion = _DotCompletionProvider()
         api["languages"]["registerCompletionItemProvider"](
             "python", _BadCompletionProvider())
         generic_completion_dispose = api["languages"]["registerCompletionItemProvider"](
             "python", generic_completion)
         dot_completion_dispose = api["languages"]["registerCompletionItemProvider"](
-            "python", _DotCompletionProvider(), ".")
+            "python", dot_completion, ".")
         completions = api["commands"]["executeCommand"](
             "vscode.executeCompletionItemProvider", doc.uri, Position(0, 1))
         completion_labels = [item.label for item in completions.items]
@@ -7372,7 +7383,11 @@ def test_vscode_api() -> None:
                and completions.isIncomplete is True
                and "selftestGeneric" in completion_labels
                and "selftestDot" in completion_labels
-               and generic_completion.contexts[-1]["triggerKind"] == 1)
+               and api["CompletionTriggerKind"]["Invoke"] == 0
+               and api["CompletionTriggerKind"]["TriggerCharacter"] == 1
+               and api["CompletionTriggerKind"]["TriggerForIncompleteCompletions"] == 2
+               and generic_completion.contexts[-1]["triggerKind"]
+               == api["CompletionTriggerKind"]["Invoke"])
         resolved_completions = api["commands"]["executeCommand"](
             "vscode.executeCompletionItemProvider", doc.uri, Position(0, 1), None, 1)
         _check("executeCompletionItemProvider resolves requested items",
@@ -7384,6 +7399,19 @@ def test_vscode_api() -> None:
         _check("completion trigger chars filter specialized providers",
                "selftestGeneric" not in semicolon_labels
                and "selftestDot" not in semicolon_labels)
+        dot_trigger_completions = api["commands"]["executeCommand"](
+            "vscode.executeCompletionItemProvider",
+            doc.uri,
+            Position(0, 1),
+            ".",
+            0,
+            {"triggerKind": api["CompletionTriggerKind"]["TriggerForIncompleteCompletions"]})
+        _check("completion context follows VS Code trigger kinds",
+               [item.label for item in dot_trigger_completions.items]
+               == ["selftestDot"]
+               and dot_completion.contexts[-1]["triggerCharacter"] == "."
+               and dot_completion.contexts[-1]["triggerKind"]
+               == api["CompletionTriggerKind"]["TriggerForIncompleteCompletions"])
         dot_completion_dispose.dispose()
         dot_after_dispose = api["commands"]["executeCommand"](
             "vscode.executeCompletionItemProvider", doc.uri, Position(0, 1), ".")
@@ -11642,7 +11670,7 @@ async function activate(context) {
   vscode.languages.registerCompletionItemProvider('python', {
     provideCompletionItems(document, position, token, context) {
       const item = new vscode.CompletionItem('nodeCompletion', vscode.CompletionItemKind.Function);
-      item.detail = document.languageId + ':' + (context.triggerCharacter || '');
+      item.detail = document.languageId + ':' + (context.triggerCharacter || '') + ':' + context.triggerKind;
       item.tags = [vscode.CompletionItemTag.Deprecated];
       item.sortText = '000_nodeCompletion';
       item.filterText = 'nodeCompletionFilter';
@@ -14472,6 +14500,8 @@ module.exports = { activate, deactivate };
                        and bool(node_completion_first_get(
                            "_nodeCompletionHandle"))
                        and node_completion_first_get("documentation") is None
+                       and node_completion_first_get("detail")
+                       == "python:.:1"
                        and node_completion_first_get("sortText")
                        == "000_nodeCompletion"
                        and node_completion_first_get("filterText")

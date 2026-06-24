@@ -4701,12 +4701,17 @@ class AIEditorAPI:
                         else payload.get("resolveCount") or 0)
                 except Exception:
                     item_resolve_count = 0
+                completion_context = {
+                    "triggerKind": payload.get("triggerKind"),
+                    "triggerCharacter": payload.get("triggerCharacter"),
+                }
                 result = self._ext_host.commands.execute(
                     "vscode.executeCompletionItemProvider",
                     document.uri,
                     position,
                     payload.get("triggerCharacter"),
                     max(0, item_resolve_count),
+                    completion_context,
                 )
                 value = _json_ready_language_value(result)
                 if isinstance(value, dict):

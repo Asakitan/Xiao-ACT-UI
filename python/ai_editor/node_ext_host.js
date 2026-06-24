@@ -6686,6 +6686,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         SignatureInformation: class { constructor(label, documentation) { this.label = label || ''; this.documentation = documentation; this.parameters = []; } },
         SignatureHelp: class { constructor() { this.signatures = []; this.activeSignature = 0; this.activeParameter = 0; } },
         SignatureHelpTriggerKind: { Invoke: 1, TriggerCharacter: 2, ContentChange: 3 },
+        CompletionTriggerKind: { Invoke: 0, TriggerCharacter: 1, TriggerForIncompleteCompletions: 2 },
         CodeAction: class {
             constructor(title, kind) {
                 this.title = title;
@@ -8343,11 +8344,18 @@ async function handleLanguageProviderRequest(msg) {
         const context = msg.context && typeof msg.context === 'object'
             ? Object.assign({}, msg.context)
             : {};
-        if (trigger) {
-            context.triggerKind = 2;
-            context.triggerCharacter = trigger;
-        } else if (kind === 'completion' || kind === 'signatureHelp') {
-            context.triggerKind = context.triggerKind || 1;
+        if (kind === 'completion') {
+            if (context.triggerKind === undefined || context.triggerKind === null) {
+                context.triggerKind = trigger ? 1 : 0;
+            }
+            context.triggerCharacter = trigger || undefined;
+        } else if (kind === 'signatureHelp') {
+            if (trigger) {
+                context.triggerKind = context.triggerKind || 2;
+                context.triggerCharacter = trigger;
+            } else {
+                context.triggerKind = context.triggerKind || 1;
+            }
         }
         const matchingProvidersForKind = (targetKind) => {
             if (workspaceSymbolKind) {

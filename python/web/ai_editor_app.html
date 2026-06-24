@@ -3214,6 +3214,8 @@ const DEFAULT_AUTO_CLOSING_PAIRS=[
 ];
 const INDENT_UNIT='    ';
 const DEFAULT_WORD_PATTERN='[A-Za-z_][A-Za-z0-9_]*';
+const COMPLETION_TRIGGER_INVOKE=0;
+const COMPLETION_TRIGGER_CHARACTER=1;
 const COMPLETION_INSERT_TEXT_RULE_KEEP_WHITESPACE=1;
 const COMPLETION_INSERT_TEXT_RULE_INSERT_AS_SNIPPET=4;
 const COMPLETION_ITEM_TAG_DEPRECATED=1;
@@ -4235,7 +4237,7 @@ function _editorInputWithUndo(e){
 let _editorSuggestItems=[],_editorSuggestIndex=0,_editorSuggestRequest=0,_editorSuggestResolveRequest=0,_editorSuggestDetailsOpen=false;
 let _editorSuggestMemory={seq:0,entries:[]};
 let _editorHoverTimer=null,_editorHoverRequest=0;
-let _editorSignatureRequest=0;
+let _editorSignatureRequest=0,_editorActiveSignatureHelp=null;
 let _editorCodeActions=[],_editorCodeActionIndex=0,_editorCodeActionRequest=0;
 let _editorDefinitionRequest=0;
 let _editorDocumentHighlights=[],_editorDocumentHighlightRequest=0,_editorDocumentHighlightTimer=null,_editorDocumentHighlightContentLength=-1;
@@ -4642,7 +4644,10 @@ async function requestEditorInlineCompletions(quiet,triggerKind){
   const wrap=$('editor-container');
   if(!ed||!wrap||wrap.style.display==='none')return;
   const requestId=++_editorInlineCompletionRequest;
-  const res=await call('editor_language_provider',editorProviderPayload('inlineCompletion',{triggerKind:triggerKind==null?1:triggerKind}));
+  const res=await call('editor_language_provider',editorProviderPayload('inlineCompletion',{
+    triggerKind:triggerKind==null?1:triggerKind,
+    selectedCompletionInfo:editorSelectedCompletionInfo()
+  }));
   if(requestId!==_editorInlineCompletionRequest)return;
   if(res&&res.error){_editorInlineCompletions=[];renderEditorInlineCompletion();if(!quiet)setStatus('Inline completions failed: '+res.error);return}
   _editorInlineCompletions=(res&&res.ok&&Array.isArray(res.items)?res.items:[]).filter(item=>item&&item.insertText!==undefined);
@@ -5485,6 +5490,22 @@ function editorCompletionRangeOffsets(item,value,s,end){
   const word=editorWordRangeAt(value,s,end);
   return {start:word?word.start:s,finish:word?word.end:end};
 }
+function editorSelectedCompletionInfo(){
+  if(!isEditorSuggestOpen())return null;
+  const item=_editorSuggestItems[_editorSuggestIndex];
+  if(!item||!ed)return null;
+  const value=String(ed.value||''),cursor=ed.selectionStart;
+  const range=editorCompletionRangeOffsets(item,value,cursor,ed.selectionEnd);
+  const text=editorCompletionFilterText(item)||editorInsertText(item)||completionLabelText(item&&item.label);
+  if(!text)return null;
+  return {
+    range:{
+      start:editorPositionFromOffset(value,range.start),
+      end:editorPositionFromOffset(value,range.finish)
+    },
+    text:String(text)
+  };
+}
 function editorCompletionAdditionalEdits(item){
   return Array.isArray(item&&item.additionalTextEdits)?item.additionalTextEdits.filter(Boolean):[];
 }
@@ -5653,7 +5674,11 @@ function editorCompletionTriggerCharacter(ch){
 async function requestEditorCompletion(triggerCharacter,quiet){
   const requestId=++_editorSuggestRequest;
   const position=editorPositionFromOffset(ed.value,ed.selectionStart);
-  const res=await call('editor_language_provider',editorProviderPayload('completion',{triggerCharacter:triggerCharacter||null,itemResolveCount:0}));
+  const res=await call('editor_language_provider',editorProviderPayload('completion',{
+    triggerCharacter:triggerCharacter||null,
+    triggerKind:triggerCharacter?COMPLETION_TRIGGER_CHARACTER:COMPLETION_TRIGGER_INVOKE,
+    itemResolveCount:0
+  }));
   if(requestId!==_editorSuggestRequest)return;
   const items=res&&res.ok&&Array.isArray(res.items)?res.items:[];
   if(items.length){
@@ -5711,6 +5736,7 @@ function isEditorSignatureOpen(){
 }
 function closeEditorSignatureHelp(){
   const box=$('editor-signature-help');if(!box)return;
+  _editorActiveSignatureHelp=null;
   box.classList.remove('open');box.style.display='none';
 }
 function editorSignatureTriggerCharacter(ch){
@@ -5758,6 +5784,7 @@ function showEditorSignatureHelp(help,position){
   const signature=signatures[activeSignature]||{};
   const parameters=Array.isArray(signature.parameters)?signature.parameters:[];
   const activeParameter=Math.max(0,Math.min(Math.max(0,parameters.length-1),Number(help.activeParameter)||0));
+  _editorActiveSignatureHelp={...help,activeSignature,activeParameter};
   box.innerHTML='';
   const top=document.createElement('div');top.className='editor-signature-top';
   const label=document.createElement('div');label.className='editor-signature-label';
@@ -5784,7 +5811,8 @@ async function requestEditorSignatureHelp(triggerCharacter,triggerKind,quiet){
   const res=await call('editor_language_provider',editorProviderPayload('signatureHelp',{
     triggerCharacter:triggerCharacter||null,
     triggerKind:triggerKind||1,
-    isRetrigger:isEditorSignatureOpen()
+    isRetrigger:isEditorSignatureOpen(),
+    activeSignatureHelp:_editorActiveSignatureHelp
   }));
   if(requestId!==_editorSignatureRequest)return;
   const help=res&&res.ok?res.signatureHelp:null;
