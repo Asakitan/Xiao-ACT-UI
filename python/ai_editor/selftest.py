@@ -2678,6 +2678,9 @@ console.log("frontend auto-close behavior ok");
             and "appendExtensionSettingMarkdown(dep,deprecation)" in html
             and "function extensionSettingParseQuery(raw,modifiedChecked)" in html
             and "function extensionSettingSearchText(key,schema,type,description,deprecation,schemaSummary)" in html
+            and "function extensionSettingEnumDescription(schema,index)" in html
+            and "function renderExtensionSettingEnumDescription(el,schema,input)" in html
+            and "ext-setting-enum-desc" in html
             and "dataset.extSettingSearch" in html
             and "dataset.extSettingTags" in html
             and "@tag:" in html
@@ -2705,6 +2708,8 @@ console.log("frontend auto-close behavior ok");
             "extensionSettingSchemaSummary",
             "extensionSettingDeprecationText",
             "extensionSettingList",
+            "extensionSettingEnumDescription",
+            "renderExtensionSettingEnumDescription",
             "extensionSettingSearchText",
             "extensionSettingJson",
             "extensionSettingJsonRows",
@@ -2722,15 +2727,21 @@ console.log("frontend auto-close behavior ok");
 function assert(ok,label){ if(!ok){ throw new Error(label); } }
 globalThis.window = { location: { href: "https://example.invalid/settings" } };
 function makeNode(tag, text){
-  return {
+  const node = {
     tagName: tag ? String(tag).toUpperCase() : "",
     textContent: text || "",
     children: [],
+    style: {},
     href: "",
     target: "",
     rel: "",
     appendChild(child){ this.children.push(child); return child; },
   };
+  Object.defineProperty(node, "innerHTML", {
+    get(){ return this._innerHTML || ""; },
+    set(value){ this._innerHTML = String(value || ""); this.children = []; },
+  });
+  return node;
 }
 globalThis.document = {
   createElement(tag){ return makeNode(tag); },
@@ -2817,6 +2828,21 @@ assert(searchText.indexOf("usesonlineservices") >= 0
        && searchText.indexOf("always send") >= 0
        && searchText.indexOf("deprecated telemetry mode") >= 0,
        "settings search text includes tags keywords enum labels and deprecation");
+assert(extensionSettingEnumDescription(searchSchema, 0) === "Uses **network**.",
+       "markdown enum description preferred");
+const enumDescHost = makeNode("div");
+renderExtensionSettingEnumDescription(enumDescHost, searchSchema, {
+  selectedIndex: 0,
+  selectedOptions: [{ dataset: { enumIndex: "0" } }]
+});
+assert(enumDescHost.children.some(n => n.tagName === "STRONG" && n.textContent === "network"),
+       "selected enum markdown description rendered");
+renderExtensionSettingEnumDescription(enumDescHost, searchSchema, {
+  selectedIndex: 9,
+  selectedOptions: []
+});
+assert(enumDescHost.children.length === 0 && enumDescHost.style.display === "none",
+       "missing enum description hidden");
 const textAreaSetting = { type: "textarea", tagName: "TEXTAREA", value: "", rows: 0 };
 setExtensionSettingInputValue(textAreaSetting, multilineSchema, "string", "alpha\nbeta\ncharlie");
 assert(extensionSettingUsesMultiline(multilineSchema, "string") === true,

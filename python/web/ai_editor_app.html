@@ -1013,14 +1013,15 @@ pre.code-block { overflow:visible; }
 .ext-setting-row.deprecated:not(.modified) { border-left-color:color-mix(in srgb,var(--fg-warning) 45%,transparent); }
 .ext-setting-key { font-size:11px; font-family:var(--mono); color:var(--fg-dim); user-select:all; margin-bottom:4px; }
 .ext-setting-desc { font-size:11px; color:var(--fg-dim); line-height:1.35; margin-bottom:4px; }
+.ext-setting-enum-desc { font-size:11px; color:var(--fg-dim); line-height:1.35; margin-top:4px; }
 .ext-setting-deprecated { font-size:11px; color:var(--fg-warning); line-height:1.35; margin-bottom:4px;
   padding:4px 6px; background:color-mix(in srgb,var(--fg-warning) 9%,transparent); border-left:2px solid color-mix(in srgb,var(--fg-warning) 55%,transparent); }
-.ext-setting-desc code,.ext-setting-deprecated code { font:10px var(--mono); color:var(--fg); background:var(--bg3);
+.ext-setting-desc code,.ext-setting-enum-desc code,.ext-setting-deprecated code { font:10px var(--mono); color:var(--fg); background:var(--bg3);
   border:1px solid var(--border); border-radius:3px; padding:1px 3px; }
-.ext-setting-desc a,.ext-setting-deprecated a { color:var(--fg-accent); text-decoration:none; }
-.ext-setting-desc a:hover,.ext-setting-deprecated a:hover { text-decoration:underline; }
-.ext-setting-desc strong,.ext-setting-deprecated strong { color:var(--fg); font-weight:600; }
-.ext-setting-desc em,.ext-setting-deprecated em { color:var(--fg); font-style:italic; }
+.ext-setting-desc a,.ext-setting-enum-desc a,.ext-setting-deprecated a { color:var(--fg-accent); text-decoration:none; }
+.ext-setting-desc a:hover,.ext-setting-enum-desc a:hover,.ext-setting-deprecated a:hover { text-decoration:underline; }
+.ext-setting-desc strong,.ext-setting-enum-desc strong,.ext-setting-deprecated strong { color:var(--fg); font-weight:600; }
+.ext-setting-desc em,.ext-setting-enum-desc em,.ext-setting-deprecated em { color:var(--fg); font-style:italic; }
 .ext-setting-schema { font-size:10px; color:var(--fg-dim); font-family:var(--mono); margin-bottom:4px; }
 .ext-setting-error { display:none; color:var(--fg-error); font-size:11px; margin-top:3px; }
 .ext-setting-row.invalid .ext-setting-error { display:block; }
@@ -9816,6 +9817,23 @@ function extensionSettingList(schema,name){
   const value=schema&&schema[name];
   return Array.isArray(value)?value.map(v=>String(v??'').trim()).filter(Boolean):[];
 }
+function extensionSettingEnumDescription(schema,index){
+  const markdown=extensionSettingList(schema,'markdownEnumDescriptions');
+  const plain=extensionSettingList(schema,'enumDescriptions');
+  const descriptions=markdown.length?markdown:plain;
+  index=Number(index);
+  return index>=0&&index<descriptions.length?descriptions[index]:'';
+}
+function renderExtensionSettingEnumDescription(el,schema,input){
+  if(!el)return;
+  const selected=input&&input.selectedOptions&&input.selectedOptions[0];
+  let index=selected?Number(selected.dataset.enumIndex):-1;
+  if(!(index>=0)&&input)index=Number(input.selectedIndex);
+  const text=extensionSettingEnumDescription(schema,index);
+  el.innerHTML='';
+  if(text){el.style.display='';appendExtensionSettingMarkdown(el,text)}
+  else el.style.display='none';
+}
 function extensionSettingSearchText(key,schema,type,description,deprecation,schemaSummary){
   schema=(schema&&typeof schema==='object')?schema:{};
   const parts=[key,schema.title,type,schema.scope,description,deprecation,schemaSummary];
@@ -10054,7 +10072,7 @@ async function renderExtensionSettings(){
       row.dataset.extSettingTags=extensionSettingList(schema,'tags').map(value=>value.toLowerCase()).join('\n');
       row.dataset.extSettingSearch=extensionSettingSearchText(key,schema,type,description,deprecation,schemaSummary);
       if(schemaSummary){const meta=document.createElement('div');meta.className='ext-setting-schema';meta.textContent=schemaSummary;row.appendChild(meta)}
-      let input;
+      let input,enumHelp;
       if(type==='boolean'){
         const lbl=document.createElement('label');lbl.className='settings-check';
         input=document.createElement('input');input.type='checkbox';
@@ -10070,6 +10088,9 @@ async function renderExtensionSettings(){
           if(enumDescriptions[idx])o.title=String(enumDescriptions[idx]);
         });
         row.appendChild(input);
+        if(extensionSettingList(schema,'markdownEnumDescriptions').length||extensionSettingList(schema,'enumDescriptions').length){
+          enumHelp=document.createElement('div');enumHelp.className='ext-setting-enum-desc';row.appendChild(enumHelp);
+        }
       } else if(type==='number'||type==='integer'){
         input=document.createElement('input');input.type='number';
         if(type==='integer')input.step='1';
@@ -10087,6 +10108,7 @@ async function renderExtensionSettings(){
       input.dataset.extSettingInput='1';
       input.title=key;
       setExtensionSettingInputValue(input,schema,type,currentVal);
+      if(enumHelp)renderExtensionSettingEnumDescription(enumHelp,schema,input);
       if(type!=='array'&&type!=='object')input.placeholder=defaultVal!=null?String(defaultVal):'';
       const err=document.createElement('div');err.className='ext-setting-error';row.appendChild(err);
       const reset=document.createElement('span');reset.className='s-reset';reset.textContent='↻';reset.title='Reset to default';
@@ -10099,6 +10121,7 @@ async function renderExtensionSettings(){
       row.appendChild(reset);
       input.addEventListener('change',async()=>{
         setExtensionSettingError(row,'');
+        if(enumHelp)renderExtensionSettingEnumDescription(enumHelp,schema,input);
         let nextValue;
         try{nextValue=readExtensionSettingInputValue(input,schema,type)}
         catch(e){setExtensionSettingError(row,'Invalid JSON: '+e.message);return}
