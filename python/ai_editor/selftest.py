@@ -2483,7 +2483,9 @@ console.log("frontend auto-close behavior ok");
     _check("frontend renders extension contribution toggles",
             "id=\"s-ext-diagnostics\"" in html
             and "id=\"s-ext-contribs-list\"" in html
-            and "function renderExtensionContributionOptions(value)" in html
+            and "function renderExtensionContributionOptions(value,explicit)" in html
+            and "function extensionContributionSelection(value,explicit)" in html
+            and "if(explicit!==true)" in html
             and "function readExtensionContributionValues()" in html
             and "enabled_contributions_explicit:true" in html
             and "customEditors" in html)

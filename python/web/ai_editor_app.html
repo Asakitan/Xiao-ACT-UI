@@ -8580,8 +8580,11 @@ function readListValue(id,splitCommas){
   const re=splitCommas?/\r?\n|,/:/\r?\n/;
   return text.split(re).map(v=>v.trim()).filter(Boolean);
 }
-function extensionContributionSelection(value){
+function extensionContributionSelection(value,explicit){
   const selected=new Set(Array.isArray(value)&&value.length?value.map(v=>String(v)).filter(Boolean):SETTING_SECTION_DEFAULTS.extensions.enabled_contributions.slice());
+  if(explicit!==true){
+    SETTINGS_SECTION_DEFAULTS.extensions.enabled_contributions.forEach(v=>selected.add(v));
+  }
   EXTENSION_CONTRIBUTION_OPTIONS.forEach(opt=>{if(selected.has(opt.id))selected.add(opt.id)});
   return selected;
 }
@@ -8594,9 +8597,9 @@ function readExtensionContributionValues(){
   const values=Array.from(document.querySelectorAll('#s-ext-contribs-list input[type=\"checkbox\"]:checked')).map(el=>String(el.value||'')).filter(Boolean);
   return values;
 }
-function renderExtensionContributionOptions(value){
+function renderExtensionContributionOptions(value,explicit){
   const host=$('s-ext-contribs-list');if(!host)return;
-  const selected=extensionContributionSelection(value);
+  const selected=extensionContributionSelection(value,explicit);
   host.innerHTML='';
   EXTENSION_CONTRIBUTION_OPTIONS.forEach(opt=>{
     const label=document.createElement('label');label.className='settings-option-card';label.dataset.extContribution=opt.id;
@@ -8671,7 +8674,7 @@ function openSettings(){
   setInputValue('s-term-profile',term.profile);setInputValue('s-term-shell',term.shell_path);setInputValue('s-term-args',listToText(term.shell_args));
   setInputValue('s-term-timeout',term.timeout??30);setInputValue('s-term-output',term.output_limit??8000);
   const ext=settingSection('extensions');
-  setCheckedValue('s-ext-confirm',ext.confirm_install!==false);setCheckedValue('s-ext-diagnostics',ext.diagnostics_enabled===true);setInputValue('s-ext-allow',listToText(ext.allowed_publishers));setInputValue('s-ext-block',listToText(ext.blocked_publishers));renderExtensionContributionOptions(ext.enabled_contributions);
+  setCheckedValue('s-ext-confirm',ext.confirm_install!==false);setCheckedValue('s-ext-diagnostics',ext.diagnostics_enabled===true);setInputValue('s-ext-allow',listToText(ext.allowed_publishers));setInputValue('s-ext-block',listToText(ext.blocked_publishers));renderExtensionContributionOptions(ext.enabled_contributions,ext.enabled_contributions_explicit===true);
   const cust=settingSection('customization');
   setCheckedValue('s-cust-agent-md',cust.use_agent_md!==false);setCheckedValue('s-cust-claude-md',cust.use_claude_md===true);
   setInputValue('s-cust-instructions',listToText(cust.instructions_locations));setInputValue('s-cust-agents',listToText(cust.agent_locations));
