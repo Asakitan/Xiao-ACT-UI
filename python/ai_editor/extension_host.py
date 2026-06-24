@@ -1633,6 +1633,9 @@ class NodeExtensionHost:
         self._on_chat_participant_callbacks: List[
             Callable[[str, str, Dict[str, Any]], None]
         ] = []
+        self._on_file_decoration_callbacks: List[
+            Callable[[str, Dict[str, Any]], None]
+        ] = []
         self._lm_model_request_callback: Optional[
             Callable[[Dict[str, Any]], Dict[str, Any]]
         ] = None
@@ -2450,6 +2453,14 @@ class NodeExtensionHost:
                 ok=True,
                 detail=str(msg.get("handle", "")),
             )
+            payload = dict(msg)
+            payload.pop("type", None)
+            for cb in self._on_file_decoration_callbacks:
+                try:
+                    cb(msg_type, payload)
+                except Exception:
+                    _log.exception(
+                        "[NodeExtHost] on_file_decoration callback error")
 
         elif msg_type in {"lm_tool_registered", "lm_tool_disposed"}:
             name = str(msg.get("name") or msg.get("toolName") or "")
@@ -2729,6 +2740,12 @@ class NodeExtensionHost:
             callback: Callable[[str, str, Dict[str, Any]], None]) -> None:
         """Register a callback for Node chat participant lifecycle events."""
         self._on_chat_participant_callbacks.append(callback)
+
+    def on_file_decoration_event(
+            self,
+            callback: Callable[[str, Dict[str, Any]], None]) -> None:
+        """Register a callback for Node file decoration change events."""
+        self._on_file_decoration_callbacks.append(callback)
 
     def request_command_result(
             self, command_id: str, args: Optional[List[Any]] = None,

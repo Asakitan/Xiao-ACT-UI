@@ -3751,6 +3751,20 @@ class AIEditorAPI:
             "entries": entries,
         }
 
+    def workspace_file_decorations(self, rel_path: str) -> Dict[str, Any]:
+        try:
+            full = self._resolve_workspace_path(rel_path)
+        except ValueError as exc:
+            return {"error": str(exc), "decorations": []}
+        if not os.path.exists(full):
+            return {"error": f"Path not found: {rel_path}", "decorations": []}
+        decorations = self._workspace_file_decorations(full)
+        return {
+            "path": self._workspace_rel_path(self._workspace_root(), full),
+            "decoration": decorations[0] if decorations else {},
+            "decorations": decorations,
+        }
+
     def open_workspace_file(self, rel_path: str) -> Dict:
         root = self._workspace_root()
         try:
@@ -6005,6 +6019,8 @@ class AIEditorAPI:
         host.on_lm_tool_event(self._handle_node_lm_tool_event)
         host.on_chat_participant_event(
             self._handle_node_chat_participant_event)
+        host.on_file_decoration_event(
+            self._handle_node_file_decoration_event)
         setattr(host, "_sao_runtime_bridge_installed", True)
 
     def _try_start_node_extension_host(self) -> None:
@@ -6900,6 +6916,14 @@ class AIEditorAPI:
         except Exception as exc:
             print(f"[NodeExtHost] Failed to bridge tree event "
                   f"{event}:{normalized_view_id}: {exc}")
+
+    def _handle_node_file_decoration_event(
+            self, event: str, payload: Dict[str, Any]) -> None:
+        """Notify the frontend that extension file decorations changed."""
+        self._emit("file_decorations_changed", {
+            "event": str(event or ""),
+            "change": _as_dict(payload),
+        })
 
     def _shutdown_node_extension_host(self) -> None:
         """Stop the Node extension host if running."""

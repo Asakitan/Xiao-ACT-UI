@@ -7521,7 +7521,14 @@ function explorerDecoration(entry){
   return list.find(dec=>dec&&(dec.badge||dec.tooltip||dec.color))||null;
 }
 
+function clearExplorerDecoration(row,label){
+  row.querySelectorAll('.tree-decoration-badge').forEach(el=>el.remove());
+  if(label)label.style.color='';
+  row.title=row.dataset.baseTitle||row.title||'';
+}
+
 function applyExplorerDecoration(row,label,entry){
+  clearExplorerDecoration(row,label);
   const decoration=explorerDecoration(entry);
   if(!decoration)return;
   const tooltip=String(decoration.tooltip||'');
@@ -7538,6 +7545,27 @@ function applyExplorerDecoration(row,label,entry){
   row.appendChild(badge);
 }
 
+let explorerDecorationRefreshTimer=0;
+async function refreshVisibleExplorerDecorations(){
+  const tree=$('explorer-tree');
+  if(!tree||!tree.dataset.loaded)return;
+  const rows=[...tree.querySelectorAll('.tree-row[data-workspace-path]')]
+    .filter(row=>row.dataset.workspacePath);
+  for(const row of rows){
+    const label=row.querySelector('.tree-label');
+    if(!label)continue;
+    const res=await call('workspace_file_decorations',row.dataset.workspacePath||'');
+    if(!res||res.error)continue;
+    applyExplorerDecoration(row,label,res);
+  }
+}
+function scheduleExplorerDecorationRefresh(){
+  const tree=$('explorer-tree');
+  if(!tree||!tree.dataset.loaded)return;
+  clearTimeout(explorerDecorationRefreshTimer);
+  explorerDecorationRefreshTimer=setTimeout(()=>{void refreshVisibleExplorerDecorations()},80);
+}
+
 function createExplorerNode(entry,depth,isRoot,activePath=''){
   const node=document.createElement('div');node.className='tree-node';
   const row=document.createElement('div');row.className='tree-row';
@@ -7545,6 +7573,7 @@ function createExplorerNode(entry,depth,isRoot,activePath=''){
   row.dataset.workspacePath=entry.path||'';
   row.dataset.filePath=entry.type==='file'?(entry.path||''):'';
   row.title=entry.path||entry.name||'';
+  row.dataset.baseTitle=row.title;
   if(entry.type==='file'&&entry.path===explorerSelectedPath)row.classList.add('active');
   if(activePath&&entry.path===activePath)row.classList.add('active');
 
@@ -8683,6 +8712,10 @@ window._onEditorEvent=function(event,data){
   }
   if(event==='extension_tree_changed'){
     scheduleExtensionActivityRefresh();
+    return;
+  }
+  if(event==='file_decorations_changed'){
+    scheduleExplorerDecorationRefresh();
     return;
   }
   if(event==='custom_editor_changed'){

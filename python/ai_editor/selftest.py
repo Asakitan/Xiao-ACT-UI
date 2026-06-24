@@ -393,7 +393,8 @@ def test_app_settings_parity() -> None:
         "list_workflows", "get_active_agent", "set_active_agent",
         "clear_active_agent", "delete_agent", "delete_workflow",
         "run_workflow", "get_scopes", "save_agent", "save_workflow",
-        "list_workspace_tree", "open_workspace_file",
+        "list_workspace_tree", "workspace_file_decorations",
+        "open_workspace_file",
         "apply_workspace_text_edits", "open_external_uri",
         "editor_language_provider",
         "get_chat_controls", "set_active_provider", "set_active_model",
@@ -1847,6 +1848,10 @@ def test_app_settings_parity() -> None:
                == "Modified by extension"
                and readme_entry.get("decoration", {}).get("color", {})
                .get("id") == "gitDecoration.modifiedResourceForeground")
+        readme_decoration = tree_api.workspace_file_decorations("README.md")
+        _check("workspace_file_decorations returns single path decorations",
+               readme_decoration.get("decoration", {}).get("badge") == "M"
+               and readme_decoration.get("path") == "README.md")
         opened = tree_api.open_workspace_file("src/sample.py")
         _check("open_workspace_file returns content and language",
                opened.get("path") == "src/sample.py"
@@ -3029,6 +3034,9 @@ console.log("quick input filter helpers ok");
            and "tree-decoration-badge" in html
            and "function applyExplorerDecoration" in html
            and "themeColorToCss(decoration.color" in html
+           and "function refreshVisibleExplorerDecorations()" in html
+           and "call('workspace_file_decorations'" in html
+           and "event==='file_decorations_changed'" in html
            and "'gitDecoration.modifiedResourceForeground':'--fg-warning'"
            in html)
     _check("frontend routes custom editor files into editor tabs",
@@ -4255,6 +4263,7 @@ def test_extension_host() -> None:
         ExtensionDescription, ExtensionRegistry, ExtensionScanner,
         ExtensionActivator, CommandService, ExtensionContext,
         ExtensionPoints, ExtensionHost,
+        NodeExtensionHost,
         Position, Range, Uri, Disposable, EventEmitter,
     )
 
@@ -4277,6 +4286,20 @@ def test_extension_host() -> None:
     ee.event(lambda v: fired.append(v))
     ee.fire(42)
     _check("EventEmitter", fired == [42])
+    node_event_host = NodeExtensionHost(node_path="", script_path="")
+    file_decoration_events = []
+    node_event_host.on_file_decoration_event(
+        lambda event, payload: file_decoration_events.append(
+            (event, payload)))
+    node_event_host._on_message({
+        "type": "file_decoration_changed",
+        "handle": 7,
+        "value": {"uri": "file:///workspace/README.md"},
+    })
+    _check("NodeExtensionHost file decoration change callback",
+           file_decoration_events
+           and file_decoration_events[0][0] == "file_decoration_changed"
+           and file_decoration_events[0][1].get("handle") == 7)
 
     # ExtensionDescription from package.json
     pkg = {
