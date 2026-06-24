@@ -3845,11 +3845,19 @@ class VscodeNamespace:
         if view is None:
             view = _TreeView(view_id)
         self._tree_views[view_id] = view
+        initial_state = {
+            key: kw[key]
+            for key in ("message", "title", "description", "badge")
+            if key in kw
+        }
+        if initial_state:
+            view.apply_state(initial_state, notify=False)
         if provider is not None:
             self._tree_data_providers[view_id] = provider
             view.bind_provider(provider, self._notify_tree_view_changed)
         self._notify_tree_view_changed("registered", view_id, {
             "refreshVersion": getattr(view, "refresh_version", 0),
+            "state": view.state_payload(),
         })
         return view
 
@@ -3863,6 +3871,7 @@ class VscodeNamespace:
         view.bind_provider(provider, self._notify_tree_view_changed)
         self._notify_tree_view_changed("registered", view_id, {
             "refreshVersion": getattr(view, "refresh_version", 0),
+            "state": view.state_payload(),
         })
 
         def _dispose() -> None:
@@ -3872,6 +3881,7 @@ class VscodeNamespace:
                 view.bind_provider(None, self._notify_tree_view_changed)
                 self._notify_tree_view_changed("disposed", view_id, {
                     "refreshVersion": getattr(view, "refresh_version", 0),
+                    "state": view.state_payload(),
                 })
 
         return Disposable(_dispose)
@@ -6192,9 +6202,10 @@ class _TreeView:
         self.visible = True
         self.selection = []
         self.activeItem = None
-        self.message = ""
-        self.title = view_id
-        self.description = ""
+        self._message = ""
+        self._title = view_id
+        self._description = ""
+        self._badge = None
         self.refresh_version = 0
         self.reveal_version = 0
         self._snapshot_counter = 0
@@ -6214,6 +6225,38 @@ class _TreeView:
         self._visibility_change = EventEmitter()
         if provider is not None:
             self.bind_provider(provider)
+
+    @property
+    def message(self) -> str:
+        return self._message
+
+    @message.setter
+    def message(self, value: Any) -> None:
+        self.apply_state({"message": value})
+
+    @property
+    def title(self) -> str:
+        return self._title
+
+    @title.setter
+    def title(self, value: Any) -> None:
+        self.apply_state({"title": value})
+
+    @property
+    def description(self) -> str:
+        return self._description
+
+    @description.setter
+    def description(self, value: Any) -> None:
+        self.apply_state({"description": value})
+
+    @property
+    def badge(self) -> Any:
+        return dict(self._badge) if isinstance(self._badge, dict) else None
+
+    @badge.setter
+    def badge(self, value: Any) -> None:
+        self.apply_state({"badge": value})
 
     @property
     def onDidDispose(self):
@@ -6254,6 +6297,70 @@ class _TreeView:
         self._reveal_expand_levels = 0
         self.refresh_version += 1
         self._subscribe_provider_refresh()
+
+    @staticmethod
+    def _normalize_optional_text(value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value)
+
+    @staticmethod
+    def _normalize_badge(value: Any) -> Optional[Dict[str, Any]]:
+        if value is None or value == "":
+            return None
+        if isinstance(value, dict):
+            raw_value = value.get("value")
+            tooltip = value.get("tooltip")
+        else:
+            raw_value = getattr(value, "value", None)
+            tooltip = getattr(value, "tooltip", None)
+        if raw_value is None:
+            return None
+        try:
+            badge_value = int(raw_value)
+        except Exception:
+            return None
+        return {
+            "value": badge_value,
+            "tooltip": "" if tooltip is None else str(tooltip),
+        }
+
+    def state_payload(self) -> Dict[str, Any]:
+        return {
+            "message": self._message,
+            "title": self._title,
+            "description": self._description,
+            "badge": self.badge,
+            "visible": bool(self.visible),
+            "selection": [str(item) for item in list(self.selection or [])],
+            "refreshVersion": self.refresh_version,
+        }
+
+    def apply_state(self, state: Any, notify: bool = True) -> None:
+        if not isinstance(state, dict):
+            return
+        changed = False
+        for key in ("message", "title", "description"):
+            if key not in state:
+                continue
+            next_value = self._normalize_optional_text(state.get(key))
+            attr = f"_{key}"
+            if getattr(self, attr) != next_value:
+                setattr(self, attr, next_value)
+                changed = True
+        if "badge" in state:
+            next_badge = self._normalize_badge(state.get("badge"))
+            if self._badge != next_badge:
+                self._badge = next_badge
+                changed = True
+        if "visible" in state:
+            next_visible = bool(state.get("visible"))
+            if bool(self.visible) != next_visible:
+                self.visible = next_visible
+                self._visibility_change.fire({"visible": next_visible})
+                changed = True
+        if changed and notify:
+            self._notify_changed("state", self.state_payload())
 
     def begin_snapshot(self) -> None:
         self._snapshot_counter += 1
@@ -6504,10 +6611,9 @@ class _TreeView:
         return ancestors
 
     def dispose(self) -> None:
-        self.visible = False
+        self.apply_state({"visible": False}, notify=True)
         self._dispose_provider_listener()
         self._dispose.fire()
-        self._visibility_change.fire({"visible": False})
 
     def _subscribe_provider_refresh(self) -> None:
         provider = self.provider

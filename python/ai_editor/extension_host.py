@@ -2567,6 +2567,7 @@ class NodeExtensionHost:
                 "tree_data_provider_registered",
                 "tree_data_provider_disposed",
                 "tree_data_changed",
+                "tree_view_state_changed",
                 "tree_view_reveal"}:
             view_id = str(msg.get("viewId", ""))
             payload = dict(msg)

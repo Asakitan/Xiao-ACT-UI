@@ -6947,6 +6947,17 @@ class AIEditorAPI:
                     element = payload.get("element")
                     refresh(NodeTreeElement(element) if isinstance(
                         element, dict) else None)
+            elif event == "tree_view_state_changed":
+                view = self._vscode_ns._tree_views.get(normalized_view_id)
+                provider = self._vscode_ns._tree_data_providers.get(
+                    normalized_view_id)
+                if view is None:
+                    view = self._vscode_ns._create_tree_view(
+                        normalized_view_id, treeDataProvider=provider)
+                state = payload.get("state")
+                apply_state = getattr(view, "apply_state", None)
+                if callable(apply_state):
+                    apply_state(state if isinstance(state, dict) else payload)
             elif event == "tree_view_reveal":
                 element = payload.get("element")
                 if not isinstance(element, dict):
@@ -8380,7 +8391,9 @@ class AIEditorAPI:
         view.update({
             "runtimeAvailable": bool(snapshot.get("runtimeAvailable")),
             "runtimeKind": snapshot.get("kind") or "view",
-            "runtimeMessage": snapshot.get("message", ""),
+            "runtimeMessage": (
+                snapshot.get("runtimeMessage")
+                or snapshot.get("message", "")),
             "titleActions": self._view_title_actions(view_id),
         })
         if snapshot:
@@ -8473,8 +8486,12 @@ class AIEditorAPI:
                 "ok": True,
                 "kind": "treeView",
                 "runtimeAvailable": True,
-                "message": "Runtime tree view provider registered.",
-                "title": getattr(tree_view, "title", view_id),
+                "runtimeMessage": "Runtime tree view provider registered.",
+                "message": getattr(tree_view, "message", ""),
+                "title": getattr(tree_view, "title", "") or view_id,
+                "description": getattr(tree_view, "description", ""),
+                "badge": getattr(tree_view, "badge", None),
+                "visible": bool(getattr(tree_view, "visible", True)),
                 "titleActions": self._view_title_actions(view_id),
                 "selection": [
                     str(item)

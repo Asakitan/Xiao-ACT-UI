@@ -3668,19 +3668,53 @@ function registerTreeDataProviderInternal(viewId, treeDataProvider) {
     });
 }
 
+function _normalizeTreeViewText(value) {
+    return value === undefined || value === null ? '' : String(value);
+}
+
+function _normalizeTreeViewBadge(value) {
+    if (value === undefined || value === null || value === '') return undefined;
+    const rawValue = Number(value.value);
+    if (!Number.isFinite(rawValue)) return undefined;
+    return {
+        value: Math.trunc(rawValue),
+        tooltip: value.tooltip === undefined || value.tooltip === null
+            ? ''
+            : String(value.tooltip),
+    };
+}
+
 function createTreeViewObject(viewId, treeDataProvider) {
     const normalized = String(viewId || '');
     const expandEmitter = new EventEmitter();
     const collapseEmitter = new EventEmitter();
     const selectionEmitter = new EventEmitter();
     const visibilityEmitter = new EventEmitter();
+    let visible = true;
+    let selection = [];
+    let message = '';
+    let title = '';
+    let description = '';
+    let badge = undefined;
+    const sendStateChanged = (reason) => {
+        send({
+            type: 'tree_view_state_changed',
+            viewId: normalized,
+            reason: String(reason || ''),
+            state: {
+                visible,
+                message,
+                title,
+                description,
+                badge: badge === undefined ? null : _serializeLanguageValue(badge),
+            },
+        });
+    };
     const providerDisposable = treeDataProvider
         ? registerTreeDataProviderInternal(normalized, treeDataProvider)
         : undefined;
     const view = {
         id: normalized,
-        visible: true,
-        selection: [],
         onDidExpandElement: expandEmitter.event,
         onDidCollapseElement: collapseEmitter.event,
         onDidChangeSelection: selectionEmitter.event,
@@ -3697,13 +3731,74 @@ function createTreeViewObject(viewId, treeDataProvider) {
         dispose() {
             try { providerDisposable?.dispose?.(); } catch {}
             _treeViews.delete(normalized);
+            visible = false;
             visibilityEmitter.fire({ visible: false });
+            sendStateChanged('visible');
         },
         _onDidExpandElement: expandEmitter,
         _onDidCollapseElement: collapseEmitter,
         _onDidChangeSelection: selectionEmitter,
         _onDidChangeVisibility: visibilityEmitter,
     };
+    Object.defineProperties(view, {
+        visible: {
+            enumerable: true,
+            get: () => visible,
+        },
+        selection: {
+            enumerable: true,
+            get: () => selection.slice(),
+            set: (value) => {
+                selection = Array.isArray(value) ? value.slice() : [];
+            },
+        },
+        message: {
+            enumerable: true,
+            get: () => message,
+            set: (value) => {
+                const next = _normalizeTreeViewText(value);
+                if (next === message) return;
+                message = next;
+                sendStateChanged('message');
+            },
+        },
+        title: {
+            enumerable: true,
+            get: () => title,
+            set: (value) => {
+                const next = _normalizeTreeViewText(value);
+                if (next === title) return;
+                title = next;
+                sendStateChanged('title');
+            },
+        },
+        description: {
+            enumerable: true,
+            get: () => description,
+            set: (value) => {
+                const next = _normalizeTreeViewText(value);
+                if (next === description) return;
+                description = next;
+                sendStateChanged('description');
+            },
+        },
+        badge: {
+            enumerable: true,
+            get: () => badge,
+            set: (value) => {
+                const next = _normalizeTreeViewBadge(value);
+                const previous = badge === undefined
+                    ? undefined
+                    : JSON.stringify(badge);
+                const current = next === undefined
+                    ? undefined
+                    : JSON.stringify(next);
+                if (previous === current) return;
+                badge = next;
+                sendStateChanged('badge');
+            },
+        },
+    });
     _treeViews.set(normalized, view);
     return view;
 }

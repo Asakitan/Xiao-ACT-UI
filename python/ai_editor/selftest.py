@@ -2890,6 +2890,10 @@ console.log("extension setting schema helpers ok");
             "function renderExtensionContainerContent(item)" in html
             and "function renderExtensionTreeView(view)" in html
             and "function renderExtensionTreeNode(viewId,node,depth,viewVersion)" in html
+            and "function extensionTreeViewBadgeElement(badge)" in html
+            and "titleLabel.textContent=state.title||extensionViewTitle(view)" in html
+            and "const viewBadge=extensionTreeViewBadgeElement(state.badge)" in html
+            and "const message=String(state.message||'').trim()" in html
             and "function extensionTreeThemeIconGlyph(id)" in html
             and "function extensionTreeIconPathUri(iconPath)" in html
             and "function extensionTreeIconGlyph(node,collapsible)" in html
@@ -3321,6 +3325,13 @@ console.log("quick input filter helpers ok");
            and "def read_clipboard_text(self) -> str:" in app_source
            and "def write_clipboard_text(self, text: str) -> None:"
            in app_source)
+    _check("extension TreeView state properties round-trip through Node host",
+           "function _normalizeTreeViewBadge(value)" in node_ext_host_source
+           and "type: 'tree_view_state_changed'" in node_ext_host_source
+           and "Object.defineProperties(view, {" in node_ext_host_source
+           and "set: (value) => {" in node_ext_host_source
+           and "\"tree_view_state_changed\"" in extension_host_source
+           and "elif event == \"tree_view_state_changed\":" in app_source)
     _check("extension status bar messages round-trip through Node host",
            "setStatusBarMessage(text, hideAfterTimeoutOrThenable)"
            in node_ext_host_source
@@ -4319,6 +4330,20 @@ def test_extension_host() -> None:
            file_decoration_events
            and file_decoration_events[0][0] == "file_decoration_changed"
            and file_decoration_events[0][1].get("handle") == 7)
+    tree_state_events = []
+    node_event_host.on_tree_event(
+        lambda event, view_id, payload: tree_state_events.append(
+            (event, view_id, payload)))
+    node_event_host._on_message({
+        "type": "tree_view_state_changed",
+        "viewId": "test.tree",
+        "state": {"message": "Ready", "badge": {"value": 1}},
+    })
+    _check("NodeExtensionHost tree view state change callback",
+           tree_state_events
+           and tree_state_events[0][0] == "tree_view_state_changed"
+           and tree_state_events[0][1] == "test.tree"
+           and tree_state_events[0][2].get("state", {}).get("message") == "Ready")
 
     # ExtensionDescription from package.json
     pkg = {
@@ -5971,6 +5996,22 @@ def test_vscode_api() -> None:
            and tree_collapsed is True
            and tree_expand_events[-1].get("element") == "node"
            and tree_collapse_events[-1].get("element") == "node")
+    tree_view.message = "Runtime message"
+    tree_view.title = "Runtime title"
+    tree_view.description = "Runtime description"
+    tree_view.badge = {"value": 4, "tooltip": "Runtime badge"}
+    _check("tree view state properties notify runtime view callback",
+           tree_view.message == "Runtime message"
+           and tree_view.title == "Runtime title"
+           and tree_view.description == "Runtime description"
+           and tree_view.badge == {"value": 4, "tooltip": "Runtime badge"}
+           and any(evt.get("event") == "state"
+                   and evt.get("view_id") == "selftest.tree"
+                   and evt.get("message") == "Runtime message"
+                   and evt.get("title") == "Runtime title"
+                   and evt.get("description") == "Runtime description"
+                   and (evt.get("badge") or {}).get("value") == 4
+                   for evt in tree_changes))
     before_tree_version = tree_view.refresh_version
     tree_provider.refresh("node")
     _check("tree data provider refresh notifies runtime view callback",
@@ -6989,6 +7030,10 @@ def test_app_extension_runtime_support() -> None:
         activity_expand_events = []
         activity_collapse_events = []
         if activity_tree_view is not None:
+            activity_tree_view.title = "Activity Runtime Tree"
+            activity_tree_view.description = "dynamic subtitle"
+            activity_tree_view.message = "dynamic tree message"
+            activity_tree_view.badge = {"value": 8, "tooltip": "dynamic badge"}
             activity_tree_view.onDidChangeSelection(
                 lambda evt: activity_selection_events.append(evt))
             activity_tree_view.onDidExpandElement(
@@ -7008,6 +7053,17 @@ def test_app_extension_runtime_support() -> None:
                and activity_views.get("selftest.activity.tree", {}).get("runtimeState", {}).get("kind") == "treeView"
                and activity_views.get("selftest.activity.webview", {}).get("runtimeState", {}).get("kind") == "webviewView"
                and "command-webview" in activity_views.get("selftest.activity.webview", {}).get("runtimeState", {}).get("html", ""))
+        _check("activity tree view exposes dynamic state properties",
+               activity_views.get("selftest.activity.tree", {})
+               .get("runtimeState", {}).get("title") == "Activity Runtime Tree"
+               and activity_views.get("selftest.activity.tree", {})
+               .get("runtimeState", {}).get("description") == "dynamic subtitle"
+               and activity_views.get("selftest.activity.tree", {})
+               .get("runtimeState", {}).get("message") == "dynamic tree message"
+               and activity_views.get("selftest.activity.tree", {})
+               .get("runtimeState", {}).get("badge", {}).get("value") == 8
+               and activity_views.get("selftest.activity.tree", {})
+               .get("runtimeState", {}).get("badge", {}).get("tooltip") == "dynamic badge")
         activity_tree_nodes = activity_views.get("selftest.activity.tree", {}).get("runtimeState", {}).get("nodes", [])
         _check("activity tree thenable provider exposes structured expandable nodes",
                activity_tree_nodes
@@ -7815,6 +7871,10 @@ async function activate(context) {
     },
   };
   const view = vscode.window.createTreeView('selftest.node.tree', { treeDataProvider: provider });
+  view.title = 'Node Runtime Tree';
+  view.description = 'node subtitle';
+  view.message = 'node tree message';
+  view.badge = { value: 7, tooltip: 'node badge' };
   view.onDidChangeSelection(evt => output.appendLine('selection:' + evt.selection.map(item => item.id).join(',')));
   view.onDidExpandElement(evt => output.appendLine('expand:' + evt.element.id));
   view.onDidCollapseElement(evt => output.appendLine('collapse:' + evt.element.id));
@@ -11023,7 +11083,7 @@ module.exports = { activate, deactivate };
                        .get("view_id"),
                        json.dumps(node_opened_custom_editor,
                                   ensure_ascii=False))
-                node_snapshot = {"nodes": []}
+                node_snapshot = {"nodes": [], "state": {}}
                 def _node_root_focused():
                     node_items = {
                         item.get("id"): item
@@ -11036,11 +11096,14 @@ module.exports = { activate, deactivate };
                     nodes = node_views.get(
                         "selftest.node.tree", {}).get(
                             "runtimeState", {}).get("nodes", [])
+                    node_snapshot["state"] = node_views.get(
+                        "selftest.node.tree", {}).get("runtimeState", {})
                     node_snapshot["nodes"] = nodes
                     return bool(nodes and nodes[0].get("focused"))
                 node_reveal_seen = _wait_until(
                     _node_root_focused, timeout=3.0)
                 node_nodes = node_snapshot.get("nodes", [])
+                node_tree_state = node_snapshot.get("state", {})
                 _check("node host lazily activates command extensions",
                        lazy_before_command is True
                        and lazy_after_command is True
@@ -11618,6 +11681,11 @@ module.exports = { activate, deactivate };
                        and node_registered
                        and node_command_registered
                        and node_reveal_seen
+                       and node_tree_state.get("title") == "Node Runtime Tree"
+                       and node_tree_state.get("description") == "node subtitle"
+                       and node_tree_state.get("message") == "node tree message"
+                       and node_tree_state.get("badge", {}).get("value") == 7
+                       and node_tree_state.get("badge", {}).get("tooltip") == "node badge"
                        and node_nodes
                        and node_nodes[0].get("label") == "Node Root"
                        and node_nodes[0].get("description") == "from-js"

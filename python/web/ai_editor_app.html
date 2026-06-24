@@ -10214,6 +10214,16 @@ function scheduleExtensionActivityRefresh(){
 function extensionViewTitle(view){
   return view.name||view.title||view.id||'Extension View';
 }
+function extensionTreeViewBadgeElement(badge){
+  if(!badge||typeof badge!=='object')return null;
+  const value=Number(badge.value);
+  if(!Number.isFinite(value))return null;
+  const el=document.createElement('span');
+  el.className='ext-badge';
+  el.textContent=String(Math.trunc(value));
+  if(badge.tooltip)el.title=String(badge.tooltip);
+  return el;
+}
 function extensionActionGlyph(action){
   const icon=String((action&&action.icon)||'');
   if(icon.indexOf('refresh')>=0)return '↻';
@@ -10391,13 +10401,28 @@ function appendExtensionTitleActions(title,view,state){
 }
 function renderExtensionTreeView(view){
   const card=document.createElement('div');card.className='tool-call';card.style.margin='0 0 8px 0';
+  const state=view.runtimeState||{};
   const title=document.createElement('div');title.className='tool-header open';
   title.style.display='flex';title.style.alignItems='center';title.style.gap='6px';
   const titleLabel=document.createElement('span');titleLabel.style.cssText='overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-  titleLabel.textContent=extensionViewTitle(view);title.appendChild(titleLabel);
+  titleLabel.textContent=state.title||extensionViewTitle(view);title.appendChild(titleLabel);
+  if(state.description){
+    const desc=document.createElement('span');
+    desc.style.cssText='color:var(--fg-dim);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:38%';
+    desc.textContent=String(state.description);
+    title.appendChild(desc);
+  }
+  const viewBadge=extensionTreeViewBadgeElement(state.badge);
+  if(viewBadge)title.appendChild(viewBadge);
   const body=document.createElement('div');body.className='tool-body open';body.style.whiteSpace='normal';
-  const state=view.runtimeState||{};
   appendExtensionTitleActions(title,view,state);
+  const message=String(state.message||'').trim();
+  if(message){
+    const msg=document.createElement('div');
+    msg.style.cssText='color:var(--fg-dim);font-size:11px;padding:0 0 6px 0;line-height:1.35';
+    msg.textContent=message;
+    body.appendChild(msg);
+  }
   const nodes=Array.isArray(state.nodes)&&state.nodes.length
     ?state.nodes
     :(Array.isArray(state.children)?state.children.map(label=>({label:String(label),children:[]})):[]);
@@ -10415,7 +10440,10 @@ function renderExtensionTreeView(view){
   }else if(state.treeError){
     body.appendChild(extensionTreeStatusRow(-1,extensionTreeErrorText(state.treeError,'Unable to load tree items'),'error',()=>renderExtensionActivityBar()));
   }else{
-    body.innerHTML='<div style="color:var(--fg-dim);font-size:11px">'+esc(view.runtimeMessage||'Tree view provider registered; no root items reported.')+'</div>';
+    const empty=document.createElement('div');
+    empty.style.cssText='color:var(--fg-dim);font-size:11px';
+    empty.textContent=view.runtimeMessage||'Tree view provider registered; no root items reported.';
+    body.appendChild(empty);
   }
   card.appendChild(title);card.appendChild(body);return card;
 }
