@@ -81,6 +81,8 @@ _WORKSPACE_CONTAINS_PREFIX = "workspaceContains:"
 _WORKSPACE_CONTAINS_MAX_FILES = 8000
 _WORKSPACE_CONTAINS_MAX_SECONDS = 2.0
 _WORKSPACE_FILE_PREVIEW_BYTES = 1024 * 1024
+_WORKSPACE_DECORATION_PROPAGATE_MAX_ENTRIES = 300
+_WORKSPACE_DECORATION_PROPAGATE_MAX_SECONDS = 0.05
 _WEBVIEW_LOCAL_URL_RE = re.compile(
     r"https://(?:webview\.local|[^/\s\"'<>)]*\.vscode-resource\.webview\.local)"
     r"/[^\s\"'<>)]*"
@@ -3688,13 +3690,8 @@ class AIEditorAPI:
         except Exception:
             return False
 
-    def _workspace_file_decorations(
-            self, full: str,
-            providers_available: Optional[bool] = None) -> List[Dict[str, Any]]:
-        if providers_available is None:
-            providers_available = self._workspace_has_file_decoration_providers()
-        if not providers_available:
-            return []
+    def _workspace_direct_file_decorations(
+            self, full: str) -> List[Dict[str, Any]]:
         vscode_ns = getattr(self, "_vscode_ns", None)
         if vscode_ns is None:
             return []
@@ -3708,6 +3705,59 @@ class AIEditorAPI:
             if payload:
                 decorations.append(payload)
         return decorations
+
+    def _workspace_propagated_file_decorations(
+            self, full: str) -> List[Dict[str, Any]]:
+        if not os.path.isdir(full):
+            return []
+        root = self._workspace_root()
+        deadline = (
+            time.perf_counter()
+            + _WORKSPACE_DECORATION_PROPAGATE_MAX_SECONDS)
+        checked = 0
+        try:
+            walker = os.walk(full)
+            for current, dirnames, filenames in walker:
+                dirnames[:] = [
+                    name for name in dirnames
+                    if name.casefold() not in _WORKSPACE_TREE_IGNORED_DIRS
+                    and self._is_workspace_safe_path(
+                        root, os.path.join(current, name))
+                ]
+                candidates = [
+                    os.path.join(current, name)
+                    for name in [*dirnames, *filenames]
+                ]
+                for candidate in candidates:
+                    if candidate == full or not self._is_workspace_safe_path(
+                            root, candidate):
+                        continue
+                    checked += 1
+                    if (checked > _WORKSPACE_DECORATION_PROPAGATE_MAX_ENTRIES
+                            or time.perf_counter() > deadline):
+                        return []
+                    decorations = [
+                        item for item
+                        in self._workspace_direct_file_decorations(candidate)
+                        if item.get("propagate")
+                    ]
+                    if decorations:
+                        return decorations
+        except Exception:
+            return []
+        return []
+
+    def _workspace_file_decorations(
+            self, full: str,
+            providers_available: Optional[bool] = None) -> List[Dict[str, Any]]:
+        if providers_available is None:
+            providers_available = self._workspace_has_file_decoration_providers()
+        if not providers_available:
+            return []
+        direct = self._workspace_direct_file_decorations(full)
+        if direct:
+            return direct
+        return self._workspace_propagated_file_decorations(full)
 
     def list_workspace_tree(self, rel_path: str = "") -> Dict:
         root = self._workspace_root()

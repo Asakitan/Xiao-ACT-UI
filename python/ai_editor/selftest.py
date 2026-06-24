@@ -1818,6 +1818,15 @@ def test_app_settings_parity() -> None:
 
         class _WorkspaceDecorationProvider:
             def provideFileDecoration(self, uri, token):
+                if str(uri).endswith("sample.py"):
+                    return {
+                        "badge": "P",
+                        "tooltip": "Propagated child decoration",
+                        "color": {
+                            "id": "gitDecoration.untrackedResourceForeground",
+                        },
+                        "propagate": True,
+                    }
                 if str(uri).endswith("README.md"):
                     return {
                         "badge": "M",
@@ -1848,10 +1857,20 @@ def test_app_settings_parity() -> None:
                == "Modified by extension"
                and readme_entry.get("decoration", {}).get("color", {})
                .get("id") == "gitDecoration.modifiedResourceForeground")
+        src_entry = next(
+            (entry for entry in tree.get("entries", [])
+             if entry.get("name") == "src"),
+            {})
+        _check("workspace tree propagates child file decorations",
+               src_entry.get("decoration", {}).get("badge") == "P"
+               and src_entry.get("decoration", {}).get("propagate") is True)
         readme_decoration = tree_api.workspace_file_decorations("README.md")
         _check("workspace_file_decorations returns single path decorations",
                readme_decoration.get("decoration", {}).get("badge") == "M"
                and readme_decoration.get("path") == "README.md")
+        src_decoration = tree_api.workspace_file_decorations("src")
+        _check("workspace_file_decorations returns propagated folder decorations",
+               src_decoration.get("decoration", {}).get("badge") == "P")
         opened = tree_api.open_workspace_file("src/sample.py")
         _check("open_workspace_file returns content and language",
                opened.get("path") == "src/sample.py"
