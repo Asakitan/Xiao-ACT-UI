@@ -1970,7 +1970,8 @@ class VscodeNamespace:
             self,
             document_or_uri: Any,
             position: Any = None,
-            trigger_character: Any = None) -> CompletionList:
+            trigger_character: Any = None,
+            item_resolve_count: Any = None) -> CompletionList:
         document = self._resolve_language_document(document_or_uri)
         pos = _coerce_position(position)
         trigger = "" if trigger_character is None else str(trigger_character)
@@ -1980,26 +1981,53 @@ class VscodeNamespace:
         }
         items: List[Any] = []
         incomplete = False
+        try:
+            remaining_resolves = max(0, int(item_resolve_count or 0))
+        except Exception:
+            remaining_resolves = 0
         for entry in self._matching_language_providers("completion", document):
             triggers = tuple(str(item) for item in (entry.get("metadata") or ()))
             if trigger and trigger not in triggers:
                 continue
+            provider = entry.get("provider")
             value = self._call_language_provider(
-                entry.get("provider"),
+                provider,
                 "provideCompletionItems",
                 (document, pos, CancellationToken.NONE, context),
                 default=None)
             normalized = _completion_list_from_provider_result(value)
             if normalized is None:
                 continue
-            items.extend(normalized.items)
+            provider_items = list(normalized.items)
+            if remaining_resolves > 0:
+                resolve_method = (
+                    provider.get("resolveCompletionItem")
+                    if isinstance(provider, dict)
+                    else getattr(provider, "resolveCompletionItem", None)
+                )
+                if callable(resolve_method):
+                    resolved_items: List[Any] = []
+                    for item in provider_items:
+                        current = item
+                        if remaining_resolves > 0:
+                            resolved = self._call_language_provider(
+                                provider,
+                                "resolveCompletionItem",
+                                (current, CancellationToken.NONE),
+                                default=current)
+                            current = resolved if resolved is not None else current
+                            remaining_resolves -= 1
+                        resolved_items.append(current)
+                    provider_items = resolved_items
+            items.extend(provider_items)
             incomplete = incomplete or bool(normalized.isIncomplete)
         external = self._request_external_language_provider(
             "completion",
             document,
             position=self._position_payload(pos),
             triggerCharacter=trigger or None,
-            context=context)
+            context=context,
+            itemResolveCount=max(0, remaining_resolves))
         normalized_external = _completion_list_from_provider_result(external)
         if normalized_external is not None:
             items.extend(normalized_external.items)
@@ -2012,8 +2040,8 @@ class VscodeNamespace:
             position: Any = None,
             trigger_character: Any = None,
             item_resolve_count: Any = None) -> CompletionList:
-        _ = item_resolve_count
-        return self._provide_completion_items(uri, position, trigger_character)
+        return self._provide_completion_items(
+            uri, position, trigger_character, item_resolve_count)
 
     def _execute_hover_provider(
             self, uri: Any, position: Any = None) -> List[Any]:

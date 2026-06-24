@@ -2262,6 +2262,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "call('editor_language_provider'" in html
            and "function editorProviderPayload(kind,extra)" in html
            and "function requestEditorCompletion(triggerCharacter,quiet)" in html
+           and "itemResolveCount:8" in html
            and "function showEditorSuggest(items,position)" in html
            and "function applyEditorCompletion(item)" in html
            and "function handleEditorSuggestKey(e)" in html
@@ -4141,6 +4142,7 @@ def test_vscode_api() -> None:
         class _GenericCompletionProvider:
             def __init__(self):
                 self.contexts = []
+                self.resolved = 0
 
             def provideCompletionItems(self, document, position, token, context):
                 self.contexts.append(context)
@@ -4148,6 +4150,11 @@ def test_vscode_api() -> None:
                                       api["CompletionItemKind"]["Function"])
                 item.detail = document.languageId
                 return CompletionList([item], True)
+
+            def resolveCompletionItem(self, item, token):
+                self.resolved += 1
+                item.documentation = "resolved generic docs"
+                return item
 
         class _DotCompletionProvider:
             def provideCompletionItems(self, document, position, token, context):
@@ -4169,6 +4176,11 @@ def test_vscode_api() -> None:
                and "selftestGeneric" in completion_labels
                and "selftestDot" in completion_labels
                and generic_completion.contexts[-1]["triggerKind"] == 1)
+        resolved_completions = api["commands"]["executeCommand"](
+            "vscode.executeCompletionItemProvider", doc.uri, Position(0, 1), None, 1)
+        _check("executeCompletionItemProvider resolves requested items",
+               getattr(resolved_completions.items[0], "documentation", None) == "resolved generic docs"
+               and generic_completion.resolved == 1)
         semicolon_completions = api["commands"]["executeCommand"](
             "vscode.executeCompletionItemProvider", doc.uri, Position(0, 1), ";")
         semicolon_labels = [item.label for item in semicolon_completions.items]
@@ -6220,6 +6232,10 @@ function activate(context) {
       item.detail = document.languageId + ':' + (context.triggerCharacter || '');
       return new vscode.CompletionList([item], true);
     },
+    resolveCompletionItem(item, token) {
+      item.documentation = 'node resolved completion docs';
+      return item;
+    },
   }, '.');
   vscode.languages.registerHoverProvider('python', {
     provideHover(document, position, token) {
@@ -6887,6 +6903,9 @@ module.exports = { activate, deactivate };
                 node_completion = api._ext_host.commands.execute(
                     "vscode.executeCompletionItemProvider",
                     node_uri, Position(0, 1), ".")
+                node_completion_resolved = api._ext_host.commands.execute(
+                    "vscode.executeCompletionItemProvider",
+                    node_uri, Position(0, 1), ".", 1)
                 node_hover = api._ext_host.commands.execute(
                     "vscode.executeHoverProvider", node_uri, Position(0, 1))
                 node_signature = api._ext_host.commands.execute(
@@ -7245,6 +7264,18 @@ module.exports = { activate, deactivate };
                        node_language_registered
                        and getattr(node_completion, "isIncomplete", False) is True
                        and "nodeCompletion" in node_completion_labels)
+                node_completion_resolved_doc = (
+                    node_completion_resolved.items[0].get("documentation")
+                    if node_completion_resolved.items
+                    and isinstance(node_completion_resolved.items[0], dict)
+                    else getattr(
+                        node_completion_resolved.items[0]
+                        if node_completion_resolved.items else None,
+                        "documentation", None)
+                )
+                _check("node host language provider resolves JS completion items",
+                       node_completion_resolved_doc
+                       == "node resolved completion docs")
                 _check("node host language provider invokes JS hover",
                        node_hover
                        and node_hover[0].get("contents") == ["node hover prin"])

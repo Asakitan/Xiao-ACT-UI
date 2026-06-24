@@ -4399,7 +4399,7 @@ function editorCompletionTriggerCharacter(ch){
 async function requestEditorCompletion(triggerCharacter,quiet){
   const requestId=++_editorSuggestRequest;
   const position=editorPositionFromOffset(ed.value,ed.selectionStart);
-  const res=await call('editor_language_provider',editorProviderPayload('completion',{triggerCharacter:triggerCharacter||null}));
+  const res=await call('editor_language_provider',editorProviderPayload('completion',{triggerCharacter:triggerCharacter||null,itemResolveCount:8}));
   if(requestId!==_editorSuggestRequest)return;
   const items=res&&res.ok&&Array.isArray(res.items)?res.items:[];
   if(items.length){closeEditorHover();showEditorSuggest(items,position);setStatus(items.length+' suggestion'+(items.length===1?'':'s'));return}

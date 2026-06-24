@@ -3755,6 +3755,8 @@ async function handleLanguageProviderRequest(msg) {
         if (kind === 'completion') {
             const items = [];
             let isIncomplete = false;
+            const rawResolveCount = Number(msg.itemResolveCount || msg.resolveCount || 0);
+            let remainingResolves = Number.isFinite(rawResolveCount) ? Math.max(0, rawResolveCount) : 0;
             for (const entry of providers) {
                 const triggers = (entry.triggers || []).map(item => String(item));
                 if (trigger && !triggers.includes(trigger)) continue;
@@ -3764,7 +3766,14 @@ async function handleLanguageProviderRequest(msg) {
                 try {
                     const value = await fn.call(provider, document, position, token, context);
                     const normalized = _completionListFromProviderValue(value);
-                    items.push(...normalized.items);
+                    for (let item of normalized.items) {
+                        if (remainingResolves > 0 && typeof provider.resolveCompletionItem === 'function') {
+                            const resolved = await provider.resolveCompletionItem.call(provider, item, token);
+                            if (resolved !== undefined && resolved !== null) item = resolved;
+                            remainingResolves -= 1;
+                        }
+                        items.push(item);
+                    }
                     isIncomplete = isIncomplete || normalized.isIncomplete;
                 } catch (err) {
                     log(`language provider ${kind} error: ${err.message}`);
