@@ -4141,6 +4141,12 @@ console.log("frontend signature help docs ok");
             and "dataset.extSettingSearch" in html
             and "dataset.extSettingTags" in html
             and "@tag:" in html
+            and "function extensionSettingTargetName(target)" in html
+            and "function createExtensionSettingTargetSelect(target)" in html
+            and "function extensionSettingRowTarget(row)" in html
+            and "ext-setting-target-select" in html
+            and "set_extension_setting',key,nextValue,extensionSettingRowTarget(row)" in html
+            and "reset_extension_setting',key,extensionSettingRowTarget(row)" in html
             and "reset_extension_setting" in html
             and "markExtensionSettingRow" in html
             and "function applyExtensionSettingsFilter()" in html
@@ -9556,9 +9562,12 @@ def test_app_extension_runtime_support() -> None:
             {})
         _check("extension setting write marks modified override",
                set_setting.get("ok") is True
+               and set_setting.get("target") == "workspace"
                and after_set.get("values", {}).get("selftest.flag") is True
                and after_set.get("configuredValues", {}).get("selftest.flag") is True
-               and after_set.get("modified", {}).get("selftest.flag") is True)
+               and after_set.get("modified", {}).get("selftest.flag") is True
+               and after_set.get("targets", {}).get("selftest.flag")
+               == "workspace")
         reset_setting = api.reset_extension_setting("selftest.flag")
         after_reset = next(
             (item for item in api.list_extension_settings().get("configurations", [])
@@ -9579,6 +9588,86 @@ def test_app_extension_runtime_support() -> None:
                and settings_node_host.messages[-1].get("section") == "selftest"
                and settings_node_host.messages[-1].get("key") == "flag"
                and settings_node_host.messages[-1].get("remove") is True)
+        target_set = api.set_extension_setting(
+            "selftest.flag", True, "global")
+        target_get = api.get_extension_setting("selftest.flag")
+        after_target_set = next(
+            (item for item in api.list_extension_settings().get("configurations", [])
+             if item.get("extension_id") == "selftest.settings-pack"),
+            {})
+        target_data = dict(getattr(api._gui_ref.settings, "data", {}).get(
+            "ai_editor", {}).get("configuration_targets", {}))
+        target_reset = api.reset_extension_setting("selftest.flag", "global")
+        after_target_reset = next(
+            (item for item in api.list_extension_settings().get("configurations", [])
+             if item.get("extension_id") == "selftest.settings-pack"),
+            {})
+        target_data_after_reset = dict(getattr(
+            api._gui_ref.settings, "data", {}).get(
+                "ai_editor", {}).get("configuration_targets", {}))
+        folder_set = api.set_extension_setting(
+            "selftest.flag", False, "workspaceFolder")
+        folder_get = api.get_extension_setting("selftest.flag")
+        after_folder_set = next(
+            (item for item in api.list_extension_settings().get("configurations", [])
+             if item.get("extension_id") == "selftest.settings-pack"),
+            {})
+        folder_reset = api.reset_extension_setting(
+            "selftest.flag", "workspaceFolder")
+        _check("extension setting targets persist and reset by scope",
+               target_set.get("ok") is True
+               and target_set.get("target") == "global"
+               and target_get.get("value") is True
+               and target_get.get("target") == "global"
+               and after_target_set.get("targets", {}).get(
+                   "selftest.flag") == "global"
+               and after_target_set.get("targetValues", {}).get(
+                   "selftest.flag") is True
+               and target_data.get("selftest.flag", {}).get(
+                   "target") == "global"
+               and target_data.get("selftest.flag", {}).get(
+                   "value") is True
+               and target_reset.get("ok") is True
+               and "selftest.flag" not in target_data_after_reset
+               and after_target_reset.get("modified", {}).get(
+                   "selftest.flag") is False
+               and folder_set.get("ok") is True
+               and folder_set.get("target") == "workspaceFolder"
+               and folder_get.get("target") == "workspaceFolder"
+               and after_folder_set.get("targets", {}).get(
+                   "selftest.flag") == "workspaceFolder"
+               and after_folder_set.get("modified", {}).get(
+                   "selftest.flag") is True
+               and folder_reset.get("ok") is True,
+               json.dumps({
+                   "target_set": target_set,
+                   "target_get": target_get,
+                   "after_target_set": {
+                       "values": after_target_set.get("values", {}),
+                       "targets": after_target_set.get("targets", {}),
+                       "targetValues": after_target_set.get(
+                           "targetValues", {}),
+                       "modified": after_target_set.get("modified", {}),
+                   },
+                   "target_data": target_data,
+                   "target_reset": target_reset,
+                   "after_target_reset": {
+                       "values": after_target_reset.get("values", {}),
+                       "targets": after_target_reset.get("targets", {}),
+                       "modified": after_target_reset.get("modified", {}),
+                   },
+                   "target_data_after_reset": target_data_after_reset,
+                   "folder_set": folder_set,
+                   "folder_get": folder_get,
+                   "after_folder_set": {
+                       "values": after_folder_set.get("values", {}),
+                       "targets": after_folder_set.get("targets", {}),
+                       "targetValues": after_folder_set.get(
+                           "targetValues", {}),
+                       "modified": after_folder_set.get("modified", {}),
+                   },
+                   "folder_reset": folder_reset,
+               }, ensure_ascii=False, default=str))
         api._node_ext_host = previous_settings_node_host
 
         manifest_tool_name = api._extension_tool_wrapper_name(
