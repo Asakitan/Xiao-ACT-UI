@@ -5431,6 +5431,7 @@ def test_app_extension_runtime_support() -> None:
     language_tmp = ""
     settings_tmp = ""
     node_tree_tmp = ""
+    node_storage_tmp = ""
     extension_host_module._host = ExtensionHost()
     try:
         api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
@@ -6257,16 +6258,54 @@ def test_app_extension_runtime_support() -> None:
             _check("node extension host tree provider bridge skipped without Node.js", True)
         else:
             node_tree_tmp = tempfile.mkdtemp(prefix="sao_node_tree_ext_")
+            node_storage_tmp = tempfile.mkdtemp(prefix="sao_node_storage_")
             node_extension_js = r"""
 const vscode = require('vscode');
 const output = vscode.window.createOutputChannel('node-tree-selftest');
 const workspaceEvents = { open: 0, change: 0, close: 0, save: 0 };
 const configEvents = { count: 0 };
+let contextProbe = {};
 const lifecycleEvents = new vscode.EventEmitter();
 const lifecycleDocs = new Map();
 
-function activate(context) {
+async function activate(context) {
   console.log('node console probe', { source: 'selftest' });
+  const secretEvents = [];
+  context.secrets.onDidChange(event => {
+    secretEvents.push(event && event.key);
+  }, null, context.subscriptions);
+  const globalBefore = context.globalState.get('activationCount', 0);
+  const workspaceBefore = context.workspaceState.get('activationCount', 0);
+  const secretBefore = await context.secrets.get('token');
+  await context.globalState.update('activationCount', globalBefore + 1);
+  await context.workspaceState.update('activationCount', workspaceBefore + 1);
+  await context.globalState.update('deleteProbe', 'remove-me');
+  await context.globalState.update('deleteProbe', undefined);
+  await context.secrets.store('token', 'secret-' + (globalBefore + 1));
+  context.globalState.setKeysForSync(['activationCount']);
+  contextProbe = {
+    globalBefore,
+    globalAfter: context.globalState.get('activationCount'),
+    workspaceBefore,
+    workspaceAfter: context.workspaceState.get('activationCount'),
+    secretBefore,
+    secretAfter: await context.secrets.get('token'),
+    secretEvents,
+    globalKeys: context.globalState.keys(),
+    workspaceKeys: context.workspaceState.keys(),
+    deleteRemoved: !context.globalState.keys().includes('deleteProbe'),
+    storageUri: context.storageUri && context.storageUri.toString(),
+    globalStorageUri: context.globalStorageUri && context.globalStorageUri.toString(),
+    logUri: context.logUri && context.logUri.toString(),
+    storagePath: context.storagePath,
+    globalStoragePath: context.globalStoragePath,
+    logPath: context.logPath,
+    asAbsolutePath: context.asAbsolutePath('package.json').replace(/\\/g, '/'),
+    extensionMode: context.extensionMode,
+    extensionId: context.extension && context.extension.id,
+    packageName: context.extension && context.extension.packageJSON
+      && context.extension.packageJSON.name,
+  };
   vscode.workspace.onDidChangeConfiguration(event => {
     configEvents.count += 1;
     configEvents.aiEditor = event.affectsConfiguration('ai_editor');
@@ -6778,6 +6817,9 @@ function activate(context) {
       hasLocalProbe: (await vscode.commands.getCommands()).includes('selftest.node.workspaceProbe'),
     };
   });
+  vscode.commands.registerCommand('selftest.node.contextProbe', async () => {
+    return contextProbe;
+  });
   vscode.commands.registerCommand('selftest.node.webviewDefaultRoots', () => {
     const panel = vscode.window.createWebviewPanel(
       'selftest.defaultRoots',
@@ -6973,6 +7015,7 @@ module.exports = { activate, deactivate };
                     os.path.dirname(extension_host_module.__file__),
                     "node_ext_host.js"),
                 ui_bridge=node_ui_bridge,
+                storage_root=node_storage_tmp,
             )
             previous_node_host = api._node_ext_host
             api._node_ext_host = node_host
@@ -7026,6 +7069,10 @@ module.exports = { activate, deactivate };
                     timeout=3.0)
                 node_workspace_command_registered = _wait_until(
                     lambda: "selftest.node.workspaceProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                node_context_command_registered = _wait_until(
+                    lambda: "selftest.node.contextProbe"
                     in api._ext_host.commands.list_commands(),
                     timeout=3.0)
                 node_python_command_registered = _wait_until(
@@ -7976,6 +8023,67 @@ module.exports = { activate, deactivate };
                        and node_diag_categories.get("workspace.applyEdit", {}).get("count", 0) >= 2
                        and node_diag_categories.get("workspace.findFiles", {}).get("count", 0) >= 1,
                        json.dumps(node_diagnostics, ensure_ascii=False))
+                try:
+                    node_context_first = api._ext_host.commands.execute(
+                        "selftest.node.contextProbe")
+                except Exception as exc:
+                    node_context_first = {"_error": str(exc)}
+                node_host.deactivate(node_tree_desc.id)
+                time.sleep(0.2)
+                node_host.activate(node_tree_tmp, node_tree_desc.id, {
+                    "name": node_tree_desc.name,
+                    "publisher": node_tree_desc.publisher,
+                    "version": node_tree_desc.version,
+                    "main": node_tree_desc.main,
+                    "activationEvents": node_tree_desc.activation_events,
+                    "contributes": node_tree_desc.contributes,
+                })
+                node_reactivated = _wait_until(
+                    lambda: node_tree_desc.id in node_host._activated_ids,
+                    timeout=3.0)
+                try:
+                    node_context_second = api._ext_host.commands.execute(
+                        "selftest.node.contextProbe")
+                except Exception as exc:
+                    node_context_second = {"_error": str(exc)}
+                storage_root_url = (
+                    "file:///" + node_storage_tmp.replace("\\", "/"))
+                _check("node ExtensionContext persists state and paths",
+                       node_context_command_registered
+                       and isinstance(node_context_first, dict)
+                       and isinstance(node_context_second, dict)
+                       and node_context_first.get("globalBefore") == 0
+                       and node_context_first.get("globalAfter") == 1
+                       and node_context_first.get("workspaceBefore") == 0
+                       and node_context_first.get("workspaceAfter") == 1
+                       and node_context_first.get("secretBefore") is None
+                       and node_context_first.get("secretAfter") == "secret-1"
+                       and node_context_first.get("secretEvents") == ["token"]
+                       and node_context_first.get("deleteRemoved") is True
+                       and "activationCount" in node_context_first.get("globalKeys", [])
+                       and "activationCount" in node_context_first.get("workspaceKeys", [])
+                       and node_context_first.get("extensionMode") == 1
+                       and node_context_first.get("extensionId") == node_tree_desc.id
+                       and node_context_first.get("packageName") == node_tree_desc.name
+                       and node_context_first.get("asAbsolutePath", "")
+                       .endswith("/package.json")
+                       and storage_root_url in node_context_first.get("storageUri", "")
+                       and storage_root_url in node_context_first.get("globalStorageUri", "")
+                       and storage_root_url in node_context_first.get("logUri", "")
+                       and node_reactivated is True
+                       and node_context_second.get("globalBefore") == 1
+                       and node_context_second.get("globalAfter") == 2
+                       and node_context_second.get("workspaceBefore") == 1
+                       and node_context_second.get("workspaceAfter") == 2
+                       and node_context_second.get("secretBefore") == "secret-1"
+                       and node_context_second.get("secretAfter") == "secret-2"
+                       and node_context_second.get("deleteRemoved") is True,
+                       json.dumps({
+                           "first": node_context_first,
+                           "second": node_context_second,
+                           "reactivated": node_reactivated,
+                           "storage": node_storage_tmp,
+                       }, ensure_ascii=False))
             finally:
                 api._vscode_ns.set_language_provider_request_callback(None)
                 try:
@@ -8064,6 +8172,8 @@ module.exports = { activate, deactivate };
             shutil.rmtree(settings_tmp, ignore_errors=True)
         if node_tree_tmp:
             shutil.rmtree(node_tree_tmp, ignore_errors=True)
+        if node_storage_tmp:
+            shutil.rmtree(node_storage_tmp, ignore_errors=True)
 
 
 def test_auth() -> None:

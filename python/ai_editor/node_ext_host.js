@@ -15,6 +15,7 @@
 'use strict';
 
 const path = require('node:path');
+const fs = require('node:fs');
 const Module = require('node:module');
 const readline = require('node:readline');
 const fsp = require('node:fs/promises');
@@ -589,12 +590,104 @@ class CancellationTokenSource {
 // -------------------------------------------------------------------------
 // Memento (globalState / workspaceState)
 // -------------------------------------------------------------------------
+function _safeStorageSegment(value) {
+    const raw = String(value || 'extension').trim() || 'extension';
+    return raw.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120) || 'extension';
+}
+
+function _defaultExtensionStorageBase() {
+    if (process.env.SAO_AI_EDITOR_EXTENSION_STORAGE) {
+        return process.env.SAO_AI_EDITOR_EXTENSION_STORAGE;
+    }
+    const userRoot = process.env.APPDATA || os.homedir() || os.tmpdir();
+    return path.join(userRoot, 'SAO-UI', 'ai-editor', 'extension-storage');
+}
+
+function _extensionStoragePaths(extensionId, extensionPath, storageRoot) {
+    const base = storageRoot || _defaultExtensionStorageBase();
+    const segment = _safeStorageSegment(extensionId || path.basename(extensionPath));
+    const root = path.join(base, segment);
+    return {
+        root,
+        workspace: path.join(root, 'workspace'),
+        global: path.join(root, 'global'),
+        logs: path.join(root, 'logs'),
+        workspaceState: path.join(root, 'workspace', 'state.json'),
+        globalState: path.join(root, 'global', 'state.json'),
+        secrets: path.join(root, 'global', 'secrets.json'),
+    };
+}
+
+function _readJsonObject(filePath) {
+    try {
+        const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? parsed
+            : {};
+    } catch {
+        return {};
+    }
+}
+
+function _writeJsonObject(filePath, value) {
+    try {
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+        fs.writeFileSync(tmpPath, JSON.stringify(value || {}, null, 2), 'utf8');
+        fs.renameSync(tmpPath, filePath);
+    } catch (err) {
+        log(`state write failed ${filePath}: ${err.message || err}`);
+    }
+}
+
 class Memento {
-    constructor() { this._data = {}; }
+    constructor(filePath) {
+        this._filePath = filePath || '';
+        this._data = this._filePath ? _readJsonObject(this._filePath) : {};
+        this._syncKeys = [];
+    }
     get(key, defaultValue) { return key in this._data ? this._data[key] : defaultValue; }
-    update(key, value) { this._data[key] = value; return Promise.resolve(); }
+    update(key, value) {
+        if (value === undefined) {
+            delete this._data[key];
+        } else {
+            this._data[key] = value;
+        }
+        if (this._filePath) _writeJsonObject(this._filePath, this._data);
+        return Promise.resolve();
+    }
     keys() { return Object.keys(this._data); }
-    setKeysForSync() {}
+    setKeysForSync(keys) {
+        this._syncKeys = Array.isArray(keys) ? Array.from(keys) : [];
+    }
+}
+
+class SecretStorage {
+    constructor(filePath) {
+        this._filePath = filePath || '';
+        this._data = this._filePath ? _readJsonObject(this._filePath) : {};
+        this._emitter = new EventEmitter();
+        this.onDidChange = this._emitter.event;
+    }
+    get(key) {
+        return Promise.resolve(this._data[String(key)]);
+    }
+    store(key, value) {
+        const normalized = String(key);
+        this._data[normalized] = String(value);
+        if (this._filePath) _writeJsonObject(this._filePath, this._data);
+        this._emitter.fire({ key: normalized });
+        return Promise.resolve();
+    }
+    delete(key) {
+        const normalized = String(key);
+        const existed = Object.prototype.hasOwnProperty.call(
+            this._data, normalized);
+        delete this._data[normalized];
+        if (this._filePath) _writeJsonObject(this._filePath, this._data);
+        if (existed) this._emitter.fire({ key: normalized });
+        return Promise.resolve();
+    }
 }
 
 // -------------------------------------------------------------------------
@@ -2107,32 +2200,38 @@ function createTreeViewObject(viewId, treeDataProvider) {
 // -------------------------------------------------------------------------
 let _sbiCounter = 0;
 
-function buildVscodeModule(extDesc, extensionPath) {
+function buildVscodeModule(extDesc, extensionPath, storageRoot) {
     const subscriptions = [];
-    const globalState = new Memento();
-    const workspaceState = new Memento();
-    const secretStorage = {
-        get: (key) => Promise.resolve(undefined),
-        store: (key, value) => Promise.resolve(),
-        delete: (key) => Promise.resolve(),
-        onDidChange: new EventEmitter().event,
-    };
+    const storagePaths = _extensionStoragePaths(
+        extDesc.extensionId || '',
+        extensionPath,
+        storageRoot,
+    );
+    try {
+        fs.mkdirSync(storagePaths.root, { recursive: true });
+    } catch {}
+    const globalState = new Memento(storagePaths.globalState);
+    const workspaceState = new Memento(storagePaths.workspaceState);
+    const secretStorage = new SecretStorage(storagePaths.secrets);
     const extensionUri = Uri.file(extensionPath);
 
     const context = {
         subscriptions,
         extensionPath,
         extensionUri,
+        asAbsolutePath(relativePath) {
+            return path.resolve(extensionPath, relativePath || '');
+        },
         globalState,
         workspaceState,
         secrets: secretStorage,
-        storagePath: path.join(extensionPath, '.storage'),
-        storageUri: Uri.file(path.join(extensionPath, '.storage')),
-        globalStoragePath: path.join(extensionPath, '.global-storage'),
-        globalStorageUri: Uri.file(path.join(extensionPath, '.global-storage')),
-        logPath: path.join(extensionPath, '.log'),
-        logUri: Uri.file(path.join(extensionPath, '.log')),
-        extensionMode: 3, // Production
+        storagePath: storagePaths.workspace,
+        storageUri: Uri.file(storagePaths.workspace),
+        globalStoragePath: storagePaths.global,
+        globalStorageUri: Uri.file(storagePaths.global),
+        logPath: storagePaths.logs,
+        logUri: Uri.file(storagePaths.logs),
+        extensionMode: 1, // Production
         extension: {
             id: extDesc.extensionId || '',
             extensionUri,
@@ -3114,7 +3213,7 @@ function _createConfigProxy(section) {
 // Extension loader
 // -------------------------------------------------------------------------
 async function activateExtension(msg) {
-    const { extensionPath, extensionId, manifest } = msg;
+    const { extensionPath, extensionId, manifest, storageRoot } = msg;
     if (_extensions.has(extensionId)) {
         send({ type: 'activated', extensionId, ok: true, already: true });
         return;
@@ -3129,6 +3228,7 @@ async function activateExtension(msg) {
     const { vscode, context } = buildVscodeModule(
         { extensionId, manifest },
         extensionPath,
+        storageRoot,
     );
 
     // Intercept require('vscode')

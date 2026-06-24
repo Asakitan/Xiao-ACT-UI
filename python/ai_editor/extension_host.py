@@ -1535,7 +1535,8 @@ class NodeExtensionHost:
     continues to handle manifest-only (no ``main``) extensions.
 
     Protocol (Python -> Node, one JSON object per line on stdin):
-        {"type": "activate",   "extensionPath": "...", "extensionId": "...", "manifest": {...}}
+        {"type": "activate",   "extensionPath": "...", "extensionId": "...",
+         "manifest": {...}, "storageRoot": "..."}
         {"type": "deactivate", "extensionId": "..."}
         {"type": "webviewMessage", "viewId": "...", "message": {...}}
         {"type": "settings_sync",    "settings": {...}}
@@ -1559,13 +1560,15 @@ class NodeExtensionHost:
     def __init__(self,
                  node_path: Optional[str] = None,
                  script_path: str = "",
-                 ui_bridge: Any = None) -> None:
+                 ui_bridge: Any = None,
+                 storage_root: str = "") -> None:
         if node_path is None:
             from ai_editor.node_runtime import get_node_path as _get_node
             node_path = _get_node() or ""
         self._node_path = node_path
         self._script_path = script_path
         self._ui_bridge = ui_bridge
+        self._storage_root = storage_root
         self._proc: Optional[subprocess.Popen] = None
         self._reader: Optional[threading.Thread] = None
         self._lock = threading.Lock()
@@ -1711,6 +1714,8 @@ class NodeExtensionHost:
             "extensionId": extension_id,
             "manifest": manifest,
         }
+        if self._storage_root:
+            msg["storageRoot"] = self._storage_root
         sent = self._send(msg)
         if sent:
             self._activation_sent_ids.add(extension_id)
