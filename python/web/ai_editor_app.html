@@ -1717,8 +1717,11 @@ pre.code-block { overflow:visible; }
 
     <div class="settings-section">
       <div class="sb-group" style="padding:0;margin-top:0">Editor</div>
+      <label class="settings-check"><input id="s-editor-format-on-save" type="checkbox"><span><b>Format on save</b><small>Runs the active formatter before explicit saves.</small></span></label>
       <label class="settings-check"><input id="s-editor-format-on-type" type="checkbox"><span><b>Format on type</b><small>Runs extension on-type formatting providers for typed trigger characters.</small></span></label>
       <label class="settings-check"><input id="s-editor-linked-editing" type="checkbox"><span><b>Linked editing</b><small>Mirrors edits across extension-provided linked ranges, such as paired HTML tags.</small></span></label>
+      <label class="settings-check"><input id="s-editor-organize-imports-on-save" type="checkbox"><span><b>Organize imports on save</b><small>Runs <code>source.organizeImports</code> before explicit saves.</small></span></label>
+      <label class="settings-check"><input id="s-editor-fix-all-on-save" type="checkbox"><span><b>Fix all on save</b><small>Runs <code>source.fixAll</code> before explicit saves.</small></span></label>
     </div>
 
     <div class="settings-section">
@@ -1910,7 +1913,7 @@ const SETTINGS_SECTION_DEFAULTS={
   mcp:{access:'prompt',autostart:false,discovery_enabled:true,collision_behavior:'first',server_sampling:false},
   terminal:{profile:'PowerShell 7 (No Profile)',shell_path:'',shell_args:[],timeout:30,output_limit:8000,auto_approve:{}},
   extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands','views','customEditors'],enabled_contributions_explicit:false,diagnostics_enabled:false},
-  editor:{formatOnType:false,linkedEditing:false},
+  editor:{formatOnType:false,formatOnSave:false,linkedEditing:false,codeActionsOnSave:{}},
   customization:{instructions_locations:['.sao/instructions.md','.sao/instructions'],agent_locations:['.sao/agents'],workflow_locations:['.sao/workflows'],skill_locations:['.agents/skills/.local','.claude/skills/.local'],use_agent_md:true,use_claude_md:false}
 };
 const EXTENSION_CONTRIBUTION_OPTIONS=[
@@ -7223,16 +7226,32 @@ async function applyEditorCodeAction(action){
   if(editResult.skipped){setStatus('Code action edits outside the active editor were skipped');return}
   setStatus('Code action has no local edit');
 }
+async function applyEditorCodeActionForSave(action){
+  if(!action||codeActionDisabledText(action&&action.disabled))return false;
+  if(editorCodeActionNeedsResolve(action))await resolveEditorCodeAction(action);
+  if(codeActionDisabledText(action&&action.disabled))return false;
+  const summary=action.edit?editorCodeActionEdits({edit:action.edit}):{edits:[],tabEdits:[],workspaceEdits:[],skipped:0};
+  _undoPush(true);
+  const editResult=action.edit?await editorApplyWorkspaceEdit(action.edit,summary):{changed:false,skipped:0,tabApplied:0,workspaceApplied:0,errors:[]};
+  const commandResult=action.command?await runEditorCodeActionCommand(action.command):null;
+  return !!(editResult.changed||editResult.tabApplied||editResult.workspaceApplied||callSucceeded(commandResult));
+}
+async function fetchEditorCodeActionsForKind(only,range){
+  const actionRange=range||editorSelectedRangePayload();
+  const payload={range:actionRange,itemResolveCount:0,triggerKind:1,diagnostics:editorDiagnosticsForRange(actionRange)};
+  if(only)payload.only=only;
+  const res=await call('editor_language_provider',editorProviderPayload('codeActions',payload));
+  if(res&&res.error)return {error:res.error,actions:[]};
+  return {actions:(res&&res.ok&&Array.isArray(res.actions)?res.actions:[]).filter(action=>!!action)};
+}
 async function requestEditorCodeActionsForKind(quiet,only,label){
   const requestId=++_editorCodeActionRequest,position=editorPositionFromOffset(ed.value,ed.selectionStart);
   const range=editorSelectedRangePayload();
   const actionLabel=label||'code action';
-  const payload={range,itemResolveCount:0,triggerKind:1,diagnostics:editorDiagnosticsForRange(range)};
-  if(only)payload.only=only;
-  const res=await call('editor_language_provider',editorProviderPayload('codeActions',payload));
+  const res=await fetchEditorCodeActionsForKind(only,range);
   if(requestId!==_editorCodeActionRequest)return;
   if(res&&res.error){closeEditorCodeActions();if(!quiet)setStatus(actionLabel+'s failed: '+res.error);return}
-  const actions=(res&&res.ok&&Array.isArray(res.actions)?res.actions:[]).filter(action=>!!action);
+  const actions=Array.isArray(res&&res.actions)?res.actions:[];
   if(actions.length){
     closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();
     showEditorCodeActions(actions,position);setStatus(actions.length+' '+actionLabel+(actions.length===1?'':'s'));return;
@@ -7586,6 +7605,10 @@ function deleteLine(){
 
 // ── Format document ──
 function editorFormatOptions(){return {tabSize:4,insertSpaces:true}}
+function editorFormatOnSaveEnabled(){
+  const editor=config&&config.editor&&typeof config.editor==='object'?config.editor:{};
+  return editor.formatOnSave===true;
+}
 function editorLinkedEditingEnabled(){
   const editor=config&&config.editor&&typeof config.editor==='object'?config.editor:{};
   return editor.linkedEditing===true;
@@ -7676,6 +7699,25 @@ function editorFormatOnTypeEnabled(){
   const editor=config&&config.editor&&typeof config.editor==='object'?config.editor:{};
   return editor.formatOnType===true;
 }
+function editorCodeActionKindIsSource(kind){
+  kind=String(kind||'');
+  return kind==='source'||kind.startsWith('source.');
+}
+function editorCodeActionSaveOrder(a,b){
+  const aFix=String(a||'')==='source.fixAll'||String(a||'').startsWith('source.fixAll.');
+  const bFix=String(b||'')==='source.fixAll'||String(b||'').startsWith('source.fixAll.');
+  if(aFix&&!bFix)return -1;
+  if(bFix&&!aFix)return 1;
+  return 0;
+}
+function editorCodeActionsOnSaveKinds(){
+  const editor=config&&config.editor&&typeof config.editor==='object'?config.editor:{};
+  const setting=editor.codeActionsOnSave;
+  let kinds=[];
+  if(Array.isArray(setting))kinds=setting;
+  else if(isPlainObject(setting))kinds=Object.keys(setting).filter(kind=>editorSaveSettingEnabled(setting[kind]));
+  return [...new Set(kinds.map(kind=>String(kind||'')).filter(editorCodeActionKindIsSource))].sort(editorCodeActionSaveOrder);
+}
 async function requestEditorOnTypeFormatting(ch,quiet){
   if(!editorFormatOnTypeEnabled()||typeof ch!=='string'||ch.length!==1)return false;
   const requestId=++_editorFormatOnTypeRequest;
@@ -7688,16 +7730,18 @@ async function requestEditorOnTypeFormatting(ch,quiet){
   }
   return false;
 }
-async function formatDocument(){
+async function formatDocument(options){
+  const opts=isPlainObject(options)?options:{};
   const res=await call('editor_language_provider',editorProviderPayload('formatting',{options:editorFormatOptions()}));
   if(res&&res.ok&&Array.isArray(res.edits)&&res.edits.length){
     _undoPush(true);
-    if(editorApplyTextEdits(res.edits)){setStatus('Formatted via extension');return}
+    if(editorApplyTextEdits(res.edits)){if(!opts.quiet)setStatus('Formatted via extension');return true}
   }
   if(editorLang==='json'){
-    try{ed.value=JSON.stringify(JSON.parse(ed.value),null,2);updateLineNums();setStatus('Formatted JSON')}
-    catch{setStatus('Invalid JSON')}
-  } else setStatus('Format not available for '+editorLang);
+    try{ed.value=JSON.stringify(JSON.parse(ed.value),null,2);editorDirty=true;updateLineNums();updateCursorPos();scheduleEditorSyntaxHighlight();if(!opts.quiet)setStatus('Formatted JSON');return true}
+    catch{if(!opts.quiet)setStatus('Invalid JSON')}
+  } else if(!opts.quiet)setStatus('Format not available for '+editorLang);
+  return false;
 }
 async function formatSelection(){
   const range=editorSelectedRangePayload(),start=range.start,end=range.end;
@@ -7708,6 +7752,28 @@ async function formatSelection(){
     if(editorApplyTextEdits(res.edits)){setStatus('Formatted selection via extension');return}
   }
   setStatus('Format selection not available for '+editorLang);
+}
+async function runEditorCodeActionsOnSave(){
+  const kinds=editorCodeActionsOnSaveKinds();
+  if(!kinds.length)return false;
+  let changed=false;
+  const range=editorFullRangePayload();
+  for(const kind of kinds){
+    const res=await fetchEditorCodeActionsForKind(kind,range);
+    if(res&&res.error){setStatus('Code actions on save failed: '+res.error);continue}
+    for(const action of (res&&res.actions)||[]){
+      if(await applyEditorCodeActionForSave(action))changed=true;
+    }
+  }
+  if(changed)setStatus('Applied code actions on save');
+  return changed;
+}
+async function runEditorSaveParticipants(){
+  let changed=false;
+  if(editorFormatOnSaveEnabled())changed=await formatDocument({quiet:true,onSave:true})||changed;
+  changed=await runEditorCodeActionsOnSave()||changed;
+  if(changed)saveCurrentTab();
+  return changed;
 }
 
 // ── Language picker ──
@@ -10120,6 +10186,22 @@ function readJsonObjectValue(id,fallback){
   const text=readInputValue(id).trim();if(!text)return fallback||{};
   try{const parsed=JSON.parse(text);return isPlainObject(parsed)?parsed:(fallback||{})}catch{return fallback||{}}
 }
+function editorSaveSettingEnabled(value){
+  return value===true||value==='true'||value==='always'||value==='explicit';
+}
+function editorKnownCodeActionsOnSave(setting,kind){
+  if(Array.isArray(setting))return setting.includes(kind);
+  return isPlainObject(setting)&&editorSaveSettingEnabled(setting[kind]);
+}
+function editorCodeActionsOnSaveFromSettings(base){
+  const current=isPlainObject(base)?{...base}:{};
+  if(Array.isArray(base))base.forEach(kind=>{if(kind)current[String(kind)]='explicit'});
+  if(readCheckedValue('s-editor-organize-imports-on-save'))current['source.organizeImports']='explicit';
+  else delete current['source.organizeImports'];
+  if(readCheckedValue('s-editor-fix-all-on-save'))current['source.fixAll']='explicit';
+  else delete current['source.fixAll'];
+  return current;
+}
 async function showModelInfo(){
   const m=$('s-model').value.trim(),el=$('s-model-info');if(!el)return;
   if(!m){el.textContent='';return}
@@ -10141,8 +10223,11 @@ function openSettings(){
   const selectedIconThemeOption=($('s-file-icon-theme').selectedOptions||[])[0];
   setFileIconThemeInfo(selectedIconThemeOption?('Active: '+selectedIconThemeOption.textContent):'',false);
   const editor=settingSection('editor');
+  setCheckedValue('s-editor-format-on-save',editor.formatOnSave===true);
   setCheckedValue('s-editor-format-on-type',editor.formatOnType===true);
   setCheckedValue('s-editor-linked-editing',editor.linkedEditing===true);
+  setCheckedValue('s-editor-organize-imports-on-save',editorKnownCodeActionsOnSave(editor.codeActionsOnSave,'source.organizeImports'));
+  setCheckedValue('s-editor-fix-all-on-save',editorKnownCodeActionsOnSave(editor.codeActionsOnSave,'source.fixAll'));
   // Provider keys
   const keys=config._provider_keys||config.provider_keys||{};
   if($('sk-openai'))$('sk-openai').value=keys.openai||'';
@@ -10376,7 +10461,8 @@ async function saveSettings(){
   config.mcp={...settingSection('mcp'),access:readInputValue('s-mcp-access')||'prompt',collision_behavior:readInputValue('s-mcp-collision')||'first',discovery_enabled:readCheckedValue('s-mcp-discovery'),autostart:readCheckedValue('s-mcp-autostart'),server_sampling:readCheckedValue('s-mcp-sampling')};
   config.terminal={...settingSection('terminal'),profile:readInputValue('s-term-profile')||'PowerShell 7 (No Profile)',shell_path:readInputValue('s-term-shell'),shell_args:readListValue('s-term-args',false),timeout:readNumberValue('s-term-timeout',30,true),output_limit:readNumberValue('s-term-output',8000,true)};
   config.extensions={...settingSection('extensions'),confirm_install:readCheckedValue('s-ext-confirm'),diagnostics_enabled:readCheckedValue('s-ext-diagnostics'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true),enabled_contributions:readExtensionContributionValues(),enabled_contributions_explicit:true};
-  config.editor={...settingSection('editor'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing')};
+  const editorSettings=settingSection('editor');
+  config.editor={...editorSettings,formatOnSave:readCheckedValue('s-editor-format-on-save'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing'),codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)};
   config.customization={...settingSection('customization'),use_agent_md:readCheckedValue('s-cust-agent-md'),use_claude_md:readCheckedValue('s-cust-claude-md'),instructions_locations:readListValue('s-cust-instructions',true),agent_locations:readListValue('s-cust-agents',true),workflow_locations:readListValue('s-cust-workflows',true),skill_locations:readListValue('s-cust-skills',true)};
   await applyEditorColorTheme(readInputValue('s-color-theme')||config.color_theme||config.theme||'dark');
   await applyEditorIconTheme(readInputValue('s-file-icon-theme')||config.file_icon_theme||defaultFileIconThemeValue());
@@ -13644,7 +13730,9 @@ async function revertCustomEditorTab(tab){
   showToast('Reverted: '+(tab.name||uri||viewType||'custom editor'),'success',1500);
   return r;
 }
-async function saveTextTabAs(tab){
+async function saveTextTabAs(tab,options){
+  const opts=isPlainObject(options)?options:{};
+  if(!opts.skipSaveParticipants)await runEditorSaveParticipants();
   const content=$('editor-text').value;
   const r=await call('save_file_as',content,saveAsSuggestedName(tab));
   if(r&&r.ok){
@@ -13684,6 +13772,7 @@ async function saveFile(){
     await saveCustomEditorTab(tab);
     return;
   }
+  await runEditorSaveParticipants();
   const content=$('editor-text').value;
   if(tab&&tab.filePath){
     const r=await call('execute_tool','editFile',JSON.stringify({path:tab.filePath,content:content}),true);
@@ -13692,7 +13781,7 @@ async function saveFile(){
     editorDirty=false;const tabEl=document.querySelector('.tab[data-tab-id="'+activeTab+'"]');if(tabEl)tabEl.classList.remove('dirty');
     showToast('Saved: '+tab.filePath,'success',1500);
   }else{
-    await saveTextTabAs(tab);
+    await saveTextTabAs(tab,{skipSaveParticipants:true});
   }
 }
 

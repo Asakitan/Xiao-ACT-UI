@@ -2525,7 +2525,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function requestEditorDiagnostics(quiet)" in html
             and "editorProviderPayload('diagnostics'" in html
             and "function editorDiagnosticsForRange(range)" in html
-            and "diagnostics:editorDiagnosticsForRange(range)" in html
+            and "diagnostics:editorDiagnosticsForRange(actionRange)" in html
             and "function renderProblemsRows(rows)" in html
             and "function showEditorCodeActions(actions,position)" in html
            and "function codeActionKindText(kind)" in html
@@ -2592,12 +2592,23 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function handleEditorInlineCompletionKey(e)" in html
            and "editorProviderPayload('inlineCompletion'" in html
            and "function editorFormatOptions()" in html
-           and "editor:{formatOnType:false,linkedEditing:false}" in html
+           and "editor:{formatOnType:false,formatOnSave:false,linkedEditing:false,codeActionsOnSave:{}}" in html
            and "linkedEditing:false" in html
+           and "formatOnSave:false" in html
+           and "codeActionsOnSave:{}" in html
+           and "id=\"s-editor-format-on-save\"" in html
            and "id=\"s-editor-format-on-type\"" in html
            and "id=\"s-editor-linked-editing\"" in html
+           and "id=\"s-editor-organize-imports-on-save\"" in html
+           and "id=\"s-editor-fix-all-on-save\"" in html
+           and "function editorFormatOnSaveEnabled()" in html
            and "function editorFormatOnTypeEnabled()" in html
            and "function editorLinkedEditingEnabled()" in html
+           and "function editorCodeActionsOnSaveKinds()" in html
+           and "function runEditorSaveParticipants()" in html
+           and "function runEditorCodeActionsOnSave()" in html
+           and "async function applyEditorCodeActionForSave(action)" in html
+           and "async function fetchEditorCodeActionsForKind(only,range)" in html
            and "async function requestEditorLinkedEditingRanges(quiet)" in html
            and "function captureEditorLinkedEditingBefore()" in html
            and "function applyEditorLinkedEditingFromInput()" in html
@@ -2607,10 +2618,17 @@ def test_phase1_ai_editor_regressions() -> None:
            and "ed.addEventListener('beforeinput',captureEditorLinkedEditingBefore)" in html
            and "applyEditorLinkedEditingFromInput()" in html
            and "requestEditorOnTypeFormatting(ch,true)" in html
+           and "setCheckedValue('s-editor-format-on-save',editor.formatOnSave===true)" in html
            and "setCheckedValue('s-editor-format-on-type',editor.formatOnType===true)" in html
            and "setCheckedValue('s-editor-linked-editing',editor.linkedEditing===true)" in html
+           and "setCheckedValue('s-editor-organize-imports-on-save',editorKnownCodeActionsOnSave(editor.codeActionsOnSave,'source.organizeImports'))" in html
+           and "setCheckedValue('s-editor-fix-all-on-save',editorKnownCodeActionsOnSave(editor.codeActionsOnSave,'source.fixAll'))" in html
+           and "formatOnSave:readCheckedValue('s-editor-format-on-save')" in html
            and "formatOnType:readCheckedValue('s-editor-format-on-type')" in html
            and "linkedEditing:readCheckedValue('s-editor-linked-editing')" in html
+           and "codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)" in html
+           and "await runEditorSaveParticipants();" in html
+           and "saveTextTabAs(tab,{skipSaveParticipants:true})" in html
            and "async function formatSelection()" in html
            and "editorProviderPayload('rangeFormatting'" in html
            and "Format Selection" in html
@@ -2719,6 +2737,67 @@ def test_phase1_ai_editor_regressions() -> None:
         node_path = get_node_path()
     except Exception:
         node_path = ""
+    if not node_path:
+        _check("frontend save participant settings skipped without Node.js", True)
+    else:
+        save_participant_functions = [
+            "isPlainObject",
+            "editorSaveSettingEnabled",
+            "editorKnownCodeActionsOnSave",
+            "editorCodeActionKindIsSource",
+            "editorCodeActionSaveOrder",
+            "editorCodeActionsOnSaveKinds",
+        ]
+        save_participant_js = "\n".join(
+            _extract_js_function(html, name)
+            for name in save_participant_functions)
+        js = save_participant_js + r"""
+function assert(ok,label){ if(!ok){ throw new Error(label); } }
+let config = { editor: { codeActionsOnSave: {
+  "quickfix": "always",
+  "source.organizeImports": "explicit",
+  "source.fixAll": "always",
+  "source.custom": true,
+  "source.never": "never",
+}}};
+let kinds = editorCodeActionsOnSaveKinds();
+assert(kinds[0] === "source.fixAll", "fixAll is first");
+assert(kinds.includes("source.organizeImports"), "organize imports kept");
+assert(kinds.includes("source.custom"), "custom source action kept");
+assert(!kinds.includes("quickfix"), "non-source action filtered");
+assert(!kinds.includes("source.never"), "never action filtered");
+assert(editorKnownCodeActionsOnSave(config.editor.codeActionsOnSave, "source.organizeImports"), "known object setting detected");
+config = { editor: { codeActionsOnSave: ["quickfix", "source.organizeImports", "source.fixAll.eslint"] } };
+kinds = editorCodeActionsOnSaveKinds();
+assert(kinds[0] === "source.fixAll.eslint" && kinds[1] === "source.organizeImports", "array settings filtered and sorted");
+console.log("frontend save participant settings ok");
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check("frontend save participant settings",
+                   result.returncode == 0
+                   and "frontend save participant settings ok" in result.stdout,
+                   (result.stderr or result.stdout).strip())
+        except Exception as exc:
+            _check("frontend save participant settings", False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
     if not node_path:
         _check("frontend auto-close notIn behavior skipped without Node.js", True)
     else:
@@ -4478,7 +4557,7 @@ console.log("quick input filter helpers ok");
            and "function appendCustomEditorTitleActions(container,tab)" in html
            and "Save custom editor" in html
            and "Revert custom editor" in html
-           and "function saveTextTabAs(tab)" in html
+           and "function saveTextTabAs(tab,options)" in html
            and "call('save_file_as',content,saveAsSuggestedName(tab))" in html
            and "'Ctrl+Shift+S':()=>saveFileAs()" in html
            and "runCustomEditorEditLifecycle(active,'undo')" in html
