@@ -4482,6 +4482,31 @@ function editorCodeLensTitle(lens){
   if(typeof command==='string')return command;
   return String(command.title||command.command||command.id||'');
 }
+function editorCodeLensNeedsResolve(lens){
+  return !!(lens&&lens._nodeCodeLensHandle&&!lens.command&&!lens._editorCodeLensResolved&&!lens._editorCodeLensResolving&&!lens._editorCodeLensResolveFailed);
+}
+function editorMergeResolvedCodeLens(lens,resolved){
+  if(!lens||!resolved||typeof resolved!=='object')return lens;
+  ['command','range'].forEach(key=>{
+    if(resolved[key]!==undefined)lens[key]=resolved[key];
+  });
+  if(resolved._nodeCodeLensHandle)lens._nodeCodeLensHandle=resolved._nodeCodeLensHandle;
+  lens._editorCodeLensResolved=true;
+  lens._editorCodeLensResolving=false;
+  lens._editorCodeLensResolveFailed=false;
+  return lens;
+}
+async function resolveEditorCodeLens(lens){
+  if(!editorCodeLensNeedsResolve(lens))return lens;
+  lens._editorCodeLensResolving=true;
+  try{
+    const res=await call('editor_language_provider',editorProviderPayload('codeLensResolve',{lens,item:lens}));
+    if(res&&res.ok&&res.lens){editorMergeResolvedCodeLens(lens,res.lens);return lens}
+    lens._editorCodeLensResolveFailed=true;
+  }catch(e){lens._editorCodeLensResolveFailed=true}
+  lens._editorCodeLensResolving=false;
+  return lens;
+}
 function clearEditorCodeLenses(){
   _editorCodeLensRequest++;
   clearTimeout(_editorCodeLensTimer);
@@ -4496,22 +4521,36 @@ function renderEditorCodeLenses(lenses){
   const style=getComputedStyle(ta),lineHeight=parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.5;
   const paddingTop=parseFloat(style.paddingTop)||8,paddingLeft=parseFloat(style.paddingLeft)||12;
   const perLine=Object.create(null);
+  const visibleUnresolved=[];
   lenses.slice(0,120).forEach((lens,index)=>{
     const title=editorCodeLensTitle(lens),range=lens&&lens.range;
-    if(!title||!range||!range.start)return;
+    if(!range||!range.start)return;
+    if(!title&&!editorCodeLensNeedsResolve(lens))return;
     const line=Math.max(0,Number(range.start.line)||0),slot=perLine[line]||0;
     perLine[line]=slot+1;
     const top=Math.max(0,paddingTop+line*lineHeight-ta.scrollTop-13);
     const left=paddingLeft+slot*170-ta.scrollLeft;
     if(top<-16||top>wrap.clientHeight+lineHeight||left<-180||left>wrap.clientWidth)return;
     const el=document.createElement('button');
-    el.type='button';el.className='editor-codelens-item';el.textContent=title;el.title=title;
+    if(editorCodeLensNeedsResolve(lens))visibleUnresolved.push(lens);
+    const label=title||(lens._editorCodeLensResolving?'Resolving CodeLens...':'CodeLens');
+    el.type='button';el.className='editor-codelens-item';el.textContent=label;el.title=label;
     el.style.top=top+'px';el.style.left=Math.max(0,left)+'px';
     el.onmousedown=e=>{e.preventDefault();e.stopPropagation();runEditorCodeLens(lens)};
     layer.appendChild(el);
   });
+  if(visibleUnresolved.length){
+    const requestId=_editorCodeLensRequest;
+    Promise.all(visibleUnresolved.map(resolveEditorCodeLens)).then(()=>{
+      if(requestId===_editorCodeLensRequest)renderEditorCodeLenses(_editorCodeLenses);
+    });
+  }
 }
 async function runEditorCodeLens(lens){
+  if(editorCodeLensNeedsResolve(lens)){
+    setStatus('Resolving CodeLens...');
+    await resolveEditorCodeLens(lens);
+  }
   const command=lens&&lens.command;
   if(!command){setStatus('CodeLens has no command');return false}
   const result=typeof runEditorCodeActionCommand==='function'
@@ -4525,10 +4564,10 @@ async function requestEditorCodeLenses(quiet){
   const wrap=$('editor-container');
   if(!ed||!wrap||wrap.style.display==='none')return;
   const requestId=++_editorCodeLensRequest;
-  const res=await call('editor_language_provider',editorProviderPayload('codeLens',{itemResolveCount:120}));
+  const res=await call('editor_language_provider',editorProviderPayload('codeLens',{itemResolveCount:0}));
   if(requestId!==_editorCodeLensRequest)return;
   if(res&&res.error){_editorCodeLenses=[];renderEditorCodeLenses([]);if(!quiet)setStatus('CodeLens failed: '+res.error);return}
-  _editorCodeLenses=(res&&res.ok&&Array.isArray(res.lenses)?res.lenses:[]).filter(lens=>lens&&lens.range&&lens.command);
+  _editorCodeLenses=(res&&res.ok&&Array.isArray(res.lenses)?res.lenses:[]).filter(lens=>lens&&lens.range&&(lens.command||lens._nodeCodeLensHandle));
   renderEditorCodeLenses(_editorCodeLenses);
   if(!quiet)setStatus(_editorCodeLenses.length+' CodeLens item'+(_editorCodeLenses.length===1?'':'s'));
 }
@@ -5598,6 +5637,31 @@ function codeActionDetail(action){
   }
   return action&&action.edit?'edit':'';
 }
+function editorCodeActionNeedsResolve(action){
+  return !!(action&&action._nodeCodeActionHandle&&!action.disabled&&!action._editorCodeActionResolved&&!action._editorCodeActionResolving&&!action._editorCodeActionResolveFailed);
+}
+function editorMergeResolvedCodeAction(action,resolved){
+  if(!action||!resolved||typeof resolved!=='object')return action;
+  ['edit','command','disabled','diagnostics','isPreferred','kind'].forEach(key=>{
+    if(resolved[key]!==undefined)action[key]=resolved[key];
+  });
+  if(resolved._nodeCodeActionHandle)action._nodeCodeActionHandle=resolved._nodeCodeActionHandle;
+  action._editorCodeActionResolved=true;
+  action._editorCodeActionResolving=false;
+  action._editorCodeActionResolveFailed=false;
+  return action;
+}
+async function resolveEditorCodeAction(action){
+  if(!editorCodeActionNeedsResolve(action))return action;
+  action._editorCodeActionResolving=true;
+  try{
+    const res=await call('editor_language_provider',editorProviderPayload('codeActionResolve',{action,item:action}));
+    if(res&&res.ok&&res.action){editorMergeResolvedCodeAction(action,res.action);return action}
+    action._editorCodeActionResolveFailed=true;
+  }catch(e){action._editorCodeActionResolveFailed=true}
+  action._editorCodeActionResolving=false;
+  return action;
+}
 function setEditorCodeActionIndex(index){
   if(!_editorCodeActions.length)return;
   _editorCodeActionIndex=(index+_editorCodeActions.length)%_editorCodeActions.length;
@@ -6366,6 +6430,31 @@ function editorDocumentLinkTarget(link){
   if(!link||typeof link!=='object')return '';
   return editorUriText(link.target||link.uri||link.href||link.url);
 }
+function editorDocumentLinkNeedsResolve(link){
+  return !!(link&&link._nodeDocumentLinkHandle&&!editorDocumentLinkTarget(link)&&!link._editorDocumentLinkResolved&&!link._editorDocumentLinkResolving&&!link._editorDocumentLinkResolveFailed);
+}
+function editorMergeResolvedDocumentLink(link,resolved){
+  if(!link||!resolved||typeof resolved!=='object')return link;
+  ['target','tooltip','range'].forEach(key=>{
+    if(resolved[key]!==undefined)link[key]=resolved[key];
+  });
+  if(resolved._nodeDocumentLinkHandle)link._nodeDocumentLinkHandle=resolved._nodeDocumentLinkHandle;
+  link._editorDocumentLinkResolved=true;
+  link._editorDocumentLinkResolving=false;
+  link._editorDocumentLinkResolveFailed=false;
+  return link;
+}
+async function resolveEditorDocumentLink(link){
+  if(!editorDocumentLinkNeedsResolve(link))return link;
+  link._editorDocumentLinkResolving=true;
+  try{
+    const res=await call('editor_language_provider',editorProviderPayload('documentLinkResolve',{link,item:link}));
+    if(res&&res.ok&&res.link){editorMergeResolvedDocumentLink(link,res.link);return link}
+    link._editorDocumentLinkResolveFailed=true;
+  }catch(e){link._editorDocumentLinkResolveFailed=true}
+  link._editorDocumentLinkResolving=false;
+  return link;
+}
 function editorDocumentLinkLabel(link){
   const target=editorDocumentLinkTarget(link);
   if(target)return target;
@@ -6402,6 +6491,10 @@ function showEditorDocumentLinks(links,position){
   placeEditorOverlay(box,position);box.style.display='block';requestAnimationFrame(()=>box.classList.add('open'));
 }
 async function openEditorDocumentLink(link){
+  if(editorDocumentLinkNeedsResolve(link)){
+    setStatus('Resolving document link...');
+    await resolveEditorDocumentLink(link);
+  }
   const target=editorDocumentLinkTarget(link);
   closeEditorLinks();
   if(!target){setStatus('Document link has no target');ed.focus();return false}
@@ -6420,7 +6513,7 @@ async function openEditorDocumentLink(link){
 }
 async function requestEditorDocumentLinks(quiet,openAtCursor){
   const requestId=++_editorLinksRequest,position=editorPositionFromOffset(ed.value,ed.selectionStart);
-  const res=await call('editor_language_provider',editorProviderPayload('documentLink',{linkResolveCount:50}));
+  const res=await call('editor_language_provider',editorProviderPayload('documentLink',{linkResolveCount:0}));
   if(requestId!==_editorLinksRequest)return;
   if(res&&res.error){closeEditorLinks();if(!quiet)setStatus('Document links failed: '+res.error);return}
   const links=(res&&res.ok&&Array.isArray(res.links)?res.links:[]).filter(link=>link&&link.range);
@@ -6949,6 +7042,12 @@ async function applyEditorCodeAction(action){
   if(!action)return;
   const disabled=codeActionDisabledText(action.disabled);
   if(disabled){setStatus(disabled);return}
+  if(editorCodeActionNeedsResolve(action)){
+    setStatus('Resolving code action...');
+    await resolveEditorCodeAction(action);
+  }
+  const resolvedDisabled=codeActionDisabledText(action.disabled);
+  if(resolvedDisabled){setStatus(resolvedDisabled);return}
   const summary=action.edit?editorCodeActionEdits({edit:action.edit}):{edits:[],tabEdits:[],workspaceEdits:[],skipped:0};
   if(action.edit&&(summary.tabEdits.length||summary.workspaceEdits.length)){
     if(!await confirmEditorWorkspaceEditApply('Apply Code Action',summary,'Apply code action "'+codeActionTitle(action)+'".')){ed.focus();return}
@@ -6965,7 +7064,7 @@ async function applyEditorCodeAction(action){
 }
 async function requestEditorCodeActions(quiet){
   const requestId=++_editorCodeActionRequest,position=editorPositionFromOffset(ed.value,ed.selectionStart);
-  const res=await call('editor_language_provider',editorProviderPayload('codeActions',{range:editorSelectedRangePayload(),itemResolveCount:20}));
+  const res=await call('editor_language_provider',editorProviderPayload('codeActions',{range:editorSelectedRangePayload(),itemResolveCount:0}));
   if(requestId!==_editorCodeActionRequest)return;
   if(res&&res.error){closeEditorCodeActions();if(!quiet)setStatus('Code actions failed: '+res.error);return}
   const actions=(res&&res.ok&&Array.isArray(res.actions)?res.actions:[]).filter(action=>!!action);

@@ -48,6 +48,8 @@ def _extract_js_function(html: str, name: str) -> str:
     start = html.find(marker)
     if start < 0:
         raise ValueError(f"Missing JS function: {name}")
+    if start >= 6 and html[start - 6:start] == "async ":
+        start -= 6
     brace = html.find("{", start)
     if brace < 0:
         raise ValueError(f"Missing JS function body: {name}")
@@ -2456,9 +2458,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function editorProviderRenderDocs(container,value)" in html
            and "editor-signature-doc-title" in html
            and "function requestEditorCodeActions(quiet)" in html
-           and "itemResolveCount:20" in html
+           and "itemResolveCount:0" in html
            and "function showEditorCodeActions(actions,position)" in html
            and "function codeActionKindText(kind)" in html
+           and "async function resolveEditorCodeAction(action)" in html
+           and "editorProviderPayload('codeActionResolve'" in html
            and "aria-disabled" in html
            and ".filter(action=>!!action)" in html
            and "function editorCodeActionEdits(action)" in html
@@ -2503,6 +2507,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function requestEditorDocumentLinks(quiet,openAtCursor)" in html
            and "function showEditorDocumentLinks(links,position)" in html
            and "function openEditorDocumentLink(link)" in html
+           and "async function resolveEditorDocumentLink(link)" in html
+           and "editorProviderPayload('documentLinkResolve'" in html
+           and "linkResolveCount:0" in html
            and "function requestEditorInlayHints(quiet)" in html
            and "function renderEditorInlayHints(hints)" in html
            and "function scheduleEditorInlayHints(delay)" in html
@@ -2554,6 +2561,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function requestEditorCodeLenses(quiet)" in html
            and "function renderEditorCodeLenses(lenses)" in html
            and "function runEditorCodeLens(lens)" in html
+           and "async function resolveEditorCodeLens(lens)" in html
+           and "editorProviderPayload('codeLensResolve'" in html
            and "function scheduleEditorCodeLenses(delay)" in html
            and "editorProviderPayload('codeLens'" in html
            and "function requestEditorDocumentHighlights(quiet)" in html
@@ -3383,6 +3392,129 @@ console.log("frontend hover and code action rendering ok");
                    (result.stderr or result.stdout).strip())
         except Exception as exc:
             _check("frontend hover and code action rendering", False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
+    if not node_path:
+        _check("frontend resolvable language items skipped without Node.js", True)
+    else:
+        resolvable_item_functions = [
+            "editorUriText",
+            "editorDocumentLinkTarget",
+            "editorDocumentLinkNeedsResolve",
+            "editorMergeResolvedDocumentLink",
+            "resolveEditorDocumentLink",
+            "editorCodeLensTitle",
+            "editorCodeLensNeedsResolve",
+            "editorMergeResolvedCodeLens",
+            "resolveEditorCodeLens",
+            "runEditorCodeLens",
+            "codeActionTitle",
+            "codeActionDisabledText",
+            "editorCodeActionNeedsResolve",
+            "editorMergeResolvedCodeAction",
+            "resolveEditorCodeAction",
+            "applyEditorCodeAction",
+        ]
+        resolvable_item_js_functions = "\n".join(
+            _extract_js_function(html, name)
+            for name in resolvable_item_functions)
+        js = r"""
+function assert(ok,label){ if(!ok){ throw new Error(label); } }
+let statusText = "";
+let undoPushes = 0;
+let closedCodeActions = 0;
+let ranCommands = [];
+let resolveKinds = [];
+const ed = { focus(){ this.focused = true; } };
+function editorProviderPayload(kind, extra){ return Object.assign({ kind }, extra || {}); }
+function setStatus(text){ statusText = String(text || ""); }
+function _undoPush(){ undoPushes += 1; }
+function closeEditorCodeActions(){ closedCodeActions += 1; }
+function callSucceeded(result){ return !!(result && result.ok); }
+async function editorApplyWorkspaceEdit(){ return { changed: false, skipped: 0, tabApplied: 0, workspaceApplied: 0, errors: [] }; }
+async function confirmEditorWorkspaceEditApply(){ return true; }
+async function runEditorCodeActionCommand(command){ ranCommands.push(command.command || command); return { ok: true }; }
+async function call(method,payload){
+  assert(method === "editor_language_provider", "resolve uses language provider");
+  resolveKinds.push(payload.kind);
+  if(payload.kind === "documentLinkResolve"){
+    return { ok: true, link: {
+      _nodeDocumentLinkHandle: payload.link._nodeDocumentLinkHandle,
+      target: { scheme: "file", path: "/workspace/resolved-link.py" },
+      tooltip: "resolved link",
+    }};
+  }
+  if(payload.kind === "codeLensResolve"){
+    return { ok: true, lens: {
+      _nodeCodeLensHandle: payload.lens._nodeCodeLensHandle,
+      range: payload.lens.range,
+      command: { command: "selftest.resolvedLens", title: "Resolved Lens" },
+    }};
+  }
+  if(payload.kind === "codeActionResolve"){
+    return { ok: true, action: {
+      _nodeCodeActionHandle: payload.action._nodeCodeActionHandle,
+      title: payload.action.title,
+      command: { command: "selftest.resolvedAction", title: "Resolved Action" },
+    }};
+  }
+  return { ok: false, error: "unexpected kind" };
+}
+""" + resolvable_item_js_functions + r"""
+(async () => {
+  const link = { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } }, _nodeDocumentLinkHandle: "link-handle" };
+  assert(editorDocumentLinkNeedsResolve(link), "document link exposes resolve need");
+  await resolveEditorDocumentLink(link);
+  assert(editorDocumentLinkTarget(link).includes("resolved-link.py")
+         && link.tooltip === "resolved link",
+         "document link resolves target and tooltip");
+
+  const lens = { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } }, _nodeCodeLensHandle: "lens-handle" };
+  assert(editorCodeLensNeedsResolve(lens), "CodeLens exposes resolve need");
+  await runEditorCodeLens(lens);
+  assert(lens.command && lens.command.title === "Resolved Lens"
+         && ranCommands.includes("selftest.resolvedLens")
+         && statusText.includes("Ran CodeLens"),
+         "CodeLens resolves before command execution");
+
+  const action = { title: "lazy fix", _nodeCodeActionHandle: "action-handle" };
+  assert(editorCodeActionNeedsResolve(action), "code action exposes resolve need");
+  await applyEditorCodeAction(action);
+  assert(action.command && action.command.title === "Resolved Action"
+         && ranCommands.includes("selftest.resolvedAction")
+         && closedCodeActions === 1
+         && statusText.includes("Ran code action"),
+         "code action resolves before apply");
+
+  assert(resolveKinds.join(",") === "documentLinkResolve,codeLensResolve,codeActionResolve",
+         "all resolve requests use dedicated provider kinds");
+  console.log("frontend resolvable language items ok");
+})().catch(err => { console.error(err && err.stack || err); process.exitCode = 1; });
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check("frontend resolvable language items",
+                   result.returncode == 0
+                   and "frontend resolvable language items ok" in result.stdout,
+                   (result.stderr or result.stdout).strip())
+        except Exception as exc:
+            _check("frontend resolvable language items", False, str(exc))
         finally:
             if js_path:
                 try:
@@ -11987,6 +12119,8 @@ module.exports = { activate, deactivate };
                             "end": {"line": 0, "character": 4},
                         },
                     })
+                node_document_links_unresolved = api._ext_host.commands.execute(
+                    "vscode.executeLinkProvider", node_uri)
                 node_document_links = api._ext_host.commands.execute(
                     "vscode.executeLinkProvider", node_uri, 1)
                 node_inlay_hints_unresolved = api._ext_host.commands.execute(
@@ -12003,6 +12137,8 @@ module.exports = { activate, deactivate };
                     node_uri,
                     Position(0, 4),
                     {"triggerKind": 0})
+                node_code_lenses_unresolved = api._ext_host.commands.execute(
+                    "vscode.executeCodeLensProvider", node_uri)
                 node_code_lenses = api._ext_host.commands.execute(
                     "vscode.executeCodeLensProvider", node_uri, 1)
                 node_folding_ranges = api._ext_host.commands.execute(
@@ -12454,6 +12590,36 @@ module.exports = { activate, deactivate };
                         if isinstance(node_completion_first, dict)
                         else {}),
                 })
+                node_document_link_editor_resolve = api.editor_language_provider({
+                    "kind": "documentLinkResolve",
+                    "filePath": node_provider_sample,
+                    "language": "python",
+                    "content": "print('node provider')\n",
+                    "position": {"line": 0, "character": 1},
+                    "link": (
+                        node_document_links_unresolved[0]
+                        if node_document_links_unresolved else {}),
+                })
+                node_code_lens_editor_resolve = api.editor_language_provider({
+                    "kind": "codeLensResolve",
+                    "filePath": node_provider_sample,
+                    "language": "python",
+                    "content": "print('node provider')\n",
+                    "position": {"line": 0, "character": 1},
+                    "lens": (
+                        node_code_lenses_unresolved[0]
+                        if node_code_lenses_unresolved else {}),
+                })
+                node_code_action_editor_resolve = api.editor_language_provider({
+                    "kind": "codeActionResolve",
+                    "filePath": node_provider_sample,
+                    "language": "python",
+                    "content": "print('node provider')\n",
+                    "position": {"line": 0, "character": 1},
+                    "action": (
+                        node_actions_unresolved[0]
+                        if node_actions_unresolved else {}),
+                })
                 _check("node host language provider invokes JS completion",
                        node_language_registered
                        and getattr(node_completion, "isIncomplete", False) is True
@@ -12568,6 +12734,17 @@ module.exports = { activate, deactivate };
                        node_document_links
                        and node_document_links[0].get("target", "").endswith("node-link.py")
                        and node_document_links[0].get("tooltip") == "node resolved link")
+                _check("editor_language_provider resolves selected Node document link",
+                       node_document_links_unresolved
+                       and not node_document_links_unresolved[0].get("target")
+                       and node_document_links_unresolved[0].get("_nodeDocumentLinkHandle")
+                       and node_document_link_editor_resolve.get("ok") is True
+                       and node_document_link_editor_resolve.get("link", {})
+                       .get("target", "").endswith("node-link.py")
+                       and node_document_link_editor_resolve.get("link", {})
+                       .get("_nodeDocumentLinkHandle")
+                       == node_document_links_unresolved[0].get(
+                           "_nodeDocumentLinkHandle"))
                 _check("node host language provider invokes JS inlay hints",
                        node_inlay_hints_unresolved
                        and node_inlay_hints_unresolved[0].get("label") == "node hint"
@@ -12588,6 +12765,17 @@ module.exports = { activate, deactivate };
                        .get("title") == "Node Lens"
                        and node_code_lenses[0].get("command", {})
                        .get("arguments", [{}])[0].get("id") == "lens-root")
+                _check("editor_language_provider resolves selected Node CodeLens",
+                       node_code_lenses_unresolved
+                       and not node_code_lenses_unresolved[0].get("command")
+                       and node_code_lenses_unresolved[0].get("_nodeCodeLensHandle")
+                       and node_code_lens_editor_resolve.get("ok") is True
+                       and node_code_lens_editor_resolve.get("lens", {})
+                       .get("command", {}).get("title") == "Node Lens"
+                       and node_code_lens_editor_resolve.get("lens", {})
+                       .get("_nodeCodeLensHandle")
+                       == node_code_lenses_unresolved[0].get(
+                           "_nodeCodeLensHandle"))
                 _check("node host language provider invokes JS folding ranges",
                        node_folding_ranges
                        and node_folding_ranges[0].get("start") == 0
@@ -12670,12 +12858,21 @@ module.exports = { activate, deactivate };
                 _check("node host language provider invokes JS code actions",
                        node_actions_unresolved
                        and node_actions_unresolved[0].get("command") is None
+                       and node_actions_unresolved[0].get("_nodeCodeActionHandle")
                        and node_actions
                        and node_actions[0].get("title") == "node quick fix"
                        and node_actions[0].get("command", {}).get("title")
                        == "Node Fix"
                        and node_actions[0].get("command", {})
                        .get("arguments", [{}])[0].get("id") == "action-root")
+                _check("editor_language_provider resolves selected Node code action",
+                       node_code_action_editor_resolve.get("ok") is True
+                       and node_code_action_editor_resolve.get("action", {})
+                       .get("command", {}).get("title") == "Node Fix"
+                       and node_code_action_editor_resolve.get("action", {})
+                       .get("_nodeCodeActionHandle")
+                       == node_actions_unresolved[0].get(
+                           "_nodeCodeActionHandle"))
                 _check("node host language provider invokes JS formatting",
                        node_format_edits
                        and node_format_edits[0].get("newText") == "NODE"

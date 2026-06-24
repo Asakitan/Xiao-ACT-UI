@@ -1423,6 +1423,8 @@ const _workspaceSymbolCache = new Map(); // handle -> { provider, symbol }
 let _nextWorkspaceSymbolHandle = 1;
 const _completionItemCache = new Map(); // handle -> { provider, item, resolved }
 let _nextCompletionItemHandle = 1;
+const _resolvableLanguageItemCache = new Map(); // handle -> { provider, item, kind, resolved }
+let _nextResolvableLanguageItemHandle = 1;
 const _hierarchyItemCache = new Map(); // handle -> { provider, item, kind }
 let _nextHierarchyItemHandle = 1;
 const _diagnosticCollections = new Map(); // name -> DiagnosticCollection
@@ -7138,9 +7140,12 @@ function _languageProviderMethod(kind) {
         prepareRename: 'prepareRename',
         rename: 'provideRenameEdits',
         documentLink: 'provideDocumentLinks',
+        documentLinkResolve: 'resolveDocumentLink',
         inlayHint: 'provideInlayHints',
+        inlayHintResolve: 'resolveInlayHint',
         inlineCompletion: 'provideInlineCompletionItems',
         codeLens: 'provideCodeLenses',
+        codeLensResolve: 'resolveCodeLens',
         foldingRange: 'provideFoldingRanges',
         selectionRange: 'provideSelectionRanges',
         linkedEditing: 'provideLinkedEditingRanges',
@@ -7160,6 +7165,8 @@ function _languageProviderMethod(kind) {
         semanticTokensRangeLegend: 'provideDocumentRangeSemanticTokens',
         documentSymbol: 'provideDocumentSymbols',
         codeActions: 'provideCodeActions',
+        codeActionResolve: 'resolveCodeAction',
+        codeActionsResolve: 'resolveCodeAction',
         formatting: 'provideDocumentFormattingEdits',
         rangeFormatting: 'provideDocumentRangeFormattingEdits',
         onTypeFormatting: 'provideOnTypeFormattingEdits',
@@ -7226,6 +7233,79 @@ function _cacheCompletionItem(provider, item, resolved = false) {
         _completionItemCache.delete(first);
     }
     return _serializeCompletionItemHandle(handle, item);
+}
+
+function _resolvableLanguageItemKind(kind) {
+    return ({
+        documentLink: 'documentLink',
+        documentLinkResolve: 'documentLink',
+        inlayHint: 'inlayHint',
+        inlayHintResolve: 'inlayHint',
+        codeLens: 'codeLens',
+        codeLensResolve: 'codeLens',
+        codeActions: 'codeActions',
+        codeActionResolve: 'codeActions',
+        codeActionsResolve: 'codeActions',
+    })[kind] || '';
+}
+
+function _resolvableLanguageItemHandleKey(kind) {
+    return ({
+        documentLink: '_nodeDocumentLinkHandle',
+        inlayHint: '_nodeInlayHintHandle',
+        codeLens: '_nodeCodeLensHandle',
+        codeActions: '_nodeCodeActionHandle',
+    })[_resolvableLanguageItemKind(kind) || kind] || '';
+}
+
+function _resolvableLanguageItemPayloadKey(kind) {
+    return ({
+        documentLink: 'link',
+        inlayHint: 'hint',
+        codeLens: 'lens',
+        codeActions: 'action',
+    })[_resolvableLanguageItemKind(kind) || kind] || 'item';
+}
+
+function _serializeResolvableLanguageItem(kind, handle, item) {
+    const value = _serializeLanguageValue(item);
+    const key = _resolvableLanguageItemHandleKey(kind);
+    if (key && value && typeof value === 'object' && !Array.isArray(value)) {
+        value[key] = String(handle || '');
+    }
+    return value;
+}
+
+function _cacheResolvableLanguageItem(kind, provider, item, resolved = false) {
+    const baseKind = _resolvableLanguageItemKind(kind) || kind;
+    const handle = String(_nextResolvableLanguageItemHandle++);
+    _resolvableLanguageItemCache.set(handle, {
+        provider,
+        item,
+        kind: baseKind,
+        resolved: !!resolved,
+    });
+    while (_resolvableLanguageItemCache.size > 3000) {
+        const first = _resolvableLanguageItemCache.keys().next().value;
+        if (first === undefined) break;
+        _resolvableLanguageItemCache.delete(first);
+    }
+    return _serializeResolvableLanguageItem(baseKind, handle, item);
+}
+
+function _resolvableLanguageItemFromMessage(msg, kind) {
+    const payloadKey = _resolvableLanguageItemPayloadKey(kind);
+    return msg[payloadKey] || msg.item || msg.value || null;
+}
+
+function _resolvableLanguageItemHandleFromMessage(msg, kind) {
+    const item = _resolvableLanguageItemFromMessage(msg, kind);
+    const handleKey = _resolvableLanguageItemHandleKey(kind);
+    return String(
+        (item && handleKey ? item[handleKey] : '')
+        || msg[handleKey]
+        || msg.handle
+        || '');
 }
 
 function _hierarchyHandleKey(kind) {
@@ -7333,6 +7413,44 @@ async function handleLanguageProviderRequest(msg) {
                 ok: true,
                 kind,
                 value: msg.item || null,
+            });
+            return;
+        }
+        const resolvableKind = _resolvableLanguageItemKind(kind);
+        if (resolvableKind && kind.endsWith('Resolve')) {
+            const handle = _resolvableLanguageItemHandleFromMessage(msg, kind);
+            const cached = handle ? _resolvableLanguageItemCache.get(handle) : null;
+            if (cached && cached.kind === resolvableKind) {
+                try {
+                    const resolveFn = cached.provider && cached.provider[methodName];
+                    if (!cached.resolved && typeof resolveFn === 'function') {
+                        const resolved = await resolveFn.call(
+                            cached.provider, cached.item, token);
+                        if (resolved !== undefined && resolved !== null) {
+                            cached.item = resolved;
+                        }
+                        cached.resolved = true;
+                        _resolvableLanguageItemCache.set(handle, cached);
+                    }
+                    send({
+                        type: 'language_provider_response',
+                        requestId,
+                        ok: true,
+                        kind,
+                        value: _serializeResolvableLanguageItem(
+                            resolvableKind, handle, cached.item),
+                    });
+                    return;
+                } catch (err) {
+                    log(`language provider ${kind} error: ${err.message}`);
+                }
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: _resolvableLanguageItemFromMessage(msg, kind),
             });
             return;
         }
@@ -7755,14 +7873,16 @@ async function handleLanguageProviderRequest(msg) {
                 try {
                     const rawLinks = _normalizeProviderItems(await fn.call(provider, document, token));
                     for (let link of rawLinks) {
+                        let didResolve = false;
                         if (remainingResolves > 0) {
                             if (typeof provider.resolveDocumentLink === 'function') {
                                 const resolved = await provider.resolveDocumentLink.call(provider, link, token);
                                 if (resolved !== undefined && resolved !== null) link = resolved;
+                                didResolve = true;
                             }
                             remainingResolves -= 1;
                         }
-                        values.push(link);
+                        values.push(_cacheResolvableLanguageItem('documentLink', provider, link, didResolve));
                     }
                 } catch (err) {
                     log(`language provider ${kind} error: ${err.message}`);
@@ -7789,14 +7909,16 @@ async function handleLanguageProviderRequest(msg) {
                 try {
                     const rawHints = _normalizeProviderItems(await fn.call(provider, document, range, token));
                     for (let hint of rawHints) {
+                        let didResolve = false;
                         if (remainingResolves > 0) {
                             if (typeof provider.resolveInlayHint === 'function') {
                                 const resolved = await provider.resolveInlayHint.call(provider, hint, token);
                                 if (resolved !== undefined && resolved !== null) hint = resolved;
+                                didResolve = true;
                             }
                             remainingResolves -= 1;
                         }
-                        values.push(hint);
+                        values.push(_cacheResolvableLanguageItem('inlayHint', provider, hint, didResolve));
                     }
                 } catch (err) {
                     log(`language provider ${kind} error: ${err.message}`);
@@ -7823,14 +7945,16 @@ async function handleLanguageProviderRequest(msg) {
                 try {
                     const rawLenses = _normalizeProviderItems(await fn.call(provider, document, token));
                     for (let lens of rawLenses) {
+                        let didResolve = false;
                         if (remainingResolves > 0) {
                             if (typeof provider.resolveCodeLens === 'function') {
                                 const resolved = await provider.resolveCodeLens.call(provider, lens, token);
                                 if (resolved !== undefined && resolved !== null) lens = resolved;
+                                didResolve = true;
                             }
                             remainingResolves -= 1;
                         }
-                        values.push(lens);
+                        values.push(_cacheResolvableLanguageItem('codeLens', provider, lens, didResolve));
                     }
                 } catch (err) {
                     log(`language provider ${kind} error: ${err.message}`);
@@ -8006,14 +8130,16 @@ async function handleLanguageProviderRequest(msg) {
                         triggerKind: msg.triggerKind,
                     }, token));
                     for (let action of rawActions) {
+                        let didResolve = false;
                         if (remainingResolves > 0) {
                             if (typeof provider.resolveCodeAction === 'function') {
                                 const resolved = await provider.resolveCodeAction.call(provider, action, token);
                                 if (resolved !== undefined && resolved !== null) action = resolved;
+                                didResolve = true;
                             }
                             remainingResolves -= 1;
                         }
-                        values.push(action);
+                        values.push(_cacheResolvableLanguageItem('codeActions', provider, action, didResolve));
                     }
                 } catch (err) {
                     log(`language provider ${kind} error: ${err.message}`);

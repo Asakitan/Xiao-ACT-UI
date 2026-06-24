@@ -4127,9 +4127,14 @@ class AIEditorAPI:
             "documentLink": "documentLink",
             "documentLinks": "documentLink",
             "links": "documentLink",
+            "documentLinkResolve": "documentLinkResolve",
+            "resolveDocumentLink": "documentLinkResolve",
+            "resolveLink": "documentLinkResolve",
             "inlayHint": "inlayHint",
             "inlayHints": "inlayHint",
             "hints": "inlayHint",
+            "inlayHintResolve": "inlayHintResolve",
+            "resolveInlayHint": "inlayHintResolve",
             "inlineCompletion": "inlineCompletion",
             "inlineCompletions": "inlineCompletion",
             "ghostText": "inlineCompletion",
@@ -4137,6 +4142,8 @@ class AIEditorAPI:
             "codeLenses": "codeLens",
             "lens": "codeLens",
             "lenses": "codeLens",
+            "codeLensResolve": "codeLensResolve",
+            "resolveCodeLens": "codeLensResolve",
             "foldingRange": "foldingRange",
             "foldingRanges": "foldingRange",
             "folds": "foldingRange",
@@ -4179,6 +4186,9 @@ class AIEditorAPI:
             "resolveWorkspaceSymbol": "resolveWorkspaceSymbol",
             "codeAction": "codeActions",
             "codeActions": "codeActions",
+            "codeActionResolve": "codeActionResolve",
+            "codeActionsResolve": "codeActionResolve",
+            "resolveCodeAction": "codeActionResolve",
             "format": "formatting",
             "formatting": "formatting",
             "formatDocument": "formatting",
@@ -4257,6 +4267,51 @@ class AIEditorAPI:
                         result.get("error")
                         if isinstance(result, dict)
                         else "Completion resolve failed"),
+                }
+            if kind in {
+                    "documentLinkResolve",
+                    "inlayHintResolve",
+                    "codeLensResolve",
+                    "codeActionResolve"}:
+                field = {
+                    "documentLinkResolve": "link",
+                    "inlayHintResolve": "hint",
+                    "codeLensResolve": "lens",
+                    "codeActionResolve": "action",
+                }.get(kind, "item")
+                item = payload.get(field)
+                if not isinstance(item, dict):
+                    item = payload.get("item")
+                if not isinstance(item, dict):
+                    item = {}
+                result = self._request_node_language_provider({
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "languageId": language,
+                    "version": document.version,
+                    "text": content,
+                    field: item,
+                    "item": item,
+                })
+                if isinstance(result, dict) and result.get("ok"):
+                    return {
+                        "ok": True,
+                        "kind": kind,
+                        "uri": str(document.uri),
+                        "version": document.version,
+                        field: _json_ready_language_value(
+                            result.get("value")),
+                    }
+                return {
+                    "ok": False,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    field: item,
+                    "error": (
+                        result.get("error")
+                        if isinstance(result, dict)
+                        else "Language item resolve failed"),
                 }
             if kind == "completion":
                 try:
