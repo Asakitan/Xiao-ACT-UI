@@ -8214,6 +8214,10 @@ function setProviderRunning(pid,running,status,kind){
   if(refs.stop)refs.stop.style.display=running?'inline-flex':'none';
   updateProviderStatus(pid,status||(running?t('provider_status_thinking'):t('provider_status_ready')),kind||(running?'running':''));
 }
+function notifyWebviewPanelViewState(viewId,isActive){
+  if(!viewId||!window.pywebview||!window.pywebview.api||!window.pywebview.api.webview_panel_view_state)return;
+  try{window.pywebview.api.webview_panel_view_state(String(viewId),{active:!!isActive,visible:!!isActive,viewColumn:1})}catch(e){}
+}
 function switchRightTab(pid){
   activeProviderId=pid;
   config.active_chat_provider=pid;
@@ -8226,6 +8230,9 @@ function switchRightTab(pid){
     if(frame){
       if(isActive){frame.style.display=''}
       else if(p.dataset.retainContext)frame.style.display='none';
+    }
+    if(p.dataset.providerSurface==='extension-webview'&&p.dataset.viewId){
+      notifyWebviewPanelViewState(p.dataset.viewId,isActive);
     }
   });
   call('switch_provider',pid).then(r=>{

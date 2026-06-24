@@ -2332,6 +2332,26 @@ class AIEditorAPI:
                 pass
         return {"error": f"No webview receiver found for: {view_id}"}
 
+    def webview_panel_view_state(
+            self, view_id: str, state: Optional[Dict[str, Any]] = None) -> Dict:
+        """Relay frontend visibility/focus state for extension webview panels."""
+        normalized_view_id = str(view_id or "").strip()
+        if not normalized_view_id:
+            return {"error": "view_id is required"}
+        node_host = getattr(self, "_node_ext_host", None)
+        if node_host is None or not getattr(node_host, "is_running", False):
+            return {"error": "Node extension host is not running"}
+        payload = state if isinstance(state, dict) else {}
+        try:
+            ok = node_host.update_webview_panel_view_state(
+                normalized_view_id, payload)
+        except Exception as exc:
+            return {"error": str(exc), "view_id": normalized_view_id}
+        return {
+            "ok": bool(ok),
+            "view_id": normalized_view_id,
+        }
+
     def get_provider_webview(self, provider_id: str) -> Dict:
         """Return the real provider webview surface when the runtime exposes one."""
         self._ensure_engine()

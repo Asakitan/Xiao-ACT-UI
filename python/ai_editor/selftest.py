@@ -2121,6 +2121,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "_injectWebviewHtml(panelEl,viewId,html,data.state)" in html
            and "updateExtensionWebviewTitle(viewId,title" in html
            and "event==='update_webview_panel_title'" in html
+           and "function notifyWebviewPanelViewState(viewId,isActive)"
+           in html
+           and "webview_panel_view_state" in html
            and 'getState:function(){return _state}' in html)
     _check("frontend accepts provider webview pushes",
            "const providerId=String(viewId).startsWith('provider.')?String(viewId).slice(9):''" in html
@@ -3183,6 +3186,14 @@ console.log("quick input filter helpers ok");
            and "function updateExtensionWebviewTitle(viewId,title,viewType)"
            in html
            and "event==='update_webview_panel_title'" in html)
+    _check("extension webview panel view state reaches Node",
+           "function notifyWebviewPanelViewState(viewId,isActive)" in html
+           and "webview_panel_view_state" in html
+           and "def webview_panel_view_state(" in app_source
+           and "def update_webview_panel_view_state(" in extension_host_source
+           and "function handleWebviewPanelViewState(msg)" in node_ext_host_source
+           and "case 'webview_panel_view_state':" in node_ext_host_source
+           and "_updateViewStateFromHost(nextState)" in node_ext_host_source)
 
     runtime_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     runtime_api._controller = object()
@@ -7143,6 +7154,8 @@ const lifecycleEvents = new vscode.EventEmitter();
 const lifecycleDocs = new Map();
 const contentProviderEmitter = new vscode.EventEmitter();
 let contentProviderText = 'virtual-one';
+let webviewStatePanel = null;
+let webviewStateEvents = [];
 
 async function activate(context) {
   console.log('node console probe', { source: 'selftest' });
@@ -8514,9 +8527,23 @@ async function activate(context) {
       vscode.ViewColumn.One,
       { enableScripts: true },
     );
+    webviewStatePanel = panel;
+    webviewStateEvents = [];
+    panel.onDidChangeViewState(event => webviewStateEvents.push({
+      viewColumn: event.webviewPanel.viewColumn,
+      active: event.webviewPanel.active,
+      visible: event.webviewPanel.visible,
+    }));
     panel.webview.html = '<main data-view="default-roots"></main>';
     return true;
   });
+  vscode.commands.registerCommand('selftest.node.webviewViewStateProbe', () => ({
+    hasPanel: !!webviewStatePanel,
+    active: webviewStatePanel && webviewStatePanel.active,
+    visible: webviewStatePanel && webviewStatePanel.visible,
+    viewColumn: webviewStatePanel && webviewStatePanel.viewColumn,
+    events: webviewStateEvents,
+  }));
   vscode.commands.registerCommand('selftest.node.webviewEmptyRoots', () => {
     const panel = vscode.window.createWebviewPanel(
       'selftest.emptyRoots',
@@ -9268,6 +9295,10 @@ module.exports = { activate, deactivate };
                     lambda: "selftest.node.webviewDefaultRoots"
                     in api._ext_host.commands.list_commands(),
                     timeout=3.0)
+                node_webview_view_state_command_registered = _wait_until(
+                    lambda: "selftest.node.webviewViewStateProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
                 node_empty_roots_command_registered = _wait_until(
                     lambda: "selftest.node.webviewEmptyRoots"
                     in api._ext_host.commands.list_commands(),
@@ -9581,6 +9612,20 @@ module.exports = { activate, deactivate };
                     in node_ui_bridge.webviews.items()
                     if 'data-view="dispose-probe"' in html
                 ), "")
+                node_webview_view_state_update = (
+                    node_host.update_webview_panel_view_state(
+                        node_default_roots_view_id, {
+                            "active": False,
+                            "visible": False,
+                            "viewColumn": 1,
+                        })
+                    if node_started and node_default_roots_view_id else False)
+                try:
+                    node_webview_view_state_probe = (
+                        api._ext_host.commands.execute(
+                            "selftest.node.webviewViewStateProbe"))
+                except Exception as exc:
+                    node_webview_view_state_probe = {"_error": str(exc)}
                 node_serialized_view_id = str(
                     node_webview_serializer_result.get("viewId", "")
                     if isinstance(node_webview_serializer_result, dict) else "")
@@ -10136,6 +10181,27 @@ module.exports = { activate, deactivate };
                            "probe": node_default_roots_probe,
                            "view_id": node_default_roots_view_id,
                            "roots": node_default_roots,
+                       }, ensure_ascii=False))
+                node_webview_view_state_events = (
+                    node_webview_view_state_probe.get("events", [])
+                    if isinstance(node_webview_view_state_probe, dict)
+                    else [])
+                node_webview_view_state_last = (
+                    node_webview_view_state_events[-1]
+                    if node_webview_view_state_events else {})
+                _check("node host webview panel view state follows frontend",
+                       node_webview_view_state_command_registered
+                       and node_webview_view_state_update is True
+                       and isinstance(node_webview_view_state_probe, dict)
+                       and node_webview_view_state_probe.get("hasPanel") is True
+                       and node_webview_view_state_probe.get("active") is False
+                       and node_webview_view_state_probe.get("visible") is False
+                       and node_webview_view_state_probe.get("viewColumn") == 1
+                       and node_webview_view_state_last.get("active") is False
+                       and node_webview_view_state_last.get("visible") is False,
+                       json.dumps({
+                           "update": node_webview_view_state_update,
+                           "probe": node_webview_view_state_probe,
                        }, ensure_ascii=False))
                 _check("node host webview explicit empty roots stay empty",
                        node_empty_roots_command_registered

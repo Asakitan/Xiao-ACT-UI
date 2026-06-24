@@ -992,6 +992,26 @@ function _createWebviewPanelObject(
     function assertPanelAlive() {
         if (disposed) throw new Error('WebviewPanel has been disposed');
     }
+    function updateViewState(nextState) {
+        if (disposed) return false;
+        const nextVisible = Object.prototype.hasOwnProperty.call(nextState, 'visible')
+            ? !!nextState.visible
+            : visible;
+        const nextActive = Object.prototype.hasOwnProperty.call(nextState, 'active')
+            ? !!nextState.active
+            : active;
+        const nextColumn = Object.prototype.hasOwnProperty.call(nextState, 'viewColumn')
+            ? _webviewPanelColumnFromShowOptions(nextState.viewColumn, viewColumn)
+            : viewColumn;
+        if (visible === nextVisible && active === nextActive && viewColumn === nextColumn) {
+            return false;
+        }
+        visible = nextVisible;
+        active = nextActive;
+        viewColumn = nextColumn;
+        viewStateEmitter.fire({ webviewPanel: panel });
+        return true;
+    }
     const panel = {
         viewType,
         get title() {
@@ -1041,12 +1061,12 @@ function _createWebviewPanelObject(
         onDidChangeViewState: viewStateEmitter.event,
         reveal(nextViewColumn, preserveFocus) {
             assertPanelAlive();
-            visible = true;
-            active = !preserveFocus;
-            if (nextViewColumn !== undefined) {
-                viewColumn = _webviewPanelColumnFromShowOptions(nextViewColumn, viewColumn);
-            }
-            viewStateEmitter.fire({ webviewPanel: panel });
+            const nextState = { visible: true, active: !preserveFocus };
+            if (nextViewColumn !== undefined) nextState.viewColumn = nextViewColumn;
+            updateViewState(nextState);
+        },
+        _updateViewStateFromHost(nextState) {
+            return updateViewState(nextState && typeof nextState === 'object' ? nextState : {});
         },
         dispose() {
             if (disposed) return;
@@ -1055,10 +1075,12 @@ function _createWebviewPanelObject(
             active = false;
             view.dispose();
             _webviewViews.delete(viewId);
+            _webviewPanels.delete(viewId);
             viewStateEmitter.dispose();
             send({ type: 'webview_dispose', viewId });
         },
     };
+    _webviewPanels.set(viewId, panel);
     return panel;
 }
 
@@ -1280,6 +1302,7 @@ const _windowDialogRequests = new Map();  // requestId -> { resolve, timer, clea
 const _envClipboardRequests = new Map();  // requestId -> { resolve, timer, cleanup, action }
 const _webviewViewProviders = new Map(); // viewType -> { provider, options }
 const _webviewViews = new Map();         // viewId -> WebviewView
+const _webviewPanels = new Map();        // viewId -> WebviewPanel-like object
 const _webviewPanelSerializers = new Map(); // viewType -> { serializer, extensionId, extensionPath }
 const _customEditorProviders = new Map(); // viewType -> { provider, options, extensionId }
 const _customEditorDocuments = new Map(); // viewType|uri|viewId -> resolved custom document state
@@ -6340,6 +6363,7 @@ async function resolveCustomEditor(msg) {
     } catch (err) {
         const error = err && err.message ? err.message : String(err);
         _webviewViews.delete(viewId);
+        _webviewPanels.delete(viewId);
         log(`resolveCustomEditor error for ${viewType}: ${error}`);
         send({ type: 'custom_editor_resolved', requestId: msg.requestId, viewType, viewId, uri: uri.toString(), ok: false, error });
         send({ type: 'error', extensionId: viewType, error });
@@ -6390,6 +6414,7 @@ async function deserializeWebviewPanel(msg) {
         const error = err && err.message ? err.message : String(err);
         try { panel?.dispose?.(); } catch {}
         _webviewViews.delete(viewId);
+        _webviewPanels.delete(viewId);
         log(`deserializeWebviewPanel error for ${viewType}: ${error}`);
         send({
             type: 'webview_panel_deserialized',
@@ -6615,6 +6640,26 @@ function handleWebviewMessage(viewId, message) {
         return;
     }
     view.webview._onDidReceiveMessage.fire(message);
+}
+
+function handleWebviewPanelViewState(msg) {
+    const viewId = String(msg.viewId || msg.view_id || '');
+    if (!viewId) return;
+    const panel = _webviewPanels.get(viewId);
+    if (!panel || typeof panel._updateViewStateFromHost !== 'function') {
+        return;
+    }
+    const nextState = {};
+    if (Object.prototype.hasOwnProperty.call(msg, 'visible')) {
+        nextState.visible = !!msg.visible;
+    }
+    if (Object.prototype.hasOwnProperty.call(msg, 'active')) {
+        nextState.active = !!msg.active;
+    }
+    if (Object.prototype.hasOwnProperty.call(msg, 'viewColumn')) {
+        nextState.viewColumn = msg.viewColumn;
+    }
+    panel._updateViewStateFromHost(nextState);
 }
 
 // -------------------------------------------------------------------------
@@ -7687,6 +7732,9 @@ async function handleMessage(msg) {
         case 'webviewMessage':
         case 'webview_message':
             handleWebviewMessage(msg.viewId, msg.message);
+            break;
+        case 'webview_panel_view_state':
+            handleWebviewPanelViewState(msg);
             break;
         case 'resolve_webview_view':
             resolveWebviewView(msg.viewType, msg.state);

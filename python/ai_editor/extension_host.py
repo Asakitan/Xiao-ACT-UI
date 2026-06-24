@@ -3289,6 +3289,19 @@ class NodeExtensionHost:
             "message": message,
         })
 
+    def update_webview_panel_view_state(
+            self, view_id: str, state: Optional[Dict[str, Any]] = None) -> bool:
+        """Relay frontend webview panel visibility/focus state to Node."""
+        payload = {
+            "type": "webview_panel_view_state",
+            "viewId": str(view_id or ""),
+        }
+        if isinstance(state, dict):
+            for key in ("active", "visible", "viewColumn"):
+                if key in state:
+                    payload[key] = state.get(key)
+        return self._send(payload)
+
     def send_quick_input_action(
             self, input_id: str, action: str,
             payload: Optional[Dict[str, Any]] = None) -> bool:
