@@ -4119,6 +4119,9 @@ console.log("frontend signature help docs ok");
             and "function extensionSettingValidateJsonValue(value,type)" in html
             and "function extensionSettingSchemaSummary(schema,type)" in html
             and "function extensionSettingConstraintSummary(schema,type)" in html
+            and "function extensionSettingSchemaFeatureTags(schema,type)" in html
+            and "function extensionSettingSchemaDetailItems(schema,type,defaultValue)" in html
+            and "function appendExtensionSettingSchemaDetails(row,schema,type,defaultValue)" in html
             and "function extensionSettingDeprecationText(schema)" in html
             and "function extensionSettingJsonRows(value,type)" in html
             and "function extensionSettingTextRows(value)" in html
@@ -4138,6 +4141,8 @@ console.log("frontend signature help docs ok");
             and "function extensionSettingEnumDescription(schema,index)" in html
             and "function renderExtensionSettingEnumDescription(el,schema,input)" in html
             and "ext-setting-enum-desc" in html
+            and "ext-setting-schema-details" in html
+            and "ext-setting-schema-chip" in html
             and "dataset.extSettingSearch" in html
             and "dataset.extSettingTags" in html
             and "dataset.extSettingType=type" in html
@@ -4185,6 +4190,11 @@ console.log("frontend signature help docs ok");
             and "Feature..." in html
             and "Setting ID..." in html
             and "Online services" in html
+            and "Conditional Schema" in html
+            and "Required Fields" in html
+            and "Enum Choices" in html
+            and "Dependency Schema" in html
+            and "Schema Constraints" in html
             and "@policy" in html
             and "@restricted" in html
             and "@sync" in html
@@ -4267,6 +4277,8 @@ console.log("frontend signature help docs ok");
             and "patternProperties" in html
             and "propertyNames" in html
             and "ext-setting-schema" in html
+            and "ext-setting-schema-details" in html
+            and "ext-setting-schema-chip" in html
             and "markdownEnumDescriptions" in html
             and "function appendExtensionSettingMarkdown(container,text)" in html
             and "function extensionSettingSafeLinkTarget(href)" in html
@@ -4283,6 +4295,9 @@ console.log("frontend signature help docs ok");
             "extensionSettingReadOnlyReason",
             "extensionSettingConstraintSummary",
             "extensionSettingSchemaSummary",
+            "extensionSettingSchemaFeatureTags",
+            "extensionSettingSchemaDetailItems",
+            "appendExtensionSettingSchemaDetails",
             "extensionSettingDefaultOverrideMetadata",
             "appendExtensionSettingDefaultOverrideBadge",
             "extensionSettingPolicyMetadata",
@@ -4327,6 +4342,7 @@ function makeNode(tag, text){
     textContent: text || "",
     children: [],
     style: {},
+    dataset: {},
     href: "",
     target: "",
     rel: "",
@@ -4632,6 +4648,34 @@ assert(extensionSettingSchemaSummary(conditionalSchema, "object").indexOf("if") 
        && extensionSettingSchemaSummary(dependentRequiredSchema, "object").indexOf("dependent required: 1") >= 0
        && extensionSettingSchemaSummary(dependentSchemasSchema, "object").indexOf("dependent schemas: 1") >= 0,
        "conditional and dependency schema summary");
+const schemaFeatureTags = extensionSettingSchemaFeatureTags(conditionalSchema, "object");
+assert(schemaFeatureTags.includes("conditional")
+       && extensionSettingSchemaFeatureTags(objectSchema, "object").includes("required")
+       && extensionSettingSchemaFeatureTags(searchSchema, "string").includes("enum")
+       && extensionSettingSchemaFeatureTags(dependencySchema, "object").includes("dependency")
+       && extensionSettingSchemaFeatureTags(rangedStringSchema, "string").includes("constraint"),
+       "schema feature tags include conditional required enum dependency constraint");
+const schemaDetails = extensionSettingSchemaDetailItems(conditionalSchema, "object", {});
+const requiredDetails = extensionSettingSchemaDetailItems(objectSchema, "object", {});
+assert(requiredDetails.some(item => item.label === "Required" && item.text.indexOf("level") >= 0)
+       && schemaDetails.some(item => item.label === "Condition" && item.text.indexOf("if") >= 0),
+       "schema detail items include required and conditional metadata");
+const enumDetails = extensionSettingSchemaDetailItems(searchSchema, "string", "always");
+assert(enumDetails.some(item => item.label === "Enum" && item.text.indexOf("Always send=always") >= 0),
+       "schema detail items include enum labels");
+const dependencyDetails = extensionSettingSchemaDetailItems(dependencySchema, "object", {});
+assert(dependencyDetails.some(item => item.label === "Dependencies" && item.text.indexOf("mode -> threshold") >= 0),
+       "schema detail items include dependency edges");
+const sourceDetails = extensionSettingSchemaDetailItems(sourceSchema, "string", "");
+assert(sourceDetails.some(item => item.label === "Source" && item.text === "selftest.settings-pack")
+       && sourceDetails.some(item => item.label === "Section" && item.text === "selftest.core"),
+       "schema detail items include source and section");
+const schemaDetailHost = makeNode("div");
+appendExtensionSettingSchemaDetails(schemaDetailHost, conditionalSchema, "object", {});
+assert(schemaDetailHost.children.some(n => n.className === "ext-setting-schema-details"
+       && n.children.some(chip => chip.className === "ext-setting-schema-chip"
+         && chip.dataset.schemaTag === "conditional")),
+       "schema detail chips rendered with tags");
 assert(extensionSettingSchemaSummary(tupleArraySchema, "array").indexOf("tuple items: 2") >= 0
        && extensionSettingSchemaSummary(tupleArraySchema, "array").indexOf("no additional items") >= 0
        && extensionSettingSchemaSummary(containsCountSchema, "array").indexOf("min 2") >= 0
@@ -4722,6 +4766,10 @@ assert(searchText.indexOf("usesonlineservices") >= 0
        && searchText.indexOf("always send") >= 0
        && searchText.indexOf("deprecated telemetry mode") >= 0,
        "settings search text includes tags keywords enum labels and deprecation");
+const schemaSearchText = extensionSettingSearchText("demo.conditional", conditionalSchema, "object", "", "", "");
+assert(schemaSearchText.indexOf("conditional") >= 0
+       && schemaSearchText.indexOf("condition if -> then -> else") >= 0,
+       "settings search text includes visible schema metadata");
 const lockedSearchText = extensionSettingSearchText("demo.locked", defaultLockedSchema, "boolean", "", "", "");
 assert(lockedSearchText.indexOf("default locked") >= 0
        && lockedSearchText.indexOf("configuration defaults") >= 0,
