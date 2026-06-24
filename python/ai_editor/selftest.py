@@ -2616,7 +2616,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function editorInsertCompletionCommitCharacter(ch)" in html
            and "function editorCompletionFuzzyMatch(pattern,text)" in html
            and "function editorAppendCompletionLabel(target,item)" in html
-           and "editor-suggest-item.deprecated" in html)
+           and "editor-suggest-item.deprecated" in html
+           and "id=\"editor-suggest-details\"" in html
+           and "function showEditorSuggestDetails(item)" in html
+           and "function editorRememberSuggestItem(item,prefix)" in html)
     try:
         from ai_editor.node_runtime import get_node_path
         node_path = get_node_path()
