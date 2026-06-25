@@ -30,9 +30,9 @@ _CURRENT_TEST_LABEL = ""
 _FAILURE_DETAIL_LINE_LIMIT = 80
 _FAILURE_POINT_LINE_LIMIT = 180
 _FAILURE_POINT_HINT_LIMIT = 6
-_FINAL_FAILURE_POINT_HEADING = "FAILED CHECK POINTS (final):"
-_RECORDED_FAILURE_NOTE = "failure points are listed last"
-_RECORDED_TEST_FAILURE_NOTE = "test failure points are listed last"
+_FINAL_FAILURE_POINT_HEADING = "FAILED CHECK POINTS (final; shown after all checks):"
+_RECORDED_FAILURE_NOTE = "see final failed check points"
+_RECORDED_TEST_FAILURE_NOTE = "see final failed check points"
 _INLINE_FAILURE_OUTPUT_FORBIDDEN_MARKERS = ("Traceback",)
 _FAILURE_POINT_PRIORITY_KEYS = (
     "error",
