@@ -1822,7 +1822,8 @@ pre.code-block { overflow:visible; }
   <div class="modal" style="max-height:90vh;overflow-y:auto">
     <h2>Settings</h2>
     <!-- SETTINGS-01: Search/filter -->
-    <input id="settings-search" placeholder="Search settings..." oninput="filterSettings()" style="width:100%;background:var(--bg-input);color:var(--fg);border:1px solid var(--border);border-radius:var(--radius);padding:7px 10px;font:13px var(--sans);outline:none;margin-bottom:8px">
+    <input id="settings-search" list="settings-filter-suggestions" placeholder="Search settings..." oninput="filterSettings()" style="width:100%;background:var(--bg-input);color:var(--fg);border:1px solid var(--border);border-radius:var(--radius);padding:7px 10px;font:13px var(--sans);outline:none;margin-bottom:8px">
+    <datalist id="settings-filter-suggestions"></datalist>
 
     <div class="sb-group" style="padding:0;margin-top:8px">Endpoint</div>
     <label>Provider</label>
@@ -14145,6 +14146,72 @@ function extensionSettingSortSectionRows(section,text){
     })
     .forEach(row=>inner.appendChild(row));
 }
+function extensionSettingCurrentFilterToken(query){
+  const raw=String(query||'');
+  const match=/\S+$/.exec(raw);
+  if(!match)return {token:'',start:raw.length,end:raw.length};
+  return {token:match[0],start:match.index,end:raw.length};
+}
+function extensionSettingCompleteFilterToken(query,token){
+  query=String(query||'');
+  token=String(token||'').trim();
+  if(!token)return query;
+  const current=extensionSettingCurrentFilterToken(query);
+  const completion=token+(token.endsWith(':')?'':' ');
+  if(current.token.startsWith('@')){
+    return (query.slice(0,current.start)+completion).replace(/\s+$/,' ');
+  }
+  return (query.trim()?query.trim()+' ':'')+completion;
+}
+function extensionSettingPushSuggestion(list,seen,query,token){
+  token=String(token||'').trim();
+  if(!token)return;
+  const value=extensionSettingCompleteFilterToken(query,token);
+  const key=value.toLowerCase();
+  if(seen.has(key))return;
+  seen.add(key);list.push(value);
+}
+function extensionSettingFilterSuggestions(container,query){
+  const current=extensionSettingCurrentFilterToken(query).token.toLowerCase();
+  if(current&&!current.startsWith('@'))return [];
+  const rows=Array.from((container&&container.querySelectorAll)?container.querySelectorAll('.ext-setting-row'):[]);
+  const suggestions=[],seen=new Set();
+  const push=token=>extensionSettingPushSuggestion(suggestions,seen,query,token);
+  ['@modified','@hidden','@stable','@restricted','@policy','@sync',
+   '@ext:','@lang:','@id:','@tag:','@scope:','@target:','@type:','@value:','@default:'].forEach(push);
+  const dynamic={ext:new Set(),lang:new Set(),id:new Set(),tag:new Set(),scope:new Set(),target:new Set(),type:new Set(),policy:new Set()};
+  rows.forEach(row=>{
+    const data=row.dataset||{};
+    if(data.extSettingExtensionId)dynamic.ext.add(data.extSettingExtensionId);
+    if(data.extSettingLanguage)dynamic.lang.add(data.extSettingLanguage);
+    if(data.extSettingKey)dynamic.id.add(data.extSettingKey);
+    if(data.extSettingScope)dynamic.scope.add(data.extSettingScope);
+    if(data.extSettingTarget)dynamic.target.add(data.extSettingTarget);
+    if(data.extSettingType)dynamic.type.add(data.extSettingType);
+    if(data.extSettingPolicy)dynamic.policy.add(data.extSettingPolicy);
+    String(data.extSettingTags||'').split('\n').forEach(tag=>{
+      tag=String(tag||'').trim().toLowerCase();
+      if(tag&&!tag.startsWith('target:')&&!tag.startsWith('configured-target:'))dynamic.tag.add(tag);
+    });
+  });
+  const include=prefix=>!current||prefix.startsWith(current)||current.startsWith(prefix);
+  [
+    ['@ext:',dynamic.ext],['@lang:',dynamic.lang],['@id:',dynamic.id],['@tag:',dynamic.tag],
+    ['@scope:',dynamic.scope],['@target:',dynamic.target],['@type:',dynamic.type],['@policy:',dynamic.policy],
+  ].forEach(item=>{
+    if(!include(item[0]))return;
+    Array.from(item[1]).filter(Boolean).sort().slice(0,24).forEach(value=>push(item[0]+value));
+  });
+  return suggestions.slice(0,80);
+}
+function renderExtensionSettingSuggestions(){
+  const list=$('settings-filter-suggestions'),input=$('settings-search'),container=$('ext-settings-container');
+  if(!list||!input||!container)return;
+  list.innerHTML='';
+  extensionSettingFilterSuggestions(container,input.value).forEach(value=>{
+    const opt=document.createElement('option');opt.value=value;list.appendChild(opt);
+  });
+}
 function extensionSettingSearchTokenValue(){
   const search=$('settings-search');
   return search?search.value:'';
@@ -14298,6 +14365,7 @@ function applyExtensionSettingsFilter(){
   const toolbar=container.querySelector('[data-ext-settings-filter="1"]');
   if(toolbar)toolbar.style.display=totalRows?'':'none';
   renderExtensionSettingFilterState(visibleRows,totalRows);
+  renderExtensionSettingSuggestions();
   extensionSettingWriteFilterState(extensionSettingCaptureFilterState());
 }
 function renderExtensionLanguageDefaults(languageDefaults,container,categorySelect,seenCategories){
@@ -14361,6 +14429,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       row.dataset.extSettingTarget=targetName;
       row.dataset.extSettingType=type;
       row.dataset.extSettingExtension=[extId,displayName].join(' ').toLowerCase();
+      row.dataset.extSettingExtensionId=String(extId||'').toLowerCase();
       row.dataset.extSettingFeature=['language',item.language,displayName,extId].join(' ').toLowerCase();
       row.dataset.extSettingLanguage=String(item.language||'').toLowerCase();
       row.dataset.extSettingPolicy=policyMeta.name.toLowerCase();
@@ -14740,6 +14809,7 @@ async function renderExtensionSettings(){
       row.dataset.extSettingTarget=targetName;
       row.dataset.extSettingType=type;
       row.dataset.extSettingExtension=[extId,displayName,title,configId].join(' ').toLowerCase();
+      row.dataset.extSettingExtensionId=String(extId||'').toLowerCase();
       row.dataset.extSettingFeature=[displayName,title,configId,sectionDescription].join(' ').toLowerCase();
       row.dataset.extSettingLanguage='';
       row.dataset.extSettingPolicy=policyMeta.name.toLowerCase();

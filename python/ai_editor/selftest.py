@@ -31,8 +31,8 @@ _FAILURE_DETAIL_LINE_LIMIT = 80
 _FAILURE_POINT_LINE_LIMIT = 180
 _FAILURE_POINT_HINT_LIMIT = 6
 _FINAL_FAILURE_POINT_HEADING = "FAILED CHECK POINTS (final):"
-_RECORDED_FAILURE_NOTE = "failure recorded; failure points are listed last"
-_RECORDED_TEST_FAILURE_NOTE = "test failed; failure points are listed last"
+_RECORDED_FAILURE_NOTE = "failure points are listed last"
+_RECORDED_TEST_FAILURE_NOTE = "test failure points are listed last"
 _FAILURE_POINT_PRIORITY_KEYS = (
     "error",
     "errors",
@@ -101,7 +101,7 @@ def _check(label: str, ok: bool, detail: str = "") -> None:
     else:
         _FAIL += 1
         _record_failure(label, detail)
-        print(f"  ✗ {_RECORDED_FAILURE_NOTE}")
+        print(f"  ✗ failure #{len(_FAILURES)} recorded; {_RECORDED_FAILURE_NOTE}")
 
 
 def _run_test(label: str, fn) -> None:
@@ -115,7 +115,7 @@ def _run_test(label: str, fn) -> None:
             _FAIL += 1
             detail = f"{type(exc).__name__}: {exc}\n{traceback.format_exc().rstrip()}"
             _record_failure(label, detail)
-            print(f"  ✗ {_RECORDED_TEST_FAILURE_NOTE}")
+            print(f"  ✗ failure #{len(_FAILURES)} recorded; {_RECORDED_TEST_FAILURE_NOTE}")
     finally:
         _CURRENT_TEST_LABEL = previous_test_label
 
@@ -382,6 +382,7 @@ def test_selftest_output() -> None:
     inline_output = inline_capture.getvalue()
     _check("check failure output defers failure point",
            _RECORDED_FAILURE_NOTE in inline_output
+           and "failure #1 recorded" in inline_output
            and "inline failure label" not in inline_output
            and "secret inline detail" not in inline_output)
 
@@ -402,6 +403,7 @@ def test_selftest_output() -> None:
     exception_output = exception_capture.getvalue()
     _check("test exception output defers traceback",
            _RECORDED_TEST_FAILURE_NOTE in exception_output
+           and "failure #1 recorded" in exception_output
            and "Exploding Output Test" not in exception_output
            and "secret exception detail" not in exception_output
            and "Traceback" not in exception_output)
@@ -4961,7 +4963,11 @@ console.log("frontend signature help docs ok");
             and "function extensionSettingRestoreFilterState()" in html
             and "function extensionSettingTextMatchRank(row,text)" in html
             and "function extensionSettingSortSectionRows(section,text)" in html
+            and "list=\"settings-filter-suggestions\"" in html
+            and "function extensionSettingFilterSuggestions(container,query)" in html
+            and "function renderExtensionSettingSuggestions()" in html
             and "extensionSettingWriteFilterState(extensionSettingCaptureFilterState())" in html
+            and "renderExtensionSettingSuggestions();" in html
             and "extensionSettingRestoreFilterState();" in html
             and "const scopeOk=(!scopeFilter||row.dataset.extSettingScope===scopeFilter)" in html
             and "&&(!query.scopes.length||query.scopes.includes(row.dataset.extSettingScope||''))" in html
@@ -5109,6 +5115,11 @@ console.log("frontend signature help docs ok");
             "extensionSettingRestoreFilterState",
             "extensionSettingTextMatchRank",
             "extensionSettingSortSectionRows",
+            "extensionSettingCurrentFilterToken",
+            "extensionSettingCompleteFilterToken",
+            "extensionSettingPushSuggestion",
+            "extensionSettingFilterSuggestions",
+            "renderExtensionSettingSuggestions",
             "extensionSettingSearchTokenValue",
             "extensionSettingSetSearchTokenValue",
             "extensionSettingAppendFilterToken",
@@ -5695,6 +5706,63 @@ assert(sortInner.children[0] === sortRows[2]
        && sortInner.children[1] === sortRows[1]
        && sortInner.children[2] === sortRows[0],
        "settings filter sorting uses match rank then original order");
+assert(extensionSettingCurrentFilterToken("font @ext:self").token === "@ext:self"
+       && extensionSettingCurrentFilterToken("font ").token === "",
+       "settings filter detects current token");
+assert(extensionSettingCompleteFilterToken("font @ex", "@ext:selftest.settings-pack") === "font @ext:selftest.settings-pack "
+       && extensionSettingCompleteFilterToken("font", "@modified") === "font @modified ",
+       "settings filter completion replaces active token or appends");
+const suggestionRows = [
+  { dataset: {
+    extSettingExtensionId: "selftest.settings-pack",
+    extSettingLanguage: "python",
+    extSettingKey: "editor.fontSize",
+    extSettingScope: "language-overridable",
+    extSettingTarget: "workspace",
+    extSettingType: "number",
+    extSettingPolicy: "selftestpolicy",
+    extSettingTags: "preview\nsync-ignored\ntarget:workspace",
+  } },
+  { dataset: {
+    extSettingExtensionId: "selftest.theme-pack",
+    extSettingLanguage: "",
+    extSettingKey: "workbench.colorTheme",
+    extSettingScope: "window",
+    extSettingTarget: "global",
+    extSettingType: "string",
+    extSettingPolicy: "",
+    extSettingTags: "stable\nconfigured-target:global",
+  } },
+];
+const suggestionContainer = { querySelectorAll(){ return suggestionRows; } };
+const extSuggestions = extensionSettingFilterSuggestions(suggestionContainer, "font @ext:");
+assert(extSuggestions.includes("font @ext:selftest.settings-pack ")
+       && extSuggestions.includes("font @ext:selftest.theme-pack ")
+       && !extSuggestions.includes("font @lang:python "),
+       "settings filter suggestions narrow dynamic extension completions");
+const broadSuggestions = extensionSettingFilterSuggestions(suggestionContainer, "");
+assert(broadSuggestions.includes("@modified ")
+       && broadSuggestions.includes("@lang:python ")
+       && broadSuggestions.includes("@id:editor.fontSize ")
+       && broadSuggestions.includes("@tag:preview ")
+       && broadSuggestions.includes("@scope:language-overridable ")
+       && broadSuggestions.includes("@target:workspace ")
+       && broadSuggestions.includes("@type:number ")
+       && broadSuggestions.includes("@policy:selftestpolicy "),
+       "settings filter suggestions include dynamic vscode-style tokens");
+assert(extensionSettingFilterSuggestions(suggestionContainer, "plain text").length === 0,
+       "settings filter suggestions stay quiet for plain text tokens");
+const fakeDatalist = makeNode("datalist");
+const oldDollar = globalThis.$;
+globalThis.$ = id => id === "settings-filter-suggestions" ? fakeDatalist : (
+  id === "settings-search" ? fakeSearch : (
+  id === "ext-settings-container" ? suggestionContainer : oldDollar(id)));
+fakeSearch.value = "@id:";
+renderExtensionSettingSuggestions();
+assert(fakeDatalist.children.some(n => n.tagName === "OPTION"
+       && n.value === "@id:editor.fontSize "),
+       "settings filter suggestions render to datalist");
+globalThis.$ = oldDollar;
 fakeSearch.value = "render @ext:selftest @stable";
 extensionSettingRemoveFilterToken("@ext:selftest");
 assert(fakeSearch.value === "render @stable",
