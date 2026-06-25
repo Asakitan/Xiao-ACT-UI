@@ -1264,6 +1264,34 @@ class _AIEditorUIBridge:
             "local_resource_roots": _json_safe(local_resource_roots),
         })
 
+    def update_webview_view_metadata(
+            self, view_id: str, view_type: str = "",
+            metadata: Optional[Dict[str, Any]] = None) -> None:
+        normalized_view_id = str(view_id or "").strip()
+        if not normalized_view_id:
+            return
+        payload = dict(metadata or {})
+        title = str(payload.get("title") or normalized_view_id)
+        record = {
+            "id": normalized_view_id,
+            "provider_id": normalized_view_id,
+            "view_id": normalized_view_id,
+            "view_type": str(view_type or ""),
+            "name": title,
+            "title": title,
+            "description": str(payload.get("description") or ""),
+            "badge": _json_safe(payload.get("badge")),
+            "visible": bool(payload.get("visible", True)),
+            "runtime_mode": "extension-webview",
+            "requested_transport": "webviewView",
+            "source": str(payload.get("source") or "runtime_webview"),
+        }
+        self._api._emit("extension_views_changed", {
+            "change": {"source": record["source"], "view_id": normalized_view_id},
+            "views": [record],
+            "providers": [record],
+        })
+
     def reveal_webview_panel(
             self, view_id: str, view_type: str = "", title: str = "",
             state: Optional[Dict[str, Any]] = None) -> None:
@@ -2770,7 +2798,15 @@ class AIEditorAPI:
         if not normalized_view_id:
             return {"error": "view_id is required"}
         self._webview_states[normalized_view_id] = state
-        return {"ok": True, "view_id": normalized_view_id}
+        node_ok = False
+        node_host = getattr(self, "_node_ext_host", None)
+        if node_host is not None and getattr(node_host, "is_running", False):
+            try:
+                node_ok = bool(node_host.update_webview_state(
+                    normalized_view_id, state))
+            except Exception:
+                node_ok = False
+        return {"ok": True, "view_id": normalized_view_id, "node_synced": node_ok}
 
     def set_chat_controls(self, data: Optional[Dict[str, Any]] = None) -> Dict:
         """Apply one or more chat toolbar selector updates in a single call."""

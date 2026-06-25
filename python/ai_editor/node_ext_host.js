@@ -1439,6 +1439,7 @@ class Webview {
 
 class WebviewView {
     constructor(viewId, viewType, webviewOptions, defaultLocalResourceRoots) {
+        this._viewId = viewId;
         this.viewType = viewType;
         this.webview = new Webview(
             viewId, webviewOptions || {}, defaultLocalResourceRoots || []);
@@ -1453,17 +1454,65 @@ class WebviewView {
         this.onDidChangeVisibility = this._onDidChangeVisibility.event;
     }
     get title() { return this._title; }
-    set title(v) { this._title = v; }
+    set title(v) {
+        const next = String(v || '');
+        if (this._title === next) return;
+        this._title = next;
+        this._emitMetadata();
+    }
     get description() { return this._description; }
-    set description(v) { this._description = v; }
+    set description(v) {
+        const next = String(v || '');
+        if (this._description === next) return;
+        this._description = next;
+        this._emitMetadata();
+    }
     get badge() { return this._badge; }
-    set badge(v) { this._badge = v; }
+    set badge(v) {
+        this._badge = v;
+        this._emitMetadata();
+    }
     show(preserveFocus) {
         if (this._disposed) throw new Error('WebviewView has been disposed');
-        this.visible = true;
+        this._updateVisibility(true, !!preserveFocus);
+    }
+    _metadataPayload() {
+        return {
+            type: 'webview_view_metadata',
+            viewId: this._viewId,
+            viewType: this.viewType,
+            title: this._title,
+            description: this._description,
+            badge: _plainBridgeValue(this._badge),
+            visible: this.visible,
+        };
+    }
+    _emitMetadata() {
+        if (this._disposed) return;
+        send(this._metadataPayload());
+    }
+    _updateVisibility(visible, preserveFocus = false) {
+        if (this._disposed) return false;
+        const nextVisible = !!visible;
+        if (this.visible === nextVisible) return false;
+        this.visible = nextVisible;
+        this._onDidChangeVisibility.fire({ visible: this.visible });
+        send({
+            type: 'webview_view_visibility',
+            viewId: this._viewId,
+            viewType: this.viewType,
+            visible: this.visible,
+            preserveFocus: !!preserveFocus,
+        });
+        this._emitMetadata();
+        return true;
+    }
+    _updateVisibilityFromHost(visible) {
+        return this._updateVisibility(visible, false);
     }
     dispose() {
         if (this._disposed) return;
+        this._updateVisibility(false, false);
         this._disposed = true;
         this.visible = false;
         this.webview._dispose();
@@ -6906,10 +6955,24 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 _webviewViewProviders.set(viewType, {
                     provider,
                     options: options || {},
+                    extensionId: extDesc.extensionId || '',
                     extensionPath,
                 });
+                send({
+                    type: 'webview_view_provider_registered',
+                    viewType,
+                    extensionId: extDesc.extensionId || '',
+                });
+                setImmediate(() => resolveWebviewView(viewType));
                 log(`registered WebviewViewProvider: ${viewType}`);
-                return new Disposable(() => _webviewViewProviders.delete(viewType));
+                return new Disposable(() => {
+                    _webviewViewProviders.delete(viewType);
+                    send({
+                        type: 'webview_view_provider_disposed',
+                        viewType,
+                        extensionId: extDesc.extensionId || '',
+                    });
+                });
             },
             registerCustomEditorProvider(viewType, provider, options) {
                 const normalized = String(viewType || '');
@@ -9262,6 +9325,11 @@ function handleWebviewPanelViewState(msg) {
     if (!viewId) return;
     const panel = _webviewPanels.get(viewId);
     if (!panel || typeof panel._updateViewStateFromHost !== 'function') {
+        const view = _webviewViews.get(viewId);
+        if (view && typeof view._updateVisibilityFromHost === 'function'
+            && Object.prototype.hasOwnProperty.call(msg, 'visible')) {
+            view._updateVisibilityFromHost(!!msg.visible);
+        }
         return;
     }
     const nextState = {};
@@ -9275,6 +9343,28 @@ function handleWebviewPanelViewState(msg) {
         nextState.viewColumn = msg.viewColumn;
     }
     panel._updateViewStateFromHost(nextState);
+}
+
+function handleWebviewState(msg) {
+    const viewId = String(msg.viewId || msg.view_id || '');
+    if (!viewId) return;
+    const view = _webviewViews.get(viewId);
+    if (view && view.webview && typeof view.webview._setState === 'function') {
+        view.webview._setState(
+            Object.prototype.hasOwnProperty.call(msg, 'state')
+                ? msg.state
+                : null);
+        return;
+    }
+    for (const [, candidate] of _webviewViews) {
+        if (candidate.viewType === viewId) {
+            candidate.webview._setState(
+                Object.prototype.hasOwnProperty.call(msg, 'state')
+                    ? msg.state
+                    : null);
+            return;
+        }
+    }
 }
 
 function handleDisposeWebviewPanel(msg) {
@@ -10989,6 +11079,9 @@ async function handleMessage(msg) {
             break;
         case 'webview_panel_view_state':
             handleWebviewPanelViewState(msg);
+            break;
+        case 'webview_state':
+            handleWebviewState(msg);
             break;
         case 'dispose_webview_panel':
             handleDisposeWebviewPanel(msg);

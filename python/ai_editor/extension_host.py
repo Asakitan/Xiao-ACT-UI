@@ -2355,6 +2355,29 @@ class NodeExtensionHost:
                         "[NodeExtHost] update_webview_panel_options failed "
                         "for %s", view_id)
 
+        elif msg_type in {"webview_view_metadata", "webview_view_visibility"}:
+            view_id = str(msg.get("viewId", ""))
+            if self._ui_bridge and view_id:
+                try:
+                    updater = getattr(
+                        self._ui_bridge, "update_webview_view_metadata", None)
+                    if callable(updater):
+                        updater(
+                            view_id,
+                            str(msg.get("viewType", "")),
+                            {
+                                "title": str(msg.get("title", "")),
+                                "description": str(msg.get("description", "")),
+                                "badge": msg.get("badge", None),
+                                "visible": bool(msg.get("visible", True)),
+                                "source": msg_type,
+                            },
+                        )
+                except Exception:
+                    _log.exception(
+                        "[NodeExtHost] update_webview_view_metadata failed "
+                        "for %s", view_id)
+
         elif msg_type == "webview_reveal":
             view_id = str(msg.get("viewId", ""))
             view_type = str(msg.get("viewType", ""))
@@ -4396,6 +4419,14 @@ class NodeExtensionHost:
                 if key in state:
                     payload[key] = state.get(key)
         return self._send(payload)
+
+    def update_webview_state(self, view_id: str, state: Any = None) -> bool:
+        """Relay acquireVsCodeApi().setState(...) state to Node."""
+        return self._send({
+            "type": "webview_state",
+            "viewId": str(view_id or ""),
+            "state": state,
+        })
 
     def dispose_webview_panel(self, view_id: str) -> bool:
         """Relay a frontend-initiated webview panel close to Node."""

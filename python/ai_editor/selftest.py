@@ -6362,6 +6362,21 @@ console.log("quick input filter helpers ok");
            and "function handleWebviewPanelViewState(msg)" in node_ext_host_source
            and "case 'webview_panel_view_state':" in node_ext_host_source
            and "_updateViewStateFromHost(nextState)" in node_ext_host_source)
+    _check("extension webview state and WebviewView metadata reach Node/UI",
+           "def update_webview_state(self, view_id: str, state: Any = None)"
+           in extension_host_source
+           and "\"type\": \"webview_state\"" in extension_host_source
+           and "node_host.update_webview_state(" in app_source
+           and "case 'webview_state':" in node_ext_host_source
+           and "function handleWebviewState(msg)" in node_ext_host_source
+           and "type: 'webview_view_metadata'" in node_ext_host_source
+           and "type: 'webview_view_visibility'" in node_ext_host_source
+           and "setImmediate(() => resolveWebviewView(viewType))"
+           in node_ext_host_source
+           and "elif msg_type in {\"webview_view_metadata\", \"webview_view_visibility\"}"
+           in extension_host_source
+           and "def update_webview_view_metadata(" in app_source
+           and "\"extension_views_changed\"" in app_source)
     _check("extension webview panel reveal reaches frontend",
            "type: 'webview_reveal'" in node_ext_host_source
            and "elif msg_type == \"webview_reveal\"" in extension_host_source
@@ -12161,6 +12176,8 @@ const contentProviderEmitter = new vscode.EventEmitter();
 let contentProviderText = 'virtual-one';
 let webviewStatePanel = null;
 let webviewStateEvents = [];
+let dynamicWebviewView = null;
+let dynamicWebviewVisibility = [];
 
 async function activate(context) {
   console.log('node console probe', { source: 'selftest' });
@@ -14264,6 +14281,8 @@ async function activate(context) {
     active: webviewStatePanel && webviewStatePanel.active,
     visible: webviewStatePanel && webviewStatePanel.visible,
     viewColumn: webviewStatePanel && webviewStatePanel.viewColumn,
+    state: webviewStatePanel && webviewStatePanel.webview
+      && webviewStatePanel.webview._state,
     events: webviewStateEvents,
   }));
   vscode.commands.registerCommand('selftest.node.webviewEmptyRoots', () => {
@@ -14296,6 +14315,45 @@ async function activate(context) {
       viewColumn: panel.viewColumn,
     };
   });
+  vscode.commands.registerCommand('selftest.node.dynamicWebviewViewProbe', async () => {
+    dynamicWebviewView = null;
+    dynamicWebviewVisibility = [];
+    const disposable = vscode.window.registerWebviewViewProvider(
+      'selftest.dynamicWebviewView',
+      {
+        resolveWebviewView(view, context, token) {
+          dynamicWebviewView = view;
+          view.onDidChangeVisibility(event => {
+            dynamicWebviewVisibility.push(event.visible);
+          });
+          view.title = 'Dynamic Webview';
+          view.description = 'Dynamic description';
+          view.badge = { value: 3, tooltip: 'Dynamic badge' };
+          view.webview.html = '<main data-view="dynamic-webview-view"></main>';
+        },
+      },
+    );
+    await new Promise(resolve => setTimeout(resolve, 25));
+    return {
+      disposable: !!(disposable && disposable.dispose),
+      hasView: !!dynamicWebviewView,
+      title: dynamicWebviewView && dynamicWebviewView.title,
+      description: dynamicWebviewView && dynamicWebviewView.description,
+      badgeValue: dynamicWebviewView && dynamicWebviewView.badge
+        && dynamicWebviewView.badge.value,
+      visible: dynamicWebviewView && dynamicWebviewView.visible,
+      visibility: dynamicWebviewVisibility,
+    };
+  });
+  vscode.commands.registerCommand('selftest.node.dynamicWebviewViewState', () => ({
+    hasView: !!dynamicWebviewView,
+    visible: dynamicWebviewView && dynamicWebviewView.visible,
+    visibility: dynamicWebviewVisibility,
+    title: dynamicWebviewView && dynamicWebviewView.title,
+    description: dynamicWebviewView && dynamicWebviewView.description,
+    badgeValue: dynamicWebviewView && dynamicWebviewView.badge
+      && dynamicWebviewView.badge.value,
+  }));
   vscode.commands.registerCommand('selftest.node.webviewUriProbe', () => {
     const panel = vscode.window.createWebviewPanel(
       'selftest.uriProbe',
@@ -14622,6 +14680,7 @@ module.exports = { activate, deactivate };
                     self.webview_titles = {}
                     self.webview_icons = {}
                     self.webview_options = {}
+                    self.webview_view_metadata = {}
                     self.local_resource_roots = {}
                     self.disposed = []
                     self.revealed = []
@@ -14676,6 +14735,13 @@ module.exports = { activate, deactivate };
                         "local_resource_roots": local_resource_roots,
                         "view_type": str(view_type or ""),
                         "title": str(title or ""),
+                    }
+
+                def update_webview_view_metadata(
+                        self, view_id, view_type="", metadata=None):
+                    self.webview_view_metadata[str(view_id)] = {
+                        "view_type": str(view_type or ""),
+                        "metadata": dict(metadata or {}),
                     }
 
                 def reveal_webview_panel(
@@ -15320,6 +15386,10 @@ module.exports = { activate, deactivate };
                     lambda: "selftest.node.webviewOptionsProbe"
                     in api._ext_host.commands.list_commands(),
                     timeout=3.0)
+                node_dynamic_webview_view_command_registered = _wait_until(
+                    lambda: "selftest.node.dynamicWebviewViewProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
                 node_webview_uri_command_registered = _wait_until(
                     lambda: "selftest.node.webviewUriProbe"
                     in api._ext_host.commands.list_commands(),
@@ -15712,6 +15782,12 @@ module.exports = { activate, deactivate };
                 except Exception as exc:
                     node_webview_options_probe = {"_error": str(exc)}
                 try:
+                    node_dynamic_webview_view_probe = (
+                        api._ext_host.commands.execute(
+                            "selftest.node.dynamicWebviewViewProbe"))
+                except Exception as exc:
+                    node_dynamic_webview_view_probe = {"_error": str(exc)}
+                try:
                     node_webview_uri_probe = api._ext_host.commands.execute(
                         "selftest.node.webviewUriProbe")
                 except Exception as exc:
@@ -15780,6 +15856,11 @@ module.exports = { activate, deactivate };
                     timeout=3.0)
                 _wait_until(
                     lambda: any(
+                        'data-view="dynamic-webview-view"' in html
+                        for html in node_ui_bridge.webviews.values()),
+                    timeout=3.0)
+                _wait_until(
+                    lambda: any(
                         'data-view="dispose-probe"' in html
                         for html in node_ui_bridge.webviews.values())
                     and bool(node_ui_bridge.disposed),
@@ -15799,11 +15880,21 @@ module.exports = { activate, deactivate };
                     in node_ui_bridge.webviews.items()
                     if 'data-view="options-probe"' in html
                 ), "")
+                node_dynamic_webview_view_id = next((
+                    view_id for view_id, html
+                    in node_ui_bridge.webviews.items()
+                    if 'data-view="dynamic-webview-view"' in html
+                ), "")
                 node_dispose_view_id = next((
                     view_id for view_id, html
                     in node_ui_bridge.webviews.items()
                     if 'data-view="dispose-probe"' in html
                 ), "")
+                node_webview_state_set = (
+                    api.webview_set_state(
+                        node_default_roots_view_id,
+                        {"from": "frontend", "count": 2})
+                    if node_default_roots_view_id else {"ok": False})
                 node_webview_view_state_update = (
                     node_host.update_webview_panel_view_state(
                         node_default_roots_view_id, {
@@ -15812,12 +15903,22 @@ module.exports = { activate, deactivate };
                             "viewColumn": 1,
                         })
                     if node_started and node_default_roots_view_id else False)
+                node_dynamic_webview_view_update = (
+                    node_host.update_webview_panel_view_state(
+                        node_dynamic_webview_view_id, {"visible": False})
+                    if node_started and node_dynamic_webview_view_id else False)
                 try:
                     node_webview_view_state_probe = (
                         api._ext_host.commands.execute(
                             "selftest.node.webviewViewStateProbe"))
                 except Exception as exc:
                     node_webview_view_state_probe = {"_error": str(exc)}
+                try:
+                    node_dynamic_webview_view_state = (
+                        api._ext_host.commands.execute(
+                            "selftest.node.dynamicWebviewViewState"))
+                except Exception as exc:
+                    node_dynamic_webview_view_state = {"_error": str(exc)}
                 node_serialized_view_id = str(
                     node_webview_serializer_result.get("viewId", "")
                     if isinstance(node_webview_serializer_result, dict) else "")
@@ -16794,15 +16895,21 @@ module.exports = { activate, deactivate };
                     if node_webview_view_state_events else {})
                 _check("node host webview panel view state follows frontend",
                        node_webview_view_state_command_registered
+                       and isinstance(node_webview_state_set, dict)
+                       and node_webview_state_set.get("ok") is True
+                       and node_webview_state_set.get("node_synced") is True
                        and node_webview_view_state_update is True
                        and isinstance(node_webview_view_state_probe, dict)
                        and node_webview_view_state_probe.get("hasPanel") is True
                        and node_webview_view_state_probe.get("active") is False
                        and node_webview_view_state_probe.get("visible") is False
                        and node_webview_view_state_probe.get("viewColumn") == 1
+                       and node_webview_view_state_probe.get(
+                           "state", {}).get("from") == "frontend"
                        and node_webview_view_state_last.get("active") is False
                        and node_webview_view_state_last.get("visible") is False,
                        json.dumps({
+                           "state": node_webview_state_set,
                            "update": node_webview_view_state_update,
                            "probe": node_webview_view_state_probe,
                        }, ensure_ascii=False))
@@ -16847,6 +16954,39 @@ module.exports = { activate, deactivate };
                            "probe": node_webview_options_probe,
                            "view_id": node_options_view_id,
                            "bridge": node_options_bridge,
+                       }, ensure_ascii=False, default=str))
+                dynamic_metadata = (
+                    node_ui_bridge.webview_view_metadata.get(
+                        node_dynamic_webview_view_id, {})
+                    if node_dynamic_webview_view_id else {})
+                dynamic_metadata_payload = dynamic_metadata.get("metadata", {})
+                _check("node host dynamically resolves WebviewView providers",
+                       node_dynamic_webview_view_command_registered
+                       and isinstance(node_dynamic_webview_view_probe, dict)
+                       and node_dynamic_webview_view_probe.get(
+                           "disposable") is True
+                       and node_dynamic_webview_view_probe.get("hasView") is True
+                       and node_dynamic_webview_view_probe.get(
+                           "title") == "Dynamic Webview"
+                       and node_dynamic_webview_view_probe.get(
+                           "description") == "Dynamic description"
+                       and node_dynamic_webview_view_probe.get(
+                           "badgeValue") == 3
+                       and node_dynamic_webview_view_id
+                       and node_dynamic_webview_view_update is True
+                       and isinstance(node_dynamic_webview_view_state, dict)
+                       and node_dynamic_webview_view_state.get(
+                           "visible") is False
+                       and False in node_dynamic_webview_view_state.get(
+                           "visibility", [])
+                       and dynamic_metadata_payload.get(
+                           "title") == "Dynamic Webview"
+                       and dynamic_metadata_payload.get("visible") is False,
+                       json.dumps({
+                           "probe": node_dynamic_webview_view_probe,
+                           "state": node_dynamic_webview_view_state,
+                           "view_id": node_dynamic_webview_view_id,
+                           "metadata": dynamic_metadata,
                        }, ensure_ascii=False, default=str))
                 _check("node host webview asWebviewUri matches VS Code resource shape",
                        node_webview_uri_command_registered
