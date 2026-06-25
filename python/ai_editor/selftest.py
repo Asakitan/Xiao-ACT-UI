@@ -6068,6 +6068,19 @@ console.log("quick input filter helpers ok");
            and "function _terminalIconText(meta)" in html
            and "def write_terminal_data(self, name: str, text: str) -> None:"
            in app_source)
+    _check("extension notebook serializers bridge through Node host",
+           "class NotebookCellData" in node_ext_host_source
+           and "class NotebookData" in node_ext_host_source
+           and "NotebookCellKind" in node_ext_host_source
+           and "registerNotebookSerializer(viewType, serializer, options)"
+           in node_ext_host_source
+           and "openNotebookDocument(uriOrType, content)" in node_ext_host_source
+           and "notebook_serializer_registered" in node_ext_host_source
+           and "notebook_deserialize_request" in node_ext_host_source
+           and "notebook_serialize_request" in node_ext_host_source
+           and "def notebook_serializers(self)" in extension_host_source
+           and "def request_notebook_deserialize_result(" in extension_host_source
+           and "def request_notebook_serialize_result(" in extension_host_source)
     _check("extension configuration target constants match VS Code API",
            "ConfigurationTarget: {" in node_ext_host_source
            and "Workspace: 2" in node_ext_host_source
@@ -13582,6 +13595,96 @@ async function activate(context) {
     handled: terminalLinkState.handled,
     providedLines: terminalLinkState.providedLines,
   }));
+  const notebookSerializerState = {
+    deserializedTexts: [],
+    serializedCells: [],
+    opened: [],
+  };
+  vscode.commands.registerCommand('selftest.node.notebookSerializerProbe', async () => {
+    const eventDisposables = [
+      vscode.workspace.onDidOpenNotebookDocument(document => {
+        notebookSerializerState.opened.push({
+          uri: document.uri.toString(),
+          notebookType: document.notebookType,
+          cellCount: document.cellCount,
+        });
+      }),
+    ];
+    const serializer = {
+      deserializeNotebook(data, token) {
+        const text = new TextDecoder().decode(data);
+        notebookSerializerState.deserializedTexts.push(text);
+        const parsed = JSON.parse(text || '{}');
+        const notebook = new vscode.NotebookData([
+          new vscode.NotebookCellData(
+            vscode.NotebookCellKind.Code,
+            parsed.code || 'console.log(1);',
+            'javascript',
+            undefined,
+            [],
+            { source: 'deserialize' },
+            { executionOrder: 7, success: true }
+          ),
+          new vscode.NotebookCellData(
+            vscode.NotebookCellKind.Markup,
+            parsed.markdown || '# Title',
+            'markdown'
+          ),
+        ]);
+        notebook.metadata = { source: 'node-serializer', trusted: true };
+        return notebook;
+      },
+      serializeNotebook(data, token) {
+        notebookSerializerState.serializedCells.push(
+          data.cells.map(cell => ({
+            kind: cell.kind,
+            value: cell.value,
+            languageId: cell.languageId,
+            metadata: cell.metadata,
+          }))
+        );
+        return new TextEncoder().encode(JSON.stringify({
+          metadata: data.metadata,
+          cells: data.cells.map(cell => ({
+            kind: cell.kind,
+            value: cell.value,
+            languageId: cell.languageId,
+          })),
+        }));
+      },
+    };
+    const disposable = vscode.workspace.registerNotebookSerializer(
+      'selftest-notebook',
+      serializer,
+      {
+        transientOutputs: true,
+        transientCellMetadata: { scratch: true },
+        transientDocumentMetadata: { secret: true },
+      }
+    );
+    const opened = await vscode.workspace.openNotebookDocument(
+      'selftest-notebook',
+      new vscode.NotebookData([
+        new vscode.NotebookCellData(
+          vscode.NotebookCellKind.Code,
+          '1 + 1',
+          'javascript'
+        ),
+      ])
+    );
+    eventDisposables.forEach(disposable => disposable.dispose());
+    return {
+      disposable: !!(disposable && disposable.dispose),
+      hasClasses: !!(vscode.NotebookData && vscode.NotebookCellData),
+      codeKind: vscode.NotebookCellKind.Code,
+      markupKind: vscode.NotebookCellKind.Markup,
+      openedType: opened.notebookType,
+      openedCellCount: opened.cellCount,
+      openedCellText: opened.cellAt(0).document.getText(),
+      workspaceNotebookCount: vscode.workspace.notebookDocuments.length,
+    };
+  });
+  vscode.commands.registerCommand('selftest.node.notebookSerializerState', () => notebookSerializerState);
   vscode.commands.registerCommand('selftest.node.taskDebugProbe', async () => {
     const taskEvents = [];
     const debugEvents = [];
@@ -14720,6 +14823,42 @@ module.exports = { activate, deactivate };
                         "selftest.node.terminalLinkState")
                 except Exception as exc:
                     node_terminal_link_state = {"_error": str(exc)}
+                node_notebook_command_registered = _wait_until(
+                    lambda: "selftest.node.notebookSerializerProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                try:
+                    node_notebook_probe = api._ext_host.commands.execute(
+                        "selftest.node.notebookSerializerProbe")
+                except Exception as exc:
+                    node_notebook_probe = {"_error": str(exc)}
+                node_notebook_serializers = (
+                    node_host.notebook_serializers() if node_started else [])
+                node_notebook_serializer = (
+                    node_notebook_serializers[0]
+                    if node_notebook_serializers else {})
+                node_notebook_deserialize = (
+                    node_host.request_notebook_deserialize_result(
+                        '{"code":"const answer = 42;","markdown":"# Demo"}',
+                        handle=node_notebook_serializer.get("handle"),
+                        timeout=3.0)
+                    if node_started else {"ok": False})
+                node_notebook_data = (
+                    node_notebook_deserialize.get("value")
+                    if isinstance(node_notebook_deserialize, dict) else None)
+                node_notebook_serialize = (
+                    node_host.request_notebook_serialize_result(
+                        node_notebook_data
+                        if isinstance(node_notebook_data, dict)
+                        else {"cells": []},
+                        handle=node_notebook_serializer.get("handle"),
+                        timeout=3.0)
+                    if node_started else {"ok": False})
+                try:
+                    node_notebook_state = api._ext_host.commands.execute(
+                        "selftest.node.notebookSerializerState")
+                except Exception as exc:
+                    node_notebook_state = {"_error": str(exc)}
                 node_task_terminal_start = len(node_ui_bridge.terminal_events)
                 node_task_debug_command_registered = _wait_until(
                     lambda: "selftest.node.taskDebugProbe"
@@ -17245,6 +17384,57 @@ module.exports = { activate, deactivate };
                            "links": node_terminal_links_result,
                            "activate": node_terminal_link_activate,
                            "state": node_terminal_link_state,
+                       }, ensure_ascii=False, default=str))
+                node_notebook_deserialized_cells = (
+                    node_notebook_deserialize.get(
+                        "value", {}).get("cells", [])
+                    if isinstance(node_notebook_deserialize, dict)
+                    else [])
+                node_notebook_serialized_response = (
+                    node_notebook_serialize.get("response", {})
+                    if isinstance(node_notebook_serialize, dict) else {})
+                _check("node host notebook serializers round-trip data",
+                       node_started is True
+                       and node_notebook_command_registered
+                       and isinstance(node_notebook_probe, dict)
+                       and node_notebook_probe.get("hasClasses") is True
+                       and node_notebook_probe.get("codeKind") == 2
+                       and node_notebook_probe.get("markupKind") == 1
+                       and node_notebook_probe.get("openedType")
+                       == "selftest-notebook"
+                       and node_notebook_probe.get("openedCellCount") == 1
+                       and node_notebook_probe.get("openedCellText") == "1 + 1"
+                       and node_notebook_probe.get("workspaceNotebookCount") >= 1
+                       and any(
+                           item.get("viewType") == "selftest-notebook"
+                           and item.get("extensionId") == "selftest.node-tree"
+                           and item.get("options", {}).get(
+                               "transientOutputs") is True
+                           for item in node_notebook_serializers)
+                       and node_notebook_deserialize.get("ok") is True
+                       and len(node_notebook_deserialized_cells) == 2
+                       and node_notebook_deserialized_cells[0].get("kind") == 2
+                       and node_notebook_deserialized_cells[0].get(
+                           "value") == "const answer = 42;"
+                       and node_notebook_deserialized_cells[0].get(
+                           "languageId") == "javascript"
+                       and node_notebook_deserialized_cells[0].get(
+                           "executionSummary", {}).get("executionOrder") == 7
+                       and node_notebook_deserialized_cells[1].get("kind") == 1
+                       and node_notebook_serialize.get("ok") is True
+                       and "const answer = 42;" in str(
+                           node_notebook_serialized_response.get("dataText", ""))
+                       and "selftest-notebook" in str(
+                           node_notebook_state.get("opened", []))
+                       and '{"code":"const answer = 42;","markdown":"# Demo"}'
+                       in node_notebook_state.get("deserializedTexts", [])
+                       and node_notebook_state.get("serializedCells"),
+                       json.dumps({
+                           "probe": node_notebook_probe,
+                           "serializers": node_notebook_serializers,
+                           "deserialize": node_notebook_deserialize,
+                           "serialize": node_notebook_serialize,
+                           "state": node_notebook_state,
                        }, ensure_ascii=False, default=str))
                 node_task_debug_events = (
                     node_task_debug_probe.get("taskEvents", [])

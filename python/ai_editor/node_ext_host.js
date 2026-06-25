@@ -220,6 +220,165 @@ class Location {
     }
 }
 
+const NotebookCellKind = Object.freeze({ Markup: 1, Code: 2 });
+
+class NotebookCellData {
+    constructor(kind, value, languageId, mime, outputs, metadata, executionSummary) {
+        this.kind = Number(kind);
+        this.value = String(value ?? '');
+        this.languageId = String(languageId ?? '');
+        if (!Number.isFinite(this.kind)) {
+            throw new Error("NotebookCellData MUST have 'kind' property");
+        }
+        if (!this.languageId) {
+            throw new Error("NotebookCellData MUST have 'languageId' property");
+        }
+        this.mime = mime;
+        this.outputs = Array.isArray(outputs) ? outputs : [];
+        this.metadata = metadata && typeof metadata === 'object' ? metadata : {};
+        this.executionSummary = executionSummary;
+    }
+}
+
+class NotebookData {
+    constructor(cells) {
+        this.cells = Array.isArray(cells) ? cells : [];
+        this.metadata = {};
+    }
+}
+
+function _notebookCellDataFromPlain(cell) {
+    if (cell instanceof NotebookCellData) return cell;
+    const source = cell && typeof cell === 'object' ? cell : {};
+    return new NotebookCellData(
+        source.kind ?? NotebookCellKind.Code,
+        source.value ?? source.text ?? '',
+        source.languageId ?? source.language ?? 'plaintext',
+        source.mime,
+        Array.isArray(source.outputs) ? source.outputs : [],
+        source.metadata && typeof source.metadata === 'object' ? source.metadata : {},
+        source.executionSummary,
+    );
+}
+
+function _notebookDataFromPlain(data) {
+    if (data instanceof NotebookData) return data;
+    const source = data && typeof data === 'object' ? data : {};
+    const notebook = new NotebookData(
+        (Array.isArray(source.cells) ? source.cells : []).map(_notebookCellDataFromPlain));
+    notebook.metadata = source.metadata && typeof source.metadata === 'object'
+        ? source.metadata
+        : {};
+    return notebook;
+}
+
+function _notebookCellDataPayload(cell) {
+    const data = _notebookCellDataFromPlain(cell);
+    return {
+        kind: data.kind,
+        value: data.value,
+        languageId: data.languageId,
+        mime: data.mime,
+        outputs: _plainBridgeValue(data.outputs || []),
+        metadata: _plainBridgeValue(data.metadata || {}),
+        executionSummary: _plainBridgeValue(data.executionSummary),
+    };
+}
+
+function _notebookDataPayload(data) {
+    const notebook = _notebookDataFromPlain(data);
+    return {
+        cells: notebook.cells.map(_notebookCellDataPayload),
+        metadata: _plainBridgeValue(notebook.metadata || {}),
+    };
+}
+
+function _notebookBytesFromMessage(msg) {
+    if (typeof msg.dataBase64 === 'string') {
+        return Uint8Array.from(Buffer.from(msg.dataBase64, 'base64'));
+    }
+    if (Array.isArray(msg.data)) {
+        return Uint8Array.from(msg.data.map(value => Number(value) & 255));
+    }
+    if (msg.dataText !== undefined && msg.dataText !== null) {
+        return new TextEncoder().encode(String(msg.dataText));
+    }
+    return new Uint8Array();
+}
+
+function _notebookBytesPayload(value) {
+    let bytes = value;
+    if (bytes instanceof ArrayBuffer) bytes = new Uint8Array(bytes);
+    if (ArrayBuffer.isView(bytes)) {
+        const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        return {
+            dataBase64: buffer.toString('base64'),
+            dataText: buffer.toString('utf8'),
+        };
+    }
+    const buffer = Buffer.from(String(bytes ?? ''), 'utf8');
+    return {
+        dataBase64: buffer.toString('base64'),
+        dataText: buffer.toString('utf8'),
+    };
+}
+
+function _notebookCellForDocument(notebook, cellData, index) {
+    const cellUri = notebook.uri.with({
+        scheme: 'vscode-notebook-cell',
+        fragment: String(index),
+    });
+    const document = {
+        uri: cellUri,
+        languageId: cellData.languageId,
+        version: notebook.version,
+        getText: () => cellData.value,
+    };
+    return {
+        index,
+        notebook,
+        kind: cellData.kind,
+        document,
+        outputs: cellData.outputs || [],
+        metadata: cellData.metadata || {},
+        executionSummary: cellData.executionSummary,
+    };
+}
+
+function _createNotebookDocument(viewType, uri, data, options = {}) {
+    const notebookData = _notebookDataFromPlain(data || new NotebookData([]));
+    const notebook = {
+        uri,
+        notebookType: String(viewType || ''),
+        version: 1,
+        isDirty: !!options.isDirty,
+        isUntitled: uri.scheme === 'untitled',
+        isClosed: false,
+        metadata: notebookData.metadata || {},
+        _data: notebookData,
+        get cellCount() { return this._data.cells.length; },
+        cellAt(index) {
+            return _notebookCellForDocument(this, this._data.cells[index], index);
+        },
+        getCells(range) {
+            const cells = this._data.cells.map((cell, index) => (
+                _notebookCellForDocument(this, cell, index)));
+            if (!range) return cells;
+            const start = Math.max(0, Number(range.start ?? 0));
+            const end = Math.min(cells.length, Number(range.end ?? cells.length));
+            return cells.slice(start, end);
+        },
+        save: async () => {
+            notebook.isDirty = false;
+            _onDidSaveNotebookDocumentEmitter.fire(notebook);
+            return true;
+        },
+    };
+    _notebookDocuments.set(uri.toString(), notebook);
+    _onDidOpenNotebookDocumentEmitter.fire(notebook);
+    return notebook;
+}
+
 class ThemeColor {
     constructor(id) {
         this.id = id === undefined || id === null ? '' : String(id);
@@ -1604,6 +1763,14 @@ let _workspaceFolders = [{
     name: _workspaceName,
     index: 0,
 }];
+let _nextNotebookSerializerHandle = 1;
+let _nextNotebookDocumentHandle = 1;
+const _notebookSerializers = new Map(); // handle -> { viewType, serializer, options, extensionId }
+const _notebookDocuments = new Map(); // uri string -> notebook document
+const _onDidOpenNotebookDocumentEmitter = new EventEmitter();
+const _onDidCloseNotebookDocumentEmitter = new EventEmitter();
+const _onDidChangeNotebookDocumentEmitter = new EventEmitter();
+const _onDidSaveNotebookDocumentEmitter = new EventEmitter();
 const _terminals = [];
 let _activeTerminal = undefined;
 let _nextTerminalHandle = 1;
@@ -3233,6 +3400,134 @@ function _debugAdapterDescriptorPayload(descriptor) {
         };
     }
     return _plainBridgeValue(descriptor);
+}
+
+function _notebookSerializerByHandleOrViewType(handle, viewType) {
+    const numericHandle = Number(handle);
+    if (Number.isFinite(numericHandle) && _notebookSerializers.has(numericHandle)) {
+        return { handle: numericHandle, entry: _notebookSerializers.get(numericHandle) };
+    }
+    const wanted = String(viewType || '');
+    if (wanted) {
+        for (const [entryHandle, entry] of _notebookSerializers.entries()) {
+            if (entry.viewType === wanted) return { handle: entryHandle, entry };
+        }
+    }
+    return null;
+}
+
+function _registerNotebookSerializer(extDesc, viewType, serializer, options) {
+    const normalized = String(viewType || '').trim();
+    if (!normalized) throw new Error('viewType cannot be empty or just whitespace');
+    if (!serializer || typeof serializer.deserializeNotebook !== 'function'
+            || typeof serializer.serializeNotebook !== 'function') {
+        throw new Error('NotebookSerializer must implement serializeNotebook and deserializeNotebook');
+    }
+    const handle = _nextNotebookSerializerHandle++;
+    const entry = {
+        handle,
+        viewType: normalized,
+        serializer,
+        options: options && typeof options === 'object' ? options : {},
+        extensionId: extDesc.extensionId || '',
+    };
+    _notebookSerializers.set(handle, entry);
+    send({
+        type: 'notebook_serializer_registered',
+        handle,
+        viewType: entry.viewType,
+        extensionId: entry.extensionId,
+        options: _plainBridgeValue(entry.options),
+    });
+    return new Disposable(() => {
+        if (_notebookSerializers.get(handle) !== entry) return;
+        _notebookSerializers.delete(handle);
+        send({
+            type: 'notebook_serializer_disposed',
+            handle,
+            viewType: entry.viewType,
+            extensionId: entry.extensionId,
+        });
+    });
+}
+
+async function _openNotebookDocument(uriOrType, content) {
+    if (uriOrType instanceof Uri) {
+        const key = uriOrType.toString();
+        const existing = _notebookDocuments.get(key);
+        if (existing) return existing;
+        const viewType = String(content?.viewType || content?.notebookType || 'interactive');
+        return _createNotebookDocument(viewType, uriOrType, content || new NotebookData([]));
+    }
+    if (typeof uriOrType === 'string') {
+        const viewType = String(uriOrType || '').trim();
+        if (!viewType) throw new Error('Invalid notebook type');
+        const uri = new Uri(
+            'untitled',
+            '',
+            `/Untitled-${_nextNotebookDocumentHandle++}.${viewType.replace(/[^a-z0-9_.-]/gi, '-')}`,
+            '',
+            '',
+        );
+        return _createNotebookDocument(viewType, uri, content || new NotebookData([]), { isDirty: !!content });
+    }
+    throw new Error('Invalid notebook arguments');
+}
+
+async function _handleNotebookDeserializeRequest(msg) {
+    const requestId = msg.requestId;
+    try {
+        const found = _notebookSerializerByHandleOrViewType(msg.handle, msg.viewType);
+        if (!found) throw new Error('Notebook serializer not found');
+        const tokenSource = new CancellationTokenSource();
+        const data = await found.entry.serializer.deserializeNotebook(
+            _notebookBytesFromMessage(msg),
+            tokenSource.token,
+        );
+        send({
+            type: 'notebook_deserialize_response',
+            requestId,
+            ok: true,
+            handle: found.handle,
+            viewType: found.entry.viewType,
+            value: _notebookDataPayload(data),
+        });
+    } catch (err) {
+        send({
+            type: 'notebook_deserialize_response',
+            requestId,
+            ok: false,
+            error: err?.message || String(err),
+        });
+    }
+}
+
+async function _handleNotebookSerializeRequest(msg) {
+    const requestId = msg.requestId;
+    try {
+        const found = _notebookSerializerByHandleOrViewType(msg.handle, msg.viewType);
+        if (!found) throw new Error('Notebook serializer not found');
+        const tokenSource = new CancellationTokenSource();
+        const bytes = await found.entry.serializer.serializeNotebook(
+            _notebookDataFromPlain(msg.notebook || msg.value || { cells: [] }),
+            tokenSource.token,
+        );
+        send({
+            type: 'notebook_serialize_response',
+            requestId,
+            ok: true,
+            handle: found.handle,
+            viewType: found.entry.viewType,
+            ..._notebookBytesPayload(bytes),
+        });
+    } catch (err) {
+        send({
+            type: 'notebook_serialize_response',
+            requestId,
+            ok: false,
+            error: err?.message || String(err),
+        });
+    }
 }
 
 function _debugUpdateActive(session, emitter) {
@@ -5880,6 +6175,8 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         CallHierarchyIncomingCall,
         CallHierarchyOutgoingCall,
         TypeHierarchyItem,
+        NotebookCellData,
+        NotebookData,
         Disposable,
         EventEmitter,
         CancellationTokenSource,
@@ -5923,6 +6220,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         ExtensionKind: { UI: 1, Workspace: 2 },
         ExtensionMode: { Production: 1, Development: 2, Test: 3 },
         DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2, Hint: 3 },
+        NotebookCellKind,
         DocumentHighlightKind: { Text: 0, Read: 1, Write: 2 },
         ProgressLocation,
         CompletionItemKind: Object.fromEntries([
@@ -6324,10 +6622,18 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 return Array.from(_workspaceTextDocuments.values()).filter(
                     _workspaceDocumentIsOpened);
             },
+            get notebookDocuments() {
+                return Array.from(_notebookDocuments.values()).filter(
+                    document => document && !document.isClosed);
+            },
             onDidOpenTextDocument: _onDidOpenTextDocumentEmitter.event,
             onDidCloseTextDocument: _onDidCloseTextDocumentEmitter.event,
             onDidChangeTextDocument: _onDidChangeTextDocumentEmitter.event,
             onDidSaveTextDocument: _onDidSaveTextDocumentEmitter.event,
+            onDidOpenNotebookDocument: _onDidOpenNotebookDocumentEmitter.event,
+            onDidCloseNotebookDocument: _onDidCloseNotebookDocumentEmitter.event,
+            onDidChangeNotebookDocument: _onDidChangeNotebookDocumentEmitter.event,
+            onDidSaveNotebookDocument: _onDidSaveNotebookDocumentEmitter.event,
             fs: {
                 readFile: (uri) => _diagnoseAsync(
                     'workspace.fs.readFile', _workspaceRelativePath(uri),
@@ -6402,6 +6708,19 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     _workspaceOpenDetail(uriOrPath),
                     () => _workspaceOpenTextDocument(uriOrPath),
                 );
+            },
+            openNotebookDocument(uriOrType, content) {
+                return _diagnoseAsync(
+                    'workspace.openNotebookDocument',
+                    uriOrType instanceof Uri ? uriOrType.toString() : String(uriOrType || ''),
+                    () => _openNotebookDocument(uriOrType, content),
+                );
+            },
+            registerNotebookSerializer(viewType, serializer, options) {
+                const disposable = _registerNotebookSerializer(
+                    extDesc, viewType, serializer, options);
+                subscriptions.push(disposable);
+                return disposable;
             },
             asRelativePath(pathOrUri, includeWorkspaceFolder) {
                 return _workspaceRelativePath(pathOrUri, includeWorkspaceFolder);
@@ -10130,6 +10449,12 @@ async function handleMessage(msg) {
             break;
         case 'terminal_link_activate':
             await handleTerminalLinkActivate(msg);
+            break;
+        case 'notebook_deserialize_request':
+            await _handleNotebookDeserializeRequest(msg);
+            break;
+        case 'notebook_serialize_request':
+            await _handleNotebookSerializeRequest(msg);
             break;
         case 'lm_tool_request':
             await handleLmToolRequest(msg);

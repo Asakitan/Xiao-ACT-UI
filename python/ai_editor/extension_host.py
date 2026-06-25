@@ -1849,6 +1849,9 @@ class NodeExtensionHost:
         self._file_decoration_request_lock = threading.Lock()
         self._file_decoration_requests: Dict[str, Dict[str, Any]] = {}
         self._file_decoration_providers: List[Dict[str, Any]] = []
+        self._notebook_request_lock = threading.Lock()
+        self._notebook_requests: Dict[str, Dict[str, Any]] = {}
+        self._notebook_serializers: List[Dict[str, Any]] = []
         self._terminal_profile_request_lock = threading.Lock()
         self._terminal_profile_requests: Dict[str, Dict[str, Any]] = {}
         self._terminal_profile_providers: List[Dict[str, Any]] = []
@@ -3126,6 +3129,41 @@ class NodeExtensionHost:
                 if isinstance(event, threading.Event):
                     event.set()
 
+        elif msg_type == "notebook_serializer_registered":
+            handle = int(msg.get("handle") or 0)
+            if handle:
+                record = {
+                    "handle": handle,
+                    "viewType": str(msg.get("viewType", "")),
+                    "extensionId": str(msg.get("extensionId", "")),
+                    "options": msg.get("options")
+                    if isinstance(msg.get("options"), dict) else {},
+                }
+                self._notebook_serializers = [
+                    item for item in self._notebook_serializers
+                    if item.get("handle") != handle
+                ]
+                self._notebook_serializers.append(record)
+
+        elif msg_type == "notebook_serializer_disposed":
+            handle = int(msg.get("handle") or 0)
+            self._notebook_serializers = [
+                item for item in self._notebook_serializers
+                if item.get("handle") != handle
+            ]
+
+        elif msg_type in {
+                "notebook_deserialize_response",
+                "notebook_serialize_response"}:
+            request_id = str(msg.get("requestId", ""))
+            with self._notebook_request_lock:
+                pending = self._notebook_requests.get(request_id)
+            if pending:
+                pending["response"] = msg
+                event = pending.get("event")
+                if isinstance(event, threading.Event):
+                    event.set()
+
         elif msg_type == "task_execute":
             if self._ui_bridge:
                 try:
@@ -3713,6 +3751,102 @@ class NodeExtensionHost:
             "requestId": request_id,
             "reason": str(reason or "cancelled"),
         })
+
+    def notebook_serializers(self) -> List[Dict[str, Any]]:
+        return [dict(item) for item in self._notebook_serializers]
+
+    def _notebook_request_result(
+            self,
+            payload: Dict[str, Any],
+            default: Any = None,
+            timeout: float = 3.0) -> Dict[str, Any]:
+        request_id = str(uuid.uuid4())
+        event = threading.Event()
+        with self._notebook_request_lock:
+            self._notebook_requests[request_id] = {"event": event}
+        msg = dict(payload)
+        msg["requestId"] = request_id
+        sent = self._send(msg)
+        if not sent:
+            with self._notebook_request_lock:
+                self._notebook_requests.pop(request_id, None)
+            return {
+                "ok": False,
+                "value": default,
+                "error": "host not running",
+            }
+        if event.wait(max(0.0, timeout)):
+            with self._notebook_request_lock:
+                pending = self._notebook_requests.pop(request_id, None)
+            response = dict((pending or {}).get("response") or {})
+            if response.get("ok"):
+                value = response.get("value", default)
+                if response.get("dataBase64") is not None:
+                    value = response.get("dataBase64")
+                return {
+                    "ok": True,
+                    "value": value,
+                    "response": response,
+                    "handle": response.get("handle"),
+                    "viewType": response.get("viewType"),
+                }
+            return {
+                "ok": False,
+                "value": default,
+                "error": str(response.get("error") or "request failed"),
+            }
+        with self._notebook_request_lock:
+            self._notebook_requests.pop(request_id, None)
+        return {
+            "ok": False,
+            "value": default,
+            "error": "timeout",
+            "timeout": True,
+        }
+
+    def request_notebook_deserialize_result(
+            self,
+            data: Any,
+            handle: Optional[int] = None,
+            view_type: str = "",
+            default: Any = None,
+            timeout: float = 3.0) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "type": "notebook_deserialize_request",
+        }
+        if handle is not None:
+            payload["handle"] = int(handle)
+        if view_type:
+            payload["viewType"] = str(view_type)
+        if isinstance(data, (bytes, bytearray)):
+            import base64
+            payload["dataBase64"] = base64.b64encode(bytes(data)).decode("ascii")
+        elif isinstance(data, str):
+            payload["dataText"] = data
+        elif isinstance(data, list):
+            payload["data"] = data
+        else:
+            payload["dataText"] = "" if data is None else str(data)
+        return self._notebook_request_result(
+            payload, default=default, timeout=timeout)
+
+    def request_notebook_serialize_result(
+            self,
+            notebook: Dict[str, Any],
+            handle: Optional[int] = None,
+            view_type: str = "",
+            default: Any = None,
+            timeout: float = 3.0) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "type": "notebook_serialize_request",
+            "notebook": notebook if isinstance(notebook, dict) else {},
+        }
+        if handle is not None:
+            payload["handle"] = int(handle)
+        if view_type:
+            payload["viewType"] = str(view_type)
+        return self._notebook_request_result(
+            payload, default=default, timeout=timeout)
 
     def terminal_profile_providers(self) -> List[Dict[str, Any]]:
         return [dict(item) for item in self._terminal_profile_providers]
