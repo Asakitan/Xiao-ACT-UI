@@ -6,6 +6,7 @@ Run:  python -m ai_editor.selftest
 from __future__ import annotations
 
 import base64
+import io
 import json
 import logging
 import shutil
@@ -118,6 +119,18 @@ def _failure_point_reason(detail: str) -> str:
     return "no detail recorded"
 
 
+def _failed_check_point_lines(
+    failures: list[tuple[str, str]] | None = None,
+) -> list[str]:
+    failure_items = _FAILURES if failures is None else failures
+    if not failure_items:
+        return ["  1. Unknown failure; no failure detail was recorded."]
+    return [
+        f"  {index}. {label}: {_failure_point_reason(detail)}"
+        for index, (label, detail) in enumerate(failure_items, 1)
+    ]
+
+
 def _print_final_summary(total: int) -> None:
     print(f"{'=' * 50}")
     if _FAIL == 0:
@@ -134,13 +147,10 @@ def _print_final_summary(total: int) -> None:
         for line in _failure_detail_tail(detail):
             print(f"     {line}")
     print()
-    print("FAILED CHECKS (last):")
-    if _FAILURES:
-        for index, (label, _detail) in enumerate(_FAILURES, 1):
-            print(f"  {index}. {label}: {_failure_point_reason(_detail)}")
-    else:
-        print("  1. Unknown failure; no failure detail was recorded.")
     print(f"{'=' * 50}")
+    print("FAILED CHECKS (last):")
+    for line in _failed_check_point_lines():
+        print(line)
 
 
 def _wait_until(predicate, timeout: float = 2.0) -> bool:
@@ -203,6 +213,46 @@ def _extract_js_function(html: str, name: str) -> str:
             if depth == 0:
                 return html[start:index + 1]
     raise ValueError(f"Unterminated JS function: {name}")
+
+
+def test_selftest_output() -> None:
+    print("-- Selftest Output --")
+    sample_failures = [
+        ("Imports / llm_engine", "ImportError: missing module\ntrace tail"),
+        ("Bridge / command dispatch", ""),
+    ]
+    point_lines = _failed_check_point_lines(sample_failures)
+    _check("failed check point lines include first detail",
+           point_lines == [
+               "  1. Imports / llm_engine: ImportError: missing module",
+               "  2. Bridge / command dispatch: no detail recorded",
+           ])
+
+    global _PASS, _FAIL
+    saved_pass = _PASS
+    saved_fail = _FAIL
+    saved_failures = list(_FAILURES)
+    saved_stdout = sys.stdout
+    capture = io.StringIO()
+    try:
+        _PASS = 3
+        _FAIL = 2
+        _FAILURES[:] = sample_failures
+        sys.stdout = capture
+        _print_final_summary(5)
+    finally:
+        sys.stdout = saved_stdout
+        _PASS = saved_pass
+        _FAIL = saved_fail
+        _FAILURES[:] = saved_failures
+
+    output_lines = capture.getvalue().splitlines()
+    _check("failure point list is the final output block",
+           output_lines[-3:] == [
+               "FAILED CHECKS (last):",
+               "  1. Imports / llm_engine: ImportError: missing module",
+               "  2. Bridge / command dispatch: no detail recorded",
+           ])
 
 
 def test_imports() -> None:
@@ -19393,6 +19443,7 @@ def main() -> None:
 
     tests = [
         ("Imports", test_imports),
+        ("Selftest Output", test_selftest_output),
         ("Tool Registry", test_tool_registry),
         ("MCP Client", test_mcp_client),
         ("LLM Engine", test_llm_engine),
