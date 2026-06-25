@@ -3279,8 +3279,12 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function _isLanguageWholeWordMatch(value,start,end)" in html
             and "function _findMatches(regex,value)" in html
             and "pattern='\\\\b'+pattern+'\\\\b'" not in html
-            and "function editorEnterInsertion(value,start)" in html
+            and "function languageBrackets(lang)" in html
+            and "function editorEnterInsertion(lang,value,start,end)" in html
+            and "function editorEnterInsertionEdit(lang,value,start,end)" in html
             and "function onEnterRuleMatches(rule,ctx)" in html
+            and "function enterActionMode(action)" in html
+            and "function languageBracketEnterAction(lang,ctx)" in html
             and "function toggleLineComment(token)" in html
             and "function toggleBlockComment(open,close)" in html
             and "Line comment: " in html
@@ -3814,7 +3818,7 @@ console.log("frontend save participant settings ok");
                 except OSError:
                     pass
     if not node_path:
-        _check("frontend auto-close notIn behavior skipped without Node.js", True)
+        _check("frontend auto-close and Enter behavior skipped without Node.js", True)
     else:
         function_names = [
             "languageConfiguration",
@@ -3823,6 +3827,7 @@ console.log("frontend save participant settings ok");
             "languageCommentTokens",
             "languageAutoClosingPairs",
             "languageSurroundingPairs",
+            "languageBrackets",
             "editorLineSpanAt",
             "editorLineStringScopes",
             "editorRegexScopes",
@@ -3836,6 +3841,19 @@ console.log("frontend save participant settings ok");
             "autoPairInsertionEditForKey",
             "autoPairOvertypeEditForKey",
             "autoPairDeleteEdit",
+            "languageRegexFlags",
+            "languageRegexSpec",
+            "testLanguageRegex",
+            "languageIndentationRules",
+            "languageOnEnterRules",
+            "editorLineContext",
+            "outdentIndent",
+            "onEnterRuleMatches",
+            "enterActionMode",
+            "enterTextForAction",
+            "languageBracketEnterAction",
+            "editorEnterInsertion",
+            "editorEnterInsertionEdit",
         ]
         js_functions = "\n".join(
             _extract_js_function(html, name) for name in function_names)
@@ -3874,6 +3892,7 @@ LANGUAGE_META.markdown = {
 };
 const BUILTIN_LANGUAGE_COMMENTS = {};
 const DEFAULT_AUTO_CLOSING_PAIRS = [{open:"(",close:")"},{open:"\"",close:"\""}];
+const INDENT_UNIT = "    ";
 function languageHighlightFamily(lang){ return lang === "javascript" ? "javascript" : "plaintext"; }
 """ + js_functions + r"""
 function assert(ok, label){ if(!ok){ throw new Error(label); } }
@@ -3930,7 +3949,41 @@ assert(overtypeEdit && overtypeEdit.selectionStart === 6 && overtypeEdit.selecti
        "closing pair overtype advances cursor");
 assert(autoPairOvertypeEditForKey("javascript", ")", "call()", 4, 5) === null,
        "closing pair overtype ignores selections");
-console.log("frontend auto-close behavior ok");
+LANGUAGE_META.selflang = {
+  configuration: {
+    brackets: [["begin", "end"], ["{", "}"]],
+    indentationRules: {
+      increaseIndentPattern: {"pattern": "^\\s*case\\b"},
+      decreaseIndentPattern: {"pattern": "^\\s*end\\b"},
+      indentNextLinePattern: {"pattern": "^\\s*where\\b"},
+      unIndentedLinePattern: {"pattern": "^\\s*#flat\\b"}
+    },
+    onEnterRules: [
+      { beforeText: {"pattern": "^\\s*doc\\b"}, action: { indentAction: 1, appendText: "/// " } },
+      { beforeText: {"pattern": "^\\s*trim\\b"}, action: { indentAction: 1, removeText: 2 } }
+    ]
+  }
+};
+const bracketIndent = editorEnterInsertion("selflang", "begin", 5, 5);
+assert(bracketIndent.text === "\n    " && bracketIndent.cursorOffset === 5,
+       "language brackets indent on Enter after open bracket");
+const bracketIndentOutdent = editorEnterInsertion("selflang", "beginend", 5, 5);
+assert(bracketIndentOutdent.text === "\n    \n" && bracketIndentOutdent.cursorOffset === 5,
+       "language brackets indentOutdent on Enter before close bracket");
+const indentNext = editorEnterInsertion("selflang", "where x", 7, 7);
+assert(indentNext.text === "\n    ", "indentNextLinePattern indents next line");
+const unIndented = editorEnterInsertion("selflang", "  #flat marker", 14, 14);
+assert(unIndented.text === "\n", "unIndentedLinePattern suppresses inherited indent");
+const actionCompat = editorEnterInsertion("selflang", "doc", 3, 3);
+assert(actionCompat.text === "\n    /// ", "VS Code indentAction numeric and appendText are honored");
+const selectionEnter = editorEnterInsertionEdit("selflang", "beginSELECTend", 5, 11);
+assert(selectionEnter.start === 5
+       && selectionEnter.end === 11
+       && selectionEnter.text === "\n    \n"
+       && selectionEnter.selectionStart === 10
+       && selectionEnter.selectionEnd === 10,
+       "Enter edit replaces selection and reads afterText from selection end");
+console.log("frontend auto-close and Enter behavior ok");
 """
         js_path = ""
         try:
@@ -3946,11 +3999,11 @@ console.log("frontend auto-close behavior ok");
                 timeout=10,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            _check("frontend auto-close notIn behavior",
-                   result.returncode == 0 and "frontend auto-close behavior ok" in result.stdout,
+            _check("frontend auto-close and Enter behavior",
+                   result.returncode == 0 and "frontend auto-close and Enter behavior ok" in result.stdout,
                    (result.stderr or result.stdout).strip())
         except Exception as exc:
-            _check("frontend auto-close notIn behavior", False, str(exc))
+            _check("frontend auto-close and Enter behavior", False, str(exc))
         finally:
             if js_path:
                 try:

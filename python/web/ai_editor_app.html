@@ -3553,6 +3553,12 @@ function languageSurroundingPairs(lang){
   const pairs=normalizeLanguagePairs(languageConfiguration(lang).surroundingPairs,true);
   return pairs.length?pairs:languageAutoClosingPairs(lang);
 }
+function languageBrackets(lang){
+  const pairs=normalizeLanguagePairs(languageConfiguration(lang).brackets,false);
+  return pairs.length?pairs:[
+    {open:'(',close:')',notIn:[]},{open:'[',close:']',notIn:[]},{open:'{',close:'}',notIn:[]}
+  ];
+}
 function editorLineStringScopes(prefix,lineComment){
   const text=String(prefix||''),lineToken=String(lineComment||'');
   let quote='',escaped=false;
@@ -3928,17 +3934,19 @@ function editorFindSeedText(){
   const selected=ed.value.substring(ed.selectionStart,ed.selectionEnd);
   return selected||editorWordAtCursor();
 }
-function editorLineContext(value,pos){
-  const text=String(value||''),lineStart=pos>0?text.lastIndexOf('\n',pos-1)+1:0;
-  let lineEnd=text.indexOf('\n',pos);if(lineEnd===-1)lineEnd=text.length;
-  const beforeText=text.slice(lineStart,pos),afterText=text.slice(pos,lineEnd);
+function editorLineContext(value,start,end){
+  const text=String(value||''),pos=Math.max(0,Math.min(text.length,Number(start)||0));
+  end=end==null?pos:Math.max(pos,Math.min(text.length,Number(end)||pos));
+  const lineStart=pos>0?text.lastIndexOf('\n',pos-1)+1:0;
+  let lineEnd=text.indexOf('\n',end);if(lineEnd===-1)lineEnd=text.length;
+  const beforeText=text.slice(lineStart,pos),afterText=text.slice(end,lineEnd);
   let prevStart=0,previousLineText='';
   if(lineStart>0){
     prevStart=text.lastIndexOf('\n',lineStart-2)+1;
     previousLineText=text.slice(prevStart,lineStart-1);
   }
   const indent=(beforeText.match(/^\s*/)||[''])[0];
-  return {beforeText,afterText,previousLineText,indent};
+  return {beforeText,afterText,previousLineText,indent,lineText:beforeText+afterText};
 }
 function outdentIndent(indent){
   const value=String(indent||'');
@@ -3953,12 +3961,26 @@ function onEnterRuleMatches(rule,ctx){
   }
   return !!(rule.beforeText||rule.afterText||rule.previousLineText);
 }
+function enterActionMode(action){
+  const raw=action&&action.indentAction!=null?action.indentAction:action&&action.indent;
+  if(typeof raw==='number'){
+    if(raw===1)return 'indent';
+    if(raw===2)return 'indentOutdent';
+    if(raw===3)return 'outdent';
+    return 'none';
+  }
+  const text=String(raw==null?'none':raw).replace(/[\s_-]/g,'').toLowerCase();
+  if(text==='indent')return 'indent';
+  if(text==='indentoutdent')return 'indentOutdent';
+  if(text==='outdent')return 'outdent';
+  return 'none';
+}
 function enterTextForAction(ctx,action){
   let indent=ctx.indent;
   const removeText=Number(action.removeText)||0;
   if(removeText>0)indent=indent.slice(0,Math.max(0,indent.length-removeText));
   const appendText=String(action.appendText||'');
-  const mode=String(action.indent||'none');
+  const mode=enterActionMode(action||{});
   if(mode==='outdent')indent=outdentIndent(indent);
   if(mode==='indent')indent+=INDENT_UNIT;
   if(mode==='indentOutdent'){
@@ -3968,20 +3990,42 @@ function enterTextForAction(ctx,action){
   const text='\n'+indent+appendText;
   return {text,cursorOffset:text.length};
 }
-function editorEnterInsertion(value,start){
-  const ctx=editorLineContext(value,start);
-  for(const rule of languageOnEnterRules(editorLang)){
+function languageBracketEnterAction(lang,ctx){
+  const before=String(ctx.beforeText||'').trimEnd(),after=String(ctx.afterText||'').trimStart();
+  if(!before)return null;
+  for(const pair of languageBrackets(lang).sort((a,b)=>b.open.length-a.open.length||b.close.length-a.close.length)){
+    const open=String(pair.open||''),close=String(pair.close||'');
+    if(open&&close&&before.endsWith(open)&&after.startsWith(close))return {indentAction:2};
+    if(open&&before.endsWith(open))return {indentAction:1};
+  }
+  return null;
+}
+function editorEnterInsertion(lang,value,start,end){
+  const ctx=editorLineContext(value,start,end);
+  for(const rule of languageOnEnterRules(lang)){
     if(onEnterRuleMatches(rule,ctx))return enterTextForAction(ctx,rule.action||{});
   }
-  const rules=languageIndentationRules(editorLang);
-  let indent=ctx.indent;
-  if(testLanguageRegex(rules.decreaseIndentPattern,ctx.beforeText))indent=outdentIndent(indent);
-  if(testLanguageRegex(rules.increaseIndentPattern,ctx.beforeText)
-      ||(!rules.increaseIndentPattern&&(ctx.beforeText.trimEnd().endsWith(':')||ctx.beforeText.trimEnd().endsWith('{')))){
-    indent+=INDENT_UNIT;
+  const bracketAction=languageBracketEnterAction(lang,ctx);
+  if(bracketAction)return enterTextForAction(ctx,bracketAction);
+  const rules=languageIndentationRules(lang);
+  let indent=ctx.indent,skipIndentRules=false;
+  if(testLanguageRegex(rules.unIndentedLinePattern,ctx.lineText)){indent='';skipIndentRules=true}
+  if(!skipIndentRules){
+    if(testLanguageRegex(rules.decreaseIndentPattern,ctx.beforeText))indent=outdentIndent(indent);
+    if(testLanguageRegex(rules.increaseIndentPattern,ctx.beforeText)
+        ||testLanguageRegex(rules.indentNextLinePattern,ctx.beforeText)
+        ||(!rules.increaseIndentPattern&&(ctx.beforeText.trimEnd().endsWith(':')||ctx.beforeText.trimEnd().endsWith('{')))){
+      indent+=INDENT_UNIT;
+    }
   }
   const text='\n'+indent;
   return {text,cursorOffset:text.length};
+}
+function editorEnterInsertionEdit(lang,value,start,end){
+  value=String(value||'');start=Math.max(0,Math.min(value.length,Number(start)||0));
+  end=Math.max(start,Math.min(value.length,Number(end)||start));
+  const insert=editorEnterInsertion(lang,value,start,end);
+  return {start,end,text:insert.text,selectionStart:start+insert.cursorOffset,selectionEnd:start+insert.cursorOffset};
 }
 function foldingRangeKindLabel(kind){
   const raw=String(kind==null?'':kind).toLowerCase();
@@ -8017,10 +8061,10 @@ ed.addEventListener('keydown',function(e){
   // Enter → Auto-indent
   if(e.key==='Enter'&&!e.ctrlKey){
     _undoPush(true);
-    const pos=this.selectionStart,enter=editorEnterInsertion(this.value,pos);
+    const enter=editorEnterInsertionEdit(editorLang,this.value,this.selectionStart,this.selectionEnd);
     e.preventDefault();
-    this.value=this.value.substring(0,pos)+enter.text+this.value.substring(this.selectionEnd);
-    this.selectionStart=this.selectionEnd=pos+enter.cursorOffset;
+    this.value=this.value.substring(0,enter.start)+enter.text+this.value.substring(enter.end);
+    this.selectionStart=enter.selectionStart;this.selectionEnd=enter.selectionEnd;
     updateLineNums();updateCursorPos()}
   // Auto-closing brackets/quotes (EDIT-001)
   const pairEdit=autoPairInsertionEditForKey(editorLang,e.key,this.value,this.selectionStart,this.selectionEnd);
