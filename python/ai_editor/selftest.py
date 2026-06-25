@@ -7011,6 +7011,16 @@ console.log("command palette quick access helpers ok");
             "title": "Writable Palette Probe",
             "category": "Selftest",
             "enablement": "editorReadonly == false",
+        }, {
+            "command": "selftest.commandPalette.context",
+            "title": "Runtime Context Palette Probe",
+            "category": "Selftest",
+            "enablement": "selftest.palette.enabled && !selftest.palette.blocked",
+        }, {
+            "command": "selftest.commandPalette.unblocked",
+            "title": "Runtime Unblocked Palette Probe",
+            "category": "Selftest",
+            "enablement": "selftest.palette.blocked == false",
         }]},
     }, "/tmp/selftest-commands-pack")
     command_palette_api._ext_host.registry.register(command_desc)
@@ -7059,6 +7069,12 @@ console.log("command palette quick access helpers ok");
     writable_command = next(
         (item for item in palette_commands
          if item.get("id") == "selftest.commandPalette.writable"), {})
+    runtime_context_initial = next(
+        (item for item in palette_commands
+         if item.get("id") == "selftest.commandPalette.context"), {})
+    runtime_unblocked_initial = next(
+        (item for item in palette_commands
+         if item.get("id") == "selftest.commandPalette.unblocked"), {})
     inactive_editor_commands = command_palette_api.list_command_palette_commands({
         "filePath": "/tmp/app.py",
         "language": "python",
@@ -7101,9 +7117,58 @@ console.log("command palette quick access helpers ok");
            and no_selection_enabled.get("enabled") is True
            and dirty_disabled.get("disabled") is True
            and writable_disabled.get("disabled") is True
+           and runtime_context_initial.get("enabled") is False
+           and runtime_unblocked_initial.get("enabled") is False
            and runtime_command.get("source") == "runtime"
            and runtime_command.get("runtimeAvailable") is True,
            json.dumps(palette_commands, ensure_ascii=False, default=str))
+    command_palette_api._ext_host.commands.execute(
+        "setContext", "selftest.palette.enabled", True)
+    command_palette_api._ext_host.commands.execute(
+        "setContext", "selftest.palette.blocked", False)
+    runtime_context_enabled_commands = (
+        command_palette_api.list_command_palette_commands({}).get("commands", []))
+    runtime_context_enabled = next(
+        (item for item in runtime_context_enabled_commands
+         if item.get("id") == "selftest.commandPalette.context"), {})
+    runtime_unblocked_enabled = next(
+        (item for item in runtime_context_enabled_commands
+         if item.get("id") == "selftest.commandPalette.unblocked"), {})
+    command_palette_api._ext_host.commands.execute(
+        "setContext", "selftest.palette.blocked", True)
+    runtime_context_blocked_commands = (
+        command_palette_api.list_command_palette_commands({}).get("commands", []))
+    runtime_context_blocked = next(
+        (item for item in runtime_context_blocked_commands
+         if item.get("id") == "selftest.commandPalette.context"), {})
+    runtime_unblocked_blocked = next(
+        (item for item in runtime_context_blocked_commands
+         if item.get("id") == "selftest.commandPalette.unblocked"), {})
+    command_palette_api._ext_host.commands.execute(
+        "setContext", "selftest.palette.enabled", None)
+    command_palette_api._ext_host.commands.execute(
+        "setContext", "selftest.palette.blocked", False)
+    runtime_context_cleared_commands = (
+        command_palette_api.list_command_palette_commands({}).get("commands", []))
+    runtime_context_cleared = next(
+        (item for item in runtime_context_cleared_commands
+         if item.get("id") == "selftest.commandPalette.context"), {})
+    runtime_unblocked_cleared = next(
+        (item for item in runtime_context_cleared_commands
+         if item.get("id") == "selftest.commandPalette.unblocked"), {})
+    _check("extension setContext keys drive command palette enablement",
+           runtime_context_enabled.get("enabled") is True
+           and runtime_context_enabled.get("disabled") is False
+           and runtime_unblocked_enabled.get("enabled") is True
+           and runtime_context_blocked.get("enabled") is False
+           and runtime_unblocked_blocked.get("enabled") is False
+           and runtime_context_cleared.get("enabled") is False
+           and runtime_unblocked_cleared.get("enabled") is True,
+           json.dumps({
+               "enabled": runtime_context_enabled_commands,
+               "blocked": runtime_context_blocked_commands,
+               "cleared": runtime_context_cleared_commands,
+           }, ensure_ascii=False, default=str))
 
     lazy_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     lazy_api._ensure_engine()

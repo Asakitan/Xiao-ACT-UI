@@ -9447,6 +9447,18 @@ class AIEditorAPI:
             "editorHasSelection": "false",
             "hasSelection": "false",
         }
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        snapshot = getattr(vscode_ns, "context_keys_snapshot", None)
+        if callable(snapshot):
+            try:
+                for key, value in snapshot().items():
+                    if value is None:
+                        continue
+                    text = self._normalize_when_context_value(value)
+                    if text:
+                        palette_context[str(key)] = text
+            except Exception:
+                pass
         if not isinstance(context, dict):
             return palette_context
         resource = (

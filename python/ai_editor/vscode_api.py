@@ -2008,6 +2008,16 @@ class VscodeNamespace:
         self._settings_getter = settings_getter
         self._ui_bridge: Optional[UIBridge] = None
         self._clipboard_text = ""
+        context_keys = getattr(host, "_vscode_context_keys", None)
+        if not isinstance(context_keys, dict):
+            context_keys = {}
+            setattr(host, "_vscode_context_keys", context_keys)
+        context_lock = getattr(host, "_vscode_context_lock", None)
+        if context_lock is None:
+            context_lock = threading.Lock()
+            setattr(host, "_vscode_context_lock", context_lock)
+        self._context_keys: Dict[str, Any] = context_keys
+        self._context_lock = context_lock
         self._active_text_editor: Optional[_TextEditor] = None
         self._visible_text_editors: List[_TextEditor] = []
         self._text_documents: List[_TextDocument] = []
@@ -2094,6 +2104,7 @@ class VscodeNamespace:
             host.on_did_change(self._on_host_extensions_changed)
         except Exception:
             pass
+        self._register_context_execute_commands()
         self._register_language_execute_commands()
 
     def _on_host_extensions_changed(self, event: Any = None) -> None:
@@ -2101,6 +2112,28 @@ class VscodeNamespace:
         self._sync_tasks_state()
         self._sync_debug_state()
         self._extensions_change_emitter.fire(event or {})
+
+    def _register_context_execute_commands(self) -> None:
+        try:
+            if not self._host.commands.has("setContext"):
+                self._host.commands.register("setContext", self._set_context_key)
+        except Exception:
+            pass
+
+    def _set_context_key(self, key: Any, value: Any = None) -> None:
+        name = str(key or "").strip()
+        if not name:
+            return None
+        with self._context_lock:
+            if value is None:
+                self._context_keys.pop(name, None)
+            else:
+                self._context_keys[name] = value
+        return None
+
+    def context_keys_snapshot(self) -> Dict[str, Any]:
+        with self._context_lock:
+            return dict(self._context_keys)
 
     def _register_language_execute_commands(self) -> None:
         commands = {
