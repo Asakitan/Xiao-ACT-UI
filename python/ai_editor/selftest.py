@@ -29,9 +29,25 @@ _FAILURES: list[tuple[str, str]] = []
 _CURRENT_TEST_LABEL = ""
 _FAILURE_DETAIL_LINE_LIMIT = 80
 _FAILURE_POINT_LINE_LIMIT = 180
+_FAILURE_POINT_HINT_LIMIT = 6
 _FINAL_FAILURE_POINT_HEADING = "FAILED CHECKS (final):"
 _RECORDED_FAILURE_NOTE = "failure recorded; see final summary"
 _RECORDED_TEST_FAILURE_NOTE = "test failed; see final summary"
+_FAILURE_POINT_PRIORITY_KEYS = (
+    "error",
+    "errors",
+    "exception",
+    "traceback",
+    "found",
+    "relative",
+    "docPrefix",
+    "docLineCount",
+    "pyCount",
+    "actual",
+    "expected",
+    "result",
+    "ok",
+)
 
 
 def _record_failure(label: str, detail: str = "") -> None:
@@ -112,10 +128,94 @@ def _failure_detail_tail(detail: str) -> list[str]:
     return [f"... omitted {omitted} earlier detail lines ...", *lines[-_FAILURE_DETAIL_LINE_LIMIT:]]
 
 
+def _failure_point_value_is_suspicious(key: str, value) -> bool:
+    key_lower = str(key or "").lower()
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value == ""
+    if isinstance(value, (list, tuple, dict, set)):
+        return len(value) == 0
+    if isinstance(value, bool):
+        return value is False and (
+            key_lower in {"ok", "success", "matched", "found", "exists"}
+        )
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value == 0 and key_lower.endswith(("count", "linecount", "size", "length"))
+    return False
+
+
+def _failure_point_format_value(value) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        text = repr(value)
+    if len(text) > 48:
+        text = f"{text[:45]}..."
+    return text
+
+
+def _failure_point_collect_json_hints(value, path: str = "") -> list[str]:
+    hints: list[tuple[int, str]] = []
+
+    def _priority(key: str) -> int:
+        if key in _FAILURE_POINT_PRIORITY_KEYS:
+            return _FAILURE_POINT_PRIORITY_KEYS.index(key)
+        key_lower = key.lower()
+        for index, priority_key in enumerate(_FAILURE_POINT_PRIORITY_KEYS):
+            if key_lower == priority_key.lower():
+                return index
+        return len(_FAILURE_POINT_PRIORITY_KEYS)
+
+    def _visit(node, node_path: str) -> None:
+        if len(hints) >= _FAILURE_POINT_HINT_LIMIT * 3:
+            return
+        if isinstance(node, dict):
+            for key, item in node.items():
+                key_text = str(key)
+                item_path = f"{node_path}.{key_text}" if node_path else key_text
+                if _failure_point_value_is_suspicious(key_text, item):
+                    hints.append((
+                        _priority(key_text),
+                        f"{item_path}={_failure_point_format_value(item)}",
+                    ))
+                elif isinstance(item, (dict, list, tuple)):
+                    _visit(item, item_path)
+            return
+        if isinstance(node, (list, tuple)):
+            for index, item in enumerate(node[:4]):
+                if isinstance(item, (dict, list, tuple)):
+                    _visit(item, f"{node_path}[{index}]")
+
+    _visit(value, path)
+    hints.sort(key=lambda item: item[0])
+    return [hint for _, hint in hints[:_FAILURE_POINT_HINT_LIMIT]]
+
+
+def _failure_point_json_reason(text: str) -> str:
+    stripped = str(text or "").strip()
+    if not stripped or stripped[0] not in "[{":
+        return ""
+    try:
+        data = json.loads(stripped)
+    except Exception:
+        return ""
+    hints = _failure_point_collect_json_hints(data)
+    if not hints:
+        return ""
+    reason = "suspect fields: " + ", ".join(hints)
+    if len(reason) > _FAILURE_POINT_LINE_LIMIT:
+        return f"{reason[:_FAILURE_POINT_LINE_LIMIT - 3]}..."
+    return reason
+
+
 def _failure_point_reason(detail: str) -> str:
     for line in str(detail or "").splitlines():
         text = line.strip()
         if text:
+            json_reason = _failure_point_json_reason(text)
+            if json_reason:
+                return json_reason
             if len(text) > _FAILURE_POINT_LINE_LIMIT:
                 return f"{text[:_FAILURE_POINT_LINE_LIMIT - 3]}..."
             return text
@@ -234,6 +334,22 @@ def test_selftest_output() -> None:
                "  1. Imports / llm_engine: ImportError: missing module",
                "  2. Bridge / command dispatch: no detail recorded",
            ])
+    json_reason = _failure_point_reason(json.dumps({
+        "ok": True,
+        "workspaceFolderDuplicateOk": False,
+        "found": [],
+        "relative": "",
+        "docPrefix": "",
+        "docLineCount": 0,
+        "pyCount": 0,
+    }))
+    _check("json failure point highlights suspect fields",
+           "found=[]" in json_reason
+           and 'relative=""' in json_reason
+           and 'docPrefix=""' in json_reason
+           and "pyCount=0" in json_reason)
+    _check("json failure point keeps expected false flags out",
+           "workspaceFolderDuplicateOk" not in json_reason)
 
     global _PASS, _FAIL
     saved_pass = _PASS
