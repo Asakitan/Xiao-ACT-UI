@@ -33,6 +33,7 @@ _FAILURE_POINT_HINT_LIMIT = 6
 _FINAL_FAILURE_POINT_HEADING = "FAILED CHECK POINTS (final):"
 _RECORDED_FAILURE_NOTE = "failure points are listed last"
 _RECORDED_TEST_FAILURE_NOTE = "test failure points are listed last"
+_INLINE_FAILURE_OUTPUT_FORBIDDEN_MARKERS = ("Traceback",)
 _FAILURE_POINT_PRIORITY_KEYS = (
     "error",
     "errors",
@@ -254,6 +255,14 @@ def _final_failed_check_point_lines(
     return lines
 
 
+def _inline_failure_output_is_deferred(output: str, hidden_markers: list[str]) -> bool:
+    text = str(output or "")
+    return all(marker not in text for marker in [
+        *hidden_markers,
+        *_INLINE_FAILURE_OUTPUT_FORBIDDEN_MARKERS,
+    ])
+
+
 def _print_final_failed_check_points() -> None:
     print(f"{'=' * 50}")
     print(_FINAL_FAILURE_POINT_HEADING)
@@ -385,8 +394,10 @@ def test_selftest_output() -> None:
     _check("check failure output defers failure point",
            _RECORDED_FAILURE_NOTE in inline_output
            and "failure #1 recorded" in inline_output
-           and "inline failure label" not in inline_output
-           and "secret inline detail" not in inline_output)
+           and _inline_failure_output_is_deferred(
+               inline_output,
+               ["inline failure label", "secret inline detail"],
+           ))
 
     exception_capture = io.StringIO()
     try:
@@ -406,9 +417,10 @@ def test_selftest_output() -> None:
     _check("test exception output defers traceback",
            _RECORDED_TEST_FAILURE_NOTE in exception_output
            and "failure #1 recorded" in exception_output
-           and "Exploding Output Test" not in exception_output
-           and "secret exception detail" not in exception_output
-           and "Traceback" not in exception_output)
+           and _inline_failure_output_is_deferred(
+               exception_output,
+               ["Exploding Output Test", "secret exception detail"],
+           ))
 
     system_exit_capture = io.StringIO()
     try:
@@ -428,9 +440,10 @@ def test_selftest_output() -> None:
     _check("test SystemExit output defers failure point",
            _RECORDED_TEST_FAILURE_NOTE in system_exit_output
            and "failure #1 recorded" in system_exit_output
-           and "SystemExit Output Test" not in system_exit_output
-           and "secret system exit detail" not in system_exit_output
-           and "Traceback" not in system_exit_output)
+           and _inline_failure_output_is_deferred(
+               system_exit_output,
+               ["SystemExit Output Test", "secret system exit detail"],
+           ))
 
     capture = io.StringIO()
     try:
