@@ -7032,18 +7032,23 @@ console.log("command palette quick access helpers ok");
            and "def open_text_resource(" in app_source
            and "def set_scm_input_value(" in app_source
            and "def validate_scm_input(" in app_source
+           and "def request_scm_history(" in app_source
            and "def accept_scm_input(" in app_source
            and "def source_control_snapshots(" in vscode_api_source
            and "def provide_source_control_original_resource(" in vscode_api_source
+           and "def provide_source_control_history(" in vscode_api_source
            and "def set_source_control_input_value(" in vscode_api_source
            and "def validate_source_control_input(" in vscode_api_source
            and "def showValidationMessage(" in vscode_api_source
            and "def node_scm_provider_snapshots(" in extension_host_source
            and "def request_node_scm_original_resource(" in extension_host_source
+           and "def request_node_scm_history(" in extension_host_source
            and "def set_node_scm_input_value(" in extension_host_source
            and "def validate_node_scm_input(" in extension_host_source
            and "scm_quick_diff_request" in node_ext_host_source
+           and "scm_history_request" in node_ext_host_source
            and "hasQuickDiffProvider" in vscode_api_source
+           and "hasHistoryProvider" in vscode_api_source
            and "validationProvider" in vscode_api_source
            and "quickDiffLabel" in extension_host_source
            and "statusBarCommands" in node_ext_host_source
@@ -12637,6 +12642,73 @@ def test_app_extension_runtime_support() -> None:
             "label": "Python Quick Diff",
             "provideOriginalResource": _activity_original_resource,
         }
+
+        class _ActivityHistoryProvider:
+            currentHistoryItemRef = {"id": "main", "label": "main"}
+            currentHistoryItemRemoteRef = {
+                "id": "origin/main",
+                "label": "origin/main",
+            }
+            currentHistoryItemBaseRef = {"id": "base", "label": "base"}
+
+            def provideHistoryItemRefs(self, history_item_refs=None, token=None):
+                activity_command_log.append((
+                    "historyRefs", list(history_item_refs or [])))
+                return [
+                    {"id": "main", "label": "main"},
+                    {"id": "feature", "label": "feature"},
+                ]
+
+            def provideHistoryItems(self, options=None, token=None):
+                activity_command_log.append((
+                    "historyItems", dict(options or {})))
+                return [{
+                    "id": "py-commit-1",
+                    "message": "Python history item",
+                    "author": "Selftest",
+                    "references": [{"id": "main", "label": "main"}],
+                }]
+
+            def provideHistoryItemChanges(
+                    self, history_item_id, history_item_parent_id=None,
+                    token=None):
+                activity_command_log.append((
+                    "historyChanges",
+                    history_item_id,
+                    history_item_parent_id,
+                ))
+                return [{
+                    "uri": activity_api["Uri"].parse(
+                        "file:///workspace/scm-file.txt"),
+                    "originalUri": activity_api["Uri"].parse(
+                        "file:///workspace/scm-file-parent.txt"),
+                    "modifiedUri": activity_api["Uri"].parse(
+                        "file:///workspace/scm-file.txt"),
+                    "renameUri": None,
+                }]
+
+            def resolveHistoryItem(self, history_item_id, token=None):
+                activity_command_log.append(("historyResolve", history_item_id))
+                return {
+                    "id": history_item_id,
+                    "message": "Resolved Python history item",
+                    "author": "Resolved",
+                }
+
+            def resolveHistoryItemChatContext(
+                    self, history_item_id, token=None):
+                return f"python-chat:{history_item_id}"
+
+            def resolveHistoryItemChangeRangeChatContext(
+                    self, history_item_id, history_item_parent_id, path,
+                    token=None):
+                return f"python-range:{history_item_id}:{history_item_parent_id}:{path}"
+
+            def resolveHistoryItemRefsCommonAncestor(
+                    self, history_item_refs, token=None):
+                return "python-common-ancestor"
+
+        activity_scm.historyProvider = _ActivityHistoryProvider()
         activity_scm.statusBarCommands = [{
             "command": "selftest.activity.scmStatus",
             "title": "SCM Status",
@@ -12870,6 +12942,41 @@ def test_app_extension_runtime_support() -> None:
         activity_scm_missing_original = (
             api.request_scm_quick_diff_original_resource(
                 "missing-scm", activity_scm_resource["resourceUri"]))
+        activity_scm_history_refs = api.request_scm_history(
+            "selftest-activity-scm",
+            "provideRefs",
+            {"historyItemRefs": ["main"]})
+        activity_scm_history_items = api.request_scm_history(
+            "selftest-activity-scm",
+            "provideItems",
+            {"options": {"limit": 1, "cursor": "HEAD"}})
+        activity_scm_history_changes = api.request_scm_history(
+            "selftest-activity-scm",
+            "provideChanges",
+            {
+                "historyItemId": "py-commit-1",
+                "historyItemParentId": "py-parent",
+            })
+        activity_scm_history_resolved = api.request_scm_history(
+            "selftest-activity-scm",
+            "resolveItem",
+            {"historyItemId": "py-commit-1"})
+        activity_scm_history_chat = api.request_scm_history(
+            "selftest-activity-scm",
+            "resolveChatContext",
+            {"historyItemId": "py-commit-1"})
+        activity_scm_history_range_chat = api.request_scm_history(
+            "selftest-activity-scm",
+            "resolveChangeRangeChatContext",
+            {
+                "historyItemId": "py-commit-1",
+                "historyItemParentId": "py-parent",
+                "path": "scm-file.txt",
+            })
+        activity_scm_history_ancestor = api.request_scm_history(
+            "selftest-activity-scm",
+            "resolveCommonAncestor",
+            {"historyItemRefs": ["main", "feature"]})
         _check("activity bar containers include runtime extension views",
                activity_items.get("selftest.activity", {}).get("view_count") == 2
                and activity_views.get("selftest.activity.tree", {}).get("runtimeState", {}).get("kind") == "treeView"
@@ -12951,6 +13058,45 @@ def test_app_extension_runtime_support() -> None:
                    "statusResult": activity_scm_status_result,
                    "actionResult": activity_scm_action_result,
                    "secondaryResult": activity_scm_secondary_result,
+               }, ensure_ascii=False))
+        _check("SCM history provider snapshots Python refs and queries",
+               activity_scm_provider.get("hasHistoryProvider") is True
+               and activity_scm_provider.get(
+                   "historyItemRef", {}).get("id") == "main"
+               and activity_scm_provider.get(
+                   "historyItemRemoteRef", {}).get("id") == "origin/main"
+               and activity_scm_provider.get(
+                   "historyItemBaseRef", {}).get("id") == "base"
+               and activity_scm_history_refs.get("ok") is True
+               and [item.get("id") for item in
+                    activity_scm_history_refs.get("value", [])]
+               == ["main", "feature"]
+               and activity_scm_history_items.get(
+                   "value", [{}])[0].get("id") == "py-commit-1"
+               and activity_scm_history_items.get(
+                   "value", [{}])[0].get("references", [{}])[0].get("id")
+               == "main"
+               and activity_scm_history_changes.get(
+                   "value", [{}])[0].get("uri")
+               == "file:///workspace/scm-file.txt"
+               and activity_scm_history_resolved.get(
+                   "value", {}).get("message")
+               == "Resolved Python history item"
+               and activity_scm_history_chat.get("value")
+               == "python-chat:py-commit-1"
+               and activity_scm_history_range_chat.get("value")
+               == "python-range:py-commit-1:py-parent:scm-file.txt"
+               and activity_scm_history_ancestor.get("value")
+               == "python-common-ancestor",
+               json.dumps({
+                   "provider": activity_scm_provider,
+                   "refs": activity_scm_history_refs,
+                   "items": activity_scm_history_items,
+                   "changes": activity_scm_history_changes,
+                   "resolved": activity_scm_history_resolved,
+                   "chat": activity_scm_history_chat,
+                   "rangeChat": activity_scm_history_range_chat,
+                   "ancestor": activity_scm_history_ancestor,
                }, ensure_ascii=False))
         _check("SCM input showValidationMessage snapshots Python messages",
                activity_scm_provider.get("inputBox", {}).get(
@@ -13780,6 +13926,54 @@ async function activate(context) {
     label: 'Node Quick Diff',
     provideOriginalResource(uri) {
       return vscode.Uri.joinPath(context.extensionUri, 'original-node-scm.txt');
+    },
+  };
+  sourceControl.historyProvider = {
+    currentHistoryItemRef: { id: 'main', label: 'main' },
+    currentHistoryItemRemoteRef: {
+      id: 'origin/main',
+      label: 'origin/main',
+    },
+    currentHistoryItemBaseRef: { id: 'base', label: 'base' },
+    provideHistoryItemRefs(historyItemRefs) {
+      return [
+        { id: 'main', label: 'main' },
+        { id: 'node-feature', label: 'node-feature' },
+      ];
+    },
+    provideHistoryItems(options) {
+      return [{
+        id: 'node-commit-1',
+        message: 'Node history item',
+        author: 'Node Selftest',
+        references: [{ id: 'main', label: 'main' }],
+      }];
+    },
+    provideHistoryItemChanges(historyItemId, historyItemParentId) {
+      return [{
+        uri: vscode.Uri.joinPath(context.extensionUri, 'node-scm.txt'),
+        originalUri: vscode.Uri.joinPath(
+          context.extensionUri,
+          'node-scm-parent.txt'
+        ),
+        modifiedUri: vscode.Uri.joinPath(context.extensionUri, 'node-scm.txt'),
+      }];
+    },
+    resolveHistoryItem(historyItemId) {
+      return {
+        id: historyItemId,
+        message: 'Resolved Node history item',
+        author: 'Node Resolved',
+      };
+    },
+    resolveHistoryItemChatContext(historyItemId) {
+      return 'node-chat:' + historyItemId;
+    },
+    resolveHistoryItemChangeRangeChatContext(historyItemId, parentId, path) {
+      return 'node-range:' + historyItemId + ':' + parentId + ':' + path;
+    },
+    resolveHistoryItemRefsCommonAncestor(historyItemRefs) {
+      return 'node-common-ancestor';
     },
   };
   sourceControl.statusBarCommands = [{
@@ -17918,6 +18112,41 @@ module.exports = { activate, deactivate };
                         "selftest-node-scm", node_scm_resource_uri))
                 node_scm_original_open = api.open_text_resource(
                     node_scm_original_result.get("originalResourceUri", ""))
+                node_scm_history_refs = api.request_scm_history(
+                    "selftest-node-scm",
+                    "provideRefs",
+                    {"historyItemRefs": ["main"]})
+                node_scm_history_items = api.request_scm_history(
+                    "selftest-node-scm",
+                    "provideItems",
+                    {"options": {"limit": 1, "cursor": "HEAD"}})
+                node_scm_history_changes = api.request_scm_history(
+                    "selftest-node-scm",
+                    "provideChanges",
+                    {
+                        "historyItemId": "node-commit-1",
+                        "historyItemParentId": "node-parent",
+                    })
+                node_scm_history_resolved = api.request_scm_history(
+                    "selftest-node-scm",
+                    "resolveItem",
+                    {"historyItemId": "node-commit-1"})
+                node_scm_history_chat = api.request_scm_history(
+                    "selftest-node-scm",
+                    "resolveChatContext",
+                    {"historyItemId": "node-commit-1"})
+                node_scm_history_range_chat = api.request_scm_history(
+                    "selftest-node-scm",
+                    "resolveChangeRangeChatContext",
+                    {
+                        "historyItemId": "node-commit-1",
+                        "historyItemParentId": "node-parent",
+                        "path": "node-scm.txt",
+                    })
+                node_scm_history_ancestor = api.request_scm_history(
+                    "selftest-node-scm",
+                    "resolveCommonAncestor",
+                    {"historyItemRefs": ["main", "node-feature"]})
                 node_custom_editor_context_action_command = next((
                     action.get("command")
                     for action in node_custom_editor_context_actions.get(
@@ -19363,6 +19592,46 @@ module.exports = { activate, deactivate };
                            "statusResult": node_scm_status_command_result,
                            "actionResult": node_scm_action_button_result,
                            "secondaryResult": node_scm_secondary_action_result,
+                       }, ensure_ascii=False))
+                _check("node SCM history provider round-trips through Node host",
+                       node_scm_provider.get("hasHistoryProvider") is True
+                       and node_scm_provider.get(
+                           "historyItemRef", {}).get("id") == "main"
+                       and node_scm_provider.get(
+                           "historyItemRemoteRef", {}).get("id")
+                       == "origin/main"
+                       and node_scm_provider.get(
+                           "historyItemBaseRef", {}).get("id") == "base"
+                       and node_scm_history_refs.get("ok") is True
+                       and [item.get("id") for item in
+                            node_scm_history_refs.get("value", [])]
+                       == ["main", "node-feature"]
+                       and node_scm_history_items.get(
+                           "value", [{}])[0].get("id") == "node-commit-1"
+                       and node_scm_history_items.get(
+                           "value", [{}])[0].get(
+                               "references", [{}])[0].get("id") == "main"
+                       and str(node_scm_history_changes.get(
+                           "value", [{}])[0].get("uri", "")).endswith(
+                               "node-scm.txt")
+                       and node_scm_history_resolved.get(
+                           "value", {}).get("message")
+                       == "Resolved Node history item"
+                       and node_scm_history_chat.get("value")
+                       == "node-chat:node-commit-1"
+                       and node_scm_history_range_chat.get("value")
+                       == "node-range:node-commit-1:node-parent:node-scm.txt"
+                       and node_scm_history_ancestor.get("value")
+                       == "node-common-ancestor",
+                       json.dumps({
+                           "provider": node_scm_provider,
+                           "refs": node_scm_history_refs,
+                           "items": node_scm_history_items,
+                           "changes": node_scm_history_changes,
+                           "resolved": node_scm_history_resolved,
+                           "chat": node_scm_history_chat,
+                           "rangeChat": node_scm_history_range_chat,
+                           "ancestor": node_scm_history_ancestor,
                        }, ensure_ascii=False))
                 _check("node SCM input showValidationMessage reaches sidebar snapshots",
                        node_scm_provider.get("inputBox", {}).get(

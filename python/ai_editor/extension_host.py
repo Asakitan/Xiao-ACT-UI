@@ -1876,6 +1876,8 @@ class NodeExtensionHost:
         self._scm_quick_diff_requests: Dict[str, Dict[str, Any]] = {}
         self._scm_validate_input_request_lock = threading.Lock()
         self._scm_validate_input_requests: Dict[str, Dict[str, Any]] = {}
+        self._scm_history_request_lock = threading.Lock()
+        self._scm_history_requests: Dict[str, Dict[str, Any]] = {}
         self._webview_serializer_request_lock = threading.Lock()
         self._webview_serializer_requests: Dict[str, Dict[str, Any]] = {}
         self._shutting_down = False
@@ -2843,6 +2845,16 @@ class NodeExtensionHost:
                 if isinstance(event, threading.Event):
                     event.set()
 
+        elif msg_type == "scm_history_response":
+            request_id = str(msg.get("requestId", ""))
+            with self._scm_history_request_lock:
+                pending = self._scm_history_requests.get(request_id)
+            if pending:
+                pending["response"] = msg
+                event = pending.get("event")
+                if isinstance(event, threading.Event):
+                    event.set()
+
         elif msg_type == "file_decoration_changed":
             self._record_diagnostic(
                 "file_decoration",
@@ -2927,6 +2939,13 @@ class NodeExtensionHost:
                                 msg.get("hasQuickDiffProvider", False)),
                             "quickDiffLabel": str(
                                 msg.get("quickDiffLabel") or ""),
+                            "hasHistoryProvider": bool(
+                                msg.get("hasHistoryProvider", False)),
+                            "historyItemRef": msg.get("historyItemRef"),
+                            "historyItemRemoteRef": msg.get(
+                                "historyItemRemoteRef"),
+                            "historyItemBaseRef": msg.get(
+                                "historyItemBaseRef"),
                             "acceptInputCommand": msg.get("acceptInputCommand"),
                             "actionButton": msg.get("actionButton"),
                             "statusBarCommands": (
@@ -3002,6 +3021,21 @@ class NodeExtensionHost:
                     except Exception:
                         _log.exception(
                             "[NodeExtHost] SCM group change callback failed")
+
+        elif msg_type == "scm_history_refs_changed":
+            provider_id = str(msg.get("providerId") or msg.get("id") or "")
+            if provider_id and self._ui_bridge:
+                try:
+                    handler = getattr(self._ui_bridge, "scm_changed", None)
+                    if callable(handler):
+                        handler({
+                            "providerId": provider_id,
+                            "type": msg_type,
+                            "source": "node",
+                        })
+                except Exception:
+                    _log.exception(
+                        "[NodeExtHost] SCM history change callback failed")
 
         elif msg_type in {"tree_response", "tree_drag_drop_response"}:
             request_id = str(msg.get("requestId", ""))
@@ -4139,6 +4173,11 @@ class NodeExtensionHost:
                 "hasQuickDiffProvider": bool(
                     provider.get("hasQuickDiffProvider", False)),
                 "quickDiffLabel": str(provider.get("quickDiffLabel") or ""),
+                "hasHistoryProvider": bool(
+                    provider.get("hasHistoryProvider", False)),
+                "historyItemRef": provider.get("historyItemRef"),
+                "historyItemRemoteRef": provider.get("historyItemRemoteRef"),
+                "historyItemBaseRef": provider.get("historyItemBaseRef"),
                 "acceptInputCommand": provider.get("acceptInputCommand"),
                 "actionButton": provider.get("actionButton"),
                 "statusBarCommands": (
@@ -4223,6 +4262,86 @@ class NodeExtensionHost:
         finally:
             with self._scm_quick_diff_request_lock:
                 self._scm_quick_diff_requests.pop(request_id, None)
+
+    def request_node_scm_history(
+            self, provider_id: Any, operation: Any,
+            payload: Optional[Dict[str, Any]] = None,
+            timeout: float = 0.85) -> Dict[str, Any]:
+        provider_key = str(provider_id or "").strip()
+        op = str(operation or "").strip()
+        if not provider_key:
+            return {"ok": False, "error": "Missing SCM provider id"}
+        if not op:
+            return {"ok": False, "error": "Missing SCM history operation"}
+        if not self.is_running:
+            return {"ok": False, "error": "Node extension host is not running"}
+        with self._node_scm_lock:
+            provider = self._node_scm_providers.get(provider_key)
+            has_history = bool(
+                isinstance(provider, dict)
+                and provider.get("hasHistoryProvider", False))
+        if not has_history:
+            return {
+                "ok": False,
+                "error": "SCM provider has no history provider",
+                "noProvider": True,
+            }
+        request_id = str(uuid.uuid4())
+        event = threading.Event()
+        with self._scm_history_request_lock:
+            self._scm_history_requests[request_id] = {"event": event}
+        try:
+            sent = self._send({
+                "type": "scm_history_request",
+                "requestId": request_id,
+                "providerId": provider_key,
+                "operation": op,
+                "payload": dict(payload) if isinstance(payload, dict) else {},
+            })
+            if not sent:
+                return {
+                    "ok": False,
+                    "error": "Node SCM history request could not be sent",
+                }
+            if not event.wait(timeout):
+                self._send({
+                    "type": "scm_history_cancel",
+                    "requestId": request_id,
+                    "reason": "timeout",
+                })
+                return {
+                    "ok": False,
+                    "error": "Node SCM history request timed out",
+                    "timeout": True,
+                }
+            with self._scm_history_request_lock:
+                pending = self._scm_history_requests.get(request_id, {})
+            response = pending.get("response", {})
+            if isinstance(response, dict) and response.get("ok"):
+                return {
+                    "ok": True,
+                    "providerId": provider_key,
+                    "operation": op,
+                    "value": response.get("value"),
+                }
+            return {
+                "ok": False,
+                "providerId": provider_key,
+                "operation": op,
+                "error": (
+                    response.get("error")
+                    if isinstance(response, dict)
+                    else "Node SCM history provider failed"),
+                "cancelled": (
+                    bool(response.get("cancelled"))
+                    if isinstance(response, dict) else False),
+                "noProvider": (
+                    bool(response.get("noProvider"))
+                    if isinstance(response, dict) else False),
+            }
+        finally:
+            with self._scm_history_request_lock:
+                self._scm_history_requests.pop(request_id, None)
 
     def set_node_scm_input_value(self, provider_id: Any, value: Any) -> bool:
         provider_key = str(provider_id or "")

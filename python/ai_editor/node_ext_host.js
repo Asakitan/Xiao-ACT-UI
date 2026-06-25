@@ -2055,6 +2055,7 @@ const _languageProviderRequests = new Map(); // requestId -> CancellationTokenSo
 const _fileDecorationProviders = [];     // { handle, extensionId, provider, disposable? }
 const _fileDecorationRequests = new Map(); // requestId -> CancellationTokenSource
 const _scmQuickDiffRequests = new Map(); // requestId -> CancellationTokenSource
+const _scmHistoryRequests = new Map(); // requestId -> CancellationTokenSource
 const _fileDecorationChangeMaxEventSize = 250;
 const _runtimeLanguageConfigurations = new Map(); // languageId -> [{ handle, configuration }]
 const _lmTools = new Map();              // name -> { handle, tool, extensionId, metadata }
@@ -8002,6 +8003,8 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 let acceptInputCommand = undefined;
                 let count = 0;
                 let quickDiffProvider = undefined;
+                let historyProvider = undefined;
+                let historyProviderDisposables = [];
                 let statusBarCommands = undefined;
                 let actionButton = undefined;
                 let validateInput = undefined;
@@ -8025,10 +8028,43 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     hasQuickDiffProvider: !!quickDiffProvider,
                     quickDiffLabel: quickDiffProvider && quickDiffProvider.label
                         ? String(quickDiffProvider.label) : '',
+                    hasHistoryProvider: !!historyProvider,
+                    ..._scmHistoryCurrentRefs(historyProvider),
                     statusBarCommands: _plainBridgeValue(statusBarCommands),
                     actionButton: _plainBridgeValue(actionButton),
                     inputBox: { ...inputBoxState },
                 });
+                const clearHistoryProviderListeners = () => {
+                    for (const disposable of historyProviderDisposables) {
+                        try { disposable && disposable.dispose && disposable.dispose(); }
+                        catch (_) {}
+                    }
+                    historyProviderDisposables = [];
+                };
+                const bindHistoryProviderListeners = () => {
+                    clearHistoryProviderListeners();
+                    if (!historyProvider) return;
+                    if (typeof historyProvider.onDidChangeCurrentHistoryItemRefs === 'function') {
+                        historyProviderDisposables.push(
+                            historyProvider.onDidChangeCurrentHistoryItemRefs(() => {
+                                emitProviderState('scm_provider_updated');
+                            }));
+                    }
+                    if (typeof historyProvider.onDidChangeHistoryItemRefs === 'function') {
+                        historyProviderDisposables.push(
+                            historyProvider.onDidChangeHistoryItemRefs((event) => {
+                                send({
+                                    type: 'scm_history_refs_changed',
+                                    providerId: String(id || ''),
+                                    added: _plainBridgeValue(event && event.added || []),
+                                    modified: _plainBridgeValue(event && event.modified || []),
+                                    removed: _plainBridgeValue(event && event.removed || []),
+                                    silent: !!(event && event.silent),
+                                });
+                                emitProviderState('scm_provider_updated');
+                            }));
+                    }
+                };
                 const inputBox = {
                     get value() { return inputBoxState.value; },
                     set value(value) {
@@ -8097,6 +8133,12 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     get quickDiffProvider() { return quickDiffProvider; },
                     set quickDiffProvider(value) {
                         quickDiffProvider = value;
+                        emitProviderState('scm_provider_updated');
+                    },
+                    get historyProvider() { return historyProvider; },
+                    set historyProvider(value) {
+                        historyProvider = value || undefined;
+                        bindHistoryProviderListeners();
                         emitProviderState('scm_provider_updated');
                     },
                     get statusBarCommands() { return statusBarCommands; },
@@ -8177,6 +8219,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                             }
                         }
                         groups.clear();
+                        clearHistoryProviderListeners();
                         _scmProviders.delete(id);
                         emitProviderState('scm_provider_disposed');
                         log(`scm: disposed "${id}"`);
@@ -11218,6 +11261,168 @@ function _normalizeScmInputValidation(value) {
     return { message, type: 0, severity: 0 };
 }
 
+function _serializeScmHistoryRef(ref) {
+    const raw = _plainBridgeValue(ref);
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const id = String(raw.id || raw.name || raw.label || '').trim();
+    const label = String(raw.label || raw.name || id).trim();
+    if (!id && !label) return null;
+    raw.id = id || label;
+    raw.label = label || id;
+    return raw;
+}
+
+function _serializeScmHistoryItem(item) {
+    let raw = _plainBridgeValue(item);
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        raw = { id: String(item || ''), message: String(item || '') };
+    }
+    const id = String(raw.id || raw.revision || '').trim();
+    if (id) raw.id = id;
+    if (Array.isArray(raw.references)) {
+        raw.references = raw.references
+            .map(_serializeScmHistoryRef)
+            .filter(Boolean);
+    }
+    return raw;
+}
+
+function _serializeScmHistoryChanges(value) {
+    const raw = _plainBridgeValue(value);
+    const items = Array.isArray(raw) ? raw : (raw == null ? [] : [raw]);
+    return items.filter(item => item && typeof item === 'object' && !Array.isArray(item));
+}
+
+function _scmHistoryCurrentRefs(historyProvider) {
+    return {
+        historyItemRef: _serializeScmHistoryRef(
+            historyProvider && historyProvider.currentHistoryItemRef),
+        historyItemRemoteRef: _serializeScmHistoryRef(
+            historyProvider && historyProvider.currentHistoryItemRemoteRef),
+        historyItemBaseRef: _serializeScmHistoryRef(
+            historyProvider && historyProvider.currentHistoryItemBaseRef),
+    };
+}
+
+async function handleScmHistoryRequest(msg) {
+    const requestId = String(msg.requestId || '');
+    const providerId = String(msg.providerId || msg.id || '');
+    const provider = _scmProviders.get(providerId);
+    const historyProvider = provider && provider.historyProvider;
+    const operation = String(msg.operation || msg.op || '');
+    const payload = msg.payload && typeof msg.payload === 'object' ? msg.payload : {};
+    const cts = new CancellationTokenSource();
+    const token = cts.token;
+    if (requestId) _scmHistoryRequests.set(requestId, cts);
+    try {
+        if (!requestId) throw new Error('Missing SCM history requestId');
+        if (!provider) throw new Error(`SCM provider not found: ${providerId}`);
+        if (!historyProvider) {
+            send({
+                type: 'scm_history_response',
+                requestId,
+                ok: false,
+                noProvider: true,
+                error: 'SCM provider has no history provider',
+            });
+            return;
+        }
+        let value;
+        if (operation === 'provideRefs') {
+            if (typeof historyProvider.provideHistoryItemRefs !== 'function') {
+                throw new Error('SCM history provider has no provideHistoryItemRefs');
+            }
+            const refs = await historyProvider.provideHistoryItemRefs(
+                payload.historyItemRefs, token);
+            value = Array.isArray(refs)
+                ? refs.map(_serializeScmHistoryRef).filter(Boolean) : [];
+        } else if (operation === 'provideItems') {
+            if (typeof historyProvider.provideHistoryItems !== 'function') {
+                throw new Error('SCM history provider has no provideHistoryItems');
+            }
+            const items = await historyProvider.provideHistoryItems(
+                payload.options || {}, token);
+            value = Array.isArray(items) ? items.map(_serializeScmHistoryItem) : [];
+        } else if (operation === 'provideChanges') {
+            if (typeof historyProvider.provideHistoryItemChanges !== 'function') {
+                throw new Error('SCM history provider has no provideHistoryItemChanges');
+            }
+            value = _serializeScmHistoryChanges(
+                await historyProvider.provideHistoryItemChanges(
+                    payload.historyItemId || payload.id || '',
+                    payload.historyItemParentId || payload.parentId,
+                    token));
+        } else if (operation === 'resolveItem') {
+            if (typeof historyProvider.resolveHistoryItem !== 'function') {
+                throw new Error('SCM history provider has no resolveHistoryItem');
+            }
+            const item = await historyProvider.resolveHistoryItem(
+                payload.historyItemId || payload.id || '', token);
+            value = item ? _serializeScmHistoryItem(item) : null;
+        } else if (operation === 'resolveChatContext') {
+            if (typeof historyProvider.resolveHistoryItemChatContext !== 'function') {
+                throw new Error('SCM history provider has no resolveHistoryItemChatContext');
+            }
+            value = _plainBridgeValue(await historyProvider.resolveHistoryItemChatContext(
+                payload.historyItemId || payload.id || '', token));
+        } else if (operation === 'resolveChangeRangeChatContext') {
+            if (typeof historyProvider.resolveHistoryItemChangeRangeChatContext !== 'function') {
+                throw new Error('SCM history provider has no resolveHistoryItemChangeRangeChatContext');
+            }
+            value = _plainBridgeValue(await historyProvider.resolveHistoryItemChangeRangeChatContext(
+                payload.historyItemId || payload.id || '',
+                payload.historyItemParentId || payload.parentId || '',
+                payload.path || '',
+                token));
+        } else if (operation === 'resolveCommonAncestor') {
+            if (typeof historyProvider.resolveHistoryItemRefsCommonAncestor !== 'function') {
+                throw new Error('SCM history provider has no resolveHistoryItemRefsCommonAncestor');
+            }
+            value = _plainBridgeValue(await historyProvider.resolveHistoryItemRefsCommonAncestor(
+                payload.historyItemRefs || payload.refs || [], token));
+        } else {
+            throw new Error(`Unknown SCM history operation: ${operation}`);
+        }
+        if (token.isCancellationRequested) {
+            send({
+                type: 'scm_history_response',
+                requestId,
+                ok: false,
+                cancelled: true,
+                error: 'SCM history request cancelled',
+            });
+            return;
+        }
+        send({
+            type: 'scm_history_response',
+            requestId,
+            ok: true,
+            providerId,
+            operation,
+            value,
+        });
+    } catch (err) {
+        send({
+            type: 'scm_history_response',
+            requestId,
+            ok: false,
+            providerId,
+            operation,
+            error: err?.message || String(err),
+        });
+    } finally {
+        _scmHistoryRequests.delete(requestId);
+        cts.dispose();
+    }
+}
+
+function handleScmHistoryCancel(msg) {
+    const requestId = String(msg.requestId || '');
+    const cts = _scmHistoryRequests.get(requestId);
+    if (!cts) return;
+    cts.cancel();
+}
+
 async function handleScmValidateInput(msg) {
     const requestId = String(msg.requestId || '');
     const providerId = String(msg.providerId || msg.id || '');
@@ -11589,6 +11794,12 @@ async function handleMessage(msg) {
             break;
         case 'scm_quick_diff_cancel':
             handleScmQuickDiffCancel(msg);
+            break;
+        case 'scm_history_request':
+            await handleScmHistoryRequest(msg);
+            break;
+        case 'scm_history_cancel':
+            handleScmHistoryCancel(msg);
             break;
         case 'scm_validate_input':
             await handleScmValidateInput(msg);

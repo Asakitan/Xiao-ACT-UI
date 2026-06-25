@@ -1382,6 +1382,49 @@ def _normalize_scm_input_validation(value: Any) -> Optional[Dict[str, Any]]:
     return {"message": message, "type": 0, "severity": 0}
 
 
+def _read_scm_provider_attr(provider: Any, name: str, default: Any = None) -> Any:
+    if isinstance(provider, dict):
+        return provider.get(name, default)
+    return getattr(provider, name, default)
+
+
+def _serialize_scm_history_ref(value: Any) -> Optional[Dict[str, Any]]:
+    raw = _plain_json_value(value)
+    if not isinstance(raw, dict):
+        return None
+    ref_id = str(raw.get("id") or raw.get("name") or raw.get("label") or "").strip()
+    label = str(raw.get("label") or raw.get("name") or ref_id).strip()
+    if not ref_id and not label:
+        return None
+    raw["id"] = ref_id or label
+    raw["label"] = label or ref_id
+    return raw
+
+
+def _serialize_scm_history_item(value: Any) -> Dict[str, Any]:
+    raw = _plain_json_value(value)
+    if not isinstance(raw, dict):
+        raw = {"id": str(value or ""), "message": str(value or "")}
+    item_id = str(raw.get("id") or raw.get("revision") or "").strip()
+    if item_id:
+        raw["id"] = item_id
+    refs = raw.get("references")
+    if isinstance(refs, list):
+        raw["references"] = [
+            ref for ref in (_serialize_scm_history_ref(item) for item in refs)
+            if ref is not None
+        ]
+    return raw
+
+
+def _serialize_scm_history_changes(value: Any) -> List[Dict[str, Any]]:
+    raw = _plain_json_value(value)
+    if raw is None:
+        return []
+    items = raw if isinstance(raw, list) else [raw]
+    return [item for item in items if isinstance(item, dict)]
+
+
 class DataTransferFile:
     """Best-effort file payload used by editor drop/paste providers."""
 
@@ -5558,6 +5601,7 @@ class VscodeNamespace:
                 getattr(quick_diff, "label", "")
                 or (quick_diff.get("label") if isinstance(quick_diff, dict) else "")
                 or "")
+            history_provider = getattr(control, "historyProvider", None)
             provider: Dict[str, Any] = {
                 "id": str(control.id or ""),
                 "providerId": str(control.id or ""),
@@ -5568,6 +5612,16 @@ class VscodeNamespace:
                 "runtimeKind": "python",
                 "hasQuickDiffProvider": quick_diff is not None,
                 "quickDiffLabel": quick_diff_label,
+                "hasHistoryProvider": history_provider is not None,
+                "historyItemRef": _serialize_scm_history_ref(
+                    _read_scm_provider_attr(
+                        history_provider, "currentHistoryItemRef")),
+                "historyItemRemoteRef": _serialize_scm_history_ref(
+                    _read_scm_provider_attr(
+                        history_provider, "currentHistoryItemRemoteRef")),
+                "historyItemBaseRef": _serialize_scm_history_ref(
+                    _read_scm_provider_attr(
+                        history_provider, "currentHistoryItemBaseRef")),
                 "acceptInputCommand": _plain_json_value(
                     getattr(control, "acceptInputCommand", None)),
                 "actionButton": _plain_json_value(
@@ -5673,6 +5727,114 @@ class VscodeNamespace:
             "resourceUri": str(uri_obj),
             "originalResourceUri": original_uri,
             "hasOriginalResource": bool(original_uri),
+        }
+
+    def provide_source_control_history(
+            self, provider_id: Any, operation: Any,
+            payload: Any = None) -> Dict[str, Any]:
+        provider_key = str(provider_id or "").strip()
+        if not provider_key:
+            return {"ok": False, "error": "Missing SCM provider id"}
+        control = self._source_controls.get(provider_key)
+        if control is None or getattr(control, "_disposed", False):
+            return {
+                "ok": False,
+                "error": "SCM provider not found",
+                "notFound": True,
+            }
+        history_provider = getattr(control, "historyProvider", None)
+        if history_provider is None:
+            return {
+                "ok": False,
+                "error": "SCM provider has no history provider",
+                "noProvider": True,
+            }
+        op = str(operation or "").strip()
+        request = payload if isinstance(payload, dict) else {}
+        method_map = {
+            "provideRefs": "provideHistoryItemRefs",
+            "provideItems": "provideHistoryItems",
+            "provideChanges": "provideHistoryItemChanges",
+            "resolveItem": "resolveHistoryItem",
+            "resolveChatContext": "resolveHistoryItemChatContext",
+            "resolveChangeRangeChatContext": (
+                "resolveHistoryItemChangeRangeChatContext"),
+            "resolveCommonAncestor": "resolveHistoryItemRefsCommonAncestor",
+        }
+        method_name = method_map.get(op)
+        if not method_name:
+            return {"ok": False, "error": f"Unknown SCM history operation: {op}"}
+        fn = _read_scm_provider_attr(history_provider, method_name)
+        if not callable(fn):
+            return {
+                "ok": False,
+                "error": f"SCM history provider has no {method_name}",
+                "noProvider": True,
+            }
+        try:
+            if op == "provideRefs":
+                args = (request.get("historyItemRefs"), CancellationToken.NONE)
+            elif op == "provideItems":
+                args = (request.get("options") or {}, CancellationToken.NONE)
+            elif op == "provideChanges":
+                args = (
+                    request.get("historyItemId") or request.get("id") or "",
+                    request.get("historyItemParentId")
+                    or request.get("parentId"),
+                    CancellationToken.NONE,
+                )
+            elif op == "resolveItem":
+                args = (
+                    request.get("historyItemId") or request.get("id") or "",
+                    CancellationToken.NONE,
+                )
+            elif op == "resolveChatContext":
+                args = (
+                    request.get("historyItemId") or request.get("id") or "",
+                    CancellationToken.NONE,
+                )
+            elif op == "resolveChangeRangeChatContext":
+                args = (
+                    request.get("historyItemId") or request.get("id") or "",
+                    request.get("historyItemParentId")
+                    or request.get("parentId") or "",
+                    request.get("path") or "",
+                    CancellationToken.NONE,
+                )
+            else:
+                args = (
+                    request.get("historyItemRefs") or request.get("refs") or [],
+                    CancellationToken.NONE,
+                )
+            raw_value = _resolve_provider_result(
+                _call_with_compatible_args(fn, args),
+                default=None,
+            )
+        except Exception as exc:
+            return {"ok": False, "providerId": provider_key, "error": str(exc)}
+
+        if op == "provideRefs":
+            refs = raw_value if isinstance(raw_value, list) else []
+            value = [
+                ref for ref in (_serialize_scm_history_ref(item) for item in refs)
+                if ref is not None
+            ]
+        elif op == "provideItems":
+            items = raw_value if isinstance(raw_value, list) else []
+            value = [_serialize_scm_history_item(item) for item in items]
+        elif op == "provideChanges":
+            value = _serialize_scm_history_changes(raw_value)
+        elif op == "resolveItem":
+            value = (
+                _serialize_scm_history_item(raw_value)
+                if raw_value is not None else None)
+        else:
+            value = _plain_json_value(raw_value)
+        return {
+            "ok": True,
+            "providerId": provider_key,
+            "operation": op,
+            "value": value,
         }
 
     def set_source_control_input_value(
@@ -7298,6 +7460,7 @@ class _SourceControl:
         self.inputBox = _SourceControlInputBox()
         self.count = 0
         self.quickDiffProvider = None
+        self.historyProvider = None
         self.statusBarCommands = None
         self.acceptInputCommand = None
         self.actionButton = None

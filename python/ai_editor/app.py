@@ -13593,6 +13593,43 @@ class AIEditorAPI:
             "notFound": True,
         }
 
+    def request_scm_history(
+            self, provider_id: str, operation: str,
+            payload: Optional[Dict[str, Any]] = None) -> Dict:
+        """Call a dynamic SCM history provider operation."""
+        self._ensure_engine()
+        provider_key = str(provider_id or "").strip()
+        op = str(operation or "").strip()
+        request_payload = payload if isinstance(payload, dict) else {}
+        if not provider_key:
+            return {"ok": False, "error": "Missing SCM provider id"}
+        if not op:
+            return {"ok": False, "error": "Missing SCM history operation"}
+        provider_result = None
+        provider_fn = getattr(
+            self._vscode_ns, "provide_source_control_history", None)
+        if callable(provider_fn):
+            try:
+                provider_result = provider_fn(
+                    provider_key, op, request_payload)
+            except Exception as exc:
+                provider_result = {"ok": False, "error": str(exc)}
+        if isinstance(provider_result, dict):
+            if provider_result.get("ok") or not provider_result.get("notFound"):
+                return provider_result
+        node_host = getattr(self, "_node_ext_host", None)
+        node_fn = getattr(node_host, "request_node_scm_history", None)
+        if callable(node_fn):
+            try:
+                return node_fn(provider_key, op, request_payload)
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+        return {
+            "ok": False,
+            "error": "SCM provider not found",
+            "notFound": True,
+        }
+
     @staticmethod
     def _scm_command_spec(raw_command: Any) -> Dict[str, Any]:
         if isinstance(raw_command, str):
