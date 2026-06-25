@@ -3296,6 +3296,19 @@ def test_phase1_ai_editor_regressions() -> None:
            and "window.pickSlashByIndex=function(idx)" in html
            and "role=\"option\" aria-selected=" in html
            and "slash-item .category" in html)
+    _check("frontend Assistant renders response references and changed-file cards",
+           "chat-response-references" in html
+           and "chat-response-reference-list" in html
+           and "chat-change-card" in html
+           and "function extractChatResponseReferences(text)" in html
+           and "function extractChatChangedFiles(text)" in html
+           and "function openChatResponseReference(path,line)" in html
+           and "function renderChatResponseReferences(body,content)" in html
+           and "chatReferenceLineOffset(ed.value,line)" in html
+           and "await openWorkspaceFile(path)" in html
+           and "renderChatResponseReferences(body,d.content);" in html
+           and "div.setAttribute('aria-label','Suggested follow-up prompts');" in html
+           and "const btn=document.createElement('button');btn.type='button';btn.className='followup-btn';" in html)
     _check("frontend supports dynamic extension webview provider tabs",
             "function isExtensionWebviewProvider(providerOrId)" in html
             and "dynamicExtensionProviderDefs" in html

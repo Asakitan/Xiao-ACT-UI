@@ -780,6 +780,17 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-reference-card .ref-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-reference-card pre { margin:5px 0 0; white-space:pre-wrap; max-height:96px; overflow:hidden;
   color:var(--fg-code); font:11px/1.4 var(--mono); }
+.chat-response-references { margin-top:9px; display:flex; flex-direction:column; gap:5px; }
+.chat-response-reference-list { display:flex; flex-wrap:wrap; gap:5px; }
+.chat-response-ref,.chat-change-card { border:1px solid var(--border); border-radius:6px;
+  background:var(--bg3); color:var(--fg); padding:4px 7px; font-size:11px;
+  display:inline-flex; align-items:center; gap:6px; max-width:100%; cursor:pointer; }
+.chat-response-ref:hover,.chat-change-card:hover,
+.chat-response-ref:focus,.chat-change-card:focus { border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
+.chat-response-ref .ref-path,.chat-change-card .change-path { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chat-response-ref .ref-line,.chat-change-card .change-kind { color:var(--fg-dim); font:10px var(--mono); }
+.chat-change-set { margin-top:7px; display:flex; flex-direction:column; gap:5px; }
+.chat-change-card { justify-content:flex-start; width:fit-content; }
 
 .chat-control-strip { display:flex; align-items:center; gap:4px; flex-wrap:wrap; min-width:0; }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
@@ -3640,6 +3651,96 @@ function renderChatReferences(body,refs){
     wrap.appendChild(card);
   });
   body.parentElement.appendChild(wrap);
+}
+function chatResponseReferenceKey(ref){return String(ref&&ref.path||'')+':'+String(ref&&ref.line||'')}
+function isLikelyChatFileReferencePath(path){
+  path=String(path||'').trim();
+  if(!path||path.length>260)return false;
+  if(/^(https?:|data:|mailto:)/i.test(path))return false;
+  if(!/[\\/]/.test(path)&&!/\.[A-Za-z0-9]{1,12}$/.test(path))return false;
+  return /^[A-Za-z]:[\\/]/.test(path)||path.startsWith('/')||path.startsWith('./')||path.startsWith('../')||/^[\w@.-]+[\\/]/.test(path)||/^[\w@.-]+\.[A-Za-z0-9]{1,12}$/.test(path);
+}
+function extractChatResponseReferences(text){
+  const refs=[],seen=new Set(),raw=String(text||'');
+  const add=(path,line,label)=>{
+    path=String(path||'').replace(/^file:\/\//,'').trim().replace(/[),.;]+$/,'');
+    line=line?Math.max(1,parseInt(line,10)||0):0;
+    if(!isLikelyChatFileReferencePath(path))return;
+    const ref={path,line,label:label||path,kind:'file'};
+    const key=chatResponseReferenceKey(ref);
+    if(seen.has(key))return;
+    seen.add(key);refs.push(ref);
+  };
+  const md=/\[[^\]]+\]\(((?:file:\/\/)?[^)\s]+?)(?::(\d+))?\)/g;
+  let m;while((m=md.exec(raw))&&refs.length<24)add(m[1],m[2],m[1]);
+  const plain=/(^|[\s`"'\(])((?:[A-Za-z]:[\\/]|\.{1,2}[\\/]|\/|[\w@.-]+[\\/])[\w@./\\-]+\.[A-Za-z0-9]{1,12})(?::(\d+))?/gm;
+  while((m=plain.exec(raw))&&refs.length<24)add(m[2],m[3],m[2]);
+  return refs;
+}
+function extractChatChangedFiles(text){
+  const changes=[],seen=new Set(),raw=String(text||''),lines=raw.split(/\r?\n/);
+  const add=(kind,path)=>{
+    path=String(path||'').trim().replace(/^["'`]+|["'`.,;:]+$/g,'');
+    if(!isLikelyChatFileReferencePath(path))return;
+    const key=kind+':'+path;if(seen.has(key))return;
+    seen.add(key);changes.push({kind,path});
+  };
+  lines.forEach(line=>{
+    let m=line.match(/^\s*(?:[-*]\s*)?(?:created|added|new)\s*:?\s+(.+)$/i);if(m)add('created',m[1]);
+    m=line.match(/^\s*(?:[-*]\s*)?(?:modified|changed|updated|edited)\s*:?\s+(.+)$/i);if(m)add('modified',m[1]);
+    m=line.match(/^\s*(?:[-*]\s*)?(?:deleted|removed)\s*:?\s+(.+)$/i);if(m)add('deleted',m[1]);
+  });
+  return changes.slice(0,12);
+}
+function chatReferenceLineOffset(value,line){
+  value=String(value||'');line=Math.max(1,Number(line)||1);
+  let offset=0,current=1;
+  while(current<line){
+    const next=value.indexOf('\n',offset);
+    if(next<0)return value.length;
+    offset=next+1;current++;
+  }
+  return offset;
+}
+async function openChatResponseReference(path,line){
+  path=String(path||'').trim();
+  if(!path)return;
+  const existing=tabs.find(tab=>String(tab.filePath||tab.workspacePath||tab.name||'').replace(/\\/g,'/').endsWith(path.replace(/\\/g,'/')));
+  if(existing)switchTab(existing.id);
+  else await openWorkspaceFile(path);
+  if(line){
+    const offset=chatReferenceLineOffset(ed.value,line);
+    ed.selectionStart=ed.selectionEnd=offset;ed.focus();updateCursorPos();
+    setStatus('Opened reference: '+path+':'+line);
+  }else setStatus('Opened reference: '+path);
+}
+function renderChatResponseReferences(body,content){
+  const refs=extractChatResponseReferences(content),changes=extractChatChangedFiles(content);
+  if(!body||(!refs.length&&!changes.length))return;
+  const wrap=document.createElement('div');wrap.className='chat-response-references';wrap.setAttribute('aria-label','Response references');
+  if(refs.length){
+    const list=document.createElement('div');list.className='chat-response-reference-list';
+    refs.slice(0,10).forEach(ref=>{
+      const btn=document.createElement('button');btn.type='button';btn.className='chat-response-ref';
+      btn.innerHTML='<span class="ref-kind">📄</span><span class="ref-path">'+esc(ref.path)+'</span>'+(ref.line?'<span class="ref-line">:'+ref.line+'</span>':'');
+      btn.title='Open '+ref.path+(ref.line?':'+ref.line:'');
+      btn.onclick=()=>openChatResponseReference(ref.path,ref.line);
+      list.appendChild(btn);
+    });
+    wrap.appendChild(list);
+  }
+  if(changes.length){
+    const set=document.createElement('div');set.className='chat-change-set';
+    changes.forEach(change=>{
+      const btn=document.createElement('button');btn.type='button';btn.className='chat-change-card';
+      btn.innerHTML='<span class="change-kind">'+esc(change.kind)+'</span><span class="change-path">'+esc(change.path)+'</span>';
+      btn.title='Open '+change.path;
+      btn.onclick=()=>openChatResponseReference(change.path,0);
+      set.appendChild(btn);
+    });
+    wrap.appendChild(set);
+  }
+  body.appendChild(wrap);
 }
 window.removeChatContextAttachment=removeChatContextAttachment;
 function appendApiKeyError(){
@@ -19551,8 +19652,9 @@ function addMessageFooter(msgEl,role){
 function showFollowups(container,suggestions){
   if(!suggestions||!suggestions.length)return;
   const div=document.createElement('div');div.className='followups';
+  div.setAttribute('aria-label','Suggested follow-up prompts');
   suggestions.forEach(s=>{
-    const btn=document.createElement('span');btn.className='followup-btn';
+    const btn=document.createElement('button');btn.type='button';btn.className='followup-btn';
     btn.textContent=s;btn.onclick=()=>{$('chat-input').value=s;doSend()};
     div.appendChild(btn);
   });
@@ -19704,6 +19806,7 @@ onStreamEnd=function(d){
         planBar.appendChild(planIcon);planBar.appendChild(planText);planBar.appendChild(implBtn);
         body.appendChild(planBar);
       }else{
+        renderChatResponseReferences(body,d.content);
         const suggestions=generateFollowups(d.content);
         showFollowups(body,suggestions);
       }
