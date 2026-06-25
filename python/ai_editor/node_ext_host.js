@@ -222,6 +222,77 @@ class Location {
 
 const NotebookCellKind = Object.freeze({ Markup: 1, Code: 2 });
 
+class NotebookRange {
+    constructor(start, end) {
+        const s = Number(start);
+        const e = Number(end);
+        if (!Number.isFinite(s) || s < 0) throw new Error('start must be positive');
+        if (!Number.isFinite(e) || e < 0) throw new Error('end must be positive');
+        this.start = Math.min(s, e);
+        this.end = Math.max(s, e);
+    }
+    get isEmpty() { return this.start === this.end; }
+    with(change) {
+        const nextStart = change && change.start !== undefined ? change.start : this.start;
+        const nextEnd = change && change.end !== undefined ? change.end : this.end;
+        if (nextStart === this.start && nextEnd === this.end) return this;
+        return new NotebookRange(nextStart, nextEnd);
+    }
+}
+
+let _nextNotebookOutputId = 1;
+
+class NotebookCellOutputItem {
+    constructor(data, mime = 'application/octet-stream') {
+        this.data = _contentToUint8Array(data);
+        this.mime = String(mime || 'application/octet-stream');
+        if (!/^[^/\s]+\/[^;\s]+(?:\s*;.*)?$/.test(this.mime)) {
+            throw new Error(`INVALID mime type: ${mime}. Must be in the format "type/subtype[;optionalparameter]"`);
+        }
+    }
+    static bytes(value, mime = 'application/octet-stream') {
+        return new NotebookCellOutputItem(value, mime);
+    }
+    static text(value, mime = 'text/plain') {
+        return new NotebookCellOutputItem(new TextEncoder().encode(String(value ?? '')), mime);
+    }
+    static json(value, mime = 'text/x-json') {
+        return NotebookCellOutputItem.text(JSON.stringify(value, undefined, '\t'), mime);
+    }
+    static stdout(value) {
+        return NotebookCellOutputItem.text(value, 'application/vnd.code.notebook.stdout');
+    }
+    static stderr(value) {
+        return NotebookCellOutputItem.text(value, 'application/vnd.code.notebook.stderr');
+    }
+    static error(err) {
+        return NotebookCellOutputItem.json({
+            name: err?.name,
+            message: err?.message,
+            stack: err?.stack,
+        }, 'application/vnd.code.notebook.error');
+    }
+}
+
+class NotebookCellOutput {
+    constructor(items, idOrMetadata, metadata) {
+        this.items = _dedupeNotebookOutputItems(
+            (Array.isArray(items) ? items : []).map(_notebookOutputItemFromPlain));
+        if (typeof idOrMetadata === 'string') {
+            this.id = idOrMetadata;
+            this.metadata = metadata && typeof metadata === 'object' ? metadata : undefined;
+        } else {
+            this.id = `output-${_nextNotebookOutputId++}`;
+            this.metadata = idOrMetadata && typeof idOrMetadata === 'object'
+                ? idOrMetadata
+                : (metadata && typeof metadata === 'object' ? metadata : undefined);
+        }
+    }
+    static ensureUniqueMimeTypes(items) {
+        return _dedupeNotebookOutputItems((Array.isArray(items) ? items : []).map(_notebookOutputItemFromPlain));
+    }
+}
+
 class NotebookCellData {
     constructor(kind, value, languageId, mime, outputs, metadata, executionSummary) {
         this.kind = Number(kind);
@@ -255,7 +326,7 @@ function _notebookCellDataFromPlain(cell) {
         source.value ?? source.text ?? '',
         source.languageId ?? source.language ?? 'plaintext',
         source.mime,
-        Array.isArray(source.outputs) ? source.outputs : [],
+        (Array.isArray(source.outputs) ? source.outputs : []).map(_notebookOutputFromPlain),
         source.metadata && typeof source.metadata === 'object' ? source.metadata : {},
         source.executionSummary,
     );
@@ -279,10 +350,45 @@ function _notebookCellDataPayload(cell) {
         value: data.value,
         languageId: data.languageId,
         mime: data.mime,
-        outputs: _plainBridgeValue(data.outputs || []),
+        outputs: (data.outputs || []).map(_notebookOutputPayload),
         metadata: _plainBridgeValue(data.metadata || {}),
         executionSummary: _plainBridgeValue(data.executionSummary),
     };
+}
+
+function _filterNotebookMetadata(metadata, transient) {
+    const source = metadata && typeof metadata === 'object' ? metadata : {};
+    const hidden = transient && typeof transient === 'object' ? transient : {};
+    const result = {};
+    for (const [key, value] of Object.entries(source)) {
+        if (hidden[key]) continue;
+        result[key] = value;
+    }
+    return result;
+}
+
+function _notebookDataForSerializer(notebook, options = {}) {
+    const data = new NotebookData([]);
+    data.metadata = _filterNotebookMetadata(
+        notebook?.metadata || notebook?._data?.metadata || {},
+        options.transientDocumentMetadata,
+    );
+    const cells = notebook && typeof notebook.getCells === 'function'
+        ? notebook.getCells()
+        : [];
+    data.cells = cells.map(cell => {
+        const cellData = new NotebookCellData(
+            cell.kind,
+            cell.document?.getText ? cell.document.getText() : '',
+            cell.document?.languageId || 'plaintext',
+            cell.mime,
+            options.transientOutputs ? [] : (cell.outputs || []).map(_notebookOutputFromPlain),
+            _filterNotebookMetadata(cell.metadata || {}, options.transientCellMetadata),
+            cell.executionSummary,
+        );
+        return cellData;
+    });
+    return data;
 }
 
 function _notebookDataPayload(data) {
@@ -323,6 +429,79 @@ function _notebookBytesPayload(value) {
     };
 }
 
+function _notebookOutputItemFromPlain(item) {
+    if (item instanceof NotebookCellOutputItem) return item;
+    const source = item && typeof item === 'object' ? item : {};
+    if (source.dataBase64 !== undefined) {
+        return new NotebookCellOutputItem(
+            Uint8Array.from(Buffer.from(String(source.dataBase64 || ''), 'base64')),
+            source.mime || 'application/octet-stream',
+        );
+    }
+    if (source.data !== undefined) {
+        return new NotebookCellOutputItem(source.data, source.mime || 'application/octet-stream');
+    }
+    if (source.value !== undefined || source.text !== undefined) {
+        return NotebookCellOutputItem.text(
+            source.value !== undefined ? source.value : source.text,
+            source.mime || 'text/plain',
+        );
+    }
+    return new NotebookCellOutputItem(new Uint8Array(), source.mime || 'application/octet-stream');
+}
+
+function _isNotebookStreamMime(mime) {
+    const normalized = String(mime || '').toLowerCase();
+    return normalized === 'application/vnd.code.notebook.stdout'
+        || normalized === 'application/vnd.code.notebook.stderr';
+}
+
+function _dedupeNotebookOutputItems(items) {
+    const seen = new Set();
+    const result = [];
+    for (const rawItem of Array.isArray(items) ? items : []) {
+        const item = _notebookOutputItemFromPlain(rawItem);
+        const mime = String(item.mime || '').toLowerCase();
+        if (seen.has(mime) && !_isNotebookStreamMime(mime)) continue;
+        seen.add(mime);
+        result.push(item);
+    }
+    return result;
+}
+
+function _notebookOutputFromPlain(output) {
+    if (output instanceof NotebookCellOutput) return output;
+    const source = output && typeof output === 'object' ? output : {};
+    return new NotebookCellOutput(
+        Array.isArray(source.items) ? source.items : [],
+        typeof source.id === 'string' ? source.id : source.metadata,
+        typeof source.id === 'string' ? source.metadata : undefined,
+    );
+}
+
+function _notebookOutputItemPayload(item) {
+    const outputItem = _notebookOutputItemFromPlain(item);
+    const buffer = Buffer.from(
+        outputItem.data.buffer,
+        outputItem.data.byteOffset,
+        outputItem.data.byteLength,
+    );
+    return {
+        mime: outputItem.mime,
+        dataBase64: buffer.toString('base64'),
+        dataText: buffer.toString('utf8'),
+    };
+}
+
+function _notebookOutputPayload(output) {
+    const normalized = _notebookOutputFromPlain(output);
+    return {
+        id: normalized.id,
+        items: normalized.items.map(_notebookOutputItemPayload),
+        metadata: _plainBridgeValue(normalized.metadata || {}),
+    };
+}
+
 function _notebookCellForDocument(notebook, cellData, index) {
     const cellUri = notebook.uri.with({
         scheme: 'vscode-notebook-cell',
@@ -354,6 +533,8 @@ function _createNotebookDocument(viewType, uri, data, options = {}) {
         isDirty: !!options.isDirty,
         isUntitled: uri.scheme === 'untitled',
         isClosed: false,
+        _serializerHandle: options.serializerHandle,
+        _serializerOptions: options.serializerOptions || {},
         metadata: notebookData.metadata || {},
         _data: notebookData,
         get cellCount() { return this._data.cells.length; },
@@ -369,14 +550,41 @@ function _createNotebookDocument(viewType, uri, data, options = {}) {
             return cells.slice(start, end);
         },
         save: async () => {
+            const serializer = _notebookSerializerByHandleOrViewType(
+                notebook._serializerHandle,
+                notebook.notebookType,
+            );
+            if (serializer && !notebook.isUntitled && notebook.uri.scheme === 'file') {
+                const tokenSource = new CancellationTokenSource();
+                const bytes = await serializer.entry.serializer.serializeNotebook(
+                    _notebookDataForSerializer(notebook, serializer.entry.options || {}),
+                    tokenSource.token,
+                );
+                await _workspaceFsWriteFile(notebook.uri, bytes);
+                notebook._serializerHandle = serializer.handle;
+                notebook._serializerOptions = serializer.entry.options || {};
+            }
             notebook.isDirty = false;
             _onDidSaveNotebookDocumentEmitter.fire(notebook);
             return true;
         },
+        close: async () => _closeNotebookDocument(notebook.uri),
+        dispose: () => _closeNotebookDocument(notebook.uri),
     };
     _notebookDocuments.set(uri.toString(), notebook);
     _onDidOpenNotebookDocumentEmitter.fire(notebook);
     return notebook;
+}
+
+function _closeNotebookDocument(uriInput) {
+    const uri = _workspaceUriFromInput(uriInput);
+    const key = uri.toString();
+    const notebook = _notebookDocuments.get(key);
+    if (!notebook || notebook.isClosed) return false;
+    notebook.isClosed = true;
+    _notebookDocuments.delete(key);
+    _onDidCloseNotebookDocumentEmitter.fire(notebook);
+    return true;
 }
 
 class ThemeColor {
@@ -3416,6 +3624,75 @@ function _notebookSerializerByHandleOrViewType(handle, viewType) {
     return null;
 }
 
+function _notebookSerializerByViewType(viewType) {
+    const wanted = String(viewType || '');
+    if (!wanted) return null;
+    for (const [handle, entry] of _notebookSerializers.entries()) {
+        if (entry.viewType === wanted) return { handle, entry };
+    }
+    return null;
+}
+
+function _notebookFilenamePatternMatches(pattern, uri) {
+    const normalizedPattern = String(pattern || '').replace(/\\/g, '/').toLowerCase();
+    if (!normalizedPattern) return false;
+    const resource = String(uri?.fsPath || uri?.path || '').replace(/\\/g, '/').toLowerCase();
+    const basename = path.posix.basename(resource);
+    if (normalizedPattern === '*' || normalizedPattern === basename || normalizedPattern === resource) {
+        return true;
+    }
+    if (normalizedPattern.startsWith('*.')) {
+        return basename.endsWith(normalizedPattern.slice(1));
+    }
+    if (normalizedPattern.startsWith('**/*.')) {
+        return basename.endsWith(normalizedPattern.slice(4));
+    }
+    const escaped = normalizedPattern
+        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*\*/g, '.*')
+        .replace(/\*/g, '[^/]*');
+    return new RegExp(`^${escaped}$`).test(resource)
+        || new RegExp(`^${escaped}$`).test(basename);
+}
+
+function _notebookContributionViewTypesForUri(uri) {
+    const matches = [];
+    for (const known of _knownExtensions.values()) {
+        const notebooks = known?.manifest?.contributes?.notebooks;
+        for (const contribution of Array.isArray(notebooks) ? notebooks : []) {
+            const viewType = String(
+                contribution?.type || contribution?.viewType || contribution?.id || '',
+            ).trim();
+            if (!viewType) continue;
+            const selectors = Array.isArray(contribution?.selector)
+                ? contribution.selector
+                : [];
+            if (!selectors.length) continue;
+            const matched = selectors.some(selector => {
+                if (typeof selector === 'string') {
+                    return _notebookFilenamePatternMatches(selector, uri);
+                }
+                return _notebookFilenamePatternMatches(selector?.filenamePattern, uri);
+            });
+            if (matched) matches.push(viewType);
+        }
+    }
+    return matches;
+}
+
+async function _notebookSerializerForUri(uri) {
+    const viewTypes = _notebookContributionViewTypesForUri(uri);
+    for (const viewType of viewTypes) {
+        await _activateKnownExtensionsForEvent(`onNotebook:${viewType}`);
+        const serializer = _notebookSerializerByViewType(viewType);
+        if (serializer) return serializer;
+    }
+    for (const [handle, entry] of _notebookSerializers.entries()) {
+        return { handle, entry };
+    }
+    return null;
+}
+
 function _registerNotebookSerializer(extDesc, viewType, serializer, options) {
     const normalized = String(viewType || '').trim();
     if (!normalized) throw new Error('viewType cannot be empty or just whitespace');
@@ -3456,12 +3733,37 @@ async function _openNotebookDocument(uriOrType, content) {
         const key = uriOrType.toString();
         const existing = _notebookDocuments.get(key);
         if (existing) return existing;
-        const viewType = String(content?.viewType || content?.notebookType || 'interactive');
-        return _createNotebookDocument(viewType, uriOrType, content || new NotebookData([]));
+        const explicitViewType = String(content?.viewType || content?.notebookType || '').trim();
+        if (content instanceof NotebookData || (content && Array.isArray(content.cells))) {
+            const viewType = explicitViewType || 'interactive';
+            const serializer = _notebookSerializerByViewType(viewType);
+            return _createNotebookDocument(viewType, uriOrType, content, {
+                isDirty: true,
+                serializerHandle: serializer?.handle,
+                serializerOptions: serializer?.entry?.options || {},
+            });
+        }
+        let serializer = explicitViewType
+            ? _notebookSerializerByViewType(explicitViewType)
+            : null;
+        if (!serializer) serializer = await _notebookSerializerForUri(uriOrType);
+        if (!serializer) throw new Error(`No notebook serializer found for ${uriOrType.toString()}`);
+        const tokenSource = new CancellationTokenSource();
+        const rawBytes = await _workspaceFsReadFile(uriOrType);
+        const notebookData = await serializer.entry.serializer.deserializeNotebook(
+            rawBytes,
+            tokenSource.token,
+        );
+        return _createNotebookDocument(serializer.entry.viewType, uriOrType, notebookData, {
+            isDirty: false,
+            serializerHandle: serializer.handle,
+            serializerOptions: serializer.entry.options || {},
+        });
     }
     if (typeof uriOrType === 'string') {
         const viewType = String(uriOrType || '').trim();
         if (!viewType) throw new Error('Invalid notebook type');
+        const serializer = _notebookSerializerByViewType(viewType);
         const uri = new Uri(
             'untitled',
             '',
@@ -3469,7 +3771,11 @@ async function _openNotebookDocument(uriOrType, content) {
             '',
             '',
         );
-        return _createNotebookDocument(viewType, uri, content || new NotebookData([]), { isDirty: !!content });
+        return _createNotebookDocument(viewType, uri, content || new NotebookData([]), {
+            isDirty: !!content,
+            serializerHandle: serializer?.handle,
+            serializerOptions: serializer?.entry?.options || {},
+        });
     }
     throw new Error('Invalid notebook arguments');
 }
@@ -6176,7 +6482,10 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         CallHierarchyOutgoingCall,
         TypeHierarchyItem,
         NotebookCellData,
+        NotebookCellOutput,
+        NotebookCellOutputItem,
         NotebookData,
+        NotebookRange,
         Disposable,
         EventEmitter,
         CancellationTokenSource,

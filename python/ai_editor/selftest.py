@@ -6096,11 +6096,15 @@ console.log("quick input filter helpers ok");
            in app_source)
     _check("extension notebook serializers bridge through Node host",
            "class NotebookCellData" in node_ext_host_source
+           and "class NotebookCellOutputItem" in node_ext_host_source
+           and "class NotebookCellOutput" in node_ext_host_source
+           and "class NotebookRange" in node_ext_host_source
            and "class NotebookData" in node_ext_host_source
            and "NotebookCellKind" in node_ext_host_source
            and "registerNotebookSerializer(viewType, serializer, options)"
            in node_ext_host_source
            and "openNotebookDocument(uriOrType, content)" in node_ext_host_source
+           and "contributes?.notebooks" in node_ext_host_source
            and "notebook_serializer_registered" in node_ext_host_source
            and "notebook_deserialize_request" in node_ext_host_source
            and "notebook_serialize_request" in node_ext_host_source
@@ -13625,11 +13629,28 @@ async function activate(context) {
     deserializedTexts: [],
     serializedCells: [],
     opened: [],
+    saved: [],
+    closed: [],
   };
   vscode.commands.registerCommand('selftest.node.notebookSerializerProbe', async () => {
+    const fs = require('node:fs');
     const eventDisposables = [
       vscode.workspace.onDidOpenNotebookDocument(document => {
         notebookSerializerState.opened.push({
+          uri: document.uri.toString(),
+          notebookType: document.notebookType,
+          cellCount: document.cellCount,
+        });
+      }),
+      vscode.workspace.onDidSaveNotebookDocument(document => {
+        notebookSerializerState.saved.push({
+          uri: document.uri.toString(),
+          notebookType: document.notebookType,
+          cellCount: document.cellCount,
+        });
+      }),
+      vscode.workspace.onDidCloseNotebookDocument(document => {
+        notebookSerializerState.closed.push({
           uri: document.uri.toString(),
           notebookType: document.notebookType,
           cellCount: document.cellCount,
@@ -13647,8 +13668,13 @@ async function activate(context) {
             parsed.code || 'console.log(1);',
             'javascript',
             undefined,
-            [],
-            { source: 'deserialize' },
+            [
+              new vscode.NotebookCellOutput([
+                vscode.NotebookCellOutputItem.text('uri-output', 'text/plain'),
+                vscode.NotebookCellOutputItem.json({ ok: true }, 'application/json'),
+              ], 'selftest-output', { origin: 'deserialize' }),
+            ],
+            { source: 'deserialize', scratch: 'drop-on-save' },
             { executionOrder: 7, success: true }
           ),
           new vscode.NotebookCellData(
@@ -13667,6 +13693,10 @@ async function activate(context) {
             value: cell.value,
             languageId: cell.languageId,
             metadata: cell.metadata,
+            outputCount: Array.isArray(cell.outputs) ? cell.outputs.length : -1,
+            outputItemMimes: (cell.outputs || []).flatMap(
+              output => (output.items || []).map(item => item.mime)
+            ),
           }))
         );
         return new TextEncoder().encode(JSON.stringify({
@@ -13675,6 +13705,8 @@ async function activate(context) {
             kind: cell.kind,
             value: cell.value,
             languageId: cell.languageId,
+            metadata: cell.metadata,
+            outputCount: Array.isArray(cell.outputs) ? cell.outputs.length : -1,
           })),
         }));
       },
@@ -13698,15 +13730,47 @@ async function activate(context) {
         ),
       ])
     );
+    const fileUri = vscode.Uri.joinPath(context.extensionUri, 'uri-open.selfnb');
+    fs.writeFileSync(fileUri.fsPath, JSON.stringify({
+      code: 'uri code',
+      markdown: 'uri markdown',
+    }), 'utf8');
+    const openedFromUri = await vscode.workspace.openNotebookDocument(fileUri);
+    const rangedCells = openedFromUri.getCells(new vscode.NotebookRange(0, 1));
+    openedFromUri.metadata.secret = 'drop-doc';
+    openedFromUri.metadata.public = 'keep-doc';
+    const workspaceNotebookCountBeforeClose = vscode.workspace.notebookDocuments.length;
+    const savedOk = await openedFromUri.save();
+    const savedPayload = JSON.parse(fs.readFileSync(fileUri.fsPath, 'utf8'));
+    const closedOk = await openedFromUri.close();
+    const workspaceNotebookCountAfterClose = vscode.workspace.notebookDocuments.length;
     eventDisposables.forEach(disposable => disposable.dispose());
     return {
       disposable: !!(disposable && disposable.dispose),
-      hasClasses: !!(vscode.NotebookData && vscode.NotebookCellData),
+      hasClasses: !!(
+        vscode.NotebookData
+        && vscode.NotebookCellData
+        && vscode.NotebookCellOutput
+        && vscode.NotebookCellOutputItem
+        && vscode.NotebookRange
+      ),
       codeKind: vscode.NotebookCellKind.Code,
       markupKind: vscode.NotebookCellKind.Markup,
       openedType: opened.notebookType,
       openedCellCount: opened.cellCount,
       openedCellText: opened.cellAt(0).document.getText(),
+      uriOpenedType: openedFromUri.notebookType,
+      uriOpenedDirty: openedFromUri.isDirty,
+      uriOpenedCellCount: openedFromUri.cellCount,
+      uriOpenedCellText: openedFromUri.cellAt(0).document.getText(),
+      uriOpenedOutputMime: openedFromUri.cellAt(0).outputs[0].items[0].mime,
+      rangeCellCount: rangedCells.length,
+      savedOk,
+      savedPayload,
+      closedOk,
+      closedState: openedFromUri.isClosed,
+      workspaceNotebookCountBeforeClose,
+      workspaceNotebookCountAfterClose,
       workspaceNotebookCount: vscode.workspace.notebookDocuments.length,
     };
   });
@@ -14269,6 +14333,11 @@ module.exports = { activate, deactivate };
                         "id": "selflang",
                         "aliases": ["Self Lang"],
                         "extensions": [".self"],
+                    }],
+                    "notebooks": [{
+                        "type": "selftest-notebook",
+                        "displayName": "Selftest Notebook",
+                        "selector": [{"filenamePattern": "*.selfnb"}],
                     }],
                     "configuration": {
                         "title": "Node Selftest",
@@ -17430,6 +17499,34 @@ module.exports = { activate, deactivate };
                        == "selftest-notebook"
                        and node_notebook_probe.get("openedCellCount") == 1
                        and node_notebook_probe.get("openedCellText") == "1 + 1"
+                       and node_notebook_probe.get("uriOpenedType")
+                       == "selftest-notebook"
+                       and node_notebook_probe.get("uriOpenedDirty") is False
+                       and node_notebook_probe.get("uriOpenedCellCount") == 2
+                       and node_notebook_probe.get("uriOpenedCellText") == "uri code"
+                       and node_notebook_probe.get("uriOpenedOutputMime")
+                       == "text/plain"
+                       and node_notebook_probe.get("rangeCellCount") == 1
+                       and node_notebook_probe.get("savedOk") is True
+                       and node_notebook_probe.get("savedPayload", {})
+                       .get("metadata", {}).get("public") == "keep-doc"
+                       and "secret" not in (
+                           node_notebook_probe.get("savedPayload", {})
+                           .get("metadata", {}))
+                       and node_notebook_probe.get("savedPayload", {})
+                       .get("cells", [{}])[0].get("metadata", {})
+                       .get("source") == "deserialize"
+                       and "scratch" not in (
+                           node_notebook_probe.get("savedPayload", {})
+                           .get("cells", [{}])[0].get("metadata", {}))
+                       and node_notebook_probe.get("savedPayload", {})
+                       .get("cells", [{}])[0].get("outputCount") == 0
+                       and node_notebook_probe.get("closedOk") is True
+                       and node_notebook_probe.get("closedState") is True
+                       and node_notebook_probe.get(
+                           "workspaceNotebookCountBeforeClose", 0)
+                       > node_notebook_probe.get(
+                           "workspaceNotebookCountAfterClose", -1)
                        and node_notebook_probe.get("workspaceNotebookCount") >= 1
                        and any(
                            item.get("viewType") == "selftest-notebook"
@@ -17445,6 +17542,9 @@ module.exports = { activate, deactivate };
                        and node_notebook_deserialized_cells[0].get(
                            "languageId") == "javascript"
                        and node_notebook_deserialized_cells[0].get(
+                           "outputs", [{}])[0].get("items", [{}])[0].get(
+                               "mime") == "text/plain"
+                       and node_notebook_deserialized_cells[0].get(
                            "executionSummary", {}).get("executionOrder") == 7
                        and node_notebook_deserialized_cells[1].get("kind") == 1
                        and node_notebook_serialize.get("ok") is True
@@ -17454,6 +17554,12 @@ module.exports = { activate, deactivate };
                            node_notebook_state.get("opened", []))
                        and '{"code":"const answer = 42;","markdown":"# Demo"}'
                        in node_notebook_state.get("deserializedTexts", [])
+                       and any(
+                           item.get("notebookType") == "selftest-notebook"
+                           for item in node_notebook_state.get("saved", []))
+                       and any(
+                           item.get("notebookType") == "selftest-notebook"
+                           for item in node_notebook_state.get("closed", []))
                        and node_notebook_state.get("serializedCells"),
                        json.dumps({
                            "probe": node_notebook_probe,
