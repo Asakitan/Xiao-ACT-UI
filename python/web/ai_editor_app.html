@@ -988,6 +988,8 @@ pre.code-block { overflow:visible; }
 #ctx-menu .ctx-item { padding:4px 16px; font-size:12px; color:var(--fg); cursor:pointer;
   display:flex; align-items:center; gap:8px; white-space:nowrap; }
 #ctx-menu .ctx-item:hover { background:var(--bg-hover); }
+#ctx-menu .ctx-item.disabled { color:var(--fg-dim); cursor:default; opacity:.55; }
+#ctx-menu .ctx-item.disabled:hover { background:transparent; }
 #ctx-menu .ctx-item .shortcut { margin-left:auto; color:var(--fg-dim); font-size:11px; }
 #ctx-menu .ctx-sep { height:1px; background:var(--border); margin:4px 0; }
 
@@ -13638,17 +13640,27 @@ function extensionTreeItemTitle(node){
 function showExtensionActionMenu(x,y,actions,runner){
   const menu=$('ctx-menu');if(!menu)return;
   menu.innerHTML='';
+  let lastGroup=null;
   (actions||[]).forEach(action=>{
+    const group=String(action.groupName||action.group||'');
+    if(lastGroup!==null&&group!==lastGroup){
+      const sep=document.createElement('div');
+      sep.className='ctx-sep';
+      menu.appendChild(sep);
+    }
+    lastGroup=group;
     const d=document.createElement('div');d.className='ctx-item';
+    if(action.disabled)d.classList.add('disabled');
     d.textContent=action.title||action.command||'Command';
-    d.onclick=()=>{menu.style.display='none';runner(action)};
+    if(action.alt&&action.alt.command)d.title='Alt: '+(action.alt.title||action.alt.command);
+    d.onclick=()=>{if(action.disabled)return;menu.style.display='none';runner(action)};
     menu.appendChild(d);
   });
   if(!menu.children.length)return;
   menu.style.display='block';menu.style.left=x+'px';menu.style.top=y+'px';
 }
 function runExtensionViewAction(action){
-  if(action&&action.command)call('execute_command',action.command);
+  if(action&&action.command&&!action.disabled)call('execute_command',action.command);
 }
 function extensionWelcomeEntries(view,state){
   const stateEntries=state&&Array.isArray(state.welcome)?state.welcome:[];
@@ -13730,7 +13742,7 @@ function appendExtensionWelcomeContent(parent,entries){
   return true;
 }
 function runExtensionTreeItemAction(viewId,node,action){
-  if(!action||!action.command)return;
+  if(!action||!action.command||action.disabled)return;
   if(viewId&&node&&node.handle)call('execute_extension_tree_item_action',viewId,node.handle,action.command);
   else call('execute_command',action.command);
 }
@@ -13870,6 +13882,7 @@ function appendExtensionTitleActions(title,view,state){
     btn.style.cssText='width:22px;height:22px;border:0;background:transparent;color:var(--fg-dim);padding:0';
     btn.textContent=extensionActionGlyph(action);
     btn.title=action.title||action.command||'Command';
+    btn.disabled=!!action.disabled;
     btn.onclick=e=>{e.stopPropagation();runExtensionViewAction(action)};
     box.appendChild(btn);
   });

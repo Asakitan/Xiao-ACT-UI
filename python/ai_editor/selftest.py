@@ -5360,6 +5360,10 @@ console.log("extension setting schema helpers ok");
             and "call('list_extension_view_containers','panel')" in html
             and "className='ptab extension-panel-tab'" in html
             and "className='terminal-panel extension-panel-container'" in html
+            and "if(action.disabled)d.classList.add('disabled')" in html
+            and "if(action.alt&&action.alt.command)d.title='Alt: '" in html
+            and "if(action&&action.command&&!action.disabled)" in html
+            and "#ctx-menu .ctx-item.disabled" in html
             and "activateBottomPanelTab(document.querySelector('.ptab[data-ptab=\"terminal\"]'))" in html)
     _check("frontend renders extension QuickInput dynamically",
            "id=\"quick-input-host\"" in html
@@ -10683,18 +10687,51 @@ def test_app_extension_runtime_support() -> None:
                         "command": "selftest.activity.openItem",
                         "title": "Open Activity Item",
                     },
+                    {
+                        "command": "selftest.activity.disabled",
+                        "title": "Disabled Activity",
+                    },
+                    {
+                        "command": "selftest.activity.alt",
+                        "title": "Alternate Activity",
+                    },
                 ],
                 "menus": {
-                    "view/title": [{
-                        "command": "selftest.activity.refresh",
-                        "when": "view == selftest.activity.tree",
-                        "group": "navigation@1",
-                    }],
-                    "view/item/context": [{
-                        "command": "selftest.activity.openItem",
-                        "when": "view == selftest.activity.tree && viewItem == branch",
-                        "group": "inline@1",
-                    }],
+                    "view/title": [
+                        {
+                            "command": "selftest.activity.openItem",
+                            "when": "view == selftest.activity.tree",
+                            "group": "z-other@1",
+                        },
+                        {
+                            "command": "selftest.activity.refresh",
+                            "when": "view == selftest.activity.tree",
+                            "group": "navigation@1",
+                            "alt": {
+                                "command": "selftest.activity.alt",
+                                "title": "Alt Refresh",
+                            },
+                        },
+                        {
+                            "command": "selftest.activity.disabled",
+                            "when": "view == selftest.activity.tree",
+                            "enablement": "viewItem == never",
+                            "group": "navigation@2",
+                        },
+                    ],
+                    "view/item/context": [
+                        {
+                            "command": "selftest.activity.openItem",
+                            "when": "view == selftest.activity.tree && viewItem == branch",
+                            "group": "inline@1",
+                        },
+                        {
+                            "command": "selftest.activity.disabled",
+                            "when": "view == selftest.activity.tree && viewItem == branch",
+                            "enablement": "viewItem == missing",
+                            "group": "inline@2",
+                        },
+                    ],
                 },
                 "viewsContainers": {
                     "activitybar": [{
@@ -11030,11 +11067,29 @@ def test_app_extension_runtime_support() -> None:
                and activity_tree_nodes[1].get("resourceUri")
                == "file:///workspace/node-b.txt?from=test")
         _check("activity tree views expose contributed title and item actions",
-               activity_views.get("selftest.activity.tree", {})
-               .get("runtimeState", {}).get("titleActions", [{}])[0].get("command")
-               == "selftest.activity.refresh"
+               [action.get("command") for action in activity_views.get(
+                   "selftest.activity.tree", {}).get(
+                       "runtimeState", {}).get("titleActions", [])[:3]]
+               == [
+                   "selftest.activity.refresh",
+                   "selftest.activity.disabled",
+                   "selftest.activity.openItem",
+               ]
+               and activity_views.get("selftest.activity.tree", {})
+               .get("runtimeState", {}).get("titleActions", [{}])[0]
+               .get("navigation") is True
+               and activity_views.get("selftest.activity.tree", {})
+               .get("runtimeState", {}).get("titleActions", [{}, {}])[1]
+               .get("disabled") is True
+               and activity_views.get("selftest.activity.tree", {})
+               .get("runtimeState", {}).get("titleActions", [{}])[0]
+               .get("alt", {}).get("command") == "selftest.activity.alt"
+               and activity_tree_nodes[0].get("actions", [{}])[0].get("inline")
+               is True
                and activity_tree_nodes[0].get("actions", [{}])[0].get("command")
-               == "selftest.activity.openItem")
+               == "selftest.activity.openItem"
+               and activity_tree_nodes[0].get("actions", [{}, {}])[1]
+               .get("disabled") is True)
         activity_tree_handle = activity_tree_nodes[0].get("handle", "")
         loaded_activity_children = api.load_extension_tree_children(
             "selftest.activity.tree", activity_tree_handle)

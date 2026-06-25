@@ -10905,7 +10905,7 @@ class AIEditorAPI:
             if action:
                 result.append(action)
         result.sort(key=lambda action: (
-            str(action.get("group", "")),
+            int(action.get("groupRank", 100)),
             float(action.get("order", 0.0)),
             str(action.get("title", "")).lower(),
         ))
@@ -10919,10 +10919,28 @@ class AIEditorAPI:
             return {}
         command_record = self._ext_host.ext_points.get_command_contribution(
             command_id)
+        group_name = self._extension_menu_group_name(item.get("group", ""))
+        enabled = self._extension_when_matches(
+            item.get("enablement", ""), context)
+        alt = item.get("alt")
+        alt_preview: Dict[str, Any] = {}
+        if isinstance(alt, str) and alt:
+            alt_preview = {"command": alt, "title": alt}
+        elif isinstance(alt, dict):
+            alt_command = str(alt.get("command") or alt.get("id") or "")
+            if alt_command:
+                alt_record = self._ext_host.ext_points.get_command_contribution(
+                    alt_command)
+                alt_preview = {
+                    "command": alt_command,
+                    "title": str(
+                        alt.get("title")
+                        or alt_record.get("title")
+                        or alt_command),
+                }
         title = (
             item.get("title")
             or command_record.get("title")
-            or item.get("alt")
             or command_id
         )
         return {
@@ -10936,11 +10954,33 @@ class AIEditorAPI:
                 item.get("icon") or command_record.get("icon")),
             "extension_id": str(item.get("_extensionId", "")),
             "group": str(item.get("group", "")),
+            "groupName": group_name,
+            "groupRank": self._extension_menu_group_rank(group_name),
+            "inline": group_name == "inline",
+            "navigation": group_name == "navigation",
             "order": self._extension_menu_order(item.get("group", "")),
             "when": str(item.get("when", "")),
+            "enablement": str(item.get("enablement", "")),
+            "enabled": enabled,
+            "disabled": not enabled,
+            "alt": alt_preview,
             "view": context.get("view", ""),
             "viewItem": context.get("viewItem", ""),
         }
+
+    @staticmethod
+    def _extension_menu_group_name(group: Any) -> str:
+        return str(group or "").split("@", 1)[0].strip()
+
+    @staticmethod
+    def _extension_menu_group_rank(group_name: str) -> int:
+        if group_name == "navigation":
+            return 0
+        if group_name == "inline":
+            return 10
+        if not group_name:
+            return 50
+        return 100
 
     @staticmethod
     def _extension_menu_order(group: Any) -> float:
