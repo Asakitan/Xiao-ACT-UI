@@ -3258,6 +3258,25 @@ def test_phase1_ai_editor_regressions() -> None:
             and "window.openChatHistory=openChatHistory" in html
             and "else if(cmd==='/history')openChatHistory();" in html
             and "{label:'Chat History',shortcut:'',action:()=>openChatHistory()}" in html)
+    _check("frontend Assistant shell follows Copilot Chat structure",
+           'class="chat-panel copilot-chat-surface"' in html
+           and 'role="log" aria-live="polite" aria-label="Assistant conversation"' in html
+           and "function ensureChatMessagesInner()" in html
+           and "function normalizeChatSystemText(text)" in html
+           and "function latestChatMessageBody(role)" in html
+           and "function showChatWelcomeIfEmpty()" in html
+           and "interactive-item-container" in html
+           and "interactive-request" in html
+           and "interactive-response" in html
+           and "chat-welcome-mark" in html
+           and "welcome-prompt-btn" in html
+           and "chat-composer-action" in html
+           and "chat-composer-meta" in html
+           and "attach-name" in html
+           and "const value=normalizeChatSystemText(text);" in html
+           and "if(!value){showChatWelcomeIfEmpty();return null}" in html
+           and "renderWelcome();\n  setStatus(t('new_chat_title')" in html
+           and "const body=latestChatMessageBody('assistant');" in html)
     _check("frontend supports dynamic extension webview provider tabs",
             "function isExtensionWebviewProvider(providerOrId)" in html
             and "dynamicExtensionProviderDefs" in html
