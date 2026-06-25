@@ -9089,7 +9089,11 @@ function highlightExplorerSelection(){
 }
 
 function explorerDecoration(entry){
-  const list=Array.isArray(entry&&entry.decorations)?entry.decorations:[entry&&entry.decoration];
+  const primary=entry&&entry.primaryDecoration;
+  if(primary&&(primary.badge||primary.tooltip||primary.color))return primary;
+  const direct=entry&&entry.decoration;
+  if(direct&&(direct.badge||direct.tooltip||direct.color))return direct;
+  const list=Array.isArray(entry&&entry.decorations)?entry.decorations:[direct];
   return list.find(dec=>dec&&(dec.badge||dec.tooltip||dec.color))||null;
 }
 
@@ -9097,12 +9101,15 @@ function clearExplorerDecoration(row,label){
   row.querySelectorAll('.tree-decoration-badge').forEach(el=>el.remove());
   if(label)label.style.color='';
   row.title=row.dataset.baseTitle||row.title||'';
+  delete row.dataset.decorationCount;
 }
 
 function applyExplorerDecoration(row,label,entry){
   clearExplorerDecoration(row,label);
   const decoration=explorerDecoration(entry);
   if(!decoration)return;
+  const decorationCount=Array.isArray(entry&&entry.decorations)?entry.decorations.length:1;
+  row.dataset.decorationCount=String(Math.max(1,decorationCount));
   const tooltip=String(decoration.tooltip||'');
   const color=themeColorToCss(decoration.color,'');
   if(tooltip)row.title=(row.title?row.title+'\n':'')+tooltip;
@@ -9114,6 +9121,8 @@ function applyExplorerDecoration(row,label,entry){
   badge.textContent=badgeText;
   if(color)badge.style.color=color;
   if(tooltip)badge.title=tooltip;
+  badge.setAttribute('aria-label',tooltip||badgeText);
+  badge.dataset.decorationCount=row.dataset.decorationCount;
   row.appendChild(badge);
 }
 

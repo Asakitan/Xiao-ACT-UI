@@ -25,7 +25,7 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set
 from urllib.parse import quote, unquote, urlparse, urlsplit, urlunsplit
 
 # Ensure package root on path
@@ -4161,16 +4161,20 @@ class AIEditorAPI:
         result: Dict[str, Any] = {}
         badge = value.get("badge")
         if badge is not None:
-            result["badge"] = str(badge)[:2]
+            badge_text = str(badge)[:2]
+            if badge_text:
+                result["badge"] = badge_text
         tooltip = value.get("tooltip")
         if tooltip is not None:
-            result["tooltip"] = str(tooltip)
+            tooltip_text = str(tooltip).strip()
+            if tooltip_text:
+                result["tooltip"] = tooltip_text
         color = value.get("color")
         color_id = ""
         if isinstance(color, dict):
-            color_id = str(color.get("id") or color.get("value") or "")
+            color_id = str(color.get("id") or color.get("value") or "").strip()
         elif color is not None:
-            color_id = str(getattr(color, "id", "") or color)
+            color_id = str(getattr(color, "id", "") or color).strip()
         if color_id:
             result["color"] = {"id": color_id}
         if "propagate" in value:
@@ -4178,6 +4182,64 @@ class AIEditorAPI:
         return result if any(
             key in result for key in ("badge", "tooltip", "color")
         ) else {}
+
+    @staticmethod
+    def _primary_file_decoration_payload(
+            decorations: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Compose provider decorations into the single Explorer visual slot."""
+        if not decorations:
+            return {}
+        primary: Dict[str, Any] = {}
+        tooltips: List[str] = []
+        badge_color: Dict[str, Any] = {}
+        first_color: Dict[str, Any] = {}
+        propagate = False
+        for decoration in decorations:
+            if not isinstance(decoration, dict):
+                continue
+            tooltip = str(decoration.get("tooltip") or "").strip()
+            if tooltip and tooltip not in tooltips:
+                tooltips.append(tooltip)
+            color = decoration.get("color")
+            if isinstance(color, dict) and color.get("id"):
+                color_payload = {"id": str(color.get("id"))}
+                if not first_color:
+                    first_color = color_payload
+                if not badge_color and decoration.get("badge"):
+                    badge_color = color_payload
+            if decoration.get("propagate"):
+                propagate = True
+            if not primary.get("badge") and decoration.get("badge"):
+                primary["badge"] = str(decoration.get("badge"))[:2]
+            if not primary.get("color") and badge_color:
+                primary["color"] = dict(badge_color)
+        if tooltips:
+            primary["tooltip"] = "\n".join(tooltips)
+        if "color" not in primary and first_color:
+            primary["color"] = dict(first_color)
+        if propagate:
+            primary["propagate"] = True
+        return primary if any(
+            key in primary for key in ("badge", "tooltip", "color")
+        ) else {}
+
+    @staticmethod
+    def _dedupe_file_decorations(
+            decorations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        deduped: List[Dict[str, Any]] = []
+        seen: Set[str] = set()
+        for decoration in decorations:
+            if not isinstance(decoration, dict) or not decoration:
+                continue
+            try:
+                key = json.dumps(decoration, sort_keys=True)
+            except Exception:
+                key = str(decoration)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(decoration)
+        return deduped
 
     def _workspace_file_decoration_change_paths(
             self, value: Any) -> List[str]:
@@ -4253,7 +4315,7 @@ class AIEditorAPI:
             payload = self._safe_file_decoration_payload(item)
             if payload:
                 decorations.append(payload)
-        return decorations
+        return self._dedupe_file_decorations(decorations)
 
     def _workspace_propagated_file_decorations(
             self, full: str) -> List[Dict[str, Any]]:
@@ -4363,7 +4425,9 @@ class AIEditorAPI:
                 self._workspace_file_decorations(full, decorate_entries)
                 if decorate_entries else [])
             if decorations:
-                entry["decoration"] = decorations[0]
+                primary = self._primary_file_decoration_payload(decorations)
+                entry["primaryDecoration"] = primary
+                entry["decoration"] = primary
                 entry["decorations"] = decorations
             entries.append(entry)
         entries.sort(key=lambda entry: (
@@ -4383,9 +4447,11 @@ class AIEditorAPI:
         if not os.path.exists(full):
             return {"error": f"Path not found: {rel_path}", "decorations": []}
         decorations = self._workspace_file_decorations(full)
+        primary = self._primary_file_decoration_payload(decorations)
         return {
             "path": self._workspace_rel_path(self._workspace_root(), full),
-            "decoration": decorations[0] if decorations else {},
+            "primaryDecoration": primary,
+            "decoration": primary,
             "decorations": decorations,
         }
 
@@ -11408,7 +11474,9 @@ class AIEditorAPI:
                 resource_uri, decoration_providers_available,
                 decoration_cache)
             if decorations:
-                node["decoration"] = decorations[0]
+                primary = self._primary_file_decoration_payload(decorations)
+                node["primaryDecoration"] = primary
+                node["decoration"] = primary
                 node["decorations"] = decorations
         if icon_path:
             node["iconPath"] = icon_path

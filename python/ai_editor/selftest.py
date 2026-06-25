@@ -2081,6 +2081,12 @@ def test_app_settings_parity() -> None:
             fh.write("# hi\n")
         with open(os.path.join(tmpdir, "style.css"), "w", encoding="utf-8") as fh:
             fh.write("body{}\n")
+        with open(os.path.join(tmpdir, "empty-badge.txt"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("empty\n")
+        with open(os.path.join(tmpdir, "long-badge.txt"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("long\n")
         tree_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
         tree_api._workspace_root = lambda: tmpdir
         from ai_editor.extension_host import ExtensionHost, EventEmitter
@@ -2121,6 +2127,34 @@ def test_app_settings_parity() -> None:
                         }
                 if str(uri).endswith("style.css"):
                     return {
+                        "badge": "",
+                        "tooltip": "CSS decoration",
+                        "color": "gitDecoration.ignoredResourceForeground",
+                    }
+                if str(uri).endswith("empty-badge.txt"):
+                    return {
+                        "badge": "",
+                        "tooltip": "Tooltip without badge",
+                    }
+                if str(uri).endswith("long-badge.txt"):
+                    return {
+                        "badge": "LONG",
+                        "tooltip": "Long badge",
+                    }
+                return None
+
+        class _SecondaryWorkspaceDecorationProvider:
+            def provideFileDecoration(self, uri, token):
+                if str(uri).endswith("README.md"):
+                    return {
+                        "badge": "!",
+                        "tooltip": "Needs attention",
+                        "color": {
+                            "id": "gitDecoration.deletedResourceForeground",
+                        },
+                    }
+                if str(uri).endswith("style.css"):
+                    return {
                         "tooltip": "CSS decoration",
                         "color": "gitDecoration.ignoredResourceForeground",
                     }
@@ -2129,6 +2163,9 @@ def test_app_settings_parity() -> None:
         decoration_provider = _WorkspaceDecorationProvider()
         decoration_disposable = tree_api._vscode_ns.build()["window"][
             "registerFileDecorationProvider"](decoration_provider)
+        secondary_decoration_disposable = tree_api._vscode_ns.build()[
+            "window"]["registerFileDecorationProvider"](
+                _SecondaryWorkspaceDecorationProvider())
         tree = tree_api.list_workspace_tree()
         root_names = {entry.get("name") for entry in tree.get("entries", [])}
         _check("workspace tree filters ignored directories",
@@ -2143,10 +2180,14 @@ def test_app_settings_parity() -> None:
             {})
         _check("workspace tree includes extension file decorations",
                readme_entry.get("decoration", {}).get("badge") == "M"
-               and readme_entry.get("decoration", {}).get("tooltip")
-               == "Modified by extension"
+               and readme_entry.get("primaryDecoration", {}).get("badge") == "M"
+               and "Modified by extension" in readme_entry.get(
+                   "decoration", {}).get("tooltip", "")
+               and "Needs attention" in readme_entry.get(
+                   "decoration", {}).get("tooltip", "")
                and readme_entry.get("decoration", {}).get("color", {})
-               .get("id") == "gitDecoration.modifiedResourceForeground")
+               .get("id") == "gitDecoration.modifiedResourceForeground"
+               and len(readme_entry.get("decorations", [])) == 2)
         src_entry = next(
             (entry for entry in tree.get("entries", [])
              if entry.get("name") == "src"),
@@ -2157,13 +2198,28 @@ def test_app_settings_parity() -> None:
         readme_decoration = tree_api.workspace_file_decorations("README.md")
         _check("workspace_file_decorations returns single path decorations",
                readme_decoration.get("decoration", {}).get("badge") == "M"
+               and readme_decoration.get("primaryDecoration", {}).get("badge") == "M"
+               and "Needs attention" in readme_decoration.get(
+                   "decoration", {}).get("tooltip", "")
                and readme_decoration.get("path") == "README.md")
         css_decoration = tree_api.workspace_file_decorations("style.css")
         _check("workspace_file_decorations preserves color-only decorations",
                css_decoration.get("decoration", {}).get("tooltip")
                == "CSS decoration"
                and css_decoration.get("decoration", {}).get("color", {})
-               .get("id") == "gitDecoration.ignoredResourceForeground")
+               .get("id") == "gitDecoration.ignoredResourceForeground"
+               and len(css_decoration.get("decorations", [])) == 1)
+        empty_badge_decoration = tree_api.workspace_file_decorations(
+            "empty-badge.txt")
+        _check("workspace_file_decorations filters empty badges",
+               "badge" not in empty_badge_decoration.get("decoration", {})
+               and empty_badge_decoration.get("decoration", {}).get(
+                   "tooltip") == "Tooltip without badge")
+        long_badge_decoration = tree_api.workspace_file_decorations(
+            "long-badge.txt")
+        _check("workspace_file_decorations clamps long badges",
+               long_badge_decoration.get("decoration", {}).get("badge")
+               == "LO")
         src_decoration = tree_api.workspace_file_decorations("src")
         _check("workspace_file_decorations returns propagated folder decorations",
                src_decoration.get("decoration", {}).get("badge") == "P")
@@ -2190,8 +2246,10 @@ def test_app_settings_parity() -> None:
             })
         _check("extension TreeView nodes include file decorations",
                readme_tree_node.get("decoration", {}).get("badge") == "M"
-               and readme_tree_node.get("decorations", [{}])[0].get(
-                   "tooltip") == "Modified by extension")
+               and readme_tree_node.get("primaryDecoration", {}).get(
+                   "badge") == "M"
+               and "Needs attention" in readme_tree_node.get(
+                   "decoration", {}).get("tooltip", ""))
 
         class _RepeatedResourceTreeProvider:
             def getChildren(self, element=None):
@@ -2222,6 +2280,7 @@ def test_app_settings_parity() -> None:
             tmpdir, "README.md")))
         _check("local file decoration provider dispose removes listener",
                len(decoration_events) == event_count_after_dispose)
+        secondary_decoration_disposable.dispose()
         opened = tree_api.open_workspace_file("src/sample.py")
         _check("open_workspace_file returns content and language",
                opened.get("path") == "src/sample.py"
@@ -5570,6 +5629,9 @@ console.log("quick input filter helpers ok");
            and "call('open_workspace_file',relPath||'')" in html
            and "tree-decoration-badge" in html
            and "function applyExplorerDecoration" in html
+           and "entry&&entry.primaryDecoration" in html
+           and "row.dataset.decorationCount" in html
+           and "badge.dataset.decorationCount" in html
            and "themeColorToCss(decoration.color" in html
            and "function refreshVisibleExplorerDecorations(paths)" in html
            and "const limit=8" in html
