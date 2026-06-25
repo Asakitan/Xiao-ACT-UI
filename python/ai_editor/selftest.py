@@ -5245,6 +5245,10 @@ console.log("frontend signature help docs ok");
             and "function extensionSettingExperimentMetadata(schema,key)" in html
             and "appendExtensionSettingExperimentBadge(head,experimentMeta)" in html
             and "addFilterAction('Experiment','@experiment')" in html
+            and "function extensionSettingAgentsWindowMetadata(schema,type)" in html
+            and "appendExtensionSettingAgentsWindowBadge(head,agentsMeta)" in html
+            and "addFilterAction('Agents Window','@agentsWindow')" in html
+            and "const agentsWindowOk=(!query.agentsWindowOnly||rowTags.includes('agents-window'))" in html
             and "Default Locked" in html
             and "default-locked" in html
             and "Policy:" in html
@@ -5358,6 +5362,8 @@ console.log("frontend signature help docs ok");
             "appendExtensionSettingPolicyBadge",
             "extensionSettingExperimentMetadata",
             "appendExtensionSettingExperimentBadge",
+            "extensionSettingAgentsWindowMetadata",
+            "appendExtensionSettingAgentsWindowBadge",
             "extensionSettingSourceDisplay",
             "extensionSettingDefaultSourceText",
             "extensionSettingWorkspaceTrustMetadata",
@@ -5571,6 +5577,14 @@ const experimentSchema = {
 const legacyExperimentSchema = {
   type: "boolean",
   tags: ["onExP"]
+};
+const agentsWindowSchema = {
+  type: "string",
+  agentsWindow: { default: "agentsDefault", readOnly: true }
+};
+const agentsWindowObjectSchema = {
+  type: "object",
+  agentsWindow: { default: { "*.md": "vscode.markdown.preview.editor" } }
 };
 const sourceSchema = {
   type: "string",
@@ -5808,8 +5822,9 @@ assert(schemaFeatureTags.includes("conditional")
        && extensionSettingSchemaFeatureTags(searchSchema, "string").includes("enum")
        && extensionSettingSchemaFeatureTags(dependencySchema, "object").includes("dependency")
        && extensionSettingSchemaFeatureTags(rangedStringSchema, "string").includes("constraint")
-       && extensionSettingSchemaFeatureTags(experimentSchema, "string").includes("experiment"),
-       "schema feature tags include conditional required enum dependency constraint experiment");
+       && extensionSettingSchemaFeatureTags(experimentSchema, "string").includes("experiment")
+       && extensionSettingSchemaFeatureTags(agentsWindowSchema, "string").includes("agents-window"),
+       "schema feature tags include conditional required enum dependency constraint experiment agents window");
 const schemaDetails = extensionSettingSchemaDetailItems(conditionalSchema, "object", {});
 const requiredDetails = extensionSettingSchemaDetailItems(objectSchema, "object", {});
 assert(requiredDetails.some(item => item.label === "Required" && item.text.indexOf("level") >= 0)
@@ -5840,6 +5855,11 @@ assert(experimentDetails.some(item => item.label === "Experiment"
        && item.text.indexOf("config.selftest.experiment") >= 0
        && item.text.indexOf("updates automatically") >= 0),
        "schema detail items include experiment metadata");
+const agentsDetails = extensionSettingSchemaDetailItems(agentsWindowSchema, "string", "");
+assert(agentsDetails.some(item => item.label === "Agents Window"
+       && item.text.indexOf("default: agentsDefault") >= 0
+       && item.text.indexOf("read-only") >= 0),
+       "schema detail items include agents window metadata");
 const schemaDetailHost = makeNode("div");
 appendExtensionSettingSchemaDetails(schemaDetailHost, conditionalSchema, "object", {});
 assert(schemaDetailHost.children.some(n => n.className === "ext-setting-schema-details"
@@ -5867,6 +5887,9 @@ assert(extensionSettingSchemaSummary({ restricted: true }, "boolean").indexOf("w
 assert(extensionSettingSchemaSummary(experimentSchema, "string").indexOf("experiment: auto") >= 0
        && extensionSettingSchemaSummary(experimentSchema, "string").indexOf("experiment name: config.selftest.experiment") >= 0,
        "experiment schema summary includes mode and name");
+assert(extensionSettingSchemaSummary(agentsWindowSchema, "string").indexOf("agents window read-only") >= 0
+       && extensionSettingSchemaSummary(agentsWindowSchema, "string").indexOf("agents default: agentsDefault") >= 0,
+       "agents window schema summary includes default and read-only");
 assert(extensionSettingDeprecationText(deprecatedSchema) === "**Use** `new.setting`.",
        "markdown deprecation preferred");
 assert(extensionSettingDeprecationText({ deprecationMessage: "Use fallback." }) === "Use fallback.",
@@ -5884,12 +5907,13 @@ assert(extensionSettingParseQuery("@hidden internal", false, false).hiddenOnly =
        && extensionSettingParseQuery("", false, true).hiddenOnly === true,
        "settings query parses hidden filter");
 const metadataQuery = extensionSettingParseQuery(
-  '@ext:selftest @type:boolean @policy:SelftestPolicy @experiment:auto @restricted @sync:locked @value:"auto mode" @default:false render',
+  '@ext:selftest @type:boolean @policy:SelftestPolicy @experiment:auto @agentsWindow:read-only @restricted @sync:locked @value:"auto mode" @default:false render',
   false);
 assert(metadataQuery.extensions[0] === "selftest"
        && metadataQuery.types[0] === "boolean"
        && metadataQuery.policies[0] === "selftestpolicy"
        && metadataQuery.experiments[0] === "auto"
+       && metadataQuery.agentsWindows[0] === "read-only"
        && metadataQuery.restrictedOnly === true
        && metadataQuery.syncs[0] === "sync-locked"
        && metadataQuery.values[0] === "auto mode"
@@ -5899,6 +5923,9 @@ assert(metadataQuery.extensions[0] === "selftest"
 assert(extensionSettingParseQuery("@experiment render", false).experimentOnly === true
        && extensionSettingParseQuery("@experiment render", false).text === "render",
        "settings query parses experiment-only filter");
+assert(extensionSettingParseQuery("@agentsWindow render", false).agentsWindowOnly === true
+       && extensionSettingParseQuery("@agentsWindow render", false).text === "render",
+       "settings query parses agents window filter");
 const vscodeStyleQuery = extensionSettingParseQuery(
   '@id:selftest.* @feature:"Selftest Settings" @lang:selflang @tag:preview,experimental @ext:"selftest.settings-pack" @stable render',
   false);
@@ -6056,6 +6083,7 @@ const suggestionRows = [
     extSettingType: "number",
     extSettingPolicy: "selftestpolicy\nextensions\n1.2.3",
     extSettingExperiment: "config.selftest.experiment\nauto",
+    extSettingAgentsWindow: "read-only\ndefault\nagentsdefault",
     extSettingTags: "preview\nsync-ignored\ntarget:workspace",
   } },
   { dataset: {
@@ -6086,8 +6114,14 @@ assert(broadSuggestions.includes("@modified ")
        && broadSuggestions.includes("@policy:selftestpolicy ")
        && broadSuggestions.includes("@policy:extensions ")
        && broadSuggestions.includes("@experiment:auto ")
-       && broadSuggestions.includes("@experiment:config.selftest.experiment "),
+       && broadSuggestions.includes("@experiment:config.selftest.experiment ")
+       && broadSuggestions.includes("@agentsWindow:read-only ")
+       && broadSuggestions.includes("@agentsWindow:agentsdefault "),
        "settings filter suggestions include dynamic vscode-style tokens");
+const lowerAgentsWindowSuggestions = extensionSettingFilterSuggestions(suggestionContainer, "font @agentswindow:");
+assert(lowerAgentsWindowSuggestions.includes("font @agentsWindow:read-only ")
+       && lowerAgentsWindowSuggestions.includes("font @agentsWindow:agentsdefault "),
+       "settings filter suggestions match agents window token case-insensitively");
 assert(extensionSettingFilterSuggestions(suggestionContainer, "plain text").length === 0,
        "settings filter suggestions stay quiet for plain text tokens");
 const fakeDatalist = makeNode("datalist");
@@ -6147,6 +6181,11 @@ assert(experimentSearchText.indexOf("experiment") >= 0
        && experimentSearchText.indexOf("config.selftest.experiment") >= 0
        && experimentSearchText.indexOf("updates automatically") >= 0,
        "settings search text includes experiment metadata");
+const agentsWindowSearchText = extensionSettingSearchText("selftest.agents", agentsWindowSchema, "string", "", "", "");
+assert(agentsWindowSearchText.indexOf("agents window") >= 0
+       && agentsWindowSearchText.indexOf("agentsdefault") >= 0
+       && agentsWindowSearchText.indexOf("read-only") >= 0,
+       "settings search text includes agents window metadata");
 const sourceSearchText = extensionSettingSearchText("demo.source", sourceSchema, "string", "", "", "");
 assert(sourceSearchText.indexOf("selftest.settings-pack") >= 0
        && sourceSearchText.indexOf("selftest.core") >= 0,
@@ -6183,6 +6222,22 @@ const experimentBadgeHost = makeNode("div");
 appendExtensionSettingExperimentBadge(experimentBadgeHost, experimentMeta);
 assert(experimentBadgeHost.children.some(n => n.textContent === "Experiment: Auto"),
        "experiment badge rendered");
+const agentsMeta = extensionSettingAgentsWindowMetadata(agentsWindowSchema, "string");
+assert(agentsMeta.enabled === true
+       && agentsMeta.tag === "agents-window"
+       && agentsMeta.readOnly === true
+       && agentsMeta.hasDefault === true
+       && agentsMeta.defaultText === "agentsDefault"
+       && agentsMeta.filterText.indexOf("read-only") >= 0,
+       "agents window metadata detected with default and read-only");
+const agentsObjectMeta = extensionSettingAgentsWindowMetadata(agentsWindowObjectSchema, "object");
+assert(agentsObjectMeta.enabled === true
+       && agentsObjectMeta.defaultText.indexOf('"*.md": "vscode.markdown.preview.editor"') >= 0,
+       "agents window metadata formats object defaults");
+const agentsBadgeHost = makeNode("div");
+appendExtensionSettingAgentsWindowBadge(agentsBadgeHost, agentsMeta);
+assert(agentsBadgeHost.children.some(n => n.textContent === "Agents Window: Read-only"),
+       "agents window badge rendered");
 assert(extensionSettingTagLabel("usesOnlineServices") === "Online"
        && extensionSettingTagLabel("preview") === "Preview",
        "setting tag labels normalized");
@@ -6239,6 +6294,14 @@ assert(experimentTags.includes("experiment")
        && experimentTags.includes("experiment-mode:auto")
        && experimentTags.includes("config.selftest.experiment"),
        "metadata tags include experiment mode and name");
+const agentsTags = extensionSettingMetadataTags(agentsWindowSchema, "string", "window", "workspace", true,
+  { tag: "", ignored: false, locked: false }, { tag: "" }, { tag: "", name: "" },
+  { tag: "", enabled: false, mode: "", name: "" }, {}, []);
+assert(agentsTags.includes("agents-window")
+       && agentsTags.includes("agents-window-readonly")
+       && agentsTags.includes("agents-window-default")
+       && agentsTags.includes("override:agentswindow"),
+       "metadata tags include agents window read-only and default markers");
 const targetOverrideHost = makeNode("div");
 renderExtensionSettingTargetOverrides(targetOverrideHost, scopedTargets, "workspace");
 assert(targetOverrideHost.textContent === "Also modified in: Global, Workspace Folder"
@@ -6280,6 +6343,9 @@ assert(indicatorRow.children.includes(indicatorWrap)
 renderExtensionSettingIndicators(indicatorWrap, experimentSchema, {}, "workspace", "");
 assert(indicatorWrap.children.some(n => n.textContent === "Experiment: Auto"),
        "settings indicators render experiment metadata");
+renderExtensionSettingIndicators(indicatorWrap, agentsWindowSchema, {}, "workspace", "");
+assert(indicatorWrap.children.some(n => n.textContent === "Agents Window: Read-only"),
+       "settings indicators render agents window metadata");
 renderExtensionSettingIndicators(indicatorWrap, { source: { id: "fallback.id" } }, { workspace: 1 }, "workspace", "Fallback Extension");
 assert(indicatorWrap.children.some(n => n.textContent === "Modified in Workspace")
        && !indicatorWrap.children.some(n => n.textContent.indexOf("Also modified in") === 0)
