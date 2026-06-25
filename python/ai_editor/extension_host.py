@@ -750,7 +750,8 @@ class ExtensionPoints:
         properties: Dict[str, Dict[str, Any]] = {}
         raw_properties = node.get("properties", {})
         if isinstance(raw_properties, dict):
-            for key, raw_schema in raw_properties.items():
+            for property_index, (key, raw_schema) in enumerate(
+                    raw_properties.items()):
                 setting_key = str(key or "")
                 if not setting_key or not isinstance(raw_schema, dict):
                     continue
@@ -766,6 +767,7 @@ class ExtensionPoints:
                 if (setting_key in restricted_properties
                         and schema.get("restricted") is None):
                     schema["restricted"] = True
+                schema["_propertyOrder"] = property_index
                 schema["section"] = dict(section)
                 schema["source"] = dict(extension_info)
                 properties[setting_key] = schema

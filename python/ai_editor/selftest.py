@@ -5259,6 +5259,9 @@ console.log("frontend signature help docs ok");
             and "reset_extension_language_setting',item.language,key,item.extension_id||'',extensionSettingRowTarget(row)" in html
             and "ext-settings-category" in html
             and "const orderedConfigs=configs.slice().sort" in html
+            and "const ai=Number(a&&a.configurationIndex),bi=Number(b&&b.configurationIndex)" in html
+            and "const ap=String(a&&a.nodePath||''),bp=String(b&&b.nodePath||'')" in html
+            and "const ai=Number(as._propertyOrder),bi=Number(bs._propertyOrder)" in html
             and "sectionDescription" in html
             and "cfg.nodePath" in html
             and "summary.title=configId" in html
@@ -12193,6 +12196,15 @@ def test_app_extension_runtime_support() -> None:
                and nested_settings_cfg.get("properties", {}).get(
                    "selftest.allOfRestricted", {}).get(
                        "source", {}).get("id") == "selftest.settings-pack"
+               and settings_cfg.get("properties", {}).get(
+                   "selftest.flag", {}).get("_propertyOrder") == 0
+               and settings_cfg.get("properties", {}).get(
+                   "selftest.mode", {}).get("_propertyOrder") == 1
+               and settings_cfg.get("properties", {}).get(
+                   "selftest.options", {}).get("_propertyOrder") == 2
+               and nested_settings_cfg.get("properties", {}).get(
+                   "selftest.allOfInheritedScope", {}).get(
+                       "_propertyOrder") == 0
                and legacy_nested_settings_cfg.get("title") == (
                    "Advanced Selftest")
                and "selftest.allOfInheritedScope" in

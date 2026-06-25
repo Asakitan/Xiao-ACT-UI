@@ -15104,6 +15104,12 @@ async function renderExtensionSettings(){
     const ao=Number(a&&a.order),bo=Number(b&&b.order);
     const an=Number.isFinite(ao)?ao:0,bn=Number.isFinite(bo)?bo:0;
     if(an!==bn)return an-bn;
+    const ai=Number(a&&a.configurationIndex),bi=Number(b&&b.configurationIndex);
+    const ain=Number.isFinite(ai)?ai:Number.MAX_SAFE_INTEGER;
+    const bin=Number.isFinite(bi)?bi:Number.MAX_SAFE_INTEGER;
+    if(ain!==bin)return ain-bin;
+    const ap=String(a&&a.nodePath||''),bp=String(b&&b.nodePath||'');
+    if(ap!==bp)return ap.localeCompare(bp);
     const al=[a&&a.display_name,a&&a.title,a&&a.id].filter(Boolean).join(' ');
     const bl=[b&&b.display_name,b&&b.title,b&&b.id].filter(Boolean).join(' ');
     return al.localeCompare(bl);
@@ -15132,8 +15138,14 @@ async function renderExtensionSettings(){
     const visibleCount=Object.keys(properties).length;
     const hiddenCount=Object.keys(hiddenProperties).length;
     const propKeys=Object.keys(allProperties).sort((a,b)=>{
-      const ao=Number((allProperties[a]||{}).order||0),bo=Number((allProperties[b]||{}).order||0);
-      return ao===bo?a.localeCompare(b):ao-bo;
+      const as=allProperties[a]||{},bs=allProperties[b]||{};
+      const ao=Number(as.order),bo=Number(bs.order);
+      const an=Number.isFinite(ao)?ao:0,bn=Number.isFinite(bo)?bo:0;
+      if(an!==bn)return an-bn;
+      const ai=Number(as._propertyOrder),bi=Number(bs._propertyOrder);
+      const ain=Number.isFinite(ai)?ai:Number.MAX_SAFE_INTEGER;
+      const bin=Number.isFinite(bi)?bi:Number.MAX_SAFE_INTEGER;
+      return ain===bin?a.localeCompare(b):ain-bin;
     });
     if(!propKeys.length)return;
     const section=document.createElement('details');section.className='settings-section';section.open=true;
