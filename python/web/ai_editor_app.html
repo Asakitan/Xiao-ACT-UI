@@ -4001,7 +4001,10 @@ async function requestEditorFoldingRanges(quiet){
   if(!ed||!wrap||wrap.style.display==='none')return;
   const requestId=++_editorFoldingRangeRequest;
   const contentLength=String(ed.value||'').length;
-  const res=await call('editor_language_provider',editorProviderPayload('foldingRange'));
+  const res=await editorRequestLanguageProvider('foldingRange',editorProviderPayload('foldingRange'),{
+    countKey:'ranges',itemLabel:'folding range',label:'Folding ranges',quiet:quiet===true,
+    isCurrent:()=>requestId===_editorFoldingRangeRequest&&contentLength===String(ed.value||'').length
+  });
   if(requestId!==_editorFoldingRangeRequest||contentLength!==String(ed.value||'').length)return;
   if(res&&res.error){_editorFoldingRanges=[];_editorFoldingRangeContentLength=-1;if(!quiet)setStatus('Folding ranges failed: '+res.error);return}
   _editorFoldingRanges=(res&&res.ok&&Array.isArray(res.ranges)?res.ranges:[]).filter(range=>normalizeEditorFoldingRange(range,0));
@@ -4606,9 +4609,11 @@ function editorLanguageProviderErrorSummary(res){
 async function editorRequestLanguageProvider(kind,payload,options){
   const opts=isPlainObject(options)?options:{};
   const label=opts.label||editorLanguageProviderKindLabel(kind);
-  updateEditorLanguageProviderStatus('running',{kind,label,message:label+'...',detail:'Running '+label.toLowerCase()+' providers'});
+  const quiet=opts.quiet===true;
+  if(!quiet)updateEditorLanguageProviderStatus('running',{kind,label,message:label+'...',detail:'Running '+label.toLowerCase()+' providers'});
   const res=await call('editor_language_provider',payload||editorProviderPayload(kind));
   if(typeof opts.isCurrent==='function'&&!opts.isCurrent())return res;
+  if(quiet)return res;
   if(editorProviderResultCancelled(res)){
     updateEditorLanguageProviderStatus('cancelled',{kind,label,message:label+' cancelled',detail:String((res&&res.reason)||'cancelled'),requestId:res&&res.requestId});
     return res;
@@ -4848,12 +4853,18 @@ async function requestEditorSemanticTokens(quiet){
   const requestId=++_editorSemanticTokensRequest;
   const contentSnapshot=String(ed.value||''),contentLength=contentSnapshot.length;
   const visibleRange=editorVisibleRangePayload();
-  let res=await call('editor_language_provider',editorProviderPayload('semanticTokensRange',{range:visibleRange}));
+  let res=await editorRequestLanguageProvider('semanticTokensRange',editorProviderPayload('semanticTokensRange',{range:visibleRange}),{
+    label:'Semantic tokens',quiet:quiet===true,
+    isCurrent:()=>requestId===_editorSemanticTokensRequest&&contentSnapshot===String(ed.value||'')
+  });
   if(requestId!==_editorSemanticTokensRequest||contentSnapshot!==String(ed.value||''))return;
   if(editorProviderResultCancelled(res))return;
   let payload=editorSemanticTokensPayloadFromResponse(res,'range',visibleRange);
   if(!payload){
-    res=await call('editor_language_provider',editorProviderPayload('semanticTokens'));
+    res=await editorRequestLanguageProvider('semanticTokens',editorProviderPayload('semanticTokens'),{
+      label:'Semantic tokens',quiet:quiet===true,
+      isCurrent:()=>requestId===_editorSemanticTokensRequest&&contentSnapshot===String(ed.value||'')
+    });
     if(requestId!==_editorSemanticTokensRequest||contentSnapshot!==String(ed.value||''))return;
     if(editorProviderResultCancelled(res))return;
     if(res&&res.error){_editorSemanticTokens=null;_editorSemanticTokensContentLength=-1;_editorSemanticTokensRangeActive=false;scheduleEditorSyntaxHighlight();if(!quiet)setStatus('Semantic tokens failed: '+res.error);return}
@@ -4958,7 +4969,10 @@ async function requestEditorInlayHints(quiet){
   const wrap=$('editor-container');
   if(!ed||!wrap||wrap.style.display==='none')return;
   const requestId=++_editorInlayHintRequest;
-  const res=await call('editor_language_provider',editorProviderPayload('inlayHint',{range:editorFullRangePayload(),hintResolveCount:0}));
+  const res=await editorRequestLanguageProvider('inlayHint',editorProviderPayload('inlayHint',{range:editorFullRangePayload(),hintResolveCount:0}),{
+    countKey:'hints',itemLabel:'inlay hint',label:'Inlay hints',quiet:quiet===true,
+    isCurrent:()=>requestId===_editorInlayHintRequest
+  });
   if(requestId!==_editorInlayHintRequest)return;
   if(editorProviderResultCancelled(res))return;
   if(res&&res.error){_editorInlayHints=[];renderEditorInlayHints([]);if(!quiet)setStatus('Inlay hints failed: '+res.error);return}
@@ -5025,10 +5039,13 @@ async function requestEditorInlineCompletions(quiet,triggerKind){
   const wrap=$('editor-container');
   if(!ed||!wrap||wrap.style.display==='none')return;
   const requestId=++_editorInlineCompletionRequest;
-  const res=await call('editor_language_provider',editorProviderPayload('inlineCompletion',{
+  const res=await editorRequestLanguageProvider('inlineCompletion',editorProviderPayload('inlineCompletion',{
     triggerKind:triggerKind==null?1:triggerKind,
     selectedCompletionInfo:editorSelectedCompletionInfo()
-  }));
+  }),{
+    countKey:'items',itemLabel:'inline completion',label:'Inline completions',quiet:quiet===true,
+    isCurrent:()=>requestId===_editorInlineCompletionRequest
+  });
   if(requestId!==_editorInlineCompletionRequest)return;
   if(editorProviderResultCancelled(res))return;
   if(res&&res.error){_editorInlineCompletions=[];renderEditorInlineCompletion();if(!quiet)setStatus('Inline completions failed: '+res.error);return}
@@ -5146,7 +5163,10 @@ async function requestEditorCodeLenses(quiet){
   const wrap=$('editor-container');
   if(!ed||!wrap||wrap.style.display==='none')return;
   const requestId=++_editorCodeLensRequest;
-  const res=await call('editor_language_provider',editorProviderPayload('codeLens',{itemResolveCount:0}));
+  const res=await editorRequestLanguageProvider('codeLens',editorProviderPayload('codeLens',{itemResolveCount:0}),{
+    countKey:'lenses',itemLabel:'CodeLens item',label:'CodeLens',quiet:quiet===true,
+    isCurrent:()=>requestId===_editorCodeLensRequest
+  });
   if(requestId!==_editorCodeLensRequest)return;
   if(editorProviderResultCancelled(res))return;
   if(res&&res.error){_editorCodeLenses=[];renderEditorCodeLenses([]);if(!quiet)setStatus('CodeLens failed: '+res.error);return}
@@ -5217,7 +5237,10 @@ async function requestEditorDocumentColors(quiet){
   if(!ed||!wrap||wrap.style.display==='none')return;
   const requestId=++_editorDocumentColorRequest;
   const contentLength=String(ed.value||'').length;
-  const res=await call('editor_language_provider',editorProviderPayload('documentColor'));
+  const res=await editorRequestLanguageProvider('documentColor',editorProviderPayload('documentColor'),{
+    countKey:'colors',itemLabel:'document color',label:'Document colors',quiet:quiet===true,
+    isCurrent:()=>requestId===_editorDocumentColorRequest&&contentLength===String(ed.value||'').length
+  });
   if(requestId!==_editorDocumentColorRequest||contentLength!==String(ed.value||'').length)return;
   if(res&&res.error){
     _editorDocumentColors=[];_editorDocumentColorContentLength=-1;renderEditorDocumentColors([]);

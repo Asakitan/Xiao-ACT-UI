@@ -3210,6 +3210,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function scheduleEditorFoldingRanges(delay)" in html
             and "function editorProviderFoldingRegions()" in html
             and "editorProviderPayload('foldingRange'" in html
+            and "editorRequestLanguageProvider('foldingRange'" in html
             and "Refresh Folding Ranges" in html
             and "Fold Regions" in html
             and "ArrowDown" in html
@@ -3400,12 +3401,14 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hintResolveCount:0" in html
            and "function scheduleEditorInlayHints(delay)" in html
            and "editorProviderPayload('inlayHint'" in html
+           and "editorRequestLanguageProvider('inlayHint'" in html
            and "function requestEditorInlineCompletions(quiet,triggerKind)" in html
            and "function renderEditorInlineCompletion()" in html
            and "function scheduleEditorInlineCompletions(delay,triggerKind)" in html
            and "function acceptEditorInlineCompletion()" in html
            and "function handleEditorInlineCompletionKey(e)" in html
            and "editorProviderPayload('inlineCompletion'" in html
+           and "editorRequestLanguageProvider('inlineCompletion'" in html
            and "function editorFormatOptions()" in html
            and "editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,linkedEditing:false,codeActionsOnSave:{},codeActions:{triggerOnFocusChange:false},tabSize:4,insertSpaces:true}" in html
            and "files:{autoSave:'off',autoSaveDelay:1000,trimTrailingWhitespace:false,insertFinalNewline:false,trimFinalNewlines:false}" in html
@@ -3523,6 +3526,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "editorProviderPayload('codeLensResolve'" in html
            and "function scheduleEditorCodeLenses(delay)" in html
            and "editorProviderPayload('codeLens'" in html
+           and "editorRequestLanguageProvider('codeLens'" in html
            and "function requestEditorDocumentHighlights(quiet)" in html
            and "function renderEditorDocumentHighlights(highlights)" in html
            and "function scheduleEditorDocumentHighlights(delay)" in html
@@ -3536,6 +3540,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function closeEditorColorPresentationMenu()" in html
            and "function scheduleEditorDocumentColors(delay)" in html
            and "editorProviderPayload('documentColor'" in html
+           and "editorRequestLanguageProvider('documentColor'" in html
            and "editorProviderPayload('colorPresentation'" in html
            and "Refresh Document Colors" in html
            and "editor-color-swatch" in html
@@ -3555,6 +3560,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function scheduleEditorSemanticTokens(delay)" in html
            and "editorProviderPayload('semanticTokensRange'" in html
            and "editorProviderPayload('semanticTokens'" in html
+           and "editorRequestLanguageProvider('semanticTokensRange'" in html
+           and "editorRequestLanguageProvider('semanticTokens'" in html
            and "_editorSemanticTokensRangeActive" in html
            and "semanticTokenColors" in html
            and "Refresh Semantic Tokens" in html
@@ -4615,6 +4622,16 @@ async function call(method,payload){
   let res = await editorRequestLanguageProvider("completion", null, { countKey:"items", itemLabel:"suggestion" });
   assert(res.ok && languageStatus.className.includes("ready") && languageStatus.textContent === "2 suggestions",
          "success count status is visible");
+
+  languageStatus.className = "sb-item editor-language-status keep";
+  languageStatus.textContent = "Keep";
+  languageStatus.title = "Keep title";
+  callResponses = [{ ok:true, requestId:"r1q", items:[{ label:"background" }] }];
+  await editorRequestLanguageProvider("inlayHint", null, { countKey:"items", itemLabel:"inlay hint", quiet:true });
+  assert(languageStatus.className === "sb-item editor-language-status keep"
+         && languageStatus.textContent === "Keep"
+         && languageStatus.title === "Keep title",
+         "quiet provider status does not overwrite visible status");
 
   callResponses = [{ ok:true, hovers:[] }];
   await editorRequestLanguageProvider("hover", null, { countKey:"hovers", itemLabel:"hover" });
