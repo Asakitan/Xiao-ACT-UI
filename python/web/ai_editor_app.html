@@ -13577,6 +13577,94 @@ function rememberDynamicExtensionProvider(raw,fallbackViewId){
   dynamicExtensionProviderDefs[p.id]={...existing,...p,webview_ids:ids,extension_view:p.extension_view||existing.extension_view||true,description:p.description||existing.description||'',badge:p.badge||existing.badge||null,visible:p.visible!==false,retainContextWhenHidden:!!(p.retainContextWhenHidden||existing.retainContextWhenHidden)};
   return dynamicExtensionProviderDefs[p.id];
 }
+function webviewRuntimeProviderId(viewId,runtime){
+  const data=runtime&&typeof runtime==='object'?runtime:{};
+  const explicit=String(data.provider_id||data.providerId||data.provider||data.tab_id||data.tabId||'').trim();
+  if(explicit)return explicit;
+  const id=String(viewId||data.view_id||data.viewId||data.webview_id||data.webviewId||data.id||'').trim();
+  if(id.startsWith('provider.'))return id.slice(9);
+  return id;
+}
+function webviewRuntimeHasProviderShape(viewId,runtime){
+  const data=runtime&&typeof runtime==='object'?runtime:{};
+  const id=String(viewId||'').trim();
+  if(id.startsWith('provider.'))return true;
+  return !!(data.html||data.title||data.name||data.description||data.badge!==undefined
+    ||data.provider_id||data.providerId||data.provider||data.tab_id||data.tabId
+    ||data.extension_view||data.extensionView||data.webview_view||data.webviewView
+    ||data.visible!==undefined||data.retainContextWhenHidden!==undefined);
+}
+function webviewRuntimeProviderRecord(viewId,runtime){
+  const data=runtime&&typeof runtime==='object'?runtime:{};
+  const id=String(viewId||data.view_id||data.viewId||data.webview_id||data.webviewId||'').trim();
+  const providerId=webviewRuntimeProviderId(id,data);
+  if(!providerId)return null;
+  const existing=providerDefs[providerId]||dynamicExtensionProviderDefs[providerId]||{};
+  const title=String(data.title||data.name||existing.title||existing.name||existing.short_name||providerId);
+  const viewType=String(data.viewType||data.view_type||existing.viewType||existing.view_type||'');
+  return {
+    ...existing,...data,
+    id:providerId,view_id:id,viewId:id,view_type:viewType,viewType:viewType,
+    name:title,short_name:data.short_name||data.shortName||existing.short_name||existing.shortName||title,title:title,
+    description:String(data.description||existing.description||''),
+    badge:data.badge!==undefined?data.badge:existing.badge,
+    visible:data.visible!==undefined?!!data.visible:existing.visible!==false,
+    available:existing.available!==false,
+    retainContextWhenHidden:!!(data.retainContextWhenHidden||data.retain_context_when_hidden||existing.retainContextWhenHidden),
+    options:data.options||existing.options||{},
+    localResourceRoots:data.localResourceRoots||data.local_resource_roots||existing.localResourceRoots||existing.local_resource_roots||null,
+    runtime_mode:existing.runtime_mode||existing.runtimeMode||'extension-webview',
+    requested_transport:existing.requested_transport||existing.requestedTransport||'webviewView',
+    extension_view:true,
+  };
+}
+function applyExtensionProviderElementState(tab,panel,p,viewId){
+  const visible=p&&p.visible!==false;
+  if(tab){
+    tab.hidden=!visible;
+    tab.dataset.viewId=String(viewId||providerTabWebviewId(p)||'');
+    tab.dataset.viewType=String((p&&p.view_type)||(p&&p.viewType)||'');
+    tab.dataset.webviewVisible=visible?'true':'false';
+    applyProviderTabChrome(tab,p);
+    const label=tab.querySelector('.rtab-label');if(label)label.textContent=providerTabLabel(p);
+    tab.title=providerTabTitle(p);tab.setAttribute('aria-label',providerTabTitle(p));
+  }
+  if(panel){
+    panel.hidden=!visible;
+    panel.dataset.webviewVisible=visible?'true':'false';
+    if(viewId)panel.dataset.viewId=String(viewId);
+    panel.dataset.webviewViewType=String((p&&p.view_type)||(p&&p.viewType)||'');
+    panel.dataset.webviewTitle=String((p&&p.title)||(p&&p.name)||'');
+    panel.dataset.webviewDescription=String((p&&p.description)||'');
+    panel.dataset.webviewRetainContext=(p&&p.retainContextWhenHidden)?'true':'false';
+    if(p&&p.retainContextWhenHidden)panel.dataset.retainContext='1';else delete panel.dataset.retainContext;
+    try{panel.dataset.webviewOptions=JSON.stringify((p&&p.options)||{})}catch(e){delete panel.dataset.webviewOptions}
+  }
+}
+function applyWebviewRuntimeChrome(viewId,runtime){
+  const id=String(viewId||'').trim();if(!id)return false;
+  const customTab=findCustomEditorTabByViewId(id);
+  if(customTab){
+    customTab.webview={...(customTab.webview||{}),view_id:id,options:(runtime&&runtime.options)||{},retainContextWhenHidden:!!(runtime&&runtime.retainContextWhenHidden)};
+    if(runtime&&(runtime.title||runtime.name))customTab.name=String(runtime.title||runtime.name);
+    if(runtime&&(runtime.viewType||runtime.view_type||runtime.description)){
+      customTab.customEditor={...(customTab.customEditor||{}),display_name:String(runtime.title||runtime.name||customTab.name||''),view_type:String(runtime.viewType||runtime.view_type||customEditorViewTypeFromTab(customTab)||''),description:String(runtime.description||'')};
+    }
+    renderTabs();
+    return true;
+  }
+  const providerId=webviewRuntimeProviderId(id,runtime);
+  const hasExisting=!!(providerDefs[providerId]||dynamicExtensionProviderDefs[providerId]||providerTabElement(providerId)||$(providerElId('rp',providerId)));
+  if(!hasExisting&&!webviewRuntimeHasProviderShape(id,runtime))return false;
+  const record=rememberDynamicExtensionProvider(webviewRuntimeProviderRecord(id,runtime),id);
+  if(!record)return false;
+  providerDefs[record.id]={...(providerDefs[record.id]||{}),...record};
+  const panel=ensureExtensionProviderPanel(record,id);
+  const tab=providerTabElement(record.id);
+  applyExtensionProviderElementState(tab,panel,record,id);
+  if(record.visible===false&&activeProviderId===record.id)switchRightTab('chat');
+  return true;
+}
 function collectExtensionProviderRecords(data){
   const records=[];
   const add=item=>{if(item)records.push(item)};
@@ -13611,6 +13699,7 @@ function rememberWebviewRuntime(viewId,data){
     localResourceRoots:data.local_resource_roots||data.localResourceRoots||existing.localResourceRoots||existing.local_resource_roots||null,
     retainContextWhenHidden:retain
   };
+  applyWebviewRuntimeChrome(id,webviewRuntimeCache[id]);
   return webviewRuntimeCache[id];
 }
 function updateWebviewPanelOptions(viewId,data){
@@ -13622,6 +13711,7 @@ function updateWebviewPanelOptions(viewId,data){
   if(panel){
     if(cached&&cached.retainContextWhenHidden)panel.dataset.retainContext='1';
     else delete panel.dataset.retainContext;
+    applyWebviewRuntimeChrome(id,cached);
   }
   const tab=findCustomEditorTabByViewId(id);
   if(tab&&cached)tab.webview={...(tab.webview||{}),options:cached.options,retainContextWhenHidden:cached.retainContextWhenHidden};
@@ -13715,8 +13805,29 @@ function applyCustomEditorState(data){
 }
 function showCustomEditorPlaceholder(host,tab){
   if(!host)return;
-  const label=(tab&&tab.customEditor&&(tab.customEditor.display_name||tab.customEditor.view_type))||'Custom editor';
-  host.innerHTML='<div class="provider-empty"><div class="provider-empty-title">'+esc(label)+'</div><div class="provider-empty-subtitle">Loading extension webview...</div></div>';
+  const ce=tab&&tab.customEditor||{};
+  const viewId=customEditorWebviewIdFromTab(tab);
+  const viewType=customEditorViewTypeFromTab(tab);
+  const uri=customEditorUriFromTab(tab);
+  const label=(ce.display_name||ce.displayName||ce.label||viewType)||'Custom editor';
+  const caps=[
+    ce.supportsSave||ce.supports_save?'save':'',
+    ce.supportsSaveAs||ce.supports_save_as?'saveAs':'',
+    ce.supportsRevert||ce.supports_revert?'revert':'',
+    ce.supportsBackup||ce.supports_backup?'backup':'',
+    ce.supportsMultipleEditorsPerDocument||ce.supports_multiple_editors_per_document?'multi':''
+  ].filter(Boolean).join(' · ');
+  host.dataset.viewId=viewId||'';
+  host.dataset.viewType=viewType||'';
+  host.dataset.resourceUri=uri||'';
+  host.innerHTML='<div class="provider-empty custom-editor-placeholder"><div class="provider-empty-title">'+esc(label)+'</div>'
+    +'<div class="provider-empty-subtitle">Waiting for the extension custom editor webview.</div>'
+    +'<div class="provider-empty-subtitle">'
+    +(viewType?'<b>View</b> '+esc(viewType)+'<br>':'')
+    +(uri?'<b>Resource</b> '+esc(uri)+'<br>':'')
+    +(viewId?'<b>Webview</b> '+esc(viewId)+'<br>':'')
+    +(caps?'<b>Capabilities</b> '+esc(caps):'')
+    +'</div></div>';
 }
 function injectCustomEditorWebview(viewId,data){
   const tab=findCustomEditorTabByViewId(viewId);
@@ -13937,6 +14048,7 @@ function ensureExtensionProviderPanel(raw,viewId){
     if(p.description)panel.dataset.webviewDescription=p.description;
     if(p.retainContextWhenHidden)panel.dataset.retainContext='1';
   }
+  applyExtensionProviderElementState(tab,panel,p,viewId);
   return panel;
 }
 function updateExtensionWebviewTitle(viewId,title,viewType){
@@ -13959,6 +14071,7 @@ function updateExtensionWebviewTitle(viewId,title,viewType){
     if(record.retainContextWhenHidden)panel.dataset.retainContext='1';
     if(!panel.children.length)renderProviderWebviewPlaceholder(panel,record,'loading');
   }
+  applyWebviewRuntimeChrome(id,{...webviewRuntimeCache[id],...record,title:label,viewType:viewType||record.viewType||record.view_type});
   return !!panel;
 }
 function updateExtensionWebviewIcon(viewId,iconPath,viewType){
@@ -13974,6 +14087,7 @@ function updateExtensionWebviewIcon(viewId,iconPath,viewType){
   const existing=providerDefs[providerId]||dynamicExtensionProviderDefs[providerId]||{};
   const record={...existing,id:providerId,view_id:id,viewId:id,view_type:viewType||existing.view_type||existing.viewType||'',iconPath:iconPath||null,available:existing.available!==false,runtime_mode:existing.runtime_mode||existing.runtimeMode||'extension-webview',requested_transport:existing.requested_transport||existing.requestedTransport||'webviewView',extension_view:true};
   const panel=ensureExtensionProviderPanel(record,id);
+  applyWebviewRuntimeChrome(id,{...webviewRuntimeCache[id],...record,iconPath:iconPath||null});
   return !!panel;
 }
 function revealExtensionWebviewPanel(data){
@@ -13989,6 +14103,7 @@ function revealExtensionWebviewPanel(data){
   const record={...existing,...(data||{}),id:providerId,view_id:viewId,viewId:viewId,name:(data&&data.title)||existing.name||existing.title||providerId,short_name:(data&&data.title)||existing.short_name||existing.shortName||existing.name||providerId,available:existing.available!==false,runtime_mode:existing.runtime_mode||existing.runtimeMode||'extension-webview',requested_transport:existing.requested_transport||existing.requestedTransport||'webviewView',extension_view:true};
   const panel=ensureExtensionProviderPanel(record,viewId);
   if(!panel)return false;
+  applyWebviewRuntimeChrome(viewId,{...webviewRuntimeCache[viewId],...record,visible:true});
   const cached=webviewRuntimeCache[viewId];
   if(cached&&cached.html&&!panel.querySelector('iframe'))_injectWebviewHtml(panel,viewId,cached.html,cached.state);
   else if(!panel.children.length)renderProviderWebviewPlaceholder(panel,record,'loading');
@@ -14460,7 +14575,10 @@ async function renderProviderTabs(){
     tabs.appendChild(tab);
     const panel=document.createElement('div');panel.className='right-panel';panel.id=providerElId('rp',p.id);panel.dataset.providerId=p.id;
     panels.appendChild(panel);
-    if(isExtensionWebviewProvider(p))void mountProviderWebviewPanel(panel,p);
+    if(isExtensionWebviewProvider(p)){
+      applyExtensionProviderElementState(tab,panel,p,providerPrimaryViewId(p));
+      void mountProviderWebviewPanel(panel,p);
+    }
     else _buildChatProviderPanel(panel,p);
   });
   if(activeProviderId!=='chat'&&!providerDefs[activeProviderId])activeProviderId='chat';

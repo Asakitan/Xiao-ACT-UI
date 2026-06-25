@@ -3534,6 +3534,30 @@ def test_phase1_ai_editor_regressions() -> None:
             and "provider_tabs_changed'||event==='extension_views_changed" in html
             and "ensureExtensionProviderPanel(data,viewId)" in html
             and "rememberDynamicProvidersFromEventData(data)" in html)
+    _check("frontend syncs dynamic WebviewView runtime chrome",
+            "function webviewRuntimeProviderId(viewId,runtime)" in html
+            and "function webviewRuntimeProviderRecord(viewId,runtime)" in html
+            and "function applyExtensionProviderElementState(tab,panel,p,viewId)" in html
+            and "function applyWebviewRuntimeChrome(viewId,runtime)" in html
+            and "panel.dataset.webviewViewType=" in html
+            and "panel.dataset.webviewTitle=" in html
+            and "panel.dataset.webviewDescription=" in html
+            and "panel.dataset.webviewRetainContext=" in html
+            and "panel.dataset.webviewOptions=JSON.stringify" in html
+            and "tab.hidden=!visible;" in html
+            and "panel.hidden=!visible;" in html
+            and "applyWebviewRuntimeChrome(id,webviewRuntimeCache[id]);" in html
+            and "applyExtensionProviderElementState(tab,panel,p,providerPrimaryViewId(p));" in html
+            and "switchRightTab('chat')" in html)
+    _check("frontend custom editor placeholder exposes extension metadata",
+            "class=\"provider-empty custom-editor-placeholder\"" in html
+            and "host.dataset.viewType=viewType||'';" in html
+            and "host.dataset.resourceUri=uri||'';" in html
+            and "Waiting for the extension custom editor webview." in html
+            and "<b>View</b> " in html
+            and "<b>Resource</b> " in html
+            and "<b>Capabilities</b> " in html
+            and "supportsMultipleEditorsPerDocument" in html)
     _check("frontend loads dynamic editor language contributions",
             "call('list_editor_languages')" in html
             and "call('list_editor_themes')" in html
