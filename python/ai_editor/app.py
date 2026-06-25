@@ -3138,9 +3138,18 @@ class AIEditorAPI:
     def _workspace_root(self) -> str:
         try:
             from ai_editor.scopes import _base_dir
-            return os.path.abspath(_base_dir())
+            base = os.path.abspath(_base_dir())
         except Exception:
-            return os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+            base = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+        current = base
+        while current:
+            if os.path.isdir(os.path.join(current, ".git")):
+                return current
+            parent = os.path.dirname(current)
+            if not parent or parent == current:
+                break
+            current = parent
+        return base
 
     @staticmethod
     def _workspace_rel_path(root: str, path: str) -> str:
@@ -7370,6 +7379,7 @@ class AIEditorAPI:
             node_path=node_path,
             script_path=script_path,
             ui_bridge=ui_bridge,
+            workspace_root=self._workspace_root(),
         )
         host.set_diagnostics_enabled(self._extension_diagnostics_enabled())
         host.set_command_service(self._ext_host.commands)
@@ -13632,6 +13642,8 @@ class AIEditorAPI:
             except Exception:
                 pass
         if updated:
+            validation_result = self.validate_scm_input(
+                provider_key, input_value, len(input_value))
             self._emit("scm_changed", {
                 "change": {
                     "providerId": provider_key,
@@ -13643,10 +13655,71 @@ class AIEditorAPI:
                 "ok": True,
                 "providerId": provider_key,
                 "value": input_value,
+                "validation": (
+                    validation_result.get("validation")
+                    if isinstance(validation_result, dict) else None),
+                "validationProvider": bool(
+                    validation_result.get("validationProvider", False)
+                    if isinstance(validation_result, dict) else False),
             }
         return {
             "ok": False,
             "error": f"SCM provider not found: {provider_key}",
+        }
+
+    def validate_scm_input(
+            self, provider_id: str, value: str = "",
+            cursor_position: int = 0) -> Dict:
+        """Run a dynamic SCM provider input validation callback."""
+        self._ensure_engine()
+        provider_key = str(provider_id or "").strip()
+        input_value = str(value or "")
+        if not provider_key:
+            return {"ok": False, "error": "Missing SCM provider id"}
+        try:
+            cursor = int(cursor_position)
+        except Exception:
+            cursor = len(input_value)
+        python_result = None
+        validator = getattr(
+            self._vscode_ns, "validate_source_control_input", None)
+        if callable(validator):
+            try:
+                python_result = validator(provider_key, input_value, cursor)
+            except Exception as exc:
+                python_result = {"ok": False, "error": str(exc)}
+        if isinstance(python_result, dict):
+            if python_result.get("ok") or not python_result.get("notFound"):
+                self._emit("scm_changed", {
+                    "change": {
+                        "providerId": provider_key,
+                        "type": "inputValidation",
+                        "source": "frontend",
+                    },
+                })
+                return python_result
+        node_host = getattr(self, "_node_ext_host", None)
+        node_validator = getattr(node_host, "validate_node_scm_input", None)
+        if callable(node_validator):
+            try:
+                node_result = node_validator(
+                    provider_key, input_value, cursor)
+            except Exception as exc:
+                node_result = {"ok": False, "error": str(exc)}
+            if isinstance(node_result, dict):
+                if node_result.get("ok") or not node_result.get("notFound"):
+                    self._emit("scm_changed", {
+                        "change": {
+                            "providerId": provider_key,
+                            "type": "inputValidation",
+                            "source": "frontend",
+                        },
+                    })
+                    return node_result
+        return {
+            "ok": False,
+            "error": f"SCM provider not found: {provider_key}",
+            "notFound": True,
         }
 
     def accept_scm_input(self, provider_id: str, value: str = "") -> Dict:

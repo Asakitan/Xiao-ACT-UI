@@ -1793,7 +1793,8 @@ class NodeExtensionHost:
                  node_path: Optional[str] = None,
                  script_path: str = "",
                  ui_bridge: Any = None,
-                 storage_root: str = "") -> None:
+                 storage_root: str = "",
+                 workspace_root: str = "") -> None:
         if node_path is None:
             from ai_editor.node_runtime import get_node_path as _get_node
             node_path = _get_node() or ""
@@ -1801,6 +1802,8 @@ class NodeExtensionHost:
         self._script_path = script_path
         self._ui_bridge = ui_bridge
         self._storage_root = storage_root
+        self._workspace_root = os.path.abspath(
+            workspace_root) if workspace_root else ""
         self._proc: Optional[subprocess.Popen] = None
         self._reader: Optional[threading.Thread] = None
         self._lock = threading.Lock()
@@ -1871,6 +1874,8 @@ class NodeExtensionHost:
         self._node_scm_providers: Dict[str, Dict[str, Any]] = {}
         self._scm_quick_diff_request_lock = threading.Lock()
         self._scm_quick_diff_requests: Dict[str, Dict[str, Any]] = {}
+        self._scm_validate_input_request_lock = threading.Lock()
+        self._scm_validate_input_requests: Dict[str, Dict[str, Any]] = {}
         self._webview_serializer_request_lock = threading.Lock()
         self._webview_serializer_requests: Dict[str, Dict[str, Any]] = {}
         self._shutting_down = False
@@ -1900,12 +1905,17 @@ class NodeExtensionHost:
 
         try:
             self._shutting_down = False
+            cwd = (
+                self._workspace_root
+                if self._workspace_root and os.path.isdir(self._workspace_root)
+                else None)
             self._proc = subprocess.Popen(
                 [node, self._script_path],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 bufsize=0,
+                cwd=cwd,
                 creationflags=(
                     getattr(subprocess, "CREATE_NO_WINDOW", 0)
                     if os.name == "nt" else 0
@@ -2817,6 +2827,16 @@ class NodeExtensionHost:
             request_id = str(msg.get("requestId", ""))
             with self._scm_quick_diff_request_lock:
                 pending = self._scm_quick_diff_requests.get(request_id)
+            if pending:
+                pending["response"] = msg
+                event = pending.get("event")
+                if isinstance(event, threading.Event):
+                    event.set()
+
+        elif msg_type == "scm_validate_input_response":
+            request_id = str(msg.get("requestId", ""))
+            with self._scm_validate_input_request_lock:
+                pending = self._scm_validate_input_requests.get(request_id)
             if pending:
                 pending["response"] = msg
                 event = pending.get("event")
@@ -4222,6 +4242,100 @@ class NodeExtensionHost:
             "providerId": provider_key,
             "value": str(value or ""),
         })
+
+    def validate_node_scm_input(
+            self, provider_id: Any, value: Any,
+            cursor_position: Any = 0,
+            timeout: float = 0.85) -> Dict[str, Any]:
+        provider_key = str(provider_id or "").strip()
+        input_value = str(value or "")
+        if not provider_key:
+            return {"ok": False, "error": "Missing SCM provider id"}
+        if not self.is_running:
+            return {"ok": False, "error": "Node extension host is not running"}
+        with self._node_scm_lock:
+            provider = self._node_scm_providers.get(provider_key)
+            if not isinstance(provider, dict):
+                return {
+                    "ok": False,
+                    "error": "SCM provider not found",
+                    "notFound": True,
+                }
+            input_box = provider.get("inputBox")
+            has_validation = bool(
+                isinstance(input_box, dict)
+                and input_box.get("validationProvider", False))
+            if not has_validation:
+                if isinstance(input_box, dict):
+                    input_box["validationMessage"] = None
+                return {
+                    "ok": True,
+                    "providerId": provider_key,
+                    "value": input_value,
+                    "validation": None,
+                    "validationProvider": False,
+                }
+        try:
+            cursor = int(cursor_position)
+        except Exception:
+            cursor = len(input_value)
+        request_id = str(uuid.uuid4())
+        event = threading.Event()
+        with self._scm_validate_input_request_lock:
+            self._scm_validate_input_requests[request_id] = {"event": event}
+        try:
+            sent = self._send({
+                "type": "scm_validate_input",
+                "requestId": request_id,
+                "providerId": provider_key,
+                "value": input_value,
+                "cursorPosition": cursor,
+            })
+            if not sent:
+                return {
+                    "ok": False,
+                    "error": "Node SCM input validation request could not be sent",
+                }
+            if not event.wait(timeout):
+                return {
+                    "ok": False,
+                    "error": "Node SCM input validation timed out",
+                    "timeout": True,
+                }
+            with self._scm_validate_input_request_lock:
+                pending = self._scm_validate_input_requests.get(
+                    request_id, {})
+            response = pending.get("response", {})
+            if not isinstance(response, dict):
+                return {
+                    "ok": False,
+                    "error": "Node SCM input validation returned no response",
+                }
+            validation = response.get("validation")
+            with self._node_scm_lock:
+                provider = self._node_scm_providers.get(provider_key)
+                if isinstance(provider, dict):
+                    input_box = provider.setdefault("inputBox", {})
+                    if isinstance(input_box, dict):
+                        input_box["value"] = input_value
+                        input_box["validationMessage"] = (
+                            validation if isinstance(validation, dict)
+                            else None)
+                        input_box["validationProvider"] = bool(
+                            response.get("validationProvider", True))
+            return {
+                "ok": bool(response.get("ok")),
+                "providerId": provider_key,
+                "value": input_value,
+                "validation": (
+                    validation if isinstance(validation, dict) else None),
+                "validationProvider": bool(
+                    response.get("validationProvider", True)),
+                "error": str(response.get("error") or ""),
+            }
+        finally:
+            with self._scm_validate_input_request_lock:
+                self._scm_validate_input_requests.pop(request_id, None)
 
     def node_scm_context_snapshot(
             self,

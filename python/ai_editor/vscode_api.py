@@ -1310,6 +1310,78 @@ def _plain_json_value(value: Any, depth: int = 0) -> Any:
     return str(value)
 
 
+def _scm_input_validation_type(value: Any) -> int:
+    if isinstance(value, str):
+        mapping = {
+            "info": 1,
+            "information": 1,
+            "warning": 2,
+            "warn": 2,
+            "error": 3,
+        }
+        return mapping.get(value.strip().lower(), 0)
+    try:
+        return int(value)
+    except Exception:
+        return 0
+
+
+def _scm_input_validation_message(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in ("message", "value", "text"):
+            item = value.get(key)
+            if item:
+                return str(item)
+    message = getattr(value, "message", None)
+    if message:
+        return str(message)
+    plain = _plain_json_value(value)
+    if isinstance(plain, dict):
+        for key in ("message", "value", "text"):
+            item = plain.get(key)
+            if item:
+                return str(item)
+    return str(value)
+
+
+def _normalize_scm_input_validation(value: Any) -> Optional[Dict[str, Any]]:
+    if not value:
+        return None
+    raw = _plain_json_value(value)
+    if isinstance(raw, dict):
+        message = _scm_input_validation_message(raw.get("message", raw))
+        if not message:
+            return None
+        validation_type = _scm_input_validation_type(
+            raw.get("type", raw.get("severity", 0)))
+        return {
+            "message": message,
+            "type": validation_type,
+            "severity": validation_type,
+        }
+    if isinstance(raw, (list, tuple)):
+        if not raw:
+            return None
+        message = _scm_input_validation_message(raw[0])
+        if not message:
+            return None
+        validation_type = _scm_input_validation_type(
+            raw[1] if len(raw) > 1 else 0)
+        return {
+            "message": message,
+            "type": validation_type,
+            "severity": validation_type,
+        }
+    message = _scm_input_validation_message(raw)
+    if not message:
+        return None
+    return {"message": message, "type": 0, "severity": 0}
+
+
 class DataTransferFile:
     """Best-effort file payload used by editor drop/paste providers."""
 
@@ -5508,6 +5580,10 @@ class VscodeNamespace:
                         getattr(control.inputBox, "placeholder", "") or ""),
                     "visible": bool(getattr(control.inputBox, "visible", True)),
                     "enabled": bool(getattr(control.inputBox, "enabled", True)),
+                    "validationProvider": callable(getattr(
+                        control.inputBox, "validateInput", None)),
+                    "validationMessage": _plain_json_value(getattr(
+                        control.inputBox, "validationMessage", None)),
                 },
                 "groups": [],
             }
@@ -5607,6 +5683,64 @@ class VscodeNamespace:
             return False
         control.inputBox.value = str(value or "")
         return True
+
+    def validate_source_control_input(
+            self, provider_id: Any, value: Any,
+            cursor_position: Any = 0) -> Dict[str, Any]:
+        provider_key = str(provider_id or "").strip()
+        if not provider_key:
+            return {"ok": False, "error": "Missing SCM provider id"}
+        control = self._source_controls.get(provider_key)
+        if control is None or getattr(control, "_disposed", False):
+            return {
+                "ok": False,
+                "error": "SCM provider not found",
+                "notFound": True,
+            }
+        input_value = str(value or "")
+        try:
+            cursor = int(cursor_position)
+        except Exception:
+            cursor = len(input_value)
+        fn = getattr(control.inputBox, "validateInput", None)
+        if not callable(fn):
+            control.inputBox.validationMessage = None
+            return {
+                "ok": True,
+                "providerId": provider_key,
+                "value": input_value,
+                "validation": None,
+                "validationProvider": False,
+            }
+        try:
+            raw_result = _resolve_provider_result(
+                _call_with_compatible_args(fn, (input_value, cursor)),
+                default=None,
+            )
+        except Exception as exc:
+            validation = {
+                "message": str(exc),
+                "type": 3,
+                "severity": 3,
+            }
+            control.inputBox.validationMessage = validation
+            return {
+                "ok": False,
+                "providerId": provider_key,
+                "value": input_value,
+                "validation": validation,
+                "validationProvider": True,
+                "error": str(exc),
+            }
+        validation = _normalize_scm_input_validation(raw_result)
+        control.inputBox.validationMessage = validation
+        return {
+            "ok": True,
+            "providerId": provider_key,
+            "value": input_value,
+            "validation": validation,
+            "validationProvider": True,
+        }
 
     def source_control_accept_command(
             self, provider_id: Any) -> Optional[Any]:
@@ -7129,6 +7263,8 @@ class _SourceControlInputBox:
         self.placeholder = ""
         self.visible = True
         self.enabled = True
+        self.validateInput = None
+        self.validationMessage = None
 
 
 class _SourceControlResourceGroup:

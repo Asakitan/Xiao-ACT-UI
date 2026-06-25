@@ -9065,9 +9065,67 @@ function runScmResourceCommand(state){
 function scmProviderId(provider){
   return String((provider&&provider.providerId)||(provider&&provider.id)||'');
 }
-async function syncScmInputValue(providerId,value){
+const _scmInputValidationTimers=new Map();
+function scmInputValidationPayload(input){
+  if(!input||typeof input!=='object')return null;
+  const raw=input.validationMessage||input.validation||null;
+  if(!raw)return null;
+  if(typeof raw==='string')return raw?{message:raw,type:0,severity:0}:null;
+  if(typeof raw==='object'){
+    const message=String(raw.message||raw.value||raw.text||'');
+    if(!message)return null;
+    const severity=Number(raw.severity||raw.type||0);
+    return {message,type:Number(raw.type||severity||0),severity};
+  }
+  return null;
+}
+function scmInputValidationClass(validation){
+  const severity=Number(validation&&(validation.severity||validation.type)||0);
+  if(severity>=3)return 'error';
+  if(severity===2)return 'warning';
+  if(severity===1)return 'info';
+  return '';
+}
+function applyScmInputValidation(box,messageEl,validation){
+  if(!messageEl)return;
+  const payload=scmInputValidationPayload({validationMessage:validation});
+  const message=payload&&payload.message?payload.message:'';
+  const kind=scmInputValidationClass(payload);
+  messageEl.textContent=message;
+  messageEl.style.display=message?'block':'none';
+  messageEl.style.color=kind==='error'?'var(--fg-error)'
+    :kind==='warning'?'var(--fg-warning)'
+    :kind==='info'?'var(--fg-accent)':'var(--fg-dim)';
+  if(box){
+    box.dataset.validationSeverity=kind;
+    box.style.borderColor=kind==='error'?'var(--fg-error)'
+      :kind==='warning'?'var(--fg-warning)'
+      :kind==='info'?'var(--fg-accent)':'var(--border)';
+  }
+}
+async function validateScmInputValue(providerId,value,cursorPosition,box,messageEl){
   const id=String(providerId||'').trim();if(!id)return null;
-  return call('set_scm_input_value',id,String(value||''));
+  const r=await call('validate_scm_input',id,String(value||''),Number(cursorPosition||0));
+  if(r&&Object.prototype.hasOwnProperty.call(r,'validation')){
+    applyScmInputValidation(box,messageEl,r.validation);
+  }
+  return r;
+}
+function scheduleScmInputValidation(providerId,value,box,messageEl){
+  const id=String(providerId||'').trim();if(!id)return;
+  clearTimeout(_scmInputValidationTimers.get(id));
+  _scmInputValidationTimers.set(id,setTimeout(()=>{
+    _scmInputValidationTimers.delete(id);
+    validateScmInputValue(id,value,box&&box.selectionStart!=null?box.selectionStart:String(value||'').length,box,messageEl);
+  },200));
+}
+async function syncScmInputValue(providerId,value,box,messageEl){
+  const id=String(providerId||'').trim();if(!id)return null;
+  const r=await call('set_scm_input_value',id,String(value||''));
+  if(r&&Object.prototype.hasOwnProperty.call(r,'validation')){
+    applyScmInputValidation(box,messageEl,r.validation);
+  }
+  return r;
 }
 async function acceptScmInput(providerId,value){
   const id=String(providerId||'').trim();if(!id)return null;
@@ -9282,22 +9340,30 @@ function renderScmProvider(parent,provider){
   appendScmStatusCommands(parent,provider.statusBarCommands);
   const input=provider.inputBox&&typeof provider.inputBox==='object'?provider.inputBox:null;
   if(input&&input.visible!==false){
-    const box=document.createElement('input');
     const providerId=scmProviderId(provider);
+    const wrap=document.createElement('div');
+    wrap.style.cssText='margin:4px 12px 8px 12px';
+    const box=document.createElement('input');
     box.value=String(input.value||'');
     box.placeholder=String(input.placeholder||'Message');
     box.disabled=input.enabled===false;
     box.dataset.scmProvider=providerId;
-    box.style.cssText='width:calc(100% - 24px);margin:4px 12px 8px 12px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:4px 7px;font:12px var(--mono);box-sizing:border-box';
-    box.addEventListener('change',()=>syncScmInputValue(providerId,box.value));
-    box.addEventListener('blur',()=>syncScmInputValue(providerId,box.value));
+    box.style.cssText='width:100%;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:4px 7px;font:12px var(--mono);box-sizing:border-box';
+    const validation=document.createElement('div');
+    validation.style.cssText='display:none;margin:4px 1px 0 1px;font-size:11px;line-height:1.35;white-space:normal;overflow-wrap:anywhere';
+    applyScmInputValidation(box,validation,scmInputValidationPayload(input));
+    box.addEventListener('input',()=>scheduleScmInputValidation(providerId,box.value,box,validation));
+    box.addEventListener('change',()=>syncScmInputValue(providerId,box.value,box,validation));
+    box.addEventListener('blur',()=>syncScmInputValue(providerId,box.value,box,validation));
     box.addEventListener('keydown',e=>{
       if(e.key==='Enter'){
         e.preventDefault();
         acceptScmInput(providerId,box.value);
       }
     });
-    parent.appendChild(box);
+    wrap.appendChild(box);
+    wrap.appendChild(validation);
+    parent.appendChild(wrap);
   }
   const groups=Array.isArray(provider.groups)?provider.groups:[];
   if(!groups.length){

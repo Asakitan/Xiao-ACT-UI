@@ -8004,11 +8004,14 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 let quickDiffProvider = undefined;
                 let statusBarCommands = undefined;
                 let actionButton = undefined;
+                let validateInput = undefined;
                 const inputBoxState = {
                     value: '',
                     placeholder: '',
                     visible: true,
                     enabled: true,
+                    validationProvider: false,
+                    validationMessage: null,
                 };
                 const emitProviderState = (type) => send({
                     type,
@@ -8046,6 +8049,31 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     set enabled(value) {
                         inputBoxState.enabled = !!value;
                         emitProviderState('scm_provider_updated');
+                    },
+                    get validateInput() { return validateInput; },
+                    set validateInput(value) {
+                        if (value && typeof value !== 'function') {
+                            throw new Error('Invalid SCM input box validation function');
+                        }
+                        validateInput = value || undefined;
+                        inputBoxState.validationProvider = !!validateInput;
+                        inputBoxState.validationMessage = null;
+                        emitProviderState('scm_provider_updated');
+                    },
+                    async _validateInput(value, cursorPosition) {
+                        if (typeof validateInput !== 'function') {
+                            inputBoxState.validationMessage = null;
+                            emitProviderState('scm_provider_updated');
+                            return null;
+                        }
+                        const result = await validateInput(
+                            String(value || ''),
+                            Number.isFinite(Number(cursorPosition))
+                                ? Number(cursorPosition) : 0);
+                        const validation = _normalizeScmInputValidation(result);
+                        inputBoxState.validationMessage = validation;
+                        emitProviderState('scm_provider_updated');
+                        return validation;
                     },
                 };
                 const sc = {
@@ -11140,6 +11168,92 @@ function handleScmQuickDiffCancel(msg) {
     cts.cancel();
 }
 
+function _scmValidationType(value) {
+    if (typeof value === 'string') {
+        const key = value.trim().toLowerCase();
+        if (key === 'info' || key === 'information') return 1;
+        if (key === 'warning' || key === 'warn') return 2;
+        if (key === 'error') return 3;
+    }
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function _scmValidationMessage(value) {
+    if (value == null) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'object') {
+        if (value.message != null) return _scmValidationMessage(value.message);
+        if (value.value != null) return String(value.value);
+        if (value.text != null) return String(value.text);
+    }
+    return String(value);
+}
+
+function _normalizeScmInputValidation(value) {
+    if (!value) return null;
+    const raw = _plainBridgeValue(value);
+    if (Array.isArray(raw)) {
+        if (!raw.length) return null;
+        const message = _scmValidationMessage(raw[0]);
+        if (!message) return null;
+        const type = _scmValidationType(raw.length > 1 ? raw[1] : 0);
+        return { message, type, severity: type };
+    }
+    if (raw && typeof raw === 'object') {
+        const message = _scmValidationMessage(raw.message ?? raw);
+        if (!message) return null;
+        const type = _scmValidationType(raw.type ?? raw.severity ?? 0);
+        return { message, type, severity: type };
+    }
+    const message = _scmValidationMessage(raw);
+    if (!message) return null;
+    return { message, type: 0, severity: 0 };
+}
+
+async function handleScmValidateInput(msg) {
+    const requestId = String(msg.requestId || '');
+    const providerId = String(msg.providerId || msg.id || '');
+    const provider = _scmProviders.get(providerId);
+    try {
+        if (!requestId) throw new Error('Missing SCM input validation requestId');
+        if (!provider || !provider.inputBox) {
+            throw new Error(`SCM provider not found: ${providerId}`);
+        }
+        const inputBox = provider.inputBox;
+        let validation = null;
+        if (typeof inputBox._validateInput === 'function') {
+            validation = await inputBox._validateInput(
+                String(msg.value || ''),
+                Number.isFinite(Number(msg.cursorPosition))
+                    ? Number(msg.cursorPosition) : 0);
+        }
+        send({
+            type: 'scm_validate_input_response',
+            requestId,
+            ok: true,
+            providerId,
+            value: String(msg.value || ''),
+            validation,
+            validationProvider: typeof inputBox.validateInput === 'function',
+        });
+    } catch (err) {
+        send({
+            type: 'scm_validate_input_response',
+            requestId,
+            ok: false,
+            providerId,
+            value: String(msg.value || ''),
+            validation: {
+                message: err?.message || String(err),
+                type: 3,
+                severity: 3,
+            },
+            error: err?.message || String(err),
+        });
+    }
+}
+
 async function handleTreeRequest(msg) {
     const requestId = String(msg.requestId || '');
     const viewId = String(msg.viewId || '');
@@ -11468,6 +11582,9 @@ async function handleMessage(msg) {
             break;
         case 'scm_quick_diff_cancel':
             handleScmQuickDiffCancel(msg);
+            break;
+        case 'scm_validate_input':
+            await handleScmValidateInput(msg);
             break;
         case 'terminal_profile_request':
             await handleTerminalProfileRequest(msg);
