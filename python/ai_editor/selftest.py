@@ -5149,6 +5149,7 @@ console.log("frontend signature help docs ok");
             and "function updateExtensionSettingRowValueMetadata(row,value,defaultValue,type)" in html
             and "function extensionSettingEnumLabel(schema,index,value)" in html
             and "function extensionSettingEnumOptionTitle(schema,index,value,defaultValue)" in html
+            and "function extensionSettingEnumDisplayValue(value)" in html
             and "function extensionSettingEnumEntries(schema,defaultValue)" in html
             and "function appendExtensionSettingEnumOptions(input,schema,defaultValue)" in html
             and "function appendExtensionSettingEnumChoices(row,schema,type,defaultValue)" in html
@@ -5357,6 +5358,7 @@ console.log("frontend signature help docs ok");
             "extensionSettingDeprecationText",
             "extensionSettingList",
             "extensionSettingEnumDescription",
+            "extensionSettingEnumDisplayValue",
             "extensionSettingEnumLabel",
             "extensionSettingEnumOptionTitle",
             "extensionSettingEnumValueToken",
@@ -6175,6 +6177,19 @@ assert(extensionSettingEnumLabel(searchSchema, 0, "always") === "Always send",
 assert(extensionSettingEnumOptionTitle(searchSchema, 0, "always", "always").indexOf("Default") >= 0
        && extensionSettingEnumOptionTitle(searchSchema, 0, "always", "always").indexOf("Value: always") >= 0,
        "enum option title includes raw value and default marker");
+const invisibleEnumValue = "line\\nbreak\\rreturn";
+const invisibleEnumSchema = { enum: [invisibleEnumValue, null] };
+assert(extensionSettingEnumDisplayValue(invisibleEnumValue) === "line\\nbreak\\rreturn"
+       && extensionSettingEnumDisplayValue(null) === "null"
+       && extensionSettingEnumDisplayValue(undefined) === "undefined",
+       "enum display value escapes invisible chars and preserves nullish labels");
+assert(extensionSettingEnumLabel(invisibleEnumSchema, 0, invisibleEnumValue) === "line\\nbreak\\rreturn"
+       && extensionSettingEnumLabel(invisibleEnumSchema, 1, null) === "null",
+       "enum label fallback uses VS Code-style display value");
+assert(extensionSettingEnumOptionTitle(
+         { enum: [invisibleEnumValue], enumItemLabels: ["Visible line"] },
+         0, invisibleEnumValue, invisibleEnumValue).indexOf("Value: line\\nbreak\\rreturn") >= 0,
+       "enum option title uses escaped raw value");
 const enumEntries = extensionSettingEnumEntries(enumDefaultOutsideSchema, "inherit");
 assert(enumEntries.length === 3 && enumEntries[0].createdDefault === true
        && enumEntries[0].value === "inherit" && enumEntries[1].value === "manual",
@@ -6191,6 +6206,13 @@ assert(enumSelect.children.length === 3
        && enumSelect.children[0].textContent === "inherit"
        && enumSelect.children[1].textContent === "Manual",
        "enum options include synthetic default and labeled choices");
+const invisibleEnumSelect = makeNode("select");
+invisibleEnumSelect.tagName = "SELECT";
+appendExtensionSettingEnumOptions(invisibleEnumSelect, invisibleEnumSchema, invisibleEnumValue);
+assert(invisibleEnumSelect.children[0].textContent === "line\\nbreak\\rreturn"
+       && invisibleEnumSelect.children[0].value === "line\\nbreak\\rreturn"
+       && invisibleEnumSelect.children[1].textContent === "null",
+       "enum options display escaped invisible and null values");
 setExtensionSettingInputValue(enumSelect, enumDefaultOutsideSchema, "string", "inherit");
 assert(enumSelect.selectedIndex === 0
        && readExtensionSettingInputValue(enumSelect, enumDefaultOutsideSchema, "string") === "inherit",
@@ -6240,6 +6262,14 @@ assert(nodeTreeHas(enumDefaultChoicesHost, n => n.className === "ext-setting-def
        && nodeTreeHas(enumDefaultChoicesHost, n => n.className === "ext-setting-enum-choice-name"
          && n.textContent === "inherit"),
        "enum choices render synthetic default outside enum");
+const invisibleEnumChoicesHost = makeNode("div");
+appendExtensionSettingEnumChoices(invisibleEnumChoicesHost,
+  { enum: [invisibleEnumValue], enumItemLabels: ["Visible line"] }, "string", invisibleEnumValue);
+assert(nodeTreeHas(invisibleEnumChoicesHost, n => n.tagName === "CODE"
+         && n.textContent === "line\\nbreak\\rreturn")
+       && nodeTreeHas(invisibleEnumChoicesHost, n => n.className === "ext-setting-enum-choice-name"
+         && n.textContent === "Visible line"),
+       "enum choices show escaped raw value when label differs");
 const textAreaSetting = { type: "textarea", tagName: "TEXTAREA", value: "", rows: 0 };
 setExtensionSettingInputValue(textAreaSetting, multilineSchema, "string", "alpha\nbeta\ncharlie");
 assert(extensionSettingUsesMultiline(multilineSchema, "string") === true,

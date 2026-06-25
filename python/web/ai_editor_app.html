@@ -13813,14 +13813,17 @@ function extensionSettingEnumDescription(schema,index){
   index=Number(index);
   return index>=0&&index<descriptions.length?descriptions[index]:'';
 }
+function extensionSettingEnumDisplayValue(value){
+  return String(value).replace(/\n/g,'\\n').replace(/\r/g,'\\r');
+}
 function extensionSettingEnumLabel(schema,index,value){
   const labels=Array.isArray(schema&&schema.enumItemLabels)?schema.enumItemLabels:[];
   const label=String(labels[index]??'').trim();
-  return label||String(value??'');
+  return label||extensionSettingEnumDisplayValue(value);
 }
 function extensionSettingEnumOptionTitle(schema,index,value,defaultValue){
   const label=extensionSettingEnumLabel(schema,index,value);
-  const raw=String(value??'');
+  const raw=extensionSettingEnumDisplayValue(value);
   const parts=[label];
   if(label!==raw)parts.push('Value: '+raw);
   if(extensionSettingStableJson(value)===extensionSettingStableJson(defaultValue))parts.push('Default');
@@ -13864,7 +13867,7 @@ function appendExtensionSettingEnumOptions(input,schema,defaultValue){
   if(!input)return;
   extensionSettingEnumEntries(schema,defaultValue).forEach(entry=>{
     const o=document.createElement('option');
-    o.value=String(entry.value??'');
+    o.value=extensionSettingEnumDisplayValue(entry.value);
     o.dataset.enumIndex=String(entry.index);
     o.dataset.enumJson=extensionSettingEnumValueToken(entry.value);
     if(entry.createdDefault)o.dataset.enumDefault='1';
@@ -13904,8 +13907,9 @@ function appendExtensionSettingEnumChoices(row,schema,type,defaultValue){
     name.textContent=label;
     name.title=extensionSettingEnumOptionTitle(schema,index,value,defaultValue);
     const desc=document.createElement('span');desc.className='ext-setting-enum-choice-desc';
-    if(label!==String(value??'')){
-      const code=document.createElement('code');code.textContent=String(value??'');
+    const raw=extensionSettingEnumDisplayValue(value);
+    if(label!==raw){
+      const code=document.createElement('code');code.textContent=raw;
       desc.appendChild(code);
       desc.appendChild(document.createTextNode(' '));
     }
@@ -13940,7 +13944,7 @@ function extensionSettingSearchText(key,schema,type,description,deprecation,sche
   ['tags','keywords','enumItemLabels','enumDescriptions','markdownEnumDescriptions'].forEach(name=>{
     extensionSettingList(schema,name).forEach(value=>parts.push(value));
   });
-  if(Array.isArray(schema.enum))schema.enum.forEach(value=>parts.push(String(value??'')));
+  if(Array.isArray(schema.enum))schema.enum.forEach(value=>parts.push(extensionSettingEnumDisplayValue(value)));
   return parts.filter(value=>value!=null&&String(value).trim()).join(' ').toLowerCase();
 }
 function extensionSettingJson(value,type){
