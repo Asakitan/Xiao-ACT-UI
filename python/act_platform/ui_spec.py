@@ -25,7 +25,6 @@ misbehaving plugin cannot bloat or crash the UI thread.
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Any, Iterable, List, Mapping, Optional
 
@@ -40,9 +39,6 @@ MAX_TEXT_LEN = 4000
 MAX_TITLE_LEN = 200
 MAX_CANVAS_OPS = 4000
 MAX_CANVAS_DIM = 4096
-MAX_MODEL_PATH_LEN = 2000
-MAX_MODEL3D_ACTION_JSON_TEXT_LEN = 4 * 1024 * 1024
-MAX_MODEL3D_PROCEDURAL_JSON_TEXT_LEN = 4 * 1024 * 1024
 MAX_LAYER_POS = 32768
 MAX_LAYER_Z = 10000
 
@@ -62,7 +58,7 @@ MAX_INPUT_VAL = 2000
 CONTAINER_KINDS = ("panel", "section", "card", "row", "group")
 LEAF_KINDS = (
     "text", "kv", "bar", "badge", "divider", "spacer",
-    "button", "input", "table", "canvas", "model3d",
+    "button", "input", "table", "canvas", "rgba_frame",
 )
 NODE_KINDS = CONTAINER_KINDS + LEAF_KINDS
 
@@ -74,9 +70,6 @@ CANVAS_COLOR_TOKENS = set(TEXT_STYLES) | set(BAR_COLORS) | {
     "white", "black", "bg", "body", "border", "sep", "grid", "header", "transparent",
 }
 CANVAS_ANCHORS = ("nw", "n", "ne", "w", "center", "e", "sw", "s", "se")
-MODEL_FORMATS = ("auto", "fbx", "obj", "gltf", "glb", "dae", "3ds", "blend")
-
-
 def _s(value: Any, limit: int = MAX_TEXT_LEN) -> str:
     text = "" if value is None else str(value)
     if len(text) > limit:
@@ -94,21 +87,6 @@ def _clamp01(value: Any) -> float:
     return max(0.0, min(1.0, num))
 
 
-def _cf(value: Any, default: float = 0.0,
-        *, lo: float | None = None, hi: float | None = None) -> float:
-    try:
-        num = float(value)
-        if num != num:
-            raise ValueError("nan")
-    except Exception:
-        num = float(default)
-    if lo is not None:
-        num = max(lo, num)
-    if hi is not None:
-        num = min(hi, num)
-    return num
-
-
 def _choice(value: Any, allowed: Iterable[str], default: str) -> str:
     text = str(value or "").strip().lower()
     return text if text in allowed else default
@@ -120,54 +98,6 @@ def _json_scalar(value: Any) -> Any:
     if isinstance(value, (int, float)):
         return value
     return _s(value)
-
-
-def _json_safe_value(value: Any, *, max_items: int = 64, depth: int = 0) -> Any:
-    if isinstance(value, Mapping):
-        return _json_safe_map(value, max_items=max_items, depth=depth + 1)
-    if isinstance(value, (list, tuple)):
-        if depth > 4:
-            return []
-        return [
-            _json_safe_value(item, max_items=max_items, depth=depth + 1)
-            for item in list(value)[:max_items]
-        ]
-    return _json_scalar(value)
-
-
-def _json_safe_map(
-    value: Any,
-    *,
-    max_items: int = 64,
-    depth: int = 0,
-    text_limit: int = MAX_TEXT_LEN,
-) -> dict:
-    if isinstance(value, str):
-        text = value.strip()
-        if not text or len(text) > text_limit:
-            return {}
-        try:
-            value = json.loads(text)
-        except Exception:
-            return {}
-    if depth > 4 or not isinstance(value, Mapping):
-        return {}
-    out: dict[str, Any] = {}
-    for key, val in list(value.items())[:max_items]:
-        out[str(key)] = _json_safe_value(val, max_items=max_items, depth=depth)
-    return out
-
-
-def _model3d_action_json_text(value: Any) -> tuple[str, str]:
-    if not isinstance(value, str):
-        return "", ""
-    text = str(value)
-    if len(text) > MAX_MODEL3D_ACTION_JSON_TEXT_LEN:
-        return "", (
-            "action json_text exceeds action json parse limit "
-            f"({len(text)} > {MAX_MODEL3D_ACTION_JSON_TEXT_LEN})"
-        )
-    return text, ""
 
 
 def _ci(value: Any, default: int = 0) -> int:
@@ -250,116 +180,11 @@ def _normalize_canvas(node: Mapping[str, Any]) -> dict:
     }
 
 
-def _num_list(value: Any, length: int, default: Iterable[float],
-              lo: float = -100000.0, hi: float = 100000.0) -> list[float]:
-    src = list(value) if isinstance(value, (list, tuple)) else list(default)
-    out: list[float] = []
-    defaults = list(default)
-    for idx in range(length):
-        try:
-            num = float(src[idx])
-            if num != num:
-                raise ValueError("nan")
-        except Exception:
-            num = float(defaults[idx] if idx < len(defaults) else 0.0)
-        out.append(max(lo, min(hi, num)))
-    return out
-
-
-def _normalize_model3d(node: Mapping[str, Any]) -> dict:
+def _normalize_rgba_frame(node: Mapping[str, Any]) -> dict:
     width = max(1, min(MAX_CANVAS_DIM, _ci(node.get("width"), 320)))
     height = max(1, min(MAX_CANVAS_DIM, _ci(node.get("height"), 480)))
-
-    raw_model = node.get("model")
-    model = dict(raw_model or {}) if isinstance(raw_model, Mapping) else {}
-    path = model.get("path", node.get("model_path", ""))
-    fmt = _choice(model.get("format", node.get("format", "auto")), MODEL_FORMATS, "auto")
-    normalized_model = {
-        "path": _s(path, MAX_MODEL_PATH_LEN),
-        "format": fmt,
-        "reload_key": _s(model.get("reload_key", node.get("reload_key", "")), 200),
-    }
-
-    raw_action = node.get("action")
-    action = dict(raw_action or {}) if isinstance(raw_action, Mapping) else {}
-    action_json_raw = action.get("json", node.get("animation_json", {}))
-    action_json_text_raw = (
-        action.get("json_text")
-        if isinstance(action.get("json_text"), str)
-        else (action_json_raw if isinstance(action_json_raw, str) else "")
-    )
-    action_json = _json_safe_map(action_json_raw)
-    action_json_text, action_json_error = _model3d_action_json_text(action_json_text_raw)
-    if not action_json_error and isinstance(action.get("json_error"), str):
-        action_json_error = _s(action.get("json_error"), 300)
-    normalized_action = {
-        "name": _s(action.get("name", node.get("animation_name", "")), 120),
-        "clip": _s(action.get("clip", ""), 120),
-        "file": _s(action.get("file", node.get("animation_file", "")), MAX_MODEL_PATH_LEN),
-        "json": action_json,
-        "json_text": action_json_text,
-        "speed": _cf(action.get("speed", 1.0), 1.0, lo=0.0, hi=8.0),
-        "loop": bool(action.get("loop", True)),
-        "time": _cf(action.get("time", node.get("phase", 0.0)), 0.0, lo=-1.0e9, hi=1.0e9),
-    }
-    if action_json_error:
-        normalized_action["json_error"] = action_json_error
-
-    raw_camera = node.get("camera")
-    camera = dict(raw_camera or {}) if isinstance(raw_camera, Mapping) else {}
-    normalized_camera = {
-        "fov": _cf(camera.get("fov", 35.0), 35.0, lo=5.0, hi=120.0),
-        "orbit": _num_list(camera.get("orbit"), 3, (0.0, 12.0, 0.0), lo=-360.0, hi=360.0),
-        "distance": _cf(camera.get("distance", 3.2), 3.2, lo=0.1, hi=100.0),
-    }
-
-    raw_transform = node.get("transform")
-    transform = dict(raw_transform or {}) if isinstance(raw_transform, Mapping) else {}
-    normalized_transform = {
-        "scale": _cf(transform.get("scale", 1.0), 1.0, lo=0.001, hi=100.0),
-        "rotation": _num_list(transform.get("rotation"), 3, (0.0, 180.0, 0.0), lo=-360.0, hi=360.0),
-        "position": _num_list(transform.get("position"), 3, (0.0, -1.0, 0.0)),
-    }
-
-    raw_retarget = node.get("retarget")
-    retarget = _json_safe_map(raw_retarget) if isinstance(raw_retarget, Mapping) else {}
-    if retarget:
-        retarget.setdefault("mode", "humanoid_auto")
-        retarget.setdefault("rest_pose", "auto")
-        retarget.setdefault("preserve_proportions", True)
-
-    raw_skeleton = node.get("skeleton")
-    skeleton = _json_safe_map(raw_skeleton) if isinstance(raw_skeleton, Mapping) else {}
-
-    raw_materials = node.get("materials")
-    materials = (
-        _json_safe_value(raw_materials, max_items=256)
-        if isinstance(raw_materials, (Mapping, list, tuple, str))
-        else {}
-    )
-    if not isinstance(materials, (dict, list)):
-        materials = {}
-
-    raw_physics = node.get("physics")
-    physics = _json_safe_map(raw_physics, max_items=256) if isinstance(raw_physics, Mapping) else {}
-    raw_procedural = node.get("procedural_action")
-    procedural_action = (
-        _json_safe_map(
-            raw_procedural,
-            max_items=512,
-            text_limit=MAX_MODEL3D_PROCEDURAL_JSON_TEXT_LEN,
-        )
-        if isinstance(raw_procedural, (Mapping, str))
-        else {}
-    )
-    raw_secondary = node.get("secondary_motion")
-    secondary_motion = (
-        _json_safe_map(raw_secondary, max_items=256)
-        if isinstance(raw_secondary, Mapping)
-        else {}
-    )
     return {
-        "type": "model3d",
+        "type": "rgba_frame",
         "id": _s(node.get("id"), 120),
         "x": _cpos(node.get("x"), 0),
         "y": _cpos(node.get("y"), 0),
@@ -367,23 +192,12 @@ def _normalize_model3d(node: Mapping[str, Any]) -> dict:
         "width": width,
         "height": height,
         "draggable": bool(node.get("draggable", True)),
-        "phase": _cf(node.get("phase", 0.0), 0.0, lo=-1.0e9, hi=1.0e9),
-        "model": normalized_model,
-        "action": normalized_action,
-        "camera": normalized_camera,
-        "transform": normalized_transform,
-        "retarget": retarget,
-        "skeleton": skeleton,
-        "materials": materials,
-        "physics": physics,
-        "procedural_action": procedural_action,
-        "secondary_motion": secondary_motion,
+        "hit_test": _choice(node.get("hit_test"), ("none", "rect", "alpha"), "rect"),
+        "frame_rgba_b64": _s(node.get("frame_rgba_b64"), width * height * 8),
+        "frame_key": _s(node.get("frame_key"), 240),
+        "premultiplied": bool(node.get("premultiplied", False)),
         "background": _s(node.get("background") or "transparent", 40),
-        "asset_policy": _choice(node.get("asset_policy"), ("best_effort", "strict", "diagnostic_only"), "best_effort"),
-        "strict_assets": bool(node.get("strict_assets") or node.get("require_assets")),
-        "fallback": _s(node.get("fallback"), 400),
-        "debug": bool(node.get("debug", False)),
-        "diagnostic": bool(node.get("diagnostic", False)),
+        "diagnostic": _s(node.get("diagnostic"), 500),
     }
 
 
@@ -535,8 +349,8 @@ def _normalize_node(node: Any, depth: int, budget: list[int]) -> Optional[dict]:
         return _normalize_table(node)
     if kind == "canvas":
         return _normalize_canvas(node)
-    if kind == "model3d":
-        return _normalize_model3d(node)
+    if kind == "rgba_frame":
+        return _normalize_rgba_frame(node)
     return None
 
 
@@ -683,62 +497,28 @@ class UI:
                 "bg": bg, "ops": list(ops or [])}
 
     @staticmethod
-    def model3d(id: Any, model_path: Any, width: int = 320, height: int = 480,
-                x: int = 0, y: int = 0, z: int = 0,
-                animation_name: Any = "", animation_file: Any = "",
-                animation_json: Any = None,
-                camera: Optional[Mapping[str, Any]] = None,
-                transform: Optional[Mapping[str, Any]] = None,
-                retarget: Optional[Mapping[str, Any]] = None,
-                skeleton: Optional[Mapping[str, Any]] = None,
-                materials: Optional[Any] = None,
-                physics: Optional[Mapping[str, Any]] = None,
-                procedural_action: Optional[Any] = None,
-                secondary_motion: Optional[Mapping[str, Any]] = None,
-                phase: float = 0.0,
-                asset_policy: Any = "best_effort",
-                strict_assets: bool = False,
-                fallback: Any = "",
-                debug: bool = False,
-                diagnostic: bool = False,
-                draggable: bool = True) -> dict:
-        action_json_text, action_json_error = _model3d_action_json_text(animation_json)
-        action = {
-            "name": _s(animation_name, 120),
-            "file": _s(animation_file, MAX_MODEL_PATH_LEN),
-            "json": _json_safe_map(animation_json or {}),
-            "json_text": action_json_text,
-        }
-        if action_json_error:
-            action["json_error"] = action_json_error
+    def rgba_frame(id: Any, width: int, height: int, frame_rgba_b64: Any,
+                   x: int = 0, y: int = 0, z: int = 0,
+                   frame_key: Any = "", draggable: bool = True,
+                   hit_test: str = "alpha", premultiplied: bool = False) -> dict:
+        """A pre-rendered RGBA8888 overlay frame supplied by a plugin.
+
+        The platform only decodes and composites these pixels; it does not
+        inspect model, mesh, or animation data.
+        """
         return {
-            "type": "model3d",
+            "type": "rgba_frame",
             "id": _s(id, 120),
-            "x": _cpos(x, 0), "y": _cpos(y, 0), "z": _cz(z, 0),
+            "x": _cpos(x, 0),
+            "y": _cpos(y, 0),
+            "z": _cz(z, 0),
             "width": max(1, min(MAX_CANVAS_DIM, _ci(width, 320))),
             "height": max(1, min(MAX_CANVAS_DIM, _ci(height, 480))),
             "draggable": bool(draggable),
-            "phase": _cf(phase, 0.0, lo=-1.0e9, hi=1.0e9),
-            "model": {"path": _s(model_path, MAX_MODEL_PATH_LEN), "format": "auto"},
-            "action": action,
-            "camera": dict(camera or {}) if isinstance(camera, Mapping) else {},
-            "transform": dict(transform or {}) if isinstance(transform, Mapping) else {},
-            "retarget": dict(retarget or {}) if isinstance(retarget, Mapping) else {},
-            "skeleton": dict(skeleton or {}) if isinstance(skeleton, Mapping) else {},
-            "materials": materials if isinstance(materials, (Mapping, list, tuple)) else {},
-            "physics": dict(physics or {}) if isinstance(physics, Mapping) else {},
-            "procedural_action": (
-                procedural_action
-                if isinstance(procedural_action, (Mapping, str))
-                else {}
-            ),
-            "secondary_motion": dict(secondary_motion or {}) if isinstance(secondary_motion, Mapping) else {},
-            "background": "transparent",
-            "asset_policy": _choice(asset_policy, ("best_effort", "strict", "diagnostic_only"), "best_effort"),
-            "strict_assets": bool(strict_assets),
-            "fallback": _s(fallback, 400),
-            "debug": bool(debug),
-            "diagnostic": bool(diagnostic),
+            "hit_test": hit_test,
+            "frame_rgba_b64": _s(frame_rgba_b64, max(0, _ci(width, 320) * _ci(height, 480) * 8)),
+            "frame_key": _s(frame_key, 240),
+            "premultiplied": bool(premultiplied),
         }
 
     @staticmethod

@@ -2,7 +2,7 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
-## v5.2.0: 脚本多文件拆分、model3d 渲染重构与 UI/设置健壮性改进.
+## v5.2.0: 脚本多文件拆分、插件 RGBA overlay 与 UI/设置健壮性改进.
 
   - **`act_platform` 脚本多文件拆分**:
     - Lua / AngelScript / Emma 新增 `load_script` / `dofile` / `import` 加载同语言子文件,
@@ -15,20 +15,16 @@
     - 文档同步: `MULTI_LANGUAGE_SCRIPTING.md` / `PLUGIN_SDK.md` / `GAME_STATE_API.md`。
   - **`settings_manager`**: 原子写入 (`NamedTemporaryFile` + `fsync` + `os.replace`) 防止崩溃损坏;
     损坏 JSON 自动备份为 `settings.json.corrupt`; `_json_safe` 清洗非可序列化值。
-  - **`render` model3d 重构**: backend 增加 action JSON 文本缓存、Unity 手指肌肉/Spread 限制、
-    `node_parents` / `material_textures` / `embedded_textures` 元数据、`get_model_data` 视图;
-    `model3d_software` 大量新增 pose / 物理 / 弹簧链 / secondary motion / 碰撞函数并作为 Cython 扩展构建
-    (`build_cython_ext` 新增 `SAO_CY_ONLY` 过滤); `moderngl` / `assimpnet` / `native` 配套适配;
-    `render/__init__` 优先加载较新 `build/lib` 下的 `model3d_software.pyd`。
+  - **`render` / overlay 清理**: 移除平台内置 3D 节点、旧 native/software/托管渲染链和
+    对应 Cython 构建入口; 3D/角色渲染由插件自行产出 RGBA 帧, 平台只负责 `rgba_frame` 解码、分层合成和输入路由。
   - **GUI / overlay**: `sao_gui_menu_mixin` 命令前关闭菜单时同步释放 fisheye 输入 z-order
     (`_close_sao_menu_for_external_command`); `sao_gui_fisheye_mixin` native 对话框期间抑制关闭并排除
     `act_plugin_manager`; `sao_gui_panels_mixin` 打开插件面板时停 fisheye;
     `sao_panel_components` 新增 `bind_canvas_mousewheel` 路由子控件滚轮到 canvas;
     `sao_gui_plugin_manager` 用 `bind_canvas_mousewheel` 绑定各 canvas 滚轮;
-    `sao_plugin_unified_overlay` 新增 model3d `speech_bubble` 绘制与输入代理生命周期改进;
+    `sao_plugin_unified_overlay` 支持 `canvas` / `rgba_frame` 独立图层、拖拽和输入代理生命周期;
     `ui_gpu/popup` `force_destroy_overlay` 释放 input zorder。
-  - **selftest**: `root_script_plugins_selftest` 增加 canvas split layer ids 验证、
-    stickwoman 默认/恢复 `moe_idle` 检查、retarget 迁移到 C# 引擎适配; `act_plugin_render_engine_selftest` 扩展。
+  - **selftest**: 移除旧 workspace-root 四插件专用 probe/selftest; 平台保留通用 UI spec、overlay 和设置持久化验证。
   - **其他**: `config.parse_hotkey` / `normalize_hotkey` 文档更新为 `HOTKEY_FKEY_VK` 命名键;
     `ui_spec` 删除多余空行。(commit `86e3b23`)
 

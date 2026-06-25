@@ -14,7 +14,7 @@ def run_selftest() -> dict:
     with tempfile.TemporaryDirectory(prefix="sao_settings_selftest_") as root:
         path = os.path.join(root, "settings.json")
         with open(path, "w", encoding="utf-8") as handle:
-            handle.write('{"act_plugin_settings": {"script_stickwoman_csharp": {"overlay_enabled": ')
+            handle.write('{"act_plugin_settings": {"sample_plugin": {"overlay_enabled": ')
 
         settings = SettingsManager(path)
         assert settings._load_error, "corrupt JSON should record a load error"

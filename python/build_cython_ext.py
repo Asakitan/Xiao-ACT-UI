@@ -92,10 +92,6 @@ extensions = [
         name='_sao_cy_uihelpers',
         sources=[os.path.join(HERE, '_sao_cy_uihelpers.pyx')],
     ),
-    Extension(
-        name='render.model3d_software',
-        sources=[os.path.join(HERE, 'render', 'model3d_software.py')],
-    ),
     # mem_probe: AVX2 accelerated memory scan/pattern search for the
     # mem_probe tools that import ``mem_probe.cy_memscan``.
     Extension(

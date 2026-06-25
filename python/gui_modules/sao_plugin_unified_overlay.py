@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import base64
 import json
 import re
 from collections.abc import Mapping
@@ -26,32 +27,10 @@ except Exception:
     CompositorBgraPresenter = None  # type: ignore[assignment]
     get_unified_overlay = None  # type: ignore[assignment]
 
-try:
-    from render.model3d_backend import (
-        diagnose_model3d_node,
-        get_backend_status,
-        model3d_node_key,
-        probe_model3d_backend,
-    )
-except Exception:
-    diagnose_model3d_node = None  # type: ignore[assignment]
-    get_backend_status = None  # type: ignore[assignment]
-    model3d_node_key = None  # type: ignore[assignment]
-    probe_model3d_backend = None  # type: ignore[assignment]
 
 from act_platform.runtime import ensure_act_event_bus, render_overlays
 from act_platform.ui_spec import normalize_ui_spec
 from gui_modules.sao_plugin_ui_render import _canvas_fill, _pal
-
-try:
-    from render.model3d_overlay import render_model3d_node
-except Exception:
-    render_model3d_node = None  # type: ignore[assignment]
-
-try:
-    from render.model3d_native import reset_native_model3d_resources
-except Exception:
-    reset_native_model3d_resources = None  # type: ignore[assignment]
 
 _FONT_CACHE: dict[tuple[int, bool], Any] = {}
 _FONT_FILES = {
@@ -59,7 +38,7 @@ _FONT_FILES = {
     True: ("msyhbd.ttc", "segoeuib.ttf", "arialbd.ttf", "msyh.ttc"),
 }
 _CONTAINER_TYPES = {"panel", "section", "card", "row", "group"}
-_LAYER_KINDS = {"canvas", "model3d"}
+_LAYER_KINDS = {"canvas", "rgba_frame"}
 _BASE_Z = 140
 _TITLE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
@@ -168,12 +147,6 @@ def _layer_title(kind: str, layer_key: str) -> str:
 
 
 def _drawable_key(plugin_id: str, kind: str, node: Mapping[str, Any], order: int) -> tuple[str, str]:
-    if kind == "model3d" and callable(model3d_node_key):
-        try:
-            display_key = model3d_node_key(plugin_id, node, order=order)
-            return f"model3d:{display_key}", display_key
-        except Exception:
-            pass
     node_id = str(node.get("id") or "").strip()
     base = f"{plugin_id or 'plugin'}/{node_id}" if node_id else f"{plugin_id or 'plugin'}/{kind}#{order}"
     return f"{kind}:{base}", base
@@ -229,88 +202,6 @@ def _draw_canvas(draw: Any, canvas_node: Mapping[str, Any], pal: Mapping[str, An
                 str(op.get("anchor") or "nw"),
             )
             draw.text((tx, ty), text, fill=fill, font=font)
-
-
-def _wrap_line(draw: Any, text: str, font: Any, max_width: int) -> list[str]:
-    words = str(text or "").split()
-    if not words:
-        return [""]
-    lines: list[str] = []
-    cur = ""
-    for word in words:
-        candidate = word if not cur else f"{cur} {word}"
-        if _text_size(draw, candidate, font)[0] <= max_width:
-            cur = candidate
-            continue
-        if cur:
-            lines.append(cur)
-        cur = word
-    if cur:
-        lines.append(cur)
-    out: list[str] = []
-    for line in lines:
-        if _text_size(draw, line, font)[0] <= max_width:
-            out.append(line)
-            continue
-        clipped = line
-        while clipped and _text_size(draw, clipped + "...", font)[0] > max_width:
-            clipped = clipped[:-1]
-        out.append((clipped + "...") if clipped else "...")
-    return out
-
-
-def _draw_model_diagnostic(
-    draw: Any,
-    model_node: Mapping[str, Any],
-    pal: Mapping[str, Any],
-    plugin_id: str,
-    order: int,
-    width: int,
-    height: int,
-    backend_status: Any,
-) -> tuple[str, ...]:
-    bg = _color_to_rgba(model_node.get("background"), pal, "")
-    if bg is None:
-        bg = (4, 10, 18, 220)
-    draw.rectangle((0, 0, width, height), fill=bg)
-    border = _color_to_rgba("gold", pal, "gold") or (222, 166, 32, 255)
-    value = _color_to_rgba("value", pal, "value") or (235, 245, 255, 255)
-    muted = _color_to_rgba("muted", pal, "muted") or (145, 160, 176, 255)
-    bad = _color_to_rgba("warn", pal, "warn") or (255, 194, 84, 255)
-    draw.rectangle((0, 0, max(0, width - 1), max(0, height - 1)), outline=border, width=1)
-    draw.rectangle((0, 0, width, min(height, 28)), fill=(12, 22, 36, 235))
-
-    title_font = _load_font(13, True)
-    body_font = _load_font(10, False)
-    small_font = _load_font(9, False)
-    if title_font is not None:
-        draw.text((10, 7), "Model3D", fill=border, font=title_font)
-
-    if callable(diagnose_model3d_node):
-        try:
-            _key, lines = diagnose_model3d_node(
-                plugin_id, model_node, order=order, status=backend_status)
-        except Exception as exc:
-            lines = (f"model3d {plugin_id or 'plugin'}/model3d#{order}", str(exc))
-    else:
-        lines = (
-            f"model3d {plugin_id or 'plugin'}/model3d#{order}",
-            "model3d backend probe is unavailable",
-        )
-
-    y = 38
-    max_text_w = max(20, width - 20)
-    for idx, line in enumerate(lines):
-        font = body_font if idx == 0 else small_font
-        if font is None:
-            continue
-        fill = value if idx == 0 else (bad if idx >= 2 else muted)
-        for wrapped in _wrap_line(draw, line, font, max_text_w):
-            if y > height - 14:
-                return tuple(lines)
-            draw.text((10, y), wrapped, fill=fill, font=font)
-            y += 14
-    return tuple(lines)
 
 
 def _iter_layer_drawables(overlays: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -374,50 +265,76 @@ def _image_to_bgra(image: Any, width: int, height: int) -> bytes:
     return bytes(out)
 
 
+def _rgba_bytes_to_bgra(rgba: bytes, width: int, height: int, *, premultiplied: bool = False) -> bytes:
+    expected = max(1, int(width)) * max(1, int(height)) * 4
+    if len(rgba) != expected:
+        raise ValueError(f"rgba_frame byte length {len(rgba)} != {expected}")
+    out = bytearray(expected)
+    src = memoryview(rgba)
+    dst = memoryview(out)
+    for idx in range(0, expected, 4):
+        r = src[idx]
+        g = src[idx + 1]
+        b = src[idx + 2]
+        a = src[idx + 3]
+        if premultiplied:
+            dst[idx] = b
+            dst[idx + 1] = g
+            dst[idx + 2] = r
+        else:
+            dst[idx] = (b * a + 127) // 255
+            dst[idx + 1] = (g * a + 127) // 255
+            dst[idx + 2] = (r * a + 127) // 255
+        dst[idx + 3] = a
+    return bytes(out)
+
+
+def _render_rgba_frame_node(node: Mapping[str, Any], width: int, height: int) -> tuple[str, bytes, int, int] | None:
+    text = str(node.get("frame_rgba_b64") or "").strip()
+    if not text:
+        return None
+    try:
+        rgba = base64.b64decode(text.encode("ascii"), validate=True)
+        bgra = _rgba_bytes_to_bgra(
+            rgba,
+            width,
+            height,
+            premultiplied=bool(node.get("premultiplied", False)),
+        )
+    except Exception:
+        return None
+    signature = json.dumps({
+        "kind": "rgba_frame",
+        "id": node.get("id"),
+        "frame_key": node.get("frame_key"),
+        "width": width,
+        "height": height,
+        "hit_test": node.get("hit_test"),
+        "draggable": node.get("draggable"),
+    }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return signature, bgra, width, height
+
+
 def _render_drawable_frame(
     drawable: Mapping[str, Any],
     pal: Mapping[str, Any],
-    backend_status: Any = None,
 ) -> tuple[str, bytes, int, int] | None:
-    if Image is None or ImageDraw is None:
-        return None
     node = drawable.get("node")
     if not isinstance(node, Mapping):
         return None
     width = _node_size(node, "width", int(drawable.get("width") or 1))
     height = _node_size(node, "height", int(drawable.get("height") or 1))
+    kind = str(drawable.get("kind") or "").lower()
+    if kind == "rgba_frame":
+        return _render_rgba_frame_node(node, width, height)
+    if Image is None or ImageDraw is None:
+        return None
     image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    kind = str(drawable.get("kind") or "").lower()
-    diagnostic_lines: tuple[str, ...] = ()
     if kind == "canvas":
         _draw_canvas(draw, node, pal, width, height)
-    elif kind == "model3d":
-        rendered = None
-        if callable(render_model3d_node):
-            try:
-                rendered = render_model3d_node(node, pal)
-            except Exception:
-                rendered = None
-        if rendered is not None:
-            image = rendered
-        else:
-            diagnostic_lines = _draw_model_diagnostic(
-                draw,
-                node,
-                pal,
-                str(drawable.get("plugin_id") or ""),
-                int(drawable.get("order") or 0),
-                width,
-                height,
-                backend_status,
-            )
     else:
         return None
-    if kind == "model3d" and isinstance(image, Image.Image):
-        speech = node.get("speech_bubble") if isinstance(node.get("speech_bubble"), Mapping) else None
-        if speech:
-            _draw_speech_bubble(image, speech, width, height)
     signature = json.dumps({
         "kind": kind,
         "key": drawable.get("key"),
@@ -425,76 +342,8 @@ def _render_drawable_frame(
         "y": drawable.get("y"),
         "z": drawable.get("z"),
         "node": node,
-        "diagnostic": diagnostic_lines,
     }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return signature, _image_to_bgra(image, width, height), width, height
-
-
-def _draw_speech_bubble(image: Any, speech: Mapping[str, Any], width: int, height: int) -> None:
-    """Draw a speech bubble above the model with anime-style text."""
-    if ImageDraw is None or ImageFont is None:
-        return
-    text = str(speech.get("text") or "").strip()
-    if not text:
-        return
-    try:
-        draw = ImageDraw.Draw(image)
-    except Exception:
-        return
-    font = None
-    for name in ("msyh.ttc", "YuGothM.ttc", "msgothic.ttc", "segoeui.ttf", "arial.ttf"):
-        try:
-            font = ImageFont.truetype(name, size=14)
-            break
-        except Exception:
-            continue
-    if font is None:
-        try:
-            font = ImageFont.load_default()
-        except Exception:
-            return
-    try:
-        bbox = draw.textbbox((0, 0), text, font=font)
-        tw = bbox[2] - bbox[0]
-        th = bbox[3] - bbox[1]
-    except Exception:
-        tw, th = len(text) * 10, 16
-    pad = 8
-    bw = tw + pad * 2
-    bh = th + pad * 2
-    bx = max(0, (width - bw) // 2)
-    by = max(0, min(10, height // 8 - bh))
-    draw.rounded_rectangle(
-        [bx, by, bx + bw, by + bh],
-        radius=10,
-        fill=(255, 255, 255, 210),
-        outline=(180, 140, 200, 255),
-        width=2,
-    )
-    tx = bx + (bw - tw) // 2
-    ty = by + (bh - th) // 2
-    draw.text((tx, ty), text, fill=(80, 60, 100, 255), font=font)
-    cx = width // 2
-    cy = by + bh
-    draw.polygon(
-        [(cx - 6, cy), (cx + 6, cy), (cx, cy + 8)],
-        fill=(255, 255, 255, 210),
-        outline=(180, 140, 200, 255),
-    )
-
-
-def _backend_status_signature(backend_status: Any) -> dict[str, Any]:
-    if backend_status is None:
-        return {}
-    return {
-        "backend": str(getattr(backend_status, "backend", "") or ""),
-        "files_present": bool(getattr(backend_status, "files_present", False)),
-        "import_available": bool(getattr(backend_status, "import_available", False)),
-        "render_available": bool(getattr(backend_status, "render_available", False)),
-        "reason": str(getattr(backend_status, "reason", "") or ""),
-        "managed_files": tuple(getattr(backend_status, "managed_files", ()) or ()),
-        "native_files": tuple(getattr(backend_status, "native_files", ()) or ()),
-    }
 
 
 def _drawable_raster_node(node: Any) -> Any:
@@ -509,7 +358,6 @@ def _drawable_raster_node(node: Any) -> Any:
 def _drawable_input_signature(
     drawable: Mapping[str, Any],
     pal: Mapping[str, Any],
-    backend_status: Any = None,
 ) -> str:
     kind = str(drawable.get("kind") or "").lower()
     payload: dict[str, Any] = {
@@ -520,8 +368,6 @@ def _drawable_input_signature(
         "node": _drawable_raster_node(drawable.get("node")),
         "pal": dict(pal or {}),
     }
-    if kind == "model3d":
-        payload["backend"] = _backend_status_signature(backend_status)
     return json.dumps(payload, ensure_ascii=False, sort_keys=True,
                       separators=(",", ":"), default=str)
 
@@ -535,10 +381,7 @@ def _compose_overlay_frame(overlays: list[Mapping[str, Any]]) -> tuple[str, byte
     drawables = _iter_layer_drawables(overlays)
     if not drawables:
         return None
-    backend_status = get_backend_status() if callable(get_backend_status) else (
-        probe_model3d_backend() if callable(probe_model3d_backend) else None
-    )
-    return _render_drawable_frame(drawables[0], _pal(), backend_status)
+    return _render_drawable_frame(drawables[0], _pal())
 
 
 def _iter_canvas_nodes(spec: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -560,9 +403,9 @@ def _iter_canvas_nodes(spec: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 class PluginUnifiedOverlayHost:
     """Bridge plugin positioned overlay nodes into the unified GPU overlay.
 
-    Each canvas/model3d node is rendered into its own compositor layer keyed by
-    plugin id plus node id (or a stable order fallback for invalid specs). Menu
-    open events only hide these layers temporarily; plugin enabled/disabled
+    Each canvas/rgba_frame node is rendered into its own compositor layer keyed
+    by plugin id plus node id (or a stable order fallback for invalid specs).
+    Menu open events only hide these layers temporarily; plugin enabled/disabled
     state is untouched.
     """
 
@@ -775,7 +618,6 @@ class PluginUnifiedOverlayHost:
     def _destroy_layer(self, key: str) -> None:
         key_text = str(key)
         state = self._layers.pop(key_text, None)
-        was_model3d = key_text.startswith("model3d:")
         self._position_overrides.pop(key_text, None)
         self._drag_state.pop(key_text, None)
         if not state:
@@ -793,8 +635,6 @@ class PluginUnifiedOverlayHost:
                 overlay.destroy_layer(layer_name)
             except Exception:
                 pass
-        if was_model3d and not self._has_model3d_layers():
-            self._release_model3d_resources()
 
     def _destroy_all_layers(self) -> None:
         for key in list(self._layers):
@@ -818,17 +658,6 @@ class PluginUnifiedOverlayHost:
         for key in list(self._layers):
             if self._plugin_id_from_layer_key(key) == pid:
                 self._destroy_layer(key)
-
-    def _has_model3d_layers(self) -> bool:
-        return any(str(key).startswith("model3d:") for key in self._layers)
-
-    def _release_model3d_resources(self) -> None:
-        if not callable(reset_native_model3d_resources):
-            return
-        try:
-            reset_native_model3d_resources()
-        except Exception:
-            pass
 
     def _lifecycle_targets_surface(self, payload: Mapping[str, Any]) -> bool:
         surface = str(payload.get("surface") or "")
@@ -865,10 +694,10 @@ class PluginUnifiedOverlayHost:
         kind = str(drawable.get("kind") or "").lower()
         node = drawable.get("node")
         if not isinstance(node, Mapping):
-            return kind == "model3d"
+            return kind in {"rgba_frame"}
         if "draggable" in node:
             return bool(node.get("draggable"))
-        return kind == "model3d"
+        return kind in {"rgba_frame"}
 
     @staticmethod
     def _alpha_hit(state: dict[str, Any], local_x: float, local_y: float, threshold: int = 10) -> bool:
@@ -1213,18 +1042,12 @@ class PluginUnifiedOverlayHost:
             self._destroy_all_layers()
             return
         pal = _pal()
-        needs_model3d = any(str(item.get("kind") or "").lower() == "model3d" for item in drawables)
-        backend_status = None
-        if needs_model3d:
-            backend_status = get_backend_status() if callable(get_backend_status) else (
-                probe_model3d_backend() if callable(probe_model3d_backend) else None
-            )
         active_keys: set[str] = set()
         for drawable in drawables:
             key = str(drawable.get("key") or "")
             if not key:
                 continue
-            input_signature = _drawable_input_signature(drawable, pal, backend_status)
+            input_signature = _drawable_input_signature(drawable, pal)
             state = self._layers.get(key)
             if state is not None and state.get("has_frame") and state.get("input_signature") == input_signature:
                 state = self._ensure_layer(
@@ -1266,7 +1089,7 @@ class PluginUnifiedOverlayHost:
                     self._destroy_layer(key)
                     active_keys.discard(key)
                 continue
-            frame = _render_drawable_frame(drawable, pal, backend_status)
+            frame = _render_drawable_frame(drawable, pal)
             if frame is None:
                 continue
             signature, bgra, width, height = frame
