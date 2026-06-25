@@ -27,6 +27,7 @@ _FAIL = 0
 _FAILURES: list[tuple[str, str]] = []
 _CURRENT_TEST_LABEL = ""
 _FAILURE_DETAIL_LINE_LIMIT = 80
+_FAILURE_POINT_LINE_LIMIT = 180
 
 
 def _record_failure(label: str, detail: str = "") -> None:
@@ -107,6 +108,16 @@ def _failure_detail_tail(detail: str) -> list[str]:
     return [f"... omitted {omitted} earlier detail lines ...", *lines[-_FAILURE_DETAIL_LINE_LIMIT:]]
 
 
+def _failure_point_reason(detail: str) -> str:
+    for line in str(detail or "").splitlines():
+        text = line.strip()
+        if text:
+            if len(text) > _FAILURE_POINT_LINE_LIMIT:
+                return f"{text[:_FAILURE_POINT_LINE_LIMIT - 3]}..."
+            return text
+    return "no detail recorded"
+
+
 def _print_final_summary(total: int) -> None:
     print(f"{'=' * 50}")
     if _FAIL == 0:
@@ -126,7 +137,7 @@ def _print_final_summary(total: int) -> None:
     print("FAILED CHECKS (last):")
     if _FAILURES:
         for index, (label, _detail) in enumerate(_FAILURES, 1):
-            print(f"  {index}. {label}")
+            print(f"  {index}. {label}: {_failure_point_reason(_detail)}")
     else:
         print("  1. Unknown failure; no failure detail was recorded.")
     print(f"{'=' * 50}")
