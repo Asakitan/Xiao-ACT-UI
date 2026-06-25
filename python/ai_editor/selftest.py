@@ -3532,15 +3532,18 @@ def test_phase1_ai_editor_regressions() -> None:
            and "editorProviderPayload('inlineCompletion'" in html
            and "editorRequestLanguageProvider('inlineCompletion'" in html
            and "function editorFormatOptions()" in html
-           and "editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,linkedEditing:false,codeActionsOnSave:{},codeActions:{triggerOnFocusChange:false},tabSize:4,insertSpaces:true}" in html
+           and "editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,formatOnPaste:false,linkedEditing:false,codeActionsOnSave:{},codeActions:{triggerOnFocusChange:false},pasteAs:{preferences:[]},tabSize:4,insertSpaces:true}" in html
            and "files:{autoSave:'off',autoSaveDelay:1000,trimTrailingWhitespace:false,insertFinalNewline:false,trimFinalNewlines:false}" in html
            and "defaultFormatter:''" in html
            and "linkedEditing:false" in html
            and "formatOnSave:false" in html
+           and "formatOnPaste:false" in html
            and "codeActionsOnSave:{}" in html
            and "codeActions:{triggerOnFocusChange:false}" in html
+           and "pasteAs:{preferences:[]}" in html
            and "id=\"s-editor-default-formatter\"" in html
            and "id=\"s-editor-format-on-save\"" in html
+           and "id=\"s-editor-format-on-paste\"" in html
            and "id=\"s-editor-format-on-type\"" in html
            and "id=\"s-editor-linked-editing\"" in html
            and "id=\"s-editor-organize-imports-on-save\"" in html
@@ -5385,6 +5388,169 @@ console.log("frontend signature help docs ok");
                     os.unlink(js_path)
                 except OSError:
                     pass
+    if not node_path:
+        _check("frontend paste/drop format behavior skipped without Node.js", True)
+    else:
+        paste_drop_functions = [
+            "editorDropPasteKindValue",
+            "editorDropPasteKindContains",
+            "editorDropPastePreferences",
+            "editorDropPasteEditPreferenceIndex",
+            "editorDropPasteFilterAndSortEdits",
+            "editorDropPasteEditSummary",
+            "editorDropPasteEditCount",
+            "editorFormatOnPasteEnabled",
+            "editorDropPastePrimaryInsertRange",
+            "formatEditorRange",
+            "maybeFormatEditorPasteRange",
+            "editorApplyDropPasteEdit",
+            "editorInsertPlainTextAtRangeWithPasteFormatting",
+            "handleEditorDropPasteOptionsKey",
+        ]
+        paste_drop_js_functions = "\n".join(
+            _extract_js_function(html, name) for name in paste_drop_functions)
+        js = r"""
+function assert(ok,label){ if(!ok){ throw new Error(label); } }
+function isPlainObject(value){ return !!value && typeof value === "object" && !Array.isArray(value); }
+let config = { editor: { formatOnPaste: true, pasteAs: { preferences: ["text.html", "text"] }, defaultFormatter: "fmt.selftest" } };
+let editorLang = "self";
+let editorDirty = false;
+let undoCount = 0;
+let statusText = "";
+let formatRequests = [];
+const ed = { value: "a", selectionStart: 1, selectionEnd: 1, focus() {}, setSelectionRange(start,end){ this.selectionStart = start; this.selectionEnd = end; } };
+function editorEffectiveSection(section){ return config[section] || {}; }
+function editorProviderPayload(kind,extra){ return { kind, ...(extra || {}) }; }
+function editorFormatOptions(){ return { tabSize: 4, insertSpaces: true }; }
+function editorFormattingProviderId(){ return "fmt.selftest"; }
+function setStatus(value){ statusText = String(value || ""); }
+function _undoPush(){ undoCount++; }
+async function confirmEditorWorkspaceEditApply(){ return true; }
+function editorSnippetPlainText(value){ return String(value || ""); }
+function editorOffsetFromPosition(value,pos){
+  const lines = String(value || "").split("\n");
+  let offset = 0;
+  for(let i = 0; i < Math.max(0, Number(pos.line) || 0); i++) offset += lines[i].length + 1;
+  return Math.max(0, Math.min(String(value || "").length, offset + Math.max(0, Number(pos.character) || 0)));
+}
+function editorPositionFromOffset(value,offset){
+  const text = String(value || "");
+  offset = Math.max(0, Math.min(text.length, Number(offset) || 0));
+  const before = text.slice(0, offset).split("\n");
+  return { line: before.length - 1, character: before[before.length - 1].length };
+}
+function editorRangePayloadFromOffsets(value,start,end){
+  return { start: editorPositionFromOffset(value, Math.min(start,end)), end: editorPositionFromOffset(value, Math.max(start,end)) };
+}
+function applyTextEditsToValue(value,edits){
+  let text = String(value || "");
+  const items = (edits || []).map(edit => ({
+    start: editorOffsetFromPosition(text, edit.range.start),
+    end: editorOffsetFromPosition(text, edit.range.end),
+    newText: String(edit.newText || "")
+  })).sort((a,b) => b.start - a.start);
+  for(const edit of items) text = text.slice(0, edit.start) + edit.newText + text.slice(edit.end);
+  return text;
+}
+function editorApplyTextEdits(edits){ ed.value = applyTextEditsToValue(ed.value, edits); return true; }
+function editorInsertPlainTextAtRange(text,range){
+  _undoPush(true);
+  return editorApplyTextEdits([{ range, newText: String(text || "") }]);
+}
+async function editorApplyWorkspaceEdit(_edit,summary){
+  if(summary && summary.edits && summary.edits.length) editorApplyTextEdits(summary.edits);
+  return { changed: !!(summary && summary.edits && summary.edits.length), tabApplied: 0, workspaceApplied: 0, skipped: 0, errors: [] };
+}
+async function editorRequestLanguageProvider(kind,payload){
+  if(kind === "rangeFormatting"){
+    formatRequests.push(payload);
+    const range = payload.range;
+    const start = editorOffsetFromPosition(ed.value, range.start);
+    const end = editorOffsetFromPosition(ed.value, range.end);
+    return { ok: true, edits: [{ range, newText: ed.value.slice(start, end).toUpperCase() }] };
+  }
+  return { ok: false, error: "unexpected " + kind };
+}
+let _editorDropPasteOptions = [{}, {}];
+let _editorDropPasteOptionIndex = 0;
+function isEditorDropPasteOptionsOpen(){ return true; }
+function setEditorDropPasteOptionIndex(index){ _editorDropPasteOptionIndex = index; }
+""" + paste_drop_js_functions + r"""
+(async()=>{
+  const edits = [
+    { title: "Plain", kind: "text", insertText: "plain" },
+    { title: "Markdown", kind: { value: "text.markdown" }, insertText: "md" },
+    { title: "HTML Table", kind: { value: "text.html.table" }, insertText: "html" },
+  ];
+  assert(editorDropPasteKindValue(edits[2]) === "text.html.table", "drop/paste kind object value normalized");
+  assert(editorDropPasteKindContains("text.html", "text.html.table"), "hierarchical edit kind match works");
+  assert(editorDropPastePreferences().join(",") === "text.html,text", "pasteAs preferences read from editor settings");
+  const sorted = editorDropPasteFilterAndSortEdits(edits, { preferences: editorDropPastePreferences() });
+  assert(sorted[0].title === "HTML Table", "preferred paste kind sorts before generic text edits");
+  const onlyHtml = editorDropPasteFilterAndSortEdits(edits, { only: "text.html" });
+  assert(onlyHtml.length === 1 && onlyHtml[0].title === "HTML Table", "paste/drop only filters by hierarchical kind");
+
+  let eventPrevented = false;
+  assert(handleEditorDropPasteOptionsKey({ key: ".", ctrlKey: true, metaKey: false, shiftKey: false, altKey: false, preventDefault(){ eventPrevented = true; } }) === true
+         && eventPrevented && _editorDropPasteOptionIndex === 1,
+         "Ctrl+Period cycles visible paste/drop options");
+
+  const range = editorRangePayloadFromOffsets(ed.value, 1, 1);
+  assert(await editorApplyDropPasteEdit({ title: "HTML", kind: "text.html", insertText: " paste" }, [range], "Paste") === true,
+         "drop/paste edit applies");
+  assert(ed.value === "a PASTE" && formatRequests.length === 1
+         && formatRequests[0].providerId === "fmt.selftest",
+         "formatOnPaste formats inserted extension edit range");
+
+  ed.value = "b"; formatRequests = [];
+  await editorInsertPlainTextAtRangeWithPasteFormatting(" fallback", editorRangePayloadFromOffsets(ed.value, 1, 1), "Paste");
+  assert(ed.value === "b FALLBACK" && formatRequests.length === 1,
+         "formatOnPaste also formats fallback text paste");
+
+  config.editor.formatOnPaste = false; ed.value = "c"; formatRequests = [];
+  await editorInsertPlainTextAtRangeWithPasteFormatting(" raw", editorRangePayloadFromOffsets(ed.value, 1, 1), "Paste");
+  assert(ed.value === "c raw" && formatRequests.length === 0,
+         "disabled formatOnPaste skips range formatter");
+  console.log("frontend paste/drop format behavior ok");
+})().catch(err => { console.error(err && err.stack || err); process.exitCode = 1; });
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check_subprocess_result(
+                "frontend paste/drop format behavior",
+                result,
+                "frontend paste/drop format behavior ok",
+            )
+        except Exception as exc:
+            _check("frontend paste/drop format behavior", False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
+    _check("frontend exposes paste/drop format settings",
+           "id=\"s-editor-format-on-paste\"" in html
+           and "id=\"s-editor-lang-format-on-paste\"" in html
+           and "formatOnPaste:false" in html
+           and "editor.formatOnPaste" in html
+           and "function editorFormatOnPasteEnabled()" in html
+           and "function maybeFormatEditorPasteRange(range,label)" in html
+           and "function editorDropPasteFilterAndSortEdits(edits,options)" in html
+           and "context:{triggerKind:0,preferences}" in html
+           and "handleEditorDropPasteOptionsKey(e)" in html)
     _check("frontend renders extension settings modified reset controls",
             "function renderExtensionSettings()" in html
             and "function extensionSettingValidateJsonValue(value,type)" in html

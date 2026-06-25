@@ -1908,6 +1908,7 @@ pre.code-block { overflow:visible; }
         <label class="settings-check"><input id="s-editor-insert-spaces" type="checkbox"><span><b>Insert spaces</b><small>Use spaces instead of tab characters when formatting.</small></span></label>
       </div>
       <label class="settings-check"><input id="s-editor-format-on-save" type="checkbox"><span><b>Format on save</b><small>Runs the active formatter before explicit saves.</small></span></label>
+      <label class="settings-check"><input id="s-editor-format-on-paste" type="checkbox"><span><b>Format on paste</b><small>Runs range formatting after paste/drop edits when a range formatter is available.</small></span></label>
       <label class="settings-check"><input id="s-editor-format-on-type" type="checkbox"><span><b>Format on type</b><small>Runs extension on-type formatting providers for typed trigger characters.</small></span></label>
       <label class="settings-check"><input id="s-editor-linked-editing" type="checkbox"><span><b>Linked editing</b><small>Mirrors edits across extension-provided linked ranges, such as paired HTML tags.</small></span></label>
       <div class="settings-grid">
@@ -1937,6 +1938,7 @@ pre.code-block { overflow:visible; }
         <label class="settings-check"><input id="s-editor-lang-insert-spaces" type="checkbox"><span><b>Insert spaces</b><small>Language-specific editor.insertSpaces.</small></span></label>
       </div>
       <label class="settings-check"><input id="s-editor-lang-format-on-save" type="checkbox"><span><b>Format on save</b><small>Language-specific editor.formatOnSave.</small></span></label>
+      <label class="settings-check"><input id="s-editor-lang-format-on-paste" type="checkbox"><span><b>Format on paste</b><small>Language-specific editor.formatOnPaste.</small></span></label>
       <label class="settings-check"><input id="s-editor-lang-format-on-type" type="checkbox"><span><b>Format on type</b><small>Language-specific editor.formatOnType.</small></span></label>
       <label class="settings-check"><input id="s-editor-lang-linked-editing" type="checkbox"><span><b>Linked editing</b><small>Language-specific editor.linkedEditing.</small></span></label>
       <div class="settings-grid">
@@ -2144,7 +2146,7 @@ const SETTINGS_SECTION_DEFAULTS={
   mcp:{access:'prompt',autostart:false,discovery_enabled:true,collision_behavior:'first',server_sampling:false},
   terminal:{profile:'PowerShell 7 (No Profile)',shell_path:'',shell_args:[],timeout:30,output_limit:8000,auto_approve:{}},
   extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands','views','customEditors','notebooks','terminal','statusBarItems'],enabled_contributions_explicit:false,diagnostics_enabled:false},
-  editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,linkedEditing:false,codeActionsOnSave:{},codeActions:{triggerOnFocusChange:false},tabSize:4,insertSpaces:true},
+  editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,formatOnPaste:false,linkedEditing:false,codeActionsOnSave:{},codeActions:{triggerOnFocusChange:false},pasteAs:{preferences:[]},tabSize:4,insertSpaces:true},
   files:{autoSave:'off',autoSaveDelay:1000,trimTrailingWhitespace:false,insertFinalNewline:false,trimFinalNewlines:false},
   customization:{instructions_locations:['.sao/instructions.md','.sao/instructions'],agent_locations:['.sao/agents'],workflow_locations:['.sao/workflows'],skill_locations:['.agents/skills/.local','.claude/skills/.local'],use_agent_md:true,use_claude_md:false}
 };
@@ -7773,15 +7775,49 @@ function editorDropPasteEditsFromResponse(res,key){
   if(value&&Array.isArray(value.edits))return value.edits.filter(Boolean);
   return value?[value]:[];
 }
+function editorDropPasteKindValue(edit){
+  const kind=edit&&edit.kind;
+  if(kind&&typeof kind==='object'&&kind.value!==undefined)return String(kind.value||'');
+  return String(kind||'');
+}
+function editorDropPasteKindContains(parent,child){
+  parent=String(parent||'');child=String(child||'');
+  return !!parent&&(parent===child||child.startsWith(parent+'.'));
+}
+function editorDropPastePreferences(){
+  const editor=editorEffectiveSection('editor'),pasteAs=editor&&editor.pasteAs;
+  const raw=Array.isArray(pasteAs)?pasteAs:(isPlainObject(pasteAs)?pasteAs.preferences:[]);
+  return (Array.isArray(raw)?raw:[]).map(v=>String(v||'').trim()).filter(Boolean);
+}
+function editorDropPasteEditPreferenceIndex(edit,preferences){
+  const kind=editorDropPasteKindValue(edit);
+  if(!kind)return Number.MAX_SAFE_INTEGER;
+  const prefs=Array.isArray(preferences)?preferences:[];
+  const index=prefs.findIndex(pref=>editorDropPasteKindContains(pref,kind));
+  return index<0?Number.MAX_SAFE_INTEGER:index;
+}
+function editorDropPasteFilterAndSortEdits(edits,options){
+  const opts=isPlainObject(options)?options:{};
+  let items=(Array.isArray(edits)?edits:[]).filter(Boolean);
+  const only=String(opts.only||'').trim();
+  if(only)items=items.filter(edit=>editorDropPasteKindContains(only,editorDropPasteKindValue(edit)));
+  const preferences=(Array.isArray(opts.preferences)?opts.preferences:[]).map(v=>String(v||'').trim()).filter(Boolean);
+  if(preferences.length){
+    items=items.map((edit,index)=>({edit,index,rank:editorDropPasteEditPreferenceIndex(edit,preferences)}))
+      .sort((a,b)=>a.rank-b.rank||a.index-b.index)
+      .map(item=>item.edit);
+  }
+  return items;
+}
 function editorDropPasteEditTitle(edit,label,index){
   const title=String((edit&&edit.title)||'').trim();
   if(title)return title;
-  const kind=edit&&edit.kind&&edit.kind.value!==undefined?String(edit.kind.value):String(edit&&edit.kind||'');
+  const kind=editorDropPasteKindValue(edit);
   if(kind)return kind;
   return String(label||'Edit')+' option '+(index+1);
 }
 function editorDropPasteEditDetail(edit,index){
-  const kind=edit&&edit.kind&&edit.kind.value!==undefined?String(edit.kind.value):String(edit&&edit.kind||'');
+  const kind=editorDropPasteKindValue(edit);
   const extra=edit&&edit.additionalEdit?' + edits':'';
   return (kind||('option '+(index+1)))+extra;
 }
@@ -7858,11 +7894,45 @@ async function applyEditorDropPasteOption(index){
 }
 function handleEditorDropPasteOptionsKey(e){
   if(!isEditorDropPasteOptionsOpen())return false;
+  if(e.key==='.'&&(e.ctrlKey||e.metaKey)&&!e.shiftKey&&!e.altKey){
+    e.preventDefault();setEditorDropPasteOptionIndex(_editorDropPasteOptionIndex+1);return true;
+  }
   if(e.key==='ArrowDown'){e.preventDefault();setEditorDropPasteOptionIndex(_editorDropPasteOptionIndex+1);return true}
   if(e.key==='ArrowUp'){e.preventDefault();setEditorDropPasteOptionIndex(_editorDropPasteOptionIndex-1);return true}
   if(e.key==='Enter'||e.key==='Tab'){e.preventDefault();applyEditorDropPasteOption(_editorDropPasteOptionIndex);return true}
   if(e.key==='Escape'){e.preventDefault();closeEditorDropPasteOptions();return true}
   return false;
+}
+function editorFormatOnPasteEnabled(){
+  const editor=editorEffectiveSection('editor');
+  return editor.formatOnPaste===true;
+}
+function editorDropPastePrimaryInsertRange(edit,ranges,beforeValue){
+  const insertText=editorSnippetPlainText(edit&&edit.insertText);
+  const range=(Array.isArray(ranges)?ranges[0]:null);
+  if(!insertText||!range||!range.start)return null;
+  const start=editorOffsetFromPosition(beforeValue,range.start);
+  const end=Math.min(String(ed.value||'').length,start+insertText.length);
+  return editorRangePayloadFromOffsets(ed.value,start,end);
+}
+async function formatEditorRange(range,options){
+  const opts=isPlainObject(options)?options:{};
+  if(!range||!range.start||!range.end)return false;
+  const payload={range,options:editorFormatOptions()};
+  const providerId=editorFormattingProviderId(opts);
+  if(providerId)payload.providerId=providerId;
+  const res=await editorRequestLanguageProvider('rangeFormatting',editorProviderPayload('rangeFormatting',payload),{
+    countKey:'edits',itemLabel:'format edit',label:opts.label||'Format range',quiet:opts.quiet===true
+  });
+  if(res&&res.ok&&Array.isArray(res.edits)&&res.edits.length){
+    _undoPush(true);
+    if(editorApplyTextEdits(res.edits)){if(!opts.quiet)setStatus(opts.status||'Formatted selection via extension');return true}
+  }
+  return false;
+}
+async function maybeFormatEditorPasteRange(range,label){
+  if(!editorFormatOnPasteEnabled()||!range)return false;
+  return formatEditorRange(range,{quiet:true,label:'Format on paste',status:'Formatted '+String(label||'paste').toLowerCase()});
 }
 async function editorApplyDropPasteEdit(edit,ranges,label){
   if(!edit)return false;
@@ -7878,8 +7948,10 @@ async function editorApplyDropPasteEdit(edit,ranges,label){
     ed.focus();return false;
   }
   _undoPush(true);
+  const beforeValue=ed.value;
   const applied=await editorApplyWorkspaceEdit({edits:[]},summary);
   if(applied.changed||applied.tabApplied||applied.workspaceApplied){
+    await maybeFormatEditorPasteRange(editorDropPastePrimaryInsertRange(edit,ranges,beforeValue),label);
     const title=String(edit.title||label||'Edit');
     setStatus('Applied '+String(label||'edit').toLowerCase()+': '+title);
     return true;
@@ -7906,6 +7978,14 @@ function editorInsertPlainTextAtRange(text,range){
   _undoPush(true);
   return editorApplyTextEdits([{range,newText:String(text)}]);
 }
+async function editorInsertPlainTextAtRangeWithPasteFormatting(text,range,label){
+  const beforeValue=ed.value;
+  if(!editorInsertPlainTextAtRange(text,range))return false;
+  const start=editorOffsetFromPosition(beforeValue,range.start);
+  const formatRange=editorRangePayloadFromOffsets(ed.value,start,start+String(text).length);
+  await maybeFormatEditorPasteRange(formatRange,label);
+  return true;
+}
 async function handleEditorDocumentPaste(e){
   if(!e||!e.clipboardData)return;
   e.preventDefault();e.stopPropagation();
@@ -7919,15 +7999,16 @@ async function handleEditorDocumentPaste(e){
     }),{label:'Prepare paste',quiet:true});
     if(requestId!==_editorPasteDropRequest||editorDropPasteStateChanged(snapshot))return;
     if(prepared&&prepared.ok&&prepared.dataTransfer)dataTransfer=prepared.dataTransfer;
+    const preferences=editorDropPastePreferences();
     const res=await editorRequestLanguageProvider('documentPaste',editorDropPasteProviderPayload('documentPaste',snapshot,{
       dataTransfer,pasteText:fallbackText,clipboardText:fallbackText,
-      context:{triggerKind:0},pasteResolveCount:1
+      context:{triggerKind:0,preferences},pasteResolveCount:1
     }),{countKey:'pasteEdits',itemLabel:'paste edit',label:'Paste edits',quiet:true});
     if(requestId!==_editorPasteDropRequest||editorDropPasteStateChanged(snapshot))return;
-    const edits=editorDropPasteEditsFromResponse(res,'pasteEdits');
+    const edits=editorDropPasteFilterAndSortEdits(editorDropPasteEditsFromResponse(res,'pasteEdits'),{preferences});
     if(await editorApplyDropPasteEdits(edits,[snapshot.range],'Paste',snapshot,snapshot.range.start))return;
   }catch(err){setStatus('Paste handlers failed: '+(err&&err.message?err.message:String(err)))}
-  if(!editorDropPasteStateChanged(snapshot))editorInsertPlainTextAtRange(fallbackText,snapshot.range);
+  if(!editorDropPasteStateChanged(snapshot))await editorInsertPlainTextAtRangeWithPasteFormatting(fallbackText,snapshot.range,'Paste');
 }
 function handleEditorDocumentDragOver(e){
   if(!e||!e.dataTransfer)return;
@@ -7949,10 +8030,10 @@ async function handleEditorDocumentDrop(e){
       dataTransfer,dropText:fallbackText,dropResolveCount:1
     }),{countKey:'dropEdits',itemLabel:'drop edit',label:'Drop edits',quiet:true});
     if(requestId!==_editorPasteDropRequest||editorDropPasteStateChanged(snapshot))return;
-    const edits=editorDropPasteEditsFromResponse(res,'dropEdits');
+    const edits=editorDropPasteFilterAndSortEdits(editorDropPasteEditsFromResponse(res,'dropEdits'),{});
     if(await editorApplyDropPasteEdits(edits,[snapshot.range],'Drop',snapshot,snapshot.range.start))return;
   }catch(err){setStatus('Drop handlers failed: '+(err&&err.message?err.message:String(err)))}
-  if(!editorDropPasteStateChanged(snapshot))editorInsertPlainTextAtRange(fallbackText,snapshot.range);
+  if(!editorDropPasteStateChanged(snapshot))await editorInsertPlainTextAtRangeWithPasteFormatting(fallbackText,snapshot.range,'Drop');
 }
 async function runEditorCodeActionCommand(command){
   if(!command)return null;
@@ -8778,16 +8859,7 @@ async function formatDocument(options){
 async function formatSelection(){
   const range=editorSelectedRangePayload(),start=range.start,end=range.end;
   if(start.line===end.line&&start.character===end.character){setStatus('No selection to format');return}
-  const payload={range,options:editorFormatOptions()};
-  const providerId=editorDefaultFormatter();
-  if(providerId)payload.providerId=providerId;
-  const res=await editorRequestLanguageProvider('rangeFormatting',editorProviderPayload('rangeFormatting',payload),{
-    countKey:'edits',itemLabel:'format edit',label:'Format selection'
-  });
-  if(res&&res.ok&&Array.isArray(res.edits)&&res.edits.length){
-    _undoPush(true);
-    if(editorApplyTextEdits(res.edits)){setStatus('Formatted selection via extension');return}
-  }
+  if(await formatEditorRange(range,{label:'Format selection',status:'Formatted selection via extension'}))return;
   setStatus('Format selection not available for '+editorLang);
 }
 async function runEditorCodeActionsOnSave(options){
@@ -12710,14 +12782,14 @@ function removeManagedEditorLanguageOverrideKeys(entry){
   if(!isPlainObject(entry))return {};
   const next={...entry};
   const managedFlat=[
-    'editor.defaultFormatter','editor.default_formatter','editor.formatOnSave',
+    'editor.defaultFormatter','editor.default_formatter','editor.formatOnSave','editor.formatOnPaste',
     'editor.formatOnType','editor.linkedEditing','editor.codeActionsOnSave','editor.codeActions.triggerOnFocusChange',
     'editor.tabSize','editor.insertSpaces'
   ];
   managedFlat.forEach(key=>delete next[key]);
   if(isPlainObject(next.editor)){
     const editor={...next.editor};
-    ['defaultFormatter','default_formatter','formatOnSave','formatOnType','linkedEditing','codeActionsOnSave','tabSize','insertSpaces'].forEach(key=>delete editor[key]);
+    ['defaultFormatter','default_formatter','formatOnSave','formatOnPaste','formatOnType','linkedEditing','codeActionsOnSave','tabSize','insertSpaces'].forEach(key=>delete editor[key]);
     if(isPlainObject(editor.codeActions)){
       const codeActions={...editor.codeActions};
       delete codeActions.triggerOnFocusChange;
@@ -12752,6 +12824,7 @@ function saveEditorLanguageOverrideSettings(){
     entry['editor.tabSize']=editorTabSize(readNumberValue('s-editor-lang-tab-size',4,true));
     entry['editor.insertSpaces']=readCheckedValue('s-editor-lang-insert-spaces');
     entry['editor.formatOnSave']=readCheckedValue('s-editor-lang-format-on-save');
+    entry['editor.formatOnPaste']=readCheckedValue('s-editor-lang-format-on-paste');
     entry['editor.formatOnType']=readCheckedValue('s-editor-lang-format-on-type');
     entry['editor.linkedEditing']=readCheckedValue('s-editor-lang-linked-editing');
     entry['editor.codeActions.triggerOnFocusChange']=readCheckedValue('s-editor-lang-code-actions-trigger-focus');
@@ -12802,6 +12875,7 @@ function openSettings(){
   setInputValue('s-editor-tab-size',editorTabSize(editor.tabSize));
   setCheckedValue('s-editor-insert-spaces',editorInsertSpaces(editor.insertSpaces));
   setCheckedValue('s-editor-format-on-save',editor.formatOnSave===true);
+  setCheckedValue('s-editor-format-on-paste',editor.formatOnPaste===true);
   setCheckedValue('s-editor-format-on-type',editor.formatOnType===true);
   setCheckedValue('s-editor-linked-editing',editor.linkedEditing===true);
   setInputValue('s-editor-organize-imports-on-save',editorCodeActionsOnSaveMode(editor.codeActionsOnSave,'source.organizeImports'));
@@ -12821,6 +12895,7 @@ function openSettings(){
   setInputValue('s-editor-lang-tab-size',editorTabSize(languageEditor.tabSize));
   setCheckedValue('s-editor-lang-insert-spaces',editorInsertSpaces(languageEditor.insertSpaces));
   setCheckedValue('s-editor-lang-format-on-save',languageEditor.formatOnSave===true);
+  setCheckedValue('s-editor-lang-format-on-paste',languageEditor.formatOnPaste===true);
   setCheckedValue('s-editor-lang-format-on-type',languageEditor.formatOnType===true);
   setCheckedValue('s-editor-lang-linked-editing',languageEditor.linkedEditing===true);
   setInputValue('s-editor-lang-organize-imports-on-save',editorCodeActionsOnSaveMode(languageEditor.codeActionsOnSave,'source.organizeImports'));
@@ -13070,7 +13145,7 @@ async function saveSettings(){
   config.terminal={...settingSection('terminal'),profile:readInputValue('s-term-profile')||'PowerShell 7 (No Profile)',shell_path:readInputValue('s-term-shell'),shell_args:readListValue('s-term-args',false),timeout:readNumberValue('s-term-timeout',30,true),output_limit:readNumberValue('s-term-output',8000,true)};
   config.extensions={...settingSection('extensions'),confirm_install:readCheckedValue('s-ext-confirm'),diagnostics_enabled:readCheckedValue('s-ext-diagnostics'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true),enabled_contributions:readExtensionContributionValues(),enabled_contributions_explicit:true};
   const editorSettings=settingSection('editor');
-  config.editor={...editorSettings,defaultFormatter:readInputValue('s-editor-default-formatter').trim(),tabSize:editorTabSize(readNumberValue('s-editor-tab-size',4,true)),insertSpaces:readCheckedValue('s-editor-insert-spaces'),formatOnSave:readCheckedValue('s-editor-format-on-save'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing'),codeActions:{...(isPlainObject(editorSettings.codeActions)?editorSettings.codeActions:{}),triggerOnFocusChange:readCheckedValue('s-editor-code-actions-trigger-focus')},codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)};
+  config.editor={...editorSettings,defaultFormatter:readInputValue('s-editor-default-formatter').trim(),tabSize:editorTabSize(readNumberValue('s-editor-tab-size',4,true)),insertSpaces:readCheckedValue('s-editor-insert-spaces'),formatOnSave:readCheckedValue('s-editor-format-on-save'),formatOnPaste:readCheckedValue('s-editor-format-on-paste'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing'),codeActions:{...(isPlainObject(editorSettings.codeActions)?editorSettings.codeActions:{}),triggerOnFocusChange:readCheckedValue('s-editor-code-actions-trigger-focus')},codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)};
   saveEditorLanguageOverrideSettings();
   config.files={...settingSection('files'),autoSave:filesAutoSaveMode({autoSave:readInputValue('s-files-auto-save')}),autoSaveDelay:filesAutoSaveDelay({autoSaveDelay:readNumberValue('s-files-auto-save-delay',1000,true)}),trimTrailingWhitespace:readCheckedValue('s-files-trim-trailing-whitespace'),insertFinalNewline:readCheckedValue('s-files-insert-final-newline'),trimFinalNewlines:readCheckedValue('s-files-trim-final-newlines')};
   saveFilesLanguageOverrideSettings();
