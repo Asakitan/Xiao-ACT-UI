@@ -6376,6 +6376,11 @@ console.log("extension setting schema helpers ok");
             and "node._childRequestId!==requestId||!childBox.isConnected" in html
             and "expectedVersion!==responseVersion" in html
             and "function focusRevealedExtensionTree(tree)" in html
+            and "function appendExtensionContainerTitleActions(parent,item)" in html
+            and "Array.isArray(item.titleActions)?item.titleActions:[]" in html
+            and "showExtensionActionMenu(e.clientX,e.clientY,actions.slice(3),runExtensionViewAction)" in html
+            and "options.showContainerActions!==false" in html
+            and "header.querySelectorAll('.ext-container-title-actions,.spacer')" in html
             and ".ext-tree-node[data-revealed=\"1\"]>.sb-item" in html
             and "dataset.focused='1'" in html
             and "node.selected||node.focused" in html
@@ -12901,6 +12906,15 @@ def test_app_extension_runtime_support() -> None:
                         "title": "Submenu Open",
                     },
                     {
+                        "command": "selftest.activity.containerTitle",
+                        "title": "Container Title",
+                        "shortTitle": "Container",
+                    },
+                    {
+                        "command": "selftest.activity.panelTitle",
+                        "title": "Panel Container Title",
+                    },
+                    {
                         "command": "selftest.activity.scmTitle",
                         "title": "SCM Runtime Title",
                     },
@@ -12997,6 +13011,35 @@ def test_app_extension_runtime_support() -> None:
                             "group": "navigation@3",
                         },
                     ],
+                    "viewContainer/title": [
+                        {
+                            "command": "selftest.activity.containerTitle",
+                            "when": "viewContainer == selftest.activity && viewContainerLocation == sidebar",
+                            "group": "navigation@1",
+                            "arguments": [{"from": "container-title"}],
+                        },
+                        {
+                            "command": "selftest.activity.disabled",
+                            "when": "viewContainer == selftest.activity",
+                            "enablement": "viewContainer == missing",
+                            "group": "navigation@2",
+                        },
+                        {
+                            "submenu": "selftest.activity.more",
+                            "when": "viewContainer == selftest.activity",
+                            "group": "z-other@1",
+                        },
+                        {
+                            "command": "selftest.activity.panelTitle",
+                            "when": "viewContainer == selftest.panel && viewContainerLocation == panel",
+                            "group": "navigation@1",
+                        },
+                        {
+                            "command": "selftest.activity.scmHiddenAction",
+                            "when": "viewContainer == selftest.secondary && viewContainerLocation == panel",
+                            "group": "navigation@1",
+                        },
+                    ],
                     "view/title": [
                         {
                             "command": "selftest.activity.openItem",
@@ -13058,13 +13101,13 @@ def test_app_extension_runtime_support() -> None:
                     "selftest.activity.more": [
                         {
                             "command": "selftest.activity.submenuOpen",
-                            "when": "view == selftest.activity.tree",
+                            "when": "view == selftest.activity.tree || viewContainer == selftest.activity",
                             "group": "navigation@1",
                             "arguments": [{"from": "submenu"}],
                         },
                         {
                             "command": "selftest.activity.disabled",
-                            "when": "view == selftest.activity.tree",
+                            "when": "view == selftest.activity.tree || viewContainer == selftest.activity",
                             "enablement": "viewItem == never",
                             "group": "inline@2",
                         },
@@ -13810,6 +13853,48 @@ def test_app_extension_runtime_support() -> None:
                and panel_containers[0].get("icon_text") == "◎"
                and secondary_containers
                and secondary_containers[0].get("id") == "selftest.secondary")
+        activity_container_actions = activity_items.get(
+            "selftest.activity", {}).get("titleActions", [])
+        activity_container_submenu = next(
+            (action for action in activity_container_actions
+             if action.get("submenu") == "selftest.activity.more"),
+            {})
+        activity_container_submenu_actions = (
+            activity_container_submenu.get("submenuActions", []))
+        activity_container_commands = [
+            action.get("command") for action in activity_container_actions
+            if action.get("command")
+        ]
+        panel_container_actions = (
+            panel_containers[0].get("titleActions", [])
+            if panel_containers else [])
+        secondary_container_actions = (
+            secondary_containers[0].get("titleActions", [])
+            if secondary_containers else [])
+        _check("extension view containers expose contributed title actions",
+               activity_container_commands[:2] == [
+                   "selftest.activity.containerTitle",
+                   "selftest.activity.disabled",
+               ]
+               and activity_container_actions[0].get("shortTitle")
+               == "Container"
+               and activity_container_actions[0].get("arguments")
+               == [{"from": "container-title"}]
+               and activity_container_actions[0].get("viewContainer")
+               == "selftest.activity"
+               and activity_container_actions[0].get(
+                   "viewContainerLocation") == "sidebar"
+               and activity_container_actions[1].get("disabled") is True
+               and activity_container_submenu.get("title") == "More Activity"
+               and activity_container_submenu_actions
+               and activity_container_submenu_actions[0].get("command")
+               == "selftest.activity.submenuOpen"
+               and panel_container_actions
+               and panel_container_actions[0].get("command")
+               == "selftest.activity.panelTitle"
+               and panel_container_actions[0].get("viewContainerLocation")
+               == "panel"
+               and secondary_container_actions == [])
         _check("extension panel views preserve descriptor order and runtime",
                [view.get("id") for view in panel_views] == [
                    "selftest.panel.first", "selftest.panel.late"]

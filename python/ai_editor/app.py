@@ -12016,6 +12016,9 @@ class AIEditorAPI:
             "alt": alt_preview,
             "view": context.get("view", ""),
             "viewItem": context.get("viewItem", ""),
+            "viewContainer": context.get("viewContainer", ""),
+            "viewContainerLocation": context.get(
+                "viewContainerLocation", ""),
         }
 
     def _extension_submenu_action_preview(
@@ -12067,6 +12070,9 @@ class AIEditorAPI:
             "itemType": "submenu",
             "view": context.get("view", ""),
             "viewItem": context.get("viewItem", ""),
+            "viewContainer": context.get("viewContainer", ""),
+            "viewContainerLocation": context.get(
+                "viewContainerLocation", ""),
         }
 
     def _extension_submenu_contribution(
@@ -13395,6 +13401,8 @@ class AIEditorAPI:
             "icon": icon_path,
             "extension_id": ext_id,
             "location": str(location or ""),
+            "titleActions": self._view_container_title_actions(
+                vc_id, str(location or "")),
             "views": views,
             "view_count": len(views),
         }
@@ -13449,6 +13457,8 @@ class AIEditorAPI:
                     "title": title,
                     "icon_text": icon_text,
                     "extension_id": ext_id,
+                    "titleActions": self._view_container_title_actions(
+                        vc_id, "activitybar"),
                     "views": views,
                     "view_count": len(views),
                 })
@@ -13471,6 +13481,8 @@ class AIEditorAPI:
                 "extension_id": "",
                 "location": normalized_container,
                 "builtin": True,
+                "titleActions": self._view_container_title_actions(
+                    normalized_container, normalized_container),
                 "views": views,
                 "view_count": len(views),
             }
@@ -13507,6 +13519,35 @@ class AIEditorAPI:
             "test": "Testing",
         }
         return titles.get(str(container_id or ""), str(container_id or ""))
+
+    def _view_container_title_actions(
+            self, container_id: str, location: str = "") -> List[Dict[str, Any]]:
+        normalized_id = str(container_id or "").strip()
+        if not normalized_id:
+            return []
+        context = self._extension_runtime_when_context()
+        context.update({
+            "viewContainer": normalized_id,
+            "viewContainerLocation": (
+                self._vscode_view_container_location(location)),
+        })
+        return self._extension_menu_actions("viewContainer/title", context)
+
+    @staticmethod
+    def _vscode_view_container_location(location: str) -> str:
+        normalized = str(location or "").strip()
+        mapping = {
+            "activitybar": "sidebar",
+            "explorer": "sidebar",
+            "scm": "sidebar",
+            "debug": "sidebar",
+            "test": "sidebar",
+            "panel": "panel",
+            "secondarySidebar": "auxiliarybar",
+            "secondary_sidebar": "auxiliarybar",
+            "auxiliarybar": "auxiliarybar",
+        }
+        return mapping.get(normalized, normalized)
 
     def list_editor_title_actions(
             self, context: Optional[Dict[str, Any]] = None) -> Dict:

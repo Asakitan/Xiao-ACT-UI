@@ -15902,6 +15902,32 @@ function focusRevealedExtensionTree(tree){
     }
   });
 }
+function appendExtensionContainerTitleActions(parent,item){
+  if(!parent||!item)return false;
+  const actions=Array.isArray(item.titleActions)?item.titleActions:[];
+  if(!actions.length)return false;
+  const box=document.createElement('div');
+  box.className='ext-container-title-actions';
+  box.style.cssText='margin-left:auto;display:flex;align-items:center;gap:2px';
+  actions.slice(0,3).forEach(action=>{
+    const btn=document.createElement('button');btn.type='button';btn.className='icon-btn';
+    btn.style.cssText='width:22px;height:22px;border:0;background:transparent;color:var(--fg-dim);padding:0';
+    btn.textContent=extensionActionGlyph(action);
+    btn.title=action.shortTitle||action.title||action.command||'Command';
+    btn.disabled=!!action.disabled;
+    btn.onclick=e=>{e.stopPropagation();runExtensionViewAction(action)};
+    box.appendChild(btn);
+  });
+  if(actions.length>3){
+    const more=document.createElement('button');more.type='button';more.className='icon-btn';
+    more.style.cssText='width:22px;height:22px;border:0;background:transparent;color:var(--fg-dim);padding:0';
+    more.textContent='...';more.title='More actions';
+    more.onclick=e=>{e.stopPropagation();showExtensionActionMenu(e.clientX,e.clientY,actions.slice(3),runExtensionViewAction)};
+    box.appendChild(more);
+  }
+  parent.appendChild(box);
+  return true;
+}
 function appendExtensionTitleActions(title,view,state){
   const actions=(Array.isArray(state.titleActions)&&state.titleActions.length)
     ?state.titleActions
@@ -16119,6 +16145,16 @@ function renderExtensionViewsInto(contentEl,item,options){
   options=options||{};
   const views=Array.isArray(item.views)?item.views:[];
   contentEl.innerHTML='';
+  if(options.showContainerActions!==false&&Array.isArray(item.titleActions)&&item.titleActions.length){
+    const toolbar=document.createElement('div');
+    toolbar.style.cssText='display:flex;align-items:center;gap:6px;color:var(--fg-dim);font-size:11px;margin-bottom:8px;min-height:24px';
+    const label=document.createElement('span');
+    label.style.cssText='overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    label.textContent=item.title||item.id||'Extension';
+    toolbar.appendChild(label);
+    appendExtensionContainerTitleActions(toolbar,item);
+    contentEl.appendChild(toolbar);
+  }
   if(options.showMeta!==false){
     const meta=document.createElement('div');
     meta.style.cssText='color:var(--fg-dim);font-size:11px;margin-bottom:8px';
@@ -16244,6 +16280,13 @@ async function renderExtensionActivityBar(){
         view.style.display='flex';
         const titleEl=$('ext-vc-title');
         if(titleEl)titleEl.textContent=item.title;
+        const header=titleEl&&titleEl.parentElement;
+        if(header){
+          header.querySelectorAll('.ext-container-title-actions,.spacer').forEach(node=>node.remove());
+          const spacer=document.createElement('span');spacer.className='spacer';
+          header.appendChild(spacer);
+          appendExtensionContainerTitleActions(header,item);
+        }
         renderExtensionContainerContent(item);
       }
       $('sidebar').classList.remove('hidden');
