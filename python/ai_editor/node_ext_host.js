@@ -7998,6 +7998,13 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 log(`scm: createSourceControl "${id}" ("${label}")`);
                 const groups = new Map();
                 let contextValue = String((options && options.contextValue) || '');
+                let acceptInputCommand = undefined;
+                const inputBoxState = {
+                    value: '',
+                    placeholder: '',
+                    visible: true,
+                    enabled: true,
+                };
                 const emitProviderState = (type) => send({
                     type,
                     id: String(id || ''),
@@ -8005,18 +8012,47 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     label: String(label || id || ''),
                     rootUri: rootUri ? _plainBridgeValue(rootUri) : '',
                     contextValue,
+                    acceptInputCommand: _plainBridgeValue(acceptInputCommand),
+                    inputBox: { ...inputBoxState },
                 });
+                const inputBox = {
+                    get value() { return inputBoxState.value; },
+                    set value(value) {
+                        inputBoxState.value = String(value || '');
+                        emitProviderState('scm_provider_updated');
+                    },
+                    get placeholder() { return inputBoxState.placeholder; },
+                    set placeholder(value) {
+                        inputBoxState.placeholder = String(value || '');
+                        emitProviderState('scm_provider_updated');
+                    },
+                    get visible() { return inputBoxState.visible; },
+                    set visible(value) {
+                        inputBoxState.visible = !!value;
+                        emitProviderState('scm_provider_updated');
+                    },
+                    get enabled() { return inputBoxState.enabled; },
+                    set enabled(value) {
+                        inputBoxState.enabled = !!value;
+                        emitProviderState('scm_provider_updated');
+                    },
+                };
                 const sc = {
                     id,
                     label,
                     rootUri: rootUri || null,
-                    inputBox: { value: '', placeholder: '' },
+                    inputBox,
                     count: 0,
                     quickDiffProvider: undefined,
                     statusBarCommands: undefined,
                     get contextValue() { return contextValue; },
                     set contextValue(value) {
                         contextValue = String(value || '');
+                        emitProviderState('scm_provider_updated');
+                    },
+                    get acceptInputCommand() { return acceptInputCommand; },
+                    set acceptInputCommand(value) {
+                        acceptInputCommand = value;
                         emitProviderState('scm_provider_updated');
                     },
                     createResourceGroup(groupId, groupLabel) {
@@ -11239,6 +11275,13 @@ async function handleTerminalLinkActivate(msg) {
     }
 }
 
+function handleScmSetInputValue(msg) {
+    const providerId = String(msg.providerId || msg.id || '');
+    const provider = _scmProviders.get(providerId);
+    if (!provider || !provider.inputBox) return;
+    provider.inputBox.value = String(msg.value || '');
+}
+
 // -------------------------------------------------------------------------
 // Shutdown — deactivate all and exit
 // -------------------------------------------------------------------------
@@ -11335,6 +11378,9 @@ async function handleMessage(msg) {
             break;
         case 'terminal_link_activate':
             await handleTerminalLinkActivate(msg);
+            break;
+        case 'scm_set_input_value':
+            handleScmSetInputValue(msg);
             break;
         case 'notebook_deserialize_request':
             await _handleNotebookDeserializeRequest(msg);

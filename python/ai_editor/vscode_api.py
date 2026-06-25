@@ -5489,6 +5489,12 @@ class VscodeNamespace:
                 "contextValue": str(control.contextValue or ""),
                 "count": int(getattr(control, "count", 0) or 0),
                 "runtimeKind": "python",
+                "acceptInputCommand": _plain_json_value(
+                    getattr(control, "acceptInputCommand", None)),
+                "actionButton": _plain_json_value(
+                    getattr(control, "actionButton", None)),
+                "statusBarCommands": _plain_json_value(
+                    getattr(control, "statusBarCommands", None)),
                 "inputBox": {
                     "value": str(getattr(control.inputBox, "value", "") or ""),
                     "placeholder": str(
@@ -5536,6 +5542,23 @@ class VscodeNamespace:
                     provider["groups"].append(group_item)
             providers.append(provider)
         return providers
+
+    def set_source_control_input_value(
+            self, provider_id: Any, value: Any) -> bool:
+        provider_key = str(provider_id or "")
+        control = self._source_controls.get(provider_key)
+        if control is None:
+            return False
+        control.inputBox.value = str(value or "")
+        return True
+
+    def source_control_accept_command(
+            self, provider_id: Any) -> Optional[Any]:
+        provider_key = str(provider_id or "")
+        control = self._source_controls.get(provider_key)
+        if control is None:
+            return None
+        return getattr(control, "acceptInputCommand", None)
 
     def _sync_tasks_state(self) -> None:
         if self._tasks_api is None:

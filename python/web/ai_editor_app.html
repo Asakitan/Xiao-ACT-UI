@@ -9042,6 +9042,24 @@ function runScmResourceCommand(state){
       .then(()=>refreshScmSidebar(true));
   }
 }
+function scmProviderId(provider){
+  return String((provider&&provider.providerId)||(provider&&provider.id)||'');
+}
+async function syncScmInputValue(providerId,value){
+  const id=String(providerId||'').trim();if(!id)return null;
+  return call('set_scm_input_value',id,String(value||''));
+}
+async function acceptScmInput(providerId,value){
+  const id=String(providerId||'').trim();if(!id)return null;
+  const r=await call('accept_scm_input',id,String(value||''));
+  if(callSucceeded(r)){
+    setStatus('SCM input accepted');
+    await refreshScmSidebar(true);
+  }else{
+    showToast(callFailedMessage(r,'SCM input command failed'),'error',3500);
+  }
+  return r;
+}
 function appendScmActionButtons(parent,actions){
   const rows=Array.isArray(actions)?actions.filter(a=>a&&a.command):[];
   if(!rows.length)return;
@@ -9127,10 +9145,20 @@ function renderScmProvider(parent,provider){
   const input=provider.inputBox&&typeof provider.inputBox==='object'?provider.inputBox:null;
   if(input&&input.visible!==false){
     const box=document.createElement('input');
+    const providerId=scmProviderId(provider);
     box.value=String(input.value||'');
     box.placeholder=String(input.placeholder||'Message');
     box.disabled=input.enabled===false;
+    box.dataset.scmProvider=providerId;
     box.style.cssText='width:calc(100% - 24px);margin:4px 12px 8px 12px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:4px 7px;font:12px var(--mono);box-sizing:border-box';
+    box.addEventListener('change',()=>syncScmInputValue(providerId,box.value));
+    box.addEventListener('blur',()=>syncScmInputValue(providerId,box.value));
+    box.addEventListener('keydown',e=>{
+      if(e.key==='Enter'){
+        e.preventDefault();
+        acceptScmInput(providerId,box.value);
+      }
+    });
     parent.appendChild(box);
   }
   const groups=Array.isArray(provider.groups)?provider.groups:[];
@@ -11079,6 +11107,11 @@ window._onEditorEvent=function(event,data){
   }
   if(event==='extension_tree_changed'){
     scheduleExtensionActivityRefresh();
+    return;
+  }
+  if(event==='scm_changed'){
+    if(_activeSidebarPanel==='scm'&&_sidebarVis)void refreshScmSidebar(true);
+    else _scmLoaded=false;
     return;
   }
   if(event==='file_decorations_changed'){

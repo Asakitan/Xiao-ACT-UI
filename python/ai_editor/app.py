@@ -1325,6 +1325,12 @@ class _AIEditorUIBridge:
         """Notify the frontend that a Node custom editor dirty state changed."""
         self._api._emit("custom_editor_changed", state)
 
+    def scm_changed(self, change: Optional[Dict[str, Any]] = None) -> None:
+        """Notify the frontend that dynamic SCM providers changed."""
+        self._api._emit("scm_changed", {
+            "change": dict(change or {}),
+        })
+
     def receive_webview_message(self, view_id: str, message: Any) -> None:
         """Relay a message from the webview back to the extension."""
         self._api.webview_post_message(view_id, message)
@@ -13493,6 +13499,108 @@ class AIEditorAPI:
             "providers": result,
             "providerCount": len(result),
             "context": self._extension_scm_menu_context({}),
+        }
+
+    @staticmethod
+    def _scm_command_spec(raw_command: Any) -> Dict[str, Any]:
+        if isinstance(raw_command, str):
+            return {"command": raw_command, "arguments": []}
+        if isinstance(raw_command, dict):
+            command_id = str(
+                raw_command.get("command")
+                or raw_command.get("id")
+                or "")
+            if not command_id:
+                return {}
+            args = raw_command.get("arguments")
+            return {
+                "command": command_id,
+                "arguments": list(args) if isinstance(args, list) else [],
+                "title": str(raw_command.get("title") or command_id),
+            }
+        command_id = str(getattr(raw_command, "command", "") or "")
+        if not command_id:
+            return {}
+        raw_args = getattr(raw_command, "arguments", [])
+        return {
+            "command": command_id,
+            "arguments": list(raw_args) if isinstance(raw_args, list) else [],
+            "title": str(getattr(raw_command, "title", "") or command_id),
+        }
+
+    def set_scm_input_value(self, provider_id: str, value: str = "") -> Dict:
+        """Update a dynamic SCM provider input box value."""
+        self._ensure_engine()
+        provider_key = str(provider_id or "").strip()
+        input_value = str(value or "")
+        if not provider_key:
+            return {"ok": False, "error": "Missing SCM provider id"}
+        updated = False
+        setter = getattr(self._vscode_ns, "set_source_control_input_value", None)
+        if callable(setter):
+            try:
+                updated = bool(setter(provider_key, input_value)) or updated
+            except Exception:
+                pass
+        node_host = getattr(self, "_node_ext_host", None)
+        node_setter = getattr(node_host, "set_node_scm_input_value", None)
+        if callable(node_setter):
+            try:
+                updated = bool(node_setter(provider_key, input_value)) or updated
+            except Exception:
+                pass
+        if updated:
+            self._emit("scm_changed", {
+                "change": {
+                    "providerId": provider_key,
+                    "type": "input",
+                    "source": "frontend",
+                },
+            })
+            return {
+                "ok": True,
+                "providerId": provider_key,
+                "value": input_value,
+            }
+        return {
+            "ok": False,
+            "error": f"SCM provider not found: {provider_key}",
+        }
+
+    def accept_scm_input(self, provider_id: str, value: str = "") -> Dict:
+        """Run a source control provider's acceptInputCommand."""
+        self._ensure_engine()
+        provider_key = str(provider_id or "").strip()
+        input_value = str(value or "")
+        if not provider_key:
+            return {"ok": False, "error": "Missing SCM provider id"}
+        self.set_scm_input_value(provider_key, input_value)
+        providers = self.list_scm_providers().get("providers", [])
+        provider = next((
+            item for item in providers
+            if str(item.get("providerId") or item.get("id") or "")
+            == provider_key), {})
+        command = self._scm_command_spec(provider.get("acceptInputCommand"))
+        if not command:
+            return {
+                "ok": False,
+                "providerId": provider_key,
+                "error": "SCM provider has no acceptInputCommand",
+            }
+        result = self.execute_command(
+            command["command"], *command.get("arguments", []))
+        if isinstance(result, dict):
+            result.setdefault("ok", True)
+            result.setdefault("providerId", provider_key)
+            result.setdefault("inputValue", input_value)
+            result.setdefault("acceptCommand", command["command"])
+            return result
+        return {
+            "ok": True,
+            "providerId": provider_key,
+            "inputValue": input_value,
+            "acceptCommand": command["command"],
+            "result": result,
         }
 
     # ── Extension marketplace API ──

@@ -6908,8 +6908,13 @@ console.log("command palette quick access helpers ok");
            and "def list_scm_resource_group_actions(" in app_source
            and "def list_scm_resource_state_actions(" in app_source
            and "def list_scm_providers(" in app_source
+           and "def set_scm_input_value(" in app_source
+           and "def accept_scm_input(" in app_source
            and "def source_control_snapshots(" in vscode_api_source
+           and "def set_source_control_input_value(" in vscode_api_source
            and "def node_scm_provider_snapshots(" in extension_host_source
+           and "def set_node_scm_input_value(" in extension_host_source
+           and "scm_set_input_value" in node_ext_host_source
            and "\"scm/title\"" in app_source
            and "\"scm/resourceGroup/context\"" in app_source
            and "\"scm/resourceState/context\"" in app_source
@@ -6921,6 +6926,9 @@ console.log("command palette quick access helpers ok");
            and "id=\"scm-list\"" in html
            and "function refreshScmSidebar(force)" in html
            and "call('list_scm_providers')" in html
+           and "event==='scm_changed'" in html
+           and "call('set_scm_input_value'" in html
+           and "call('accept_scm_input'" in html
            and "function renderScmProvider(parent,provider)" in html
            and "function renderScmGroup(parent,provider,group)" in html
            and "function renderScmResource(parent,provider,group,state,index)"
@@ -12168,6 +12176,10 @@ def test_app_extension_runtime_support() -> None:
                         "title": "SCM State Action",
                     },
                     {
+                        "command": "selftest.activity.scmAccept",
+                        "title": "SCM Accept",
+                    },
+                    {
                         "command": "selftest.activity.scmHiddenAction",
                         "title": "SCM Hidden Action",
                     },
@@ -12431,6 +12443,10 @@ def test_app_extension_runtime_support() -> None:
             "Selftest Activity SCM",
             activity_api["Uri"].parse("file:///workspace"),
             {"contextValue": "repository"})
+        activity_scm.inputBox.placeholder = "Commit message"
+        activity_scm.acceptInputCommand = {
+            "command": "selftest.activity.scmAccept",
+        }
         activity_scm_group = activity_scm.createResourceGroup(
             "workingTree", "Working Tree")
         activity_scm_group.contextValue = "exportable"
@@ -12459,6 +12475,14 @@ def test_app_extension_runtime_support() -> None:
             "selftest.activity.scmStateAction",
             lambda *args: activity_command_log.append(
                 ("scmState", list(args))) or {"state": True, "args": list(args)})
+        activity_api["commands"]["registerCommand"](
+            "selftest.activity.scmAccept",
+            lambda *args: activity_command_log.append(
+                ("scmAccept", activity_scm.inputBox.value, list(args))) or {
+                    "accepted": True,
+                    "value": activity_scm.inputBox.value,
+                    "args": list(args),
+                })
         activity_api["window"]["registerTreeDataProvider"](
             "selftest.activity.tree", activity_tree_provider)
         activity_api["window"]["registerTreeDataProvider"](
@@ -12569,6 +12593,14 @@ def test_app_extension_runtime_support() -> None:
                 "resourceStates", [])
             if state.get("resourceUri")
             == activity_scm_resource["resourceUri"]), {})
+        activity_scm_input_set = api.set_scm_input_value(
+            "selftest-activity-scm", "commit from python provider")
+        activity_scm_accept_result = api.accept_scm_input(
+            "selftest-activity-scm", "accepted from sidebar")
+        activity_scm_after_accept = next((
+            provider for provider in api.list_scm_providers().get(
+                "providers", [])
+            if provider.get("providerId") == "selftest-activity-scm"), {})
         activity_scm_group_action = next((
             action for action in activity_scm_group_actions.get("actions", [])
             if action.get("command") == "selftest.activity.scmGroupAction"), {})
@@ -12656,6 +12688,16 @@ def test_app_extension_runtime_support() -> None:
                ]
                and activity_scm_snapshot_state.get("context", {}).get(
                    "scmResourceState") == "diffable")
+        _check("SCM input updates and accept command use provider input box",
+               activity_scm_input_set.get("ok") is True
+               and activity_scm_accept_result.get("accepted") is True
+               and activity_scm_accept_result.get("value")
+               == "accepted from sidebar"
+               and activity_scm_after_accept.get("inputBox", {}).get("value")
+               == "accepted from sidebar"
+               and activity_scm_after_accept.get(
+                   "acceptInputCommand", {}).get("command")
+               == "selftest.activity.scmAccept")
         all_view_containers = api.list_extension_view_containers().get("items", [])
         panel_containers = api.list_extension_view_containers("panel").get("items", [])
         secondary_containers = api.list_extension_view_containers(
@@ -13379,6 +13421,10 @@ async function activate(context) {
   );
   sourceControl.contextValue = 'repository';
   sourceControl.inputBox.value = 'node scm input';
+  sourceControl.inputBox.placeholder = 'Node commit message';
+  sourceControl.acceptInputCommand = {
+    command: 'selftest.node.scmAcceptInput',
+  };
   const sourceGroup = sourceControl.createResourceGroup(
     'workingTree',
     'Working Tree'
@@ -15808,6 +15854,11 @@ async function activate(context) {
     state: contextArg && contextArg.scmResourceState,
     extname: contextArg && contextArg.resourceExtname,
   }));
+  vscode.commands.registerCommand('selftest.node.scmAcceptInput', () => ({
+    ok: true,
+    accepted: true,
+    value: sourceControl.inputBox.value,
+  }));
   vscode.commands.registerCommand('selftest.node.customEditorContextAction', contextArg => {
     customEditorContextActionHits += 1;
     customEditorContextActionLast = contextArg || null;
@@ -15946,6 +15997,9 @@ module.exports = { activate, deactivate };
                     }, {
                         "command": "selftest.node.scmStateAction",
                         "title": "Node SCM State Action",
+                    }, {
+                        "command": "selftest.node.scmAcceptInput",
+                        "title": "Node SCM Accept Input",
                     }],
                     "menus": {
                         "view/item/context": [{
@@ -17396,6 +17450,14 @@ module.exports = { activate, deactivate };
                     state for state in node_scm_snapshot_group.get(
                         "resourceStates", [])
                     if state.get("resourceUri") == node_scm_resource_uri), {})
+                node_scm_input_set = api.set_scm_input_value(
+                    "selftest-node-scm", "node accepted from sidebar")
+                node_scm_accept_result = api.accept_scm_input(
+                    "selftest-node-scm", "node accepted from accept")
+                node_scm_after_accept = next((
+                    provider for provider in api.list_scm_providers().get(
+                        "providers", [])
+                    if provider.get("providerId") == "selftest-node-scm"), {})
                 node_scm_missing_group_actions = (
                     api.list_scm_resource_group_actions({
                         "providerId": "selftest-node-scm",
@@ -18829,6 +18891,9 @@ module.exports = { activate, deactivate };
                        == node_scm_resource_uri
                        and node_scm_snapshot_state.get("contextValue")
                        == "diffable"
+                       and node_scm_provider.get(
+                           "acceptInputCommand", {}).get("command")
+                       == "selftest.node.scmAcceptInput"
                        and "selftest.node.scmGroupAction" in [
                            action.get("command") for action in
                            node_scm_snapshot_group.get("actions", [])
@@ -18839,6 +18904,19 @@ module.exports = { activate, deactivate };
                        ],
                        json.dumps({
                            "providers": node_scm_provider_snapshot,
+                       }, ensure_ascii=False))
+                _check("node SCM input syncs before accept command execution",
+                       node_scm_input_set.get("ok") is True
+                       and node_scm_accept_result.get("ok") is True
+                       and node_scm_accept_result.get("accepted") is True
+                       and node_scm_accept_result.get("value")
+                       == "node accepted from accept"
+                       and node_scm_after_accept.get("inputBox", {}).get(
+                           "value") == "node accepted from accept",
+                       json.dumps({
+                           "set": node_scm_input_set,
+                           "accept": node_scm_accept_result,
+                           "provider": node_scm_after_accept,
                        }, ensure_ascii=False))
                 _check("extension editor/webview menus follow custom editor context",
                        "selftest.node.customEditorTitleAction"

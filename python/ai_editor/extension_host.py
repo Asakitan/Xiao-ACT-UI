@@ -2880,13 +2880,37 @@ class NodeExtensionHost:
                     if msg_type == "scm_provider_disposed":
                         self._node_scm_providers.pop(provider_id, None)
                     else:
+                        previous = self._node_scm_providers.get(provider_id)
+                        previous_groups = (
+                            previous.get("groups")
+                            if isinstance(previous, dict) else None)
                         self._node_scm_providers[provider_id] = {
                             "id": provider_id,
                             "providerId": provider_id,
                             "label": str(msg.get("label") or provider_id),
                             "rootUri": str(msg.get("rootUri") or ""),
                             "contextValue": str(msg.get("contextValue") or ""),
+                            "acceptInputCommand": msg.get("acceptInputCommand"),
+                            "inputBox": (
+                                dict(msg.get("inputBox"))
+                                if isinstance(msg.get("inputBox"), dict)
+                                else {}),
+                            "groups": (
+                                previous_groups
+                                if isinstance(previous_groups, dict) else {}),
                         }
+                if self._ui_bridge:
+                    try:
+                        handler = getattr(self._ui_bridge, "scm_changed", None)
+                        if callable(handler):
+                            handler({
+                                "providerId": provider_id,
+                                "type": msg_type,
+                                "source": "node",
+                            })
+                    except Exception:
+                        _log.exception(
+                            "[NodeExtHost] SCM change callback failed")
 
         elif msg_type in {
                 "scm_resource_group_registered",
@@ -2922,6 +2946,19 @@ class NodeExtensionHost:
                                 list(resource_states)
                                 if isinstance(resource_states, list) else []),
                         }
+                if self._ui_bridge:
+                    try:
+                        handler = getattr(self._ui_bridge, "scm_changed", None)
+                        if callable(handler):
+                            handler({
+                                "providerId": provider_id,
+                                "groupId": group_id,
+                                "type": msg_type,
+                                "source": "node",
+                            })
+                    except Exception:
+                        _log.exception(
+                            "[NodeExtHost] SCM group change callback failed")
 
         elif msg_type in {"tree_response", "tree_drag_drop_response"}:
             request_id = str(msg.get("requestId", ""))
@@ -4056,11 +4093,31 @@ class NodeExtensionHost:
                 "contextValue": str(provider.get("contextValue") or ""),
                 "count": int(provider.get("count") or 0),
                 "runtimeKind": "node",
+                "acceptInputCommand": provider.get("acceptInputCommand"),
                 "inputBox": provider.get("inputBox") if isinstance(
                     provider.get("inputBox"), dict) else {},
                 "groups": group_items,
             })
         return result
+
+    def set_node_scm_input_value(self, provider_id: Any, value: Any) -> bool:
+        provider_key = str(provider_id or "")
+        if not provider_key:
+            return False
+        with self._node_scm_lock:
+            provider = self._node_scm_providers.get(provider_key)
+            if not isinstance(provider, dict):
+                return False
+            input_box = provider.setdefault("inputBox", {})
+            if not isinstance(input_box, dict):
+                input_box = {}
+                provider["inputBox"] = input_box
+            input_box["value"] = str(value or "")
+        return self._send({
+            "type": "scm_set_input_value",
+            "providerId": provider_key,
+            "value": str(value or ""),
+        })
 
     def node_scm_context_snapshot(
             self,
