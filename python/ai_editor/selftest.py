@@ -5064,7 +5064,7 @@ console.log("frontend signature help docs ok");
             and "function extensionSettingConfiguredTargets(scopedValues)" in html
             and "function extensionSettingTargetTags(scopedValues,currentTarget)" in html
             and "function extensionSettingTargetSearchText(scopedValues,type)" in html
-            and "function extensionSettingMetadataTags(schema,type,scopeName,currentTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,extraTags)" in html
+            and "function extensionSettingMetadataTags(schema,type,scopeName,currentTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,experimentMeta,scopedValues,extraTags)" in html
             and "function renderExtensionSettingTargetOverrides(el,scopedValues,currentTarget)" in html
             and "function extensionSettingDeprecationText(schema)" in html
             and "function extensionSettingJsonRows(value,type)" in html
@@ -5242,6 +5242,9 @@ console.log("frontend signature help docs ok");
             and "appendExtensionSettingDefaultOverrideBadge(head,defaultOverrideMeta)" in html
             and "function extensionSettingPolicyMetadata(schema)" in html
             and "appendExtensionSettingPolicyBadge(head,policyMeta)" in html
+            and "function extensionSettingExperimentMetadata(schema,key)" in html
+            and "appendExtensionSettingExperimentBadge(head,experimentMeta)" in html
+            and "addFilterAction('Experiment','@experiment')" in html
             and "Default Locked" in html
             and "default-locked" in html
             and "Policy:" in html
@@ -5353,6 +5356,8 @@ console.log("frontend signature help docs ok");
             "extensionSettingPolicyTextValue",
             "extensionSettingPolicyMetadata",
             "appendExtensionSettingPolicyBadge",
+            "extensionSettingExperimentMetadata",
+            "appendExtensionSettingExperimentBadge",
             "extensionSettingSourceDisplay",
             "extensionSettingDefaultSourceText",
             "extensionSettingWorkspaceTrustMetadata",
@@ -5557,6 +5562,15 @@ const policySchema = {
 const stringPolicySchema = {
   type: "boolean",
   policy: "StringPolicy"
+};
+const experimentSchema = {
+  type: "string",
+  experiment: { mode: "auto", name: "config.selftest.experiment" },
+  tags: ["experimental"]
+};
+const legacyExperimentSchema = {
+  type: "boolean",
+  tags: ["onExP"]
 };
 const sourceSchema = {
   type: "string",
@@ -5793,8 +5807,9 @@ assert(schemaFeatureTags.includes("conditional")
        && extensionSettingSchemaFeatureTags(objectSchema, "object").includes("required")
        && extensionSettingSchemaFeatureTags(searchSchema, "string").includes("enum")
        && extensionSettingSchemaFeatureTags(dependencySchema, "object").includes("dependency")
-       && extensionSettingSchemaFeatureTags(rangedStringSchema, "string").includes("constraint"),
-       "schema feature tags include conditional required enum dependency constraint");
+       && extensionSettingSchemaFeatureTags(rangedStringSchema, "string").includes("constraint")
+       && extensionSettingSchemaFeatureTags(experimentSchema, "string").includes("experiment"),
+       "schema feature tags include conditional required enum dependency constraint experiment");
 const schemaDetails = extensionSettingSchemaDetailItems(conditionalSchema, "object", {});
 const requiredDetails = extensionSettingSchemaDetailItems(objectSchema, "object", {});
 assert(requiredDetails.some(item => item.label === "Required" && item.text.indexOf("level") >= 0)
@@ -5820,6 +5835,11 @@ const trustDetails = extensionSettingSchemaDetailItems({ restricted: true }, "bo
 assert(trustDetails.some(item => item.label === "Workspace trust"
        && item.text.indexOf("trusted sources") >= 0),
        "schema detail items include workspace trust restrictions");
+const experimentDetails = extensionSettingSchemaDetailItems(experimentSchema, "string", "");
+assert(experimentDetails.some(item => item.label === "Experiment"
+       && item.text.indexOf("config.selftest.experiment") >= 0
+       && item.text.indexOf("updates automatically") >= 0),
+       "schema detail items include experiment metadata");
 const schemaDetailHost = makeNode("div");
 appendExtensionSettingSchemaDetails(schemaDetailHost, conditionalSchema, "object", {});
 assert(schemaDetailHost.children.some(n => n.className === "ext-setting-schema-details"
@@ -5844,6 +5864,9 @@ assert(extensionSettingSchemaSummary(policySchema, "string").indexOf("policy: Se
        "policy schema summary");
 assert(extensionSettingSchemaSummary({ restricted: true }, "boolean").indexOf("workspace trust restricted") >= 0,
        "restricted schema summary includes workspace trust marker");
+assert(extensionSettingSchemaSummary(experimentSchema, "string").indexOf("experiment: auto") >= 0
+       && extensionSettingSchemaSummary(experimentSchema, "string").indexOf("experiment name: config.selftest.experiment") >= 0,
+       "experiment schema summary includes mode and name");
 assert(extensionSettingDeprecationText(deprecatedSchema) === "**Use** `new.setting`.",
        "markdown deprecation preferred");
 assert(extensionSettingDeprecationText({ deprecationMessage: "Use fallback." }) === "Use fallback.",
@@ -5861,17 +5884,21 @@ assert(extensionSettingParseQuery("@hidden internal", false, false).hiddenOnly =
        && extensionSettingParseQuery("", false, true).hiddenOnly === true,
        "settings query parses hidden filter");
 const metadataQuery = extensionSettingParseQuery(
-  '@ext:selftest @type:boolean @policy:SelftestPolicy @restricted @sync:locked @value:"auto mode" @default:false render',
+  '@ext:selftest @type:boolean @policy:SelftestPolicy @experiment:auto @restricted @sync:locked @value:"auto mode" @default:false render',
   false);
 assert(metadataQuery.extensions[0] === "selftest"
        && metadataQuery.types[0] === "boolean"
        && metadataQuery.policies[0] === "selftestpolicy"
+       && metadataQuery.experiments[0] === "auto"
        && metadataQuery.restrictedOnly === true
        && metadataQuery.syncs[0] === "sync-locked"
        && metadataQuery.values[0] === "auto mode"
        && metadataQuery.defaults[0] === "false"
        && metadataQuery.text === "render",
        "settings query parses extension metadata and value filters");
+assert(extensionSettingParseQuery("@experiment render", false).experimentOnly === true
+       && extensionSettingParseQuery("@experiment render", false).text === "render",
+       "settings query parses experiment-only filter");
 const vscodeStyleQuery = extensionSettingParseQuery(
   '@id:selftest.* @feature:"Selftest Settings" @lang:selflang @tag:preview,experimental @ext:"selftest.settings-pack" @stable render',
   false);
@@ -6028,6 +6055,7 @@ const suggestionRows = [
     extSettingTarget: "workspace",
     extSettingType: "number",
     extSettingPolicy: "selftestpolicy\nextensions\n1.2.3",
+    extSettingExperiment: "config.selftest.experiment\nauto",
     extSettingTags: "preview\nsync-ignored\ntarget:workspace",
   } },
   { dataset: {
@@ -6056,7 +6084,9 @@ assert(broadSuggestions.includes("@modified ")
        && broadSuggestions.includes("@target:workspace ")
        && broadSuggestions.includes("@type:number ")
        && broadSuggestions.includes("@policy:selftestpolicy ")
-       && broadSuggestions.includes("@policy:extensions "),
+       && broadSuggestions.includes("@policy:extensions ")
+       && broadSuggestions.includes("@experiment:auto ")
+       && broadSuggestions.includes("@experiment:config.selftest.experiment "),
        "settings filter suggestions include dynamic vscode-style tokens");
 assert(extensionSettingFilterSuggestions(suggestionContainer, "plain text").length === 0,
        "settings filter suggestions stay quiet for plain text tokens");
@@ -6112,6 +6142,11 @@ const trustSearchText = extensionSettingSearchText("demo.trust", { restricted: t
 assert(trustSearchText.indexOf("workspace trust") >= 0
        && trustSearchText.indexOf("trusted sources") >= 0,
        "settings search text includes workspace trust metadata");
+const experimentSearchText = extensionSettingSearchText("selftest.experiment", experimentSchema, "string", "", "", "");
+assert(experimentSearchText.indexOf("experiment") >= 0
+       && experimentSearchText.indexOf("config.selftest.experiment") >= 0
+       && experimentSearchText.indexOf("updates automatically") >= 0,
+       "settings search text includes experiment metadata");
 const sourceSearchText = extensionSettingSearchText("demo.source", sourceSchema, "string", "", "", "");
 assert(sourceSearchText.indexOf("selftest.settings-pack") >= 0
        && sourceSearchText.indexOf("selftest.core") >= 0,
@@ -6131,6 +6166,23 @@ const policyBadgeHost = makeNode("div");
 appendExtensionSettingPolicyBadge(policyBadgeHost, policyMeta);
 assert(policyBadgeHost.children.some(n => n.textContent === "Policy: SelftestPolicy"),
        "policy badge rendered");
+const experimentMeta = extensionSettingExperimentMetadata(experimentSchema, "selftest.experiment");
+assert(experimentMeta.enabled === true
+       && experimentMeta.tag === "experiment"
+       && experimentMeta.mode === "auto"
+       && experimentMeta.name === "config.selftest.experiment"
+       && experimentMeta.filterText.indexOf("auto") >= 0,
+       "experiment metadata detected with mode name and filter text");
+const legacyExperimentMeta = extensionSettingExperimentMetadata(legacyExperimentSchema, "legacy.setting");
+assert(legacyExperimentMeta.enabled === true
+       && legacyExperimentMeta.mode === "startup"
+       && legacyExperimentMeta.name === "config.legacy.setting"
+       && legacyExperimentMeta.legacy === true,
+       "legacy onExP tag maps to startup experiment metadata");
+const experimentBadgeHost = makeNode("div");
+appendExtensionSettingExperimentBadge(experimentBadgeHost, experimentMeta);
+assert(experimentBadgeHost.children.some(n => n.textContent === "Experiment: Auto"),
+       "experiment badge rendered");
 assert(extensionSettingTagLabel("usesOnlineServices") === "Online"
        && extensionSettingTagLabel("preview") === "Preview",
        "setting tag labels normalized");
@@ -6158,6 +6210,7 @@ assert(targetSearchText.indexOf("configured in Global") >= 0
        "target scoped values indexed for search");
 const metadataTags = extensionSettingMetadataTags(searchSchema, "string", "window", "workspace", true,
   { tag: "", ignored: false, locked: false }, { tag: "" }, { tag: "", name: "" },
+  { tag: "", enabled: false, mode: "", name: "" },
   scopedTargets, ["language-default"]);
 assert(metadataTags.includes("experimental")
        && metadataTags.includes("enum")
@@ -6166,17 +6219,26 @@ assert(metadataTags.includes("experimental")
        "metadata tags combine schema tags target tags and extras");
 const deprecatedTags = extensionSettingMetadataTags(deprecatedSchema, "string", "window", "workspace", true,
   { tag: "", ignored: false, locked: false }, { tag: "" }, { tag: "", name: "" },
+  { tag: "", enabled: false, mode: "", name: "" },
   {}, []);
 assert(deprecatedTags.includes("deprecated"),
        "metadata tags include deprecated schema marker");
 const policyTags = extensionSettingMetadataTags(policySchema, "string", "window", "workspace", true,
   { tag: "", ignored: false, locked: false }, { tag: "" }, policyMeta,
+  { tag: "", enabled: false, mode: "", name: "" },
   {}, []);
 assert(policyTags.includes("policy")
        && policyTags.includes("selftestpolicy")
        && policyTags.includes("policy-category:extensions")
        && policyTags.includes("policy-version:1.2.3"),
        "metadata tags include policy name category and version");
+const experimentTags = extensionSettingMetadataTags(experimentSchema, "string", "window", "workspace", true,
+  { tag: "", ignored: false, locked: false }, { tag: "" }, { tag: "", name: "" },
+  experimentMeta, {}, []);
+assert(experimentTags.includes("experiment")
+       && experimentTags.includes("experiment-mode:auto")
+       && experimentTags.includes("config.selftest.experiment"),
+       "metadata tags include experiment mode and name");
 const targetOverrideHost = makeNode("div");
 renderExtensionSettingTargetOverrides(targetOverrideHost, scopedTargets, "workspace");
 assert(targetOverrideHost.textContent === "Also modified in: Global, Workspace Folder"
@@ -6198,6 +6260,7 @@ assert(trustMeta.restricted === true && trustMeta.label === "Requires workspace 
        "workspace trust metadata detected for restricted settings");
 const trustTags = extensionSettingMetadataTags({ restricted: true }, "boolean", "window", "workspace", true,
   { tag: "", ignored: false, locked: false }, { tag: "" }, { tag: "", name: "" },
+  { tag: "", enabled: false, mode: "", name: "" },
   {}, []);
 assert(trustTags.includes("workspace-trust") && trustTags.includes("trusted-sources"),
        "metadata tags include workspace trust markers");
@@ -6214,6 +6277,9 @@ assert(indicatorRow.children.includes(indicatorWrap)
        && indicatorWrap.children.some(n => n.textContent === "Default from Selftest Source")
        && indicatorWrap.children.some(n => n.textContent === "Requires workspace trust"),
        "settings indicators render current target other targets default source and trust");
+renderExtensionSettingIndicators(indicatorWrap, experimentSchema, {}, "workspace", "");
+assert(indicatorWrap.children.some(n => n.textContent === "Experiment: Auto"),
+       "settings indicators render experiment metadata");
 renderExtensionSettingIndicators(indicatorWrap, { source: { id: "fallback.id" } }, { workspace: 1 }, "workspace", "Fallback Extension");
 assert(indicatorWrap.children.some(n => n.textContent === "Modified in Workspace")
        && !indicatorWrap.children.some(n => n.textContent.indexOf("Also modified in") === 0)

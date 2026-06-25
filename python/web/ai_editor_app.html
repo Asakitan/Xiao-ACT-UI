@@ -13538,6 +13538,36 @@ function appendExtensionSettingPolicyBadge(head,meta){
   el.title=meta.title;
   head.appendChild(el);
 }
+function extensionSettingExperimentMetadata(schema,key){
+  schema=(schema&&typeof schema==='object')?schema:{};
+  const tags=extensionSettingList(schema,'tags').map(value=>value.toLowerCase());
+  const exp=schema.experiment&&typeof schema.experiment==='object'?schema.experiment:null;
+  const legacy=!exp&&tags.includes('onexp');
+  if(!exp&&!legacy)return {enabled:false,label:'',tag:'',title:'',mode:'',name:'',detail:'',search:'',filterText:''};
+  let mode=String((exp&&exp.mode)||'startup').trim().toLowerCase();
+  if(mode!=='auto'&&mode!=='startup')mode='startup';
+  const fallbackName=key?'config.'+String(key):'';
+  const name=String((exp&&exp.name)||fallbackName).trim();
+  const modeLabel=mode==='auto'?'Auto':'Startup';
+  const label='Experiment: '+modeLabel;
+  const parts=['Default can be overwritten by an experiment',modeLabel.toLowerCase()];
+  if(name)parts.push(name);
+  if(legacy)parts.push('legacy onExP tag');
+  const detail=(name?name+' · ':'')+(mode==='auto'
+    ? 'updates automatically when the experiment changes'
+    : 'updates on startup');
+  const filterValues=[name,mode,legacy?'onexp':''].map(value=>String(value||'').trim().toLowerCase()).filter(Boolean);
+  return {enabled:true,label,tag:'experiment',title:parts.join(' · '),mode,name,legacy,
+    detail,search:parts.concat(['experiment','experimental','default override']).join(' '),filterText:filterValues.join('\n')};
+}
+function appendExtensionSettingExperimentBadge(head,meta){
+  if(!head||!meta||!meta.enabled)return;
+  const el=document.createElement('span');
+  el.className='ext-setting-scope-badge ext-setting-experiment-badge';
+  el.textContent=meta.label;
+  el.title=meta.title;
+  head.appendChild(el);
+}
 function extensionSettingSourceDisplay(value){
   if(!value)return '';
   if(typeof value==='string')return value;
@@ -13702,6 +13732,11 @@ function extensionSettingSchemaSummary(schema,type){
   }
   const trustMeta=extensionSettingWorkspaceTrustMetadata(schema);
   if(trustMeta.restricted)parts.push('workspace trust restricted');
+  const experimentMeta=extensionSettingExperimentMetadata(schema);
+  if(experimentMeta.enabled){
+    parts.push('experiment: '+experimentMeta.mode);
+    if(experimentMeta.name)parts.push('experiment name: '+experimentMeta.name);
+  }
   const constraints=extensionSettingConstraintSummary(schema,type);
   if(constraints)parts.push(constraints);
   return parts.join(' · ');
@@ -13775,6 +13810,7 @@ function extensionSettingSchemaFeatureTags(schema,type){
     || schema.patternProperties||schema.propertyNames)push('constraint');
   if(schema.source&&schema.source.id)push('source');
   if(schema.section&&schema.section.id)push('section');
+  if(schema.experiment&&typeof schema.experiment==='object')push('experiment');
   return tags;
 }
 function extensionSettingSchemaDetailItems(schema,type,defaultValue){
@@ -13822,6 +13858,8 @@ function extensionSettingSchemaDetailItems(schema,type,defaultValue){
   if(policyMeta.managed)push('Policy',policyMeta.detail||policyMeta.name||'managed by policy','policy');
   const trustMeta=extensionSettingWorkspaceTrustMetadata(schema);
   if(trustMeta.restricted)push('Workspace trust',trustMeta.detail,'workspace-trust');
+  const experimentMeta=extensionSettingExperimentMetadata(schema);
+  if(experimentMeta.enabled)push('Experiment',experimentMeta.detail,'experiment');
   if(schema.source&&schema.source.id)push('Source',schema.source.id,'source');
   if(schema.section&&schema.section.id)push('Section',schema.section.id,'section');
   if(Object.prototype.hasOwnProperty.call(schema,'default'))push('Schema default',extensionSettingJson(defaultValue,type).replace(/\s+/g,' ').trim(),'default');
@@ -14024,6 +14062,8 @@ function extensionSettingSearchText(key,schema,type,description,deprecation,sche
   if(policyMeta.managed)parts.push('policy managed '+policyMeta.search+' '+policyMeta.filterText);
   const trustMeta=extensionSettingWorkspaceTrustMetadata(schema);
   if(trustMeta.restricted)parts.push(trustMeta.search+' '+trustMeta.detail);
+  const experimentMeta=extensionSettingExperimentMetadata(schema,key);
+  if(experimentMeta.enabled)parts.push(experimentMeta.search+' '+experimentMeta.detail+' '+experimentMeta.filterText);
   ['tags','keywords','enumItemLabels','enumDescriptions','markdownEnumDescriptions'].forEach(name=>{
     extensionSettingList(schema,name).forEach(value=>parts.push(value));
   });
@@ -14411,6 +14451,10 @@ function renderExtensionSettingIndicators(wrap,schema,scopedValues,currentTarget
   if(trust.restricted){
     appendExtensionSettingIndicator(wrap,trust.label,trust.title,'trust');
   }
+  const experiment=extensionSettingExperimentMetadata(schema);
+  if(experiment.enabled){
+    appendExtensionSettingIndicator(wrap,experiment.label,experiment.title,'experiment');
+  }
   wrap.style.display=wrap.children.length?'':'none';
 }
 function appendExtensionSettingIndicators(row,schema,scopedValues,currentTarget,defaultSource){
@@ -14421,7 +14465,7 @@ function appendExtensionSettingIndicators(row,schema,scopedValues,currentTarget,
   row.appendChild(wrap);
   return wrap;
 }
-function extensionSettingMetadataTags(schema,type,scopeName,currentTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,extraTags){
+function extensionSettingMetadataTags(schema,type,scopeName,currentTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,experimentMeta,scopedValues,extraTags){
   schema=(schema&&typeof schema==='object')?schema:{};
   const trustMeta=extensionSettingWorkspaceTrustMetadata(schema);
   return extensionSettingList(schema,'tags').map(value=>value.toLowerCase())
@@ -14436,7 +14480,11 @@ function extensionSettingMetadataTags(schema,type,scopeName,currentTarget,worksp
       defaultOverrideMeta&&defaultOverrideMeta.tag,policyMeta&&policyMeta.tag,
       policyMeta&&policyMeta.name?policyMeta.name.toLowerCase():'',
       policyMeta&&policyMeta.category?'policy-category:'+policyMeta.category.toLowerCase():'',
-      policyMeta&&policyMeta.minimumVersion?'policy-version:'+policyMeta.minimumVersion.toLowerCase():''])
+      policyMeta&&policyMeta.minimumVersion?'policy-version:'+policyMeta.minimumVersion.toLowerCase():'',
+      experimentMeta&&experimentMeta.tag,
+      experimentMeta&&experimentMeta.mode?'experiment-mode:'+experimentMeta.mode:'',
+      experimentMeta&&experimentMeta.name?experimentMeta.name.toLowerCase():'',
+      experimentMeta&&experimentMeta.legacy?'onexp':''])
     .filter(Boolean);
 }
 function renderExtensionSettingTargetOverrides(el,scopedValues,currentTarget){
@@ -14486,17 +14534,18 @@ function extensionSettingQueryTokens(raw){
   return tokens;
 }
 function extensionSettingIsFilterToken(token){
-  return /^@(modified|hidden|stable|restricted|sync)(?=$|\s)/i.test(token)
+  return /^@(modified|hidden|stable|restricted|sync|experiment)(?=$|\s)/i.test(token)
     || /^@policy(?=$|\s|:)/i.test(token)
-    || /^@(tag|ext|feature|id|lang|scope|target|type|sync|value|default):/i.test(token);
+    || /^@(tag|ext|feature|id|lang|scope|target|type|sync|value|default|experiment):/i.test(token);
 }
 function extensionSettingFilterTokenLabel(token){
   token=String(token||'').trim();
   if(!token)return '';
   const lower=token.toLowerCase();
-  const map={'@modified':'Modified','@hidden':'Hidden','@stable':'Stable','@policy':'Policy','@restricted':'Restricted','@sync':'Sync'};
+  const map={'@modified':'Modified','@hidden':'Hidden','@stable':'Stable','@policy':'Policy','@restricted':'Restricted','@sync':'Sync','@experiment':'Experiment'};
   if(map[lower])return map[lower];
   if(lower.startsWith('@policy:'))return 'Policy: '+(token.slice(8)||'...');
+  if(lower.startsWith('@experiment:'))return 'Experiment: '+(token.slice(12)||'...');
   if(token.startsWith('@tag:'))return 'Tag: '+token.slice(5);
   if(token.startsWith('@ext:'))return 'Extension: '+(token.slice(5)||'...');
   if(token.startsWith('@feature:'))return 'Feature: '+(token.slice(9)||'...');
@@ -14635,9 +14684,9 @@ function extensionSettingFilterSuggestions(container,query){
   const rows=Array.from((container&&container.querySelectorAll)?container.querySelectorAll('.ext-setting-row'):[]);
   const suggestions=[],seen=new Set();
   const push=token=>extensionSettingPushSuggestion(suggestions,seen,query,token);
-  ['@modified','@hidden','@stable','@restricted','@policy','@sync',
+  ['@modified','@hidden','@stable','@restricted','@policy','@experiment','@sync',
    '@ext:','@lang:','@id:','@tag:','@scope:','@target:','@type:','@value:','@default:'].forEach(push);
-  const dynamic={ext:new Set(),lang:new Set(),id:new Set(),tag:new Set(),scope:new Set(),target:new Set(),type:new Set(),policy:new Set()};
+  const dynamic={ext:new Set(),lang:new Set(),id:new Set(),tag:new Set(),scope:new Set(),target:new Set(),type:new Set(),policy:new Set(),experiment:new Set()};
   rows.forEach(row=>{
     const data=row.dataset||{};
     if(data.extSettingExtensionId)dynamic.ext.add(data.extSettingExtensionId);
@@ -14652,6 +14701,12 @@ function extensionSettingFilterSuggestions(container,query){
         if(value)dynamic.policy.add(value);
       });
     }
+    if(data.extSettingExperiment){
+      String(data.extSettingExperiment).split('\n').forEach(value=>{
+        value=String(value||'').trim().toLowerCase();
+        if(value)dynamic.experiment.add(value);
+      });
+    }
     String(data.extSettingTags||'').split('\n').forEach(tag=>{
       tag=String(tag||'').trim().toLowerCase();
       if(tag&&!tag.startsWith('target:')&&!tag.startsWith('configured-target:'))dynamic.tag.add(tag);
@@ -14661,6 +14716,7 @@ function extensionSettingFilterSuggestions(container,query){
   [
     ['@ext:',dynamic.ext],['@lang:',dynamic.lang],['@id:',dynamic.id],['@tag:',dynamic.tag],
     ['@scope:',dynamic.scope],['@target:',dynamic.target],['@type:',dynamic.type],['@policy:',dynamic.policy],
+    ['@experiment:',dynamic.experiment],
   ].forEach(item=>{
     if(!include(item[0]))return;
     Array.from(item[1]).filter(Boolean).sort().slice(0,24).forEach(value=>push(item[0]+value));
@@ -14749,8 +14805,8 @@ function extensionSettingsQuery(){
 }
 function extensionSettingParseQuery(raw,modifiedChecked,hiddenChecked){
   raw=String(raw||'').trim();
-  const tags=[],scopes=[],targets=[],extensions=[],types=[],policies=[],syncs=[],ids=[],features=[],languages=[],values=[],defaults=[];
-  let restrictedOnly=false,stableOnly=false;
+  const tags=[],scopes=[],targets=[],extensions=[],types=[],policies=[],experiments=[],syncs=[],ids=[],features=[],languages=[],values=[],defaults=[];
+  let restrictedOnly=false,stableOnly=false,experimentOnly=false;
   const modifiedOnly=modifiedChecked===true||/(^|\s)@modified(?=\s|$)/i.test(raw);
   const hiddenOnly=hiddenChecked===true||/(^|\s)@hidden(?=\s|$)/i.test(raw);
   const text=raw
@@ -14767,6 +14823,7 @@ function extensionSettingParseQuery(raw,modifiedChecked,hiddenChecked){
     .replace(new RegExp('(^|\\s)@value:("[^"]*"|[^\\s]+)','ig'),(match,prefix,value)=>{extensionSettingPushFilterValues(values,value);return ' ';})
     .replace(new RegExp('(^|\\s)@default:("[^"]*"|[^\\s]+)','ig'),(match,prefix,value)=>{extensionSettingPushFilterValues(defaults,value);return ' ';})
     .replace(new RegExp('(^|\\s)@policy(?::("[^"]*"|[^\\s]+))?(?=\\s|$)','ig'),(match,prefix,policy)=>{extensionSettingPushFilterValues(policies,policy||'policy');return ' ';})
+    .replace(new RegExp('(^|\\s)@experiment(?::("[^"]*"|[^\\s]+))?(?=\\s|$)','ig'),(match,prefix,experiment)=>{if(experiment)extensionSettingPushFilterValues(experiments,experiment);else experimentOnly=true;return ' ';})
     .replace(/(^|\s)@restricted(?=\s|$)/ig,()=>{restrictedOnly=true;return ' ';})
     .replace(/(^|\s)@sync(?::([^\s]+))?(?=\s|$)/ig,(match,prefix,sync)=>{
       const value=String(sync||'sync').toLowerCase();
@@ -14775,7 +14832,7 @@ function extensionSettingParseQuery(raw,modifiedChecked,hiddenChecked){
     })
     .replace(new RegExp('(^|\\s)@tag:("[^"]*"|[^\\s]+)','ig'),(match,prefix,tag)=>{extensionSettingPushFilterValues(tags,tag);return ' ';})
     .trim().toLowerCase();
-  return {modifiedOnly,hiddenOnly,tags,scopes,targets,extensions,types,policies,syncs,ids,features,languages,values,defaults,restrictedOnly,stableOnly,text};
+  return {modifiedOnly,hiddenOnly,tags,scopes,targets,extensions,types,policies,experiments,syncs,ids,features,languages,values,defaults,restrictedOnly,stableOnly,experimentOnly,text};
 }
 function applyExtensionSettingsFilter(){
   const container=$('ext-settings-container');if(!container)return;
@@ -14803,6 +14860,8 @@ function applyExtensionSettingsFilter(){
       const extOk=!query.extensions.length||query.extensions.some(ext=>(row.dataset.extSettingExtension||'').includes(ext));
       const typeOk=!query.types.length||query.types.includes(row.dataset.extSettingType||'');
       const policyOk=!query.policies.length||query.policies.some(policy=>rowTags.includes('policy')&&(policy==='policy'||(row.dataset.extSettingPolicy||'').includes(policy)));
+      const experimentOk=(!query.experimentOnly||rowTags.includes('experiment'))
+        &&(!query.experiments.length||query.experiments.some(experiment=>rowTags.includes('experiment')&&(experiment==='experiment'||(row.dataset.extSettingExperiment||'').includes(experiment))));
       const restrictedOk=!query.restrictedOnly||rowTags.includes('restricted');
       const syncOk=!query.syncs.length||query.syncs.some(sync=>sync==='sync'?rowTags.includes('sync-ignored')||rowTags.includes('sync-locked'):rowTags.includes(sync));
       const idOk=!query.ids.length||query.ids.some(id=>id.endsWith('*')?(row.dataset.extSettingKey||'').toLowerCase().startsWith(id.slice(0,-1)):(row.dataset.extSettingKey||'').toLowerCase()===id);
@@ -14812,14 +14871,14 @@ function applyExtensionSettingsFilter(){
       const defaultOk=!query.defaults.length||query.defaults.some(value=>(row.dataset.extSettingDefault||'').includes(value));
       const stableOk=!query.stableOnly||(!rowTags.includes('experimental')&&!rowTags.includes('preview'));
       const modifiedOk=!query.modifiedOnly||row.dataset.extSettingModified==='1';
-      const show=categoryOk&&scopeOk&&targetOk&&textOk&&tagOk&&hiddenOk&&extOk&&typeOk&&policyOk&&restrictedOk&&syncOk&&idOk&&featureOk&&langOk&&valueOk&&defaultOk&&stableOk&&modifiedOk;
+      const show=categoryOk&&scopeOk&&targetOk&&textOk&&tagOk&&hiddenOk&&extOk&&typeOk&&policyOk&&experimentOk&&restrictedOk&&syncOk&&idOk&&featureOk&&langOk&&valueOk&&defaultOk&&stableOk&&modifiedOk;
       row.dataset.extSettingMatchRank=show?String(extensionSettingTextMatchRank(row,query.text)):'0';
       row.style.display=show?'':'none';
       if(show){visibleRows++;sectionRows++}
     });
     extensionSettingSortSectionRows(section,query.text);
     section.style.display=sectionRows?'':'none';
-    if(sectionRows){visibleSections++;if(query.text||query.tags.length||query.scopes.length||query.targets.length||query.extensions.length||query.types.length||query.policies.length||query.syncs.length||query.ids.length||query.features.length||query.languages.length||query.values.length||query.defaults.length||query.restrictedOnly||query.stableOnly||query.modifiedOnly||query.hiddenOnly||category||scopeFilter||targetFilter)section.open=true}
+    if(sectionRows){visibleSections++;if(query.text||query.tags.length||query.scopes.length||query.targets.length||query.extensions.length||query.types.length||query.policies.length||query.experiments.length||query.syncs.length||query.ids.length||query.features.length||query.languages.length||query.values.length||query.defaults.length||query.restrictedOnly||query.experimentOnly||query.stableOnly||query.modifiedOnly||query.hiddenOnly||category||scopeFilter||targetFilter)section.open=true}
   });
   const count=$('ext-settings-filter-count');
   if(count)count.textContent=visibleRows+' / '+totalRows;
@@ -14881,6 +14940,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       const syncMeta=extensionSettingSyncMetadata(schema);
       const defaultOverrideMeta=extensionSettingDefaultOverrideMetadata(schema);
       const policyMeta=extensionSettingPolicyMetadata(schema);
+      const experimentMeta=extensionSettingExperimentMetadata(schema,key);
       const defaultSource=extensionSettingDefaultSourceText(schema,displayName||extId);
       const shortKey=key.split('.').pop()||key;
       const row=document.createElement('div');row.className='ext-setting-row settings-field';
@@ -14897,10 +14957,11 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       row.dataset.extSettingFeature=['language',item.language,displayName,extId].join(' ').toLowerCase();
       row.dataset.extSettingLanguage=String(item.language||'').toLowerCase();
       row.dataset.extSettingPolicy=policyMeta.filterText||policyMeta.name.toLowerCase();
+      row.dataset.extSettingExperiment=experimentMeta.filterText||experimentMeta.name.toLowerCase();
       row.dataset.extSettingModified=modified[key]?'1':'0';
       row.dataset.modified=modified[key]?'1':'0';
       updateExtensionSettingRowValueMetadata(row,value,defaultValue,type);
-      const tagList=extensionSettingMetadataTags(schema,type,scopeName,targetName,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,
+      const tagList=extensionSettingMetadataTags(schema,type,scopeName,targetName,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,experimentMeta,scopedValues,
         ['language-default',String(item.language||'').toLowerCase()]);
       row.dataset.extSettingTags=tagList.filter(Boolean).join('\n');
       row.dataset.extSettingSearch=[
@@ -14923,6 +14984,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       appendExtensionSettingSyncBadge(head,syncMeta);
       appendExtensionSettingDefaultOverrideBadge(head,defaultOverrideMeta);
       appendExtensionSettingPolicyBadge(head,policyMeta);
+      appendExtensionSettingExperimentBadge(head,experimentMeta);
       appendExtensionSettingTagBadges(head,schema);
       if(isHiddenSetting){
         const hiddenEl=document.createElement('span');hiddenEl.className='ext-setting-hidden-badge';hiddenEl.textContent='Hidden';
@@ -14951,7 +15013,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
           if(enumHelp)renderExtensionSettingEnumDescription(enumHelp,schema,input);
           markExtensionSettingRow(row,extensionSettingHasTargetValue(scopedValues,row.dataset.extSettingTarget));
           keyLabel.textContent=override+' · '+key+(scopeName!=='window'?' · '+scopeName:'')+' · '+type+' · '+extensionSettingTargetLabel(row.dataset.extSettingTarget);
-          const nextTagList=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,
+          const nextTagList=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,experimentMeta,scopedValues,
             ['language-default',String(item.language||'').toLowerCase()]);
           row.dataset.extSettingTags=nextTagList.filter(Boolean).join('\n');
           row.dataset.extSettingSearch=[
@@ -15033,7 +15095,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
           updateExtensionSettingRowValueMetadata(row,nextValue,defaultValue,type);
           if(enumHelp)renderExtensionSettingEnumDescription(enumHelp,schema,input);
           markExtensionSettingRow(row,extensionSettingHasTargetValue(scopedValues,row.dataset.extSettingTarget));
-          row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,
+          row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,experimentMeta,scopedValues,
             ['language-default',String(item.language||'').toLowerCase()]).join('\n');
           row.dataset.extSettingSearch=[
             displayName,extId,override,item.language,
@@ -15064,7 +15126,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
           const savedValue=extensionSettingValueForTarget(scopedValues,row.dataset.extSettingTarget,nextValue);
           updateExtensionSettingRowValueMetadata(row,savedValue,defaultValue,type);
           markExtensionSettingRow(row,extensionSettingHasTargetValue(scopedValues,row.dataset.extSettingTarget));
-          row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,
+          row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,experimentMeta,scopedValues,
             ['language-default',String(item.language||'').toLowerCase()]).join('\n');
           row.dataset.extSettingSearch=[
             displayName,extId,override,item.language,
@@ -15146,6 +15208,7 @@ async function renderExtensionSettings(){
   const sepTarget=document.createElement('div');sepTarget.className='sep';filterMenu.appendChild(sepTarget);
   addFilterAction('Online services','@tag:usesOnlineServices');
   addFilterAction('Policy','@policy');
+  addFilterAction('Experiment','@experiment');
   addFilterAction('Sync','@sync');
   const sep2=document.createElement('div');sep2.className='sep';filterMenu.appendChild(sep2);
   addFilterAction('Stable','@stable',{exclude:['@tag:preview','@tag:experimental']});
@@ -15284,6 +15347,7 @@ async function renderExtensionSettings(){
       const syncMeta=extensionSettingSyncMetadata(schema);
       const defaultOverrideMeta=extensionSettingDefaultOverrideMetadata(schema);
       const policyMeta=extensionSettingPolicyMetadata(schema);
+      const experimentMeta=extensionSettingExperimentMetadata(schema,key);
       const defaultSource=extensionSettingDefaultSourceText(schema,displayName||extId);
       const schemaSummary=extensionSettingSchemaSummary(schema,type);
       const shortKey=key.split('.').pop()||key;
@@ -15305,6 +15369,7 @@ async function renderExtensionSettings(){
       row.dataset.extSettingFeature=[displayName,title,configId,sectionDescription].join(' ').toLowerCase();
       row.dataset.extSettingLanguage='';
       row.dataset.extSettingPolicy=policyMeta.filterText||policyMeta.name.toLowerCase();
+      row.dataset.extSettingExperiment=experimentMeta.filterText||experimentMeta.name.toLowerCase();
       row.dataset.extSettingHidden=isHiddenSetting?'1':'0';
       updateExtensionSettingRowValueMetadata(row,currentVal,defaultVal,type);
       if(!workspaceWritable)row.classList.add('scope-readonly');
@@ -15319,6 +15384,7 @@ async function renderExtensionSettings(){
       appendExtensionSettingSyncBadge(head,syncMeta);
       appendExtensionSettingDefaultOverrideBadge(head,defaultOverrideMeta);
       appendExtensionSettingPolicyBadge(head,policyMeta);
+      appendExtensionSettingExperimentBadge(head,experimentMeta);
       appendExtensionSettingTagBadges(head,schema);
       if(isHiddenSetting){
         const hiddenEl=document.createElement('span');hiddenEl.className='ext-setting-hidden-badge';hiddenEl.textContent=hiddenEditable?'Hidden by Default':'Hidden';
@@ -15346,7 +15412,7 @@ async function renderExtensionSettings(){
           updateExtensionSettingRowValueMetadata(row,nextValue,defaultVal,type);
           if(enumHelp)renderExtensionSettingEnumDescription(enumHelp,schema,input);
           markExtensionSettingRow(row,extensionSettingHasTargetValue(scopedValues,row.dataset.extSettingTarget));
-          row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,
+          row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,experimentMeta,scopedValues,
             hiddenTags).join('\n');
           keyLabel.textContent=key+(scopeName!=='window'?' · '+scopeName:'')+' · '+type+' · '+extensionSettingTargetLabel(row.dataset.extSettingTarget);
           row.dataset.extSettingSearch=(
@@ -15376,7 +15442,7 @@ async function renderExtensionSettings(){
       if(readOnlyReason){const note=document.createElement('div');note.className='ext-setting-note';note.textContent=readOnlyReason;row.appendChild(note)}
       if(description){const desc=document.createElement('div');desc.className='ext-setting-desc';appendExtensionSettingMarkdown(desc,description);row.appendChild(desc)}
       if(deprecation){const dep=document.createElement('div');dep.className='ext-setting-deprecated';appendExtensionSettingMarkdown(dep,deprecation);row.appendChild(dep)}
-      row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,targetName,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,
+      row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,targetName,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,experimentMeta,scopedValues,
         hiddenTags).join('\n');
       row.dataset.extSettingSearch=(
         sectionSearch+' '+extensionSettingSearchText(
@@ -15446,7 +15512,7 @@ async function renderExtensionSettings(){
           setExtensionSettingInputValue(input,schema,type,nextValue);
           updateExtensionSettingRowValueMetadata(row,nextValue,defaultVal,type);
           markExtensionSettingRow(row,extensionSettingHasTargetValue(scopedValues,row.dataset.extSettingTarget));
-          row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,
+          row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,experimentMeta,scopedValues,
             hiddenTags).join('\n');
           row.dataset.extSettingSearch=(
             sectionSearch+' '+extensionSettingSearchText(
@@ -15480,7 +15546,7 @@ async function renderExtensionSettings(){
           const savedValue=extensionSettingValueForTarget(scopedValues,row.dataset.extSettingTarget,nextValue);
           updateExtensionSettingRowValueMetadata(row,savedValue,defaultVal,type);
           markExtensionSettingRow(row,extensionSettingHasTargetValue(scopedValues,row.dataset.extSettingTarget));
-          row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,
+          row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,experimentMeta,scopedValues,
             hiddenTags).join('\n');
           row.dataset.extSettingSearch=(
             sectionSearch+' '+extensionSettingSearchText(
