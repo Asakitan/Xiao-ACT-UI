@@ -6859,6 +6859,15 @@ console.log("command palette quick access helpers ok");
            in app_source
            and "window.pywebview.api.execute_command(a.command,...(a.arguments||[]))"
            in html)
+    _check("extension SCM menus expose VS Code context surfaces",
+           "def list_scm_title_actions(" in app_source
+           and "def list_scm_resource_group_actions(" in app_source
+           and "def list_scm_resource_state_actions(" in app_source
+           and "\"scm/title\"" in app_source
+           and "\"scm/resourceGroup/context\"" in app_source
+           and "\"scm/resourceState/context\"" in app_source
+           and "scmResourceGroupState" in app_source
+           and "scmResourceState" in app_source)
     _check("extension webview panel reveal reaches frontend",
            "type: 'webview_reveal'" in node_ext_host_source
            and "elif msg_type == \"webview_reveal\"" in extension_host_source
@@ -12091,8 +12100,51 @@ def test_app_extension_runtime_support() -> None:
                         "command": "selftest.activity.debugInactiveTitle",
                         "title": "Debug Inactive Title",
                     },
+                    {
+                        "command": "selftest.activity.scmGroupAction",
+                        "title": "SCM Group Action",
+                    },
+                    {
+                        "command": "selftest.activity.scmStateAction",
+                        "title": "SCM State Action",
+                    },
+                    {
+                        "command": "selftest.activity.scmHiddenAction",
+                        "title": "SCM Hidden Action",
+                    },
                 ],
                 "menus": {
+                    "scm/title": [
+                        {
+                            "command": "selftest.activity.scmTitle",
+                            "when": "scmProvider == selftest-activity-scm && scmProviderContext == repository && scmProviderHasRootUri",
+                            "group": "navigation@1",
+                        },
+                    ],
+                    "scm/resourceGroup/context": [
+                        {
+                            "command": "selftest.activity.scmGroupAction",
+                            "when": "scmProvider == selftest-activity-scm && scmResourceGroup == workingTree && scmResourceGroupState == exportable",
+                            "group": "inline@1",
+                        },
+                        {
+                            "command": "selftest.activity.scmHiddenAction",
+                            "when": "scmResourceGroupState == hidden",
+                            "group": "inline@2",
+                        },
+                    ],
+                    "scm/resourceState/context": [
+                        {
+                            "command": "selftest.activity.scmStateAction",
+                            "when": "scmProvider == selftest-activity-scm && scmResourceGroup == workingTree && scmResourceState == diffable && resourceExtname == .txt",
+                            "group": "inline@1",
+                        },
+                        {
+                            "command": "selftest.activity.scmHiddenAction",
+                            "when": "scmResourceState == hidden",
+                            "group": "inline@2",
+                        },
+                    ],
                     "editor/title": [
                         {
                             "command": "selftest.activity.scmTitle",
@@ -12320,6 +12372,14 @@ def test_app_extension_runtime_support() -> None:
             "Selftest Activity SCM",
             activity_api["Uri"].parse("file:///workspace"),
             {"contextValue": "repository"})
+        activity_scm_group = activity_scm.createResourceGroup(
+            "workingTree", "Working Tree")
+        activity_scm_group.contextValue = "exportable"
+        activity_scm_resource = {
+            "resourceUri": "file:///workspace/scm-file.txt",
+            "contextValue": "diffable",
+        }
+        activity_scm_group.resourceStates = [activity_scm_resource]
         activity_api["commands"]["registerCommand"](
             "selftest.activity.refresh",
             lambda *args: activity_command_log.append(
@@ -12332,6 +12392,14 @@ def test_app_extension_runtime_support() -> None:
             "selftest.activity.preconditioned",
             lambda *args: activity_command_log.append(
                 ("preconditioned", list(args))) or {"ready": True, "args": list(args)})
+        activity_api["commands"]["registerCommand"](
+            "selftest.activity.scmGroupAction",
+            lambda *args: activity_command_log.append(
+                ("scmGroup", list(args))) or {"group": True, "args": list(args)})
+        activity_api["commands"]["registerCommand"](
+            "selftest.activity.scmStateAction",
+            lambda *args: activity_command_log.append(
+                ("scmState", list(args))) or {"state": True, "args": list(args)})
         activity_api["window"]["registerTreeDataProvider"](
             "selftest.activity.tree", activity_tree_provider)
         activity_api["window"]["registerTreeDataProvider"](
@@ -12404,6 +12472,44 @@ def test_app_extension_runtime_support() -> None:
         activity_editor_title_commands = [
             action.get("command") for action in activity_editor_title_actions
         ]
+        activity_scm_title_actions = api.list_scm_title_actions({
+            "providerId": "selftest-activity-scm",
+            "rootUri": "file:///workspace",
+            "providerContext": "repository",
+        })
+        activity_scm_group_actions = api.list_scm_resource_group_actions({
+            "providerId": "selftest-activity-scm",
+            "rootUri": "file:///workspace",
+            "providerContext": "repository",
+            "groupId": activity_scm_group.id,
+            "contextValue": activity_scm_group.contextValue,
+        })
+        activity_scm_state_actions = api.list_scm_resource_state_actions({
+            "providerId": "selftest-activity-scm",
+            "rootUri": "file:///workspace",
+            "providerContext": "repository",
+            "groupId": activity_scm_group.id,
+            "groupContextValue": activity_scm_group.contextValue,
+            "resourceUri": activity_scm_resource["resourceUri"],
+            "contextValue": activity_scm_resource["contextValue"],
+        })
+        activity_scm_hidden_group_actions = api.list_scm_resource_group_actions({
+            "providerId": "selftest-activity-scm",
+            "groupId": activity_scm_group.id,
+            "contextValue": "not-exportable",
+        })
+        activity_scm_group_action = next((
+            action for action in activity_scm_group_actions.get("actions", [])
+            if action.get("command") == "selftest.activity.scmGroupAction"), {})
+        activity_scm_state_action = next((
+            action for action in activity_scm_state_actions.get("actions", [])
+            if action.get("command") == "selftest.activity.scmStateAction"), {})
+        activity_scm_group_result = api.execute_command(
+            activity_scm_group_action.get("command", ""),
+            *activity_scm_group_action.get("arguments", []))
+        activity_scm_state_result = api.execute_command(
+            activity_scm_state_action.get("command", ""),
+            *activity_scm_state_action.get("arguments", []))
         _check("activity bar containers include runtime extension views",
                activity_items.get("selftest.activity", {}).get("view_count") == 2
                and activity_views.get("selftest.activity.tree", {}).get("runtimeState", {}).get("kind") == "treeView"
@@ -12415,6 +12521,46 @@ def test_app_extension_runtime_support() -> None:
                in activity_editor_title_commands
                and "selftest.activity.debugInactiveTitle"
                in activity_editor_title_commands)
+        _check("SCM title actions honor provider context",
+               [action.get("command") for action in
+                activity_scm_title_actions.get("actions", [])]
+               == ["selftest.activity.scmTitle"]
+               and activity_scm_title_actions.get("context", {}).get(
+                   "scmProvider") == "selftest-activity-scm"
+               and activity_scm_title_actions.get("context", {}).get(
+                   "scmProviderContext") == "repository"
+               and activity_scm_title_actions.get("context", {}).get(
+                   "scmProviderHasRootUri") == "true")
+        _check("SCM resource group actions honor group id and state",
+               activity_scm_group_action.get("command")
+               == "selftest.activity.scmGroupAction"
+               and activity_scm_group_action.get("inline") is True
+               and activity_scm_group_actions.get("context", {}).get(
+                   "scmResourceGroup") == "workingTree"
+               and activity_scm_group_actions.get("context", {}).get(
+                   "scmResourceGroupState") == "exportable")
+        _check("SCM resource state actions honor resource context",
+               activity_scm_state_action.get("command")
+               == "selftest.activity.scmStateAction"
+               and activity_scm_state_actions.get("context", {}).get(
+                   "scmResourceState") == "diffable"
+               and activity_scm_state_actions.get("context", {}).get(
+                   "resourceExtname") == ".txt")
+        _check("SCM context menus filter hidden group and state actions",
+               "selftest.activity.scmHiddenAction" not in [
+                   action.get("command") for action in
+                   activity_scm_group_actions.get("actions", [])
+               ]
+               and activity_scm_hidden_group_actions.get("actions") == [])
+        _check("SCM context menu actions forward default context arguments",
+               activity_scm_group_result.get("group") is True
+               and activity_scm_state_result.get("state") is True
+               and activity_scm_group_result.get("args", [{}])[0].get(
+                   "scmResourceGroupState") == "exportable"
+               and activity_scm_state_result.get("args", [{}])[0].get(
+                   "scmResourceState") == "diffable"
+               and activity_command_log[-2][0] == "scmGroup"
+               and activity_command_log[-1][0] == "scmState")
         all_view_containers = api.list_extension_view_containers().get("items", [])
         panel_containers = api.list_extension_view_containers("panel").get("items", [])
         secondary_containers = api.list_extension_view_containers(

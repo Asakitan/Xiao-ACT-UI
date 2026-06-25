@@ -13236,6 +13236,119 @@ class AIEditorAPI:
                     dict(menu_context), ensure_ascii=False, default=str))]
         return {"actions": actions, "context": menu_context}
 
+    def _extension_scm_menu_context(
+            self,
+            context: Optional[Dict[str, Any]] = None,
+            scope: str = "title") -> Dict[str, str]:
+        raw_context = context if isinstance(context, dict) else {}
+        menu_context = self._extension_runtime_when_context()
+        for key, value in raw_context.items():
+            if value is None:
+                continue
+            text = self._normalize_when_context_value(value)
+            if text:
+                menu_context[str(key)] = text
+        provider = (
+            raw_context.get("scmProvider")
+            or raw_context.get("providerId")
+            or raw_context.get("sourceControlId"))
+        if provider:
+            menu_context["scmProvider"] = str(provider)
+        root_uri = (
+            raw_context.get("scmProviderRootUri")
+            or raw_context.get("rootUri"))
+        if root_uri:
+            menu_context["scmProviderRootUri"] = str(root_uri)
+            menu_context["scmProviderHasRootUri"] = "true"
+        provider_context = (
+            raw_context.get("scmProviderContext")
+            or raw_context.get("providerContext")
+            or (raw_context.get("contextValue") if scope == "title" else None))
+        if provider_context:
+            menu_context["scmProviderContext"] = str(provider_context)
+        group_id = (
+            raw_context.get("scmResourceGroup")
+            or raw_context.get("resourceGroup")
+            or raw_context.get("groupId"))
+        if group_id:
+            menu_context["scmResourceGroup"] = str(group_id)
+        group_state = (
+            raw_context.get("scmResourceGroupState")
+            or raw_context.get("resourceGroupState")
+            or raw_context.get("groupContextValue")
+            or raw_context.get("groupContext")
+            or (raw_context.get("contextValue")
+                if scope == "resourceGroup" else None))
+        if group_state:
+            menu_context["scmResourceGroupState"] = str(group_state)
+        resource_state = (
+            raw_context.get("scmResourceState")
+            or raw_context.get("resourceState")
+            or raw_context.get("resourceContextValue")
+            or raw_context.get("resourceContext")
+            or (raw_context.get("contextValue")
+                if scope == "resourceState" else None))
+        if resource_state:
+            menu_context["scmResourceState"] = str(resource_state)
+        resource = (
+            raw_context.get("resourceUri")
+            or raw_context.get("resource")
+            or raw_context.get("uri")
+            or raw_context.get("path")
+            or raw_context.get("filePath")
+            or "")
+        menu_context.update(self._extension_resource_context(resource))
+        return menu_context
+
+    def _extension_context_argument_actions(
+            self,
+            menu_id: str,
+            context: Dict[str, str]) -> List[Dict[str, Any]]:
+        actions = self._extension_menu_actions(menu_id, context)
+        for action in actions:
+            if (isinstance(action, dict)
+                    and not action.get("explicitArguments")):
+                action["arguments"] = [json.loads(json.dumps(
+                    dict(context), ensure_ascii=False, default=str))]
+        return actions
+
+    def list_scm_title_actions(
+            self, context: Optional[Dict[str, Any]] = None) -> Dict:
+        """Return VS Code-style contributes.menus["scm/title"] actions."""
+        self._ensure_engine()
+        menu_context = self._extension_scm_menu_context(context, "title")
+        try:
+            actions = self._extension_menu_actions("scm/title", menu_context)
+        except Exception:
+            actions = []
+        return {"actions": actions, "context": menu_context}
+
+    def list_scm_resource_group_actions(
+            self, context: Optional[Dict[str, Any]] = None) -> Dict:
+        """Return contributes.menus["scm/resourceGroup/context"] actions."""
+        self._ensure_engine()
+        menu_context = self._extension_scm_menu_context(
+            context, "resourceGroup")
+        try:
+            actions = self._extension_context_argument_actions(
+                "scm/resourceGroup/context", menu_context)
+        except Exception:
+            actions = []
+        return {"actions": actions, "context": menu_context}
+
+    def list_scm_resource_state_actions(
+            self, context: Optional[Dict[str, Any]] = None) -> Dict:
+        """Return contributes.menus["scm/resourceState/context"] actions."""
+        self._ensure_engine()
+        menu_context = self._extension_scm_menu_context(
+            context, "resourceState")
+        try:
+            actions = self._extension_context_argument_actions(
+                "scm/resourceState/context", menu_context)
+        except Exception:
+            actions = []
+        return {"actions": actions, "context": menu_context}
+
     # ── Extension marketplace API ──
 
     def search_extensions(self, query: str = "ai chat model", page: int = 1) -> Dict:
