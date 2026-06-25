@@ -5844,6 +5844,10 @@ function _quickPickItemIsSeparator(item) {
     );
 }
 
+function _quickPickItemIsPickable(item) {
+    return item !== undefined && !_quickPickItemIsSeparator(item);
+}
+
 async function _windowShowQuickPick(itemsOrPromise, options = {}, token = undefined) {
     const rawItems = await Promise.resolve(itemsOrPromise);
     const items = Array.isArray(rawItems) ? Array.from(rawItems) : [];
@@ -6113,8 +6117,9 @@ class QuickPickInput extends QuickInputBase {
         this._buttons = [];
         this._items = [];
         this._canSelectMany = false;
-        this._matchOnDescription = false;
-        this._matchOnDetail = false;
+        this._matchOnDescription = true;
+        this._matchOnDetail = true;
+        this._sortByLabel = true;
         this._keepScrollPosition = false;
         this._activeItems = [];
         this._selectedItems = [];
@@ -6162,6 +6167,8 @@ class QuickPickInput extends QuickInputBase {
     set items(value) {
         this._assertAlive();
         this._items = Array.isArray(value) ? Array.from(value) : [];
+        this._activeItems = this._filterPickableItems(this._activeItems);
+        this._selectedItems = this._filterPickableItems(this._selectedItems);
         this._send('update', { changed: 'items' });
     }
     get canSelectMany() { this._assertAlive(); return this._canSelectMany; }
@@ -6182,6 +6189,12 @@ class QuickPickInput extends QuickInputBase {
         this._matchOnDetail = !!value;
         this._send('update', { changed: 'matchOnDetail' });
     }
+    get sortByLabel() { this._assertAlive(); return this._sortByLabel; }
+    set sortByLabel(value) {
+        this._assertAlive();
+        this._sortByLabel = value !== false;
+        this._send('update', { changed: 'sortByLabel' });
+    }
     get keepScrollPosition() { this._assertAlive(); return this._keepScrollPosition; }
     set keepScrollPosition(value) {
         this._assertAlive();
@@ -6191,14 +6204,29 @@ class QuickPickInput extends QuickInputBase {
     get activeItems() { this._assertAlive(); return this._activeItems; }
     set activeItems(value) {
         this._assertAlive();
-        this._activeItems = Array.isArray(value) ? Array.from(value) : [];
+        this._activeItems = this._filterPickableItems(value);
         this._onDidChangeActiveEmitter.fire(this._activeItems);
         this._send('changeActive', { activeItems: this._activeItems });
     }
     get selectedItems() { this._assertAlive(); return this._selectedItems; }
     set selectedItems(value) {
         this._assertAlive();
-        this._selectedItems = Array.isArray(value) ? Array.from(value) : [];
+        this._selectedItems = this._filterPickableItems(value);
+        this._onDidChangeSelectionEmitter.fire(this._selectedItems);
+        this._send('changeSelection', { selectedItems: this._selectedItems });
+    }
+    _filterPickableItems(value) {
+        const source = Array.isArray(value) ? value : [];
+        const current = new Set(this._items.filter(_quickPickItemIsPickable));
+        return source.filter(item => current.has(item));
+    }
+    _setActiveItemsFromHost(value) {
+        this._activeItems = this._filterPickableItems(value);
+        this._onDidChangeActiveEmitter.fire(this._activeItems);
+        this._send('changeActive', { activeItems: this._activeItems });
+    }
+    _setSelectedItemsFromHost(value) {
+        this._selectedItems = this._filterPickableItems(value);
         this._onDidChangeSelectionEmitter.fire(this._selectedItems);
         this._send('changeSelection', { selectedItems: this._selectedItems });
     }
@@ -6207,13 +6235,19 @@ class QuickPickInput extends QuickInputBase {
         this._onDidAcceptEmitter.fire();
         this._send('accept');
     }
-    _triggerButton(button) {
+    _triggerButton(button, checked = undefined) {
         this._assertAlive();
+        if (checked !== undefined && button && button.toggle) {
+            button.toggle.checked = !!checked;
+        }
         this._onDidTriggerButtonEmitter.fire(button);
         this._send('triggerButton', { button });
     }
-    _triggerItemButton(item, button) {
+    _triggerItemButton(item, button, checked = undefined) {
         this._assertAlive();
+        if (checked !== undefined && button && button.toggle) {
+            button.toggle.checked = !!checked;
+        }
         const event = { item, button };
         this._onDidTriggerItemButtonEmitter.fire(event);
         this._send('triggerItemButton', event);
@@ -6239,6 +6273,7 @@ class QuickPickInput extends QuickInputBase {
             canSelectMany: this._canSelectMany,
             matchOnDescription: this._matchOnDescription,
             matchOnDetail: this._matchOnDetail,
+            sortByLabel: this._sortByLabel,
             keepScrollPosition: this._keepScrollPosition,
             activeItems: this._activeItems,
             selectedItems: this._selectedItems,
@@ -6372,13 +6407,15 @@ function handleQuickInputAction(msg) {
         if (action === 'changeValue') {
             input.value = String(msg.value ?? '');
         } else if (action === 'changeActive' && input instanceof QuickPickInput) {
-            input.activeItems = _quickInputItemsForIndices(input, msg.itemIndices || msg.indices);
+            input._setActiveItemsFromHost(
+                _quickInputItemsForIndices(input, msg.itemIndices || msg.indices));
         } else if (action === 'changeSelection' && input instanceof QuickPickInput) {
-            input.selectedItems = _quickInputItemsForIndices(input, msg.itemIndices || msg.indices);
+            input._setSelectedItemsFromHost(
+                _quickInputItemsForIndices(input, msg.itemIndices || msg.indices));
         } else if (action === 'triggerButton') {
             const button = _quickInputButtonForIndex(input, msg.buttonIndex);
             if (button !== undefined && typeof input._triggerButton === 'function') {
-                input._triggerButton(button);
+                input._triggerButton(button, msg.checked);
             }
         } else if (action === 'triggerItemButton' && input instanceof QuickPickInput) {
             const item = _quickInputItemForIndex(input, msg.itemIndex);
@@ -6386,7 +6423,7 @@ function handleQuickInputAction(msg) {
             const buttonIndex = Number(msg.buttonIndex);
             const button = Number.isInteger(buttonIndex) ? buttons[buttonIndex] : undefined;
             if (item !== undefined && button !== undefined) {
-                input._triggerItemButton(item, button);
+                input._triggerItemButton(item, button, msg.checked);
             }
         } else if (action === 'accept' && typeof input._accept === 'function') {
             input._accept();

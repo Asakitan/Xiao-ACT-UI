@@ -2534,10 +2534,31 @@ function quickInputSelectedIndices(state){
     .filter(index=>index>=0);
 }
 function quickInputSelectableIndices(state){
-  return (Array.isArray(state.items)?state.items:[])
-    .map((item,index)=>((item&&typeof item==='object'&&Number(item.kind)===1)
-      ||!quickInputItemMatchesFilter(item,state))?-1:index)
+  return quickInputOrderedEntries(state)
+    .map(entry=>((entry.item&&typeof entry.item==='object'&&Number(entry.item.kind)===1)
+      ||!quickInputItemMatchesFilter(entry.item,state))?-1:entry.index)
     .filter(index=>index>=0);
+}
+function quickInputOrderedEntries(state){
+  const items=Array.isArray(state.items)?state.items:[];
+  const entries=[];
+  items.forEach((item,index)=>entries.push({item,index,separator:!!(item&&typeof item==='object'&&Number(item.kind)===1)}));
+  if(state&&state.sortByLabel===false)return entries;
+  const sorted=[],pending=[];
+  function flush(){
+    pending.sort((a,b)=>{
+      const ad=quickInputDisplayItem(a.item),bd=quickInputDisplayItem(b.item);
+      return String(ad.label||'').localeCompare(String(bd.label||''),undefined,{sensitivity:'base'})
+        ||String(ad.description||'').localeCompare(String(bd.description||''),undefined,{sensitivity:'base'});
+    });
+    sorted.push(...pending.splice(0,pending.length));
+  }
+  entries.forEach(entry=>{
+    if(entry.separator){flush();sorted.push(entry)}
+    else pending.push(entry);
+  });
+  flush();
+  return sorted;
 }
 function quickInputActiveIndex(state){
   const keys=quickInputSelectedKeySet(state.activeItems);
@@ -2597,7 +2618,11 @@ function quickInputRenderButtons(box,state){
     if(button&&button.toggle&&button.toggle.checked)btn.classList.add('checked');
     btn.title=quickInputButtonTitle(button);btn.setAttribute('aria-label',btn.title||'Quick input action');
     btn.disabled=state.enabled===false;btn.innerHTML=quickInputButtonGlyph(button);
-    btn.onclick=e=>{e.preventDefault();e.stopPropagation();if(btn.disabled)return;quickInputAction(state.id,'triggerButton',{buttonIndex:index})};
+    btn.onclick=e=>{
+      e.preventDefault();e.stopPropagation();if(btn.disabled)return;
+      const checked=button&&button.toggle?!(button.toggle&&button.toggle.checked):undefined;
+      quickInputAction(state.id,'triggerButton',{buttonIndex:index,checked});
+    };
     holder.appendChild(btn);
   });
 }
@@ -2618,7 +2643,8 @@ function quickInputRenderItems(list,state,input){
     const sep=document.createElement('div');sep.className='quick-input-separator';sep.textContent=String(item&&item.label||'');
     list.appendChild(sep);
   }
-  items.forEach((item,index)=>{
+  quickInputOrderedEntries(state).forEach(entry=>{
+    const item=entry.item,index=entry.index;
     if(item&&typeof item==='object'&&Number(item.kind)===1){
       if(hasFilter)pendingSeparator=item;else appendSeparator(item);
       return;
@@ -2643,8 +2669,13 @@ function quickInputRenderItems(list,state,input){
     const btns=document.createElement('div');btns.className='quick-input-btns';
     (Array.isArray(item&&item.buttons)?item.buttons:[]).forEach((button,buttonIndex)=>{
       const btn=document.createElement('button');btn.type='button';btn.className='quick-input-btn';btn.title=quickInputButtonTitle(button);
+      if(button&&button.toggle&&button.toggle.checked)btn.classList.add('checked');
       btn.setAttribute('aria-label',btn.title||'Quick input item action');btn.disabled=state.enabled===false;btn.innerHTML=quickInputButtonGlyph(button);
-      btn.onclick=e=>{e.preventDefault();e.stopPropagation();if(btn.disabled)return;quickInputAction(state.id,'triggerItemButton',{itemIndex:index,buttonIndex})};
+      btn.onclick=e=>{
+        e.preventDefault();e.stopPropagation();if(btn.disabled)return;
+        const checked=button&&button.toggle?!(button.toggle&&button.toggle.checked):undefined;
+        quickInputAction(state.id,'triggerItemButton',{itemIndex:index,buttonIndex,checked});
+      };
       btns.appendChild(btn);
     });
     row.onclick=()=>{
@@ -2759,6 +2790,13 @@ function renderQuickInputState(state){
   }
   if(state.visible){activeQuickInputId=state.id;if(input&&document.activeElement!==input)setTimeout(()=>input.focus(),0)}
 }
+document.addEventListener('mousedown',e=>{
+  if(!activeQuickInputId)return;
+  const view=quickInputViews[activeQuickInputId];
+  if(!view||!view.visible||view.ignoreFocusOut)return;
+  if(e.target&&e.target.closest&&e.target.closest('.quick-input'))return;
+  quickInputAction(activeQuickInputId,'hide',{reason:'focusOut'});
+});
 function renderQuickInputEvent(data){
   const id=String(data&&data.id||'');if(!id)return;
   if(data.event==='dispose'){quickInputRemove(id);return}

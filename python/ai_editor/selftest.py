@@ -5751,6 +5751,7 @@ console.log("extension setting schema helpers ok");
             "quickInputItemMatchesFilter",
             "quickInputSelectedIndices",
             "quickInputSelectableIndices",
+            "quickInputOrderedEntries",
             "quickInputActiveIndex",
         ]
         quick_input_js = "\n".join(
@@ -6111,9 +6112,22 @@ console.log("quick input filter helpers ok");
            and "handler(dict(msg))" in extension_host_source
            and "def send_quick_input_action(" in extension_host_source
            and "\"type\": \"quick_input_action\"" in extension_host_source
+           and "function renderQuickInputEvent(data)" in html
+           and "function renderQuickInputState(state)" in html
+           and "function quickInputOrderedEntries(state)" in html
+           and "quickInputAction(state.id,'triggerButton',{buttonIndex:index,checked})"
+           in html
+           and "quickInputAction(state.id,'triggerItemButton',{itemIndex:index,buttonIndex,checked})"
+           in html
+           and "if(!view||!view.visible||view.ignoreFocusOut)return;" in html
            and "const _quickInputs = new Map()" in node_ext_host_source
            and "_quickInputs.set(this._id, this)" in node_ext_host_source
            and "_quickInputs.delete(this._id)" in node_ext_host_source
+           and "function _quickPickItemIsPickable(item)" in node_ext_host_source
+           and "this._sortByLabel = true" in node_ext_host_source
+           and "get sortByLabel()" in node_ext_host_source
+           and "this._activeItems = this._filterPickableItems(value)"
+           in node_ext_host_source
            and "async function _windowShowQuickPick(itemsOrPromise, options = {}, token = undefined)"
            in node_ext_host_source
            and "const input = new QuickPickInput()" in node_ext_host_source
@@ -6126,7 +6140,9 @@ console.log("quick input filter helpers ok");
            and "function handleQuickInputAction(msg)" in node_ext_host_source
            and "case 'quick_input_action':" in node_ext_host_source
            and "input.value = String(msg.value ?? '')" in node_ext_host_source
-           and "input._triggerItemButton(item, button)" in node_ext_host_source
+           and "input._triggerButton(button, msg.checked)" in node_ext_host_source
+           and "input._triggerItemButton(item, button, msg.checked)"
+           in node_ext_host_source
            and "input._accept()" in node_ext_host_source
            and "input.hide()" in node_ext_host_source)
     _check("extension OutputChannel lifecycle round-trips to UI bridge",
@@ -13508,6 +13524,30 @@ async function activate(context) {
     inputBox.dispose();
     let inputBoxDisposedThrows = false;
     try { inputBox.value = 'after-dispose'; } catch (_err) { inputBoxDisposedThrows = true; }
+    const parityQuickPick = vscode.window.createQuickPick();
+    const staleItem = { label: 'stale' };
+    const separatorItem = { label: 'Parity Group', kind: vscode.QuickPickItemKind.Separator };
+    const keepItem = { label: 'keep' };
+    const dropItem = { label: 'drop' };
+    parityQuickPick.items = [separatorItem, keepItem, dropItem];
+    parityQuickPick.activeItems = [separatorItem, keepItem, staleItem];
+    parityQuickPick.selectedItems = [separatorItem, keepItem, dropItem, staleItem];
+    const filteredActiveBefore = parityQuickPick.activeItems.map(item => item.label);
+    const filteredSelectedBefore = parityQuickPick.selectedItems.map(item => item.label);
+    parityQuickPick.items = [separatorItem, keepItem];
+    const filteredActiveAfterItems = parityQuickPick.activeItems.map(item => item.label);
+    const filteredSelectedAfterItems = parityQuickPick.selectedItems.map(item => item.label);
+    const sortByLabelDefault = parityQuickPick.sortByLabel;
+    parityQuickPick.sortByLabel = false;
+    const sortByLabelDisabled = parityQuickPick.sortByLabel;
+    const titleToggle = { tooltip: 'Title Toggle', toggle: { checked: false } };
+    const inlineToggle = { tooltip: 'Inline Toggle', toggle: { checked: false } };
+    const toggleItem = { label: 'toggle-row', buttons: [inlineToggle] };
+    parityQuickPick.buttons = [titleToggle];
+    parityQuickPick.items = [toggleItem];
+    parityQuickPick._triggerButton(titleToggle, true);
+    parityQuickPick._triggerItemButton(toggleItem, inlineToggle, true);
+    parityQuickPick.dispose();
     return {
       stringPick,
       objectPick: objectPick && objectPick.label,
@@ -13543,6 +13583,16 @@ async function activate(context) {
         validationSeverity: vscode.InputBoxValidationSeverity.Warning,
         events: inputBoxEvents,
         disposedThrows: inputBoxDisposedThrows,
+      },
+      quickPickParity: {
+        filteredActiveBefore,
+        filteredSelectedBefore,
+        filteredActiveAfterItems,
+        filteredSelectedAfterItems,
+        sortByLabelDefault,
+        sortByLabelDisabled,
+        titleToggleChecked: titleToggle.toggle.checked,
+        inlineToggleChecked: inlineToggle.toggle.checked,
       },
     };
   });
@@ -17692,6 +17742,9 @@ module.exports = { activate, deactivate };
                 node_input_box_object = (
                     node_quick_input_probe.get("inputBoxObject", {})
                     if isinstance(node_quick_input_probe, dict) else {})
+                node_quick_pick_parity = (
+                    node_quick_input_probe.get("quickPickParity", {})
+                    if isinstance(node_quick_input_probe, dict) else {})
                 node_dialog_events = list(node_ui_bridge.window_dialogs)
                 expected_open_dialog_paths = [
                     str(item).replace("\\", "/")
@@ -17763,6 +17816,22 @@ module.exports = { activate, deactivate };
                        and "accept" in node_input_box_object.get("events", [])
                        and "hide" in node_input_box_object.get("events", [])
                        and node_input_box_object.get("disposedThrows") is True
+                       and node_quick_pick_parity.get("filteredActiveBefore")
+                       == ["keep"]
+                       and node_quick_pick_parity.get("filteredSelectedBefore")
+                       == ["keep", "drop"]
+                       and node_quick_pick_parity.get(
+                           "filteredActiveAfterItems") == ["keep"]
+                       and node_quick_pick_parity.get(
+                           "filteredSelectedAfterItems") == ["keep"]
+                       and node_quick_pick_parity.get(
+                           "sortByLabelDefault") is True
+                       and node_quick_pick_parity.get(
+                           "sortByLabelDisabled") is False
+                       and node_quick_pick_parity.get(
+                           "titleToggleChecked") is True
+                       and node_quick_pick_parity.get(
+                           "inlineToggleChecked") is True
                        and any(
                            item.get("event") == "show"
                            and item.get("kind") == "quickPick"
