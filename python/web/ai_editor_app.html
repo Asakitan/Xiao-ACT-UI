@@ -781,12 +781,13 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-reference-card pre { margin:5px 0 0; white-space:pre-wrap; max-height:96px; overflow:hidden;
   color:var(--fg-code); font:11px/1.4 var(--mono); }
 .chat-response-references { margin-top:9px; display:flex; flex-direction:column; gap:5px; }
+.chat-response-summary { color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; letter-spacing:.4px; }
 .chat-response-reference-list { display:flex; flex-wrap:wrap; gap:5px; }
-.chat-response-ref,.chat-change-card { border:1px solid var(--border); border-radius:6px;
+.chat-response-ref,.chat-change-card,.chat-inline-action { border:1px solid var(--border); border-radius:6px;
   background:var(--bg3); color:var(--fg); padding:4px 7px; font-size:11px;
   display:inline-flex; align-items:center; gap:6px; max-width:100%; cursor:pointer; }
 .chat-response-ref:hover,.chat-change-card:hover,
-.chat-response-ref:focus,.chat-change-card:focus { border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
+.chat-inline-action:hover,.chat-response-ref:focus,.chat-change-card:focus,.chat-inline-action:focus { border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
 .chat-response-ref .ref-path,.chat-change-card .change-path { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-response-ref .ref-line,.chat-response-ref .ref-col,.chat-change-card .change-kind { color:var(--fg-dim); font:10px var(--mono); }
 .chat-response-ref .ref-status { color:var(--fg-warning); font:10px var(--mono); text-transform:uppercase; }
@@ -796,11 +797,17 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-response-ref .ref-diff { color:var(--fg-success); font:10px var(--mono); }
 .chat-response-ref.anchor { border-color:color-mix(in srgb, var(--border-focus) 45%, var(--border)); }
 .chat-change-card.has-diff .change-kind { color:var(--fg-accent); }
+.chat-inline-actions { display:flex; flex-wrap:wrap; gap:5px; }
+.chat-inline-action { color:var(--fg-dim); background:transparent; }
+.chat-inline-action.primary { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 45%,var(--border)); }
+.chat-inline-action:disabled { opacity:.5; cursor:default; }
 .chat-change-set { margin-top:7px; display:flex; flex-direction:column; gap:5px; }
 .chat-change-card { justify-content:flex-start; width:fit-content; }
 .chat-file-tree { border:1px solid var(--border); border-radius:6px; background:var(--bg3);
   padding:5px 6px; display:flex; flex-direction:column; gap:2px; max-width:100%; }
-.chat-file-tree-title { color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; padding:1px 2px 3px; }
+.chat-file-tree-head { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:1px 2px 3px; }
+.chat-file-tree-title { min-width:0; color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chat-file-tree-actions { display:flex; gap:4px; flex:0 0 auto; }
 .chat-file-tree-row { min-height:20px; display:flex; align-items:center; gap:5px; border:0; background:transparent;
   color:var(--fg); text-align:left; font:11px var(--sans); border-radius:4px; padding:1px 5px; max-width:100%; }
 .chat-file-tree-row.openable { cursor:pointer; }
@@ -3944,15 +3951,25 @@ function normalizeChatNativeReference(raw,kindOverride){
   if(!raw)return null;
   const rec=typeof raw==='object'?raw:{reference:raw};
   const partKind=chatResponsePartKind(rec);
-  const source=rec.reference!==undefined?rec.reference:(rec.value!==undefined?rec.value:rec);
+  let source=rec;
+  if(rec.reference!==undefined)source=rec.reference;
+  else if(rec.value!==undefined)source=rec.value;
+  else if(rec.uri!==undefined)source=rec.uri;
+  else if(rec.target!==undefined)source=rec.target;
+  else if(rec.targetUri!==undefined)source=rec.targetUri;
+  else if(rec.resourceUri!==undefined)source=rec.resourceUri;
+  else if(rec.location!==undefined)source=rec.location;
+  else if(rec.path!==undefined)source=rec.path;
   const sourceObj=source&&typeof source==='object'?source:null;
-  const pathRaw=chatUriPath(sourceObj&&sourceObj.value!==undefined?sourceObj.value:source);
+  const pathRaw=chatUriPath(sourceObj&&sourceObj.uri!==undefined?sourceObj.uri:(sourceObj&&sourceObj.value!==undefined?sourceObj.value:source));
   const range=chatReferenceRange(sourceObj||rec);
   const loc=chatReferenceLocationFromPath(pathRaw,range.line,range.column,range.endLine,range.endColumn);
   const path=loc.path;
   const variable=sourceObj&&sourceObj.variableName?String(sourceObj.variableName):'';
   const options=rec.options||{};
   const statusSource=options.status||rec.status;
+  const edits=rec.edits||rec.textEdits||rec.text_edits||rec.edit||options.edits||[];
+  const normalizedEdits=Array.isArray(edits)?edits:(edits?[edits]:[]);
   const diffMeta=options.diffMeta||rec.diffMeta||rec.diff||rec.stats||null;
   const status=chatReferenceStatusLabel(statusSource);
   const statusKind=chatReferenceStatusKind(statusSource);
@@ -3966,8 +3983,9 @@ function normalizeChatNativeReference(raw,kindOverride){
     modifiedUri:options.modifiedUri||rec.modifiedUri||rec.modified||rec.afterUri||rec.after||path,
     originalContent:options.originalContent||rec.originalContent||rec.beforeContent||rec.oldText||'',
     modifiedContent:options.modifiedContent||rec.modifiedContent||rec.afterContent||rec.newText||'',
+    edits:normalizedEdits,
     language:options.language||rec.language||'',
-    openable:(!!path&&isLikelyChatFileReferencePath(path))||!!(options.originalContent||rec.originalContent||rec.beforeContent)
+    openable:(!!path&&isLikelyChatFileReferencePath(path))||!!(options.originalContent||rec.originalContent||rec.beforeContent)||!!normalizedEdits.length
   };
 }
 function normalizeChatUsedContext(payload){
@@ -4078,7 +4096,40 @@ function chatReferenceLocationLabel(ref){
   return label;
 }
 function chatReferenceHasDiff(ref){
-  return !!(ref&&(ref.kind==='textEdit'||ref.diffMeta||ref.originalUri||ref.modifiedUri||ref.originalContent||ref.modifiedContent));
+  return !!(ref&&(ref.kind==='textEdit'||(Array.isArray(ref.edits)&&ref.edits.length)||ref.diffMeta||ref.originalUri||ref.modifiedUri||ref.originalContent||ref.modifiedContent));
+}
+function chatTextEditEntries(ref){
+  if(!ref)return [];
+  const uri=ref.modifiedUri||ref.uri||ref.path||ref.target||'';
+  const edits=Array.isArray(ref.edits)?ref.edits:(ref.edits?[ref.edits]:[]);
+  return edits.map(edit=>{
+    if(!edit||typeof edit!=='object')return null;
+    let range=edit.range;
+    if(!range&&edit.position)range={start:edit.position,end:edit.position};
+    if(!range)return null;
+    return {
+      uri:edit.uri||edit.targetUri||uri,
+      range,
+      newText:String(edit.newText??edit.text??'')
+    };
+  }).filter(Boolean);
+}
+function chatTextEditCount(ref){return chatTextEditEntries(ref).length}
+function chatApplyTextEditsToContent(content,edits){
+  const result=editorApplyTextEditsToValue(String(content||''),edits);
+  return result?result.value:String(content||'');
+}
+function chatTextEditSummary(ref){
+  const summary={edits:[],tabEdits:[],workspaceEdits:[],skipped:0};
+  chatTextEditEntries(ref).forEach(edit=>{
+    const uri=edit.uri||ref.path||'';
+    if(!uri||editorCurrentUriMatches(uri)){summary.edits.push(edit);return}
+    const tab=editorTabForUri(uri);
+    if(tab){summary.tabEdits.push({tabId:tab.id,uri,edit});return}
+    if(editorDocumentUriToPath(uri)||isLikelyChatFileReferencePath(uri)){summary.workspaceEdits.push(edit);return}
+    summary.skipped++;
+  });
+  return summary;
 }
 function chatInlineDiffResource(content,path,label,language){
   return {path:String(path||label||''),name:String(label||path||''),content:String(content||''),language:String(language||'')};
@@ -4096,8 +4147,16 @@ async function openChatReferenceDiff(ref){
   const path=String(ref.path||'');
   const originalUri=String(ref.originalUri||'');
   const modifiedUri=String(ref.modifiedUri||path||'');
-  const originalOpened=await chatOpenReferenceResource(ref,originalUri,'original');
-  const modifiedOpened=await chatOpenReferenceResource(ref,modifiedUri,'modified');
+  const originalOpened=await chatOpenReferenceResource(ref,originalUri||path,'original');
+  let modifiedOpened=await chatOpenReferenceResource(ref,modifiedUri,'modified');
+  const textEdits=chatTextEditEntries(ref);
+  if(originalOpened&&textEdits.length&&!ref.modifiedContent){
+    modifiedOpened=chatInlineDiffResource(
+      chatApplyTextEditsToContent(originalOpened.content,textEdits),
+      modifiedUri||path,
+      'Assistant edits',
+      ref.language||originalOpened.language||'');
+  }
   if(!originalOpened||!modifiedOpened)return false;
   openEditorDiffResult(originalOpened,modifiedOpened,{
     key:'chatdiff:'+String(originalUri||ref.originalContent||'original')+'::'+String(modifiedUri||ref.modifiedContent||path),
@@ -4109,6 +4168,18 @@ async function openChatReferenceDiff(ref){
     language:ref.language||modifiedOpened.language||originalOpened.language||''
   });
   return true;
+}
+async function applyChatTextEditReference(ref){
+  const summary=chatTextEditSummary(ref);
+  const count=(summary.edits.length+summary.tabEdits.length+summary.workspaceEdits.length);
+  if(!count){setStatus('No assistant edits to apply');return}
+  const ok=window.confirm?window.confirm('Apply '+count+' assistant edit'+(count===1?'':'s')+'?'):true;
+  if(!ok)return;
+  _undoPush(true);
+  const applied=await editorApplyWorkspaceEdit(null,summary);
+  const total=(applied.changed?summary.edits.length:0)+(applied.tabApplied||0)+(applied.workspaceApplied||0);
+  if(total)setStatus('Applied assistant edits: '+total+(applied.skipped?' ('+applied.skipped+' skipped)':''));
+  else setStatus('No assistant edits applied'+(applied.skipped?' ('+applied.skipped+' skipped)':''));
 }
 async function openChatResponseReference(path,line){
   const ref=typeof path==='object'?path:{path,line};
@@ -4130,6 +4201,20 @@ async function openChatFileTreePath(path){
   if(!path)return;
   await openWorkspaceFile(path);
 }
+function flattenChatFileTreeNodes(nodes,out){
+  out=out||[];
+  (nodes||[]).forEach(node=>{
+    if(!node)return;
+    out.push(node);
+    if(node.children&&node.children.length)flattenChatFileTreeNodes(node.children,out);
+  });
+  return out;
+}
+async function openFirstChatFileTreeFile(tree){
+  const node=flattenChatFileTreeNodes(tree&&tree.nodes,[]).find(item=>item&&!item.directory&&item.path);
+  if(node)await openChatFileTreePath(node.path);
+  else setStatus('No file in assistant tree');
+}
 function renderChatFileTreeNodes(parent,nodes){
   (nodes||[]).forEach(node=>{
     const row=document.createElement(node.directory?'div':'button');
@@ -4137,6 +4222,7 @@ function renderChatFileTreeNodes(parent,nodes){
     row.style.paddingLeft=(5+node.depth*13)+'px';
     row.setAttribute('role','treeitem');
     row.setAttribute('aria-label',node.path||node.name);
+    row.title=node.path||node.name;
     if(node.directory)row.setAttribute('aria-expanded','true');
     else{row.type='button';row.onclick=()=>openChatFileTreePath(node.path)}
     row.innerHTML='<span class="tree-icon">'+(node.directory?'▾':'·')+'</span><span class="tree-name">'+esc(node.name)+'</span>';
@@ -4148,9 +4234,15 @@ function renderChatFileTrees(wrap,fileTrees){
   if(!fileTrees.length)return;
   fileTrees.forEach(tree=>{
     const box=document.createElement('div');box.className='chat-file-tree';box.setAttribute('role','tree');box.setAttribute('aria-label','Assistant file tree');
+    const head=document.createElement('div');head.className='chat-file-tree-head';
     const title=document.createElement('div');title.className='chat-file-tree-title';
-    title.textContent='File tree'+(tree.base?' · '+tree.base:'')+(tree.count>=120?' · truncated':'');
-    box.appendChild(title);
+    const flat=flattenChatFileTreeNodes(tree.nodes,[]);
+    const fileCount=flat.filter(node=>!node.directory).length,folderCount=flat.length-fileCount;
+    title.textContent='File tree · '+fileCount+' files'+(folderCount?' · '+folderCount+' folders':'')+(tree.base?' · '+tree.base:'')+(tree.count>=120?' · truncated':'');
+    head.appendChild(title);
+    const actions=document.createElement('div');actions.className='chat-file-tree-actions';
+    const openBtn=document.createElement('button');openBtn.type='button';openBtn.className='chat-inline-action primary';openBtn.textContent='Open first';openBtn.title='Open first file in tree';openBtn.onclick=()=>openFirstChatFileTreeFile(tree);actions.appendChild(openBtn);
+    head.appendChild(actions);box.appendChild(head);
     if(tree.nodes.length)renderChatFileTreeNodes(box,tree.nodes);
     else{const empty=document.createElement('div');empty.className='chat-file-tree-empty';empty.textContent='No files';box.appendChild(empty)}
     wrap.appendChild(box);
@@ -4174,6 +4266,14 @@ function renderChatResponseReferences(body,content,payload){
   const changes=[...extractChatChangedFiles(content),...refs.filter(r=>chatReferenceHasDiff(r)||r.isDeletion).map(r=>({...r,kind:r.isDeletion?'deleted':(r.kind==='textEdit'?'textEdit':'modified'),path:r.path,diffMeta:r.diffMeta}))];
   if(!body||(!refs.length&&!changes.length&&!fileTrees.length))return;
   const wrap=document.createElement('div');wrap.className='chat-response-references';wrap.setAttribute('aria-label','Response references');
+  const textEditRefs=refs.filter(ref=>ref&&ref.kind==='textEdit'&&chatTextEditCount(ref));
+  const summary=document.createElement('div');summary.className='chat-response-summary';
+  summary.textContent=[
+    refs.length?refs.length+' refs':'',
+    textEditRefs.length?textEditRefs.reduce((n,ref)=>n+chatTextEditCount(ref),0)+' edits':'',
+    fileTrees.length?fileTrees.length+' trees':''
+  ].filter(Boolean).join(' · ');
+  if(summary.textContent)wrap.appendChild(summary);
   if(usedRefs.length){
     const used=document.createElement('div');used.className='chat-used-context';
     const title=document.createElement('div');title.className='chat-used-context-title';title.textContent='Used context';
@@ -4185,7 +4285,8 @@ function renderChatResponseReferences(body,content,payload){
       const btn=document.createElement('button');btn.type='button';btn.className='chat-response-ref';
       if(ref.kind==='anchor')btn.classList.add('anchor');
       if(!ref.openable)btn.disabled=true;
-      const diff=ref.diffMeta?'<span class="ref-diff">+'+esc(ref.diffMeta.added||0)+' -'+esc(ref.diffMeta.removed||0)+'</span>':'';
+      const editCount=chatTextEditCount(ref);
+      const diff=ref.diffMeta?'<span class="ref-diff">+'+esc(ref.diffMeta.added||0)+' -'+esc(ref.diffMeta.removed||0)+'</span>':(editCount?'<span class="ref-diff">'+editCount+' edit'+(editCount===1?'':'s')+'</span>':'');
       const statusClass=ref.statusKind?' '+esc(ref.statusKind):'';
       const loc=chatReferenceLocationLabel(ref);
       btn.innerHTML='<span class="ref-kind">'+(ref.kind==='used'?'📎':(ref.kind==='anchor'?'🔗':(ref.kind==='textEdit'?'✎':'📄')))+'</span><span class="ref-path">'+esc(ref.label||ref.path)+'</span>'+(loc?'<span class="ref-line">'+esc(loc)+'</span>':'')+(ref.status?'<span class="ref-status'+statusClass+'">'+esc(ref.status)+'</span>':'')+diff;
@@ -4195,12 +4296,21 @@ function renderChatResponseReferences(body,content,payload){
     });
     wrap.appendChild(list);
   }
+  if(textEditRefs.length){
+    const actions=document.createElement('div');actions.className='chat-inline-actions';actions.setAttribute('aria-label','Assistant edit actions');
+    textEditRefs.slice(0,6).forEach(ref=>{
+      const preview=document.createElement('button');preview.type='button';preview.className='chat-inline-action';preview.textContent='Preview '+(ref.label||pathBaseName(ref.path)||'edit');preview.onclick=()=>openChatReferenceDiff(ref);actions.appendChild(preview);
+      const apply=document.createElement('button');apply.type='button';apply.className='chat-inline-action primary';apply.textContent='Apply '+chatTextEditCount(ref)+' edit'+(chatTextEditCount(ref)===1?'':'s');apply.onclick=()=>applyChatTextEditReference(ref);actions.appendChild(apply);
+    });
+    wrap.appendChild(actions);
+  }
   if(changes.length){
     const set=document.createElement('div');set.className='chat-change-set';
     changes.forEach(change=>{
       const btn=document.createElement('button');btn.type='button';btn.className='chat-change-card';
       if(chatReferenceHasDiff(change))btn.classList.add('has-diff');
-      const diff=change.diffMeta?' <span class="ref-diff">+'+esc(change.diffMeta.added||0)+' -'+esc(change.diffMeta.removed||0)+'</span>':'';
+      const editCount=chatTextEditCount(change);
+      const diff=change.diffMeta?' <span class="ref-diff">+'+esc(change.diffMeta.added||0)+' -'+esc(change.diffMeta.removed||0)+'</span>':(editCount?' <span class="ref-diff">'+editCount+' edit'+(editCount===1?'':'s')+'</span>':'');
       btn.innerHTML='<span class="change-kind">'+esc(change.kind)+'</span><span class="change-path">'+esc(change.path)+'</span>'+diff;
       btn.title=(chatReferenceHasDiff(change)?'Open diff ':'Open ')+change.path;
       btn.onclick=()=>openChatResponseReference(change);

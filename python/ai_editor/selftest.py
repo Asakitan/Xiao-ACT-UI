@@ -3357,6 +3357,22 @@ def test_phase1_ai_editor_regressions() -> None:
            and "role','treeitem'" in html
            and "openChatFileTreePath(node.path)" in html
            and "renderChatFileTrees(wrap,fileTrees)" in html)
+    _check("frontend Assistant applies native response text edits and file tree actions",
+           "chat-response-summary" in html
+           and "chat-inline-actions" in html
+           and "function chatTextEditEntries(ref)" in html
+           and "function chatApplyTextEditsToContent(content,edits)" in html
+           and "function chatTextEditSummary(ref)" in html
+           and "async function applyChatTextEditReference(ref)" in html
+           and "editorApplyWorkspaceEdit(null,summary)" in html
+           and "chatTextEditCount(ref)" in html
+           and "modifiedOpened=chatInlineDiffResource(" in html
+           and "function flattenChatFileTreeNodes(nodes,out)" in html
+           and "async function openFirstChatFileTreeFile(tree)" in html
+           and "chat-file-tree-head" in html
+           and "chat-file-tree-actions" in html
+           and "Open first" in html
+           and "aria-label','Assistant edit actions'" in html)
     _check("frontend Assistant exposes dynamic context picker",
            'class="chat-context-picker" id="chat-context-picker" role="dialog" aria-label="Attach context"' in html
            and 'id="chat-context-picker-input" aria-label="Search context"' in html
