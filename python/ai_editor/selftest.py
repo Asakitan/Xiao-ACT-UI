@@ -3436,7 +3436,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "res&&res.timeout?'warning':'error'" in html
            and "function applyEditorCompletion(item)" in html
            and "function handleEditorSuggestKey(e)" in html
-           and "function requestEditorHover()" in html
+           and "async function requestEditorHover(event)" in html
            and "function editorHoverListParts(hovers)" in html
            and "function showEditorHover(hovers,position)" in html
            and "function requestEditorSignatureHelp(triggerCharacter,triggerKind,quiet)" in html
@@ -3544,18 +3544,24 @@ def test_phase1_ai_editor_regressions() -> None:
            and "pasteAs:{preferences:[]}" in html
            and "const DEFAULT_EDITOR_WORD_SEPARATORS='`~!@#$%^&*()" in html
            and "quickSuggestions:{other:'offWhenInlineCompletions',comments:'off',strings:'off'}" in html
-           and "quickSuggestionsDelay:10" in html
-           and "acceptSuggestionOnEnter:'on'" in html
-           and "id=\"s-editor-default-formatter\"" in html
-           and "id=\"s-editor-word-separators\"" in html
-           and "id=\"s-editor-quick-suggestions-other\"" in html
-           and "id=\"s-editor-quick-suggestions-delay\"" in html
-           and "id=\"s-editor-suggest-on-trigger-characters\"" in html
-           and "id=\"s-editor-accept-suggestion-on-enter\"" in html
-           and "id=\"s-editor-accept-suggestion-on-commit-character\"" in html
-           and "id=\"s-editor-format-on-save\"" in html
-           and "id=\"s-editor-format-on-paste\"" in html
-           and "id=\"s-editor-format-on-type\"" in html
+            and "quickSuggestionsDelay:10" in html
+            and "acceptSuggestionOnEnter:'on'" in html
+            and "hover:{enabled:'on',delay:300,hidingDelay:300,sticky:true,above:true}" in html
+            and "id=\"s-editor-default-formatter\"" in html
+            and "id=\"s-editor-word-separators\"" in html
+            and "id=\"s-editor-quick-suggestions-other\"" in html
+            and "id=\"s-editor-quick-suggestions-delay\"" in html
+            and "id=\"s-editor-suggest-on-trigger-characters\"" in html
+            and "id=\"s-editor-accept-suggestion-on-enter\"" in html
+            and "id=\"s-editor-accept-suggestion-on-commit-character\"" in html
+            and "id=\"s-editor-hover-enabled\"" in html
+            and "id=\"s-editor-hover-delay\"" in html
+            and "id=\"s-editor-hover-hiding-delay\"" in html
+            and "id=\"s-editor-hover-sticky\"" in html
+            and "id=\"s-editor-hover-above\"" in html
+            and "id=\"s-editor-format-on-save\"" in html
+            and "id=\"s-editor-format-on-paste\"" in html
+            and "id=\"s-editor-format-on-type\"" in html
            and "id=\"s-editor-linked-editing\"" in html
            and "id=\"s-editor-organize-imports-on-save\"" in html
            and "id=\"s-editor-fix-all-on-save\"" in html
@@ -3565,20 +3571,30 @@ def test_phase1_ai_editor_regressions() -> None:
            and "id=\"s-editor-lang-word-separators\"" in html
            and "id=\"s-editor-lang-quick-suggestions-other\"" in html
            and "id=\"s-editor-lang-quick-suggestions-delay\"" in html
-           and "id=\"s-editor-lang-suggest-on-trigger-characters\"" in html
-           and "id=\"s-editor-lang-accept-suggestion-on-enter\"" in html
-           and "id=\"s-editor-lang-accept-suggestion-on-commit-character\"" in html
-           and "id=\"s-editor-lang-code-actions-on-save-json\"" in html
-           and "id=\"s-editor-lang-code-actions-detected\"" in html
+            and "id=\"s-editor-lang-suggest-on-trigger-characters\"" in html
+            and "id=\"s-editor-lang-accept-suggestion-on-enter\"" in html
+            and "id=\"s-editor-lang-accept-suggestion-on-commit-character\"" in html
+            and "id=\"s-editor-lang-hover-enabled\"" in html
+            and "id=\"s-editor-lang-hover-delay\"" in html
+            and "id=\"s-editor-lang-hover-hiding-delay\"" in html
+            and "id=\"s-editor-lang-hover-sticky\"" in html
+            and "id=\"s-editor-lang-hover-above\"" in html
+            and "id=\"s-editor-lang-code-actions-on-save-json\"" in html
+            and "id=\"s-editor-lang-code-actions-detected\"" in html
            and "function editorWordSeparators(language)" in html
            and "function editorIsWordSeparator(ch,language)" in html
            and "function editorWordRangeAt(value,start,end,language)" in html
            and "function editorQuickSuggestions(value)" in html
            and "function editorQuickSuggestionsDelay(value)" in html
-           and "function editorAcceptSuggestionOnEnterMode(value)" in html
-           and "function editorSuggestOnTriggerCharactersEnabled(value)" in html
-           and "function scheduleEditorQuickSuggestions(ch)" in html
-           and "function editorFormatOnSaveEnabled()" in html
+            and "function editorAcceptSuggestionOnEnterMode(value)" in html
+            and "function editorSuggestOnTriggerCharactersEnabled(value)" in html
+            and "function editorHoverOptions(value)" in html
+            and "function editorHoverEnabledForEvent(event)" in html
+            and "function placeEditorHoverOverlay(el,position)" in html
+            and "function closeEditorHoverDelayed()" in html
+            and "function scheduleEditorQuickSuggestions(ch)" in html
+            and "function scheduleEditorHover(event)" in html
+            and "function editorFormatOnSaveEnabled()" in html
            and "function editorDefaultFormatter()" in html
            and "async function requestEditorFormattingProviders()" in html
            and "editorProviderPayload('formattingProviders',{matchedOnly:true})" in html
@@ -5048,10 +5064,18 @@ console.log("frontend suggest option behavior ok");
         hover_action_functions = [
             "editorProviderText",
             "editorProviderRenderDocs",
+            "editorHoverMode",
+            "editorHoverDelayValue",
+            "editorHoverOptions",
+            "editorHoverEnabledForEvent",
+            "clearEditorHoverHideTimer",
             "closeEditorHover",
+            "closeEditorHoverDelayed",
             "editorHoverParts",
             "editorHoverListParts",
+            "placeEditorHoverOverlay",
             "showEditorHover",
+            "scheduleEditorHover",
             "codeActionTitle",
             "codeActionDisabledText",
             "codeActionKindText",
@@ -5064,8 +5088,18 @@ console.log("frontend suggest option behavior ok");
 function assert(ok,label){ if(!ok){ throw new Error(label); } }
 let statusText = "";
 let undoPushes = 0;
+let scheduledDelay = -1;
+let clearedTimers = [];
+let _editorHoverTimer = null;
+let _editorHoverHideTimer = null;
+let _editorHoverRequest = 0;
 let _editorCodeActions = [];
 let _editorCodeActionIndex = 0;
+const DEFAULT_EDITOR_HOVER = { enabled: "on", delay: 300, hidingDelay: 300, sticky: true, above: true };
+let config = { editor: { hover: { enabled: "on", delay: 25, hidingDelay: 40, sticky: true, above: true } } };
+function isPlainObject(value){ return !!value && typeof value === "object" && !Array.isArray(value); }
+function editorEffectiveSection(section){ return config[section] || {}; }
+function editorSuggestSetting(name){ return editorEffectiveSection("editor")[name]; }
 function makeClassList(owner){
   const classes = new Set();
   return {
@@ -5109,8 +5143,11 @@ function nodeText(node){
   return String(node.textContent || "") + (node.children || []).map(nodeText).join("");
 }
 const hoverBox = makeElement("div");
+hoverBox.offsetHeight = 50;
+hoverBox.offsetWidth = 220;
 const actionsBox = makeElement("div");
-const ed = { focus(){ this.focused = true; } };
+const editorContainer = { clientHeight: 260, clientWidth: 640 };
+const ed = { value: "alpha", selectionStart: 1, offsetParent: {}, focus(){ this.focused = true; } };
 const document = {
   createElement(tag){ return makeElement(tag); },
   createTextNode(text){ return makeElement("#text", String(text || "")); },
@@ -5122,10 +5159,15 @@ const document = {
 function $(id){
   if(id === "editor-hover") return hoverBox;
   if(id === "editor-code-actions") return actionsBox;
+  if(id === "editor-container") return editorContainer;
   return null;
 }
 function requestAnimationFrame(fn){ fn(); }
-function placeEditorOverlay() {}
+function setTimeout(fn,delay){ scheduledDelay = delay; return { fn, delay }; }
+function clearTimeout(timer){ if(timer) clearedTimers.push(timer); }
+function editorPositionFromOffset(){ return { line: 0, character: 0 }; }
+function editorOverlayPoint(){ return { left: 40, top: 120 }; }
+function placeEditorOverlay(el){ el.style.left = "40px"; el.style.top = "120px"; }
 function appendExtensionSettingMarkdown(container,text){ container.textContent += String(text || "").replace(/\*/g, ""); }
 function setStatus(text){ statusText = String(text || ""); }
 function _undoPush(){ undoPushes += 1; }
@@ -5136,6 +5178,28 @@ async function runEditorCodeActionCommand(){ return null; }
 function closeEditorCodeActions(){ actionsBox.classList.remove("open"); actionsBox.style.display = "none"; _editorCodeActions = []; }
 function callSucceeded(){ return false; }
 """ + hover_action_js_functions + r"""
+assert(editorHoverOptions({ enabled: "off", delay: 12, hidingDelay: 9, sticky: false, above: false }).enabled === "off"
+       && editorHoverOptions({ enabled: "off", delay: 12, hidingDelay: 9, sticky: false, above: false }).delay === 12
+       && editorHoverOptions({ enabled: "off", delay: 12, hidingDelay: 9, sticky: false, above: false }).hidingDelay === 9
+       && editorHoverOptions({ enabled: "off", delay: 12, hidingDelay: 9, sticky: false, above: false }).sticky === false
+       && editorHoverOptions({ enabled: "off", delay: 12, hidingDelay: 9, sticky: false, above: false }).above === false,
+       "hover options normalize all VS Code fields");
+assert(editorHoverOptions({ delay: 10001, hidingDelay: 20000 }).delay === 300
+       && editorHoverOptions({ delay: 10001, hidingDelay: 20000 }).hidingDelay === 20000,
+       "hover delay caps at VS Code maximum while hidingDelay stays unbounded above");
+config.editor.hover = { enabled: "onKeyboardModifier", delay: 25, hidingDelay: 40, sticky: true, above: true };
+assert(editorHoverEnabledForEvent({ ctrlKey: true }) === true
+       && editorHoverEnabledForEvent({ altKey: true }) === true
+       && editorHoverEnabledForEvent({ metaKey: true }) === true
+       && editorHoverEnabledForEvent({}) === false,
+       "hover onKeyboardModifier requires a keyboard modifier");
+config.editor.hover.enabled = "off";
+assert(scheduleEditorHover({ ctrlKey: true }) === false
+       && !hoverBox.classList.contains("open"),
+       "disabled hover does not schedule a provider request");
+config.editor.hover.enabled = "on";
+assert(scheduleEditorHover({}) === true && scheduledDelay === 25,
+       "hover schedule uses configured delay");
 assert(editorHoverListParts([
   { contents: [{ value: "**one**" }, "two"] },
   { value: "`three`" },
@@ -5146,9 +5210,18 @@ assert(showEditorHover([
 ], { line: 0, character: 0 }) === true
        && hoverBox.classList.contains("open")
        && hoverBox.children.some(child => child.className === "editor-hover-separator")
+       && hoverBox.style.top === "62px"
        && nodeText(hoverBox).includes("one")
        && nodeText(hoverBox).includes("three"),
-       "hover renders markdown-like multi-part content");
+       "hover renders markdown-like multi-part content above the line when configured");
+scheduledDelay = -1;
+closeEditorHoverDelayed();
+assert(scheduledDelay === 40 && hoverBox.classList.contains("open"),
+       "sticky hover hides after configured delay");
+config.editor.hover.sticky = false;
+closeEditorHoverDelayed();
+assert(!hoverBox.classList.contains("open") && _editorHoverRequest > 0,
+       "non-sticky hover closes immediately");
 assert(showEditorHover([], { line: 0, character: 0 }) === false
        && !hoverBox.classList.contains("open"),
        "empty hover closes widget");

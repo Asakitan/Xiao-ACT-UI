@@ -1921,6 +1921,13 @@ pre.code-block { overflow:visible; }
         <label class="settings-check"><input id="s-editor-accept-suggestion-on-commit-character" type="checkbox"><span><b>Accept on commit character</b><small>Accepts suggestions on extension-provided commit characters.</small></span></label>
       </div>
       <label class="settings-check"><input id="s-editor-suggest-on-trigger-characters" type="checkbox"><span><b>Suggest on trigger characters</b><small>Automatically opens suggestions on provider trigger characters.</small></span></label>
+      <div class="settings-grid">
+        <div><label>Hover</label><select id="s-editor-hover-enabled" style="width:100%"><option value="on">on</option><option value="off">off</option><option value="onKeyboardModifier">onKeyboardModifier</option></select></div>
+        <div><label>Hover Delay</label><input id="s-editor-hover-delay" type="number" min="0" max="10000" step="1" style="width:100%"></div>
+        <div><label>Hover Hiding Delay</label><input id="s-editor-hover-hiding-delay" type="number" min="0" step="1" style="width:100%"></div>
+        <label class="settings-check"><input id="s-editor-hover-sticky" type="checkbox"><span><b>Sticky hover</b><small>Keep the hover open while the pointer moves over it.</small></span></label>
+      </div>
+      <label class="settings-check"><input id="s-editor-hover-above" type="checkbox"><span><b>Prefer hover above line</b><small>Matches editor.hover.above when there is room.</small></span></label>
       <label class="settings-check"><input id="s-editor-format-on-save" type="checkbox"><span><b>Format on save</b><small>Runs the active formatter before explicit saves.</small></span></label>
       <label class="settings-check"><input id="s-editor-format-on-paste" type="checkbox"><span><b>Format on paste</b><small>Runs range formatting after paste/drop edits when a range formatter is available.</small></span></label>
       <label class="settings-check"><input id="s-editor-format-on-type" type="checkbox"><span><b>Format on type</b><small>Runs extension on-type formatting providers for typed trigger characters.</small></span></label>
@@ -1965,6 +1972,13 @@ pre.code-block { overflow:visible; }
         <label class="settings-check"><input id="s-editor-lang-accept-suggestion-on-commit-character" type="checkbox"><span><b>Accept on commit character</b><small>Language-specific editor.acceptSuggestionOnCommitCharacter.</small></span></label>
       </div>
       <label class="settings-check"><input id="s-editor-lang-suggest-on-trigger-characters" type="checkbox"><span><b>Suggest on trigger characters</b><small>Language-specific editor.suggestOnTriggerCharacters.</small></span></label>
+      <div class="settings-grid">
+        <div><label>Hover</label><select id="s-editor-lang-hover-enabled" style="width:100%"><option value="on">on</option><option value="off">off</option><option value="onKeyboardModifier">onKeyboardModifier</option></select></div>
+        <div><label>Hover Delay</label><input id="s-editor-lang-hover-delay" type="number" min="0" max="10000" step="1" style="width:100%"></div>
+        <div><label>Hover Hiding Delay</label><input id="s-editor-lang-hover-hiding-delay" type="number" min="0" step="1" style="width:100%"></div>
+        <label class="settings-check"><input id="s-editor-lang-hover-sticky" type="checkbox"><span><b>Sticky hover</b><small>Language-specific editor.hover.sticky.</small></span></label>
+      </div>
+      <label class="settings-check"><input id="s-editor-lang-hover-above" type="checkbox"><span><b>Prefer hover above line</b><small>Language-specific editor.hover.above.</small></span></label>
       <label class="settings-check"><input id="s-editor-lang-format-on-save" type="checkbox"><span><b>Format on save</b><small>Language-specific editor.formatOnSave.</small></span></label>
       <label class="settings-check"><input id="s-editor-lang-format-on-paste" type="checkbox"><span><b>Format on paste</b><small>Language-specific editor.formatOnPaste.</small></span></label>
       <label class="settings-check"><input id="s-editor-lang-format-on-type" type="checkbox"><span><b>Format on type</b><small>Language-specific editor.formatOnType.</small></span></label>
@@ -2174,12 +2188,13 @@ const SETTINGS_SECTION_DEFAULTS={
   mcp:{access:'prompt',autostart:false,discovery_enabled:true,collision_behavior:'first',server_sampling:false},
   terminal:{profile:'PowerShell 7 (No Profile)',shell_path:'',shell_args:[],timeout:30,output_limit:8000,auto_approve:{}},
   extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands','views','customEditors','notebooks','terminal','statusBarItems'],enabled_contributions_explicit:false,diagnostics_enabled:false},
-  editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,formatOnPaste:false,linkedEditing:false,codeActionsOnSave:{},codeActions:{triggerOnFocusChange:false},pasteAs:{preferences:[]},tabSize:4,insertSpaces:true,wordSeparators:'`~!@#$%^&*()-=+[{]}\\|;:\'",.<>/?',quickSuggestions:{other:'offWhenInlineCompletions',comments:'off',strings:'off'},quickSuggestionsDelay:10,suggestOnTriggerCharacters:true,acceptSuggestionOnEnter:'on',acceptSuggestionOnCommitCharacter:true},
+  editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,formatOnPaste:false,linkedEditing:false,codeActionsOnSave:{},codeActions:{triggerOnFocusChange:false},pasteAs:{preferences:[]},tabSize:4,insertSpaces:true,wordSeparators:'`~!@#$%^&*()-=+[{]}\\|;:\'",.<>/?',quickSuggestions:{other:'offWhenInlineCompletions',comments:'off',strings:'off'},quickSuggestionsDelay:10,suggestOnTriggerCharacters:true,acceptSuggestionOnEnter:'on',acceptSuggestionOnCommitCharacter:true,hover:{enabled:'on',delay:300,hidingDelay:300,sticky:true,above:true}},
   files:{autoSave:'off',autoSaveDelay:1000,trimTrailingWhitespace:false,insertFinalNewline:false,trimFinalNewlines:false},
   customization:{instructions_locations:['.sao/instructions.md','.sao/instructions'],agent_locations:['.sao/agents'],workflow_locations:['.sao/workflows'],skill_locations:['.agents/skills/.local','.claude/skills/.local'],use_agent_md:true,use_claude_md:false}
 };
 const DEFAULT_EDITOR_WORD_SEPARATORS='`~!@#$%^&*()-=+[{]}\\|;:\'",.<>/?';
 const DEFAULT_EDITOR_QUICK_SUGGESTIONS={other:'offWhenInlineCompletions',comments:'off',strings:'off'};
+const DEFAULT_EDITOR_HOVER={enabled:'on',delay:300,hidingDelay:300,sticky:true,above:true};
 const EXTENSION_CONTRIBUTION_OPTIONS=[
   {id:'chatParticipants',label:'Chat Participants',description:'Expose extension chat participants in the assistant surface.'},
   {id:'languageModelTools',label:'LM Tools',description:'Register extension language-model tools for tool invocation.'},
@@ -4634,7 +4649,7 @@ function _editorInputWithUndo(e){
 
 let _editorSuggestItems=[],_editorSuggestIndex=0,_editorSuggestRequest=0,_editorSuggestResolveRequest=0,_editorSuggestDetailsOpen=false;
 let _editorSuggestMemory={seq:0,entries:[]};
-let _editorHoverTimer=null,_editorHoverRequest=0;
+let _editorHoverTimer=null,_editorHoverHideTimer=null,_editorHoverRequest=0;
 let _editorSignatureRequest=0,_editorActiveSignatureHelp=null;
 let _editorCodeActions=[],_editorCodeActionIndex=0,_editorCodeActionRequest=0;
 let _editorDefinitionRequest=0;
@@ -6317,9 +6332,19 @@ async function requestEditorCompletion(triggerCharacter,quiet){
   }
   closeEditorSuggest();if(!quiet)setStatus('No suggestions');
 }
+function clearEditorHoverHideTimer(){
+  clearTimeout(_editorHoverHideTimer);_editorHoverHideTimer=null;
+}
 function closeEditorHover(){
+  clearTimeout(_editorHoverTimer);_editorHoverTimer=null;clearEditorHoverHideTimer();_editorHoverRequest++;
   const box=$('editor-hover');if(!box)return;
   box.classList.remove('open');box.style.display='none';box.innerHTML='';
+}
+function closeEditorHoverDelayed(){
+  clearEditorHoverHideTimer();
+  const hover=editorHoverOptions();
+  if(!hover.sticky){closeEditorHover();return}
+  _editorHoverHideTimer=setTimeout(()=>closeEditorHover(),hover.hidingDelay);
 }
 function editorHoverParts(hover){
   if(hover==null)return [];
@@ -6331,10 +6356,20 @@ function editorHoverParts(hover){
 function editorHoverListParts(hovers){
   return (Array.isArray(hovers)?hovers:[]).flatMap(editorHoverParts).filter(part=>editorProviderText(part));
 }
+function placeEditorHoverOverlay(el,position){
+  const source=editorOverlayPoint(position||editorPositionFromOffset(ed.value,ed.selectionStart));
+  placeEditorOverlay(el,position);
+  const hover=editorHoverOptions(),wrap=$('editor-container');
+  if(!hover.above||!wrap)return;
+  const height=el.offsetHeight||80;
+  const aboveTop=source.top-height-8;
+  if(aboveTop>=8)el.style.top=aboveTop+'px';
+}
 function showEditorHover(hovers,position){
   const box=$('editor-hover');if(!box)return false;
   const parts=editorHoverListParts(hovers);
   if(!parts.length){closeEditorHover();return false}
+  clearEditorHoverHideTimer();
   box.innerHTML='';
   parts.forEach((part,index)=>{
     if(index){
@@ -6342,12 +6377,14 @@ function showEditorHover(hovers,position){
     }
     const row=document.createElement('div');row.className='editor-hover-row';editorProviderRenderDocs(row,part);box.appendChild(row);
   });
-  placeEditorOverlay(box,position);box.style.display='block';
+  box.onmouseenter=()=>clearEditorHoverHideTimer();
+  box.onmouseleave=()=>closeEditorHoverDelayed();
+  box.style.display='block';placeEditorHoverOverlay(box,position);
   requestAnimationFrame(()=>box.classList.add('open'));
   return true;
 }
-async function requestEditorHover(){
-  if(isEditorSuggestOpen()||isEditorSignatureOpen()||isEditorCodeActionsOpen()||isEditorReferencesOpen()||!ed||ed.offsetParent===null)return;
+async function requestEditorHover(event){
+  if(!editorHoverEnabledForEvent(event)||isEditorSuggestOpen()||isEditorSignatureOpen()||isEditorCodeActionsOpen()||isEditorReferencesOpen()||!ed||ed.offsetParent===null)return;
   const requestId=++_editorHoverRequest,position=editorPositionFromOffset(ed.value,ed.selectionStart);
   const res=await editorRequestLanguageProvider('hover',editorProviderPayload('hover'),{countKey:'hovers',itemLabel:'hover',isCurrent:()=>requestId===_editorHoverRequest});
   if(requestId!==_editorHoverRequest)return;
@@ -6355,9 +6392,11 @@ async function requestEditorHover(){
   if(res&&res.ok&&showEditorHover(Array.isArray(res.hovers)?res.hovers:[],position))return;
   closeEditorHover();
 }
-function scheduleEditorHover(){
-  clearTimeout(_editorHoverTimer);
-  _editorHoverTimer=setTimeout(()=>requestEditorHover(),520);
+function scheduleEditorHover(event){
+  clearTimeout(_editorHoverTimer);_editorHoverTimer=null;
+  if(!editorHoverEnabledForEvent(event)){closeEditorHover();return false}
+  _editorHoverTimer=setTimeout(()=>requestEditorHover(event),editorHoverOptions().delay);
+  return true;
 }
 function isEditorSignatureOpen(){
   const box=$('editor-signature-help');return !!(box&&box.classList.contains('open'));
@@ -8196,9 +8235,9 @@ ed.addEventListener('paste',handleEditorDocumentPaste);
 ed.addEventListener('dragenter',handleEditorDocumentDragOver);
 ed.addEventListener('dragover',handleEditorDocumentDragOver);
 ed.addEventListener('drop',handleEditorDocumentDrop);
-ed.addEventListener('click',e=>{editorCancelSnippetSession(false);closeEditorDropPasteOptions();updateCursorPos();renderEditorInlineCompletion();scheduleEditorDocumentHighlights();scheduleEditorLinkedEditingRanges();if(e.ctrlKey||e.metaKey){requestEditorDocumentLinks(true,true);return}scheduleEditorHover()});
+ed.addEventListener('click',e=>{editorCancelSnippetSession(false);closeEditorDropPasteOptions();updateCursorPos();renderEditorInlineCompletion();scheduleEditorDocumentHighlights();scheduleEditorLinkedEditingRanges();if(e.ctrlKey||e.metaKey){requestEditorDocumentLinks(true,true);return}scheduleEditorHover(e)});
 ed.addEventListener('dblclick',()=>editorSelectWordAtCursor());
-ed.addEventListener('keyup',()=>{updateCursorPos();renderEditorInlineCompletion();scheduleEditorDocumentHighlights();scheduleEditorLinkedEditingRanges();scheduleEditorHover()});
+ed.addEventListener('keyup',e=>{updateCursorPos();renderEditorInlineCompletion();scheduleEditorDocumentHighlights();scheduleEditorLinkedEditingRanges();scheduleEditorHover(e)});
 ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();renderEditorInlayHints(_editorInlayHints);renderEditorDocumentHighlights(_editorDocumentHighlights);renderEditorDiagnostics(_editorDiagnostics);if(_editorSemanticTokensRangeActive)scheduleEditorSemanticTokens(260);updateCursorPos();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorDropPasteOptions();closeEditorReferences();closeEditorHierarchy();closeEditorLinks();closeEditorColorPresentationMenu()});
 ed.addEventListener('keydown',function(e){
   if(handleEditorDropPasteOptionsKey(e))return;
@@ -8575,6 +8614,49 @@ function editorAcceptSuggestionOnCommitCharacterEnabled(value){
 }
 function editorSuggestOnTriggerCharactersEnabled(value){
   return (value===undefined?editorSuggestSetting('suggestOnTriggerCharacters'):value)!==false;
+}
+function editorHoverMode(value){
+  const text=String(value||'').trim();
+  return ['on','off','onKeyboardModifier'].includes(text)?text:DEFAULT_EDITOR_HOVER.enabled;
+}
+function editorHoverDelayValue(value,fallback,maximum){
+  const n=Math.trunc(Number(value));
+  const max=Number.isFinite(Number(maximum))?Number(maximum):Number.MAX_SAFE_INTEGER;
+  return Number.isFinite(n)&&n>=0&&n<=max?n:Number(fallback);
+}
+function editorHoverOptions(value){
+  const raw=value===undefined?editorSuggestSetting('hover'):value;
+  const obj=isPlainObject(raw)?raw:{};
+  return {
+    enabled:editorHoverMode(obj.enabled),
+    delay:editorHoverDelayValue(obj.delay,DEFAULT_EDITOR_HOVER.delay,10000),
+    hidingDelay:editorHoverDelayValue(obj.hidingDelay,DEFAULT_EDITOR_HOVER.hidingDelay),
+    sticky:obj.sticky!==false,
+    above:obj.above!==false
+  };
+}
+function editorHoverOptionsFromInputs(prefix){
+  return {
+    enabled:editorHoverMode(readInputValue(prefix+'hover-enabled')),
+    delay:editorHoverDelayValue(readNumberValue(prefix+'hover-delay',DEFAULT_EDITOR_HOVER.delay,true),DEFAULT_EDITOR_HOVER.delay,10000),
+    hidingDelay:editorHoverDelayValue(readNumberValue(prefix+'hover-hiding-delay',DEFAULT_EDITOR_HOVER.hidingDelay,true),DEFAULT_EDITOR_HOVER.hidingDelay),
+    sticky:readCheckedValue(prefix+'hover-sticky'),
+    above:readCheckedValue(prefix+'hover-above')
+  };
+}
+function setEditorHoverInputs(prefix,value){
+  const hover=editorHoverOptions(value);
+  setSelectValue(prefix+'hover-enabled',hover.enabled,DEFAULT_EDITOR_HOVER.enabled);
+  setInputValue(prefix+'hover-delay',hover.delay);
+  setInputValue(prefix+'hover-hiding-delay',hover.hidingDelay);
+  setCheckedValue(prefix+'hover-sticky',hover.sticky);
+  setCheckedValue(prefix+'hover-above',hover.above);
+}
+function editorHoverEnabledForEvent(event){
+  const mode=editorHoverOptions().enabled;
+  if(mode==='off')return false;
+  if(mode==='onKeyboardModifier')return !!(event&&(event.altKey||event.ctrlKey||event.metaKey));
+  return true;
 }
 function setDottedConfigValue(target,path,value){
   const parts=String(path||'').split('.').map(p=>p.trim()).filter(Boolean);
@@ -12902,12 +12984,13 @@ function removeManagedEditorLanguageOverrideKeys(entry){
     'editor.defaultFormatter','editor.default_formatter','editor.formatOnSave','editor.formatOnPaste',
     'editor.formatOnType','editor.linkedEditing','editor.codeActionsOnSave','editor.codeActions.triggerOnFocusChange',
     'editor.tabSize','editor.insertSpaces','editor.wordSeparators','editor.quickSuggestions','editor.quickSuggestionsDelay',
-    'editor.suggestOnTriggerCharacters','editor.acceptSuggestionOnEnter','editor.acceptSuggestionOnCommitCharacter'
+    'editor.suggestOnTriggerCharacters','editor.acceptSuggestionOnEnter','editor.acceptSuggestionOnCommitCharacter',
+    'editor.hover','editor.hover.enabled','editor.hover.delay','editor.hover.sticky','editor.hover.hidingDelay','editor.hover.above'
   ];
   managedFlat.forEach(key=>delete next[key]);
   if(isPlainObject(next.editor)){
     const editor={...next.editor};
-    ['defaultFormatter','default_formatter','formatOnSave','formatOnPaste','formatOnType','linkedEditing','codeActionsOnSave','tabSize','insertSpaces','wordSeparators','quickSuggestions','quickSuggestionsDelay','suggestOnTriggerCharacters','acceptSuggestionOnEnter','acceptSuggestionOnCommitCharacter'].forEach(key=>delete editor[key]);
+    ['defaultFormatter','default_formatter','formatOnSave','formatOnPaste','formatOnType','linkedEditing','codeActionsOnSave','tabSize','insertSpaces','wordSeparators','quickSuggestions','quickSuggestionsDelay','suggestOnTriggerCharacters','acceptSuggestionOnEnter','acceptSuggestionOnCommitCharacter','hover'].forEach(key=>delete editor[key]);
     if(isPlainObject(editor.codeActions)){
       const codeActions={...editor.codeActions};
       delete codeActions.triggerOnFocusChange;
@@ -12947,6 +13030,7 @@ function saveEditorLanguageOverrideSettings(){
     entry['editor.suggestOnTriggerCharacters']=readCheckedValue('s-editor-lang-suggest-on-trigger-characters');
     entry['editor.acceptSuggestionOnEnter']=editorAcceptSuggestionOnEnterMode(readInputValue('s-editor-lang-accept-suggestion-on-enter'));
     entry['editor.acceptSuggestionOnCommitCharacter']=readCheckedValue('s-editor-lang-accept-suggestion-on-commit-character');
+    entry['editor.hover']=editorHoverOptionsFromInputs('s-editor-lang-');
     entry['editor.formatOnSave']=readCheckedValue('s-editor-lang-format-on-save');
     entry['editor.formatOnPaste']=readCheckedValue('s-editor-lang-format-on-paste');
     entry['editor.formatOnType']=readCheckedValue('s-editor-lang-format-on-type');
@@ -13004,6 +13088,7 @@ function openSettings(){
   setCheckedValue('s-editor-suggest-on-trigger-characters',editorSuggestOnTriggerCharactersEnabled(editor.suggestOnTriggerCharacters));
   setSelectValue('s-editor-accept-suggestion-on-enter',editorAcceptSuggestionOnEnterMode(editor.acceptSuggestionOnEnter),'on');
   setCheckedValue('s-editor-accept-suggestion-on-commit-character',editorAcceptSuggestionOnCommitCharacterEnabled(editor.acceptSuggestionOnCommitCharacter));
+  setEditorHoverInputs('s-editor-',editor.hover);
   setCheckedValue('s-editor-format-on-save',editor.formatOnSave===true);
   setCheckedValue('s-editor-format-on-paste',editor.formatOnPaste===true);
   setCheckedValue('s-editor-format-on-type',editor.formatOnType===true);
@@ -13030,6 +13115,7 @@ function openSettings(){
   setCheckedValue('s-editor-lang-suggest-on-trigger-characters',editorSuggestOnTriggerCharactersEnabled(languageEditor.suggestOnTriggerCharacters));
   setSelectValue('s-editor-lang-accept-suggestion-on-enter',editorAcceptSuggestionOnEnterMode(languageEditor.acceptSuggestionOnEnter),'on');
   setCheckedValue('s-editor-lang-accept-suggestion-on-commit-character',editorAcceptSuggestionOnCommitCharacterEnabled(languageEditor.acceptSuggestionOnCommitCharacter));
+  setEditorHoverInputs('s-editor-lang-',languageEditor.hover);
   setCheckedValue('s-editor-lang-format-on-save',languageEditor.formatOnSave===true);
   setCheckedValue('s-editor-lang-format-on-paste',languageEditor.formatOnPaste===true);
   setCheckedValue('s-editor-lang-format-on-type',languageEditor.formatOnType===true);
@@ -13281,7 +13367,7 @@ async function saveSettings(){
   config.terminal={...settingSection('terminal'),profile:readInputValue('s-term-profile')||'PowerShell 7 (No Profile)',shell_path:readInputValue('s-term-shell'),shell_args:readListValue('s-term-args',false),timeout:readNumberValue('s-term-timeout',30,true),output_limit:readNumberValue('s-term-output',8000,true)};
   config.extensions={...settingSection('extensions'),confirm_install:readCheckedValue('s-ext-confirm'),diagnostics_enabled:readCheckedValue('s-ext-diagnostics'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true),enabled_contributions:readExtensionContributionValues(),enabled_contributions_explicit:true};
   const editorSettings=settingSection('editor');
-  config.editor={...editorSettings,defaultFormatter:readInputValue('s-editor-default-formatter').trim(),tabSize:editorTabSize(readNumberValue('s-editor-tab-size',4,true)),insertSpaces:readCheckedValue('s-editor-insert-spaces'),wordSeparators:readInputValue('s-editor-word-separators'),quickSuggestions:editorQuickSuggestionsFromInputs('s-editor-'),quickSuggestionsDelay:editorQuickSuggestionsDelay(readNumberValue('s-editor-quick-suggestions-delay',10,true)),suggestOnTriggerCharacters:readCheckedValue('s-editor-suggest-on-trigger-characters'),acceptSuggestionOnEnter:editorAcceptSuggestionOnEnterMode(readInputValue('s-editor-accept-suggestion-on-enter')),acceptSuggestionOnCommitCharacter:readCheckedValue('s-editor-accept-suggestion-on-commit-character'),formatOnSave:readCheckedValue('s-editor-format-on-save'),formatOnPaste:readCheckedValue('s-editor-format-on-paste'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing'),codeActions:{...(isPlainObject(editorSettings.codeActions)?editorSettings.codeActions:{}),triggerOnFocusChange:readCheckedValue('s-editor-code-actions-trigger-focus')},codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)};
+  config.editor={...editorSettings,defaultFormatter:readInputValue('s-editor-default-formatter').trim(),tabSize:editorTabSize(readNumberValue('s-editor-tab-size',4,true)),insertSpaces:readCheckedValue('s-editor-insert-spaces'),wordSeparators:readInputValue('s-editor-word-separators'),quickSuggestions:editorQuickSuggestionsFromInputs('s-editor-'),quickSuggestionsDelay:editorQuickSuggestionsDelay(readNumberValue('s-editor-quick-suggestions-delay',10,true)),suggestOnTriggerCharacters:readCheckedValue('s-editor-suggest-on-trigger-characters'),acceptSuggestionOnEnter:editorAcceptSuggestionOnEnterMode(readInputValue('s-editor-accept-suggestion-on-enter')),acceptSuggestionOnCommitCharacter:readCheckedValue('s-editor-accept-suggestion-on-commit-character'),hover:editorHoverOptionsFromInputs('s-editor-'),formatOnSave:readCheckedValue('s-editor-format-on-save'),formatOnPaste:readCheckedValue('s-editor-format-on-paste'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing'),codeActions:{...(isPlainObject(editorSettings.codeActions)?editorSettings.codeActions:{}),triggerOnFocusChange:readCheckedValue('s-editor-code-actions-trigger-focus')},codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)};
   saveEditorLanguageOverrideSettings();
   config.files={...settingSection('files'),autoSave:filesAutoSaveMode({autoSave:readInputValue('s-files-auto-save')}),autoSaveDelay:filesAutoSaveDelay({autoSaveDelay:readNumberValue('s-files-auto-save-delay',1000,true)}),trimTrailingWhitespace:readCheckedValue('s-files-trim-trailing-whitespace'),insertFinalNewline:readCheckedValue('s-files-insert-final-newline'),trimFinalNewlines:readCheckedValue('s-files-trim-final-newlines')};
   saveFilesLanguageOverrideSettings();
