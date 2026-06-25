@@ -1855,6 +1855,9 @@ class NodeExtensionHost:
         self._terminal_link_request_lock = threading.Lock()
         self._terminal_link_requests: Dict[str, Dict[str, Any]] = {}
         self._terminal_link_providers: List[Dict[str, Any]] = []
+        self._active_terminal: Dict[str, Any] = {}
+        self._terminal_shell_integrations: List[Dict[str, Any]] = []
+        self._terminal_shell_executions: List[Dict[str, Any]] = []
         self._custom_editor_request_lock = threading.Lock()
         self._custom_editor_requests: Dict[str, Dict[str, Any]] = {}
         self._custom_editor_lifecycle_lock = threading.Lock()
@@ -2944,10 +2947,25 @@ class NodeExtensionHost:
         elif msg_type == "terminal_show":
             if self._ui_bridge:
                 try:
+                    metadata = msg.get("metadata") if isinstance(
+                        msg.get("metadata"), dict) else {}
+                    metadata = dict(metadata)
+                    if msg.get("id") is not None:
+                        metadata["id"] = msg.get("id")
                     self._ui_bridge.show_terminal(
                         str(msg.get("name", "")),
-                        msg.get("metadata") if isinstance(
-                            msg.get("metadata"), dict) else {})
+                        metadata)
+                except Exception:
+                    pass
+
+        elif msg_type == "terminal_active":
+            terminal = msg.get("terminal")
+            self._active_terminal = terminal if isinstance(terminal, dict) else {}
+            if self._ui_bridge:
+                try:
+                    handler = getattr(self._ui_bridge, "set_active_terminal", None)
+                    if callable(handler):
+                        handler(self._active_terminal)
                 except Exception:
                     pass
 
@@ -3005,6 +3023,49 @@ class NodeExtensionHost:
                     if callable(writer):
                         writer(str(msg.get("name", "")),
                                str(msg.get("text", "")))
+                except Exception:
+                    pass
+
+        elif msg_type == "terminal_shell_integration":
+            terminal = msg.get("terminal")
+            record = {
+                "terminal": terminal if isinstance(terminal, dict) else {},
+                "cwd": msg.get("cwd"),
+                "env": msg.get("env"),
+            }
+            self._terminal_shell_integrations.append(record)
+            if len(self._terminal_shell_integrations) > 50:
+                self._terminal_shell_integrations = self._terminal_shell_integrations[-50:]
+            if self._ui_bridge:
+                try:
+                    handler = getattr(
+                        self._ui_bridge, "update_terminal_shell_integration", None)
+                    if callable(handler):
+                        handler(record)
+                except Exception:
+                    pass
+
+        elif msg_type in {
+                "terminal_shell_execution_start",
+                "terminal_shell_execution_end"}:
+            terminal = msg.get("terminal")
+            execution = msg.get("execution")
+            record = {
+                "event": (
+                    "start" if msg_type.endswith("_start") else "end"),
+                "terminal": terminal if isinstance(terminal, dict) else {},
+                "execution": execution if isinstance(execution, dict) else {},
+                "exitCode": msg.get("exitCode"),
+            }
+            self._terminal_shell_executions.append(record)
+            if len(self._terminal_shell_executions) > 100:
+                self._terminal_shell_executions = self._terminal_shell_executions[-100:]
+            if self._ui_bridge:
+                try:
+                    handler = getattr(
+                        self._ui_bridge, "update_terminal_shell_execution", None)
+                    if callable(handler):
+                        handler(record)
                 except Exception:
                     pass
 
@@ -3708,6 +3769,15 @@ class NodeExtensionHost:
 
     def terminal_link_providers(self) -> List[Dict[str, Any]]:
         return [dict(item) for item in self._terminal_link_providers]
+
+    def active_terminal(self) -> Dict[str, Any]:
+        return dict(self._active_terminal)
+
+    def terminal_shell_integrations(self) -> List[Dict[str, Any]]:
+        return [dict(item) for item in self._terminal_shell_integrations]
+
+    def terminal_shell_executions(self) -> List[Dict[str, Any]]:
+        return [dict(item) for item in self._terminal_shell_executions]
 
     def _terminal_link_request_result(
             self,

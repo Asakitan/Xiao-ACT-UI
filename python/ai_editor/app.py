@@ -1003,10 +1003,13 @@ class _AIEditorUIBridge:
             "if(tp){tp.style.display='flex';tp.classList.add('active');}"
             "var term=null;"
             "if(typeof _terminals!=='undefined'&&Array.isArray(_terminals)){"
-            "term=_terminals.find(function(t){return t&&t.name===name;});}"
+            "var hostId=metadata&&metadata.id!=null?String(metadata.id):'';"
+            "term=hostId?_terminals.find(function(t){return t&&String(t.hostId||'')===hostId;}):null;"
+            "if(!term)term=_terminals.find(function(t){return t&&t.name===name;});}"
             "if(!term&&typeof _createTerminal==='function'){"
             "term=_createTerminal(name,metadata||{});}"
             "if(term){term.metadata=Object.assign({},term.metadata||{},metadata||{});"
+            "if(metadata&&metadata.id!=null)term.hostId=String(metadata.id);"
             "if(typeof _switchTerminal==='function')_switchTerminal(term.id);}"
             "}catch(e){}})("
             f"{json.dumps(terminal_name)},"
@@ -1037,6 +1040,38 @@ class _AIEditorUIBridge:
             "_updateTerminalDimensions(name,dimensions||{});"
             "}catch(e){}})("
             f"{json.dumps(str(name or ''))},"
+            f"{json.dumps(payload, ensure_ascii=False)});"
+        )
+
+    def set_active_terminal(self, terminal: Dict[str, Any]) -> None:
+        payload = terminal if isinstance(terminal, dict) else {}
+        self._api._eval_js(
+            "(function(terminal){try{"
+            "if(typeof _setActiveTerminalFromHost==='function')"
+            "_setActiveTerminalFromHost(terminal||{});"
+            "}catch(e){}})("
+            f"{json.dumps(payload, ensure_ascii=False)});"
+        )
+
+    def update_terminal_shell_integration(
+            self, record: Dict[str, Any]) -> None:
+        payload = record if isinstance(record, dict) else {}
+        self._api._eval_js(
+            "(function(record){try{"
+            "if(typeof _updateTerminalShellIntegration==='function')"
+            "_updateTerminalShellIntegration(record||{});"
+            "}catch(e){}})("
+            f"{json.dumps(payload, ensure_ascii=False)});"
+        )
+
+    def update_terminal_shell_execution(
+            self, record: Dict[str, Any]) -> None:
+        payload = record if isinstance(record, dict) else {}
+        self._api._eval_js(
+            "(function(record){try{"
+            "if(typeof _updateTerminalShellExecution==='function')"
+            "_updateTerminalShellExecution(record||{});"
+            "}catch(e){}})("
             f"{json.dumps(payload, ensure_ascii=False)});"
         )
 

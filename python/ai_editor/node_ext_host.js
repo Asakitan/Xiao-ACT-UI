@@ -1611,10 +1611,14 @@ const _terminalProfileProviders = new Map(); // id -> { provider, extensionId }
 const _terminalLinkProviders = new Set();
 const _terminalLinkCache = new Map(); // terminal handle -> Map<link id, { provider, link }>
 let _nextTerminalLinkHandle = 1;
+let _nextTerminalShellExecutionHandle = 1;
 const _onDidChangeActiveTerminalEmitter = new EventEmitter();
 const _onDidOpenTerminalEmitter = new EventEmitter();
 const _onDidCloseTerminalEmitter = new EventEmitter();
 const _onDidChangeTerminalStateEmitter = new EventEmitter();
+const _onDidChangeTerminalShellIntegrationEmitter = new EventEmitter();
+const _onDidStartTerminalShellExecutionEmitter = new EventEmitter();
+const _onDidEndTerminalShellExecutionEmitter = new EventEmitter();
 const _workspaceDefaultSkipDirs = new Set(['.git', 'node_modules', '__pycache__', '.venv', 'venv']);
 const _workspaceSymbolCache = new Map(); // handle -> { provider, symbol }
 let _nextWorkspaceSymbolHandle = 1;
@@ -3236,10 +3240,21 @@ function _debugUpdateActive(session, emitter) {
     if (emitter) emitter.fire(_activeDebugSession);
 }
 
+function _terminalBridgePayload(terminal) {
+    if (!terminal) return null;
+    return Object.assign(
+        { id: terminal._handle, active: _activeTerminal === terminal },
+        terminal.metadata());
+}
+
 function _terminalSetActive(terminal) {
     if (_activeTerminal === terminal) return;
     _activeTerminal = terminal;
     _onDidChangeActiveTerminalEmitter.fire(terminal);
+    send({
+        type: 'terminal_active',
+        terminal: _terminalBridgePayload(terminal),
+    });
 }
 
 function _terminalRemove(terminal) {
@@ -3249,6 +3264,10 @@ function _terminalRemove(terminal) {
     if (_activeTerminal === terminal) {
         _activeTerminal = _terminals.length ? _terminals[_terminals.length - 1] : undefined;
         _onDidChangeActiveTerminalEmitter.fire(_activeTerminal);
+        send({
+            type: 'terminal_active',
+            terminal: _terminalBridgePayload(_activeTerminal),
+        });
     }
     _onDidCloseTerminalEmitter.fire(terminal);
 }
@@ -3275,6 +3294,7 @@ class TerminalObject {
         this.exitStatus = undefined;
         this.state = { isInteractedWith: false };
         this.shellIntegration = undefined;
+        this._shellIntegrationObject = null;
         this.dimensions = undefined;
         this._pty = options?.pty && typeof options.pty.open === 'function'
             ? options.pty
@@ -3356,9 +3376,25 @@ class TerminalObject {
         this._disposePtySubscriptions();
         _terminalRemove(this);
     }
+    _ensureShellIntegration() {
+        if (this._disposed) return undefined;
+        if (this.shellIntegration) return this.shellIntegration;
+        this._shellIntegrationObject = new TerminalShellIntegration(this);
+        this.shellIntegration = this._shellIntegrationObject.value;
+        const event = { terminal: this, shellIntegration: this.shellIntegration };
+        _onDidChangeTerminalShellIntegrationEmitter.fire(event);
+        send({
+            type: 'terminal_shell_integration',
+            terminal: _terminalBridgePayload(this),
+            cwd: this._shellIntegrationObject.cwdPayload(),
+            env: this._shellIntegrationObject.envPayload(),
+        });
+        return this.shellIntegration;
+    }
     sendText(text, shouldExecute = true) {
         if (this._disposed) return;
         this.state.isInteractedWith = true;
+        this._ensureShellIntegration();
         _onDidChangeTerminalStateEmitter.fire(this);
         if (this._pty) {
             this._openPty();
@@ -3382,6 +3418,7 @@ class TerminalObject {
     metadata() {
         const options = this.creationOptions || {};
         return {
+            id: this._handle,
             name: this.name,
             cwd: _terminalOptionValue(options.cwd),
             env: _terminalOptionValue(options.env),
@@ -3393,11 +3430,13 @@ class TerminalObject {
             color: _terminalOptionValue(options.color),
             isTransient: options.isTransient === true,
             isPseudoterminal: !!this._pty,
+            shellIntegration: !!this.shellIntegration,
         };
     }
     show(preserveFocus = false) {
         if (this._disposed) return;
         if (!preserveFocus) _terminalSetActive(this);
+        this._ensureShellIntegration();
         this._openPty();
         send({
             type: 'terminal_show',
@@ -3421,6 +3460,109 @@ class TerminalObject {
         }
         send({ type: 'terminal_dispose', id: this._handle, name: this.name });
         _terminalRemove(this);
+    }
+}
+
+function _terminalShellCommandLine(commandLineOrExecutable, args) {
+    let value = String(commandLineOrExecutable ?? '');
+    if (Array.isArray(args)) {
+        for (const rawArg of args) {
+            const arg = String(rawArg ?? '');
+            value += /\s/.test(arg) && !/["'`]/.test(arg)
+                ? ` "${arg}"`
+                : ` ${arg}`;
+        }
+    }
+    return value;
+}
+
+class TerminalShellExecution {
+    constructor(terminal, commandLine) {
+        this._handle = _nextTerminalShellExecutionHandle++;
+        this.terminal = terminal;
+        this.commandLine = {
+            value: String(commandLine || ''),
+            confidence: 2,
+            isTrusted: true,
+        };
+        this.cwd = terminal?._shellIntegrationObject?.cwd;
+        this._chunks = [];
+    }
+    _append(data) {
+        this._chunks.push(String(data ?? ''));
+    }
+    async *read() {
+        for (const chunk of this._chunks) {
+            yield chunk;
+        }
+    }
+}
+
+class TerminalShellIntegration {
+    constructor(terminal) {
+        this._terminal = terminal;
+        const rawCwd = terminal.creationOptions?.cwd;
+        this.cwd = rawCwd instanceof Uri
+            ? rawCwd
+            : (typeof rawCwd === 'string' && rawCwd ? Uri.file(rawCwd) : undefined);
+        const envValue = _terminalOptionValue(terminal.creationOptions?.env);
+        this.env = envValue && typeof envValue === 'object'
+            ? Object.freeze({ isTrusted: true, value: Object.freeze(Object.assign({}, envValue)) })
+            : undefined;
+        const self = this;
+        this.value = {
+            get cwd() { return self.cwd; },
+            get env() { return self.env; },
+            executeCommand(commandLineOrExecutable, args) {
+                return self.executeCommand(commandLineOrExecutable, args);
+            },
+        };
+    }
+    cwdPayload() {
+        return _plainBridgeValue(this.cwd);
+    }
+    envPayload() {
+        return _plainBridgeValue(this.env);
+    }
+    executeCommand(commandLineOrExecutable, args) {
+        const commandLine = _terminalShellCommandLine(commandLineOrExecutable, args);
+        const execution = new TerminalShellExecution(this._terminal, commandLine);
+        const startEvent = {
+            terminal: this._terminal,
+            shellIntegration: this.value,
+            execution,
+        };
+        _onDidStartTerminalShellExecutionEmitter.fire(startEvent);
+        send({
+            type: 'terminal_shell_execution_start',
+            terminal: _terminalBridgePayload(this._terminal),
+            execution: {
+                id: execution._handle,
+                commandLine: execution.commandLine,
+                cwd: _plainBridgeValue(execution.cwd),
+            },
+        });
+        this._terminal.sendText(commandLine, true);
+        setTimeout(() => {
+            const endEvent = {
+                terminal: this._terminal,
+                shellIntegration: this.value,
+                execution,
+                exitCode: undefined,
+            };
+            _onDidEndTerminalShellExecutionEmitter.fire(endEvent);
+            send({
+                type: 'terminal_shell_execution_end',
+                terminal: _terminalBridgePayload(this._terminal),
+                execution: {
+                    id: execution._handle,
+                    commandLine: execution.commandLine,
+                    cwd: _plainBridgeValue(execution.cwd),
+                },
+                exitCode: null,
+            });
+        }, 0);
+        return execution;
     }
 }
 
@@ -5761,6 +5903,11 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             User: 3,
             Extension: 4,
         },
+        TerminalShellExecutionCommandLineConfidence: {
+            Low: 0,
+            Medium: 1,
+            High: 2,
+        },
         QuickPickItemKind: { Separator: 1 },
         InputBoxValidationSeverity: { Info: 1, Warning: 2, Error: 3 },
         QuickInputButtonLocation: { Title: 1, Inline: 2, Input: 3 },
@@ -6139,6 +6286,9 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             onDidOpenTerminal: _onDidOpenTerminalEmitter.event,
             onDidCloseTerminal: _onDidCloseTerminalEmitter.event,
             onDidChangeTerminalState: _onDidChangeTerminalStateEmitter.event,
+            onDidChangeTerminalShellIntegration: _onDidChangeTerminalShellIntegrationEmitter.event,
+            onDidStartTerminalShellExecution: _onDidStartTerminalShellExecutionEmitter.event,
+            onDidEndTerminalShellExecution: _onDidEndTerminalShellExecutionEmitter.event,
             get activeTextEditor() { return undefined; },
             get visibleTextEditors() { return []; },
             get activeColorTheme() { return { kind: 2 }; }, // Dark

@@ -1167,6 +1167,10 @@ pre.code-block { overflow:visible; }
   white-space:nowrap; max-width:140px; }
 .term-tab:hover { color:var(--fg); background:var(--bg-hover); }
 .term-tab.active { color:var(--fg); background:var(--bg-tab-active); }
+.term-tab .term-shell { font-size:9px; letter-spacing:0; color:var(--fg-accent);
+  border:1px solid color-mix(in srgb, var(--fg-accent) 45%, transparent);
+  border-radius:3px; padding:0 3px; line-height:13px; }
+.term-tab .term-running { color:var(--fg-warning); }
 .term-tab .term-close { font-size:12px; opacity:0; cursor:pointer; margin-left:2px; }
 .term-tab:hover .term-close { opacity:0.6; }
 .term-tab .term-close:hover { opacity:1; color:var(--fg-error); }
@@ -15710,13 +15714,28 @@ function _minimapScrollTo(e){
 let _terminals=[];
 let _activeTermId=null;
 let _nextTermId=1;
+function _terminalHostId(meta){
+  if(!meta||typeof meta!=='object')return '';
+  const raw=meta.id??meta.hostId??meta.terminalId;
+  return raw===undefined||raw===null?'':String(raw);
+}
+function _terminalFromHostPayload(payload,name){
+  const hostId=_terminalHostId(payload);
+  if(hostId){
+    const byId=_terminals.find(t=>String(t.hostId||'')===hostId);
+    if(byId)return byId;
+  }
+  const termName=String((payload&&payload.name)||name||'');
+  return termName?_terminals.find(t=>t.name===termName):null;
+}
 function _createTerminal(name,metadata){
   const id=_nextTermId++;
+  const meta=(metadata&&typeof metadata==='object')?metadata:{};
   const outputEl=document.createElement('div');
   outputEl.className='terminal-output';outputEl.id='term-out-'+id;
   outputEl.style.display='none';
   $('terminal-panel').appendChild(outputEl);
-  const term={id:id,name:name||('Terminal '+id),metadata:(metadata&&typeof metadata==='object')?metadata:{},dimensions:null,outputEl:outputEl,history:[],historyIdx:-1,inputText:''};
+  const term={id:id,hostId:_terminalHostId(meta),name:name||meta.name||('Terminal '+id),metadata:meta,dimensions:null,shellIntegration:!!meta.shellIntegration,shellCwd:null,shellEnv:null,shellExecution:null,outputEl:outputEl,history:[],historyIdx:-1,inputText:''};
   _terminals.push(term);
   _renderTermTabs();_switchTerminal(id);
   $('term-tab-bar').style.display='flex';
@@ -15769,8 +15788,10 @@ function _renderTermTabs(){
     const tab=document.createElement('div');tab.className='term-tab'+(t.id===_activeTermId?' active':'');
     const icon=_terminalIconText(meta);
     const dims=t.dimensions&&t.dimensions.columns&&t.dimensions.rows?(' • '+t.dimensions.columns+'x'+t.dimensions.rows):'';
-    tab.innerHTML=(icon?'<span class="term-icon">'+esc(icon)+'</span> ':'')+esc(t.name)+'<span class="term-close" onclick="_closeTerminal('+t.id+',event)">&#x2715;</span>';
-    tab.title=[meta.message||'',dims?dims.slice(3):''].filter(Boolean).join('\n');
+    const shell=t.shellIntegration?'<span class="term-shell'+(t.shellExecution&&t.shellExecution.event==='start'?' term-running':'')+'">SI</span> ':'';
+    tab.innerHTML=(icon?'<span class="term-icon">'+esc(icon)+'</span> ':'')+shell+esc(t.name)+'<span class="term-close" onclick="_closeTerminal('+t.id+',event)">&#x2715;</span>';
+    const command=t.shellExecution&&t.shellExecution.commandLine?t.shellExecution.commandLine:'';
+    tab.title=[meta.message||'',dims?dims.slice(3):'',t.shellIntegration?'Shell Integration':'',command?('Command: '+command):''].filter(Boolean).join('\n');
     const colorId=_terminalThemeColor(meta);
     if(colorId)tab.dataset.themeColor=colorId;else delete tab.dataset.themeColor;
     tab.onclick=()=>_switchTerminal(t.id);bar.appendChild(tab);
@@ -15791,6 +15812,38 @@ function _updateTerminalDimensions(name,dimensions){
   term.dimensions=(Number.isFinite(cols)&&Number.isFinite(rows))?{columns:cols,rows:rows}:null;
   _renderTermTabs();
 }
+function _setActiveTerminalFromHost(terminal){
+  let term=_terminalFromHostPayload(terminal);
+  if(!term&&terminal&&terminal.name)term=_createTerminal(terminal.name,terminal);
+  if(!term)return;
+  term.hostId=_terminalHostId(terminal)||term.hostId;
+  term.metadata={...(term.metadata||{}),...((terminal&&typeof terminal==='object')?terminal:{})};
+  _switchTerminal(term.id);
+}
+function _updateTerminalShellIntegration(record){
+  const payload=record&&record.terminal?record.terminal:{};
+  let term=_terminalFromHostPayload(payload);
+  if(!term&&payload.name)term=_createTerminal(payload.name,payload);
+  if(!term)return;
+  term.hostId=_terminalHostId(payload)||term.hostId;
+  term.metadata={...(term.metadata||{}),...payload,shellIntegration:true};
+  term.shellIntegration=true;
+  term.shellCwd=record?record.cwd:null;
+  term.shellEnv=record?record.env:null;
+  _renderTermTabs();
+}
+function _updateTerminalShellExecution(record){
+  const payload=record&&record.terminal?record.terminal:{};
+  let term=_terminalFromHostPayload(payload);
+  if(!term&&payload.name)term=_createTerminal(payload.name,payload);
+  if(!term)return;
+  const execution=record&&record.execution?record.execution:{};
+  const line=execution.commandLine&&execution.commandLine.value?String(execution.commandLine.value):'';
+  term.hostId=_terminalHostId(payload)||term.hostId;
+  term.shellIntegration=true;
+  term.shellExecution={event:record&&record.event?String(record.event):'',commandLine:line,exitCode:record?record.exitCode:null};
+  _renderTermTabs();
+}
 function _getActiveTermOutput(){
   if(_activeTermId!==null){const t=_terminals.find(t=>t.id===_activeTermId);if(t)return t.outputEl}
   return $('terminal-output');
@@ -15801,7 +15854,7 @@ function _getActiveTermHistory(){
 }
 clearTerminal=function(){const el=_getActiveTermOutput();if(el)el.innerHTML=''};
 window.clearTerminal=clearTerminal;
-window._createTerminal=_createTerminal;window._closeTerminal=_closeTerminal;window._renameTerminal=_renameTerminal;window._updateTerminalDimensions=_updateTerminalDimensions;
+window._createTerminal=_createTerminal;window._closeTerminal=_closeTerminal;window._renameTerminal=_renameTerminal;window._updateTerminalDimensions=_updateTerminalDimensions;window._setActiveTerminalFromHost=_setActiveTerminalFromHost;window._updateTerminalShellIntegration=_updateTerminalShellIntegration;window._updateTerminalShellExecution=_updateTerminalShellExecution;
 // Re-wire terminal input for per-tab history and output
 (function(){
   const termInput=$('term-input');if(!termInput)return;

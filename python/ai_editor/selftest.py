@@ -6033,10 +6033,18 @@ console.log("quick input filter helpers ok");
            and "registerTerminalLinkProvider(provider)" in node_ext_host_source
            and "terminal_link_request" in node_ext_host_source
            and "terminal_link_activate" in node_ext_host_source
+           and "class TerminalShellIntegration" in node_ext_host_source
+           and "onDidChangeTerminalShellIntegration" in node_ext_host_source
+           and "onDidStartTerminalShellExecution" in node_ext_host_source
+           and "TerminalShellExecutionCommandLineConfidence" in node_ext_host_source
+           and "type: 'terminal_active'" in node_ext_host_source
            and "msg_type == \"terminal_command\"" in extension_host_source
            and "msg_type == \"terminal_write\"" in extension_host_source
            and "msg_type == \"terminal_rename\"" in extension_host_source
            and "msg_type == \"terminal_dimensions\"" in extension_host_source
+           and "msg_type == \"terminal_active\"" in extension_host_source
+           and "msg_type == \"terminal_shell_integration\"" in extension_host_source
+           and "terminal_shell_executions(self)" in extension_host_source
            and "def request_terminal_links_result(" in extension_host_source
            and "def activate_terminal_link_result(" in extension_host_source
            and "msg.get(\"metadata\")" in extension_host_source
@@ -6045,10 +6053,16 @@ console.log("quick input filter helpers ok");
            and "def rename_terminal(self, previous_name: str, name: str)"
            in app_source
            and "def update_terminal_dimensions(" in app_source
+           and "def set_active_terminal(self, terminal: Dict[str, Any])"
+           in app_source
+           and "def update_terminal_shell_integration(" in app_source
            and "metadata: Optional[Dict[str, Any]] = None" in app_source
            and "_createTerminal(name,metadata||{})" in app_source
-           and "metadata:(metadata&&typeof metadata==='object')?metadata:{}"
-           in html
+           and "function _terminalHostId(meta)" in html
+           and "function _setActiveTerminalFromHost(terminal)" in html
+           and "function _updateTerminalShellIntegration(record)" in html
+           and "function _updateTerminalShellExecution(record)" in html
+           and "term-shell" in html
            and "function _renameTerminal(previousName,name)" in html
            and "function _updateTerminalDimensions(name,dimensions)" in html
            and "function _terminalIconText(meta)" in html
@@ -13372,6 +13386,15 @@ async function activate(context) {
       vscode.window.onDidChangeTerminalState(terminal => {
         events.push('state:' + terminal.name + ':' + terminal.state.isInteractedWith);
       }),
+      vscode.window.onDidChangeTerminalShellIntegration(event => {
+        events.push('shell:' + event.terminal.name + ':' + !!event.shellIntegration);
+      }),
+      vscode.window.onDidStartTerminalShellExecution(event => {
+        events.push('shellStart:' + event.terminal.name + ':' + event.execution.commandLine.value);
+      }),
+      vscode.window.onDidEndTerminalShellExecution(event => {
+        events.push('shellEnd:' + event.terminal.name + ':' + event.execution.commandLine.value + ':' + event.exitCode);
+      }),
       vscode.window.onDidCloseTerminal(terminal => {
         events.push('close:' + terminal.name);
       }),
@@ -13403,10 +13426,25 @@ async function activate(context) {
       shellIntegrationMissing: terminal.shellIntegration === undefined,
     };
     terminal.show();
+    const shellAfterShow = terminal.shellIntegration;
+    const shellExecution = shellAfterShow
+      ? shellAfterShow.executeCommand('echo', ['shell integration'])
+      : null;
     terminal.sendText('echo node-terminal');
     terminal.sendText('typed only', false);
+    await new Promise(resolve => setTimeout(resolve, 10));
     terminal.hide();
     const interacted = terminal.state.isInteractedWith === true;
+    const shell = {
+      available: !!shellAfterShow,
+      cwd: shellAfterShow && shellAfterShow.cwd && shellAfterShow.cwd.toString(),
+      envTrusted: shellAfterShow && shellAfterShow.env && shellAfterShow.env.isTrusted,
+      envValue: shellAfterShow && shellAfterShow.env && shellAfterShow.env.value,
+      commandLine: shellExecution && shellExecution.commandLine && shellExecution.commandLine.value,
+      confidence: shellExecution && shellExecution.commandLine && shellExecution.commandLine.confidence,
+      hasRead: !!(shellExecution && shellExecution.read),
+      enumHigh: vscode.TerminalShellExecutionCommandLineConfidence.High,
+    };
     terminal.dispose();
     const after = {
       beforeCount,
@@ -13469,7 +13507,7 @@ async function activate(context) {
       exitReason: ptyTerminal.exitStatus && ptyTerminal.exitStatus.reason,
     };
     disposables.forEach(disposable => disposable.dispose());
-    return { created, after, ptyAfter, interacted, events };
+    return { created, after, ptyAfter, interacted, shell, events };
   });
   vscode.commands.registerCommand('selftest.node.terminalProfileProbe', async () => {
     const provider = {
@@ -14367,6 +14405,40 @@ module.exports = { activate, deactivate };
                         "data": event,
                     })
 
+                def set_active_terminal(self, terminal):
+                    event = {
+                        "event": "active",
+                        "terminal": (
+                            terminal if isinstance(terminal, dict) else {}),
+                    }
+                    self.terminal_events.append(event)
+                    emitted_events.append({
+                        "event": "terminal",
+                        "data": event,
+                    })
+
+                def update_terminal_shell_integration(self, record):
+                    event = {
+                        "event": "shellIntegration",
+                        "record": record if isinstance(record, dict) else {},
+                    }
+                    self.terminal_events.append(event)
+                    emitted_events.append({
+                        "event": "terminal",
+                        "data": event,
+                    })
+
+                def update_terminal_shell_execution(self, record):
+                    event = {
+                        "event": "shellExecution",
+                        "record": record if isinstance(record, dict) else {},
+                    }
+                    self.terminal_events.append(event)
+                    emitted_events.append({
+                        "event": "terminal",
+                        "data": event,
+                    })
+
                 def run_terminal_command(self, name, text):
                     event = {
                         "event": "command",
@@ -14577,6 +14649,14 @@ module.exports = { activate, deactivate };
                 except Exception as exc:
                     node_terminal_probe = {"_error": str(exc)}
                 node_terminal_events = list(node_ui_bridge.terminal_events)
+                node_active_terminal_after_probe = (
+                    node_host.active_terminal() if node_started else {})
+                node_terminal_shell_integrations = (
+                    node_host.terminal_shell_integrations()
+                    if node_started else [])
+                node_terminal_shell_executions = (
+                    node_host.terminal_shell_executions()
+                    if node_started else [])
                 node_terminal_profile_command_registered = _wait_until(
                     lambda: "selftest.node.terminalProfileProbe"
                     in api._ext_host.commands.list_commands(),
@@ -16939,6 +17019,9 @@ module.exports = { activate, deactivate };
                 node_terminal_runtime_events = (
                     node_terminal_probe.get("events", [])
                     if isinstance(node_terminal_probe, dict) else [])
+                node_terminal_shell = (
+                    node_terminal_probe.get("shell", {})
+                    if isinstance(node_terminal_probe, dict) else {})
                 _check("node host terminal APIs use existing UI bridge",
                        node_started is True
                        and node_terminal_command_registered
@@ -16959,6 +17042,16 @@ module.exports = { activate, deactivate };
                        and node_terminal_created.get("transient") is True
                        and node_terminal_created.get(
                            "shellIntegrationMissing") is True
+                       and node_terminal_shell.get("available") is True
+                       and node_terminal_shell.get("envTrusted") is True
+                       and node_terminal_shell.get(
+                           "envValue", {}).get("NODE_TERMINAL_SELFTEST")
+                       == "1"
+                       and node_terminal_shell.get("commandLine")
+                       == 'echo "shell integration"'
+                       and node_terminal_shell.get("confidence")
+                       == node_terminal_shell.get("enumHigh") == 2
+                       and node_terminal_shell.get("hasRead") is True
                        and node_terminal_probe.get("interacted") is True
                        and node_terminal_after.get("count")
                        == node_terminal_after.get("beforeCount")
@@ -16969,6 +17062,12 @@ module.exports = { activate, deactivate };
                        and "open:Node Terminal" in node_terminal_runtime_events
                        and "active:Node Terminal" in node_terminal_runtime_events
                        and "state:Node Terminal:true"
+                       in node_terminal_runtime_events
+                       and "shell:Node Terminal:true"
+                       in node_terminal_runtime_events
+                       and 'shellStart:Node Terminal:echo "shell integration"'
+                       in node_terminal_runtime_events
+                       and 'shellEnd:Node Terminal:echo "shell integration":undefined'
                        in node_terminal_runtime_events
                        and "close:Node Terminal" in node_terminal_runtime_events
                        and node_terminal_pty.get("openCount") == 1
@@ -17002,6 +17101,36 @@ module.exports = { activate, deactivate };
                            .get("id") == "terminal-powershell"
                            and item.get("metadata", {}).get("color", {})
                            .get("id") == "terminal.ansiGreen"
+                           and item.get("metadata", {}).get("id")
+                           for item in node_terminal_events)
+                       and node_active_terminal_after_probe == {}
+                       and any(
+                           item.get("event") == "active"
+                           and item.get("terminal", {}).get("name")
+                           == "Node Terminal"
+                           for item in node_terminal_events)
+                       and any(
+                           item.get("terminal", {}).get("name")
+                           == "Node Terminal"
+                           for item in node_terminal_shell_integrations)
+                       and any(
+                           item.get("event") == "shellIntegration"
+                           and item.get("record", {}).get(
+                               "terminal", {}).get("name") == "Node Terminal"
+                           for item in node_terminal_events)
+                       and any(
+                           item.get("event") == "start"
+                           and item.get("terminal", {}).get("name")
+                           == "Node Terminal"
+                           and item.get("execution", {}).get(
+                               "commandLine", {}).get("value")
+                           == 'echo "shell integration"'
+                           for item in node_terminal_shell_executions)
+                       and any(
+                           item.get("event") == "shellExecution"
+                           and item.get("record", {}).get("event") == "start"
+                           and item.get("record", {}).get(
+                               "terminal", {}).get("name") == "Node Terminal"
                            for item in node_terminal_events)
                        and any(
                            item.get("event") == "hide"
@@ -17042,6 +17171,9 @@ module.exports = { activate, deactivate };
                        json.dumps({
                            "probe": node_terminal_probe,
                            "bridge": node_terminal_events,
+                           "active": node_active_terminal_after_probe,
+                           "shellIntegrations": node_terminal_shell_integrations,
+                           "shellExecutions": node_terminal_shell_executions,
                        }, ensure_ascii=False, default=str))
                 _check("node host terminal profile providers create dynamic terminals",
                        node_started is True
