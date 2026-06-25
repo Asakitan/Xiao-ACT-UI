@@ -3269,7 +3269,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "interactive-request" in html
            and "interactive-response" in html
            and "chat-welcome-mark" in html
+           and "chat-welcome-meta" in html
+           and "chat-welcome-actions" in html
            and "welcome-prompt-btn" in html
+           and 'id="chat-toolbar-head" aria-live="polite"' in html
            and "chat-composer-action" in html
            and "chat-composer-meta" in html
            and "attach-name" in html
@@ -3279,11 +3282,14 @@ def test_phase1_ai_editor_regressions() -> None:
             and "const body=latestChatMessageBody('assistant');" in html)
     _check("frontend Assistant suppresses null and empty message turns",
            "function normalizeChatMessageText(text,role)" in html
+           and "function isChatEmptyLiteral(value)" in html
            and "function chatMessageBodyHasContent(body)" in html
            and "function removeChatMessageBody(body)" in html
+           and "function pruneEmptyChatMessages()" in html
            and "if(!content&&role!=='user')return;" in html
            and "const finalMarkdown=normalizeChatMessageText(streamBuf||d.content||'','assistant');" in html
            and "if(!chatMessageBodyHasContent(currentMsgBody))removeChatMessageBody(currentMsgBody);" in html
+           and "pruneEmptyChatMessages();" in html
            and "const message=normalizeChatSystemText(d&&d.error!==undefined?d.error:d)||'Unknown error';" in html
            and "onStreamEnd=function(d){\n  d=d||{};" in html)
     _check("frontend Assistant tracks Copilot-style session and input state",
@@ -3407,10 +3413,22 @@ def test_phase1_ai_editor_regressions() -> None:
            and "setChatInputValue((item.subCommand?String(item.subCommand)+' ':'')+message);doSend()" in html)
     _check("frontend Assistant composer uses Copilot-style send readiness and pending state",
            "function chatComposerHasSendableValue()" in html
+           and "function chatModePlaceholder()" in html
+           and "function chatControlDisplayState()" in html
+           and "function renderAssistantStatePills(parent,pillClass)" in html
+           and "function refreshChatWelcomeState()" in html
+           and "function renderChatComposerHeader()" in html
            and "function updateChatComposerState()" in html
            and "function setChatStreamingState(active)" in html
+           and "container.classList.toggle('sendable',sendable&&!streaming);" in html
+           and "container.classList.toggle('empty',!sendable);" in html
+           and "container.classList.toggle('streaming',streaming);" in html
+           and "messages.setAttribute('aria-busy',streaming?'true':'false');" in html
+           and "input.placeholder=chatModePlaceholder()" in html
            and "panel.dataset.chatComposerSendable=sendable?'true':'false';" in html
            and "panel.dataset.chatComposerStreaming=streaming?'true':'false';" in html
+           and "panel.dataset.chatMode=normalizeMode" in html
+           and "panel.dataset.chatProvider=String(config.provider||'');" in html
            and "function renderAssistantPending(body,label)" in html
            and "className='chat-response-pending'" in html
            and "@keyframes assistantPendingPulse" in html

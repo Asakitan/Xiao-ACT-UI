@@ -566,6 +566,18 @@ body.window-resizing * { cursor:inherit !important; }
 .chat-welcome-title { color:var(--fg); font-size:15px; font-weight:600; margin-bottom:6px; }
 .chat-welcome-desc { max-width:420px; color:var(--fg-dim); font-size:12px; line-height:1.45; margin-bottom:18px; }
 .chat-welcome-link { color:var(--fg-accent); cursor:pointer; text-decoration:underline; text-underline-offset:2px; }
+.chat-welcome-meta { display:flex; flex-wrap:wrap; gap:6px; justify-content:center; margin:-6px 0 14px; }
+.chat-welcome-pill,.chat-head-pill { display:inline-flex; align-items:center; gap:5px; max-width:220px;
+  border:1px solid var(--border); border-radius:999px; background:var(--bg3); color:var(--fg-dim);
+  padding:3px 8px; font:11px/16px var(--sans); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.chat-welcome-pill.strong,.chat-head-pill.strong { color:var(--fg); border-color:color-mix(in srgb, var(--border-focus) 45%, var(--border)); }
+.chat-welcome-actions { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-top:14px; }
+.chat-welcome-action { height:26px; border:1px solid var(--border); border-radius:4px; background:var(--bg3);
+  color:var(--fg); padding:0 10px; font:12px var(--sans); cursor:pointer; }
+.chat-welcome-action.primary { color:#fff; background:var(--btn); border-color:var(--btn); }
+.chat-welcome-action:hover,.chat-welcome-action:focus { border-color:var(--border-focus); background:var(--bg-hover); outline:none; }
+.chat-welcome-action.primary:hover,.chat-welcome-action.primary:focus { background:var(--btn-hover); }
+.chat-welcome-warning { max-width:520px; margin:0 0 12px; color:var(--fg-warning); font-size:12px; }
 .welcome-prompts { display:grid; grid-template-columns:1fr 1fr; gap:7px; width:100%; max-width:520px; }
 .welcome-prompt-btn { background:var(--bg3); color:var(--fg); border:1px solid var(--border);
   border-radius:6px; padding:8px 10px; font:12px/1.35 var(--sans); cursor:pointer; text-align:left;
@@ -729,6 +741,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-input-container { position:relative; border-radius:8px; border:1px solid var(--border);
   background:var(--bg3); transition:border-color .15s, box-shadow .35s, background .15s; overflow:visible; }
 .chat-input-container:focus-within { border-color:var(--border-focus); box-shadow:0 0 0 1px var(--border-focus); }
+.chat-input-container.sendable { border-color:color-mix(in srgb, var(--border-focus) 35%, var(--border)); }
+.chat-input-container.empty .chat-toolbar { border-top-color:transparent; }
 .chat-input-container.completion-open { border-color:color-mix(in srgb, var(--fg-accent) 65%, var(--border-focus));
   box-shadow:0 0 0 1px color-mix(in srgb, var(--fg-accent) 45%, transparent), 0 -8px 28px #00000026; }
 .chat-input-container.working { border-color:transparent; }
@@ -758,6 +772,13 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-response-pending .pending-dot:nth-child(3) { animation-delay:.28s; }
 @keyframes assistantPendingPulse { 0%,80%,100%{opacity:.35;transform:translateY(0)}
   40%{opacity:1;transform:translateY(-2px)} }
+.chat-toolbar-head { display:none; align-items:center; gap:6px; flex-wrap:wrap; min-height:26px;
+  padding:7px 8px 0; color:var(--fg-dim); }
+.chat-toolbar-head.has-state { display:flex; }
+.chat-head-spacer { flex:1; min-width:8px; }
+.chat-head-status { color:var(--fg-dim); font:10px/16px var(--mono); text-transform:uppercase; }
+.chat-head-status.running { color:var(--fg-accent); }
+.chat-head-status.ready { color:var(--fg-success); }
 .chat-input-row { display:flex; gap:0; align-items:flex-end; }
 .chat-input { flex:1; background:transparent; color:var(--fg); border:none;
   padding:11px 13px 9px; font:13px/20px var(--sans); resize:none;
@@ -768,9 +789,11 @@ pre.code-block code .type { color:var(--fg-type); }
   flex-shrink:0; padding:0; }
 .send-btn:hover { background:var(--btn-hover); }
 .send-btn:disabled { opacity:0.3; cursor:default; }
+.chat-input-container.sendable .send-btn:not(:disabled) { box-shadow:0 0 0 1px color-mix(in srgb, var(--btn) 35%, transparent); }
+.chat-input-container.streaming .send-btn { background:var(--fg-error); }
 .send-btn svg { width:14px; height:14px; }
 .chat-toolbar { display:flex; align-items:center; gap:7px; padding:0 8px 7px; font-size:11px;
-  border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent); }
+  border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent); flex-wrap:wrap; }
 .chat-toolbar .hint { color:var(--fg-dim); }
 .chat-toolbar .spacer { flex:1; }
 .chat-session-chip { max-width:170px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
@@ -833,7 +856,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-used-context { display:flex; flex-direction:column; gap:4px; margin-bottom:2px; }
 .chat-used-context-title { color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; letter-spacing:.5px; }
 
-.chat-control-strip { display:flex; align-items:center; gap:4px; flex-wrap:wrap; min-width:0; }
+.chat-control-strip { display:flex; align-items:center; gap:4px; flex-wrap:wrap; min-width:0; flex:1 1 auto; }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
   border-radius:999px; background:var(--bg3); color:var(--fg); font:11px var(--sans);
   outline:none; min-width:0; }
@@ -898,6 +921,14 @@ pre.code-block code .type { color:var(--fg-type); }
 .model-chip .provider-badge { font-size:9px; opacity:0.6; }
 .toolbar-btn { color:var(--fg-dim); cursor:pointer; padding:2px 8px; border-radius:3px; }
 .toolbar-btn:hover { background:var(--bg-hover); color:var(--fg); }
+@media (max-width:760px){
+  .chat-input-area { padding:6px 8px 8px; }
+  .chat-messages-inner { padding:12px 12px 16px; }
+  .welcome-prompts { grid-template-columns:1fr; }
+  .chat-select-chip { max-width:118px; }
+  .chat-model-inline { width:96px; }
+  .chat-composer-meta { width:100%; justify-content:flex-end; }
+}
 
 /* Provider panels */
 .provider-native-host { background:var(--bg); }
@@ -1885,6 +1916,7 @@ pre.code-block { overflow:visible; }
             <div style="position:relative">
               <div class="slash-popup" id="slash-popup" role="listbox" aria-label="Slash commands"></div>
               <div class="chat-input-container" id="chat-input-container">
+                <div class="chat-toolbar-head" id="chat-toolbar-head" aria-live="polite"></div>
                 <div class="chat-input-row">
                   <textarea class="chat-input" id="chat-input" rows="1" data-i18n="ask_placeholder" placeholder="Ask anything... (/ commands, @ context, # tools)" aria-autocomplete="list" aria-expanded="false"></textarea>
                   <button class="send-btn" id="send-btn" onclick="doSend()" title="Send"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 2.5l-5 5h3.5V13h3V7.5H13L8 2.5z"/></svg></button>
@@ -3575,6 +3607,75 @@ try{const saved=normalizeUiLanguage(localStorage.getItem('sao-ai-lang'));if(save
 const _SEND_SVG='<svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 2.5l-5 5h3.5V13h3V7.5H13L8 2.5z"/></svg>';
 const _STOP_SVG='<svg viewBox="0 0 16 16" fill="currentColor"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>';
 function _setSendIcon(streaming){$('send-btn').innerHTML=streaming?_STOP_SVG:_SEND_SVG}
+function chatModePlaceholder(){
+  const mode=normalizeMode(typeof currentMode==='string'?currentMode:'agent');
+  if(_curLang==='zh'){
+    if(mode==='agent')return '让 Agent 完成任务... (/ 命令, @ 上下文, # 工具)';
+    if(mode==='plan')return '描述目标，让 Assistant 先规划...';
+    return '向 Assistant 提问...';
+  }
+  if(mode==='agent')return 'Ask Agent to complete a task... (/ commands, @ context, # tools)';
+  if(mode==='plan')return 'Describe the goal and ask for a plan...';
+  return 'Ask Assistant a question...';
+}
+function chatControlDisplayState(){
+  const provider=providerLabel(config.provider||'openai');
+  const model=String(config.model||'').trim();
+  const mode=normalizeMode(typeof currentMode==='string'?currentMode:'agent');
+  const agentId=typeof activeAgentId==='string'?activeAgentId:'';
+  const agent=agentId?String(agentId):'Default';
+  return {provider,model,mode,agent,agentId};
+}
+function appendChatHeadPill(parent,label,strong){
+  const pill=document.createElement('span');
+  pill.className='chat-head-pill'+(strong?' strong':'');
+  pill.textContent=label;
+  pill.title=label;
+  parent.appendChild(pill);
+  return pill;
+}
+function renderAssistantStatePills(parent,pillClass){
+  if(!parent)return;
+  parent.innerHTML='';
+  const state=chatControlDisplayState();
+  [state.provider+(state.model?' · '+state.model:''),t('mode_'+state.mode)||state.mode,'Agent: '+state.agent].forEach((label,idx)=>{
+    const pill=document.createElement('span');
+    pill.className=pillClass+(idx===0?' strong':'');
+    pill.textContent=label;
+    pill.title=label;
+    parent.appendChild(pill);
+  });
+}
+function refreshChatWelcomeState(){
+  const welcome=$('chat-welcome-msg');if(!welcome)return;
+  renderAssistantStatePills(welcome.querySelector('.chat-welcome-meta'),'chat-welcome-pill');
+  let warning=welcome.querySelector('.chat-welcome-warning');
+  const missingKey=!config.api_key&&config.provider!=='ollama';
+  if(missingKey&&!warning){
+    warning=document.createElement('div');warning.className='chat-welcome-warning';
+    const desc=welcome.querySelector('.chat-welcome-desc');
+    welcome.insertBefore(warning,desc||welcome.firstChild);
+  }
+  if(warning){
+    warning.textContent=missingKey?'⚠ '+t('no_api_key'):'';
+    warning.style.display=missingKey?'':'none';
+  }
+}
+function renderChatComposerHeader(){
+  const head=$('chat-toolbar-head');if(!head)return;
+  const state=chatControlDisplayState();
+  head.innerHTML='';
+  appendChatHeadPill(head,t('mode_'+state.mode)||state.mode,true);
+  appendChatHeadPill(head,state.provider+(state.model?' · '+state.model:''),!!state.model);
+  appendChatHeadPill(head,'Agent: '+state.agent,!!state.agentId);
+  const spacer=document.createElement('span');spacer.className='chat-head-spacer';head.appendChild(spacer);
+  const status=document.createElement('span');
+  status.className='chat-head-status '+(streaming?'running':(chatComposerHasSendableValue()?'ready':''));
+  status.textContent=streaming?t('thinking'):(chatComposerHasSendableValue()?t('send'):t('ready'));
+  head.appendChild(status);
+  head.classList.add('has-state');
+  refreshChatWelcomeState();
+}
 function chatComposerHasSendableValue(){
   const input=$('chat-input');
   const hasText=!!(input&&String(input.value||'').trim());
@@ -3584,18 +3685,33 @@ function chatComposerHasSendableValue(){
 }
 function updateChatComposerState(){
   const send=$('send-btn'),stop=$('stop-btn'),panel=$('chat-panel'),input=$('chat-input');
+  const container=$('chat-input-container'),messages=$('chat-messages');
   const sendable=chatComposerHasSendableValue();
   if(send){
     send.disabled=streaming||!sendable;
     send.setAttribute('aria-disabled',send.disabled?'true':'false');
-    send.title=streaming?'Response in progress':'Send';
+    send.setAttribute('aria-label',streaming?t('stop'):t('send'));
+    send.title=streaming?'Response in progress':(sendable?t('send'):t('ask_placeholder'));
   }
   if(stop)stop.style.display=streaming?'':'none';
+  if(container){
+    container.classList.toggle('sendable',sendable&&!streaming);
+    container.classList.toggle('empty',!sendable);
+    container.classList.toggle('streaming',streaming);
+    container.dataset.mode=normalizeMode(typeof currentMode==='string'?currentMode:'agent');
+    container.dataset.provider=String(config.provider||'');
+    container.dataset.agent=(typeof activeAgentId==='string'?activeAgentId:'')||'';
+  }
   if(panel){
     panel.dataset.chatComposerSendable=sendable?'true':'false';
     panel.dataset.chatComposerStreaming=streaming?'true':'false';
+    panel.dataset.chatMode=normalizeMode(typeof currentMode==='string'?currentMode:'agent');
+    panel.dataset.chatProvider=String(config.provider||'');
+    panel.dataset.chatAgent=(typeof activeAgentId==='string'?activeAgentId:'')||'';
   }
-  if(input)input.dataset.sendable=sendable?'true':'false';
+  if(messages)messages.setAttribute('aria-busy',streaming?'true':'false');
+  if(input){input.dataset.sendable=sendable?'true':'false';input.placeholder=chatModePlaceholder()}
+  renderChatComposerHeader();
 }
 function setChatStreamingState(active){
   streaming=!!active;
@@ -3616,15 +3732,21 @@ function renderAssistantPending(body,label){
   pending.innerHTML='<span class="pending-dot"></span><span class="pending-dot"></span><span class="pending-dot"></span><span class="pending-label">'+esc(label||t('thinking'))+'</span>';
   body.appendChild(pending);
 }
+function isChatEmptyLiteral(value){
+  const normalized=String(value==null?'':value).replace(/\u00a0/g,' ').trim().toLowerCase();
+  return !normalized||normalized==='null'||normalized==='undefined'||normalized==='none'||normalized==='[object object]';
+}
 function normalizeChatSystemText(text){
   if(text==null)return '';
   if(typeof text==='object'){
     if(typeof text.message==='string')text=text.message;
     else if(typeof text.error==='string')text=text.error;
+    else if(typeof text.content==='string')text=text.content;
+    else if(Object.prototype.hasOwnProperty.call(text,'value'))text=text.value;
     else return '';
   }
-  const value=String(text).trim();
-  return value&&value!=='null'&&value!=='undefined'?value:'';
+  const value=String(text).replace(/\u00a0/g,' ').trim();
+  return isChatEmptyLiteral(value)?'':value;
 }
 function normalizeChatMessageText(text,role){
   if(role==='system')return normalizeChatSystemText(text);
@@ -3633,19 +3755,29 @@ function normalizeChatMessageText(text,role){
     if(typeof text.content==='string')text=text.content;
     else if(typeof text.message==='string')text=text.message;
     else if(typeof text.error==='string')text='⚠ '+text.error;
+    else if(Object.prototype.hasOwnProperty.call(text,'value'))text=text.value;
     else return '';
   }
-  const value=String(text).trim();
-  return value&&value!=='null'&&value!=='undefined'?value:'';
+  const value=String(text).replace(/\u00a0/g,' ').trim();
+  return isChatEmptyLiteral(value)?'':value;
 }
 function chatMessageBodyHasContent(body){
   if(!body)return false;
   if(String(body.textContent||'').trim())return true;
-  return !!body.querySelector('.tool-call,.thinking-block,.chat-response-references,.chat-change-card,.followups,.confirm-bar,img');
+  return !!body.querySelector('.tool-call,.thinking-block,.chat-response-pending,.chat-response-references,.chat-change-card,.followups,.confirm-bar,img');
 }
 function removeChatMessageBody(body){
   const msg=body&&body.closest?body.closest('.msg'):null;
   if(msg)msg.remove();
+  showChatWelcomeIfEmpty();
+}
+function pruneEmptyChatMessages(){
+  chatConversationItems().forEach(msg=>{
+    const body=msg.querySelector('.msg-body');
+    if(!body||msg.dataset.role==='user')return;
+    const text=normalizeChatMessageText(body.textContent||'',msg.dataset.role||'assistant');
+    if(!text&&!chatMessageBodyHasContent(body))msg.remove();
+  });
   showChatWelcomeIfEmpty();
 }
 function ensureChatMessagesInner(){
@@ -11218,6 +11350,7 @@ function onStreamEnd(d){
     if(d.error){const e=document.createElement('div');e.className='error-text';e.textContent='⚠ '+d.error;currentMsgBody.appendChild(e)}
     if(!chatMessageBodyHasContent(currentMsgBody))removeChatMessageBody(currentMsgBody);
   }
+  pruneEmptyChatMessages();
   if(d.usage){
     updateContextUsage(totalTokens+(d.usage.total_tokens||0));
     // Parse prompt_tokens_details for tooltip (cached_tokens, reasoning_tokens)
@@ -11286,6 +11419,7 @@ function onTokenWarning(d){
 function onError(d){
   const message=normalizeChatSystemText(d&&d.error!==undefined?d.error:d)||'Unknown error';
   appendSystem('⚠ Error: '+message);setStatus(t('status_error'))
+  pruneEmptyChatMessages();
 }
 function onIdle(){
   setStatus(t('ready'));streaming=false;
@@ -16029,6 +16163,7 @@ function updateModeUI(){
   document.querySelectorAll('.mode-popup-item[data-approval]').forEach(el=>{el.classList.toggle('active',el.dataset.approval===currentApproval)});
   const sa=$('status-approval');
   if(sa){sa.textContent=(APPROVAL_LABELS[currentApproval]||'◎')+' '+(t('approval_'+currentApproval)||currentApproval)}
+  if(typeof updateChatComposerState==='function')updateChatComposerState();
 }
 function toggleModePopup(){
   const popup=$('mode-popup');if(!popup)return;
@@ -21215,10 +21350,15 @@ function renderWelcome(){
   w.setAttribute('role','status');
   w.innerHTML='<div class="chat-welcome-mark">✦</div>'
     +'<div class="chat-welcome-title">'+esc(t('welcome_title'))+'</div>'
+    +'<div class="chat-welcome-meta"></div>'
+    +(!config.api_key&&config.provider!=='ollama'?'<div class="chat-welcome-warning">⚠ '+esc(t('no_api_key'))+'</div>':'')
     +'<div class="chat-welcome-desc">'
     +esc(t('welcome_desc'))+'<br>'
     +esc(t('welcome_settings'))+' <span class="chat-welcome-link" onclick="openSettings()">'+esc(t('welcome_settings_link'))+'</span></div>'
-    +'<div class="welcome-prompts"></div>';
+    +'<div class="welcome-prompts"></div>'
+    +'<div class="chat-welcome-actions"></div>';
+  const meta=w.querySelector('.chat-welcome-meta');
+  renderAssistantStatePills(meta,'chat-welcome-pill');
   const prompts=w.querySelector('.welcome-prompts');
   [t('prompt_explain'),t('prompt_write'),t('prompt_debug'),t('prompt_summarize')].forEach(s=>{
     const btn=document.createElement('button');btn.type='button';btn.className='welcome-prompt-btn';
@@ -21226,6 +21366,15 @@ function renderWelcome(){
     btn.textContent=s;
     btn.onclick=()=>{setChatInputValue(s);w.remove()};
     prompts.appendChild(btn);
+  });
+  const actions=w.querySelector('.chat-welcome-actions');
+  [
+    {label:t('new_chat_action'),cls:'primary',fn:()=>newChat()},
+    {label:'Attach Context',fn:()=>openChatContextPicker()},
+    {label:t('settings'),fn:()=>openSettings()},
+  ].forEach(item=>{
+    const btn=document.createElement('button');btn.type='button';btn.className='chat-welcome-action'+(item.cls?' '+item.cls:'');
+    btn.textContent=item.label;btn.onclick=item.fn;actions.appendChild(btn);
   });
   const note=document.createElement('div');
   note.className='chat-empty-note';
