@@ -4185,8 +4185,9 @@ function _matchDocumentSelector(selector, document) {
     const docLang = document.languageId || '';
     let docUri = document.uri;
     const docScheme = (docUri && docUri.scheme) || 'file';
-    const notebookType = document.notebookType;
-    const notebookUri = document.notebookUri;
+    const notebook = document.notebook || {};
+    const notebookType = document.notebookType ?? notebook.notebookType ?? notebook.type;
+    const notebookUri = document.notebookUri ?? notebook.uri;
     const selectors = Array.isArray(selector) ? selector : [selector];
     let best = 0;
     for (const sel of selectors) {

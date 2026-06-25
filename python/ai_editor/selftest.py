@@ -7435,6 +7435,20 @@ def test_vscode_api() -> None:
         notebook_doc.uri = api_uri.file("C:/workspace/cell.py")
         notebook_doc.notebookType = "jupyter-notebook"
         notebook_doc.notebookUri = api_uri.file("C:/workspace/demo.ipynb")
+        nested_notebook_doc = {
+            "languageId": "python",
+            "uri": api_uri.file("C:/workspace/cell.py"),
+            "notebook": {
+                "type": "jupyter-notebook",
+                "uri": {"fsPath": "C:/workspace/nested.ipynb"},
+            },
+        }
+        string_notebook_doc = {
+            "languageId": "python",
+            "uri": "vscode-notebook-cell:/workspace/cell.py",
+            "notebookType": "jupyter-notebook",
+            "notebookUri": "C:/workspace/string-demo.ipynb",
+        }
         _check("languages.match scores VS Code document selectors",
                api["languages"]["match"]("*", selector_doc) == 5
                and api["languages"]["match"](
@@ -7468,6 +7482,17 @@ def test_vscode_api() -> None:
                and api["languages"]["match"](
                    {"notebookType": "jupyter-notebook",
                     "pattern": "**/*.py"}, notebook_doc) == 0)
+        _check("languages.match handles nested notebook selectors",
+               api["languages"]["match"](
+                   {"notebookType": "jupyter-notebook",
+                    "pattern": "**/nested.ipynb"}, nested_notebook_doc) == 10
+               and api["languages"]["match"](
+                   {"notebookType": "*",
+                    "pattern": "**/string-demo.ipynb"}, string_notebook_doc)
+               == 10
+               and api["languages"]["match"](
+                   {"notebookType": "interactive",
+                    "pattern": "**/nested.ipynb"}, nested_notebook_doc) == 0)
 
         class _BadCompletionProvider:
             def provideCompletionItems(self, document, position, token, context):
@@ -11692,6 +11717,14 @@ async function activate(context) {
       notebookType: 'jupyter-notebook',
       notebookUri,
     };
+    const nestedNotebookDocument = {
+      languageId: 'python',
+      uri,
+      notebook: {
+        type: 'jupyter-notebook',
+        uri: vscode.Uri.file(String(uri.fsPath || '').replace(/[\\/]node_provider\.py$/, '/nested.ipynb')),
+      },
+    };
     return {
       star: vscode.languages.match('*', document),
       wildcardLanguage: vscode.languages.match({ language: '*' }, document),
@@ -11715,6 +11748,14 @@ async function activate(context) {
         notebookType: 'jupyter-notebook',
         pattern: '**/*.py',
       }, notebookDocument),
+      nestedNotebookPattern: vscode.languages.match({
+        notebookType: 'jupyter-notebook',
+        pattern: '**/nested.ipynb',
+      }, nestedNotebookDocument),
+      nestedNotebookMiss: vscode.languages.match({
+        notebookType: 'interactive',
+        pattern: '**/nested.ipynb',
+      }, nestedNotebookDocument),
     };
   });
   vscode.workspace.onDidChangeConfiguration(event => {
@@ -14764,7 +14805,9 @@ module.exports = { activate, deactivate };
                        and node_selector_scores.get("notebookExact") == 10
                        and node_selector_scores.get("notebookWildcard") == 5
                        and node_selector_scores.get("notebookPattern") == 10
-                       and node_selector_scores.get("notebookPatternMiss") == 0)
+                       and node_selector_scores.get("notebookPatternMiss") == 0
+                       and node_selector_scores.get("nestedNotebookPattern") == 10
+                       and node_selector_scores.get("nestedNotebookMiss") == 0)
                 node_completion_resolved_doc = (
                     node_completion_resolved.items[0].get("documentation")
                     if node_completion_resolved.items

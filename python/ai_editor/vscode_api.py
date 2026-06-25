@@ -5177,14 +5177,26 @@ class VscodeNamespace:
 
     @staticmethod
     def _document_selector_attr(document: Any, *names: str) -> Any:
+        if document is None:
+            return None
         if isinstance(document, dict):
             for name in names:
                 if name in document:
                     return document.get(name)
-            return None
+            notebook = document.get("notebook")
+        else:
+            notebook = None
         for name in names:
             if hasattr(document, name):
                 return getattr(document, name)
+        if notebook is None and hasattr(document, "notebook"):
+            notebook = getattr(document, "notebook")
+        if any(name in {"notebookUri", "notebook_uri"} for name in names):
+            return VscodeNamespace._document_selector_attr(
+                notebook, "uri", "notebookUri", "notebook_uri")
+        if any(name in {"notebookType", "notebook_type"} for name in names):
+            return VscodeNamespace._document_selector_attr(
+                notebook, "notebookType", "notebook_type", "type")
         return None
 
     @staticmethod
@@ -5204,7 +5216,13 @@ class VscodeNamespace:
             return False
         path_text = str(getattr(uri, "fs_path", "") or "").replace("\\", "/")
         uri_path = str(getattr(uri, "path", "") or "").replace("\\", "/")
-        candidates = {path_text, uri_path, os.path.basename(uri_path)}
+        fallback_path = VscodeNamespace._selector_path_text(uri)
+        candidates = {
+            path_text,
+            uri_path,
+            fallback_path,
+            os.path.basename(uri_path or fallback_path),
+        }
         base_path = VscodeNamespace._selector_path_text(base)
         if base_path and path_text:
             try:
