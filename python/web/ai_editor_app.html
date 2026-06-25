@@ -788,9 +788,14 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-response-ref:hover,.chat-change-card:hover,
 .chat-response-ref:focus,.chat-change-card:focus { border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
 .chat-response-ref .ref-path,.chat-change-card .change-path { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.chat-response-ref .ref-line,.chat-change-card .change-kind { color:var(--fg-dim); font:10px var(--mono); }
+.chat-response-ref .ref-line,.chat-response-ref .ref-col,.chat-change-card .change-kind { color:var(--fg-dim); font:10px var(--mono); }
 .chat-response-ref .ref-status { color:var(--fg-warning); font:10px var(--mono); text-transform:uppercase; }
+.chat-response-ref .ref-status.complete { color:var(--fg-success); }
+.chat-response-ref .ref-status.omitted { color:var(--fg-error); }
+.chat-response-ref .ref-status.partial { color:var(--fg-warning); }
 .chat-response-ref .ref-diff { color:var(--fg-success); font:10px var(--mono); }
+.chat-response-ref.anchor { border-color:color-mix(in srgb, var(--border-focus) 45%, var(--border)); }
+.chat-change-card.has-diff .change-kind { color:var(--fg-accent); }
 .chat-change-set { margin-top:7px; display:flex; flex-direction:column; gap:5px; }
 .chat-change-card { justify-content:flex-start; width:fit-content; }
 .chat-used-context { display:flex; flex-direction:column; gap:4px; margin-bottom:2px; }
@@ -3807,7 +3812,15 @@ document.addEventListener('mousedown',function(e){
   const onAttachButton=e.target&&e.target.closest&&e.target.closest('[aria-label="Attach context"]');
   if(!picker.contains(e.target)&&!onAttachButton)closeChatContextPicker();
 });
-function chatResponseReferenceKey(ref){return String(ref&&ref.path||'')+':'+String(ref&&ref.line||'')}
+function chatResponseReferenceKey(ref){return [ref&&ref.kind,ref&&ref.path,ref&&ref.line,ref&&ref.column,ref&&ref.endLine,ref&&ref.status].join(':')}
+function chatReferenceStatusKind(status){
+  if(!status)return '';
+  const kind=typeof status==='object'?status.kind:status;
+  if(kind===1||String(kind).toLowerCase()==='complete')return 'complete';
+  if(kind===2||String(kind).toLowerCase()==='partial')return 'partial';
+  if(kind===3||String(kind).toLowerCase()==='omitted')return 'omitted';
+  return String(kind||'').toLowerCase();
+}
 function chatReferenceStatusLabel(status){
   if(!status)return '';
   const kind=typeof status==='object'?status.kind:status;
@@ -3842,12 +3855,48 @@ function chatUriPath(value){
   }
   return '';
 }
-function chatReferenceLine(value){
+function chatReferenceLocationFromPath(path,line,column,endLine,endColumn){
+  let target=String(path||'').trim().replace(/^file:\/\//i,'').replace(/[),.;]+$/,'');
+  if(/^\/[A-Za-z]:[\\/]/.test(target))target=target.slice(1);
+  let parsedLine=line?Math.max(1,parseInt(line,10)||0):0;
+  let parsedColumn=column?Math.max(1,parseInt(column,10)||0):0;
+  let parsedEndLine=endLine?Math.max(1,parseInt(endLine,10)||0):0;
+  let parsedEndColumn=endColumn?Math.max(1,parseInt(endColumn,10)||0):0;
+  let m=target.match(/^(.*?)(?:#L?(\d+)(?::(\d+))?(?:-L?(\d+)(?::(\d+))?)?)$/i);
+  if(m&&m[1]){
+    target=m[1];parsedLine=parsedLine||parseInt(m[2],10)||0;parsedColumn=parsedColumn||parseInt(m[3],10)||0;
+    parsedEndLine=parsedEndLine||parseInt(m[4],10)||0;parsedEndColumn=parsedEndColumn||parseInt(m[5],10)||0;
+  }else{
+    m=target.match(/^(.+?):(\d+)(?::(\d+))?(?:-(\d+)(?::(\d+))?)?$/);
+    if(m&&m[1]&&!/^[A-Za-z]$/.test(m[1])){
+      target=m[1];parsedLine=parsedLine||parseInt(m[2],10)||0;parsedColumn=parsedColumn||parseInt(m[3],10)||0;
+      parsedEndLine=parsedEndLine||parseInt(m[4],10)||0;parsedEndColumn=parsedEndColumn||parseInt(m[5],10)||0;
+    }
+  }
+  return {path:target,line:parsedLine,column:parsedColumn,endLine:parsedEndLine,endColumn:parsedEndColumn};
+}
+function chatReferenceRange(value){
   const range=value&&typeof value==='object'&&(value.range||value.selection||value.targetSelectionRange);
-  const start=range&&range.start;
-  if(start&&Number.isFinite(Number(start.line)))return Number(start.line)+1;
-  if(value&&typeof value==='object'&&Number.isFinite(Number(value.line)))return Number(value.line);
-  return 0;
+  const start=range&&range.start,end=range&&range.end;
+  const out={line:0,column:0,endLine:0,endColumn:0};
+  if(start&&Number.isFinite(Number(start.line))){
+    out.line=Number(start.line)+1;
+    out.column=Number.isFinite(Number(start.character))?Number(start.character)+1:0;
+  }
+  if(end&&Number.isFinite(Number(end.line))){
+    out.endLine=Number(end.line)+1;
+    out.endColumn=Number.isFinite(Number(end.character))?Number(end.character)+1:0;
+  }
+  if(value&&typeof value==='object'){
+    if(Number.isFinite(Number(value.line)))out.line=Number(value.line);
+    if(Number.isFinite(Number(value.column)))out.column=Number(value.column);
+    if(Number.isFinite(Number(value.endLine)))out.endLine=Number(value.endLine);
+    if(Number.isFinite(Number(value.endColumn)))out.endColumn=Number(value.endColumn);
+  }
+  return out;
+}
+function chatReferenceLine(value){
+  return chatReferenceRange(value).line||0;
 }
 function isLikelyChatFileReferencePath(path){
   path=String(path||'').trim();
@@ -3859,37 +3908,55 @@ function isLikelyChatFileReferencePath(path){
 function extractChatResponseReferences(text){
   const refs=[],seen=new Set(),raw=String(text||'');
   const add=(path,line,label)=>{
-    path=String(path||'').replace(/^file:\/\//,'').trim().replace(/[),.;]+$/,'');
-    line=line?Math.max(1,parseInt(line,10)||0):0;
+    const loc=chatReferenceLocationFromPath(path,line);
+    path=loc.path;
     if(!isLikelyChatFileReferencePath(path))return;
-    const ref={path,line,label:label||path,kind:'file'};
+    const ref={path,line:loc.line,column:loc.column,endLine:loc.endLine,endColumn:loc.endColumn,label:label||path,kind:'file',openable:true};
     const key=chatResponseReferenceKey(ref);
     if(seen.has(key))return;
     seen.add(key);refs.push(ref);
   };
-  const md=/\[[^\]]+\]\(((?:file:\/\/)?[^)\s]+?)(?::(\d+))?\)/g;
+  const md=/\[[^\]]+\]\(((?:file:\/\/)?[^)\s]+?)\)/g;
   let m;while((m=md.exec(raw))&&refs.length<24)add(m[1],m[2],m[1]);
-  const plain=/(^|[\s`"'\(])((?:[A-Za-z]:[\\/]|\.{1,2}[\\/]|\/|[\w@.-]+[\\/])[\w@./\\-]+\.[A-Za-z0-9]{1,12})(?::(\d+))?/gm;
-  while((m=plain.exec(raw))&&refs.length<24)add(m[2],m[3],m[2]);
+  const plain=/(^|[\s`"'\(])((?:file:\/\/)?(?:[A-Za-z]:[\\/]|\.{1,2}[\\/]|\/|[\w@.-]+[\\/])[\w@./\\:-]+\.[A-Za-z0-9]{1,12}(?:(?:#L?\d+(?::\d+)?(?:-L?\d+(?::\d+)?)?)|(?::\d+(?::\d+)?(?:-\d+(?::\d+)?)?))?)/gm;
+  while((m=plain.exec(raw))&&refs.length<24)add(m[2],0,m[2]);
   return refs;
+}
+function chatResponsePartKind(part){
+  const raw=String(part&&(part.kind||part.type||part.$type||part.name||part.responsePartKind||'')).toLowerCase();
+  if(raw.includes('anchor'))return 'anchor';
+  if(raw.includes('reference'))return 'reference';
+  if(raw.includes('textedit')||raw.includes('text_edit')||raw.includes('edit'))return 'textEdit';
+  return '';
 }
 function normalizeChatNativeReference(raw,kindOverride){
   if(!raw)return null;
   const rec=typeof raw==='object'?raw:{reference:raw};
-  const source=rec.reference!==undefined?rec.reference:rec;
+  const partKind=chatResponsePartKind(rec);
+  const source=rec.reference!==undefined?rec.reference:(rec.value!==undefined?rec.value:rec);
   const sourceObj=source&&typeof source==='object'?source:null;
-  const path=chatUriPath(sourceObj&&sourceObj.value!==undefined?sourceObj.value:source);
-  const line=chatReferenceLine(sourceObj||rec);
+  const pathRaw=chatUriPath(sourceObj&&sourceObj.value!==undefined?sourceObj.value:source);
+  const range=chatReferenceRange(sourceObj||rec);
+  const loc=chatReferenceLocationFromPath(pathRaw,range.line,range.column,range.endLine,range.endColumn);
+  const path=loc.path;
   const variable=sourceObj&&sourceObj.variableName?String(sourceObj.variableName):'';
   const options=rec.options||{};
-  const diffMeta=options.diffMeta||rec.diffMeta||null;
-  const status=chatReferenceStatusLabel(options.status||rec.status);
+  const statusSource=options.status||rec.status;
+  const diffMeta=options.diffMeta||rec.diffMeta||rec.diff||rec.stats||null;
+  const status=chatReferenceStatusLabel(statusSource);
+  const statusKind=chatReferenceStatusKind(statusSource);
   const label=String(rec.label||rec.name||rec.title||variable||path||'Reference');
   if(!path&&!variable)return null;
   return {
-    path:path||variable,label,line,kind:kindOverride||rec.kind||'reference',
-    status,diffMeta,isDeletion:!!(options.isDeletion||rec.isDeletion),
-    openable:!!path&&isLikelyChatFileReferencePath(path)
+    path:path||variable,label,line:loc.line,column:loc.column,endLine:loc.endLine,endColumn:loc.endColumn,
+    kind:kindOverride||partKind||rec.kind||'reference',
+    status,statusKind,diffMeta,isDeletion:!!(options.isDeletion||rec.isDeletion),
+    originalUri:options.originalUri||rec.originalUri||rec.original||rec.beforeUri||rec.before,
+    modifiedUri:options.modifiedUri||rec.modifiedUri||rec.modified||rec.afterUri||rec.after||path,
+    originalContent:options.originalContent||rec.originalContent||rec.beforeContent||rec.oldText||'',
+    modifiedContent:options.modifiedContent||rec.modifiedContent||rec.afterContent||rec.newText||'',
+    language:options.language||rec.language||'',
+    openable:(!!path&&isLikelyChatFileReferencePath(path))||!!(options.originalContent||rec.originalContent||rec.beforeContent)
   };
 }
 function normalizeChatUsedContext(payload){
@@ -3909,7 +3976,19 @@ function normalizeChatContentReferences(payload){
     ...(Array.isArray(payload&&payload.content_references)?payload.content_references:[]),
     ...(Array.isArray(payload&&payload.responseReferences)?payload.responseReferences:[]),
     ...(Array.isArray(payload&&payload.response_references)?payload.response_references:[])];
-  return refs.map(ref=>normalizeChatNativeReference(ref,'reference')).filter(Boolean);
+  return [...refs.map(ref=>normalizeChatNativeReference(ref,'reference')),
+    ...normalizeChatResponseParts(payload)].filter(Boolean);
+}
+function normalizeChatResponseParts(payload){
+  const parts=[...(Array.isArray(payload&&payload.responseParts)?payload.responseParts:[]),
+    ...(Array.isArray(payload&&payload.response_parts)?payload.response_parts:[]),
+    ...(Array.isArray(payload&&payload.parts)?payload.parts:[]),
+    ...(Array.isArray(payload&&payload.response)?payload.response:[])];
+  return parts.map(part=>{
+    const kind=chatResponsePartKind(part);
+    if(!kind)return null;
+    return normalizeChatNativeReference(part,kind);
+  }).filter(Boolean);
 }
 function extractChatChangedFiles(text){
   const changes=[],seen=new Set(),raw=String(text||''),lines=raw.split(/\r?\n/);
@@ -3936,23 +4015,67 @@ function chatReferenceLineOffset(value,line){
   }
   return offset;
 }
+function chatReferenceLocationLabel(ref){
+  if(!ref||!ref.line)return '';
+  let label=':'+ref.line;
+  if(ref.column)label+=':'+ref.column;
+  if(ref.endLine&&ref.endLine!==ref.line)label+='-'+ref.endLine+(ref.endColumn?':'+ref.endColumn:'');
+  else if(ref.endColumn&&ref.column&&ref.endColumn!==ref.column)label+='-'+ref.endColumn;
+  return label;
+}
+function chatReferenceHasDiff(ref){
+  return !!(ref&&(ref.kind==='textEdit'||ref.diffMeta||ref.originalUri||ref.modifiedUri||ref.originalContent||ref.modifiedContent));
+}
+function chatInlineDiffResource(content,path,label,language){
+  return {path:String(path||label||''),name:String(label||path||''),content:String(content||''),language:String(language||'')};
+}
+async function chatOpenReferenceResource(ref,value,role){
+  const uri=String(value||'').trim();
+  if(ref&&role==='original'&&ref.originalContent)return chatInlineDiffResource(ref.originalContent,uri||ref.path,'Original',ref.language);
+  if(ref&&role==='modified'&&ref.modifiedContent)return chatInlineDiffResource(ref.modifiedContent,uri||ref.path,'Current',ref.language);
+  if(!uri)return null;
+  const opened=/^[A-Za-z][A-Za-z0-9+.-]*:/i.test(uri)?await call('open_text_resource',uri):await call('open_workspace_file',uri);
+  return opened&&!opened.error?opened:null;
+}
+async function openChatReferenceDiff(ref){
+  if(!chatReferenceHasDiff(ref))return false;
+  const path=String(ref.path||'');
+  const originalUri=String(ref.originalUri||'');
+  const modifiedUri=String(ref.modifiedUri||path||'');
+  const originalOpened=await chatOpenReferenceResource(ref,originalUri,'original');
+  const modifiedOpened=await chatOpenReferenceResource(ref,modifiedUri,'modified');
+  if(!originalOpened||!modifiedOpened)return false;
+  openEditorDiffResult(originalOpened,modifiedOpened,{
+    key:'chatdiff:'+String(originalUri||ref.originalContent||'original')+'::'+String(modifiedUri||ref.modifiedContent||path),
+    title:'Assistant Diff: '+diffResourceLabel(modifiedOpened,path||modifiedUri),
+    originalUri:originalUri||path,
+    modifiedUri:modifiedUri||path,
+    originalLabel:'Original',
+    modifiedLabel:'Assistant',
+    language:ref.language||modifiedOpened.language||originalOpened.language||''
+  });
+  return true;
+}
 async function openChatResponseReference(path,line){
-  path=String(path||'').trim();
+  const ref=typeof path==='object'?path:{path,line};
+  path=String(ref.path||'').trim();
   if(!path)return;
+  if(await openChatReferenceDiff(ref))return;
   const existing=tabs.find(tab=>String(tab.filePath||tab.workspacePath||tab.name||'').replace(/\\/g,'/').endsWith(path.replace(/\\/g,'/')));
   if(existing)switchTab(existing.id);
   else await openWorkspaceFile(path);
-  if(line){
-    const offset=chatReferenceLineOffset(ed.value,line);
-    ed.selectionStart=ed.selectionEnd=offset;ed.focus();updateCursorPos();
-    setStatus('Opened reference: '+path+':'+line);
+  if(ref.line){
+    const offset=chatReferenceLineOffset(ed.value,ref.line);
+    const endOffset=ref.endLine?chatReferenceLineOffset(ed.value,ref.endLine):offset;
+    ed.selectionStart=offset;ed.selectionEnd=Math.max(offset,endOffset);ed.focus();updateCursorPos();
+    setStatus('Opened reference: '+path+chatReferenceLocationLabel(ref));
   }else setStatus('Opened reference: '+path);
 }
 function dedupeChatReferences(refs){
   const seen=new Set(),out=[];
   (refs||[]).forEach(ref=>{
     if(!ref)return;
-    const key=[ref.kind,ref.path,ref.line,ref.status].join(':');
+    const key=chatResponseReferenceKey(ref);
     if(seen.has(key))return;
     seen.add(key);out.push(ref);
   });
@@ -3962,7 +4085,7 @@ function renderChatResponseReferences(body,content,payload){
   payload=payload||{};
   const usedRefs=normalizeChatUsedContext(payload);
   const refs=dedupeChatReferences([...usedRefs,...normalizeChatContentReferences(payload),...extractChatResponseReferences(content)]);
-  const changes=[...extractChatChangedFiles(content),...refs.filter(r=>r.diffMeta||r.isDeletion).map(r=>({kind:r.isDeletion?'deleted':'modified',path:r.path,diffMeta:r.diffMeta}))];
+  const changes=[...extractChatChangedFiles(content),...refs.filter(r=>chatReferenceHasDiff(r)||r.isDeletion).map(r=>({...r,kind:r.isDeletion?'deleted':(r.kind==='textEdit'?'textEdit':'modified'),path:r.path,diffMeta:r.diffMeta}))];
   if(!body||(!refs.length&&!changes.length))return;
   const wrap=document.createElement('div');wrap.className='chat-response-references';wrap.setAttribute('aria-label','Response references');
   if(usedRefs.length){
@@ -3974,11 +4097,14 @@ function renderChatResponseReferences(body,content,payload){
     const list=document.createElement('div');list.className='chat-response-reference-list';
     refs.slice(0,10).forEach(ref=>{
       const btn=document.createElement('button');btn.type='button';btn.className='chat-response-ref';
+      if(ref.kind==='anchor')btn.classList.add('anchor');
       if(!ref.openable)btn.disabled=true;
       const diff=ref.diffMeta?'<span class="ref-diff">+'+esc(ref.diffMeta.added||0)+' -'+esc(ref.diffMeta.removed||0)+'</span>':'';
-      btn.innerHTML='<span class="ref-kind">'+(ref.kind==='used'?'📎':'📄')+'</span><span class="ref-path">'+esc(ref.label||ref.path)+'</span>'+(ref.line?'<span class="ref-line">:'+ref.line+'</span>':'')+(ref.status?'<span class="ref-status">'+esc(ref.status)+'</span>':'')+diff;
-      btn.title='Open '+ref.path+(ref.line?':'+ref.line:'');
-      if(ref.openable)btn.onclick=()=>openChatResponseReference(ref.path,ref.line);
+      const statusClass=ref.statusKind?' '+esc(ref.statusKind):'';
+      const loc=chatReferenceLocationLabel(ref);
+      btn.innerHTML='<span class="ref-kind">'+(ref.kind==='used'?'📎':(ref.kind==='anchor'?'🔗':(ref.kind==='textEdit'?'✎':'📄')))+'</span><span class="ref-path">'+esc(ref.label||ref.path)+'</span>'+(loc?'<span class="ref-line">'+esc(loc)+'</span>':'')+(ref.status?'<span class="ref-status'+statusClass+'">'+esc(ref.status)+'</span>':'')+diff;
+      btn.title=(chatReferenceHasDiff(ref)?'Open diff ':'Open ')+ref.path+loc;
+      if(ref.openable)btn.onclick=()=>openChatResponseReference(ref);
       list.appendChild(btn);
     });
     wrap.appendChild(list);
@@ -3987,9 +4113,11 @@ function renderChatResponseReferences(body,content,payload){
     const set=document.createElement('div');set.className='chat-change-set';
     changes.forEach(change=>{
       const btn=document.createElement('button');btn.type='button';btn.className='chat-change-card';
-      btn.innerHTML='<span class="change-kind">'+esc(change.kind)+'</span><span class="change-path">'+esc(change.path)+'</span>';
-      btn.title='Open '+change.path;
-      btn.onclick=()=>openChatResponseReference(change.path,0);
+      if(chatReferenceHasDiff(change))btn.classList.add('has-diff');
+      const diff=change.diffMeta?' <span class="ref-diff">+'+esc(change.diffMeta.added||0)+' -'+esc(change.diffMeta.removed||0)+'</span>':'';
+      btn.innerHTML='<span class="change-kind">'+esc(change.kind)+'</span><span class="change-path">'+esc(change.path)+'</span>'+diff;
+      btn.title=(chatReferenceHasDiff(change)?'Open diff ':'Open ')+change.path;
+      btn.onclick=()=>openChatResponseReference(change);
       set.appendChild(btn);
     });
     wrap.appendChild(set);

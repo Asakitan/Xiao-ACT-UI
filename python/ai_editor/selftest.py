@@ -3304,8 +3304,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function extractChatChangedFiles(text)" in html
            and "function openChatResponseReference(path,line)" in html
            and "function renderChatResponseReferences(body,content,payload)" in html
-           and "chatReferenceLineOffset(ed.value,line)" in html
-           and "await openWorkspaceFile(path)" in html
+           and "chatReferenceLineOffset(ed.value,ref.line)" in html
+           and "else await openWorkspaceFile(path)" in html
            and "renderChatResponseReferences(body,d.content,d);" in html
            and "div.setAttribute('aria-label','Suggested follow-up prompts');" in html
            and "const btn=document.createElement('button');btn.type='button';btn.className='followup-btn';" in html)
@@ -3323,6 +3323,24 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function chatFollowupsFromPayload(payload,content)" in html
            and "item.agentId" in html
            and "renderChatResponseReferences(s,content,data);" in html)
+    _check("frontend Assistant opens rich response anchors ranges and diffs",
+           "function chatReferenceLocationFromPath(path,line,column,endLine,endColumn)" in html
+           and "function chatReferenceRange(value)" in html
+           and "function chatResponsePartKind(part)" in html
+           and "function normalizeChatResponseParts(payload)" in html
+           and "payload.responseParts" in html
+           and "payload.response_parts" in html
+           and "payload.parts" in html
+           and "kind==='anchor'" in html
+           and "kind==='textEdit'" in html
+           and "function chatReferenceLocationLabel(ref)" in html
+           and "function chatReferenceHasDiff(ref)" in html
+           and "function openChatReferenceDiff(ref)" in html
+           and "openEditorDiffResult(originalOpened,modifiedOpened" in html
+           and "originalContent:options.originalContent||rec.originalContent" in html
+           and "modifiedContent:options.modifiedContent||rec.modifiedContent" in html
+           and "chatReferenceHasDiff(change)?'Open diff '" in html
+           and "btn.classList.add('has-diff')" in html)
     _check("frontend Assistant exposes dynamic context picker",
            'class="chat-context-picker" id="chat-context-picker" role="dialog" aria-label="Attach context"' in html
            and 'id="chat-context-picker-input" aria-label="Search context"' in html
