@@ -15508,6 +15508,7 @@ function openCommandPalette(){
   $('cmd-input').focus();
   try{$('cmd-input').setSelectionRange(1,1)}catch(e){}
   filterCommands();
+  refreshCommandPaletteDynamicCommands();
 }
 function closeCommandPalette(){
   if(_editorFormatterPickSession&&$('cmd-palette').dataset.mode==='formatter'){
@@ -15522,8 +15523,54 @@ function closeCommandPalette(){
 const _CMD_HISTORY_KEY='sao-command-palette-history';
 let _cmdPaletteSelected=0;
 let _cmdPaletteLastQuery='';
+let _cmdPaletteDynamicCommands=[];
+let _cmdPaletteDynamicRefresh=0;
 function commandPaletteCommandId(command){
   return String(command.id||command.commandId||command.label||'').trim();
+}
+function commandPaletteBuiltinIdSet(){
+  const ids=new Set();
+  COMMANDS.forEach(command=>ids.add(commandPaletteCommandId(command)));
+  return ids;
+}
+function commandPaletteNormalizeDynamicCommand(raw,builtinIds){
+  if(!raw||typeof raw!=='object')return null;
+  const id=String(raw.command||raw.id||raw.commandId||'').trim();if(!id||builtinIds.has(id))return null;
+  const title=String(raw.title||raw.label||id).trim();
+  const category=String(raw.category||raw.source||'Extensions').trim()||'Extensions';
+  const label=String(raw.label||((category&&title.indexOf(category+':')!==0)?category+': '+title:title)||id);
+  const description=String(raw.description||raw.extensionId||raw.source||'Extension command');
+  return{
+    id:id,
+    commandId:id,
+    label:label,
+    category:category,
+    description:description,
+    source:raw.source||'extension',
+    extensionId:raw.extensionId||'',
+    runtimeAvailable:raw.runtimeAvailable!==false,
+    needsExtensionRuntime:!!raw.needsExtensionRuntime,
+    action:()=>call('execute_command',id,...(Array.isArray(raw.arguments)?raw.arguments:[])),
+  };
+}
+function commandPaletteAllCommands(){
+  const seen=commandPaletteBuiltinIdSet();
+  const dynamic=[];
+  _cmdPaletteDynamicCommands.forEach(command=>{
+    const id=commandPaletteCommandId(command);
+    if(!id||seen.has(id))return;
+    seen.add(id);dynamic.push(command);
+  });
+  return COMMANDS.concat(dynamic);
+}
+async function refreshCommandPaletteDynamicCommands(){
+  const requestId=++_cmdPaletteDynamicRefresh;
+  const result=await call('list_command_palette_commands');
+  if(requestId!==_cmdPaletteDynamicRefresh)return;
+  const builtinIds=commandPaletteBuiltinIdSet();
+  const rawCommands=result&&Array.isArray(result.commands)?result.commands:[];
+  _cmdPaletteDynamicCommands=rawCommands.map(raw=>commandPaletteNormalizeDynamicCommand(raw,builtinIds)).filter(Boolean);
+  if($('cmd-palette').classList.contains('open')&&!$('cmd-palette').dataset.mode)filterCommands();
 }
 function commandPaletteNormalizeQuery(value){
   const raw=String(value||'');
@@ -15580,7 +15627,7 @@ function commandPaletteBestMatch(command,query){
 }
 function commandPaletteFilteredCommands(query,history){
   const normalized=commandPaletteNormalizeQuery(query);
-  return COMMANDS.map((command,index)=>{
+  return commandPaletteAllCommands().map((command,index)=>{
     const match=commandPaletteBestMatch(command,normalized);
     if(normalized&&!match)return null;
     const id=commandPaletteCommandId(command);

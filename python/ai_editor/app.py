@@ -9436,6 +9436,89 @@ class AIEditorAPI:
         self._ensure_engine()
         return {"commands": self._ext_host.commands.list_commands()}
 
+    def list_command_palette_commands(self) -> Dict:
+        """Return VS Code-style command palette entries from extensions."""
+        self._ensure_engine()
+        ext_points = getattr(self._ext_host, "ext_points", None)
+        contributions = (
+            getattr(ext_points, "all_contributions", {}) if ext_points else {})
+        manifest_commands = (
+            contributions.get("commands", [])
+            if isinstance(contributions, dict) else [])
+        registered_ids = set(self._ext_host.commands.list_commands())
+        entries: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+
+        def extension_info(extension_id: str) -> Dict[str, Any]:
+            ext = self._ext_host.registry.get(extension_id)
+            if ext is None:
+                return {"id": extension_id}
+            return {
+                "id": ext.id,
+                "name": ext.name,
+                "displayName": ext.display_name,
+                "publisher": ext.publisher,
+                "version": ext.version,
+            }
+
+        for item in manifest_commands if isinstance(manifest_commands, list) else []:
+            if not isinstance(item, dict):
+                continue
+            command_id = str(item.get("command") or "").strip()
+            if not command_id:
+                continue
+            seen.add(command_id)
+            extension_id = str(item.get("_extensionId") or "").strip()
+            title = item.get("title") or command_id
+            category = item.get("category") or "Extensions"
+            label = f"{category}: {title}" if category else str(title)
+            entry: Dict[str, Any] = {
+                "id": command_id,
+                "command": command_id,
+                "label": str(label),
+                "title": str(title),
+                "category": str(category or "Extensions"),
+                "description": str(
+                    item.get("shortTitle")
+                    or item.get("description")
+                    or extension_id
+                    or "Extension command"),
+                "source": "extension",
+                "extensionId": extension_id,
+                "extension": extension_info(extension_id),
+                "runtimeAvailable": command_id in registered_ids,
+                "needsExtensionRuntime": bool(
+                    (item.get("_runtimeSupport") or {}).get(
+                        "needsExtensionRuntime", False)),
+            }
+            if item.get("enablement") is not None:
+                entry["enablement"] = str(item.get("enablement"))
+            if item.get("icon") is not None:
+                entry["icon"] = item.get("icon")
+            entries.append(entry)
+
+        for command_id in sorted(registered_ids - seen):
+            if not command_id or command_id.startswith("_"):
+                continue
+            entries.append({
+                "id": command_id,
+                "command": command_id,
+                "label": command_id,
+                "title": command_id,
+                "category": "Runtime",
+                "description": "Runtime registered command",
+                "source": "runtime",
+                "runtimeAvailable": True,
+                "needsExtensionRuntime": False,
+            })
+
+        entries.sort(key=lambda item: (
+            str(item.get("category") or ""),
+            str(item.get("label") or ""),
+            str(item.get("id") or "")))
+        return {"commands": json.loads(json.dumps(
+            entries, ensure_ascii=False, default=str))}
+
     # ── VSCode API ──
 
     def get_vscode_api(self) -> Dict:

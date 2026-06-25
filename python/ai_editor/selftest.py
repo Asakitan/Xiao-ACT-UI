@@ -5823,6 +5823,11 @@ console.log("extension setting schema helpers ok");
            and "function commandPaletteFilteredCommands(query,history)" in html
            and "function commandPaletteHighlightedHtml(text,ranges)" in html
            and "function commandPaletteRemember(command)" in html
+           and "function commandPaletteNormalizeDynamicCommand(raw,builtinIds)" in html
+           and "function commandPaletteAllCommands()" in html
+           and "function refreshCommandPaletteDynamicCommands()" in html
+           and "call('list_command_palette_commands')" in html
+           and "call('execute_command',id" in html
            and "No matching commands" in html
            and "recently used" in html
            and "other commands" in html
@@ -5975,6 +5980,9 @@ console.log("quick input filter helpers ok");
         command_palette_functions = [
             "commandPaletteCommandId",
             "commandPaletteNormalizeQuery",
+            "commandPaletteBuiltinIdSet",
+            "commandPaletteNormalizeDynamicCommand",
+            "commandPaletteAllCommands",
             "commandPaletteFuzzyMatch",
             "commandPaletteBestMatch",
             "commandPaletteFilteredCommands",
@@ -5993,6 +6001,9 @@ const COMMANDS = [
   { id: "developer.reload", label: "Developer: Reload Window", shortcut: "", category: "Developer", description: "Reload extension host" },
   { id: "workbench.action.terminal.new", label: "Terminal: Create New Terminal", shortcut: "Ctrl+Shift+`", category: "Terminal", description: "Create terminal" },
 ];
+let _cmdPaletteDynamicCommands = [];
+const executedCommands = [];
+function call(method, ...args){ executedCommands.push({ method, args }); return Promise.resolve({ ok: true }); }
 assert(commandPaletteNormalizeQuery("> rename") === "rename", "command prefix is stripped");
 assert(commandPaletteNormalizeQuery("  >Preferences ") === "Preferences", "prefix trim matches VS Code entry");
 const fuzzy = commandPaletteFuzzyMatch("rn sym", "Rename Symbol");
@@ -6018,6 +6029,25 @@ assert(filtered[0].command.label === "File: Save",
 filtered = commandPaletteFilteredCommands("active editor", {});
 assert(filtered[0].command.label === "File: Save",
        "description text participates in matching");
+const dynamic = commandPaletteNormalizeDynamicCommand({
+  command: "selftest.extension.run",
+  title: "Run Probe",
+  category: "Selftest",
+  description: "Extension contributed command",
+  extensionId: "selftest.commands",
+}, commandPaletteBuiltinIdSet());
+assert(dynamic && dynamic.label === "Selftest: Run Probe" && dynamic.id === "selftest.extension.run",
+       "dynamic manifest command normalizes title category and id");
+assert(commandPaletteNormalizeDynamicCommand({ command: "editor.action.rename", title: "Duplicate" }, commandPaletteBuiltinIdSet()) === null,
+       "dynamic command does not duplicate built-in ids");
+_cmdPaletteDynamicCommands = [dynamic];
+filtered = commandPaletteFilteredCommands("probe", {});
+assert(filtered[0].command.id === "selftest.extension.run",
+       "dynamic command description participates in filtering");
+filtered[0].command.action();
+assert(executedCommands[0].method === "execute_command"
+       && executedCommands[0].args[0] === "selftest.extension.run",
+       "dynamic command executes through backend command service");
 console.log("command palette quick access helpers ok");
 """
         js_path = ""
@@ -6776,6 +6806,45 @@ console.log("command palette quick access helpers ok");
            and dynamic_result.get("view_id") == "selftest.dynamic.view"
            and "dynamic-runtime" in dynamic_result.get("html", "")
            and any(event == "provider_tabs_changed" for event, _ in dynamic_events))
+
+    command_palette_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    command_palette_api._ensure_engine()
+    command_desc = ExtensionDescription.from_package_json({
+        "name": "commands-pack",
+        "publisher": "selftest",
+        "version": "0.0.1",
+        "displayName": "Selftest Commands",
+        "activationEvents": ["onCommand:selftest.commandPalette.run"],
+        "contributes": {"commands": [{
+            "command": "selftest.commandPalette.run",
+            "title": "Run Palette Probe",
+            "category": "Selftest",
+            "shortTitle": "Palette Probe",
+        }]},
+    }, "/tmp/selftest-commands-pack")
+    command_palette_api._ext_host.registry.register(command_desc)
+    command_palette_api._ext_host.ext_points.process(command_desc)
+    command_palette_api._ext_host.commands.register(
+        "selftest.runtimeOnly.command", lambda: {"ok": True})
+    palette_commands = command_palette_api.list_command_palette_commands().get(
+        "commands", [])
+    manifest_command = next(
+        (item for item in palette_commands
+         if item.get("id") == "selftest.commandPalette.run"), {})
+    runtime_command = next(
+        (item for item in palette_commands
+         if item.get("id") == "selftest.runtimeOnly.command"), {})
+    _check("extension commands surface in command palette metadata",
+           manifest_command.get("label") == "Selftest: Run Palette Probe"
+           and manifest_command.get("title") == "Run Palette Probe"
+           and manifest_command.get("category") == "Selftest"
+           and manifest_command.get("description") == "Palette Probe"
+           and manifest_command.get("extensionId") == "selftest.commands-pack"
+           and manifest_command.get("extension", {}).get("displayName") == "Selftest Commands"
+           and manifest_command.get("needsExtensionRuntime") is True
+           and runtime_command.get("source") == "runtime"
+           and runtime_command.get("runtimeAvailable") is True,
+           json.dumps(palette_commands, ensure_ascii=False, default=str))
 
     lazy_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     lazy_api._ensure_engine()
