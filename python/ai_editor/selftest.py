@@ -5160,6 +5160,10 @@ console.log("frontend signature help docs ok");
             and "function extensionSettingSchemaForObjectKey(schema,key)" in html
             and "function extensionSettingObjectValueSuggestion(schema,key)" in html
             and "function extensionSettingCoerceObjectNumericValues(value,schema)" in html
+            and "function extensionSettingStructuredInputValue(input,type)" in html
+            and "function extensionSettingApplyStructuredInputValue(input,type,value)" in html
+            and "function appendExtensionSettingStructuredAssist(row,input,schema,type)" in html
+            and "ext-setting-structured-assist" in html
             and "ext-setting-enum-choices" in html
             and "ext-setting-default-badge" in html
             and "const targetScopedValues=cfg.targetScopedValues||{}" in html
@@ -5399,6 +5403,10 @@ console.log("frontend signature help docs ok");
             "extensionSettingSchemaForObjectKey",
             "extensionSettingObjectValueSuggestion",
             "extensionSettingCoerceObjectNumericValues",
+            "extensionSettingStructuredInputValue",
+            "extensionSettingDispatchStructuredInput",
+            "extensionSettingApplyStructuredInputValue",
+            "appendExtensionSettingStructuredAssist",
             "extensionSettingSearchText",
             "extensionSettingSplitFilterValues",
             "extensionSettingPushFilterValues",
@@ -5467,6 +5475,7 @@ globalThis.localStorage = {
   removeItem(key){ delete fakeStorageData[key]; },
 };
 function makeNode(tag, text){
+  const listeners = {};
   const node = {
     tagName: tag ? String(tag).toUpperCase() : "",
     textContent: text || "",
@@ -5476,7 +5485,12 @@ function makeNode(tag, text){
     href: "",
     target: "",
     rel: "",
+    type: "",
+    value: "",
+    rows: 0,
     appendChild(child){ this.children.push(child); return child; },
+    addEventListener(type,handler){ (listeners[type] = listeners[type] || []).push(handler); },
+    dispatchEvent(event){ (listeners[event && event.type] || []).forEach(handler => handler(event)); return true; },
   };
   Object.defineProperty(node, "innerHTML", {
     get(){ return this._innerHTML || ""; },
@@ -5487,6 +5501,12 @@ function makeNode(tag, text){
 function nodeTreeHas(node,predicate){
   if(predicate(node))return true;
   return (node.children||[]).some(child=>nodeTreeHas(child,predicate));
+}
+function nodeFindAll(node,predicate){
+  const found = [];
+  if(predicate(node))found.push(node);
+  (node.children||[]).forEach(child => found.push(...nodeFindAll(child,predicate)));
+  return found;
 }
 function nodeTreeText(node){
   return String(node.textContent || "") + (node.children||[]).map(nodeTreeText).join("");
@@ -5771,6 +5791,50 @@ assert(parsedObjectSetting.level === 3
        && parsedObjectSetting.threads === 4
        && parsedObjectSetting.mode === "auto",
        "object setting read coerces numeric schema values before validation");
+const arrayAssistRow = makeNode("div");
+const arrayAssistInput = makeNode("textarea");
+arrayAssistInput.value = JSON.stringify(["alpha", "beta"], null, 2);
+let arrayAssistChanges = 0;
+arrayAssistInput.addEventListener("change", () => { arrayAssistChanges++; });
+const arrayAssist = appendExtensionSettingStructuredAssist(arrayAssistRow, arrayAssistInput, arraySuggestionSchema, "array");
+let arrayAssistButtons = nodeFindAll(arrayAssist, node => node.tagName === "BUTTON");
+assert(arrayAssistRow.children.includes(arrayAssist)
+       && arrayAssist.className === "ext-setting-structured-assist"
+       && nodeTreeText(arrayAssist).indexOf("Add item") >= 0
+       && arrayAssistButtons.length === 1
+       && arrayAssistButtons[0].textContent === "Gamma",
+       "structured array assist renders unique enum add action");
+arrayAssistButtons[0].onclick({ preventDefault(){}, stopPropagation(){} });
+assert(JSON.parse(arrayAssistInput.value).join(",") === "alpha,beta,gamma"
+       && arrayAssistChanges === 1
+       && arrayAssist.style.display === "none",
+       "structured array assist appends item and refreshes suggestions");
+const objectAssistRow = makeNode("div");
+const objectAssistInput = makeNode("textarea");
+objectAssistInput.value = JSON.stringify({ enabled: true }, null, 2);
+let objectAssistChanges = 0;
+objectAssistInput.addEventListener("change", () => { objectAssistChanges++; });
+const objectAssist = appendExtensionSettingStructuredAssist(objectAssistRow, objectAssistInput, objectSuggestionSchema, "object");
+let objectAssistButtons = nodeFindAll(objectAssist, node => node.tagName === "BUTTON");
+assert(objectAssistRow.children.includes(objectAssist)
+       && nodeTreeText(objectAssist).indexOf("Add property") >= 0
+       && objectAssistButtons.some(btn => btn.textContent === "level" && btn.title === "Level")
+       && objectAssistButtons.some(btn => btn.textContent === "mode")
+       && !objectAssistButtons.some(btn => btn.textContent === "enabled"),
+       "structured object assist renders missing property actions");
+objectAssistButtons.find(btn => btn.textContent === "level").onclick({ preventDefault(){}, stopPropagation(){} });
+let objectAssistValue = JSON.parse(objectAssistInput.value);
+assert(objectAssistValue.level === 2 && objectAssistChanges === 1,
+       "structured object assist inserts property default and triggers change");
+objectAssistButtons = nodeFindAll(objectAssist, node => node.tagName === "BUTTON");
+objectAssistButtons.find(btn => btn.textContent === "mode").onclick({ preventDefault(){}, stopPropagation(){} });
+objectAssistValue = JSON.parse(objectAssistInput.value);
+assert(objectAssistValue.mode === "manual" && objectAssistChanges === 2,
+       "structured object assist inserts enum default values");
+objectAssistInput.value = "{bad json";
+objectAssistInput.dispatchEvent({ type: "input" });
+assert(objectAssist.style.display === "none",
+       "structured object assist hides while JSON is invalid");
 extensionSettingValidateSchemaValue(5, anyOfSchema, "value");
 extensionSettingValidateSchemaValue("auto", anyOfSchema, "value");
 let anyOfRejected = false;

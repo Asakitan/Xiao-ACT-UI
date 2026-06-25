@@ -1177,6 +1177,11 @@ pre.code-block { overflow:visible; }
 .ext-setting-enum-choice { display:grid; grid-template-columns:minmax(96px, max-content) 1fr; gap:6px; align-items:start; }
 .ext-setting-enum-choice-name { color:var(--fg); font-weight:600; overflow:hidden; text-overflow:ellipsis; }
 .ext-setting-enum-choice-desc { overflow:hidden; text-overflow:ellipsis; }
+.ext-setting-structured-assist { display:flex; flex-wrap:wrap; gap:4px; margin:4px 0 5px; align-items:center; }
+.ext-setting-structured-assist-label { color:var(--fg-dim); font-size:10px; margin-right:2px; }
+.ext-setting-structured-assist button { height:22px; max-width:168px; padding:1px 7px; font:10px var(--sans);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border:1px solid var(--border); background:var(--bg3); color:var(--fg); border-radius:3px; }
+.ext-setting-structured-assist button:hover { border-color:var(--fg-accent); background:var(--bg-hover); }
 .ext-setting-default-badge { display:inline-flex; align-items:center; padding:1px 5px; border-radius:999px;
   border:1px solid color-mix(in srgb,var(--fg-accent) 36%,transparent); color:var(--fg-accent); font:10px var(--sans); }
 .ext-setting-markdown-block { margin:0 0 4px; }
@@ -1194,7 +1199,7 @@ pre.code-block { overflow:visible; }
 .ext-setting-note { font-size:10px; color:var(--fg-dim); line-height:1.35; margin-bottom:4px; }
 .ext-setting-deprecated { font-size:11px; color:var(--fg-warning); line-height:1.35; margin-bottom:4px;
   padding:4px 6px; background:color-mix(in srgb,var(--fg-warning) 9%,transparent); border-left:2px solid color-mix(in srgb,var(--fg-warning) 55%,transparent); }
-.ext-setting-desc code,.ext-setting-enum-desc code,.ext-setting-deprecated code,.ext-setting-enum-choices code,.ext-setting-default-value code { font:10px var(--mono); color:var(--fg); background:var(--bg3);
+.ext-setting-desc code,.ext-setting-enum-desc code,.ext-setting-deprecated code,.ext-setting-enum-choices code,.ext-setting-structured-assist code,.ext-setting-default-value code { font:10px var(--mono); color:var(--fg); background:var(--bg3);
   border:1px solid var(--border); border-radius:3px; padding:1px 3px; }
 .ext-setting-desc a,.ext-setting-enum-desc a,.ext-setting-deprecated a,.ext-setting-enum-choices a { color:var(--fg-accent); text-decoration:none; }
 .ext-setting-desc a:hover,.ext-setting-enum-desc a:hover,.ext-setting-deprecated a:hover,.ext-setting-enum-choices a:hover { text-decoration:underline; }
@@ -14161,6 +14166,75 @@ function extensionSettingCoerceObjectNumericValues(value,schema){
   });
   return next;
 }
+function extensionSettingStructuredInputValue(input,type){
+  try{
+    const text=String((input&&input.value)||'').trim();
+    if(!text)return type==='array'?[]:{};
+    return extensionSettingValidateJsonValue(JSON.parse(text),type);
+  }catch(e){return null}
+}
+function extensionSettingDispatchStructuredInput(input){
+  if(!input||typeof input.dispatchEvent!=='function')return;
+  try{
+    input.dispatchEvent(new Event('input',{bubbles:true}));
+    input.dispatchEvent(new Event('change',{bubbles:true}));
+  }catch(e){
+    try{input.dispatchEvent({type:'input'});input.dispatchEvent({type:'change'})}catch(_e){}
+  }
+}
+function extensionSettingApplyStructuredInputValue(input,type,value){
+  if(!input)return;
+  input.value=extensionSettingJson(value,type);
+  input.rows=extensionSettingJsonRows(value,type);
+  if(typeof input._extensionSettingStructuredAssistRender==='function')input._extensionSettingStructuredAssistRender();
+  extensionSettingDispatchStructuredInput(input);
+}
+function appendExtensionSettingStructuredAssist(row,input,schema,type){
+  if(!row||!input||(type!=='array'&&type!=='object'))return null;
+  const wrap=document.createElement('div');
+  wrap.className='ext-setting-structured-assist';
+  const render=()=>{
+    wrap.innerHTML='';
+    const value=extensionSettingStructuredInputValue(input,type);
+    if(value==null){wrap.style.display='none';return}
+    const actions=[];
+    if(type==='array'&&Array.isArray(value)){
+      extensionSettingArrayEnumSuggestions(schema,value,undefined).slice(0,8).forEach(item=>{
+        actions.push({label:item.label||extensionSettingEnumDisplayValue(item.value),title:item.description||'',apply:()=>{
+          const next=value.slice();next.push(item.value);extensionSettingApplyStructuredInputValue(input,type,next);
+        }});
+      });
+    }else if(type==='object'&&value&&typeof value==='object'&&!Array.isArray(value)){
+      extensionSettingObjectKeySuggestions(schema,Object.keys(value)).slice(0,8).forEach(item=>{
+        const suggested=extensionSettingObjectValueSuggestion(schema,item.value);
+        actions.push({label:item.value,title:item.description||'',apply:()=>{
+          const next=Object.assign({},value);
+          next[item.value]=suggested?suggested.data:'';
+          extensionSettingApplyStructuredInputValue(input,type,next);
+        }});
+      });
+    }
+    if(!actions.length){wrap.style.display='none';return}
+    wrap.style.display='';
+    const label=document.createElement('span');
+    label.className='ext-setting-structured-assist-label';
+    label.textContent=type==='array'?'Add item':'Add property';
+    wrap.appendChild(label);
+    actions.forEach(action=>{
+      const btn=document.createElement('button');
+      btn.type='button';
+      btn.textContent=action.label;
+      btn.title=action.title||action.label;
+      btn.onclick=ev=>{if(ev){ev.preventDefault();ev.stopPropagation()}action.apply()};
+      wrap.appendChild(btn);
+    });
+  };
+  input._extensionSettingStructuredAssistRender=render;
+  if(typeof input.addEventListener==='function')input.addEventListener('input',render);
+  render();
+  row.appendChild(wrap);
+  return wrap;
+}
 function extensionSettingSearchText(key,schema,type,description,deprecation,schemaSummary){
   schema=(schema&&typeof schema==='object')?schema:{};
   const schemaTags=extensionSettingSchemaFeatureTags(schema,type);
@@ -14411,6 +14485,7 @@ function setExtensionSettingInputValue(input,schema,type,value){
     input.value=value!=null?String(value):'';
     if(input.tagName==='TEXTAREA')input.rows=extensionSettingTextRows(input.value);
   }
+  if(typeof input._extensionSettingStructuredAssistRender==='function')input._extensionSettingStructuredAssistRender();
 }
 function readExtensionSettingInputValue(input,schema,type){
   if(input.type==='checkbox')return !!input.checked;
@@ -15221,6 +15296,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       }
       applyExtensionSettingInputConstraints(input,schema,type);
       setExtensionSettingInputValue(input,schema,type,value);
+      if(type==='array'||type==='object')appendExtensionSettingStructuredAssist(row,input,schema,type);
       if(enumHelp)renderExtensionSettingEnumDescription(enumHelp,schema,input);
       if(type!=='array'&&type!=='object')input.placeholder=defaultValue!=null?String(defaultValue):'';
       const err=document.createElement('div');err.className='ext-setting-error';row.appendChild(err);
@@ -15642,6 +15718,7 @@ async function renderExtensionSettings(){
       }
       applyExtensionSettingInputConstraints(input,schema,type);
       setExtensionSettingInputValue(input,schema,type,currentVal);
+      if(type==='array'||type==='object')appendExtensionSettingStructuredAssist(row,input,schema,type);
       if(enumHelp)renderExtensionSettingEnumDescription(enumHelp,schema,input);
       if(type!=='array'&&type!=='object')input.placeholder=defaultVal!=null?String(defaultVal):'';
       const err=document.createElement('div');err.className='ext-setting-error';row.appendChild(err);
