@@ -3405,6 +3405,19 @@ def test_phase1_ai_editor_regressions() -> None:
            and "setChatInputValue(prefix+'#'+tool.name+' ')" in html
            and "setChatInputValue(s);w.remove()" in html
            and "setChatInputValue((item.subCommand?String(item.subCommand)+' ':'')+message);doSend()" in html)
+    _check("frontend Assistant composer uses Copilot-style send readiness and pending state",
+           "function chatComposerHasSendableValue()" in html
+           and "function updateChatComposerState()" in html
+           and "function setChatStreamingState(active)" in html
+           and "panel.dataset.chatComposerSendable=sendable?'true':'false';" in html
+           and "panel.dataset.chatComposerStreaming=streaming?'true':'false';" in html
+           and "function renderAssistantPending(body,label)" in html
+           and "className='chat-response-pending'" in html
+           and "@keyframes assistantPendingPulse" in html
+           and "renderAssistantPending(currentMsgBody,t('thinking'));" in html
+           and "clearAssistantPending(currentMsgBody);" in html
+           and "syncAssistantSessionState();\n    }\n  }\n  if(e.key==='ArrowDown'" in html
+           and "restoreAssistantSessionDraft();\nupdateChatComposerState();" in html)
     _check("frontend Assistant renders response references and changed-file cards",
            "chat-response-references" in html
            and "chat-response-reference-list" in html
