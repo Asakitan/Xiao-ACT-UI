@@ -5740,7 +5740,7 @@ console.log("extension setting schema helpers ok");
             and "call('load_extension_tree_children',viewId,node.handle)" in html
             and "call('set_extension_tree_item_expanded',viewId,node.handle,!!expanded)" in html
             and "call('select_extension_tree_item',viewId,node.handle)" in html
-            and "call('execute_extension_tree_item_action',viewId,node.handle,action.command)" in html
+            and "call('execute_extension_tree_item_action',viewId,node.handle,action.command,...(action.arguments||[]))" in html
             and "window.pywebview.api.execute_command(node.command.command" in html
             and "function renderExtensionWebviewView(view)" in html
             and "_injectWebviewHtml(host,view.id||state.view_id||state.viewId,html,state.state)" in html
@@ -5751,6 +5751,7 @@ console.log("extension setting schema helpers ok");
             and "className='terminal-panel extension-panel-container'" in html
             and "if(action.disabled)d.classList.add('disabled')" in html
             and "if(action.alt&&action.alt.command)d.title='Alt: '" in html
+            and "call('execute_command',action.command,...(action.arguments||[]))" in html
             and "if(action&&action.command&&!action.disabled)" in html
             and "#ctx-menu .ctx-item.disabled" in html
             and "activateBottomPanelTab(document.querySelector('.ptab[data-ptab=\"terminal\"]'))" in html)
@@ -12006,6 +12007,11 @@ def test_app_extension_runtime_support() -> None:
                         "title": "Disabled Activity",
                     },
                     {
+                        "command": "selftest.activity.preconditioned",
+                        "title": "Preconditioned Activity",
+                        "precondition": "selftest.activity.ready",
+                    },
+                    {
                         "command": "selftest.activity.alt",
                         "title": "Alternate Activity",
                     },
@@ -12025,9 +12031,11 @@ def test_app_extension_runtime_support() -> None:
                             "command": "selftest.activity.refresh",
                             "when": "view == selftest.activity.tree",
                             "group": "navigation@1",
+                            "arguments": [{"from": "view-title"}],
                             "alt": {
                                 "command": "selftest.activity.alt",
                                 "title": "Alt Refresh",
+                                "arguments": [{"from": "alt-title"}],
                             },
                         },
                         {
@@ -12036,12 +12044,18 @@ def test_app_extension_runtime_support() -> None:
                             "enablement": "viewItem == never",
                             "group": "navigation@2",
                         },
+                        {
+                            "command": "selftest.activity.preconditioned",
+                            "when": "view == selftest.activity.tree",
+                            "group": "navigation@3",
+                        },
                     ],
                     "view/item/context": [
                         {
                             "command": "selftest.activity.openItem",
                             "when": "view == selftest.activity.tree && viewItem == branch",
                             "group": "inline@1",
+                            "arguments": [{"from": "tree-item"}],
                         },
                         {
                             "command": "selftest.activity.disabled",
@@ -12214,10 +12228,16 @@ def test_app_extension_runtime_support() -> None:
         activity_api = api._vscode_ns.build(activity_desc)
         activity_api["commands"]["registerCommand"](
             "selftest.activity.refresh",
-            lambda: activity_command_log.append(("refresh", None)) or {"refreshed": True})
+            lambda *args: activity_command_log.append(
+                ("refresh", list(args))) or {"refreshed": True, "args": list(args)})
         activity_api["commands"]["registerCommand"](
             "selftest.activity.openItem",
-            lambda item: activity_command_log.append(("open", item)) or {"opened": str(item)})
+            lambda item, *args: activity_command_log.append(
+                ("open", item, list(args))) or {"opened": str(item), "args": list(args)})
+        activity_api["commands"]["registerCommand"](
+            "selftest.activity.preconditioned",
+            lambda *args: activity_command_log.append(
+                ("preconditioned", list(args))) or {"ready": True, "args": list(args)})
         activity_api["window"]["registerTreeDataProvider"](
             "selftest.activity.tree", activity_tree_provider)
         activity_api["window"]["registerTreeDataProvider"](
@@ -12389,38 +12409,83 @@ def test_app_extension_runtime_support() -> None:
                and len(activity_tree_nodes) > 1
                and activity_tree_nodes[1].get("resourceUri")
                == "file:///workspace/node-b.txt?from=test")
+        activity_title_actions = activity_views.get(
+            "selftest.activity.tree", {}).get(
+                "runtimeState", {}).get("titleActions", [])
+        activity_title_by_command = {
+            action.get("command"): action
+            for action in activity_title_actions
+            if isinstance(action, dict)
+        }
+        activity_item_actions = (
+            activity_tree_nodes[0].get("actions", [])
+            if activity_tree_nodes else [])
+        activity_item_by_command = {
+            action.get("command"): action
+            for action in activity_item_actions
+            if isinstance(action, dict)
+        }
         _check("activity tree views expose contributed title and item actions",
-               [action.get("command") for action in activity_views.get(
-                   "selftest.activity.tree", {}).get(
-                       "runtimeState", {}).get("titleActions", [])[:3]]
+               [action.get("command") for action in activity_title_actions[:4]]
                == [
                    "selftest.activity.refresh",
                    "selftest.activity.disabled",
+                   "selftest.activity.preconditioned",
                    "selftest.activity.openItem",
                ]
-               and activity_views.get("selftest.activity.tree", {})
-               .get("runtimeState", {}).get("titleActions", [{}])[0]
+               and activity_title_by_command.get("selftest.activity.refresh", {})
                .get("navigation") is True
-               and activity_views.get("selftest.activity.tree", {})
-               .get("runtimeState", {}).get("titleActions", [{}, {}])[1]
+               and activity_title_by_command.get("selftest.activity.refresh", {})
+               .get("arguments") == [{"from": "view-title"}]
+               and activity_title_by_command.get("selftest.activity.disabled", {})
                .get("disabled") is True
-               and activity_views.get("selftest.activity.tree", {})
-               .get("runtimeState", {}).get("titleActions", [{}])[0]
+               and activity_title_by_command.get("selftest.activity.disabled", {})
+               .get("disabledReason") == "Enablement not satisfied: viewItem == never"
+               and activity_title_by_command.get(
+                   "selftest.activity.preconditioned", {})
+               .get("enablement") == "selftest.activity.ready"
+               and activity_title_by_command.get(
+                   "selftest.activity.preconditioned", {})
+               .get("disabled") is True
+               and activity_title_by_command.get("selftest.activity.refresh", {})
                .get("alt", {}).get("command") == "selftest.activity.alt"
-               and activity_tree_nodes[0].get("actions", [{}])[0].get("inline")
+               and activity_title_by_command.get("selftest.activity.refresh", {})
+               .get("alt", {}).get("arguments") == [{"from": "alt-title"}]
+               and activity_item_by_command.get("selftest.activity.openItem", {})
+               .get("inline")
                is True
-                and activity_tree_nodes[0].get("actions", [{}])[0].get("command")
-                == "selftest.activity.openItem"
-                and activity_tree_nodes[0].get("actions", [{}, {}])[1]
-                .get("disabled") is True
-                and [action.get("command") for action in activity_tree_nodes[0]
-                     .get("actions", [])[:3]] == [
-                         "selftest.activity.openItem",
-                         "selftest.activity.disabled",
-                         "selftest.activity.resource",
-                     ]
-                and [action.get("command") for action in activity_tree_nodes[1]
-                     .get("actions", [])] == [])
+               and activity_item_by_command.get("selftest.activity.openItem", {})
+               .get("arguments") == [{"from": "tree-item"}]
+               and activity_item_by_command.get("selftest.activity.disabled", {})
+               .get("disabled") is True
+               and [action.get("command") for action in activity_item_actions[:3]]
+               == [
+                   "selftest.activity.openItem",
+                   "selftest.activity.disabled",
+                   "selftest.activity.resource",
+               ]
+               and [action.get("command") for action in activity_tree_nodes[1]
+                    .get("actions", [])] == [])
+        api._ext_host.commands.execute(
+            "setContext", "selftest.activity.ready", True)
+        ready_activity_views = {
+            view.get("id"): view
+            for item in api.list_extension_activity_bar_items().get("items", [])
+            if item.get("id") == "selftest.activity"
+            for view in item.get("views", [])
+        }
+        ready_title_actions = ready_activity_views.get(
+            "selftest.activity.tree", {}).get(
+                "runtimeState", {}).get("titleActions", [])
+        preconditioned_ready = next(
+            (action for action in ready_title_actions
+             if action.get("command") == "selftest.activity.preconditioned"),
+            {})
+        _check("extension view title actions honor runtime setContext preconditions",
+               preconditioned_ready.get("enabled") is True
+               and preconditioned_ready.get("disabled") is False
+               and preconditioned_ready.get("enablement")
+               == "selftest.activity.ready")
         resource_context = api._extension_resource_context(
             "file:///workspace/node-a.txt?from=test")
         _check("extension view menu context keys support resource clauses",
@@ -12510,11 +12575,15 @@ def test_app_extension_runtime_support() -> None:
         item_action = api.execute_extension_tree_item_action(
             "selftest.activity.tree",
             activity_tree_handle,
-            "selftest.activity.openItem")
+            "selftest.activity.openItem",
+            *activity_tree_nodes[0].get("actions", [{}])[0].get("arguments", []))
         _check("activity tree item context action receives selected element",
                item_action.get("ok") is True
                and item_action.get("opened") == "node-a"
-               and activity_command_log[-1] == ("open", "node-a"))
+               and item_action.get("arguments") == [{"from": "tree-item"}]
+               and item_action.get("args") == [{"from": "tree-item"}]
+               and activity_command_log[-1] == (
+                   "open", "node-a", [{"from": "tree-item"}]))
         if activity_tree_view is not None:
             activity_tree_view.reveal("leaf-a")
         revealed_activity_views = {

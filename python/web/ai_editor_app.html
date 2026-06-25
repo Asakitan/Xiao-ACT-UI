@@ -14101,7 +14101,7 @@ function showExtensionActionMenu(x,y,actions,runner){
   menu.style.display='block';menu.style.left=x+'px';menu.style.top=y+'px';
 }
 function runExtensionViewAction(action){
-  if(action&&action.command&&!action.disabled)call('execute_command',action.command);
+  if(action&&action.command&&!action.disabled)call('execute_command',action.command,...(action.arguments||[]));
 }
 function webviewRuntimeRecord(viewId){
   const id=String(viewId||'').trim();
@@ -14229,8 +14229,8 @@ function appendExtensionWelcomeContent(parent,entries){
 }
 function runExtensionTreeItemAction(viewId,node,action){
   if(!action||!action.command||action.disabled)return;
-  if(viewId&&node&&node.handle)call('execute_extension_tree_item_action',viewId,node.handle,action.command);
-  else call('execute_command',action.command);
+  if(viewId&&node&&node.handle)call('execute_extension_tree_item_action',viewId,node.handle,action.command,...(action.arguments||[]));
+  else call('execute_command',action.command,...(action.arguments||[]));
 }
 function extensionTreeStatusRow(depth,text,kind,retry){
   const row=document.createElement('div');

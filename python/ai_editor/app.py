@@ -9341,7 +9341,8 @@ class AIEditorAPI:
             payload, ensure_ascii=False, default=str))
 
     def execute_extension_tree_item_action(
-            self, view_id: str, handle: str, command_id: str) -> Dict:
+            self, view_id: str, handle: str, command_id: str,
+            *args: Any) -> Dict:
         """Execute a contributed TreeView item action with the item as argument."""
         self._ensure_engine()
         normalized_view_id = str(view_id or "")
@@ -9363,7 +9364,8 @@ class AIEditorAPI:
         selection = list(getattr(view, "selection", []) or [])
         element = selection[0] if selection else None
         try:
-            result = self._ext_host.commands.execute(normalized_command, element)
+            result = self._ext_host.commands.execute(
+                normalized_command, element, *args)
             payload: Dict[str, Any]
             if isinstance(result, dict):
                 payload = dict(result)
@@ -9373,6 +9375,7 @@ class AIEditorAPI:
             payload.update({
                 "view_id": normalized_view_id,
                 "command": normalized_command,
+                "arguments": list(args),
                 "selection": [str(item) for item in selection],
             })
             return json.loads(json.dumps(payload, ensure_ascii=False, default=str))
@@ -9436,6 +9439,22 @@ class AIEditorAPI:
         self._ensure_engine()
         return {"commands": self._ext_host.commands.list_commands()}
 
+    def _extension_runtime_when_context(self) -> Dict[str, str]:
+        runtime_context: Dict[str, str] = {}
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        snapshot = getattr(vscode_ns, "context_keys_snapshot", None)
+        if callable(snapshot):
+            try:
+                for key, value in snapshot().items():
+                    if value is None:
+                        continue
+                    text = self._normalize_when_context_value(value)
+                    if text:
+                        runtime_context[str(key)] = text
+            except Exception:
+                pass
+        return runtime_context
+
     def _command_palette_context(self, context: Any = None) -> Dict[str, str]:
         palette_context: Dict[str, str] = {
             "editorTextFocus": "true",
@@ -9447,18 +9466,7 @@ class AIEditorAPI:
             "editorHasSelection": "false",
             "hasSelection": "false",
         }
-        vscode_ns = getattr(self, "_vscode_ns", None)
-        snapshot = getattr(vscode_ns, "context_keys_snapshot", None)
-        if callable(snapshot):
-            try:
-                for key, value in snapshot().items():
-                    if value is None:
-                        continue
-                    text = self._normalize_when_context_value(value)
-                    if text:
-                        palette_context[str(key)] = text
-            except Exception:
-                pass
+        palette_context.update(self._extension_runtime_when_context())
         if not isinstance(context, dict):
             return palette_context
         resource = (
@@ -11607,17 +11615,20 @@ class AIEditorAPI:
         return result
 
     def _view_title_actions(self, view_id: str) -> List[Dict[str, Any]]:
-        return self._extension_menu_actions("view/title", {
+        context = self._extension_runtime_when_context()
+        context.update({
             "view": str(view_id or ""),
         })
+        return self._extension_menu_actions("view/title", context)
 
     def _view_item_actions(
             self, view_id: str, context_value: Any,
             node: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        context = {
+        context = self._extension_runtime_when_context()
+        context.update({
             "view": str(view_id or ""),
             "viewItem": "" if context_value is None else str(context_value),
-        }
+        })
         context.update(self._extension_resource_context(
             (node or {}).get("resourceUri", "")))
         return self._extension_menu_actions("view/item/context", context)
@@ -11656,8 +11667,21 @@ class AIEditorAPI:
         command_record = self._ext_host.ext_points.get_command_contribution(
             command_id)
         group_name = self._extension_menu_group_name(item.get("group", ""))
-        enabled = self._extension_when_matches(
-            item.get("enablement", ""), context)
+        enablement_parts = [
+            str(value).strip()
+            for value in (
+                command_record.get("precondition"),
+                command_record.get("enablement"),
+                item.get("precondition"),
+                item.get("enablement"),
+            )
+            if str(value or "").strip()
+        ]
+        enablement = " && ".join(enablement_parts)
+        enabled = self._extension_when_matches(enablement, context)
+        arguments = (
+            list(item.get("arguments") or [])
+            if isinstance(item.get("arguments"), list) else [])
         alt = item.get("alt")
         alt_preview: Dict[str, Any] = {}
         if isinstance(alt, str) and alt:
@@ -11674,6 +11698,8 @@ class AIEditorAPI:
                         or alt_record.get("title")
                         or alt_command),
                 }
+                if isinstance(alt.get("arguments"), list):
+                    alt_preview["arguments"] = list(alt.get("arguments") or [])
         title = (
             item.get("title")
             or command_record.get("title")
@@ -11688,7 +11714,12 @@ class AIEditorAPI:
                 or title),
             "icon": self._extension_action_icon(
                 item.get("icon") or command_record.get("icon")),
-            "extension_id": str(item.get("_extensionId", "")),
+            "extension_id": str(
+                item.get("_extensionId")
+                or command_record.get("_extensionId") or ""),
+            "extensionId": str(
+                item.get("_extensionId")
+                or command_record.get("_extensionId") or ""),
             "group": str(item.get("group", "")),
             "groupName": group_name,
             "groupRank": self._extension_menu_group_rank(group_name),
@@ -11696,9 +11727,14 @@ class AIEditorAPI:
             "navigation": group_name == "navigation",
             "order": self._extension_menu_order(item.get("group", "")),
             "when": str(item.get("when", "")),
-            "enablement": str(item.get("enablement", "")),
+            "enablement": enablement,
             "enabled": enabled,
             "disabled": not enabled,
+            "disabledReason": (
+                "" if enabled or not enablement
+                else f"Enablement not satisfied: {enablement}"),
+            "arguments": arguments,
+            "explicitArguments": isinstance(item.get("arguments"), list),
             "alt": alt_preview,
             "view": context.get("view", ""),
             "viewItem": context.get("viewItem", ""),
@@ -13137,11 +13173,12 @@ class AIEditorAPI:
         """
         self._ensure_engine()
         raw_context = context if isinstance(context, dict) else {}
-        menu_context = {
+        menu_context = self._extension_runtime_when_context()
+        menu_context.update({
             str(key): str(value)
             for key, value in raw_context.items()
             if value is not None
-        }
+        })
         menu_context.update(self._extension_resource_context(
             raw_context.get("resourceUri")
             or raw_context.get("resource")
@@ -13162,11 +13199,12 @@ class AIEditorAPI:
         self._ensure_engine()
         raw_context = context if isinstance(context, dict) else {}
         webview_id = str(view_type or raw_context.get("webviewId") or view_id or "")
-        menu_context = {
+        menu_context = self._extension_runtime_when_context()
+        menu_context.update({
             str(key): str(value)
             for key, value in raw_context.items()
             if value is not None
-        }
+        })
         if webview_id:
             menu_context["webviewId"] = webview_id
             menu_context.setdefault("webview", webview_id)
@@ -13178,7 +13216,8 @@ class AIEditorAPI:
         except Exception:
             actions = []
         for action in actions:
-            if isinstance(action, dict) and "arguments" not in action:
+            if (isinstance(action, dict)
+                    and not action.get("explicitArguments")):
                 action["arguments"] = [json.loads(json.dumps(
                     dict(menu_context), ensure_ascii=False, default=str))]
         return {"actions": actions, "context": menu_context}
