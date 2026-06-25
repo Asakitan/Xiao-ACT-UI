@@ -30,6 +30,8 @@ _CURRENT_TEST_LABEL = ""
 _FAILURE_DETAIL_LINE_LIMIT = 80
 _FAILURE_POINT_LINE_LIMIT = 180
 _FINAL_FAILURE_POINT_HEADING = "FAILED CHECKS (final):"
+_RECORDED_FAILURE_NOTE = "failure recorded; see final summary"
+_RECORDED_TEST_FAILURE_NOTE = "test failed; see final summary"
 
 
 def _record_failure(label: str, detail: str = "") -> None:
@@ -83,7 +85,7 @@ def _check(label: str, ok: bool, detail: str = "") -> None:
     else:
         _FAIL += 1
         _record_failure(label, detail)
-        print("  ✗ failure recorded; see final summary")
+        print(f"  ✗ {_RECORDED_FAILURE_NOTE}")
 
 
 def _run_test(label: str, fn) -> None:
@@ -97,7 +99,7 @@ def _run_test(label: str, fn) -> None:
             _FAIL += 1
             detail = f"{type(exc).__name__}: {exc}\n{traceback.format_exc().rstrip()}"
             _record_failure(label, detail)
-            print("  ✗ test failed; see final summary")
+            print(f"  ✗ {_RECORDED_TEST_FAILURE_NOTE}")
     finally:
         _CURRENT_TEST_LABEL = previous_test_label
 
@@ -132,6 +134,13 @@ def _failed_check_point_lines(
     ]
 
 
+def _print_final_failed_check_points() -> None:
+    print(f"{'=' * 50}")
+    print(_FINAL_FAILURE_POINT_HEADING)
+    for line in _failed_check_point_lines():
+        print(line)
+
+
 def _print_final_summary(total: int) -> None:
     print(f"{'=' * 50}")
     if _FAIL == 0:
@@ -148,10 +157,7 @@ def _print_final_summary(total: int) -> None:
         for line in _failure_detail_tail(detail):
             print(f"     {line}")
     print()
-    print(f"{'=' * 50}")
-    print(_FINAL_FAILURE_POINT_HEADING)
-    for line in _failed_check_point_lines():
-        print(line)
+    _print_final_failed_check_points()
 
 
 def _wait_until(predicate, timeout: float = 2.0) -> bool:
@@ -234,6 +240,44 @@ def test_selftest_output() -> None:
     saved_fail = _FAIL
     saved_failures = list(_FAILURES)
     saved_stdout = sys.stdout
+
+    inline_capture = io.StringIO()
+    try:
+        sys.stdout = inline_capture
+        _check("inline failure label", False, "secret inline detail")
+    finally:
+        sys.stdout = saved_stdout
+        _PASS = saved_pass
+        _FAIL = saved_fail
+        _FAILURES[:] = saved_failures
+
+    inline_output = inline_capture.getvalue()
+    _check("check failure output defers failure point",
+           _RECORDED_FAILURE_NOTE in inline_output
+           and "inline failure label" not in inline_output
+           and "secret inline detail" not in inline_output)
+
+    exception_capture = io.StringIO()
+    try:
+        sys.stdout = exception_capture
+
+        def _selftest_output_raises() -> None:
+            raise RuntimeError("secret exception detail")
+
+        _run_test("Exploding Output Test", _selftest_output_raises)
+    finally:
+        sys.stdout = saved_stdout
+        _PASS = saved_pass
+        _FAIL = saved_fail
+        _FAILURES[:] = saved_failures
+
+    exception_output = exception_capture.getvalue()
+    _check("test exception output defers traceback",
+           _RECORDED_TEST_FAILURE_NOTE in exception_output
+           and "Exploding Output Test" not in exception_output
+           and "secret exception detail" not in exception_output
+           and "Traceback" not in exception_output)
+
     capture = io.StringIO()
     try:
         _PASS = 3
