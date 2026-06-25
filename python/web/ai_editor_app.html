@@ -3858,7 +3858,9 @@ function applyEditorSelectionRange(direction){
 }
 async function requestEditorSelectionRanges(direction,quiet){
   const position=editorPositionFromOffset(ed.value,editorSelectionFocus());
-  const res=await call('editor_language_provider',editorProviderPayload('selectionRange',{positions:[position]}));
+  const res=await editorRequestLanguageProvider('selectionRange',editorProviderPayload('selectionRange',{positions:[position]}),{
+    countKey:'ranges',itemLabel:'selection range',label:'Selection ranges',quiet:quiet===true
+  });
   if(res&&res.error){if(!quiet)setStatus('Selection ranges failed: '+res.error);return false}
   const first=res&&res.ok&&Array.isArray(res.ranges)?res.ranges[0]:null;
   _editorSelectionRanges=editorSelectionRangeChain(first);
@@ -5315,7 +5317,9 @@ function showEditorColorPresentationMenu(info,presentations,event){
 }
 async function requestEditorColorPresentations(info,quiet,event){
   if(!info||!info.range||!info.color)return false;
-  const res=await call('editor_language_provider',editorProviderPayload('colorPresentation',{color:info.color,range:info.range}));
+  const res=await editorRequestLanguageProvider('colorPresentation',editorProviderPayload('colorPresentation',{color:info.color,range:info.range}),{
+    countKey:'presentations',itemLabel:'color presentation',label:'Color presentations',quiet:quiet===true
+  });
   if(res&&res.error){if(!quiet)setStatus('Color presentations failed: '+res.error);return false}
   const presentations=res&&res.ok&&Array.isArray(res.presentations)?res.presentations:[];
   const first=presentations[0]||null,label=first?String(first.label||''):'';
@@ -7411,7 +7415,9 @@ async function requestEditorRename(quiet){
   closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();closeEditorHierarchy();
   const offset=ed.selectionStart,position=editorPositionFromOffset(ed.value,offset);
   const basePayload={offset,position};
-  const prepRes=await call('editor_language_provider',editorProviderPayload('prepareRename',basePayload));
+  const prepRes=await editorRequestLanguageProvider('prepareRename',editorProviderPayload('prepareRename',basePayload),{
+    label:'Prepare rename',quiet:quiet===true
+  });
   if(prepRes&&prepRes.error){if(!quiet)setStatus('Rename failed: '+prepRes.error);return}
   const prepared=editorNormalizePrepareRename(prepRes&&prepRes.prepareRename)||editorFallbackPrepareRename(offset);
   if(!prepared||!prepared.range){if(!quiet)setStatus('No rename target');return}
@@ -7419,7 +7425,9 @@ async function requestEditorRename(quiet){
   const oldName=prepared.placeholder||editorRangeText(prepared.range);
   const newName=await promptEditorRenameName(oldName);
   if(!newName||newName===oldName){ed.focus();return}
-  const res=await call('editor_language_provider',editorProviderPayload('rename',Object.assign({},basePayload,{newName})));
+  const res=await editorRequestLanguageProvider('rename',editorProviderPayload('rename',Object.assign({},basePayload,{newName})),{
+    label:'Rename',quiet:quiet===true
+  });
   if(!res||res.error){setStatus('Rename failed: '+((res&&res.error)||'No rename result'));ed.focus();return}
   const summary=editorCodeActionEdits({edit:res.edit});
   if(!editorWorkspaceEditEditCount(summary)&&!summary.skipped){setStatus('Rename produced no edits');ed.focus();return}
@@ -7753,15 +7761,15 @@ async function handleEditorDocumentPaste(e){
   const fallbackText=editorPlainTextFromTransfer(dataTransfer);
   const requestId=++_editorPasteDropRequest;
   try{
-    const prepared=await call('editor_language_provider',editorDropPasteProviderPayload('prepareDocumentPaste',snapshot,{
+    const prepared=await editorRequestLanguageProvider('prepareDocumentPaste',editorDropPasteProviderPayload('prepareDocumentPaste',snapshot,{
       dataTransfer,pasteText:fallbackText,clipboardText:fallbackText
-    }));
+    }),{label:'Prepare paste',quiet:true});
     if(requestId!==_editorPasteDropRequest||editorDropPasteStateChanged(snapshot))return;
     if(prepared&&prepared.ok&&prepared.dataTransfer)dataTransfer=prepared.dataTransfer;
-    const res=await call('editor_language_provider',editorDropPasteProviderPayload('documentPaste',snapshot,{
+    const res=await editorRequestLanguageProvider('documentPaste',editorDropPasteProviderPayload('documentPaste',snapshot,{
       dataTransfer,pasteText:fallbackText,clipboardText:fallbackText,
       context:{triggerKind:0},pasteResolveCount:1
-    }));
+    }),{countKey:'pasteEdits',itemLabel:'paste edit',label:'Paste edits',quiet:true});
     if(requestId!==_editorPasteDropRequest||editorDropPasteStateChanged(snapshot))return;
     const edits=editorDropPasteEditsFromResponse(res,'pasteEdits');
     if(await editorApplyDropPasteEdits(edits,[snapshot.range],'Paste',snapshot,snapshot.range.start))return;
@@ -7784,9 +7792,9 @@ async function handleEditorDocumentDrop(e){
   const fallbackText=editorPlainTextFromTransfer(dataTransfer);
   const requestId=++_editorPasteDropRequest;
   try{
-    const res=await call('editor_language_provider',editorDropPasteProviderPayload('documentDrop',snapshot,{
+    const res=await editorRequestLanguageProvider('documentDrop',editorDropPasteProviderPayload('documentDrop',snapshot,{
       dataTransfer,dropText:fallbackText,dropResolveCount:1
-    }));
+    }),{countKey:'dropEdits',itemLabel:'drop edit',label:'Drop edits',quiet:true});
     if(requestId!==_editorPasteDropRequest||editorDropPasteStateChanged(snapshot))return;
     const edits=editorDropPasteEditsFromResponse(res,'dropEdits');
     if(await editorApplyDropPasteEdits(edits,[snapshot.range],'Drop',snapshot,snapshot.range.start))return;
@@ -12482,7 +12490,9 @@ function renderEditorCodeActionProviderKinds(hostId,inputId,items){
   });
 }
 async function refreshEditorCodeActionProviderKinds(){
-  const res=await call('editor_language_provider',editorProviderPayload('providerMetadata',{providerKind:'codeActions',matchedOnly:true}));
+  const res=await editorRequestLanguageProvider('providerMetadata',editorProviderPayload('providerMetadata',{providerKind:'codeActions',matchedOnly:true}),{
+    countKey:'providers',itemLabel:'provider',label:'Code action providers',quiet:true
+  });
   const items=editorCodeActionProviderKinds(res&&res.ok?res.providers:[]);
   renderEditorCodeActionProviderKinds('s-editor-code-actions-detected','s-editor-code-actions-on-save-json',items);
   renderEditorCodeActionProviderKinds('s-editor-lang-code-actions-detected','s-editor-lang-code-actions-on-save-json',items);

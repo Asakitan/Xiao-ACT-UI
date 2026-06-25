@@ -111,7 +111,9 @@ def _run_test(label: str, fn) -> None:
     try:
         try:
             fn()
-        except Exception as exc:
+        except BaseException as exc:
+            if isinstance(exc, KeyboardInterrupt):
+                raise
             _FAIL += 1
             detail = f"{type(exc).__name__}: {exc}\n{traceback.format_exc().rstrip()}"
             _record_failure(label, detail)
@@ -407,6 +409,28 @@ def test_selftest_output() -> None:
            and "Exploding Output Test" not in exception_output
            and "secret exception detail" not in exception_output
            and "Traceback" not in exception_output)
+
+    system_exit_capture = io.StringIO()
+    try:
+        sys.stdout = system_exit_capture
+
+        def _selftest_output_exits() -> None:
+            raise SystemExit("secret system exit detail")
+
+        _run_test("SystemExit Output Test", _selftest_output_exits)
+    finally:
+        sys.stdout = saved_stdout
+        _PASS = saved_pass
+        _FAIL = saved_fail
+        _FAILURES[:] = saved_failures
+
+    system_exit_output = system_exit_capture.getvalue()
+    _check("test SystemExit output defers failure point",
+           _RECORDED_TEST_FAILURE_NOTE in system_exit_output
+           and "failure #1 recorded" in system_exit_output
+           and "SystemExit Output Test" not in system_exit_output
+           and "secret system exit detail" not in system_exit_output
+           and "Traceback" not in system_exit_output)
 
     capture = io.StringIO()
     try:
@@ -3224,6 +3248,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function editorMoveWord(direction,selecting)" in html
             and "function editorSelectWordAtCursor()" in html
             and "async function requestEditorSelectionRanges(direction,quiet)" in html
+            and "editorRequestLanguageProvider('selectionRange'" in html
             and "async function expandEditorSelection(quiet)" in html
             and "async function shrinkEditorSelection(quiet)" in html
             and "editorProviderPayload('selectionRange'" in html
@@ -3458,6 +3483,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function editorCodeActionProviderKinds(providers)" in html
            and "async function refreshEditorCodeActionProviderKinds()" in html
            and "editorProviderPayload('providerMetadata',{providerKind:'codeActions',matchedOnly:true})" in html
+           and "editorRequestLanguageProvider('providerMetadata'" in html
            and "async function triggerEditorCodeActionsOnFocusChange()" in html
            and "async function applyEditorCodeActionForSave(action)" in html
            and "async function fetchEditorCodeActionsForKind(only,range,isCurrent)" in html
@@ -3528,6 +3554,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "editorDropPasteProviderPayload('prepareDocumentPaste'" in html
            and "editorDropPasteProviderPayload('documentPaste'" in html
            and "editorDropPasteProviderPayload('documentDrop'" in html
+           and "editorRequestLanguageProvider('prepareDocumentPaste'" in html
+           and "editorRequestLanguageProvider('documentPaste'" in html
+           and "editorRequestLanguageProvider('documentDrop'" in html
            and "ed.addEventListener('paste',handleEditorDocumentPaste)" in html
            and "ed.addEventListener('drop',handleEditorDocumentDrop)" in html
            and "function requestEditorCodeLenses(quiet)" in html
@@ -3554,6 +3583,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "editorProviderPayload('documentColor'" in html
            and "editorRequestLanguageProvider('documentColor'" in html
            and "editorProviderPayload('colorPresentation'" in html
+           and "editorRequestLanguageProvider('colorPresentation'" in html
            and "Refresh Document Colors" in html
            and "editor-color-swatch" in html
            and "editor-color-presentation-menu" in html
@@ -3585,6 +3615,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function confirmEditorWorkspaceEditApply(titleText,summary,detailText)" in html
            and "function editorWorkspaceEditPreviewItems(summary)" in html
            and "call('apply_workspace_text_edits'" in html
+           and "editorRequestLanguageProvider('prepareRename'" in html
+           and "editorRequestLanguageProvider('rename'" in html
            and "function editorApplyTextEdits(edits)" in html
            and "Ctrl+Space" in html
            and "Ctrl+Shift+Space" in html
