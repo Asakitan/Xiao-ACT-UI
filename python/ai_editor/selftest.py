@@ -6330,6 +6330,12 @@ console.log("extension setting schema helpers ok");
             and "function scheduleExtensionActivityRefresh()" in html
             and "function appendExtensionTitleActions(title,view,state)" in html
             and "function showExtensionActionMenu(x,y,actions,runner)" in html
+            and "function extensionSubmenuActions(action)" in html
+            and "function appendExtensionActionMenuItems(menu,actions,runner,level)" in html
+            and "function closeExtensionSubmenus(menu,level)" in html
+            and "d.classList.add('submenu')" in html
+            and "arrow.className='submenu-arrow'" in html
+            and "sub.className='ctx-submenu'" in html
             and "function extensionWelcomeEntries(view,state)" in html
             and "function appendExtensionWelcomeContent(parent,entries)" in html
             and "function appendExtensionWelcomeLine(parent,line)" in html
@@ -6387,7 +6393,7 @@ console.log("extension setting schema helpers ok");
             and "call('list_extension_view_containers','panel')" in html
             and "className='ptab extension-panel-tab'" in html
             and "className='terminal-panel extension-panel-container'" in html
-            and "if(action.disabled)d.classList.add('disabled')" in html
+            and "if(action.disabled&&!subActions.length)d.classList.add('disabled')" in html
             and "if(action.alt&&action.alt.command)d.title='Alt: '" in html
             and "call('execute_command',action.command,...(action.arguments||[]))" in html
             and "if(action&&action.command&&!action.disabled)" in html
@@ -12891,6 +12897,10 @@ def test_app_extension_runtime_support() -> None:
                         "title": "Resource Activity",
                     },
                     {
+                        "command": "selftest.activity.submenuOpen",
+                        "title": "Submenu Open",
+                    },
+                    {
                         "command": "selftest.activity.scmTitle",
                         "title": "SCM Runtime Title",
                     },
@@ -12929,6 +12939,13 @@ def test_app_extension_runtime_support() -> None:
                     {
                         "command": "selftest.activity.scmHiddenAction",
                         "title": "SCM Hidden Action",
+                    },
+                ],
+                "submenus": [
+                    {
+                        "id": "selftest.activity.more",
+                        "label": "More Activity",
+                        "icon": "$(zap)",
                     },
                 ],
                 "menus": {
@@ -13008,6 +13025,11 @@ def test_app_extension_runtime_support() -> None:
                             "when": "view == selftest.activity.tree",
                             "group": "navigation@3",
                         },
+                        {
+                            "submenu": "selftest.activity.more",
+                            "when": "view == selftest.activity.tree",
+                            "group": "z-other@2",
+                        },
                     ],
                     "view/item/context": [
                         {
@@ -13026,6 +13048,25 @@ def test_app_extension_runtime_support() -> None:
                             "command": "selftest.activity.resource",
                             "when": "view == selftest.activity.tree && viewItem == branch && resourceScheme == file && resourceExtname in [.txt,.md] && resourceFilename =~ /node-a/i && resourceFilename not in [node-b.txt]",
                             "group": "inline@3",
+                        },
+                        {
+                            "submenu": "selftest.activity.more",
+                            "when": "view == selftest.activity.tree && viewItem == branch",
+                            "group": "inline@4",
+                        },
+                    ],
+                    "selftest.activity.more": [
+                        {
+                            "command": "selftest.activity.submenuOpen",
+                            "when": "view == selftest.activity.tree",
+                            "group": "navigation@1",
+                            "arguments": [{"from": "submenu"}],
+                        },
+                        {
+                            "command": "selftest.activity.disabled",
+                            "when": "view == selftest.activity.tree",
+                            "enablement": "viewItem == never",
+                            "group": "inline@2",
                         },
                     ],
                 },
@@ -13867,6 +13908,18 @@ def test_app_extension_runtime_support() -> None:
             for action in activity_item_actions
             if isinstance(action, dict)
         }
+        activity_title_submenu = next(
+            (action for action in activity_title_actions
+             if action.get("submenu") == "selftest.activity.more"),
+            {})
+        activity_item_submenu = next(
+            (action for action in activity_item_actions
+             if action.get("submenu") == "selftest.activity.more"),
+            {})
+        title_submenu_actions = activity_title_submenu.get(
+            "submenuActions", [])
+        item_submenu_actions = activity_item_submenu.get(
+            "submenuActions", [])
         _check("activity tree views expose contributed title and item actions",
                [action.get("command") for action in activity_title_actions[:4]]
                == [
@@ -13908,6 +13961,24 @@ def test_app_extension_runtime_support() -> None:
                ]
                and [action.get("command") for action in activity_tree_nodes[1]
                     .get("actions", [])] == [])
+        _check("extension view menus render contributed submenus dynamically",
+               activity_title_submenu.get("title") == "More Activity"
+               and activity_title_submenu.get("icon") == "$(zap)"
+               and activity_title_submenu.get("itemType") == "submenu"
+               and activity_title_submenu.get("view")
+               == "selftest.activity.tree"
+               and [action.get("command") for action in title_submenu_actions]
+               == [
+                   "selftest.activity.submenuOpen",
+                   "selftest.activity.disabled",
+               ]
+               and title_submenu_actions[0].get("arguments")
+               == [{"from": "submenu"}]
+               and title_submenu_actions[1].get("disabled") is True
+               and activity_item_submenu.get("inline") is True
+               and activity_item_submenu.get("submenuActions", [{}])[0].get(
+                   "command") == "selftest.activity.submenuOpen"
+               and item_submenu_actions[0].get("viewItem") == "branch")
         api._ext_host.commands.execute(
             "setContext", "selftest.activity.ready", True)
         ready_activity_views = {

@@ -11898,7 +11898,10 @@ class AIEditorAPI:
         return self._extension_menu_actions("view/item/context", context)
 
     def _extension_menu_actions(
-            self, menu_id: str, context: Dict[str, str]) -> List[Dict[str, Any]]:
+            self,
+            menu_id: str,
+            context: Dict[str, str],
+            seen: Optional[set[str]] = None) -> List[Dict[str, Any]]:
         ext_host = getattr(self, "_ext_host", None)
         ext_points = getattr(ext_host, "ext_points", None)
         if ext_points is None:
@@ -11906,13 +11909,19 @@ class AIEditorAPI:
         menus = ext_points.all_contributions.get("menus", {})
         if not isinstance(menus, dict):
             return []
+        normalized_menu_id = str(menu_id or "")
+        visited = set(seen or set())
+        if normalized_menu_id in visited:
+            return []
+        visited.add(normalized_menu_id)
         result: List[Dict[str, Any]] = []
-        for item in menus.get(menu_id, []):
+        for item in menus.get(normalized_menu_id, []):
             if not isinstance(item, dict):
                 continue
             if not self._extension_when_matches(item.get("when", ""), context):
                 continue
-            action = self._extension_menu_action_preview(item, context)
+            action = self._extension_menu_action_preview(
+                item, context, visited)
             if action:
                 result.append(action)
         result.sort(key=lambda action: (
@@ -11924,7 +11933,12 @@ class AIEditorAPI:
 
     def _extension_menu_action_preview(
             self, item: Dict[str, Any],
-            context: Dict[str, str]) -> Dict[str, Any]:
+            context: Dict[str, str],
+            seen: Optional[set[str]] = None) -> Dict[str, Any]:
+        submenu_id = str(item.get("submenu") or "").strip()
+        if submenu_id:
+            return self._extension_submenu_action_preview(
+                item, context, submenu_id, seen)
         command_id = str(item.get("command") or "")
         if not command_id:
             return {}
@@ -12003,6 +12017,72 @@ class AIEditorAPI:
             "view": context.get("view", ""),
             "viewItem": context.get("viewItem", ""),
         }
+
+    def _extension_submenu_action_preview(
+            self,
+            item: Dict[str, Any],
+            context: Dict[str, str],
+            submenu_id: str,
+            seen: Optional[set[str]] = None) -> Dict[str, Any]:
+        submenu = self._extension_submenu_contribution(submenu_id)
+        if not submenu:
+            return {}
+        actions = self._extension_menu_actions(submenu_id, context, seen)
+        if not actions:
+            return {}
+        group_name = self._extension_menu_group_name(item.get("group", ""))
+        title = (
+            item.get("title")
+            or item.get("label")
+            or submenu.get("label")
+            or submenu_id)
+        icon = item.get("icon")
+        if icon is None:
+            icon = submenu.get("icon")
+        extension_id = str(
+            item.get("_extensionId")
+            or submenu.get("_extensionId")
+            or "")
+        return {
+            "submenu": submenu_id,
+            "id": submenu_id,
+            "title": str(title),
+            "shortTitle": str(item.get("shortTitle") or title),
+            "icon": self._extension_action_icon(icon),
+            "extension_id": extension_id,
+            "extensionId": extension_id,
+            "group": str(item.get("group", "")),
+            "groupName": group_name,
+            "groupRank": self._extension_menu_group_rank(group_name),
+            "inline": group_name == "inline",
+            "navigation": group_name == "navigation",
+            "order": self._extension_menu_order(item.get("group", "")),
+            "when": str(item.get("when", "")),
+            "enablement": "",
+            "enabled": True,
+            "disabled": False,
+            "disabledReason": "",
+            "actions": actions,
+            "submenuActions": actions,
+            "itemType": "submenu",
+            "view": context.get("view", ""),
+            "viewItem": context.get("viewItem", ""),
+        }
+
+    def _extension_submenu_contribution(
+            self, submenu_id: str) -> Dict[str, Any]:
+        ext_points = getattr(getattr(self, "_ext_host", None), "ext_points", None)
+        if ext_points is None:
+            return {}
+        raw_submenus = ext_points.all_contributions.get("submenus", [])
+        if not isinstance(raw_submenus, list):
+            return {}
+        for item in raw_submenus:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("id") or "") == submenu_id:
+                return dict(item)
+        return {}
 
     @staticmethod
     def _extension_menu_group_name(group: Any) -> str:
