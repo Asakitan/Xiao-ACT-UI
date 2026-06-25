@@ -15540,6 +15540,7 @@ function commandPaletteQuickAccessProviders(){
     {prefix:'>',label:'Show and Run Commands',category:'Quick Access',description:'Run built-in and extension-contributed commands.',placeholder:'Type a command...'},
     {prefix:'@',label:'Go to Symbol in Editor',category:'Quick Access',description:'Search symbols in the active editor.',placeholder:'Search symbols in the active editor...'},
     {prefix:'#',label:'Go to Symbol in Workspace',category:'Quick Access',description:'Search symbols across the workspace.',placeholder:'Search workspace symbols...'},
+    {prefix:'view ',label:'Open View',category:'Quick Access',description:'Open side bar, panel, and configuration views.',placeholder:'Search views...'},
   ];
 }
 function commandPaletteProviderPrefix(value){
@@ -15608,6 +15609,7 @@ function commandPaletteRunQuickAccessProvider(provider,query){
   if(provider.prefix==='>'){openCommandPaletteWithValue('>'+value);return}
   if(provider.prefix==='@'){closeCommandPalette();openDocumentSymbolPicker(value);return}
   if(provider.prefix==='#'){closeCommandPalette();openWorkspaceSymbolPicker(value);return}
+  if(provider.prefix==='view '){openCommandPaletteWithValue('view '+value);return}
   if(provider.prefix==='?'){openCommandPaletteWithValue('?'+value);return}
 }
 function commandPaletteLoadHistory(){
@@ -15678,10 +15680,43 @@ function commandPaletteFilteredCommands(query,history){
     return String(a.command.label||'').localeCompare(String(b.command.label||''));
   });
 }
+function commandPaletteQuickAccessViews(){
+  return [
+    {id:'view.explorer',label:'Explorer',container:'Side Bar',description:'Open the workspace explorer.',action:()=>switchSidebar('explorer')},
+    {id:'view.extensions',label:'Extensions',container:'Side Bar',description:'Open installed and marketplace extensions.',action:()=>switchSidebar('extensions')},
+    {id:'view.tools',label:'Tools',container:'Side Bar',description:'Open available tools and MCP entries.',action:()=>switchSidebar('tools')},
+    {id:'view.chatHistory',label:'Chat History',container:'Side Bar',description:'Open saved AI chat history.',action:()=>openChatHistory()},
+    {id:'view.customInstructions',label:'Custom Instructions',container:'Side Bar',description:'Open custom instruction files.',action:()=>switchSidebar('instructions')},
+    {id:'view.agents',label:'Agents & Workflows',container:'Side Bar',description:'Open agents and workflow definitions.',action:()=>switchSidebar('agents')},
+    {id:'view.settings',label:'Settings',container:'Preferences',description:'Open application settings.',action:()=>openSettings()},
+    {id:'view.keyboardShortcuts',label:'Keyboard Shortcuts',container:'Preferences',description:'Open keyboard shortcut reference.',shortcut:'Ctrl+K Ctrl+S',action:()=>openKeybindings()},
+  ];
+}
+function commandPaletteViewEntries(query){
+  const normalized=String(query||'').trim();
+  return commandPaletteQuickAccessViews().map((view,index)=>{
+    const command={
+      id:view.id,
+      label:view.label,
+      category:view.container||'View',
+      description:view.description||view.container||'',
+      shortcut:view.shortcut||'',
+      noHistory:true,
+      action:view.action,
+    };
+    const match=commandPaletteBestMatch(command,normalized);
+    if(normalized&&!match)return null;
+    return{command,index,id:view.id,category:command.category,recent:0,match,score:match?match.score:0};
+  }).filter(Boolean).sort((a,b)=>{
+    if(normalized&&b.score!==a.score)return b.score-a.score;
+    return a.index-b.index;
+  });
+}
 function commandPalettePrefixEntries(value){
   const active=commandPaletteProviderPrefix(value);
   if(!active||active.prefix==='>')return null;
   const query=commandPaletteProviderQuery(value,active);
+  if(active.prefix==='view ')return commandPaletteViewEntries(query);
   const providers=active.prefix==='?'
     ?commandPaletteQuickAccessProviders().filter(provider=>provider.prefix!=='?')
     :[active];
@@ -15751,7 +15786,8 @@ function filterCommands(){
   const prefixItems=commandPalettePrefixEntries(input.value);
   const items=prefixItems||commandPaletteFilteredCommands(input.value,history);
   if(!items.length){
-    const empty=document.createElement('div');empty.className='cmd-empty';empty.textContent='No matching commands';
+    const empty=document.createElement('div');empty.className='cmd-empty';
+    empty.textContent=provider&&provider.prefix==='view '?'No matching views':(provider&&provider.prefix==='?'?'No matching Quick Access providers':'No matching commands');
     list.appendChild(empty);commandPaletteSetSelected(0);return;
   }
   let showedRecent=false,showedOther=false;

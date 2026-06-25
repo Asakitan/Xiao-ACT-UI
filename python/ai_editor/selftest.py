@@ -5836,11 +5836,16 @@ console.log("extension setting schema helpers ok");
            and "prefix:'?'" in html
            and "prefix:'@'" in html
            and "prefix:'#'" in html
+           and "prefix:'view '" in html
+           and "function commandPaletteQuickAccessViews()" in html
+           and "function commandPaletteViewEntries(query)" in html
            and "openDocumentSymbolPicker(value)" in html
            and "openWorkspaceSymbolPicker(value)" in html
+           and "openCommandPaletteWithValue('view '+value)" in html
            and "openCommandPaletteWithValue('>'+value)" in html
            and "function openWorkspaceSymbolPicker(query)" in html
            and "function openDocumentSymbolPicker(query)" in html
+           and "No matching views" in html
            and "No matching commands" in html
            and "recently used" in html
            and "other commands" in html
@@ -6003,6 +6008,8 @@ console.log("quick input filter helpers ok");
             "commandPaletteFuzzyMatch",
             "commandPaletteBestMatch",
             "commandPaletteFilteredCommands",
+            "commandPaletteQuickAccessViews",
+            "commandPaletteViewEntries",
             "commandPalettePrefixEntries",
             "commandPaletteHighlightedHtml",
         ]
@@ -6025,14 +6032,25 @@ let openedDocumentQuery = null;
 let openedWorkspaceQuery = null;
 let reopenedPaletteValue = null;
 let closedPaletteCount = 0;
+let switchedSidebar = null;
+let openedSettings = false;
+let openedKeybindings = false;
 function call(method, ...args){ executedCommands.push({ method, args }); return Promise.resolve({ ok: true }); }
 function closeCommandPalette(){ closedPaletteCount += 1; }
 function openDocumentSymbolPicker(query){ openedDocumentQuery = query; }
 function openWorkspaceSymbolPicker(query){ openedWorkspaceQuery = query; }
 function openCommandPaletteWithValue(value){ reopenedPaletteValue = value; }
+function switchSidebar(panel){ switchedSidebar = panel; }
+function openChatHistory(){ switchedSidebar = "history"; }
+function openSettings(){ openedSettings = true; }
+function openKeybindings(){ openedKeybindings = true; }
 assert(commandPaletteNormalizeQuery("> rename") === "rename", "command prefix is stripped");
 assert(commandPaletteNormalizeQuery("  >Preferences ") === "Preferences", "prefix trim matches VS Code entry");
-assert(commandPaletteQuickAccessProviders().map(provider => provider.prefix).join("") === "?>@#",
+assert(commandPaletteQuickAccessProviders().some(provider => provider.prefix === "?")
+       && commandPaletteQuickAccessProviders().some(provider => provider.prefix === ">")
+       && commandPaletteQuickAccessProviders().some(provider => provider.prefix === "@")
+       && commandPaletteQuickAccessProviders().some(provider => provider.prefix === "#")
+       && commandPaletteQuickAccessProviders().some(provider => provider.prefix === "view "),
        "QuickAccess providers expose help command document and workspace prefixes");
 assert(commandPaletteProviderPrefix("@MyClass").prefix === "@"
        && commandPaletteProviderQuery("@MyClass") === "MyClass",
@@ -6040,6 +6058,9 @@ assert(commandPaletteProviderPrefix("@MyClass").prefix === "@"
 assert(commandPaletteProviderPrefix("#Widget").prefix === "#"
        && commandPaletteProviderQuery("#Widget") === "Widget",
        "workspace symbol prefix preserves query");
+assert(commandPaletteProviderPrefix("view explorer").prefix === "view "
+       && commandPaletteProviderQuery("view explorer") === "explorer",
+       "view prefix preserves query after its multi-character prefix");
 let prefixEntries = commandPalettePrefixEntries("?symbol");
 assert(prefixEntries.some(entry => entry.command.label.indexOf("@ Go to Symbol in Editor") === 0)
        && prefixEntries.some(entry => entry.command.label.indexOf("# Go to Symbol in Workspace") === 0),
@@ -6056,6 +6077,21 @@ assert(openedWorkspaceQuery === "WorkspaceSymbol",
 commandPaletteRunQuickAccessProvider(commandPaletteProviderPrefix(">rename"), "rename");
 assert(reopenedPaletteValue === ">rename",
        "command provider reopens command mode while preserving query");
+commandPaletteRunQuickAccessProvider(commandPaletteProviderPrefix("view explorer"), "explorer");
+assert(reopenedPaletteValue === "view explorer",
+       "view provider reopens view mode while preserving query");
+prefixEntries = commandPalettePrefixEntries("view ext");
+assert(prefixEntries.length === 1 && prefixEntries[0].command.label === "Extensions",
+       "view prefix filters side bar view entries");
+prefixEntries[0].command.action();
+assert(switchedSidebar === "extensions",
+       "view prefix action opens existing side bar entry");
+commandPalettePrefixEntries("view settings")[0].command.action();
+assert(openedSettings,
+       "view prefix can open settings via existing action");
+commandPalettePrefixEntries("view shortcuts")[0].command.action();
+assert(openedKeybindings,
+       "view prefix can open keyboard shortcuts via existing action");
 const fuzzy = commandPaletteFuzzyMatch("rn sym", "Rename Symbol");
 assert(fuzzy && fuzzy.ranges.length >= 2, "fuzzy non-contiguous words match");
 const highlighted = commandPaletteHighlightedHtml("Rename Symbol", [[0,2],[7,10]]);
