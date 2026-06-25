@@ -117,6 +117,9 @@ body.window-resizing * { cursor:inherit !important; }
 .ab-icon:hover { opacity:1; color:var(--fg); }
 .ab-icon.active { opacity:1; color:var(--fg); border-left-color:var(--fg); }
 .ab-icon svg { width:24px; height:24px; }
+.ab-icon .extension-container-icon { width:24px; height:24px; display:inline-flex;
+  align-items:center; justify-content:center; background-size:24px 24px; background-position:center;
+  background-repeat:no-repeat; font-size:18px; line-height:1; }
 .ab-icon .badge { position:absolute; top:6px; right:6px; background:var(--bg-badge);
   color:#fff; font-size:9px; min-width:16px; height:16px; border-radius:8px;
   display:flex; align-items:center; justify-content:center; }
@@ -158,6 +161,9 @@ body.window-resizing * { cursor:inherit !important; }
   background-position:center; background-repeat:no-repeat; background-size:16px 16px;
   color:transparent; font-size:0;
 }
+.extension-panel-tab .extension-container-icon { width:14px; height:14px; display:inline-flex;
+  align-items:center; justify-content:center; background-size:14px 14px; background-position:center;
+  background-repeat:no-repeat; font-size:11px; line-height:1; flex-shrink:0; }
 .tree-label { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .tree-decoration-badge { margin-left:auto; min-width:14px; height:14px; padding:0 4px;
   display:inline-flex; align-items:center; justify-content:center; flex-shrink:0;
@@ -16192,6 +16198,53 @@ async function renderExplorerExtensionViews(){
   block.style.display='';
   renderExtensionViewsInto(contentEl,item,{showMeta:false,emptyText:''});
 }
+function extensionContainerIconUri(item){
+  if(!item||typeof item!=='object')return '';
+  const direct=String(item.iconUri||item.icon_uri||'');
+  if(direct)return direct;
+  const iconPath=item.iconPath||item.icon_path;
+  if(iconPath&&typeof iconPath==='object'){
+    const themeKind=(document.documentElement.getAttribute('data-theme')==='light')?'light':'dark';
+    const raw=String(
+      (themeKind==='light'?(iconPath.light||iconPath.path):(iconPath.dark||iconPath.path))
+      ||iconPath.path||iconPath.light||iconPath.dark||'');
+    if(raw)return raw;
+  }
+  return '';
+}
+function extensionContainerIconVisual(item){
+  const uri=extensionContainerIconUri(item);
+  if(uri)return {uri,title:String((item&&item.icon)||'')};
+  const themeIcon=item&&(item.themeIcon||item.theme_icon);
+  if(themeIcon&&typeof themeIcon==='object'&&themeIcon.id){
+    return {text:extensionTreeThemeIconGlyph(themeIcon.id),title:String(themeIcon.id)};
+  }
+  const raw=String((item&&item.icon)||'').trim();
+  if(raw.startsWith('$(')&&raw.endsWith(')')){
+    const id=raw.slice(2,-1);
+    return {text:extensionTreeThemeIconGlyph(id),title:id};
+  }
+  return {text:String((item&&item.icon_text)||'▣')};
+}
+function renderExtensionContainerIcon(target,item){
+  if(!target)return;
+  target.textContent='';
+  const icon=document.createElement('span');
+  icon.className='extension-container-icon';
+  applyIconVisual(icon,extensionContainerIconVisual(item));
+  target.appendChild(icon);
+}
+function renderExtensionPanelTabLabel(tab,item){
+  if(!tab)return;
+  tab.textContent='';
+  const icon=document.createElement('span');
+  icon.className='extension-container-icon';
+  applyIconVisual(icon,extensionContainerIconVisual(item));
+  const label=document.createElement('span');
+  label.textContent=item.title||item.id;
+  tab.appendChild(icon);
+  tab.appendChild(label);
+}
 function extensionPanelTabKey(id){return 'ext-panel-'+String(id||'').replace(/[^a-zA-Z0-9_-]/g,'_')}
 function extensionPanelContentId(id){return 'extension-panel-content-'+String(id||'').replace(/[^a-zA-Z0-9_-]/g,'_')}
 function ensureExtensionPanelContainer(item){
@@ -16209,7 +16262,7 @@ function ensureExtensionPanelContainer(item){
     tabs.insertBefore(tab,spacer||null);
   }
   if(tab){
-    tab.textContent=item.title||item.id;
+    renderExtensionPanelTabLabel(tab,item);
     tab.title=(item.location?item.location+': ':'')+(item.title||item.id);
     tab._extensionPanelItem=item;
   }
@@ -16262,8 +16315,7 @@ async function renderExtensionActivityBar(){
     btn.className='ab-icon';
     btn.dataset.panel='ext-vc-'+item.id;
     btn.title=item.title;
-    btn.textContent=item.icon_text;
-    btn.style.fontSize='18px';
+    renderExtensionContainerIcon(btn,item);
     btn.addEventListener('click',function(){
       const panel='ext-vc-'+item.id;
       if(panel===_activeSidebarPanel&&_sidebarVis){toggleSidebarVis();return}

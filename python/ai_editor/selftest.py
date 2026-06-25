@@ -6394,6 +6394,12 @@ console.log("extension setting schema helpers ok");
             and "function renderExtensionWebviewView(view)" in html
             and "_injectWebviewHtml(host,view.id||state.view_id||state.viewId,html,state.state)" in html
             and "renderExtensionContainerContent(item)" in html
+            and "function extensionContainerIconUri(item)" in html
+            and "function extensionContainerIconVisual(item)" in html
+            and "function renderExtensionContainerIcon(target,item)" in html
+            and "renderExtensionContainerIcon(btn,item)" in html
+            and "function renderExtensionPanelTabLabel(tab,item)" in html
+            and "renderExtensionPanelTabLabel(tab,item)" in html
             and "function renderExtensionPanelContainers()" in html
             and "call('list_extension_view_containers','panel')" in html
             and "className='ptab extension-panel-tab'" in html
@@ -12869,6 +12875,15 @@ def test_app_extension_runtime_support() -> None:
                and command_webview_result.get("fallbackKind") == "webviewView"
                and "command-webview" in command_webview_result.get("html", ""))
 
+        activity_ext_dir = tempfile.mkdtemp(prefix="sao_selftest_activity_")
+        activity_icon_dir = os.path.join(activity_ext_dir, "icons")
+        os.makedirs(activity_icon_dir, exist_ok=True)
+        activity_icon_path = os.path.join(activity_icon_dir, "activity.svg")
+        with open(activity_icon_path, "w", encoding="utf-8") as fh:
+            fh.write(
+                '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">'
+                '<path fill="#d7dae0" d="M12 2l9 20H3z"/></svg>')
+
         activity_desc = ExtensionDescription.from_package_json({
             "name": "activity-container",
             "publisher": "selftest",
@@ -13117,6 +13132,7 @@ def test_app_extension_runtime_support() -> None:
                     "activitybar": [{
                         "id": "selftest.activity",
                         "title": "Selftest Activity",
+                        "icon": "icons/activity.svg",
                     }],
                     "panel": [{
                         "id": "selftest.panel",
@@ -13126,6 +13142,7 @@ def test_app_extension_runtime_support() -> None:
                     "secondarySidebar": [{
                         "id": "selftest.secondary",
                         "title": "Selftest Secondary",
+                        "icon": "$(beaker)",
                     }],
                 },
                 "views": {"selftest.activity": [
@@ -13181,7 +13198,7 @@ def test_app_extension_runtime_support() -> None:
                     },
                 ],
             },
-        }, "/tmp/selftest-activity")
+        }, activity_ext_dir)
         api._ext_host.ext_points.process(activity_desc)
         class _ImmediateThenable:
             def __init__(self, value):
@@ -13836,6 +13853,9 @@ def test_app_extension_runtime_support() -> None:
                    "acceptInputCommand", {}).get("command")
                == "selftest.activity.scmAccept")
         all_view_containers = api.list_extension_view_containers().get("items", [])
+        activity_container = next(
+            (item for item in all_view_containers
+             if item.get("id") == "selftest.activity"), {})
         panel_containers = api.list_extension_view_containers("panel").get("items", [])
         secondary_containers = api.list_extension_view_containers(
             "secondarySidebar").get("items", [])
@@ -13853,6 +13873,24 @@ def test_app_extension_runtime_support() -> None:
                and panel_containers[0].get("icon_text") == "◎"
                and secondary_containers
                and secondary_containers[0].get("id") == "selftest.secondary")
+        _check("extension view containers resolve manifest icons",
+               activity_container.get("icon") == "icons/activity.svg"
+               and activity_container.get("iconUri", "").startswith("file:///")
+               and "activity.svg" in activity_container.get("iconUri", "")
+               and activity_container.get("iconPath", {}).get("path")
+               == activity_container.get("iconUri")
+               and activity_container.get("icon_text") == ""
+               and panel_containers
+               and panel_containers[0].get("icon_text") == "◎"
+               and secondary_containers
+               and secondary_containers[0].get(
+                   "themeIcon", {}).get("id") == "beaker"
+               and secondary_containers[0].get("icon_text") == "",
+               json.dumps({
+                   "activity": activity_container,
+                   "panel": panel_containers[:1],
+                   "secondary": secondary_containers[:1],
+               }, ensure_ascii=False))
         activity_container_actions = activity_items.get(
             "selftest.activity", {}).get("titleActions", [])
         activity_container_submenu = next(

@@ -883,6 +883,7 @@ class ExtensionPoints:
                     if isinstance(vc, dict):
                         vc = dict(vc)
                         vc["_extensionId"] = eid
+                        vc["_extensionPath"] = ext.extension_path
                         self._view_containers.setdefault(loc, []).append(vc)
 
         for loc, vs in c.get("views", {}).items():

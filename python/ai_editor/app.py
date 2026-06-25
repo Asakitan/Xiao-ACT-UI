@@ -13380,25 +13380,11 @@ class AIEditorAPI:
             view for view in views
             if self._extension_view_visible_in_container(view)
         ])
-        icon_text = ""
-        icon_path = vc.get("icon")
-        if isinstance(icon_path, str) and icon_path.strip():
-            raw_icon = icon_path.strip()
-            if len(raw_icon) <= 4 and not raw_icon.endswith((".svg", ".png")):
-                icon_text = raw_icon
-        if not icon_text:
-            ext_desc = self._ext_host.registry.get(ext_id)
-            if ext_desc and ext_desc.icon:
-                raw_icon = ext_desc.icon.strip()
-                if len(raw_icon) <= 4 and not raw_icon.endswith((".svg", ".png")):
-                    icon_text = raw_icon
-        if not icon_text:
-            icon_text = "▣"
-        return {
+        icon_payload = self._extension_view_container_icon_payload(vc, ext_id)
+        item = {
             "id": vc_id,
             "title": title,
-            "icon_text": icon_text,
-            "icon": icon_path,
+            "icon": vc.get("icon"),
             "extension_id": ext_id,
             "location": str(location or ""),
             "titleActions": self._view_container_title_actions(
@@ -13406,6 +13392,108 @@ class AIEditorAPI:
             "views": views,
             "view_count": len(views),
         }
+        item.update(icon_payload)
+        return item
+
+    @staticmethod
+    def _extension_theme_icon_id(raw: Any) -> str:
+        text = str(raw or "").strip()
+        match = re.match(r"^\$\(([^)]+)\)$", text)
+        if not match:
+            return ""
+        icon_id = match.group(1).strip()
+        if not re.match(r"^[A-Za-z0-9._-]{1,80}$", icon_id):
+            return ""
+        return icon_id
+
+    def _extension_container_asset_uri(
+            self, ext_id: str, raw_path: Any, root_hint: Any = "") -> str:
+        raw = str(raw_path or "").strip()
+        if not raw or re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", raw):
+            return ""
+        asset_ref = raw.split("?", 1)[0].split("#", 1)[0]
+        if os.path.splitext(asset_ref)[1].lower() not in {
+                ".svg", ".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+            return ""
+        ext_desc = self._ext_host.registry.get(str(ext_id or ""))
+        root = (
+            str(root_hint or "").strip()
+            or (getattr(ext_desc, "extension_path", "") if ext_desc else "")
+        )
+        if not root:
+            return ""
+        full = os.path.abspath(os.path.join(root, asset_ref))
+        try:
+            root_real = os.path.realpath(os.path.abspath(root))
+            full_real = os.path.realpath(full)
+            if os.path.commonpath([
+                    os.path.normcase(root_real),
+                    os.path.normcase(full_real)]) != os.path.normcase(root_real):
+                return ""
+        except Exception:
+            return ""
+        if not os.path.isfile(full):
+            return ""
+        try:
+            return Path(full).resolve().as_uri()
+        except Exception:
+            return ""
+
+    def _extension_view_container_icon_payload(
+            self, vc: Dict[str, Any], ext_id: str) -> Dict[str, Any]:
+        raw_icon = vc.get("icon")
+        payload: Dict[str, Any] = {}
+        if isinstance(raw_icon, str) and raw_icon.strip():
+            raw = raw_icon.strip()
+            theme_id = self._extension_theme_icon_id(raw)
+            if theme_id:
+                return {
+                    "themeIcon": {"id": theme_id, "kind": "theme"},
+                    "icon_text": "",
+                }
+            icon_uri = self._extension_container_asset_uri(
+                ext_id, raw, vc.get("_extensionPath"))
+            if icon_uri:
+                return {
+                    "iconUri": icon_uri,
+                    "iconPath": {"path": icon_uri},
+                    "icon_text": "",
+                }
+            if len(raw) <= 4 and not raw.lower().endswith((
+                    ".svg", ".png", ".jpg", ".jpeg", ".webp", ".gif")):
+                return {"icon_text": raw}
+        elif isinstance(raw_icon, dict):
+            icon_path: Dict[str, str] = {}
+            for key in ("light", "dark", "path"):
+                uri = self._extension_container_asset_uri(
+                    ext_id, raw_icon.get(key), vc.get("_extensionPath"))
+                if uri:
+                    icon_path[key] = uri
+            if icon_path:
+                payload["iconPath"] = icon_path
+                payload["iconUri"] = (
+                    icon_path.get("dark")
+                    or icon_path.get("path")
+                    or icon_path.get("light")
+                    or ""
+                )
+                payload["icon_text"] = ""
+                return payload
+        ext_desc = self._ext_host.registry.get(str(ext_id or ""))
+        raw_fallback = str(getattr(ext_desc, "icon", "") or "").strip()
+        if raw_fallback:
+            fallback_uri = self._extension_container_asset_uri(
+                ext_id, raw_fallback, vc.get("_extensionPath"))
+            if fallback_uri:
+                return {
+                    "iconUri": fallback_uri,
+                    "iconPath": {"path": fallback_uri},
+                    "icon_text": "",
+                }
+            if len(raw_fallback) <= 4 and not raw_fallback.lower().endswith((
+                    ".svg", ".png", ".jpg", ".jpeg", ".webp", ".gif")):
+                return {"icon_text": raw_fallback}
+        return {"icon_text": "▣"}
 
     @classmethod
     def _sort_extension_views(cls, views: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
