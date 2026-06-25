@@ -2017,7 +2017,7 @@ const SETTINGS_SECTION_DEFAULTS={
   codex:{cli_path:'',cli_args:[],transport:'chat_completions',model:'codex-mini-latest'},
   mcp:{access:'prompt',autostart:false,discovery_enabled:true,collision_behavior:'first',server_sampling:false},
   terminal:{profile:'PowerShell 7 (No Profile)',shell_path:'',shell_args:[],timeout:30,output_limit:8000,auto_approve:{}},
-  extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands','views','customEditors'],enabled_contributions_explicit:false,diagnostics_enabled:false},
+  extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands','views','customEditors','terminal','statusBarItems'],enabled_contributions_explicit:false,diagnostics_enabled:false},
   editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,linkedEditing:false,codeActionsOnSave:{},codeActions:{triggerOnFocusChange:false},tabSize:4,insertSpaces:true},
   files:{autoSave:'off',autoSaveDelay:1000,trimTrailingWhitespace:false,insertFinalNewline:false,trimFinalNewlines:false},
   customization:{instructions_locations:['.sao/instructions.md','.sao/instructions'],agent_locations:['.sao/agents'],workflow_locations:['.sao/workflows'],skill_locations:['.agents/skills/.local','.claude/skills/.local'],use_agent_md:true,use_claude_md:false}
@@ -2027,7 +2027,9 @@ const EXTENSION_CONTRIBUTION_OPTIONS=[
   {id:'languageModelTools',label:'LM Tools',description:'Register extension language-model tools for tool invocation.'},
   {id:'commands',label:'Commands',description:'Enable extension commands and command fallbacks.'},
   {id:'views',label:'Views',description:'Load extension webview and tree view contributions.'},
-  {id:'customEditors',label:'Custom Editors',description:'Resolve extension-owned editor surfaces such as NBT viewers.'}
+  {id:'customEditors',label:'Custom Editors',description:'Resolve extension-owned editor surfaces such as NBT viewers.'},
+  {id:'terminal',label:'Terminal Profiles',description:'Load extension-contributed terminal profiles.'},
+  {id:'statusBarItems',label:'Status Bar Items',description:'Render extension-contributed status bar entries.'}
 ];
 const SETTINGS_DEFAULTS={
   provider:'openai',api_key:'',base_url:'',model:'',temperature:0.7,max_tokens:4096,system_prompt:'',

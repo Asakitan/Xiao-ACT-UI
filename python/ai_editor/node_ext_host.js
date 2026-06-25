@@ -1608,6 +1608,9 @@ const _terminals = [];
 let _activeTerminal = undefined;
 let _nextTerminalHandle = 1;
 const _terminalProfileProviders = new Map(); // id -> { provider, extensionId }
+const _terminalLinkProviders = new Set();
+const _terminalLinkCache = new Map(); // terminal handle -> Map<link id, { provider, link }>
+let _nextTerminalLinkHandle = 1;
 const _onDidChangeActiveTerminalEmitter = new EventEmitter();
 const _onDidOpenTerminalEmitter = new EventEmitter();
 const _onDidCloseTerminalEmitter = new EventEmitter();
@@ -3429,6 +3432,16 @@ class TerminalProfile {
     }
 }
 
+class TerminalLink {
+    constructor(startIndex, length, tooltip) {
+        this.startIndex = Math.max(0, Number(startIndex || 0));
+        this.length = Math.max(0, Number(length || 0));
+        if (tooltip !== undefined && tooltip !== null) {
+            this.tooltip = String(tooltip);
+        }
+    }
+}
+
 function _createTerminal(nameOrOptions, shellPath, shellArgs) {
     const terminal = new TerminalObject(
         _terminalOptionsFromArgs(nameOrOptions, shellPath, shellArgs));
@@ -3466,6 +3479,44 @@ async function _createTerminalFromProfileProvider(profileId, options) {
         cancelled: false,
         profile: _plainBridgeValue({ options: profile.options || {} }),
         terminal: Object.assign({ id: terminal._handle }, terminal.metadata()),
+    };
+}
+
+function _terminalForLinkRequest(msg) {
+    const id = Number(msg.terminalId ?? msg.id ?? msg.handle);
+    if (Number.isFinite(id)) {
+        const byId = _terminals.find(terminal => terminal._handle === id);
+        if (byId) return byId;
+    }
+    const name = String(msg.name || msg.terminalName || '');
+    if (name) {
+        const byName = _terminals.find(terminal => terminal.name === name);
+        if (byName) return byName;
+    }
+    return _activeTerminal;
+}
+
+function _terminalLinkPayload(provider, rawLink, terminalHandle) {
+    if (!rawLink || typeof rawLink !== 'object') return null;
+    const startIndex = Math.max(0, Number(rawLink.startIndex || 0));
+    const length = Math.max(0, Number(rawLink.length || 0));
+    if (!length) return null;
+    const link = rawLink instanceof TerminalLink
+        ? rawLink
+        : new TerminalLink(startIndex, length, rawLink.tooltip);
+    const id = _nextTerminalLinkHandle++;
+    let cache = _terminalLinkCache.get(terminalHandle);
+    if (!cache) {
+        cache = new Map();
+        _terminalLinkCache.set(terminalHandle, cache);
+    }
+    cache.set(id, { provider, link });
+    return {
+        id,
+        startIndex: link.startIndex,
+        length: link.length,
+        tooltip: link.tooltip || '',
+        label: link.tooltip || '',
     };
 }
 
@@ -5691,6 +5742,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         EventEmitter,
         CancellationTokenSource,
         TerminalProfile,
+        TerminalLink,
 
         // --- Enums ---
         ViewColumn: { One: 1, Two: 2, Three: 3, Active: -1, Beside: -2 },
@@ -6017,6 +6069,36 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             },
             createTerminal(nameOrOptions, shellPath, shellArgs) {
                 return _createTerminal(nameOrOptions, shellPath, shellArgs);
+            },
+            registerTerminalLinkProvider(provider) {
+                if (!provider || typeof provider.provideTerminalLinks !== 'function') {
+                    throw new Error('TerminalLinkProvider must implement provideTerminalLinks');
+                }
+                const entry = {
+                    provider,
+                    extensionId: extDesc.extensionId || '',
+                };
+                _terminalLinkProviders.add(entry);
+                send({
+                    type: 'terminal_link_provider_registered',
+                    extensionId: entry.extensionId,
+                    providerCount: _terminalLinkProviders.size,
+                });
+                const d = new Disposable(() => {
+                    if (!_terminalLinkProviders.delete(entry)) return;
+                    for (const cache of _terminalLinkCache.values()) {
+                        for (const [linkId, cached] of [...cache.entries()]) {
+                            if (cached.provider === provider) cache.delete(linkId);
+                        }
+                    }
+                    send({
+                        type: 'terminal_link_provider_disposed',
+                        extensionId: entry.extensionId,
+                        providerCount: _terminalLinkProviders.size,
+                    });
+                });
+                subscriptions.push(d);
+                return d;
             },
             registerTerminalProfileProvider(id, provider) {
                 const normalized = String(id || '');
@@ -9725,6 +9807,86 @@ async function handleTerminalProfileRequest(msg) {
     }
 }
 
+async function handleTerminalLinkRequest(msg) {
+    const requestId = msg.requestId;
+    try {
+        const terminal = _terminalForLinkRequest(msg);
+        if (!terminal) {
+            throw new Error('Terminal not found for link request');
+        }
+        const line = String(msg.line || '');
+        _terminalLinkCache.set(terminal._handle, new Map());
+        const tokenSource = new CancellationTokenSource();
+        const context = { terminal, line };
+        const results = [];
+        for (const entry of _terminalLinkProviders) {
+            try {
+                const raw = await entry.provider.provideTerminalLinks(
+                    context,
+                    tokenSource.token);
+                const links = Array.isArray(raw) ? raw : [];
+                for (const link of links) {
+                    const payload = _terminalLinkPayload(
+                        entry.provider,
+                        link,
+                        terminal._handle);
+                    if (payload) results.push(payload);
+                }
+            } catch (err) {
+                log(`terminal link provider failed: ${err?.message || err}`);
+            }
+        }
+        send({
+            type: 'terminal_link_response',
+            requestId,
+            ok: true,
+            terminalId: terminal._handle,
+            line,
+            value: results,
+        });
+    } catch (err) {
+        send({
+            type: 'terminal_link_response',
+            requestId,
+            ok: false,
+            error: err?.message || String(err),
+            value: [],
+        });
+    }
+}
+
+async function handleTerminalLinkActivate(msg) {
+    const requestId = msg.requestId;
+    try {
+        const terminal = _terminalForLinkRequest(msg);
+        if (!terminal) {
+            throw new Error('Terminal not found for link activation');
+        }
+        const linkId = Number(msg.linkId ?? msg.id);
+        const cached = _terminalLinkCache.get(terminal._handle)?.get(linkId);
+        if (!cached) {
+            throw new Error(`Terminal link not found: ${linkId}`);
+        }
+        if (cached.provider && typeof cached.provider.handleTerminalLink === 'function') {
+            await cached.provider.handleTerminalLink(cached.link);
+        }
+        send({
+            type: 'terminal_link_activate_response',
+            requestId,
+            ok: true,
+            terminalId: terminal._handle,
+            linkId,
+        });
+    } catch (err) {
+        send({
+            type: 'terminal_link_activate_response',
+            requestId,
+            ok: false,
+            error: err?.message || String(err),
+        });
+    }
+}
+
 // -------------------------------------------------------------------------
 // Shutdown — deactivate all and exit
 // -------------------------------------------------------------------------
@@ -9812,6 +9974,12 @@ async function handleMessage(msg) {
             break;
         case 'terminal_profile_request':
             await handleTerminalProfileRequest(msg);
+            break;
+        case 'terminal_link_request':
+            await handleTerminalLinkRequest(msg);
+            break;
+        case 'terminal_link_activate':
+            await handleTerminalLinkActivate(msg);
             break;
         case 'lm_tool_request':
             await handleLmToolRequest(msg);

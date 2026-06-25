@@ -6905,6 +6905,7 @@ class AIEditorAPI:
             print(f"[ExtHost] {count} extensions scanned, "
                   f"{len(activated)} activated")
             self._register_ext_tools()
+        self._sync_manifest_status_bar_items()
 
         # --- Node.js extension host for extensions with "main" ---
         self._try_start_node_extension_host()
@@ -6914,6 +6915,7 @@ class AIEditorAPI:
                   f"{workspace_activated} workspaceContains activation "
                   "event(s) triggered.")
             self._register_ext_tools()
+            self._sync_manifest_status_bar_items()
 
     def _workspace_contains_activation_events(self) -> List[str]:
         try:
@@ -10710,7 +10712,97 @@ class AIEditorAPI:
             location: [self._decorate_extension_view(item) for item in items]
             for location, items in contributions.get("views", {}).items()
         }
+        decorated["statusBarItems"] = [
+            self._manifest_status_bar_payload(item)
+            for item in contributions.get("statusBarItems", [])
+            if isinstance(item, dict)
+        ]
         return decorated
+
+    @staticmethod
+    def _manifest_status_bar_alignment(value: Any) -> int:
+        text = str(value or "").strip().lower()
+        if text == "left" or value == 1:
+            return 1
+        return 2
+
+    @staticmethod
+    def _manifest_status_bar_priority(value: Any) -> int:
+        try:
+            return int(float(value))
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
+    @staticmethod
+    def _manifest_status_bar_command(value: Any) -> Any:
+        if isinstance(value, str) and value.strip():
+            return {"command": value.strip(), "arguments": []}
+        if isinstance(value, dict) and value.get("command"):
+            return {
+                "command": str(value.get("command") or ""),
+                "title": str(value.get("title") or ""),
+                "arguments": (
+                    list(value.get("arguments") or [])
+                    if isinstance(value.get("arguments"), list) else []),
+            }
+        return ""
+
+    def _manifest_status_bar_payload(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        extension_id = str(item.get("_extensionId") or "")
+        item_id = str(item.get("id") or item.get("name") or "").strip()
+        status_id = (
+            f"manifest:{extension_id}:{item_id}"
+            if extension_id or item_id else "")
+        return {
+            "id": status_id,
+            "manifestId": item_id,
+            "extensionId": extension_id,
+            "text": str(item.get("text") or ""),
+            "tooltip": item.get("tooltip") or item.get("name") or "",
+            "command": self._manifest_status_bar_command(item.get("command")),
+            "alignment": self._manifest_status_bar_alignment(
+                item.get("alignment")),
+            "priority": self._manifest_status_bar_priority(
+                item.get("priority")),
+            "color": item.get("color", ""),
+            "backgroundColor": item.get("backgroundColor", ""),
+            "name": str(item.get("name") or item_id),
+            "accessibilityInformation": item.get(
+                "accessibilityInformation") or {},
+            "source": "manifest",
+        }
+
+    def _sync_manifest_status_bar_items(self) -> None:
+        bridge = getattr(self, "_vscode_ns", None)
+        if bridge is not None:
+            bridge = getattr(bridge, "_ui_bridge", None)
+        if bridge is None:
+            bridge = _AIEditorUIBridge(self) if hasattr(self, "_emit") else None
+        if bridge is None:
+            return
+        contributions = (
+            self._ext_host.ext_points.all_contributions
+            if getattr(self, "_ext_host", None) is not None else {})
+        for item in contributions.get("statusBarItems", []) or []:
+            if not isinstance(item, dict):
+                continue
+            payload = self._manifest_status_bar_payload(item)
+            if not payload.get("id"):
+                continue
+            try:
+                bridge.show_status_bar_item(
+                    payload["id"],
+                    payload["text"],
+                    str(payload.get("tooltip") or ""),
+                    payload.get("command", ""),
+                    int(payload.get("alignment", 2)),
+                    int(payload.get("priority", 0)),
+                    payload.get("color", ""),
+                    payload.get("backgroundColor", ""),
+                    payload.get("name", ""),
+                    payload.get("accessibilityInformation") or {})
+            except Exception:
+                pass
 
     def _decorate_extension_command(self, item: Dict[str, Any]) -> Dict[str, Any]:
         command = dict(item)

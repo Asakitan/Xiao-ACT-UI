@@ -1852,6 +1852,9 @@ class NodeExtensionHost:
         self._terminal_profile_request_lock = threading.Lock()
         self._terminal_profile_requests: Dict[str, Dict[str, Any]] = {}
         self._terminal_profile_providers: List[Dict[str, Any]] = []
+        self._terminal_link_request_lock = threading.Lock()
+        self._terminal_link_requests: Dict[str, Dict[str, Any]] = {}
+        self._terminal_link_providers: List[Dict[str, Any]] = []
         self._custom_editor_request_lock = threading.Lock()
         self._custom_editor_requests: Dict[str, Dict[str, Any]] = {}
         self._custom_editor_lifecycle_lock = threading.Lock()
@@ -3035,6 +3038,33 @@ class NodeExtensionHost:
                 if isinstance(event, threading.Event):
                     event.set()
 
+        elif msg_type == "terminal_link_provider_registered":
+            extension_id = str(msg.get("extensionId", ""))
+            record = {
+                "extensionId": extension_id,
+                "providerCount": int(msg.get("providerCount") or 0),
+            }
+            self._terminal_link_providers.append(record)
+
+        elif msg_type == "terminal_link_provider_disposed":
+            extension_id = str(msg.get("extensionId", ""))
+            for index in range(len(self._terminal_link_providers) - 1, -1, -1):
+                if self._terminal_link_providers[index].get("extensionId") == extension_id:
+                    self._terminal_link_providers.pop(index)
+                    break
+
+        elif msg_type in {
+                "terminal_link_response",
+                "terminal_link_activate_response"}:
+            request_id = str(msg.get("requestId", ""))
+            with self._terminal_link_request_lock:
+                pending = self._terminal_link_requests.get(request_id)
+            if pending:
+                pending["response"] = msg
+                event = pending.get("event")
+                if isinstance(event, threading.Event):
+                    event.set()
+
         elif msg_type == "task_execute":
             if self._ui_bridge:
                 try:
@@ -3675,6 +3705,92 @@ class NodeExtensionHost:
             "error": "timeout",
             "timeout": True,
         }
+
+    def terminal_link_providers(self) -> List[Dict[str, Any]]:
+        return [dict(item) for item in self._terminal_link_providers]
+
+    def _terminal_link_request_result(
+            self,
+            msg: Dict[str, Any],
+            default: Any = None,
+            timeout: float = 3.0) -> Dict[str, Any]:
+        request_id = str(uuid.uuid4())
+        event = threading.Event()
+        with self._terminal_link_request_lock:
+            self._terminal_link_requests[request_id] = {"event": event}
+        payload = dict(msg)
+        payload["requestId"] = request_id
+        sent = self._send(payload)
+        if not sent:
+            with self._terminal_link_request_lock:
+                self._terminal_link_requests.pop(request_id, None)
+            return {
+                "ok": False,
+                "value": default,
+                "error": "host not running",
+            }
+        if event.wait(max(0.0, timeout)):
+            with self._terminal_link_request_lock:
+                pending = self._terminal_link_requests.pop(request_id, None)
+            response = dict((pending or {}).get("response") or {})
+            if response.get("ok"):
+                return {
+                    "ok": True,
+                    "value": response.get("value", default),
+                    "terminalId": response.get("terminalId"),
+                    "linkId": response.get("linkId"),
+                }
+            return {
+                "ok": False,
+                "value": default,
+                "error": str(response.get("error") or "request failed"),
+            }
+        with self._terminal_link_request_lock:
+            self._terminal_link_requests.pop(request_id, None)
+        return {
+            "ok": False,
+            "value": default,
+            "error": "timeout",
+            "timeout": True,
+        }
+
+    def request_terminal_links_result(
+            self,
+            line: str,
+            terminal_id: Optional[int] = None,
+            terminal_name: str = "",
+            default: Any = None,
+            timeout: float = 3.0) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "type": "terminal_link_request",
+            "line": str(line or ""),
+        }
+        if terminal_id is not None:
+            payload["terminalId"] = terminal_id
+        if terminal_name:
+            payload["name"] = str(terminal_name)
+        return self._terminal_link_request_result(
+            payload, default=[] if default is None else default,
+            timeout=timeout)
+
+    def activate_terminal_link_result(
+            self,
+            link_id: int,
+            terminal_id: Optional[int] = None,
+            terminal_name: str = "",
+            default: Any = None,
+            timeout: float = 3.0) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "type": "terminal_link_activate",
+            "linkId": link_id,
+        }
+        if terminal_id is not None:
+            payload["terminalId"] = terminal_id
+        if terminal_name:
+            payload["name"] = str(terminal_name)
+        return self._terminal_link_request_result(
+            payload, default={} if default is None else default,
+            timeout=timeout)
 
     def request_lm_tool_result(
             self, name: str, input_data: Any = None,

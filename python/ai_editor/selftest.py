@@ -6016,10 +6016,16 @@ console.log("quick input filter helpers ok");
            and "type: 'terminal_rename'" in node_ext_host_source
            and "type: 'terminal_dimensions'" in node_ext_host_source
            and "type: 'terminal_command'" in node_ext_host_source
+           and "class TerminalLink" in node_ext_host_source
+           and "registerTerminalLinkProvider(provider)" in node_ext_host_source
+           and "terminal_link_request" in node_ext_host_source
+           and "terminal_link_activate" in node_ext_host_source
            and "msg_type == \"terminal_command\"" in extension_host_source
            and "msg_type == \"terminal_write\"" in extension_host_source
            and "msg_type == \"terminal_rename\"" in extension_host_source
            and "msg_type == \"terminal_dimensions\"" in extension_host_source
+           and "def request_terminal_links_result(" in extension_host_source
+           and "def activate_terminal_link_result(" in extension_host_source
            and "msg.get(\"metadata\")" in extension_host_source
            and "def run_terminal_command(self, name: str, text: str)"
            in app_source
@@ -9409,14 +9415,49 @@ def test_app_extension_runtime_support() -> None:
                     "displayName": "Manifest Tool",
                     "inputSchema": {"type": "object", "properties": {}},
                 }],
+                "statusBarItems": [{
+                    "id": "manifestStatus",
+                    "name": "Manifest Status",
+                    "text": "$(zap) Manifest",
+                    "tooltip": "Manifest status tooltip",
+                    "alignment": "left",
+                    "priority": 25,
+                    "command": "selftest.manifest.command",
+                }],
             },
         }, "/tmp/selftest-manifest")
         api._ext_host.ext_points.process(manifest_desc)
         api._register_ext_tools()
         ext_contribs = api.get_extension_contributions()
+        api._sync_manifest_status_bar_items()
+        manifest_status_events = [
+            item for item in emitted_events
+            if item.get("event") == "show_status_bar_item"
+        ]
         _check("app exposes extension contribution details",
                ext_contribs.get("summary", {}).get("languageModelTools", 0) >= 1
                and "languageModelTools" in ext_contribs.get("contributions", {}))
+        _check("manifest status bar items hydrate into UI bridge",
+               ext_contribs.get("summary", {}).get("statusBarItems", 0) >= 1
+               and any(
+                   item.get("manifestId") == "manifestStatus"
+                   and item.get("source") == "manifest"
+                   for item in ext_contribs.get("contributions", {}).get(
+                       "statusBarItems", []))
+               and any(
+                   event.get("data", {}).get("id")
+                   == "manifest:selftest.manifest-only:manifestStatus"
+                   and event.get("data", {}).get("text") == "$(zap) Manifest"
+                   and event.get("data", {}).get("alignment") == 1
+                   and event.get("data", {}).get("priority") == 25
+                   and event.get("data", {}).get("command", {}).get("command")
+                   == "selftest.manifest.command"
+                   for event in manifest_status_events),
+               json.dumps({
+                   "contributions": ext_contribs.get("contributions", {}).get(
+                       "statusBarItems", []),
+                   "events": manifest_status_events,
+               }, ensure_ascii=False, default=str))
 
         language_tmp = tempfile.mkdtemp(prefix="sao_ext_language_")
         os.makedirs(os.path.join(language_tmp, "themes"), exist_ok=True)
@@ -13452,6 +13493,44 @@ async function activate(context) {
       disposable: !!(disposable && disposable.dispose),
     };
   });
+  const terminalLinkState = { handled: [], providedLines: [] };
+  vscode.commands.registerCommand('selftest.node.terminalLinkProbe', async () => {
+    const terminal = vscode.window.createTerminal({
+      name: 'Node Link Terminal',
+      isTransient: true,
+    });
+    const disposable = vscode.window.registerTerminalLinkProvider({
+      provideTerminalLinks(context, token) {
+        terminalLinkState.providedLines.push(context.line);
+        const start = context.line.indexOf('https://example.test');
+        if (start < 0) return [];
+        return [
+          new vscode.TerminalLink(
+            start,
+            'https://example.test'.length,
+            'Open example'
+          ),
+        ];
+      },
+      handleTerminalLink(link) {
+        terminalLinkState.handled.push({
+          startIndex: link.startIndex,
+          length: link.length,
+          tooltip: link.tooltip,
+        });
+      },
+    });
+    return {
+      terminalId: terminal._handle,
+      terminalName: terminal.name,
+      terminalLinkClass: !!vscode.TerminalLink,
+      disposable: !!(disposable && disposable.dispose),
+    };
+  });
+  vscode.commands.registerCommand('selftest.node.terminalLinkState', () => ({
+    handled: terminalLinkState.handled,
+    providedLines: terminalLinkState.providedLines,
+  }));
   vscode.commands.registerCommand('selftest.node.taskDebugProbe', async () => {
     const taskEvents = [];
     const debugEvents = [];
@@ -14507,6 +14586,47 @@ module.exports = { activate, deactivate };
                 node_terminal_profile_events = list(
                     node_ui_bridge.terminal_events[
                         node_terminal_profile_start:])
+                node_terminal_link_command_registered = _wait_until(
+                    lambda: "selftest.node.terminalLinkProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                try:
+                    node_terminal_link_probe = (
+                        api._ext_host.commands.execute(
+                            "selftest.node.terminalLinkProbe"))
+                except Exception as exc:
+                    node_terminal_link_probe = {"_error": str(exc)}
+                node_terminal_link_providers = (
+                    node_host.terminal_link_providers()
+                    if node_started else [])
+                node_terminal_links_result = (
+                    node_host.request_terminal_links_result(
+                        "open https://example.test now",
+                        terminal_id=node_terminal_link_probe.get(
+                            "terminalId")
+                        if isinstance(node_terminal_link_probe, dict)
+                        else None,
+                        timeout=3.0)
+                    if node_started else {"ok": False, "value": []})
+                node_terminal_first_link = (
+                    (node_terminal_links_result.get("value") or [None])[0]
+                    if isinstance(node_terminal_links_result, dict)
+                    else None)
+                node_terminal_link_activate = (
+                    node_host.activate_terminal_link_result(
+                        node_terminal_first_link.get("id"),
+                        terminal_id=node_terminal_link_probe.get(
+                            "terminalId"),
+                        timeout=3.0)
+                    if (node_started
+                        and isinstance(node_terminal_link_probe, dict)
+                        and isinstance(node_terminal_first_link, dict))
+                    else {"ok": False})
+                try:
+                    node_terminal_link_state = api._ext_host.commands.execute(
+                        "selftest.node.terminalLinkState")
+                except Exception as exc:
+                    node_terminal_link_state = {"_error": str(exc)}
                 node_task_terminal_start = len(node_ui_bridge.terminal_events)
                 node_task_debug_command_registered = _wait_until(
                     lambda: "selftest.node.taskDebugProbe"
@@ -16947,6 +17067,39 @@ module.exports = { activate, deactivate };
                            "providers": node_terminal_profile_providers,
                            "request": node_terminal_profile_request,
                            "events": node_terminal_profile_events,
+                       }, ensure_ascii=False, default=str))
+                _check("node host terminal link providers round-trip links",
+                       node_started is True
+                       and node_terminal_link_command_registered
+                       and isinstance(node_terminal_link_probe, dict)
+                       and node_terminal_link_probe.get(
+                           "terminalName") == "Node Link Terminal"
+                       and node_terminal_link_probe.get(
+                           "terminalLinkClass") is True
+                       and node_terminal_link_probe.get("disposable") is True
+                       and any(
+                           item.get("extensionId") == "selftest.node-tree"
+                           for item in node_terminal_link_providers)
+                       and node_terminal_links_result.get("ok") is True
+                       and node_terminal_links_result.get("terminalId")
+                       == node_terminal_link_probe.get("terminalId")
+                       and isinstance(node_terminal_first_link, dict)
+                       and node_terminal_first_link.get("startIndex") == 5
+                       and node_terminal_first_link.get("length")
+                       == len("https://example.test")
+                       and node_terminal_first_link.get("tooltip")
+                       == "Open example"
+                       and node_terminal_link_activate.get("ok") is True
+                       and node_terminal_link_state.get("providedLines")
+                       == ["open https://example.test now"]
+                       and node_terminal_link_state.get("handled", [{}])[0]
+                       .get("tooltip") == "Open example",
+                       json.dumps({
+                           "probe": node_terminal_link_probe,
+                           "providers": node_terminal_link_providers,
+                           "links": node_terminal_links_result,
+                           "activate": node_terminal_link_activate,
+                           "state": node_terminal_link_state,
                        }, ensure_ascii=False, default=str))
                 node_task_debug_events = (
                     node_task_debug_probe.get("taskEvents", [])
