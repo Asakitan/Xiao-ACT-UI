@@ -1199,13 +1199,15 @@ class _AIEditorUIBridge:
             self, view_id: str, html: str,
             local_resource_roots: Any = None,
             state: Any = None,
-            title: str = "") -> None:
+            title: str = "",
+            options: Any = None) -> None:
         """Push HTML content for a webview panel to the frontend."""
         state_to_render = state
         if state_to_render is None:
             state_to_render = self.get_webview_state(view_id)
         elif str(view_id or "").strip():
             self._api.webview_set_state(view_id, state_to_render)
+        option_payload = options if isinstance(options, dict) else {}
         prepared = self._api._prepare_extension_webview_html(
             html, local_resource_roots, view_id=view_id)
         self._api._emit("render_webview_panel", {
@@ -1213,6 +1215,9 @@ class _AIEditorUIBridge:
             "html": prepared,
             "state": state_to_render,
             "title": str(title or ""),
+            "options": _json_safe(option_payload),
+            "retainContextWhenHidden": bool(
+                option_payload.get("retainContextWhenHidden", False)),
         })
 
     def get_webview_state(self, view_id: str) -> Any:
@@ -1242,6 +1247,21 @@ class _AIEditorUIBridge:
             "view_id": normalized_view_id,
             "view_type": str(view_type or ""),
             "icon_path": _json_safe(icon_path),
+        })
+
+    def update_webview_panel_options(
+            self, view_id: str, options: Any = None,
+            local_resource_roots: Any = None,
+            view_type: str = "", title: str = "") -> None:
+        normalized_view_id = str(view_id or "").strip()
+        if not normalized_view_id:
+            return
+        self._api._emit("update_webview_panel_options", {
+            "view_id": normalized_view_id,
+            "view_type": str(view_type or ""),
+            "title": str(title or ""),
+            "options": _json_safe(options if isinstance(options, dict) else {}),
+            "local_resource_roots": _json_safe(local_resource_roots),
         })
 
     def reveal_webview_panel(

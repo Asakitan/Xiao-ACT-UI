@@ -2886,6 +2886,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "event==='reveal_webview_panel'" in html
            and "webview_panel_view_state" in html
            and 'getState:function(){return _state}' in html)
+    _check("provider webviews queue extension messages until iframe mounts",
+           "function queueWebviewMessage(viewId,msg)" in html
+           and "function flushPendingWebviewMessages(viewId,iframe)" in html
+           and "pendingMessages" in html
+           and "queueWebviewMessage(viewId,msg)" in html
+           and "flushPendingWebviewMessages(viewId,iframe)" in html)
     _check("frontend accepts provider webview pushes",
            "const providerId=String(viewId).startsWith('provider.')?String(viewId).slice(9):''" in html
             and "isNativeCliProvider" not in html
@@ -6325,6 +6331,15 @@ console.log("quick input filter helpers ok");
            and "function updateExtensionWebviewIcon(viewId,iconPath,viewType)" in html
            and "function applyProviderTabIcon(tab,p)" in html
            and "event==='update_webview_panel_icon'" in html)
+    _check("extension webview panel options updates reach frontend",
+           "type: 'webview_options'" in node_ext_host_source
+           and "set options(value)" in node_ext_host_source
+           and "elif msg_type == \"webview_options\"" in extension_host_source
+           and "def update_webview_panel_options(" in app_source
+           and "\"update_webview_panel_options\"" in app_source
+           and "function updateWebviewPanelOptions(viewId,data)" in html
+           and "event==='update_webview_panel_options'" in html
+           and "retainContextWhenHidden" in html)
     _check("extension webview panel frontend dispose reaches Node",
            "function disposeExtensionWebviewPanel(viewId,providerId)" in html
            and "function clearDisposedWebviewPanel(viewId,providerId)" in html
@@ -14261,6 +14276,26 @@ async function activate(context) {
     panel.webview.html = '<main data-view="empty-roots"></main>';
     return true;
   });
+  vscode.commands.registerCommand('selftest.node.webviewOptionsProbe', () => {
+    const panel = vscode.window.createWebviewPanel(
+      'selftest.optionsProbe',
+      'Options Probe',
+      vscode.ViewColumn.One,
+      { enableScripts: false },
+    );
+    panel.webview.html = '<main data-view="options-probe"></main>';
+    panel.webview.options = {
+      enableScripts: true,
+      retainContextWhenHidden: true,
+      localResourceRoots: [context.extensionUri],
+    };
+    return {
+      options: panel.webview.options,
+      visible: panel.visible,
+      active: panel.active,
+      viewColumn: panel.viewColumn,
+    };
+  });
   vscode.commands.registerCommand('selftest.node.webviewUriProbe', () => {
     const panel = vscode.window.createWebviewPanel(
       'selftest.uriProbe',
@@ -14586,6 +14621,7 @@ module.exports = { activate, deactivate };
                     self.webview_states = {}
                     self.webview_titles = {}
                     self.webview_icons = {}
+                    self.webview_options = {}
                     self.local_resource_roots = {}
                     self.disposed = []
                     self.revealed = []
@@ -14630,6 +14666,16 @@ module.exports = { activate, deactivate };
                     self.webview_icons[str(view_id)] = {
                         "icon_path": icon_path,
                         "view_type": str(view_type or ""),
+                    }
+
+                def update_webview_panel_options(
+                        self, view_id, options=None, local_resource_roots=None,
+                        view_type="", title=""):
+                    self.webview_options[str(view_id)] = {
+                        "options": dict(options or {}),
+                        "local_resource_roots": local_resource_roots,
+                        "view_type": str(view_type or ""),
+                        "title": str(title or ""),
                     }
 
                 def reveal_webview_panel(
@@ -15270,6 +15316,10 @@ module.exports = { activate, deactivate };
                     lambda: "selftest.node.webviewEmptyRoots"
                     in api._ext_host.commands.list_commands(),
                     timeout=3.0)
+                node_webview_options_command_registered = _wait_until(
+                    lambda: "selftest.node.webviewOptionsProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
                 node_webview_uri_command_registered = _wait_until(
                     lambda: "selftest.node.webviewUriProbe"
                     in api._ext_host.commands.list_commands(),
@@ -15656,6 +15706,12 @@ module.exports = { activate, deactivate };
                 except Exception as exc:
                     node_empty_roots_probe = {"_error": str(exc)}
                 try:
+                    node_webview_options_probe = (
+                        api._ext_host.commands.execute(
+                            "selftest.node.webviewOptionsProbe"))
+                except Exception as exc:
+                    node_webview_options_probe = {"_error": str(exc)}
+                try:
                     node_webview_uri_probe = api._ext_host.commands.execute(
                         "selftest.node.webviewUriProbe")
                 except Exception as exc:
@@ -15719,6 +15775,11 @@ module.exports = { activate, deactivate };
                     timeout=3.0)
                 _wait_until(
                     lambda: any(
+                        'data-view="options-probe"' in html
+                        for html in node_ui_bridge.webviews.values()),
+                    timeout=3.0)
+                _wait_until(
+                    lambda: any(
                         'data-view="dispose-probe"' in html
                         for html in node_ui_bridge.webviews.values())
                     and bool(node_ui_bridge.disposed),
@@ -15732,6 +15793,11 @@ module.exports = { activate, deactivate };
                     view_id for view_id, html
                     in node_ui_bridge.webviews.items()
                     if 'data-view="empty-roots"' in html
+                ), "")
+                node_options_view_id = next((
+                    view_id for view_id, html
+                    in node_ui_bridge.webviews.items()
+                    if 'data-view="options-probe"' in html
                 ), "")
                 node_dispose_view_id = next((
                     view_id for view_id, html
@@ -16750,6 +16816,38 @@ module.exports = { activate, deactivate };
                            "view_id": node_empty_roots_view_id,
                            "roots": node_empty_roots,
                        }, ensure_ascii=False))
+                node_options_bridge = (
+                    node_ui_bridge.webview_options.get(
+                        node_options_view_id, {})
+                    if node_options_view_id else {})
+                node_options_payload = node_options_bridge.get("options", {})
+                node_options_roots = (
+                    node_options_bridge.get("local_resource_roots") or [])
+                _check("node host webview options updates reach frontend bridge",
+                       node_webview_options_command_registered
+                       and isinstance(node_webview_options_probe, dict)
+                       and node_options_view_id
+                       and node_webview_options_probe.get(
+                           "options", {}).get("enableScripts") is True
+                       and node_webview_options_probe.get(
+                           "options", {}).get(
+                               "retainContextWhenHidden") is True
+                       and node_options_payload.get("enableScripts") is True
+                       and node_options_payload.get(
+                           "retainContextWhenHidden") is True
+                       and node_options_roots
+                       and os.path.normcase(os.path.realpath(node_tree_tmp))
+                       in [
+                           os.path.normcase(os.path.realpath(
+                               item.get("fsPath", "")))
+                           for item in node_options_roots
+                           if isinstance(item, dict) and item.get("fsPath")
+                       ],
+                       json.dumps({
+                           "probe": node_webview_options_probe,
+                           "view_id": node_options_view_id,
+                           "bridge": node_options_bridge,
+                       }, ensure_ascii=False, default=str))
                 _check("node host webview asWebviewUri matches VS Code resource shape",
                        node_webview_uri_command_registered
                        and isinstance(node_webview_uri_probe, dict)

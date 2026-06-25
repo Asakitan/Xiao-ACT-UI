@@ -1382,6 +1382,14 @@ class Webview {
     set options(value) {
         this._assertAlive();
         this._options = value && typeof value === 'object' ? value : {};
+        send({
+            type: 'webview_options',
+            viewId: this._viewId,
+            viewType: this._viewType,
+            title: this._title,
+            options: this._webviewOptionsPayload(),
+            localResourceRoots: this._localResourceRootsPayload(),
+        });
     }
     postMessage(message) {
         this._assertAlive();

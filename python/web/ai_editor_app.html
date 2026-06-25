@@ -9817,9 +9817,34 @@ function collectExtensionProviderRecords(data){
 }
 function rememberDynamicProvidersFromEventData(data){return collectExtensionProviderRecords(data).map(rec=>rememberDynamicExtensionProvider(rec)).filter(Boolean)}
 function rememberWebviewRuntime(viewId,data){
-  const id=String(viewId||'').trim();if(!id||!data||!data.html)return null;
-  webviewRuntimeCache[id]={html:data.html,state:data.state,source:data.source||'event',retainContextWhenHidden:!!data.retainContextWhenHidden};
+  const id=String(viewId||'').trim();if(!id||!data)return null;
+  const existing=webviewRuntimeCache[id]||{};
+  const options={...(existing.options||{}),...((data.options&&typeof data.options==='object')?data.options:{})};
+  const retain=('retainContextWhenHidden' in options)?!!options.retainContextWhenHidden:!!(data.retainContextWhenHidden||existing.retainContextWhenHidden);
+  webviewRuntimeCache[id]={
+    ...existing,
+    html:data.html!==undefined?data.html:existing.html,
+    state:data.state!==undefined?data.state:existing.state,
+    source:data.source||existing.source||'event',
+    options:options,
+    localResourceRoots:data.local_resource_roots||data.localResourceRoots||existing.localResourceRoots||existing.local_resource_roots||null,
+    retainContextWhenHidden:retain
+  };
   return webviewRuntimeCache[id];
+}
+function updateWebviewPanelOptions(viewId,data){
+  const id=String(viewId||'').trim();if(!id)return null;
+  const cached=rememberWebviewRuntime(id,{...(data||{}),html:(webviewRuntimeCache[id]||{}).html});
+  const frameId='webview-frame-'+providerDomKey(id);
+  const iframe=document.getElementById(frameId);
+  const panel=iframe&&iframe.closest('.right-panel');
+  if(panel){
+    if(cached&&cached.retainContextWhenHidden)panel.dataset.retainContext='1';
+    else delete panel.dataset.retainContext;
+  }
+  const tab=findCustomEditorTabByViewId(id);
+  if(tab&&cached)tab.webview={...(tab.webview||{}),options:cached.options,retainContextWhenHidden:cached.retainContextWhenHidden};
+  return cached;
 }
 function isExtensionCustomEditorMode(mode){
   return markerKey(mode)==='extensioncustomeditor';
@@ -10483,6 +10508,8 @@ function _injectWebviewHtml(container,viewId,html,initialState){
   // Inject bridge + extension HTML into the iframe via srcdoc
   // (contentDocument is inaccessible without allow-same-origin)
   iframe.srcdoc=themeStyle+bridgeScript+html;
+  iframe.addEventListener('load',()=>flushPendingWebviewMessages(viewId,iframe),{once:true});
+  setTimeout(()=>flushPendingWebviewMessages(viewId,iframe),0);
 }
 // Listen for postMessage from webview iframes (token-validated)
 window.addEventListener('message',function(e){
@@ -10685,6 +10712,23 @@ function postExtensionMessageToWebview(iframe,msg){
     try{iframe.contentWindow.postMessage({type:'webview-extension-message',message:msg},'*')}catch(e){}
   }
 }
+function queueWebviewMessage(viewId,msg){
+  const id=String(viewId||'').trim();if(!id)return;
+  const cached=rememberWebviewRuntime(id,{});
+  const q=Array.isArray(cached.pendingMessages)?cached.pendingMessages:[];
+  q.push(msg);
+  cached.pendingMessages=q.slice(-50);
+}
+function flushPendingWebviewMessages(viewId,iframe){
+  const id=String(viewId||'').trim();if(!id)return;
+  const cached=webviewRuntimeCache[id];
+  const q=cached&&Array.isArray(cached.pendingMessages)?cached.pendingMessages:[];
+  if(!q.length)return;
+  const target=iframe||document.getElementById('webview-frame-'+providerDomKey(id));
+  if(!target||!target.contentWindow)return;
+  cached.pendingMessages=[];
+  q.forEach(msg=>postExtensionMessageToWebview(target,msg));
+}
 window._onEditorEvent=function(event,data){
   if(event==='quick_input'){
     renderQuickInputEvent(data);
@@ -10749,6 +10793,11 @@ window._onEditorEvent=function(event,data){
     if(viewId)updateExtensionWebviewIcon(viewId,data&&data.icon_path,data&&data.view_type);
     return;
   }
+  if(event==='update_webview_panel_options'){
+    const viewId=data&&data.view_id;
+    if(viewId)updateWebviewPanelOptions(viewId,data);
+    return;
+  }
   if(event==='reveal_webview_panel'){
     revealExtensionWebviewPanel(data);
     return;
@@ -10768,6 +10817,8 @@ window._onEditorEvent=function(event,data){
     const iframe=document.getElementById(frameId);
     if(iframe&&iframe.contentWindow){
       postExtensionMessageToWebview(iframe,msg);
+    }else{
+      queueWebviewMessage(viewId,msg);
     }
     return;
   }

@@ -2271,26 +2271,31 @@ class NodeExtensionHost:
             local_roots = msg.get("localResourceRoots", None)
             state = msg.get("state", None)
             title = str(msg.get("title", ""))
+            options = msg.get("options", {})
             if self._ui_bridge and view_id:
                 try:
                     self._ui_bridge.render_webview_panel(
-                        view_id, html, local_roots, state, title)
+                        view_id, html, local_roots, state, title, options)
                 except TypeError:
                     try:
                         self._ui_bridge.render_webview_panel(
-                            view_id, html, local_roots, state)
+                            view_id, html, local_roots, state, title)
                     except TypeError:
                         try:
                             self._ui_bridge.render_webview_panel(
-                                view_id, html, local_roots)
+                                view_id, html, local_roots, state)
                         except TypeError:
                             try:
                                 self._ui_bridge.render_webview_panel(
-                                    view_id, html)
+                                    view_id, html, local_roots)
                             except Exception:
-                                _log.exception(
-                                    "[NodeExtHost] render_webview_panel failed "
-                                    "for %s", view_id)
+                                try:
+                                    self._ui_bridge.render_webview_panel(
+                                        view_id, html)
+                                except Exception:
+                                    _log.exception(
+                                        "[NodeExtHost] render_webview_panel "
+                                        "failed for %s", view_id)
                         except Exception:
                             _log.exception(
                                 "[NodeExtHost] render_webview_panel failed "
@@ -2331,6 +2336,23 @@ class NodeExtensionHost:
                 except Exception:
                     _log.exception(
                         "[NodeExtHost] update_webview_panel_icon failed "
+                        "for %s", view_id)
+
+        elif msg_type == "webview_options":
+            view_id = str(msg.get("viewId", ""))
+            view_type = str(msg.get("viewType", ""))
+            title = str(msg.get("title", ""))
+            options = msg.get("options", {})
+            local_roots = msg.get("localResourceRoots", None)
+            if self._ui_bridge and view_id:
+                try:
+                    updater = getattr(
+                        self._ui_bridge, "update_webview_panel_options", None)
+                    if callable(updater):
+                        updater(view_id, options, local_roots, view_type, title)
+                except Exception:
+                    _log.exception(
+                        "[NodeExtHost] update_webview_panel_options failed "
                         "for %s", view_id)
 
         elif msg_type == "webview_reveal":
