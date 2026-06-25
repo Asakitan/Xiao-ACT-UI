@@ -22,6 +22,7 @@ import secrets
 import sys
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -1379,6 +1380,37 @@ class AIEditorAPI:
 
     _webview_resource_server: Optional[_WebviewResourceServer] = None
     _webview_resource_server_lock = threading.Lock()
+    _LANGUAGE_PROVIDER_SUPERSEDE_KINDS = {
+        "completion",
+        "hover",
+        "signatureHelp",
+        "definition",
+        "typeDefinition",
+        "declaration",
+        "implementation",
+        "references",
+        "documentHighlight",
+        "evaluatableExpression",
+        "inlineValue",
+        "documentLink",
+        "inlayHint",
+        "inlineCompletion",
+        "codeLens",
+        "foldingRange",
+        "selectionRange",
+        "linkedEditing",
+        "documentColor",
+        "semanticTokens",
+        "semanticTokensRange",
+        "documentSymbol",
+        "workspaceSymbol",
+        "diagnostics",
+        "codeActions",
+        "formattingProviders",
+        "onTypeFormatting",
+        "formatting",
+        "rangeFormatting",
+    }
 
     def __init__(self, gui_ref: Any = None) -> None:
         self._gui_ref = gui_ref
@@ -1398,6 +1430,8 @@ class AIEditorAPI:
         self._window_geometry: Optional[Dict[str, int]] = None
         self._window_resize_supports_fix_point: Optional[bool] = None
         self._extension_snippet_cache: Dict[str, Dict[str, Any]] = {}
+        self._language_provider_request_lock = threading.Lock()
+        self._active_language_provider_requests: Dict[str, str] = {}
 
     @classmethod
     def _ensure_webview_resource_server(cls) -> _WebviewResourceServer:
@@ -7013,7 +7047,46 @@ class AIEditorAPI:
                 "value": None,
                 "error": "Node extension host is not running",
             }
-        return host.request_language_provider_result(payload, default=None)
+        request_payload = dict(payload or {})
+        kind = str(request_payload.get("kind") or "")
+        uri = str(request_payload.get("uri") or "")
+        request_key = str(
+            request_payload.pop("_requestKey", "")
+            or request_payload.pop("requestKey", "")
+            or "")
+        should_supersede = kind in self._LANGUAGE_PROVIDER_SUPERSEDE_KINDS
+        if should_supersede and not request_key and (kind or uri):
+            request_key = f"{kind}:{uri}"
+        request_id = str(uuid.uuid4())
+        request_payload["_requestId"] = request_id
+        previous_request_id = ""
+        if should_supersede and request_key:
+            with self._language_provider_request_lock:
+                previous_request_id = (
+                    self._active_language_provider_requests.get(request_key)
+                    or "")
+                self._active_language_provider_requests[request_key] = request_id
+        if previous_request_id and previous_request_id != request_id:
+            try:
+                host.cancel_language_provider_request(
+                    previous_request_id, "superseded")
+            except Exception:
+                pass
+        try:
+            result = host.request_language_provider_result(
+                request_payload, default=None)
+            if isinstance(result, dict):
+                result.setdefault("requestId", request_id)
+                if request_key:
+                    result.setdefault("requestKey", request_key)
+            return result
+        finally:
+            if should_supersede and request_key:
+                with self._language_provider_request_lock:
+                    if (self._active_language_provider_requests.get(
+                            request_key) == request_id):
+                        self._active_language_provider_requests.pop(
+                            request_key, None)
 
     def _request_node_file_decorations(
             self, payload: Dict[str, Any]) -> Dict[str, Any]:

@@ -873,12 +873,19 @@ class CancellationToken:
     def is_cancellation_requested(self) -> bool:
         return self._source._cancelled if self._source else False
 
+    @property
+    def isCancellationRequested(self) -> bool:
+        return self.is_cancellation_requested
+
     def on_cancellation_requested(self, listener: Callable) -> Disposable:
         if self._source:
             self._source._listeners.append(listener)
             return Disposable(lambda: self._source._listeners.remove(listener)
                               if listener in self._source._listeners else None)
         return Disposable()
+
+    def onCancellationRequested(self, listener: Callable) -> Disposable:
+        return self.on_cancellation_requested(listener)
 
 
 CancellationToken.NONE = CancellationToken()

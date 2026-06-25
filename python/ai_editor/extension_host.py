@@ -3317,16 +3317,21 @@ class NodeExtensionHost:
                 "value": default,
                 "error": error,
             }
-        request_id = str(uuid.uuid4())
+        payload_dict = dict(payload or {})
+        payload_dict.pop("requestId", None)
+        request_id = str(payload_dict.pop("_requestId", "") or uuid.uuid4())
         event = threading.Event()
         with self._language_request_lock:
-            self._language_requests[request_id] = {"event": event}
+            self._language_requests[request_id] = {
+                "event": event,
+                "cancelled": False,
+            }
         try:
             msg = {
                 "type": "language_provider_request",
                 "requestId": request_id,
             }
-            msg.update(dict(payload or {}))
+            msg.update(payload_dict)
             sent = self._send(msg)
             if not sent:
                 error = "Node language provider request could not be sent"
@@ -3334,24 +3339,36 @@ class NodeExtensionHost:
                     "ok": False,
                     "value": default,
                     "error": error,
+                    "requestId": request_id,
                 }
             if not event.wait(timeout):
                 timed_out = True
                 error = "Node language provider request timed out"
+                self.cancel_language_provider_request(request_id, "timeout")
                 return {
                     "ok": False,
                     "value": default,
                     "error": error,
                     "timeout": True,
+                    "requestId": request_id,
                 }
             with self._language_request_lock:
                 pending = self._language_requests.get(request_id, {})
             response = pending.get("response", {})
+            if pending.get("cancelled"):
+                return {
+                    "ok": False,
+                    "value": default,
+                    "error": "Node language provider request was cancelled",
+                    "cancelled": True,
+                    "requestId": request_id,
+                }
             if isinstance(response, dict) and response.get("ok"):
                 ok = True
                 return {
                     "ok": True,
                     "value": response.get("value", default),
+                    "requestId": request_id,
                 }
             error = (
                 response.get("error")
@@ -3361,6 +3378,10 @@ class NodeExtensionHost:
                 "ok": False,
                 "value": default,
                 "error": error,
+                "cancelled": (
+                    bool(response.get("cancelled"))
+                    if isinstance(response, dict) else False),
+                "requestId": request_id,
             }
         finally:
             with self._language_request_lock:
@@ -3373,6 +3394,25 @@ class NodeExtensionHost:
                 detail=kind,
                 error=error,
             )
+
+    def cancel_language_provider_request(
+            self, request_id: str, reason: str = "cancelled") -> bool:
+        request_id = str(request_id or "")
+        if not request_id:
+            return False
+        with self._language_request_lock:
+            pending = self._language_requests.get(request_id)
+            if not pending:
+                return False
+            pending["cancelled"] = True
+            event = pending.get("event")
+            if isinstance(event, threading.Event):
+                event.set()
+        return self._send({
+            "type": "language_provider_cancel",
+            "requestId": request_id,
+            "reason": str(reason or "cancelled"),
+        })
 
     def request_file_decoration_result(
             self, payload: Dict[str, Any], default: Any = None,

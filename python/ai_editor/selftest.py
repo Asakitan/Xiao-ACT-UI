@@ -8898,6 +8898,13 @@ def test_vscode_api() -> None:
     _check("CancellationToken.cancelled", tok.is_cancellation_requested)
     _check("CancellationToken.listener", len(cancelled_flag) == 1)
     _check("CancellationToken.NONE", not CancellationToken.NONE.is_cancellation_requested)
+    alias_flag = []
+    cts_alias = CancellationTokenSource()
+    tok_alias = cts_alias.token
+    tok_alias.onCancellationRequested(lambda: alias_flag.append(True))
+    cts_alias.cancel()
+    _check("CancellationToken VS Code aliases",
+           tok_alias.isCancellationRequested and len(alias_flag) == 1)
 
     # ChatResponseStream extended methods
     stream2 = ChatResponseStream()
@@ -11866,6 +11873,22 @@ async function activate(context) {
       return new vscode.Hover(['node hover ' + document.getText().slice(0, 4)], new vscode.Range(position, position));
     },
   });
+  const cancelProbe = { started: 0, cancelled: 0, completed: 0 };
+  vscode.commands.registerCommand('selftest.node.languageCancelState', () => Object.assign({}, cancelProbe));
+  vscode.languages.registerHoverProvider({ language: 'python', pattern: '**/cancel_provider.py' }, {
+    provideHover(document, position, token) {
+      cancelProbe.started += 1;
+      if (token && typeof token.onCancellationRequested === 'function') {
+        token.onCancellationRequested(() => { cancelProbe.cancelled += 1; });
+      }
+      return new Promise(resolve => {
+        setTimeout(() => {
+          cancelProbe.completed += 1;
+          resolve(new vscode.Hover(['cancel hover'], new vscode.Range(position, position)));
+        }, 200);
+      });
+    },
+  });
   vscode.languages.registerSignatureHelpProvider('python', {
     provideSignatureHelp(document, position, token, context) {
       const sig = new vscode.SignatureInformation('nodeCall(value)', 'node signature docs');
@@ -14058,6 +14081,39 @@ module.exports = { activate, deactivate };
                     node_uri, Position(0, 1), ".", 1)
                 node_hover = api._ext_host.commands.execute(
                     "vscode.executeHoverProvider", node_uri, Position(0, 1))
+                cancel_provider_sample = os.path.join(
+                    node_tree_tmp, "cancel_provider.py")
+                with open(cancel_provider_sample, "w", encoding="utf-8") as fh:
+                    fh.write("cancel probe\n")
+                cancel_uri = Uri.file(cancel_provider_sample)
+                cancel_payload = {
+                    "kind": "hover",
+                    "uri": str(cancel_uri),
+                    "languageId": "python",
+                    "version": 1,
+                    "text": "cancel probe\n",
+                    "position": {"line": 0, "character": 1},
+                    "_requestKey": "selftest-node-language-cancel",
+                }
+                first_cancel_result = {}
+
+                def _run_first_cancel_request():
+                    first_cancel_result["result"] = (
+                        api._request_node_language_provider(cancel_payload))
+
+                cancel_thread = threading.Thread(
+                    target=_run_first_cancel_request, daemon=True)
+                cancel_thread.start()
+                _wait_until(
+                    lambda: api._ext_host.commands.execute(
+                        "selftest.node.languageCancelState"
+                    ).get("started", 0) >= 1,
+                    timeout=1.0)
+                second_cancel_result = api._request_node_language_provider(
+                    dict(cancel_payload, version=2))
+                cancel_thread.join(2.0)
+                cancel_state = api._ext_host.commands.execute(
+                    "selftest.node.languageCancelState")
                 node_signature = api._ext_host.commands.execute(
                     "vscode.executeSignatureHelpProvider",
                     node_uri, Position(0, 5), "(")
@@ -14732,6 +14788,17 @@ module.exports = { activate, deactivate };
                 _check("node host language provider invokes JS hover",
                        node_hover
                        and node_hover[0].get("contents") == ["node hover prin"])
+                _check("node host language provider cancels superseded requests",
+                       first_cancel_result.get("result", {}).get("cancelled")
+                       is True
+                       and second_cancel_result.get("ok") is True
+                       and cancel_state.get("started", 0) >= 2
+                       and cancel_state.get("cancelled", 0) >= 1,
+                       json.dumps({
+                           "first": first_cancel_result.get("result"),
+                           "second": second_cancel_result,
+                           "state": cancel_state,
+                       }, ensure_ascii=False, default=str))
                 _check("node host language provider invokes JS signature help",
                        node_signature
                        and node_signature.get("signatures", [{}])[0].get("label")

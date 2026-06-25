@@ -4292,8 +4292,10 @@ function editorUntitledUri(tab){
 function editorProviderPayload(kind,extra){
   const tab=activeEditorTab(),value=ed.value,offset=ed.selectionStart;
   const filePath=tab.filePath||'',uri=filePath||editorUntitledUri(tab);
+  const tabKey=String((tab&&tab.id)||uri||tab.name||editorFileName||'untitled');
   return Object.assign({
     kind,uri,filePath,workspacePath:tab.workspacePath||'',name:tab.name||editorFileName||'untitled',
+    requestKey:'editor:'+String(kind||'')+':'+tabKey,
     language:editorLang,content:value,dirty:editorDirty,offset,position:editorPositionFromOffset(value,offset)
   },extra||{});
 }

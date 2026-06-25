@@ -1548,6 +1548,7 @@ const _fileSystemProviders = new Map();  // scheme -> { provider, options, exten
 const _textDocumentContentProviders = new Map(); // scheme -> { provider, extensionId }
 const _uriHandlers = new Map();          // extensionId -> { handler }
 const _languageProviders = [];           // { kind, selector, provider, triggers?, disposable }
+const _languageProviderRequests = new Map(); // requestId -> CancellationTokenSource
 const _fileDecorationProviders = [];     // { handle, extensionId, provider, disposable? }
 const _fileDecorationChangeMaxEventSize = 250;
 const _runtimeLanguageConfigurations = new Map(); // languageId -> [{ handle, configuration }]
@@ -8380,6 +8381,9 @@ async function handleLanguageProviderRequest(msg) {
     const requestId = String(msg.requestId || '');
     const kind = String(msg.kind || '');
     const methodName = _languageProviderMethod(kind);
+    const cts = new CancellationTokenSource();
+    const token = cts.token;
+    if (requestId) _languageProviderRequests.set(requestId, cts);
     try {
         if (!requestId) throw new Error('Missing language provider requestId');
         if (!methodName) throw new Error(`Unsupported language provider kind: ${kind}`);
@@ -8391,7 +8395,6 @@ async function handleLanguageProviderRequest(msg) {
             : [position];
         const range = _rangeFromPayload(msg.range);
         const color = _colorFromPayload(msg.color);
-        const token = { isCancellationRequested: false, onCancellationRequested: new EventEmitter().event };
         const trigger = msg.triggerCharacter === undefined || msg.triggerCharacter === null
             ? ''
             : String(msg.triggerCharacter);
@@ -8422,6 +8425,20 @@ async function handleLanguageProviderRequest(msg) {
                 .sort((a, b) => b.score - a.score)
                 .map(item => item.entry);
         };
+        const respondCancelled = () => {
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: false,
+                kind,
+                cancelled: true,
+                error: 'Language provider request cancelled',
+            });
+        };
+        if (token.isCancellationRequested) {
+            respondCancelled();
+            return;
+        }
 
         if (kind === 'diagnostics') {
             send({
@@ -8551,11 +8568,13 @@ async function handleLanguageProviderRequest(msg) {
             const values = [];
             const query = String(msg.query || msg.search || '');
             for (const entry of providers) {
+                if (token.isCancellationRequested) { respondCancelled(); return; }
                 const provider = entry.provider;
                 const fn = provider && provider[methodName];
                 if (typeof fn !== 'function') continue;
                 try {
                     const rawSymbols = _normalizeProviderItems(await fn.call(provider, query, token));
+                    if (token.isCancellationRequested) { respondCancelled(); return; }
                     for (const symbol of rawSymbols) {
                         if (symbol && symbol.name) values.push(_cacheWorkspaceSymbol(provider, symbol));
                     }
@@ -8620,6 +8639,7 @@ async function handleLanguageProviderRequest(msg) {
             const rawResolveCount = Number(msg.itemResolveCount || msg.resolveCount || 0);
             let remainingResolves = Number.isFinite(rawResolveCount) ? Math.max(0, rawResolveCount) : 0;
             for (const entry of providers) {
+                if (token.isCancellationRequested) { respondCancelled(); return; }
                 const triggers = (entry.triggers || []).map(item => String(item));
                 if (trigger && !triggers.includes(trigger)) continue;
                 const provider = entry.provider;
@@ -8627,8 +8647,10 @@ async function handleLanguageProviderRequest(msg) {
                 if (typeof fn !== 'function') continue;
                 try {
                     const value = await fn.call(provider, document, position, token, context);
+                    if (token.isCancellationRequested) { respondCancelled(); return; }
                     const normalized = _completionListFromProviderValue(value);
                     for (let item of normalized.items) {
+                        if (token.isCancellationRequested) { respondCancelled(); return; }
                         let didResolve = false;
                         if (remainingResolves > 0 && typeof provider.resolveCompletionItem === 'function') {
                             const resolved = await provider.resolveCompletionItem.call(provider, item, token);
@@ -8658,6 +8680,7 @@ async function handleLanguageProviderRequest(msg) {
 
         if (kind === 'signatureHelp') {
             for (const entry of providers) {
+                if (token.isCancellationRequested) { respondCancelled(); return; }
                 const metadata = entry.metadata || {};
                 const triggers = [
                     ...(metadata.triggerCharacters || []),
@@ -8669,6 +8692,7 @@ async function handleLanguageProviderRequest(msg) {
                 if (typeof fn !== 'function') continue;
                 try {
                     const value = await fn.call(provider, document, position, token, context);
+                    if (token.isCancellationRequested) { respondCancelled(); return; }
                     if (value !== undefined && value !== null) {
                         send({
                             type: 'language_provider_response',
@@ -8695,11 +8719,13 @@ async function handleLanguageProviderRequest(msg) {
 
         if (kind === 'linkedEditing') {
             for (const entry of providers) {
+                if (token.isCancellationRequested) { respondCancelled(); return; }
                 const provider = entry.provider;
                 const fn = provider && provider[methodName];
                 if (typeof fn !== 'function') continue;
                 try {
                     const value = await fn.call(provider, document, position, token);
+                    if (token.isCancellationRequested) { respondCancelled(); return; }
                     if (value !== undefined && value !== null) {
                         send({
                             type: 'language_provider_response',
@@ -9008,12 +9034,15 @@ async function handleLanguageProviderRequest(msg) {
             const rawResolveCount = Number(msg.itemResolveCount || msg.resolveCount || 0);
             let remainingResolves = Number.isFinite(rawResolveCount) ? Math.max(0, rawResolveCount) : 0;
             for (const entry of providers) {
+                if (token.isCancellationRequested) { respondCancelled(); return; }
                 const provider = entry.provider;
                 const fn = provider && provider[methodName];
                 if (typeof fn !== 'function') continue;
                 try {
                     const rawLenses = _normalizeProviderItems(await fn.call(provider, document, token));
+                    if (token.isCancellationRequested) { respondCancelled(); return; }
                     for (let lens of rawLenses) {
+                        if (token.isCancellationRequested) { respondCancelled(); return; }
                         let didResolve = false;
                         if (remainingResolves > 0) {
                             if (typeof provider.resolveCodeLens === 'function') {
@@ -9045,11 +9074,13 @@ async function handleLanguageProviderRequest(msg) {
                 ? msg.ranges.map(_rangeFromPayload)
                 : [range];
             for (const entry of providers) {
+                if (token.isCancellationRequested) { respondCancelled(); return; }
                 const provider = entry.provider;
                 const fn = provider && provider[methodName];
                 if (typeof fn !== 'function') continue;
                 try {
                     await fn.call(provider, document, pasteRanges, dataTransfer, token);
+                    if (token.isCancellationRequested) { respondCancelled(); return; }
                 } catch (err) {
                     log(`language provider ${kind} error: ${err.message}`);
                 }
@@ -9080,6 +9111,7 @@ async function handleLanguageProviderRequest(msg) {
                 pasteContext.only = _dropOrPasteKindFromPayload(pasteContext.only);
             }
             for (const entry of providers) {
+                if (token.isCancellationRequested) { respondCancelled(); return; }
                 if (!_dataTransferMatchesMetadata(dataTransfer, entry.metadata, 'pasteMimeTypes')) continue;
                 const provider = entry.provider;
                 const fn = provider && provider[methodName];
@@ -9087,7 +9119,9 @@ async function handleLanguageProviderRequest(msg) {
                 try {
                     const rawEdits = _normalizeProviderItems(
                         await fn.call(provider, document, pasteRanges, dataTransfer, pasteContext, token));
+                    if (token.isCancellationRequested) { respondCancelled(); return; }
                     for (let edit of rawEdits) {
+                        if (token.isCancellationRequested) { respondCancelled(); return; }
                         if (remainingResolves > 0) {
                             if (typeof provider.resolveDocumentPasteEdit === 'function') {
                                 const resolved = await provider.resolveDocumentPasteEdit.call(provider, edit, token);
@@ -9117,6 +9151,7 @@ async function handleLanguageProviderRequest(msg) {
             const rawResolveCount = Number(msg.dropResolveCount || msg.resolveCount || 0);
             let remainingResolves = Number.isFinite(rawResolveCount) ? Math.max(0, rawResolveCount) : 0;
             for (const entry of providers) {
+                if (token.isCancellationRequested) { respondCancelled(); return; }
                 if (!_dataTransferMatchesMetadata(dataTransfer, entry.metadata, 'dropMimeTypes')) continue;
                 const provider = entry.provider;
                 const fn = provider && provider[methodName];
@@ -9124,7 +9159,9 @@ async function handleLanguageProviderRequest(msg) {
                 try {
                     const rawEdits = _normalizeProviderItems(
                         await fn.call(provider, document, position, dataTransfer, token));
+                    if (token.isCancellationRequested) { respondCancelled(); return; }
                     for (let edit of rawEdits) {
+                        if (token.isCancellationRequested) { respondCancelled(); return; }
                         if (remainingResolves > 0) {
                             if (typeof provider.resolveDocumentDropEdit === 'function') {
                                 const resolved = await provider.resolveDocumentDropEdit.call(provider, edit, token);
@@ -9150,6 +9187,7 @@ async function handleLanguageProviderRequest(msg) {
 
         if (kind === 'semanticTokens' || kind === 'semanticTokensRange') {
             for (const entry of providers) {
+                if (token.isCancellationRequested) { respondCancelled(); return; }
                 const provider = entry.provider;
                 const fn = provider && provider[methodName];
                 if (typeof fn !== 'function') continue;
@@ -9157,6 +9195,7 @@ async function handleLanguageProviderRequest(msg) {
                     const value = kind === 'semanticTokensRange'
                         ? await fn.call(provider, document, range, token)
                         : await fn.call(provider, document, token);
+                    if (token.isCancellationRequested) { respondCancelled(); return; }
                     if (value !== undefined && value !== null) {
                         send({
                             type: 'language_provider_response',
@@ -9194,13 +9233,16 @@ async function handleLanguageProviderRequest(msg) {
                 triggerKind: msg.triggerKind,
             };
             for (const entry of providers) {
+                if (token.isCancellationRequested) { respondCancelled(); return; }
                 const provider = entry.provider;
                 const fn = provider && provider[methodName];
                 if (typeof fn !== 'function') continue;
                 try {
                     const rawActions = _normalizeProviderItems(await fn.call(
                         provider, document, range, codeActionContext, token));
+                    if (token.isCancellationRequested) { respondCancelled(); return; }
                     for (let action of rawActions) {
+                        if (token.isCancellationRequested) { respondCancelled(); return; }
                         if (!_codeActionMatchesKind(action, msg.only)) continue;
                         let didResolve = false;
                         if (remainingResolves > 0) {
@@ -9229,6 +9271,7 @@ async function handleLanguageProviderRequest(msg) {
 
         const values = [];
         for (const entry of providers) {
+            if (token.isCancellationRequested) { respondCancelled(); return; }
             if ((kind === 'formatting' || kind === 'rangeFormatting')
                 && !_languageProviderMatchesProviderId(entry, msg.providerId)) {
                 continue;
@@ -9276,6 +9319,7 @@ async function handleLanguageProviderRequest(msg) {
                 } else {
                     value = await fn.call(provider, document, position, token);
                 }
+                if (token.isCancellationRequested) { respondCancelled(); return; }
                 values.push(..._normalizeProviderItems(value));
             } catch (err) {
                 log(`language provider ${kind} error: ${err.message}`);
@@ -9296,7 +9340,17 @@ async function handleLanguageProviderRequest(msg) {
             kind,
             error: err?.message || String(err),
         });
+    } finally {
+        _languageProviderRequests.delete(requestId);
+        cts.dispose();
     }
+}
+
+function handleLanguageProviderCancel(msg) {
+    const requestId = String(msg.requestId || '');
+    const cts = _languageProviderRequests.get(requestId);
+    if (!cts) return;
+    cts.cancel();
 }
 
 async function handleFileDecorationRequest(msg) {
@@ -9538,6 +9592,9 @@ async function handleMessage(msg) {
             break;
         case 'language_provider_request':
             await handleLanguageProviderRequest(msg);
+            break;
+        case 'language_provider_cancel':
+            handleLanguageProviderCancel(msg);
             break;
         case 'file_decoration_request':
             await handleFileDecorationRequest(msg);
