@@ -9019,19 +9019,39 @@ function reportActiveExtensionActivityVisibility(visible){
   reportExtensionActivityVisibilityForPanel(_activeSidebarPanel,visible);
 }
 let _scmLoaded=false;
+function scmCommandSpec(raw){
+  if(!raw)return null;
+  if(typeof raw==='string')return {command:raw,arguments:[],title:raw,disabled:false};
+  if(typeof raw!=='object')return null;
+  const source=(raw.command&&typeof raw.command==='object')?raw.command:raw;
+  const command=String((source&&source.command)||(source&&source.id)||'');
+  if(!command)return null;
+  return {
+    command,
+    arguments:Array.isArray(source.arguments)?source.arguments:[],
+    title:String((source&&source.shortTitle)||(source&&source.title)||(raw&&raw.shortTitle)||(raw&&raw.title)||command),
+    icon:(source&&source.icon)||(raw&&raw.icon)||'',
+    disabled:!!((source&&source.disabled)||(raw&&raw.disabled)||(raw&&raw.enabled===false))
+  };
+}
 function scmActionLabel(action){
-  return String((action&&action.shortTitle)||(action&&action.title)||(action&&action.command)||'Action');
+  const spec=scmCommandSpec(action);
+  return spec?spec.title:'Action';
 }
 function scmActionGlyph(action){
-  const icon=String((action&&action.icon)||'');
+  const spec=scmCommandSpec(action);
+  const icon=String((spec&&spec.icon)||'');
   if(icon.startsWith('$(')&&icon.endsWith(')'))return extensionTreeThemeIconGlyph(icon.slice(2,-1));
   if(icon)return iconText(icon)||icon;
   return '›';
 }
+function runScmCommandSpec(raw){
+  const spec=scmCommandSpec(raw);
+  if(!spec||!spec.command||spec.disabled)return;
+  call('execute_command',spec.command,...spec.arguments).then(()=>refreshScmSidebar(true));
+}
 function runScmAction(action){
-  if(!action||!action.command||action.disabled)return;
-  call('execute_command',action.command,...(Array.isArray(action.arguments)?action.arguments:[]))
-    .then(()=>refreshScmSidebar(true));
+  runScmCommandSpec(action);
 }
 function runScmResourceCommand(state){
   const command=state&&state.command;
@@ -9061,7 +9081,7 @@ async function acceptScmInput(providerId,value){
   return r;
 }
 function appendScmActionButtons(parent,actions){
-  const rows=Array.isArray(actions)?actions.filter(a=>a&&a.command):[];
+  const rows=Array.isArray(actions)?actions.filter(a=>scmCommandSpec(a)): [];
   if(!rows.length)return;
   const bar=document.createElement('div');
   bar.style.cssText='display:flex;align-items:center;gap:4px;flex-wrap:wrap';
@@ -9071,7 +9091,7 @@ function appendScmActionButtons(parent,actions){
     btn.className='icon-btn';
     btn.textContent=scmActionGlyph(action);
     btn.title=scmActionLabel(action);
-    btn.disabled=!!action.disabled;
+    btn.disabled=!!(scmCommandSpec(action)||{}).disabled;
     btn.style.cssText='width:20px;height:20px;font-size:10px;padding:0';
     btn.onclick=e=>{e.stopPropagation();runScmAction(action)};
     bar.appendChild(btn);
@@ -9090,6 +9110,35 @@ function appendScmActionButtons(parent,actions){
     bar.appendChild(more);
   }
   parent.appendChild(bar);
+}
+function appendScmStatusCommands(parent,commands){
+  const rows=Array.isArray(commands)?commands.filter(c=>scmCommandSpec(c)): [];
+  if(!rows.length)return;
+  const bar=document.createElement('div');
+  bar.style.cssText='display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin:0 12px 6px 12px';
+  rows.slice(0,4).forEach(command=>{
+    const spec=scmCommandSpec(command);
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.className='text-btn';
+    btn.textContent=spec.title;
+    btn.title=spec.command;
+    btn.disabled=!!spec.disabled;
+    btn.style.cssText='min-height:20px;padding:1px 6px;font-size:11px;border-radius:3px';
+    btn.onclick=e=>{e.stopPropagation();runScmCommandSpec(command)};
+    bar.appendChild(btn);
+  });
+  parent.appendChild(bar);
+}
+function flattenScmSecondaryCommands(actionButton){
+  const raw=actionButton&&Array.isArray(actionButton.secondaryCommands)
+    ? actionButton.secondaryCommands : [];
+  const out=[];
+  raw.forEach(row=>{
+    if(Array.isArray(row))row.forEach(item=>{if(scmCommandSpec(item))out.push(item)});
+    else if(scmCommandSpec(row))out.push(row);
+  });
+  return out;
 }
 function renderScmResource(parent,provider,group,state,index){
   const row=document.createElement('div');
@@ -9137,11 +9186,54 @@ function renderScmProvider(parent,provider){
   const title=document.createElement('span');
   title.style.cssText='flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
   const count=Number(provider.count||0);
-  title.textContent=String(provider.label||provider.providerId||provider.id||'Source Control')+(count?' '+count:'');
+  title.textContent=String(provider.label||provider.providerId||provider.id||'Source Control');
   title.title=String(provider.rootUri||provider.providerId||provider.id||'');
   providerHeader.appendChild(title);
+  if(count){
+    const badge=document.createElement('span');
+    badge.textContent=String(count);
+    badge.title='Source Control Count';
+    badge.style.cssText='min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:var(--accent);color:#fff;font-size:10px;line-height:16px;text-align:center;font-weight:600';
+    providerHeader.appendChild(badge);
+  }
+  if(provider.hasQuickDiffProvider){
+    const quick=document.createElement('span');
+    quick.textContent=String(provider.quickDiffLabel||'Quick Diff');
+    quick.title='Quick Diff Provider';
+    quick.style.cssText='max-width:96px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid var(--border);border-radius:3px;color:var(--fg-dim);font-size:10px;line-height:16px;padding:0 4px';
+    providerHeader.appendChild(quick);
+  }
+  if(provider.actionButton&&provider.actionButton.command){
+    const spec=scmCommandSpec(provider.actionButton);
+    if(spec){
+      const btn=document.createElement('button');
+      btn.type='button';
+      btn.className='text-btn';
+      btn.textContent=spec.title;
+      btn.title=spec.command;
+      btn.disabled=!!spec.disabled;
+      btn.style.cssText='min-height:20px;padding:1px 6px;font-size:11px;border-radius:3px';
+      btn.onclick=e=>{e.stopPropagation();runScmCommandSpec(provider.actionButton)};
+      providerHeader.appendChild(btn);
+    }
+    const secondary=flattenScmSecondaryCommands(provider.actionButton);
+    if(secondary.length){
+      const more=document.createElement('button');
+      more.type='button';
+      more.className='icon-btn';
+      more.textContent='...';
+      more.title='More Source Control Actions';
+      more.style.cssText='width:24px;height:20px;font-size:10px;padding:0';
+      more.onclick=e=>{
+        e.stopPropagation();
+        showExtensionActionMenu(e.clientX,e.clientY,secondary,runScmAction);
+      };
+      providerHeader.appendChild(more);
+    }
+  }
   appendScmActionButtons(providerHeader,provider.titleActions);
   parent.appendChild(providerHeader);
+  appendScmStatusCommands(parent,provider.statusBarCommands);
   const input=provider.inputBox&&typeof provider.inputBox==='object'?provider.inputBox:null;
   if(input&&input.visible!==false){
     const box=document.createElement('input');

@@ -7999,6 +7999,10 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 const groups = new Map();
                 let contextValue = String((options && options.contextValue) || '');
                 let acceptInputCommand = undefined;
+                let count = 0;
+                let quickDiffProvider = undefined;
+                let statusBarCommands = undefined;
+                let actionButton = undefined;
                 const inputBoxState = {
                     value: '',
                     placeholder: '',
@@ -8013,6 +8017,12 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     rootUri: rootUri ? _plainBridgeValue(rootUri) : '',
                     contextValue,
                     acceptInputCommand: _plainBridgeValue(acceptInputCommand),
+                    count,
+                    hasQuickDiffProvider: !!quickDiffProvider,
+                    quickDiffLabel: quickDiffProvider && quickDiffProvider.label
+                        ? String(quickDiffProvider.label) : '',
+                    statusBarCommands: _plainBridgeValue(statusBarCommands),
+                    actionButton: _plainBridgeValue(actionButton),
                     inputBox: { ...inputBoxState },
                 });
                 const inputBox = {
@@ -8042,9 +8052,28 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     label,
                     rootUri: rootUri || null,
                     inputBox,
-                    count: 0,
-                    quickDiffProvider: undefined,
-                    statusBarCommands: undefined,
+                    get count() { return count; },
+                    set count(value) {
+                        const numeric = Number(value);
+                        count = Number.isFinite(numeric) ? numeric : 0;
+                        emitProviderState('scm_provider_updated');
+                    },
+                    get quickDiffProvider() { return quickDiffProvider; },
+                    set quickDiffProvider(value) {
+                        quickDiffProvider = value;
+                        emitProviderState('scm_provider_updated');
+                    },
+                    get statusBarCommands() { return statusBarCommands; },
+                    set statusBarCommands(value) {
+                        statusBarCommands = Array.isArray(value)
+                            ? value.slice() : value;
+                        emitProviderState('scm_provider_updated');
+                    },
+                    get actionButton() { return actionButton; },
+                    set actionButton(value) {
+                        actionButton = value;
+                        emitProviderState('scm_provider_updated');
+                    },
                     get contextValue() { return contextValue; },
                     set contextValue(value) {
                         contextValue = String(value || '');

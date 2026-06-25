@@ -5481,6 +5481,11 @@ class VscodeNamespace:
             if getattr(control, "_disposed", False):
                 continue
             root_uri = str(control.rootUri or "")
+            quick_diff = getattr(control, "quickDiffProvider", None)
+            quick_diff_label = str(
+                getattr(quick_diff, "label", "")
+                or (quick_diff.get("label") if isinstance(quick_diff, dict) else "")
+                or "")
             provider: Dict[str, Any] = {
                 "id": str(control.id or ""),
                 "providerId": str(control.id or ""),
@@ -5489,6 +5494,8 @@ class VscodeNamespace:
                 "contextValue": str(control.contextValue or ""),
                 "count": int(getattr(control, "count", 0) or 0),
                 "runtimeKind": "python",
+                "hasQuickDiffProvider": quick_diff is not None,
+                "quickDiffLabel": quick_diff_label,
                 "acceptInputCommand": _plain_json_value(
                     getattr(control, "acceptInputCommand", None)),
                 "actionButton": _plain_json_value(

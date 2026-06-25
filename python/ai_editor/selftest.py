@@ -6914,6 +6914,10 @@ console.log("command palette quick access helpers ok");
            and "def set_source_control_input_value(" in vscode_api_source
            and "def node_scm_provider_snapshots(" in extension_host_source
            and "def set_node_scm_input_value(" in extension_host_source
+           and "hasQuickDiffProvider" in vscode_api_source
+           and "quickDiffLabel" in extension_host_source
+           and "statusBarCommands" in node_ext_host_source
+           and "actionButton" in node_ext_host_source
            and "scm_set_input_value" in node_ext_host_source
            and "\"scm/title\"" in app_source
            and "\"scm/resourceGroup/context\"" in app_source
@@ -6929,7 +6933,11 @@ console.log("command palette quick access helpers ok");
            and "event==='scm_changed'" in html
            and "call('set_scm_input_value'" in html
            and "call('accept_scm_input'" in html
+           and "function scmCommandSpec(raw)" in html
+           and "function appendScmStatusCommands(parent,commands)" in html
            and "function renderScmProvider(parent,provider)" in html
+           and "provider.hasQuickDiffProvider" in html
+           and "provider.actionButton&&provider.actionButton.command" in html
            and "function renderScmGroup(parent,provider,group)" in html
            and "function renderScmResource(parent,provider,group,state,index)"
            in html
@@ -12180,6 +12188,18 @@ def test_app_extension_runtime_support() -> None:
                         "title": "SCM Accept",
                     },
                     {
+                        "command": "selftest.activity.scmStatus",
+                        "title": "SCM Status",
+                    },
+                    {
+                        "command": "selftest.activity.scmActionButton",
+                        "title": "SCM Action Button",
+                    },
+                    {
+                        "command": "selftest.activity.scmSecondary",
+                        "title": "SCM Secondary",
+                    },
+                    {
                         "command": "selftest.activity.scmHiddenAction",
                         "title": "SCM Hidden Action",
                     },
@@ -12447,6 +12467,27 @@ def test_app_extension_runtime_support() -> None:
         activity_scm.acceptInputCommand = {
             "command": "selftest.activity.scmAccept",
         }
+        activity_scm.count = 5
+        activity_scm.quickDiffProvider = {"label": "Python Quick Diff"}
+        activity_scm.statusBarCommands = [{
+            "command": "selftest.activity.scmStatus",
+            "title": "SCM Status",
+            "arguments": ["from-status"],
+        }]
+        activity_scm.actionButton = {
+            "command": {
+                "command": "selftest.activity.scmActionButton",
+                "title": "SCM Action",
+                "shortTitle": "Go",
+                "arguments": ["from-action"],
+            },
+            "secondaryCommands": [[{
+                "command": "selftest.activity.scmSecondary",
+                "title": "SCM Secondary",
+                "arguments": ["from-secondary"],
+            }]],
+            "enabled": True,
+        }
         activity_scm_group = activity_scm.createResourceGroup(
             "workingTree", "Working Tree")
         activity_scm_group.contextValue = "exportable"
@@ -12483,6 +12524,18 @@ def test_app_extension_runtime_support() -> None:
                     "value": activity_scm.inputBox.value,
                     "args": list(args),
                 })
+        activity_api["commands"]["registerCommand"](
+            "selftest.activity.scmStatus",
+            lambda *args: activity_command_log.append(
+                ("scmStatus", list(args))) or {"status": True, "args": list(args)})
+        activity_api["commands"]["registerCommand"](
+            "selftest.activity.scmActionButton",
+            lambda *args: activity_command_log.append(
+                ("scmActionButton", list(args))) or {"action": True, "args": list(args)})
+        activity_api["commands"]["registerCommand"](
+            "selftest.activity.scmSecondary",
+            lambda *args: activity_command_log.append(
+                ("scmSecondary", list(args))) or {"secondary": True, "args": list(args)})
         activity_api["window"]["registerTreeDataProvider"](
             "selftest.activity.tree", activity_tree_provider)
         activity_api["window"]["registerTreeDataProvider"](
@@ -12613,6 +12666,25 @@ def test_app_extension_runtime_support() -> None:
         activity_scm_state_result = api.execute_command(
             activity_scm_state_action.get("command", ""),
             *activity_scm_state_action.get("arguments", []))
+        activity_scm_context_command_log = list(activity_command_log)
+        activity_scm_status_command = (
+            activity_scm_provider.get("statusBarCommands") or [{}])[0]
+        activity_scm_action_button = activity_scm_provider.get(
+            "actionButton") or {}
+        activity_scm_action_command = (
+            activity_scm_action_button.get("command") or {})
+        activity_scm_secondary_command = (
+            ((activity_scm_action_button.get("secondaryCommands") or [[]])[0]
+             or [{}])[0])
+        activity_scm_status_result = api.execute_command(
+            activity_scm_status_command.get("command", ""),
+            *activity_scm_status_command.get("arguments", []))
+        activity_scm_action_result = api.execute_command(
+            activity_scm_action_command.get("command", ""),
+            *activity_scm_action_command.get("arguments", []))
+        activity_scm_secondary_result = api.execute_command(
+            activity_scm_secondary_command.get("command", ""),
+            *activity_scm_secondary_command.get("arguments", []))
         _check("activity bar containers include runtime extension views",
                activity_items.get("selftest.activity", {}).get("view_count") == 2
                and activity_views.get("selftest.activity.tree", {}).get("runtimeState", {}).get("kind") == "treeView"
@@ -12662,8 +12734,8 @@ def test_app_extension_runtime_support() -> None:
                    "scmResourceGroupState") == "exportable"
                and activity_scm_state_result.get("args", [{}])[0].get(
                    "scmResourceState") == "diffable"
-               and activity_command_log[-2][0] == "scmGroup"
-               and activity_command_log[-1][0] == "scmState")
+               and activity_scm_context_command_log[-2][0] == "scmGroup"
+               and activity_scm_context_command_log[-1][0] == "scmState")
         _check("SCM providers API returns dynamic Python provider tree",
                activity_scm_provider.get("label") == "Selftest Activity SCM"
                and activity_scm_provider.get("runtimeKind") == "python"
@@ -12674,6 +12746,27 @@ def test_app_extension_runtime_support() -> None:
                and activity_scm_snapshot_state.get("label") == "scm-file.txt"
                and activity_scm_snapshot_state.get("contextValue")
                == "diffable")
+        _check("SCM providers API exposes VS Code provider controls",
+               activity_scm_provider.get("count") == 5
+               and activity_scm_provider.get("hasQuickDiffProvider") is True
+               and activity_scm_provider.get("quickDiffLabel")
+               == "Python Quick Diff"
+               and activity_scm_status_command.get("command")
+               == "selftest.activity.scmStatus"
+               and activity_scm_action_command.get("command")
+               == "selftest.activity.scmActionButton"
+               and activity_scm_secondary_command.get("command")
+               == "selftest.activity.scmSecondary"
+               and activity_scm_status_result.get("args") == ["from-status"]
+               and activity_scm_action_result.get("args") == ["from-action"]
+               and activity_scm_secondary_result.get("args")
+               == ["from-secondary"],
+               json.dumps({
+                   "provider": activity_scm_provider,
+                   "statusResult": activity_scm_status_result,
+                   "actionResult": activity_scm_action_result,
+                   "secondaryResult": activity_scm_secondary_result,
+               }, ensure_ascii=False))
         _check("SCM providers API attaches menu actions at each tree level",
                [action.get("command") for action in
                 activity_scm_provider.get("titleActions", [])]
@@ -13424,6 +13517,32 @@ async function activate(context) {
   sourceControl.inputBox.placeholder = 'Node commit message';
   sourceControl.acceptInputCommand = {
     command: 'selftest.node.scmAcceptInput',
+  };
+  sourceControl.count = 7;
+  sourceControl.quickDiffProvider = {
+    label: 'Node Quick Diff',
+    provideOriginalResource(uri) {
+      return vscode.Uri.joinPath(context.extensionUri, 'original-node-scm.txt');
+    },
+  };
+  sourceControl.statusBarCommands = [{
+    command: 'selftest.node.scmStatusCommand',
+    title: 'Node Status',
+    arguments: ['from-status'],
+  }];
+  sourceControl.actionButton = {
+    command: {
+      command: 'selftest.node.scmActionButton',
+      title: 'Node Action',
+      shortTitle: 'Do',
+      arguments: ['from-action'],
+    },
+    secondaryCommands: [[{
+      command: 'selftest.node.scmSecondaryAction',
+      title: 'Node Secondary',
+      arguments: ['from-secondary'],
+    }]],
+    enabled: true,
   };
   const sourceGroup = sourceControl.createResourceGroup(
     'workingTree',
@@ -15859,6 +15978,18 @@ async function activate(context) {
     accepted: true,
     value: sourceControl.inputBox.value,
   }));
+  vscode.commands.registerCommand('selftest.node.scmStatusCommand', value => ({
+    ok: true,
+    status: value,
+  }));
+  vscode.commands.registerCommand('selftest.node.scmActionButton', value => ({
+    ok: true,
+    action: value,
+  }));
+  vscode.commands.registerCommand('selftest.node.scmSecondaryAction', value => ({
+    ok: true,
+    secondary: value,
+  }));
   vscode.commands.registerCommand('selftest.node.customEditorContextAction', contextArg => {
     customEditorContextActionHits += 1;
     customEditorContextActionLast = contextArg || null;
@@ -16000,6 +16131,15 @@ module.exports = { activate, deactivate };
                     }, {
                         "command": "selftest.node.scmAcceptInput",
                         "title": "Node SCM Accept Input",
+                    }, {
+                        "command": "selftest.node.scmStatusCommand",
+                        "title": "Node SCM Status",
+                    }, {
+                        "command": "selftest.node.scmActionButton",
+                        "title": "Node SCM Action Button",
+                    }, {
+                        "command": "selftest.node.scmSecondaryAction",
+                        "title": "Node SCM Secondary Action",
                     }],
                     "menus": {
                         "view/item/context": [{
@@ -17483,6 +17623,30 @@ module.exports = { activate, deactivate };
                         node_scm_state_action.get("command", ""),
                         *node_scm_state_action.get("arguments", []))
                     if node_scm_state_action else {})
+                node_scm_status_command = (
+                    node_scm_provider.get("statusBarCommands") or [{}])[0]
+                node_scm_action_button = (
+                    node_scm_provider.get("actionButton") or {})
+                node_scm_action_command = (
+                    node_scm_action_button.get("command") or {})
+                node_scm_secondary_command = (
+                    ((node_scm_action_button.get("secondaryCommands")
+                      or [[]])[0] or [{}])[0])
+                node_scm_status_command_result = (
+                    api.execute_command(
+                        node_scm_status_command.get("command", ""),
+                        *node_scm_status_command.get("arguments", []))
+                    if node_scm_status_command else {})
+                node_scm_action_button_result = (
+                    api.execute_command(
+                        node_scm_action_command.get("command", ""),
+                        *node_scm_action_command.get("arguments", []))
+                    if node_scm_action_command else {})
+                node_scm_secondary_action_result = (
+                    api.execute_command(
+                        node_scm_secondary_command.get("command", ""),
+                        *node_scm_secondary_command.get("arguments", []))
+                    if node_scm_secondary_command else {})
                 node_custom_editor_context_action_command = next((
                     action.get("command")
                     for action in node_custom_editor_context_actions.get(
@@ -18904,6 +19068,29 @@ module.exports = { activate, deactivate };
                        ],
                        json.dumps({
                            "providers": node_scm_provider_snapshot,
+                       }, ensure_ascii=False))
+                _check("node SCM providers expose VS Code provider controls",
+                       node_scm_provider.get("count") == 7
+                       and node_scm_provider.get("hasQuickDiffProvider") is True
+                       and node_scm_provider.get("quickDiffLabel")
+                       == "Node Quick Diff"
+                       and node_scm_status_command.get("command")
+                       == "selftest.node.scmStatusCommand"
+                       and node_scm_action_command.get("command")
+                       == "selftest.node.scmActionButton"
+                       and node_scm_secondary_command.get("command")
+                       == "selftest.node.scmSecondaryAction"
+                       and node_scm_status_command_result.get("status")
+                       == "from-status"
+                       and node_scm_action_button_result.get("action")
+                       == "from-action"
+                       and node_scm_secondary_action_result.get("secondary")
+                       == "from-secondary",
+                       json.dumps({
+                           "provider": node_scm_provider,
+                           "statusResult": node_scm_status_command_result,
+                           "actionResult": node_scm_action_button_result,
+                           "secondaryResult": node_scm_secondary_action_result,
                        }, ensure_ascii=False))
                 _check("node SCM input syncs before accept command execution",
                        node_scm_input_set.get("ok") is True

@@ -91,6 +91,7 @@ license.db
 # ── AI Editor (user conversation history, local only) ──
 python/ai_editor_history/
 python/.sao/chat_history/
+.vscode/handoff/
 
 
 # ── Embedded Node.js runtime (downloaded binary, ~70 MB) ──

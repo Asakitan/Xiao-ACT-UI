@@ -2890,7 +2890,18 @@ class NodeExtensionHost:
                             "label": str(msg.get("label") or provider_id),
                             "rootUri": str(msg.get("rootUri") or ""),
                             "contextValue": str(msg.get("contextValue") or ""),
+                            "count": int(msg.get("count") or 0),
+                            "hasQuickDiffProvider": bool(
+                                msg.get("hasQuickDiffProvider", False)),
+                            "quickDiffLabel": str(
+                                msg.get("quickDiffLabel") or ""),
                             "acceptInputCommand": msg.get("acceptInputCommand"),
+                            "actionButton": msg.get("actionButton"),
+                            "statusBarCommands": (
+                                list(msg.get("statusBarCommands"))
+                                if isinstance(
+                                    msg.get("statusBarCommands"), list)
+                                else []),
                             "inputBox": (
                                 dict(msg.get("inputBox"))
                                 if isinstance(msg.get("inputBox"), dict)
@@ -4093,7 +4104,15 @@ class NodeExtensionHost:
                 "contextValue": str(provider.get("contextValue") or ""),
                 "count": int(provider.get("count") or 0),
                 "runtimeKind": "node",
+                "hasQuickDiffProvider": bool(
+                    provider.get("hasQuickDiffProvider", False)),
+                "quickDiffLabel": str(provider.get("quickDiffLabel") or ""),
                 "acceptInputCommand": provider.get("acceptInputCommand"),
+                "actionButton": provider.get("actionButton"),
+                "statusBarCommands": (
+                    list(provider.get("statusBarCommands"))
+                    if isinstance(provider.get("statusBarCommands"), list)
+                    else []),
                 "inputBox": provider.get("inputBox") if isinstance(
                     provider.get("inputBox"), dict) else {},
                 "groups": group_items,
