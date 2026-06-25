@@ -26,6 +26,7 @@ _PASS = 0
 _FAIL = 0
 _FAILURES: list[tuple[str, str]] = []
 _CURRENT_TEST_LABEL = ""
+_FAILURE_DETAIL_LINE_LIMIT = 80
 
 
 def _record_failure(label: str, detail: str = "") -> None:
@@ -96,6 +97,31 @@ def _run_test(label: str, fn) -> None:
             print("  ✗ test failed; see final summary")
     finally:
         _CURRENT_TEST_LABEL = previous_test_label
+
+
+def _failure_detail_tail(detail: str) -> list[str]:
+    lines = str(detail or "").splitlines()
+    if len(lines) <= _FAILURE_DETAIL_LINE_LIMIT:
+        return lines
+    omitted = len(lines) - _FAILURE_DETAIL_LINE_LIMIT
+    return [f"... omitted {omitted} earlier detail lines ...", *lines[-_FAILURE_DETAIL_LINE_LIMIT:]]
+
+
+def _print_final_summary(total: int) -> None:
+    print(f"{'=' * 50}")
+    if _FAIL == 0:
+        print(f"ALL {total} TESTS PASSED ✓")
+        print(f"{'=' * 50}")
+        return
+
+    print(f"{_PASS}/{total} passed, {_FAIL} FAILED ✗")
+    print(f"{'=' * 50}")
+    print()
+    print("FAILED CHECKS (final summary):")
+    for index, (label, detail) in enumerate(_FAILURES, 1):
+        print(f"  {index}. {label}")
+        for line in _failure_detail_tail(detail):
+            print(f"     {line}")
 
 
 def _wait_until(predicate, timeout: float = 2.0) -> bool:
@@ -18385,21 +18411,7 @@ def main() -> None:
     _flush_test_output()
     print()
     total = _PASS + _FAIL
-    if _FAIL == 0:
-        print(f"{'=' * 50}")
-        print(f"ALL {total} TESTS PASSED ✓")
-        print(f"{'=' * 50}")
-    else:
-        print(f"{'=' * 50}")
-        print(f"{_PASS}/{total} passed, {_FAIL} FAILED ✗")
-        print(f"{'=' * 50}")
-        print()
-        print("FAILED CHECKS (deferred details):")
-        for index, (label, detail) in enumerate(_FAILURES, 1):
-            print(f"  {index}. {label}")
-            if detail:
-                for line in detail.splitlines():
-                    print(f"     {line}")
+    _print_final_summary(total)
 
     sys.exit(0 if _FAIL == 0 else 1)
 
