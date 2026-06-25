@@ -10695,6 +10695,10 @@ def test_app_extension_runtime_support() -> None:
                         "command": "selftest.activity.alt",
                         "title": "Alternate Activity",
                     },
+                    {
+                        "command": "selftest.activity.resource",
+                        "title": "Resource Activity",
+                    },
                 ],
                 "menus": {
                     "view/title": [
@@ -10730,6 +10734,11 @@ def test_app_extension_runtime_support() -> None:
                             "when": "view == selftest.activity.tree && viewItem == branch",
                             "enablement": "viewItem == missing",
                             "group": "inline@2",
+                        },
+                        {
+                            "command": "selftest.activity.resource",
+                            "when": "view == selftest.activity.tree && viewItem == branch && resourceScheme == file && resourceExtname in [.txt,.md] && resourceFilename =~ /node-a/i && resourceFilename not in [node-b.txt]",
+                            "group": "inline@3",
                         },
                     ],
                 },
@@ -11086,10 +11095,32 @@ def test_app_extension_runtime_support() -> None:
                .get("alt", {}).get("command") == "selftest.activity.alt"
                and activity_tree_nodes[0].get("actions", [{}])[0].get("inline")
                is True
-               and activity_tree_nodes[0].get("actions", [{}])[0].get("command")
-               == "selftest.activity.openItem"
-               and activity_tree_nodes[0].get("actions", [{}, {}])[1]
-               .get("disabled") is True)
+                and activity_tree_nodes[0].get("actions", [{}])[0].get("command")
+                == "selftest.activity.openItem"
+                and activity_tree_nodes[0].get("actions", [{}, {}])[1]
+                .get("disabled") is True
+                and [action.get("command") for action in activity_tree_nodes[0]
+                     .get("actions", [])[:3]] == [
+                         "selftest.activity.openItem",
+                         "selftest.activity.disabled",
+                         "selftest.activity.resource",
+                     ]
+                and [action.get("command") for action in activity_tree_nodes[1]
+                     .get("actions", [])] == [])
+        resource_context = api._extension_resource_context(
+            "file:///workspace/node-a.txt?from=test")
+        _check("extension view menu context keys support resource clauses",
+               resource_context.get("resourceScheme") == "file"
+               and resource_context.get("resourceFilename") == "node-a.txt"
+               and resource_context.get("resourceExtname") == ".txt"
+               and api._extension_when_matches(
+                   "resourceScheme == file && resourceExtname in [.txt,.md] "
+                   "&& resourceFilename =~ /node-a/i && "
+                   "resourceFilename not in [node-b.txt] && resourceFilename",
+                   resource_context)
+               and not api._extension_when_matches(
+                   "resourceScheme == untitled || resourceExtname in [.js]",
+                   resource_context))
         activity_tree_handle = activity_tree_nodes[0].get("handle", "")
         loaded_activity_children = api.load_extension_tree_children(
             "selftest.activity.tree", activity_tree_handle)

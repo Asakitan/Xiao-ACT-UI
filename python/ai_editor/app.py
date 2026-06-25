@@ -10880,11 +10880,15 @@ class AIEditorAPI:
         })
 
     def _view_item_actions(
-            self, view_id: str, context_value: Any) -> List[Dict[str, Any]]:
-        return self._extension_menu_actions("view/item/context", {
+            self, view_id: str, context_value: Any,
+            node: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        context = {
             "view": str(view_id or ""),
             "viewItem": "" if context_value is None else str(context_value),
-        })
+        }
+        context.update(self._extension_resource_context(
+            (node or {}).get("resourceUri", "")))
+        return self._extension_menu_actions("view/item/context", context)
 
     def _extension_menu_actions(
             self, menu_id: str, context: Dict[str, str]) -> List[Dict[str, Any]]:
@@ -11037,28 +11041,38 @@ class AIEditorAPI:
         if negated:
             clause = clause[1:].strip()
         regex_match = re.match(
-            r"^(view|viewItem)\s*=~\s*/(.+)/(i)?$", clause)
+            r"^([A-Za-z_][\w.$-]*)\s*=~\s*/(.+)/(i)?$", clause)
         if regex_match:
             key, pattern, flags = regex_match.groups()
             try:
                 matched = re.search(
                     pattern,
-                    context.get(key, ""),
+                    str(context.get(key, "")),
                     re.IGNORECASE if flags else 0) is not None
             except re.error:
                 matched = False
             return not matched if negated else matched
+        in_match = re.match(
+            r"^([A-Za-z_][\w.$-]*)\s+(not\s+in|in)\s+(.+)$", clause)
+        if in_match:
+            key, op, raw_values = in_match.groups()
+            actual = str(context.get(key, ""))
+            values = cls._strip_when_values(raw_values)
+            matched = actual in values
+            if op.strip() == "not in":
+                matched = not matched
+            return not matched if negated else matched
         compare_match = re.match(
-            r"^(view|viewItem)\s*(==|!=|===|!==)\s*(.+)$", clause)
+            r"^([A-Za-z_][\w.$-]*)\s*(==|!=|===|!==)\s*(.+)$", clause)
         if compare_match:
             key, op, raw_expected = compare_match.groups()
             expected = cls._strip_when_value(raw_expected)
-            actual = context.get(key, "")
+            actual = str(context.get(key, ""))
             matched = actual == expected
             if op in ("!=", "!=="):
                 matched = not matched
             return not matched if negated else matched
-        if clause in {"view", "viewItem"}:
+        if re.match(r"^[A-Za-z_][\w.$-]*$", clause):
             matched = bool(context.get(clause, ""))
             return not matched if negated else matched
         # Unknown context keys should not make an action visible.
@@ -11107,6 +11121,10 @@ class AIEditorAPI:
             r"^([A-Za-z_][\w.$-]*)\s*(==|!=|===|!==)\s*.+$", text)
         if compare_match:
             return compare_match.group(1)
+        in_match = re.match(
+            r"^([A-Za-z_][\w.$-]*)\s+(?:not\s+in|in)\s+.+$", text)
+        if in_match:
+            return in_match.group(1)
         bare_match = re.match(r"^([A-Za-z_][\w.$-]*)$", text)
         if bare_match:
             return bare_match.group(1)
@@ -11119,6 +11137,40 @@ class AIEditorAPI:
                 or (value.startswith('"') and value.endswith('"'))):
             return value[1:-1]
         return value
+
+    @classmethod
+    def _strip_when_values(cls, value: str) -> set[str]:
+        text = str(value or "").strip()
+        if text.startswith("[") and text.endswith("]"):
+            text = text[1:-1]
+        values = re.split(r"\s*,\s*|\s+", text)
+        return {
+            cls._strip_when_value(item)
+            for item in values
+            if cls._strip_when_value(item)
+        }
+
+    @staticmethod
+    def _extension_resource_context(resource_uri: Any) -> Dict[str, str]:
+        text = str(resource_uri or "").strip()
+        if not text:
+            return {}
+        try:
+            parsed = urlparse(text)
+        except Exception:
+            parsed = None
+        scheme = getattr(parsed, "scheme", "") if parsed else ""
+        path_text = unquote(getattr(parsed, "path", "") or text)
+        filename = os.path.basename(path_text.replace("\\", "/"))
+        _, ext = os.path.splitext(filename)
+        return {
+            "resource": text,
+            "resourceUri": text,
+            "resourceScheme": scheme,
+            "resourceFilename": filename,
+            "resourceExtname": ext,
+            "resourceDirname": os.path.dirname(path_text).replace("\\", "/"),
+        }
 
     @staticmethod
     def _append_tree_provider_error(
@@ -11345,7 +11397,7 @@ class AIEditorAPI:
         if accessibility:
             node["accessibilityInformation"] = accessibility
         node["actions"] = self._view_item_actions(
-            view_id, node.get("contextValue", ""))
+            view_id, node.get("contextValue", ""), node)
         if tree_view is not None:
             remember = getattr(tree_view, "remember_element", None)
             if callable(remember):
