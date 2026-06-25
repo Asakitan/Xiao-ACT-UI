@@ -4677,6 +4677,15 @@ class AIEditorAPI:
                     "uri": str(document.uri),
                     "version": document.version,
                     "item": item,
+                    "cancelled": (
+                        bool(result.get("cancelled"))
+                        if isinstance(result, dict) else False),
+                    "reason": (
+                        result.get("reason")
+                        if isinstance(result, dict) else ""),
+                    "requestId": (
+                        result.get("requestId")
+                        if isinstance(result, dict) else ""),
                     "error": (
                         result.get("error")
                         if isinstance(result, dict)
@@ -4722,6 +4731,15 @@ class AIEditorAPI:
                     "uri": str(document.uri),
                     "version": document.version,
                     field: item,
+                    "cancelled": (
+                        bool(result.get("cancelled"))
+                        if isinstance(result, dict) else False),
+                    "reason": (
+                        result.get("reason")
+                        if isinstance(result, dict) else ""),
+                    "requestId": (
+                        result.get("requestId")
+                        if isinstance(result, dict) else ""),
                     "error": (
                         result.get("error")
                         if isinstance(result, dict)

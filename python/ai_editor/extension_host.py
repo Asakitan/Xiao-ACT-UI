@@ -3361,6 +3361,8 @@ class NodeExtensionHost:
                     "value": default,
                     "error": "Node language provider request was cancelled",
                     "cancelled": True,
+                    "reason": str(
+                        pending.get("cancel_reason") or "cancelled"),
                     "requestId": request_id,
                 }
             if isinstance(response, dict) and response.get("ok"):
@@ -3405,6 +3407,7 @@ class NodeExtensionHost:
             if not pending:
                 return False
             pending["cancelled"] = True
+            pending["cancel_reason"] = str(reason or "cancelled")
             event = pending.get("event")
             if isinstance(event, threading.Event):
                 event.set()

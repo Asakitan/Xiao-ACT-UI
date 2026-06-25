@@ -4299,6 +4299,9 @@ function editorProviderPayload(kind,extra){
     language:editorLang,content:value,dirty:editorDirty,offset,position:editorPositionFromOffset(value,offset)
   },extra||{});
 }
+function editorProviderResultCancelled(res){
+  return !!(res&&(res.cancelled===true||res.reason==='superseded'||res.timeout===true));
+}
 function editorOverlayPoint(position){
   const ta=ed,wrap=$('editor-container'),nums=$('line-nums');
   const style=getComputedStyle(ta),lineHeight=parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.5;
@@ -4506,10 +4509,12 @@ async function requestEditorSemanticTokens(quiet){
   const visibleRange=editorVisibleRangePayload();
   let res=await call('editor_language_provider',editorProviderPayload('semanticTokensRange',{range:visibleRange}));
   if(requestId!==_editorSemanticTokensRequest||contentSnapshot!==String(ed.value||''))return;
+  if(editorProviderResultCancelled(res))return;
   let payload=editorSemanticTokensPayloadFromResponse(res,'range',visibleRange);
   if(!payload){
     res=await call('editor_language_provider',editorProviderPayload('semanticTokens'));
     if(requestId!==_editorSemanticTokensRequest||contentSnapshot!==String(ed.value||''))return;
+    if(editorProviderResultCancelled(res))return;
     if(res&&res.error){_editorSemanticTokens=null;_editorSemanticTokensContentLength=-1;_editorSemanticTokensRangeActive=false;scheduleEditorSyntaxHighlight();if(!quiet)setStatus('Semantic tokens failed: '+res.error);return}
     payload=editorSemanticTokensPayloadFromResponse(res,'full',null);
   }
@@ -4557,6 +4562,7 @@ async function resolveEditorInlayHint(hint){
   try{
     const res=await call('editor_language_provider',editorProviderPayload('inlayHintResolve',{hint,item:hint}));
     if(res&&res.ok&&res.hint){editorMergeResolvedInlayHint(hint,res.hint);return hint}
+    if(editorProviderResultCancelled(res))return hint;
     hint._editorInlayHintResolveFailed=true;
   }catch(e){hint._editorInlayHintResolveFailed=true}
   hint._editorInlayHintResolving=false;
@@ -4613,6 +4619,7 @@ async function requestEditorInlayHints(quiet){
   const requestId=++_editorInlayHintRequest;
   const res=await call('editor_language_provider',editorProviderPayload('inlayHint',{range:editorFullRangePayload(),hintResolveCount:0}));
   if(requestId!==_editorInlayHintRequest)return;
+  if(editorProviderResultCancelled(res))return;
   if(res&&res.error){_editorInlayHints=[];renderEditorInlayHints([]);if(!quiet)setStatus('Inlay hints failed: '+res.error);return}
   _editorInlayHints=(res&&res.ok&&Array.isArray(res.hints)?res.hints:[]).filter(hint=>hint&&hint.position&&editorInlayHintLabelText(hint.label));
   renderEditorInlayHints(_editorInlayHints);
@@ -4682,6 +4689,7 @@ async function requestEditorInlineCompletions(quiet,triggerKind){
     selectedCompletionInfo:editorSelectedCompletionInfo()
   }));
   if(requestId!==_editorInlineCompletionRequest)return;
+  if(editorProviderResultCancelled(res))return;
   if(res&&res.error){_editorInlineCompletions=[];renderEditorInlineCompletion();if(!quiet)setStatus('Inline completions failed: '+res.error);return}
   _editorInlineCompletions=(res&&res.ok&&Array.isArray(res.items)?res.items:[]).filter(item=>item&&item.insertText!==undefined);
   _editorInlineCompletionIndex=0;renderEditorInlineCompletion();
@@ -4734,6 +4742,7 @@ async function resolveEditorCodeLens(lens){
   try{
     const res=await call('editor_language_provider',editorProviderPayload('codeLensResolve',{lens,item:lens}));
     if(res&&res.ok&&res.lens){editorMergeResolvedCodeLens(lens,res.lens);return lens}
+    if(editorProviderResultCancelled(res))return lens;
     lens._editorCodeLensResolveFailed=true;
   }catch(e){lens._editorCodeLensResolveFailed=true}
   lens._editorCodeLensResolving=false;
@@ -4798,6 +4807,7 @@ async function requestEditorCodeLenses(quiet){
   const requestId=++_editorCodeLensRequest;
   const res=await call('editor_language_provider',editorProviderPayload('codeLens',{itemResolveCount:0}));
   if(requestId!==_editorCodeLensRequest)return;
+  if(editorProviderResultCancelled(res))return;
   if(res&&res.error){_editorCodeLenses=[];renderEditorCodeLenses([]);if(!quiet)setStatus('CodeLens failed: '+res.error);return}
   _editorCodeLenses=(res&&res.ok&&Array.isArray(res.lenses)?res.lenses:[]).filter(lens=>lens&&lens.range&&(lens.command||lens._nodeCodeLensHandle));
   renderEditorCodeLenses(_editorCodeLenses);
@@ -5113,6 +5123,7 @@ function resolveEditorSuggestItem(item){
   item._editorSuggestResolving=true;
   return Promise.resolve(call('editor_language_provider',editorProviderPayload('completionResolve',{item}))).then(res=>{
     if(res&&res.ok&&res.item)editorMergeResolvedCompletionItem(item,res.item);
+    else if(editorProviderResultCancelled(res))return;
     else item._editorSuggestResolveFailed=true;
   }).catch(()=>{
     item._editorSuggestResolveFailed=true;
@@ -5713,6 +5724,7 @@ async function requestEditorCompletion(triggerCharacter,quiet){
     itemResolveCount:0
   }));
   if(requestId!==_editorSuggestRequest)return;
+  if(editorProviderResultCancelled(res))return;
   const items=res&&res.ok&&Array.isArray(res.items)?res.items:[];
   if(items.length){
     closeEditorHover();
@@ -5757,6 +5769,7 @@ async function requestEditorHover(){
   const requestId=++_editorHoverRequest,position=editorPositionFromOffset(ed.value,ed.selectionStart);
   const res=await call('editor_language_provider',editorProviderPayload('hover'));
   if(requestId!==_editorHoverRequest)return;
+  if(editorProviderResultCancelled(res))return;
   if(res&&res.ok&&showEditorHover(Array.isArray(res.hovers)?res.hovers:[],position))return;
   closeEditorHover();
 }
@@ -5848,6 +5861,7 @@ async function requestEditorSignatureHelp(triggerCharacter,triggerKind,quiet){
     activeSignatureHelp:_editorActiveSignatureHelp
   }));
   if(requestId!==_editorSignatureRequest)return;
+  if(editorProviderResultCancelled(res))return;
   const help=res&&res.ok?res.signatureHelp:null;
   if(help&&Array.isArray(help.signatures)&&help.signatures.length){
     closeEditorHover();showEditorSignatureHelp(help,position);return;
@@ -5914,6 +5928,7 @@ async function resolveEditorCodeAction(action){
   try{
     const res=await call('editor_language_provider',editorProviderPayload('codeActionResolve',{action,item:action}));
     if(res&&res.ok&&res.action){editorMergeResolvedCodeAction(action,res.action);return action}
+    if(editorProviderResultCancelled(res))return action;
     action._editorCodeActionResolveFailed=true;
   }catch(e){action._editorCodeActionResolveFailed=true}
   action._editorCodeActionResolving=false;
@@ -6418,6 +6433,7 @@ async function requestEditorDocumentHighlights(quiet){
   const contentLength=String(ed.value||'').length;
   const res=await call('editor_language_provider',editorProviderPayload('documentHighlight'));
   if(requestId!==_editorDocumentHighlightRequest||contentLength!==String(ed.value||'').length)return;
+  if(editorProviderResultCancelled(res))return;
   if(res&&res.error){_editorDocumentHighlights=[];_editorDocumentHighlightContentLength=-1;renderEditorDocumentHighlights([]);if(!quiet)setStatus('Document highlights failed: '+res.error);return}
   _editorDocumentHighlights=(res&&res.ok&&Array.isArray(res.highlights)?res.highlights:[])
     .map(normalizeEditorDocumentHighlight).filter(Boolean);
@@ -6809,6 +6825,7 @@ async function resolveEditorDocumentLink(link){
   try{
     const res=await call('editor_language_provider',editorProviderPayload('documentLinkResolve',{link,item:link}));
     if(res&&res.ok&&res.link){editorMergeResolvedDocumentLink(link,res.link);return link}
+    if(editorProviderResultCancelled(res))return link;
     link._editorDocumentLinkResolveFailed=true;
   }catch(e){link._editorDocumentLinkResolveFailed=true}
   link._editorDocumentLinkResolving=false;
@@ -7436,6 +7453,7 @@ async function fetchEditorCodeActionsForKind(only,range){
   const payload={range:actionRange,itemResolveCount:0,triggerKind:1,diagnostics:editorDiagnosticsForRange(actionRange)};
   if(only)payload.only=only;
   const res=await call('editor_language_provider',editorProviderPayload('codeActions',payload));
+  if(editorProviderResultCancelled(res))return {cancelled:true,actions:[]};
   if(res&&res.error)return {error:res.error,actions:[]};
   return {actions:(res&&res.ok&&Array.isArray(res.actions)?res.actions:[]).filter(action=>!!action)};
 }
@@ -7445,6 +7463,7 @@ async function requestEditorCodeActionsForKind(quiet,only,label){
   const actionLabel=label||'code action';
   const res=await fetchEditorCodeActionsForKind(only,range);
   if(requestId!==_editorCodeActionRequest)return;
+  if(res&&res.cancelled)return;
   if(res&&res.error){closeEditorCodeActions();if(!quiet)setStatus(actionLabel+'s failed: '+res.error);return}
   const actions=Array.isArray(res&&res.actions)?res.actions:[];
   if(actions.length){
@@ -8179,6 +8198,7 @@ async function runEditorCodeActionsOnSave(options){
   const range=editorFullRangePayload();
   for(const kind of kinds){
     const res=await fetchEditorCodeActionsForKind(kind,range);
+    if(res&&res.cancelled)continue;
     if(res&&res.error){setStatus('Code actions on save failed: '+res.error);continue}
     for(const action of (res&&res.actions)||[]){
       if(await applyEditorCodeActionForSave(action))changed=true;

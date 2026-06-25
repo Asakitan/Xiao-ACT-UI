@@ -14791,6 +14791,8 @@ module.exports = { activate, deactivate };
                 _check("node host language provider cancels superseded requests",
                        first_cancel_result.get("result", {}).get("cancelled")
                        is True
+                       and first_cancel_result.get("result", {}).get("reason")
+                       == "superseded"
                        and second_cancel_result.get("ok") is True
                        and cancel_state.get("started", 0) >= 2
                        and cancel_state.get("cancelled", 0) >= 1,
