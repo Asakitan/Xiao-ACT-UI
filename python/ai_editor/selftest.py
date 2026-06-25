@@ -13062,9 +13062,33 @@ def test_vscode_api() -> None:
     stream2.warning("Be careful")
     stream2.info("FYI")
     stream2.progress("Working...")
-    stream2.filetree({"items": []})
+    stream2.reference("file:///workspace/ref.py")
+    stream2.reference2("file:///workspace/ref2.py", None, {"status": "included"})
+    stream2.filetree({"items": [{"label": "src", "children": []}]}, "file:///workspace")
+    stream2.text_edit(
+        "file:///workspace/ref.py",
+        [{"range": {"start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 0}},
+          "newText": "patched"}])
+    stream2.push({"kind": "reference", "uri": "file:///workspace/pushed.py"})
     stream2.thinking_progress("hmm...")
+    stream2_payload = stream2.to_payload()
+    stream2_kinds = [
+        str(item.get("kind", ""))
+        for item in stream2_payload.get("responseParts", [])
+        if isinstance(item, dict)
+    ]
     _check("stream.anchor+warn+info", "Example" in stream2.get_content() and "careful" in stream2.get_content())
+    _check("ChatResponseStream emits VS Code-style response parts",
+           "anchor" in stream2_kinds
+           and "reference" in stream2_kinds
+           and "fileTree" in stream2_kinds
+           and "textEdit" in stream2_kinds
+           and len(stream2_payload.get("contentReferences", [])) >= 3
+           and len(stream2_payload.get("fileTrees", [])) == 1
+           and len(stream2_payload.get("textEdits", [])) == 1
+           and stream2_payload.get("response_parts") == stream2_payload.get("responseParts")
+           and stream2_payload.get("content_references") == stream2_payload.get("contentReferences"))
 
     # ChatRequest extended fields
     req2 = ChatRequest(prompt="test", tool_references=[{"name": "tool1"}],
@@ -16911,6 +16935,21 @@ async function activate(context) {
     'selftest.node.dynamicParticipant',
     (request, context, response) => {
       response.markdown('node-chat:' + request.prompt);
+      response.anchor(vscode.Uri.parse('file:///workspace/anchor.md'), 'Anchor File');
+      response.reference(vscode.Uri.parse('file:///workspace/ref.md'));
+      response.reference2(
+        vscode.Uri.parse('file:///workspace/ref2.md'),
+        undefined,
+        { status: 'included' },
+      );
+      response.filetree(
+        [{ name: 'src', children: [{ name: 'index.ts' }] }],
+        vscode.Uri.parse('file:///workspace'),
+      );
+      response.textEdit(
+        vscode.Uri.parse('file:///workspace/ref.md'),
+        [vscode.TextEdit.insert(new vscode.Position(0, 0), 'patched')],
+      );
       return { handled: true, participant: context.participant };
     },
   );
@@ -23869,11 +23908,32 @@ module.exports = { activate, deactivate };
                            "text") == "node-tool:from-python"
                        and isinstance(node_dynamic_chat_result, dict)
                        and node_dynamic_chat_result.get("content")
-                       == "node-chat:from-python",
+                       == "node-chat:from-pythonAnchor File",
                        json.dumps({
                            "tool": node_dynamic_tool_result,
                            "chat": node_dynamic_chat_result,
                        }, ensure_ascii=False))
+                node_chat_part_kinds = {
+                    item.get("kind")
+                    for item in node_dynamic_chat_result.get("responseParts", [])
+                    if isinstance(item, dict)
+                } if isinstance(node_dynamic_chat_result, dict) else set()
+                _check("node host preserves native chat response parts",
+                       node_started is True
+                       and isinstance(node_dynamic_chat_result, dict)
+                       and node_dynamic_chat_result.get("response_parts")
+                       == node_dynamic_chat_result.get("responseParts")
+                       and {"anchor", "reference", "fileTree", "textEdit"}.issubset(
+                           node_chat_part_kinds)
+                       and len(node_dynamic_chat_result.get(
+                           "contentReferences", [])) >= 2
+                       and len(node_dynamic_chat_result.get("fileTrees", [])) == 1
+                       and len(node_dynamic_chat_result.get("textEdits", [])) == 1
+                       and (node_dynamic_chat_result.get(
+                           "contentReferences", [{}])[1].get("status")
+                            == "included"),
+                       json.dumps(node_dynamic_chat_result,
+                                  ensure_ascii=False, default=str))
                 _check("node host tree provider registers dynamic activity view",
                        node_started is True
                        and sent is True

@@ -8439,6 +8439,8 @@ class AIEditorAPI:
             content = value.get("content")
             if content:
                 stream.markdown(str(content))
+            if hasattr(stream, "extend_payload"):
+                stream.extend_payload(value)
             return value.get("result")
         if value:
             stream.markdown(str(value))
@@ -12848,8 +12850,10 @@ class AIEditorAPI:
         stream = ChatResponseStream(lambda kind, val: parts.append(val))
         try:
             result = cp.request_handler(req, ctx, stream, None)
-            return {"ok": True, "content": stream.get_content(),
-                    "result": str(result) if result else None}
+            payload = stream.to_payload()
+            payload["ok"] = True
+            payload["result"] = str(result) if result else None
+            return payload
         except Exception as exc:
             return {"error": str(exc)}
 

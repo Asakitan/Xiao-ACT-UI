@@ -479,108 +479,219 @@ class ChatResponseStream:
     def __init__(self, callback: Callable = None) -> None:
         self._parts: List[str] = []
         self._callback = callback
+        self._response_parts: List[Dict[str, Any]] = []
+        self._content_references: List[Dict[str, Any]] = []
+        self._file_trees: List[Dict[str, Any]] = []
+        self._text_edits: List[Dict[str, Any]] = []
+
+    def _emit(self, kind: str, value: Any) -> None:
+        if self._callback:
+            self._callback(kind, value)
+
+    def _record_response_part(self, part: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = _plain_json_value(part)
+        if isinstance(normalized, dict):
+            kind = str(normalized.get("kind") or normalized.get("type") or "")
+            if kind and "kind" not in normalized:
+                normalized["kind"] = kind
+            self._response_parts.append(normalized)
+            self._emit("responsePart", normalized)
+            return normalized
+        fallback = {"kind": "text", "value": str(normalized)}
+        self._response_parts.append(fallback)
+        self._emit("responsePart", fallback)
+        return fallback
+
+    def _record_content_reference(self, reference: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = _plain_json_value(reference)
+        if isinstance(normalized, dict):
+            self._content_references.append(normalized)
+            self._emit("contentReference", normalized)
+            return normalized
+        fallback = {"uri": str(normalized)}
+        self._content_references.append(fallback)
+        self._emit("contentReference", fallback)
+        return fallback
+
+    def _record_file_tree(self, tree: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = _plain_json_value(tree)
+        if isinstance(normalized, dict):
+            self._file_trees.append(normalized)
+            self._emit("filetree", normalized)
+            return normalized
+        fallback = {"value": normalized}
+        self._file_trees.append(fallback)
+        self._emit("filetree", fallback)
+        return fallback
+
+    def _record_text_edit(self, edit: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = _plain_json_value(edit)
+        if isinstance(normalized, dict):
+            self._text_edits.append(normalized)
+            self._emit("textEdit", normalized)
+            return normalized
+        fallback = {"target": str(normalized), "edits": []}
+        self._text_edits.append(fallback)
+        self._emit("textEdit", fallback)
+        return fallback
 
     def markdown(self, value: str) -> None:
         self._parts.append(value)
-        if self._callback:
-            self._callback("markdown", value)
+        self._emit("markdown", value)
 
     def text(self, value: str) -> None:
         self._parts.append(value)
-        if self._callback:
-            self._callback("text", value)
+        self._emit("text", value)
 
     def anchor(self, value: Any, title: str = "") -> None:
         label = title or str(value)
         self._parts.append(f"[{label}]({value})")
-        if self._callback:
-            self._callback("anchor", {"uri": str(value), "title": title})
+        payload = {"kind": "anchor", "value": _plain_json_value(value),
+                   "uri": _plain_json_value(value), "title": title}
+        self._record_response_part(payload)
+        self._emit("anchor", {"uri": str(value), "title": title})
 
     def button(self, command: Any) -> None:
-        if self._callback:
-            self._callback("button", command)
+        self._emit("button", command)
 
     def progress(self, value: str) -> None:
-        if self._callback:
-            self._callback("progress", value)
+        self._emit("progress", value)
 
     def warning(self, value: str) -> None:
         self._parts.append(f"⚠ {value}")
-        if self._callback:
-            self._callback("warning", value)
+        self._emit("warning", value)
 
     def reference(self, uri: Any, icon_path: Any = None) -> None:
-        if self._callback:
-            self._callback("reference", str(uri))
+        payload = {"kind": "reference", "value": _plain_json_value(uri),
+                   "uri": _plain_json_value(uri)}
+        if icon_path is not None:
+            payload["iconPath"] = _plain_json_value(icon_path)
+        self._record_response_part(payload)
+        self._record_content_reference(payload)
+        self._emit("reference", str(uri))
 
     def reference2(self, uri: Any, icon_path: Any = None,
                     options: Dict = None) -> None:
-        if self._callback:
-            self._callback("reference", str(uri))
+        payload = {"kind": "reference", "value": _plain_json_value(uri),
+                   "uri": _plain_json_value(uri)}
+        if icon_path is not None:
+            payload["iconPath"] = _plain_json_value(icon_path)
+        if options:
+            payload["options"] = _plain_json_value(options)
+            status = options.get("status") if isinstance(options, dict) else None
+            if status is not None:
+                payload["status"] = _plain_json_value(status)
+        self._record_response_part(payload)
+        self._record_content_reference(payload)
+        self._emit("reference", str(uri))
 
     def filetree(self, value: Any, base_uri: Any = None) -> None:
-        if self._callback:
-            self._callback("filetree", {"value": value, "baseUri": str(base_uri) if base_uri else ""})
+        payload = {"kind": "fileTree", "value": _plain_json_value(value)}
+        if base_uri is not None:
+            payload["baseUri"] = _plain_json_value(base_uri)
+        self._record_response_part(payload)
+        self._record_file_tree(payload)
 
     def codeblock_uri(self, value: Any, is_edit: bool = False) -> None:
-        if self._callback:
-            self._callback("codeblockUri", {"uri": str(value), "isEdit": is_edit})
+        self._emit("codeblockUri", {"uri": str(value), "isEdit": is_edit})
 
     def code_citation(self, value: Any, license: str = "",
                        snippet: str = "") -> None:
-        if self._callback:
-            self._callback("codeCitation", {"uri": str(value), "license": license, "snippet": snippet})
+        self._emit("codeCitation", {"uri": str(value), "license": license, "snippet": snippet})
 
     def text_edit(self, target: Any, edits: Any = None) -> None:
-        if self._callback:
-            self._callback("textEdit", {"target": str(target), "edits": edits})
+        payload = {"kind": "textEdit", "target": _plain_json_value(target),
+                   "uri": _plain_json_value(target),
+                   "edits": _plain_json_value(edits or [])}
+        self._record_response_part(payload)
+        self._record_text_edit(payload)
 
     def confirmation(self, title: str = "", message: str = "",
                       data: Any = None, buttons: List[str] = None) -> None:
-        if self._callback:
-            self._callback("confirmation", {"title": title, "message": message,
-                                             "data": data, "buttons": buttons or []})
+        self._emit("confirmation", {"title": title, "message": message,
+                                    "data": data, "buttons": buttons or []})
 
     def info(self, value: str) -> None:
         self._parts.append(f"ℹ {value}")
-        if self._callback:
-            self._callback("info", value)
+        self._emit("info", value)
 
     def usage(self, value: Dict[str, int] = None) -> None:
-        if self._callback:
-            self._callback("usage", value or {})
+        self._emit("usage", value or {})
 
     def notebook_edit(self, target: Any, edits: Any = None) -> None:
-        if self._callback:
-            self._callback("notebookEdit", {"target": str(target), "edits": edits})
+        self._emit("notebookEdit", {"target": str(target), "edits": edits})
 
     def workspace_edit(self, edits: Any = None) -> None:
-        if self._callback:
-            self._callback("workspaceEdit", {"edits": edits})
+        self._emit("workspaceEdit", {"edits": edits})
 
     def thinking_progress(self, thinking_delta: str = "") -> None:
-        if self._callback:
-            self._callback("thinkingProgress", thinking_delta)
+        self._emit("thinkingProgress", thinking_delta)
 
     def begin_tool_invocation(self, tool_call_id: str = "",
                                tool_name: str = "",
                                stream_data: Any = None) -> None:
-        if self._callback:
-            self._callback("beginToolInvocation", {
-                "toolCallId": tool_call_id, "toolName": tool_name,
-                "streamData": stream_data})
+        self._emit("beginToolInvocation", {
+            "toolCallId": tool_call_id, "toolName": tool_name,
+            "streamData": stream_data})
 
     def update_tool_invocation(self, tool_call_id: str = "",
                                 stream_data: Any = None) -> None:
-        if self._callback:
-            self._callback("updateToolInvocation", {
-                "toolCallId": tool_call_id, "streamData": stream_data})
+        self._emit("updateToolInvocation", {
+            "toolCallId": tool_call_id, "streamData": stream_data})
 
     def push(self, part: Any) -> None:
+        if isinstance(part, dict):
+            kind = str(part.get("kind") or part.get("type") or "")
+            if kind:
+                normalized = self._record_response_part(part)
+                lower = kind.lower()
+                if lower in {"reference", "chatresponsereferencepart"}:
+                    self._record_content_reference(normalized)
+                elif lower in {"filetree", "file_tree", "chatresponsefiletreepart"}:
+                    self._record_file_tree(normalized)
+                elif lower in {"textedit", "text_edit", "chatresponsetexteditpart"}:
+                    self._record_text_edit(normalized)
+                text = part.get("text") or part.get("markdown") or part.get("content")
+                if text is not None:
+                    self._parts.append(str(text))
+                return
         self._parts.append(str(part))
+
+    def extend_payload(self, payload: Dict[str, Any]) -> None:
+        if not isinstance(payload, dict):
+            return
+        for part in payload.get("responseParts") or payload.get("response_parts") or []:
+            if isinstance(part, dict):
+                self._record_response_part(part)
+            else:
+                self.push(part)
+        for ref in (payload.get("contentReferences")
+                    or payload.get("content_references")
+                    or payload.get("responseReferences")
+                    or payload.get("response_references")
+                    or []):
+            self._record_content_reference(ref)
+        for tree in payload.get("fileTrees") or payload.get("file_trees") or []:
+            self._record_file_tree(tree)
+        for edit in payload.get("textEdits") or payload.get("text_edits") or []:
+            self._record_text_edit(edit)
 
     def get_content(self) -> str:
         return "".join(self._parts)
+
+    def to_payload(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "content": self.get_content(),
+            "responseParts": list(self._response_parts),
+            "response_parts": list(self._response_parts),
+            "contentReferences": list(self._content_references),
+            "content_references": list(self._content_references),
+            "fileTrees": list(self._file_trees),
+            "file_trees": list(self._file_trees),
+            "textEdits": list(self._text_edits),
+            "text_edits": list(self._text_edits),
+        }
+        return payload
 
 
 @dataclass
@@ -618,7 +729,9 @@ class ChatParticipant:
         ctx = ChatContext()
         stream = ChatResponseStream()
         result = self.request_handler(req, ctx, stream, token)
-        return {"content": stream.get_content(), "result": result}
+        payload = stream.to_payload()
+        payload["result"] = result
+        return payload
 
     @property
     def on_did_receive_feedback(self):

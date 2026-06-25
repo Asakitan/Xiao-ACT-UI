@@ -3043,33 +3043,118 @@ function _chatPartToText(part) {
 }
 
 function _createChatResponseStream(parts) {
+    const responseParts = [];
+    const contentReferences = [];
+    const fileTrees = [];
+    const textEdits = [];
     const append = (value) => {
         const text = _chatPartToText(value);
         parts.push(text);
         return text;
     };
-    return {
+    const pushResponsePart = (part) => {
+        const normalized = _serializeLanguageValue(part);
+        if (normalized && typeof normalized === 'object') {
+            if (!normalized.kind && normalized.type) normalized.kind = String(normalized.type);
+            responseParts.push(normalized);
+            return normalized;
+        }
+        const fallback = { kind: 'text', value: normalized === undefined || normalized === null ? '' : String(normalized) };
+        responseParts.push(fallback);
+        return fallback;
+    };
+    const recordReference = (value, iconPath, options) => {
+        const part = {
+            kind: 'reference',
+            value: _serializeLanguageValue(value),
+            uri: _serializeLanguageUri(value),
+        };
+        if (iconPath !== undefined && iconPath !== null) part.iconPath = _serializeLanguageValue(iconPath);
+        if (options !== undefined && options !== null) {
+            part.options = _serializeLanguageValue(options);
+            if (options && typeof options === 'object' && options.status !== undefined) {
+                part.status = _serializeLanguageValue(options.status);
+            }
+        }
+        const normalized = pushResponsePart(part);
+        contentReferences.push(normalized);
+        return normalized;
+    };
+    const recordFileTree = (value, baseUri) => {
+        const part = {
+            kind: 'fileTree',
+            value: _serializeLanguageValue(value),
+        };
+        if (baseUri !== undefined && baseUri !== null) part.baseUri = _serializeLanguageValue(baseUri);
+        const normalized = pushResponsePart(part);
+        fileTrees.push(normalized);
+        return normalized;
+    };
+    const recordTextEdit = (target, edits) => {
+        const part = {
+            kind: 'textEdit',
+            target: _serializeLanguageValue(target),
+            uri: _serializeLanguageUri(target),
+            edits: _serializeLanguageValue(edits || []),
+        };
+        const normalized = pushResponsePart(part);
+        textEdits.push(normalized);
+        return normalized;
+    };
+    const push = (part) => {
+        if (part && typeof part === 'object' && !(part instanceof Uri)) {
+            const kind = String(part.kind || part.type || part.constructor?.name || '');
+            if (kind) {
+                const normalized = pushResponsePart(Object.assign({ kind }, _serializeLanguageValue(part)));
+                const lower = kind.toLowerCase();
+                if (lower.includes('reference')) contentReferences.push(normalized);
+                else if (lower.includes('filetree')) fileTrees.push(normalized);
+                else if (lower.includes('textedit')) textEdits.push(normalized);
+                const text = part.text ?? part.markdown ?? part.content ?? part.value;
+                if (text !== undefined && text !== null && lower.includes('markdown')) append(text);
+                return normalized;
+            }
+        }
+        append(part);
+        return part;
+    };
+    const stream = {
         markdown: append,
         text: append,
         progress() {},
         warning: append,
         info: append,
-        anchor(value, title) { append(title || value); },
+        anchor(value, title) {
+            append(title || value);
+            return pushResponsePart({
+                kind: 'anchor',
+                value: _serializeLanguageValue(value),
+                uri: _serializeLanguageUri(value),
+                title: title === undefined || title === null ? '' : String(title),
+            });
+        },
         button() {},
-        reference() {},
-        reference2() {},
-        filetree() {},
+        reference: recordReference,
+        reference2: recordReference,
+        filetree: recordFileTree,
         codeblockUri(value) { append(value); },
         codeCitation(value) { append(value); },
-        textEdit() {},
+        textEdit: recordTextEdit,
         confirmation() {},
         notebookEdit() {},
         workspaceEdit() {},
         thinkingProgress: append,
         beginToolInvocation() {},
         updateToolInvocation() {},
-        push: append,
+        push,
     };
+    Object.defineProperties(stream, {
+        _responseParts: { value: responseParts },
+        _contentReferences: { value: contentReferences },
+        _fileTrees: { value: fileTrees },
+        _textEdits: { value: textEdits },
+    });
+    return stream;
 }
 
 function _normalizeProgressOptions(options) {
@@ -9960,6 +10045,14 @@ async function handleChatParticipantRequest(msg) {
             ok: true,
             value: {
                 content: parts.join(''),
+                responseParts: stream._responseParts || [],
+                response_parts: stream._responseParts || [],
+                contentReferences: stream._contentReferences || [],
+                content_references: stream._contentReferences || [],
+                fileTrees: stream._fileTrees || [],
+                file_trees: stream._fileTrees || [],
+                textEdits: stream._textEdits || [],
+                text_edits: stream._textEdits || [],
                 result: result === undefined ? null : _serializeLanguageValue(result),
             },
         });
