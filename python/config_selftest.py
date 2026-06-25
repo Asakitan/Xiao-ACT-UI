@@ -6,8 +6,41 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import traceback
 
 from config import SettingsManager
+
+_FAILURE_DETAIL_LINE_LIMIT = 80
+_FINAL_FAILURE_POINT_HEADING = "FAILED CHECK POINTS (final):"
+
+
+def _failure_detail_tail(detail: str) -> list[str]:
+    lines = str(detail or "").splitlines()
+    if len(lines) <= _FAILURE_DETAIL_LINE_LIMIT:
+        return lines
+    omitted = len(lines) - _FAILURE_DETAIL_LINE_LIMIT
+    return [f"... omitted {omitted} earlier detail lines ...", *lines[-_FAILURE_DETAIL_LINE_LIMIT:]]
+
+
+def _failure_point_reason(exc: BaseException) -> str:
+    message = str(exc).strip()
+    if message:
+        first_line = message.splitlines()[0].strip()
+        if first_line:
+            return first_line
+    return f"{type(exc).__name__} without detail"
+
+
+def _print_final_failed_check_points(exc: BaseException, detail: str) -> None:
+    print()
+    print("=" * 50)
+    print(_FINAL_FAILURE_POINT_HEADING)
+    print(f"  1. {type(exc).__name__}: {_failure_point_reason(exc)}")
+    detail_lines = _failure_detail_tail(detail)
+    if detail_lines:
+        print("     detail:")
+        for line in detail_lines:
+            print(f"       {line}")
 
 
 def run_selftest() -> dict:
@@ -32,8 +65,16 @@ def run_selftest() -> dict:
 
 
 def main() -> int:
-    print(json.dumps(run_selftest(), ensure_ascii=False, indent=2))
-    return 0
+    try:
+        print(json.dumps(run_selftest(), ensure_ascii=False, indent=2))
+        return 0
+    except Exception as exc:
+        print(json.dumps({
+            "ok": False,
+            "failure_points_deferred": True,
+        }, ensure_ascii=False, indent=2))
+        _print_final_failed_check_points(exc, traceback.format_exc().rstrip())
+        return 1
 
 
 if __name__ == "__main__":
