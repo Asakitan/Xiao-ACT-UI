@@ -2052,6 +2052,7 @@ const _textDocumentContentProviders = new Map(); // scheme -> { provider, extens
 const _uriHandlers = new Map();          // extensionId -> { handler }
 const _languageProviders = [];           // { kind, selector, provider, triggers?, disposable }
 const _languageProviderRequests = new Map(); // requestId -> CancellationTokenSource
+const _languageStatusItems = new Map();  // fullyQualifiedId -> language status state
 const _fileDecorationProviders = [];     // { handle, extensionId, provider, disposable? }
 const _fileDecorationRequests = new Map(); // requestId -> CancellationTokenSource
 const _scmQuickDiffRequests = new Map(); // requestId -> CancellationTokenSource
@@ -2061,6 +2062,7 @@ const _runtimeLanguageConfigurations = new Map(); // languageId -> [{ handle, co
 const _lmTools = new Map();              // name -> { handle, tool, extensionId, metadata }
 const _chatParticipants = new Map();     // id -> { handle, handler, extensionId }
 let _nextLanguageProviderHandle = 1;
+let _nextLanguageStatusHandle = 1;
 let _nextFileDecorationProviderHandle = 1;
 let _nextLanguageConfigurationHandle = 1;
 let _nextLmToolHandle = 1;
@@ -6697,6 +6699,135 @@ function _createStatusBarItemObject(id, alignment, priority) {
     return item;
 }
 
+function _languageStatusSeverity(value) {
+    const n = Number(value);
+    if (n === 2) return 2;
+    if (n === 1) return 1;
+    return 0;
+}
+
+function _languageStatusLabel(value) {
+    if (value === undefined || value === null) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'value')) {
+        return {
+            value: String(value.value ?? ''),
+            shortValue: value.shortValue === undefined || value.shortValue === null
+                ? ''
+                : String(value.shortValue),
+        };
+    }
+    return String(value);
+}
+
+function _languageStatusSource(extDesc, name) {
+    return String(
+        name
+        || extDesc.manifest?.displayName
+        || extDesc.displayName
+        || extDesc.name
+        || extDesc.extensionId
+        || 'Extension');
+}
+
+function _createLanguageStatusItemObject(extDesc, id, selector) {
+    const itemId = String(id || '');
+    if (!itemId) throw new Error('LanguageStatusItem id is required');
+    const extensionId = String(extDesc.extensionId || extDesc.name || 'extension');
+    const fullyQualifiedId = `${extensionId}/${itemId}`;
+    if (_languageStatusItems.has(fullyQualifiedId)) {
+        throw new Error(`LanguageStatusItem with id '${itemId}' ALREADY exists`);
+    }
+    const state = {
+        handle: _nextLanguageStatusHandle++,
+        id: itemId,
+        fullyQualifiedId,
+        extensionId,
+        selector,
+        source: _languageStatusSource(extDesc, ''),
+        name: _languageStatusSource(extDesc, ''),
+        severity: 0,
+        text: '',
+        detail: '',
+        command: undefined,
+        accessibilityInformation: undefined,
+        busy: false,
+        disposed: false,
+        updateTimer: null,
+    };
+    _languageStatusItems.set(fullyQualifiedId, state);
+
+    function payload() {
+        return {
+            type: 'language_status_set',
+            handle: state.handle,
+            id: state.fullyQualifiedId,
+            itemId: state.id,
+            extensionId: state.extensionId,
+            source: state.source,
+            name: String(state.name || state.source),
+            selector: _serializeLanguageValue(state.selector),
+            label: _languageStatusLabel(state.text),
+            text: _languageStatusLabel(state.text),
+            detail: state.detail === undefined || state.detail === null
+                ? ''
+                : String(state.detail),
+            severity: _languageStatusSeverity(state.severity),
+            command: _statusBarCommand(state.command),
+            accessibilityInfo: _statusBarAccessibility(state.accessibilityInformation),
+            accessibilityInformation: _statusBarAccessibility(state.accessibilityInformation),
+            busy: !!state.busy,
+        };
+    }
+
+    function scheduleUpdate() {
+        if (state.disposed) {
+            console.warn(`LanguageStatusItem (${itemId}) from ${extensionId} has been disposed and CANNOT be updated anymore`);
+            return;
+        }
+        if (state.updateTimer) clearTimeout(state.updateTimer);
+        state.updateTimer = setTimeout(() => {
+            state.updateTimer = null;
+            if (!state.disposed && _languageStatusItems.get(fullyQualifiedId) === state) {
+                send(payload());
+            }
+        }, 0);
+    }
+
+    const item = {};
+    Object.defineProperty(item, 'id', { enumerable: true, get() { return state.id; } });
+    ['name', 'selector', 'text', 'detail', 'severity', 'command',
+     'accessibilityInformation', 'busy'].forEach(prop => {
+        Object.defineProperty(item, prop, {
+            enumerable: true,
+            get() { return state[prop]; },
+            set(value) {
+                if (prop === 'severity') state[prop] = _languageStatusSeverity(value);
+                else if (prop === 'busy') state[prop] = !!value;
+                else state[prop] = value;
+                scheduleUpdate();
+            },
+        });
+    });
+    item.dispose = () => {
+        if (state.disposed) return;
+        state.disposed = true;
+        if (state.updateTimer) {
+            clearTimeout(state.updateTimer);
+            state.updateTimer = null;
+        }
+        _languageStatusItems.delete(fullyQualifiedId);
+        send({
+            type: 'language_status_remove',
+            handle: state.handle,
+            id: state.fullyQualifiedId,
+            itemId: state.id,
+            extensionId: state.extensionId,
+        });
+    };
+    return item;
+}
+
 function _authProviderMethod(provider, names) {
     for (const name of names) {
         if (provider && typeof provider[name] === 'function') {
@@ -6964,6 +7095,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         ExtensionKind: { UI: 1, Workspace: 2 },
         ExtensionMode: { Production: 1, Development: 2, Test: 3 },
         DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2, Hint: 3 },
+        LanguageStatusSeverity: { Information: 0, Warning: 1, Error: 2 },
         NotebookCellKind,
         DocumentHighlightKind: { Text: 0, Read: 1, Write: 2 },
         ProgressLocation,
@@ -7767,6 +7899,9 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 },
                 setLanguageConfiguration(language, configuration) {
                     return _setLanguageConfiguration(language, configuration);
+                },
+                createLanguageStatusItem(id, selector) {
+                    return _createLanguageStatusItemObject(extDesc, id, selector);
                 },
                 registerDocumentFormattingEditProvider(selector, provider) {
                     return _registerLangProvider('formatting', selector, provider);

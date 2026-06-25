@@ -804,6 +804,12 @@ pre.code-block code .type { color:var(--fg-type); }
 .editor-language-status.empty, .editor-language-status.cancelled { color:var(--fg-dim); }
 .editor-language-status.warning { color:var(--fg-warning); }
 .editor-language-status.error { color:var(--fg-error); }
+.language-status-item { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg-dim); }
+.language-status-item.info { color:var(--fg-dim); }
+.language-status-item.warning { color:var(--fg-warning); }
+.language-status-item.error { color:var(--fg-error); }
+.language-status-item.busy { color:var(--fg-accent); animation:languageStatusPulse 1.1s ease-in-out infinite; }
+@keyframes languageStatusPulse { 0%,100%{opacity:.72} 50%{opacity:1} }
 
 /* ── Settings modal ── */
 .modal-bg { position:fixed; inset:0; background:#00000060; display:none;
@@ -2326,6 +2332,8 @@ window._onEditorEvent=function(event,data){
   else if(event==='dispose_status_bar_item'){_removeExtStatusBarItem(data.id)}
   else if(event==='show_status_bar_item'){_upsertExtStatusBarItem(data)}
   else if(event==='hide_status_bar_item'){_removeExtStatusBarItem(data.id)}
+  else if(event==='show_language_status_item'){_upsertLanguageStatusItem(data)}
+  else if(event==='remove_language_status_item'){_removeLanguageStatusItem(data.id)}
 };
 
 // ── LN-05+LN-09: Layout persistence ──
@@ -13071,6 +13079,76 @@ function _removeExtStatusBarItem(id){
   const el=document.getElementById('sb-ext-'+id);
   if(el)el.remove();
   delete _extStatusBarItems[id];
+}
+const _languageStatusItems={};
+function _languageStatusSeverityClass(value){
+  const n=Number(value);
+  if(n>=2)return 'error';
+  if(n===1)return 'warning';
+  return 'info';
+}
+function _languageStatusSortValue(data){
+  const severity=Number(data&&data.severity)||0;
+  const source=String((data&&(data.source||data.name||data.extensionId))||'');
+  const id=String((data&&data.id)||'');
+  return {severity,source,id};
+}
+function _placeLanguageStatusItem(el,id){
+  const container=$('sb-ext-right');if(!container)return;
+  const current=_languageStatusItems[id]||{};
+  const score=_languageStatusSortValue(current);
+  if(el.parentElement!==container)container.appendChild(el);
+  const peers=Array.from(container.children).filter(child=>child!==el&&child.classList.contains('language-status-item'));
+  let inserted=false;
+  for(const child of peers){
+    const cid=child.id.replace('sb-lang-status-','');
+    const other=_languageStatusSortValue(_languageStatusItems[cid]||{});
+    if(score.severity>other.severity
+       || (score.severity===other.severity&&score.source.localeCompare(other.source)<0)
+       || (score.severity===other.severity&&score.source===other.source&&score.id.localeCompare(other.id)<0)){
+      container.insertBefore(el,child);inserted=true;break;
+    }
+  }
+  if(!inserted){
+    const firstExt=Array.from(container.children).find(child=>!child.classList.contains('language-status-item'));
+    if(firstExt)container.insertBefore(el,firstExt);else container.appendChild(el);
+  }
+}
+function _upsertLanguageStatusItem(data){
+  if(!data||!data.id)return;
+  const id=String(data.id);
+  _languageStatusItems[id]=data;
+  let el=document.getElementById('sb-lang-status-'+id);
+  if(!el){
+    el=document.createElement('span');
+    el.id='sb-lang-status-'+id;
+  }
+  const severityClass=_languageStatusSeverityClass(data.severity);
+  const text=_extStatusBarText(data.label!==undefined?data.label:data.text);
+  const source=_extStatusBarText(data.source||data.name||data.extensionId);
+  const detail=_extStatusBarText(data.detail);
+  el.className='sb-item language-status-item '+severityClass+(data.busy?' busy':'');
+  el.textContent=text||source||id;
+  el.title=[source,detail].filter(Boolean).join(' - ')||el.textContent;
+  el.dataset.source=source;
+  el.dataset.severity=String(Number(data.severity)||0);
+  el.dataset.busy=data.busy?'true':'false';
+  const accessibility=data.accessibilityInfo||data.accessibilityInformation||{};
+  const ariaLabel=_extStatusBarText(accessibility.label)||el.title;
+  if(ariaLabel)el.setAttribute('aria-label',ariaLabel);else el.removeAttribute('aria-label');
+  const role=_extStatusBarText(accessibility.role);
+  if(role)el.setAttribute('role',role);else el.removeAttribute('role');
+  const command=_extStatusBarCommand(data);
+  el.style.cursor=command?'pointer':'default';
+  el.onclick=command?()=>{if(window.pywebview&&window.pywebview.api)window.pywebview.api.execute_command(command.command,...command.arguments)}:null;
+  _placeLanguageStatusItem(el,id);
+}
+function _removeLanguageStatusItem(id){
+  if(!id)return;
+  const key=String(id);
+  const el=document.getElementById('sb-lang-status-'+key);
+  if(el)el.remove();
+  delete _languageStatusItems[key];
 }
 
 // ── Mode & Permissions ──

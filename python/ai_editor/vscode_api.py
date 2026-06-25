@@ -2150,6 +2150,8 @@ class VscodeNamespace:
         self._variables: Dict[str, Callable] = {}
         self._lm_providers: Dict[str, Any] = {}
         self._language_providers: Dict[str, List[Any]] = {}
+        self._language_status_items: Dict[str, Any] = {}
+        self._language_status_counter = 0
         self._language_configurations: Dict[str, List[Dict[str, Any]]] = {}
         self._diagnostic_collections: Dict[str, Any] = {}
         self._file_system_providers: Dict[str, Dict[str, Any]] = {}
@@ -4363,6 +4365,7 @@ class VscodeNamespace:
             "FileType": {"Unknown": 0, "File": 1, "Directory": 2, "SymbolicLink": 64},
             "ProgressLocation": {"SourceControl": 1, "Window": 10, "Notification": 15},
             "TaskScope": {"Global": 1, "Workspace": 2},
+            "LanguageStatusSeverity": {"Information": 0, "Warning": 1, "Error": 2},
         }
 
     # ── commands ──
@@ -5260,6 +5263,7 @@ class VscodeNamespace:
             "match": self._language_match,
             "onDidChangeDiagnostics": self._diagnostics_change_emitter.event,
             "setLanguageConfiguration": self._set_language_configuration,
+            "createLanguageStatusItem": self._create_language_status_item,
             "registerHoverProvider": lambda selector, provider: self._register_language_provider("hover", selector, provider),
             "registerCompletionItemProvider": lambda selector, provider, *trigger: self._register_language_provider("completion", selector, provider, trigger),
             "registerSignatureHelpProvider": lambda selector, provider, *metadata: self._register_language_provider("signatureHelp", selector, provider, self._signature_help_registration_metadata(metadata)),
@@ -5294,6 +5298,24 @@ class VscodeNamespace:
             "registerDocumentRangeSemanticTokensProvider": lambda selector, provider, legend: self._register_language_provider("semanticTokensRange", selector, provider, legend),
             "setTextDocumentLanguage": lambda doc, language_id: _set_document_language(doc, language_id),
         }
+
+    def _create_language_status_item(self, item_id: str, selector: Any) -> Any:
+        raw_id = str(item_id or "")
+        if not raw_id:
+            raise ValueError("LanguageStatusItem id is required")
+        full_id = f"python/{raw_id}"
+        if full_id in self._language_status_items:
+            raise ValueError(f"LanguageStatusItem with id '{raw_id}' ALREADY exists")
+        self._language_status_counter += 1
+        item = _LanguageStatusItem(
+            full_id,
+            raw_id,
+            selector,
+            self._language_status_counter,
+            self._ui_bridge,
+            lambda: self._language_status_items.pop(full_id, None))
+        self._language_status_items[full_id] = item
+        return item
 
     def _create_diagnostic_collection(self, name: str = "") -> Any:
         collection = _DiagnosticCollection(name, self._diagnostics_change_emitter)
@@ -6866,6 +6888,123 @@ class _StatusBarItem:
         if self._bridge is not None:
             try:
                 self._bridge.dispose_status_bar_item(self._id)
+            except Exception:
+                pass
+
+
+class _LanguageStatusItem:
+    def __init__(self, full_id: str, item_id: str, selector: Any, handle: int,
+                 bridge: Optional[UIBridge], on_dispose: Callable[[], None]) -> None:
+        object.__setattr__(self, "_full_id", full_id)
+        object.__setattr__(self, "_item_id", item_id)
+        object.__setattr__(self, "_handle", handle)
+        object.__setattr__(self, "_bridge", bridge)
+        object.__setattr__(self, "_on_dispose", on_dispose)
+        object.__setattr__(self, "_disposed", False)
+        self.id = item_id
+        self.name = "Python Extension"
+        self.selector = selector
+        self.severity = 0
+        self.text = ""
+        self.detail = ""
+        self.command = None
+        self.accessibilityInformation = None
+        self.busy = False
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        object.__setattr__(self, name, value)
+        if name in {
+            "name", "selector", "severity", "text", "detail", "command",
+            "accessibilityInformation", "busy",
+        }:
+            self._refresh()
+
+    @staticmethod
+    def _severity(value: Any) -> int:
+        try:
+            n = int(value)
+        except Exception:
+            return 0
+        return 2 if n == 2 else 1 if n == 1 else 0
+
+    @staticmethod
+    def _label(value: Any) -> Any:
+        if value is None:
+            return ""
+        if isinstance(value, dict) and "value" in value:
+            return {
+                "value": str(value.get("value") or ""),
+                "shortValue": str(value.get("shortValue") or ""),
+            }
+        return str(value)
+
+    @staticmethod
+    def _command(value: Any) -> Any:
+        if not value:
+            return None
+        if isinstance(value, str):
+            return {"command": value, "arguments": []}
+        if isinstance(value, dict) and value.get("command"):
+            return {
+                "command": str(value.get("command") or ""),
+                "title": str(value.get("title") or ""),
+                "arguments": list(value.get("arguments") or []),
+            }
+        return value
+
+    @staticmethod
+    def _accessibility(value: Any) -> Any:
+        if not isinstance(value, dict):
+            return None
+        return {
+            "label": str(value.get("label") or ""),
+            "role": str(value.get("role") or ""),
+        }
+
+    def _payload(self) -> Dict[str, Any]:
+        source = str(getattr(self, "name", "") or "Python Extension")
+        return {
+            "handle": self._handle,
+            "id": self._full_id,
+            "itemId": self._item_id,
+            "extensionId": "python",
+            "source": "Python Extension",
+            "name": source,
+            "selector": getattr(self, "selector", None),
+            "label": self._label(getattr(self, "text", "")),
+            "text": self._label(getattr(self, "text", "")),
+            "detail": str(getattr(self, "detail", "") or ""),
+            "severity": self._severity(getattr(self, "severity", 0)),
+            "command": self._command(getattr(self, "command", None)),
+            "accessibilityInfo": self._accessibility(
+                getattr(self, "accessibilityInformation", None)),
+            "accessibilityInformation": self._accessibility(
+                getattr(self, "accessibilityInformation", None)),
+            "busy": bool(getattr(self, "busy", False)),
+        }
+
+    def _refresh(self) -> None:
+        if getattr(self, "_disposed", False):
+            return
+        bridge = getattr(self, "_bridge", None)
+        if bridge is not None:
+            try:
+                bridge.show_language_status_item(self._payload())
+            except Exception:
+                pass
+
+    def dispose(self) -> None:
+        if self._disposed:
+            return
+        object.__setattr__(self, "_disposed", True)
+        try:
+            self._on_dispose()
+        except Exception:
+            pass
+        bridge = getattr(self, "_bridge", None)
+        if bridge is not None:
+            try:
+                bridge.remove_language_status_item(self._full_id)
             except Exception:
                 pass
 

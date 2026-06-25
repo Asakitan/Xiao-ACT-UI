@@ -1194,6 +1194,13 @@ class _AIEditorUIBridge:
     def dispose_status_bar_item(self, item_id: str) -> None:
         self._api._emit("dispose_status_bar_item", {"id": item_id})
 
+    def show_language_status_item(self, item: Dict[str, Any]) -> None:
+        payload = dict(item or {})
+        self._api._emit("show_language_status_item", payload)
+
+    def remove_language_status_item(self, item_id: str) -> None:
+        self._api._emit("remove_language_status_item", {"id": item_id})
+
     # -- Webview panels --
     def render_webview_panel(
             self, view_id: str, html: str,

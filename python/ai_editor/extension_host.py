@@ -1849,6 +1849,7 @@ class NodeExtensionHost:
         self._language_request_lock = threading.Lock()
         self._language_requests: Dict[str, Dict[str, Any]] = {}
         self._language_providers: List[Dict[str, Any]] = []
+        self._language_status_items: Dict[str, Dict[str, Any]] = {}
         self._file_decoration_request_lock = threading.Lock()
         self._file_decoration_requests: Dict[str, Dict[str, Any]] = {}
         self._file_decoration_providers: List[Dict[str, Any]] = []
@@ -2785,6 +2786,28 @@ class NodeExtensionHost:
                 event = pending.get("event")
                 if isinstance(event, threading.Event):
                     event.set()
+
+        elif msg_type == "language_status_set":
+            item_id = str(msg.get("id", ""))
+            if item_id:
+                payload = dict(msg)
+                payload.pop("type", None)
+                self._language_status_items[item_id] = payload
+                if self._ui_bridge:
+                    try:
+                        self._ui_bridge.show_language_status_item(payload)
+                    except Exception:
+                        pass
+
+        elif msg_type == "language_status_remove":
+            item_id = str(msg.get("id", ""))
+            if item_id:
+                self._language_status_items.pop(item_id, None)
+                if self._ui_bridge:
+                    try:
+                        self._ui_bridge.remove_language_status_item(item_id)
+                    except Exception:
+                        pass
 
         elif msg_type == "file_decoration_provider_registered":
             provider_record = {
@@ -5072,6 +5095,10 @@ class NodeExtensionHost:
     def list_language_providers(self) -> List[Dict[str, Any]]:
         """Return registered language provider capabilities from Node."""
         return list(self._language_providers)
+
+    def list_language_status_items(self) -> List[Dict[str, Any]]:
+        """Return active VS Code language status items from Node."""
+        return list(self._language_status_items.values())
 
     def list_file_decoration_providers(self) -> List[Dict[str, Any]]:
         """Return registered file decoration providers from Node."""

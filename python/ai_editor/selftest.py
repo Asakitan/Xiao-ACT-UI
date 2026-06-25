@@ -7164,6 +7164,22 @@ console.log("command palette quick access helpers ok");
            and "function _extStatusBarCommand(data)" in html
            and "execute_command(command.command,...command.arguments)" in html
            and "aria-label" in html)
+    _check("extension language status items round-trip dynamically",
+           "LanguageStatusSeverity: { Information: 0, Warning: 1, Error: 2 }"
+           in node_ext_host_source
+           and "function _createLanguageStatusItemObject" in node_ext_host_source
+           and "createLanguageStatusItem(id, selector)" in node_ext_host_source
+           and "type: 'language_status_set'" in node_ext_host_source
+           and "type: 'language_status_remove'" in node_ext_host_source
+           and "elif msg_type == \"language_status_set\":" in extension_host_source
+           and "def list_language_status_items(self)" in extension_host_source
+           and "def show_language_status_item(self, item:" in app_source
+           and "\"createLanguageStatusItem\": self._create_language_status_item"
+           in vscode_api_source
+           and "class _LanguageStatusItem" in vscode_api_source
+           and "else if(event==='show_language_status_item')" in html
+           and "function _upsertLanguageStatusItem(data)" in html
+           and ".language-status-item.busy" in html)
     _check("extension terminals bridge through Node host",
            "class TerminalObject" in node_ext_host_source
            and "createTerminal(nameOrOptions, shellPath, shellArgs)"
@@ -15828,6 +15844,47 @@ async function activate(context) {
     return { text };
   });
   vscode.commands.registerCommand('selftest.node.statusBarNoop', (...args) => args);
+  vscode.commands.registerCommand('selftest.node.languageStatusProbe', async () => {
+    const item = vscode.languages.createLanguageStatusItem(
+      'selftest.node.languageStatus',
+      [{ language: 'python', scheme: 'file' }]
+    );
+    let duplicateError = '';
+    try {
+      vscode.languages.createLanguageStatusItem(
+        'selftest.node.languageStatus',
+        { language: 'python' }
+      );
+    } catch (err) {
+      duplicateError = String(err && err.message || err);
+    }
+    item.name = 'Selftest Language Status';
+    item.text = { value: 'Py Ready', shortValue: 'Py' };
+    item.detail = 'Python provider is active';
+    item.severity = vscode.LanguageStatusSeverity.Warning;
+    item.busy = true;
+    item.command = {
+      command: 'selftest.node.statusBarNoop',
+      title: 'Run Language Status',
+      arguments: ['language-status', 5],
+    };
+    item.accessibilityInformation = {
+      label: 'Selftest Language Status Accessible',
+      role: 'button',
+    };
+    await new Promise(resolve => setTimeout(resolve, 15));
+    item.severity = vscode.LanguageStatusSeverity.Error;
+    item.busy = false;
+    item.detail = 'Python provider failed';
+    await new Promise(resolve => setTimeout(resolve, 15));
+    item.dispose();
+    return {
+      itemId: item.id,
+      duplicateError,
+      enumWarning: vscode.LanguageStatusSeverity.Warning,
+      enumError: vscode.LanguageStatusSeverity.Error,
+    };
+  });
   vscode.commands.registerCommand('selftest.node.statusBarMessageProbe', async () => {
     const item = vscode.window.createStatusBarItem(
       'selftest.node.status',
@@ -17112,6 +17169,8 @@ module.exports = { activate, deactivate };
                     self.clipboard_events = []
                     self.status_bar_items = {}
                     self.status_bar_events = []
+                    self.language_status_items = {}
+                    self.language_status_events = []
                     self.terminal_events = []
                     self.window_dialogs = []
                     self.open_dialog_paths = [
@@ -17282,6 +17341,27 @@ module.exports = { activate, deactivate };
                     self.status_bar_events.append(event)
                     emitted_events.append({
                         "event": "status_bar",
+                        "data": event,
+                    })
+
+                def show_language_status_item(self, item):
+                    payload = dict(item or {})
+                    payload["event"] = "show"
+                    self.language_status_items[str(payload.get("id", ""))] = payload
+                    self.language_status_events.append(payload)
+                    emitted_events.append({
+                        "event": "language_status",
+                        "data": payload,
+                    })
+
+                def remove_language_status_item(self, item_id):
+                    item = self.language_status_items.pop(str(item_id), {
+                        "id": str(item_id),
+                    })
+                    event = {**item, "event": "remove"}
+                    self.language_status_events.append(event)
+                    emitted_events.append({
+                        "event": "language_status",
                         "data": event,
                     })
 
@@ -17566,6 +17646,21 @@ module.exports = { activate, deactivate };
                 except Exception as exc:
                     node_status_bar_probe = {"_error": str(exc)}
                 node_status_bar_events = list(node_ui_bridge.status_bar_events)
+                node_language_status_command_registered = _wait_until(
+                    lambda: "selftest.node.languageStatusProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                try:
+                    node_language_status_probe = (
+                        api._ext_host.commands.execute(
+                            "selftest.node.languageStatusProbe"))
+                except Exception as exc:
+                    node_language_status_probe = {"_error": str(exc)}
+                node_language_status_events = list(
+                    node_ui_bridge.language_status_events)
+                node_language_status_items = (
+                    node_host.list_language_status_items()
+                    if node_started else [])
                 node_terminal_command_registered = _wait_until(
                     lambda: "selftest.node.terminalProbe"
                     in api._ext_host.commands.list_commands(),
@@ -20627,6 +20722,59 @@ module.exports = { activate, deactivate };
                        json.dumps({
                            "probe": node_status_bar_probe,
                            "events": node_status_bar_events,
+                       }, ensure_ascii=False, default=str))
+                _check("node host language status items use VS Code dynamic API",
+                       node_started is True
+                       and node_language_status_command_registered
+                       and isinstance(node_language_status_probe, dict)
+                       and node_language_status_probe.get("itemId")
+                       == "selftest.node.languageStatus"
+                       and node_language_status_probe.get("enumWarning") == 1
+                       and node_language_status_probe.get("enumError") == 2
+                       and "ALREADY exists" in str(
+                           node_language_status_probe.get("duplicateError"))
+                       and any(
+                           item.get("event") == "show"
+                           and item.get("id")
+                           == "selftest.node-tree/selftest.node.languageStatus"
+                           and item.get("itemId")
+                           == "selftest.node.languageStatus"
+                           and item.get("extensionId") == "selftest.node-tree"
+                           and item.get("source") == "node-tree"
+                           and item.get("selector") == [{
+                               "language": "python", "scheme": "file"}]
+                           and item.get("label", {}).get("value")
+                           == "Py Ready"
+                           and item.get("label", {}).get("shortValue") == "Py"
+                           and item.get("detail")
+                           == "Python provider is active"
+                           and item.get("severity") == 1
+                           and item.get("busy") is True
+                           and item.get("command", {}).get("command")
+                           == "selftest.node.statusBarNoop"
+                           and item.get("command", {}).get("arguments")
+                           == ["language-status", 5]
+                           and item.get("accessibilityInfo", {}).get("label")
+                           == "Selftest Language Status Accessible"
+                           for item in node_language_status_events)
+                       and any(
+                           item.get("event") == "show"
+                           and item.get("id")
+                           == "selftest.node-tree/selftest.node.languageStatus"
+                           and item.get("severity") == 2
+                           and item.get("busy") is False
+                           and item.get("detail") == "Python provider failed"
+                           for item in node_language_status_events)
+                       and any(
+                           item.get("event") == "remove"
+                           and item.get("id")
+                           == "selftest.node-tree/selftest.node.languageStatus"
+                           for item in node_language_status_events)
+                       and not node_language_status_items,
+                       json.dumps({
+                           "probe": node_language_status_probe,
+                           "events": node_language_status_events,
+                           "items": node_language_status_items,
                        }, ensure_ascii=False, default=str))
                 node_terminal_created = (
                     node_terminal_probe.get("created", {})
