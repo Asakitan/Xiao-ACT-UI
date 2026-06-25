@@ -3311,6 +3311,13 @@ def test_phase1_ai_editor_regressions() -> None:
            and "text.value||text.snippet||text.text" in html
            and "function editorSelectedCompletionInfo()" in html
            and "selectedCompletionInfo:editorSelectedCompletionInfo()" in html
+           and "id=\"status-language-service\"" in html
+           and "function editorRequestLanguageProvider(kind,payload,options)" in html
+           and "function updateEditorLanguageProviderStatus(state,info)" in html
+           and "function editorLanguageProviderFailureMessage(kind,res)" in html
+           and "function editorProviderResultCount(res,key)" in html
+           and "editorProviderResultCancelled(res)" in html
+           and "res&&res.timeout?'warning':'error'" in html
            and "function applyEditorCompletion(item)" in html
            and "function handleEditorSuggestKey(e)" in html
            and "function requestEditorHover()" in html
@@ -3443,7 +3450,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "editorProviderPayload('providerMetadata',{providerKind:'codeActions',matchedOnly:true})" in html
            and "async function triggerEditorCodeActionsOnFocusChange()" in html
            and "async function applyEditorCodeActionForSave(action)" in html
-           and "async function fetchEditorCodeActionsForKind(only,range)" in html
+           and "async function fetchEditorCodeActionsForKind(only,range,isCurrent)" in html
            and "async function requestEditorLinkedEditingRanges(quiet)" in html
            and "function captureEditorLinkedEditingBefore()" in html
            and "function applyEditorLinkedEditingFromInput()" in html
@@ -4564,6 +4571,104 @@ console.log("frontend hover and code action rendering ok");
                    (result.stderr or result.stdout).strip())
         except Exception as exc:
             _check("frontend hover and code action rendering", False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
+    if not node_path:
+        _check("frontend language provider status skipped without Node.js", True)
+    else:
+        provider_status_functions = [
+            "editorProviderResultCancelled",
+            "editorLanguageProviderKindLabel",
+            "editorProviderResultCount",
+            "updateEditorLanguageProviderStatus",
+            "editorLanguageProviderFailureMessage",
+            "editorRequestLanguageProvider",
+        ]
+        provider_status_js_functions = "\n".join(
+            _extract_js_function(html, name)
+            for name in provider_status_functions)
+        js = r"""
+function assert(ok,label){ if(!ok){ throw new Error(label); } }
+const languageStatus = { className:"", textContent:"", title:"" };
+let _editorLanguageProviderStatus = { state:"ready" };
+let callResponses = [];
+function isPlainObject(value){ return !!value && typeof value === "object" && !Array.isArray(value); }
+function callFailedMessage(result,fallback){ return result && result.error ? String(result.error) : String(fallback || "failed"); }
+function $(id){ return id === "status-language-service" ? languageStatus : null; }
+function editorProviderPayload(kind){ return { kind }; }
+async function call(method,payload){
+  assert(method === "editor_language_provider", "language provider method used");
+  return callResponses.shift();
+}
+""" + provider_status_js_functions + r"""
+(async () => {
+  updateEditorLanguageProviderStatus("running", { kind:"completion", label:"Completions" });
+  assert(languageStatus.className.includes("running") && languageStatus.textContent === "Completions...",
+         "running status is visible");
+
+  callResponses = [{ ok:true, requestId:"r1", items:[{ label:"a" }, { label:"b" }] }];
+  let res = await editorRequestLanguageProvider("completion", null, { countKey:"items", itemLabel:"suggestion" });
+  assert(res.ok && languageStatus.className.includes("ready") && languageStatus.textContent === "2 suggestions",
+         "success count status is visible");
+
+  callResponses = [{ ok:true, hovers:[] }];
+  await editorRequestLanguageProvider("hover", null, { countKey:"hovers", itemLabel:"hover" });
+  assert(languageStatus.className.includes("empty") && languageStatus.textContent === "No hover",
+         "empty provider status is visible");
+
+  callResponses = [{ ok:true, items:[{ label:"stale" }] }];
+  await editorRequestLanguageProvider("completion", null, { countKey:"items", itemLabel:"suggestion", isCurrent:() => false });
+  assert(languageStatus.className.includes("running") && languageStatus.textContent === "Completions...",
+         "stale provider result does not publish final status");
+
+  callResponses = [{ ok:false, error:"provider exploded", requestId:"r2" }];
+  await editorRequestLanguageProvider("definition", null, { countKey:"definitions" });
+  assert(languageStatus.className.includes("error")
+         && languageStatus.textContent.includes("Definition failed: provider exploded"),
+         "error provider status is visible");
+
+  callResponses = [{ ok:false, timeout:true, error:"too slow", requestId:"r3" }];
+  await editorRequestLanguageProvider("diagnostics", null, { countKey:"diagnostics" });
+  assert(languageStatus.className.includes("warning")
+         && languageStatus.textContent === "Diagnostics timed out",
+         "timeout status is visible");
+  assert(editorProviderResultCancelled({ timeout:true }) === false,
+         "timeout is not treated as cancellation");
+
+  callResponses = [{ ok:false, cancelled:true, reason:"superseded", requestId:"r4" }];
+  await editorRequestLanguageProvider("references", null, { countKey:"references" });
+  assert(languageStatus.className.includes("cancelled")
+         && languageStatus.textContent === "References cancelled"
+         && _editorLanguageProviderStatus.requestId === "r4",
+         "cancelled provider status is visible");
+
+  console.log("frontend language provider status ok");
+})().catch(err => { console.error(err && err.stack || err); process.exit(1); });
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check("frontend language provider status",
+                   result.returncode == 0
+                   and "frontend language provider status ok" in result.stdout,
+                   (result.stderr or result.stdout).strip())
+        except Exception as exc:
+            _check("frontend language provider status", False, str(exc))
         finally:
             if js_path:
                 try:
