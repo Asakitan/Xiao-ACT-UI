@@ -7081,6 +7081,10 @@ console.log("command palette quick access helpers ok");
            and "function applyScmInputValidation(box,messageEl,validation)"
            in html
            and "function scmInputValidationPayload(input)" in html
+           and "const SCM_VIEW_STATE_KEY='sao-ai-scm-view-state-v2'" in html
+           and "function scmLoadViewState()" in html
+           and "function scmStableProviders(providers)" in html
+           and "scmStableProviders(providers).forEach" in html
            and "function scmCommandSpec(raw)" in html
            and "function appendScmStatusCommands(parent,commands)" in html
            and "function runScmQuickDiff(provider,resourceUri)" in html
@@ -7096,6 +7100,9 @@ console.log("command palette quick access helpers ok");
            in html
            and "const SCM_HISTORY_PAGE_SIZE=20" in html
            and "function scmHistoryLimit(container)" in html
+           and "function scmHistoryItemDate(item)" in html
+           and "function appendScmHistoryItemRefs(parent,item,provider)" in html
+           and "function scmSortHistoryRefs(refs,provider)" in html
            and "function renderScmHistoryItems(provider,container,items)"
            in html
            and "function toggleScmHistoryItemChanges(provider,item,body,button)"
@@ -7110,6 +7117,12 @@ console.log("command palette quick access helpers ok");
            in html
            and "dataset.scmHistoryLoadMore" in html
            and "dataset.scmHistoryRetry" in html
+           and "scmStateSet('expandedHistoryItems'" in html
+           and "scmStateSet('collapsedHistory'" in html
+           and "scmStateSet('collapsedGroups'" in html
+           and "scmStateSet('collapsedProviders'" in html
+           and "dataset.scmProviderBody" in html
+           and "dataset.scmGroupBody" in html
            and "requestScmHistory(providerId,'provideChanges'" in html
            and "provider.hasHistoryProvider" in html
            and "historyItemRemoteRef" in html

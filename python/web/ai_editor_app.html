@@ -9092,6 +9092,59 @@ function runScmResourceCommand(state){
 function scmProviderId(provider){
   return String((provider&&provider.providerId)||(provider&&provider.id)||'');
 }
+const SCM_VIEW_STATE_KEY='sao-ai-scm-view-state-v2';
+function scmLoadViewState(){
+  try{
+    const raw=typeof localStorage!=='undefined'?localStorage.getItem(SCM_VIEW_STATE_KEY):'';
+    const data=raw?JSON.parse(raw):{};
+    return data&&typeof data==='object'?data:{};
+  }catch(e){return {}}
+}
+let _scmViewState=scmLoadViewState();
+function scmSaveViewState(){
+  try{if(typeof localStorage!=='undefined')localStorage.setItem(SCM_VIEW_STATE_KEY,JSON.stringify(_scmViewState||{}))}catch(e){}
+}
+function scmStateBag(name){
+  if(!_scmViewState||typeof _scmViewState!=='object')_scmViewState={};
+  if(!_scmViewState[name]||typeof _scmViewState[name]!=='object'||Array.isArray(_scmViewState[name]))_scmViewState[name]={};
+  return _scmViewState[name];
+}
+function scmProviderKey(provider){
+  return String(scmProviderId(provider)||(provider&&provider.label)||(provider&&provider.rootUri)||'scm-provider');
+}
+function scmGroupKey(provider,group){
+  return scmProviderKey(provider)+'::'+String((group&&group.groupId)||(group&&group.id)||(group&&group.label)||'group');
+}
+function scmHistoryItemKey(provider,item){
+  return scmProviderKey(provider)+'::'+String((item&&item.id)||(item&&item.revision)||(item&&item.displayId)||'history-item');
+}
+function scmStateGet(name,key){
+  return !!scmStateBag(name)[String(key||'')];
+}
+function scmStateSet(name,key,value){
+  const bag=scmStateBag(name);
+  key=String(key||'');
+  if(!key)return;
+  if(value)bag[key]=true;else delete bag[key];
+  scmSaveViewState();
+}
+function scmStableProviders(providers){
+  const rows=Array.isArray(providers)?providers.slice():[];
+  const order=Array.isArray(_scmViewState.providerOrder)?_scmViewState.providerOrder.slice():[];
+  let changed=false;
+  rows.forEach(provider=>{
+    const key=scmProviderKey(provider);
+    if(key&&!order.includes(key)){order.push(key);changed=true}
+  });
+  if(changed||!Array.isArray(_scmViewState.providerOrder)){
+    _scmViewState.providerOrder=order;
+    scmSaveViewState();
+  }
+  return rows.sort((a,b)=>{
+    const ai=order.indexOf(scmProviderKey(a)),bi=order.indexOf(scmProviderKey(b));
+    return (ai<0?9999:ai)-(bi<0?9999:bi);
+  });
+}
 const _scmInputValidationTimers=new Map();
 function scmInputValidationPayload(input){
   if(!input||typeof input!=='object')return null;
@@ -9273,14 +9326,46 @@ function scmHistoryRefLabel(ref){
   if(!ref||typeof ref!=='object')return '';
   return String(ref.label||ref.name||ref.id||ref.revision||'');
 }
+function scmHistoryRefOrder(kind,ref,provider){
+  const id=String((ref&&ref.id)||(ref&&ref.revision)||'');
+  const head=provider&&provider.historyItemRef;
+  const remote=provider&&provider.historyItemRemoteRef;
+  const base=provider&&provider.historyItemBaseRef;
+  if(kind==='HEAD'||id&&id===String((head&&head.id)||(head&&head.revision)||''))return 1;
+  if(kind==='REMOTE'||id&&id===String((remote&&remote.id)||(remote&&remote.revision)||''))return 2;
+  if(kind==='BASE'||id&&id===String((base&&base.id)||(base&&base.revision)||''))return 3;
+  if(ref&&ref.color!==undefined)return 4;
+  return 99;
+}
+function scmSortHistoryRefs(refs,provider){
+  return (Array.isArray(refs)?refs.slice():[]).sort((a,b)=>{
+    const ak=Array.isArray(a)?a[0]:'',bk=Array.isArray(b)?b[0]:'';
+    const ar=Array.isArray(a)?a[1]:a,br=Array.isArray(b)?b[1]:b;
+    const diff=scmHistoryRefOrder(ak,ar,provider)-scmHistoryRefOrder(bk,br,provider);
+    if(diff)return diff;
+    return scmHistoryRefLabel(ar).localeCompare(scmHistoryRefLabel(br));
+  });
+}
 function scmHistoryItemTitle(item){
   return String((item&&item.subject)||(item&&item.message)||(item&&item.id)||'History Item');
+}
+function scmHistoryItemDate(item){
+  const raw=item&&(item.timestamp||item.date||item.authorDate||item.author_date||item.commitDate||item.commit_date);
+  if(!raw)return '';
+  const n=Number(raw);
+  const date=Number.isFinite(n)?new Date(n<10000000000?n*1000:n):new Date(String(raw));
+  if(Number.isNaN(date.getTime()))return '';
+  return date.toLocaleString();
 }
 function scmHistoryItemMeta(item){
   const bits=[];
   const displayId=String((item&&item.displayId)||(item&&item.id)||'');
   if(displayId)bits.push(displayId);
   if(item&&item.author)bits.push(String(item.author));
+  const date=scmHistoryItemDate(item);
+  if(date)bits.push(date);
+  const parents=Array.isArray(item&&item.parentIds)?item.parentIds:[];
+  if(parents.length>1)bits.push(parents.length+' parents');
   const stats=item&&item.statistics&&typeof item.statistics==='object'?item.statistics:null;
   if(stats){
     const files=Number(stats.files||0),insertions=Number(stats.insertions||0),deletions=Number(stats.deletions||0);
@@ -9291,6 +9376,20 @@ function scmHistoryItemMeta(item){
     if(statBits.length)bits.push(statBits.join(' '));
   }
   return bits.join(' · ');
+}
+function appendScmHistoryItemRefs(parent,item,provider){
+  const refs=scmSortHistoryRefs(item&&item.references,provider).filter(ref=>scmHistoryRefLabel(ref));
+  if(!refs.length)return;
+  const row=document.createElement('div');
+  row.style.cssText='display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-top:3px';
+  refs.slice(0,6).forEach(ref=>{
+    const chip=document.createElement('span');
+    chip.textContent=scmHistoryRefLabel(ref);
+    chip.title=String((ref&&ref.description)||(ref&&ref.revision)||scmHistoryRefLabel(ref));
+    chip.style.cssText='max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid var(--border);border-radius:8px;color:var(--fg-dim);font-size:10px;line-height:15px;padding:0 5px';
+    row.appendChild(chip);
+  });
+  parent.appendChild(row);
 }
 function scmHistoryChangeLabel(change){
   const uri=String((change&&change.uri)||(change&&change.modifiedUri)||(change&&change.originalUri)||'');
@@ -9304,11 +9403,11 @@ function scmHistoryLimit(container){
   return Math.max(SCM_HISTORY_PAGE_SIZE,Math.min(500,limit));
 }
 function appendScmHistoryRefs(parent,provider){
-  const refs=[
+  const refs=scmSortHistoryRefs([
     ['HEAD',provider&&provider.historyItemRef],
     ['REMOTE',provider&&provider.historyItemRemoteRef],
     ['BASE',provider&&provider.historyItemBaseRef],
-  ].filter(item=>scmHistoryRefLabel(item[1]));
+  ],provider).filter(item=>scmHistoryRefLabel(item[1]));
   if(!refs.length)return;
   const row=document.createElement('div');
   row.style.cssText='display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin:0 12px 6px 12px';
@@ -9399,15 +9498,18 @@ async function toggleScmHistoryItemChanges(provider,item,body,button){
   const providerId=scmProviderId(provider);
   const itemId=String((item&&item.id)||(item&&item.revision)||'');
   if(!providerId||!itemId)return;
+  const stateKey=scmHistoryItemKey(provider,item);
   if(body.dataset.loaded==='true'){
     const hidden=body.style.display==='none';
     body.style.display=hidden?'':'none';
     if(button)button.textContent=hidden?'▾':'▸';
+    scmStateSet('expandedHistoryItems',stateKey,hidden);
     return;
   }
   body.style.display='';
   body.innerHTML='<div class="tree-note" style="padding-left:24px">Loading history changes...</div>';
   if(button)button.textContent='▾';
+  scmStateSet('expandedHistoryItems',stateKey,true);
   const r=await requestScmHistory(providerId,'provideChanges',{historyItemId:itemId,historyItemParentId:(item.parentIds&&item.parentIds[0])||item.parentId||''});
   if(!callSucceeded(r)){
     body.innerHTML='';
@@ -9416,6 +9518,7 @@ async function toggleScmHistoryItemChanges(provider,item,body,button){
     err.style.paddingLeft='24px';
     err.textContent=callFailedMessage(r,'History changes unavailable');
     body.appendChild(err);
+    scmStateSet('expandedHistoryItems',stateKey,false);
     return;
   }
   body.dataset.loaded='true';
@@ -9452,6 +9555,7 @@ function renderScmHistoryItems(provider,container,items){
     meta.textContent=scmHistoryItemMeta(item);
     text.appendChild(title);
     if(meta.textContent)text.appendChild(meta);
+    appendScmHistoryItemRefs(text,item,provider);
     row.appendChild(text);
     const changes=document.createElement('div');
     changes.style.display='none';
@@ -9459,6 +9563,9 @@ function renderScmHistoryItems(provider,container,items){
     wrap.appendChild(row);
     wrap.appendChild(changes);
     container.appendChild(wrap);
+    if(scmStateGet('expandedHistoryItems',scmHistoryItemKey(provider,item))){
+      setTimeout(()=>toggleScmHistoryItemChanges(provider,item,changes,toggle),0);
+    }
   });
   const limit=scmHistoryLimit(container);
   if(rows.length>=limit){
@@ -9509,10 +9616,16 @@ async function loadScmHistoryProvider(provider,container,force){
 function renderScmHistorySection(parent,provider){
   if(!provider||!provider.hasHistoryProvider)return;
   appendScmHistoryRefs(parent,provider);
+  const stateKey=scmProviderKey(provider)+'::history';
+  const collapsed=scmStateGet('collapsedHistory',stateKey);
   const header=document.createElement('div');
   header.className='sb-group';
   header.dataset.scmHistoryProvider=scmProviderId(provider);
   header.style.cssText='display:flex;align-items:center;gap:6px';
+  const twist=document.createElement('span');
+  twist.className='tree-twist';
+  twist.textContent=collapsed?'▸':'▾';
+  header.appendChild(twist);
   const title=document.createElement('span');
   title.style.cssText='flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
   title.textContent='History';
@@ -9527,9 +9640,17 @@ function renderScmHistorySection(parent,provider){
   parent.appendChild(header);
   const body=document.createElement('div');
   body.dataset.scmHistoryList=scmProviderId(provider);
+  body.style.display=collapsed?'none':'';
   parent.appendChild(body);
-  refresh.onclick=e=>{e.stopPropagation();loadScmHistoryProvider(provider,body,true)};
-  loadScmHistoryProvider(provider,body,false);
+  const setCollapsed=value=>{
+    body.style.display=value?'none':'';
+    twist.textContent=value?'▸':'▾';
+    scmStateSet('collapsedHistory',stateKey,value);
+    if(!value)loadScmHistoryProvider(provider,body,false);
+  };
+  header.onclick=()=>setCollapsed(body.style.display!=='none');
+  refresh.onclick=e=>{e.stopPropagation();setCollapsed(false);loadScmHistoryProvider(provider,body,true)};
+  if(!collapsed)loadScmHistoryProvider(provider,body,false);
 }
 function renderScmResource(parent,provider,group,state,index){
   const row=document.createElement('div');
@@ -9561,10 +9682,16 @@ function renderScmResource(parent,provider,group,state,index){
   parent.appendChild(row);
 }
 function renderScmGroup(parent,provider,group){
+  const stateKey=scmGroupKey(provider,group);
+  const collapsed=scmStateGet('collapsedGroups',stateKey);
   const header=document.createElement('div');
   header.className='sb-group';
   header.dataset.scmGroup=String(group.groupId||group.id||'');
   header.style.cssText='display:flex;align-items:center;gap:6px';
+  const twist=document.createElement('span');
+  twist.className='tree-twist';
+  twist.textContent=collapsed?'▸':'▾';
+  header.appendChild(twist);
   const title=document.createElement('span');
   title.style.cssText='flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
   const states=Array.isArray(group.resourceStates)?group.resourceStates:[];
@@ -9572,21 +9699,37 @@ function renderScmGroup(parent,provider,group){
   header.appendChild(title);
   appendScmActionButtons(header,group.actions);
   parent.appendChild(header);
+  const body=document.createElement('div');
+  body.dataset.scmGroupBody=stateKey;
+  body.style.display=collapsed?'none':'';
+  parent.appendChild(body);
+  header.onclick=()=>{
+    const next=body.style.display!=='none';
+    body.style.display=next?'none':'';
+    twist.textContent=next?'▸':'▾';
+    scmStateSet('collapsedGroups',stateKey,next);
+  };
   if(!states.length){
     const empty=document.createElement('div');
     empty.className='tree-note';
     empty.style.paddingLeft='24px';
     empty.textContent='No changes';
-    parent.appendChild(empty);
+    body.appendChild(empty);
     return;
   }
-  states.forEach((state,index)=>renderScmResource(parent,provider,group,state,index));
+  states.forEach((state,index)=>renderScmResource(body,provider,group,state,index));
 }
 function renderScmProvider(parent,provider){
+  const stateKey=scmProviderKey(provider);
+  const collapsed=scmStateGet('collapsedProviders',stateKey);
   const providerHeader=document.createElement('div');
   providerHeader.className='sb-group';
-  providerHeader.dataset.scmProvider=String(provider.providerId||provider.id||'');
+  providerHeader.dataset.scmProvider=stateKey;
   providerHeader.style.cssText='display:flex;align-items:center;gap:6px';
+  const twist=document.createElement('span');
+  twist.className='tree-twist';
+  twist.textContent=collapsed?'▸':'▾';
+  providerHeader.appendChild(twist);
   const title=document.createElement('span');
   title.style.cssText='flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
   const count=Number(provider.count||0);
@@ -9638,8 +9781,18 @@ function renderScmProvider(parent,provider){
   }
   appendScmActionButtons(providerHeader,provider.titleActions);
   parent.appendChild(providerHeader);
-  appendScmStatusCommands(parent,provider.statusBarCommands);
-  renderScmHistorySection(parent,provider);
+  const body=document.createElement('div');
+  body.dataset.scmProviderBody=stateKey;
+  body.style.display=collapsed?'none':'';
+  parent.appendChild(body);
+  providerHeader.onclick=()=>{
+    const next=body.style.display!=='none';
+    body.style.display=next?'none':'';
+    twist.textContent=next?'▸':'▾';
+    scmStateSet('collapsedProviders',stateKey,next);
+  };
+  appendScmStatusCommands(body,provider.statusBarCommands);
+  renderScmHistorySection(body,provider);
   const input=provider.inputBox&&typeof provider.inputBox==='object'?provider.inputBox:null;
   if(input&&input.visible!==false){
     const providerId=scmProviderId(provider);
@@ -9665,17 +9818,17 @@ function renderScmProvider(parent,provider){
     });
     wrap.appendChild(box);
     wrap.appendChild(validation);
-    parent.appendChild(wrap);
+    body.appendChild(wrap);
   }
   const groups=Array.isArray(provider.groups)?provider.groups:[];
   if(!groups.length){
     const empty=document.createElement('div');
     empty.className='tree-note';
     empty.textContent='No source control groups.';
-    parent.appendChild(empty);
+    body.appendChild(empty);
     return;
   }
-  groups.forEach(group=>renderScmGroup(parent,provider,group));
+  groups.forEach(group=>renderScmGroup(body,provider,group));
 }
 async function refreshScmSidebar(force){
   if(_scmLoaded&&!force)return;
@@ -9694,7 +9847,7 @@ async function refreshScmSidebar(force){
     _scmLoaded=true;
     return;
   }
-  providers.forEach(provider=>renderScmProvider(list,provider));
+  scmStableProviders(providers).forEach(provider=>renderScmProvider(list,provider));
   _scmLoaded=true;
 }
 function switchSidebar(panel){
