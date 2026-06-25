@@ -15333,7 +15333,7 @@ async function renderExtensionSettings(){
       const reset=document.createElement('span');reset.className='s-reset';reset.textContent='↻';reset.title='Reset to default';
       reset.onclick=async ev=>{
         ev.preventDefault();ev.stopPropagation();setExtensionSettingError(row,'');
-        if(isHiddenSetting){setExtensionSettingError(row,'Hidden settings are shown for diagnostics only');return}
+        if(isHiddenSetting&&!hiddenEditable){setExtensionSettingError(row,'Hidden settings are shown for diagnostics only');return}
         const r=await call('reset_extension_setting',key,extensionSettingRowTarget(row));
         if(r&&r.ok){
           row.dataset.extSettingTarget=extensionSettingTargetName(r.target||extensionSettingRowTarget(row));
@@ -15343,17 +15343,18 @@ async function renderExtensionSettings(){
           updateExtensionSettingRowValueMetadata(row,nextValue,defaultVal,type);
           markExtensionSettingRow(row,extensionSettingHasTargetValue(scopedValues,row.dataset.extSettingTarget));
           row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,
-            [isHiddenSetting?'hidden':'',isHiddenSetting?'excluded':'']).join('\n');
+            hiddenTags).join('\n');
           row.dataset.extSettingSearch=(
             sectionSearch+' '+extensionSettingSearchText(
               key,schema,type,description,deprecation,schemaSummary)+' '+
               defaultSource+' '+
-              (isHiddenSetting?'hidden excluded included false diagnostics ':'')+
+              hiddenSearchText+' '+
               extensionSettingCompactValue(nextValue,type)+' '+
               extensionSettingCompactValue(defaultVal,type)+' '+
               extensionSettingTargetSearchText(scopedValues,type)+' '+
               extensionSettingTargetLabel(row.dataset.extSettingTarget)
           ).trim().toLowerCase();
+          if(hiddenEditable||deprecation){await renderExtensionSettings();return}
           renderExtensionSettingTargetOverrides(targetOverrideNote,scopedValues,row.dataset.extSettingTarget);
           renderExtensionSettingIndicators(indicators,schema,scopedValues,row.dataset.extSettingTarget,defaultSource);
           applyExtensionSettingsFilter();
@@ -15376,17 +15377,18 @@ async function renderExtensionSettings(){
           updateExtensionSettingRowValueMetadata(row,savedValue,defaultVal,type);
           markExtensionSettingRow(row,extensionSettingHasTargetValue(scopedValues,row.dataset.extSettingTarget));
           row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,
-            [isHiddenSetting?'hidden':'',isHiddenSetting?'excluded':'']).join('\n');
+            hiddenTags).join('\n');
           row.dataset.extSettingSearch=(
             sectionSearch+' '+extensionSettingSearchText(
               key,schema,type,description,deprecation,schemaSummary)+' '+
               defaultSource+' '+
-              (isHiddenSetting?'hidden excluded included false diagnostics ':'')+
+              hiddenSearchText+' '+
               extensionSettingCompactValue(savedValue,type)+' '+
               extensionSettingCompactValue(defaultVal,type)+' '+
               extensionSettingTargetSearchText(scopedValues,type)+' '+
               extensionSettingTargetLabel(row.dataset.extSettingTarget)
           ).trim().toLowerCase();
+          if(hiddenEditable){await renderExtensionSettings();return}
           renderExtensionSettingTargetOverrides(targetOverrideNote,scopedValues,row.dataset.extSettingTarget);
           renderExtensionSettingIndicators(indicators,schema,scopedValues,row.dataset.extSettingTarget,defaultSource);
           applyExtensionSettingsFilter();

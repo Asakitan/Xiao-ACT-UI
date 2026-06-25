@@ -5290,6 +5290,41 @@ console.log("frontend signature help docs ok");
             and "function appendExtensionSettingDefaultValue(row,value,type)" in html
             and "ext-setting-default-value" in html
             and "appendExtensionSettingMarkdown(desc,description)" in html)
+    _check("frontend hidden deprecated settings stay editable until configured",
+           "const hiddenEditable=hiddenReason==='deprecated'" in html
+           and (
+               "const hiddenTags=isHiddenSetting?['hidden',hiddenReason,"
+               "hiddenEditable?'deprecated-hidden':'']:[]") in html
+           and (
+               "const hiddenSearchText=isHiddenSetting?('hidden '+hiddenReason+' '+"
+               "(hiddenEditable?'deprecated hidden by default':"
+               "'included false excluded diagnostics')):''") in html
+           and (
+               "if(isHiddenSetting&&!hiddenEditable){setExtensionSettingError(row,"
+               "'Hidden settings are shown for diagnostics only');return}") in html
+           and (
+               "if(hiddenEditable||deprecation){await renderExtensionSettings();return}"
+               in html)
+           and (
+               "if(hiddenEditable){await renderExtensionSettings();return}"
+               in html)
+           and (
+               "(isHiddenSetting?'hidden excluded included false diagnostics ':'')"
+               not in html),
+           json.dumps({
+               "hasHiddenEditable": "hiddenEditable" in html,
+               "hasHiddenTags": "hiddenTags).join('\\n')" in html,
+               "hasHiddenSearchText": "hiddenSearchText" in html,
+               "hasLegacyExcludedSearch": (
+                   "(isHiddenSetting?'hidden excluded included false diagnostics ':'')"
+                   in html),
+               "hasRefreshAfterReset": (
+                   "if(hiddenEditable||deprecation){await renderExtensionSettings();return}"
+                   in html),
+               "hasRefreshAfterSave": (
+                   "if(hiddenEditable){await renderExtensionSettings();return}"
+                   in html),
+           }, ensure_ascii=False))
     if node_path:
         setting_functions = [
             "extensionSettingType",
