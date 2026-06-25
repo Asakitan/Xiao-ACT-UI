@@ -8020,11 +8020,61 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                         emitProviderState('scm_provider_updated');
                     },
                     createResourceGroup(groupId, groupLabel) {
-                        const group = { id: groupId, label: groupLabel, resourceStates: [], hideWhenEmpty: false, dispose() { groups.delete(groupId); } };
-                        groups.set(groupId, group);
+                        const normalizedGroupId = String(groupId || '');
+                        let groupContextValue = '';
+                        let groupResourceStates = [];
+                        const serializeResourceState = (state) => {
+                            const resourceUri = state && state.resourceUri
+                                ? _plainBridgeValue(state.resourceUri) : '';
+                            return {
+                                resourceUri,
+                                contextValue: String(
+                                    state && state.contextValue || ''),
+                                command: _plainBridgeValue(
+                                    state && state.command || undefined),
+                            };
+                        };
+                        const emitGroupState = (type) => send({
+                            type,
+                            providerId: String(id || ''),
+                            groupId: normalizedGroupId,
+                            label: String(groupLabel || normalizedGroupId),
+                            contextValue: groupContextValue,
+                            resourceStates: groupResourceStates
+                                .map(serializeResourceState),
+                        });
+                        const group = {
+                            id: normalizedGroupId,
+                            label: groupLabel,
+                            hideWhenEmpty: false,
+                            get contextValue() { return groupContextValue; },
+                            set contextValue(value) {
+                                groupContextValue = String(value || '');
+                                emitGroupState('scm_resource_group_updated');
+                            },
+                            get resourceStates() {
+                                return groupResourceStates.slice();
+                            },
+                            set resourceStates(value) {
+                                groupResourceStates = Array.isArray(value)
+                                    ? value.slice() : [];
+                                emitGroupState('scm_resource_group_updated');
+                            },
+                            dispose() {
+                                groups.delete(normalizedGroupId);
+                                emitGroupState('scm_resource_group_disposed');
+                            },
+                        };
+                        groups.set(normalizedGroupId, group);
+                        emitGroupState('scm_resource_group_registered');
                         return group;
                     },
                     dispose() {
+                        for (const group of groups.values()) {
+                            if (group && typeof group.dispose === 'function') {
+                                group.dispose();
+                            }
+                        }
                         groups.clear();
                         _scmProviders.delete(id);
                         emitProviderState('scm_provider_disposed');

@@ -13298,6 +13298,21 @@ class AIEditorAPI:
             or raw_context.get("filePath")
             or "")
         menu_context.update(self._extension_resource_context(resource))
+        node_host = getattr(self, "_node_ext_host", None)
+        node_scm_snapshot = getattr(node_host, "node_scm_context_snapshot", None)
+        if callable(node_scm_snapshot):
+            try:
+                for key, value in node_scm_snapshot(raw_context).items():
+                    if value is None:
+                        continue
+                    text = self._normalize_when_context_value(value)
+                    if text and not menu_context.get(str(key)):
+                        menu_context[str(key)] = text
+            except Exception:
+                pass
+        if not resource and menu_context.get("resourceUri"):
+            menu_context.update(self._extension_resource_context(
+                menu_context.get("resourceUri", "")))
         return menu_context
 
     def _extension_context_argument_actions(

@@ -13284,6 +13284,15 @@ async function activate(context) {
   );
   sourceControl.contextValue = 'repository';
   sourceControl.inputBox.value = 'node scm input';
+  const sourceGroup = sourceControl.createResourceGroup(
+    'workingTree',
+    'Working Tree'
+  );
+  sourceGroup.contextValue = 'exportable';
+  sourceGroup.resourceStates = [{
+    resourceUri: vscode.Uri.joinPath(context.extensionUri, 'node-scm.txt'),
+    contextValue: 'diffable',
+  }];
   context.subscriptions.push(sourceControl);
   const secretEvents = [];
   context.secrets.onDidChange(event => {
@@ -15693,6 +15702,17 @@ async function activate(context) {
     ok: true,
     provider: 'selftest-node-scm',
   }));
+  vscode.commands.registerCommand('selftest.node.scmGroupAction', contextArg => ({
+    ok: true,
+    group: contextArg && contextArg.scmResourceGroup,
+    groupState: contextArg && contextArg.scmResourceGroupState,
+  }));
+  vscode.commands.registerCommand('selftest.node.scmStateAction', contextArg => ({
+    ok: true,
+    group: contextArg && contextArg.scmResourceGroup,
+    state: contextArg && contextArg.scmResourceState,
+    extname: contextArg && contextArg.resourceExtname,
+  }));
   vscode.commands.registerCommand('selftest.node.customEditorContextAction', contextArg => {
     customEditorContextActionHits += 1;
     customEditorContextActionLast = contextArg || null;
@@ -15825,6 +15845,12 @@ module.exports = { activate, deactivate };
                     }, {
                         "command": "selftest.node.scmTitleAction",
                         "title": "Node SCM Title Action",
+                    }, {
+                        "command": "selftest.node.scmGroupAction",
+                        "title": "Node SCM Group Action",
+                    }, {
+                        "command": "selftest.node.scmStateAction",
+                        "title": "Node SCM State Action",
                     }],
                     "menus": {
                         "view/item/context": [{
@@ -15844,6 +15870,16 @@ module.exports = { activate, deactivate };
                             "command": "selftest.node.customEditorContextAction",
                             "when": "webviewId == selftest.node.customEditor && selftestWebviewSection == body",
                             "group": "navigation@1",
+                        }],
+                        "scm/resourceGroup/context": [{
+                            "command": "selftest.node.scmGroupAction",
+                            "when": "scmProvider == selftest-node-scm && scmResourceGroup == workingTree && scmResourceGroupState == exportable",
+                            "group": "inline@1",
+                        }],
+                        "scm/resourceState/context": [{
+                            "command": "selftest.node.scmStateAction",
+                            "when": "scmProvider == selftest-node-scm && scmResourceGroup == workingTree && scmResourceState == diffable && resourceExtname == .txt",
+                            "group": "inline@1",
                         }],
                     },
                     "viewsContainers": {"activitybar": [{
@@ -17203,6 +17239,18 @@ module.exports = { activate, deactivate };
                         "scmProvider") == "selftest-node-scm"
                     and node_host.node_scm_context_snapshot().get(
                         "scmProviderContext") == "repository")
+                node_scm_resource_uri = str(Uri.file(os.path.join(
+                    node_tree_tmp, "node-scm.txt")))
+                node_scm_group_ready = _wait_until(
+                    lambda: node_host.node_scm_context_snapshot({
+                        "providerId": "selftest-node-scm",
+                        "groupId": "workingTree",
+                    }).get("scmResourceGroupState") == "exportable"
+                    and node_host.node_scm_context_snapshot({
+                        "providerId": "selftest-node-scm",
+                        "groupId": "workingTree",
+                        "resourceUri": node_scm_resource_uri,
+                    }).get("scmResourceState") == "diffable")
                 node_custom_editor_title_actions = (
                     api.list_editor_title_actions({
                         "activeCustomEditorId": "selftest.node.customEditor",
@@ -17232,6 +17280,40 @@ module.exports = { activate, deactivate };
                 node_scm_title_action_result = (
                     api.execute_command(node_scm_title_action_command)
                     if node_scm_title_action_command else {})
+                node_scm_group_actions = api.list_scm_resource_group_actions({
+                    "providerId": "selftest-node-scm",
+                    "groupId": "workingTree",
+                })
+                node_scm_state_actions = api.list_scm_resource_state_actions({
+                    "providerId": "selftest-node-scm",
+                    "groupId": "workingTree",
+                    "resourceUri": node_scm_resource_uri,
+                })
+                node_scm_missing_group_actions = (
+                    api.list_scm_resource_group_actions({
+                        "providerId": "selftest-node-scm",
+                        "groupId": "missing",
+                    }))
+                node_scm_group_action = next((
+                    action for action in node_scm_group_actions.get(
+                        "actions", [])
+                    if action.get("command")
+                    == "selftest.node.scmGroupAction"), {})
+                node_scm_state_action = next((
+                    action for action in node_scm_state_actions.get(
+                        "actions", [])
+                    if action.get("command")
+                    == "selftest.node.scmStateAction"), {})
+                node_scm_group_action_result = (
+                    api.execute_command(
+                        node_scm_group_action.get("command", ""),
+                        *node_scm_group_action.get("arguments", []))
+                    if node_scm_group_action else {})
+                node_scm_state_action_result = (
+                    api.execute_command(
+                        node_scm_state_action.get("command", ""),
+                        *node_scm_state_action.get("arguments", []))
+                    if node_scm_state_action else {})
                 node_custom_editor_context_action_command = next((
                     action.get("command")
                     for action in node_custom_editor_context_actions.get(
@@ -18593,6 +18675,39 @@ module.exports = { activate, deactivate };
                     for action in node_custom_editor_context_actions.get(
                         "actions", [])
                 ]
+                _check("node SCM resource groups and states feed menu context",
+                       node_scm_context_ready
+                       and node_scm_group_ready
+                       and node_scm_group_actions.get("context", {}).get(
+                           "scmResourceGroup") == "workingTree"
+                       and node_scm_group_actions.get("context", {}).get(
+                           "scmResourceGroupState") == "exportable"
+                       and node_scm_state_actions.get("context", {}).get(
+                           "scmResourceState") == "diffable"
+                       and node_scm_state_actions.get("context", {}).get(
+                           "resourceExtname") == ".txt"
+                       and node_scm_group_action.get("command")
+                       == "selftest.node.scmGroupAction"
+                       and node_scm_state_action.get("command")
+                       == "selftest.node.scmStateAction"
+                       and node_scm_missing_group_actions.get("actions") == []
+                       and node_scm_group_action_result.get("ok") is True
+                       and node_scm_group_action_result.get("group")
+                       == "workingTree"
+                       and node_scm_group_action_result.get("groupState")
+                       == "exportable"
+                       and node_scm_state_action_result.get("ok") is True
+                       and node_scm_state_action_result.get("state")
+                       == "diffable"
+                       and node_scm_state_action_result.get("extname")
+                       == ".txt",
+                       json.dumps({
+                           "groupActions": node_scm_group_actions,
+                           "stateActions": node_scm_state_actions,
+                           "missingGroup": node_scm_missing_group_actions,
+                           "groupResult": node_scm_group_action_result,
+                           "stateResult": node_scm_state_action_result,
+                       }, ensure_ascii=False))
                 _check("extension editor/webview menus follow custom editor context",
                        "selftest.node.customEditorTitleAction"
                        in node_custom_editor_title_action_ids

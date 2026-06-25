@@ -2888,6 +2888,41 @@ class NodeExtensionHost:
                             "contextValue": str(msg.get("contextValue") or ""),
                         }
 
+        elif msg_type in {
+                "scm_resource_group_registered",
+                "scm_resource_group_updated",
+                "scm_resource_group_disposed"}:
+            provider_id = str(msg.get("providerId") or msg.get("id") or "")
+            group_id = str(msg.get("groupId") or "")
+            if provider_id and group_id:
+                with self._node_scm_lock:
+                    provider = self._node_scm_providers.setdefault(
+                        provider_id, {
+                            "id": provider_id,
+                            "providerId": provider_id,
+                            "label": provider_id,
+                            "rootUri": "",
+                            "contextValue": "",
+                        })
+                    groups = provider.setdefault("groups", {})
+                    if not isinstance(groups, dict):
+                        groups = {}
+                        provider["groups"] = groups
+                    if msg_type == "scm_resource_group_disposed":
+                        groups.pop(group_id, None)
+                    else:
+                        resource_states = msg.get("resourceStates")
+                        groups[group_id] = {
+                            "id": group_id,
+                            "groupId": group_id,
+                            "label": str(msg.get("label") or group_id),
+                            "contextValue": str(
+                                msg.get("contextValue") or ""),
+                            "resourceStates": (
+                                list(resource_states)
+                                if isinstance(resource_states, list) else []),
+                        }
+
         elif msg_type in {"tree_response", "tree_drag_drop_response"}:
             request_id = str(msg.get("requestId", ""))
             with self._tree_request_lock:
@@ -3978,9 +4013,12 @@ class NodeExtensionHost:
     def terminal_shell_executions(self) -> List[Dict[str, Any]]:
         return [dict(item) for item in self._terminal_shell_executions]
 
-    def node_scm_context_snapshot(self) -> Dict[str, Any]:
+    def node_scm_context_snapshot(
+            self,
+            selector: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         with self._node_scm_lock:
             providers = [dict(item) for item in self._node_scm_providers.values()]
+        raw_selector = selector if isinstance(selector, dict) else {}
         context: Dict[str, Any] = {
             "scm.providerCount": len(providers),
             "scmProviderCount": len(providers),
@@ -3988,7 +4026,15 @@ class NodeExtensionHost:
         }
         if not providers:
             return context
-        provider = providers[0]
+        provider_id = str(
+            raw_selector.get("scmProvider")
+            or raw_selector.get("providerId")
+            or raw_selector.get("sourceControlId")
+            or "")
+        provider = next((
+            item for item in providers
+            if str(item.get("providerId") or item.get("id") or "")
+            == provider_id), providers[0])
         root_uri = str(provider.get("rootUri") or "")
         context.update({
             "scmProvider": str(
@@ -4000,6 +4046,51 @@ class NodeExtensionHost:
         context_value = str(provider.get("contextValue") or "")
         if context_value:
             context["scmProviderContext"] = context_value
+        groups = provider.get("groups")
+        if not isinstance(groups, dict):
+            return context
+        group_id = str(
+            raw_selector.get("scmResourceGroup")
+            or raw_selector.get("resourceGroup")
+            or raw_selector.get("groupId")
+            or "")
+        resource_uri = str(
+            raw_selector.get("resourceUri")
+            or raw_selector.get("resource")
+            or raw_selector.get("uri")
+            or raw_selector.get("path")
+            or raw_selector.get("filePath")
+            or "")
+        group = None
+        if group_id:
+            group = groups.get(group_id)
+        elif resource_uri:
+            for candidate in groups.values():
+                states = candidate.get("resourceStates")
+                if not isinstance(states, list):
+                    continue
+                if any(str(state.get("resourceUri") or "") == resource_uri
+                       for state in states if isinstance(state, dict)):
+                    group = candidate
+                    break
+        if isinstance(group, dict):
+            context["scmResourceGroup"] = str(
+                group.get("groupId") or group.get("id") or "")
+            group_context = str(group.get("contextValue") or "")
+            if group_context:
+                context["scmResourceGroupState"] = group_context
+            states = group.get("resourceStates")
+            if isinstance(states, list) and resource_uri:
+                state = next((
+                    item for item in states
+                    if isinstance(item, dict)
+                    and str(item.get("resourceUri") or "") == resource_uri),
+                    None)
+                if isinstance(state, dict):
+                    state_context = str(state.get("contextValue") or "")
+                    if state_context:
+                        context["scmResourceState"] = state_context
+                    context["resourceUri"] = resource_uri
         return context
 
     def _terminal_link_request_result(
