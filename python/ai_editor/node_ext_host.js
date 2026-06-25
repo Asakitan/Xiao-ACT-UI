@@ -240,6 +240,38 @@ class NotebookRange {
     }
 }
 
+class NotebookEdit {
+    constructor(range, newCells, notebookMetadata, cellIndex, cellMetadata) {
+        this.range = range instanceof NotebookRange
+            ? range
+            : (range ? new NotebookRange(range.start, range.end) : undefined);
+        this.newCells = Array.isArray(newCells)
+            ? newCells.map(_notebookCellDataFromPlain)
+            : undefined;
+        this.newNotebookMetadata = notebookMetadata;
+        this.index = cellIndex;
+        this.newCellMetadata = cellMetadata;
+        this._notebookEdit = true;
+        this.kind = 'notebook';
+    }
+    static replaceCells(range, newCells) {
+        return new NotebookEdit(range, Array.isArray(newCells) ? newCells : []);
+    }
+    static insertCells(index, newCells) {
+        const start = Math.max(0, Number(index || 0));
+        return new NotebookEdit(new NotebookRange(start, start), Array.isArray(newCells) ? newCells : []);
+    }
+    static deleteCells(range) {
+        return new NotebookEdit(range, []);
+    }
+    static updateNotebookMetadata(newNotebookMetadata) {
+        return new NotebookEdit(undefined, undefined, newNotebookMetadata || {});
+    }
+    static updateCellMetadata(index, newCellMetadata) {
+        return new NotebookEdit(undefined, undefined, undefined, Number(index || 0), newCellMetadata || {});
+    }
+}
+
 let _nextNotebookOutputId = 1;
 
 class NotebookCellOutputItem {
@@ -354,6 +386,19 @@ function _notebookCellDataPayload(cell) {
         metadata: _plainBridgeValue(data.metadata || {}),
         executionSummary: _plainBridgeValue(data.executionSummary),
     };
+}
+
+function _notebookCellDataClone(cell) {
+    const data = _notebookCellDataFromPlain(cell);
+    return new NotebookCellData(
+        data.kind,
+        data.value,
+        data.languageId,
+        data.mime,
+        (data.outputs || []).map(_notebookOutputFromPlain),
+        _plainBridgeValue(data.metadata || {}),
+        _plainBridgeValue(data.executionSummary),
+    );
 }
 
 function _filterNotebookMetadata(metadata, transient) {
@@ -522,6 +567,18 @@ function _notebookCellForDocument(notebook, cellData, index) {
         metadata: cellData.metadata || {},
         executionSummary: cellData.executionSummary,
     };
+}
+
+function _fireNotebookChange(notebook, change) {
+    if (!notebook || notebook.isClosed) return;
+    notebook.version = Number(notebook.version || 0) + 1;
+    notebook.isDirty = true;
+    _onDidChangeNotebookDocumentEmitter.fire(Object.assign({
+        notebook,
+        metadata: undefined,
+        cells: [],
+        cellChanges: [],
+    }, change || {}));
 }
 
 function _createNotebookDocument(viewType, uri, data, options = {}) {
@@ -1975,6 +2032,8 @@ let _nextNotebookSerializerHandle = 1;
 let _nextNotebookDocumentHandle = 1;
 const _notebookSerializers = new Map(); // handle -> { viewType, serializer, options, extensionId }
 const _notebookDocuments = new Map(); // uri string -> notebook document
+let _nextNotebookControllerHandle = 1;
+const _notebookControllers = new Map(); // handle -> controller
 const _onDidOpenNotebookDocumentEmitter = new EventEmitter();
 const _onDidCloseNotebookDocumentEmitter = new EventEmitter();
 const _onDidChangeNotebookDocumentEmitter = new EventEmitter();
@@ -3728,6 +3787,156 @@ function _registerNotebookSerializer(extDesc, viewType, serializer, options) {
     });
 }
 
+function _createNotebookController(extDesc, id, notebookType, label, handler) {
+    const normalizedId = String(id || '').trim();
+    const normalizedType = String(notebookType || '').trim();
+    if (!normalizedId || !normalizedType) {
+        throw new Error('NotebookController id and notebookType are required');
+    }
+    const handle = _nextNotebookControllerHandle++;
+    const controller = {
+        id: normalizedId,
+        notebookType: normalizedType,
+        label: label === undefined || label === null ? normalizedId : String(label),
+        description: undefined,
+        detail: undefined,
+        supportedLanguages: [],
+        supportsExecutionOrder: true,
+        executeHandler: typeof handler === 'function' ? handler : undefined,
+        extensionId: extDesc.extensionId || '',
+        _handle: handle,
+        createNotebookCellExecution(cell) {
+            return _createNotebookCellExecution(controller, cell);
+        },
+        dispose() {
+            _notebookControllers.delete(handle);
+        },
+    };
+    _notebookControllers.set(handle, controller);
+    send({
+        type: 'notebook_controller_registered',
+        handle,
+        id: normalizedId,
+        notebookType: normalizedType,
+        label: controller.label,
+        extensionId: controller.extensionId,
+    });
+    return controller;
+}
+
+function _createNotebookCellExecution(controller, cell) {
+    const notebook = cell?.notebook;
+    const index = Number(cell?.index);
+    if (!notebook || !Number.isFinite(index) || index < 0 || index >= notebook.cellCount) {
+        throw new Error('Notebook cell execution requires a live notebook cell');
+    }
+    let executionOrder = undefined;
+    return {
+        get token() {
+            return { isCancellationRequested: false, onCancellationRequested: new EventEmitter().event };
+        },
+        get executionOrder() { return executionOrder; },
+        set executionOrder(value) {
+            const numeric = Number(value);
+            executionOrder = Number.isFinite(numeric) ? numeric : undefined;
+            const data = notebook._data.cells[index];
+            data.executionSummary = Object.assign(
+                {}, data.executionSummary || {}, { executionOrder });
+            _fireNotebookChange(notebook, {
+                cellChanges: [{ cell: notebook.cellAt(index), executionSummary: data.executionSummary }],
+            });
+        },
+        start(startTime) {
+            const data = notebook._data.cells[index];
+            data.executionSummary = Object.assign({}, data.executionSummary || {}, {
+                timing: Object.assign({}, data.executionSummary?.timing || {}, {
+                    startTime: Number(startTime || Date.now()),
+                }),
+            });
+            _fireNotebookChange(notebook, {
+                cellChanges: [{ cell: notebook.cellAt(index), executionSummary: data.executionSummary }],
+            });
+        },
+        end(success, endTime) {
+            const data = notebook._data.cells[index];
+            data.executionSummary = Object.assign({}, data.executionSummary || {}, {
+                success: success !== false,
+                timing: Object.assign({}, data.executionSummary?.timing || {}, {
+                    endTime: Number(endTime || Date.now()),
+                }),
+            });
+            _fireNotebookChange(notebook, {
+                cellChanges: [{ cell: notebook.cellAt(index), executionSummary: data.executionSummary }],
+            });
+        },
+        clearOutput() {
+            notebook._data.cells[index].outputs = [];
+            _fireNotebookChange(notebook, {
+                cellChanges: [{ cell: notebook.cellAt(index), outputs: [] }],
+            });
+            return Promise.resolve();
+        },
+        replaceOutput(outputs) {
+            const next = (Array.isArray(outputs) ? outputs : [outputs])
+                .filter(value => value !== undefined && value !== null)
+                .map(_notebookOutputFromPlain);
+            notebook._data.cells[index].outputs = next;
+            _fireNotebookChange(notebook, {
+                cellChanges: [{ cell: notebook.cellAt(index), outputs: next }],
+            });
+            return Promise.resolve();
+        },
+        appendOutput(outputs) {
+            const next = (Array.isArray(outputs) ? outputs : [outputs])
+                .filter(value => value !== undefined && value !== null)
+                .map(_notebookOutputFromPlain);
+            notebook._data.cells[index].outputs = [
+                ...(notebook._data.cells[index].outputs || []),
+                ...next,
+            ];
+            _fireNotebookChange(notebook, {
+                cellChanges: [{ cell: notebook.cellAt(index), outputs: notebook._data.cells[index].outputs }],
+            });
+            return Promise.resolve();
+        },
+        replaceOutputItems(items, output) {
+            const data = notebook._data.cells[index];
+            const targetId = output && output.id;
+            const nextItems = NotebookCellOutput.ensureUniqueMimeTypes(
+                Array.isArray(items) ? items : [items]);
+            for (const item of data.outputs || []) {
+                if (!targetId || item.id === targetId) {
+                    item.items = nextItems;
+                    _fireNotebookChange(notebook, {
+                        cellChanges: [{ cell: notebook.cellAt(index), outputs: data.outputs }],
+                    });
+                    return Promise.resolve();
+                }
+            }
+            return Promise.resolve();
+        },
+        appendOutputItems(items, output) {
+            const data = notebook._data.cells[index];
+            const targetId = output && output.id;
+            const nextItems = (Array.isArray(items) ? items : [items])
+                .map(_notebookOutputItemFromPlain);
+            for (const item of data.outputs || []) {
+                if (!targetId || item.id === targetId) {
+                    item.items = NotebookCellOutput.ensureUniqueMimeTypes([
+                        ...(item.items || []),
+                        ...nextItems,
+                    ]);
+                    _fireNotebookChange(notebook, {
+                        cellChanges: [{ cell: notebook.cellAt(index), outputs: data.outputs }],
+                    });
+                    return Promise.resolve();
+                }
+            }
+            return Promise.resolve();
+        },
+    };
+}
+
 async function _openNotebookDocument(uriOrType, content) {
     if (uriOrType instanceof Uri) {
         const key = uriOrType.toString();
@@ -4673,10 +4882,12 @@ function _workspaceEditText(entry) {
 
 function _workspaceEditKind(entry) {
     if (!entry || typeof entry !== 'object') return 'text';
+    if (entry._notebookEdit || entry.kind === 'notebook') return 'notebook';
     const kind = String(entry.kind || entry.type || entry.operation || '').toLowerCase();
     if (kind === 'createfile' || kind === 'create') return 'create';
     if (kind === 'deletefile' || kind === 'delete') return 'delete';
     if (kind === 'renamefile' || kind === 'rename') return 'rename';
+    if (kind === 'notebook' || kind === 'notebookedit') return 'notebook';
     return 'text';
 }
 
@@ -4858,6 +5069,64 @@ async function _workspaceApplyFileOperation(entry) {
     return false;
 }
 
+function _notebookDocumentForEdit(uri) {
+    if (!uri) return undefined;
+    const key = uri.toString();
+    const notebook = _notebookDocuments.get(key);
+    return notebook && !notebook.isClosed ? notebook : undefined;
+}
+
+function _notebookRangeFromEdit(entry, notebook) {
+    const cellCount = Math.max(0, Number(notebook?.cellCount || 0));
+    const raw = entry?.range;
+    const start = Math.max(0, Math.min(cellCount, Number(raw?.start ?? raw?.from ?? 0)));
+    const end = Math.max(start, Math.min(cellCount, Number(raw?.end ?? raw?.to ?? start)));
+    return { start, end };
+}
+
+function _workspaceApplyNotebookEdit(entry) {
+    const uri = _workspaceEditUri(entry);
+    const notebook = _notebookDocumentForEdit(uri);
+    if (!notebook) return false;
+    const event = { cells: [], cellChanges: [] };
+    if (entry.newNotebookMetadata !== undefined || entry.metadata !== undefined) {
+        const metadata = entry.newNotebookMetadata !== undefined
+            ? entry.newNotebookMetadata
+            : entry.metadata;
+        notebook.metadata = metadata && typeof metadata === 'object' ? metadata : {};
+        notebook._data.metadata = notebook.metadata;
+        event.metadata = notebook.metadata;
+    }
+    if (entry.index !== undefined || entry.cellIndex !== undefined) {
+        const index = Number(entry.index ?? entry.cellIndex);
+        if (!Number.isFinite(index) || index < 0 || index >= notebook._data.cells.length) {
+            return false;
+        }
+        const metadata = entry.newCellMetadata !== undefined
+            ? entry.newCellMetadata
+            : (entry.cellMetadata || {});
+        notebook._data.cells[index].metadata = metadata && typeof metadata === 'object'
+            ? metadata
+            : {};
+        const cell = notebook.cellAt(index);
+        event.cellChanges.push({ cell, metadata: cell.metadata });
+    }
+    if (Array.isArray(entry.newCells)) {
+        const range = _notebookRangeFromEdit(entry, notebook);
+        const newCells = entry.newCells.map(_notebookCellDataClone);
+        notebook._data.cells.splice(range.start, range.end - range.start, ...newCells);
+        event.cells.push({
+            start: range.start,
+            deletedCount: range.end - range.start,
+            deletedItems: [],
+            items: notebook.getCells(new NotebookRange(
+                range.start, range.start + newCells.length)),
+        });
+    }
+    _fireNotebookChange(notebook, event);
+    return true;
+}
+
 async function _workspaceApplyEdit(edit) {
     const entries = _workspaceEditEntries(edit);
     if (!entries.length) return true;
@@ -4916,6 +5185,11 @@ async function _workspaceApplyEdit(edit) {
     }
     for (const entry of entries) {
         const kind = _workspaceEditKind(entry);
+        if (kind === 'notebook') {
+            if (!(await flushTextEdits())) return false;
+            if (!_workspaceApplyNotebookEdit(entry)) return false;
+            continue;
+        }
         if (kind !== 'text') {
             if (!(await flushTextEdits())) return false;
             try {
@@ -6485,6 +6759,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         NotebookCellOutput,
         NotebookCellOutputItem,
         NotebookData,
+        NotebookEdit,
         NotebookRange,
         Disposable,
         EventEmitter,
@@ -6579,6 +6854,12 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
 
         // --- Namespace: window ---
         window: {
+            createNotebookController(id, notebookType, label, handler) {
+                const controller = _createNotebookController(
+                    extDesc, id, notebookType, label, handler);
+                subscriptions.push(new Disposable(() => controller.dispose()));
+                return controller;
+            },
             registerWebviewPanelSerializer(viewType, serializer) {
                 const normalized = String(viewType || '');
                 if (!normalized) {

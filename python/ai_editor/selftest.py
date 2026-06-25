@@ -5882,6 +5882,10 @@ console.log("quick input filter helpers ok");
            and "function showNotebookSurface(tab)" in html
            and "function readNotebookFromSurface(tab)" in html
            and "function notebookOutputText(outputs)" in html
+           and "function renderNotebookOutputs(parent,outputs)" in html
+           and "function notebookOutputItemDataUrl(item,mime)" in html
+           and "editor-notebook-output-item iframe" in html
+           and "frame.sandbox=''" in html
            and "editor-notebook-output" in html
            and "addEventListener('input',()=>{cell.value=ta.value;markNotebookDirty(tab)})"
            in html
@@ -6227,9 +6231,15 @@ console.log("quick input filter helpers ok");
            "class NotebookCellData" in node_ext_host_source
            and "class NotebookCellOutputItem" in node_ext_host_source
            and "class NotebookCellOutput" in node_ext_host_source
+           and "class NotebookEdit" in node_ext_host_source
            and "class NotebookRange" in node_ext_host_source
            and "class NotebookData" in node_ext_host_source
            and "NotebookCellKind" in node_ext_host_source
+           and "createNotebookController(id, notebookType, label, handler)"
+           in node_ext_host_source
+           and "createNotebookCellExecution(cell)" in node_ext_host_source
+           and "function _workspaceApplyNotebookEdit(entry)"
+           in node_ext_host_source
            and "registerNotebookSerializer(viewType, serializer, options)"
            in node_ext_host_source
            and "openNotebookDocument(uriOrType, content)" in node_ext_host_source
@@ -13760,8 +13770,10 @@ async function activate(context) {
     deserializedTexts: [],
     serializedCells: [],
     opened: [],
+    changed: [],
     saved: [],
     closed: [],
+    controllerExecutions: [],
   };
   vscode.commands.registerCommand('selftest.node.notebookSerializerProbe', async () => {
     const fs = require('node:fs');
@@ -13785,6 +13797,16 @@ async function activate(context) {
           uri: document.uri.toString(),
           notebookType: document.notebookType,
           cellCount: document.cellCount,
+        });
+      }),
+      vscode.workspace.onDidChangeNotebookDocument(event => {
+        notebookSerializerState.changed.push({
+          uri: event.notebook.uri.toString(),
+          notebookType: event.notebook.notebookType,
+          cellCount: event.notebook.cellCount,
+          metadataPublic: event.notebook.metadata && event.notebook.metadata.public,
+          cells: Array.isArray(event.cells) ? event.cells.length : 0,
+          cellChanges: Array.isArray(event.cellChanges) ? event.cellChanges.length : 0,
         });
       }),
     ];
@@ -13868,8 +13890,45 @@ async function activate(context) {
     }), 'utf8');
     const openedFromUri = await vscode.workspace.openNotebookDocument(fileUri);
     const rangedCells = openedFromUri.getCells(new vscode.NotebookRange(0, 1));
-    openedFromUri.metadata.secret = 'drop-doc';
-    openedFromUri.metadata.public = 'keep-doc';
+    const notebookEdit = new vscode.WorkspaceEdit();
+    notebookEdit.set(fileUri, [
+      vscode.NotebookEdit.updateNotebookMetadata({ secret: 'drop-doc', public: 'keep-doc' }),
+      vscode.NotebookEdit.updateCellMetadata(0, { source: 'applyEdit', scratch: 'drop-on-save' }),
+      vscode.NotebookEdit.replaceCells(
+        new vscode.NotebookRange(1, 2),
+        [new vscode.NotebookCellData(vscode.NotebookCellKind.Markup, 'edited markdown', 'markdown')]
+      ),
+      vscode.NotebookEdit.insertCells(
+        1,
+        [new vscode.NotebookCellData(vscode.NotebookCellKind.Code, 'inserted code', 'python')]
+      ),
+      vscode.NotebookEdit.deleteCells(new vscode.NotebookRange(1, 2)),
+    ]);
+    const notebookApplyEditOk = await vscode.workspace.applyEdit(notebookEdit);
+    const controller = vscode.window.createNotebookController(
+      'selftest.notebookController',
+      'selftest-notebook',
+      'Selftest Notebook Controller',
+      cells => notebookSerializerState.controllerExecutions.push(cells.length)
+    );
+    const execution = controller.createNotebookCellExecution(openedFromUri.cellAt(0));
+    execution.executionOrder = 9;
+    execution.start(100);
+    await execution.replaceOutput(new vscode.NotebookCellOutput([
+      vscode.NotebookCellOutputItem.text('<b>html</b>', 'text/html'),
+      vscode.NotebookCellOutputItem.text('plain output', 'text/plain'),
+    ], 'controller-output'));
+    await execution.appendOutput(new vscode.NotebookCellOutput([
+      vscode.NotebookCellOutputItem.json({ controller: true }, 'application/json'),
+    ], 'controller-json'));
+    await execution.appendOutputItems(
+      vscode.NotebookCellOutputItem.stdout(' stream'),
+      openedFromUri.cellAt(0).outputs[0]
+    );
+    execution.end(true, 200);
+    const outputMimesAfterExecution = openedFromUri.cellAt(0).outputs.flatMap(
+      output => output.items.map(item => item.mime));
+    const executionSummaryAfterController = openedFromUri.cellAt(0).executionSummary || {};
     const workspaceNotebookCountBeforeClose = vscode.workspace.notebookDocuments.length;
     const savedOk = await openedFromUri.save();
     const savedPayload = JSON.parse(fs.readFileSync(fileUri.fsPath, 'utf8'));
@@ -13883,6 +13942,7 @@ async function activate(context) {
         && vscode.NotebookCellData
         && vscode.NotebookCellOutput
         && vscode.NotebookCellOutputItem
+        && vscode.NotebookEdit
         && vscode.NotebookRange
       ),
       codeKind: vscode.NotebookCellKind.Code,
@@ -13894,7 +13954,11 @@ async function activate(context) {
       uriOpenedDirty: openedFromUri.isDirty,
       uriOpenedCellCount: openedFromUri.cellCount,
       uriOpenedCellText: openedFromUri.cellAt(0).document.getText(),
+      notebookApplyEditOk,
+      uriEditedCellText: openedFromUri.cellAt(1).document.getText(),
       uriOpenedOutputMime: openedFromUri.cellAt(0).outputs[0].items[0].mime,
+      outputMimesAfterExecution,
+      executionSummaryAfterController,
       rangeCellCount: rangedCells.length,
       savedOk,
       savedPayload,
@@ -17635,8 +17699,21 @@ module.exports = { activate, deactivate };
                        and node_notebook_probe.get("uriOpenedDirty") is False
                        and node_notebook_probe.get("uriOpenedCellCount") == 2
                        and node_notebook_probe.get("uriOpenedCellText") == "uri code"
+                       and node_notebook_probe.get("notebookApplyEditOk") is True
+                       and node_notebook_probe.get("uriEditedCellText")
+                       == "edited markdown"
                        and node_notebook_probe.get("uriOpenedOutputMime")
-                       == "text/plain"
+                       == "text/html"
+                       and "application/json" in node_notebook_probe.get(
+                           "outputMimesAfterExecution", [])
+                       and "application/vnd.code.notebook.stdout"
+                       in node_notebook_probe.get("outputMimesAfterExecution", [])
+                       and node_notebook_probe.get(
+                           "executionSummaryAfterController", {}).get(
+                               "executionOrder") == 9
+                       and node_notebook_probe.get(
+                           "executionSummaryAfterController", {}).get(
+                               "success") is True
                        and node_notebook_probe.get("rangeCellCount") == 1
                        and node_notebook_probe.get("savedOk") is True
                        and node_notebook_probe.get("savedPayload", {})
@@ -17646,7 +17723,7 @@ module.exports = { activate, deactivate };
                            .get("metadata", {}))
                        and node_notebook_probe.get("savedPayload", {})
                        .get("cells", [{}])[0].get("metadata", {})
-                       .get("source") == "deserialize"
+                       .get("source") == "applyEdit"
                        and "scratch" not in (
                            node_notebook_probe.get("savedPayload", {})
                            .get("cells", [{}])[0].get("metadata", {}))
@@ -17685,6 +17762,10 @@ module.exports = { activate, deactivate };
                            node_notebook_state.get("opened", []))
                        and '{"code":"const answer = 42;","markdown":"# Demo"}'
                        in node_notebook_state.get("deserializedTexts", [])
+                       and any(
+                           item.get("notebookType") == "selftest-notebook"
+                           and item.get("metadataPublic") == "keep-doc"
+                           for item in node_notebook_state.get("changed", []))
                        and any(
                            item.get("notebookType") == "selftest-notebook"
                            for item in node_notebook_state.get("saved", []))
