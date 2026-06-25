@@ -178,6 +178,8 @@ _AI_EDITOR_SECTION_DEFAULTS: Dict[str, Dict[str, Any]] = {
             "commands",
             "views",
             "customEditors",
+            "terminal",
+            "statusBarItems",
         ],
         "enabled_contributions_explicit": False,
         "diagnostics_enabled": False,

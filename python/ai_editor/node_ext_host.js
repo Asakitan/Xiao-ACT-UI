@@ -1607,6 +1607,7 @@ let _workspaceFolders = [{
 const _terminals = [];
 let _activeTerminal = undefined;
 let _nextTerminalHandle = 1;
+const _terminalProfileProviders = new Map(); // id -> { provider, extensionId }
 const _onDidChangeActiveTerminalEmitter = new EventEmitter();
 const _onDidOpenTerminalEmitter = new EventEmitter();
 const _onDidCloseTerminalEmitter = new EventEmitter();
@@ -3420,6 +3421,14 @@ class TerminalObject {
     }
 }
 
+class TerminalProfile {
+    constructor(options) {
+        this.options = options && typeof options === 'object'
+            ? options
+            : {};
+    }
+}
+
 function _createTerminal(nameOrOptions, shellPath, shellArgs) {
     const terminal = new TerminalObject(
         _terminalOptionsFromArgs(nameOrOptions, shellPath, shellArgs));
@@ -3428,6 +3437,36 @@ function _createTerminal(nameOrOptions, shellPath, shellArgs) {
     _onDidOpenTerminalEmitter.fire(terminal);
     terminal._openPty();
     return terminal;
+}
+
+async function _createTerminalFromProfileProvider(profileId, options) {
+    const id = String(profileId || '');
+    const entry = _terminalProfileProviders.get(id);
+    if (!entry) {
+        throw new Error(`No terminal profile provider registered for id "${id}"`);
+    }
+    const tokenSource = new CancellationTokenSource();
+    let profile = await entry.provider.provideTerminalProfile(tokenSource.token);
+    if (tokenSource.token.isCancellationRequested) {
+        return { cancelled: true };
+    }
+    if (profile && typeof profile === 'object' && !Object.prototype.hasOwnProperty.call(profile, 'options')) {
+        profile = new TerminalProfile(profile);
+    }
+    if (!profile || typeof profile !== 'object' || !profile.options) {
+        throw new Error(`No terminal profile options provided for id "${id}"`);
+    }
+    const terminalOptions = Object.assign(
+        {},
+        profile.options || {},
+        options && typeof options === 'object' ? options : {});
+    const terminal = _createTerminal(terminalOptions);
+    terminal.show(!!(options && options.preserveFocus));
+    return {
+        cancelled: false,
+        profile: _plainBridgeValue({ options: profile.options || {} }),
+        terminal: Object.assign({ id: terminal._handle }, terminal.metadata()),
+    };
 }
 
 function _normalizeFileSystemScheme(scheme) {
@@ -5651,6 +5690,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         Disposable,
         EventEmitter,
         CancellationTokenSource,
+        TerminalProfile,
 
         // --- Enums ---
         ViewColumn: { One: 1, Two: 2, Three: 3, Active: -1, Beside: -2 },
@@ -5977,6 +6017,39 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             },
             createTerminal(nameOrOptions, shellPath, shellArgs) {
                 return _createTerminal(nameOrOptions, shellPath, shellArgs);
+            },
+            registerTerminalProfileProvider(id, provider) {
+                const normalized = String(id || '');
+                if (!normalized) {
+                    throw new Error('Terminal profile provider id is required');
+                }
+                if (!provider || typeof provider.provideTerminalProfile !== 'function') {
+                    throw new Error('TerminalProfileProvider must implement provideTerminalProfile');
+                }
+                if (_terminalProfileProviders.has(normalized)) {
+                    throw new Error(`Terminal profile provider "${normalized}" already registered`);
+                }
+                const entry = {
+                    provider,
+                    extensionId: extDesc.extensionId || '',
+                };
+                _terminalProfileProviders.set(normalized, entry);
+                send({
+                    type: 'terminal_profile_provider_registered',
+                    id: normalized,
+                    extensionId: entry.extensionId,
+                });
+                const d = new Disposable(() => {
+                    if (_terminalProfileProviders.get(normalized) !== entry) return;
+                    _terminalProfileProviders.delete(normalized);
+                    send({
+                        type: 'terminal_profile_provider_disposed',
+                        id: normalized,
+                        extensionId: entry.extensionId,
+                    });
+                });
+                subscriptions.push(d);
+                return d;
             },
             get terminals() { return _terminals.slice(); },
             get activeTerminal() { return _activeTerminal; },
@@ -9628,6 +9701,30 @@ function handleTreeViewEvent(msg) {
     }
 }
 
+async function handleTerminalProfileRequest(msg) {
+    const requestId = msg.requestId;
+    try {
+        const value = await _createTerminalFromProfileProvider(
+            msg.id || msg.profileId,
+            msg.options || {});
+        send({
+            type: 'terminal_profile_response',
+            requestId,
+            ok: true,
+            profile: value.profile || null,
+            terminal: value.terminal || null,
+            cancelled: value.cancelled === true,
+        });
+    } catch (err) {
+        send({
+            type: 'terminal_profile_response',
+            requestId,
+            ok: false,
+            error: err?.message || String(err),
+        });
+    }
+}
+
 // -------------------------------------------------------------------------
 // Shutdown — deactivate all and exit
 // -------------------------------------------------------------------------
@@ -9712,6 +9809,9 @@ async function handleMessage(msg) {
             break;
         case 'file_decoration_cancel':
             handleFileDecorationCancel(msg);
+            break;
+        case 'terminal_profile_request':
+            await handleTerminalProfileRequest(msg);
             break;
         case 'lm_tool_request':
             await handleLmToolRequest(msg);

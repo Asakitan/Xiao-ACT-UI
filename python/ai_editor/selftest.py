@@ -6309,6 +6309,9 @@ console.log("quick input filter helpers ok");
            "views" in ext_defaults._enabled_extension_contributions())
     _check("extension custom editor contribution remains enabled for old settings",
            "customEditors" in ext_defaults._enabled_extension_contributions())
+    _check("extension terminal/status contributions remain enabled for old settings",
+           "terminal" in ext_defaults._enabled_extension_contributions()
+           and "statusBarItems" in ext_defaults._enabled_extension_contributions())
     ext_explicit = AIEditorAPI(_SettingsGui({"ai_editor": {"extensions": {
         "enabled_contributions": ["commands"],
         "enabled_contributions_explicit": True,
@@ -7164,6 +7167,19 @@ def test_extension_host() -> None:
                                   "fullName": "Test Chat Bot"}],
             "languageModelTools": [{"name": "test_tool",
                                     "displayName": "Test Tool"}],
+            "statusBarItems": [{
+                "id": "test.status",
+                "name": "Test Status",
+                "text": "$(zap) Ready",
+                "alignment": "left",
+                "priority": 10,
+                "command": "test.hello",
+            }],
+            "terminal": {"profiles": [{
+                "id": "test.profile",
+                "title": "Test Profile",
+                "icon": "terminal",
+            }]},
             "views": {"explorer": [{"id": "test.tree", "name": "Test Tree"}]},
             "menus": {"view/title": [{
                 "command": "test.hello",
@@ -7227,6 +7243,9 @@ def test_extension_host() -> None:
             and summary.get("manifestCommandFallbacks") == 0)
     _check("EP.summary view runtime count",
            summary.get("needsExtensionRuntime", {}).get("views") == 1)
+    _check("EP.summary terminal and status contributions",
+           summary.get("terminalProfiles") == 1
+           and summary.get("statusBarItems") == 1)
     contrib_details = ep.all_contributions
     _check("EP.extra contribution details retained",
            len(contrib_details.get("jsonValidation", [])) == 1
@@ -7235,7 +7254,13 @@ def test_extension_host() -> None:
            and len(contrib_details.get("viewsWelcome", [])) == 1
            and len(contrib_details.get("submenus", [])) == 1
            and len(contrib_details.get("problemMatchers", [])) == 1
-           and len(contrib_details.get("breakpoints", [])) == 1)
+           and len(contrib_details.get("breakpoints", [])) == 1
+           and len(contrib_details.get("terminal", [])) == 1
+           and len(contrib_details.get("statusBarItems", [])) == 1
+           and contrib_details.get("terminal", [{}])[0].get("_extensionId")
+           == "test.test-ext"
+           and contrib_details.get("statusBarItems", [{}])[0].get("id")
+           == "test.status")
 
     # ExtensionContext
     tmpdir = tempfile.mkdtemp(prefix="sao_ext_test_")
@@ -13392,6 +13417,41 @@ async function activate(context) {
     disposables.forEach(disposable => disposable.dispose());
     return { created, after, ptyAfter, interacted, events };
   });
+  vscode.commands.registerCommand('selftest.node.terminalProfileProbe', async () => {
+    const provider = {
+      provideTerminalProfile(token) {
+        return new vscode.TerminalProfile({
+          name: 'Node Profile Terminal',
+          message: 'profile ready',
+          iconPath: new vscode.ThemeIcon('terminal'),
+          color: new vscode.ThemeColor('terminal.ansiCyan'),
+          isTransient: true,
+        });
+      },
+    };
+    const disposable = vscode.window.registerTerminalProfileProvider(
+      'selftest.node.profile',
+      provider
+    );
+    let duplicateError = '';
+    try {
+      vscode.window.registerTerminalProfileProvider(
+        'selftest.node.profile',
+        provider
+      );
+    } catch (err) {
+      duplicateError = err && err.message ? err.message : String(err);
+    }
+    const profile = await provider.provideTerminalProfile(
+      new vscode.CancellationTokenSource().token
+    );
+    return {
+      hasClass: profile instanceof vscode.TerminalProfile,
+      optionsName: profile.options && profile.options.name,
+      duplicateError,
+      disposable: !!(disposable && disposable.dispose),
+    };
+  });
   vscode.commands.registerCommand('selftest.node.taskDebugProbe', async () => {
     const taskEvents = [];
     const debugEvents = [];
@@ -14425,6 +14485,28 @@ module.exports = { activate, deactivate };
                 except Exception as exc:
                     node_terminal_probe = {"_error": str(exc)}
                 node_terminal_events = list(node_ui_bridge.terminal_events)
+                node_terminal_profile_command_registered = _wait_until(
+                    lambda: "selftest.node.terminalProfileProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                try:
+                    node_terminal_profile_probe = (
+                        api._ext_host.commands.execute(
+                            "selftest.node.terminalProfileProbe"))
+                except Exception as exc:
+                    node_terminal_profile_probe = {"_error": str(exc)}
+                node_terminal_profile_providers = (
+                    node_host.terminal_profile_providers()
+                    if node_started else [])
+                node_terminal_profile_start = len(node_ui_bridge.terminal_events)
+                node_terminal_profile_request = (
+                    node_host.request_terminal_profile_result(
+                        "selftest.node.profile",
+                        timeout=3.0)
+                    if node_started else {"ok": False})
+                node_terminal_profile_events = list(
+                    node_ui_bridge.terminal_events[
+                        node_terminal_profile_start:])
                 node_task_terminal_start = len(node_ui_bridge.terminal_events)
                 node_task_debug_command_registered = _wait_until(
                     lambda: "selftest.node.taskDebugProbe"
@@ -16827,6 +16909,44 @@ module.exports = { activate, deactivate };
                        json.dumps({
                            "probe": node_terminal_probe,
                            "bridge": node_terminal_events,
+                       }, ensure_ascii=False, default=str))
+                _check("node host terminal profile providers create dynamic terminals",
+                       node_started is True
+                       and node_terminal_profile_command_registered
+                       and isinstance(node_terminal_profile_probe, dict)
+                       and node_terminal_profile_probe.get("hasClass") is True
+                       and node_terminal_profile_probe.get("optionsName")
+                       == "Node Profile Terminal"
+                       and node_terminal_profile_probe.get("disposable") is True
+                       and "already registered" in str(
+                           node_terminal_profile_probe.get(
+                               "duplicateError", ""))
+                       and any(
+                           item.get("id") == "selftest.node.profile"
+                           and item.get("extensionId") == "selftest.node-tree"
+                           for item in node_terminal_profile_providers)
+                       and node_terminal_profile_request.get("ok") is True
+                       and node_terminal_profile_request.get(
+                           "terminal", {}).get("name")
+                       == "Node Profile Terminal"
+                       and node_terminal_profile_request.get(
+                           "profile", {}).get("options", {}).get("name")
+                       == "Node Profile Terminal"
+                       and any(
+                           item.get("event") == "show"
+                           and item.get("name") == "Node Profile Terminal"
+                           and item.get("metadata", {}).get("message")
+                           == "profile ready"
+                           and item.get("metadata", {}).get("iconPath", {})
+                           .get("id") == "terminal"
+                           and item.get("metadata", {}).get("color", {})
+                           .get("id") == "terminal.ansiCyan"
+                           for item in node_terminal_profile_events),
+                       json.dumps({
+                           "probe": node_terminal_profile_probe,
+                           "providers": node_terminal_profile_providers,
+                           "request": node_terminal_profile_request,
+                           "events": node_terminal_profile_events,
                        }, ensure_ascii=False, default=str))
                 node_task_debug_events = (
                     node_task_debug_probe.get("taskEvents", [])

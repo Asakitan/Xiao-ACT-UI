@@ -543,6 +543,7 @@ class ExtensionPoints:
         self._chat_skills: List[Dict[str, Any]] = []
         self._mcp_providers: List[Dict[str, Any]] = []
         self._terminal_profiles: List[Dict[str, Any]] = []
+        self._status_bar_items: List[Dict[str, Any]] = []
         self._config_defaults: List[Dict[str, Any]] = []
         self._chat_welcome: List[Dict[str, Any]] = []
         self._interactive_sessions: List[Dict[str, Any]] = []
@@ -927,11 +928,24 @@ class ExtensionPoints:
                 mp["_extensionId"] = eid
                 self._mcp_providers.append(mp)
 
-        for tp in c.get("terminal", []):
+        terminal_contributes = c.get("terminal", []) if _enabled("terminal") else []
+        if isinstance(terminal_contributes, dict):
+            terminal_profiles = terminal_contributes.get("profiles", [])
+        else:
+            terminal_profiles = terminal_contributes
+        for tp in terminal_profiles:
             if isinstance(tp, dict):
                 tp = dict(tp)
                 tp["_extensionId"] = eid
                 self._terminal_profiles.append(tp)
+                self._bucket(eid, "terminal").append(tp)
+
+        for item in (c.get("statusBarItems", []) if _enabled("statusBarItems") else []):
+            if isinstance(item, dict):
+                item = dict(item)
+                item["_extensionId"] = eid
+                self._status_bar_items.append(item)
+                self._bucket(eid, "statusBarItems").append(item)
 
         cfg_defaults = c.get("configurationDefaults")
         if cfg_defaults:
@@ -1086,6 +1100,7 @@ class ExtensionPoints:
             "chatSkills": list(self._chat_skills),
             "mcpServerDefinitionProviders": list(self._mcp_providers),
             "terminal": list(self._terminal_profiles),
+            "statusBarItems": list(self._status_bar_items),
             "interactiveSession": list(self._interactive_sessions),
             "authentication": list(self._authentication),
             "languages": list(self._languages),
@@ -1162,6 +1177,7 @@ class ExtensionPoints:
             "chatSkills": len(self._chat_skills),
             "mcpServerDefinitionProviders": len(self._mcp_providers),
             "terminalProfiles": len(self._terminal_profiles),
+            "statusBarItems": len(self._status_bar_items),
             "configurationDefaults": len(self._config_defaults),
             "chatViewsWelcome": len(self._chat_welcome),
             "viewsWelcome": len(self._views_welcome),
@@ -1833,6 +1849,9 @@ class NodeExtensionHost:
         self._file_decoration_request_lock = threading.Lock()
         self._file_decoration_requests: Dict[str, Dict[str, Any]] = {}
         self._file_decoration_providers: List[Dict[str, Any]] = []
+        self._terminal_profile_request_lock = threading.Lock()
+        self._terminal_profile_requests: Dict[str, Dict[str, Any]] = {}
+        self._terminal_profile_providers: List[Dict[str, Any]] = []
         self._custom_editor_request_lock = threading.Lock()
         self._custom_editor_requests: Dict[str, Dict[str, Any]] = {}
         self._custom_editor_lifecycle_lock = threading.Lock()
@@ -2986,6 +3005,36 @@ class NodeExtensionHost:
                 except Exception:
                     pass
 
+        elif msg_type == "terminal_profile_provider_registered":
+            profile_id = str(msg.get("id") or msg.get("profileId") or "")
+            if profile_id:
+                record = {
+                    "id": profile_id,
+                    "extensionId": str(msg.get("extensionId", "")),
+                }
+                self._terminal_profile_providers = [
+                    item for item in self._terminal_profile_providers
+                    if item.get("id") != profile_id
+                ]
+                self._terminal_profile_providers.append(record)
+
+        elif msg_type == "terminal_profile_provider_disposed":
+            profile_id = str(msg.get("id") or msg.get("profileId") or "")
+            self._terminal_profile_providers = [
+                item for item in self._terminal_profile_providers
+                if item.get("id") != profile_id
+            ]
+
+        elif msg_type == "terminal_profile_response":
+            request_id = str(msg.get("requestId", ""))
+            with self._terminal_profile_request_lock:
+                pending = self._terminal_profile_requests.get(request_id)
+            if pending:
+                pending["response"] = msg
+                event = pending.get("event")
+                if isinstance(event, threading.Event):
+                    event.set()
+
         elif msg_type == "task_execute":
             if self._ui_bridge:
                 try:
@@ -3573,6 +3622,59 @@ class NodeExtensionHost:
             "requestId": request_id,
             "reason": str(reason or "cancelled"),
         })
+
+    def terminal_profile_providers(self) -> List[Dict[str, Any]]:
+        return [dict(item) for item in self._terminal_profile_providers]
+
+    def request_terminal_profile_result(
+            self,
+            profile_id: str,
+            options: Optional[Dict[str, Any]] = None,
+            default: Any = None,
+            timeout: float = 5.0) -> Dict[str, Any]:
+        request_id = str(uuid.uuid4())
+        event = threading.Event()
+        with self._terminal_profile_request_lock:
+            self._terminal_profile_requests[request_id] = {"event": event}
+        sent = self._send({
+            "type": "terminal_profile_request",
+            "requestId": request_id,
+            "id": str(profile_id or ""),
+            "options": options if isinstance(options, dict) else {},
+        })
+        if not sent:
+            with self._terminal_profile_request_lock:
+                self._terminal_profile_requests.pop(request_id, None)
+            return {
+                "ok": False,
+                "value": default,
+                "error": "host not running",
+            }
+        if event.wait(max(0.0, timeout)):
+            with self._terminal_profile_request_lock:
+                pending = self._terminal_profile_requests.pop(request_id, None)
+            response = dict((pending or {}).get("response") or {})
+            if response.get("ok"):
+                terminal = response.get("terminal")
+                return {
+                    "ok": True,
+                    "value": terminal,
+                    "terminal": terminal,
+                    "profile": response.get("profile"),
+                }
+            return {
+                "ok": False,
+                "value": default,
+                "error": str(response.get("error") or "request failed"),
+            }
+        with self._terminal_profile_request_lock:
+            self._terminal_profile_requests.pop(request_id, None)
+        return {
+            "ok": False,
+            "value": default,
+            "error": "timeout",
+            "timeout": True,
+        }
 
     def request_lm_tool_result(
             self, name: str, input_data: Any = None,
