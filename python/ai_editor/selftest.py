@@ -4586,6 +4586,7 @@ console.log("frontend hover and code action rendering ok");
             "editorProviderResultCount",
             "updateEditorLanguageProviderStatus",
             "editorLanguageProviderFailureMessage",
+            "editorLanguageProviderErrorSummary",
             "editorRequestLanguageProvider",
         ]
         provider_status_js_functions = "\n".join(
@@ -4630,6 +4631,20 @@ async function call(method,payload){
   assert(languageStatus.className.includes("error")
          && languageStatus.textContent.includes("Definition failed: provider exploded"),
          "error provider status is visible");
+
+  callResponses = [{ ok:true, requestId:"r2b", items:[{ label:"a" }], providerErrors:[{ displayName:"Bad Hover", error:"boom" }] }];
+  await editorRequestLanguageProvider("completion", null, { countKey:"items", itemLabel:"suggestion" });
+  assert(languageStatus.className.includes("warning")
+         && languageStatus.textContent === "1 suggestion with provider warning"
+         && languageStatus.title === "Bad Hover: boom",
+         "provider warning status is visible");
+
+  callResponses = [{ ok:true, requestId:"r2c", hovers:[], providerErrors:[{ providerId:"bad.hover", error:"boom" }] }];
+  await editorRequestLanguageProvider("hover", null, { countKey:"hovers", itemLabel:"hover" });
+  assert(languageStatus.className.includes("error")
+         && languageStatus.textContent === "Hover provider bad.hover failed: boom"
+         && languageStatus.title === "bad.hover: boom",
+         "empty provider error status is visible");
 
   callResponses = [{ ok:false, timeout:true, error:"too slow", requestId:"r3" }];
   await editorRequestLanguageProvider("diagnostics", null, { countKey:"diagnostics" });
@@ -14878,6 +14893,11 @@ async function activate(context) {
       return new vscode.Hover(['node hover ' + document.getText().slice(0, 4)], new vscode.Range(position, position));
     },
   });
+  vscode.languages.registerHoverProvider('python', {
+    provideHover(document, position, token) {
+      throw new Error('node hover provider failure');
+    },
+  });
   const cancelProbe = { started: 0, cancelled: 0, completed: 0 };
   vscode.commands.registerCommand('selftest.node.languageCancelState', () => Object.assign({}, cancelProbe));
   vscode.languages.registerHoverProvider({ language: 'python', pattern: '**/cancel_provider.py' }, {
@@ -17992,6 +18012,19 @@ module.exports = { activate, deactivate };
                     node_uri, Position(0, 1), ".", 1)
                 node_hover = api._ext_host.commands.execute(
                     "vscode.executeHoverProvider", node_uri, Position(0, 1))
+                node_hover_health_result = api._request_node_language_provider({
+                    "kind": "hover",
+                    "uri": str(node_uri),
+                    "languageId": "python",
+                    "version": 2,
+                    "text": "print('node provider')\n",
+                    "position": {"line": 0, "character": 1},
+                })
+                node_hover_health_errors = (
+                    node_hover_health_result.get("providerErrors")
+                    if isinstance(node_hover_health_result, dict) else [])
+                node_hover_health_snapshot = (
+                    node_host.language_provider_health_snapshot())
                 cancel_provider_sample = os.path.join(
                     node_tree_tmp, "cancel_provider.py")
                 with open(cancel_provider_sample, "w", encoding="utf-8") as fh:
@@ -18177,6 +18210,15 @@ module.exports = { activate, deactivate };
                     api.editor_language_provider({
                         "kind": "providerMetadata",
                         "providerKind": "completion",
+                        "filePath": node_provider_sample,
+                        "language": "python",
+                        "content": "print('node provider')\n",
+                        "matchedOnly": True,
+                    }))
+                node_editor_hover_providers = (
+                    api.editor_language_provider({
+                        "kind": "providerMetadata",
+                        "providerKind": "hover",
                         "filePath": node_provider_sample,
                         "language": "python",
                         "content": "print('node provider')\n",
@@ -18999,6 +19041,24 @@ module.exports = { activate, deactivate };
                 _check("node host language provider invokes JS hover",
                        node_hover
                        and node_hover[0].get("contents") == ["node hover prin"])
+                _check("node host aggregates JS language provider failures",
+                       node_hover_health_result.get("ok") is True
+                       and node_hover_health_result.get("providerCount", 0) >= 2
+                       and node_hover_health_errors
+                       and any(
+                           "node hover provider failure" in str(
+                               item.get("error", ""))
+                           for item in node_hover_health_errors)
+                       and any(
+                           item.get("kind") == "hover"
+                           and item.get("errors", 0) >= 1
+                           and "node hover provider failure" in str(
+                               item.get("last_error", ""))
+                           for item in node_hover_health_snapshot.values()),
+                       json.dumps({
+                           "result": node_hover_health_result,
+                           "health": node_hover_health_snapshot,
+                       }, ensure_ascii=False, default=str))
                 _check("node host language provider cancels superseded requests",
                        first_cancel_result.get("result", {}).get("cancelled")
                        is True
@@ -19280,6 +19340,19 @@ module.exports = { activate, deactivate };
                            for item in
                            node_editor_on_type_providers.get(
                                "providers", [])))
+                _check("editor_language_provider exposes Node provider health metadata",
+                       node_editor_hover_providers.get("matchedOnly") is True
+                       and any(
+                           item.get("source") == "node"
+                           and item.get("kind") == "hover"
+                           and item.get("matched") is True
+                           and item.get("health", {}).get("errors", 0) >= 1
+                           and "node hover provider failure" in str(
+                               item.get("health", {}).get("last_error", ""))
+                           for item in
+                           node_editor_hover_providers.get("providers", [])),
+                       json.dumps(node_editor_hover_providers,
+                                  ensure_ascii=False, default=str))
                 _check("node host language provider invokes JS workspace symbols",
                        node_workspace_symbols
                        and node_workspace_symbols[0].get("name")
@@ -21497,6 +21570,17 @@ module.exports = { activate, deactivate };
                        }, ensure_ascii=False))
                 node_diagnostics = node_host.diagnostics_snapshot()
                 node_diag_categories = node_diagnostics.get("categories", {})
+                node_diag_language_health = (
+                    node_diagnostics.get("languageProviderHealth", {}))
+                _check("node host diagnostics include language provider health",
+                       any(
+                           item.get("kind") == "hover"
+                           and item.get("errors", 0) >= 1
+                           and "node hover provider failure" in str(
+                               item.get("last_error", ""))
+                           for item in node_diag_language_health.values()),
+                       json.dumps(node_diag_language_health,
+                                  ensure_ascii=False, default=str))
                 _check("node host diagnostics are default-off and record enabled probes",
                        node_diag_initial.get("enabled") is False
                        and node_diagnostics.get("enabled") is True

@@ -788,7 +788,8 @@ def _language_provider_metadata_entry(
         source: str,
         entry: Dict[str, Any],
         document: Any,
-        vscode_ns: Any) -> Dict[str, Any]:
+        vscode_ns: Any,
+        health: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     metadata = entry.get("metadata")
     selector = entry.get("selector")
     match_score = _language_provider_match_score(
@@ -811,6 +812,7 @@ def _language_provider_metadata_entry(
         "resolveSupport": _language_provider_resolve_support(entry),
         "metadata": _json_ready_language_value(metadata),
         "codeActionKinds": _code_action_metadata_kinds(metadata),
+        "health": dict(health or {}),
     }
 
 
@@ -5040,13 +5042,29 @@ class AIEditorAPI:
                 if node_host is not None and getattr(
                         node_host, "is_running", False):
                     try:
+                        node_health = {}
+                        try:
+                            node_health = (
+                                node_host.language_provider_health_snapshot())
+                        except Exception:
+                            node_health = {}
                         for entry in node_host.list_language_providers():
                             if not isinstance(entry, dict):
                                 continue
                             if target_kind and entry.get("kind") != target_kind:
                                 continue
+                            provider_id = str(
+                                entry.get("providerId") or entry.get("id")
+                                or entry.get("handle") or "")
+                            provider_kind = str(entry.get("kind") or "")
+                            health = (
+                                node_health.get(
+                                    f"{provider_kind}:{provider_id}")
+                                or node_health.get(provider_id)
+                                or {})
                             item = _language_provider_metadata_entry(
-                                "node", entry, document, self._vscode_ns)
+                                "node", entry, document, self._vscode_ns,
+                                health=health)
                             if not matched_only or item.get("matched"):
                                 providers.append(item)
                     except Exception:

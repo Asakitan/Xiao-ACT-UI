@@ -10248,6 +10248,8 @@ async function handleLanguageProviderRequest(msg) {
     const methodName = _languageProviderMethod(kind);
     const cts = new CancellationTokenSource();
     const token = cts.token;
+    const providerErrors = [];
+    let matchedProviderCount = 0;
     if (requestId) _languageProviderRequests.set(requestId, cts);
     try {
         if (!requestId) throw new Error('Missing language provider requestId');
@@ -10290,6 +10292,30 @@ async function handleLanguageProviderRequest(msg) {
                 .sort((a, b) => b.score - a.score)
                 .map(item => item.entry);
         };
+        const providerIdentity = (entry) => {
+            if (!entry) return {};
+            return {
+                handle: entry.handle,
+                providerId: String(entry.providerId || entry.id || entry.handle || ''),
+                extensionId: String(entry.extensionId || ''),
+                displayName: String(entry.displayName || entry.providerId || entry.id || entry.handle || ''),
+                kind: String(entry.kind || kind || ''),
+            };
+        };
+        const recordProviderError = (entry, err) => {
+            const error = err && err.message ? String(err.message) : String(err || '');
+            const payload = Object.assign(providerIdentity(entry), {
+                error,
+                name: err && err.name ? String(err.name) : '',
+            });
+            providerErrors.push(payload);
+            send(Object.assign({
+                type: 'language_provider_error',
+                requestId,
+                providerCount: matchedProviderCount,
+            }, payload));
+            log(`language provider ${kind} error: ${error}`);
+        };
         const respondCancelled = () => {
             send({
                 type: 'language_provider_response',
@@ -10298,6 +10324,8 @@ async function handleLanguageProviderRequest(msg) {
                 kind,
                 cancelled: true,
                 error: 'Language provider request cancelled',
+                providerCount: matchedProviderCount,
+                providerErrors: providerErrors.slice(),
             });
         };
         if (token.isCancellationRequested) {
@@ -10362,7 +10390,7 @@ async function handleLanguageProviderRequest(msg) {
                     });
                     return;
                 } catch (err) {
-                    log(`language provider ${kind} error: ${err.message}`);
+                    recordProviderError(entry, err);
                 }
             }
             send({
@@ -10400,7 +10428,7 @@ async function handleLanguageProviderRequest(msg) {
                     });
                     return;
                 } catch (err) {
-                    log(`language provider ${kind} error: ${err.message}`);
+                    recordProviderError(entry, err);
                 }
             }
             send({
@@ -10428,6 +10456,13 @@ async function handleLanguageProviderRequest(msg) {
                         ? 'documentPaste'
                     : (kind === 'prepareRename' || kind === 'rename') ? 'rename' : kind;
         const providers = matchingProvidersForKind(providerKind);
+        matchedProviderCount = providers.length;
+        send({
+            type: 'language_provider_status',
+            requestId,
+            kind,
+            providerCount: matchedProviderCount,
+        });
 
         if (kind === 'workspaceSymbol') {
             const values = [];
@@ -10444,7 +10479,7 @@ async function handleLanguageProviderRequest(msg) {
                         if (symbol && symbol.name) values.push(_cacheWorkspaceSymbol(provider, symbol));
                     }
                 } catch (err) {
-                    log(`language provider ${kind} error: ${err.message}`);
+                    recordProviderError(entry, err);
                 }
             }
             send({
@@ -10473,7 +10508,7 @@ async function handleLanguageProviderRequest(msg) {
                     });
                     return;
                 } catch (err) {
-                    log(`language provider ${kind} error: ${err.message}`);
+                    recordProviderError(entry, err);
                 }
             }
             send({
@@ -10527,7 +10562,7 @@ async function handleLanguageProviderRequest(msg) {
                     }
                     isIncomplete = isIncomplete || normalized.isIncomplete;
                 } catch (err) {
-                    log(`language provider ${kind} error: ${err.message}`);
+                    recordProviderError(entry, err);
                 }
             }
             send({
@@ -10569,7 +10604,7 @@ async function handleLanguageProviderRequest(msg) {
                         return;
                     }
                 } catch (err) {
-                    log(`language provider ${kind} error: ${err.message}`);
+                    recordProviderError(entry, err);
                 }
             }
             send({
@@ -10602,7 +10637,7 @@ async function handleLanguageProviderRequest(msg) {
                         return;
                     }
                 } catch (err) {
-                    log(`language provider ${kind} error: ${err.message}`);
+                    recordProviderError(entry, err);
                 }
             }
             send({
@@ -10634,7 +10669,7 @@ async function handleLanguageProviderRequest(msg) {
                         return;
                     }
                 } catch (err) {
-                    log(`language provider ${kind} error: ${err.message}`);
+                    recordProviderError(entry, err);
                 }
             }
             send({
@@ -10675,7 +10710,7 @@ async function handleLanguageProviderRequest(msg) {
                         return;
                     }
                 } catch (err) {
-                    log(`language provider ${kind} error: ${err.message}`);
+                    recordProviderError(entry, err);
                 }
             }
             send({
@@ -10713,7 +10748,7 @@ async function handleLanguageProviderRequest(msg) {
                         return;
                     }
                 } catch (err) {
-                    log(`language provider ${kind} error: ${err.message}`);
+                    recordProviderError(entry, err);
                 }
             }
             send({
@@ -10744,7 +10779,7 @@ async function handleLanguageProviderRequest(msg) {
                         return;
                     }
                 } catch (err) {
-                    log(`language provider ${kind} error: ${err.message}`);
+                    recordProviderError(entry, err);
                 }
             }
             send({
@@ -10776,7 +10811,7 @@ async function handleLanguageProviderRequest(msg) {
                     const value = await fn.call(provider, document, range, inlineContext, token);
                     values.push(..._normalizeProviderItems(value));
                 } catch (err) {
-                    log(`language provider ${kind} error: ${err.message}`);
+                    recordProviderError(entry, err);
                 }
             }
             send({
@@ -10809,7 +10844,7 @@ async function handleLanguageProviderRequest(msg) {
                         return;
                     }
                 } catch (err) {
-                    log(`language provider ${kind} error: ${err.message}`);
+                    recordProviderError(entry, err);
                 }
             }
             send({
@@ -10845,7 +10880,7 @@ async function handleLanguageProviderRequest(msg) {
                         values.push(_cacheResolvableLanguageItem('documentLink', provider, link, didResolve));
                     }
                 } catch (err) {
-                    log(`language provider ${kind} error: ${err.message}`);
+                    recordProviderError(entry, err);
                 }
             }
             send({
@@ -10881,7 +10916,7 @@ async function handleLanguageProviderRequest(msg) {
                         values.push(_cacheResolvableLanguageItem('inlayHint', provider, hint, didResolve));
                     }
                 } catch (err) {
-                    log(`language provider ${kind} error: ${err.message}`);
+                    recordProviderError(entry, err);
                 }
             }
             send({
@@ -10920,7 +10955,7 @@ async function handleLanguageProviderRequest(msg) {
                         values.push(_cacheResolvableLanguageItem('codeLens', provider, lens, didResolve));
                     }
                 } catch (err) {
-                    log(`language provider ${kind} error: ${err.message}`);
+                    recordProviderError(entry, err);
                 }
             }
             send({
@@ -10947,7 +10982,7 @@ async function handleLanguageProviderRequest(msg) {
                     await fn.call(provider, document, pasteRanges, dataTransfer, token);
                     if (token.isCancellationRequested) { respondCancelled(); return; }
                 } catch (err) {
-                    log(`language provider ${kind} error: ${err.message}`);
+                    recordProviderError(entry, err);
                 }
             }
             send({
@@ -10997,7 +11032,7 @@ async function handleLanguageProviderRequest(msg) {
                         values.push(edit);
                     }
                 } catch (err) {
-                    log(`language provider ${kind} error: ${err.message}`);
+                    recordProviderError(entry, err);
                 }
             }
             send({
@@ -11037,7 +11072,7 @@ async function handleLanguageProviderRequest(msg) {
                         values.push(edit);
                     }
                 } catch (err) {
-                    log(`language provider ${kind} error: ${err.message}`);
+                    recordProviderError(entry, err);
                 }
             }
             send({
@@ -11075,7 +11110,7 @@ async function handleLanguageProviderRequest(msg) {
                         return;
                     }
                 } catch (err) {
-                    log(`language provider ${kind} error: ${err.message}`);
+                    recordProviderError(entry, err);
                 }
             }
             send({
@@ -11121,7 +11156,7 @@ async function handleLanguageProviderRequest(msg) {
                         values.push(_cacheResolvableLanguageItem('codeActions', provider, action, didResolve));
                     }
                 } catch (err) {
-                    log(`language provider ${kind} error: ${err.message}`);
+                    recordProviderError(entry, err);
                 }
             }
             send({
@@ -11187,7 +11222,7 @@ async function handleLanguageProviderRequest(msg) {
                 if (token.isCancellationRequested) { respondCancelled(); return; }
                 values.push(..._normalizeProviderItems(value));
             } catch (err) {
-                log(`language provider ${kind} error: ${err.message}`);
+                recordProviderError(entry, err);
             }
         }
         send({

@@ -1849,6 +1849,7 @@ class NodeExtensionHost:
         self._language_request_lock = threading.Lock()
         self._language_requests: Dict[str, Dict[str, Any]] = {}
         self._language_providers: List[Dict[str, Any]] = []
+        self._language_provider_health: Dict[str, Dict[str, Any]] = {}
         self._language_status_items: Dict[str, Dict[str, Any]] = {}
         self._file_decoration_request_lock = threading.Lock()
         self._file_decoration_requests: Dict[str, Dict[str, Any]] = {}
@@ -2786,6 +2787,36 @@ class NodeExtensionHost:
                 event = pending.get("event")
                 if isinstance(event, threading.Event):
                     event.set()
+
+        elif msg_type == "language_provider_status":
+            request_id = str(msg.get("requestId", ""))
+            with self._language_request_lock:
+                pending = self._language_requests.get(request_id)
+                if pending is not None:
+                    pending["providerCount"] = self._safe_provider_count(
+                        msg.get("providerCount"), 0)
+
+        elif msg_type == "language_provider_error":
+            request_id = str(msg.get("requestId", ""))
+            payload = {
+                "handle": msg.get("handle"),
+                "providerId": str(msg.get("providerId", "")),
+                "extensionId": str(msg.get("extensionId", "")),
+                "displayName": str(msg.get("displayName", "")),
+                "kind": str(msg.get("kind", "")),
+                "name": str(msg.get("name", "")),
+                "error": str(msg.get("error", "")),
+            }
+            with self._language_request_lock:
+                pending = self._language_requests.get(request_id)
+                if pending is not None:
+                    pending.setdefault("providerErrors", []).append(payload)
+                    pending["providerCount"] = self._safe_provider_count(
+                        msg.get("providerCount"),
+                        self._safe_provider_count(
+                            pending.get("providerCount"), 0))
+            self._record_language_provider_health(
+                payload, ok=False, error=payload.get("error", ""))
 
         elif msg_type == "language_status_set":
             item_id = str(msg.get("id", ""))
@@ -3766,6 +3797,9 @@ class NodeExtensionHost:
         timed_out = False
         error = ""
         kind = str((payload or {}).get("kind", ""))
+        provider_count = 0
+        provider_errors: List[Dict[str, Any]] = []
+        cancelled = False
         if not self.is_running:
             error = "Node extension host is not running"
             self._record_diagnostic(
@@ -3798,6 +3832,8 @@ class NodeExtensionHost:
                     "value": default,
                     "error": error,
                     "requestId": request_id,
+                    "providerCount": provider_count,
+                    "providerErrors": provider_errors,
                 }
             if not event.wait(timeout):
                 timed_out = True
@@ -3809,11 +3845,22 @@ class NodeExtensionHost:
                     "error": error,
                     "timeout": True,
                     "requestId": request_id,
+                    "providerCount": provider_count,
+                    "providerErrors": provider_errors,
                 }
             with self._language_request_lock:
                 pending = self._language_requests.get(request_id, {})
+            try:
+                provider_count = int(pending.get("providerCount") or 0)
+            except Exception:
+                provider_count = 0
+            provider_errors = [
+                dict(item) for item in pending.get("providerErrors", [])
+                if isinstance(item, dict)
+            ]
             response = pending.get("response", {})
             if pending.get("cancelled"):
+                cancelled = True
                 return {
                     "ok": False,
                     "value": default,
@@ -3822,30 +3869,68 @@ class NodeExtensionHost:
                     "reason": str(
                         pending.get("cancel_reason") or "cancelled"),
                     "requestId": request_id,
+                    "providerCount": provider_count,
+                    "providerErrors": provider_errors,
                 }
+            if isinstance(response, dict):
+                try:
+                    provider_count = int(
+                        response.get("providerCount") or provider_count)
+                except Exception:
+                    pass
+                response_errors = response.get("providerErrors")
+                if isinstance(response_errors, list):
+                    provider_errors.extend(
+                        dict(item) for item in response_errors
+                        if isinstance(item, dict))
             if isinstance(response, dict) and response.get("ok"):
                 ok = True
                 return {
                     "ok": True,
                     "value": response.get("value", default),
                     "requestId": request_id,
+                    "providerCount": provider_count,
+                    "providerErrors": provider_errors,
                 }
             error = (
                 response.get("error")
                 if isinstance(response, dict)
                 else "Node language provider failed")
+            cancelled = (
+                bool(response.get("cancelled"))
+                if isinstance(response, dict) else False)
             return {
                 "ok": False,
                 "value": default,
                 "error": error,
-                "cancelled": (
-                    bool(response.get("cancelled"))
-                    if isinstance(response, dict) else False),
+                "cancelled": cancelled,
                 "requestId": request_id,
+                "providerCount": provider_count,
+                "providerErrors": provider_errors,
             }
         finally:
             with self._language_request_lock:
-                self._language_requests.pop(request_id, None)
+                pending_final = self._language_requests.pop(request_id, {})
+            if not provider_count:
+                try:
+                    provider_count = int(
+                        pending_final.get("providerCount") or 0)
+                except Exception:
+                    provider_count = 0
+            if not provider_errors:
+                provider_errors = [
+                    dict(item)
+                    for item in pending_final.get("providerErrors", [])
+                    if isinstance(item, dict)
+                ]
+            if timed_out or cancelled or error:
+                self._record_language_provider_health({
+                    "providerId": f"request:{kind or 'unknown'}",
+                    "kind": kind,
+                    "displayName": kind or "language",
+                    "extensionId": "node",
+                }, ok=ok, timeout=timed_out, cancelled=cancelled,
+                    error=error)
             self._record_diagnostic(
                 "language",
                 (time.perf_counter() - started) * 1000,
@@ -5096,6 +5181,20 @@ class NodeExtensionHost:
         """Return registered language provider capabilities from Node."""
         return list(self._language_providers)
 
+    def language_provider_health_snapshot(self) -> Dict[str, Dict[str, Any]]:
+        """Return accumulated language-provider request health."""
+        return {
+            key: dict(value)
+            for key, value in self._language_provider_health.items()
+        }
+
+    @staticmethod
+    def _safe_provider_count(value: Any, default: int = 0) -> int:
+        try:
+            return int(value)
+        except Exception:
+            return default
+
     def list_language_status_items(self) -> List[Dict[str, Any]]:
         """Return active VS Code language status items from Node."""
         return list(self._language_status_items.values())
@@ -5143,6 +5242,8 @@ class NodeExtensionHost:
             "enabled": self._diagnostics_enabled,
             "running": self.is_running,
             "activated": len(self._activated_ids),
+            "languageProviderHealth": (
+                self.language_provider_health_snapshot()),
             "pending": {
                 "commands": len(self._command_requests),
                 "tree": len(self._tree_requests),
@@ -5194,6 +5295,44 @@ class NodeExtensionHost:
             data["max_ms"] = max(float(data.get("max_ms") or 0), elapsed)
             data["last_detail"] = str(detail or "")[:200]
             data["last_error"] = str(error or "")[:300]
+
+    def _record_language_provider_health(
+            self, provider: Dict[str, Any], ok: bool = True,
+            timeout: bool = False, cancelled: bool = False,
+            error: str = "") -> None:
+        kind = str(provider.get("kind") or "")
+        provider_id = str(
+            provider.get("providerId")
+            or provider.get("id")
+            or provider.get("handle")
+            or f"request:{kind or 'unknown'}")
+        key = f"{kind}:{provider_id}" if kind else provider_id
+        data = self._language_provider_health.setdefault(key, {
+            "providerId": provider_id,
+            "kind": kind,
+            "extensionId": str(provider.get("extensionId") or ""),
+            "displayName": str(
+                provider.get("displayName")
+                or provider.get("name")
+                or provider_id),
+            "count": 0,
+            "ok": 0,
+            "errors": 0,
+            "timeouts": 0,
+            "cancelled": 0,
+            "last_error": "",
+        })
+        data["count"] = int(data.get("count") or 0) + 1
+        if ok:
+            data["ok"] = int(data.get("ok") or 0) + 1
+        else:
+            data["errors"] = int(data.get("errors") or 0) + 1
+        if timeout:
+            data["timeouts"] = int(data.get("timeouts") or 0) + 1
+        if cancelled:
+            data["cancelled"] = int(data.get("cancelled") or 0) + 1
+        if error:
+            data["last_error"] = str(error)[:300]
 
     @staticmethod
     def _diagnostic_snapshot_for(data: Dict[str, Any]) -> Dict[str, Any]:

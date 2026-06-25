@@ -4585,7 +4585,23 @@ function editorLanguageProviderFailureMessage(kind,res){
   const label=editorLanguageProviderKindLabel(kind);
   if(res&&res.timeout)return label+' timed out';
   if(editorProviderResultCancelled(res))return label+' cancelled';
+  const providerErrors=Array.isArray(res&&res.providerErrors)?res.providerErrors:[];
+  if(providerErrors.length){
+    const first=providerErrors[0]||{};
+    const name=String(first.displayName||first.providerId||first.extensionId||'provider');
+    const err=String(first.error||'failed');
+    return label+' provider '+name+' failed: '+err;
+  }
   return label+' failed: '+callFailedMessage(res,'provider unavailable');
+}
+function editorLanguageProviderErrorSummary(res){
+  const providerErrors=Array.isArray(res&&res.providerErrors)?res.providerErrors:[];
+  if(!providerErrors.length)return '';
+  const first=providerErrors[0]||{};
+  const name=String(first.displayName||first.providerId||first.extensionId||'provider');
+  const err=String(first.error||'failed');
+  const suffix=providerErrors.length>1?' (+'+(providerErrors.length-1)+' more)':'';
+  return name+': '+err+suffix;
 }
 async function editorRequestLanguageProvider(kind,payload,options){
   const opts=isPlainObject(options)?options:{};
@@ -4603,16 +4619,27 @@ async function editorRequestLanguageProvider(kind,payload,options){
     return res||{error:'provider unavailable'};
   }
   const countKey=opts.countKey||'';
+  const providerErrorSummary=editorLanguageProviderErrorSummary(res);
   if(countKey){
     const count=editorProviderResultCount(res,countKey);
     if(count>0){
       const itemLabel=opts.itemLabel||label.toLowerCase();
-      updateEditorLanguageProviderStatus('ready',{kind,label,message:count+' '+itemLabel+(count===1?'':'s'),detail:label+' completed',requestId:res.requestId});
+      updateEditorLanguageProviderStatus(providerErrorSummary?'warning':'ready',{
+        kind,label,
+        message:count+' '+itemLabel+(count===1?'':'s')+(providerErrorSummary?' with provider warning':''),
+        detail:providerErrorSummary||label+' completed',
+        requestId:res.requestId
+      });
     }else{
-      updateEditorLanguageProviderStatus('empty',{kind,label,message:'No '+label.toLowerCase(),detail:label+' returned no results',requestId:res.requestId});
+      updateEditorLanguageProviderStatus(providerErrorSummary?'error':'empty',{
+        kind,label,
+        message:providerErrorSummary?editorLanguageProviderFailureMessage(kind,res):'No '+label.toLowerCase(),
+        detail:providerErrorSummary||label+' returned no results',
+        requestId:res.requestId
+      });
     }
   }else{
-    updateEditorLanguageProviderStatus('ready',{kind,label,message:label+' ready',detail:label+' completed',requestId:res.requestId});
+    updateEditorLanguageProviderStatus(providerErrorSummary?'warning':'ready',{kind,label,message:providerErrorSummary?label+' provider warning':label+' ready',detail:providerErrorSummary||label+' completed',requestId:res.requestId});
   }
   return res;
 }
