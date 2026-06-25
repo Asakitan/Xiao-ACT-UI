@@ -5150,6 +5150,8 @@ console.log("frontend signature help docs ok");
             and "function extensionSettingEnumLabel(schema,index,value)" in html
             and "function extensionSettingEnumOptionTitle(schema,index,value,defaultValue)" in html
             and "function extensionSettingEnumDisplayValue(value)" in html
+            and "function extensionSettingEnumOptionSources(schema)" in html
+            and "function extensionSettingHasEnumOptions(schema)" in html
             and "function extensionSettingEnumEntries(schema,defaultValue)" in html
             and "function appendExtensionSettingEnumOptions(input,schema,defaultValue)" in html
             and "function appendExtensionSettingEnumChoices(row,schema,type,defaultValue)" in html
@@ -5362,6 +5364,8 @@ console.log("frontend signature help docs ok");
             "extensionSettingList",
             "extensionSettingEnumDescription",
             "extensionSettingEnumDisplayValue",
+            "extensionSettingEnumOptionSources",
+            "extensionSettingHasEnumOptions",
             "extensionSettingEnumLabel",
             "extensionSettingEnumOptionTitle",
             "extensionSettingEnumValueToken",
@@ -6182,13 +6186,39 @@ assert(extensionSettingEnumOptionTitle(searchSchema, 0, "always", "always").inde
        "enum option title includes raw value and default marker");
 const invisibleEnumValue = "line\\nbreak\\rreturn";
 const invisibleEnumSchema = { enum: [invisibleEnumValue, null] };
+const composedEnumSchema = {
+  anyOf: [
+    { enum: ["fromAny"], title: "From Any", markdownDescription: "Any **choice**" },
+    { enum: ["fromAny", "otherAny"], title: "Duplicate source ignored" }
+  ]
+};
+const constEnumSchema = {
+  oneOf: [
+    { const: "manual", title: "Manual Mode", description: "Use manual mode" },
+    { const: "auto", title: "Auto Mode", markdownDescription: "Use **auto** mode" }
+  ]
+};
 assert(extensionSettingEnumDisplayValue(invisibleEnumValue) === "line\\nbreak\\rreturn"
        && extensionSettingEnumDisplayValue(null) === "null"
        && extensionSettingEnumDisplayValue(undefined) === "undefined",
        "enum display value escapes invisible chars and preserves nullish labels");
+assert(extensionSettingHasEnumOptions(searchSchema)
+       && extensionSettingHasEnumOptions(composedEnumSchema)
+       && extensionSettingHasEnumOptions(constEnumSchema),
+       "enum-like options detected for direct enum anyOf and oneOf const schemas");
+const composedSources = extensionSettingEnumOptionSources(composedEnumSchema);
+assert(composedSources.length === 2
+       && composedSources[0].value === "fromAny"
+       && composedSources[1].value === "otherAny",
+       "composed enum sources flatten and dedupe anyOf enum values");
 assert(extensionSettingEnumLabel(invisibleEnumSchema, 0, invisibleEnumValue) === "line\\nbreak\\rreturn"
        && extensionSettingEnumLabel(invisibleEnumSchema, 1, null) === "null",
        "enum label fallback uses VS Code-style display value");
+assert(extensionSettingEnumLabel(composedEnumSchema, 0, "fromAny") === "From Any"
+       && extensionSettingEnumDescription(composedEnumSchema, 0) === "Any **choice**"
+       && extensionSettingEnumLabel(constEnumSchema, 1, "auto") === "Auto Mode"
+       && extensionSettingEnumDescription(constEnumSchema, 1) === "Use **auto** mode",
+       "composed enum labels and descriptions come from branches");
 assert(extensionSettingEnumOptionTitle(
          { enum: [invisibleEnumValue], enumItemLabels: ["Visible line"] },
          0, invisibleEnumValue, invisibleEnumValue).indexOf("Value: line\\nbreak\\rreturn") >= 0,
@@ -6216,10 +6246,22 @@ assert(invisibleEnumSelect.children[0].textContent === "line\\nbreak\\rreturn"
        && invisibleEnumSelect.children[0].value === "line\\nbreak\\rreturn"
        && invisibleEnumSelect.children[1].textContent === "null",
        "enum options display escaped invisible and null values");
+const composedEnumSelect = makeNode("select");
+composedEnumSelect.tagName = "SELECT";
+composedEnumSelect.selectedIndex = 0;
+appendExtensionSettingEnumOptions(composedEnumSelect, constEnumSchema, "manual");
+assert(composedEnumSelect.children.length === 2
+       && composedEnumSelect.children[0].textContent === "Manual Mode"
+       && composedEnumSelect.children[1].title.indexOf("Use **auto** mode") >= 0,
+       "composed enum select uses oneOf const labels and descriptions");
 setExtensionSettingInputValue(enumSelect, enumDefaultOutsideSchema, "string", "inherit");
 assert(enumSelect.selectedIndex === 0
        && readExtensionSettingInputValue(enumSelect, enumDefaultOutsideSchema, "string") === "inherit",
        "enum select roundtrips synthetic default value");
+setExtensionSettingInputValue(composedEnumSelect, constEnumSchema, "string", "auto");
+assert(composedEnumSelect.selectedIndex === 1
+       && readExtensionSettingInputValue(composedEnumSelect, constEnumSchema, "string") === "auto",
+       "composed enum select roundtrips branch const value");
 const enumDefaultDescHost = makeNode("div");
 renderExtensionSettingEnumDescription(enumDefaultDescHost, enumDefaultOutsideSchema, enumSelect);
 assert(enumDefaultDescHost.children.length === 0 && enumDefaultDescHost.style.display === "none",
@@ -6273,6 +6315,15 @@ assert(nodeTreeHas(invisibleEnumChoicesHost, n => n.tagName === "CODE"
        && nodeTreeHas(invisibleEnumChoicesHost, n => n.className === "ext-setting-enum-choice-name"
          && n.textContent === "Visible line"),
        "enum choices show escaped raw value when label differs");
+const composedChoicesHost = makeNode("div");
+appendExtensionSettingEnumChoices(composedChoicesHost, constEnumSchema, "string", "manual");
+assert(nodeTreeHas(composedChoicesHost, n => n.className === "ext-setting-enum-choice-name"
+         && n.textContent === "Manual Mode")
+       && nodeTreeHas(composedChoicesHost, n => n.className === "ext-setting-enum-choice-name"
+         && n.textContent === "Auto Mode")
+       && nodeTreeHas(composedChoicesHost, n => n.tagName === "STRONG"
+         && n.textContent === "auto"),
+       "composed enum choices render branch labels and markdown descriptions");
 const textAreaSetting = { type: "textarea", tagName: "TEXTAREA", value: "", rows: 0 };
 setExtensionSettingInputValue(textAreaSetting, multilineSchema, "string", "alpha\nbeta\ncharlie");
 assert(extensionSettingUsesMultiline(multilineSchema, "string") === true,

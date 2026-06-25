@@ -13723,7 +13723,7 @@ function extensionSettingSchemaFeatureTags(schema,type){
   const tags=[];
   const push=tag=>{tag=String(tag||'').trim().toLowerCase();if(tag&&!tags.includes(tag))tags.push(tag)};
   if(Array.isArray(schema.required)&&schema.required.length)push('required');
-  if(Array.isArray(schema.enum)&&schema.enum.length)push('enum');
+  if(extensionSettingHasEnumOptions(schema))push('enum');
   if(Object.prototype.hasOwnProperty.call(schema,'const'))push('const');
   if(schema.if||schema.then||schema.else)push('conditional');
   if(schema.dependencies||schema.dependentRequired||schema.dependentSchemas)push('dependency');
@@ -13747,14 +13747,16 @@ function extensionSettingSchemaDetailItems(schema,type,defaultValue){
     if(text)details.push({label:String(label||''),text,tag:String(tag||'')});
   };
   if(Array.isArray(schema.required)&&schema.required.length)push('Required',schema.required.slice(0,6).join(', ')+(schema.required.length>6?' +'+(schema.required.length-6):''),'required');
-  if(Array.isArray(schema.enum)&&schema.enum.length){
-    const labels=Array.isArray(schema.enumItemLabels)?schema.enumItemLabels:[];
-    const values=schema.enum.slice(0,4).map((value,idx)=>{
+  const enumEntriesForDetails=extensionSettingEnumEntries(schema,Object.prototype.hasOwnProperty.call(schema,'default')?schema.default:undefined)
+    .filter(entry=>!entry.createdDefault);
+  if(enumEntriesForDetails.length){
+    const values=enumEntriesForDetails.slice(0,4).map(entry=>{
+      const value=entry.value,idx=entry.index;
       const raw=String(value??'');
-      const label=String(labels[idx]||'').trim();
+      const label=extensionSettingEnumLabel(schema,idx,value);
       return label&&label!==raw?label+'='+raw:raw;
     });
-    push('Enum',values.join(', ')+(schema.enum.length>4?' +'+(schema.enum.length-4):''),'enum');
+    push('Enum',values.join(', ')+(enumEntriesForDetails.length>4?' +'+(enumEntriesForDetails.length-4):''),'enum');
   }
   const composition=[];
   [['anyOf',schema.anyOf],['oneOf',schema.oneOf],['allOf',schema.allOf]].forEach(item=>{
@@ -13807,6 +13809,11 @@ function extensionSettingList(schema,name){
   return Array.isArray(value)?value.map(v=>String(v??'').trim()).filter(Boolean):[];
 }
 function extensionSettingEnumDescription(schema,index){
+  const sources=extensionSettingEnumOptionSources(schema);
+  const source=sources[Number(index)];
+  if(source&&source.branch&&source.branch!==schema){
+    return source.branch.markdownDescription||source.branch.description||'';
+  }
   const markdown=extensionSettingList(schema,'markdownEnumDescriptions');
   const plain=extensionSettingList(schema,'enumDescriptions');
   const descriptions=markdown.length?markdown:plain;
@@ -13816,7 +13823,39 @@ function extensionSettingEnumDescription(schema,index){
 function extensionSettingEnumDisplayValue(value){
   return String(value).replace(/\n/g,'\\n').replace(/\r/g,'\\r');
 }
+function extensionSettingEnumOptionSources(schema){
+  schema=(schema&&typeof schema==='object')?schema:{};
+  const result=[],seen=new Set();
+  const pushValue=(value,branch,sourceIndex)=>{
+    const token=extensionSettingEnumValueToken(value);
+    if(seen.has(token))return;
+    seen.add(token);
+    result.push({value,branch:branch||schema,sourceIndex});
+  };
+  if(Array.isArray(schema.enum)){
+    schema.enum.forEach(value=>pushValue(value,schema,-1));
+    return result;
+  }
+  ['anyOf','oneOf'].forEach(name=>{
+    const list=Array.isArray(schema[name])?schema[name]:[];
+    list.forEach((branch,sourceIndex)=>{
+      if(!branch||typeof branch!=='object')return;
+      if(Array.isArray(branch.enum))branch.enum.forEach(value=>pushValue(value,branch,sourceIndex));
+      else if(Object.prototype.hasOwnProperty.call(branch,'const'))pushValue(branch.const,branch,sourceIndex);
+    });
+  });
+  return result;
+}
+function extensionSettingHasEnumOptions(schema){
+  return extensionSettingEnumOptionSources(schema).length>0;
+}
 function extensionSettingEnumLabel(schema,index,value){
+  const sources=extensionSettingEnumOptionSources(schema);
+  const source=sources[Number(index)];
+  if(source&&source.branch&&source.branch!==schema){
+    const title=String(source.branch.title||'').trim();
+    if(title)return title;
+  }
   const labels=Array.isArray(schema&&schema.enumItemLabels)?schema.enumItemLabels:[];
   const label=String(labels[index]??'').trim();
   return label||extensionSettingEnumDisplayValue(value);
@@ -13835,9 +13874,9 @@ function extensionSettingEnumValueToken(value){
   return value===undefined?'__undefined__':extensionSettingStableJson(value);
 }
 function extensionSettingEnumEntries(schema,defaultValue){
-  const values=Array.isArray(schema&&schema.enum)?schema.enum:[];
-  const entries=values.map((value,index)=>({value,index,createdDefault:false}));
-  const hasDefault=values.some(value=>extensionSettingEnumValueToken(value)===extensionSettingEnumValueToken(defaultValue));
+  const sources=extensionSettingEnumOptionSources(schema);
+  const entries=sources.map((source,index)=>({value:source.value,index,createdDefault:false}));
+  const hasDefault=sources.some(source=>extensionSettingEnumValueToken(source.value)===extensionSettingEnumValueToken(defaultValue));
   if(!hasDefault)entries.unshift({value:defaultValue,index:-1,createdDefault:true});
   return entries;
 }
@@ -13896,7 +13935,7 @@ function renderExtensionSettingEnumDescription(el,schema,input){
   else el.style.display='none';
 }
 function appendExtensionSettingEnumChoices(row,schema,type,defaultValue){
-  if(!row||!schema||!Array.isArray(schema.enum)||!schema.enum.length)return;
+  if(!row||!schema||!extensionSettingHasEnumOptions(schema))return;
   const wrap=document.createElement('div');wrap.className='ext-setting-enum-choices';
   const entries=extensionSettingEnumEntries(schema,defaultValue);
   entries.slice(0,8).forEach(entry=>{
@@ -13944,7 +13983,7 @@ function extensionSettingSearchText(key,schema,type,description,deprecation,sche
   ['tags','keywords','enumItemLabels','enumDescriptions','markdownEnumDescriptions'].forEach(name=>{
     extensionSettingList(schema,name).forEach(value=>parts.push(value));
   });
-  if(Array.isArray(schema.enum))schema.enum.forEach(value=>parts.push(extensionSettingEnumDisplayValue(value)));
+  extensionSettingEnumOptionSources(schema).forEach(source=>parts.push(extensionSettingEnumDisplayValue(source.value)));
   return parts.filter(value=>value!=null&&String(value).trim()).join(' ').toLowerCase();
 }
 function extensionSettingJson(value,type){
@@ -14159,7 +14198,7 @@ function extensionSettingValidateSchemaValue(value,schema,path){
 }
 function setExtensionSettingInputValue(input,schema,type,value){
   if(input.type==='checkbox'){input.checked=!!value;return}
-  if(input.tagName==='SELECT'&&Array.isArray(schema.enum)){
+  if(input.tagName==='SELECT'&&extensionSettingHasEnumOptions(schema)){
     const wanted=extensionSettingEnumValueToken(value);
     const options=extensionSettingSelectOptions(input);
     const idx=options.findIndex(opt=>opt.dataset&&opt.dataset.enumJson===wanted);
@@ -14176,13 +14215,10 @@ function setExtensionSettingInputValue(input,schema,type,value){
 }
 function readExtensionSettingInputValue(input,schema,type){
   if(input.type==='checkbox')return !!input.checked;
-  if(input.tagName==='SELECT'&&Array.isArray(schema.enum)){
+  if(input.tagName==='SELECT'&&extensionSettingHasEnumOptions(schema)){
     const opt=extensionSettingSelectedOption(input);
-    if(opt&&opt.dataset&&opt.dataset.enumDefault==='1'){
-      return readExtensionSettingEnumOptionValue(opt);
-    }
-    const idx=opt?Number(opt.dataset.enumIndex):-1;
-    return idx>=0&&idx<schema.enum.length?schema.enum[idx]:input.value;
+    if(opt)return readExtensionSettingEnumOptionValue(opt);
+    return input.value;
   }
   if(type==='integer')return extensionSettingValidateSchemaValue(
     Math.trunc(Number(input.value)||0),schema,'value');
@@ -14903,11 +14939,11 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
         input=document.createElement('input');input.type='checkbox';
         const span=document.createElement('span');span.textContent=schema.title||shortKey;
         lbl.appendChild(input);lbl.appendChild(span);row.appendChild(lbl);
-      }else if(Array.isArray(schema.enum)){
+      }else if(extensionSettingHasEnumOptions(schema)){
         input=document.createElement('select');
         appendExtensionSettingEnumOptions(input,schema,defaultValue);
         row.appendChild(input);
-        if(extensionSettingList(schema,'markdownEnumDescriptions').length||extensionSettingList(schema,'enumDescriptions').length){
+        if(extensionSettingEnumEntries(schema,defaultValue).some(entry=>!entry.createdDefault&&extensionSettingEnumDescription(schema,entry.index))){
           enumHelp=document.createElement('div');enumHelp.className='ext-setting-enum-desc';row.appendChild(enumHelp);
         }
         appendExtensionSettingEnumChoices(row,schema,type,defaultValue);
@@ -15313,11 +15349,11 @@ async function renderExtensionSettings(){
         input=document.createElement('input');input.type='checkbox';
         const span=document.createElement('span');span.textContent=schema.title||shortKey;
         lbl.appendChild(input);lbl.appendChild(span);row.appendChild(lbl);
-      } else if(Array.isArray(schema.enum)){
+      } else if(extensionSettingHasEnumOptions(schema)){
         input=document.createElement('select');
         appendExtensionSettingEnumOptions(input,schema,defaultVal);
         row.appendChild(input);
-        if(extensionSettingList(schema,'markdownEnumDescriptions').length||extensionSettingList(schema,'enumDescriptions').length){
+        if(extensionSettingEnumEntries(schema,defaultVal).some(entry=>!entry.createdDefault&&extensionSettingEnumDescription(schema,entry.index))){
           enumHelp=document.createElement('div');enumHelp.className='ext-setting-enum-desc';row.appendChild(enumHelp);
         }
         appendExtensionSettingEnumChoices(row,schema,type,defaultVal);
