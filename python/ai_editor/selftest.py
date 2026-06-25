@@ -3312,6 +3312,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "editorProviderPayload('workspaceSymbol'" in html
            and "editorRequestLanguageProvider('workspaceSymbol'" in html
            and "editorProviderPayload('resolveWorkspaceSymbol'" in html
+           and "editorRequestLanguageProvider('resolveWorkspaceSymbol'" in html
            and "Go to Symbol in Workspace..." in html
            and "Ctrl+T" in html
            and "id=\"document-symbol-palette\"" in html
@@ -3336,6 +3337,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function editorCompletionCanResolve(item)" in html
            and "function resolveEditorSuggestItem(item)" in html
            and "editorProviderPayload('completionResolve'" in html
+           and "editorRequestLanguageProvider('completionResolve'" in html
            and "text.value||text.snippet||text.text" in html
            and "function editorSelectedCompletionInfo()" in html
            and "selectedCompletionInfo:editorSelectedCompletionInfo()" in html
@@ -3372,8 +3374,9 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function renderProblemsRows(rows)" in html
             and "function showEditorCodeActions(actions,position)" in html
            and "function codeActionKindText(kind)" in html
-           and "async function resolveEditorCodeAction(action)" in html
+           and "async function resolveEditorCodeAction(action,quiet)" in html
            and "editorProviderPayload('codeActionResolve'" in html
+           and "editorRequestLanguageProvider('codeActionResolve'" in html
            and "aria-disabled" in html
            and ".filter(action=>!!action)" in html
            and "function editorCodeActionEdits(action)" in html
@@ -3423,12 +3426,14 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function openEditorDocumentLink(link)" in html
            and "async function resolveEditorDocumentLink(link)" in html
            and "editorProviderPayload('documentLinkResolve'" in html
+           and "editorRequestLanguageProvider('documentLinkResolve'" in html
            and "linkResolveCount:0" in html
            and "editorRequestLanguageProvider('documentLink'" in html
            and "function requestEditorInlayHints(quiet)" in html
            and "function renderEditorInlayHints(hints)" in html
            and "async function resolveEditorInlayHint(hint)" in html
            and "editorProviderPayload('inlayHintResolve'" in html
+           and "editorRequestLanguageProvider('inlayHintResolve'" in html
            and "hintResolveCount:0" in html
            and "function scheduleEditorInlayHints(delay)" in html
            and "editorProviderPayload('inlayHint'" in html
@@ -3562,8 +3567,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function requestEditorCodeLenses(quiet)" in html
            and "function renderEditorCodeLenses(lenses)" in html
            and "function runEditorCodeLens(lens)" in html
-           and "async function resolveEditorCodeLens(lens)" in html
+           and "async function resolveEditorCodeLens(lens,quiet)" in html
            and "editorProviderPayload('codeLensResolve'" in html
+           and "editorRequestLanguageProvider('codeLensResolve'" in html
            and "function scheduleEditorCodeLenses(delay)" in html
            and "editorProviderPayload('codeLens'" in html
            and "editorRequestLanguageProvider('codeLens'" in html
@@ -4153,6 +4159,7 @@ let ranCommands = [];
 let closedSuggest = 0;
 let undoPushes = 0;
 let resolveCalls = 0;
+let wrapperCalls = 0;
 let lastResolvePayload = null;
 let editorLang = "python";
 const COMPLETION_INSERT_TEXT_RULE_KEEP_WHITESPACE = 1;
@@ -4261,6 +4268,12 @@ function runEditorCodeActionCommand(command){ ranCommands.push(command.command |
 function isEditorSuggestOpen(){ return true; }
 function setEditorSuggestIndex(index){ _editorSuggestIndex = index; refreshEditorSuggestDetails(); }
 function editorProviderPayload(kind, extra){ return Object.assign({ kind }, extra || {}); }
+async function editorRequestLanguageProvider(kind, payload, options){
+  wrapperCalls += 1;
+  assert(kind === "completionResolve", "completion resolve uses wrapper kind");
+  assert(payload && payload.kind === kind, "completion resolve wrapper receives matching payload");
+  return call("editor_language_provider", payload);
+}
 async function call(method, payload){
   if(method !== "editor_language_provider" || !payload || payload.kind !== "completionResolve"){
     return { ok: false, error: "unexpected call" };
@@ -4439,9 +4452,10 @@ assert(showEditorSuggestDetails(lazyItem) === true
        "suggest details shows loading state for resolvable item");
 setTimeout(() => {
   assert(resolveCalls === 1
+         && wrapperCalls === 1
          && lastResolvePayload
          && lastResolvePayload.item === lazyItem,
-         "completion resolve requested selected item once");
+         "completion resolve requested selected item once through wrapper");
   assert(lazyItem._editorSuggestResolved === true
          && lazyItem.label === "lazyCompletion"
          && lazyItem.insertText === "lazyCompletion()"
@@ -4786,6 +4800,7 @@ let undoPushes = 0;
 let closedCodeActions = 0;
 let ranCommands = [];
 let resolveKinds = [];
+let wrapperKinds = [];
 const ed = { focus(){ this.focused = true; } };
 function editorProviderPayload(kind, extra){ return Object.assign({ kind }, extra || {}); }
 function setStatus(text){ statusText = String(text || ""); }
@@ -4795,6 +4810,11 @@ function callSucceeded(result){ return !!(result && result.ok); }
 async function editorApplyWorkspaceEdit(){ return { changed: false, skipped: 0, tabApplied: 0, workspaceApplied: 0, errors: [] }; }
 async function confirmEditorWorkspaceEditApply(){ return true; }
 async function runEditorCodeActionCommand(command){ ranCommands.push(command.command || command); return { ok: true }; }
+async function editorRequestLanguageProvider(kind,payload,options){
+  wrapperKinds.push(kind);
+  assert(payload && payload.kind === kind, "wrapper receives matching provider payload");
+  return call("editor_language_provider", payload);
+}
 async function call(method,payload){
   assert(method === "editor_language_provider", "resolve uses language provider");
   resolveKinds.push(payload.kind);
@@ -4866,6 +4886,8 @@ async function call(method,payload){
 
   assert(resolveKinds.join(",") === "documentLinkResolve,inlayHintResolve,codeLensResolve,codeActionResolve",
          "all resolve requests use dedicated provider kinds");
+  assert(wrapperKinds.join(",") === resolveKinds.join(","),
+         "all resolve requests use shared language provider wrapper");
   console.log("frontend resolvable language items ok");
 })().catch(err => { console.error(err && err.stack || err); process.exitCode = 1; });
 """

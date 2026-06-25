@@ -4548,7 +4548,10 @@ function editorLanguageProviderKindLabel(kind){
     inlineCompletion:'Inline completions',codeLens:'CodeLens',documentLink:'Document links',
     foldingRange:'Folding ranges',selectionRange:'Selection ranges',
     documentHighlight:'Document highlights',linkedEditing:'Linked editing',
-    prepareRename:'Rename',rename:'Rename'
+    prepareRename:'Rename',rename:'Rename',
+    completionResolve:'Completion details',codeActionResolve:'Code action details',
+    inlayHintResolve:'Inlay hint details',codeLensResolve:'CodeLens details',
+    documentLinkResolve:'Document link target',resolveWorkspaceSymbol:'Workspace symbol target'
   };
   if(labels[kind])return labels[kind];
   return String(kind||'Language provider').replace(/([a-z])([A-Z])/g,'$1 $2').replace(/^./,c=>c.toUpperCase());
@@ -4914,7 +4917,9 @@ async function resolveEditorInlayHint(hint){
   if(!editorInlayHintNeedsResolve(hint))return hint;
   hint._editorInlayHintResolving=true;
   try{
-    const res=await call('editor_language_provider',editorProviderPayload('inlayHintResolve',{hint,item:hint}));
+    const res=await editorRequestLanguageProvider('inlayHintResolve',editorProviderPayload('inlayHintResolve',{hint,item:hint}),{
+      label:'Inlay hint details',quiet:true
+    });
     if(res&&res.ok&&res.hint){editorMergeResolvedInlayHint(hint,res.hint);return hint}
     if(editorProviderResultCancelled(res))return hint;
     hint._editorInlayHintResolveFailed=true;
@@ -5096,11 +5101,13 @@ function editorMergeResolvedCodeLens(lens,resolved){
   lens._editorCodeLensResolveFailed=false;
   return lens;
 }
-async function resolveEditorCodeLens(lens){
+async function resolveEditorCodeLens(lens,quiet){
   if(!editorCodeLensNeedsResolve(lens))return lens;
   lens._editorCodeLensResolving=true;
   try{
-    const res=await call('editor_language_provider',editorProviderPayload('codeLensResolve',{lens,item:lens}));
+    const res=await editorRequestLanguageProvider('codeLensResolve',editorProviderPayload('codeLensResolve',{lens,item:lens}),{
+      label:'CodeLens details',quiet:quiet===true
+    });
     if(res&&res.ok&&res.lens){editorMergeResolvedCodeLens(lens,res.lens);return lens}
     if(editorProviderResultCancelled(res))return lens;
     lens._editorCodeLensResolveFailed=true;
@@ -5142,7 +5149,7 @@ function renderEditorCodeLenses(lenses){
   });
   if(visibleUnresolved.length){
     const requestId=_editorCodeLensRequest;
-    Promise.all(visibleUnresolved.map(resolveEditorCodeLens)).then(()=>{
+    Promise.all(visibleUnresolved.map(lens=>resolveEditorCodeLens(lens,true))).then(()=>{
       if(requestId===_editorCodeLensRequest)renderEditorCodeLenses(_editorCodeLenses);
     });
   }
@@ -5489,7 +5496,9 @@ function resolveEditorSuggestItem(item){
   if(!editorCompletionCanResolve(item)||item._editorSuggestResolving)return Promise.resolve(item);
   const requestId=++_editorSuggestResolveRequest;
   item._editorSuggestResolving=true;
-  return Promise.resolve(call('editor_language_provider',editorProviderPayload('completionResolve',{item}))).then(res=>{
+  return Promise.resolve(editorRequestLanguageProvider('completionResolve',editorProviderPayload('completionResolve',{item}),{
+    label:'Completion details',quiet:true
+  })).then(res=>{
     if(res&&res.ok&&res.item)editorMergeResolvedCompletionItem(item,res.item);
     else if(editorProviderResultCancelled(res))return;
     else item._editorSuggestResolveFailed=true;
@@ -6290,11 +6299,13 @@ function editorMergeResolvedCodeAction(action,resolved){
   action._editorCodeActionResolveFailed=false;
   return action;
 }
-async function resolveEditorCodeAction(action){
+async function resolveEditorCodeAction(action,quiet){
   if(!editorCodeActionNeedsResolve(action))return action;
   action._editorCodeActionResolving=true;
   try{
-    const res=await call('editor_language_provider',editorProviderPayload('codeActionResolve',{action,item:action}));
+    const res=await editorRequestLanguageProvider('codeActionResolve',editorProviderPayload('codeActionResolve',{action,item:action}),{
+      label:'Code action details',quiet:quiet===true
+    });
     if(res&&res.ok&&res.action){editorMergeResolvedCodeAction(action,res.action);return action}
     if(editorProviderResultCancelled(res))return action;
     action._editorCodeActionResolveFailed=true;
@@ -7018,7 +7029,9 @@ function openWorkspaceSymbolPicker(query){
   requestWorkspaceSymbols(true);
 }
 async function resolveWorkspaceSymbol(symbol){
-  const res=await call('editor_language_provider',editorProviderPayload('resolveWorkspaceSymbol',{symbol}));
+  const res=await editorRequestLanguageProvider('resolveWorkspaceSymbol',editorProviderPayload('resolveWorkspaceSymbol',{symbol}),{
+    label:'Workspace symbol target'
+  });
   if(res&&res.ok&&res.symbol)return res.symbol;
   return symbol;
 }
@@ -7213,7 +7226,9 @@ async function resolveEditorDocumentLink(link){
   if(!editorDocumentLinkNeedsResolve(link))return link;
   link._editorDocumentLinkResolving=true;
   try{
-    const res=await call('editor_language_provider',editorProviderPayload('documentLinkResolve',{link,item:link}));
+    const res=await editorRequestLanguageProvider('documentLinkResolve',editorProviderPayload('documentLinkResolve',{link,item:link}),{
+      label:'Document link target'
+    });
     if(res&&res.ok&&res.link){editorMergeResolvedDocumentLink(link,res.link);return link}
     if(editorProviderResultCancelled(res))return link;
     link._editorDocumentLinkResolveFailed=true;
@@ -7837,7 +7852,7 @@ async function applyEditorCodeAction(action){
 }
 async function applyEditorCodeActionForSave(action){
   if(!action||codeActionDisabledText(action&&action.disabled))return false;
-  if(editorCodeActionNeedsResolve(action))await resolveEditorCodeAction(action);
+  if(editorCodeActionNeedsResolve(action))await resolveEditorCodeAction(action,true);
   if(codeActionDisabledText(action&&action.disabled))return false;
   const summary=action.edit?editorCodeActionEdits({edit:action.edit}):{edits:[],tabEdits:[],workspaceEdits:[],skipped:0};
   _undoPush(true);
