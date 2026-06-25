@@ -2391,6 +2391,9 @@ class NodeExtensionHost:
                                 "description": str(msg.get("description", "")),
                                 "badge": msg.get("badge", None),
                                 "visible": bool(msg.get("visible", True)),
+                                "options": msg.get("options", {}),
+                                "retainContextWhenHidden": bool(
+                                    msg.get("retainContextWhenHidden", False)),
                                 "source": msg_type,
                             },
                         )

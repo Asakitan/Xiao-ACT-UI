@@ -1443,6 +1443,7 @@ class WebviewView {
         this.viewType = viewType;
         this.webview = new Webview(
             viewId, webviewOptions || {}, defaultLocalResourceRoots || []);
+        this.webview._setPanelMetadata(viewType, '');
         this._title = '';
         this._description = '';
         this._badge = undefined;
@@ -1458,6 +1459,7 @@ class WebviewView {
         const next = String(v || '');
         if (this._title === next) return;
         this._title = next;
+        this.webview._setPanelMetadata(this.viewType, next);
         this._emitMetadata();
     }
     get description() { return this._description; }
@@ -1485,6 +1487,10 @@ class WebviewView {
             description: this._description,
             badge: _plainBridgeValue(this._badge),
             visible: this.visible,
+            options: this.webview._webviewOptionsPayload(),
+            retainContextWhenHidden: !!(
+                this.webview._options
+                && this.webview._options.retainContextWhenHidden),
         };
     }
     _emitMetadata() {
@@ -9443,10 +9449,14 @@ function resolveWebviewView(viewType, state) {
         return;
     }
     const viewId = `view-${_nextViewHandle++}`;
+    const viewOptions = reg.options && reg.options.webviewOptions
+        ? reg.options.webviewOptions
+        : {};
     const view = new WebviewView(
-        viewId, viewType, {},
+        viewId, viewType, viewOptions,
         _defaultLocalResourceRoots(reg.extensionPath));
     _webviewViews.set(viewId, view);
+    view._emitMetadata();
 
     const token = { isCancellationRequested: false, onCancellationRequested: new EventEmitter().event };
     try {

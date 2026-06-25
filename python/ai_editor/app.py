@@ -1437,10 +1437,16 @@ class _AIEditorUIBridge:
             "view_id": normalized_view_id,
             "view_type": str(view_type or ""),
             "name": title,
+            "short_name": title,
             "title": title,
             "description": str(payload.get("description") or ""),
             "badge": _json_safe(payload.get("badge")),
             "visible": bool(payload.get("visible", True)),
+            "options": _json_safe(
+                payload.get("options") if isinstance(
+                    payload.get("options"), dict) else {}),
+            "retainContextWhenHidden": bool(
+                payload.get("retainContextWhenHidden", False)),
             "runtime_mode": "extension-webview",
             "requested_transport": "webviewView",
             "source": str(payload.get("source") or "runtime_webview"),

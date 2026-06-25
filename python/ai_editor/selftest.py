@@ -9510,12 +9510,24 @@ console.log("command palette quick access helpers ok");
            and "function handleWebviewState(msg)" in node_ext_host_source
            and "type: 'webview_view_metadata'" in node_ext_host_source
            and "type: 'webview_view_visibility'" in node_ext_host_source
+           and "retainContextWhenHidden: !!(" in node_ext_host_source
+           and "const viewOptions = reg.options && reg.options.webviewOptions"
+           in node_ext_host_source
+           and "this.webview._setPanelMetadata(this.viewType, next);"
+           in node_ext_host_source
            and "setImmediate(() => resolveWebviewView(viewType))"
            in node_ext_host_source
            and "elif msg_type in {\"webview_view_metadata\", \"webview_view_visibility\"}"
            in extension_host_source
+           and "\"retainContextWhenHidden\": bool(" in extension_host_source
             and "def update_webview_view_metadata(" in app_source
-            and "\"extension_views_changed\"" in app_source)
+            and "\"retainContextWhenHidden\": bool(" in app_source
+            and "\"extension_views_changed\"" in app_source
+            and "function ensureProviderTabBadge(tab,p)" in html
+            and "notifyWebviewPanelViewState(viewId,p.id===activeProviderId"
+            in html
+            and "description:rec.description||rec.detail||''" in html
+            and "badge:p.badge||existing.badge||null" in html)
     _check("extension custom editor webview menus and state follow VS Code context",
            "webviewState: view && view.webview ? view.webview._state : null"
            in node_ext_host_source
@@ -19163,6 +19175,7 @@ async function activate(context) {
           view.webview.html = '<main data-view="dynamic-webview-view"></main>';
         },
       },
+      { webviewOptions: { enableScripts: true, retainContextWhenHidden: true } },
     );
     await new Promise(resolve => setTimeout(resolve, 25));
     return {
@@ -19172,6 +19185,10 @@ async function activate(context) {
       description: dynamicWebviewView && dynamicWebviewView.description,
       badgeValue: dynamicWebviewView && dynamicWebviewView.badge
         && dynamicWebviewView.badge.value,
+      retainContextWhenHidden: dynamicWebviewView
+        && dynamicWebviewView.webview
+        && dynamicWebviewView.webview.options
+        && dynamicWebviewView.webview.options.retainContextWhenHidden,
       visible: dynamicWebviewView && dynamicWebviewView.visible,
       visibility: dynamicWebviewVisibility,
     };
@@ -19184,6 +19201,10 @@ async function activate(context) {
     description: dynamicWebviewView && dynamicWebviewView.description,
     badgeValue: dynamicWebviewView && dynamicWebviewView.badge
       && dynamicWebviewView.badge.value,
+    retainContextWhenHidden: dynamicWebviewView
+      && dynamicWebviewView.webview
+      && dynamicWebviewView.webview.options
+      && dynamicWebviewView.webview.options.retainContextWhenHidden,
   }));
   vscode.commands.registerCommand('selftest.node.webviewUriProbe', () => {
     const panel = vscode.window.createWebviewPanel(
@@ -22231,15 +22252,28 @@ module.exports = { activate, deactivate };
                            "description") == "Dynamic description"
                        and node_dynamic_webview_view_probe.get(
                            "badgeValue") == 3
+                       and node_dynamic_webview_view_probe.get(
+                           "retainContextWhenHidden") is True
                        and node_dynamic_webview_view_id
                        and node_dynamic_webview_view_update is True
                        and isinstance(node_dynamic_webview_view_state, dict)
                        and node_dynamic_webview_view_state.get(
                            "visible") is False
+                       and node_dynamic_webview_view_state.get(
+                           "retainContextWhenHidden") is True
                        and False in node_dynamic_webview_view_state.get(
                            "visibility", [])
                        and dynamic_metadata_payload.get(
                            "title") == "Dynamic Webview"
+                       and dynamic_metadata_payload.get(
+                           "description") == "Dynamic description"
+                       and dynamic_metadata_payload.get(
+                           "badge", {}).get("value") == 3
+                       and dynamic_metadata_payload.get(
+                           "retainContextWhenHidden") is True
+                       and dynamic_metadata_payload.get(
+                           "options", {}).get(
+                               "retainContextWhenHidden") is True
                        and dynamic_metadata_payload.get("visible") is False,
                        json.dumps({
                            "probe": node_dynamic_webview_view_probe,

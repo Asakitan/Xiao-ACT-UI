@@ -190,6 +190,8 @@ body.window-resizing * { cursor:inherit !important; }
 .rtab-icon { width:15px; height:15px; flex:0 0 15px; display:inline-flex; align-items:center; justify-content:center; font-size:12px; opacity:.9; background-size:contain; background-position:center; background-repeat:no-repeat; }
 .rtab-icon:empty { display:none; }
 .rtab-label { overflow:hidden; text-overflow:ellipsis; }
+.rtab-badge { min-width:14px; height:14px; padding:0 4px; border-radius:7px; margin-left:2px;
+  background:var(--bg-badge); color:#fff; font:9px/14px var(--mono); text-align:center; }
 .rtab-close { width:15px; height:15px; margin-left:2px; border:0; background:transparent; color:var(--fg-dim); display:none; align-items:center; justify-content:center; border-radius:4px; padding:0; font-size:13px; line-height:15px; cursor:pointer; }
 .rtab:hover .rtab-close { display:inline-flex; }
 .rtab-close:hover { color:var(--fg); background:var(--bg-hover); }
@@ -12951,7 +12953,10 @@ function providerDisplayName(pid){
   return p.name||pid;
 }
 function providerTabLabel(p){return t(PROVIDER_TAB_LABEL_KEYS[p.id]||'')||p.short_name||p.name||p.id}
-function providerTabTitle(p){return providerDisplayName(p.id)+(p.available===false?' — '+providerUnavailableText(p):'')}
+function providerTabTitle(p){
+  const desc=String(p&&p.description||'').trim();
+  return providerDisplayName(p.id)+(desc?' — '+desc:'')+(p.available===false?' — '+providerUnavailableText(p):'');
+}
 function providerWebviewIconVisual(iconPath){
   if(!iconPath)return '';
   if(typeof iconPath==='string')return {text:iconPath.length<=3?iconPath:'□',title:iconPath};
@@ -13009,8 +13014,28 @@ function ensureProviderTabClose(tab,p){
     disposeExtensionWebviewPanel(viewId,p&&p.id);
   };
 }
+function ensureProviderTabBadge(tab,p){
+  if(!tab)return;
+  let badgeEl=tab.querySelector('.rtab-badge');
+  const badge=p&&p.badge;
+  const value=badge&&typeof badge==='object'?badge.value:badge;
+  const text=value===undefined||value===null||value===''?'':String(value);
+  if(!text){
+    if(badgeEl)badgeEl.remove();
+    return;
+  }
+  if(!badgeEl){
+    badgeEl=document.createElement('span');
+    badgeEl.className='rtab-badge';
+    tab.appendChild(badgeEl);
+  }
+  badgeEl.textContent=text.slice(0,3);
+  badgeEl.title=String((badge&&typeof badge==='object'&&badge.tooltip)||text);
+  badgeEl.setAttribute('aria-label',badgeEl.title);
+}
 function applyProviderTabChrome(tab,p){
   applyProviderTabIcon(tab,p);
+  ensureProviderTabBadge(tab,p);
   ensureProviderTabClose(tab,p);
 }
 function normalizeExtensionProviderRecord(raw,fallbackViewId){
@@ -13020,7 +13045,7 @@ function normalizeExtensionProviderRecord(raw,fallbackViewId){
   if(!providerId)return null;
   const viewIds=providerCandidateViewIds(rec);
   if(viewId&&!viewIds.includes(viewId))viewIds.push(viewId);
-  return {...rec,id:providerId,name:rec.name||rec.title||rec.label||rec.short_name||providerId,short_name:rec.short_name||rec.shortName||rec.label||rec.title||rec.name||providerId,available:rec.available!==false,runtime_mode:rec.runtime_mode||rec.runtimeMode||'extension-webview',requested_transport:rec.requested_transport||rec.requestedTransport||'webviewView',webview_ids:viewIds,extension_view:rec.extension_view||rec.extensionView||rec.webview_view||rec.webviewView||true};
+  return {...rec,id:providerId,name:rec.name||rec.title||rec.label||rec.short_name||providerId,short_name:rec.short_name||rec.shortName||rec.label||rec.title||rec.name||providerId,description:rec.description||rec.detail||'',badge:rec.badge||null,visible:rec.visible!==false,retainContextWhenHidden:!!(rec.retainContextWhenHidden||rec.retain_context_when_hidden),available:rec.available!==false,runtime_mode:rec.runtime_mode||rec.runtimeMode||'extension-webview',requested_transport:rec.requested_transport||rec.requestedTransport||'webviewView',webview_ids:viewIds,extension_view:rec.extension_view||rec.extensionView||rec.webview_view||rec.webviewView||true};
 }
 function recordLooksLikeExtensionWebview(raw,fallbackViewId){
   if(fallbackViewId)return true;
@@ -13038,7 +13063,7 @@ function rememberDynamicExtensionProvider(raw,fallbackViewId){
   const p=normalizeExtensionProviderRecord(raw,fallbackViewId);if(!p)return null;
   const existing=dynamicExtensionProviderDefs[p.id]||{};
   const ids=[...providerCandidateViewIds(existing),...providerCandidateViewIds(p)].filter((id,i,a)=>id&&a.indexOf(id)===i);
-  dynamicExtensionProviderDefs[p.id]={...existing,...p,webview_ids:ids,extension_view:p.extension_view||existing.extension_view||true};
+  dynamicExtensionProviderDefs[p.id]={...existing,...p,webview_ids:ids,extension_view:p.extension_view||existing.extension_view||true,description:p.description||existing.description||'',badge:p.badge||existing.badge||null,visible:p.visible!==false,retainContextWhenHidden:!!(p.retainContextWhenHidden||existing.retainContextWhenHidden)};
   return dynamicExtensionProviderDefs[p.id];
 }
 function collectExtensionProviderRecords(data){
@@ -13066,6 +13091,11 @@ function rememberWebviewRuntime(viewId,data){
     html:data.html!==undefined?data.html:existing.html,
     state:data.state!==undefined?data.state:existing.state,
     source:data.source||existing.source||'event',
+    viewType:data.view_type||data.viewType||existing.viewType||existing.view_type||'',
+    title:data.title||data.name||existing.title||existing.name||'',
+    description:data.description||existing.description||'',
+    badge:data.badge!==undefined?data.badge:existing.badge,
+    visible:data.visible!==undefined?!!data.visible:existing.visible,
     options:options,
     localResourceRoots:data.local_resource_roots||data.localResourceRoots||existing.localResourceRoots||existing.local_resource_roots||null,
     retainContextWhenHidden:retain
@@ -13391,7 +13421,11 @@ function ensureExtensionProviderPanel(raw,viewId){
   if(tab){applyProviderTabChrome(tab,p);const label=tab.querySelector('.rtab-label');if(label)label.textContent=providerTabLabel(p);tab.title=providerTabTitle(p);tab.setAttribute('aria-label',providerTabTitle(p))}
   let panel=$(providerElId('rp',p.id));
   if(!panel&&panels){panel=document.createElement('div');panel.className='right-panel';panel.id=providerElId('rp',p.id);panels.appendChild(panel)}
-  if(panel){panel.dataset.providerId=p.id;panel.dataset.providerSurface='extension-webview';panel.classList.add('provider-webview-host');if(viewId)panel.dataset.viewId=viewId}
+  if(panel){
+    panel.dataset.providerId=p.id;panel.dataset.providerSurface='extension-webview';panel.classList.add('provider-webview-host');if(viewId)panel.dataset.viewId=viewId;
+    if(p.description)panel.dataset.webviewDescription=p.description;
+    if(p.retainContextWhenHidden)panel.dataset.retainContext='1';
+  }
   return panel;
 }
 function updateExtensionWebviewTitle(viewId,title,viewType){
@@ -13410,6 +13444,8 @@ function updateExtensionWebviewTitle(viewId,title,viewType){
   const panel=ensureExtensionProviderPanel(record,id);
   if(panel){
     panel.dataset.webviewTitle=label;
+    if(record.description)panel.dataset.webviewDescription=record.description;
+    if(record.retainContextWhenHidden)panel.dataset.retainContext='1';
     if(!panel.children.length)renderProviderWebviewPlaceholder(panel,record,'loading');
   }
   return !!panel;
@@ -13720,6 +13756,7 @@ async function mountProviderWebviewPanel(panel,p){
     panel.dataset.webviewSource=cached.source||'event';
     if(cached.retainContextWhenHidden)panel.dataset.retainContext='1';
     _injectWebviewHtml(panel,cached.viewId,cached.html,cached.state);
+    notifyWebviewPanelViewState(cached.viewId,p.id===activeProviderId,p.id===activeProviderId);
     return;
   }
   let wv=null;
@@ -13736,6 +13773,7 @@ async function mountProviderWebviewPanel(panel,p){
     delete panel.dataset.webviewFallback;
     rememberWebviewRuntime(viewId,wv);
     _injectWebviewHtml(panel,viewId,wv.html,wv.state);
+    notifyWebviewPanelViewState(viewId,p.id===activeProviderId,p.id===activeProviderId);
     return;
   }
   delete panel.dataset.webviewSource;
@@ -13903,9 +13941,10 @@ async function renderProviderTabs(){
     if(p.available===false)return;
     providerDefs[p.id]=p;
     const tab=document.createElement('div');tab.className='rtab';tab.dataset.rtab=p.id;
-    const tabIcon=document.createElement('span');tabIcon.className='rtab-icon';tab.appendChild(tabIcon);applyProviderTabChrome(tab,p);
+    const tabIcon=document.createElement('span');tabIcon.className='rtab-icon';tab.appendChild(tabIcon);
     const tabLabel=document.createElement('span');tabLabel.className='rtab-label';tabLabel.textContent=providerTabLabel(p);
     tab.appendChild(tabLabel);tab.title=providerTabTitle(p);tab.setAttribute('aria-label',providerTabTitle(p));
+    applyProviderTabChrome(tab,p);
     tab.onclick=()=>switchRightTab(p.id);
     tabs.appendChild(tab);
     const panel=document.createElement('div');panel.className='right-panel';panel.id=providerElId('rp',p.id);panel.dataset.providerId=p.id;
