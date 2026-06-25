@@ -4027,6 +4027,53 @@ function editorEnterInsertionEdit(lang,value,start,end){
   const insert=editorEnterInsertion(lang,value,start,end);
   return {start,end,text:insert.text,selectionStart:start+insert.cursorOffset,selectionEnd:start+insert.cursorOffset};
 }
+function editorElectricCharacters(lang){
+  const chars=new Set();
+  languageBrackets(lang).forEach(pair=>{
+    const close=String(pair&&pair.close||'');
+    if(close)chars.add(close.slice(-1));
+  });
+  return Array.from(chars);
+}
+function editorLineBounds(value,pos){
+  const text=String(value||''),start=pos>0?text.lastIndexOf('\n',pos-1)+1:0;
+  let end=text.indexOf('\n',pos);if(end===-1)end=text.length;
+  return {start,end};
+}
+function editorElectricOutdentEditForKey(lang,key,value,start,end){
+  const keyText=String(key||'');
+  if(keyText.length!==1||keyText==='\n'||keyText==='\t')return null;
+  value=String(value||'');start=Math.max(0,Math.min(value.length,Number(start)||0));
+  end=Math.max(start,Math.min(value.length,Number(end)||start));
+  if(start!==end)return null;
+  const scopes=editorContextScopesAt(lang,value,start);
+  if(scopes.has('string')||scopes.has('comment')||scopes.has('regex'))return null;
+  const bounds=editorLineBounds(value,start);
+  const before=value.slice(bounds.start,start),after=value.slice(start,bounds.end);
+  const indentMatch=before.match(/^\s*/)||[''],indent=indentMatch[0],bodyBefore=before.slice(indent.length);
+  const makeEdit=(text,reason)=>{
+    if(text===before+keyText)return null;
+    return {start:bounds.start,end:start,text,selectionStart:bounds.start+text.length,selectionEnd:bounds.start+text.length,reason};
+  };
+  const pairs=languageBrackets(lang).filter(pair=>pair&&pair.close&&String(pair.close).endsWith(keyText))
+    .sort((a,b)=>String(b.close).length-String(a.close).length);
+  for(const pair of pairs){
+    const close=String(pair.close),prefix=close.slice(0,-keyText.length);
+    if(prefix&&!before.endsWith(prefix))continue;
+    const closeStart=start-prefix.length,lineBeforeClose=value.slice(bounds.start,closeStart);
+    if(!/^\s*$/.test(lineBeforeClose))continue;
+    const next=outdentIndent(lineBeforeClose)+prefix+keyText;
+    const edit=makeEdit(next,'bracket');
+    if(edit)return edit;
+  }
+  const rules=languageIndentationRules(lang),lineBefore=before+after,lineAfter=before+keyText+after;
+  if(!testLanguageRegex(rules.decreaseIndentPattern,lineBefore)&&testLanguageRegex(rules.decreaseIndentPattern,lineAfter)){
+    const next=outdentIndent(indent)+bodyBefore+keyText;
+    const edit=makeEdit(next,'decreaseIndentPattern');
+    if(edit)return edit;
+  }
+  return null;
+}
 function foldingRangeKindLabel(kind){
   const raw=String(kind==null?'':kind).toLowerCase();
   if(raw==='1'||raw==='comment')return 'Comment';
@@ -8076,6 +8123,14 @@ ed.addEventListener('keydown',function(e){
   const overtypeEdit=autoPairOvertypeEditForKey(editorLang,e.key,this.value,this.selectionStart,this.selectionEnd);
   if(overtypeEdit){
     e.preventDefault();this.selectionStart=overtypeEdit.selectionStart;this.selectionEnd=overtypeEdit.selectionEnd;return}
+  if(!e.ctrlKey&&!e.metaKey&&!e.altKey){
+    const electricEdit=editorElectricOutdentEditForKey(editorLang,e.key,this.value,this.selectionStart,this.selectionEnd);
+    if(electricEdit){
+      e.preventDefault();_undoPush(true);
+      this.value=this.value.substring(0,electricEdit.start)+electricEdit.text+this.value.substring(electricEdit.end);
+      this.selectionStart=electricEdit.selectionStart;this.selectionEnd=electricEdit.selectionEnd;
+      updateLineNums();updateCursorPos();return}
+  }
   if(e.key==='Backspace'&&!e.ctrlKey){
     const deleteEdit=autoPairDeleteEdit(editorLang,this.value,this.selectionStart,this.selectionEnd);
     if(deleteEdit){

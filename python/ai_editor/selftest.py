@@ -3282,6 +3282,8 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function languageBrackets(lang)" in html
             and "function editorEnterInsertion(lang,value,start,end)" in html
             and "function editorEnterInsertionEdit(lang,value,start,end)" in html
+            and "function editorElectricCharacters(lang)" in html
+            and "function editorElectricOutdentEditForKey(lang,key,value,start,end)" in html
             and "function onEnterRuleMatches(rule,ctx)" in html
             and "function enterActionMode(action)" in html
             and "function languageBracketEnterAction(lang,ctx)" in html
@@ -3854,6 +3856,9 @@ console.log("frontend save participant settings ok");
             "languageBracketEnterAction",
             "editorEnterInsertion",
             "editorEnterInsertionEdit",
+            "editorElectricCharacters",
+            "editorLineBounds",
+            "editorElectricOutdentEditForKey",
         ]
         js_functions = "\n".join(
             _extract_js_function(html, name) for name in function_names)
@@ -3964,6 +3969,14 @@ LANGUAGE_META.selflang = {
     ]
   }
 };
+LANGUAGE_META.rulelang = {
+  configuration: {
+    comments: { lineComment: "#" },
+    indentationRules: {
+      decreaseIndentPattern: {"pattern": "^\\s*done\\b"}
+    }
+  }
+};
 const bracketIndent = editorEnterInsertion("selflang", "begin", 5, 5);
 assert(bracketIndent.text === "\n    " && bracketIndent.cursorOffset === 5,
        "language brackets indent on Enter after open bracket");
@@ -3983,6 +3996,24 @@ assert(selectionEnter.start === 5
        && selectionEnter.selectionStart === 10
        && selectionEnter.selectionEnd === 10,
        "Enter edit replaces selection and reads afterText from selection end");
+const electricChars = editorElectricCharacters("selflang");
+assert(electricChars.includes("}") && electricChars.includes("d"),
+       "electric characters include contributed bracket close tails");
+const electricBrace = editorElectricOutdentEditForKey("selflang", "}", "    ", 4, 4);
+assert(electricBrace && electricBrace.text === "}" && electricBrace.selectionStart === 1,
+       "electric close bracket outdents whitespace-only line");
+const electricWordClose = editorElectricOutdentEditForKey("selflang", "d", "    en", 6, 6);
+assert(electricWordClose && electricWordClose.text === "end" && electricWordClose.reason === "bracket",
+       "electric multi-character close bracket replaces typed prefix with outdent");
+const electricDecrease = editorElectricOutdentEditForKey("rulelang", "e", "    don", 7, 7);
+assert(electricDecrease && electricDecrease.text === "done" && electricDecrease.reason === "decreaseIndentPattern",
+       "electric decreaseIndentPattern outdents when typed character completes rule");
+assert(editorElectricOutdentEditForKey("selflang", "d", "call en", 7, 7) === null,
+       "electric bracket outdent ignores non-whitespace before close token");
+assert(editorElectricOutdentEditForKey("javascript", "}", "//    ", 6, 6) === null,
+       "electric outdent is suppressed in comments");
+assert(editorElectricOutdentEditForKey("selflang", "}", "    ", 1, 4) === null,
+       "electric outdent ignores selections");
 console.log("frontend auto-close and Enter behavior ok");
 """
         js_path = ""
