@@ -5107,7 +5107,11 @@ console.log("frontend signature help docs ok");
             and "hiddenModified" in html
             and "hiddenTargets" in html
             and "hiddenTargetScopedValues" in html
+            and "hiddenReasons" in html
+            and "hidden-editable" in html
+            and "Hidden by Default" in html
             and "Hidden setting: excluded from the VS Code configuration registry" in html
+            and "Deprecated setting hidden until configured" in html
             and "dataset.extSettingPolicy" in html
             and "@tag:" in html
             and "@hidden" in html
@@ -6078,6 +6082,11 @@ assert(metadataTags.includes("experimental")
        && metadataTags.includes("target:global")
        && metadataTags.includes("language-default"),
        "metadata tags combine schema tags target tags and extras");
+const deprecatedTags = extensionSettingMetadataTags(deprecatedSchema, "string", "window", "workspace", true,
+  { tag: "", ignored: false, locked: false }, { tag: "" }, { tag: "", name: "" },
+  {}, []);
+assert(deprecatedTags.includes("deprecated"),
+       "metadata tags include deprecated schema marker");
 const targetOverrideHost = makeNode("div");
 renderExtensionSettingTargetOverrides(targetOverrideHost, scopedTargets, "workspace");
 assert(targetOverrideHost.textContent === "Also modified in: Global, Workspace Folder"
@@ -11965,6 +11974,20 @@ def test_app_extension_runtime_support() -> None:
                             "included": False,
                             "description": "Hidden internal setting",
                         },
+                        "selftest.deprecatedUnused": {
+                            "type": "string",
+                            "default": "old-default",
+                            "markdownDeprecationMessage": (
+                                "**Deprecated**: use `selftest.mode`."),
+                            "deprecationMessage": (
+                                "Deprecated: use selftest.mode."),
+                        },
+                        "selftest.deprecatedConfigured": {
+                            "type": "string",
+                            "default": "old-configured-default",
+                            "markdownDeprecationMessage": (
+                                "**Deprecated configured** setting."),
+                        },
                     },
                     "allOf": [
                         {
@@ -12006,6 +12029,10 @@ def test_app_extension_runtime_support() -> None:
         }, settings_tmp)
         api._ext_host.registry.register(settings_desc)
         api._ext_host.activator.activate(settings_desc.id)
+        settings_ctx = api._ext_host.activator.get_context(settings_desc.id)
+        if settings_ctx:
+            settings_ctx.workspace_state.update(
+                "selftest.deprecatedConfigured", "configured-old")
         conflict_tmp = tempfile.mkdtemp(prefix="sao_ext_settings_conflict_")
         conflict_desc = ExtensionDescription.from_package_json({
             "name": "settings-conflict",
@@ -12134,13 +12161,61 @@ def test_app_extension_runtime_support() -> None:
                and settings_cfg.get("hiddenScopes", {}).get(
                    "selftest.hidden") == "window"
                and settings_cfg.get("hiddenWorkspaceWritable", {}).get(
-                   "selftest.hidden") is True
+                   "selftest.hidden") is False
+               and settings_cfg.get("hiddenReasons", {}).get(
+                   "selftest.hidden") == "excluded"
                and hidden_set.get("ok") is False
                and "hidden" in hidden_set.get("error", "").lower()
                and hidden_save.get("ok") is False
                and "hidden" in hidden_save.get("error", "").lower()
                and all("selftest.hidden" not in props
-                       for props in legacy_hidden_props))
+                       for props in legacy_hidden_props),
+               json.dumps({
+                   "hidden": settings_cfg.get("hiddenProperties", {}).get(
+                       "selftest.hidden", {}),
+                   "hiddenReasons": settings_cfg.get("hiddenReasons", {}),
+                   "hiddenWorkspaceWritable": settings_cfg.get(
+                       "hiddenWorkspaceWritable", {}),
+                   "hiddenValues": settings_cfg.get("hiddenValues", {}),
+                   "hiddenSet": hidden_set,
+                   "hiddenSave": hidden_save,
+               }, ensure_ascii=False))
+        _check("extension settings hide unconfigured deprecated entries",
+               "selftest.deprecatedUnused" not in settings_cfg.get(
+                   "properties", {})
+               and "selftest.deprecatedUnused" in settings_cfg.get(
+                   "hiddenProperties", {})
+               and settings_cfg.get("hiddenReasons", {}).get(
+                   "selftest.deprecatedUnused") == "deprecated"
+               and settings_cfg.get("hiddenWorkspaceWritable", {}).get(
+                   "selftest.deprecatedUnused") is True
+               and settings_cfg.get("hiddenModified", {}).get(
+                   "selftest.deprecatedUnused") is False
+               and settings_cfg.get("hiddenValues", {}).get(
+                   "selftest.deprecatedUnused") == "old-default"
+               and "selftest.deprecatedConfigured" in settings_cfg.get(
+                   "properties", {})
+               and settings_cfg.get("values", {}).get(
+                   "selftest.deprecatedConfigured") == "configured-old"
+               and settings_cfg.get("modified", {}).get(
+                   "selftest.deprecatedConfigured") is True)
+        deprecated_set = api.set_extension_setting(
+            "selftest.deprecatedUnused", "revived")
+        deprecated_after_cfg = next(
+            (item for item in api.list_extension_settings().get(
+                "configurations", [])
+             if item.get("extension_id") == "selftest.settings-pack"),
+            {})
+        _check("extension deprecated settings reappear after configuration",
+               deprecated_set.get("ok") is True
+               and "selftest.deprecatedUnused" in deprecated_after_cfg.get(
+                   "properties", {})
+               and "selftest.deprecatedUnused" not in deprecated_after_cfg.get(
+                   "hiddenProperties", {})
+               and deprecated_after_cfg.get("values", {}).get(
+                   "selftest.deprecatedUnused") == "revived"
+               and deprecated_after_cfg.get("modified", {}).get(
+                   "selftest.deprecatedUnused") is True)
         machine_set = api.set_extension_setting(
             "selftest.machineOnly", "changed")
         machine_save = api.save_extension_setting(

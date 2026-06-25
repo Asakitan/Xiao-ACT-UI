@@ -10322,14 +10322,26 @@ class AIEditorAPI:
             hidden_restricted: Dict[str, bool] = {}
             hidden_sync_ignored: Dict[str, bool] = {}
             hidden_sync_ignore_locked: Dict[str, bool] = {}
+            hidden_reasons: Dict[str, str] = {}
             for key, schema in props.items():
                 if not isinstance(schema, dict):
                     continue
-                if not self._extension_setting_included(schema):
+                hidden_target_entry = self._extension_setting_target_entry(key)
+                hidden_target_name = self._extension_setting_active_target(
+                    hidden_target_entry)
+                hidden_scoped_values = (
+                    self._extension_setting_target_scoped_values(
+                        hidden_target_entry))
+                configured = bool(hidden_scoped_values) or key in configured_keys
+                hidden_reason = self._extension_setting_hidden_reason(
+                    schema, configured)
+                if hidden_reason:
                     hidden_props[key] = schema
+                    hidden_reasons[key] = hidden_reason
                     hidden_scopes[key] = self._extension_setting_scope(schema)
                     hidden_workspace_writable[key] = (
-                        self._extension_setting_workspace_writable(schema))
+                        hidden_reason == "deprecated"
+                        and self._extension_setting_workspace_writable(schema))
                     hidden_restricted[key] = bool(
                         schema.get("restricted") is True)
                     hidden_sync_ignored[key] = (
@@ -10339,14 +10351,6 @@ class AIEditorAPI:
                     hidden_has_default = "default" in schema
                     if hidden_has_default:
                         hidden_defaults[key] = schema["default"]
-                    hidden_target_entry = (
-                        self._extension_setting_target_entry(key))
-                    hidden_target_name = (
-                        self._extension_setting_active_target(
-                            hidden_target_entry))
-                    hidden_scoped_values = (
-                        self._extension_setting_target_scoped_values(
-                            hidden_target_entry))
                     hidden_targets[key] = hidden_target_name
                     if hidden_scoped_values:
                         hidden_target_scoped_values[key] = (
@@ -10437,6 +10441,7 @@ class AIEditorAPI:
                 "hiddenRestricted": hidden_restricted,
                 "hiddenSyncIgnored": hidden_sync_ignored,
                 "hiddenSyncIgnoreLocked": hidden_sync_ignore_locked,
+                "hiddenReasons": hidden_reasons,
                 "scopes": scopes,
                 "workspaceWritable": workspace_writable,
                 "restricted": restricted,
@@ -10576,6 +10581,25 @@ class AIEditorAPI:
         if cls._extension_setting_included(schema):
             return ""
         return "Setting is hidden from the VS Code configuration registry"
+
+    @staticmethod
+    def _extension_setting_deprecated(schema: Dict[str, Any]) -> bool:
+        return bool(
+            isinstance(schema, dict)
+            and (
+                str(schema.get("markdownDeprecationMessage") or "").strip()
+                or str(schema.get("deprecationMessage") or "").strip()
+            )
+        )
+
+    @classmethod
+    def _extension_setting_hidden_reason(
+            cls, schema: Dict[str, Any], configured: bool = False) -> str:
+        if not cls._extension_setting_included(schema):
+            return "excluded"
+        if cls._extension_setting_deprecated(schema) and not configured:
+            return "deprecated"
+        return ""
 
     @staticmethod
     def _extension_setting_scope(schema: Dict[str, Any]) -> str:

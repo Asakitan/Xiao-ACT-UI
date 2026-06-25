@@ -1168,7 +1168,7 @@ pre.code-block { overflow:visible; }
   border-radius:3px; padding:0 4px; line-height:15px; background:var(--bg3); }
 .ext-setting-row.deprecated:not(.modified) { border-left-color:color-mix(in srgb,var(--fg-warning) 45%,transparent); }
 .ext-setting-row.scope-readonly input,.ext-setting-row.scope-readonly select,.ext-setting-row.scope-readonly textarea,
-.ext-setting-row.hidden-setting input,.ext-setting-row.hidden-setting select,.ext-setting-row.hidden-setting textarea {
+.ext-setting-row.hidden-setting:not(.hidden-editable) input,.ext-setting-row.hidden-setting:not(.hidden-editable) select,.ext-setting-row.hidden-setting:not(.hidden-editable) textarea {
   opacity:.66; cursor:not-allowed; }
 .ext-setting-key { font-size:11px; font-family:var(--mono); color:var(--fg-dim); user-select:all; margin-bottom:4px; }
 .ext-setting-desc { font-size:11px; color:var(--fg-dim); line-height:1.35; margin-bottom:4px; }
@@ -14345,6 +14345,7 @@ function extensionSettingMetadataTags(schema,type,scopeName,currentTarget,worksp
     .concat(extraTags||[])
     .concat([scopeName,'type:'+type,type,schema.restricted===true?'restricted':'',
       schema.restricted===true?'workspace-trust':'',
+      extensionSettingDeprecationText(schema)?'deprecated':'',
       workspaceWritable?'':'scope-readonly',syncMeta&&syncMeta.tag,
       syncMeta&&syncMeta.ignored?'sync-ignored':'',syncMeta&&syncMeta.locked?'sync-locked':'',
       defaultOverrideMeta&&defaultOverrideMeta.tag,policyMeta&&policyMeta.tag,
@@ -15121,6 +15122,7 @@ async function renderExtensionSettings(){
     const hiddenModified=cfg.hiddenModified||{};
     const hiddenTargets=cfg.hiddenTargets||{};
     const hiddenTargetScopedValues=cfg.hiddenTargetScopedValues||{};
+    const hiddenReasons=cfg.hiddenReasons||{};
     if(!properties||typeof properties!=='object'||!hiddenProperties||typeof hiddenProperties!=='object')return;
     const allProperties=Object.assign({},properties,hiddenProperties);
     const visibleCount=Object.keys(properties).length;
@@ -15167,8 +15169,12 @@ async function renderExtensionSettings(){
       const hasDefaultValue=Object.prototype.hasOwnProperty.call(defaultMap,key)||Object.prototype.hasOwnProperty.call(schema,'default');
       const description=schema.markdownDescription||schema.description||'';
       const deprecation=extensionSettingDeprecationText(schema);
-      const workspaceWritable=!isHiddenSetting&&extensionSettingWorkspaceWritable(schema);
-      const readOnlyReason=isHiddenSetting?'Hidden setting: excluded from the VS Code configuration registry and shown here for diagnostics only.':extensionSettingReadOnlyReason(schema);
+      const hiddenReason=isHiddenSetting?String(hiddenReasons[key]||'excluded'):'';
+      const hiddenEditable=hiddenReason==='deprecated';
+      const hiddenTags=isHiddenSetting?['hidden',hiddenReason,hiddenEditable?'deprecated-hidden':'']:[];
+      const hiddenSearchText=isHiddenSetting?('hidden '+hiddenReason+' '+(hiddenEditable?'deprecated hidden by default':'included false excluded diagnostics')):'';
+      const workspaceWritable=hiddenEditable?extensionSettingWorkspaceWritable(schema):(!isHiddenSetting&&extensionSettingWorkspaceWritable(schema));
+      const readOnlyReason=(isHiddenSetting&&!hiddenEditable)?'Hidden setting: excluded from the VS Code configuration registry and shown here for diagnostics only.':extensionSettingReadOnlyReason(schema);
       const scopeName=extensionSettingScopeName(schema);
       const scopeBadge=extensionSettingScopeBadge(schema);
       const syncMeta=extensionSettingSyncMetadata(schema);
@@ -15184,6 +15190,7 @@ async function renderExtensionSettings(){
         :(Object.prototype.hasOwnProperty.call(valueMap,key)?valueMap[key]:defaultVal);
       const row=document.createElement('div');row.className='ext-setting-row settings-field';row.dataset.extSettingKey=key;
       if(isHiddenSetting)row.classList.add('hidden-setting');
+      if(hiddenEditable)row.classList.add('hidden-editable');
       row.dataset.extSettingOrder=String(inner.children.length);
       row.dataset.extSettingTitle=schema.title||shortKey;
       row.dataset.extSettingScope=scopeName;
@@ -15209,6 +15216,11 @@ async function renderExtensionSettings(){
       appendExtensionSettingDefaultOverrideBadge(head,defaultOverrideMeta);
       appendExtensionSettingPolicyBadge(head,policyMeta);
       appendExtensionSettingTagBadges(head,schema);
+      if(isHiddenSetting){
+        const hiddenEl=document.createElement('span');hiddenEl.className='ext-setting-hidden-badge';hiddenEl.textContent=hiddenEditable?'Hidden by Default':'Hidden';
+        hiddenEl.title=hiddenEditable?'Deprecated setting hidden until configured':'Excluded from the VS Code configuration registry';
+        head.appendChild(hiddenEl);
+      }
       if(schema.restricted===true){
         const restrictedEl=document.createElement('span');restrictedEl.className='ext-setting-scope-badge';restrictedEl.textContent='Restricted';
         head.appendChild(restrictedEl);
@@ -15231,13 +15243,13 @@ async function renderExtensionSettings(){
           if(enumHelp)renderExtensionSettingEnumDescription(enumHelp,schema,input);
           markExtensionSettingRow(row,extensionSettingHasTargetValue(scopedValues,row.dataset.extSettingTarget));
           row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,row.dataset.extSettingTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,
-            [isHiddenSetting?'hidden':'',isHiddenSetting?'excluded':'']).join('\n');
+            hiddenTags).join('\n');
           keyLabel.textContent=key+(scopeName!=='window'?' · '+scopeName:'')+' · '+type+' · '+extensionSettingTargetLabel(row.dataset.extSettingTarget);
           row.dataset.extSettingSearch=(
             sectionSearch+' '+extensionSettingSearchText(
               key,schema,type,description,deprecation,schemaSummary)+' '+
               defaultSource+' '+
-              (isHiddenSetting?'hidden excluded included false diagnostics ':'')+
+              hiddenSearchText+' '+
               extensionSettingCompactValue(nextValue,type)+' '+
               extensionSettingCompactValue(defaultVal,type)+' '+
               extensionSettingTargetSearchText(scopedValues,type)+' '+
@@ -15261,12 +15273,12 @@ async function renderExtensionSettings(){
       if(description){const desc=document.createElement('div');desc.className='ext-setting-desc';appendExtensionSettingMarkdown(desc,description);row.appendChild(desc)}
       if(deprecation){const dep=document.createElement('div');dep.className='ext-setting-deprecated';appendExtensionSettingMarkdown(dep,deprecation);row.appendChild(dep)}
       row.dataset.extSettingTags=extensionSettingMetadataTags(schema,type,scopeName,targetName,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,
-        [isHiddenSetting?'hidden':'',isHiddenSetting?'excluded':'']).join('\n');
+        hiddenTags).join('\n');
       row.dataset.extSettingSearch=(
         sectionSearch+' '+extensionSettingSearchText(
           key,schema,type,description,deprecation,schemaSummary)+' '+
           defaultSource+' '+
-          (isHiddenSetting?'hidden excluded included false diagnostics ':'')+
+          hiddenSearchText+' '+
           extensionSettingCompactValue(currentVal,type)+' '+
           extensionSettingCompactValue(defaultVal,type)+' '+
           extensionSettingTargetSearchText(scopedValues,type)+' '+
