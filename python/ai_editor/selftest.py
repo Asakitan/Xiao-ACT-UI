@@ -5716,6 +5716,10 @@ console.log("extension setting schema helpers ok");
            and "function quickInputMoveActive(state,delta)" in html
            and "function quickInputAccept(state)" in html
            and "function quickInputButtonHandle(button,index)" in html
+           and "function quickInputButtonLocation(button)" in html
+           and "function quickInputIconId(value)" in html
+           and "function quickInputItemTooltip(item,display)" in html
+           and "function quickInputItemIconGlyph(item)" in html
            and "function quickInputItemIsSeparator(item)" in html
            and "function quickInputItemMatchesFilter(item,state)" in html
            and "function quickInputFilterText(state)" in html
@@ -5737,6 +5741,14 @@ console.log("extension setting schema helpers ok");
            and "e.key==='Home'" in html
            and "e.key==='End'" in html
            and "aria-disabled" in html
+           and "aria-checked" in html
+           and "aria-pressed" in html
+           and "quick-input-title-btns" in html
+           and "quick-input-input-btns" in html
+           and "quick-input-field-wrap" in html
+           and "buttonLocation!==3" in html
+           and "quickInputItemTooltip(item,display)" in html
+           and "quickInputItemIconGlyph(item)" in html
            and "e.key==='ArrowDown'" in html
            and "e.key==='ArrowUp'" in html
            and "aria-activedescendant" in html
@@ -5762,8 +5774,12 @@ console.log("extension setting schema helpers ok");
             "quickInputItemKey",
             "quickInputSelectedKeySet",
             "quickInputFilterText",
+            "quickInputIconId",
+            "quickInputItemTooltip",
+            "quickInputItemIconGlyph",
             "quickInputItemIsSeparator",
             "quickInputItemMatchesFilter",
+            "quickInputButtonLocation",
             "quickInputButtonHandle",
             "quickInputSelectedIndices",
             "quickInputSelectableIndices",
@@ -5848,6 +5864,15 @@ assert(quickInputButtonHandle({ tooltip: "Back" }, 4) === -1,
        "Back button gets VS Code handle");
 assert(quickInputButtonHandle({ handle: 7, tooltip: "Custom" }, 4) === 7,
        "explicit button handle is preserved");
+assert(quickInputButtonLocation({ location: 3 }) === 3
+       && quickInputButtonLocation({ tooltip: "Title" }) === 1,
+       "button location defaults to title and preserves input location");
+assert(quickInputIconId({ iconPath: { id: "gear" } }) === "gear",
+       "button iconPath id is read");
+assert(quickInputItemIconGlyph({ iconPath: { id: "symbol-method" } }) === "S",
+       "item icon glyph derives from icon id");
+assert(quickInputItemTooltip({ tooltip: { value: "tip" } }, { label: "L" }) === "tip",
+       "markdown-style tooltip value is rendered");
 console.log("quick input filter helpers ok");
 """
         js_path = ""
@@ -13570,13 +13595,19 @@ async function activate(context) {
     inputBox.value = 'typed';
     inputBox.valueSelection = [1, 3];
     inputBox.password = true;
-    inputBox.buttons = [vscode.QuickInputButtons.Back];
+    const inputLocationButton = {
+      tooltip: 'Input Action',
+      location: vscode.QuickInputButtonLocation.Input,
+      iconPath: new vscode.ThemeIcon('gear'),
+    };
+    inputBox.buttons = [vscode.QuickInputButtons.Back, inputLocationButton];
     inputBox.validationMessage = {
       message: 'warn only',
       severity: vscode.InputBoxValidationSeverity.Warning,
     };
     inputBox.show();
     inputBox._triggerButton(vscode.QuickInputButtons.Back);
+    inputBox._triggerButton(inputLocationButton);
     inputBox._accept();
     inputBox.dispose();
     let inputBoxDisposedThrows = false;
@@ -13660,6 +13691,8 @@ async function activate(context) {
         valueSelection: [1, 3],
         password: true,
         validationSeverity: vscode.InputBoxValidationSeverity.Warning,
+        inputButtonLocation: inputLocationButton.location,
+        inputButtonIcon: inputLocationButton.iconPath.id,
         events: inputBoxEvents,
         disposedThrows: inputBoxDisposedThrows,
       },
@@ -17898,9 +17931,15 @@ module.exports = { activate, deactivate };
                        and node_input_box_object.get("password") is True
                        and node_input_box_object.get(
                            "validationSeverity") == 2
+                       and node_input_box_object.get(
+                           "inputButtonLocation") == 3
+                       and node_input_box_object.get(
+                           "inputButtonIcon") == "gear"
                        and "value:typed" in node_input_box_object.get(
                            "events", [])
                        and "button:Back" in node_input_box_object.get(
+                           "events", [])
+                       and "button:Input Action" in node_input_box_object.get(
                            "events", [])
                        and "accept" in node_input_box_object.get("events", [])
                        and "hide" in node_input_box_object.get("events", [])

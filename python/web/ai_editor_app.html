@@ -923,8 +923,11 @@ pre.code-block code .type { color:var(--fg-type); }
 .quick-input-btn.checked { color:var(--fg-accent); border-color:var(--fg-accent); }
 .quick-input-btn:disabled { opacity:.45; cursor:default; }
 .quick-input-body { padding:8px 10px 10px; }
+.quick-input-field-wrap { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:6px; }
 .quick-input-field { width:100%; background:var(--bg-input); border:1px solid var(--border);
   color:var(--fg); border-radius:4px; padding:7px 9px; font:13px var(--sans); outline:none; }
+.quick-input-field-wrap.has-input-buttons .quick-input-field { border-top-right-radius:0; border-bottom-right-radius:0; }
+.quick-input-input-btns { display:flex; align-items:center; gap:4px; }
 .quick-input-field:focus { border-color:var(--border-focus); }
 .quick-input-field:disabled { opacity:.75; cursor:not-allowed; }
 .quick-input-prompt { color:var(--fg-dim); font-size:12px; margin:6px 1px 0; line-height:1.35; }
@@ -945,6 +948,9 @@ pre.code-block code .type { color:var(--fg-type); }
 .quick-input-item:focus { outline:1px solid var(--border-focus); outline-offset:-1px; }
 .quick-input-item-main { min-width:0; overflow:hidden; }
 .quick-input-item-title { display:flex; align-items:center; gap:6px; min-width:0; }
+.quick-input-item-icon { flex:0 0 16px; width:16px; height:16px; border-radius:3px;
+  display:inline-flex; align-items:center; justify-content:center; color:var(--fg-accent);
+  background:color-mix(in srgb,var(--fg-accent) 12%,transparent); font:10px var(--mono); }
 .quick-input-item-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .quick-input-item-picked { color:var(--fg-accent); font-size:12px; }
 .quick-input-item-desc,.quick-input-item-detail { color:var(--fg-dim); font-size:11px;
@@ -2486,16 +2492,44 @@ function quickInputPayloadState(data){
 function quickInputButtonGlyph(button){
   const tip=String(button&&button.tooltip||'');
   if(tip.toLowerCase()==='back')return '&lt;';
-  const icon=button&&button.iconPath&&button.iconPath.id?String(button.iconPath.id):'';
+  const icon=quickInputIconId(button);
   if(icon.indexOf('close')>=0)return 'x';
   if(icon.indexOf('add')>=0||icon.indexOf('plus')>=0)return '+';
+  if(icon.indexOf('check')>=0)return '✓';
+  if(icon.indexOf('gear')>=0||icon.indexOf('settings')>=0)return '⚙';
   return tip?esc(tip.slice(0,1).toUpperCase()):'·';
 }
 function quickInputButtonTitle(button){return String(button&&button.tooltip||'')}
+function quickInputButtonLocation(button){const n=Number(button&&button.location);return Number.isFinite(n)?n:1}
 function quickInputButtonHandle(button,index){
   if(button&&Number.isInteger(Number(button.handle)))return Number(button.handle);
   if(String(button&&button.tooltip||'').toLowerCase()==='back')return -1;
   return index;
+}
+function quickInputIconId(value){
+  const icon=value&&(value.iconPathDto||value.iconPath||value.icon);
+  if(!icon)return'';
+  if(typeof icon==='string')return icon;
+  if(icon.id)return String(icon.id);
+  if(icon.light&&icon.dark)return quickInputIconId({icon:icon.dark});
+  if(icon.path)return quickInputResourceBasename(icon.path);
+  if(icon.fsPath)return quickInputResourceBasename(icon.fsPath);
+  return'';
+}
+function quickInputItemTooltip(item,display){
+  const tooltip=item&&item.tooltip;
+  if(typeof tooltip==='string')return tooltip;
+  if(tooltip&&tooltip.value!==undefined)return String(tooltip.value||'');
+  return [display&&display.label,display&&display.description,display&&display.detail]
+    .filter(Boolean).join('\n');
+}
+function quickInputItemIconGlyph(item){
+  const icon=quickInputIconId(item);
+  if(!icon)return'';
+  if(icon.indexOf('folder')>=0)return 'D';
+  if(icon.indexOf('file')>=0)return 'F';
+  if(icon.indexOf('symbol')>=0)return 'S';
+  return String(icon).slice(0,1).toUpperCase();
 }
 function quickInputResourceUriPath(resource){
   if(!resource)return'';
@@ -2633,13 +2667,16 @@ function quickInputRemove(id){
   delete quickInputViews[id];
   if(activeQuickInputId===id)activeQuickInputId='';
 }
-function quickInputRenderButtons(box,state){
-  const holder=box.querySelector('.quick-input-btns');if(!holder)return;
+function quickInputRenderButtons(box,state,location){
+  const holder=box.querySelector(location===3?'.quick-input-input-btns':'.quick-input-title-btns');if(!holder)return;
   holder.innerHTML='';
   (Array.isArray(state.buttons)?state.buttons:[]).forEach((button,index)=>{
+    const buttonLocation=quickInputButtonLocation(button);
+    if(location===3 ? buttonLocation!==3 : buttonLocation===3)return;
     const btn=document.createElement('button');btn.type='button';btn.className='quick-input-btn';
     if(button&&button.toggle&&button.toggle.checked)btn.classList.add('checked');
     btn.title=quickInputButtonTitle(button);btn.setAttribute('aria-label',btn.title||'Quick input action');
+    if(button&&button.toggle)btn.setAttribute('aria-pressed',button.toggle.checked?'true':'false');
     btn.disabled=state.enabled===false;btn.innerHTML=quickInputButtonGlyph(button);
     btn.onclick=e=>{
       e.preventDefault();e.stopPropagation();if(btn.disabled)return;
@@ -2648,6 +2685,7 @@ function quickInputRenderButtons(box,state){
     };
     holder.appendChild(btn);
   });
+  if(location===3&&holder.parentElement)holder.parentElement.classList.toggle('has-input-buttons',holder.children.length>0);
 }
 function quickInputRenderItems(list,state,input){
   const previousScrollTop=state.keepScrollPosition?list.scrollTop:0;
@@ -2682,11 +2720,15 @@ function quickInputRenderItems(list,state,input){
     if(selected.has(key))row.classList.add('selected');
     if(state.enabled===false)row.classList.add('disabled');
     row.setAttribute('aria-selected',selected.has(key)?'true':'false');
+    row.setAttribute('aria-checked',selected.has(key)?'true':'false');
     row.setAttribute('aria-disabled',state.enabled===false?'true':'false');
+    row.title=quickInputItemTooltip(item,display);
     const main=document.createElement('div');main.className='quick-input-item-main';
     const title=document.createElement('div');title.className='quick-input-item-title';
     const mark=document.createElement('span');mark.className='quick-input-item-picked';mark.textContent=selected.has(key)?'✓':'';
     const label=document.createElement('span');label.className='quick-input-item-label';label.textContent=display.label;
+    const iconGlyph=quickInputItemIconGlyph(item);
+    if(iconGlyph){const icon=document.createElement('span');icon.className='quick-input-item-icon';icon.textContent=iconGlyph;title.appendChild(icon)}
     title.appendChild(mark);title.appendChild(label);main.appendChild(title);
     if(display.description){const desc=document.createElement('div');desc.className='quick-input-item-desc';desc.textContent=display.description;main.appendChild(desc)}
     if(display.detail){const detail=document.createElement('div');detail.className='quick-input-item-detail';detail.textContent=display.detail;main.appendChild(detail)}
@@ -2695,6 +2737,7 @@ function quickInputRenderItems(list,state,input){
       const btn=document.createElement('button');btn.type='button';btn.className='quick-input-btn';btn.title=quickInputButtonTitle(button);
       if(button&&button.toggle&&button.toggle.checked)btn.classList.add('checked');
       btn.setAttribute('aria-label',btn.title||'Quick input item action');btn.disabled=state.enabled===false;btn.innerHTML=quickInputButtonGlyph(button);
+      if(button&&button.toggle)btn.setAttribute('aria-pressed',button.toggle.checked?'true':'false');
       btn.onclick=e=>{
         e.preventDefault();e.stopPropagation();if(btn.disabled)return;
         const checked=button&&button.toggle?!(button.toggle&&button.toggle.checked):undefined;
@@ -2731,7 +2774,7 @@ function renderQuickInputState(state){
   let view=quickInputViews[state.id];
   if(!view){
     const el=document.createElement('div');el.className='quick-input hidden';el.dataset.quickInputId=state.id;
-    el.innerHTML='<div class="quick-input-head"><div class="quick-input-title"></div><div class="quick-input-step"></div><div class="quick-input-btns"></div></div><div class="quick-input-body"><input class="quick-input-field"><div class="quick-input-prompt"></div><div class="quick-input-validation"></div><div class="quick-input-list"></div></div>';
+    el.innerHTML='<div class="quick-input-head"><div class="quick-input-title"></div><div class="quick-input-step"></div><div class="quick-input-btns quick-input-title-btns"></div></div><div class="quick-input-body"><div class="quick-input-field-wrap"><input class="quick-input-field"><div class="quick-input-btns quick-input-input-btns"></div></div><div class="quick-input-prompt"></div><div class="quick-input-validation"></div><div class="quick-input-list"></div></div>';
     host.appendChild(el);view={el};quickInputViews[state.id]=view;
   }
   view.state=state;state.el=view.el;
@@ -2768,6 +2811,7 @@ function renderQuickInputState(state){
     }
     input.disabled=state.enabled===false;
     input.setAttribute('aria-label',quickInputAriaLabel(state));
+    input.setAttribute('aria-busy',state.busy?'true':'false');
     if(state.kind==='quickPick'){
       input.setAttribute('aria-haspopup','listbox');
       input.setAttribute('aria-autocomplete','list');
@@ -2807,7 +2851,8 @@ function renderQuickInputState(state){
     validation.classList.toggle('error',!!message&&severity===3);
     input&&input.setAttribute('aria-invalid',message&&severity===3?'true':'false');
   }
-  quickInputRenderButtons(el,state);
+  quickInputRenderButtons(el,state,1);
+  quickInputRenderButtons(el,state,3);
   if(list){
     list.id=quickInputDomId(state.id,'list');
     list.setAttribute('role','listbox');
