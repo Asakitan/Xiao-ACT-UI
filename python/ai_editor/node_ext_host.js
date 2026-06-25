@@ -1570,6 +1570,7 @@ const _uriHandlers = new Map();          // extensionId -> { handler }
 const _languageProviders = [];           // { kind, selector, provider, triggers?, disposable }
 const _languageProviderRequests = new Map(); // requestId -> CancellationTokenSource
 const _fileDecorationProviders = [];     // { handle, extensionId, provider, disposable? }
+const _fileDecorationRequests = new Map(); // requestId -> CancellationTokenSource
 const _fileDecorationChangeMaxEventSize = 250;
 const _runtimeLanguageConfigurations = new Map(); // languageId -> [{ handle, configuration }]
 const _lmTools = new Map();              // name -> { handle, tool, extensionId, metadata }
@@ -5878,14 +5879,22 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             },
             registerFileDecorationProvider(provider) {
                 const handle = _nextFileDecorationProviderHandle++;
+                const hasChangeEvent = !!(
+                    provider && typeof provider.onDidChangeFileDecorations === 'function'
+                );
+                const hasProvider = !!(
+                    provider && typeof provider.provideFileDecoration === 'function'
+                );
                 const entry = {
                     handle,
                     extensionId: extDesc.extensionId || '',
                     provider,
+                    hasChangeEvent,
+                    hasProvider,
                 };
                 _fileDecorationProviders.push(entry);
                 let changeSubscription = null;
-                if (provider && typeof provider.onDidChangeFileDecorations === 'function') {
+                if (hasChangeEvent) {
                     changeSubscription = provider.onDidChangeFileDecorations((value) => {
                         const change = _fileDecorationChangedPayload(value);
                         send({
@@ -5903,6 +5912,8 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     type: 'file_decoration_provider_registered',
                     handle,
                     extensionId: entry.extensionId,
+                    hasChangeEvent,
+                    hasProvider,
                 });
                 const d = new Disposable(() => {
                     const idx = _fileDecorationProviders.indexOf(entry);
@@ -9403,31 +9414,52 @@ function handleLanguageProviderCancel(msg) {
 async function handleFileDecorationRequest(msg) {
     const requestId = String(msg.requestId || '');
     const uri = _uriFromPayload(msg.uri || msg);
-    const token = {
-        isCancellationRequested: false,
-        onCancellationRequested: new EventEmitter().event,
-    };
+    const cts = new CancellationTokenSource();
+    const token = cts.token;
     const values = [];
+    const errors = [];
+    if (requestId) _fileDecorationRequests.set(requestId, cts);
     try {
         if (!requestId) throw new Error('Missing file decoration requestId');
         for (const entry of [..._fileDecorationProviders]) {
+            if (token.isCancellationRequested) break;
             const provider = entry.provider;
             const fn = provider && provider.provideFileDecoration;
             if (typeof fn !== 'function') continue;
             try {
                 const value = await fn.call(provider, uri, token);
+                if (token.isCancellationRequested) break;
                 if (value !== undefined && value !== null) {
                     values.push(_serializeLanguageValue(value));
                 }
             } catch (err) {
-                log(`file decoration provider error: ${err.message}`);
+                const message = err?.message || String(err);
+                log(`file decoration provider error: ${message}`);
+                errors.push({
+                    handle: entry.handle,
+                    extensionId: entry.extensionId,
+                    error: message,
+                });
             }
+        }
+        if (token.isCancellationRequested) {
+            send({
+                type: 'file_decoration_response',
+                requestId,
+                ok: false,
+                cancelled: true,
+                error: 'File decoration request cancelled',
+                value: values,
+                errors,
+            });
+            return;
         }
         send({
             type: 'file_decoration_response',
             requestId,
             ok: true,
             value: values,
+            errors,
         });
     } catch (err) {
         send({
@@ -9436,8 +9468,19 @@ async function handleFileDecorationRequest(msg) {
             ok: false,
             error: err?.message || String(err),
             value: [],
+            errors,
         });
+    } finally {
+        _fileDecorationRequests.delete(requestId);
+        cts.dispose();
     }
+}
+
+function handleFileDecorationCancel(msg) {
+    const requestId = String(msg.requestId || '');
+    const cts = _fileDecorationRequests.get(requestId);
+    if (!cts) return;
+    cts.cancel();
 }
 
 async function handleTreeRequest(msg) {
@@ -9645,6 +9688,9 @@ async function handleMessage(msg) {
             break;
         case 'file_decoration_request':
             await handleFileDecorationRequest(msg);
+            break;
+        case 'file_decoration_cancel':
+            handleFileDecorationCancel(msg);
             break;
         case 'lm_tool_request':
             await handleLmToolRequest(msg);

@@ -2701,6 +2701,8 @@ class NodeExtensionHost:
             self._file_decoration_providers.append({
                 "handle": msg.get("handle"),
                 "extensionId": str(msg.get("extensionId", "")),
+                "hasChangeEvent": bool(msg.get("hasChangeEvent")),
+                "hasProvider": bool(msg.get("hasProvider")),
             })
             _log.info("[NodeExtHost] File decoration provider registered: %s",
                       msg.get("handle"))
@@ -3425,6 +3427,7 @@ class NodeExtensionHost:
         ok = False
         timed_out = False
         error = ""
+        provider_errors: List[Dict[str, Any]] = []
         detail = str((payload or {}).get("uri", ""))
         if not self.is_running:
             error = "Node extension host is not running"
@@ -3456,6 +3459,8 @@ class NodeExtensionHost:
             if not event.wait(timeout):
                 timed_out = True
                 error = "Node file decoration request timed out"
+                self.cancel_file_decoration_request(
+                    request_id, reason="timeout")
                 return {
                     "ok": False,
                     "value": default,
@@ -3467,10 +3472,26 @@ class NodeExtensionHost:
             response = pending.get("response", {})
             if isinstance(response, dict) and response.get("ok"):
                 ok = True
+                raw_errors = response.get("errors")
+                if isinstance(raw_errors, list):
+                    provider_errors = [
+                        item for item in raw_errors
+                        if isinstance(item, dict)
+                    ]
+                if provider_errors:
+                    error = f"{len(provider_errors)} file decoration provider error(s)"
                 return {
                     "ok": True,
                     "value": response.get("value", default),
+                    "errors": provider_errors,
                 }
+            if isinstance(response, dict):
+                raw_errors = response.get("errors")
+                if isinstance(raw_errors, list):
+                    provider_errors = [
+                        item for item in raw_errors
+                        if isinstance(item, dict)
+                    ]
             error = (
                 response.get("error")
                 if isinstance(response, dict)
@@ -3479,6 +3500,10 @@ class NodeExtensionHost:
                 "ok": False,
                 "value": default,
                 "error": error,
+                "cancelled": (
+                    bool(response.get("cancelled"))
+                    if isinstance(response, dict) else False),
+                "errors": provider_errors,
             }
         finally:
             with self._file_decoration_request_lock:
@@ -3486,11 +3511,27 @@ class NodeExtensionHost:
             self._record_diagnostic(
                 "file_decoration",
                 (time.perf_counter() - started) * 1000,
-                ok=ok,
+                ok=ok and not provider_errors,
                 timeout=timed_out,
                 detail=detail,
                 error=error,
             )
+
+    def cancel_file_decoration_request(
+            self, request_id: str, reason: str = "cancelled") -> bool:
+        """Cancel an in-flight Node file-decoration request."""
+        if not request_id:
+            return False
+        with self._file_decoration_request_lock:
+            pending = self._file_decoration_requests.get(request_id)
+            event = pending.get("event") if pending else None
+            if isinstance(event, threading.Event):
+                pending["cancelled"] = True
+        return self._send({
+            "type": "file_decoration_cancel",
+            "requestId": request_id,
+            "reason": str(reason or "cancelled"),
+        })
 
     def request_lm_tool_result(
             self, name: str, input_data: Any = None,

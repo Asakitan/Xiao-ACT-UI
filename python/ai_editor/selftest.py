@@ -6966,6 +6966,37 @@ def test_extension_host() -> None:
            file_decoration_events
            and file_decoration_events[0][0] == "file_decoration_changed"
            and file_decoration_events[0][1].get("handle") == 7)
+    node_event_host._on_message({
+        "type": "file_decoration_provider_registered",
+        "handle": 8,
+        "extensionId": "selftest.decorations",
+        "hasChangeEvent": True,
+        "hasProvider": True,
+    })
+    node_file_decoration_providers = (
+        node_event_host.list_file_decoration_providers())
+    _check("NodeExtensionHost records file decoration provider metadata",
+           node_file_decoration_providers
+           and node_file_decoration_providers[0].get("handle") == 8
+           and node_file_decoration_providers[0].get("hasChangeEvent") is True
+           and node_file_decoration_providers[0].get("hasProvider") is True)
+    class _RunningNodeProc:
+        def poll(self):
+            return None
+    timeout_host = NodeExtensionHost(node_path="", script_path="")
+    timeout_host._proc = _RunningNodeProc()
+    timeout_messages = []
+    timeout_host._send = lambda msg: timeout_messages.append(dict(msg)) or True
+    timeout_result = timeout_host.request_file_decoration_result(
+        {"uri": "file:///workspace/slow-decoration.txt"},
+        default=[],
+        timeout=0.01)
+    _check("NodeExtensionHost cancels timed out file decoration requests",
+           timeout_result.get("timeout") is True
+           and any(
+               msg.get("type") == "file_decoration_cancel"
+               for msg in timeout_messages),
+           json.dumps(timeout_messages, ensure_ascii=False, default=str))
     tree_state_events = []
     node_event_host.on_tree_event(
         lambda event, view_id, payload: tree_state_events.append(
@@ -12111,6 +12142,9 @@ async function activate(context) {
   vscode.window.registerFileDecorationProvider({
     onDidChangeFileDecorations: fileDecorationEmitter.event,
     provideFileDecoration(uri, token) {
+      if (uri.toString().endsWith('node-decoration-error.txt')) {
+        throw new Error('Node decoration failure');
+      }
       if (!uri.toString().endsWith('node-decoration.txt')) return undefined;
       const decoration = new vscode.FileDecoration(
         'N',
@@ -14372,10 +14406,23 @@ module.exports = { activate, deactivate };
                 node_file_decoration_registered = _wait_until(
                     lambda: bool(node_host.list_file_decoration_providers()),
                     timeout=3.0)
+                node_file_decoration_providers = (
+                    node_host.list_file_decoration_providers())
                 node_file_decorations = (
                     api._vscode_ns.provide_file_decorations(
                         Uri.file(node_decoration_sample))
                     if node_file_decoration_registered else [])
+                node_decoration_error_sample = os.path.join(
+                    node_tree_tmp, "node-decoration-error.txt")
+                with open(node_decoration_error_sample, "w",
+                          encoding="utf-8") as fh:
+                    fh.write("error\n")
+                node_file_decoration_error_result = (
+                    node_host.request_file_decoration_result({
+                        "uri": Uri.file(
+                            node_decoration_error_sample).to_string(),
+                    }, default=[])
+                    if node_file_decoration_registered else {})
                 _wait_until(
                     lambda: any(
                         item.get("event") == "file_decorations_changed"
@@ -15170,6 +15217,11 @@ module.exports = { activate, deactivate };
                            for payload in node_language_payloads))
                 _check("node host file decoration provider invokes JS decorations",
                        node_file_decoration_registered
+                       and node_file_decoration_providers
+                       and node_file_decoration_providers[0].get(
+                           "hasChangeEvent") is True
+                       and node_file_decoration_providers[0].get(
+                           "hasProvider") is True
                        and node_file_decorations
                        and node_file_decorations[0].get("badge") == "N"
                        and node_file_decorations[0].get("tooltip")
@@ -15181,6 +15233,13 @@ module.exports = { activate, deactivate };
                        and node_file_decoration_payloads[-1].get("uri", "")
                        .endswith("node-decoration.txt"),
                        json.dumps(node_file_decorations,
+                                  ensure_ascii=False, default=str))
+                _check("node host file decoration provider errors are reported",
+                       node_file_decoration_error_result.get("ok") is True
+                       and not node_file_decoration_error_result.get("value")
+                       and (node_file_decoration_error_result.get("errors")
+                            or [{}])[0].get("extensionId"),
+                       json.dumps(node_file_decoration_error_result,
                                   ensure_ascii=False, default=str))
                 node_file_decoration_change = (
                     node_file_decoration_change_events[-1]
@@ -16931,6 +16990,7 @@ module.exports = { activate, deactivate };
                        and node_diag_categories.get("python_command", {}).get("count", 0) >= 1
                        and node_diag_categories.get("language", {}).get("count", 0) >= 5
                        and node_diag_categories.get("file_decoration", {}).get("count", 0) >= 1
+                       and node_diag_categories.get("file_decoration", {}).get("errors", 0) >= 1
                        and node_diag_categories.get("tree", {}).get("count", 0) >= 1
                        and node_diag_categories.get("workspace.applyEdit", {}).get("count", 0) >= 2
                        and node_diag_categories.get("workspace.findFiles", {}).get("count", 0) >= 1,
