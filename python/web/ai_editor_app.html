@@ -309,6 +309,20 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-notebook-output-item img { display:block; max-width:100%; max-height:260px; object-fit:contain; }
 .editor-notebook-output-item iframe { width:100%; min-height:120px; border:0; background:white; border-radius:4px; }
 .editor-notebook-empty { color:var(--fg-dim); font-size:12px; padding:18px; text-align:center; }
+.editor-diff-host { position:absolute; inset:0; z-index:22; display:none; flex-direction:column;
+  background:var(--bg-editor); color:var(--fg); overflow:hidden; }
+.editor-diff-host.active { display:flex; }
+.editor-diff-header { display:flex; align-items:center; gap:8px; min-height:30px; padding:6px 10px;
+  border-bottom:1px solid var(--border); background:var(--bg2); color:var(--fg-dim); font-size:12px; }
+.editor-diff-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.editor-diff-grid { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  border-top:1px solid color-mix(in srgb,var(--border) 55%,transparent); }
+.editor-diff-pane { min-width:0; min-height:0; display:flex; flex-direction:column; border-right:1px solid var(--border); }
+.editor-diff-pane:last-child { border-right:0; }
+.editor-diff-pane-title { padding:5px 8px; border-bottom:1px solid var(--border); background:var(--bg3);
+  color:var(--fg-dim); font:11px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.editor-diff-text { flex:1; min-height:0; margin:0; padding:10px 12px; overflow:auto; white-space:pre;
+  color:var(--fg-code); background:var(--bg-editor); font:12px/1.5 var(--mono); tab-size:2; }
 .editor-container.custom-editor .line-numbers,
 .editor-container.custom-editor .editor-textarea,
 .editor-container.custom-editor .editor-syntax-layer,
@@ -329,6 +343,16 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-container.notebook-editor .editor-codelens-layer,
 .editor-container.notebook-editor .editor-color-layer,
 .editor-container.notebook-editor .minimap-container { opacity:0; pointer-events:none; }
+.editor-container.diff-editor .line-numbers,
+.editor-container.diff-editor .editor-textarea,
+.editor-container.diff-editor .editor-syntax-layer,
+.editor-container.diff-editor .editor-highlight-layer,
+.editor-container.diff-editor .editor-diagnostic-layer,
+.editor-container.diff-editor .editor-inlay-layer,
+.editor-container.diff-editor .editor-ghost-layer,
+.editor-container.diff-editor .editor-codelens-layer,
+.editor-container.diff-editor .editor-color-layer,
+.editor-container.diff-editor .minimap-container { opacity:0; pointer-events:none; }
 .editor-container.syntax-on .editor-textarea {
   background:transparent; color:transparent; -webkit-text-fill-color:transparent;
 }
@@ -1582,6 +1606,7 @@ pre.code-block { overflow:visible; }
         <div class="editor-codelens-layer" id="editor-codelens-layer" aria-hidden="true"></div>
         <div class="editor-color-layer" id="editor-color-layer" aria-hidden="true"></div>
         <textarea class="editor-textarea" id="editor-text" spellcheck="false" placeholder="// Your code here..."></textarea>
+        <div class="editor-diff-host" id="editor-diff-host"></div>
         <div class="editor-notebook-host" id="editor-notebook-host"></div>
         <div class="editor-custom-webview-host" id="editor-custom-webview-host"></div>
         <div class="editor-suggest" id="editor-suggest" role="listbox"></div>
@@ -3318,7 +3343,9 @@ function renderToolResult(container,name,result,callId){
 // ── Editor ──
 function openInEditor(code,lang){
   showEditorArea();
+  if(typeof hideDiffEditorSurface==='function')hideDiffEditorSurface();
   if(typeof hideCustomEditorSurface==='function')hideCustomEditorSurface();
+  if(typeof hideNotebookSurface==='function')hideNotebookSurface();
   $('editor-welcome').style.display='none';
   $('editor-container').style.display='flex';
   $('editor-text').value=code;
@@ -9221,13 +9248,25 @@ async function runScmQuickDiff(provider,resourceUri){
     showToast(callFailedMessage(r,'No original resource available'),'info',2600);
     return r;
   }
-  const opened=await call('open_text_resource',r.originalResourceUri);
-  if(!opened||opened.error){
-    showToast((opened&&opened.error)||'Original resource could not be opened','error',3000);
+  const originalOpened=await call('open_text_resource',r.originalResourceUri);
+  if(!originalOpened||originalOpened.error){
+    showToast((originalOpened&&originalOpened.error)||'Original resource could not be opened','error',3000);
     return r;
   }
-  openEditorOpenResult(opened,opened.path||'');
-  setStatus('Opened quick diff original');
+  const modifiedOpened=await call('open_text_resource',uri);
+  if(!modifiedOpened||modifiedOpened.error){
+    showToast((modifiedOpened&&modifiedOpened.error)||'Current resource could not be opened','error',3000);
+    return r;
+  }
+  openEditorDiffResult(originalOpened,modifiedOpened,{
+    key:'quickdiff:'+providerId+':'+uri,
+    title:String(provider.quickDiffLabel||'Quick Diff')+': '+diffResourceLabel(modifiedOpened,uri),
+    originalUri:r.originalResourceUri,
+    modifiedUri:uri,
+    originalLabel:'Original',
+    modifiedLabel:'Current',
+    language:modifiedOpened.language||originalOpened.language||''
+  });
   return r;
 }
 function scmHistoryRefLabel(ref){
@@ -9259,6 +9298,11 @@ function scmHistoryChangeLabel(change){
   const clean=uri.split(/[?#]/)[0].replace(/\\/g,'/');
   return clean.split('/').filter(Boolean).pop()||uri;
 }
+const SCM_HISTORY_PAGE_SIZE=20;
+function scmHistoryLimit(container){
+  const limit=Number(container&&container.dataset&&container.dataset.limit)||SCM_HISTORY_PAGE_SIZE;
+  return Math.max(SCM_HISTORY_PAGE_SIZE,Math.min(500,limit));
+}
 function appendScmHistoryRefs(parent,provider){
   const refs=[
     ['HEAD',provider&&provider.historyItemRef],
@@ -9284,6 +9328,23 @@ async function requestScmHistory(providerId,operation,payload){
   return await call('request_scm_history',id,op,payload||{});
 }
 async function openScmHistoryChange(change,preferOriginal){
+  if(!preferOriginal&&change&&change.originalUri&&(change.modifiedUri||change.uri)){
+    const modifiedUri=String(change.modifiedUri||change.uri||'');
+    const originalOpened=await call('open_text_resource',change.originalUri);
+    const modifiedOpened=await call('open_text_resource',modifiedUri);
+    if(originalOpened&&!originalOpened.error&&modifiedOpened&&!modifiedOpened.error){
+      openEditorDiffResult(originalOpened,modifiedOpened,{
+        key:'historydiff:'+String(change.originalUri)+'::'+modifiedUri,
+        title:'History Diff: '+scmHistoryChangeLabel(change),
+        originalUri:change.originalUri,
+        modifiedUri,
+        originalLabel:'Original',
+        modifiedLabel:'Current',
+        language:modifiedOpened.language||originalOpened.language||''
+      });
+      return {ok:true,diff:true};
+    }
+  }
   const uri=String(preferOriginal
     ? ((change&&change.originalUri)||(change&&change.uri)||'')
     : ((change&&change.modifiedUri)||(change&&change.uri)||(change&&change.originalUri)||''));
@@ -9399,14 +9460,32 @@ function renderScmHistoryItems(provider,container,items){
     wrap.appendChild(changes);
     container.appendChild(wrap);
   });
+  const limit=scmHistoryLimit(container);
+  if(rows.length>=limit){
+    const more=document.createElement('button');
+    more.type='button';
+    more.className='text-btn';
+    more.dataset.scmHistoryLoadMore='1';
+    more.textContent='Load More';
+    more.title='Load more history items';
+    more.style.cssText='margin:4px 12px 8px 16px;min-height:22px;padding:2px 8px;font-size:11px';
+    more.onclick=e=>{
+      e.stopPropagation();
+      container.dataset.limit=String(limit+SCM_HISTORY_PAGE_SIZE);
+      loadScmHistoryProvider(provider,container,true);
+    };
+    container.appendChild(more);
+  }
 }
 async function loadScmHistoryProvider(provider,container,force){
   const providerId=scmProviderId(provider);
   if(!providerId||!container)return;
   if(container.dataset.loaded==='true'&&!force)return;
   container.dataset.loaded='';
+  const limit=scmHistoryLimit(container);
+  container.dataset.limit=String(limit);
   container.innerHTML='<div class="tree-note" style="padding-left:16px">Loading history...</div>';
-  const r=await requestScmHistory(providerId,'provideItems',{options:{limit:10}});
+  const r=await requestScmHistory(providerId,'provideItems',{options:{limit:limit}});
   if(!callSucceeded(r)){
     container.innerHTML='';
     const err=document.createElement('div');
@@ -9414,6 +9493,14 @@ async function loadScmHistoryProvider(provider,container,force){
     err.style.paddingLeft='16px';
     err.textContent=callFailedMessage(r,'History unavailable');
     container.appendChild(err);
+    const retry=document.createElement('button');
+    retry.type='button';
+    retry.className='text-btn';
+    retry.dataset.scmHistoryRetry='1';
+    retry.textContent='Retry';
+    retry.style.cssText='margin:4px 12px 8px 16px;min-height:22px;padding:2px 8px;font-size:11px';
+    retry.onclick=e=>{e.stopPropagation();loadScmHistoryProvider(provider,container,true)};
+    container.appendChild(retry);
     return;
   }
   container.dataset.loaded='true';
@@ -10080,6 +10167,39 @@ async function openWorkspaceFile(relPath){
   }
   return openEditorOpenResult(res,relPath);
 }
+function diffOpenResultResource(res,uri,label){
+  const path=String((res&&(res.path||res.absolute_path||res.absolutePath))||uri||'');
+  return {
+    uri:String(uri||path||''),
+    path,
+    name:String((res&&res.name)||diffResourceLabel({path},label)),
+    content:String((res&&res.content)||'')
+  };
+}
+function openEditorDiffResult(originalRes,modifiedRes,meta){
+  meta=meta||{};
+  const original=diffOpenResultResource(originalRes,meta.originalUri,'Original');
+  const modified=diffOpenResultResource(modifiedRes,meta.modifiedUri,'Current');
+  const key=String(meta.key||('diff:'+original.uri+'::'+modified.uri));
+  const existing=tabs.find(tab=>isDiffEditorTab(tab)&&tab.diff&&tab.diff.key===key);
+  const title=String(meta.title||('Diff: '+diffResourceLabel(modified,'Current')));
+  const diff={
+    key,title,
+    originalLabel:String(meta.originalLabel||'Original'),
+    modifiedLabel:String(meta.modifiedLabel||'Current'),
+    original,modified
+  };
+  if(existing){
+    existing.name=title;
+    existing.language=meta.language||modifiedRes&&modifiedRes.language||originalRes&&originalRes.language||existing.language||'plaintext';
+    existing.diff=diff;
+    switchTab(existing.id);
+  }else{
+    addTab(title,'',meta.language||modifiedRes&&modifiedRes.language||originalRes&&originalRes.language||'plaintext',{runtimeMode:'diff',diff});
+  }
+  setStatus('Opened diff: '+title);
+  return {ok:true,key,title};
+}
 function openEditorOpenResult(res,relPath){
   if(isExtensionCustomEditorOpenResult(res))return openExtensionCustomEditorFile(res,relPath);
   if(isExtensionNotebookOpenResult(res))return openExtensionNotebookFile(res,relPath);
@@ -10695,9 +10815,60 @@ function injectCustomEditorWebview(viewId,data){
   }
   return true;
 }
+function diffResourceLabel(resource,fallback){
+  const text=String((resource&&(resource.name||resource.path||resource.uri))||fallback||'').trim();
+  if(!text)return 'resource';
+  return text.split(/[\\/]/).filter(Boolean).pop()||text;
+}
+function renderDiffPane(parent,title,content){
+  const pane=document.createElement('div');
+  pane.className='editor-diff-pane';
+  const head=document.createElement('div');
+  head.className='editor-diff-pane-title';
+  head.textContent=title;
+  head.title=title;
+  const pre=document.createElement('pre');
+  pre.className='editor-diff-text';
+  pre.textContent=String(content||'');
+  pane.appendChild(head);
+  pane.appendChild(pre);
+  parent.appendChild(pane);
+}
+function showDiffEditorSurface(tab){
+  const container=$('editor-container'),host=$('editor-diff-host');
+  if(!container||!host)return;
+  hideCustomEditorSurface();
+  hideNotebookSurface();
+  $('editor-welcome').style.display='none';
+  container.style.display='flex';
+  container.classList.add('diff-editor');
+  host.classList.add('active');
+  const diff=tab&&tab.diff||{};
+  const original=diff.original||{},modified=diff.modified||{};
+  host.innerHTML='';
+  const header=document.createElement('div');
+  header.className='editor-diff-header';
+  const title=document.createElement('div');
+  title.className='editor-diff-title';
+  title.textContent=String(diff.title||tab.name||'Diff');
+  title.title=String((original.uri||original.path||'')+' ↔ '+(modified.uri||modified.path||''));
+  header.appendChild(title);
+  host.appendChild(header);
+  const grid=document.createElement('div');
+  grid.className='editor-diff-grid';
+  renderDiffPane(grid,String(diff.originalLabel||'Original')+' · '+diffResourceLabel(original,'Original'),original.content);
+  renderDiffPane(grid,String(diff.modifiedLabel||'Current')+' · '+diffResourceLabel(modified,'Current'),modified.content);
+  host.appendChild(grid);
+}
+function hideDiffEditorSurface(){
+  const container=$('editor-container'),host=$('editor-diff-host');
+  if(container)container.classList.remove('diff-editor');
+  if(host){host.classList.remove('active');host.innerHTML=''}
+}
 function showCustomEditorSurface(tab){
   const container=$('editor-container'),host=$('editor-custom-webview-host');
   if(!container||!host)return;
+  hideDiffEditorSurface();
   hideNotebookSurface();
   $('editor-welcome').style.display='none';
   container.style.display='flex';
@@ -10782,6 +10953,7 @@ function markNotebookDirty(tab){
 }
 function showNotebookSurface(tab){
   const container=$('editor-container'),host=$('editor-notebook-host');
+  hideDiffEditorSurface();
   hideCustomEditorSurface();
   if(!container||!host)return;
   $('editor-welcome').style.display='none';
@@ -15468,6 +15640,10 @@ function isExtensionNotebookTab(tab){
   const mode=String((tab&&tab.runtimeMode)||(tab&&tab.runtime_mode)||'');
   return mode==='extension-notebook'&&!!(tab&&tab.notebook);
 }
+function isDiffEditorTab(tab){
+  const mode=String((tab&&tab.runtimeMode)||(tab&&tab.runtime_mode)||'');
+  return mode==='diff'&&!!(tab&&tab.diff);
+}
 
 function addTab(name,content,lang,meta){
   showEditorArea();
@@ -15475,6 +15651,7 @@ function addTab(name,content,lang,meta){
   const tab={id:nextTabId++,name:name||'untitled',content:content||'',language:lang||'plaintext',cursor:0,
     filePath:tabMeta.filePath||'',workspacePath:tabMeta.workspacePath||'',
     runtimeMode:tabMeta.runtimeMode||tabMeta.runtime_mode||'text',
+    diff:tabMeta.diff||null,
     notebook:tabMeta.notebook||null,
     customEditor:tabMeta.customEditor||tabMeta.custom_editor||null,
     webview:tabMeta.webview||null,viewId:tabMeta.viewId||tabMeta.view_id||''};
@@ -15517,6 +15694,18 @@ function switchTab(id){
   const tab=tabs.find(t=>t.id===id);
   if(tab){
     editorFileName=tab.filePath||tab.name||'untitled';
+    if(isDiffEditorTab(tab)){
+      $('editor-text').value='';
+      setEditorLanguage(tab.language||'plaintext');
+      $('editor-text').selectionStart=$('editor-text').selectionEnd=0;
+      _undoStack.length=0;_redoStack.length=0;_undoPush(true);
+      closeEditorTransientUi();
+      updateLineNums();updateCursorPos();
+      showDiffEditorSurface(tab);
+      renderTabs();
+      _loadEditorTitleActions();
+      return;
+    }
     if(isExtensionCustomEditorTab(tab)){
       $('editor-text').value=tab.content||'';
       setEditorLanguage(tab.language||'plaintext');
@@ -15540,6 +15729,7 @@ function switchTab(id){
       _loadEditorTitleActions();
       return;
     }
+    hideDiffEditorSurface();
     hideCustomEditorSurface();
     hideNotebookSurface();
     $('editor-text').value=tab.content;
@@ -15577,6 +15767,7 @@ function switchTab(id){
 
 function saveCurrentTab(){
   const tab=tabs.find(t=>t.id===activeTab);
+  if(isDiffEditorTab(tab))return;
   if(isExtensionCustomEditorTab(tab))return;
   if(isExtensionNotebookTab(tab)){tab.notebook=readNotebookFromSurface(tab);return}
   if(tab){tab.content=$('editor-text').value;tab.language=editorLang;tab.cursor=$('editor-text').selectionStart}

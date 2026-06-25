@@ -7084,11 +7084,18 @@ console.log("command palette quick access helpers ok");
            and "function scmCommandSpec(raw)" in html
            and "function appendScmStatusCommands(parent,commands)" in html
            and "function runScmQuickDiff(provider,resourceUri)" in html
+           and "function openEditorDiffResult(originalRes,modifiedRes,meta)"
+           in html
+           and "function showDiffEditorSurface(tab)" in html
+           and "runtimeMode:'diff'" in html
            and "call('request_scm_quick_diff_original_resource'" in html
            and "call('open_text_resource'" in html
+           and "openEditorDiffResult(originalOpened,modifiedOpened" in html
            and "function renderScmHistorySection(parent,provider)" in html
            and "function loadScmHistoryProvider(provider,container,force)"
            in html
+           and "const SCM_HISTORY_PAGE_SIZE=20" in html
+           and "function scmHistoryLimit(container)" in html
            and "function renderScmHistoryItems(provider,container,items)"
            in html
            and "function toggleScmHistoryItemChanges(provider,item,body,button)"
@@ -7096,10 +7103,13 @@ console.log("command palette quick access helpers ok");
            and "function renderScmHistoryChanges(container,provider,item,changes)"
            in html
            and "function openScmHistoryChange(change,preferOriginal)" in html
+           and "openEditorDiffResult(originalOpened,modifiedOpened,{" in html
            and "function appendScmHistoryRefs(parent,provider)" in html
            and "call('request_scm_history',id,op,payload||{})" in html
-           and "requestScmHistory(providerId,'provideItems',{options:{limit:10}})"
+           and "requestScmHistory(providerId,'provideItems',{options:{limit:limit}})"
            in html
+           and "dataset.scmHistoryLoadMore" in html
+           and "dataset.scmHistoryRetry" in html
            and "requestScmHistory(providerId,'provideChanges'" in html
            and "provider.hasHistoryProvider" in html
            and "historyItemRemoteRef" in html
