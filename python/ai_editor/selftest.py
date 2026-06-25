@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import shutil
 import subprocess
 import sys
@@ -15,6 +16,7 @@ import tempfile
 import threading
 import time
 import tkinter as tk
+import traceback
 from urllib.parse import quote, urljoin
 from unittest.mock import patch
 
@@ -25,6 +27,42 @@ _FAIL = 0
 _FAILURES: list[tuple[str, str]] = []
 
 
+def _record_failure(label: str, detail: str = "") -> None:
+    _FAILURES.append((label, str(detail or "")))
+
+
+def _flush_test_output() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except Exception:
+            pass
+
+
+def _route_selftest_diagnostics_to_stdout() -> None:
+    """Keep expected diagnostic logs in chronological selftest output."""
+    sys.stderr = sys.stdout
+    loggers = [logging.getLogger()]
+    loggers.extend(
+        logger for logger in logging.root.manager.loggerDict.values()
+        if isinstance(logger, logging.Logger)
+    )
+    handlers = []
+    for logger in loggers:
+        handlers.extend(logger.handlers)
+    if logging.lastResort is not None:
+        handlers.append(logging.lastResort)
+    for handler in handlers:
+        try:
+            handler.setStream(sys.stdout)
+        except Exception:
+            if hasattr(handler, "stream"):
+                try:
+                    handler.stream = sys.stdout
+                except Exception:
+                    pass
+
+
 def _check(label: str, ok: bool, detail: str = "") -> None:
     global _PASS, _FAIL
     if ok:
@@ -32,8 +70,8 @@ def _check(label: str, ok: bool, detail: str = "") -> None:
         print(f"  ✓ {label}")
     else:
         _FAIL += 1
-        _FAILURES.append((label, str(detail or "")))
-        print(f"  ✗ {label}" + (f" — {detail}" if detail else ""))
+        _record_failure(label, detail)
+        print(f"  ✗ {label}")
 
 
 def _run_test(label: str, fn) -> None:
@@ -42,11 +80,9 @@ def _run_test(label: str, fn) -> None:
         fn()
     except Exception as exc:
         _FAIL += 1
-        detail = f"{type(exc).__name__}: {exc}"
-        _FAILURES.append((label, detail))
-        print(f"  ✗ {label} — {detail}")
-        import traceback
-        traceback.print_exc()
+        detail = f"{type(exc).__name__}: {exc}\n{traceback.format_exc().rstrip()}"
+        _record_failure(label, detail)
+        print(f"  ✗ {label}")
 
 
 def _wait_until(predicate, timeout: float = 2.0) -> bool:
@@ -17695,9 +17731,7 @@ def test_tk_window() -> None:
         _check("Destroy succeeded", not panel.is_visible())
 
     except Exception as e:
-        _check(f"Tk window test", False, str(e))
-        import traceback
-        traceback.print_exc()
+        _check("Tk window test", False, f"{type(e).__name__}: {e}\n{traceback.format_exc().rstrip()}")
     finally:
         try:
             root.destroy()
@@ -17707,6 +17741,7 @@ def test_tk_window() -> None:
 
 def main() -> None:
     global _PASS, _FAIL
+    _route_selftest_diagnostics_to_stdout()
     _PASS = 0
     _FAIL = 0
     _FAILURES.clear()
@@ -17739,18 +17774,24 @@ def main() -> None:
     for label, fn in tests:
         _run_test(label, fn)
 
+    _flush_test_output()
     print()
-    print(f"{'=' * 50}")
     total = _PASS + _FAIL
     if _FAIL == 0:
+        print(f"{'=' * 50}")
         print(f"ALL {total} TESTS PASSED ✓")
+        print(f"{'=' * 50}")
     else:
+        print(f"{'=' * 50}")
         print(f"{_PASS}/{total} passed, {_FAIL} FAILED ✗")
+        print(f"{'=' * 50}")
         print()
-        print("FAILED TESTS:")
+        print("FAILED TESTS (details at end):")
         for index, (label, detail) in enumerate(_FAILURES, 1):
-            print(f"  {index}. {label}" + (f" — {detail}" if detail else ""))
-    print(f"{'=' * 50}")
+            print(f"  {index}. {label}")
+            if detail:
+                for line in detail.splitlines():
+                    print(f"     {line}")
 
     sys.exit(0 if _FAIL == 0 else 1)
 
