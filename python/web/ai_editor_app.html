@@ -9140,6 +9140,38 @@ function flattenScmSecondaryCommands(actionButton){
   });
   return out;
 }
+function firstScmResourceUri(provider){
+  const groups=Array.isArray(provider&&provider.groups)?provider.groups:[];
+  for(const group of groups){
+    const states=Array.isArray(group&&group.resourceStates)?group.resourceStates:[];
+    for(const state of states){
+      const uri=String((state&&state.resourceUri)||(state&&state.uri)||'');
+      if(uri)return uri;
+    }
+  }
+  return String((activeEditorTab()||{}).filePath||'');
+}
+async function runScmQuickDiff(provider,resourceUri){
+  const providerId=scmProviderId(provider);
+  const uri=String(resourceUri||firstScmResourceUri(provider)||'');
+  if(!providerId||!uri){
+    showToast('No SCM resource selected for quick diff','info',2200);
+    return null;
+  }
+  const r=await call('request_scm_quick_diff_original_resource',providerId,uri);
+  if(!callSucceeded(r)||!r.hasOriginalResource||!r.originalResourceUri){
+    showToast(callFailedMessage(r,'No original resource available'),'info',2600);
+    return r;
+  }
+  const opened=await call('open_text_resource',r.originalResourceUri);
+  if(!opened||opened.error){
+    showToast((opened&&opened.error)||'Original resource could not be opened','error',3000);
+    return r;
+  }
+  openEditorOpenResult(opened,opened.path||'');
+  setStatus('Opened quick diff original');
+  return r;
+}
 function renderScmResource(parent,provider,group,state,index){
   const row=document.createElement('div');
   row.className='sb-item';
@@ -9153,6 +9185,19 @@ function renderScmResource(parent,provider,group,state,index){
   name.textContent=String(state.label||state.resourceUri||('resource-'+(index+1)));
   name.title=String(state.resourceUri||state.label||'');
   row.appendChild(name);
+  if(provider&&provider.hasQuickDiffProvider&&state.resourceUri){
+    const quick=document.createElement('button');
+    quick.type='button';
+    quick.className='icon-btn';
+    quick.textContent='⇄';
+    quick.title=String(provider.quickDiffLabel||'Open Quick Diff Original');
+    quick.style.cssText='width:20px;height:20px;font-size:10px;padding:0';
+    quick.onclick=e=>{
+      e.stopPropagation();
+      runScmQuickDiff(provider,state.resourceUri);
+    };
+    row.appendChild(quick);
+  }
   appendScmActionButtons(row,state.actions);
   parent.appendChild(row);
 }
@@ -9200,7 +9245,8 @@ function renderScmProvider(parent,provider){
     const quick=document.createElement('span');
     quick.textContent=String(provider.quickDiffLabel||'Quick Diff');
     quick.title='Quick Diff Provider';
-    quick.style.cssText='max-width:96px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid var(--border);border-radius:3px;color:var(--fg-dim);font-size:10px;line-height:16px;padding:0 4px';
+    quick.style.cssText='max-width:96px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid var(--border);border-radius:3px;color:var(--fg-dim);font-size:10px;line-height:16px;padding:0 4px;cursor:pointer';
+    quick.onclick=e=>{e.stopPropagation();runScmQuickDiff(provider)};
     providerHeader.appendChild(quick);
   }
   if(provider.actionButton&&provider.actionButton.command){
@@ -9751,6 +9797,9 @@ async function openWorkspaceFile(relPath){
     showToast((res&&res.error)||t('workspace_load_failed'),'error',2500);
     return null;
   }
+  return openEditorOpenResult(res,relPath);
+}
+function openEditorOpenResult(res,relPath){
   if(isExtensionCustomEditorOpenResult(res))return openExtensionCustomEditorFile(res,relPath);
   if(isExtensionNotebookOpenResult(res))return openExtensionNotebookFile(res,relPath);
   explorerSelectedPath=res.path||relPath||'';

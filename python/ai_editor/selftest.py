@@ -6908,12 +6908,17 @@ console.log("command palette quick access helpers ok");
            and "def list_scm_resource_group_actions(" in app_source
            and "def list_scm_resource_state_actions(" in app_source
            and "def list_scm_providers(" in app_source
+           and "def request_scm_quick_diff_original_resource(" in app_source
+           and "def open_text_resource(" in app_source
            and "def set_scm_input_value(" in app_source
            and "def accept_scm_input(" in app_source
            and "def source_control_snapshots(" in vscode_api_source
+           and "def provide_source_control_original_resource(" in vscode_api_source
            and "def set_source_control_input_value(" in vscode_api_source
            and "def node_scm_provider_snapshots(" in extension_host_source
+           and "def request_node_scm_original_resource(" in extension_host_source
            and "def set_node_scm_input_value(" in extension_host_source
+           and "scm_quick_diff_request" in node_ext_host_source
            and "hasQuickDiffProvider" in vscode_api_source
            and "quickDiffLabel" in extension_host_source
            and "statusBarCommands" in node_ext_host_source
@@ -6935,6 +6940,9 @@ console.log("command palette quick access helpers ok");
            and "call('accept_scm_input'" in html
            and "function scmCommandSpec(raw)" in html
            and "function appendScmStatusCommands(parent,commands)" in html
+           and "function runScmQuickDiff(provider,resourceUri)" in html
+           and "call('request_scm_quick_diff_original_resource'" in html
+           and "call('open_text_resource'" in html
            and "function renderScmProvider(parent,provider)" in html
            and "provider.hasQuickDiffProvider" in html
            and "provider.actionButton&&provider.actionButton.command" in html
@@ -12458,6 +12466,15 @@ def test_app_extension_runtime_support() -> None:
         activity_tree_provider = _ActivityTreeProvider()
         activity_command_log = []
         activity_api = api._vscode_ns.build(activity_desc)
+        activity_original_tmp = tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", suffix=".txt", delete=False)
+        activity_original_tmp.write("python quick diff original")
+        activity_original_tmp.close()
+
+        def _activity_original_resource(uri, token=None):
+            activity_command_log.append(("scmQuickDiff", str(uri)))
+            return activity_api["Uri"].file(activity_original_tmp.name)
+
         activity_scm = activity_api["scm"]["createSourceControl"](
             "selftest-activity-scm",
             "Selftest Activity SCM",
@@ -12468,7 +12485,10 @@ def test_app_extension_runtime_support() -> None:
             "command": "selftest.activity.scmAccept",
         }
         activity_scm.count = 5
-        activity_scm.quickDiffProvider = {"label": "Python Quick Diff"}
+        activity_scm.quickDiffProvider = {
+            "label": "Python Quick Diff",
+            "provideOriginalResource": _activity_original_resource,
+        }
         activity_scm.statusBarCommands = [{
             "command": "selftest.activity.scmStatus",
             "title": "SCM Status",
@@ -12685,6 +12705,15 @@ def test_app_extension_runtime_support() -> None:
         activity_scm_secondary_result = api.execute_command(
             activity_scm_secondary_command.get("command", ""),
             *activity_scm_secondary_command.get("arguments", []))
+        activity_scm_original_result = (
+            api.request_scm_quick_diff_original_resource(
+                "selftest-activity-scm",
+                activity_scm_resource["resourceUri"]))
+        activity_scm_original_open = api.open_text_resource(
+            activity_scm_original_result.get("originalResourceUri", ""))
+        activity_scm_missing_original = (
+            api.request_scm_quick_diff_original_resource(
+                "missing-scm", activity_scm_resource["resourceUri"]))
         _check("activity bar containers include runtime extension views",
                activity_items.get("selftest.activity", {}).get("view_count") == 2
                and activity_views.get("selftest.activity.tree", {}).get("runtimeState", {}).get("kind") == "treeView"
@@ -12766,6 +12795,22 @@ def test_app_extension_runtime_support() -> None:
                    "statusResult": activity_scm_status_result,
                    "actionResult": activity_scm_action_result,
                    "secondaryResult": activity_scm_secondary_result,
+               }, ensure_ascii=False))
+        _check("SCM quick diff provider returns and opens Python original resource",
+               activity_scm_original_result.get("ok") is True
+               and activity_scm_original_result.get(
+                   "hasOriginalResource") is True
+               and activity_scm_original_result.get(
+                   "originalResourceUri", "").startswith("file:///")
+               and activity_scm_original_open.get("content")
+               == "python quick diff original"
+               and activity_scm_missing_original.get("ok") is False
+               and any(item[0] == "scmQuickDiff"
+                       for item in activity_command_log),
+               json.dumps({
+                   "quickDiff": activity_scm_original_result,
+                   "opened": activity_scm_original_open,
+                   "missing": activity_scm_missing_original,
                }, ensure_ascii=False))
         _check("SCM providers API attaches menu actions at each tree level",
                [action.get("command") for action in
@@ -13121,6 +13166,10 @@ def test_app_extension_runtime_support() -> None:
                .get("runtimeState", {}).get("refreshVersion", 0)
                > before_activity_version)
         activity_scm.dispose()
+        try:
+            os.unlink(activity_original_tmp.name)
+        except Exception:
+            pass
 
         contribs = api.get_extension_contributions().get("contributions", {})
         command_items = {
@@ -13470,6 +13519,7 @@ module.exports = { activate };
             }, node_uri_tmp)
             node_extension_js = r"""
 const vscode = require('vscode');
+const fs = require('node:fs');
 const output = vscode.window.createOutputChannel('node-tree-selftest');
 const workspaceEvents = {
   open: 0,
@@ -13518,6 +13568,11 @@ async function activate(context) {
   sourceControl.acceptInputCommand = {
     command: 'selftest.node.scmAcceptInput',
   };
+  fs.writeFileSync(
+    vscode.Uri.joinPath(context.extensionUri, 'original-node-scm.txt').fsPath,
+    'node quick diff original',
+    'utf8'
+  );
   sourceControl.count = 7;
   sourceControl.quickDiffProvider = {
     label: 'Node Quick Diff',
@@ -17647,6 +17702,11 @@ module.exports = { activate, deactivate };
                         node_scm_secondary_command.get("command", ""),
                         *node_scm_secondary_command.get("arguments", []))
                     if node_scm_secondary_command else {})
+                node_scm_original_result = (
+                    api.request_scm_quick_diff_original_resource(
+                        "selftest-node-scm", node_scm_resource_uri))
+                node_scm_original_open = api.open_text_resource(
+                    node_scm_original_result.get("originalResourceUri", ""))
                 node_custom_editor_context_action_command = next((
                     action.get("command")
                     for action in node_custom_editor_context_actions.get(
@@ -19091,6 +19151,18 @@ module.exports = { activate, deactivate };
                            "statusResult": node_scm_status_command_result,
                            "actionResult": node_scm_action_button_result,
                            "secondaryResult": node_scm_secondary_action_result,
+                       }, ensure_ascii=False))
+                _check("node SCM quick diff provider returns and opens original resource",
+                       node_scm_original_result.get("ok") is True
+                       and node_scm_original_result.get(
+                           "hasOriginalResource") is True
+                       and node_scm_original_result.get(
+                           "originalResourceUri", "").startswith("file:///")
+                       and node_scm_original_open.get("content")
+                       == "node quick diff original",
+                       json.dumps({
+                           "quickDiff": node_scm_original_result,
+                           "opened": node_scm_original_open,
                        }, ensure_ascii=False))
                 _check("node SCM input syncs before accept command execution",
                        node_scm_input_set.get("ok") is True

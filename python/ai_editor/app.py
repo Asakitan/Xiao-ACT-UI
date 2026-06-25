@@ -4738,6 +4738,53 @@ class AIEditorAPI:
             "truncated": truncated,
         }
 
+    @staticmethod
+    def _file_uri_to_path(uri_value: Any) -> str:
+        text = str(uri_value or "").strip()
+        if not text:
+            return ""
+        if not text.lower().startswith("file:"):
+            return os.path.abspath(text)
+        parsed = urlparse(text)
+        if parsed.scheme.lower() != "file":
+            return ""
+        raw_path = unquote(parsed.path or "")
+        if os.name == "nt" and re.match(r"^/[A-Za-z]:", raw_path):
+            raw_path = raw_path[1:]
+        path_text = raw_path.replace("/", os.sep)
+        if parsed.netloc:
+            return (f"\\\\{parsed.netloc}{path_text}"
+                    if os.name == "nt" else f"//{parsed.netloc}{path_text}")
+        return os.path.abspath(path_text)
+
+    def open_text_resource(self, uri: str) -> Dict:
+        """Open a local file URI/path through the normal editor tab payload."""
+        path = self._file_uri_to_path(uri)
+        if not path:
+            return {"error": "Only local file resources can be opened"}
+        root = self._workspace_root()
+        if self._is_workspace_safe_path(root, path):
+            return self.open_workspace_file(self._workspace_rel_path(root, path))
+        if not os.path.isfile(path):
+            return {"error": f"File not found: {uri}"}
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read(_WORKSPACE_FILE_PREVIEW_BYTES + 1)
+        except Exception as exc:
+            return {"error": str(exc)}
+        truncated = len(data) > _WORKSPACE_FILE_PREVIEW_BYTES
+        text = data[:_WORKSPACE_FILE_PREVIEW_BYTES].decode(
+            "utf-8", errors="replace")
+        return {
+            "name": os.path.basename(path),
+            "path": "",
+            "absolute_path": path,
+            "uri": str(uri or ""),
+            "content": text,
+            "language": self._editor_language_for_path(path),
+            "truncated": truncated,
+        }
+
     def save_workspace_notebook(
             self, rel_path: str, notebook: Dict[str, Any],
             view_type: str = "", handle: Optional[int] = None) -> Dict:
@@ -13499,6 +13546,41 @@ class AIEditorAPI:
             "providers": result,
             "providerCount": len(result),
             "context": self._extension_scm_menu_context({}),
+        }
+
+    def request_scm_quick_diff_original_resource(
+            self, provider_id: str, resource_uri: str) -> Dict:
+        """Return the original resource URI from a dynamic SCM quick diff provider."""
+        self._ensure_engine()
+        provider_key = str(provider_id or "").strip()
+        resource = str(resource_uri or "").strip()
+        if not provider_key:
+            return {"ok": False, "error": "Missing SCM provider id"}
+        if not resource:
+            return {"ok": False, "error": "Missing SCM resource URI"}
+        provider_result = None
+        provider_fn = getattr(
+            self._vscode_ns, "provide_source_control_original_resource", None)
+        if callable(provider_fn):
+            try:
+                provider_result = provider_fn(provider_key, resource)
+            except Exception as exc:
+                provider_result = {"ok": False, "error": str(exc)}
+        if isinstance(provider_result, dict):
+            if provider_result.get("ok") or not provider_result.get("notFound"):
+                return provider_result
+        node_host = getattr(self, "_node_ext_host", None)
+        node_fn = getattr(
+            node_host, "request_node_scm_original_resource", None)
+        if callable(node_fn):
+            try:
+                return node_fn(provider_key, resource)
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+        return {
+            "ok": False,
+            "error": "SCM provider not found",
+            "notFound": True,
         }
 
     @staticmethod

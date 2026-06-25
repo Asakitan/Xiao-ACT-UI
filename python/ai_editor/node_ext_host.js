@@ -2054,6 +2054,7 @@ const _languageProviders = [];           // { kind, selector, provider, triggers
 const _languageProviderRequests = new Map(); // requestId -> CancellationTokenSource
 const _fileDecorationProviders = [];     // { handle, extensionId, provider, disposable? }
 const _fileDecorationRequests = new Map(); // requestId -> CancellationTokenSource
+const _scmQuickDiffRequests = new Map(); // requestId -> CancellationTokenSource
 const _fileDecorationChangeMaxEventSize = 250;
 const _runtimeLanguageConfigurations = new Map(); // languageId -> [{ handle, configuration }]
 const _lmTools = new Map();              // name -> { handle, tool, extensionId, metadata }
@@ -11076,6 +11077,69 @@ function handleFileDecorationCancel(msg) {
     cts.cancel();
 }
 
+async function handleScmQuickDiffRequest(msg) {
+    const requestId = String(msg.requestId || '');
+    const providerId = String(msg.providerId || '');
+    const provider = _scmProviders.get(providerId);
+    const quickDiffProvider = provider && provider.quickDiffProvider;
+    const fn = quickDiffProvider && quickDiffProvider.provideOriginalResource;
+    const cts = new CancellationTokenSource();
+    const token = cts.token;
+    if (requestId) _scmQuickDiffRequests.set(requestId, cts);
+    try {
+        if (!requestId) throw new Error('Missing SCM quick diff requestId');
+        if (!provider) throw new Error(`SCM provider not found: ${providerId}`);
+        if (typeof fn !== 'function') {
+            send({
+                type: 'scm_quick_diff_response',
+                requestId,
+                ok: false,
+                noProvider: true,
+                error: 'SCM provider has no quick diff provider',
+            });
+            return;
+        }
+        const uri = _uriFromPayload(msg.resourceUri || msg.uri || msg);
+        const result = await fn.call(quickDiffProvider, uri, token);
+        if (token.isCancellationRequested) {
+            send({
+                type: 'scm_quick_diff_response',
+                requestId,
+                ok: false,
+                cancelled: true,
+                error: 'SCM quick diff request cancelled',
+            });
+            return;
+        }
+        send({
+            type: 'scm_quick_diff_response',
+            requestId,
+            ok: true,
+            providerId,
+            resourceUri: uri.toString(),
+            originalResourceUri: result ? _serializeLanguageUri(result) : '',
+        });
+    } catch (err) {
+        send({
+            type: 'scm_quick_diff_response',
+            requestId,
+            ok: false,
+            providerId,
+            error: err?.message || String(err),
+        });
+    } finally {
+        _scmQuickDiffRequests.delete(requestId);
+        cts.dispose();
+    }
+}
+
+function handleScmQuickDiffCancel(msg) {
+    const requestId = String(msg.requestId || '');
+    const cts = _scmQuickDiffRequests.get(requestId);
+    if (!cts) return;
+    cts.cancel();
+}
+
 async function handleTreeRequest(msg) {
     const requestId = String(msg.requestId || '');
     const viewId = String(msg.viewId || '');
@@ -11398,6 +11462,12 @@ async function handleMessage(msg) {
             break;
         case 'file_decoration_cancel':
             handleFileDecorationCancel(msg);
+            break;
+        case 'scm_quick_diff_request':
+            await handleScmQuickDiffRequest(msg);
+            break;
+        case 'scm_quick_diff_cancel':
+            handleScmQuickDiffCancel(msg);
             break;
         case 'terminal_profile_request':
             await handleTerminalProfileRequest(msg);

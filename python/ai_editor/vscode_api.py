@@ -5550,6 +5550,55 @@ class VscodeNamespace:
             providers.append(provider)
         return providers
 
+    def provide_source_control_original_resource(
+            self, provider_id: Any, resource_uri: Any) -> Dict[str, Any]:
+        """Ask a Python SCM quickDiffProvider for an original resource URI."""
+        provider_key = str(provider_id or "").strip()
+        if not provider_key:
+            return {"ok": False, "error": "Missing SCM provider id"}
+        control = self._source_controls.get(provider_key)
+        if control is None or getattr(control, "_disposed", False):
+            return {
+                "ok": False,
+                "error": "SCM provider not found",
+                "notFound": True,
+            }
+        quick_diff = getattr(control, "quickDiffProvider", None)
+        if quick_diff is None:
+            return {
+                "ok": False,
+                "error": "SCM provider has no quick diff provider",
+                "noProvider": True,
+            }
+        fn = (
+            quick_diff.get("provideOriginalResource")
+            if isinstance(quick_diff, dict)
+            else getattr(quick_diff, "provideOriginalResource", None))
+        if not callable(fn):
+            return {
+                "ok": False,
+                "error": "SCM quick diff provider cannot provide originals",
+                "noProvider": True,
+            }
+        uri_obj = _coerce_uri(resource_uri) or Uri.parse(str(resource_uri or ""))
+        try:
+            value = _resolve_provider_result(
+                _call_with_compatible_args(
+                    fn, (uri_obj, CancellationToken.NONE)),
+                default=None,
+            )
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        original = _coerce_uri(value)
+        original_uri = str(original or value or "")
+        return {
+            "ok": True,
+            "providerId": provider_key,
+            "resourceUri": str(uri_obj),
+            "originalResourceUri": original_uri,
+            "hasOriginalResource": bool(original_uri),
+        }
+
     def set_source_control_input_value(
             self, provider_id: Any, value: Any) -> bool:
         provider_key = str(provider_id or "")

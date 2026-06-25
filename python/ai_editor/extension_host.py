@@ -1869,6 +1869,8 @@ class NodeExtensionHost:
         self._custom_editor_states: Dict[str, Dict[str, Any]] = {}
         self._node_scm_lock = threading.Lock()
         self._node_scm_providers: Dict[str, Dict[str, Any]] = {}
+        self._scm_quick_diff_request_lock = threading.Lock()
+        self._scm_quick_diff_requests: Dict[str, Dict[str, Any]] = {}
         self._webview_serializer_request_lock = threading.Lock()
         self._webview_serializer_requests: Dict[str, Dict[str, Any]] = {}
         self._shutting_down = False
@@ -2805,6 +2807,16 @@ class NodeExtensionHost:
             request_id = str(msg.get("requestId", ""))
             with self._file_decoration_request_lock:
                 pending = self._file_decoration_requests.get(request_id)
+            if pending:
+                pending["response"] = msg
+                event = pending.get("event")
+                if isinstance(event, threading.Event):
+                    event.set()
+
+        elif msg_type == "scm_quick_diff_response":
+            request_id = str(msg.get("requestId", ""))
+            with self._scm_quick_diff_request_lock:
+                pending = self._scm_quick_diff_requests.get(request_id)
             if pending:
                 pending["response"] = msg
                 event = pending.get("event")
@@ -4118,6 +4130,79 @@ class NodeExtensionHost:
                 "groups": group_items,
             })
         return result
+
+    def request_node_scm_original_resource(
+            self, provider_id: Any, resource_uri: Any,
+            timeout: float = 0.85) -> Dict[str, Any]:
+        provider_key = str(provider_id or "").strip()
+        if not provider_key:
+            return {"ok": False, "error": "Missing SCM provider id"}
+        if not self.is_running:
+            return {"ok": False, "error": "Node extension host is not running"}
+        with self._node_scm_lock:
+            provider = self._node_scm_providers.get(provider_key)
+            has_quick_diff = bool(
+                isinstance(provider, dict)
+                and provider.get("hasQuickDiffProvider", False))
+        if not has_quick_diff:
+            return {
+                "ok": False,
+                "error": "SCM provider has no quick diff provider",
+                "noProvider": True,
+            }
+        request_id = str(uuid.uuid4())
+        event = threading.Event()
+        with self._scm_quick_diff_request_lock:
+            self._scm_quick_diff_requests[request_id] = {"event": event}
+        try:
+            sent = self._send({
+                "type": "scm_quick_diff_request",
+                "requestId": request_id,
+                "providerId": provider_key,
+                "resourceUri": str(resource_uri or ""),
+            })
+            if not sent:
+                return {
+                    "ok": False,
+                    "error": "Node SCM quick diff request could not be sent",
+                }
+            if not event.wait(timeout):
+                self._send({
+                    "type": "scm_quick_diff_cancel",
+                    "requestId": request_id,
+                    "reason": "timeout",
+                })
+                return {
+                    "ok": False,
+                    "error": "Node SCM quick diff request timed out",
+                    "timeout": True,
+                }
+            with self._scm_quick_diff_request_lock:
+                pending = self._scm_quick_diff_requests.get(request_id, {})
+            response = pending.get("response", {})
+            if isinstance(response, dict) and response.get("ok"):
+                original_uri = str(response.get("originalResourceUri") or "")
+                return {
+                    "ok": True,
+                    "providerId": provider_key,
+                    "resourceUri": str(response.get("resourceUri")
+                                       or resource_uri or ""),
+                    "originalResourceUri": original_uri,
+                    "hasOriginalResource": bool(original_uri),
+                }
+            return {
+                "ok": False,
+                "error": (
+                    response.get("error")
+                    if isinstance(response, dict)
+                    else "Node SCM quick diff provider failed"),
+                "cancelled": (
+                    bool(response.get("cancelled"))
+                    if isinstance(response, dict) else False),
+            }
+        finally:
+            with self._scm_quick_diff_request_lock:
+                self._scm_quick_diff_requests.pop(request_id, None)
 
     def set_node_scm_input_value(self, provider_id: Any, value: Any) -> bool:
         provider_key = str(provider_id or "")
