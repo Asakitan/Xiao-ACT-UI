@@ -2166,6 +2166,9 @@ def test_app_settings_parity() -> None:
         secondary_decoration_disposable = tree_api._vscode_ns.build()[
             "window"]["registerFileDecorationProvider"](
                 _SecondaryWorkspaceDecorationProvider())
+        _check("local file decoration provider registration requests full refresh",
+               decoration_events
+               and decoration_events[-1].count('"all": true') >= 1)
         tree = tree_api.list_workspace_tree()
         root_names = {entry.get("name") for entry in tree.get("entries", [])}
         _check("workspace tree filters ignored directories",
@@ -2238,6 +2241,15 @@ def test_app_settings_parity() -> None:
         _check("local file decoration empty changes request full refresh",
                '"file_decorations_changed"' in local_all_script
                and '"all": true' in local_all_script)
+        tree_api._on_file_decorations_changed({
+            "value": Uri.parse("untitled:Scratch"),
+            "all": False,
+        })
+        local_non_file_script = decoration_events[-1] if decoration_events else ""
+        _check("local file decoration non-file changes stay scoped-empty",
+               '"file_decorations_changed"' in local_non_file_script
+               and '"all": false' in local_non_file_script
+               and '"paths": []' in local_non_file_script)
         readme_tree_node = tree_api._tree_node_preview(
             {"id": "readme"},
             {
@@ -2275,6 +2287,11 @@ def test_app_settings_parity() -> None:
                and all(node.get("decoration", {}).get("badge") == "M"
                        for node in repeated_nodes))
         decoration_disposable.dispose()
+        dispose_refresh_script = (
+            decoration_events[-1] if decoration_events else "")
+        _check("local file decoration provider dispose requests full refresh",
+               '"file_decorations_changed"' in dispose_refresh_script
+               and '"all": true' in dispose_refresh_script)
         event_count_after_dispose = len(decoration_events)
         decoration_provider._emitter.fire(Uri.file(os.path.join(
             tmpdir, "README.md")))
@@ -7042,6 +7059,21 @@ def test_extension_host() -> None:
            and node_file_decoration_providers[0].get("handle") == 8
            and node_file_decoration_providers[0].get("hasChangeEvent") is True
            and node_file_decoration_providers[0].get("hasProvider") is True)
+    _check("NodeExtensionHost file decoration registration refreshes UI",
+           len(file_decoration_events) >= 2
+           and file_decoration_events[-1][0]
+           == "file_decoration_provider_registered"
+           and file_decoration_events[-1][1].get("all") is True)
+    node_event_host._on_message({
+        "type": "file_decoration_provider_disposed",
+        "handle": 8,
+        "extensionId": "selftest.decorations",
+    })
+    _check("NodeExtensionHost file decoration dispose refreshes UI",
+           not node_event_host.list_file_decoration_providers()
+           and file_decoration_events[-1][0]
+           == "file_decoration_provider_disposed"
+           and file_decoration_events[-1][1].get("all") is True)
     class _RunningNodeProc:
         def poll(self):
             return None

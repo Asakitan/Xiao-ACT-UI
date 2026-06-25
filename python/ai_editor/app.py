@@ -7998,9 +7998,15 @@ class AIEditorAPI:
     def _on_file_decorations_changed(self, payload: Dict[str, Any]) -> None:
         """Notify the frontend that local file decorations changed."""
         change = _as_dict(payload)
+        explicit_all = "all" in change
+        explicit_value = "value" in change
+        value = change.get("value")
         change["paths"] = self._workspace_file_decoration_change_paths(
-            change.get("value"))
-        change["all"] = bool(change.get("all")) or not change["paths"]
+            value)
+        change["all"] = (
+            bool(change.get("all"))
+            or (not explicit_all and (
+                not explicit_value or value is None)))
         self._emit("file_decorations_changed", {
             "event": "file_decoration_changed",
             "change": change,

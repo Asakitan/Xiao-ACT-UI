@@ -4242,6 +4242,7 @@ class VscodeNamespace:
 
     def _register_file_decoration_provider(self, provider: Any) -> Disposable:
         self._file_decoration_providers.append(provider)
+        self._notify_file_decorations_changed(None)
         event = (
             provider.get("onDidChangeFileDecorations")
             if isinstance(provider, dict)
@@ -4266,6 +4267,7 @@ class VscodeNamespace:
                     dispose()
                 except Exception:
                     pass
+            self._notify_file_decorations_changed(None)
 
         return Disposable(_dispose)
 

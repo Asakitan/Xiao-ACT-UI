@@ -2698,21 +2698,33 @@ class NodeExtensionHost:
                     event.set()
 
         elif msg_type == "file_decoration_provider_registered":
-            self._file_decoration_providers.append({
+            provider_record = {
                 "handle": msg.get("handle"),
                 "extensionId": str(msg.get("extensionId", "")),
                 "hasChangeEvent": bool(msg.get("hasChangeEvent")),
                 "hasProvider": bool(msg.get("hasProvider")),
-            })
+            }
+            self._file_decoration_providers.append(provider_record)
             _log.info("[NodeExtHost] File decoration provider registered: %s",
                       msg.get("handle"))
+            self._emit_file_decoration_provider_refresh(
+                msg_type, provider_record)
 
         elif msg_type == "file_decoration_provider_disposed":
             handle = msg.get("handle")
+            disposed_record = next((
+                item for item in self._file_decoration_providers
+                if item.get("handle") == handle
+            ), {
+                "handle": handle,
+                "extensionId": str(msg.get("extensionId", "")),
+            })
             self._file_decoration_providers = [
                 item for item in self._file_decoration_providers
                 if item.get("handle") != handle
             ]
+            self._emit_file_decoration_provider_refresh(
+                msg_type, disposed_record)
 
         elif msg_type == "file_decoration_response":
             request_id = str(msg.get("requestId", ""))
@@ -3982,6 +3994,24 @@ class NodeExtensionHost:
     def list_file_decoration_providers(self) -> List[Dict[str, Any]]:
         """Return registered file decoration providers from Node."""
         return list(self._file_decoration_providers)
+
+    def _emit_file_decoration_provider_refresh(
+            self, event: str, provider: Dict[str, Any]) -> None:
+        payload = {
+            "handle": provider.get("handle"),
+            "extensionId": str(provider.get("extensionId", "")),
+            "all": True,
+            "value": [],
+            "count": 0,
+            "capped": False,
+            "reason": str(event or ""),
+        }
+        for cb in self._on_file_decoration_callbacks:
+            try:
+                cb(str(event or ""), dict(payload))
+            except Exception:
+                _log.exception(
+                    "[NodeExtHost] on_file_decoration callback error")
 
     def set_diagnostics_enabled(self, enabled: bool) -> None:
         """Enable lightweight in-memory request diagnostics."""
