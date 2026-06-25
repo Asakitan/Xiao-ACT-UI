@@ -93,6 +93,21 @@ _RUNTIME_ACTION_ALIASES: dict[str, str] = {
 _MISSING = object()
 
 
+def _safe_exception_text(exc: BaseException) -> str:
+    try:
+        text = "".join(traceback.format_exception_only(type(exc), exc)).strip()
+        if text:
+            return text
+    except Exception:
+        pass
+    name = type(exc).__name__
+    try:
+        message = str(exc)
+    except Exception:
+        message = ""
+    return f"{name}: {message}" if message else name
+
+
 def _safe_id(value: Any) -> str:
     text = str(value or "").strip().replace(" ", "_").lower()
     out = []
@@ -559,6 +574,42 @@ def _normalize_sao_menu(value: Any) -> dict[str, Any]:
     else:
         out["priority"] = 50.0
     return out
+
+
+def _normalize_requires(value: Any) -> tuple[str, ...]:
+    """Normalize manifest requirements into stable string tokens.
+
+    Older built-in plugin manifests use a plain list such as
+    ``["star_resonance"]``. Workspace-root script plugins may use a mapping
+    with a platform version and runtime features:
+    ``{"act_platform": ">=1.0", "runtime_features": ["rgba_frame"]}``.
+    Keep both forms discoverable without loading the plugin.
+    """
+    out: list[str] = []
+
+    def add(raw: Any) -> None:
+        text = str(raw or "").strip()
+        if text:
+            out.append(text)
+
+    if isinstance(value, Mapping):
+        for key, raw in value.items():
+            name = str(key or "").strip()
+            if not name:
+                continue
+            if name == "runtime_features" and isinstance(raw, (list, tuple, set)):
+                for feature in raw:
+                    add(f"runtime_feature:{feature}")
+            elif raw is True:
+                add(name)
+            elif raw not in (None, False):
+                add(f"{name}{raw}")
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            add(item)
+    elif value not in (None, ""):
+        add(value)
+    return tuple(out)
 
 
 def _normalize_engine_name(value: Any) -> str:
@@ -2188,7 +2239,7 @@ class PluginManager:
                 result = handler(action, copy.deepcopy(dict(payload or {})))
             except Exception as exc:
                 self._record_failure(pid, exc)
-                errors.append(str(exc))
+                errors.append(_safe_exception_text(exc))
                 continue
             if result is None:
                 continue
@@ -2920,7 +2971,7 @@ class PluginManager:
             enabled=bool(manifest.get("enabled", False)),
             language=language,
             game_ids=tuple(str(x) for x in manifest.get("game_ids", [])),
-            requires=tuple(str(x).strip() for x in manifest.get("requires", []) if str(x or "").strip()),
+            requires=_normalize_requires(manifest.get("requires", [])),
             permissions=tuple(str(x) for x in manifest.get("permissions", [])),
             capabilities=_normalize_capabilities(manifest.get("capabilities", [])),
             settings_schema=manifest.get("settings_schema") if isinstance(manifest.get("settings_schema"), dict) else {},
@@ -3028,7 +3079,7 @@ class PluginManager:
         if record is None:
             return
         record.failures += 1
-        record.last_error = "".join(traceback.format_exception_only(type(exc), exc)).strip()
+        record.last_error = _safe_exception_text(exc)
         self._append_log(plugin_id, f"ERROR {record.last_error}")
         if record.failures >= self.max_failures:
             record.enabled = False

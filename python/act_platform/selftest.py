@@ -306,6 +306,57 @@ dictionary@ state()
 
     assert built_in_parser_adapters() == [], built_in_parser_adapters()
 
+    workspace_cutegirl_contract = False
+    workspace_base = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+    workspace_cutegirl_manifest = os.path.abspath(
+        os.path.join(workspace_base, os.pardir, os.pardir, "plugins", "script_cutegirl_csharp", "plugin.json")
+    )
+    if os.path.isfile(workspace_cutegirl_manifest):
+        from .runtime import default_plugin_dirs
+
+        workspace_settings = FakeSettings({"act_plugin_locale": "zh-CN"})
+        workspace_bus = EventBus()
+        workspace_manager = PluginManager(
+            plugin_dirs=default_plugin_dirs(workspace_base),
+            event_bus=workspace_bus,
+            settings=workspace_settings,
+        )
+        workspace_manager.discover()
+        cutegirl_record = workspace_manager._records.get("script_cutegirl_csharp")
+        assert cutegirl_record is not None, workspace_manager.status()
+        assert cutegirl_record.language == "csharp", cutegirl_record
+        assert cutegirl_record.entry == "plugin.cs", cutegirl_record
+        assert not cutegirl_record.last_error, cutegirl_record
+        assert os.path.abspath(cutegirl_record.path).endswith(
+            os.path.join("plugins", "script_cutegirl_csharp")
+        ), cutegirl_record.path
+        assert "act_platform>=1.0" in cutegirl_record.requires, cutegirl_record.requires
+        assert "runtime_feature:unioverlay" in cutegirl_record.requires, cutegirl_record.requires
+        assert "runtime_feature:rgba_frame" in cutegirl_record.requires, cutegirl_record.requires
+        cutegirl_schema = cutegirl_record.localized_settings_schema("zh-CN")
+        assert cutegirl_schema.get("ssaa", {}).get("default") == 4, cutegirl_schema
+        assert cutegirl_schema.get("target_fps", {}).get("default") == 60, cutegirl_schema
+        assert cutegirl_schema.get("model_path", {}).get("default") == "assets/tomurai_1_00/FBX/Tomurai.fbx", cutegirl_schema
+        cutegirl_menu = cutegirl_record.localized_sao_menu("zh-CN")
+        action_ids = {
+            str(action.get("id") or "")
+            for action in cutegirl_menu.get("actions", [])
+            if isinstance(action, dict)
+        }
+        assert cutegirl_menu.get("surface") == "unioverlay", cutegirl_menu
+        assert "script.avatar.expression" in action_ids, cutegirl_menu
+        assert "script.avatar.action" in action_ids, cutegirl_menu
+        assert "script.render.set_quality" in action_ids, cutegirl_menu
+        cutegirl_record.enabled = True
+        menu_entry = next(
+            item for item in workspace_manager.list_script_menu_entries("zh-CN")
+            if item.get("id") == "script_cutegirl_csharp"
+        )
+        assert menu_entry.get("surface") == "unioverlay", menu_entry
+        assert menu_entry.get("overlay_enabled") is False, menu_entry
+        assert menu_entry.get("menu", {}).get("name") == "GPU桌宠", menu_entry
+        workspace_cutegirl_contract = True
+
     with tempfile.TemporaryDirectory(prefix="act_plugin_selftest_") as root:
         _write_demo_plugin(root)
         _write_script_menu_plugin(root)
@@ -693,6 +744,7 @@ dictionary@ state()
         "script_menu_count": len(enabled_script_menus.get("items", [])),
         "captured_events": len(captured),
         "built_in_parser_adapters": len(built_in_parser_adapters()),
+        "workspace_cutegirl_contract": workspace_cutegirl_contract,
     }
 
 
