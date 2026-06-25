@@ -105,6 +105,28 @@ def _check(label: str, ok: bool, detail: str = "") -> None:
         print(f"  ✗ failure #{len(_FAILURES)} recorded; {_RECORDED_FAILURE_NOTE}")
 
 
+def _subprocess_failure_detail(result, success_marker: str = "") -> str:
+    stdout = str(getattr(result, "stdout", "") or "").strip()
+    stderr = str(getattr(result, "stderr", "") or "").strip()
+    lines = [f"returncode={getattr(result, 'returncode', '(missing)')}"]
+    if success_marker and success_marker not in stdout:
+        lines.append(f"missing stdout marker: {success_marker}")
+    for stream_name, stream_text in (("stdout", stdout), ("stderr", stderr)):
+        if not stream_text:
+            continue
+        lines.append(f"{stream_name}:")
+        lines.extend(f"  {line}" for line in _failure_detail_tail(stream_text))
+    return "\n".join(lines)
+
+
+def _check_subprocess_result(label: str, result, success_marker: str = "") -> None:
+    stdout = str(getattr(result, "stdout", "") or "")
+    ok = getattr(result, "returncode", None) == 0
+    if success_marker:
+        ok = ok and success_marker in stdout
+    _check(label, ok, _subprocess_failure_detail(result, success_marker))
+
+
 def _run_test(label: str, fn) -> None:
     global _FAIL, _CURRENT_TEST_LABEL
     previous_test_label = _CURRENT_TEST_LABEL
@@ -398,6 +420,48 @@ def test_selftest_output() -> None:
                inline_output,
                ["inline failure label", "secret inline detail"],
            ))
+
+    class _FakeSubprocessResult:
+        returncode = 7
+        stdout = "visible setup\nsecret stdout detail"
+        stderr = "secret stderr detail"
+
+    subprocess_capture = io.StringIO()
+    try:
+        sys.stdout = subprocess_capture
+        _check_subprocess_result(
+            "Subprocess Output Test",
+            _FakeSubprocessResult(),
+            "expected marker",
+        )
+    finally:
+        sys.stdout = saved_stdout
+        _PASS = saved_pass
+        _FAIL = saved_fail
+        _FAILURES[:] = saved_failures
+
+    subprocess_output = subprocess_capture.getvalue()
+    _check("subprocess failure output defers captured streams",
+           _RECORDED_FAILURE_NOTE in subprocess_output
+           and "failure #1 recorded" in subprocess_output
+           and _inline_failure_output_is_deferred(
+               subprocess_output,
+               [
+                   "Subprocess Output Test",
+                   "secret stdout detail",
+                   "secret stderr detail",
+                   "expected marker",
+               ],
+           ))
+    subprocess_detail = _subprocess_failure_detail(
+        _FakeSubprocessResult(),
+        "expected marker",
+    )
+    _check("subprocess failure detail keeps final diagnostics",
+           "returncode=7" in subprocess_detail
+           and "missing stdout marker: expected marker" in subprocess_detail
+           and "secret stdout detail" in subprocess_detail
+           and "secret stderr detail" in subprocess_detail)
 
     exception_capture = io.StringIO()
     try:
@@ -3812,10 +3876,11 @@ console.log("frontend save participant settings ok");
                 timeout=10,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            _check("frontend save participant settings",
-                   result.returncode == 0
-                   and "frontend save participant settings ok" in result.stdout,
-                   (result.stderr or result.stdout).strip())
+            _check_subprocess_result(
+                "frontend save participant settings",
+                result,
+                "frontend save participant settings ok",
+            )
         except Exception as exc:
             _check("frontend save participant settings", False, str(exc))
         finally:
@@ -4035,9 +4100,11 @@ console.log("frontend auto-close and Enter behavior ok");
                 timeout=10,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            _check("frontend auto-close and Enter behavior",
-                   result.returncode == 0 and "frontend auto-close and Enter behavior ok" in result.stdout,
-                   (result.stderr or result.stdout).strip())
+            _check_subprocess_result(
+                "frontend auto-close and Enter behavior",
+                result,
+                "frontend auto-close and Enter behavior ok",
+            )
         except Exception as exc:
             _check("frontend auto-close and Enter behavior", False, str(exc))
         finally:
@@ -4144,9 +4211,11 @@ async function editorRequestLanguageProvider(kind, payload, options){
                 timeout=10,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            _check("frontend on-type formatting trigger behavior",
-                   result.returncode == 0 and "frontend on-type formatting trigger behavior ok" in result.stdout,
-                   (result.stderr or result.stdout).strip())
+            _check_subprocess_result(
+                "frontend on-type formatting trigger behavior",
+                result,
+                "frontend on-type formatting trigger behavior ok",
+            )
         except Exception as exc:
             _check("frontend on-type formatting trigger behavior", False, str(exc))
         finally:
@@ -4228,10 +4297,11 @@ console.log("frontend semantic token rendering behavior ok");
                 timeout=10,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            _check("frontend semantic token rendering behavior",
-                   result.returncode == 0
-                   and "frontend semantic token rendering behavior ok" in result.stdout,
-                   (result.stderr or result.stdout).strip())
+            _check_subprocess_result(
+                "frontend semantic token rendering behavior",
+                result,
+                "frontend semantic token rendering behavior ok",
+            )
         except Exception as exc:
             _check("frontend semantic token rendering behavior", False, str(exc))
         finally:
@@ -4348,10 +4418,11 @@ console.log("frontend snippet behavior ok");
                 timeout=10,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            _check("frontend snippet tabstop behavior",
-                   result.returncode == 0
-                   and "frontend snippet behavior ok" in result.stdout,
-                   (result.stderr or result.stdout).strip())
+            _check_subprocess_result(
+                "frontend snippet tabstop behavior",
+                result,
+                "frontend snippet behavior ok",
+            )
         except Exception as exc:
             _check("frontend snippet tabstop behavior", False, str(exc))
         finally:
@@ -4753,10 +4824,11 @@ setTimeout(() => {
                 timeout=10,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            _check("frontend completion accept metadata",
-                   result.returncode == 0
-                   and "frontend completion accept behavior ok" in result.stdout,
-                   (result.stderr or result.stdout).strip())
+            _check_subprocess_result(
+                "frontend completion accept metadata",
+                result,
+                "frontend completion accept behavior ok",
+            )
         except Exception as exc:
             _check("frontend completion accept metadata", False, str(exc))
         finally:
@@ -4901,10 +4973,11 @@ console.log("frontend hover and code action rendering ok");
                 timeout=10,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            _check("frontend hover and code action rendering",
-                   result.returncode == 0
-                   and "frontend hover and code action rendering ok" in result.stdout,
-                   (result.stderr or result.stdout).strip())
+            _check_subprocess_result(
+                "frontend hover and code action rendering",
+                result,
+                "frontend hover and code action rendering ok",
+            )
         except Exception as exc:
             _check("frontend hover and code action rendering", False, str(exc))
         finally:
@@ -5024,10 +5097,11 @@ async function call(method,payload){
                 timeout=10,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            _check("frontend language provider status",
-                   result.returncode == 0
-                   and "frontend language provider status ok" in result.stdout,
-                   (result.stderr or result.stdout).strip())
+            _check_subprocess_result(
+                "frontend language provider status",
+                result,
+                "frontend language provider status ok",
+            )
         except Exception as exc:
             _check("frontend language provider status", False, str(exc))
         finally:
@@ -5176,10 +5250,11 @@ async function call(method,payload){
                 timeout=10,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            _check("frontend resolvable language items",
-                   result.returncode == 0
-                   and "frontend resolvable language items ok" in result.stdout,
-                   (result.stderr or result.stdout).strip())
+            _check_subprocess_result(
+                "frontend resolvable language items",
+                result,
+                "frontend resolvable language items ok",
+            )
         except Exception as exc:
             _check("frontend resolvable language items", False, str(exc))
         finally:
@@ -5297,10 +5372,11 @@ console.log("frontend signature help docs ok");
                 timeout=10,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            _check("frontend signature help docs",
-                   result.returncode == 0
-                   and "frontend signature help docs ok" in result.stdout,
-                   (result.stderr or result.stdout).strip())
+            _check_subprocess_result(
+                "frontend signature help docs",
+                result,
+                "frontend signature help docs ok",
+            )
         except Exception as exc:
             _check("frontend signature help docs", False, str(exc))
         finally:
@@ -6978,10 +7054,11 @@ console.log("extension setting schema helpers ok");
                 timeout=10,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            _check("frontend extension settings validate array/object schemas",
-                   result.returncode == 0
-                   and "extension setting schema helpers ok" in result.stdout,
-                   (result.stderr or result.stdout).strip())
+            _check_subprocess_result(
+                "frontend extension settings validate array/object schemas",
+                result,
+                "extension setting schema helpers ok",
+            )
         except Exception as exc:
             _check("frontend extension settings validate array/object schemas",
                    False, str(exc))
@@ -7351,10 +7428,11 @@ console.log("quick input filter helpers ok");
                 timeout=10,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            _check("frontend QuickInput filters match VS Code options",
-                   result.returncode == 0
-                   and "quick input filter helpers ok" in result.stdout,
-                   (result.stderr or result.stdout).strip())
+            _check_subprocess_result(
+                "frontend QuickInput filters match VS Code options",
+                result,
+                "quick input filter helpers ok",
+            )
         except Exception as exc:
             _check("frontend QuickInput filters match VS Code options",
                    False, str(exc))
@@ -7595,10 +7673,11 @@ console.log("command palette quick access helpers ok");
                 timeout=10,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            _check("frontend command palette QuickAccess helpers",
-                   result.returncode == 0
-                   and "command palette quick access helpers ok" in result.stdout,
-                   (result.stderr or result.stdout).strip())
+            _check_subprocess_result(
+                "frontend command palette QuickAccess helpers",
+                result,
+                "command palette quick access helpers ok",
+            )
         except Exception as exc:
             _check("frontend command palette QuickAccess helpers", False, str(exc))
         finally:
