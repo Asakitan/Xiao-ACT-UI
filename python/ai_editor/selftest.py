@@ -29,6 +29,7 @@ _FAILURES: list[tuple[str, str]] = []
 _CURRENT_TEST_LABEL = ""
 _FAILURE_DETAIL_LINE_LIMIT = 80
 _FAILURE_POINT_LINE_LIMIT = 180
+_FINAL_FAILURE_POINT_HEADING = "FAILED CHECKS (final):"
 
 
 def _record_failure(label: str, detail: str = "") -> None:
@@ -141,14 +142,14 @@ def _print_final_summary(total: int) -> None:
     print(f"{_PASS}/{total} passed, {_FAIL} FAILED ✗")
     print(f"{'=' * 50}")
     print()
-    print("FAILED CHECK DETAILS (final summary):")
+    print("FAILED CHECK DETAILS:")
     for index, (label, detail) in enumerate(_FAILURES, 1):
         print(f"  {index}. {label}")
         for line in _failure_detail_tail(detail):
             print(f"     {line}")
     print()
     print(f"{'=' * 50}")
-    print("FAILED CHECKS (last):")
+    print(_FINAL_FAILURE_POINT_HEADING)
     for line in _failed_check_point_lines():
         print(line)
 
@@ -249,7 +250,7 @@ def test_selftest_output() -> None:
     output_lines = capture.getvalue().splitlines()
     _check("failure point list is the final output block",
            output_lines[-3:] == [
-               "FAILED CHECKS (last):",
+               _FINAL_FAILURE_POINT_HEADING,
                "  1. Imports / llm_engine: ImportError: missing module",
                "  2. Bridge / command dispatch: no detail recorded",
            ])
