@@ -1738,6 +1738,7 @@ function _customEditorEntryForMessage(msg) {
 function _customEditorStatePayload(entry, kind, extra = {}) {
     if (!entry) return {};
     const provider = entry.provider || {};
+    const view = entry.viewId ? _webviewViews.get(entry.viewId) : null;
     return {
         viewType: entry.viewType,
         viewId: entry.viewId,
@@ -1759,6 +1760,7 @@ function _customEditorStatePayload(entry, kind, extra = {}) {
         canUndo: entry.currentEditIndex >= 0,
         canRedo: entry.currentEditIndex < entry.edits.length - 1,
         backupId: entry.backupId || '',
+        webviewState: view && view.webview ? view.webview._state : null,
         ...extra,
     };
 }
@@ -6976,6 +6978,19 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             },
             registerCustomEditorProvider(viewType, provider, options) {
                 const normalized = String(viewType || '');
+                if (!normalized) {
+                    throw new Error('Custom editor viewType is required');
+                }
+                if (!provider || (
+                        typeof provider.resolveCustomTextEditor !== 'function'
+                        && typeof provider.resolveCustomEditor !== 'function')) {
+                    throw new Error(
+                        'Custom editor provider must implement resolveCustomTextEditor or resolveCustomEditor');
+                }
+                if (_customEditorProviders.has(normalized)) {
+                    throw new Error(
+                        `CustomEditorProvider already registered for viewType: ${normalized}`);
+                }
                 let changeSubscription = null;
                 if (provider && typeof provider.onDidChangeCustomDocument === 'function') {
                     changeSubscription = provider.onDidChangeCustomDocument((event) => {
@@ -6994,6 +7009,15 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     viewType: normalized,
                     extensionId: extDesc.extensionId || '',
                     options: options || {},
+                    capabilities: {
+                        text: typeof provider.resolveCustomTextEditor === 'function',
+                        custom: typeof provider.resolveCustomEditor === 'function',
+                        move: typeof provider.moveCustomTextEditor === 'function',
+                        save: typeof provider.saveCustomDocument === 'function',
+                        saveAs: typeof provider.saveCustomDocumentAs === 'function',
+                        revert: typeof provider.revertCustomDocument === 'function',
+                        backup: typeof provider.backupCustomDocument === 'function',
+                    },
                 });
                 log(`registered CustomEditorProvider: ${normalized}`);
                 return new Disposable(() => {
@@ -9087,6 +9111,12 @@ async function deserializeWebviewPanel(msg) {
             viewId,
             ok: true,
             state,
+            title: panel.title,
+            viewColumn: panel.viewColumn,
+            active: panel.active,
+            visible: panel.visible,
+            options: panel.options || {},
+            webviewOptions: panel.webview._webviewOptionsPayload(),
         });
     } catch (err) {
         const error = err && err.message ? err.message : String(err);

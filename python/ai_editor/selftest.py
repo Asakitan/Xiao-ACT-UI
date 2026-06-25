@@ -6386,8 +6386,22 @@ console.log("quick input filter helpers ok");
            in node_ext_host_source
            and "elif msg_type in {\"webview_view_metadata\", \"webview_view_visibility\"}"
            in extension_host_source
-           and "def update_webview_view_metadata(" in app_source
-           and "\"extension_views_changed\"" in app_source)
+            and "def update_webview_view_metadata(" in app_source
+            and "\"extension_views_changed\"" in app_source)
+    _check("extension custom editor webview menus and state follow VS Code context",
+           "webviewState: view && view.webview ? view.webview._state : null"
+           in node_ext_host_source
+           and "CustomEditorProvider already registered for viewType"
+           in node_ext_host_source
+           and "capabilities: {" in node_ext_host_source
+           and "def list_editor_title_actions(" in app_source
+           and "activeCustomEditorId" in html
+           and "function activeEditorTitleActionContext()" in html
+           and "call('list_editor_title_actions',ctx)" in html
+           and "def list_webview_context_actions(" in app_source
+           and "\"webview/context\"" in app_source
+           and "window.pywebview.api.execute_command(a.command,...(a.arguments||[]))"
+           in html)
     _check("extension webview panel reveal reaches frontend",
            "type: 'webview_reveal'" in node_ext_host_source
            and "elif msg_type == \"webview_reveal\"" in extension_host_source
@@ -12189,6 +12203,9 @@ let webviewStatePanel = null;
 let webviewStateEvents = [];
 let dynamicWebviewView = null;
 let dynamicWebviewVisibility = [];
+let customEditorPanel = null;
+let customEditorDuplicateError = '';
+let customEditorTitleActionHits = 0;
 
 async function activate(context) {
   console.log('node console probe', { source: 'selftest' });
@@ -14485,6 +14502,7 @@ async function activate(context) {
     'selftest.node.customEditor',
     {
       async resolveCustomTextEditor(document, panel, token) {
+        customEditorPanel = panel;
         panel.webview.options = {
           enableScripts: true,
           localResourceRoots: [context.extensionUri],
@@ -14507,6 +14525,28 @@ async function activate(context) {
     },
     { supportsMultipleEditorsPerDocument: true },
   ));
+  try {
+    vscode.window.registerCustomEditorProvider(
+      'selftest.node.customEditor',
+      { resolveCustomTextEditor() {} },
+    );
+  } catch (err) {
+    customEditorDuplicateError = String(err && err.message || err);
+  }
+  vscode.commands.registerCommand('selftest.node.customEditorWebviewStateProbe', () => ({
+    hasPanel: !!customEditorPanel,
+    viewType: customEditorPanel && customEditorPanel.viewType,
+    state: customEditorPanel && customEditorPanel.webview
+      && customEditorPanel.webview._state,
+    duplicateError: customEditorDuplicateError,
+  }));
+  vscode.commands.registerCommand('selftest.node.customEditorTitleAction', () => {
+    customEditorTitleActionHits += 1;
+    return { ok: true, hits: customEditorTitleActionHits };
+  });
+  vscode.commands.registerCommand('selftest.node.customEditorTitleActionProbe', () => ({
+    hits: customEditorTitleActionHits,
+  }));
   context.subscriptions.push(vscode.window.registerCustomEditorProvider(
     'selftest.node.lifecycleEditor',
     {
@@ -14615,11 +14655,27 @@ module.exports = { activate, deactivate };
                     "commands": [{
                         "command": "selftest.node.openItem",
                         "title": "Open Node Item",
+                    }, {
+                        "command": "selftest.node.customEditorTitleAction",
+                        "title": "Custom Editor Title Action",
+                        "shortTitle": "CETA",
                     }],
-                    "menus": {"view/item/context": [{
-                        "command": "selftest.node.openItem",
-                        "when": "view == selftest.node.tree && viewItem == nodeRoot",
-                    }]},
+                    "menus": {
+                        "view/item/context": [{
+                            "command": "selftest.node.openItem",
+                            "when": "view == selftest.node.tree && viewItem == nodeRoot",
+                        }],
+                        "editor/title": [{
+                            "command": "selftest.node.customEditorTitleAction",
+                            "when": "activeCustomEditorId == selftest.node.customEditor && resourceExtname == .txt",
+                            "group": "navigation@1",
+                        }],
+                        "webview/context": [{
+                            "command": "selftest.node.customEditorTitleAction",
+                            "when": "webviewId == selftest.node.customEditor",
+                            "group": "navigation@1",
+                        }],
+                    },
                     "viewsContainers": {"activitybar": [{
                         "id": "selftest.node",
                         "title": "Node Activity",
@@ -15961,6 +16017,42 @@ module.exports = { activate, deactivate };
                     "Node Custom Editor")
                 node_custom_editor_html = node_ui_bridge.webviews.get(
                     node_custom_editor.get("viewId", ""), "")
+                node_custom_editor_state_set = (
+                    api.webview_set_state(
+                        node_custom_editor.get("viewId", ""),
+                        {"custom": "frontend-state"})
+                    if node_custom_editor.get("viewId") else {"ok": False})
+                try:
+                    node_custom_editor_webview_state_probe = (
+                        api._ext_host.commands.execute(
+                            "selftest.node.customEditorWebviewStateProbe"))
+                except Exception as exc:
+                    node_custom_editor_webview_state_probe = {"_error": str(exc)}
+                node_custom_editor_title_actions = (
+                    api.list_editor_title_actions({
+                        "activeCustomEditorId": "selftest.node.customEditor",
+                        "webviewId": "selftest.node.customEditor",
+                        "resourceUri": node_custom_editor.get("uri", ""),
+                    }))
+                node_custom_editor_context_actions = (
+                    api.list_webview_context_actions(
+                        node_custom_editor.get("viewId", ""),
+                        "selftest.node.customEditor"))
+                node_custom_editor_title_action_command = next((
+                    action.get("command")
+                    for action in node_custom_editor_title_actions.get(
+                        "actions", [])
+                    if action.get("command")
+                    == "selftest.node.customEditorTitleAction"), "")
+                node_custom_editor_title_action_result = (
+                    api.execute_command(node_custom_editor_title_action_command)
+                    if node_custom_editor_title_action_command else {})
+                try:
+                    node_custom_editor_title_action_probe = (
+                        api._ext_host.commands.execute(
+                            "selftest.node.customEditorTitleActionProbe"))
+                except Exception as exc:
+                    node_custom_editor_title_action_probe = {"_error": str(exc)}
                 node_custom_editor_roots = (
                     node_ui_bridge.local_resource_roots.get(
                         node_custom_editor.get("viewId", ""), []) or [])
@@ -17088,6 +17180,16 @@ module.exports = { activate, deactivate };
                        node_webview_serializer_command_registered
                        and isinstance(node_webview_serializer_result, dict)
                        and node_webview_serializer_result.get("ok") is True
+                       and node_webview_serializer_result.get(
+                           "title") == "Serialized Title"
+                       and node_webview_serializer_result.get(
+                           "viewColumn") == 1
+                       and node_webview_serializer_result.get(
+                           "active") is True
+                       and node_webview_serializer_result.get(
+                           "visible") is True
+                       and isinstance(node_webview_serializer_result.get(
+                           "webviewOptions"), dict)
                        and isinstance(
                            node_webview_serializer_stored_result, dict)
                        and node_webview_serializer_stored_result.get("ok")
@@ -17253,8 +17355,58 @@ module.exports = { activate, deactivate };
                            "saveAsState": node_custom_text_save_as_state,
                            "saveAsDisk": node_custom_text_save_as_disk,
                            "originalAfterSaveAs": node_custom_text_original_after_save_as,
-                           "output": node_host._output_channels.get(
-                               "node-tree-selftest", []),
+                            "output": node_host._output_channels.get(
+                                "node-tree-selftest", []),
+                        }, ensure_ascii=False))
+                _check("node host syncs custom editor webview state and provider guards",
+                       isinstance(node_custom_editor_state_set, dict)
+                       and node_custom_editor_state_set.get("ok") is True
+                       and node_custom_editor_state_set.get("node_synced") is True
+                       and isinstance(
+                           node_custom_editor_webview_state_probe, dict)
+                       and node_custom_editor_webview_state_probe.get(
+                           "hasPanel") is True
+                       and node_custom_editor_webview_state_probe.get(
+                           "state", {}).get("custom") == "frontend-state"
+                       and "already registered" in (
+                           node_custom_editor_webview_state_probe.get(
+                               "duplicateError") or ""),
+                       json.dumps({
+                           "setState": node_custom_editor_state_set,
+                           "probe": node_custom_editor_webview_state_probe,
+                       }, ensure_ascii=False))
+                node_custom_editor_title_action_ids = [
+                    action.get("command")
+                    for action in node_custom_editor_title_actions.get(
+                        "actions", [])
+                ]
+                node_custom_editor_context_action_ids = [
+                    action.get("command")
+                    for action in node_custom_editor_context_actions.get(
+                        "actions", [])
+                ]
+                _check("extension editor/webview menus follow custom editor context",
+                       "selftest.node.customEditorTitleAction"
+                       in node_custom_editor_title_action_ids
+                       and "selftest.node.customEditorTitleAction"
+                       in node_custom_editor_context_action_ids
+                       and node_custom_editor_title_actions.get(
+                           "context", {}).get("activeCustomEditorId")
+                       == "selftest.node.customEditor"
+                       and node_custom_editor_title_actions.get(
+                           "context", {}).get("resourceExtname") == ".txt"
+                       and node_custom_editor_context_actions.get(
+                           "context", {}).get("webviewId")
+                       == "selftest.node.customEditor"
+                       and node_custom_editor_title_action_result.get("ok")
+                       is True
+                       and node_custom_editor_title_action_probe.get("hits")
+                       == 1,
+                       json.dumps({
+                           "title": node_custom_editor_title_actions,
+                           "context": node_custom_editor_context_actions,
+                           "result": node_custom_editor_title_action_result,
+                           "probe": node_custom_editor_title_action_probe,
                        }, ensure_ascii=False))
                 node_lifecycle_output = "".join(
                     node_host._output_channels.get("node-tree-selftest", []))

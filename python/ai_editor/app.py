@@ -12874,42 +12874,55 @@ class AIEditorAPI:
         }
         return titles.get(str(container_id or ""), str(container_id or ""))
 
-    def list_editor_title_actions(self) -> Dict:
+    def list_editor_title_actions(
+            self, context: Optional[Dict[str, Any]] = None) -> Dict:
         """Return editor title bar actions contributed by extensions.
 
         VSCode extensions declare these in contributes.menus["editor/title"].
         Each action has a command, icon, and optional when-clause.
         """
         self._ensure_engine()
-        actions: List[Dict[str, Any]] = []
+        raw_context = context if isinstance(context, dict) else {}
+        menu_context = {
+            str(key): str(value)
+            for key, value in raw_context.items()
+            if value is not None
+        }
+        menu_context.update(self._extension_resource_context(
+            raw_context.get("resourceUri")
+            or raw_context.get("resource")
+            or raw_context.get("uri")
+            or raw_context.get("path")
+            or raw_context.get("filePath")
+            or ""))
         try:
-            ep = self._ext_host.ext_points
-            for item in getattr(ep, "editor_title_actions", []):
-                cmd_id = str(item.get("command", ""))
-                if not cmd_id:
-                    continue
-                ext_id = str(item.get("_extensionId", ""))
-                ext_desc = self._ext_host.registry.get(ext_id)
-                icon = ""
-                if ext_desc and ext_desc.icon:
-                    raw = ext_desc.icon.strip()
-                    if len(raw) <= 4 and not raw.endswith((".svg", ".png")):
-                        icon = raw
-                title = str(item.get("title", ""))
-                if not title:
-                    cmd_info = self._ext_host.commands.get_info(cmd_id) if hasattr(
-                        self._ext_host.commands, "get_info") else None
-                    title = str(cmd_info.get("title", cmd_id)) if cmd_info else cmd_id
-                actions.append({
-                    "command": cmd_id,
-                    "title": title,
-                    "icon": icon or "▣",
-                    "extension_id": ext_id,
-                    "group": str(item.get("group", "")),
-                })
+            actions = self._extension_menu_actions("editor/title", menu_context)
         except Exception:
-            pass
-        return {"actions": actions}
+            actions = []
+        return {"actions": actions, "context": menu_context}
+
+    def list_webview_context_actions(
+            self, view_id: str = "", view_type: str = "",
+            context: Optional[Dict[str, Any]] = None) -> Dict:
+        """Return VS Code-style contributes.menus["webview/context"] actions."""
+        self._ensure_engine()
+        raw_context = context if isinstance(context, dict) else {}
+        webview_id = str(view_type or raw_context.get("webviewId") or view_id or "")
+        menu_context = {
+            str(key): str(value)
+            for key, value in raw_context.items()
+            if value is not None
+        }
+        if webview_id:
+            menu_context["webviewId"] = webview_id
+        if view_id:
+            menu_context.setdefault("view", str(view_id))
+        try:
+            actions = self._extension_menu_actions(
+                "webview/context", menu_context)
+        except Exception:
+            actions = []
+        return {"actions": actions, "context": menu_context}
 
     # ── Extension marketplace API ──
 

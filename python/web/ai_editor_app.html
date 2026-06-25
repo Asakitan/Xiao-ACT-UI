@@ -14683,6 +14683,7 @@ function switchTab(id){
       updateLineNums();updateCursorPos();
       showCustomEditorSurface(tab);
       renderTabs();
+      _loadEditorTitleActions();
       return;
     }
     if(isExtensionNotebookTab(tab)){
@@ -14693,6 +14694,7 @@ function switchTab(id){
       updateLineNums();updateCursorPos();
       showNotebookSurface(tab);
       renderTabs();
+      _loadEditorTitleActions();
       return;
     }
     hideCustomEditorSurface();
@@ -14727,6 +14729,7 @@ function switchTab(id){
     if(typeof scheduleEditorDocumentColors==='function')scheduleEditorDocumentColors(440);
   }
   renderTabs();
+  _loadEditorTitleActions();
 }
 
 function saveCurrentTab(){
@@ -14759,8 +14762,49 @@ window.addTab=addTab;window.closeTab=closeTab;
 
 // ── Extension editor title actions (top-right of editor bar) ──
 let _editorTitleActions=[];
+let _editorTitleActionContextKey='';
+function _editorResourceContextFromPath(value){
+  const text=String(value||'').trim();
+  if(!text)return {};
+  const pathText=text.replace(/^file:\/\//,'').replace(/\\/g,'/');
+  const filename=(pathText.split('/').pop()||'').trim();
+  const extMatch=filename.match(/(\.[^.\/\\]+)$/);
+  return {
+    resource:text,
+    resourceUri:text,
+    resourceFilename:filename,
+    resourceExtname:extMatch?extMatch[1]:'',
+    resourceDirname:pathText.includes('/')?pathText.slice(0,pathText.lastIndexOf('/')):'',
+    resourceScheme:text.includes(':')?text.split(':',1)[0]:'file'
+  };
+}
+function activeEditorTitleActionContext(){
+  const tab=tabs.find(t=>t.id===activeTab)||{};
+  const ctx={};
+  const resource=customEditorUriFromTab(tab)||tab.filePath||tab.workspacePath||tab.name||'';
+  Object.assign(ctx,_editorResourceContextFromPath(resource));
+  if(isExtensionCustomEditorTab(tab)){
+    const viewType=customEditorViewTypeFromTab(tab);
+    const viewId=customEditorWebviewIdFromTab(tab);
+    if(viewType){
+      ctx.activeCustomEditorId=viewType;
+      ctx.webviewId=viewType;
+    }
+    if(viewId)ctx.view=viewId;
+  }
+  return ctx;
+}
 async function _loadEditorTitleActions(){
-  try{const r=await call('list_editor_title_actions');_editorTitleActions=r&&Array.isArray(r.actions)?r.actions:[]}catch(e){_editorTitleActions=[]}
+  const ctx=activeEditorTitleActionContext();
+  const key=JSON.stringify(ctx);
+  _editorTitleActionContextKey=key;
+  try{
+    const r=await call('list_editor_title_actions',ctx);
+    if(_editorTitleActionContextKey!==key)return;
+    _editorTitleActions=r&&Array.isArray(r.actions)?r.actions:[];
+  }catch(e){
+    if(_editorTitleActionContextKey===key)_editorTitleActions=[];
+  }
   _renderEditorTitleActions();
 }
 function _renderEditorTitleActions(){
@@ -14770,8 +14814,13 @@ function _renderEditorTitleActions(){
   if(isExtensionNotebookTab(tab))appendNotebookTitleActions(c,tab);
   _editorTitleActions.forEach(a=>{
     const btn=document.createElement('button');btn.className='eta-btn';
-    btn.textContent=a.icon||'▣';btn.title=a.title||a.command||'';
-    btn.onclick=()=>{if(a.command&&window.pywebview&&window.pywebview.api)window.pywebview.api.execute_command(a.command)};
+    btn.textContent=a.icon||a.shortTitle||'▣';btn.title=a.title||a.command||'';
+    btn.disabled=!!(a.disabled||a.enabled===false);
+    btn.onclick=ev=>{
+      ev.preventDefault();ev.stopPropagation();
+      if(btn.disabled||!a.command||!window.pywebview||!window.pywebview.api)return;
+      window.pywebview.api.execute_command(a.command,...(a.arguments||[]));
+    };
     c.appendChild(btn);
   });
 }
