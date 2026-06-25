@@ -2186,11 +2186,7 @@ window._onEditorEvent=function(event,data){
   else if(event==='idle') onIdle();
   else if(event==='show_output'){
     const oc=$('output-content');if(oc)oc.textContent=data.content||'';
-    document.querySelectorAll('.ptab').forEach(p=>p.classList.toggle('active',p.dataset.ptab==='output'));
-    const tp=$('terminal-panel'),op=$('output-panel'),pp=$('problems-panel');
-    if(tp){tp.style.display='none';tp.classList.remove('active')}
-    if(op){op.style.display='flex';op.classList.add('active')}
-    if(pp){pp.style.display='none';pp.classList.remove('active')}
+    activateBottomPanelTab(document.querySelector('.ptab[data-ptab="output"]'));
   }
   else if(event==='clear_output'){
     const oc=$('output-content');if(oc)oc.textContent='';
@@ -2198,22 +2194,14 @@ window._onEditorEvent=function(event,data){
   else if(event==='hide_output'){
     const activeOut=document.querySelector('.ptab.active');
     if(activeOut&&activeOut.dataset.ptab==='output'){
-      document.querySelectorAll('.ptab').forEach(p=>p.classList.toggle('active',p.dataset.ptab==='terminal'));
-      const tp=$('terminal-panel'),op=$('output-panel'),pp=$('problems-panel');
-      if(tp){tp.style.display='flex';tp.classList.add('active')}
-      if(op){op.style.display='none';op.classList.remove('active')}
-      if(pp){pp.style.display='none';pp.classList.remove('active')}
+      activateBottomPanelTab(document.querySelector('.ptab[data-ptab="terminal"]'));
     }
   }
   else if(event==='dispose_output'){
     const oc=$('output-content');if(oc)oc.textContent='';
     const activeOut=document.querySelector('.ptab.active');
     if(activeOut&&activeOut.dataset.ptab==='output'){
-      document.querySelectorAll('.ptab').forEach(p=>p.classList.toggle('active',p.dataset.ptab==='terminal'));
-      const tp=$('terminal-panel'),op=$('output-panel'),pp=$('problems-panel');
-      if(tp){tp.style.display='flex';tp.classList.add('active')}
-      if(op){op.style.display='none';op.classList.remove('active')}
-      if(pp){pp.style.display='none';pp.classList.remove('active')}
+      activateBottomPanelTab(document.querySelector('.ptab[data-ptab="terminal"]'));
     }
   }
   else if(event==='show_message'){
@@ -2403,6 +2391,9 @@ function _applyLayoutState(){
     $('terminal-panel').style.display=st.activeBottomTab==='terminal'?'':'none';
     if($('output-panel'))$('output-panel').style.display=st.activeBottomTab==='output'?'':'none';
     if($('problems-panel'))$('problems-panel').style.display=st.activeBottomTab==='problems'?'':'none';
+    document.querySelectorAll('.extension-panel-container').forEach(el=>{
+      el.style.display=el.dataset.ptab===st.activeBottomTab?'flex':'none';
+    });
   }
   // MINIMAP-001: Restore minimap visibility
   if(typeof st.minimapVisible==='boolean'&&typeof _minimapVisible!=='undefined'){
@@ -9487,16 +9478,23 @@ async function loadHistoryConv(id){
 }
 
 // ── Panel tabs (bottom: terminal/output) ──
-document.querySelectorAll('.ptab').forEach(t=>t.addEventListener('click',function(){
-  document.querySelectorAll('.ptab').forEach(p=>p.classList.remove('active'));this.classList.add('active');
-  const panel=this.dataset.ptab;
+function activateBottomPanelTab(tab){
+  if(!tab)return;
+  document.querySelectorAll('.ptab').forEach(p=>p.classList.remove('active'));tab.classList.add('active');
+  const panel=tab.dataset.ptab;
   $('terminal-panel').style.display=panel==='terminal'?'':'none';
   if($('output-panel'))$('output-panel').style.display=panel==='output'?'':'none';
   if($('problems-panel'))$('problems-panel').style.display=panel==='problems'?'':'none';
+  document.querySelectorAll('.extension-panel-container').forEach(el=>{
+    el.style.display=el.dataset.ptab===panel?'flex':'none';
+  });
   // PANEL-001: Fetch diagnostics when Problems tab is activated
   if(panel==='problems')_refreshProblems();
+  const extItem=tab._extensionPanelItem||null;
+  if(extItem)renderExtensionViewsInto($(extensionPanelContentId(extItem.id)),extItem,{showMeta:true});
   _saveLayoutImmediate();
-}));
+}
+document.querySelectorAll('.ptab').forEach(t=>t.addEventListener('click',function(){activateBottomPanelTab(this)}));
 function editorProblemRowsFromDiagnostics(diagnostics){
   const tab=activeEditorTab();
   return (Array.isArray(diagnostics)?diagnostics:[]).map(item=>{
@@ -14114,11 +14112,68 @@ async function renderExplorerExtensionViews(){
   block.style.display='';
   renderExtensionViewsInto(contentEl,item,{showMeta:false,emptyText:''});
 }
+function extensionPanelTabKey(id){return 'ext-panel-'+String(id||'').replace(/[^a-zA-Z0-9_-]/g,'_')}
+function extensionPanelContentId(id){return 'extension-panel-content-'+String(id||'').replace(/[^a-zA-Z0-9_-]/g,'_')}
+function ensureExtensionPanelContainer(item){
+  const panelArea=$('panel-area');
+  if(!panelArea||!item||!item.id)return null;
+  const key=extensionPanelTabKey(item.id);
+  const tabs=panelArea.querySelector('.panel-tabs');
+  let tab=tabs&&tabs.querySelector('.ptab[data-ptab="'+CSS.escape(key)+'"]');
+  if(tabs&&!tab){
+    tab=document.createElement('div');
+    tab.className='ptab extension-panel-tab';
+    tab.dataset.ptab=key;
+    tab.addEventListener('click',function(){activateBottomPanelTab(this)});
+    const spacer=tabs.querySelector('.spacer');
+    tabs.insertBefore(tab,spacer||null);
+  }
+  if(tab){
+    tab.textContent=item.title||item.id;
+    tab.title=(item.location?item.location+': ':'')+(item.title||item.id);
+    tab._extensionPanelItem=item;
+  }
+  let panel=$(key);
+  if(!panel){
+    panel=document.createElement('div');
+    panel.className='terminal-panel extension-panel-container';
+    panel.id=key;
+    panel.dataset.ptab=key;
+    panel.style.display='none';
+    const out=document.createElement('div');
+    out.className='terminal-output';
+    out.id=extensionPanelContentId(item.id);
+    panel.appendChild(out);
+    panelArea.appendChild(panel);
+  }
+  return {tab,panel};
+}
+async function renderExtensionPanelContainers(){
+  let items=[];
+  try{
+    const r=await call('list_extension_view_containers','panel');
+    items=(r&&Array.isArray(r.items))?r.items:[];
+  }catch(e){items=[]}
+  const seen=new Set(items.map(item=>extensionPanelTabKey(item.id)));
+  document.querySelectorAll('.extension-panel-tab').forEach(tab=>{
+    if(!seen.has(tab.dataset.ptab))tab.remove();
+  });
+  document.querySelectorAll('.extension-panel-container').forEach(panel=>{
+    if(!seen.has(panel.dataset.ptab))panel.remove();
+  });
+  items.forEach(item=>{
+    const refs=ensureExtensionPanelContainer(item);
+    if(refs&&refs.tab&&refs.tab.classList.contains('active')){
+      renderExtensionViewsInto($(extensionPanelContentId(item.id)),item,{showMeta:true});
+    }
+  });
+}
 async function renderExtensionActivityBar(){
   try{
     const r=await call('list_extension_activity_bar_items');
     _extActBarItems=(r&&r.items)?r.items:[];
   }catch(e){_extActBarItems=[];}
+  renderExtensionPanelContainers();
   const container=$('ext-actbar-items');
   if(!container)return;
   container.innerHTML='';
@@ -15384,10 +15439,7 @@ function toggleChatVis(){
 function focusTerminal(){
   showEditorArea();_editorVis=true;
   const toggle=$('tb-toggle-editor');if(toggle)toggle.classList.add('active');
-  document.querySelectorAll('.ptab').forEach(p=>p.classList.toggle('active',p.dataset.ptab==='terminal'));
-  const termPanel=$('terminal-panel');if(termPanel){termPanel.style.display='flex';termPanel.classList.add('active')}
-  const outPanel=$('output-panel');if(outPanel){outPanel.style.display='none';outPanel.classList.remove('active')}
-  const probPanel=$('problems-panel');if(probPanel){probPanel.style.display='none';probPanel.classList.remove('active')}
+  activateBottomPanelTab(document.querySelector('.ptab[data-ptab="terminal"]'));
   const input=$('term-input'),out=$('terminal-output');
   if(input)input.focus();else if(out){out.setAttribute('tabindex','-1');out.focus()}
   setStatus('Terminal focused');

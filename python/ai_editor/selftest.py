@@ -419,6 +419,7 @@ def test_app_settings_parity() -> None:
         "list_editor_languages", "list_editor_grammars",
         "list_editor_themes", "get_editor_theme", "get_editor_icon_theme",
         "list_extension_activity_bar_items",
+        "list_extension_view_containers",
         "list_extension_container_views",
         "set_extension_activity_view_visibility",
         "set_extension_tree_item_checkbox_state",
@@ -5354,7 +5355,12 @@ console.log("extension setting schema helpers ok");
             and "window.pywebview.api.execute_command(node.command.command" in html
             and "function renderExtensionWebviewView(view)" in html
             and "_injectWebviewHtml(host,view.id||state.view_id||state.viewId,html,state.state)" in html
-            and "renderExtensionContainerContent(item)" in html)
+            and "renderExtensionContainerContent(item)" in html
+            and "function renderExtensionPanelContainers()" in html
+            and "call('list_extension_view_containers','panel')" in html
+            and "className='ptab extension-panel-tab'" in html
+            and "className='terminal-panel extension-panel-container'" in html
+            and "activateBottomPanelTab(document.querySelector('.ptab[data-ptab=\"terminal\"]'))" in html)
     _check("frontend renders extension QuickInput dynamically",
            "id=\"quick-input-host\"" in html
            and ".quick-input-host" in html
@@ -10690,12 +10696,30 @@ def test_app_extension_runtime_support() -> None:
                         "group": "inline@1",
                     }],
                 },
-                "viewsContainers": {"activitybar": [{
-                    "id": "selftest.activity",
-                    "title": "Selftest Activity",
-                }]},
+                "viewsContainers": {
+                    "activitybar": [{
+                        "id": "selftest.activity",
+                        "title": "Selftest Activity",
+                    }],
+                    "panel": [{
+                        "id": "selftest.panel",
+                        "title": "Selftest Panel",
+                        "icon": "◎",
+                    }],
+                    "secondarySidebar": [{
+                        "id": "selftest.secondary",
+                        "title": "Selftest Secondary",
+                    }],
+                },
                 "views": {"selftest.activity": [
-                    {"id": "selftest.activity.tree", "name": "Activity Tree"},
+                    {
+                        "id": "selftest.activity.tree",
+                        "name": "Activity Tree",
+                        "contextualTitle": "Activity Context",
+                        "group": "navigation@2",
+                        "initialSize": 3,
+                        "accessibilityHelpContent": "Activity help",
+                    },
                     {"id": "selftest.activity.webview", "name": "Activity Webview", "type": "webview"},
                 ], "explorer": [
                     {"id": "selftest.explorer.tree", "name": "Explorer Runtime Tree"},
@@ -10703,6 +10727,23 @@ def test_app_extension_runtime_support() -> None:
                         "id": "selftest.explorer.hidden",
                         "name": "Hidden Manifest Tree",
                         "visibility": "hidden",
+                    },
+                ], "selftest.panel": [
+                    {
+                        "id": "selftest.panel.late",
+                        "name": "Panel Late",
+                        "group": "group@2",
+                    },
+                    {
+                        "id": "selftest.panel.first",
+                        "name": "Panel First",
+                        "group": "group@1",
+                    },
+                ], "selftest.secondary": [
+                    {
+                        "id": "selftest.secondary.collapsed",
+                        "name": "Secondary Collapsed",
+                        "visibility": "collapsed",
                     },
                 ]},
                 "viewsWelcome": [
@@ -10821,6 +10862,12 @@ def test_app_extension_runtime_support() -> None:
             "selftest.activity.tree", activity_tree_provider)
         activity_api["window"]["registerTreeDataProvider"](
             "selftest.explorer.tree", _TreeProvider())
+        activity_api["window"]["registerTreeDataProvider"](
+            "selftest.panel.first", _TreeProvider())
+        activity_api["window"]["registerTreeDataProvider"](
+            "selftest.panel.late", _TreeProvider())
+        activity_api["window"]["registerTreeDataProvider"](
+            "selftest.secondary.collapsed", _TreeProvider())
         activity_api["window"]["registerWebviewViewProvider"](
             "selftest.activity.webview", _CommandWebviewProvider())
         activity_tree_view = api._vscode_ns._tree_views.get("selftest.activity.tree")
@@ -10882,6 +10929,39 @@ def test_app_extension_runtime_support() -> None:
                and activity_views.get("selftest.activity.tree", {}).get("runtimeState", {}).get("kind") == "treeView"
                and activity_views.get("selftest.activity.webview", {}).get("runtimeState", {}).get("kind") == "webviewView"
                and "command-webview" in activity_views.get("selftest.activity.webview", {}).get("runtimeState", {}).get("html", ""))
+        all_view_containers = api.list_extension_view_containers().get("items", [])
+        panel_containers = api.list_extension_view_containers("panel").get("items", [])
+        secondary_containers = api.list_extension_view_containers(
+            "secondarySidebar").get("items", [])
+        panel_views = (
+            panel_containers[0].get("views", [])
+            if panel_containers else [])
+        secondary_views = (
+            secondary_containers[0].get("views", [])
+            if secondary_containers else [])
+        _check("extension view containers include panel and secondary sidebar",
+               {item.get("location") for item in all_view_containers}
+               >= {"activitybar", "panel", "secondarySidebar"}
+               and panel_containers
+               and panel_containers[0].get("id") == "selftest.panel"
+               and panel_containers[0].get("icon_text") == "◎"
+               and secondary_containers
+               and secondary_containers[0].get("id") == "selftest.secondary")
+        _check("extension panel views preserve descriptor order and runtime",
+               [view.get("id") for view in panel_views] == [
+                   "selftest.panel.first", "selftest.panel.late"]
+               and all(view.get("runtimeAvailable") for view in panel_views)
+               and panel_views[0].get("runtimeState", {}).get("kind")
+               == "treeView")
+        _check("extension views expose VS Code descriptor metadata",
+               activity_views.get("selftest.activity.tree", {}).get(
+                   "contextualTitle") == "Activity Context"
+               and activity_views.get("selftest.activity.tree", {}).get(
+                   "initialSize") == 3
+               and activity_views.get("selftest.activity.tree", {}).get(
+                   "accessibilityHelpContent") == "Activity help"
+               and secondary_views
+               and secondary_views[0].get("collapsed") is True)
         explorer_container = api.list_extension_container_views(
             "explorer").get("item", {})
         explorer_views = {

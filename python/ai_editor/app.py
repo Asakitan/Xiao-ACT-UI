@@ -10651,6 +10651,19 @@ class AIEditorAPI:
             "runtimeMessage": (
                 snapshot.get("runtimeMessage")
                 or snapshot.get("message", "")),
+            "contextualTitle": (
+                view.get("contextualTitle")
+                or view.get("contextual_title")
+                or view.get("name")
+                or view_id),
+            "group": str(view.get("group") or ""),
+            "visibility": str(view.get("visibility") or "visible"),
+            "collapsed": str(view.get("visibility") or "").lower() == "collapsed",
+            "initialSize": view.get("initialSize", view.get("initial_size")),
+            "accessibilityHelpContent": (
+                view.get("accessibilityHelpContent")
+                or view.get("accessibility_help_content")
+                or ""),
             "titleActions": self._view_title_actions(view_id),
             "welcome": welcome,
         })
@@ -12094,7 +12107,100 @@ class AIEditorAPI:
 
     def list_extension_activity_bar_items(self) -> Dict:
         """Return activity bar view containers contributed by extensions."""
+        containers = self.list_extension_view_containers("activitybar")
+        return {"items": containers.get("items", [])}
+
+    def list_extension_view_containers(self, location: str = "") -> Dict:
+        """Return extension view containers contributed to VS Code locations."""
         self._ensure_engine()
+        normalized_location = str(location or "").strip()
+        if not normalized_location:
+            locations = ["activitybar", "panel", "secondarySidebar"]
+        else:
+            locations = [normalized_location]
+        items: List[Dict[str, Any]] = []
+        try:
+            contributions = self._ext_host.ext_points.all_contributions
+            containers_by_location = contributions.get("viewsContainers", {})
+            if not isinstance(containers_by_location, dict):
+                containers_by_location = {}
+            for loc in locations:
+                raw_containers = containers_by_location.get(loc, [])
+                if not isinstance(raw_containers, list):
+                    continue
+                for vc in raw_containers:
+                    if not isinstance(vc, dict):
+                        continue
+                    item = self._extension_view_container_item(loc, vc)
+                    if item:
+                        items.append(item)
+        except Exception:
+            pass
+        return {"items": items}
+
+    def _extension_view_container_item(
+            self, location: str, vc: Dict[str, Any]) -> Dict[str, Any]:
+        vc_id = str(vc.get("id", ""))
+        if not vc_id:
+            return {}
+        ext_id = str(vc.get("_extensionId", ""))
+        title = str(vc.get("title", vc_id))
+        raw_views = self._ext_host.ext_points.all_contributions.get(
+            "views", {}).get(vc_id, [])
+        views = [
+            self._decorate_extension_view(view)
+            for view in raw_views
+            if isinstance(view, dict)
+        ]
+        views = self._sort_extension_views([
+            view for view in views
+            if self._extension_view_visible_in_container(view)
+        ])
+        icon_text = ""
+        icon_path = vc.get("icon")
+        if isinstance(icon_path, str) and icon_path.strip():
+            raw_icon = icon_path.strip()
+            if len(raw_icon) <= 4 and not raw_icon.endswith((".svg", ".png")):
+                icon_text = raw_icon
+        if not icon_text:
+            ext_desc = self._ext_host.registry.get(ext_id)
+            if ext_desc and ext_desc.icon:
+                raw_icon = ext_desc.icon.strip()
+                if len(raw_icon) <= 4 and not raw_icon.endswith((".svg", ".png")):
+                    icon_text = raw_icon
+        if not icon_text:
+            icon_text = "▣"
+        return {
+            "id": vc_id,
+            "title": title,
+            "icon_text": icon_text,
+            "icon": icon_path,
+            "extension_id": ext_id,
+            "location": str(location or ""),
+            "views": views,
+            "view_count": len(views),
+        }
+
+    @classmethod
+    def _sort_extension_views(cls, views: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return sorted(list(views), key=cls._extension_view_sort_key)
+
+    @staticmethod
+    def _extension_view_sort_key(view: Dict[str, Any]) -> tuple:
+        group = str(view.get("group") or "").strip()
+        base, _, order_text = group.partition("@")
+        try:
+            order = float(order_text) if order_text else 0.0
+        except Exception:
+            order = 0.0
+        return (
+            base or "~",
+            order,
+            str(view.get("name") or view.get("id") or ""),
+        )
+
+    def _legacy_list_extension_activity_bar_items(self) -> Dict:
+        """Legacy implementation retained for reference; use list_extension_view_containers."""
         items: List[Dict[str, Any]] = []
         try:
             for vc in self._ext_host.ext_points.activity_bar_items:
@@ -12161,11 +12267,18 @@ class AIEditorAPI:
             if not isinstance(view, dict):
                 continue
             decorated = self._decorate_extension_view(view)
-            visibility = str(decorated.get("visibility", "")).lower()
-            if visibility == "hidden" and not decorated.get("runtimeAvailable"):
+            if not self._extension_view_visible_in_container(decorated):
                 continue
             views.append(decorated)
-        return views
+        return self._sort_extension_views(views)
+
+    @staticmethod
+    def _extension_view_visible_in_container(view: Dict[str, Any]) -> bool:
+        visibility = str(view.get("visibility", "")).lower()
+        return not (
+            visibility == "hidden"
+            and not bool(view.get("runtimeAvailable"))
+        )
 
     @staticmethod
     def _builtin_extension_container_title(container_id: str) -> str:
