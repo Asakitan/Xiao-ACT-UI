@@ -3285,6 +3285,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function applyWorkspaceSymbol(symbol)" in html
            and "function handleWorkspaceSymbolKey(e)" in html
            and "editorProviderPayload('workspaceSymbol'" in html
+           and "editorRequestLanguageProvider('workspaceSymbol'" in html
            and "editorProviderPayload('resolveWorkspaceSymbol'" in html
            and "Go to Symbol in Workspace..." in html
            and "Ctrl+T" in html
@@ -3296,6 +3297,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function applyDocumentSymbol(row)" in html
            and "function handleDocumentSymbolKey(e)" in html
            and "editorProviderPayload('documentSymbol'" in html
+           and "editorRequestLanguageProvider('documentSymbol'" in html
            and "Go to Symbol in Editor..." in html
            and "Ctrl+Shift+O" in html
            and "call('editor_language_provider'" in html
@@ -3381,6 +3383,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function handleEditorHierarchyKey(e)" in html
            and "editorProviderPayload('prepareCallHierarchy'" in html
            and "editorProviderPayload('prepareTypeHierarchy'" in html
+           and "editorRequestLanguageProvider('prepareCallHierarchy'" in html
+           and "editorRequestLanguageProvider('prepareTypeHierarchy'" in html
+           and "editorRequestLanguageProvider(childKind" in html
            and "callHierarchyIncoming" in html
            and "callHierarchyOutgoing" in html
            and "typeHierarchySupertypes" in html
@@ -3394,6 +3399,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "async function resolveEditorDocumentLink(link)" in html
            and "editorProviderPayload('documentLinkResolve'" in html
            and "linkResolveCount:0" in html
+           and "editorRequestLanguageProvider('documentLink'" in html
            and "function requestEditorInlayHints(quiet)" in html
            and "function renderEditorInlayHints(hints)" in html
            and "async function resolveEditorInlayHint(hint)" in html
@@ -3432,6 +3438,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function editorDefaultFormatter()" in html
            and "async function requestEditorFormattingProviders()" in html
            and "editorProviderPayload('formattingProviders',{matchedOnly:true})" in html
+           and "editorRequestLanguageProvider('formattingProviders'" in html
            and "function showEditorFormatterPicker(providers)" in html
            and "async function formatDocumentWithProvider()" in html
            and "function editorFormatOnTypeEnabled()" in html
@@ -3460,6 +3467,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "async function requestEditorOnTypeFormatting(ch,quiet)" in html
            and "editorProviderPayload('linkedEditing'" in html
            and "editorProviderPayload('onTypeFormatting'" in html
+           and "editorRequestLanguageProvider('linkedEditing'" in html
+           and "editorRequestLanguageProvider('onTypeFormatting'" in html
+           and "editorRequestLanguageProvider('formatting'" in html
+           and "editorRequestLanguageProvider('rangeFormatting'" in html
            and "ed.addEventListener('beforeinput',captureEditorLinkedEditingBefore)" in html
            and "applyEditorLinkedEditingFromInput()" in html
            and "requestEditorOnTypeFormatting(ch,true)" in html
@@ -3531,6 +3542,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function renderEditorDocumentHighlights(highlights)" in html
            and "function scheduleEditorDocumentHighlights(delay)" in html
            and "editorProviderPayload('documentHighlight'" in html
+           and "editorRequestLanguageProvider('documentHighlight'" in html
            and "editor-document-highlight" in html
            and "function requestEditorDocumentColors(quiet)" in html
            and "function renderEditorDocumentColors(colors)" in html

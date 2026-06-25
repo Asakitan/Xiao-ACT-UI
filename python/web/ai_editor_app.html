@@ -6687,7 +6687,12 @@ async function refreshEditorHierarchyChildren(quiet){
   const requestId=++_editorHierarchyRequest;
   _editorHierarchyRows=[];_editorHierarchyIndex=0;renderEditorHierarchy('Loading...');
   const itemKey=_editorHierarchyMode==='type'?'typeHierarchyItem':'callHierarchyItem';
-  const res=await call('editor_language_provider',editorProviderPayload(editorHierarchyChildKind(),{[itemKey]:_editorHierarchyRoot,item:_editorHierarchyRoot}));
+  const childKind=editorHierarchyChildKind();
+  const res=await editorRequestLanguageProvider(childKind,editorProviderPayload(childKind,{[itemKey]:_editorHierarchyRoot,item:_editorHierarchyRoot}),{
+    label:editorHierarchyDirectionLabel(_editorHierarchyDirection),
+    quiet:quiet===true,
+    isCurrent:()=>requestId===_editorHierarchyRequest
+  });
   if(requestId!==_editorHierarchyRequest)return;
   if(res&&res.error){renderEditorHierarchy('Hierarchy failed: '+res.error);if(!quiet)setStatus('Hierarchy failed: '+res.error);return}
   _editorHierarchyRows=editorHierarchyRowsFromResponse(res);_editorHierarchyIndex=0;renderEditorHierarchy();
@@ -6722,7 +6727,10 @@ function refocusEditorHierarchyItem(item){
 }
 async function requestEditorCallHierarchy(quiet){
   const requestId=++_editorHierarchyRequest,position=editorPositionFromOffset(ed.value,ed.selectionStart);
-  const res=await call('editor_language_provider',editorProviderPayload('prepareCallHierarchy'));
+  const res=await editorRequestLanguageProvider('prepareCallHierarchy',editorProviderPayload('prepareCallHierarchy'),{
+    countKey:'items',itemLabel:'call hierarchy item',label:'Call hierarchy',quiet:quiet===true,
+    isCurrent:()=>requestId===_editorHierarchyRequest
+  });
   if(requestId!==_editorHierarchyRequest)return;
   if(res&&res.error){closeEditorHierarchy();if(!quiet)setStatus('Call hierarchy failed: '+res.error);return}
   const items=(res&&res.ok&&Array.isArray(res.items)?res.items:[]).filter(item=>editorHierarchyItemTarget(item));
@@ -6731,7 +6739,10 @@ async function requestEditorCallHierarchy(quiet){
 }
 async function requestEditorTypeHierarchy(quiet){
   const requestId=++_editorHierarchyRequest,position=editorPositionFromOffset(ed.value,ed.selectionStart);
-  const res=await call('editor_language_provider',editorProviderPayload('prepareTypeHierarchy'));
+  const res=await editorRequestLanguageProvider('prepareTypeHierarchy',editorProviderPayload('prepareTypeHierarchy'),{
+    countKey:'items',itemLabel:'type hierarchy item',label:'Type hierarchy',quiet:quiet===true,
+    isCurrent:()=>requestId===_editorHierarchyRequest
+  });
   if(requestId!==_editorHierarchyRequest)return;
   if(res&&res.error){closeEditorHierarchy();if(!quiet)setStatus('Type hierarchy failed: '+res.error);return}
   const items=(res&&res.ok&&Array.isArray(res.items)?res.items:[]).filter(item=>editorHierarchyItemTarget(item));
@@ -6795,7 +6806,10 @@ async function requestEditorDocumentHighlights(quiet){
   if(!ed||!wrap||wrap.style.display==='none')return;
   const requestId=++_editorDocumentHighlightRequest;
   const contentLength=String(ed.value||'').length;
-  const res=await call('editor_language_provider',editorProviderPayload('documentHighlight'));
+  const res=await editorRequestLanguageProvider('documentHighlight',editorProviderPayload('documentHighlight'),{
+    countKey:'highlights',itemLabel:'document highlight',label:'Document highlights',quiet:quiet===true,
+    isCurrent:()=>requestId===_editorDocumentHighlightRequest&&contentLength===String(ed.value||'').length
+  });
   if(requestId!==_editorDocumentHighlightRequest||contentLength!==String(ed.value||'').length)return;
   if(editorProviderResultCancelled(res))return;
   if(res&&res.error){_editorDocumentHighlights=[];_editorDocumentHighlightContentLength=-1;renderEditorDocumentHighlights([]);if(!quiet)setStatus('Document highlights failed: '+res.error);return}
@@ -6977,7 +6991,10 @@ async function requestWorkspaceSymbols(quiet){
   const input=$('workspace-symbol-input');if(!input)return;
   const query=String(input.value||'').trim();
   const requestId=++_workspaceSymbolRequest;
-  const res=await call('editor_language_provider',editorProviderPayload('workspaceSymbol',{query}));
+  const res=await editorRequestLanguageProvider('workspaceSymbol',editorProviderPayload('workspaceSymbol',{query}),{
+    countKey:'symbols',itemLabel:'workspace symbol',label:'Workspace symbols',quiet:quiet===true,
+    isCurrent:()=>requestId===_workspaceSymbolRequest
+  });
   if(requestId!==_workspaceSymbolRequest)return;
   if(res&&res.error){renderWorkspaceSymbols([],query);if(!quiet)setStatus('Workspace symbols failed: '+res.error);return}
   renderWorkspaceSymbols(res&&res.ok&&Array.isArray(res.symbols)?res.symbols:[],query);
@@ -7102,7 +7119,10 @@ function filterDocumentSymbols(){
 }
 async function requestDocumentSymbols(quiet){
   const requestId=++_documentSymbolRequest;
-  const res=await call('editor_language_provider',editorProviderPayload('documentSymbol'));
+  const res=await editorRequestLanguageProvider('documentSymbol',editorProviderPayload('documentSymbol'),{
+    countKey:'symbols',itemLabel:'document symbol',label:'Document symbols',quiet:quiet===true,
+    isCurrent:()=>requestId===_documentSymbolRequest
+  });
   if(requestId!==_documentSymbolRequest)return;
   if(res&&res.error){_documentSymbolRows=[];renderDocumentSymbols('', 'Document symbols failed: '+res.error);if(!quiet)setStatus('Document symbols failed: '+res.error);return}
   _documentSymbolRows=flattenDocumentSymbols(res&&res.ok&&Array.isArray(res.symbols)?res.symbols:[],0,'');
@@ -7255,7 +7275,10 @@ async function openEditorDocumentLink(link){
 }
 async function requestEditorDocumentLinks(quiet,openAtCursor){
   const requestId=++_editorLinksRequest,position=editorPositionFromOffset(ed.value,ed.selectionStart);
-  const res=await call('editor_language_provider',editorProviderPayload('documentLink',{linkResolveCount:0}));
+  const res=await editorRequestLanguageProvider('documentLink',editorProviderPayload('documentLink',{linkResolveCount:0}),{
+    countKey:'links',itemLabel:'document link',label:'Document links',quiet:quiet===true,
+    isCurrent:()=>requestId===_editorLinksRequest
+  });
   if(requestId!==_editorLinksRequest)return;
   if(res&&res.error){closeEditorLinks();if(!quiet)setStatus('Document links failed: '+res.error);return}
   const links=(res&&res.ok&&Array.isArray(res.links)?res.links:[]).filter(link=>link&&link.range);
@@ -8321,7 +8344,9 @@ function normalizeEditorFormattingProvider(value){
   return {...value,id:providerId,providerId,displayName,capabilities:[...new Set(capabilities.filter(Boolean))]};
 }
 async function requestEditorFormattingProviders(){
-  const res=await call('editor_language_provider',editorProviderPayload('formattingProviders',{matchedOnly:true}));
+  const res=await editorRequestLanguageProvider('formattingProviders',editorProviderPayload('formattingProviders',{matchedOnly:true}),{
+    countKey:'providers',itemLabel:'formatter provider',label:'Formatter providers'
+  });
   if(res&&res.error){setStatus('Formatter providers failed: '+res.error);return []}
   const providers=Array.isArray(res&&res.providers)?res.providers:[];
   const seen=new Set(),items=[];
@@ -8390,7 +8415,10 @@ function clearEditorLinkedEditingRanges(){
 async function requestEditorLinkedEditingRanges(quiet){
   if(!editorLinkedEditingEnabled()){clearEditorLinkedEditingRanges();return}
   const requestId=++_editorLinkedEditingRequest;
-  const res=await call('editor_language_provider',editorProviderPayload('linkedEditing'));
+  const res=await editorRequestLanguageProvider('linkedEditing',editorProviderPayload('linkedEditing'),{
+    countKey:'ranges',itemLabel:'linked range',label:'Linked editing',quiet:quiet===true,
+    isCurrent:()=>requestId===_editorLinkedEditingRequest
+  });
   if(requestId!==_editorLinkedEditingRequest)return;
   if(res&&res.error){clearEditorLinkedEditingRanges();if(!quiet)setStatus('Linked editing failed: '+res.error);return}
   const payload=res&&res.ok?(res.linkedEditing||{ranges:res.ranges||[]}):null;
@@ -8518,7 +8546,10 @@ function editorCodeActionsOnSaveKinds(reason){
 async function requestEditorOnTypeFormatting(ch,quiet){
   if(!editorFormatOnTypeEnabled()||typeof ch!=='string'||ch.length!==1)return false;
   const requestId=++_editorFormatOnTypeRequest;
-  const res=await call('editor_language_provider',editorProviderPayload('onTypeFormatting',{triggerCharacter:ch,options:editorFormatOptions()}));
+  const res=await editorRequestLanguageProvider('onTypeFormatting',editorProviderPayload('onTypeFormatting',{triggerCharacter:ch,options:editorFormatOptions()}),{
+    countKey:'edits',itemLabel:'format edit',label:'Format on type',quiet:quiet===true,
+    isCurrent:()=>requestId===_editorFormatOnTypeRequest
+  });
   if(requestId!==_editorFormatOnTypeRequest)return false;
   if(res&&res.error){if(!quiet)setStatus('Format on type failed: '+res.error);return false}
   if(res&&res.ok&&Array.isArray(res.edits)&&res.edits.length){
@@ -8532,7 +8563,9 @@ async function formatDocument(options){
   const payload={options:editorFormatOptions()};
   const providerId=editorFormattingProviderId(opts);
   if(providerId)payload.providerId=providerId;
-  const res=await call('editor_language_provider',editorProviderPayload('formatting',payload));
+  const res=await editorRequestLanguageProvider('formatting',editorProviderPayload('formatting',payload),{
+    countKey:'edits',itemLabel:'format edit',label:'Format document',quiet:opts.quiet===true
+  });
   if(res&&res.ok&&Array.isArray(res.edits)&&res.edits.length){
     _undoPush(true);
     if(editorApplyTextEdits(res.edits)){if(!opts.quiet)setStatus('Formatted via extension');return true}
@@ -8549,7 +8582,9 @@ async function formatSelection(){
   const payload={range,options:editorFormatOptions()};
   const providerId=editorDefaultFormatter();
   if(providerId)payload.providerId=providerId;
-  const res=await call('editor_language_provider',editorProviderPayload('rangeFormatting',payload));
+  const res=await editorRequestLanguageProvider('rangeFormatting',editorProviderPayload('rangeFormatting',payload),{
+    countKey:'edits',itemLabel:'format edit',label:'Format selection'
+  });
   if(res&&res.ok&&Array.isArray(res.edits)&&res.edits.length){
     _undoPush(true);
     if(editorApplyTextEdits(res.edits)){setStatus('Formatted selection via extension');return}
