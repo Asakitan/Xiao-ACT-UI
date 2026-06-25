@@ -25,10 +25,18 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 _PASS = 0
 _FAIL = 0
 _FAILURES: list[tuple[str, str]] = []
+_CURRENT_TEST_LABEL = ""
 
 
 def _record_failure(label: str, detail: str = "") -> None:
-    _FAILURES.append((label, str(detail or "")))
+    failure_label = str(label or "").strip() or "(unlabeled check)"
+    if (
+        _CURRENT_TEST_LABEL
+        and failure_label != _CURRENT_TEST_LABEL
+        and not failure_label.startswith(f"{_CURRENT_TEST_LABEL} / ")
+    ):
+        failure_label = f"{_CURRENT_TEST_LABEL} / {failure_label}"
+    _FAILURES.append((failure_label, str(detail or "")))
 
 
 def _flush_test_output() -> None:
@@ -71,18 +79,23 @@ def _check(label: str, ok: bool, detail: str = "") -> None:
     else:
         _FAIL += 1
         _record_failure(label, detail)
-        print(f"  ✗ {label}")
+        print("  ✗ failure recorded; see final summary")
 
 
 def _run_test(label: str, fn) -> None:
-    global _FAIL
+    global _FAIL, _CURRENT_TEST_LABEL
+    previous_test_label = _CURRENT_TEST_LABEL
+    _CURRENT_TEST_LABEL = label
     try:
-        fn()
-    except Exception as exc:
-        _FAIL += 1
-        detail = f"{type(exc).__name__}: {exc}\n{traceback.format_exc().rstrip()}"
-        _record_failure(label, detail)
-        print(f"  ✗ {label}")
+        try:
+            fn()
+        except Exception as exc:
+            _FAIL += 1
+            detail = f"{type(exc).__name__}: {exc}\n{traceback.format_exc().rstrip()}"
+            _record_failure(label, detail)
+            print("  ✗ test failed; see final summary")
+    finally:
+        _CURRENT_TEST_LABEL = previous_test_label
 
 
 def _wait_until(predicate, timeout: float = 2.0) -> bool:
@@ -18059,7 +18072,7 @@ def main() -> None:
         print(f"{_PASS}/{total} passed, {_FAIL} FAILED ✗")
         print(f"{'=' * 50}")
         print()
-        print("FAILED TESTS (details at end):")
+        print("FAILED CHECKS (deferred details):")
         for index, (label, detail) in enumerate(_FAILURES, 1):
             print(f"  {index}. {label}")
             if detail:
