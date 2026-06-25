@@ -3418,6 +3418,22 @@ def test_phase1_ai_editor_regressions() -> None:
            and "clearAssistantPending(currentMsgBody);" in html
            and "syncAssistantSessionState();\n    }\n  }\n  if(e.key==='ArrowDown'" in html
            and "restoreAssistantSessionDraft();\nupdateChatComposerState();" in html)
+    _check("frontend Assistant message actions follow Copilot Chat footer behavior",
+           "function chatMessageActionText(msgEl,markdown)" in html
+           and "function chatPreviousUserMessageText(msgEl)" in html
+           and "function setMessageFeedback(msgEl,msgId,rating)" in html
+           and "function retryAssistantMessage(msgEl)" in html
+           and "items.indexOf(msgEl)" in html
+           and "msgEl.querySelector('.msg-footer')" in html
+           and "footer.setAttribute('role','toolbar');" in html
+           and "footer.setAttribute('aria-label','Assistant message actions');" in html
+           and "const b=document.createElement('button');b.type='button';" in html
+           and "b.dataset.feedback=a.feedback" in html
+           and "chatMessageActionText(msgEl,true)" in html
+           and "retryAssistantMessage(msgEl)" in html
+           and "addMessageFooter(body.closest('.msg'),'assistant');" in html
+           and "showChatWelcomeIfEmpty();syncAssistantSessionState();assistantSessionPersistCurrent" in html
+           and "e.key==='Enter'&&(e.ctrlKey||e.metaKey)" in html)
     _check("frontend Assistant renders response references and changed-file cards",
            "chat-response-references" in html
            and "chat-response-reference-list" in html
