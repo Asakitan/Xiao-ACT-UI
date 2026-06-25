@@ -3553,16 +3553,6 @@ function languageSurroundingPairs(lang){
   const pairs=normalizeLanguagePairs(languageConfiguration(lang).surroundingPairs,true);
   return pairs.length?pairs:languageAutoClosingPairs(lang);
 }
-function languageClosingCharacters(lang){
-  return new Set(languageAutoClosingPairs(lang).map(pair=>pair.close).filter(close=>close&&close.length===1));
-}
-function languageSingleCharPairMap(lang){
-  const map=Object.create(null);
-  languageAutoClosingPairs(lang).forEach(pair=>{
-    if(pair.open&&pair.close&&pair.open.length===1&&pair.close.length===1)map[pair.open]=pair.close;
-  });
-  return map;
-}
 function editorLineStringScopes(prefix,lineComment){
   const text=String(prefix||''),lineToken=String(lineComment||'');
   let quote='',escaped=false;
@@ -3684,10 +3674,51 @@ function autoClosingPairForKey(lang,key,value,pos,hasSelection){
     .sort((a,b)=>b.open.length-a.open.length);
   for(const pair of pairs){
     if(autoClosingPairBlockedByContext(pair,context))continue;
-    if(hasSelection&&pair.open!==key)continue;
     if(pair.open===key)return pair;
     const prefix=pair.open.slice(0,-key.length);
     if(prefix&&before.endsWith(prefix))return pair;
+  }
+  return null;
+}
+function autoPairInsertionEditForKey(lang,key,value,start,end){
+  value=String(value||'');start=Math.max(0,Math.min(value.length,Number(start)||0));
+  end=Math.max(start,Math.min(value.length,Number(end)||start));
+  const pair=autoClosingPairForKey(lang,key,value,start,start!==end);
+  if(!pair)return null;
+  const prefixLen=pair.open===key?0:Math.max(0,pair.open.length-String(key||'').length);
+  const insertStart=Math.max(0,start-prefixLen);
+  const selected=value.slice(start,end);
+  const text=pair.open+selected+pair.close;
+  return {
+    start:insertStart,end,
+    text,
+    selectionStart:insertStart+pair.open.length,
+    selectionEnd:insertStart+pair.open.length+selected.length,
+    pair
+  };
+}
+function autoPairOvertypeEditForKey(lang,key,value,start,end){
+  value=String(value||'');start=Math.max(0,Math.min(value.length,Number(start)||0));
+  end=Math.max(start,Math.min(value.length,Number(end)||start));
+  if(start!==end)return null;
+  const keyText=String(key||'');
+  if(!keyText)return null;
+  const closes=languageAutoClosingPairs(lang).map(pair=>String(pair.close||'')).filter(Boolean);
+  const close=closes.find(close=>close===keyText&&value.startsWith(close,start));
+  return close?{start,end:start+close.length,text:'',selectionStart:start+close.length,selectionEnd:start+close.length}:null;
+}
+function autoPairDeleteEdit(lang,value,start,end){
+  value=String(value||'');start=Math.max(0,Math.min(value.length,Number(start)||0));
+  end=Math.max(start,Math.min(value.length,Number(end)||start));
+  if(start!==end)return null;
+  const pairs=languageAutoClosingPairs(lang)
+    .filter(pair=>pair&&pair.open&&pair.close)
+    .sort((a,b)=>b.open.length-a.open.length||b.close.length-a.close.length);
+  for(const pair of pairs){
+    const open=String(pair.open),close=String(pair.close);
+    if(start>=open.length&&value.slice(start-open.length,start)===open&&value.slice(start,start+close.length)===close){
+      return {start:start-open.length,end:start+close.length,text:'',selectionStart:start-open.length,selectionEnd:start-open.length,pair};
+    }
   }
   return null;
 }
@@ -7992,29 +8023,21 @@ ed.addEventListener('keydown',function(e){
     this.selectionStart=this.selectionEnd=pos+enter.cursorOffset;
     updateLineNums();updateCursorPos()}
   // Auto-closing brackets/quotes (EDIT-001)
-  const pair=autoClosingPairForKey(editorLang,e.key,this.value,this.selectionStart,this.selectionStart!==this.selectionEnd);
-  if(pair){
+  const pairEdit=autoPairInsertionEditForKey(editorLang,e.key,this.value,this.selectionStart,this.selectionEnd);
+  if(pairEdit){
     e.preventDefault();_undoPush(true);
-    const s=this.selectionStart,end=this.selectionEnd,val=this.value;
-    if(s!==end){
-      const sel=val.substring(s,end);
-      this.value=val.substring(0,s)+pair.open+sel+pair.close+val.substring(end);
-      this.selectionStart=s;this.selectionEnd=end+pair.open.length+pair.close.length;
-    }else{
-      const prefixLen=pair.open===e.key?0:pair.open.length-String(e.key).length;
-      const insertStart=Math.max(0,s-prefixLen);
-      this.value=val.substring(0,insertStart)+pair.open+pair.close+val.substring(end);
-      this.selectionStart=this.selectionEnd=insertStart+pair.open.length;
-    }
+    this.value=this.value.substring(0,pairEdit.start)+pairEdit.text+this.value.substring(pairEdit.end);
+    this.selectionStart=pairEdit.selectionStart;this.selectionEnd=pairEdit.selectionEnd;
     updateLineNums();return}
-  if(languageClosingCharacters(editorLang).has(e.key)&&this.value[this.selectionStart]===e.key&&this.selectionStart===this.selectionEnd){
-    e.preventDefault();this.selectionStart=this.selectionEnd=this.selectionStart+1;return}
+  const overtypeEdit=autoPairOvertypeEditForKey(editorLang,e.key,this.value,this.selectionStart,this.selectionEnd);
+  if(overtypeEdit){
+    e.preventDefault();this.selectionStart=overtypeEdit.selectionStart;this.selectionEnd=overtypeEdit.selectionEnd;return}
   if(e.key==='Backspace'&&!e.ctrlKey){
-    const s=this.selectionStart,val=this.value,pairMap=languageSingleCharPairMap(editorLang);
-    if(s>0&&s===this.selectionEnd&&pairMap[val[s-1]]&&val[s]===pairMap[val[s-1]]){
+    const deleteEdit=autoPairDeleteEdit(editorLang,this.value,this.selectionStart,this.selectionEnd);
+    if(deleteEdit){
       e.preventDefault();_undoPush(true);
-      this.value=val.substring(0,s-1)+val.substring(s+1);
-      this.selectionStart=this.selectionEnd=s-1;
+      this.value=this.value.substring(0,deleteEdit.start)+deleteEdit.text+this.value.substring(deleteEdit.end);
+      this.selectionStart=deleteEdit.selectionStart;this.selectionEnd=deleteEdit.selectionEnd;
       updateLineNums();return}}
 });
 

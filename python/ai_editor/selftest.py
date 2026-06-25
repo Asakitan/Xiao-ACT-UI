@@ -3223,6 +3223,9 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function languageCommentTokens(lang)" in html
             and "function languageAutoClosingPairs(lang)" in html
             and "function autoClosingPairForKey(lang,key,value,pos,hasSelection)" in html
+            and "function autoPairInsertionEditForKey(lang,key,value,start,end)" in html
+            and "function autoPairOvertypeEditForKey(lang,key,value,start,end)" in html
+            and "function autoPairDeleteEdit(lang,value,start,end)" in html
             and "function editorLineStringScopes(prefix,lineComment)" in html
             and "function editorRegexScopes(prefix,lineComment)" in html
             and "function editorBlockCommentOpenAt(value,pos,blockComment,lineComment)" in html
@@ -3830,6 +3833,9 @@ console.log("frontend save participant settings ok");
             "editorContextScopesAt",
             "autoClosingPairBlockedByContext",
             "autoClosingPairForKey",
+            "autoPairInsertionEditForKey",
+            "autoPairOvertypeEditForKey",
+            "autoPairDeleteEdit",
         ]
         js_functions = "\n".join(
             _extract_js_function(html, name) for name in function_names)
@@ -3849,6 +3855,23 @@ LANGUAGE_META.javascript = {
   grammarScopes: ["source.js"],
   grammars: [{ tokenTypes: { "string.quoted.double.js": "string", "comment.line.double-slash.js": "comment" } }]
 };
+LANGUAGE_META.python = {
+  configuration: {
+    comments: { lineComment: "#", blockComment: ["\"\"\"", "\"\"\""] },
+    autoClosingPairs: [
+      { open: "r\"", close: "\"", notIn: ["string", "comment"] },
+      { open: "\"", close: "\"", notIn: ["string", "comment"] },
+      { open: "(", close: ")" }
+    ],
+    surroundingPairs: [["\"", "\""], ["(", ")"]]
+  }
+};
+LANGUAGE_META.markdown = {
+  configuration: {
+    surroundingPairs: [["**", "**"], ["`", "`"], ["(", ")"]],
+    autoClosingPairs: [{ open: "`", close: "`", notIn: ["string", "comment"] }]
+  }
+};
 const BUILTIN_LANGUAGE_COMMENTS = {};
 const DEFAULT_AUTO_CLOSING_PAIRS = [{open:"(",close:")"},{open:"\"",close:"\""}];
 function languageHighlightFamily(lang){ return lang === "javascript" ? "javascript" : "plaintext"; }
@@ -3856,8 +3879,16 @@ function languageHighlightFamily(lang){ return lang === "javascript" ? "javascri
 function assert(ok, label){ if(!ok){ throw new Error(label); } }
 let value = "const s = ";
 assert(autoClosingPairForKey("javascript", "\"", value, value.length, false).open === "\"", "quote closes in normal code");
+const quoteEdit = autoPairInsertionEditForKey("javascript", "\"", value, value.length, value.length);
+assert(quoteEdit.start === value.length
+       && quoteEdit.text === "\"\""
+       && quoteEdit.selectionStart === value.length + 1
+       && quoteEdit.selectionEnd === value.length + 1,
+       "auto pair insertion edit inserts simple pair");
 value = "const s = \"abc";
 assert(autoClosingPairForKey("javascript", "\"", value, value.length, false) === null, "quote suppressed inside string");
+assert(autoPairInsertionEditForKey("javascript", "\"", value, value.length, value.length) === null,
+       "auto pair edit keeps notIn suppression inside string");
 value = "// comment ";
 assert(autoClosingPairForKey("javascript", "\"", value, value.length, false) === null, "quote suppressed inside line comment");
 value = "/* block comment ";
@@ -3870,6 +3901,35 @@ assert(regexContext.scopes.has("regex"), "regex scope detected");
 assert(regexContext.source.indexOf("textmate-hints") === 0, "TextMate grammar hints retained");
 assert((regexContext.grammarTokenTypes.string || []).includes("string.quoted.double.js"), "grammar token type hints retained");
 assert(autoClosingPairForKey("javascript", "/", value, value.length, false) === null, "slash suppressed inside regex");
+value = "r";
+const rawStringEdit = autoPairInsertionEditForKey("python", "\"", value, 1, 1);
+assert(rawStringEdit.start === 0
+       && rawStringEdit.text === "r\"\""
+       && rawStringEdit.selectionStart === 2
+       && rawStringEdit.selectionEnd === 2,
+       "multi-character auto-closing open pair replaces typed prefix");
+const rawDeleteEdit = autoPairDeleteEdit("python", "r\"\"", 2, 2);
+assert(rawDeleteEdit.start === 0
+       && rawDeleteEdit.end === 3
+       && rawDeleteEdit.selectionStart === 0,
+       "multi-character auto pair delete removes open and close");
+value = "*bold";
+const surroundEdit = autoPairInsertionEditForKey("markdown", "*", value, 1, 5);
+assert(surroundEdit.start === 0
+       && surroundEdit.text === "**bold**"
+       && surroundEdit.selectionStart === 2
+       && surroundEdit.selectionEnd === 6,
+       "multi-character surrounding pair preserves selected text and typed prefix");
+const tickSurroundEdit = autoPairInsertionEditForKey("markdown", "`", "code", 0, 4);
+assert(tickSurroundEdit.text === "`code`"
+       && tickSurroundEdit.selectionStart === 1
+       && tickSurroundEdit.selectionEnd === 5,
+       "single-character surrounding pair still works through shared edit helper");
+const overtypeEdit = autoPairOvertypeEditForKey("javascript", ")", "call()", 5, 5);
+assert(overtypeEdit && overtypeEdit.selectionStart === 6 && overtypeEdit.selectionEnd === 6,
+       "closing pair overtype advances cursor");
+assert(autoPairOvertypeEditForKey("javascript", ")", "call()", 4, 5) === null,
+       "closing pair overtype ignores selections");
 console.log("frontend auto-close behavior ok");
 """
         js_path = ""
