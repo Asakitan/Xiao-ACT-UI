@@ -127,6 +127,156 @@ _EDITOR_LANGUAGE_DISPLAY_NAMES = {
     "rust": "Rust",
     "toml": "TOML",
 }
+_EDITOR_BUILTIN_LANGUAGE_CONFIG_PATHS = {
+    "python": "vscode/extensions/python/language-configuration.json",
+    "javascript": "vscode/extensions/javascript/javascript-language-configuration.json",
+    "json": "vscode/extensions/json/language-configuration.json",
+    "markdown": "vscode/extensions/markdown-basics/language-configuration.json",
+    "shell": "vscode/extensions/shellscript/language-configuration.json",
+}
+_EDITOR_BUILTIN_LANGUAGE_CONFIGURATIONS: Dict[str, Dict[str, Any]] = {
+    "python": {
+        "comments": {"lineComment": "#", "blockComment": ['"""', '"""']},
+        "brackets": [["{", "}"], ["[", "]"], ["(", ")"]],
+        "autoClosingPairs": [
+            {"open": "{", "close": "}"},
+            {"open": "[", "close": "]"},
+            {"open": "(", "close": ")"},
+            {"open": '"', "close": '"', "notIn": ["string"]},
+            {"open": "r\"", "close": '"', "notIn": ["string", "comment"]},
+            {"open": "f\"", "close": '"', "notIn": ["string", "comment"]},
+            {"open": "'", "close": "'", "notIn": ["string", "comment"]},
+            {"open": "r'", "close": "'", "notIn": ["string", "comment"]},
+            {"open": "f'", "close": "'", "notIn": ["string", "comment"]},
+        ],
+        "surroundingPairs": [
+            ["{", "}"], ["[", "]"], ["(", ")"],
+            ['"', '"'], ["'", "'"], ["`", "`"],
+        ],
+        "folding": {
+            "offSide": True,
+            "markers": {
+                "start": r"^\s*#\s*region\b",
+                "end": r"^\s*#\s*endregion\b",
+            },
+        },
+        "onEnterRules": [{
+            "beforeText": (
+                r"^\s*(?:def|class|for|if|elif|else|while|try|with|"
+                r"finally|except|async).*?:\s*$"
+            ),
+            "action": {"indent": "indent"},
+        }],
+    },
+    "javascript": {
+        "comments": {"lineComment": "//", "blockComment": ["/*", "*/"]},
+        "brackets": [["${", "}"], ["{", "}"], ["[", "]"], ["(", ")"]],
+        "autoClosingPairs": [
+            {"open": "${", "close": "}"},
+            {"open": "{", "close": "}"},
+            {"open": "[", "close": "]"},
+            {"open": "(", "close": ")"},
+            {"open": "'", "close": "'", "notIn": ["string", "comment"]},
+            {"open": '"', "close": '"', "notIn": ["string"]},
+            {"open": "`", "close": "`", "notIn": ["string", "comment"]},
+            {"open": "/**", "close": " */", "notIn": ["string"]},
+        ],
+        "surroundingPairs": [
+            ["${", "}"], ["$", ""], ["{", "}"], ["[", "]"], ["(", ")"],
+            ["'", "'"], ['"', '"'], ["`", "`"], ["<", ">"],
+        ],
+        "folding": {
+            "markers": {
+                "start": r"^\s*//\s*#?region\b",
+                "end": r"^\s*//\s*#?endregion\b",
+            },
+        },
+        "wordPattern": {
+            "pattern": (
+                r"(-?\d*\.\d\w*)|([^`~@!%^&*()\-=+\[{\]}\\|;:'\",.<>/?\s]+)"
+            ),
+        },
+        "indentationRules": {
+            "decreaseIndentPattern": r"^\s*[\}\]\)].*$",
+            "increaseIndentPattern": r"^.*(\{[^}]*|\([^)]*|\[[^\]]*)$",
+            "indentNextLinePattern": (
+                r"^((.*=>\s*)|((.*[^\w]+|\s*)((if|while|for)\s*"
+                r"\(.*\)\s*|else\s*)))$"
+            ),
+        },
+    },
+    "json": {
+        "comments": {"lineComment": "//", "blockComment": ["/*", "*/"]},
+        "brackets": [["{", "}"], ["[", "]"]],
+        "autoClosingPairs": [
+            {"open": "{", "close": "}", "notIn": ["string"]},
+            {"open": "[", "close": "]", "notIn": ["string"]},
+            {"open": "(", "close": ")", "notIn": ["string"]},
+            {"open": "'", "close": "'", "notIn": ["string"]},
+            {"open": '"', "close": '"', "notIn": ["string", "comment"]},
+            {"open": "`", "close": "`", "notIn": ["string", "comment"]},
+        ],
+        "indentationRules": {
+            "increaseIndentPattern": (
+                r"({+(?=((\\.|[^\"\\])*(\\.|[^\"\\])*)*[^\"}]*)$)|"
+                r"(\[+(?=((\\.|[^\"\\])*(\\.|[^\"\\])*)*[^\"\]]*)$)"
+            ),
+            "decreaseIndentPattern": r"^\s*[}\]],?\s*$",
+        },
+    },
+    "markdown": {
+        "comments": {"blockComment": ["<!--", "-->"]},
+        "brackets": [["{", "}"], ["[", "]"], ["(", ")"]],
+        "autoClosingPairs": [
+            {"open": "{", "close": "}"},
+            {"open": "[", "close": "]"},
+            {"open": "(", "close": ")"},
+            {"open": "<", "close": ">", "notIn": ["string"]},
+        ],
+        "surroundingPairs": [
+            ["(", ")"], ["[", "]"], ["`", "`"], ["_", "_"],
+            ["*", "*"], ["{", "}"], ["'", "'"], ['"', '"'],
+            ["<", ">"], ["~", "~"], ["$", "$"],
+        ],
+        "folding": {
+            "offSide": True,
+            "markers": {
+                "start": r"^\s*<!--\s*#?region\b.*-->",
+                "end": r"^\s*<!--\s*#?endregion\b.*-->",
+            },
+        },
+        "wordPattern": {
+            "pattern": (
+                r"(\p{Alphabetic}|\p{Number}|\p{Nonspacing_Mark})"
+                r"(((\p{Alphabetic}|\p{Number}|\p{Nonspacing_Mark})|[_])?"
+                r"(\p{Alphabetic}|\p{Number}|\p{Nonspacing_Mark}))*"
+            ),
+            "flags": "ug",
+        },
+    },
+    "shell": {
+        "comments": {"lineComment": "#"},
+        "brackets": [["{", "}"], ["[", "]"], ["(", ")"]],
+        "autoClosingPairs": [
+            {"open": "{", "close": "}"},
+            {"open": "[", "close": "]"},
+            {"open": "(", "close": ")"},
+            {"open": '"', "close": '"', "notIn": ["string"]},
+            {"open": "'", "close": "'", "notIn": ["string"]},
+            {"open": "`", "close": "`", "notIn": ["string"]},
+        ],
+        "surroundingPairs": [
+            ["{", "}"], ["[", "]"], ["(", ")"],
+            ['"', '"'], ["'", "'"], ["`", "`"],
+        ],
+        "folding": {
+            "markers": {
+                "start": r"^\s*#\s*#?region\b.*",
+                "end": r"^\s*#\s*#?endregion\b.*",
+            },
+        },
+    },
+}
 _AI_EDITOR_LAYOUT_DEFAULTS: Dict[str, Any] = {
     "sidebarVisible": True,
     "editorVisible": False,
@@ -3437,6 +3587,18 @@ class AIEditorAPI:
                 "configurationResolvedPath": "",
                 "configuration": {},
             })
+            if source == "builtin" and not item.get("configuration"):
+                builtin_config = _EDITOR_BUILTIN_LANGUAGE_CONFIGURATIONS.get(
+                    language_id)
+                if builtin_config:
+                    item["configurationPath"] = (
+                        _EDITOR_BUILTIN_LANGUAGE_CONFIG_PATHS.get(
+                            language_id, "vscode/extensions")
+                    )
+                    item["configuration"] = (
+                        self._safe_editor_language_configuration(
+                            builtin_config)
+                    )
             if item.get("source") != "builtin" and source == "builtin":
                 item["source"] = "builtin"
             return item

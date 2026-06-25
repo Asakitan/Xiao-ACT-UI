@@ -11478,6 +11478,51 @@ def test_app_extension_runtime_support() -> None:
             .replace("\\", "/"))
         selflang_config = editor_languages.get("selflang", {}).get(
             "configuration", {})
+        builtin_python_config = editor_languages.get("python", {}).get(
+            "configuration", {})
+        builtin_javascript_config = editor_languages.get("javascript", {}).get(
+            "configuration", {})
+        builtin_json_config = editor_languages.get("json", {}).get(
+            "configuration", {})
+        builtin_markdown_config = editor_languages.get("markdown", {}).get(
+            "configuration", {})
+        builtin_shell_config = editor_languages.get("shell", {}).get(
+            "configuration", {})
+        _check("builtin languages carry VS Code behavior metadata",
+               editor_languages.get("python", {}).get("configurationPath")
+                   == "vscode/extensions/python/language-configuration.json"
+               and builtin_python_config.get("comments", {}).get("lineComment") == "#"
+               and builtin_python_config.get("folding", {}).get("offSide") is True
+               and any(pair.get("open") == "f\""
+                       and "comment" in pair.get("notIn", [])
+                       for pair in builtin_python_config.get("autoClosingPairs", []))
+               and editor_languages.get("javascript", {}).get("configurationPath")
+                   == "vscode/extensions/javascript/javascript-language-configuration.json"
+               and builtin_javascript_config.get("comments", {}).get("blockComment")
+                   == ["/*", "*/"]
+               and ["${", "}"] in builtin_javascript_config.get("brackets", [])
+               and builtin_javascript_config.get("wordPattern", {}).get("pattern", "")
+                   .startswith("(-?\\d*\\.\\d\\w*)")
+               and editor_languages.get("json", {}).get("configurationPath")
+                   == "vscode/extensions/json/language-configuration.json"
+               and builtin_json_config.get("indentationRules", {})
+                   .get("decreaseIndentPattern", {}).get("pattern")
+                   == r"^\s*[}\]],?\s*$"
+               and any(pair.get("open") == "{"
+                       and "string" in pair.get("notIn", [])
+                       for pair in builtin_json_config.get("autoClosingPairs", []))
+               and editor_languages.get("markdown", {}).get("configurationPath")
+                   == "vscode/extensions/markdown-basics/language-configuration.json"
+               and builtin_markdown_config.get("comments", {}).get("blockComment")
+                   == ["<!--", "-->"]
+               and builtin_markdown_config.get("wordPattern", {}).get("flags")
+                   == "ug"
+               and editor_languages.get("shell", {}).get("configurationPath")
+                   == "vscode/extensions/shellscript/language-configuration.json"
+               and builtin_shell_config.get("comments", {}).get("lineComment") == "#"
+               and builtin_shell_config.get("folding", {})
+                   .get("markers", {}).get("start", {}).get("pattern")
+                   == r"^\s*#\s*#?region\b.*")
         _check("extension languages feed editor language table",
                editor_languages.get("selflang", {}).get("name") == "Self Lang"
                and ".self" in editor_languages.get("selflang", {}).get("extensions", [])
