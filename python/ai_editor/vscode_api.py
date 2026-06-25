@@ -5475,6 +5475,68 @@ class VscodeNamespace:
             return control
         return None
 
+    def source_control_snapshots(self) -> List[Dict[str, Any]]:
+        providers: List[Dict[str, Any]] = []
+        for control in self._source_controls.values():
+            if getattr(control, "_disposed", False):
+                continue
+            root_uri = str(control.rootUri or "")
+            provider: Dict[str, Any] = {
+                "id": str(control.id or ""),
+                "providerId": str(control.id or ""),
+                "label": str(control.label or control.id or ""),
+                "rootUri": root_uri,
+                "contextValue": str(control.contextValue or ""),
+                "count": int(getattr(control, "count", 0) or 0),
+                "runtimeKind": "python",
+                "inputBox": {
+                    "value": str(getattr(control.inputBox, "value", "") or ""),
+                    "placeholder": str(
+                        getattr(control.inputBox, "placeholder", "") or ""),
+                    "visible": bool(getattr(control.inputBox, "visible", True)),
+                    "enabled": bool(getattr(control.inputBox, "enabled", True)),
+                },
+                "groups": [],
+            }
+            for group in control.groups:
+                if getattr(group, "_disposed", False):
+                    continue
+                group_item: Dict[str, Any] = {
+                    "id": str(group.id or ""),
+                    "groupId": str(group.id or ""),
+                    "label": str(group.label or group.id or ""),
+                    "contextValue": str(group.contextValue or ""),
+                    "hideWhenEmpty": bool(getattr(group, "hideWhenEmpty", False)),
+                    "resourceStates": [],
+                }
+                for index, state in enumerate(list(group.resourceStates or [])):
+                    raw = _plain_json_value(state)
+                    raw_dict = raw if isinstance(raw, dict) else {}
+                    resource_uri = str(
+                        raw_dict.get("resourceUri")
+                        or raw_dict.get("uri")
+                        or raw_dict.get("resource")
+                        or "")
+                    label = str(
+                        raw_dict.get("label")
+                        or raw_dict.get("name")
+                        or os.path.basename(resource_uri.replace("\\", "/"))
+                        or resource_uri
+                        or f"resource-{index + 1}")
+                    group_item["resourceStates"].append({
+                        "resourceUri": resource_uri,
+                        "label": label,
+                        "contextValue": str(raw_dict.get("contextValue") or ""),
+                        "command": raw_dict.get("command"),
+                        "decorations": raw_dict.get("decorations") or {},
+                        "raw": raw,
+                    })
+                if (not group_item["hideWhenEmpty"]
+                        or group_item["resourceStates"]):
+                    provider["groups"].append(group_item)
+            providers.append(provider)
+        return providers
+
     def _sync_tasks_state(self) -> None:
         if self._tasks_api is None:
             return

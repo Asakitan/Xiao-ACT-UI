@@ -6907,11 +6907,26 @@ console.log("command palette quick access helpers ok");
            "def list_scm_title_actions(" in app_source
            and "def list_scm_resource_group_actions(" in app_source
            and "def list_scm_resource_state_actions(" in app_source
+           and "def list_scm_providers(" in app_source
+           and "def source_control_snapshots(" in vscode_api_source
+           and "def node_scm_provider_snapshots(" in extension_host_source
            and "\"scm/title\"" in app_source
            and "\"scm/resourceGroup/context\"" in app_source
            and "\"scm/resourceState/context\"" in app_source
            and "scmResourceGroupState" in app_source
            and "scmResourceState" in app_source)
+    _check("frontend renders dynamic SCM side bar from provider snapshots",
+           "data-panel=\"scm\"" in html
+           and "id=\"sb-scm\"" in html
+           and "id=\"scm-list\"" in html
+           and "function refreshScmSidebar(force)" in html
+           and "call('list_scm_providers')" in html
+           and "function renderScmProvider(parent,provider)" in html
+           and "function renderScmGroup(parent,provider,group)" in html
+           and "function renderScmResource(parent,provider,group,state,index)"
+           in html
+           and "view.scm" in html
+           and "switchSidebar('scm')" in html)
     _check("extension webview panel reveal reaches frontend",
            "type: 'webview_reveal'" in node_ext_host_source
            and "elif msg_type == \"webview_reveal\"" in extension_host_source
@@ -12542,6 +12557,18 @@ def test_app_extension_runtime_support() -> None:
             "groupId": activity_scm_group.id,
             "contextValue": "not-exportable",
         })
+        activity_scm_snapshot = api.list_scm_providers()
+        activity_scm_provider = next((
+            provider for provider in activity_scm_snapshot.get("providers", [])
+            if provider.get("providerId") == "selftest-activity-scm"), {})
+        activity_scm_snapshot_group = next((
+            group for group in activity_scm_provider.get("groups", [])
+            if group.get("groupId") == "workingTree"), {})
+        activity_scm_snapshot_state = next((
+            state for state in activity_scm_snapshot_group.get(
+                "resourceStates", [])
+            if state.get("resourceUri")
+            == activity_scm_resource["resourceUri"]), {})
         activity_scm_group_action = next((
             action for action in activity_scm_group_actions.get("actions", [])
             if action.get("command") == "selftest.activity.scmGroupAction"), {})
@@ -12605,6 +12632,30 @@ def test_app_extension_runtime_support() -> None:
                    "scmResourceState") == "diffable"
                and activity_command_log[-2][0] == "scmGroup"
                and activity_command_log[-1][0] == "scmState")
+        _check("SCM providers API returns dynamic Python provider tree",
+               activity_scm_provider.get("label") == "Selftest Activity SCM"
+               and activity_scm_provider.get("runtimeKind") == "python"
+               and activity_scm_provider.get("contextValue") == "repository"
+               and activity_scm_snapshot_group.get("label") == "Working Tree"
+               and activity_scm_snapshot_group.get("contextValue")
+               == "exportable"
+               and activity_scm_snapshot_state.get("label") == "scm-file.txt"
+               and activity_scm_snapshot_state.get("contextValue")
+               == "diffable")
+        _check("SCM providers API attaches menu actions at each tree level",
+               [action.get("command") for action in
+                activity_scm_provider.get("titleActions", [])]
+               == ["selftest.activity.scmTitle"]
+               and "selftest.activity.scmGroupAction" in [
+                   action.get("command") for action in
+                   activity_scm_snapshot_group.get("actions", [])
+               ]
+               and "selftest.activity.scmStateAction" in [
+                   action.get("command") for action in
+                   activity_scm_snapshot_state.get("actions", [])
+               ]
+               and activity_scm_snapshot_state.get("context", {}).get(
+                   "scmResourceState") == "diffable")
         all_view_containers = api.list_extension_view_containers().get("items", [])
         panel_containers = api.list_extension_view_containers("panel").get("items", [])
         secondary_containers = api.list_extension_view_containers(
@@ -17333,6 +17384,18 @@ module.exports = { activate, deactivate };
                     "groupId": "workingTree",
                     "resourceUri": node_scm_resource_uri,
                 })
+                node_scm_provider_snapshot = api.list_scm_providers()
+                node_scm_provider = next((
+                    provider for provider in
+                    node_scm_provider_snapshot.get("providers", [])
+                    if provider.get("providerId") == "selftest-node-scm"), {})
+                node_scm_snapshot_group = next((
+                    group for group in node_scm_provider.get("groups", [])
+                    if group.get("groupId") == "workingTree"), {})
+                node_scm_snapshot_state = next((
+                    state for state in node_scm_snapshot_group.get(
+                        "resourceStates", [])
+                    if state.get("resourceUri") == node_scm_resource_uri), {})
                 node_scm_missing_group_actions = (
                     api.list_scm_resource_group_actions({
                         "providerId": "selftest-node-scm",
@@ -18751,6 +18814,31 @@ module.exports = { activate, deactivate };
                            "missingGroup": node_scm_missing_group_actions,
                            "groupResult": node_scm_group_action_result,
                            "stateResult": node_scm_state_action_result,
+                       }, ensure_ascii=False))
+                _check("node SCM providers feed dynamic sidebar snapshots",
+                       node_scm_provider.get("runtimeKind") == "node"
+                       and node_scm_provider.get("label")
+                       == "Selftest Node SCM"
+                       and node_scm_provider.get("contextValue")
+                       == "repository"
+                       and node_scm_snapshot_group.get("label")
+                       == "Working Tree"
+                       and node_scm_snapshot_group.get("contextValue")
+                       == "exportable"
+                       and node_scm_snapshot_state.get("resourceUri")
+                       == node_scm_resource_uri
+                       and node_scm_snapshot_state.get("contextValue")
+                       == "diffable"
+                       and "selftest.node.scmGroupAction" in [
+                           action.get("command") for action in
+                           node_scm_snapshot_group.get("actions", [])
+                       ]
+                       and "selftest.node.scmStateAction" in [
+                           action.get("command") for action in
+                           node_scm_snapshot_state.get("actions", [])
+                       ],
+                       json.dumps({
+                           "providers": node_scm_provider_snapshot,
                        }, ensure_ascii=False))
                 _check("extension editor/webview menus follow custom editor context",
                        "selftest.node.customEditorTitleAction"

@@ -13364,6 +13364,137 @@ class AIEditorAPI:
             actions = []
         return {"actions": actions, "context": menu_context}
 
+    def _scm_provider_snapshots(self) -> List[Dict[str, Any]]:
+        providers: List[Dict[str, Any]] = []
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        python_snapshots = getattr(vscode_ns, "source_control_snapshots", None)
+        if callable(python_snapshots):
+            try:
+                providers.extend(python_snapshots())
+            except Exception:
+                pass
+        node_host = getattr(self, "_node_ext_host", None)
+        node_snapshots = getattr(node_host, "node_scm_provider_snapshots", None)
+        if callable(node_snapshots):
+            try:
+                providers.extend(node_snapshots())
+            except Exception:
+                pass
+        return [
+            provider for provider in providers
+            if isinstance(provider, dict)
+            and str(provider.get("providerId")
+                    or provider.get("id") or "").strip()
+        ]
+
+    @staticmethod
+    def _scm_resource_label(resource: Dict[str, Any], index: int) -> str:
+        label = str(resource.get("label") or "").strip()
+        if label:
+            return label
+        uri = str(resource.get("resourceUri") or resource.get("uri") or "")
+        if uri:
+            normalized = uri.replace("\\", "/").rstrip("/")
+            tail = normalized.rsplit("/", 1)[-1]
+            return tail or normalized
+        return f"resource-{index + 1}"
+
+    def _scm_provider_context(self, provider: Dict[str, Any]) -> Dict[str, Any]:
+        provider_id = str(provider.get("providerId")
+                          or provider.get("id") or "")
+        root_uri = str(provider.get("rootUri") or "")
+        context = {
+            "scmProvider": provider_id,
+            "providerId": provider_id,
+            "sourceControlId": provider_id,
+            "scmProviderRootUri": root_uri,
+            "rootUri": root_uri,
+            "scmProviderHasRootUri": bool(root_uri),
+        }
+        provider_context = str(provider.get("contextValue") or "")
+        if provider_context:
+            context["scmProviderContext"] = provider_context
+            context["providerContext"] = provider_context
+            context["contextValue"] = provider_context
+        return context
+
+    def list_scm_providers(self) -> Dict:
+        """Return dynamic SCM providers and VS Code-style SCM menu actions."""
+        self._ensure_engine()
+        providers = self._scm_provider_snapshots()
+        result: List[Dict[str, Any]] = []
+        for provider in providers:
+            provider_item = json.loads(json.dumps(
+                provider, ensure_ascii=False, default=str))
+            provider_context = self._scm_provider_context(provider_item)
+            title_result = self.list_scm_title_actions(provider_context)
+            provider_item["titleActions"] = title_result.get("actions", [])
+            provider_item["context"] = title_result.get(
+                "context", provider_context)
+            groups = provider_item.get("groups")
+            if not isinstance(groups, list):
+                groups = []
+            normalized_groups: List[Dict[str, Any]] = []
+            for group in groups:
+                if not isinstance(group, dict):
+                    continue
+                group_id = str(group.get("groupId") or group.get("id") or "")
+                group_context = dict(provider_context)
+                group_context.update({
+                    "scmResourceGroup": group_id,
+                    "resourceGroup": group_id,
+                    "groupId": group_id,
+                })
+                group_state = str(group.get("contextValue") or "")
+                if group_state:
+                    group_context["scmResourceGroupState"] = group_state
+                    group_context["resourceGroupState"] = group_state
+                    group_context["groupContextValue"] = group_state
+                    group_context["contextValue"] = group_state
+                group_actions = self.list_scm_resource_group_actions(
+                    group_context)
+                group["actions"] = group_actions.get("actions", [])
+                group["context"] = group_actions.get("context", group_context)
+                states = group.get("resourceStates")
+                if not isinstance(states, list):
+                    states = []
+                normalized_states: List[Dict[str, Any]] = []
+                for index, state in enumerate(states):
+                    if not isinstance(state, dict):
+                        continue
+                    resource_uri = str(state.get("resourceUri")
+                                       or state.get("uri") or "")
+                    state_context = dict(group_context)
+                    state_context.update({
+                        "resourceUri": resource_uri,
+                        "resource": resource_uri,
+                        "uri": resource_uri,
+                    })
+                    resource_state = str(state.get("contextValue") or "")
+                    if resource_state:
+                        state_context["scmResourceState"] = resource_state
+                        state_context["resourceState"] = resource_state
+                        state_context["resourceContextValue"] = resource_state
+                        state_context["contextValue"] = resource_state
+                    state_actions = self.list_scm_resource_state_actions(
+                        state_context)
+                    state["label"] = self._scm_resource_label(state, index)
+                    state["actions"] = state_actions.get("actions", [])
+                    state["context"] = state_actions.get(
+                        "context", state_context)
+                    normalized_states.append(state)
+                group["resourceStates"] = normalized_states
+                if (not group.get("hideWhenEmpty")
+                        or normalized_states):
+                    normalized_groups.append(group)
+            provider_item["groups"] = normalized_groups
+            result.append(provider_item)
+        return {
+            "providers": result,
+            "providerCount": len(result),
+            "context": self._extension_scm_menu_context({}),
+        }
+
     # ── Extension marketplace API ──
 
     def search_extensions(self, query: str = "ai chat model", page: int = 1) -> Dict:

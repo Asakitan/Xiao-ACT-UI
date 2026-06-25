@@ -4013,6 +4013,55 @@ class NodeExtensionHost:
     def terminal_shell_executions(self) -> List[Dict[str, Any]]:
         return [dict(item) for item in self._terminal_shell_executions]
 
+    def node_scm_provider_snapshots(self) -> List[Dict[str, Any]]:
+        with self._node_scm_lock:
+            providers = json.loads(json.dumps(
+                list(self._node_scm_providers.values()),
+                ensure_ascii=False, default=str))
+        result: List[Dict[str, Any]] = []
+        for provider in providers:
+            if not isinstance(provider, dict):
+                continue
+            groups = provider.get("groups")
+            group_items: List[Dict[str, Any]] = []
+            if isinstance(groups, dict):
+                for group in groups.values():
+                    if not isinstance(group, dict):
+                        continue
+                    states = group.get("resourceStates")
+                    group_items.append({
+                        "id": str(group.get("id")
+                                  or group.get("groupId") or ""),
+                        "groupId": str(group.get("groupId")
+                                       or group.get("id") or ""),
+                        "label": str(group.get("label")
+                                     or group.get("groupId")
+                                     or group.get("id") or ""),
+                        "contextValue": str(
+                            group.get("contextValue") or ""),
+                        "hideWhenEmpty": bool(
+                            group.get("hideWhenEmpty", False)),
+                        "resourceStates": (
+                            list(states) if isinstance(states, list) else []),
+                    })
+            result.append({
+                "id": str(provider.get("id")
+                          or provider.get("providerId") or ""),
+                "providerId": str(provider.get("providerId")
+                                  or provider.get("id") or ""),
+                "label": str(provider.get("label")
+                             or provider.get("providerId")
+                             or provider.get("id") or ""),
+                "rootUri": str(provider.get("rootUri") or ""),
+                "contextValue": str(provider.get("contextValue") or ""),
+                "count": int(provider.get("count") or 0),
+                "runtimeKind": "node",
+                "inputBox": provider.get("inputBox") if isinstance(
+                    provider.get("inputBox"), dict) else {},
+                "groups": group_items,
+            })
+        return result
+
     def node_scm_context_snapshot(
             self,
             selector: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

@@ -1378,6 +1378,7 @@ pre.code-block { overflow:visible; }
   <!-- Activity bar -->
   <div class="activity-bar">
     <div class="ab-icon" data-panel="explorer" data-i18n-title="explorer" title="Explorer"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M2.75 5.25A1.75 1.75 0 014.5 3.5h3.2l1.5 1.5h6.3a1.75 1.75 0 011.75 1.75v7.75A1.75 1.75 0 0115.5 16.25h-11A1.75 1.75 0 012.75 14.5v-9.25z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></div>
+    <div class="ab-icon" data-panel="scm" title="Source Control"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="6" cy="5" r="2" stroke="currentColor" stroke-width="1.5"/><circle cx="14" cy="15" r="2" stroke="currentColor" stroke-width="1.5"/><circle cx="6" cy="15" r="2" stroke="currentColor" stroke-width="1.5"/><path d="M6 7v6M8 5h2.5A3.5 3.5 0 0114 8.5V13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
     <div class="ab-icon active" data-panel="chat" data-i18n-title="chat" title="Assistant"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 4h12a2 2 0 012 2v7a2 2 0 01-2 2H8l-4 3v-3a2 2 0 01-2-2V6a2 2 0 012-2z" stroke="currentColor" stroke-width="1.5"/></svg></div>
     <div class="ab-icon" data-panel="tools" data-i18n-title="tools" title="Tools"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M11.5 2.5l2.5 2.5-7 7-3.5.5.5-3.5 7-7z" stroke="currentColor" stroke-width="1.5"/><path d="M14 8l3-3" stroke="currentColor" stroke-width="1.5"/></svg></div>
     <div class="ab-icon" data-panel="extensions" data-i18n-title="extensions" title="Extensions"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="8" y="3" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="8" y="12" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="13" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/></svg></div>
@@ -1403,6 +1404,15 @@ pre.code-block { overflow:visible; }
           <div class="sb-group">Extension Views</div>
           <div id="explorer-extension-views"></div>
         </div>
+      </div>
+    </div>
+    <!-- Source Control sidebar (dynamic SCM providers) -->
+    <div class="sb-view" id="sb-scm" style="display:none">
+      <div class="sb-header"><span>Source Control</span> <span class="spacer"></span>
+        <span class="sb-action" onclick="refreshScmSidebar(true)" data-i18n-title="refresh" title="Refresh">↻</span>
+      </div>
+      <div class="sb-section" id="scm-list">
+        <div class="tree-note">No source control providers registered.</div>
       </div>
     </div>
     <!-- Assistant sidebar (default) -->
@@ -9008,6 +9018,151 @@ function reportActiveExtensionActivityVisibility(visible){
   if(typeof _activeSidebarPanel==='undefined')return;
   reportExtensionActivityVisibilityForPanel(_activeSidebarPanel,visible);
 }
+let _scmLoaded=false;
+function scmActionLabel(action){
+  return String((action&&action.shortTitle)||(action&&action.title)||(action&&action.command)||'Action');
+}
+function scmActionGlyph(action){
+  const icon=String((action&&action.icon)||'');
+  if(icon.startsWith('$(')&&icon.endsWith(')'))return extensionTreeThemeIconGlyph(icon.slice(2,-1));
+  if(icon)return iconText(icon)||icon;
+  return '›';
+}
+function runScmAction(action){
+  if(!action||!action.command||action.disabled)return;
+  call('execute_command',action.command,...(Array.isArray(action.arguments)?action.arguments:[]))
+    .then(()=>refreshScmSidebar(true));
+}
+function runScmResourceCommand(state){
+  const command=state&&state.command;
+  if(!command)return;
+  if(typeof command==='string'){call('execute_command',command).then(()=>refreshScmSidebar(true));return}
+  if(typeof command==='object'&&command.command){
+    call('execute_command',command.command,...(Array.isArray(command.arguments)?command.arguments:[]))
+      .then(()=>refreshScmSidebar(true));
+  }
+}
+function appendScmActionButtons(parent,actions){
+  const rows=Array.isArray(actions)?actions.filter(a=>a&&a.command):[];
+  if(!rows.length)return;
+  const bar=document.createElement('div');
+  bar.style.cssText='display:flex;align-items:center;gap:4px;flex-wrap:wrap';
+  rows.slice(0,3).forEach(action=>{
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.className='icon-btn';
+    btn.textContent=scmActionGlyph(action);
+    btn.title=scmActionLabel(action);
+    btn.disabled=!!action.disabled;
+    btn.style.cssText='width:20px;height:20px;font-size:10px;padding:0';
+    btn.onclick=e=>{e.stopPropagation();runScmAction(action)};
+    bar.appendChild(btn);
+  });
+  if(rows.length>3){
+    const more=document.createElement('button');
+    more.type='button';
+    more.className='icon-btn';
+    more.textContent='...';
+    more.title='More Actions';
+    more.style.cssText='width:24px;height:20px;font-size:10px;padding:0';
+    more.onclick=e=>{
+      e.stopPropagation();
+      showExtensionActionMenu(e.clientX,e.clientY,rows.slice(3),runScmAction);
+    };
+    bar.appendChild(more);
+  }
+  parent.appendChild(bar);
+}
+function renderScmResource(parent,provider,group,state,index){
+  const row=document.createElement('div');
+  row.className='sb-item';
+  row.dataset.scmProvider=String(provider.providerId||provider.id||'');
+  row.dataset.scmGroup=String(group.groupId||group.id||'');
+  row.dataset.resourceUri=String(state.resourceUri||'');
+  row.style.cssText='display:flex;align-items:center;gap:6px;padding-left:24px';
+  if(state.command)row.onclick=()=>runScmResourceCommand(state);
+  const name=document.createElement('div');
+  name.style.cssText='flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  name.textContent=String(state.label||state.resourceUri||('resource-'+(index+1)));
+  name.title=String(state.resourceUri||state.label||'');
+  row.appendChild(name);
+  appendScmActionButtons(row,state.actions);
+  parent.appendChild(row);
+}
+function renderScmGroup(parent,provider,group){
+  const header=document.createElement('div');
+  header.className='sb-group';
+  header.dataset.scmGroup=String(group.groupId||group.id||'');
+  header.style.cssText='display:flex;align-items:center;gap:6px';
+  const title=document.createElement('span');
+  title.style.cssText='flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  const states=Array.isArray(group.resourceStates)?group.resourceStates:[];
+  title.textContent=String(group.label||group.groupId||group.id||'Changes')+(states.length?' '+states.length:'');
+  header.appendChild(title);
+  appendScmActionButtons(header,group.actions);
+  parent.appendChild(header);
+  if(!states.length){
+    const empty=document.createElement('div');
+    empty.className='tree-note';
+    empty.style.paddingLeft='24px';
+    empty.textContent='No changes';
+    parent.appendChild(empty);
+    return;
+  }
+  states.forEach((state,index)=>renderScmResource(parent,provider,group,state,index));
+}
+function renderScmProvider(parent,provider){
+  const providerHeader=document.createElement('div');
+  providerHeader.className='sb-group';
+  providerHeader.dataset.scmProvider=String(provider.providerId||provider.id||'');
+  providerHeader.style.cssText='display:flex;align-items:center;gap:6px';
+  const title=document.createElement('span');
+  title.style.cssText='flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  const count=Number(provider.count||0);
+  title.textContent=String(provider.label||provider.providerId||provider.id||'Source Control')+(count?' '+count:'');
+  title.title=String(provider.rootUri||provider.providerId||provider.id||'');
+  providerHeader.appendChild(title);
+  appendScmActionButtons(providerHeader,provider.titleActions);
+  parent.appendChild(providerHeader);
+  const input=provider.inputBox&&typeof provider.inputBox==='object'?provider.inputBox:null;
+  if(input&&input.visible!==false){
+    const box=document.createElement('input');
+    box.value=String(input.value||'');
+    box.placeholder=String(input.placeholder||'Message');
+    box.disabled=input.enabled===false;
+    box.style.cssText='width:calc(100% - 24px);margin:4px 12px 8px 12px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:4px 7px;font:12px var(--mono);box-sizing:border-box';
+    parent.appendChild(box);
+  }
+  const groups=Array.isArray(provider.groups)?provider.groups:[];
+  if(!groups.length){
+    const empty=document.createElement('div');
+    empty.className='tree-note';
+    empty.textContent='No source control groups.';
+    parent.appendChild(empty);
+    return;
+  }
+  groups.forEach(group=>renderScmGroup(parent,provider,group));
+}
+async function refreshScmSidebar(force){
+  if(_scmLoaded&&!force)return;
+  const list=$('scm-list');
+  if(!list)return;
+  list.innerHTML='<div class="tree-note">Loading source control...</div>';
+  let r=null;
+  try{r=await call('list_scm_providers')}catch(e){r=null}
+  const providers=r&&Array.isArray(r.providers)?r.providers:[];
+  list.innerHTML='';
+  if(!providers.length){
+    const empty=document.createElement('div');
+    empty.className='tree-note';
+    empty.textContent='No source control providers registered.';
+    list.appendChild(empty);
+    _scmLoaded=true;
+    return;
+  }
+  providers.forEach(provider=>renderScmProvider(list,provider));
+  _scmLoaded=true;
+}
 function switchSidebar(panel){
   if(typeof _activeSidebarPanel!=='undefined')_activeSidebarPanel=panel;
   document.querySelectorAll('.ab-icon').forEach(i=>{i.classList.toggle('active',i.dataset.panel===panel)});
@@ -9022,6 +9177,7 @@ function switchSidebar(panel){
   if(panel==='tools'&&!$('tools-list').children.length){
     call('list_tools').then(t=>renderToolsSidebar(t&&t.tools?t.tools:[]));
   }
+  if(panel==='scm')refreshScmSidebar(true);
   if(panel==='instructions')refreshInstructions();
   if(panel==='agents')refreshAgents();
   if(panel==='premium')loadPremiumGuide();
@@ -15492,6 +15648,7 @@ const COMMANDS=[
   {label:'Upload Image',shortcut:'',action:()=>uploadImage()},
   {label:'System Info',shortcut:'',action:()=>execSlash('/system')},
   {label:'Explorer',shortcut:'',action:()=>switchSidebar('explorer')},
+  {label:'Source Control',shortcut:'',action:()=>switchSidebar('scm')},
   {label:'Extensions',shortcut:'',action:()=>switchSidebar('extensions')},
   {label:'Chat History',shortcut:'',action:()=>openChatHistory()},
   {label:'Custom Instructions',shortcut:'',action:()=>switchSidebar('instructions')},
@@ -15722,6 +15879,7 @@ function commandPaletteFilteredCommands(query,history){
 function commandPaletteQuickAccessViews(){
   return [
     {id:'view.explorer',label:'Explorer',container:'Side Bar',description:'Open the workspace explorer.',action:()=>switchSidebar('explorer')},
+    {id:'view.scm',label:'Source Control',container:'Side Bar',description:'Open registered source control providers.',action:()=>switchSidebar('scm')},
     {id:'view.extensions',label:'Extensions',container:'Side Bar',description:'Open installed and marketplace extensions.',action:()=>switchSidebar('extensions')},
     {id:'view.tools',label:'Tools',container:'Side Bar',description:'Open available tools and MCP entries.',action:()=>switchSidebar('tools')},
     {id:'view.chatHistory',label:'Chat History',container:'Side Bar',description:'Open saved AI chat history.',action:()=>openChatHistory()},
