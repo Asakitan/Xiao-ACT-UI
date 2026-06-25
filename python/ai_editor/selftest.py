@@ -5714,7 +5714,9 @@ console.log("extension setting schema helpers ok");
            and "function quickInputResourceUriPath(resource)" in html
            and "function quickInputResourceBasename(value)" in html
            and "function quickInputMoveActive(state,delta)" in html
+           and "function quickInputAccept(state)" in html
            and "function quickInputButtonHandle(button,index)" in html
+           and "function quickInputItemIsSeparator(item)" in html
            and "function quickInputItemMatchesFilter(item,state)" in html
            and "function quickInputFilterText(state)" in html
            and "quickInputSelectableIndices(state)" in html
@@ -5730,6 +5732,11 @@ console.log("extension setting schema helpers ok");
            and "buttonHandle:quickInputButtonHandle(button,index)" in html
            and "input.setAttribute('aria-invalid'" in html
            and "validation.classList.toggle('warning'" in html
+           and "item.alwaysShow" in html
+           and "payload.itemIndex=active" in html
+           and "e.key==='Home'" in html
+           and "e.key==='End'" in html
+           and "aria-disabled" in html
            and "e.key==='ArrowDown'" in html
            and "e.key==='ArrowUp'" in html
            and "aria-activedescendant" in html
@@ -5755,19 +5762,27 @@ console.log("extension setting schema helpers ok");
             "quickInputItemKey",
             "quickInputSelectedKeySet",
             "quickInputFilterText",
+            "quickInputItemIsSeparator",
             "quickInputItemMatchesFilter",
             "quickInputButtonHandle",
             "quickInputSelectedIndices",
             "quickInputSelectableIndices",
             "quickInputOrderedEntries",
             "quickInputActiveIndex",
+            "quickInputMoveActive",
+            "quickInputAccept",
         ]
         quick_input_js = "\n".join(
             _extract_js_function(html, name)
             for name in quick_input_functions)
         js = quick_input_js + r"""
+const quickInputActions = [];
+function quickInputAction(id, action, payload) { quickInputActions.push({ id, action, payload }); }
+function renderQuickInputState(_state) {}
 function assert(ok,label){ if(!ok){ throw new Error(label); } }
 const state = {
+  id: "probe",
+  kind: "quickPick",
   value: "beta",
   matchOnDescription: false,
   matchOnDetail: false,
@@ -5811,6 +5826,24 @@ assert(JSON.stringify(quickInputSelectableIndices(state)) === "[2,3]",
 state.value = "";
 assert(JSON.stringify(quickInputSelectableIndices(state)) === "[1,2,3]",
        "empty filter shows all non-separator items");
+state.items.push({ label: "Pinned", alwaysShow: true });
+state.value = "missing";
+assert(JSON.stringify(quickInputSelectableIndices(state)) === "[4]",
+       "alwaysShow item survives filtering");
+state.value = "";
+state.activeItems = [];
+state.selectedItems = [];
+assert(quickInputActiveIndex(state) === 1,
+       "no active or selected item falls back to first selectable");
+quickInputMoveActive(state, Infinity);
+assert(state.activeItems[0].label === "Pinned",
+       "End key path moves to last selectable item");
+quickInputMoveActive(state, -Infinity);
+assert(state.activeItems[0].label === "Alpha",
+       "Home key path moves to first selectable item");
+quickInputAccept(state);
+assert(quickInputActions.some(item => item.action === "accept" && item.payload.itemIndex === 1),
+       "accept sends active item index to host");
 assert(quickInputButtonHandle({ tooltip: "Back" }, 4) === -1,
        "Back button gets VS Code handle");
 assert(quickInputButtonHandle({ handle: 7, tooltip: "Custom" }, 4) === 7,
@@ -6143,6 +6176,9 @@ console.log("quick input filter helpers ok");
            and "get sortByLabel()" in node_ext_host_source
            and "this._activeItems = this._filterPickableItems(value)"
            in node_ext_host_source
+           and "const picked = this._items.filter" in node_ext_host_source
+           and "this._selectedItems = this._canSelectMany ? picked : [picked[0]]"
+           in node_ext_host_source
            and "async function _windowShowQuickPick(itemsOrPromise, options = {}, token = undefined)"
            in node_ext_host_source
            and "const input = new QuickPickInput()" in node_ext_host_source
@@ -6158,6 +6194,7 @@ console.log("quick input filter helpers ok");
            in node_ext_host_source
            and "const enabled = input._enabled !== false"
            in node_ext_host_source
+           and "msg.itemIndex !== undefined" in node_ext_host_source
            and "case 'quick_input_action':" in node_ext_host_source
            and "input.value = String(msg.value ?? '')" in node_ext_host_source
            and "input._triggerButton(button, msg.checked)" in node_ext_host_source
@@ -13581,6 +13618,15 @@ async function activate(context) {
     validationInput.validationMessage = undefined;
     const clearedValidationSnapshot = validationInput._snapshot();
     validationInput.dispose();
+    const pickedQuickPick = vscode.window.createQuickPick();
+    pickedQuickPick.canSelectMany = true;
+    pickedQuickPick.items = [
+      { label: 'plain-row' },
+      { label: 'picked-row', picked: true },
+      { label: 'second-picked-row', picked: true },
+    ];
+    const pickedSnapshot = pickedQuickPick._snapshot();
+    pickedQuickPick.dispose();
     return {
       stringPick,
       objectPick: objectPick && objectPick.label,
@@ -13634,6 +13680,8 @@ async function activate(context) {
         infoValidationSeverity: infoValidationSnapshot.severity,
         clearedValidationMessage: clearedValidationSnapshot.validationMessage,
         clearedValidationSeverity: clearedValidationSnapshot.severity,
+        pickedActiveLabels: pickedSnapshot.activeItems.map(item => item.label),
+        pickedSelectedLabels: pickedSnapshot.selectedItems.map(item => item.label),
       },
     };
   });
@@ -17889,6 +17937,11 @@ module.exports = { activate, deactivate };
                            "clearedValidationMessage") is None
                        and node_quick_pick_parity.get(
                            "clearedValidationSeverity") == 0
+                       and node_quick_pick_parity.get(
+                           "pickedActiveLabels") == ["picked-row"]
+                       and node_quick_pick_parity.get(
+                           "pickedSelectedLabels")
+                       == ["picked-row", "second-picked-row"]
                        and any(
                            item.get("event") == "show"
                            and item.get("kind") == "quickPick"

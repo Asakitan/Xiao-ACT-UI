@@ -6189,6 +6189,14 @@ class QuickPickInput extends QuickInputBase {
         this._items = Array.isArray(value) ? Array.from(value) : [];
         this._activeItems = this._filterPickableItems(this._activeItems);
         this._selectedItems = this._filterPickableItems(this._selectedItems);
+        const picked = this._items.filter(item => _quickPickItemIsPickable(item) && item.picked);
+        if (!this._selectedItems.length && picked.length) {
+            this._selectedItems = this._canSelectMany ? picked : [picked[0]];
+        }
+        if (!this._activeItems.length) {
+            const first = picked[0] || this._items.find(_quickPickItemIsPickable);
+            this._activeItems = first ? [first] : [];
+        }
         this._send('update', { changed: 'items' });
     }
     get canSelectMany() { this._assertAlive(); return this._canSelectMany; }
@@ -6473,6 +6481,13 @@ function handleQuickInputAction(msg) {
             }
         } else if (action === 'accept' && typeof input._accept === 'function') {
             if (!enabled) return;
+            if (input instanceof QuickPickInput && msg.itemIndex !== undefined) {
+                const item = _quickInputItemForIndex(input, msg.itemIndex);
+                if (_quickPickItemIsPickable(item)) {
+                    input._setActiveItemsFromHost([item]);
+                    if (!input._canSelectMany) input._setSelectedItemsFromHost([item]);
+                }
+            }
             input._accept();
         } else if (action === 'hide') {
             input.hide();

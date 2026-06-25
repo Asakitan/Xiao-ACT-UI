@@ -2525,10 +2525,12 @@ function quickInputSelectedKeySet(items){
   const set=new Set();(Array.isArray(items)?items:[]).forEach(item=>set.add(quickInputItemKey(item)));return set;
 }
 function quickInputFilterText(state){return String(state&&state.value||'').trim().toLowerCase()}
+function quickInputItemIsSeparator(item){return !!(item&&typeof item==='object'&&Number(item.kind)===1)}
 function quickInputItemMatchesFilter(item,state){
   const query=quickInputFilterText(state);
   if(!query)return true;
-  if(item&&typeof item==='object'&&Number(item.kind)===1)return false;
+  if(quickInputItemIsSeparator(item))return false;
+  if(item&&typeof item==='object'&&item.alwaysShow)return true;
   const display=quickInputDisplayItem(item);
   const fields=[display.label];
   if(state&&state.matchOnDescription)fields.push(display.description);
@@ -2543,8 +2545,7 @@ function quickInputSelectedIndices(state){
 }
 function quickInputSelectableIndices(state){
   return quickInputOrderedEntries(state)
-    .map(entry=>((entry.item&&typeof entry.item==='object'&&Number(entry.item.kind)===1)
-      ||!quickInputItemMatchesFilter(entry.item,state))?-1:entry.index)
+    .map(entry=>(quickInputItemIsSeparator(entry.item)||!quickInputItemMatchesFilter(entry.item,state))?-1:entry.index)
     .filter(index=>index>=0);
 }
 function quickInputOrderedEntries(state){
@@ -2575,7 +2576,9 @@ function quickInputActiveIndex(state){
   const active=items.findIndex(item=>keys.has(quickInputItemKey(item)));
   if(active>=0&&selectable.has(active))return active;
   const selected=quickInputSelectedIndices(state).filter(index=>selectable.has(index));
-  return selected.length?selected[0]:-1;
+  if(selected.length)return selected[0];
+  const first=quickInputSelectableIndices(state)[0];
+  return first===undefined?-1:first;
 }
 function quickInputDomId(id,suffix){return 'quick-input-'+suffix+'-'+String(id||'').replace(/[^a-zA-Z0-9_-]/g,'-')}
 function quickInputAriaLabel(state){return String(state.ariaLabel||state.placeholder||state.title||'Quick input')}
@@ -2596,13 +2599,25 @@ function quickInputMoveActive(state,delta){
   const items=Array.isArray(state.items)?state.items:[];
   const current=quickInputActiveIndex(state);
   const currentPos=choices.indexOf(current);
-  let nextPos=currentPos>=0?currentPos+delta:(delta>=0?0:choices.length-1);
+  let nextPos;
+  if(delta===Infinity)nextPos=choices.length-1;
+  else if(delta===-Infinity)nextPos=0;
+  else nextPos=currentPos>=0?currentPos+delta:(delta>=0?0:choices.length-1);
   if(nextPos<0)nextPos=choices.length-1;
   if(nextPos>=choices.length)nextPos=0;
   const next=choices[nextPos];
   state.activeItems=[items[next]];
   quickInputAction(state.id,'changeActive',{itemIndices:[next]});
   renderQuickInputState(state);
+}
+function quickInputAccept(state){
+  if(!state||state.enabled===false)return;
+  const payload={};
+  if(state.kind==='quickPick'){
+    const active=quickInputActiveIndex(state);
+    if(active>=0)payload.itemIndex=active;
+  }
+  quickInputAction(state.id,'accept',payload);
 }
 function quickInputAction(id,action,payload){
   if(!id||!action)return;
@@ -2653,7 +2668,7 @@ function quickInputRenderItems(list,state,input){
   }
   quickInputOrderedEntries(state).forEach(entry=>{
     const item=entry.item,index=entry.index;
-    if(item&&typeof item==='object'&&Number(item.kind)===1){
+    if(quickInputItemIsSeparator(item)){
       if(hasFilter)pendingSeparator=item;else appendSeparator(item);
       return;
     }
@@ -2667,6 +2682,7 @@ function quickInputRenderItems(list,state,input){
     if(selected.has(key))row.classList.add('selected');
     if(state.enabled===false)row.classList.add('disabled');
     row.setAttribute('aria-selected',selected.has(key)?'true':'false');
+    row.setAttribute('aria-disabled',state.enabled===false?'true':'false');
     const main=document.createElement('div');main.className='quick-input-item-main';
     const title=document.createElement('div');title.className='quick-input-item-title';
     const mark=document.createElement('span');mark.className='quick-input-item-picked';mark.textContent=selected.has(key)?'✓':'';
@@ -2696,10 +2712,10 @@ function quickInputRenderItems(list,state,input){
       quickInputAction(state.id,'changeSelection',{itemIndices:nextSelected});
       if(input)input.focus();
     };
-    row.ondblclick=()=>{if(state.enabled!==false)quickInputAction(state.id,'accept',{})};
+    row.ondblclick=()=>{quickInputAccept({...state,activeItems:[item]})};
     row.onkeydown=e=>{
       if(state.enabled===false)return;
-      if(e.key==='Enter'){e.preventDefault();quickInputAction(state.id,'accept',{})}
+      if(e.key==='Enter'){e.preventDefault();quickInputAccept({...state,activeItems:[item]})}
       else if(e.key===' '){e.preventDefault();row.click()}
     };
     row.appendChild(main);row.appendChild(btns);list.appendChild(row);
@@ -2732,6 +2748,7 @@ function renderQuickInputState(state){
   el.setAttribute('role','dialog');
   el.setAttribute('aria-label',quickInputAriaLabel(state));
   el.setAttribute('aria-busy',state.busy?'true':'false');
+  el.setAttribute('aria-disabled',state.enabled===false?'true':'false');
   el.querySelector('.quick-input-title').textContent=state.title||'';
   const stepText=state.step&&state.totalSteps?String(state.step)+'/'+String(state.totalSteps):'';
   el.querySelector('.quick-input-step').textContent=stepText;
@@ -2774,7 +2791,9 @@ function renderQuickInputState(state){
       if(state.enabled===false&&e.key!=='Escape')return;
       if(state.kind==='quickPick'&&e.key==='ArrowDown'){e.preventDefault();quickInputMoveActive(state,1)}
       else if(state.kind==='quickPick'&&e.key==='ArrowUp'){e.preventDefault();quickInputMoveActive(state,-1)}
-      else if(e.key==='Enter'){e.preventDefault();quickInputAction(state.id,'accept',{})}
+      else if(state.kind==='quickPick'&&e.key==='Home'){e.preventDefault();quickInputMoveActive(state,-Infinity)}
+      else if(state.kind==='quickPick'&&e.key==='End'){e.preventDefault();quickInputMoveActive(state,Infinity)}
+      else if(e.key==='Enter'){e.preventDefault();quickInputAccept(state)}
       else if(e.key==='Escape'){e.preventDefault();quickInputAction(state.id,'hide',{})}
     };
   }
@@ -2795,6 +2814,7 @@ function renderQuickInputState(state){
     list.setAttribute('aria-label',quickInputAriaLabel(state));
     list.setAttribute('aria-multiselectable',state.canSelectMany?'true':'false');
     list.setAttribute('aria-busy',state.busy?'true':'false');
+    list.setAttribute('aria-disabled',state.enabled===false?'true':'false');
     list.style.display=state.kind==='quickPick'?'':'none';
     if(state.kind==='quickPick'){
       quickInputRenderItems(list,state,input);
