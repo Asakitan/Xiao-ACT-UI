@@ -3341,6 +3341,22 @@ def test_phase1_ai_editor_regressions() -> None:
            and "modifiedContent:options.modifiedContent||rec.modifiedContent" in html
            and "chatReferenceHasDiff(change)?'Open diff '" in html
            and "btn.classList.add('has-diff')" in html)
+    _check("frontend Assistant renders VS Code-style file tree response parts",
+           "chat-file-tree" in html
+           and "function normalizeChatFileTrees(payload)" in html
+           and "function normalizeChatFileTreeNode(node,base,depth,count)" in html
+           and "function chatFileTreeBasePath(part)" in html
+           and "function chatJoinFileTreePath(base,name)" in html
+           and "payload&&payload.fileTrees" in html
+           and "payload&&payload.file_trees" in html
+           and "kind==='fileTree'" in html
+           and "Array.isArray(part&&part.value)" in html
+           and "part.baseUri||part.base_uri||part.base" in html
+           and "count.value>=120" in html
+           and "role','tree'" in html
+           and "role','treeitem'" in html
+           and "openChatFileTreePath(node.path)" in html
+           and "renderChatFileTrees(wrap,fileTrees)" in html)
     _check("frontend Assistant exposes dynamic context picker",
            'class="chat-context-picker" id="chat-context-picker" role="dialog" aria-label="Attach context"' in html
            and 'id="chat-context-picker-input" aria-label="Search context"' in html

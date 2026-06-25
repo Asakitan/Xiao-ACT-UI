@@ -798,6 +798,16 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-change-card.has-diff .change-kind { color:var(--fg-accent); }
 .chat-change-set { margin-top:7px; display:flex; flex-direction:column; gap:5px; }
 .chat-change-card { justify-content:flex-start; width:fit-content; }
+.chat-file-tree { border:1px solid var(--border); border-radius:6px; background:var(--bg3);
+  padding:5px 6px; display:flex; flex-direction:column; gap:2px; max-width:100%; }
+.chat-file-tree-title { color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; padding:1px 2px 3px; }
+.chat-file-tree-row { min-height:20px; display:flex; align-items:center; gap:5px; border:0; background:transparent;
+  color:var(--fg); text-align:left; font:11px var(--sans); border-radius:4px; padding:1px 5px; max-width:100%; }
+.chat-file-tree-row.openable { cursor:pointer; }
+.chat-file-tree-row.openable:hover,.chat-file-tree-row.openable:focus { background:var(--bg-hover); outline:none; }
+.chat-file-tree-row .tree-icon { color:var(--fg-accent); width:14px; flex:0 0 14px; text-align:center; }
+.chat-file-tree-row .tree-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chat-file-tree-empty { color:var(--fg-dim); font-size:11px; padding:4px 6px; }
 .chat-used-context { display:flex; flex-direction:column; gap:4px; margin-bottom:2px; }
 .chat-used-context-title { color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; letter-spacing:.5px; }
 
@@ -3924,6 +3934,7 @@ function extractChatResponseReferences(text){
 }
 function chatResponsePartKind(part){
   const raw=String(part&&(part.kind||part.type||part.$type||part.name||part.responsePartKind||'')).toLowerCase();
+  if(raw.includes('filetree')||raw.includes('file_tree')||raw.includes('tree'))return 'fileTree';
   if(raw.includes('anchor'))return 'anchor';
   if(raw.includes('reference'))return 'reference';
   if(raw.includes('textedit')||raw.includes('text_edit')||raw.includes('edit'))return 'textEdit';
@@ -3986,8 +3997,51 @@ function normalizeChatResponseParts(payload){
     ...(Array.isArray(payload&&payload.response)?payload.response:[])];
   return parts.map(part=>{
     const kind=chatResponsePartKind(part);
-    if(!kind)return null;
+    if(!kind||kind==='fileTree')return null;
     return normalizeChatNativeReference(part,kind);
+  }).filter(Boolean);
+}
+function chatFileTreeBasePath(part){
+  return chatUriPath(part&&(part.baseUri||part.base_uri||part.base||part.uri||part.root))||'';
+}
+function chatJoinFileTreePath(base,name){
+  base=String(base||'').replace(/[\\/]+$/,'');
+  name=String(name||'').replace(/^[\\/]+/,'');
+  if(/^[A-Za-z][A-Za-z0-9+.-]*:/i.test(name)||/^[A-Za-z]:[\\/]/.test(name))return chatUriPath(name)||name;
+  if(!base)return name;
+  if(!name)return base;
+  return base+'/'+name;
+}
+function normalizeChatFileTreeNode(node,base,depth,count){
+  if(!node||count.value>=120)return null;
+  const rawName=String((typeof node==='string'?node:(node.name||node.label||node.path||node.uri||''))||'').trim();
+  if(!rawName)return null;
+  const rawChildren=typeof node==='object'?(node.children||node.items||node.files||[]):[];
+  const children=Array.isArray(rawChildren)?rawChildren:[];
+  const path=chatJoinFileTreePath(base,String((typeof node==='object'&&(node.path||node.uri))||rawName));
+  const name=String((typeof node==='object'&&(node.name||node.label))||pathBaseName(rawName)||rawName);
+  count.value++;
+  return {
+    name,path,depth:Math.min(depth,8),
+    directory:children.length>0||!!(node&&typeof node==='object'&&(node.isDirectory||node.directory||node.folder)),
+    children:depth>=8?[]:children.map(child=>normalizeChatFileTreeNode(child,path,depth+1,count)).filter(Boolean)
+  };
+}
+function normalizeChatFileTrees(payload){
+  const parts=[...(Array.isArray(payload&&payload.responseParts)?payload.responseParts:[]),
+    ...(Array.isArray(payload&&payload.response_parts)?payload.response_parts:[]),
+    ...(Array.isArray(payload&&payload.parts)?payload.parts:[]),
+    ...(Array.isArray(payload&&payload.response)?payload.response:[]),
+    ...(Array.isArray(payload&&payload.fileTrees)?payload.fileTrees:[]),
+    ...(Array.isArray(payload&&payload.file_trees)?payload.file_trees:[])];
+  return parts.map(part=>{
+    const kind=chatResponsePartKind(part);
+    const value=Array.isArray(part&&part.value)?part.value:(Array.isArray(part&&part.tree)?part.tree:(Array.isArray(part)?part:[]));
+    if(kind!=='fileTree'&&!value.length)return null;
+    const base=chatFileTreeBasePath(part||{});
+    const count={value:0};
+    const nodes=value.map(node=>normalizeChatFileTreeNode(node,base,0,count)).filter(Boolean);
+    return nodes.length?{base,nodes,count:count.value}:null;
   }).filter(Boolean);
 }
 function extractChatChangedFiles(text){
@@ -4071,6 +4125,37 @@ async function openChatResponseReference(path,line){
     setStatus('Opened reference: '+path+chatReferenceLocationLabel(ref));
   }else setStatus('Opened reference: '+path);
 }
+async function openChatFileTreePath(path){
+  path=String(path||'').trim();
+  if(!path)return;
+  await openWorkspaceFile(path);
+}
+function renderChatFileTreeNodes(parent,nodes){
+  (nodes||[]).forEach(node=>{
+    const row=document.createElement(node.directory?'div':'button');
+    row.className='chat-file-tree-row'+(!node.directory?' openable':'');
+    row.style.paddingLeft=(5+node.depth*13)+'px';
+    row.setAttribute('role','treeitem');
+    row.setAttribute('aria-label',node.path||node.name);
+    if(node.directory)row.setAttribute('aria-expanded','true');
+    else{row.type='button';row.onclick=()=>openChatFileTreePath(node.path)}
+    row.innerHTML='<span class="tree-icon">'+(node.directory?'▾':'·')+'</span><span class="tree-name">'+esc(node.name)+'</span>';
+    parent.appendChild(row);
+    if(node.children&&node.children.length)renderChatFileTreeNodes(parent,node.children);
+  });
+}
+function renderChatFileTrees(wrap,fileTrees){
+  if(!fileTrees.length)return;
+  fileTrees.forEach(tree=>{
+    const box=document.createElement('div');box.className='chat-file-tree';box.setAttribute('role','tree');box.setAttribute('aria-label','Assistant file tree');
+    const title=document.createElement('div');title.className='chat-file-tree-title';
+    title.textContent='File tree'+(tree.base?' · '+tree.base:'')+(tree.count>=120?' · truncated':'');
+    box.appendChild(title);
+    if(tree.nodes.length)renderChatFileTreeNodes(box,tree.nodes);
+    else{const empty=document.createElement('div');empty.className='chat-file-tree-empty';empty.textContent='No files';box.appendChild(empty)}
+    wrap.appendChild(box);
+  });
+}
 function dedupeChatReferences(refs){
   const seen=new Set(),out=[];
   (refs||[]).forEach(ref=>{
@@ -4085,8 +4170,9 @@ function renderChatResponseReferences(body,content,payload){
   payload=payload||{};
   const usedRefs=normalizeChatUsedContext(payload);
   const refs=dedupeChatReferences([...usedRefs,...normalizeChatContentReferences(payload),...extractChatResponseReferences(content)]);
+  const fileTrees=normalizeChatFileTrees(payload);
   const changes=[...extractChatChangedFiles(content),...refs.filter(r=>chatReferenceHasDiff(r)||r.isDeletion).map(r=>({...r,kind:r.isDeletion?'deleted':(r.kind==='textEdit'?'textEdit':'modified'),path:r.path,diffMeta:r.diffMeta}))];
-  if(!body||(!refs.length&&!changes.length))return;
+  if(!body||(!refs.length&&!changes.length&&!fileTrees.length))return;
   const wrap=document.createElement('div');wrap.className='chat-response-references';wrap.setAttribute('aria-label','Response references');
   if(usedRefs.length){
     const used=document.createElement('div');used.className='chat-used-context';
@@ -4122,6 +4208,7 @@ function renderChatResponseReferences(body,content,payload){
     });
     wrap.appendChild(set);
   }
+  renderChatFileTrees(wrap,fileTrees);
   body.appendChild(wrap);
 }
 window.removeChatContextAttachment=removeChatContextAttachment;
