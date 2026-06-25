@@ -234,10 +234,28 @@ def _failed_check_point_lines(
     ]
 
 
+def _final_failed_check_point_lines(
+    failures: list[tuple[str, str]] | None = None,
+) -> list[str]:
+    failure_items = _FAILURES if failures is None else failures
+    if not failure_items:
+        return _failed_check_point_lines(failure_items)
+
+    lines: list[str] = []
+    for index, (label, detail) in enumerate(failure_items, 1):
+        lines.append(f"  {index}. {label}: {_failure_point_reason(detail)}")
+        detail_lines = _failure_detail_tail(detail)
+        if not detail_lines:
+            continue
+        lines.append("     detail:")
+        lines.extend(f"       {line}" for line in detail_lines)
+    return lines
+
+
 def _print_final_failed_check_points() -> None:
     print(f"{'=' * 50}")
     print(_FINAL_FAILURE_POINT_HEADING)
-    for line in _failed_check_point_lines():
+    for line in _final_failed_check_point_lines():
         print(line)
 
 
@@ -250,12 +268,6 @@ def _print_final_summary(total: int) -> None:
 
     print(f"{_PASS}/{total} passed, {_FAIL} FAILED ✗")
     print(f"{'=' * 50}")
-    print()
-    print("FAILED CHECK DETAILS:")
-    for index, (label, detail) in enumerate(_FAILURES, 1):
-        print(f"  {index}. {label}")
-        for line in _failure_detail_tail(detail):
-            print(f"     {line}")
     print()
     _print_final_failed_check_points()
 
@@ -408,16 +420,20 @@ def test_selftest_output() -> None:
         _FAILURES[:] = saved_failures
 
     output_lines = capture.getvalue().splitlines()
-    details_index = output_lines.index("FAILED CHECK DETAILS:")
     points_index = output_lines.index(_FINAL_FAILURE_POINT_HEADING)
-    _check("failure point list is after detailed failures",
-           points_index > details_index)
+    _check("failure details are not printed before final failure points",
+           "FAILED CHECK DETAILS:" not in output_lines)
     _check("failure point list is the final output block",
-           output_lines[-3:] == [
-               _FINAL_FAILURE_POINT_HEADING,
+           output_lines[points_index - 1] == ("=" * 50)
+           and output_lines[points_index + 1:] == [
                "  1. Imports / llm_engine: ImportError: missing module",
+               "     detail:",
+               "       ImportError: missing module",
+               "       trace tail",
                "  2. Bridge / command dispatch: no detail recorded",
            ])
+    _check("final failure point block includes detail tail",
+           "       trace tail" in output_lines[points_index + 1:])
 
 
 def test_imports() -> None:
