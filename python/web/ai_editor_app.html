@@ -15600,9 +15600,26 @@ function commandPaletteAllCommands(){
   });
   return COMMANDS.concat(dynamic);
 }
+function commandPaletteContext(){
+  const tab=(typeof activeEditorTab==='function'?activeEditorTab():((typeof tabs!=='undefined'&&Array.isArray(tabs))?tabs.find(t=>t.id===activeTab):null))||{};
+  const resource=String(tab.filePath||tab.workspacePath||tab.name||editorFileName||'');
+  const ctx=(typeof _editorResourceContextFromPath==='function')?_editorResourceContextFromPath(resource):{};
+  const lang=String((typeof editorLang!=='undefined'&&editorLang)||(tab&&tab.language)||'plaintext');
+  ctx.resource=ctx.resource||resource;
+  ctx.filePath=tab.filePath||'';
+  ctx.workspacePath=tab.workspacePath||'';
+  ctx.resourceLangId=lang;
+  ctx.languageId=lang;
+  ctx.activeEditorLanguage=lang;
+  ctx.editorTextFocus=!(typeof isExtensionCustomEditorTab==='function'&&isExtensionCustomEditorTab(tab))&&!(typeof isExtensionNotebookTab==='function'&&isExtensionNotebookTab(tab));
+  ctx.textInputFocus=true;
+  ctx.inQuickOpen=true;
+  if(!ctx.resourceScheme)ctx.resourceScheme=resource&&resource.indexOf('untitled:')===0?'untitled':'file';
+  return ctx;
+}
 async function refreshCommandPaletteDynamicCommands(){
   const requestId=++_cmdPaletteDynamicRefresh;
-  const result=await call('list_command_palette_commands');
+  const result=await call('list_command_palette_commands',commandPaletteContext());
   if(requestId!==_cmdPaletteDynamicRefresh)return;
   const builtinIds=commandPaletteBuiltinIdSet();
   const rawCommands=result&&Array.isArray(result.commands)?result.commands:[];

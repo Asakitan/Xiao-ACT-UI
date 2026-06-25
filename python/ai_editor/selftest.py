@@ -5830,8 +5830,9 @@ console.log("extension setting schema helpers ok");
            and "function commandPaletteRemember(command)" in html
            and "function commandPaletteNormalizeDynamicCommand(raw,builtinIds)" in html
            and "function commandPaletteAllCommands()" in html
+           and "function commandPaletteContext()" in html
            and "function refreshCommandPaletteDynamicCommands()" in html
-           and "call('list_command_palette_commands')" in html
+           and "call('list_command_palette_commands',commandPaletteContext())" in html
            and "call('execute_command',id" in html
            and "const enabled=raw.disabled?false:raw.enabled!==false" in html
            and "disabledReason:raw.disabledReason" in html
@@ -6011,6 +6012,7 @@ console.log("quick input filter helpers ok");
             "commandPaletteBuiltinIdSet",
             "commandPaletteNormalizeDynamicCommand",
             "commandPaletteAllCommands",
+            "commandPaletteContext",
             "commandPaletteRunQuickAccessProvider",
             "commandPaletteFuzzyMatch",
             "commandPaletteBestMatch",
@@ -6043,6 +6045,10 @@ let switchedSidebar = null;
 let openedSettings = false;
 let openedKeybindings = false;
 let statusText = "";
+let editorLang = "python";
+let editorFileName = "app.py";
+let activeTab = 4;
+let tabs = [{ id: 4, name: "app.py", filePath: "/tmp/app.py", workspacePath: "src/app.py", language: "python", runtimeMode: "text" }];
 function call(method, ...args){ executedCommands.push({ method, args }); return Promise.resolve({ ok: true }); }
 function setStatus(text){ statusText = text; }
 function closeCommandPalette(){ closedPaletteCount += 1; }
@@ -6053,8 +6059,30 @@ function switchSidebar(panel){ switchedSidebar = panel; }
 function openChatHistory(){ switchedSidebar = "history"; }
 function openSettings(){ openedSettings = true; }
 function openKeybindings(){ openedKeybindings = true; }
+function activeEditorTab(){ return tabs.find(tab => tab.id === activeTab) || {}; }
+function isExtensionCustomEditorTab(tab){ return tab && tab.runtimeMode === "extension-custom-editor"; }
+function isExtensionNotebookTab(tab){ return tab && tab.runtimeMode === "extension-notebook"; }
+function _editorResourceContextFromPath(value){
+  const text=String(value||"");
+  const filename=(text.replace(/\\/g,"/").split("/").pop()||"");
+  const match=filename.match(/(\.[^.\/\\]+)$/);
+  return { resource:text, resourceUri:text, resourceFilename:filename, resourceExtname:match?match[1]:"", resourceScheme:text.indexOf("untitled:")===0?"untitled":"file" };
+}
 assert(commandPaletteNormalizeQuery("> rename") === "rename", "command prefix is stripped");
 assert(commandPaletteNormalizeQuery("  >Preferences ") === "Preferences", "prefix trim matches VS Code entry");
+let paletteContext = commandPaletteContext();
+assert(paletteContext.filePath === "/tmp/app.py"
+       && paletteContext.workspacePath === "src/app.py"
+       && paletteContext.resourceFilename === "app.py"
+       && paletteContext.resourceExtname === ".py"
+       && paletteContext.resourceLangId === "python"
+       && paletteContext.inQuickOpen === true,
+       "command palette context includes active editor resource and language");
+tabs[0].runtimeMode = "extension-custom-editor";
+paletteContext = commandPaletteContext();
+assert(paletteContext.editorTextFocus === false && paletteContext.resourceLangId === "python",
+       "command palette context suppresses text focus for custom editors while preserving language");
+tabs[0].runtimeMode = "text";
 assert(commandPaletteQuickAccessProviders().some(provider => provider.prefix === "?")
        && commandPaletteQuickAccessProviders().some(provider => provider.prefix === ">")
        && commandPaletteQuickAccessProviders().some(provider => provider.prefix === "@")
@@ -6939,14 +6967,26 @@ console.log("command palette quick access helpers ok");
             "title": "Disabled Palette Probe",
             "category": "Selftest",
             "enablement": "neverContext",
+        }, {
+            "command": "selftest.commandPalette.markdown",
+            "title": "Markdown Palette Probe",
+            "category": "Selftest",
+            "enablement": "resourceExtname == .md",
+        }, {
+            "command": "selftest.commandPalette.python",
+            "title": "Python Palette Probe",
+            "category": "Selftest",
+            "enablement": "resourceLangId == python",
         }]},
     }, "/tmp/selftest-commands-pack")
     command_palette_api._ext_host.registry.register(command_desc)
     command_palette_api._ext_host.ext_points.process(command_desc)
     command_palette_api._ext_host.commands.register(
         "selftest.runtimeOnly.command", lambda: {"ok": True})
-    palette_commands = command_palette_api.list_command_palette_commands().get(
-        "commands", [])
+    palette_commands = command_palette_api.list_command_palette_commands({
+        "resourceUri": "file:///tmp/readme.md",
+        "resourceLangId": "markdown",
+    }).get("commands", [])
     manifest_command = next(
         (item for item in palette_commands
          if item.get("id") == "selftest.commandPalette.run"), {})
@@ -6956,6 +6996,20 @@ console.log("command palette quick access helpers ok");
     runtime_command = next(
         (item for item in palette_commands
          if item.get("id") == "selftest.runtimeOnly.command"), {})
+    markdown_command = next(
+        (item for item in palette_commands
+         if item.get("id") == "selftest.commandPalette.markdown"), {})
+    python_command = next(
+        (item for item in palette_commands
+         if item.get("id") == "selftest.commandPalette.python"), {})
+    python_palette_commands = command_palette_api.list_command_palette_commands({
+        "filePath": "/tmp/app.py",
+        "language": "python",
+        "resourceScheme": "file",
+    }).get("commands", [])
+    python_context_command = next(
+        (item for item in python_palette_commands
+         if item.get("id") == "selftest.commandPalette.python"), {})
     _check("extension commands surface in command palette metadata",
            manifest_command.get("label") == "Selftest: Run Palette Probe"
            and manifest_command.get("title") == "Run Palette Probe"
@@ -6970,6 +7024,11 @@ console.log("command palette quick access helpers ok");
            and disabled_command.get("enabled") is False
            and disabled_command.get("disabled") is True
            and disabled_command.get("disabledReason") == "Enablement not satisfied: neverContext"
+           and markdown_command.get("enabled") is True
+           and markdown_command.get("disabled") is False
+           and python_command.get("enabled") is False
+           and python_context_command.get("enabled") is True
+           and python_context_command.get("disabled") is False
            and runtime_command.get("source") == "runtime"
            and runtime_command.get("runtimeAvailable") is True,
            json.dumps(palette_commands, ensure_ascii=False, default=str))

@@ -9436,7 +9436,45 @@ class AIEditorAPI:
         self._ensure_engine()
         return {"commands": self._ext_host.commands.list_commands()}
 
-    def list_command_palette_commands(self) -> Dict:
+    def _command_palette_context(self, context: Any = None) -> Dict[str, str]:
+        palette_context: Dict[str, str] = {
+            "editorTextFocus": "true",
+            "textInputFocus": "true",
+            "resourceScheme": "file",
+            "inQuickOpen": "true",
+        }
+        if not isinstance(context, dict):
+            return palette_context
+        resource = (
+            context.get("resourceUri")
+            or context.get("uri")
+            or context.get("filePath")
+            or context.get("workspacePath")
+            or context.get("resource")
+            or ""
+        )
+        palette_context.update(self._extension_resource_context(resource))
+        for key, value in context.items():
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                palette_context[str(key)] = text
+        language = str(
+            context.get("resourceLangId")
+            or context.get("language")
+            or context.get("languageId")
+            or "").strip()
+        if language:
+            palette_context["resourceLangId"] = language
+            palette_context["languageId"] = language
+            palette_context["activeEditorLanguage"] = language
+        if (palette_context.get("resource") or palette_context.get(
+                "resourceUri")) and not palette_context.get("resourceScheme"):
+            palette_context["resourceScheme"] = "file"
+        return palette_context
+
+    def list_command_palette_commands(self, context: Any = None) -> Dict:
         """Return VS Code-style command palette entries from extensions."""
         self._ensure_engine()
         ext_points = getattr(self._ext_host, "ext_points", None)
@@ -9448,12 +9486,7 @@ class AIEditorAPI:
         registered_ids = set(self._ext_host.commands.list_commands())
         entries: List[Dict[str, Any]] = []
         seen: set[str] = set()
-        palette_context = {
-            "editorTextFocus": "true",
-            "textInputFocus": "true",
-            "resourceScheme": "file",
-            "inQuickOpen": "true",
-        }
+        palette_context = self._command_palette_context(context)
 
         def extension_info(extension_id: str) -> Dict[str, Any]:
             ext = self._ext_host.registry.get(extension_id)
