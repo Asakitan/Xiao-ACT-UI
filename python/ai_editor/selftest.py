@@ -3548,6 +3548,11 @@ def test_phase1_ai_editor_regressions() -> None:
             and "acceptSuggestionOnEnter:'on'" in html
             and "hover:{enabled:'on',delay:300,hidingDelay:300,sticky:true,above:true}" in html
             and "minimap:{enabled:true,size:'proportional',side:'right',showSlider:'mouseover',renderCharacters:true,maxColumn:120,scale:1}" in html
+            and "renderWhitespace:'selection'" in html
+            and "renderControlCharacters:true" in html
+            and "renderLineHighlight:'line'" in html
+            and "rulers:[]" in html
+            and "guides:{bracketPairs:false,bracketPairsHorizontal:'active',highlightActiveBracketPair:true,indentation:true,highlightActiveIndentation:true}" in html
             and "id=\"s-editor-default-formatter\"" in html
             and "id=\"s-editor-word-separators\"" in html
             and "id=\"s-editor-quick-suggestions-other\"" in html
@@ -3567,6 +3572,14 @@ def test_phase1_ai_editor_regressions() -> None:
             and "id=\"s-editor-minimap-render-characters\"" in html
             and "id=\"s-editor-minimap-max-column\"" in html
             and "id=\"s-editor-minimap-show-slider\"" in html
+            and "id=\"editor-visual-layer\"" in html
+            and "id=\"editor-whitespace-layer\"" in html
+            and "id=\"s-editor-render-whitespace\"" in html
+            and "id=\"s-editor-render-control-characters\"" in html
+            and "id=\"s-editor-render-line-highlight\"" in html
+            and "id=\"s-editor-rulers-json\"" in html
+            and "id=\"s-editor-guides-indentation\"" in html
+            and "id=\"s-editor-guides-highlight-active-indentation\"" in html
             and "id=\"s-editor-format-on-save\"" in html
             and "id=\"s-editor-format-on-paste\"" in html
             and "id=\"s-editor-format-on-type\"" in html
@@ -3603,6 +3616,13 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function editorMinimapOptions(value)" in html
             and "function applyEditorMinimapSettings(render)" in html
             and "function editorMinimapLineHeight(minimap,lineCount,height)" in html
+            and "function editorRenderWhitespaceMode(value)" in html
+            and "function editorRenderControlCharactersEnabled(value)" in html
+            and "function editorRenderLineHighlightMode(value)" in html
+            and "function editorRulers(value)" in html
+            and "function editorGuidesOptions(value)" in html
+            and "function renderEditorWhitespaceLayer()" in html
+            and "function renderEditorVisualDecorations()" in html
             and "async function toggleMinimap()" in html
             and "function scheduleEditorQuickSuggestions(ch)" in html
             and "function scheduleEditorHover(event)" in html
@@ -5960,6 +5980,156 @@ function setEditorDropPasteOptionIndex(index){ _editorDropPasteOptionIndex = ind
             )
         except Exception as exc:
             _check("frontend paste/drop format behavior", False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
+    if not node_path:
+        _check("frontend visual editor settings behavior skipped without Node.js", True)
+    else:
+        visual_functions = [
+            "editorEscapeHtml",
+            "editorTextMetrics",
+            "editorControlCharacterLabel",
+            "editorLineTrailingStart",
+            "editorWhitespaceShouldRender",
+            "renderEditorWhitespaceLayer",
+            "editorLeadingIndentColumns",
+            "_updateLineHighlight",
+            "renderEditorVisualDecorations",
+            "editorRenderWhitespaceMode",
+            "editorRenderControlCharactersEnabled",
+            "editorRenderLineHighlightMode",
+            "editorRulers",
+            "editorGuideActiveIndentationMode",
+            "editorGuidesOptions",
+            "editorVisualOptions",
+        ]
+        visual_js_functions = "\n".join(
+            _extract_js_function(html, name) for name in visual_functions)
+        js = r"""
+function assert(ok,label){ if(!ok){ throw new Error(label); } }
+const DEFAULT_EDITOR_GUIDES = { bracketPairs: false, bracketPairsHorizontal: "active", highlightActiveBracketPair: true, indentation: true, highlightActiveIndentation: true };
+let editorLang = "self";
+let config = { editor: {
+  renderWhitespace: "selection",
+  renderControlCharacters: true,
+  renderLineHighlight: "all",
+  rulers: [80, { column: 4, color: "#445566" }, "bad"],
+  guides: { indentation: true, highlightActiveIndentation: "always" },
+} };
+const _editorTextMetricCache = new Map();
+function isPlainObject(value){ return !!value && typeof value === "object" && !Array.isArray(value); }
+function editorTabSize(){ return 4; }
+function editorEffectiveSection(section){ return config[section] || {}; }
+function editorSuggestSetting(name){ return editorEffectiveSection("editor")[name]; }
+function makeClassList(owner){
+  return {
+    contains(name){ return String(owner.className || "").split(/\s+/).includes(name); },
+    add(name){ owner.className = (owner.className ? owner.className + " " : "") + name; },
+  };
+}
+function makeElement(tag){
+  const element = {
+    tagName: String(tag || "").toUpperCase(),
+    className: "",
+    style: {},
+    children: [],
+    textContent: "",
+    parentNode: null,
+    appendChild(child){ child.parentNode = this; this.children.push(child); return child; },
+    removeChild(child){ this.children = this.children.filter(item => item !== child); },
+    remove(){ if(this.parentNode) this.parentNode.removeChild(this); },
+    getBoundingClientRect(){ return { width: 80 }; },
+  };
+  Object.defineProperty(element, "innerHTML", {
+    get(){ return this._innerHTML || ""; },
+    set(value){ this._innerHTML = String(value || ""); this.children = []; },
+  });
+  element.classList = makeClassList(element);
+  return element;
+}
+const visualLayer = makeElement("div");
+const whitespaceLayer = makeElement("pre");
+const oldHighlight = makeElement("div");
+const container = { offsetHeight: 300 };
+const ed = { value: "  alpha  \n    beta\u0001", selectionStart: 0, selectionEnd: 2, scrollTop: 0, scrollLeft: 0 };
+const document = {
+  body: makeElement("body"),
+  createElement: makeElement,
+};
+function $(id){
+  if(id === "editor-visual-layer") return visualLayer;
+  if(id === "editor-whitespace-layer") return whitespaceLayer;
+  if(id === "editor-line-highlight") return oldHighlight;
+  if(id === "editor-container") return container;
+  if(id === "editor-text") return ed;
+  return null;
+}
+function getComputedStyle(){
+  return { fontSize: "13px", lineHeight: "20px", paddingTop: "8px", paddingLeft: "12px", font: "13px monospace", fontFamily: "monospace", tabSize: "4" };
+}
+""" + visual_js_functions + r"""
+assert(editorRenderWhitespaceMode("bogus") === "selection"
+       && editorRenderWhitespaceMode("all") === "all",
+       "renderWhitespace normalizes VS Code enum");
+assert(editorRenderControlCharactersEnabled(false) === false
+       && editorRenderControlCharactersEnabled(undefined) === true,
+       "renderControlCharacters defaults on");
+assert(editorRenderLineHighlightMode("bad") === "line"
+       && editorRenderLineHighlightMode("gutter") === "gutter",
+       "renderLineHighlight normalizes VS Code enum");
+const rulers = editorRulers([120, { column: 4, color: "#123456" }, { column: -1 }, "x"]);
+assert(rulers.length === 3
+       && rulers[0].column === 0
+       && rulers[1].column === 4 && rulers[1].color === "#123456"
+       && rulers[2].column === 120,
+       "rulers accept numbers and color objects sorted by column");
+assert(editorGuidesOptions({ indentation: false, highlightActiveIndentation: "always" }).indentation === false
+       && editorGuidesOptions({ highlightActiveIndentation: "bad" }).highlightActiveIndentation === true,
+       "guides normalize indentation and active indentation");
+renderEditorWhitespaceLayer();
+assert(whitespaceLayer.innerHTML.includes("editor-whitespace-mark")
+       && whitespaceLayer.innerHTML.includes("·")
+       && whitespaceLayer.innerHTML.includes("editor-control-character")
+       && whitespaceLayer.innerHTML.includes("^A"),
+       "whitespace layer renders selection whitespace and control characters");
+ed.selectionStart = ed.selectionEnd = "  alpha  \n    ".length;
+renderEditorVisualDecorations();
+assert(visualLayer.children.some(child => child.className.includes("editor-line-highlight-visual"))
+       && visualLayer.children.some(child => child.className.includes("editor-ruler-line") && child.style.background === "#445566")
+       && visualLayer.children.some(child => child.className.includes("editor-indent-guide active")),
+       "visual layer renders line highlight rulers and active indent guides");
+config.editor.renderWhitespace = "trailing";
+ed.selectionStart = ed.selectionEnd = 0;
+renderEditorWhitespaceLayer();
+assert((whitespaceLayer.innerHTML.match(/editor-whitespace-mark/g) || []).length >= 2,
+       "trailing whitespace mode renders trailing marks without selection");
+console.log("frontend visual editor settings behavior ok");
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check_subprocess_result(
+                "frontend visual editor settings behavior",
+                result,
+                "frontend visual editor settings behavior ok",
+            )
+        except Exception as exc:
+            _check("frontend visual editor settings behavior", False, str(exc))
         finally:
             if js_path:
                 try:
