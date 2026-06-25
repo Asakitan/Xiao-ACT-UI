@@ -286,6 +286,24 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-custom-webview-host { position:absolute; inset:0; z-index:24; display:none; flex-direction:column;
   background:var(--bg-editor); overflow:hidden; }
 .editor-custom-webview-host.active { display:flex; }
+.editor-notebook-host { position:absolute; inset:0; z-index:23; display:none; overflow:auto;
+  background:var(--bg-editor); padding:12px 16px 24px; box-sizing:border-box; }
+.editor-notebook-host.active { display:block; }
+.editor-notebook-header { display:flex; align-items:center; gap:8px; margin:0 0 10px; color:var(--fg-dim);
+  font-size:12px; }
+.editor-notebook-type { color:var(--fg-accent); font:11px var(--mono); border:1px solid color-mix(in srgb,var(--fg-accent) 45%,var(--border));
+  border-radius:3px; padding:1px 5px; }
+.editor-notebook-cell { border:1px solid var(--border); border-radius:5px; background:var(--bg);
+  margin:0 0 10px; overflow:hidden; }
+.editor-notebook-cell-head { display:flex; align-items:center; gap:6px; padding:5px 8px; background:var(--bg2);
+  border-bottom:1px solid var(--border); color:var(--fg-dim); font:11px var(--mono); }
+.editor-notebook-cell-kind { color:var(--fg-accent); font-weight:600; }
+.editor-notebook-cell textarea { width:100%; min-height:72px; resize:vertical; box-sizing:border-box;
+  border:0; outline:none; background:var(--bg-editor); color:var(--fg-code); font:13px/1.5 var(--mono);
+  padding:9px 10px; display:block; }
+.editor-notebook-output { border-top:1px solid var(--border); background:var(--bg3); color:var(--fg-dim);
+  font:11px/1.4 var(--mono); padding:6px 8px; white-space:pre-wrap; }
+.editor-notebook-empty { color:var(--fg-dim); font-size:12px; padding:18px; text-align:center; }
 .editor-container.custom-editor .line-numbers,
 .editor-container.custom-editor .editor-textarea,
 .editor-container.custom-editor .editor-syntax-layer,
@@ -296,6 +314,16 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-container.custom-editor .editor-codelens-layer,
 .editor-container.custom-editor .editor-color-layer,
 .editor-container.custom-editor .minimap-container { opacity:0; pointer-events:none; }
+.editor-container.notebook-editor .line-numbers,
+.editor-container.notebook-editor .editor-textarea,
+.editor-container.notebook-editor .editor-syntax-layer,
+.editor-container.notebook-editor .editor-highlight-layer,
+.editor-container.notebook-editor .editor-diagnostic-layer,
+.editor-container.notebook-editor .editor-inlay-layer,
+.editor-container.notebook-editor .editor-ghost-layer,
+.editor-container.notebook-editor .editor-codelens-layer,
+.editor-container.notebook-editor .editor-color-layer,
+.editor-container.notebook-editor .minimap-container { opacity:0; pointer-events:none; }
 .editor-container.syntax-on .editor-textarea {
   background:transparent; color:transparent; -webkit-text-fill-color:transparent;
 }
@@ -1520,6 +1548,7 @@ pre.code-block { overflow:visible; }
         <div class="editor-codelens-layer" id="editor-codelens-layer" aria-hidden="true"></div>
         <div class="editor-color-layer" id="editor-color-layer" aria-hidden="true"></div>
         <textarea class="editor-textarea" id="editor-text" spellcheck="false" placeholder="// Your code here..."></textarea>
+        <div class="editor-notebook-host" id="editor-notebook-host"></div>
         <div class="editor-custom-webview-host" id="editor-custom-webview-host"></div>
         <div class="editor-suggest" id="editor-suggest" role="listbox"></div>
         <div class="editor-suggest-details" id="editor-suggest-details" role="tooltip"></div>
@@ -2021,7 +2050,7 @@ const SETTINGS_SECTION_DEFAULTS={
   codex:{cli_path:'',cli_args:[],transport:'chat_completions',model:'codex-mini-latest'},
   mcp:{access:'prompt',autostart:false,discovery_enabled:true,collision_behavior:'first',server_sampling:false},
   terminal:{profile:'PowerShell 7 (No Profile)',shell_path:'',shell_args:[],timeout:30,output_limit:8000,auto_approve:{}},
-  extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands','views','customEditors','terminal','statusBarItems'],enabled_contributions_explicit:false,diagnostics_enabled:false},
+  extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands','views','customEditors','notebooks','terminal','statusBarItems'],enabled_contributions_explicit:false,diagnostics_enabled:false},
   editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,linkedEditing:false,codeActionsOnSave:{},codeActions:{triggerOnFocusChange:false},tabSize:4,insertSpaces:true},
   files:{autoSave:'off',autoSaveDelay:1000,trimTrailingWhitespace:false,insertFinalNewline:false,trimFinalNewlines:false},
   customization:{instructions_locations:['.sao/instructions.md','.sao/instructions'],agent_locations:['.sao/agents'],workflow_locations:['.sao/workflows'],skill_locations:['.agents/skills/.local','.claude/skills/.local'],use_agent_md:true,use_claude_md:false}
@@ -2032,6 +2061,7 @@ const EXTENSION_CONTRIBUTION_OPTIONS=[
   {id:'commands',label:'Commands',description:'Enable extension commands and command fallbacks.'},
   {id:'views',label:'Views',description:'Load extension webview and tree view contributions.'},
   {id:'customEditors',label:'Custom Editors',description:'Resolve extension-owned editor surfaces such as NBT viewers.'},
+  {id:'notebooks',label:'Notebooks',description:'Open extension-contributed notebook file types through their serializers.'},
   {id:'terminal',label:'Terminal Profiles',description:'Load extension-contributed terminal profiles.'},
   {id:'statusBarItems',label:'Status Bar Items',description:'Render extension-contributed status bar entries.'}
 ];
@@ -9235,6 +9265,10 @@ function createExplorerNode(entry,depth,isRoot,activePath=''){
 function isExtensionCustomEditorOpenResult(res){
   return !!(res&&isExtensionCustomEditorMode(res.runtime_mode||res.runtimeMode));
 }
+function isExtensionNotebookOpenResult(res){
+  const mode=String((res&&res.runtime_mode)||(res&&res.runtimeMode)||'');
+  return mode==='extension-notebook'&&!!(res&&res.notebook);
+}
 function openExtensionCustomEditorFile(res,relPath){
   explorerSelectedPath=res.path||relPath||'';
   const absolutePath=res.absolute_path||res.absolutePath||'';
@@ -9267,6 +9301,31 @@ function openExtensionCustomEditorFile(res,relPath){
   highlightExplorerSelection();
   return res;
 }
+function openExtensionNotebookFile(res,relPath){
+  explorerSelectedPath=res.path||relPath||'';
+  const absolutePath=res.absolute_path||res.absolutePath||'';
+  const workspacePath=res.path||relPath||'';
+  const notebook={...(res.notebook||{}),dirty:false};
+  const existing=tabs.find(t=>(absolutePath&&t.filePath===absolutePath)||(workspacePath&&t.workspacePath===workspacePath));
+  const meta={
+    filePath:absolutePath,workspacePath:workspacePath,
+    runtimeMode:'extension-notebook',
+    notebook:notebook
+  };
+  if(existing){
+    existing.name=res.name||existing.name;
+    existing.filePath=absolutePath||existing.filePath;
+    existing.workspacePath=workspacePath||existing.workspacePath||'';
+    existing.language='notebook';
+    existing.runtimeMode=meta.runtimeMode;
+    existing.notebook=notebook;
+    switchTab(existing.id);
+  }else{
+    addTab(res.name||pathBaseName(res.path),'','notebook',meta);
+  }
+  highlightExplorerSelection();
+  return res;
+}
 async function openWorkspaceFile(relPath){
   const res=await call('open_workspace_file',relPath||'');
   if(!res||res.error){
@@ -9274,6 +9333,7 @@ async function openWorkspaceFile(relPath){
     return null;
   }
   if(isExtensionCustomEditorOpenResult(res))return openExtensionCustomEditorFile(res,relPath);
+  if(isExtensionNotebookOpenResult(res))return openExtensionNotebookFile(res,relPath);
   explorerSelectedPath=res.path||relPath||'';
   const absolutePath=res.absolute_path||'';
   const workspacePath=res.path||relPath||'';
@@ -9864,6 +9924,7 @@ function injectCustomEditorWebview(viewId,data){
 function showCustomEditorSurface(tab){
   const container=$('editor-container'),host=$('editor-custom-webview-host');
   if(!container||!host)return;
+  hideNotebookSurface();
   $('editor-welcome').style.display='none';
   container.style.display='flex';
   container.classList.add('custom-editor');
@@ -9876,6 +9937,86 @@ function hideCustomEditorSurface(){
   const container=$('editor-container'),host=$('editor-custom-webview-host');
   if(container)container.classList.remove('custom-editor');
   if(host)host.classList.remove('active');
+}
+function notebookCellKindLabel(kind){
+  return Number(kind)===1?'Markdown':'Code';
+}
+function notebookOutputText(outputs){
+  const parts=[];
+  (Array.isArray(outputs)?outputs:[]).forEach(output=>{
+    (Array.isArray(output&&output.items)?output.items:[]).forEach(item=>{
+      const mime=String(item&&item.mime||'');
+      const text=item&&item.dataText!==undefined?String(item.dataText):'';
+      if(text)parts.push((mime?mime+': ':'')+text);
+    });
+  });
+  return parts.join('\n');
+}
+function readNotebookFromSurface(tab){
+  const source=(tab&&tab.notebook)||{};
+  const host=$('editor-notebook-host');
+  const cells=[];
+  if(host&&host.dataset.tabId===String(tab&&tab.id)){
+    host.querySelectorAll('.editor-notebook-cell').forEach(cellEl=>{
+      const idx=Number(cellEl.dataset.cellIndex||0);
+      const original=(Array.isArray(source.cells)?source.cells:[])[idx]||{};
+      const ta=cellEl.querySelector('textarea');
+      cells.push({...original,value:ta?ta.value:String(original.value||'')});
+    });
+  }else{
+    (Array.isArray(source.cells)?source.cells:[]).forEach(cell=>cells.push({...cell}));
+  }
+  return {...source,cells};
+}
+function markNotebookDirty(tab){
+  if(!tab||!tab.notebook)return;
+  tab.notebook.dirty=true;editorDirty=true;
+  const tabEl=document.querySelector('.tab[data-tab-id="'+tab.id+'"]');
+  if(tabEl)tabEl.classList.add('dirty');
+  _renderEditorTitleActions();
+  scheduleEditorAutoSave();
+}
+function showNotebookSurface(tab){
+  const container=$('editor-container'),host=$('editor-notebook-host');
+  hideCustomEditorSurface();
+  if(!container||!host)return;
+  $('editor-welcome').style.display='none';
+  container.style.display='flex';
+  container.classList.add('notebook-editor');
+  host.classList.add('active');
+  host.dataset.tabId=String(tab.id);
+  const nb=tab.notebook||{};
+  const cells=Array.isArray(nb.cells)?nb.cells:[];
+  host.innerHTML='';
+  const header=document.createElement('div');header.className='editor-notebook-header';
+  const type=document.createElement('span');type.className='editor-notebook-type';type.textContent=nb.view_type||nb.viewType||'notebook';
+  const title=document.createElement('span');title.textContent=(nb.display_name||nb.displayName||tab.name||'Notebook')+' · '+cells.length+' cells';
+  header.appendChild(type);header.appendChild(title);host.appendChild(header);
+  if(!cells.length){
+    const empty=document.createElement('div');empty.className='editor-notebook-empty';empty.textContent='Empty notebook';
+    host.appendChild(empty);return;
+  }
+  cells.forEach((cell,index)=>{
+    const card=document.createElement('div');card.className='editor-notebook-cell';card.dataset.cellIndex=String(index);
+    const head=document.createElement('div');head.className='editor-notebook-cell-head';
+    const kind=document.createElement('span');kind.className='editor-notebook-cell-kind';kind.textContent=notebookCellKindLabel(cell.kind);
+    const lang=document.createElement('span');lang.textContent=cell.languageId||cell.language||'plaintext';
+    head.appendChild(kind);head.appendChild(lang);card.appendChild(head);
+    const ta=document.createElement('textarea');ta.spellcheck=false;ta.value=String(cell.value||'');
+    ta.addEventListener('input',()=>{cell.value=ta.value;markNotebookDirty(tab)});
+    card.appendChild(ta);
+    const outText=notebookOutputText(cell.outputs);
+    if(outText){
+      const out=document.createElement('div');out.className='editor-notebook-output';out.textContent=outText;
+      card.appendChild(out);
+    }
+    host.appendChild(card);
+  });
+}
+function hideNotebookSurface(){
+  const container=$('editor-container'),host=$('editor-notebook-host');
+  if(container)container.classList.remove('notebook-editor');
+  if(host){host.classList.remove('active');host.innerHTML='';host.dataset.tabId=''}
 }
 function cachedWebviewForProvider(p){
   const ids=providerCandidateViewIds(p);ids.push('provider.'+String(p&&p.id||''));
@@ -14393,12 +14534,18 @@ setTimeout(renderRecommendedExts,200);
 let tabs=[{id:0,name:'untitled',content:'',language:'plaintext',cursor:0,filePath:'',workspacePath:'',runtimeMode:'text',customEditor:null,webview:null}];
 let activeTab=0, nextTabId=1;
 
+function isExtensionNotebookTab(tab){
+  const mode=String((tab&&tab.runtimeMode)||(tab&&tab.runtime_mode)||'');
+  return mode==='extension-notebook'&&!!(tab&&tab.notebook);
+}
+
 function addTab(name,content,lang,meta){
   showEditorArea();
   const tabMeta=isPlainObject(meta)?meta:{};
   const tab={id:nextTabId++,name:name||'untitled',content:content||'',language:lang||'plaintext',cursor:0,
     filePath:tabMeta.filePath||'',workspacePath:tabMeta.workspacePath||'',
     runtimeMode:tabMeta.runtimeMode||tabMeta.runtime_mode||'text',
+    notebook:tabMeta.notebook||null,
     customEditor:tabMeta.customEditor||tabMeta.custom_editor||null,
     webview:tabMeta.webview||null,viewId:tabMeta.viewId||tabMeta.view_id||''};
   tabs.push(tab);
@@ -14451,7 +14598,18 @@ function switchTab(id){
       renderTabs();
       return;
     }
+    if(isExtensionNotebookTab(tab)){
+      $('editor-text').value='';
+      setEditorLanguage('notebook');
+      _undoStack.length=0;_redoStack.length=0;_undoPush(true);
+      closeEditorTransientUi();
+      updateLineNums();updateCursorPos();
+      showNotebookSurface(tab);
+      renderTabs();
+      return;
+    }
     hideCustomEditorSurface();
+    hideNotebookSurface();
     $('editor-text').value=tab.content;
     setEditorLanguage(tab.language);
     $('editor-text').selectionStart=$('editor-text').selectionEnd=tab.cursor;
@@ -14487,6 +14645,7 @@ function switchTab(id){
 function saveCurrentTab(){
   const tab=tabs.find(t=>t.id===activeTab);
   if(isExtensionCustomEditorTab(tab))return;
+  if(isExtensionNotebookTab(tab)){tab.notebook=readNotebookFromSurface(tab);return}
   if(tab){tab.content=$('editor-text').value;tab.language=editorLang;tab.cursor=$('editor-text').selectionStart}
 }
 
@@ -14495,7 +14654,8 @@ function renderTabs(){
   tabs.forEach(t=>{
     const el=document.createElement('div');
     const customDirty=isExtensionCustomEditorTab(t)&&t.customEditor&&t.customEditor.dirty;
-    el.className='tab'+(t.id===activeTab?' active':'')+(customDirty?' dirty':'');
+    const notebookDirty=isExtensionNotebookTab(t)&&t.notebook&&t.notebook.dirty;
+    el.className='tab'+(t.id===activeTab?' active':'')+((customDirty||notebookDirty)?' dirty':'');
     el.dataset.tabId=t.id;
     el.innerHTML=esc(t.name)+'<span class="dot"></span> <span class="close" onclick="closeTab('+t.id+',event)">×</span>';
     el.onclick=()=>switchTab(t.id);
@@ -14520,6 +14680,7 @@ function _renderEditorTitleActions(){
   const c=$('editor-title-actions');if(!c)return;c.innerHTML='';
   const tab=tabs.find(t=>t.id===activeTab);
   if(isExtensionCustomEditorTab(tab))appendCustomEditorTitleActions(c,tab);
+  if(isExtensionNotebookTab(tab))appendNotebookTitleActions(c,tab);
   _editorTitleActions.forEach(a=>{
     const btn=document.createElement('button');btn.className='eta-btn';
     btn.textContent=a.icon||'▣';btn.title=a.title||a.command||'';
@@ -14544,13 +14705,18 @@ function appendCustomEditorTitleActions(container,tab){
   container.appendChild(makeEditorTitleButton('Save custom editor as','<svg viewBox="0 0 16 16" width="14" height="14"><path d="M3 2h8l2 2v10H3zM5 2v4h5V2M5 12h4V9H5zM10.5 9.2l2.3 2.3-2.3 2.3v-1.5H8.8v-1.6h1.7z" fill="currentColor"/></svg>',()=>saveCustomEditorTabAs(tab),!canSaveAs));
   container.appendChild(makeEditorTitleButton('Revert custom editor','<svg viewBox="0 0 16 16" width="14" height="14"><path d="M7 3a5 5 0 1 1-4.5 7.2l1.3-.7A3.5 3.5 0 1 0 4 5.3V8H2V3h5v2H5.2A3.5 3.5 0 0 1 7 3z" fill="currentColor"/></svg>',()=>revertCustomEditorTab(tab),!canRevert||!dirty));
 }
+function appendNotebookTitleActions(container,tab){
+  const dirty=!!(tab&&tab.notebook&&tab.notebook.dirty);
+  container.appendChild(makeEditorTitleButton('Save notebook','<svg viewBox="0 0 16 16" width="14" height="14"><path d="M3 2h8l2 2v10H3zM5 2v4h5V2M5 12h6V9H5z" fill="currentColor"/></svg>',()=>saveNotebookTab(tab),!dirty));
+  container.appendChild(makeEditorTitleButton('Revert notebook','<svg viewBox="0 0 16 16" width="14" height="14"><path d="M7 3a5 5 0 1 1-4.5 7.2l1.3-.7A3.5 3.5 0 1 0 4 5.3V8H2V3h5v2H5.2A3.5 3.5 0 0 1 7 3z" fill="currentColor"/></svg>',()=>revertNotebookTab(tab),!dirty));
+}
 
 // Update openInEditor to use tabs
 const _origOpenInEditor=openInEditor;
 openInEditor=function(code,lang){
   saveCurrentTab();
   let tab=tabs.find(t=>t.id===activeTab);
-  if(tab&&isExtensionCustomEditorTab(tab)){
+  if(tab&&(isExtensionCustomEditorTab(tab)||isExtensionNotebookTab(tab))){
     addTab('untitled','',lang||'plaintext',{runtimeMode:'text'});
     tab=tabs.find(t=>t.id===activeTab);
   }
@@ -15583,6 +15749,49 @@ async function revertCustomEditorTab(tab){
   showToast('Reverted: '+(tab.name||uri||viewType||'custom editor'),'success',1500);
   return r;
 }
+async function saveNotebookTab(tab,options){
+  const opts=isPlainObject(options)?options:{};
+  if(!isExtensionNotebookTab(tab))return {ok:false,error:'not a notebook tab'};
+  const nb=readNotebookFromSurface(tab);
+  const viewType=nb.view_type||nb.viewType||'';
+  const handle=nb.handle;
+  const path=tab.workspacePath||tab.filePath||'';
+  if(!path){if(!opts.autoSave)showToast('Save failed: notebook path is missing','error');return {ok:false,error:'notebook path is missing'}}
+  const r=await call('save_workspace_notebook',path,nb,viewType,handle);
+  if(!callSucceeded(r)){
+    if(!opts.autoSave)showToast('Save failed: '+callFailedMessage(r,'notebook serializer unavailable'),'error');
+    return r||{ok:false,error:'notebook serializer unavailable'};
+  }
+  tab.notebook={...nb,dirty:false};
+  editorDirty=false;
+  const tabEl=document.querySelector('.tab[data-tab-id="'+tab.id+'"]');if(tabEl)tabEl.classList.remove('dirty');
+  renderTabs();
+  if(opts.autoSave)setStatus('Auto saved notebook: '+(tab.workspacePath||tab.name));
+  else showToast('Saved notebook: '+(tab.name||path),'success',1500);
+  return r;
+}
+async function revertNotebookTab(tab){
+  if(!isExtensionNotebookTab(tab))return {ok:false,error:'not a notebook tab'};
+  if(tab.notebook&&tab.notebook.dirty&&!window.confirm('Revert notebook changes?'))return {ok:false,cancelled:true};
+  const path=tab.workspacePath||'';
+  if(!path)return {ok:false,error:'notebook path is missing'};
+  const previousId=tab.id;
+  const previousName=tab.name;
+  const res=await call('open_workspace_file',path);
+  if(!isExtensionNotebookOpenResult(res)){
+    showToast('Revert failed: '+callFailedMessage(res,'notebook serializer unavailable'),'error');
+    return res||{ok:false,error:'notebook serializer unavailable'};
+  }
+  tab.notebook={...(res.notebook||{}),dirty:false};
+  tab.name=res.name||previousName;
+  tab.filePath=res.absolute_path||tab.filePath;
+  tab.workspacePath=res.path||tab.workspacePath;
+  activeTab=previousId;
+  showNotebookSurface(tab);
+  renderTabs();
+  showToast('Reverted notebook: '+tab.name,'success',1500);
+  return {ok:true};
+}
 async function saveTextTabAs(tab,options){
   const opts=isPlainObject(options)?options:{};
   if(!opts.skipSaveParticipants)await runEditorSaveParticipants();
@@ -15609,6 +15818,10 @@ async function saveFileAs(){
     await saveCustomEditorTabAs(tab);
     return;
   }
+  if(isExtensionNotebookTab(tab)){
+    await saveNotebookTab(tab);
+    return;
+  }
   await saveTextTabAs(tab);
 }
 async function revertFile(){
@@ -15617,7 +15830,11 @@ async function revertFile(){
     await revertCustomEditorTab(tab);
     return;
   }
-  showToast('Revert is available for extension custom editors','warning',2200);
+  if(isExtensionNotebookTab(tab)){
+    await revertNotebookTab(tab);
+    return;
+  }
+  showToast('Revert is available for extension custom editors and notebooks','warning',2200);
 }
 async function saveFile(options){
   const opts=isPlainObject(options)?options:{};
@@ -15626,6 +15843,10 @@ async function saveFile(options){
     if(opts.autoSave)return {ok:false,skipped:true};
     await saveCustomEditorTab(tab);
     return;
+  }
+  if(isExtensionNotebookTab(tab)){
+    if(opts.autoSave&&!tab.filePath)return {ok:false,skipped:true};
+    return await saveNotebookTab(tab,opts);
   }
   if(opts.autoSave&&!(tab&&tab.filePath))return {ok:false,skipped:true};
   await runEditorSaveParticipants({autoSave:opts.autoSave===true,autoSaveMode:opts.autoSaveMode||''});

@@ -1023,7 +1023,7 @@ class ExtensionPoints:
                 snip["_extensionId"] = eid
                 self._snippets.append(snip)
 
-        for ce in c.get("customEditors", []):
+        for ce in (c.get("customEditors", []) if _enabled("customEditors") else []):
             if isinstance(ce, dict):
                 ce = dict(ce)
                 ce["_extensionId"] = eid
@@ -1043,7 +1043,7 @@ class ExtensionPoints:
                     ext, "debugger", dbg.get("type") or dbg.get("label", ""))
                 self._debuggers.append(dbg)
 
-        for nb in c.get("notebooks", []):
+        for nb in (c.get("notebooks", []) if _enabled("notebooks") else []):
             if isinstance(nb, dict):
                 nb = dict(nb)
                 nb["_extensionId"] = eid

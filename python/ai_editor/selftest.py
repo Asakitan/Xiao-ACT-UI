@@ -117,11 +117,19 @@ def _print_final_summary(total: int) -> None:
     print(f"{_PASS}/{total} passed, {_FAIL} FAILED ✗")
     print(f"{'=' * 50}")
     print()
-    print("FAILED CHECKS (final summary):")
+    print("FAILED CHECK DETAILS (final summary):")
     for index, (label, detail) in enumerate(_FAILURES, 1):
         print(f"  {index}. {label}")
         for line in _failure_detail_tail(detail):
             print(f"     {line}")
+    print()
+    print("FAILED CHECKS (last):")
+    if _FAILURES:
+        for index, (label, _detail) in enumerate(_FAILURES, 1):
+            print(f"  {index}. {label}")
+    else:
+        print("  1. Unknown failure; no failure detail was recorded.")
+    print(f"{'=' * 50}")
 
 
 def _wait_until(predicate, timeout: float = 2.0) -> bool:
@@ -417,6 +425,8 @@ class _FakeNodeCustomEditorHost:
     def __init__(self):
         self.requests = []
         self.relayed = []
+        self.notebook_deserialize_requests = []
+        self.notebook_serialize_requests = []
 
     def request_custom_editor_result(
             self, view_type, uri, title="", view_id="", timeout=2.0):
@@ -474,6 +484,65 @@ class _FakeNodeCustomEditorHost:
         self.relayed.append(("dispose", view_id))
         return True
 
+    def notebook_serializers(self):
+        return [{
+            "handle": 7,
+            "viewType": "selftest.notebook",
+            "extensionId": "selftest.notebookExt",
+            "options": {},
+        }]
+
+    def is_extension_activated(self, ext_id):
+        return True
+
+    def request_notebook_deserialize_result(
+            self, data, handle=None, view_type="", default=None,
+            timeout=3.0):
+        self.notebook_deserialize_requests.append({
+            "data": data,
+            "handle": handle,
+            "view_type": view_type,
+            "timeout": timeout,
+        })
+        return {
+            "ok": True,
+            "value": {
+                "metadata": {"fixture": True},
+                "cells": [{
+                    "kind": 2,
+                    "value": "print('nb')",
+                    "languageId": "python",
+                    "outputs": [{
+                        "id": "out-1",
+                        "items": [{
+                            "mime": "text/plain",
+                            "dataText": "ok",
+                        }],
+                    }],
+                }],
+            },
+            "handle": handle,
+            "viewType": view_type,
+        }
+
+    def request_notebook_serialize_result(
+            self, notebook, handle=None, view_type="", default=None,
+            timeout=3.0):
+        self.notebook_serialize_requests.append({
+            "notebook": notebook,
+            "handle": handle,
+            "view_type": view_type,
+            "timeout": timeout,
+        })
+        return {
+            "ok": True,
+            "response": {
+                "dataText": json.dumps(notebook, ensure_ascii=False),
+            },
+            "handle": handle,
+            "viewType": view_type,
+        }
+
 
 def test_app_settings_parity() -> None:
     print("── App Settings Parity ──")
@@ -490,7 +559,7 @@ def test_app_settings_parity() -> None:
         "clear_active_agent", "delete_agent", "delete_workflow",
         "run_workflow", "get_scopes", "save_agent", "save_workflow",
         "list_workspace_tree", "workspace_file_decorations",
-        "open_workspace_file",
+        "open_workspace_file", "save_workspace_notebook",
         "apply_workspace_text_edits", "open_external_uri",
         "editor_language_provider", "get_diagnostics",
         "get_chat_controls", "set_active_provider", "set_active_model",
@@ -2406,6 +2475,48 @@ def test_app_settings_parity() -> None:
                and "onCustomEditor:selftest.customNbt"
                in tree_api._ext_host.activated_events,
                json.dumps(opened_custom, ensure_ascii=False))
+        notebook_file = os.path.join(tmpdir, "assets", "demo.selfnb")
+        with open(notebook_file, "w", encoding="utf-8") as fh:
+            fh.write('{"cells":[]}')
+        tree_api._ext_host = _FakeExtensionHost({
+            "notebooks": [{
+                "type": "selftest.notebook",
+                "displayName": "Selftest Notebook",
+                "selector": [{"filenamePattern": "**/*.selfnb"}],
+                "_extensionId": "selftest.notebookExt",
+            }],
+        })
+        tree_api._node_ext_host = _FakeNodeCustomEditorHost()
+        opened_notebook = tree_api.open_workspace_file("assets/demo.selfnb")
+        _check("open_workspace_file resolves contributed notebooks",
+               opened_notebook.get("runtime_mode") == "extension-notebook"
+               and opened_notebook.get("path") == "assets/demo.selfnb"
+               and opened_notebook.get("notebook", {}).get("view_type")
+               == "selftest.notebook"
+               and opened_notebook.get("notebook", {}).get("handle") == 7
+               and opened_notebook.get("notebook", {}).get("cells", [{}])[0]
+               .get("outputs", [{}])[0].get("items", [{}])[0].get("dataText") == "ok"
+               and tree_api._node_ext_host.notebook_deserialize_requests
+               and tree_api._node_ext_host.notebook_deserialize_requests[0]
+               .get("view_type") == "selftest.notebook"
+               and "onNotebook:selftest.notebook"
+               in tree_api._ext_host.activated_events,
+               json.dumps(opened_notebook, ensure_ascii=False))
+        save_notebook = tree_api.save_workspace_notebook(
+            "assets/demo.selfnb",
+            opened_notebook.get("notebook", {}),
+            "selftest.notebook",
+            7)
+        with open(notebook_file, "r", encoding="utf-8") as fh:
+            saved_notebook_text = fh.read()
+        _check("save_workspace_notebook serializes through Node serializer",
+               save_notebook.get("ok") is True
+               and save_notebook.get("workspace_path") == "assets/demo.selfnb"
+               and tree_api._node_ext_host.notebook_serialize_requests
+               and tree_api._node_ext_host.notebook_serialize_requests[0]
+               .get("handle") == 7
+               and "print('nb')" in saved_notebook_text,
+               json.dumps(save_notebook, ensure_ascii=False))
         edit_result = tree_api.apply_workspace_text_edits([{
             "uri": "src/sample.py",
             "range": {
@@ -5478,7 +5589,8 @@ console.log("extension setting schema helpers ok");
             and "if(explicit!==true)" in html
             and "function readExtensionContributionValues()" in html
             and "enabled_contributions_explicit:true" in html
-            and "customEditors" in html)
+            and "customEditors" in html
+            and "notebooks" in html)
     _check("frontend shows runtime extension install metadata",
             "function mergeInstalledExtensionMetadata(items)" in html
             and "function extensionSourceBadge(ext)" in html
@@ -5761,6 +5873,23 @@ console.log("quick input filter helpers ok");
            and "applyCustomEditorState(data)" in html
            and "supportsMultipleEditorsPerDocument" in html
            and "supports_multiple_editors_per_document" in html)
+    _check("frontend renders extension notebooks in editor tabs",
+           "editor-notebook-host" in html
+           and "function isExtensionNotebookOpenResult(res)" in html
+           and "function openExtensionNotebookFile(res,relPath)" in html
+           and "runtimeMode:'extension-notebook'" in html
+           and "function isExtensionNotebookTab(tab)" in html
+           and "function showNotebookSurface(tab)" in html
+           and "function readNotebookFromSurface(tab)" in html
+           and "function notebookOutputText(outputs)" in html
+           and "editor-notebook-output" in html
+           and "addEventListener('input',()=>{cell.value=ta.value;markNotebookDirty(tab)})"
+           in html
+           and "function saveNotebookTab(tab,options)" in html
+           and "call('save_workspace_notebook',path,nb,viewType,handle)" in html
+           and "function revertNotebookTab(tab)" in html
+           and "if(isExtensionNotebookTab(tab))" in html
+           and "appendNotebookTitleActions(c,tab)" in html)
     with tempfile.TemporaryDirectory() as webview_tmp, \
             tempfile.TemporaryDirectory() as outside_tmp:
         import urllib.request
@@ -6385,6 +6514,8 @@ console.log("quick input filter helpers ok");
            "views" in ext_defaults._enabled_extension_contributions())
     _check("extension custom editor contribution remains enabled for old settings",
            "customEditors" in ext_defaults._enabled_extension_contributions())
+    _check("extension notebook contribution remains enabled for old settings",
+           "notebooks" in ext_defaults._enabled_extension_contributions())
     _check("extension terminal/status contributions remain enabled for old settings",
            "terminal" in ext_defaults._enabled_extension_contributions()
            and "statusBarItems" in ext_defaults._enabled_extension_contributions())

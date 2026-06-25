@@ -178,6 +178,7 @@ _AI_EDITOR_SECTION_DEFAULTS: Dict[str, Dict[str, Any]] = {
             "commands",
             "views",
             "customEditors",
+            "notebooks",
             "terminal",
             "statusBarItems",
         ],
@@ -4139,6 +4140,136 @@ class AIEditorAPI:
         matches.sort(key=lambda item: item[0], reverse=True)
         return dict(matches[0][1])
 
+    def _notebook_match_score(
+            self, notebook: Dict[str, Any], full: str, rel: str) -> int:
+        filename = os.path.basename(full)
+        selectors = notebook.get("selector")
+        if not isinstance(selectors, list):
+            return -1
+        best = -1
+        for selector in selectors:
+            if isinstance(selector, str):
+                pattern = selector
+                scheme = "file"
+            elif isinstance(selector, dict):
+                scheme = str(selector.get("scheme") or "file").strip().lower()
+                pattern = selector.get("filenamePattern") or selector.get("pattern")
+            else:
+                continue
+            if scheme not in {"", "*", "file"} or not pattern:
+                continue
+            for glob_pattern in self._expand_custom_editor_glob(str(pattern)):
+                if self._custom_editor_glob_matches(glob_pattern, rel, filename):
+                    best = max(best, min(len(glob_pattern), 999))
+        return best
+
+    def _matching_notebook_contribution(
+            self, full: str, rel: str) -> Optional[Dict[str, Any]]:
+        ext_host = getattr(self, "_ext_host", None)
+        if ext_host is None:
+            return None
+        ext_points = getattr(ext_host, "ext_points", None)
+        contributions = getattr(ext_points, "all_contributions", {}) or {}
+        notebooks = contributions.get("notebooks", [])
+        if not isinstance(notebooks, list):
+            return None
+        matches: List[tuple[int, Dict[str, Any]]] = []
+        for notebook in notebooks:
+            if not isinstance(notebook, dict):
+                continue
+            view_type = str(
+                notebook.get("type")
+                or notebook.get("viewType")
+                or notebook.get("id")
+                or ""
+            ).strip()
+            if not view_type:
+                continue
+            score = self._notebook_match_score(notebook, full, rel)
+            if score >= 0:
+                item = dict(notebook)
+                item["type"] = view_type
+                matches.append((score, item))
+        if not matches:
+            return None
+        matches.sort(key=lambda item: item[0], reverse=True)
+        return matches[0][1]
+
+    @staticmethod
+    def _notebook_serializer_handle(
+            serializers: List[Dict[str, Any]], view_type: str) -> Optional[int]:
+        for item in serializers:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("viewType") or "") != view_type:
+                continue
+            try:
+                return int(item.get("handle"))
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def _open_extension_notebook(
+            self, full: str, rel: str) -> Optional[Dict[str, Any]]:
+        contribution = self._matching_notebook_contribution(full, rel)
+        if not contribution:
+            return None
+        view_type = str(contribution.get("type") or "").strip()
+        if not view_type:
+            return None
+        ext_host = getattr(self, "_ext_host", None)
+        if ext_host is not None:
+            try:
+                ext_host.activate_event(f"onNotebook:{view_type}")
+            except Exception:
+                pass
+        node_host = getattr(self, "_node_ext_host", None)
+        if node_host is None or not getattr(node_host, "is_running", False):
+            return None
+        ext_id = str(contribution.get("_extensionId") or "").strip()
+        is_activated = getattr(node_host, "is_extension_activated", None)
+        if ext_id and callable(is_activated):
+            deadline = time.time() + 8.0
+            while time.time() < deadline and not is_activated(ext_id):
+                time.sleep(0.05)
+        serializers = node_host.notebook_serializers()
+        handle = self._notebook_serializer_handle(serializers, view_type)
+        if handle is None:
+            return None
+        try:
+            with open(full, "rb") as fh:
+                raw = fh.read()
+        except Exception:
+            return None
+        result = node_host.request_notebook_deserialize_result(
+            raw, handle=handle, view_type=view_type, timeout=10.0)
+        if not result.get("ok") or not isinstance(result.get("value"), dict):
+            return None
+        notebook_data = dict(result.get("value") or {})
+        return {
+            "name": os.path.basename(full),
+            "path": rel,
+            "absolute_path": full,
+            "content": "",
+            "language": "notebook",
+            "truncated": False,
+            "runtime_mode": "extension-notebook",
+            "notebook": {
+                "view_type": view_type,
+                "display_name": (
+                    contribution.get("displayName")
+                    or contribution.get("display_name")
+                    or contribution.get("name")
+                    or view_type),
+                "extension_id": contribution.get("_extensionId", ""),
+                "handle": handle,
+                "metadata": notebook_data.get("metadata", {}),
+                "cells": notebook_data.get("cells", []),
+                "dirty": False,
+                "supports_save": True,
+            },
+        }
+
     def _open_extension_custom_editor(
             self, full: str, rel: str) -> Optional[Dict[str, Any]]:
         contribution = self._matching_custom_editor(full, rel)
@@ -4526,6 +4657,9 @@ class AIEditorAPI:
         custom_editor = self._open_extension_custom_editor(full, rel)
         if custom_editor:
             return custom_editor
+        notebook = self._open_extension_notebook(full, rel)
+        if notebook:
+            return notebook
         try:
             with open(full, "rb") as fh:
                 data = fh.read(_WORKSPACE_FILE_PREVIEW_BYTES + 1)
@@ -4540,6 +4674,57 @@ class AIEditorAPI:
             "content": text,
             "language": self._editor_language_for_path(full),
             "truncated": truncated,
+        }
+
+    def save_workspace_notebook(
+            self, rel_path: str, notebook: Dict[str, Any],
+            view_type: str = "", handle: Optional[int] = None) -> Dict:
+        root = self._workspace_root()
+        try:
+            full = self._resolve_workspace_path(rel_path)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if not full:
+            return {"ok": False, "error": "Notebook path is required"}
+        node_host = getattr(self, "_node_ext_host", None)
+        if node_host is None or not getattr(node_host, "is_running", False):
+            return {"ok": False, "error": "Node extension host is not running"}
+        view_type = str(view_type or "").strip()
+        numeric_handle: Optional[int] = None
+        if handle is not None:
+            try:
+                numeric_handle = int(handle)
+            except (TypeError, ValueError):
+                numeric_handle = None
+        if numeric_handle is None and view_type:
+            numeric_handle = self._notebook_serializer_handle(
+                node_host.notebook_serializers(), view_type)
+        if numeric_handle is None:
+            return {"ok": False, "error": "Notebook serializer not found"}
+        payload = notebook if isinstance(notebook, dict) else {}
+        result = node_host.request_notebook_serialize_result(
+            payload, handle=numeric_handle, view_type=view_type, timeout=10.0)
+        if not result.get("ok"):
+            return {"ok": False, "error": result.get("error", "serialize failed")}
+        response = result.get("response", {}) if isinstance(result, dict) else {}
+        raw_b64 = response.get("dataBase64")
+        try:
+            if raw_b64 is not None:
+                data = base64.b64decode(str(raw_b64).encode("ascii"))
+            else:
+                data = str(response.get("dataText") or result.get("value") or "").encode("utf-8")
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "wb") as fh:
+                fh.write(data)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        return {
+            "ok": True,
+            "path": full,
+            "workspace_path": self._workspace_rel_path(root, full),
+            "name": os.path.basename(full),
+            "view_type": view_type,
+            "handle": numeric_handle,
         }
 
     def editor_language_provider(self, payload: Dict[str, Any]) -> Dict:
