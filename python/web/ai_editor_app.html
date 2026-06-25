@@ -789,8 +789,12 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-response-ref:focus,.chat-change-card:focus { border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
 .chat-response-ref .ref-path,.chat-change-card .change-path { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-response-ref .ref-line,.chat-change-card .change-kind { color:var(--fg-dim); font:10px var(--mono); }
+.chat-response-ref .ref-status { color:var(--fg-warning); font:10px var(--mono); text-transform:uppercase; }
+.chat-response-ref .ref-diff { color:var(--fg-success); font:10px var(--mono); }
 .chat-change-set { margin-top:7px; display:flex; flex-direction:column; gap:5px; }
 .chat-change-card { justify-content:flex-start; width:fit-content; }
+.chat-used-context { display:flex; flex-direction:column; gap:4px; margin-bottom:2px; }
+.chat-used-context-title { color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; letter-spacing:.5px; }
 
 .chat-control-strip { display:flex; align-items:center; gap:4px; flex-wrap:wrap; min-width:0; }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
@@ -3653,6 +3657,47 @@ function renderChatReferences(body,refs){
   body.parentElement.appendChild(wrap);
 }
 function chatResponseReferenceKey(ref){return String(ref&&ref.path||'')+':'+String(ref&&ref.line||'')}
+function chatReferenceStatusLabel(status){
+  if(!status)return '';
+  const kind=typeof status==='object'?status.kind:status;
+  const desc=typeof status==='object'?status.description:'';
+  if(desc)return String(desc);
+  if(kind===2||String(kind).toLowerCase()==='partial')return 'partial';
+  if(kind===3||String(kind).toLowerCase()==='omitted')return 'omitted';
+  if(kind===1||String(kind).toLowerCase()==='complete')return '';
+  return String(kind||'');
+}
+function chatUriPath(value){
+  if(value==null)return '';
+  if(typeof value==='string'){
+    let text=value.trim();
+    if(/^file:\/\//i.test(text)){
+      try{text=decodeURIComponent(text.replace(/^file:\/\/\/?/i,''))}catch(e){text=text.replace(/^file:\/\/\/?/i,'')}
+      if(/^[A-Za-z]:\//.test(text))return text;
+      if(/^\/[A-Za-z]:\//.test(text))return text.slice(1);
+      return text;
+    }
+    return text;
+  }
+  if(typeof value==='object'){
+    if(value.fsPath)return String(value.fsPath);
+    if(value.path&&value.scheme==='file'){
+      const p=String(value.path);
+      return /^\/[A-Za-z]:\//.test(p)?p.slice(1):p;
+    }
+    if(value.path)return String(value.path);
+    if(value.uri)return chatUriPath(value.uri);
+    if(value.value)return chatUriPath(value.value);
+  }
+  return '';
+}
+function chatReferenceLine(value){
+  const range=value&&typeof value==='object'&&(value.range||value.selection||value.targetSelectionRange);
+  const start=range&&range.start;
+  if(start&&Number.isFinite(Number(start.line)))return Number(start.line)+1;
+  if(value&&typeof value==='object'&&Number.isFinite(Number(value.line)))return Number(value.line);
+  return 0;
+}
 function isLikelyChatFileReferencePath(path){
   path=String(path||'').trim();
   if(!path||path.length>260)return false;
@@ -3676,6 +3721,44 @@ function extractChatResponseReferences(text){
   const plain=/(^|[\s`"'\(])((?:[A-Za-z]:[\\/]|\.{1,2}[\\/]|\/|[\w@.-]+[\\/])[\w@./\\-]+\.[A-Za-z0-9]{1,12})(?::(\d+))?/gm;
   while((m=plain.exec(raw))&&refs.length<24)add(m[2],m[3],m[2]);
   return refs;
+}
+function normalizeChatNativeReference(raw,kindOverride){
+  if(!raw)return null;
+  const rec=typeof raw==='object'?raw:{reference:raw};
+  const source=rec.reference!==undefined?rec.reference:rec;
+  const sourceObj=source&&typeof source==='object'?source:null;
+  const path=chatUriPath(sourceObj&&sourceObj.value!==undefined?sourceObj.value:source);
+  const line=chatReferenceLine(sourceObj||rec);
+  const variable=sourceObj&&sourceObj.variableName?String(sourceObj.variableName):'';
+  const options=rec.options||{};
+  const diffMeta=options.diffMeta||rec.diffMeta||null;
+  const status=chatReferenceStatusLabel(options.status||rec.status);
+  const label=String(rec.label||rec.name||rec.title||variable||path||'Reference');
+  if(!path&&!variable)return null;
+  return {
+    path:path||variable,label,line,kind:kindOverride||rec.kind||'reference',
+    status,diffMeta,isDeletion:!!(options.isDeletion||rec.isDeletion),
+    openable:!!path&&isLikelyChatFileReferencePath(path)
+  };
+}
+function normalizeChatUsedContext(payload){
+  const used=payload&&(payload.usedContext||payload.used_context||payload.used);
+  const docs=Array.isArray(used&&used.documents)?used.documents:(Array.isArray(used)?used:[]);
+  return docs.map(doc=>{
+    const path=chatUriPath(doc.uri||doc.path||doc.filePath||doc);
+    if(!path)return null;
+    const ranges=Array.isArray(doc.ranges)?doc.ranges:[];
+    const first=ranges[0]||{};
+    const line=chatReferenceLine({range:first});
+    return {path,label:path,line,kind:'used',status:'used',openable:isLikelyChatFileReferencePath(path)};
+  }).filter(Boolean);
+}
+function normalizeChatContentReferences(payload){
+  const refs=[...(Array.isArray(payload&&payload.contentReferences)?payload.contentReferences:[]),
+    ...(Array.isArray(payload&&payload.content_references)?payload.content_references:[]),
+    ...(Array.isArray(payload&&payload.responseReferences)?payload.responseReferences:[]),
+    ...(Array.isArray(payload&&payload.response_references)?payload.response_references:[])];
+  return refs.map(ref=>normalizeChatNativeReference(ref,'reference')).filter(Boolean);
 }
 function extractChatChangedFiles(text){
   const changes=[],seen=new Set(),raw=String(text||''),lines=raw.split(/\r?\n/);
@@ -3714,17 +3797,37 @@ async function openChatResponseReference(path,line){
     setStatus('Opened reference: '+path+':'+line);
   }else setStatus('Opened reference: '+path);
 }
-function renderChatResponseReferences(body,content){
-  const refs=extractChatResponseReferences(content),changes=extractChatChangedFiles(content);
+function dedupeChatReferences(refs){
+  const seen=new Set(),out=[];
+  (refs||[]).forEach(ref=>{
+    if(!ref)return;
+    const key=[ref.kind,ref.path,ref.line,ref.status].join(':');
+    if(seen.has(key))return;
+    seen.add(key);out.push(ref);
+  });
+  return out;
+}
+function renderChatResponseReferences(body,content,payload){
+  payload=payload||{};
+  const usedRefs=normalizeChatUsedContext(payload);
+  const refs=dedupeChatReferences([...usedRefs,...normalizeChatContentReferences(payload),...extractChatResponseReferences(content)]);
+  const changes=[...extractChatChangedFiles(content),...refs.filter(r=>r.diffMeta||r.isDeletion).map(r=>({kind:r.isDeletion?'deleted':'modified',path:r.path,diffMeta:r.diffMeta}))];
   if(!body||(!refs.length&&!changes.length))return;
   const wrap=document.createElement('div');wrap.className='chat-response-references';wrap.setAttribute('aria-label','Response references');
+  if(usedRefs.length){
+    const used=document.createElement('div');used.className='chat-used-context';
+    const title=document.createElement('div');title.className='chat-used-context-title';title.textContent='Used context';
+    used.appendChild(title);wrap.appendChild(used);
+  }
   if(refs.length){
     const list=document.createElement('div');list.className='chat-response-reference-list';
     refs.slice(0,10).forEach(ref=>{
       const btn=document.createElement('button');btn.type='button';btn.className='chat-response-ref';
-      btn.innerHTML='<span class="ref-kind">📄</span><span class="ref-path">'+esc(ref.path)+'</span>'+(ref.line?'<span class="ref-line">:'+ref.line+'</span>':'');
+      if(!ref.openable)btn.disabled=true;
+      const diff=ref.diffMeta?'<span class="ref-diff">+'+esc(ref.diffMeta.added||0)+' -'+esc(ref.diffMeta.removed||0)+'</span>':'';
+      btn.innerHTML='<span class="ref-kind">'+(ref.kind==='used'?'📎':'📄')+'</span><span class="ref-path">'+esc(ref.label||ref.path)+'</span>'+(ref.line?'<span class="ref-line">:'+ref.line+'</span>':'')+(ref.status?'<span class="ref-status">'+esc(ref.status)+'</span>':'')+diff;
       btn.title='Open '+ref.path+(ref.line?':'+ref.line:'');
-      btn.onclick=()=>openChatResponseReference(ref.path,ref.line);
+      if(ref.openable)btn.onclick=()=>openChatResponseReference(ref.path,ref.line);
       list.appendChild(btn);
     });
     wrap.appendChild(list);
@@ -13594,6 +13697,7 @@ window._onEditorEvent=function(event,data){
         s.classList.remove('streaming');s.innerHTML='';s._streamContent=null;s._thinkingEl=null;s._thinkingBuf='';
         if(thinking)renderProviderThinkingBlock(s,thinking,false);
         if(content)renderMd(s,content);
+        renderChatResponseReferences(s,content,data);
         if(data.error&&!content){const e=document.createElement('div');e.className='error-text';e.textContent='⚠ '+data.error;s.appendChild(e)}
       }
       updateProviderContext(pid,data.usage);setProviderRunning(pid,false,data.error?t('provider_status_error'):t('provider_status_ready'),data.error?'error':'');
@@ -19654,10 +19758,19 @@ function showFollowups(container,suggestions){
   const div=document.createElement('div');div.className='followups';
   div.setAttribute('aria-label','Suggested follow-up prompts');
   suggestions.forEach(s=>{
+    const item=(s&&typeof s==='object')?s:{message:String(s||'')};
+    const message=String(item.message||item.prompt||item.title||'').trim();
+    if(!message)return;
     const btn=document.createElement('button');btn.type='button';btn.className='followup-btn';
-    btn.textContent=s;btn.onclick=()=>{$('chat-input').value=s;doSend()};
+    btn.textContent=String(item.title||message);
+    if(item.tooltip)btn.title=String(item.tooltip);
+    btn.onclick=()=>{
+      if(item.agentId)addChatContextAttachment({id:'agent:'+item.agentId,kind:'agent',label:item.agentId});
+      $('chat-input').value=(item.subCommand?String(item.subCommand)+' ':'')+message;doSend()
+    };
     div.appendChild(btn);
   });
+  if(!div.children.length)return;
   container.appendChild(div);
 }
 
@@ -19670,6 +19783,15 @@ function generateFollowups(content){
   if(content.includes('file')||content.includes('File'))suggestions.push(t('fu_full'));
   suggestions.push(t('fu_continue'));
   return suggestions.slice(0,3);
+}
+function chatFollowupsFromPayload(payload,content){
+  const raw=Array.isArray(payload&&payload.followups)?payload.followups:[];
+  const native=raw.map(item=>{
+    if(typeof item==='string')return {message:item};
+    if(item&&typeof item==='object'&&(item.message||item.title))return item;
+    return null;
+  }).filter(Boolean);
+  return native.length?native:generateFollowups(content);
 }
 
 // ── Patch createMsg to add footer ──
@@ -19806,8 +19928,8 @@ onStreamEnd=function(d){
         planBar.appendChild(planIcon);planBar.appendChild(planText);planBar.appendChild(implBtn);
         body.appendChild(planBar);
       }else{
-        renderChatResponseReferences(body,d.content);
-        const suggestions=generateFollowups(d.content);
+        renderChatResponseReferences(body,d.content,d);
+        const suggestions=chatFollowupsFromPayload(d,d.content);
         showFollowups(body,suggestions);
       }
     }

@@ -3303,12 +3303,26 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function extractChatResponseReferences(text)" in html
            and "function extractChatChangedFiles(text)" in html
            and "function openChatResponseReference(path,line)" in html
-           and "function renderChatResponseReferences(body,content)" in html
+           and "function renderChatResponseReferences(body,content,payload)" in html
            and "chatReferenceLineOffset(ed.value,line)" in html
            and "await openWorkspaceFile(path)" in html
-           and "renderChatResponseReferences(body,d.content);" in html
+           and "renderChatResponseReferences(body,d.content,d);" in html
            and "div.setAttribute('aria-label','Suggested follow-up prompts');" in html
            and "const btn=document.createElement('button');btn.type='button';btn.className='followup-btn';" in html)
+    _check("frontend Assistant accepts provider-native references usedContext and followups",
+           "function normalizeChatContentReferences(payload)" in html
+           and "function normalizeChatUsedContext(payload)" in html
+           and "function normalizeChatNativeReference(raw,kindOverride)" in html
+           and "function chatReferenceStatusLabel(status)" in html
+           and "function chatUriPath(value)" in html
+           and "payload.contentReferences" in html
+           and "payload.content_references" in html
+           and "payload.usedContext||payload.used_context" in html
+           and "ref.diffMeta" in html
+           and "ref.status" in html
+           and "function chatFollowupsFromPayload(payload,content)" in html
+           and "item.agentId" in html
+           and "renderChatResponseReferences(s,content,data);" in html)
     _check("frontend supports dynamic extension webview provider tabs",
             "function isExtensionWebviewProvider(providerOrId)" in html
             and "dynamicExtensionProviderDefs" in html
