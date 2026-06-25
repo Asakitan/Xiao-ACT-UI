@@ -3319,11 +3319,11 @@ def test_phase1_ai_editor_regressions() -> None:
             and "Fold Regions" in html
             and "ArrowDown" in html
             and "function languageWordPattern(lang)" in html
-            and "function languageWordRegex(globalFlag)" in html
-            and "function editorWordRangesForLine(line,baseOffset)" in html
             and "function editorLineSpanAt(value,pos)" in html
+            and "function editorWordSeparators(language)" in html
+            and "function editorIsWordSeparator(ch,language)" in html
             and "function editorWordAtCursor()" in html
-            and "function editorWordRangeAt(value,start,end)" in html
+            and "function editorWordRangeAt(value,start,end,language)" in html
             and "function editorWordBoundary(value,pos,direction)" in html
             and "function editorMoveWord(direction,selecting)" in html
             and "function editorSelectWordAtCursor()" in html
@@ -3532,7 +3532,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "editorProviderPayload('inlineCompletion'" in html
            and "editorRequestLanguageProvider('inlineCompletion'" in html
            and "function editorFormatOptions()" in html
-           and "editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,formatOnPaste:false,linkedEditing:false,codeActionsOnSave:{},codeActions:{triggerOnFocusChange:false},pasteAs:{preferences:[]},tabSize:4,insertSpaces:true}" in html
+           and "editor:{defaultFormatter:''" in html
+           and "insertSpaces:true,wordSeparators:" in html
            and "files:{autoSave:'off',autoSaveDelay:1000,trimTrailingWhitespace:false,insertFinalNewline:false,trimFinalNewlines:false}" in html
            and "defaultFormatter:''" in html
            and "linkedEditing:false" in html
@@ -3541,7 +3542,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "codeActionsOnSave:{}" in html
            and "codeActions:{triggerOnFocusChange:false}" in html
            and "pasteAs:{preferences:[]}" in html
+           and "const DEFAULT_EDITOR_WORD_SEPARATORS='`~!@#$%^&*()" in html
            and "id=\"s-editor-default-formatter\"" in html
+           and "id=\"s-editor-word-separators\"" in html
            and "id=\"s-editor-format-on-save\"" in html
            and "id=\"s-editor-format-on-paste\"" in html
            and "id=\"s-editor-format-on-type\"" in html
@@ -3551,8 +3554,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "id=\"s-editor-code-actions-on-save-json\"" in html
            and "id=\"s-editor-code-actions-detected\"" in html
            and "id=\"s-editor-code-actions-trigger-focus\"" in html
+           and "id=\"s-editor-lang-word-separators\"" in html
            and "id=\"s-editor-lang-code-actions-on-save-json\"" in html
            and "id=\"s-editor-lang-code-actions-detected\"" in html
+           and "function editorWordSeparators(language)" in html
+           and "function editorIsWordSeparator(ch,language)" in html
+           and "function editorWordRangeAt(value,start,end,language)" in html
            and "function editorFormatOnSaveEnabled()" in html
            and "function editorDefaultFormatter()" in html
            and "async function requestEditorFormattingProviders()" in html
@@ -5535,6 +5542,174 @@ function setEditorDropPasteOptionIndex(index){ _editorDropPasteOptionIndex = ind
             )
         except Exception as exc:
             _check("frontend paste/drop format behavior", False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
+    if not node_path:
+        _check("frontend word separator behavior skipped without Node.js", True)
+    else:
+        word_functions = [
+            "editorLineSpanAt",
+            "editorWordSeparators",
+            "editorIsWordSeparator",
+            "editorWordRangeAt",
+            "editorWordAtCursor",
+            "editorWordBoundary",
+            "editorSelectionFocus",
+            "editorSelectionAnchor",
+            "editorSetSelection",
+            "editorMoveWord",
+            "editorSelectWordAtCursor",
+            "fallbackExpandSelection",
+            "editorFindSeedText",
+            "_isLanguageWholeWordMatch",
+            "editorCompletionRangeOffsets",
+            "editorFallbackPrepareRename",
+        ]
+        word_js_functions = "\n".join(
+            _extract_js_function(html, name) for name in word_functions)
+        js = r"""
+function assert(ok,label){ if(!ok){ throw new Error(label); } }
+const DEFAULT_EDITOR_WORD_SEPARATORS = '`~!@#$%^&*()-=+[{]}\\|;:\'",.<>/?';
+let editorLang = "self";
+let config = {
+  editor: { wordSeparators: ".-" },
+  "[self]": { "editor.wordSeparators": "." }
+};
+let focused = false;
+const ed = {
+  value: "alpha-beta.gamma_delta next",
+  selectionStart: 7,
+  selectionEnd: 7,
+  selectionDirection: "forward",
+  focus(){ focused = true; },
+  setSelectionRange(start,end,direction){
+    this.selectionStart = start;
+    this.selectionEnd = end;
+    this.selectionDirection = direction || "none";
+  }
+};
+function isPlainObject(value){ return !!value && typeof value === "object" && !Array.isArray(value); }
+function settingSection(section){ return config[section] || {}; }
+function setDottedConfigValue(target,path,value){
+  const parts = String(path || "").split(".").filter(Boolean);
+  let current = target;
+  for(let i = 0; i < parts.length - 1; i++){
+    if(!isPlainObject(current[parts[i]])) current[parts[i]] = {};
+    current = current[parts[i]];
+  }
+  if(parts.length) current[parts[parts.length - 1]] = value;
+}
+function editorLanguageOverrideKey(language){
+  const id = String(language || editorLang || "").trim();
+  return id ? "[" + id + "]" : "";
+}
+function editorLanguageOverrideSection(language){
+  return config[editorLanguageOverrideKey(language)] || {};
+}
+function editorEffectiveSection(section,language){
+  const result = { ...(settingSection(section) || {}) };
+  const override = editorLanguageOverrideSection(language);
+  if(isPlainObject(override[section])) Object.assign(result, override[section]);
+  const prefix = section + ".";
+  Object.keys(override).forEach(key => {
+    if(key.startsWith(prefix)) setDottedConfigValue(result, key.slice(prefix.length), override[key]);
+  });
+  return result;
+}
+function updateCursorPos(){}
+function editorOffsetFromPosition(value,pos){
+  const text = String(value || "");
+  const lines = text.split("\n");
+  let offset = 0;
+  for(let i = 0; i < Math.max(0, Number(pos.line) || 0); i++) offset += lines[i].length + 1;
+  return Math.max(0, Math.min(text.length, offset + Math.max(0, Number(pos.character) || 0)));
+}
+function editorPositionFromOffset(value,offset){
+  const text = String(value || "");
+  offset = Math.max(0, Math.min(text.length, Number(offset) || 0));
+  const before = text.slice(0, offset).split("\n");
+  return { line: before.length - 1, character: before[before.length - 1].length };
+}
+function editorRangeFromOffsets(start,end){
+  return { start: editorPositionFromOffset(ed.value, start), end: editorPositionFromOffset(ed.value, end) };
+}
+function editorRangeText(range){
+  const start = editorOffsetFromPosition(ed.value, range.start);
+  const end = editorOffsetFromPosition(ed.value, range.end);
+  return ed.value.slice(Math.min(start,end), Math.max(start,end));
+}
+""" + word_js_functions + r"""
+const rangeInOverride = editorWordRangeAt(ed.value, 7, 7);
+assert(editorWordSeparators() === ".", "language override wordSeparators wins");
+assert(rangeInOverride && rangeInOverride.start === 0 && rangeInOverride.end === 10 && rangeInOverride.text === "alpha-beta",
+       "language override keeps hyphen inside word");
+const globalRange = editorWordRangeAt(ed.value, 7, 7, "plaintext");
+assert(globalRange && globalRange.start === 6 && globalRange.end === 10 && globalRange.text === "beta",
+       "global wordSeparators split hyphen");
+const underscoreRange = editorWordRangeAt(ed.value, 12, 12);
+assert(underscoreRange && underscoreRange.text === "gamma_delta",
+       "underscore remains a word character by default");
+
+ed.selectionStart = 7; ed.selectionEnd = 7;
+assert(editorSelectWordAtCursor() === true && ed.selectionStart === 0 && ed.selectionEnd === 10,
+       "Select Word uses configured separators");
+
+ed.selectionStart = 7; ed.selectionEnd = 7;
+const completionRange = editorCompletionRangeOffsets({}, ed.value, ed.selectionStart, ed.selectionEnd);
+assert(completionRange.start === 0 && completionRange.finish === 10,
+       "completion replacement range uses configured separators");
+
+assert(_isLanguageWholeWordMatch(ed.value, 0, 10) === true
+       && _isLanguageWholeWordMatch(ed.value, 6, 10) === false,
+       "whole-word find uses configured separators");
+
+ed.selectionStart = 12; ed.selectionEnd = 12;
+assert(editorFindSeedText() === "gamma_delta",
+       "find seed uses configured word range");
+
+ed.selectionStart = 7; ed.selectionEnd = 7;
+assert(fallbackExpandSelection() === true && ed.selectionStart === 0 && ed.selectionEnd === 10,
+       "fallback expand selection starts at configured word range");
+
+ed.selectionStart = 0; ed.selectionEnd = 0;
+editorMoveWord(1, false);
+assert(ed.selectionStart === 10 && ed.selectionEnd === 10,
+       "word navigation stops at configured separator");
+
+ed.selectionStart = 7; ed.selectionEnd = 7;
+const rename = editorFallbackPrepareRename(7);
+assert(rename && rename.placeholder === "alpha-beta"
+       && editorOffsetFromPosition(ed.value, rename.range.start) === 0
+       && editorOffsetFromPosition(ed.value, rename.range.end) === 10,
+       "rename fallback seed uses configured word range");
+
+console.log("frontend word separator behavior ok");
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check_subprocess_result(
+                "frontend word separator behavior",
+                result,
+                "frontend word separator behavior ok",
+            )
+        except Exception as exc:
+            _check("frontend word separator behavior", False, str(exc))
         finally:
             if js_path:
                 try:
