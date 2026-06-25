@@ -6172,9 +6172,25 @@ const dynamic = commandPaletteNormalizeDynamicCommand({
   category: "Selftest",
   description: "Extension contributed command",
   extensionId: "selftest.commands",
+  when: "resourceLangId == markdown",
+  menu: "commandPalette",
+  group: "navigation@1",
+  arguments: [{ from: "commandPalette" }],
+  alt: { command: "selftest.extension.alt", title: "Alt Probe" },
 }, commandPaletteBuiltinIdSet());
-assert(dynamic && dynamic.label === "Selftest: Run Probe" && dynamic.id === "selftest.extension.run",
-       "dynamic manifest command normalizes title category and id");
+assert(dynamic && dynamic.label === "Selftest: Run Probe" && dynamic.id === "selftest.extension.run"
+       && dynamic.when === "resourceLangId == markdown"
+       && dynamic.menu === "commandPalette"
+       && dynamic.group === "navigation@1"
+       && dynamic.arguments.length === 1
+       && dynamic.arguments[0].from === "commandPalette"
+       && dynamic.alt.command === "selftest.extension.alt",
+       "dynamic manifest command normalizes title category id and menu metadata");
+dynamic.action();
+assert(executedCommands.some(item => item.method === "execute_command"
+       && item.args[0] === "selftest.extension.run"
+       && item.args[1] && item.args[1].from === "commandPalette"),
+       "dynamic command action forwards contributed arguments");
 const disabledDynamic = commandPaletteNormalizeDynamicCommand({
   command: "selftest.extension.disabled",
   title: "Disabled Probe",
@@ -7021,7 +7037,42 @@ console.log("command palette quick access helpers ok");
             "title": "Runtime Unblocked Palette Probe",
             "category": "Selftest",
             "enablement": "selftest.palette.blocked == false",
+        }, {
+            "command": "selftest.commandPalette.menuVisible",
+            "title": "Menu Visible Probe",
+            "category": "Selftest",
+            "shortTitle": "Menu Visible",
+        }, {
+            "command": "selftest.commandPalette.menuHidden",
+            "title": "Menu Hidden Probe",
+            "category": "Selftest",
+        }, {
+            "command": "selftest.commandPalette.menuDisabled",
+            "title": "Menu Disabled Probe",
+            "category": "Selftest",
+        }, {
+            "command": "selftest.commandPalette.precondition",
+            "title": "Precondition Palette Probe",
+            "category": "Selftest",
+            "precondition": "selftest.palette.preconditionReady",
+        }],
+        "menus": {"commandPalette": [{
+            "command": "selftest.commandPalette.menuVisible",
+            "when": "resourceLangId == markdown",
+            "group": "navigation@1",
+            "arguments": [{"from": "commandPalette"}],
+            "alt": {"command": "selftest.commandPalette.noSelection"},
+        }, {
+            "command": "selftest.commandPalette.menuHidden",
+            "when": "neverContext",
+            "group": "navigation@2",
+        }, {
+            "command": "selftest.commandPalette.menuDisabled",
+            "when": "resourceLangId == markdown",
+            "enablement": "selftest.palette.menuEnabled",
+            "group": "navigation@3",
         }]},
+        },
     }, "/tmp/selftest-commands-pack")
     command_palette_api._ext_host.registry.register(command_desc)
     command_palette_api._ext_host.ext_points.process(command_desc)
@@ -7075,6 +7126,18 @@ console.log("command palette quick access helpers ok");
     runtime_unblocked_initial = next(
         (item for item in palette_commands
          if item.get("id") == "selftest.commandPalette.unblocked"), {})
+    menu_visible_command = next(
+        (item for item in palette_commands
+         if item.get("id") == "selftest.commandPalette.menuVisible"), {})
+    menu_hidden_command = next(
+        (item for item in palette_commands
+         if item.get("id") == "selftest.commandPalette.menuHidden"), {})
+    menu_disabled_command = next(
+        (item for item in palette_commands
+         if item.get("id") == "selftest.commandPalette.menuDisabled"), {})
+    precondition_command = next(
+        (item for item in palette_commands
+         if item.get("id") == "selftest.commandPalette.precondition"), {})
     inactive_editor_commands = command_palette_api.list_command_palette_commands({
         "filePath": "/tmp/app.py",
         "language": "python",
@@ -7119,6 +7182,17 @@ console.log("command palette quick access helpers ok");
            and writable_disabled.get("disabled") is True
            and runtime_context_initial.get("enabled") is False
            and runtime_unblocked_initial.get("enabled") is False
+           and menu_visible_command.get("menu") == "commandPalette"
+           and menu_visible_command.get("when") == "resourceLangId == markdown"
+           and menu_visible_command.get("group") == "navigation@1"
+           and menu_visible_command.get("order") == 1.0
+           and menu_visible_command.get("arguments") == [{"from": "commandPalette"}]
+           and menu_visible_command.get("alt", {}).get("command") == "selftest.commandPalette.noSelection"
+           and menu_hidden_command == {}
+           and menu_disabled_command.get("disabled") is True
+           and menu_disabled_command.get("enablement") == "selftest.palette.menuEnabled"
+           and precondition_command.get("disabled") is True
+           and precondition_command.get("enablement") == "selftest.palette.preconditionReady"
            and runtime_command.get("source") == "runtime"
            and runtime_command.get("runtimeAvailable") is True,
            json.dumps(palette_commands, ensure_ascii=False, default=str))
@@ -7126,14 +7200,26 @@ console.log("command palette quick access helpers ok");
         "setContext", "selftest.palette.enabled", True)
     command_palette_api._ext_host.commands.execute(
         "setContext", "selftest.palette.blocked", False)
+    command_palette_api._ext_host.commands.execute(
+        "setContext", "selftest.palette.menuEnabled", True)
+    command_palette_api._ext_host.commands.execute(
+        "setContext", "selftest.palette.preconditionReady", True)
     runtime_context_enabled_commands = (
-        command_palette_api.list_command_palette_commands({}).get("commands", []))
+        command_palette_api.list_command_palette_commands({
+            "resourceLangId": "markdown",
+        }).get("commands", []))
     runtime_context_enabled = next(
         (item for item in runtime_context_enabled_commands
          if item.get("id") == "selftest.commandPalette.context"), {})
     runtime_unblocked_enabled = next(
         (item for item in runtime_context_enabled_commands
          if item.get("id") == "selftest.commandPalette.unblocked"), {})
+    menu_disabled_enabled = next(
+        (item for item in runtime_context_enabled_commands
+         if item.get("id") == "selftest.commandPalette.menuDisabled"), {})
+    precondition_enabled = next(
+        (item for item in runtime_context_enabled_commands
+         if item.get("id") == "selftest.commandPalette.precondition"), {})
     command_palette_api._ext_host.commands.execute(
         "setContext", "selftest.palette.blocked", True)
     runtime_context_blocked_commands = (
@@ -7160,6 +7246,8 @@ console.log("command palette quick access helpers ok");
            runtime_context_enabled.get("enabled") is True
            and runtime_context_enabled.get("disabled") is False
            and runtime_unblocked_enabled.get("enabled") is True
+           and menu_disabled_enabled.get("enabled") is True
+           and precondition_enabled.get("enabled") is True
            and runtime_context_blocked.get("enabled") is False
            and runtime_unblocked_blocked.get("enabled") is False
            and runtime_context_cleared.get("enabled") is False

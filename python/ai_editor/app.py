@@ -9499,9 +9499,16 @@ class AIEditorAPI:
         manifest_commands = (
             contributions.get("commands", [])
             if isinstance(contributions, dict) else [])
+        menus = (
+            contributions.get("menus", {})
+            if isinstance(contributions, dict) else {})
+        palette_menu_items = (
+            menus.get("commandPalette", [])
+            if isinstance(menus, dict) else [])
         registered_ids = set(self._ext_host.commands.list_commands())
         entries: List[Dict[str, Any]] = []
         seen: set[str] = set()
+        explicit_palette_ids: set[str] = set()
         palette_context = self._command_palette_context(context)
 
         def extension_info(extension_id: str) -> Dict[str, Any]:
@@ -9516,17 +9523,39 @@ class AIEditorAPI:
                 "version": ext.version,
             }
 
-        for item in manifest_commands if isinstance(manifest_commands, list) else []:
-            if not isinstance(item, dict):
-                continue
-            command_id = str(item.get("command") or "").strip()
-            if not command_id:
-                continue
-            seen.add(command_id)
-            extension_id = str(item.get("_extensionId") or "").strip()
-            title = item.get("title") or command_id
-            category = item.get("category") or "Extensions"
+        def _combined_when(*values: Any) -> str:
+            parts = [
+                str(value).strip()
+                for value in values
+                if str(value or "").strip()
+            ]
+            return " && ".join(parts)
+
+        def _command_palette_entry(
+                command_id: str,
+                command_record: Dict[str, Any],
+                menu_item: Optional[Dict[str, Any]] = None,
+                source: str = "extension") -> Dict[str, Any]:
+            menu_item = menu_item or {}
+            extension_id = str(
+                menu_item.get("_extensionId")
+                or command_record.get("_extensionId") or "").strip()
+            title = (
+                menu_item.get("title")
+                or command_record.get("title")
+                or command_id)
+            category = (
+                menu_item.get("category")
+                or command_record.get("category")
+                or "Extensions")
             label = f"{category}: {title}" if category else str(title)
+            enablement = _combined_when(
+                command_record.get("precondition"),
+                command_record.get("enablement"),
+                menu_item.get("precondition"),
+                menu_item.get("enablement"))
+            group_name = self._extension_menu_group_name(
+                menu_item.get("group", ""))
             entry: Dict[str, Any] = {
                 "id": command_id,
                 "command": command_id,
@@ -9534,22 +9563,23 @@ class AIEditorAPI:
                 "title": str(title),
                 "category": str(category or "Extensions"),
                 "description": str(
-                    item.get("shortTitle")
-                    or item.get("description")
+                    menu_item.get("shortTitle")
+                    or menu_item.get("description")
+                    or command_record.get("shortTitle")
+                    or command_record.get("description")
                     or extension_id
                     or "Extension command"),
-                "source": "extension",
+                "source": source,
                 "extensionId": extension_id,
                 "extension": extension_info(extension_id),
                 "runtimeAvailable": command_id in registered_ids,
                 "needsExtensionRuntime": bool(
-                    (item.get("_runtimeSupport") or {}).get(
+                    (command_record.get("_runtimeSupport") or {}).get(
                         "needsExtensionRuntime", False)),
                 "enabled": True,
                 "disabled": False,
             }
-            if item.get("enablement") is not None:
-                enablement = str(item.get("enablement"))
+            if enablement:
                 enabled = self._extension_when_matches(
                     enablement, palette_context)
                 entry["enablement"] = enablement
@@ -9558,11 +9588,71 @@ class AIEditorAPI:
                 if not enabled:
                     entry["disabledReason"] = (
                         f"Enablement not satisfied: {enablement}")
-            if item.get("icon") is not None:
-                entry["icon"] = item.get("icon")
-            entries.append(entry)
+            if command_record.get("icon") is not None:
+                entry["icon"] = command_record.get("icon")
+            if menu_item.get("icon") is not None:
+                entry["icon"] = menu_item.get("icon")
+            if menu_item:
+                entry["menu"] = "commandPalette"
+                entry["when"] = str(menu_item.get("when", "") or "")
+                entry["group"] = str(menu_item.get("group", "") or "")
+                entry["groupName"] = group_name
+                entry["groupRank"] = self._extension_menu_group_rank(group_name)
+                entry["order"] = self._extension_menu_order(
+                    menu_item.get("group", ""))
+                if isinstance(menu_item.get("arguments"), list):
+                    entry["arguments"] = list(menu_item.get("arguments") or [])
+                alt = menu_item.get("alt")
+                if isinstance(alt, str) and alt:
+                    entry["alt"] = {"command": alt, "title": alt}
+                elif isinstance(alt, dict):
+                    alt_command = str(
+                        alt.get("command") or alt.get("id") or "").strip()
+                    if alt_command:
+                        alt_record = (
+                            self._ext_host.ext_points.get_command_contribution(
+                                alt_command))
+                        entry["alt"] = {
+                            "command": alt_command,
+                            "title": str(
+                                alt.get("title")
+                                or alt_record.get("title")
+                                or alt_command),
+                        }
+            return entry
 
-        for command_id in sorted(registered_ids - seen):
+        for item in palette_menu_items if isinstance(palette_menu_items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            command_id = str(item.get("command") or "").strip()
+            if not command_id:
+                continue
+            explicit_palette_ids.add(command_id)
+            if not self._extension_when_matches(
+                    item.get("when", ""), palette_context):
+                continue
+            command_record = self._ext_host.ext_points.get_command_contribution(
+                command_id)
+            if not command_record:
+                command_record = {
+                    "command": command_id,
+                    "title": item.get("title") or command_id,
+                    "_extensionId": str(item.get("_extensionId") or ""),
+                }
+            seen.add(command_id)
+            entries.append(_command_palette_entry(
+                command_id, command_record, item))
+
+        for item in manifest_commands if isinstance(manifest_commands, list) else []:
+            if not isinstance(item, dict):
+                continue
+            command_id = str(item.get("command") or "").strip()
+            if not command_id or command_id in explicit_palette_ids:
+                continue
+            seen.add(command_id)
+            entries.append(_command_palette_entry(command_id, item))
+
+        for command_id in sorted(registered_ids - seen - explicit_palette_ids):
             if not command_id or command_id.startswith("_"):
                 continue
             entries.append({
@@ -9580,6 +9670,8 @@ class AIEditorAPI:
             })
 
         entries.sort(key=lambda item: (
+            int(item.get("groupRank", 100)),
+            float(item.get("order", 0.0)),
             str(item.get("category") or ""),
             str(item.get("label") or ""),
             str(item.get("id") or "")))
