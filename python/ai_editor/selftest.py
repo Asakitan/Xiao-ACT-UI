@@ -3277,6 +3277,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "if(!value){showChatWelcomeIfEmpty();return null}" in html
             and "renderWelcome();\n  setStatus(t('new_chat_title')" in html
             and "const body=latestChatMessageBody('assistant');" in html)
+    _check("frontend Assistant suppresses null and empty message turns",
+           "function normalizeChatMessageText(text,role)" in html
+           and "function chatMessageBodyHasContent(body)" in html
+           and "function removeChatMessageBody(body)" in html
+           and "if(!content&&role!=='user')return;" in html
+           and "const finalMarkdown=normalizeChatMessageText(streamBuf||d.content||'','assistant');" in html
+           and "if(!chatMessageBodyHasContent(currentMsgBody))removeChatMessageBody(currentMsgBody);" in html
+           and "const message=normalizeChatSystemText(d&&d.error!==undefined?d.error:d)||'Unknown error';" in html
+           and "onStreamEnd=function(d){\n  d=d||{};" in html)
     _check("frontend Assistant tracks Copilot-style session and input state",
            "ASSISTANT_SESSION_STATE_KEY='sao-ai-editor-chat-session-state'"
            in html

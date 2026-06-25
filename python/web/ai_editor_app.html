@@ -3571,6 +3571,28 @@ function normalizeChatSystemText(text){
   const value=String(text).trim();
   return value&&value!=='null'&&value!=='undefined'?value:'';
 }
+function normalizeChatMessageText(text,role){
+  if(role==='system')return normalizeChatSystemText(text);
+  if(text==null)return '';
+  if(typeof text==='object'){
+    if(typeof text.content==='string')text=text.content;
+    else if(typeof text.message==='string')text=text.message;
+    else if(typeof text.error==='string')text='⚠ '+text.error;
+    else return '';
+  }
+  const value=String(text).trim();
+  return value&&value!=='null'&&value!=='undefined'?value:'';
+}
+function chatMessageBodyHasContent(body){
+  if(!body)return false;
+  if(String(body.textContent||'').trim())return true;
+  return !!body.querySelector('.tool-call,.thinking-block,.chat-response-references,.chat-change-card,.followups,.confirm-bar,img');
+}
+function removeChatMessageBody(body){
+  const msg=body&&body.closest?body.closest('.msg'):null;
+  if(msg)msg.remove();
+  showChatWelcomeIfEmpty();
+}
 function ensureChatMessagesInner(){
   const host=$('chat-messages');if(!host)return null;
   let container=host.querySelector('.chat-messages-inner');
@@ -3696,10 +3718,12 @@ function assistantSessionMessageSnapshot(){
   return chatConversationItems().map(msg=>{
     const body=msg.querySelector('.msg-body');
     const model=msg.querySelector('.msg-model');
+    const role=String(msg.dataset.role||'assistant');
+    const content=normalizeChatMessageText((body&&body._rawMarkdown)||((body&&body.textContent)||''),role);
     return {
-      role:String(msg.dataset.role||'assistant'),
+      role,
       model:model?String(model.textContent||''):'',
-      content:String((body&&body._rawMarkdown)||((body&&body.textContent)||'')).slice(0,80000)
+      content:content.slice(0,80000)
     };
   }).filter(m=>m.content||m.role==='user').slice(-80);
 }
@@ -3747,9 +3771,11 @@ function assistantSessionRenderMessages(messages){
   totalTokens=0;mainToolNames=Object.create(null);
   (messages||[]).forEach(m=>{
     const role=String(m&&m.role||'assistant');
+    const content=normalizeChatMessageText(m&&m.content,role);
+    if(!content&&role!=='user')return;
     const b=createMsg(role,m&&m.model);
-    if(role==='assistant')renderMd(b,String(m.content||''));
-    else b.textContent=String(m.content||'');
+    if(role==='assistant')renderMd(b,content);
+    else b.textContent=content;
   });
   showChatWelcomeIfEmpty();
 }
@@ -10998,6 +11024,7 @@ function highlightCode(code,lang){
 let thinkingBuf='', thinkingEl=null;
 
 function onThinkingDelta(d){
+  d=d||{};
   thinkingBuf+=(d.content||'');
   if(!currentMsgBody&&(d.content||''))ensureAssistantBody();
   if(!thinkingEl&&currentMsgBody){
@@ -11059,6 +11086,7 @@ function toolResultSucceeded(data){
 let streamWordQueue='', streamFlushTimer=null;
 
 function onStreamDelta(d){
+  d=d||{};
   if(!currentMsgBody&&(d.content||''))ensureAssistantBody();
   if(!currentMsgBody)return;
   const text=d.content||'';
@@ -11086,6 +11114,7 @@ function flushStreamWords(){
 }
 
 function onStreamEnd(d){
+  d=d||{};
   finalizeThinking();
   if(!currentMsgBody&&(d.content||d.thinking||d.error||(d.tool_calls&&d.tool_calls.length)))ensureAssistantBody();
   if(currentMsgBody){
@@ -11101,10 +11130,12 @@ function onStreamEnd(d){
       hdr.onclick=()=>{hdr.classList.toggle('open');body.classList.toggle('open')};
       tb.appendChild(hdr);tb.appendChild(body);currentMsgBody.appendChild(tb);
     }
-    currentMsgBody._rawMarkdown=streamBuf;
-    renderMd(currentMsgBody,streamBuf);
+    const finalMarkdown=normalizeChatMessageText(streamBuf||d.content||'','assistant');
+    currentMsgBody._rawMarkdown=finalMarkdown;
+    if(finalMarkdown)renderMd(currentMsgBody,finalMarkdown);
     if(d.tool_calls)d.tool_calls.forEach(tc=>{rememberMainTool(tc.id,tc.name);renderToolCallWithState(currentMsgBody,tc.name,tc.arguments,tc.id)});
     if(d.error){const e=document.createElement('div');e.className='error-text';e.textContent='⚠ '+d.error;currentMsgBody.appendChild(e)}
+    if(!chatMessageBodyHasContent(currentMsgBody))removeChatMessageBody(currentMsgBody);
   }
   if(d.usage){
     updateContextUsage(totalTokens+(d.usage.total_tokens||0));
@@ -11171,7 +11202,10 @@ function onTokenWarning(d){
   setStatus('Context warning: '+label);
   if(typeof showToast==='function')showToast('Context warning: '+label,'warning',5000);
 }
-function onError(d){appendSystem('⚠ Error: '+(d.error||d));setStatus(t('status_error'))}
+function onError(d){
+  const message=normalizeChatSystemText(d&&d.error!==undefined?d.error:d)||'Unknown error';
+  appendSystem('⚠ Error: '+message);setStatus(t('status_error'))
+}
 function onIdle(){
   setStatus(t('ready'));streaming=false;
   $('send-btn').disabled=false;_setSendIcon(false);
@@ -13092,10 +13126,14 @@ async function loadHistoryConv(id){
   const data=await call('load_history',id);if(!data||data.error){appendSystem('Failed to load');return}
   $('chat-messages').innerHTML='';totalTokens=0;
   (data.messages||[]).forEach(m=>{
-    if(m.role==='user')createMsg('user').textContent=m.content;
-    else if(m.role==='assistant'){const b=createMsg('assistant',data.model);renderMd(b,m.content||'');
+    const role=String(m&&m.role||'assistant');
+    const content=normalizeChatMessageText(m&&m.content,role);
+    if(!content&&role!=='user')return;
+    if(role==='user')createMsg('user').textContent=content;
+    else if(role==='assistant'){const b=createMsg('assistant',data.model);renderMd(b,content);
       if(m.tool_calls)m.tool_calls.forEach(tc=>renderToolCall(b,tc.name,tc.arguments))}
-    else if(m.role==='tool'){}// tool results shown inline with assistant
+    else if(role==='system')appendSystem(content);
+    else if(role==='tool'){}// tool results shown inline with assistant
   });
   assistantSessionState=assistantSessionDefaults({
     provider:data.provider||config.provider,model:data.model||config.model,
@@ -20806,6 +20844,7 @@ window.doSend=doSend;
 // ── Patch onStreamEnd to show followups + plan implement button ──
 const _origOnStreamEnd=onStreamEnd;
 onStreamEnd=function(d){
+  d=d||{};
   _origOnStreamEnd(d);
   if(d.content){
     const body=latestChatMessageBody('assistant');
