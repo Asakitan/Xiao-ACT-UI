@@ -6010,6 +6010,26 @@ function _quickInputEventPayload(input, event, extra = {}) {
     };
 }
 
+function _quickInputNormalizeValidationMessage(value) {
+    if (value === undefined || value === null || value === '') {
+        return { message: undefined, severity: 0 };
+    }
+    if (typeof value === 'string') {
+        return { message: value, severity: 3 };
+    }
+    if (typeof value === 'object') {
+        const message = value.message === undefined || value.message === null
+            ? ''
+            : String(value.message);
+        const severity = Number(value.severity);
+        return {
+            message,
+            severity: Number.isFinite(severity) ? severity : 3,
+        };
+    }
+    return { message: String(value), severity: 3 };
+}
+
 class QuickInputBase {
     constructor(kind) {
         this._kind = kind;
@@ -6021,7 +6041,7 @@ class QuickInputBase {
         this._totalSteps = undefined;
         this._enabled = true;
         this._busy = false;
-        this._ignoreFocusOut = false;
+        this._ignoreFocusOut = true;
         this._onDidHideEmitter = new EventEmitter();
         this.onDidHide = this._onDidHideEmitter.event;
         _quickInputs.set(this._id, this);
@@ -6291,6 +6311,7 @@ class InputBoxInput extends QuickInputBase {
         this._buttons = [];
         this._prompt = undefined;
         this._validationMessage = undefined;
+        this._validationSeverity = 0;
         this._onDidChangeValueEmitter = new EventEmitter();
         this._onDidAcceptEmitter = new EventEmitter();
         this._onDidTriggerButtonEmitter = new EventEmitter();
@@ -6343,6 +6364,7 @@ class InputBoxInput extends QuickInputBase {
     set validationMessage(value) {
         this._assertAlive();
         this._validationMessage = value;
+        this._validationSeverity = _quickInputNormalizeValidationMessage(value).severity;
         this._send('update', { changed: 'validationMessage' });
     }
     _accept() {
@@ -6371,7 +6393,9 @@ class InputBoxInput extends QuickInputBase {
             password: this._password,
             buttons: this._buttons,
             prompt: this._prompt,
-            validationMessage: this._validationMessage,
+            validationMessage: _quickInputNormalizeValidationMessage(
+                this._validationMessage).message,
+            severity: this._validationSeverity,
         };
     }
 }
@@ -6395,6 +6419,16 @@ function _quickInputButtonForIndex(input, index) {
     return Number.isInteger(i) && i >= 0 && i < buttons.length ? buttons[i] : undefined;
 }
 
+function _quickInputButtonForHandle(input, handle) {
+    const buttons = Array.isArray(input?._buttons) ? input._buttons : [];
+    const h = Number(handle);
+    if (!Number.isInteger(h)) return undefined;
+    if (h === -1) {
+        return buttons.find(button => String(button?.tooltip || '').toLowerCase() === 'back');
+    }
+    return h >= 0 && h < buttons.length ? buttons[h] : undefined;
+}
+
 function handleQuickInputAction(msg) {
     const id = String(msg.id || '');
     const action = String(msg.action || '');
@@ -6404,28 +6438,41 @@ function handleQuickInputAction(msg) {
         return;
     }
     try {
+        const enabled = input._enabled !== false;
         if (action === 'changeValue') {
+            if (!enabled) return;
             input.value = String(msg.value ?? '');
         } else if (action === 'changeActive' && input instanceof QuickPickInput) {
+            if (!enabled) return;
             input._setActiveItemsFromHost(
                 _quickInputItemsForIndices(input, msg.itemIndices || msg.indices));
         } else if (action === 'changeSelection' && input instanceof QuickPickInput) {
+            if (!enabled) return;
             input._setSelectedItemsFromHost(
                 _quickInputItemsForIndices(input, msg.itemIndices || msg.indices));
         } else if (action === 'triggerButton') {
-            const button = _quickInputButtonForIndex(input, msg.buttonIndex);
+            if (!enabled) return;
+            const button = msg.buttonHandle !== undefined
+                ? _quickInputButtonForHandle(input, msg.buttonHandle)
+                : _quickInputButtonForIndex(input, msg.buttonIndex);
             if (button !== undefined && typeof input._triggerButton === 'function') {
                 input._triggerButton(button, msg.checked);
             }
         } else if (action === 'triggerItemButton' && input instanceof QuickPickInput) {
+            if (!enabled) return;
             const item = _quickInputItemForIndex(input, msg.itemIndex);
             const buttons = Array.isArray(item?.buttons) ? item.buttons : [];
-            const buttonIndex = Number(msg.buttonIndex);
-            const button = Number.isInteger(buttonIndex) ? buttons[buttonIndex] : undefined;
+            const buttonIndex = msg.buttonHandle !== undefined
+                ? Number(msg.buttonHandle)
+                : Number(msg.buttonIndex);
+            const button = Number.isInteger(buttonIndex) && buttonIndex >= 0
+                ? buttons[buttonIndex]
+                : undefined;
             if (item !== undefined && button !== undefined) {
                 input._triggerItemButton(item, button, msg.checked);
             }
         } else if (action === 'accept' && typeof input._accept === 'function') {
+            if (!enabled) return;
             input._accept();
         } else if (action === 'hide') {
             input.hide();

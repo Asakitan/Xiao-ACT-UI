@@ -5714,6 +5714,7 @@ console.log("extension setting schema helpers ok");
            and "function quickInputResourceUriPath(resource)" in html
            and "function quickInputResourceBasename(value)" in html
            and "function quickInputMoveActive(state,delta)" in html
+           and "function quickInputButtonHandle(button,index)" in html
            and "function quickInputItemMatchesFilter(item,state)" in html
            and "function quickInputFilterText(state)" in html
            and "quickInputSelectableIndices(state)" in html
@@ -5723,6 +5724,12 @@ console.log("extension setting schema helpers ok");
            and "previousScrollTop" in html
            and "state.valueSelection" in html
            and "input.setSelectionRange" in html
+           and "quickInputPreviousFocus" in html
+           and "target.isConnected" in html
+           and "state.enabled===false&&e.key!=='Escape'" in html
+           and "buttonHandle:quickInputButtonHandle(button,index)" in html
+           and "input.setAttribute('aria-invalid'" in html
+           and "validation.classList.toggle('warning'" in html
            and "e.key==='ArrowDown'" in html
            and "e.key==='ArrowUp'" in html
            and "aria-activedescendant" in html
@@ -5749,6 +5756,7 @@ console.log("extension setting schema helpers ok");
             "quickInputSelectedKeySet",
             "quickInputFilterText",
             "quickInputItemMatchesFilter",
+            "quickInputButtonHandle",
             "quickInputSelectedIndices",
             "quickInputSelectableIndices",
             "quickInputOrderedEntries",
@@ -5803,6 +5811,10 @@ assert(JSON.stringify(quickInputSelectableIndices(state)) === "[2,3]",
 state.value = "";
 assert(JSON.stringify(quickInputSelectableIndices(state)) === "[1,2,3]",
        "empty filter shows all non-separator items");
+assert(quickInputButtonHandle({ tooltip: "Back" }, 4) === -1,
+       "Back button gets VS Code handle");
+assert(quickInputButtonHandle({ handle: 7, tooltip: "Custom" }, 4) === 7,
+       "explicit button handle is preserved");
 console.log("quick input filter helpers ok");
 """
         js_path = ""
@@ -6115,16 +6127,19 @@ console.log("quick input filter helpers ok");
            and "function renderQuickInputEvent(data)" in html
            and "function renderQuickInputState(state)" in html
            and "function quickInputOrderedEntries(state)" in html
-           and "quickInputAction(state.id,'triggerButton',{buttonIndex:index,checked})"
+           and "quickInputAction(state.id,'triggerButton',{buttonIndex:index,buttonHandle:quickInputButtonHandle(button,index),checked})"
            in html
-           and "quickInputAction(state.id,'triggerItemButton',{itemIndex:index,buttonIndex,checked})"
+           and "quickInputAction(state.id,'triggerItemButton',{itemIndex:index,buttonIndex,buttonHandle:quickInputButtonHandle(button,buttonIndex),checked})"
            in html
            and "if(!view||!view.visible||view.ignoreFocusOut)return;" in html
            and "const _quickInputs = new Map()" in node_ext_host_source
            and "_quickInputs.set(this._id, this)" in node_ext_host_source
            and "_quickInputs.delete(this._id)" in node_ext_host_source
            and "function _quickPickItemIsPickable(item)" in node_ext_host_source
+           and "function _quickInputNormalizeValidationMessage(value)"
+           in node_ext_host_source
            and "this._sortByLabel = true" in node_ext_host_source
+           and "this._ignoreFocusOut = true" in node_ext_host_source
            and "get sortByLabel()" in node_ext_host_source
            and "this._activeItems = this._filterPickableItems(value)"
            in node_ext_host_source
@@ -6137,7 +6152,12 @@ console.log("quick input filter helpers ok");
            in node_ext_host_source
            and "const input = new InputBoxInput()" in node_ext_host_source
            and "validateCurrentValue" in node_ext_host_source
+           and "severity: this._validationSeverity" in node_ext_host_source
            and "function handleQuickInputAction(msg)" in node_ext_host_source
+           and "function _quickInputButtonForHandle(input, handle)"
+           in node_ext_host_source
+           and "const enabled = input._enabled !== false"
+           in node_ext_host_source
            and "case 'quick_input_action':" in node_ext_host_source
            and "input.value = String(msg.value ?? '')" in node_ext_host_source
            and "input._triggerButton(button, msg.checked)" in node_ext_host_source
@@ -13547,7 +13567,20 @@ async function activate(context) {
     parityQuickPick.items = [toggleItem];
     parityQuickPick._triggerButton(titleToggle, true);
     parityQuickPick._triggerItemButton(toggleItem, inlineToggle, true);
+    const quickPickIgnoreFocusOutDefault = parityQuickPick.ignoreFocusOut;
     parityQuickPick.dispose();
+    const validationInput = vscode.window.createInputBox();
+    const inputBoxIgnoreFocusOutDefault = validationInput.ignoreFocusOut;
+    validationInput.validationMessage = 'string error';
+    const stringValidationSnapshot = validationInput._snapshot();
+    validationInput.validationMessage = {
+      message: 'info only',
+      severity: vscode.InputBoxValidationSeverity.Info,
+    };
+    const infoValidationSnapshot = validationInput._snapshot();
+    validationInput.validationMessage = undefined;
+    const clearedValidationSnapshot = validationInput._snapshot();
+    validationInput.dispose();
     return {
       stringPick,
       objectPick: objectPick && objectPick.label,
@@ -13593,6 +13626,14 @@ async function activate(context) {
         sortByLabelDisabled,
         titleToggleChecked: titleToggle.toggle.checked,
         inlineToggleChecked: inlineToggle.toggle.checked,
+        quickPickIgnoreFocusOutDefault,
+        inputBoxIgnoreFocusOutDefault,
+        stringValidationMessage: stringValidationSnapshot.validationMessage,
+        stringValidationSeverity: stringValidationSnapshot.severity,
+        infoValidationMessage: infoValidationSnapshot.validationMessage,
+        infoValidationSeverity: infoValidationSnapshot.severity,
+        clearedValidationMessage: clearedValidationSnapshot.validationMessage,
+        clearedValidationSeverity: clearedValidationSnapshot.severity,
       },
     };
   });
@@ -17832,6 +17873,22 @@ module.exports = { activate, deactivate };
                            "titleToggleChecked") is True
                        and node_quick_pick_parity.get(
                            "inlineToggleChecked") is True
+                       and node_quick_pick_parity.get(
+                           "quickPickIgnoreFocusOutDefault") is True
+                       and node_quick_pick_parity.get(
+                           "inputBoxIgnoreFocusOutDefault") is True
+                       and node_quick_pick_parity.get(
+                           "stringValidationMessage") == "string error"
+                       and node_quick_pick_parity.get(
+                           "stringValidationSeverity") == 3
+                       and node_quick_pick_parity.get(
+                           "infoValidationMessage") == "info only"
+                       and node_quick_pick_parity.get(
+                           "infoValidationSeverity") == 1
+                       and node_quick_pick_parity.get(
+                           "clearedValidationMessage") is None
+                       and node_quick_pick_parity.get(
+                           "clearedValidationSeverity") == 0
                        and any(
                            item.get("event") == "show"
                            and item.get("kind") == "quickPick"

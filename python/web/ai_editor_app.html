@@ -929,6 +929,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .quick-input-field:disabled { opacity:.75; cursor:not-allowed; }
 .quick-input-prompt { color:var(--fg-dim); font-size:12px; margin:6px 1px 0; line-height:1.35; }
 .quick-input-validation { color:var(--fg-warning); font-size:12px; margin:6px 1px 0; line-height:1.35; }
+.quick-input-validation.info { color:var(--fg-accent); }
+.quick-input-validation.warning { color:var(--fg-warning); }
 .quick-input-validation.error { color:var(--fg-error); }
 .quick-input-list { margin-top:8px; max-height:320px; overflow-y:auto; border:1px solid var(--border);
   border-radius:4px; background:var(--bg); }
@@ -2103,6 +2105,7 @@ function withSettingsDefaults(raw){
 let config=withSettingsDefaults({});
 const quickInputViews=Object.create(null);
 let activeQuickInputId='';
+let quickInputPreviousFocus=null;
 const APPROVAL_VALUES=new Set(['default','bypass','autopilot']);
 function normalizeApproval(value){
   const raw=String(value||'default').trim().toLowerCase();
@@ -2489,6 +2492,11 @@ function quickInputButtonGlyph(button){
   return tip?esc(tip.slice(0,1).toUpperCase()):'·';
 }
 function quickInputButtonTitle(button){return String(button&&button.tooltip||'')}
+function quickInputButtonHandle(button,index){
+  if(button&&Number.isInteger(Number(button.handle)))return Number(button.handle);
+  if(String(button&&button.tooltip||'').toLowerCase()==='back')return -1;
+  return index;
+}
 function quickInputResourceUriPath(resource){
   if(!resource)return'';
   if(typeof resource==='string')return resource;
@@ -2621,7 +2629,7 @@ function quickInputRenderButtons(box,state){
     btn.onclick=e=>{
       e.preventDefault();e.stopPropagation();if(btn.disabled)return;
       const checked=button&&button.toggle?!(button.toggle&&button.toggle.checked):undefined;
-      quickInputAction(state.id,'triggerButton',{buttonIndex:index,checked});
+      quickInputAction(state.id,'triggerButton',{buttonIndex:index,buttonHandle:quickInputButtonHandle(button,index),checked});
     };
     holder.appendChild(btn);
   });
@@ -2674,7 +2682,7 @@ function quickInputRenderItems(list,state,input){
       btn.onclick=e=>{
         e.preventDefault();e.stopPropagation();if(btn.disabled)return;
         const checked=button&&button.toggle?!(button.toggle&&button.toggle.checked):undefined;
-        quickInputAction(state.id,'triggerItemButton',{itemIndex:index,buttonIndex,checked});
+        quickInputAction(state.id,'triggerItemButton',{itemIndex:index,buttonIndex,buttonHandle:quickInputButtonHandle(button,buttonIndex),checked});
       };
       btns.appendChild(btn);
     });
@@ -2712,6 +2720,11 @@ function renderQuickInputState(state){
   }
   view.state=state;state.el=view.el;
   const el=view.el,input=el.querySelector('.quick-input-field'),prompt=el.querySelector('.quick-input-prompt'),validation=el.querySelector('.quick-input-validation'),list=el.querySelector('.quick-input-list');
+  const wasVisible=!!view.wasVisible;
+  if(state.visible&&!wasVisible){
+    const active=document.activeElement;
+    quickInputPreviousFocus=active&&active.closest&&!active.closest('.quick-input')?active:quickInputPreviousFocus;
+  }
   el.classList.toggle('hidden',!state.visible);
   el.classList.toggle('busy',!!state.busy);
   el.classList.toggle('disabled',state.enabled===false);
@@ -2758,6 +2771,7 @@ function renderQuickInputState(state){
       quickInputAction(state.id,'changeValue',{value:input.value});
     };
     input.onkeydown=e=>{
+      if(state.enabled===false&&e.key!=='Escape')return;
       if(state.kind==='quickPick'&&e.key==='ArrowDown'){e.preventDefault();quickInputMoveActive(state,1)}
       else if(state.kind==='quickPick'&&e.key==='ArrowUp'){e.preventDefault();quickInputMoveActive(state,-1)}
       else if(e.key==='Enter'){e.preventDefault();quickInputAction(state.id,'accept',{})}
@@ -2766,10 +2780,13 @@ function renderQuickInputState(state){
   }
   if(prompt){prompt.textContent=state.prompt||'';prompt.style.display=state.prompt?'':'none'}
   if(validation){
-    const raw=state.validationMessage;
+    const raw=state.validationMessage,severity=Number(state.severity||(raw&&raw.severity)||0);
     const message=typeof raw==='string'?raw:(raw&&raw.message)||'';
     validation.textContent=message;validation.style.display=message?'':'none';
-    validation.classList.toggle('error',!!(raw&&Number(raw.severity)===3));
+    validation.classList.toggle('info',!!message&&severity===1);
+    validation.classList.toggle('warning',!!message&&severity===2);
+    validation.classList.toggle('error',!!message&&severity===3);
+    input&&input.setAttribute('aria-invalid',message&&severity===3?'true':'false');
   }
   quickInputRenderButtons(el,state);
   if(list){
@@ -2788,7 +2805,12 @@ function renderQuickInputState(state){
       quickInputSyncActiveDescendant(input,null);
     }
   }
-  if(state.visible){activeQuickInputId=state.id;if(input&&document.activeElement!==input)setTimeout(()=>input.focus(),0)}
+  if(state.visible){activeQuickInputId=state.id;if(input&&state.enabled!==false&&document.activeElement!==input)setTimeout(()=>input.focus(),0)}
+  else if(wasVisible&&quickInputPreviousFocus&&quickInputPreviousFocus.focus){
+    const target=quickInputPreviousFocus;quickInputPreviousFocus=null;
+    setTimeout(()=>{try{if(target.isConnected)target.focus()}catch(_err){}},0);
+  }
+  view.wasVisible=!!state.visible;
 }
 document.addEventListener('mousedown',e=>{
   if(!activeQuickInputId)return;
