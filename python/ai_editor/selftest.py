@@ -3275,8 +3275,30 @@ def test_phase1_ai_editor_regressions() -> None:
            and "attach-name" in html
            and "const value=normalizeChatSystemText(text);" in html
            and "if(!value){showChatWelcomeIfEmpty();return null}" in html
-           and "renderWelcome();\n  setStatus(t('new_chat_title')" in html
-           and "const body=latestChatMessageBody('assistant');" in html)
+            and "renderWelcome();\n  setStatus(t('new_chat_title')" in html
+            and "const body=latestChatMessageBody('assistant');" in html)
+    _check("frontend Assistant tracks Copilot-style session and input state",
+           "ASSISTANT_SESSION_STATE_KEY='sao-ai-editor-chat-session-state'"
+           in html
+           and "function assistantSessionResource()" in html
+           and "function syncAssistantSessionState(patch)" in html
+           and "function restoreAssistantSessionDraft()" in html
+           and "function noteAssistantChatRequest(text,refs,toolHint)" in html
+           and 'id="chat-session-chip"' in html
+           and "panel.dataset.chatSessionResource=assistantSessionResource();"
+           in html
+           and "panel.dataset.chatSessionType=assistantSessionState.type"
+           in html
+           and "panel.dataset.chatRequestInProgress=assistantSessionState.requestInProgress?'true':'false';"
+           in html
+           and "panel.dataset.chatInputHasText=assistantSessionState.inputHasText?'true':'false';"
+           in html
+           and "panel.dataset.chatHasFileAttachments=assistantSessionState.hasFileAttachments?'true':'false';"
+           in html
+           and "noteAssistantChatRequest(text,sendContext.refs,toolHint);"
+           in html
+           and "chat_session:requestMeta" in html
+           and "restoreAssistantSessionDraft();" in html)
     _check("frontend Assistant supports Copilot-style attached context and references",
            'id="chat-context-area" aria-label="Attached context"' in html
            and "chat-context-pill" in html
