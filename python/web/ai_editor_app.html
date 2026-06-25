@@ -968,6 +968,29 @@ pre.code-block code .type { color:var(--fg-type); }
 .slash-item .category { font-size:9px; text-transform:uppercase; letter-spacing:.5px;
   color:var(--fg-dim); border:1px solid var(--border); border-radius:3px; padding:1px 5px; }
 
+/* ── Assistant context picker ── */
+.chat-context-picker { position:absolute; bottom:100%; left:0; right:0; display:none; z-index:110;
+  margin-bottom:4px; background:var(--bg2); border:1px solid var(--border); border-radius:6px;
+  box-shadow:0 -4px 18px #0000004d; overflow:hidden; }
+.chat-context-picker.open { display:block; }
+.chat-context-picker-head { display:flex; align-items:center; gap:8px; padding:7px 8px;
+  border-bottom:1px solid var(--border); background:color-mix(in srgb, var(--bg3) 70%, var(--bg2)); }
+.chat-context-picker-head .label { color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; }
+.chat-context-picker-input { flex:1; min-width:0; height:24px; border:1px solid var(--border);
+  border-radius:4px; background:var(--bg-input); color:var(--fg); padding:0 8px; font:12px var(--sans); outline:none; }
+.chat-context-picker-input:focus { border-color:var(--border-focus); }
+.chat-context-picker-list { max-height:270px; overflow-y:auto; padding:4px; }
+.chat-context-picker-empty { color:var(--fg-dim); padding:10px; font-size:12px; }
+.chat-context-picker-item { display:grid; grid-template-columns:22px 1fr auto; gap:7px; align-items:center;
+  padding:6px 7px; border-radius:4px; cursor:pointer; color:var(--fg); font-size:12px; }
+.chat-context-picker-item:hover,.chat-context-picker-item.selected { background:var(--bg-hover); }
+.chat-context-picker-item .ctx-icon { color:var(--fg-accent); text-align:center; font-size:13px; }
+.chat-context-picker-item .ctx-main { min-width:0; display:flex; flex-direction:column; gap:1px; }
+.chat-context-picker-item .ctx-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chat-context-picker-item .ctx-desc { color:var(--fg-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
+.chat-context-picker-item .ctx-kind { color:var(--fg-dim); border:1px solid var(--border);
+  border-radius:3px; padding:1px 5px; font:9px var(--mono); text-transform:uppercase; }
+
 /* ── Responsive ── */
 /* ── Editor current-line highlight overlay ── */
 .editor-line-highlight { position:absolute; left:0; right:0; height:1.5em;
@@ -1886,6 +1909,7 @@ pre.code-block { overflow:visible; }
                   <button class="chat-composer-action" id="stop-btn" style="display:none;color:var(--fg-error)" onclick="doStop()" title="Stop" aria-label="Stop">■</button>
                   <button class="chat-composer-action" onclick="newChat()" data-i18n-title="new_chat_title" title="New chat" aria-label="New chat">＋</button>
                   <button class="chat-composer-action" onclick="openChatHistory()" data-i18n-title="history" title="History" aria-label="History">◷</button>
+                  <button class="chat-composer-action" onclick="openChatContextPicker()" title="Attach context" aria-label="Attach context">@</button>
                   <button class="chat-composer-action" onclick="uploadImage()" title="Attach image" aria-label="Attach image">📎</button>
                   <span class="spacer"></span>
                   <span class="chat-composer-meta">
@@ -1898,6 +1922,13 @@ pre.code-block { overflow:visible; }
                 </div>
               </div>
               <div class="slash-popup" id="at-popup"></div>
+              <div class="chat-context-picker" id="chat-context-picker" role="dialog" aria-label="Attach context">
+                <div class="chat-context-picker-head">
+                  <span class="label">Context</span>
+                  <input class="chat-context-picker-input" id="chat-context-picker-input" aria-label="Search context" placeholder="Search files, agents, providers...">
+                </div>
+                <div class="chat-context-picker-list" id="chat-context-picker-list" role="listbox"></div>
+              </div>
             </div>
           </div>
         </div>
@@ -3601,6 +3632,12 @@ function chatContextFromToken(token){
   if(key==='language')return {id:'language:'+String(editorLang||'plaintext'),kind:'language',label:String(editorLang||'plaintext'),prompt:'Current editor language: '+String(editorLang||'plaintext')};
   const agent=(chatControlState&&chatControlState.agents||[]).find(a=>controlItemId(a).toLowerCase()===key);
   if(agent)return {id:'agent:'+controlItemId(agent),kind:'agent',label:controlItemName(agent)||controlItemId(agent),prompt:'Use chat participant/agent: '+controlItemId(agent)};
+  const providerKey=key.replace(/^provider:/,'');
+  const provider=(chatControlState&&chatControlState.providers||[]).find(p=>controlItemId(p).toLowerCase()===providerKey);
+  if(provider)return {id:'provider:'+controlItemId(provider),kind:'provider',label:controlItemName(provider)||controlItemId(provider),prompt:'Use chat provider: '+controlItemId(provider)};
+  const workflowKey=key.replace(/^workflow:/,'');
+  const workflow=(chatControlState&&chatControlState.workflows||[]).find(w=>controlItemId(w).toLowerCase()===workflowKey);
+  if(workflow)return {id:'workflow:'+controlItemId(workflow),kind:'workflow',label:controlItemName(workflow)||controlItemId(workflow),prompt:'Relevant workflow: '+controlItemId(workflow)};
   return null;
 }
 function renderChatContextAttachments(){
@@ -3618,6 +3655,14 @@ function addChatContextAttachment(item){
   if(!item||item.empty)return false;
   if(item.kind==='agent'){
     setToolbarAgent(String(item.id||'').replace(/^agent:/,''));
+    return true;
+  }
+  if(item.kind==='provider'){
+    const providerId=String(item.id||'').replace(/^provider:/,'');
+    if(providerId){
+      if((typeof providerDefs!=='undefined'&&providerDefs[providerId])||providerId==='chat')switchRightTab(providerId);
+      else updateProviderModel(providerId,config.model||readProviderModelDefaults(providerId),true);
+    }
     return true;
   }
   if(!chatContextAttachments.some(x=>x.id===item.id))chatContextAttachments.push(item);
@@ -3656,6 +3701,112 @@ function renderChatReferences(body,refs){
   });
   body.parentElement.appendChild(wrap);
 }
+let _chatContextPickerItems=[],_chatContextPickerFiltered=[],_chatContextPickerIndex=0;
+function chatContextPickerOpenTabs(){
+  const rows=(typeof tabs!=='undefined'&&Array.isArray(tabs)?tabs:[]).filter(Boolean);
+  return rows.map(tab=>{
+    const path=String(tab.filePath||tab.workspacePath||tab.name||'Untitled');
+    const label=String(tab.name||path||'Untitled');
+    const content=String(tab.content||'');
+    return {id:'tab:'+String(tab.id||label),kind:'tab',icon:'□',label,description:path,
+      prompt:'Open editor tab '+label+' ('+path+'):\n```\n'+chatContextTextSample(content,10000)+'\n```',
+      preview:content?chatContextTextSample(content,220):path};
+  });
+}
+function chatContextPickerItems(){
+  const items=[];
+  AT_VARS.forEach(v=>{
+    const ref=chatContextFromToken(v[0]);
+    if(ref)items.push({...ref,icon:v[3],description:v[1],token:v[0]});
+  });
+  if(typeof explorerSelectedPath!=='undefined'&&explorerSelectedPath){
+    const p=String(explorerSelectedPath);
+    items.push({id:'workspace:'+p,kind:'file',icon:'◇',label:p,description:'Selected in Explorer',
+      prompt:'Workspace file selected in Explorer: '+p,preview:p});
+  }
+  chatContextPickerOpenTabs().forEach(item=>items.push(item));
+  if(typeof attachments!=='undefined'&&Array.isArray(attachments)){
+    attachments.forEach(a=>items.push({id:'attachment:'+a.type+':'+a.name,kind:a.type||'file',icon:'+',label:a.name||'Attachment',
+      description:'Pending attachment',preview:a.type==='image'?'Image attachment':chatContextTextSample(a.data,220),
+      prompt:a.type==='image'?'Attached image: '+a.name:'Attached file '+a.name+':\n```\n'+chatContextTextSample(a.data,6000)+'\n```'}));
+  }
+  (chatControlState.agents||[]).forEach(a=>{
+    const id=controlItemId(a);if(!id)return;
+    items.push({id:'agent:'+id,kind:'agent',icon:a.icon||'@',label:controlItemName(a)||id,
+      description:a.description||'Registered chat participant',prompt:'Use chat participant/agent: '+id,token:'@'+id});
+  });
+  (chatControlState.providers||[]).forEach(p=>{
+    const id=controlItemId(p);if(!id)return;
+    items.push({id:'provider:'+id,kind:'provider',icon:'◎',label:controlItemName(p)||id,
+      description:p.description||p.provider_kind||'Chat provider',prompt:'Use chat provider: '+id,token:'@provider:'+id});
+  });
+  (chatControlState.workflows||[]).forEach(w=>{
+    const id=controlItemId(w);if(!id)return;
+    items.push({id:'workflow:'+id,kind:'workflow',icon:'▶',label:controlItemName(w)||id,
+      description:w.description||'Workflow context',prompt:'Relevant workflow: '+id,token:'@workflow:'+id});
+  });
+  const seen=new Set();
+  return items.filter(item=>{
+    const key=String(item.id||item.kind+':'+item.label);
+    if(seen.has(key))return false;seen.add(key);return true;
+  });
+}
+function renderChatContextPicker(){
+  const input=$('chat-context-picker-input'),list=$('chat-context-picker-list');if(!list)return;
+  const query=String((input&&input.value)||'').trim().toLowerCase();
+  _chatContextPickerFiltered=_chatContextPickerItems.filter(item=>{
+    if(!query)return true;
+    return [item.label,item.description,item.kind,item.id,item.token].some(v=>String(v||'').toLowerCase().includes(query));
+  });
+  if(_chatContextPickerIndex>=_chatContextPickerFiltered.length)_chatContextPickerIndex=Math.max(0,_chatContextPickerFiltered.length-1);
+  if(!_chatContextPickerFiltered.length){
+    list.innerHTML='<div class="chat-context-picker-empty">No matching context</div>';
+    return;
+  }
+  list.innerHTML=_chatContextPickerFiltered.map((item,i)=>
+    '<div class="chat-context-picker-item'+(i===_chatContextPickerIndex?' selected':'')+'" role="option" aria-selected="'+(i===_chatContextPickerIndex?'true':'false')+'" data-context-picker-idx="'+i+'" onmousedown="pickChatContextPickerItem('+i+')">'+
+    '<span class="ctx-icon">'+esc(item.icon||'@')+'</span><span class="ctx-main"><span class="ctx-label">'+esc(item.label||item.id||'Context')+'</span>'+
+    '<span class="ctx-desc">'+esc(item.description||item.preview||item.prompt||'')+'</span></span><span class="ctx-kind">'+esc(item.kind||'ctx')+'</span></div>').join('');
+}
+function closeChatContextPicker(){
+  const picker=$('chat-context-picker');if(picker)picker.classList.remove('open');
+}
+async function openChatContextPicker(){
+  await loadChatControls().catch(()=>{});
+  const picker=$('chat-context-picker'),input=$('chat-context-picker-input');if(!picker||!input)return;
+  slashPopup.classList.remove('open');$('at-popup').classList.remove('open');
+  _chatContextPickerItems=chatContextPickerItems();_chatContextPickerIndex=0;
+  input.value='';renderChatContextPicker();picker.classList.add('open');input.focus();
+}
+function selectChatContextPickerIndex(delta){
+  if(!_chatContextPickerFiltered.length)return;
+  _chatContextPickerIndex=(_chatContextPickerIndex+delta+_chatContextPickerFiltered.length)%_chatContextPickerFiltered.length;
+  renderChatContextPicker();
+  const row=$('chat-context-picker-list').querySelector('[data-context-picker-idx="'+_chatContextPickerIndex+'"]');
+  if(row)row.scrollIntoView({block:'nearest'});
+}
+window.pickChatContextPickerItem=function(idx){
+  const item=_chatContextPickerFiltered[idx];if(!item)return;
+  closeChatContextPicker();
+  addChatContextAttachment(item);
+  const input=$('chat-input');if(input)input.focus();
+};
+window.openChatContextPicker=openChatContextPicker;
+window.closeChatContextPicker=closeChatContextPicker;
+const _chatContextPickerInput=$('chat-context-picker-input');
+if(_chatContextPickerInput){
+  _chatContextPickerInput.addEventListener('input',()=>{_chatContextPickerIndex=0;renderChatContextPicker()});
+  _chatContextPickerInput.addEventListener('keydown',e=>{
+    if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();selectChatContextPickerIndex(e.key==='ArrowDown'?1:-1);return}
+    if(e.key==='Enter'||e.key==='Tab'){e.preventDefault();pickChatContextPickerItem(_chatContextPickerIndex);return}
+    if(e.key==='Escape'){e.preventDefault();closeChatContextPicker();$('chat-input').focus();return}
+  });
+}
+document.addEventListener('mousedown',function(e){
+  const picker=$('chat-context-picker');if(!picker||!picker.classList.contains('open'))return;
+  const onAttachButton=e.target&&e.target.closest&&e.target.closest('[aria-label="Attach context"]');
+  if(!picker.contains(e.target)&&!onAttachButton)closeChatContextPicker();
+});
 function chatResponseReferenceKey(ref){return String(ref&&ref.path||'')+':'+String(ref&&ref.line||'')}
 function chatReferenceStatusLabel(status){
   if(!status)return '';
@@ -10597,6 +10748,7 @@ window.doSend=doSend;window.doStop=doStop;window.newChat=newChat;window.clearCha
 function getSlashCmds(){return [
   ['/clear',t('slash_clear'),'chat'],['/new',t('slash_new'),'chat'],['/export',t('slash_export'),'chat'],
   ['/settings',t('slash_settings'),'ui'],['/tools',t('slash_tools'),'ui'],['/history',t('slash_history'),'chat'],
+  ['/attach','Attach context','context'],['/context','Attach context','context'],
   ['/instructions',t('slash_instructions'),'context'],['/agents',t('slash_agents'),'agent'],
   ['/system',t('slash_system'),'engine'],['/eval',t('slash_eval'),'engine'],
 ];}
@@ -10609,6 +10761,7 @@ async function execSlash(raw){
   else if(cmd==='/settings')openSettings();
   else if(cmd==='/tools')switchSidebar('tools');
   else if(cmd==='/history')openChatHistory();
+  else if(cmd==='/attach'||cmd==='/context')openChatContextPicker();
   else if(cmd==='/instructions')switchSidebar('instructions')
   else if(cmd==='/agents')switchSidebar('agents')
   else if(cmd==='/system'){
@@ -10659,6 +10812,15 @@ chatInp.addEventListener('input',function(){
   },100);
 });
 chatInp.addEventListener('keydown',function(e){
+  const contextPicker=$('chat-context-picker');
+  if(contextPicker&&contextPicker.classList.contains('open')){
+    if(e.key==='ArrowDown'||e.key==='ArrowUp'){
+      e.preventDefault();selectChatContextPickerIndex(e.key==='ArrowDown'?1:-1);return;
+    }
+    if((e.key==='Enter'&&!e.shiftKey)||e.key==='Tab'){
+      e.preventDefault();pickChatContextPickerItem(_chatContextPickerIndex);return;
+    }
+  }
   if(slashPopup.classList.contains('open')){
     if(e.key==='ArrowDown'||e.key==='ArrowUp'){
       e.preventDefault();selectSlashIndex(_slashSelectedIdx+(e.key==='ArrowDown'?1:-1));return;
@@ -10666,10 +10828,11 @@ chatInp.addEventListener('keydown',function(e){
     if(e.key==='Tab'){e.preventDefault();pickSlashByIndex(_slashSelectedIdx);return}
     if(e.key==='Enter'&&!e.shiftKey&&!/\s/.test(this.value.trim())){e.preventDefault();pickSlashByIndex(_slashSelectedIdx);return}
   }
-  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();slashPopup.classList.remove('open');$('at-popup').classList.remove('open');doSend()}
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();slashPopup.classList.remove('open');$('at-popup').classList.remove('open');closeChatContextPicker();doSend()}
   if(e.key==='Escape'){
     if(slashPopup.classList.contains('open')){slashPopup.classList.remove('open');e.stopPropagation();return}
     if($('at-popup').classList.contains('open')){$('at-popup').classList.remove('open');e.stopPropagation();return}
+    if(contextPicker&&contextPicker.classList.contains('open')){closeChatContextPicker();e.stopPropagation();return}
     if(streaming){doStop();e.stopPropagation()}
   }
   // ── History navigation (↑/↓) ──
@@ -18792,6 +18955,14 @@ function _getAtMentionItems(){
     chatControlState.agents.forEach(a=>{
       const id=a.id||a.name||'';const name=a.name||id;
       if(id)items.push(['@'+id,name+(a.description?' — '+a.description:''),'agent',a.icon||'\u{1f916}']);
+    });
+    (chatControlState.providers||[]).forEach(p=>{
+      const id=controlItemId(p);const name=controlItemName(p)||id;
+      if(id)items.push(['@provider:'+id,name+(p.description?' — '+p.description:''),'provider','◎']);
+    });
+    (chatControlState.workflows||[]).forEach(w=>{
+      const id=controlItemId(w);const name=controlItemName(w)||id;
+      if(id)items.push(['@workflow:'+id,name+(w.description?' — '+w.description:''),'workflow','▶']);
     });
   }
   return items;

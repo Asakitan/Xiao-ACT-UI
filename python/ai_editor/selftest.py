@@ -3323,6 +3323,23 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function chatFollowupsFromPayload(payload,content)" in html
            and "item.agentId" in html
            and "renderChatResponseReferences(s,content,data);" in html)
+    _check("frontend Assistant exposes dynamic context picker",
+           'class="chat-context-picker" id="chat-context-picker" role="dialog" aria-label="Attach context"' in html
+           and 'id="chat-context-picker-input" aria-label="Search context"' in html
+           and 'onclick="openChatContextPicker()" title="Attach context" aria-label="Attach context"' in html
+           and "['/attach','Attach context','context']" in html
+           and "else if(cmd==='/attach'||cmd==='/context')openChatContextPicker();" in html
+           and "function chatContextPickerItems()" in html
+           and "function chatContextPickerOpenTabs()" in html
+           and "window.openChatContextPicker=openChatContextPicker" in html
+           and "pickChatContextPickerItem(_chatContextPickerIndex)" in html
+           and "selectChatContextPickerIndex(e.key==='ArrowDown'?1:-1)" in html
+           and "chatControlState.providers||[]" in html
+           and "chatControlState.workflows||[]" in html
+           and "provider:'+id" in html
+           and "workflow:'+id" in html
+           and "Open editor tab '+label" in html
+           and "Selected in Explorer" in html)
     _check("frontend supports dynamic extension webview provider tabs",
             "function isExtensionWebviewProvider(providerOrId)" in html
             and "dynamicExtensionProviderDefs" in html
