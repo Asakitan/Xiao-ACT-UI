@@ -729,6 +729,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-input-container { position:relative; border-radius:8px; border:1px solid var(--border);
   background:var(--bg3); transition:border-color .15s, box-shadow .35s, background .15s; overflow:visible; }
 .chat-input-container:focus-within { border-color:var(--border-focus); box-shadow:0 0 0 1px var(--border-focus); }
+.chat-input-container.completion-open { border-color:color-mix(in srgb, var(--fg-accent) 65%, var(--border-focus));
+  box-shadow:0 0 0 1px color-mix(in srgb, var(--fg-accent) 45%, transparent), 0 -8px 28px #00000026; }
 .chat-input-container.working { border-color:transparent; }
 .chat-input-container.working::before { content:''; position:absolute; inset:-1px; border-radius:9px;
   background:conic-gradient(from var(--beam-angle,135deg),
@@ -987,6 +989,8 @@ pre.code-block code .type { color:var(--fg-type); }
   border:1px solid var(--border); border-radius:6px; max-height:240px;
   overflow-y:auto; display:none; z-index:100; box-shadow:0 -4px 16px #00000040; margin-bottom:4px; }
 .slash-popup.open { display:block; }
+.slash-popup.open,.at-popup-enhanced.open,.chat-context-picker.open { animation:composerPopupIn .12s ease-out; }
+@keyframes composerPopupIn { from{opacity:.75;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
 .slash-item { padding:6px 12px; cursor:pointer; display:flex; align-items:center; gap:8px; font-size:13px; }
 .slash-item:hover,.slash-item.selected { background:var(--bg-hover); }
 .slash-item .cmd { color:var(--fg-accent); font:12px var(--mono); min-width:70px; }
@@ -1869,10 +1873,10 @@ pre.code-block { overflow:visible; }
           <div class="scroll-down-btn" id="scroll-down-btn" onclick="scrollChatBottom()" title="Scroll to bottom">↓</div>
           <div class="chat-input-area">
             <div style="position:relative">
-              <div class="slash-popup" id="slash-popup"></div>
+              <div class="slash-popup" id="slash-popup" role="listbox" aria-label="Slash commands"></div>
               <div class="chat-input-container" id="chat-input-container">
                 <div class="chat-input-row">
-                  <textarea class="chat-input" id="chat-input" rows="1" data-i18n="ask_placeholder" placeholder="Ask anything... (/ for commands, @ for context)"></textarea>
+                  <textarea class="chat-input" id="chat-input" rows="1" data-i18n="ask_placeholder" placeholder="Ask anything... (/ commands, @ context, # tools)" aria-autocomplete="list" aria-expanded="false"></textarea>
                   <button class="send-btn" id="send-btn" onclick="doSend()" title="Send"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 2.5l-5 5h3.5V13h3V7.5H13L8 2.5z"/></svg></button>
                 </div>
                 <div class="chat-attached-context" id="chat-context-area" aria-label="Attached context"></div>
@@ -1948,7 +1952,7 @@ pre.code-block { overflow:visible; }
                   </span>
                 </div>
               </div>
-              <div class="slash-popup" id="at-popup"></div>
+              <div class="slash-popup" id="at-popup" role="listbox" aria-label="Chat input completions"></div>
               <div class="chat-context-picker" id="chat-context-picker" role="dialog" aria-label="Attach context">
                 <div class="chat-context-picker-head">
                   <span class="label">Context</span>
@@ -3263,7 +3267,7 @@ en:{
   cmd_palette:'Command Palette',toggle_sidebar:'Toggle Sidebar',toggle_editor:'Toggle Editor',toggle_chat:'Toggle Chat Panel',toggle_theme:'Toggle Theme',
   go_to_line:'Go to Line...',run_selection:'Run Selection',new_terminal:'New Terminal',system_info:'System Info',about:'About',
   chat:'Assistant',explorer:'Explorer',tools:'Engine Tools',extensions:'Extensions',history:'History',instructions:'Instructions',agents_wf:'Agents & Workflows',settings:'Settings',
-  send:'Send',stop:'Stop',ask_placeholder:'Ask anything... (/ for commands, @ for context)',
+  send:'Send',stop:'Stop',ask_placeholder:'Ask anything... (/ commands, @ context, # tools)',
   agents:'Agents',workflows:'Workflows',new_agent:'New Agent',new_wf:'New Workflow',
   model:'Model',quick_actions:'Quick Actions',
   welcome_title:'SAO AI Editor',welcome_desc:'Multi-model LLM · Tool Calling · Streaming',
@@ -3404,7 +3408,7 @@ zh:{
   cmd_palette:'命令面板',toggle_sidebar:'切换侧栏',toggle_editor:'切换编辑器',toggle_chat:'切换聊天面板',toggle_theme:'切换主题',
   go_to_line:'转到行...',run_selection:'运行选中代码',new_terminal:'新建终端',system_info:'系统信息',about:'关于',
   chat:'助手',explorer:'资源管理器',tools:'引擎工具',extensions:'扩展',history:'历史记录',instructions:'自定义指令',agents_wf:'代理 & 工作流',settings:'设置',
-  send:'发送',stop:'停止',ask_placeholder:'输入问题... (/ 命令, @ 上下文)',
+  send:'发送',stop:'停止',ask_placeholder:'输入问题... (/ 命令, @ 上下文, # 工具)',
   agents:'代理',workflows:'工作流',new_agent:'新建代理',new_wf:'新建工作流',
   model:'模型',quick_actions:'快捷操作',
   welcome_title:'SAO AI Editor',welcome_desc:'多模型 LLM · 工具调用 · 流式输出',
@@ -4066,11 +4070,13 @@ function renderChatContextPicker(){
 }
 function closeChatContextPicker(){
   const picker=$('chat-context-picker');if(picker)picker.classList.remove('open');
+  if(typeof setChatCompletionState==='function')setChatCompletionState('',false);
 }
 async function openChatContextPicker(){
   await loadChatControls().catch(()=>{});
   const picker=$('chat-context-picker'),input=$('chat-context-picker-input');if(!picker||!input)return;
   slashPopup.classList.remove('open');$('at-popup').classList.remove('open');
+  if(typeof setChatCompletionState==='function')setChatCompletionState('context',true,'chat-context-picker');
   _chatContextPickerItems=chatContextPickerItems();_chatContextPickerIndex=0;
   input.value='';renderChatContextPicker();picker.classList.add('open');input.focus();
 }
@@ -11400,12 +11406,35 @@ window.execSlash=execSlash;
 // Slash popup (debounced 100ms)
 const chatInp=$('chat-input'),slashPopup=$('slash-popup');
 let _chatInputTimer=null,_slashSelectedIdx=0,_slashMatches=[];
+function chatCompletionPopupIsOpen(){
+  const atPopup=$('at-popup'),contextPicker=$('chat-context-picker');
+  return (slashPopup&&slashPopup.classList.contains('open'))
+    || (atPopup&&atPopup.classList.contains('open'))
+    || (contextPicker&&contextPicker.classList.contains('open'));
+}
+function setChatCompletionState(kind,open,controlsId){
+  const container=$('chat-input-container'),input=$('chat-input');
+  if(container){
+    container.classList.toggle('completion-open',!!open);
+    if(open&&kind)container.dataset.completionKind=kind;else delete container.dataset.completionKind;
+  }
+  if(input){
+    input.setAttribute('aria-expanded',open?'true':'false');
+    if(open&&controlsId)input.setAttribute('aria-controls',controlsId);else input.removeAttribute('aria-controls');
+  }
+}
+function closeSlashPopup(){
+  slashPopup.classList.remove('open');
+  if(!chatCompletionPopupIsOpen())setChatCompletionState('',false);
+}
 function renderSlashPopup(matches){
   _slashMatches=matches.slice();_slashSelectedIdx=0;
-  if(!_slashMatches.length){slashPopup.classList.remove('open');return}
+  if(!_slashMatches.length){closeSlashPopup();return}
+  $('at-popup').classList.remove('open');closeChatContextPicker();
   slashPopup.innerHTML=_slashMatches.map((c,i)=>'<div class="slash-item'+(i===0?' selected':'')+'" role="option" aria-selected="'+(i===0?'true':'false')+'" data-slash-idx="'+i+'" onmousedown="pickSlashByIndex('+i+')"><span class="cmd">'+esc(c[0])+'</span><span class="desc">'+esc(c[1])+'</span><span class="category">'+esc(c[2]||'chat')+'</span></div>').join('');
   slashPopup.setAttribute('role','listbox');
   slashPopup.classList.add('open');
+  setChatCompletionState('slash',true,'slash-popup');
 }
 function selectSlashIndex(next){
   const items=slashPopup.querySelectorAll('.slash-item');if(!items.length)return;
@@ -11424,7 +11453,7 @@ chatInp.addEventListener('input',function(){
       const prefix=v.split(/\s/)[0].toLowerCase();
       const matches=getSlashCmds().filter(c=>c[0].startsWith(prefix));
       renderSlashPopup(matches);
-    } else slashPopup.classList.remove('open');
+    } else closeSlashPopup();
     self.style.height='auto';self.style.height=Math.min(self.scrollHeight,180)+'px';
   },100);
 });
@@ -11445,10 +11474,10 @@ chatInp.addEventListener('keydown',function(e){
     if(e.key==='Tab'){e.preventDefault();pickSlashByIndex(_slashSelectedIdx);return}
     if(e.key==='Enter'&&!e.shiftKey&&!/\s/.test(this.value.trim())){e.preventDefault();pickSlashByIndex(_slashSelectedIdx);return}
   }
-  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();slashPopup.classList.remove('open');$('at-popup').classList.remove('open');closeChatContextPicker();doSend()}
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();closeSlashPopup();$('at-popup').classList.remove('open');setChatCompletionState('',false);closeChatContextPicker();doSend()}
   if(e.key==='Escape'){
-    if(slashPopup.classList.contains('open')){slashPopup.classList.remove('open');e.stopPropagation();return}
-    if($('at-popup').classList.contains('open')){$('at-popup').classList.remove('open');e.stopPropagation();return}
+    if(slashPopup.classList.contains('open')){closeSlashPopup();e.stopPropagation();return}
+    if($('at-popup').classList.contains('open')){$('at-popup').classList.remove('open');setChatCompletionState('',false);e.stopPropagation();return}
     if(contextPicker&&contextPicker.classList.contains('open')){closeChatContextPicker();e.stopPropagation();return}
     if(streaming){doStop();e.stopPropagation()}
   }
@@ -11502,7 +11531,7 @@ chatInp.addEventListener('paste',function(e){
   }
 });
 window.pickSlashByIndex=function(idx){const item=_slashMatches[idx];if(item)pickSlash(item[0])};
-window.pickSlash=function(cmd){slashPopup.classList.remove('open');chatInp.value='';execSlash(cmd)};
+window.pickSlash=function(cmd){closeSlashPopup();chatInp.value='';execSlash(cmd)};
 
 // ── Terminal ──
 // TERM-01: ANSI SGR escape code renderer
@@ -19702,9 +19731,10 @@ function _getAtMentionItems(){
 }
 function _renderAtPopup(matches){
   const atPopup=$('at-popup');
-  if(!matches.length){atPopup.classList.remove('open');return}
+  if(!matches.length){atPopup.classList.remove('open');if(!chatCompletionPopupIsOpen())setChatCompletionState('',false);return}
   _atSelectedIdx=0;
   _chatCompletionMode='mention';
+  closeSlashPopup();closeChatContextPicker();
   atPopup.innerHTML=matches.map((a,i)=>
     '<div class="at-popup-item'+(i===0?' selected':'')+'" role="option" aria-selected="'+(i===0?'true':'false')+'" data-at-idx="'+i+'" onmousedown="pickAtVar(\''+esc(a[0]).replace(/'/g,"\\'")+'\')">'+
     '<span class="at-icon">'+esc(a[3]||'')+'</span>'+
@@ -19713,6 +19743,7 @@ function _renderAtPopup(matches){
     '<span class="at-category">'+esc(a[2]||'')+'</span></div>').join('');
   atPopup.className='at-popup-enhanced open';
   atPopup.setAttribute('role','listbox');
+  setChatCompletionState('mention',true,'at-popup');
 }
 function getHashToolCompletions(prefix){
   const query=String(prefix||'').toLowerCase();
@@ -19720,9 +19751,10 @@ function getHashToolCompletions(prefix){
 }
 function renderHashToolPopup(matches){
   const atPopup=$('at-popup');
-  if(!matches.length){atPopup.classList.remove('open');return}
+  if(!matches.length){atPopup.classList.remove('open');if(!chatCompletionPopupIsOpen())setChatCompletionState('',false);return}
   _atSelectedIdx=0;
   _chatCompletionMode='tool';
+  closeSlashPopup();closeChatContextPicker();
   atPopup.innerHTML=matches.map((tool,i)=>
     '<div class="at-popup-item'+(i===0?' selected':'')+'" role="option" aria-selected="'+(i===0?'true':'false')+'" data-at-idx="'+i+'" onmousedown="pickHashToolCompletion(\''+esc(tool.name).replace(/'/g,"\\'")+'\')">'+
     '<span class="at-icon">#</span>'+
@@ -19731,6 +19763,7 @@ function renderHashToolPopup(matches){
     '<span class="at-category">'+esc(tool.category||'tool')+'</span></div>').join('');
   atPopup.className='at-popup-enhanced open';
   atPopup.setAttribute('role','listbox');
+  setChatCompletionState('tool',true,'at-popup');
 }
 chatInp.addEventListener('input',function(){
   if(_atPopupTimer)clearTimeout(_atPopupTimer);
@@ -19748,12 +19781,12 @@ chatInp.addEventListener('input',function(){
       const allItems=_getAtMentionItems();
       const matches=allItems.filter(a=>a[0].substring(1).toLowerCase().startsWith(prefix));
       if(matches.length) _renderAtPopup(matches);
-      else atPopup.classList.remove('open');
+      else {atPopup.classList.remove('open');if(!chatCompletionPopupIsOpen())setChatCompletionState('',false)}
     } else if(hashMatch&&!slashMatch){
       const matches=getHashToolCompletions(hashMatch[1]);
       if(matches.length)renderHashToolPopup(matches);
-      else atPopup.classList.remove('open');
-    } else atPopup.classList.remove('open');
+      else {atPopup.classList.remove('open');if(!chatCompletionPopupIsOpen())setChatCompletionState('',false)}
+    } else {atPopup.classList.remove('open');if(!chatCompletionPopupIsOpen())setChatCompletionState('',false)}
   },100);
 });
 // Keyboard navigation for @-mention popup
@@ -19774,14 +19807,15 @@ chatInp.addEventListener('keydown',function(e){
   if(e.key==='Enter'||e.key==='Tab'){
     if(items[_atSelectedIdx]){e.preventDefault();e.stopPropagation();items[_atSelectedIdx].onmousedown();return}
   }
-  if(e.key==='Escape'){e.preventDefault();atPopup.classList.remove('open');return}
+  if(e.key==='Escape'){e.preventDefault();atPopup.classList.remove('open');setChatCompletionState('',false);return}
 });
 // Close on click outside
 document.addEventListener('mousedown',function(e){
   const atPopup=$('at-popup');if(!atPopup)return;
-  if(!atPopup.contains(e.target)&&e.target!==chatInp)atPopup.classList.remove('open');
+  if(!atPopup.contains(e.target)&&e.target!==chatInp){atPopup.classList.remove('open');if(!chatCompletionPopupIsOpen())setChatCompletionState('',false)}
 });
 window.pickAtVar=function(v){$('at-popup').classList.remove('open');
+  setChatCompletionState('',false);
   const inp=$('chat-input'),val=inp.value,pos=inp.selectionStart;
   const item=chatContextFromToken(v);
   if(item&&addChatContextAttachment(item)){
@@ -19792,6 +19826,7 @@ window.pickAtVar=function(v){$('at-popup').classList.remove('open');
   const before=val.substring(0,pos).replace(/@[A-Za-z0-9_.:-]*$/,v+' ');
   inp.value=before+val.substring(pos);inp.selectionStart=inp.selectionEnd=before.length;inp.focus()};
 window.pickHashToolCompletion=function(name){$('at-popup').classList.remove('open');
+  setChatCompletionState('',false);
   const inp=$('chat-input'),val=inp.value,pos=inp.selectionStart;
   const token='#'+String(name||'').replace(/^#/,'');
   const before=val.substring(0,pos).replace(/#[A-Za-z0-9_.:-]*$/,token+' ');
@@ -19808,7 +19843,7 @@ doSend=async function(){
   if(!text&&sendContext.refs.length)text='Review the attached context.';
   if(!text)return;
   inp.value='';inp.style.height='auto';
-  $('at-popup').classList.remove('open');
+  $('at-popup').classList.remove('open');setChatCompletionState('',false);
   // Strip #toolName prefix — LLM understands tool hints naturally
   let toolHint='';
   const toolMatch=text.match(/^#([A-Za-z0-9_.:-]+)\s+/);
@@ -20900,7 +20935,7 @@ function renderWelcome(){
   });
   const note=document.createElement('div');
   note.className='chat-empty-note';
-  note.textContent='Enter to send, Shift+Enter for newline, / for commands, @ for context.';
+  note.textContent='Enter to send, Shift+Enter for newline, / commands, @ context, # tools.';
   w.appendChild(note);
   container.appendChild(w);
   return w;

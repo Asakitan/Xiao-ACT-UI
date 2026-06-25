@@ -3362,6 +3362,20 @@ def test_phase1_ai_editor_regressions() -> None:
            and "if(key.startsWith('session:'))" in html
            and "if(key.startsWith('tab:'))" in html
            and "if(key.startsWith('symbol:'))" in html)
+    _check("frontend Assistant composer completion popups expose VS Code-style state",
+           "placeholder=\"Ask anything... (/ commands, @ context, # tools)\" aria-autocomplete=\"list\" aria-expanded=\"false\"" in html
+           and "ask_placeholder:'Ask anything... (/ commands, @ context, # tools)'" in html
+           and "ask_placeholder:'输入问题... (/ 命令, @ 上下文, # 工具)'" in html
+           and "note.textContent='Enter to send, Shift+Enter for newline, / commands, @ context, # tools.'" in html
+           and ".chat-input-container.completion-open" in html
+           and "@keyframes composerPopupIn" in html
+           and "function setChatCompletionState(kind,open,controlsId)" in html
+           and "function closeSlashPopup()" in html
+           and "setChatCompletionState('slash',true,'slash-popup');" in html
+           and "setChatCompletionState('mention',true,'at-popup');" in html
+           and "setChatCompletionState('tool',true,'at-popup');" in html
+           and "role=\"listbox\" aria-label=\"Slash commands\"" in html
+           and "role=\"listbox\" aria-label=\"Chat input completions\"" in html)
     _check("frontend Assistant renders response references and changed-file cards",
            "chat-response-references" in html
            and "chat-response-reference-list" in html
