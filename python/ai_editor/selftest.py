@@ -13131,6 +13131,14 @@ async function activate(context) {
   const disposedOutput = vscode.window.createOutputChannel('node-output-dispose', 'log');
   disposedOutput.appendLine('gone');
   disposedOutput.dispose();
+  const sourceControl = vscode.scm.createSourceControl(
+    'selftest-node-scm',
+    'Selftest Node SCM',
+    vscode.Uri.file(process.cwd())
+  );
+  sourceControl.contextValue = 'repository';
+  sourceControl.inputBox.value = 'node scm input';
+  context.subscriptions.push(sourceControl);
   const secretEvents = [];
   context.secrets.onDidChange(event => {
     secretEvents.push(event && event.key);
@@ -15535,6 +15543,10 @@ async function activate(context) {
   vscode.commands.registerCommand('selftest.node.customEditorTitleActionProbe', () => ({
     hits: customEditorTitleActionHits,
   }));
+  vscode.commands.registerCommand('selftest.node.scmTitleAction', () => ({
+    ok: true,
+    provider: 'selftest-node-scm',
+  }));
   vscode.commands.registerCommand('selftest.node.customEditorContextAction', contextArg => {
     customEditorContextActionHits += 1;
     customEditorContextActionLast = contextArg || null;
@@ -15664,6 +15676,9 @@ module.exports = { activate, deactivate };
                         "command": "selftest.node.customEditorContextAction",
                         "title": "Custom Editor Context Action",
                         "shortTitle": "CECA",
+                    }, {
+                        "command": "selftest.node.scmTitleAction",
+                        "title": "Node SCM Title Action",
                     }],
                     "menus": {
                         "view/item/context": [{
@@ -15674,6 +15689,10 @@ module.exports = { activate, deactivate };
                             "command": "selftest.node.customEditorTitleAction",
                             "when": "activeCustomEditorId == selftest.node.customEditor && resourceExtname == .txt",
                             "group": "navigation@1",
+                        }, {
+                            "command": "selftest.node.scmTitleAction",
+                            "when": "scmProvider == selftest-node-scm && scmProviderContext == repository && scmProviderHasRootUri",
+                            "group": "navigation@2",
                         }],
                         "webview/context": [{
                             "command": "selftest.node.customEditorContextAction",
@@ -17033,6 +17052,11 @@ module.exports = { activate, deactivate };
                             "selftest.node.customEditorWebviewStateProbe"))
                 except Exception as exc:
                     node_custom_editor_webview_state_probe = {"_error": str(exc)}
+                node_scm_context_ready = _wait_until(
+                    lambda: node_host.node_scm_context_snapshot().get(
+                        "scmProvider") == "selftest-node-scm"
+                    and node_host.node_scm_context_snapshot().get(
+                        "scmProviderContext") == "repository")
                 node_custom_editor_title_actions = (
                     api.list_editor_title_actions({
                         "activeCustomEditorId": "selftest.node.customEditor",
@@ -17050,9 +17074,18 @@ module.exports = { activate, deactivate };
                         "actions", [])
                     if action.get("command")
                     == "selftest.node.customEditorTitleAction"), "")
+                node_scm_title_action_command = next((
+                    action.get("command")
+                    for action in node_custom_editor_title_actions.get(
+                        "actions", [])
+                    if action.get("command")
+                    == "selftest.node.scmTitleAction"), "")
                 node_custom_editor_title_action_result = (
                     api.execute_command(node_custom_editor_title_action_command)
                     if node_custom_editor_title_action_command else {})
+                node_scm_title_action_result = (
+                    api.execute_command(node_scm_title_action_command)
+                    if node_scm_title_action_command else {})
                 node_custom_editor_context_action_command = next((
                     action.get("command")
                     for action in node_custom_editor_context_actions.get(
@@ -18417,6 +18450,9 @@ module.exports = { activate, deactivate };
                 _check("extension editor/webview menus follow custom editor context",
                        "selftest.node.customEditorTitleAction"
                        in node_custom_editor_title_action_ids
+                       and node_scm_context_ready
+                       and "selftest.node.scmTitleAction"
+                       in node_custom_editor_title_action_ids
                        and "selftest.node.customEditorContextAction"
                        in node_custom_editor_context_action_ids
                        and node_custom_editor_title_actions.get(
@@ -18424,6 +18460,15 @@ module.exports = { activate, deactivate };
                        == "selftest.node.customEditor"
                        and node_custom_editor_title_actions.get(
                            "context", {}).get("resourceExtname") == ".txt"
+                       and node_custom_editor_title_actions.get(
+                           "context", {}).get("scmProvider")
+                       == "selftest-node-scm"
+                       and node_custom_editor_title_actions.get(
+                           "context", {}).get("scmProviderContext")
+                       == "repository"
+                       and node_custom_editor_title_actions.get(
+                           "context", {}).get("scmProviderHasRootUri")
+                       == "true"
                        and node_custom_editor_context_actions.get(
                            "context", {}).get("webviewId")
                        == "selftest.node.customEditor"
@@ -18435,6 +18480,9 @@ module.exports = { activate, deactivate };
                        == "body"
                        and node_custom_editor_title_action_result.get("ok")
                        is True
+                       and node_scm_title_action_result.get("ok") is True
+                       and node_scm_title_action_result.get("provider")
+                       == "selftest-node-scm"
                        and node_custom_editor_title_action_probe.get("hits")
                        == 1
                        and node_custom_editor_context_action_result.get("ok")
@@ -18448,6 +18496,7 @@ module.exports = { activate, deactivate };
                            "title": node_custom_editor_title_actions,
                            "context": node_custom_editor_context_actions,
                            "result": node_custom_editor_title_action_result,
+                           "scmResult": node_scm_title_action_result,
                            "contextResult":
                                node_custom_editor_context_action_result,
                            "probe": node_custom_editor_title_action_probe,

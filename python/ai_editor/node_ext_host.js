@@ -7994,9 +7994,18 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
 
         // --- Namespace: scm ---
         scm: {
-            createSourceControl(id, label, rootUri) {
+            createSourceControl(id, label, rootUri, options) {
                 log(`scm: createSourceControl "${id}" ("${label}")`);
                 const groups = new Map();
+                let contextValue = String((options && options.contextValue) || '');
+                const emitProviderState = (type) => send({
+                    type,
+                    id: String(id || ''),
+                    providerId: String(id || ''),
+                    label: String(label || id || ''),
+                    rootUri: rootUri ? _plainBridgeValue(rootUri) : '',
+                    contextValue,
+                });
                 const sc = {
                     id,
                     label,
@@ -8005,6 +8014,11 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     count: 0,
                     quickDiffProvider: undefined,
                     statusBarCommands: undefined,
+                    get contextValue() { return contextValue; },
+                    set contextValue(value) {
+                        contextValue = String(value || '');
+                        emitProviderState('scm_provider_updated');
+                    },
                     createResourceGroup(groupId, groupLabel) {
                         const group = { id: groupId, label: groupLabel, resourceStates: [], hideWhenEmpty: false, dispose() { groups.delete(groupId); } };
                         groups.set(groupId, group);
@@ -8013,10 +8027,12 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     dispose() {
                         groups.clear();
                         _scmProviders.delete(id);
+                        emitProviderState('scm_provider_disposed');
                         log(`scm: disposed "${id}"`);
                     },
                 };
                 _scmProviders.set(id, sc);
+                emitProviderState('scm_provider_registered');
                 return sc;
             },
         },

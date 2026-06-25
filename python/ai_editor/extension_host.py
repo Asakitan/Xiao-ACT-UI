@@ -1867,6 +1867,8 @@ class NodeExtensionHost:
         self._custom_editor_lifecycle_requests: Dict[str, Dict[str, Any]] = {}
         self._custom_editor_state_lock = threading.Lock()
         self._custom_editor_states: Dict[str, Dict[str, Any]] = {}
+        self._node_scm_lock = threading.Lock()
+        self._node_scm_providers: Dict[str, Dict[str, Any]] = {}
         self._webview_serializer_request_lock = threading.Lock()
         self._webview_serializer_requests: Dict[str, Dict[str, Any]] = {}
         self._shutting_down = False
@@ -2867,6 +2869,24 @@ class NodeExtensionHost:
                 event = pending.get("event")
                 if isinstance(event, threading.Event):
                     event.set()
+
+        elif msg_type in {
+                "scm_provider_registered",
+                "scm_provider_updated",
+                "scm_provider_disposed"}:
+            provider_id = str(msg.get("providerId") or msg.get("id") or "")
+            if provider_id:
+                with self._node_scm_lock:
+                    if msg_type == "scm_provider_disposed":
+                        self._node_scm_providers.pop(provider_id, None)
+                    else:
+                        self._node_scm_providers[provider_id] = {
+                            "id": provider_id,
+                            "providerId": provider_id,
+                            "label": str(msg.get("label") or provider_id),
+                            "rootUri": str(msg.get("rootUri") or ""),
+                            "contextValue": str(msg.get("contextValue") or ""),
+                        }
 
         elif msg_type in {"tree_response", "tree_drag_drop_response"}:
             request_id = str(msg.get("requestId", ""))
@@ -3957,6 +3977,30 @@ class NodeExtensionHost:
 
     def terminal_shell_executions(self) -> List[Dict[str, Any]]:
         return [dict(item) for item in self._terminal_shell_executions]
+
+    def node_scm_context_snapshot(self) -> Dict[str, Any]:
+        with self._node_scm_lock:
+            providers = [dict(item) for item in self._node_scm_providers.values()]
+        context: Dict[str, Any] = {
+            "scm.providerCount": len(providers),
+            "scmProviderCount": len(providers),
+            "scmProviderHasRootUri": False,
+        }
+        if not providers:
+            return context
+        provider = providers[0]
+        root_uri = str(provider.get("rootUri") or "")
+        context.update({
+            "scmProvider": str(
+                provider.get("providerId")
+                or provider.get("id") or ""),
+            "scmProviderRootUri": root_uri,
+            "scmProviderHasRootUri": bool(root_uri),
+        })
+        context_value = str(provider.get("contextValue") or "")
+        if context_value:
+            context["scmProviderContext"] = context_value
+        return context
 
     def _terminal_link_request_result(
             self,

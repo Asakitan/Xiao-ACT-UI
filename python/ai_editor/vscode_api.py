@@ -2149,7 +2149,15 @@ class VscodeNamespace:
         if active_debug is not None:
             context["debugType"] = str(getattr(active_debug, "type", "") or "")
         active_scm = self._active_source_control()
-        active_scm_count = len(self._source_controls)
+        node_scm_context: Dict[str, Any] = {}
+        node_scm_snapshot = getattr(self._host, "node_scm_context_snapshot", None)
+        if callable(node_scm_snapshot):
+            try:
+                node_scm_context = dict(node_scm_snapshot())
+            except Exception:
+                node_scm_context = {}
+        active_scm_count = len(self._source_controls) + int(
+            node_scm_context.get("scm.providerCount") or 0)
         context["scm.providerCount"] = active_scm_count
         context["scmProviderCount"] = active_scm_count
         if active_scm is not None:
@@ -2161,6 +2169,14 @@ class VscodeNamespace:
             })
             if active_scm.contextValue:
                 context["scmProviderContext"] = active_scm.contextValue
+        elif node_scm_context.get("scmProvider"):
+            for key in (
+                    "scmProvider",
+                    "scmProviderRootUri",
+                    "scmProviderHasRootUri",
+                    "scmProviderContext"):
+                if key in node_scm_context:
+                    context[key] = node_scm_context[key]
         else:
             context["scmProviderHasRootUri"] = False
         return context

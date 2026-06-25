@@ -9455,6 +9455,18 @@ class AIEditorAPI:
                         runtime_context[str(key)] = text
             except Exception:
                 pass
+        node_host = getattr(self, "_node_ext_host", None)
+        node_scm_snapshot = getattr(node_host, "node_scm_context_snapshot", None)
+        if callable(node_scm_snapshot):
+            try:
+                for key, value in node_scm_snapshot().items():
+                    if value is None:
+                        continue
+                    text = self._normalize_when_context_value(value)
+                    if text:
+                        runtime_context[str(key)] = text
+            except Exception:
+                pass
         return runtime_context
 
     def _command_palette_context(self, context: Any = None) -> Dict[str, str]:
