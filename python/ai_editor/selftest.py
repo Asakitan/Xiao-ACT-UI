@@ -3299,6 +3299,25 @@ def test_phase1_ai_editor_regressions() -> None:
            in html
            and "chat_session:requestMeta" in html
            and "restoreAssistantSessionDraft();" in html)
+    _check("frontend Assistant exposes local chat session items and fork",
+           "ASSISTANT_SESSION_ITEMS_KEY='sao-ai-editor-chat-session-items'"
+           in html
+           and "function assistantSessionLoadItems()" in html
+           and "function assistantSessionMessageSnapshot()" in html
+           and "function assistantSessionPersistCurrent(extra)" in html
+           and "function assistantSessionOpenItem(sessionId,opts)" in html
+           and "function assistantSessionForkCurrent()" in html
+           and "window.assistantSessionOpenItem=assistantSessionOpenItem"
+           in html
+           and "assistantSessionPersistCurrent({status:streaming?'inProgress':'completed'});"
+           in html
+           and "group.textContent='▸ Assistant Sessions'" in html
+           and "fork.onclick=ev=>{ev.stopPropagation();assistantSessionOpenItem(s.id,{fork:true});refreshHistory()};"
+           in html
+           and "assistantSessionDeleteItem(s.id);refreshHistory()" in html
+           and "['/sessions','Open chat sessions','chat']" in html
+           and "else if(cmd==='/fork')assistantSessionForkCurrent();"
+           in html)
     _check("frontend Assistant supports Copilot-style attached context and references",
            'id="chat-context-area" aria-label="Attached context"' in html
            and "chat-context-pill" in html
