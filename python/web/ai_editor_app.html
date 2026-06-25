@@ -1265,7 +1265,11 @@ pre.code-block { overflow:visible; }
 .minimap-container.hidden { display:none; }
 .minimap-container canvas { width:100%; height:100%; display:block; }
 .minimap-viewport { position:absolute; left:0; right:0; background:color-mix(in srgb, var(--fg-accent) 15%, transparent);
-  border:1px solid color-mix(in srgb, var(--fg-accent) 30%, transparent); pointer-events:none; min-height:8px; }
+  border:1px solid color-mix(in srgb, var(--fg-accent) 30%, transparent); pointer-events:none; min-height:8px;
+  transition:opacity .12s ease; }
+.minimap-container.slider-mouseover .minimap-viewport { opacity:0; }
+.minimap-container.slider-mouseover:hover .minimap-viewport { opacity:1; }
+.editor-container.minimap-left .minimap-container { order:-1; border-left:0; border-right:1px solid var(--border); }
 
 /* ── TERM-03: Terminal tabs ── */
 .term-tab-bar { display:flex; align-items:center; height:24px; background:var(--bg2);
@@ -1928,6 +1932,17 @@ pre.code-block { overflow:visible; }
         <label class="settings-check"><input id="s-editor-hover-sticky" type="checkbox"><span><b>Sticky hover</b><small>Keep the hover open while the pointer moves over it.</small></span></label>
       </div>
       <label class="settings-check"><input id="s-editor-hover-above" type="checkbox"><span><b>Prefer hover above line</b><small>Matches editor.hover.above when there is room.</small></span></label>
+      <div class="settings-grid">
+        <label class="settings-check"><input id="s-editor-minimap-enabled" type="checkbox"><span><b>Minimap</b><small>Matches editor.minimap.enabled.</small></span></label>
+        <div><label>Minimap Side</label><select id="s-editor-minimap-side" style="width:100%"><option value="right">right</option><option value="left">left</option></select></div>
+        <div><label>Minimap Size</label><select id="s-editor-minimap-size" style="width:100%"><option value="proportional">proportional</option><option value="fill">fill</option><option value="fit">fit</option></select></div>
+        <div><label>Minimap Scale</label><select id="s-editor-minimap-scale" style="width:100%"><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></div>
+      </div>
+      <div class="settings-grid">
+        <label class="settings-check"><input id="s-editor-minimap-render-characters" type="checkbox"><span><b>Render characters</b><small>Draw individual minimap glyph marks instead of a single line block.</small></span></label>
+        <div><label>Max Column</label><input id="s-editor-minimap-max-column" type="number" min="1" step="1" style="width:100%"></div>
+        <div><label>Show Slider</label><select id="s-editor-minimap-show-slider" style="width:100%"><option value="mouseover">mouseover</option><option value="always">always</option></select></div>
+      </div>
       <label class="settings-check"><input id="s-editor-format-on-save" type="checkbox"><span><b>Format on save</b><small>Runs the active formatter before explicit saves.</small></span></label>
       <label class="settings-check"><input id="s-editor-format-on-paste" type="checkbox"><span><b>Format on paste</b><small>Runs range formatting after paste/drop edits when a range formatter is available.</small></span></label>
       <label class="settings-check"><input id="s-editor-format-on-type" type="checkbox"><span><b>Format on type</b><small>Runs extension on-type formatting providers for typed trigger characters.</small></span></label>
@@ -2188,13 +2203,14 @@ const SETTINGS_SECTION_DEFAULTS={
   mcp:{access:'prompt',autostart:false,discovery_enabled:true,collision_behavior:'first',server_sampling:false},
   terminal:{profile:'PowerShell 7 (No Profile)',shell_path:'',shell_args:[],timeout:30,output_limit:8000,auto_approve:{}},
   extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands','views','customEditors','notebooks','terminal','statusBarItems'],enabled_contributions_explicit:false,diagnostics_enabled:false},
-  editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,formatOnPaste:false,linkedEditing:false,codeActionsOnSave:{},codeActions:{triggerOnFocusChange:false},pasteAs:{preferences:[]},tabSize:4,insertSpaces:true,wordSeparators:'`~!@#$%^&*()-=+[{]}\\|;:\'",.<>/?',quickSuggestions:{other:'offWhenInlineCompletions',comments:'off',strings:'off'},quickSuggestionsDelay:10,suggestOnTriggerCharacters:true,acceptSuggestionOnEnter:'on',acceptSuggestionOnCommitCharacter:true,hover:{enabled:'on',delay:300,hidingDelay:300,sticky:true,above:true}},
+  editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,formatOnPaste:false,linkedEditing:false,codeActionsOnSave:{},codeActions:{triggerOnFocusChange:false},pasteAs:{preferences:[]},tabSize:4,insertSpaces:true,wordSeparators:'`~!@#$%^&*()-=+[{]}\\|;:\'",.<>/?',quickSuggestions:{other:'offWhenInlineCompletions',comments:'off',strings:'off'},quickSuggestionsDelay:10,suggestOnTriggerCharacters:true,acceptSuggestionOnEnter:'on',acceptSuggestionOnCommitCharacter:true,hover:{enabled:'on',delay:300,hidingDelay:300,sticky:true,above:true},minimap:{enabled:true,size:'proportional',side:'right',showSlider:'mouseover',renderCharacters:true,maxColumn:120,scale:1}},
   files:{autoSave:'off',autoSaveDelay:1000,trimTrailingWhitespace:false,insertFinalNewline:false,trimFinalNewlines:false},
   customization:{instructions_locations:['.sao/instructions.md','.sao/instructions'],agent_locations:['.sao/agents'],workflow_locations:['.sao/workflows'],skill_locations:['.agents/skills/.local','.claude/skills/.local'],use_agent_md:true,use_claude_md:false}
 };
 const DEFAULT_EDITOR_WORD_SEPARATORS='`~!@#$%^&*()-=+[{]}\\|;:\'",.<>/?';
 const DEFAULT_EDITOR_QUICK_SUGGESTIONS={other:'offWhenInlineCompletions',comments:'off',strings:'off'};
 const DEFAULT_EDITOR_HOVER={enabled:'on',delay:300,hidingDelay:300,sticky:true,above:true};
+const DEFAULT_EDITOR_MINIMAP={enabled:true,size:'proportional',side:'right',showSlider:'mouseover',renderCharacters:true,maxColumn:120,scale:1};
 const EXTENSION_CONTRIBUTION_OPTIONS=[
   {id:'chatParticipants',label:'Chat Participants',description:'Expose extension chat participants in the assistant surface.'},
   {id:'languageModelTools',label:'LM Tools',description:'Register extension language-model tools for tool invocation.'},
@@ -2592,6 +2608,7 @@ async function init(){
   if(normalizeUiLanguage(config.language))_curLang=config.language;
   syncUI();
   _applyLayoutState();
+  if(typeof applyEditorMinimapSettings==='function')applyEditorMinimapSettings(false);
   const persistedLayout=isPlainObject(config.layout)?JSON.stringify(config.layout):'';
   const currentLayout=JSON.stringify(_layoutSnapshot());
   _lastPersistedLayoutState=persistedLayout;
@@ -8658,6 +8675,49 @@ function editorHoverEnabledForEvent(event){
   if(mode==='onKeyboardModifier')return !!(event&&(event.altKey||event.ctrlKey||event.metaKey));
   return true;
 }
+function editorMinimapChoice(value,choices,fallback){
+  const text=String(value||'').trim();
+  return choices.includes(text)?text:fallback;
+}
+function editorMinimapInteger(value,fallback,min,max){
+  const n=Math.trunc(Number(value));
+  if(!Number.isFinite(n)||n<min)return fallback;
+  return Number.isFinite(max)?Math.min(n,max):n;
+}
+function editorMinimapOptions(value){
+  const raw=value===undefined?editorSuggestSetting('minimap'):value;
+  const obj=isPlainObject(raw)?raw:{};
+  return {
+    enabled:obj.enabled!==false,
+    size:editorMinimapChoice(obj.size,['proportional','fill','fit'],DEFAULT_EDITOR_MINIMAP.size),
+    side:editorMinimapChoice(obj.side,['left','right'],DEFAULT_EDITOR_MINIMAP.side),
+    showSlider:editorMinimapChoice(obj.showSlider,['always','mouseover'],DEFAULT_EDITOR_MINIMAP.showSlider),
+    renderCharacters:obj.renderCharacters!==false,
+    maxColumn:editorMinimapInteger(obj.maxColumn,DEFAULT_EDITOR_MINIMAP.maxColumn,1,Number.MAX_SAFE_INTEGER),
+    scale:editorMinimapInteger(obj.scale,DEFAULT_EDITOR_MINIMAP.scale,1,3)
+  };
+}
+function editorMinimapOptionsFromInputs(prefix){
+  return {
+    enabled:readCheckedValue(prefix+'minimap-enabled'),
+    size:editorMinimapChoice(readInputValue(prefix+'minimap-size'),['proportional','fill','fit'],DEFAULT_EDITOR_MINIMAP.size),
+    side:editorMinimapChoice(readInputValue(prefix+'minimap-side'),['left','right'],DEFAULT_EDITOR_MINIMAP.side),
+    showSlider:editorMinimapChoice(readInputValue(prefix+'minimap-show-slider'),['always','mouseover'],DEFAULT_EDITOR_MINIMAP.showSlider),
+    renderCharacters:readCheckedValue(prefix+'minimap-render-characters'),
+    maxColumn:editorMinimapInteger(readNumberValue(prefix+'minimap-max-column',DEFAULT_EDITOR_MINIMAP.maxColumn,true),DEFAULT_EDITOR_MINIMAP.maxColumn,1,Number.MAX_SAFE_INTEGER),
+    scale:editorMinimapInteger(readNumberValue(prefix+'minimap-scale',DEFAULT_EDITOR_MINIMAP.scale,true),DEFAULT_EDITOR_MINIMAP.scale,1,3)
+  };
+}
+function setEditorMinimapInputs(prefix,value){
+  const minimap=editorMinimapOptions(value);
+  setCheckedValue(prefix+'minimap-enabled',minimap.enabled);
+  setSelectValue(prefix+'minimap-size',minimap.size,DEFAULT_EDITOR_MINIMAP.size);
+  setSelectValue(prefix+'minimap-side',minimap.side,DEFAULT_EDITOR_MINIMAP.side);
+  setSelectValue(prefix+'minimap-show-slider',minimap.showSlider,DEFAULT_EDITOR_MINIMAP.showSlider);
+  setCheckedValue(prefix+'minimap-render-characters',minimap.renderCharacters);
+  setInputValue(prefix+'minimap-max-column',minimap.maxColumn);
+  setSelectValue(prefix+'minimap-scale',String(minimap.scale),String(DEFAULT_EDITOR_MINIMAP.scale));
+}
 function setDottedConfigValue(target,path,value){
   const parts=String(path||'').split('.').map(p=>p.trim()).filter(Boolean);
   if(!parts.length||!target||typeof target!=='object')return;
@@ -13089,6 +13149,7 @@ function openSettings(){
   setSelectValue('s-editor-accept-suggestion-on-enter',editorAcceptSuggestionOnEnterMode(editor.acceptSuggestionOnEnter),'on');
   setCheckedValue('s-editor-accept-suggestion-on-commit-character',editorAcceptSuggestionOnCommitCharacterEnabled(editor.acceptSuggestionOnCommitCharacter));
   setEditorHoverInputs('s-editor-',editor.hover);
+  setEditorMinimapInputs('s-editor-',editor.minimap);
   setCheckedValue('s-editor-format-on-save',editor.formatOnSave===true);
   setCheckedValue('s-editor-format-on-paste',editor.formatOnPaste===true);
   setCheckedValue('s-editor-format-on-type',editor.formatOnType===true);
@@ -13367,7 +13428,7 @@ async function saveSettings(){
   config.terminal={...settingSection('terminal'),profile:readInputValue('s-term-profile')||'PowerShell 7 (No Profile)',shell_path:readInputValue('s-term-shell'),shell_args:readListValue('s-term-args',false),timeout:readNumberValue('s-term-timeout',30,true),output_limit:readNumberValue('s-term-output',8000,true)};
   config.extensions={...settingSection('extensions'),confirm_install:readCheckedValue('s-ext-confirm'),diagnostics_enabled:readCheckedValue('s-ext-diagnostics'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true),enabled_contributions:readExtensionContributionValues(),enabled_contributions_explicit:true};
   const editorSettings=settingSection('editor');
-  config.editor={...editorSettings,defaultFormatter:readInputValue('s-editor-default-formatter').trim(),tabSize:editorTabSize(readNumberValue('s-editor-tab-size',4,true)),insertSpaces:readCheckedValue('s-editor-insert-spaces'),wordSeparators:readInputValue('s-editor-word-separators'),quickSuggestions:editorQuickSuggestionsFromInputs('s-editor-'),quickSuggestionsDelay:editorQuickSuggestionsDelay(readNumberValue('s-editor-quick-suggestions-delay',10,true)),suggestOnTriggerCharacters:readCheckedValue('s-editor-suggest-on-trigger-characters'),acceptSuggestionOnEnter:editorAcceptSuggestionOnEnterMode(readInputValue('s-editor-accept-suggestion-on-enter')),acceptSuggestionOnCommitCharacter:readCheckedValue('s-editor-accept-suggestion-on-commit-character'),hover:editorHoverOptionsFromInputs('s-editor-'),formatOnSave:readCheckedValue('s-editor-format-on-save'),formatOnPaste:readCheckedValue('s-editor-format-on-paste'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing'),codeActions:{...(isPlainObject(editorSettings.codeActions)?editorSettings.codeActions:{}),triggerOnFocusChange:readCheckedValue('s-editor-code-actions-trigger-focus')},codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)};
+  config.editor={...editorSettings,defaultFormatter:readInputValue('s-editor-default-formatter').trim(),tabSize:editorTabSize(readNumberValue('s-editor-tab-size',4,true)),insertSpaces:readCheckedValue('s-editor-insert-spaces'),wordSeparators:readInputValue('s-editor-word-separators'),quickSuggestions:editorQuickSuggestionsFromInputs('s-editor-'),quickSuggestionsDelay:editorQuickSuggestionsDelay(readNumberValue('s-editor-quick-suggestions-delay',10,true)),suggestOnTriggerCharacters:readCheckedValue('s-editor-suggest-on-trigger-characters'),acceptSuggestionOnEnter:editorAcceptSuggestionOnEnterMode(readInputValue('s-editor-accept-suggestion-on-enter')),acceptSuggestionOnCommitCharacter:readCheckedValue('s-editor-accept-suggestion-on-commit-character'),hover:editorHoverOptionsFromInputs('s-editor-'),minimap:editorMinimapOptionsFromInputs('s-editor-'),formatOnSave:readCheckedValue('s-editor-format-on-save'),formatOnPaste:readCheckedValue('s-editor-format-on-paste'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing'),codeActions:{...(isPlainObject(editorSettings.codeActions)?editorSettings.codeActions:{}),triggerOnFocusChange:readCheckedValue('s-editor-code-actions-trigger-focus')},codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)};
   saveEditorLanguageOverrideSettings();
   config.files={...settingSection('files'),autoSave:filesAutoSaveMode({autoSave:readInputValue('s-files-auto-save')}),autoSaveDelay:filesAutoSaveDelay({autoSaveDelay:readNumberValue('s-files-auto-save-delay',1000,true)}),trimTrailingWhitespace:readCheckedValue('s-files-trim-trailing-whitespace'),insertFinalNewline:readCheckedValue('s-files-insert-final-newline'),trimFinalNewlines:readCheckedValue('s-files-trim-final-newlines')};
   saveFilesLanguageOverrideSettings();
@@ -13387,6 +13448,7 @@ async function saveSettings(){
     if(callAppliedLocally(modeResult))showPersistenceFailure(modeResult,{errorPrefix:'Mode save failed: ',partialPrefix:'Mode updated only for current session: '});
   }
   syncUI();
+  if(typeof applyEditorMinimapSettings==='function')applyEditorMinimapSettings(false);
   const saveResult=await call('save_config',config);
   if(!(saveResult&&saveResult.ok)){
     showToast('Save failed: '+callFailedMessage(saveResult,'backend unavailable'),'error',3200);
@@ -19096,41 +19158,74 @@ async function saveFile(options){
 let _minimapVisible=false;
 let _minimapDirtyTimer=null;
 const _MINIMAP_THROTTLE=200;
-function toggleMinimap(){
-  _minimapVisible=!_minimapVisible;
+function editorMinimapLineHeight(minimap,lineCount,height){
+  const lines=Math.max(1,Number(lineCount)||1),h=Math.max(1,Number(height)||1),scale=editorMinimapInteger(minimap&&minimap.scale,1,1,3);
+  const natural=scale;
+  if(minimap&&minimap.size==='fill')return Math.max(.5,h/lines);
+  if(minimap&&minimap.size==='fit')return Math.min(natural,Math.max(.5,h/lines));
+  return natural;
+}
+function applyEditorMinimapSettings(render){
+  const opts=editorMinimapOptions();
   const mc=$('minimap-container');if(!mc)return;
+  const wrap=$('editor-container');
+  _minimapVisible=!!opts.enabled;
   mc.classList.toggle('hidden',!_minimapVisible);
-  if(_minimapVisible)_renderMinimap();
-  _saveLayoutDebounced(); // MINIMAP-001: Persist minimap state
+  mc.classList.toggle('slider-mouseover',opts.showSlider==='mouseover');
+  mc.dataset.side=opts.side;mc.dataset.size=opts.size;mc.dataset.scale=String(opts.scale);
+  mc.style.width=Math.max(44,Math.min(132,44+(opts.scale*16)))+'px';
+  if(wrap)wrap.classList.toggle('minimap-left',opts.side==='left');
+  if(_minimapVisible&&render!==false)_renderMinimap();
+  return opts;
+}
+async function toggleMinimap(){
+  const editor=settingSection('editor');
+  const minimap=editorMinimapOptions(editor.minimap);
+  config.editor={...editor,minimap:{...minimap,enabled:!minimap.enabled}};
+  applyEditorMinimapSettings();
+  _saveLayoutDebounced();
+  await persistConfigPatch({editor:config.editor},{errorPrefix:'Minimap setting save failed: ',partialPrefix:'Minimap updated only for current session: '});
 }
 function _renderMinimap(){
   const canvas=$('minimap-canvas'),mc=$('minimap-container'),ta=$('editor-text');
-  if(!canvas||!mc||!ta||mc.classList.contains('hidden'))return;
+  const minimap=applyEditorMinimapSettings(false);
+  if(!canvas||!mc||!ta||!minimap||mc.classList.contains('hidden'))return;
   const ctx=canvas.getContext('2d');
   const dpr=window.devicePixelRatio||1;
   const w=mc.clientWidth,h=mc.clientHeight;
   canvas.width=w*dpr;canvas.height=h*dpr;
   ctx.scale(dpr,dpr);ctx.clearRect(0,0,w,h);
   const lines=ta.value.split('\n');
-  const lineH=Math.max(1,Math.min(2,h/Math.max(lines.length,1)));
+  const lineH=editorMinimapLineHeight(minimap,lines.length,h);
   const style=getComputedStyle(document.body);
   const fgColor=style.getPropertyValue('--fg-dim').trim()||'#808080';
   ctx.fillStyle=fgColor;ctx.globalAlpha=0.5;
   for(let i=0;i<lines.length;i++){
     const line=lines[i];if(!line.length)continue;
-    const density=Math.min(line.replace(/\s/g,'').length,w-4);
+    const clipped=line.slice(0,minimap.maxColumn);
+    const density=Math.min(clipped.replace(/\s/g,'').length,w-4);
     const indent=line.match(/^\s*/)[0].length;
-    const x=Math.min(indent*0.5,w*0.3);
-    ctx.fillRect(x,i*lineH,Math.max(1,density*0.8),Math.max(1,lineH-0.2));
+    const x=Math.min(indent*0.35*minimap.scale,w*0.3);
+    if(minimap.renderCharacters){
+      let drawn=0;
+      for(let c=0;c<clipped.length&&drawn<w-4;c++){
+        if(/\s/.test(clipped[c]))continue;
+        ctx.fillRect(x+(c*.55*minimap.scale),i*lineH,Math.max(.8,minimap.scale*.75),Math.max(.8,lineH-.2));
+        drawn++;
+      }
+    }else{
+      ctx.fillRect(x,i*lineH,Math.max(1,density*.8*minimap.scale),Math.max(1,lineH-.2));
+    }
   }
   ctx.globalAlpha=1;_updateMinimapViewport();
 }
 function _updateMinimapViewport(){
   const vp=$('minimap-viewport'),ta=$('editor-text'),mc=$('minimap-container');
   if(!vp||!ta||!mc||mc.classList.contains('hidden'))return;
+  const minimap=editorMinimapOptions();
   const lines=ta.value.split('\n').length;
   const totalH=mc.clientHeight;
-  const lineH=Math.max(1,Math.min(2,totalH/Math.max(lines,1)));
+  const lineH=editorMinimapLineHeight(minimap,lines,totalH);
   const taStyle=getComputedStyle(ta);
   const taLineH=parseFloat(taStyle.lineHeight)||parseFloat(taStyle.fontSize)*1.5;
   const visLines=Math.floor(ta.clientHeight/taLineH);
@@ -19442,7 +19537,7 @@ function updateBreadcrumb(){
 document.addEventListener('click',()=>{const bar=$('breadcrumb-bar');if(bar)bar.querySelectorAll('.bc-drop.open').forEach(d=>d.classList.remove('open'))});
 // Patch switchTab and addTab to update breadcrumb
 const _origSwitchTab2=switchTab;
-switchTab=function(id){_origSwitchTab2(id);updateBreadcrumb();if(_minimapVisible)setTimeout(_renderMinimap,50)};
+switchTab=function(id){_origSwitchTab2(id);updateBreadcrumb();if(typeof applyEditorMinimapSettings==='function')applyEditorMinimapSettings(false);if(_minimapVisible)setTimeout(_renderMinimap,50)};
 const _origAddTab2=addTab;
 addTab=function(name,content,lang,meta){_origAddTab2(name,content,lang,meta);updateBreadcrumb()};
 

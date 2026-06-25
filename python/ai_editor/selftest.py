@@ -3547,6 +3547,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and "quickSuggestionsDelay:10" in html
             and "acceptSuggestionOnEnter:'on'" in html
             and "hover:{enabled:'on',delay:300,hidingDelay:300,sticky:true,above:true}" in html
+            and "minimap:{enabled:true,size:'proportional',side:'right',showSlider:'mouseover',renderCharacters:true,maxColumn:120,scale:1}" in html
             and "id=\"s-editor-default-formatter\"" in html
             and "id=\"s-editor-word-separators\"" in html
             and "id=\"s-editor-quick-suggestions-other\"" in html
@@ -3559,6 +3560,13 @@ def test_phase1_ai_editor_regressions() -> None:
             and "id=\"s-editor-hover-hiding-delay\"" in html
             and "id=\"s-editor-hover-sticky\"" in html
             and "id=\"s-editor-hover-above\"" in html
+            and "id=\"s-editor-minimap-enabled\"" in html
+            and "id=\"s-editor-minimap-side\"" in html
+            and "id=\"s-editor-minimap-size\"" in html
+            and "id=\"s-editor-minimap-scale\"" in html
+            and "id=\"s-editor-minimap-render-characters\"" in html
+            and "id=\"s-editor-minimap-max-column\"" in html
+            and "id=\"s-editor-minimap-show-slider\"" in html
             and "id=\"s-editor-format-on-save\"" in html
             and "id=\"s-editor-format-on-paste\"" in html
             and "id=\"s-editor-format-on-type\"" in html
@@ -3592,6 +3600,10 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function editorHoverEnabledForEvent(event)" in html
             and "function placeEditorHoverOverlay(el,position)" in html
             and "function closeEditorHoverDelayed()" in html
+            and "function editorMinimapOptions(value)" in html
+            and "function applyEditorMinimapSettings(render)" in html
+            and "function editorMinimapLineHeight(minimap,lineCount,height)" in html
+            and "async function toggleMinimap()" in html
             and "function scheduleEditorQuickSuggestions(ch)" in html
             and "function scheduleEditorHover(event)" in html
             and "function editorFormatOnSaveEnabled()" in html
@@ -5258,6 +5270,144 @@ console.log("frontend hover and code action rendering ok");
             )
         except Exception as exc:
             _check("frontend hover and code action rendering", False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
+    if not node_path:
+        _check("frontend minimap settings behavior skipped without Node.js", True)
+    else:
+        minimap_functions = [
+            "editorMinimapChoice",
+            "editorMinimapInteger",
+            "editorMinimapOptions",
+            "editorMinimapLineHeight",
+            "applyEditorMinimapSettings",
+            "toggleMinimap",
+            "_renderMinimap",
+            "_updateMinimapViewport",
+        ]
+        minimap_js_functions = "\n".join(
+            _extract_js_function(html, name) for name in minimap_functions)
+        js = r"""
+function assert(ok,label){ if(!ok){ throw new Error(label); } }
+const DEFAULT_EDITOR_MINIMAP = { enabled: true, size: "proportional", side: "right", showSlider: "mouseover", renderCharacters: true, maxColumn: 120, scale: 1 };
+let config = { editor: { minimap: { enabled: true, size: "fit", side: "left", showSlider: "mouseover", renderCharacters: true, maxColumn: 3, scale: 3 } } };
+let persistedPatch = null;
+function isPlainObject(value){ return !!value && typeof value === "object" && !Array.isArray(value); }
+function editorEffectiveSection(section){ return config[section] || {}; }
+function editorSuggestSetting(name){ return editorEffectiveSection("editor")[name]; }
+function settingSection(section){ return config[section] || {}; }
+async function persistConfigPatch(patch){ persistedPatch = patch; Object.assign(config, patch); return { ok: true }; }
+function makeClassList(owner){
+  const classes = new Set();
+  return {
+    add(name){ classes.add(name); owner.className = Array.from(classes).join(" "); },
+    remove(name){ classes.delete(name); owner.className = Array.from(classes).join(" "); },
+    toggle(name, force){
+      const on = force === undefined ? !classes.has(name) : !!force;
+      if(on) classes.add(name); else classes.delete(name);
+      owner.className = Array.from(classes).join(" ");
+      return on;
+    },
+    contains(name){ return classes.has(name); },
+  };
+}
+const fillRects = [];
+const ctx = {
+  globalAlpha: 1,
+  fillStyle: "",
+  scale(){},
+  clearRect(){ fillRects.length = 0; },
+  fillRect(x,y,w,h){ fillRects.push({ x, y, w, h }); },
+};
+const canvas = { width: 0, height: 0, getContext(){ return ctx; } };
+const minimap = { className: "", classList: null, dataset: {}, style: {}, clientWidth: 80, clientHeight: 120 };
+minimap.classList = makeClassList(minimap);
+const wrap = { className: "", classList: null };
+wrap.classList = makeClassList(wrap);
+const viewport = { style: {} };
+const textarea = { value: "abcdef\n  xy\nzzzz", scrollTop: 20, scrollHeight: 240, clientHeight: 80 };
+const document = { body: {} };
+function $(id){
+  if(id === "minimap-container") return minimap;
+  if(id === "minimap-canvas") return canvas;
+  if(id === "editor-container") return wrap;
+  if(id === "minimap-viewport") return viewport;
+  if(id === "editor-text") return textarea;
+  return null;
+}
+function getComputedStyle(target){
+  return {
+    getPropertyValue(name){ return name === "--fg-dim" ? "#777" : ""; },
+    lineHeight: "20px",
+    fontSize: "13px",
+  };
+}
+const window = { devicePixelRatio: 2 };
+function _saveLayoutDebounced(){}
+""" + minimap_js_functions + r"""
+(async function(){
+assert(editorMinimapOptions({ enabled: false, size: "bad", side: "left", showSlider: "always", renderCharacters: false, maxColumn: 9, scale: 9 }).enabled === false
+       && editorMinimapOptions({ enabled: false, size: "bad", side: "left", showSlider: "always", renderCharacters: false, maxColumn: 9, scale: 9 }).size === "proportional"
+       && editorMinimapOptions({ enabled: false, size: "bad", side: "left", showSlider: "always", renderCharacters: false, maxColumn: 9, scale: 9 }).side === "left"
+       && editorMinimapOptions({ enabled: false, size: "bad", side: "left", showSlider: "always", renderCharacters: false, maxColumn: 9, scale: 9 }).showSlider === "always"
+       && editorMinimapOptions({ enabled: false, size: "bad", side: "left", showSlider: "always", renderCharacters: false, maxColumn: 9, scale: 9 }).renderCharacters === false
+       && editorMinimapOptions({ enabled: false, size: "bad", side: "left", showSlider: "always", renderCharacters: false, maxColumn: 9, scale: 9 }).maxColumn === 9
+       && editorMinimapOptions({ enabled: false, size: "bad", side: "left", showSlider: "always", renderCharacters: false, maxColumn: 9, scale: 9 }).scale === 3,
+       "minimap options normalize VS Code fields");
+assert(editorMinimapLineHeight({ size: "fit", scale: 3 }, 100, 120) === 1.2
+       && editorMinimapLineHeight({ size: "fill", scale: 1 }, 100, 120) === 1.2
+       && editorMinimapLineHeight({ size: "proportional", scale: 3 }, 100, 120) === 3,
+       "minimap size controls line height");
+applyEditorMinimapSettings();
+assert(!minimap.classList.contains("hidden")
+       && minimap.classList.contains("slider-mouseover")
+       && wrap.classList.contains("minimap-left")
+       && minimap.dataset.side === "left"
+       && minimap.dataset.size === "fit"
+       && minimap.dataset.scale === "3",
+       "minimap settings apply side slider and scale classes");
+_renderMinimap();
+assert(canvas.width === 160 && canvas.height === 240
+       && fillRects.length === 7
+       && fillRects[0].x === 0
+       && viewport.style.height,
+       "minimap renderCharacters honors maxColumn and updates viewport");
+config.editor.minimap.renderCharacters = false;
+_renderMinimap();
+assert(fillRects.length === 3, "minimap block rendering draws one block per non-empty line");
+await toggleMinimap();
+assert(config.editor.minimap.enabled === false
+       && minimap.classList.contains("hidden")
+       && persistedPatch && persistedPatch.editor && persistedPatch.editor.minimap.enabled === false,
+       "toggle minimap updates editor.minimap.enabled and persists patch");
+console.log("frontend minimap settings behavior ok");
+})().catch(err => { console.error(err && err.stack || err); process.exit(1); });
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check_subprocess_result(
+                "frontend minimap settings behavior",
+                result,
+                "frontend minimap settings behavior ok",
+            )
+        except Exception as exc:
+            _check("frontend minimap settings behavior", False, str(exc))
         finally:
             if js_path:
                 try:
