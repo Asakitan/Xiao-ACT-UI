@@ -3881,6 +3881,22 @@ function chatContextFromToken(token){
   const workflowKey=key.replace(/^workflow:/,'');
   const workflow=(chatControlState&&chatControlState.workflows||[]).find(w=>controlItemId(w).toLowerCase()===workflowKey);
   if(workflow)return {id:'workflow:'+controlItemId(workflow),kind:'workflow',label:controlItemName(workflow)||controlItemId(workflow),prompt:'Relevant workflow: '+controlItemId(workflow)};
+  if(key.startsWith('tab:')){
+    const tabId=key.slice(4);
+    const tabItems=chatContextPickerOpenTabs();
+    const tabItem=/^\d+$/.test(tabId)?tabItems[Number(tabId)]:tabItems.find(item=>String(item.id||'').toLowerCase()==='tab:'+tabId||String(item.label||'').toLowerCase()===tabId);
+    if(tabItem)return tabItem;
+  }
+  if(key.startsWith('session:')){
+    const sessionId=key.slice(8);
+    const session=assistantSessionLoadItems().find(s=>String(s.id||'').toLowerCase()===sessionId);
+    if(session)return {id:'session:'+session.id,kind:'session',label:session.title||'Chat session',preview:session.sessionResource||String(session.updatedAt||''),prompt:'Assistant chat session '+(session.title||session.id)+':\n'+JSON.stringify({id:session.id,title:session.title,requestCount:session.requestCount,sessionResource:session.sessionResource},null,2)};
+  }
+  if(key.startsWith('symbol:')){
+    const encoded=raw.replace(/^@symbol:/i,'');
+    const symbol=chatInputSymbolCompletions().find(item=>String(item.token||'').replace(/^@symbol:/i,'')===encoded);
+    if(symbol)return {id:'symbol:'+symbol.line+':'+symbol.name,kind:'symbol',label:symbol.name,preview:symbol.preview,prompt:'Current editor symbol '+symbol.name+' at line '+symbol.line+':\n```\n'+symbol.preview+'\n```'};
+  }
   return null;
 }
 function renderChatContextAttachments(){
@@ -3969,6 +3985,16 @@ function chatContextPickerItems(){
       prompt:'Workspace file selected in Explorer: '+p,preview:p});
   }
   chatContextPickerOpenTabs().forEach(item=>items.push(item));
+  assistantSessionLoadItems().forEach(s=>{
+    if(!s||!s.id)return;
+    items.push({id:'session:'+s.id,kind:'session',icon:'◷',label:s.title||'Chat session',
+      description:s.sessionResource||((s.requestCount||0)+' requests'),preview:s.sessionResource||String(s.updatedAt||''),
+      prompt:'Assistant chat session '+(s.title||s.id)+':\n'+JSON.stringify({id:s.id,title:s.title,requestCount:s.requestCount,sessionResource:s.sessionResource},null,2),
+      token:'@session:'+s.id});
+  });
+  chatInputSymbolCompletions().forEach(symbol=>items.push({id:'symbol:'+symbol.line+':'+symbol.name,kind:'symbol',icon:'ƒ',
+    label:symbol.name,description:'Line '+symbol.line,preview:symbol.preview,prompt:'Current editor symbol '+symbol.name+' at line '+symbol.line+':\n```\n'+symbol.preview+'\n```',
+    token:symbol.token}));
   if(typeof attachments!=='undefined'&&Array.isArray(attachments)){
     attachments.forEach(a=>items.push({id:'attachment:'+a.type+':'+a.name,kind:a.type||'file',icon:'+',label:a.name||'Attachment',
       description:'Pending attachment',preview:a.type==='image'?'Image attachment':chatContextTextSample(a.data,220),
@@ -12375,8 +12401,17 @@ async function loadPremiumGuide(force){
 }
 function refreshPremiumGuide(){_premiumLoaded=false;return loadPremiumGuide(true)}
 
+let chatToolCompletionItems=[];
 function renderToolsSidebar(toolList){
   const list=$('tools-list');list.innerHTML='';let lastCat='';
+  chatToolCompletionItems=(toolList||[]).map(tool=>({
+    name:String(tool&&tool.name||''),
+    label:'#'+String(tool&&tool.name||''),
+    description:String(tool&&tool.description||tool&&tool.runtimeMessage||'Tool'),
+    category:String(tool&&tool.category||'tool'),
+    requires_confirm:!!(tool&&tool.requires_confirm),
+    needsExtensionRuntime:!!(tool&&tool.needsExtensionRuntime)
+  })).filter(tool=>tool.name);
   if(!toolList||!toolList.length){list.innerHTML='<div class="tree-note">'+esc(t('no_tools'))+'</div>';return}
   const isAgent=currentMode==='agent';
   toolList.forEach(tool=>{
@@ -19572,13 +19607,45 @@ $('term-input')&&$('term-input').addEventListener('keydown',function(e){
   if(e.key==='k'&&(e.ctrlKey||e.metaKey)){e.preventDefault();clearTerminal()}
 });
 
-// ── @-mention popup (chat-ux-6: enhanced autocomplete with agents and tools) ──
+// ── @/# chat input completions (Copilot Chat-style dynamic context and tool refs) ──
 const AT_VARS=[['@file','Current file name','context','\u{1f4c4}'],['@selection','Selected text in editor','context','✂'],
   ['@editor','Full editor content','context','\u{1f4dd}'],['@state','Runtime state','context','⚡'],['@language','Editor language','context','\u{1f310}']];
 
-let _atPopupTimer=null,_atSelectedIdx=0;
+let _atPopupTimer=null,_atSelectedIdx=0,_chatCompletionMode='mention';
+function chatInputSymbolCompletions(){
+  const editor=(typeof ed!=='undefined'&&ed)?ed:{value:''};
+  const lines=String(editor.value||'').split(/\r?\n/),items=[];
+  const patterns=[
+    /^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/,
+    /^\s*(?:export\s+)?class\s+([A-Za-z_$][\w$]*)\b/,
+    /^\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/,
+    /^\s*def\s+([A-Za-z_][\w]*)\s*\(/,
+    /^\s*class\s+([A-Za-z_][\w]*)\s*[:(]/,
+    /^\s{0,3}#{1,6}\s+(.+)$/
+  ];
+  lines.forEach((line,idx)=>{
+    for(const pattern of patterns){
+      const m=line.match(pattern);
+      if(!m)continue;
+      const name=String(m[1]||'').trim().slice(0,80);
+      if(!name)return;
+      items.push({token:'@symbol:'+(idx+1),name,line:idx+1,preview:line.trim()});
+      return;
+    }
+  });
+  return items.slice(0,30);
+}
+function chatInputSessionCompletionItems(){
+  return assistantSessionLoadItems().slice(0,20).map(s=>['@session:'+s.id,s.title||s.sessionResource||'Chat session','session','◷']);
+}
+function chatInputTabCompletionItems(){
+  return chatContextPickerOpenTabs().map((tab,idx)=>['@tab:'+idx,tab.description||tab.label||'Open editor tab','file',tab.icon||'□']).slice(0,20);
+}
 function _getAtMentionItems(){
   const items=AT_VARS.map(a=>a.slice());
+  chatInputTabCompletionItems().forEach(item=>items.push(item));
+  chatInputSessionCompletionItems().forEach(item=>items.push(item));
+  chatInputSymbolCompletions().forEach(symbol=>items.push([symbol.token,symbol.preview,'symbol','ƒ']));
   if(chatControlState&&chatControlState.agents){
     chatControlState.agents.forEach(a=>{
       const id=a.id||a.name||'';const name=a.name||id;
@@ -19599,12 +19666,31 @@ function _renderAtPopup(matches){
   const atPopup=$('at-popup');
   if(!matches.length){atPopup.classList.remove('open');return}
   _atSelectedIdx=0;
+  _chatCompletionMode='mention';
   atPopup.innerHTML=matches.map((a,i)=>
     '<div class="at-popup-item'+(i===0?' selected':'')+'" role="option" aria-selected="'+(i===0?'true':'false')+'" data-at-idx="'+i+'" onmousedown="pickAtVar(\''+esc(a[0]).replace(/'/g,"\\'")+'\')">'+
     '<span class="at-icon">'+esc(a[3]||'')+'</span>'+
     '<span class="at-label">'+esc(a[0])+'</span>'+
     '<span class="at-desc">'+esc(a[1])+'</span>'+
     '<span class="at-category">'+esc(a[2]||'')+'</span></div>').join('');
+  atPopup.className='at-popup-enhanced open';
+  atPopup.setAttribute('role','listbox');
+}
+function getHashToolCompletions(prefix){
+  const query=String(prefix||'').toLowerCase();
+  return chatToolCompletionItems.filter(tool=>!query||tool.name.toLowerCase().startsWith(query)||tool.description.toLowerCase().includes(query)).slice(0,40);
+}
+function renderHashToolPopup(matches){
+  const atPopup=$('at-popup');
+  if(!matches.length){atPopup.classList.remove('open');return}
+  _atSelectedIdx=0;
+  _chatCompletionMode='tool';
+  atPopup.innerHTML=matches.map((tool,i)=>
+    '<div class="at-popup-item'+(i===0?' selected':'')+'" role="option" aria-selected="'+(i===0?'true':'false')+'" data-at-idx="'+i+'" onmousedown="pickHashToolCompletion(\''+esc(tool.name).replace(/'/g,"\\'")+'\')">'+
+    '<span class="at-icon">#</span>'+
+    '<span class="at-label">'+esc(tool.label||('#'+tool.name))+'</span>'+
+    '<span class="at-desc">'+esc(tool.description||'Tool')+'</span>'+
+    '<span class="at-category">'+esc(tool.category||'tool')+'</span></div>').join('');
   atPopup.className='at-popup-enhanced open';
   atPopup.setAttribute('role','listbox');
 }
@@ -19616,6 +19702,7 @@ chatInp.addEventListener('input',function(){
     const v=self.value,pos=self.selectionStart;
     const before=v.substring(0,pos);
     const atMatch=before.match(/@([A-Za-z0-9_.:-]*)$/);
+    const hashMatch=before.match(/#([A-Za-z0-9_.:-]*)$/);
     const slashMatch=v.match(/^\/\w*/);
     const atPopup=$('at-popup');
     if(atMatch&&!slashMatch){
@@ -19623,6 +19710,10 @@ chatInp.addEventListener('input',function(){
       const allItems=_getAtMentionItems();
       const matches=allItems.filter(a=>a[0].substring(1).toLowerCase().startsWith(prefix));
       if(matches.length) _renderAtPopup(matches);
+      else atPopup.classList.remove('open');
+    } else if(hashMatch&&!slashMatch){
+      const matches=getHashToolCompletions(hashMatch[1]);
+      if(matches.length)renderHashToolPopup(matches);
       else atPopup.classList.remove('open');
     } else atPopup.classList.remove('open');
   },100);
@@ -19661,6 +19752,11 @@ window.pickAtVar=function(v){$('at-popup').classList.remove('open');
     inp.selectionStart=inp.selectionEnd=before.length;inp.focus();return;
   }
   const before=val.substring(0,pos).replace(/@[A-Za-z0-9_.:-]*$/,v+' ');
+  inp.value=before+val.substring(pos);inp.selectionStart=inp.selectionEnd=before.length;inp.focus()};
+window.pickHashToolCompletion=function(name){$('at-popup').classList.remove('open');
+  const inp=$('chat-input'),val=inp.value,pos=inp.selectionStart;
+  const token='#'+String(name||'').replace(/^#/,'');
+  const before=val.substring(0,pos).replace(/#[A-Za-z0-9_.:-]*$/,token+' ');
   inp.value=before+val.substring(pos);inp.selectionStart=inp.selectionEnd=before.length;inp.focus()};
 
 // ── Agent Mode in doSend ──

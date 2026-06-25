@@ -3337,6 +3337,22 @@ def test_phase1_ai_editor_regressions() -> None:
            and "window.pickSlashByIndex=function(idx)" in html
            and "role=\"option\" aria-selected=" in html
            and "slash-item .category" in html)
+    _check("frontend Assistant exposes Copilot-style input completions",
+           "function chatInputSymbolCompletions()" in html
+           and "function chatInputSessionCompletionItems()" in html
+           and "function chatInputTabCompletionItems()" in html
+           and "function getHashToolCompletions(prefix)" in html
+           and "function renderHashToolPopup(matches)" in html
+           and "window.pickHashToolCompletion=function(name)" in html
+           and "let chatToolCompletionItems=[];" in html
+           and "chatToolCompletionItems=(toolList||[]).map" in html
+           and "const hashMatch=before.match(/#([A-Za-z0-9_.:-]*)$/)" in html
+           and "chatInputSymbolCompletions().forEach(symbol=>items.push" in html
+           and "chatInputSessionCompletionItems().forEach(item=>items.push(item));" in html
+           and "chatInputTabCompletionItems().forEach(item=>items.push(item));" in html
+           and "if(key.startsWith('session:'))" in html
+           and "if(key.startsWith('tab:'))" in html
+           and "if(key.startsWith('symbol:'))" in html)
     _check("frontend Assistant renders response references and changed-file cards",
            "chat-response-references" in html
            and "chat-response-reference-list" in html
