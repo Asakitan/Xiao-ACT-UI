@@ -8314,7 +8314,7 @@ def test_vscode_api() -> None:
         ChatRequest, ChatContext, ChatResponseStream, ChatResult,
         WorkspaceConfiguration, LanguageModelToolResult,
         AuthenticationProviderBase, Diagnostic, WorkspaceEdit,
-        Position, Range, AuthenticationSession, PreparedToolInvocation,
+        Position, Range, Uri, AuthenticationSession, PreparedToolInvocation,
         EventEmitter, CompletionItem, CompletionList, Hover, CodeAction,
         DocumentLink, InlayHint, InlayHintLabelPart, InlineCompletionItem,
         CodeLens, FoldingRange, SelectionRange, SemanticTokensLegend,
@@ -8338,6 +8338,7 @@ def test_vscode_api() -> None:
     _check("api.commands", "registerCommand" in api["commands"])
     _check("api.window", "showInformationMessage" in api["window"])
     _check("api.workspace", "getConfiguration" in api["workspace"])
+    _check("api.scm", "createSourceControl" in api["scm"])
     _check("api.env", api["env"]["appName"] == "SAO AI Editor")
     _check("api.languages", "createDiagnosticCollection" in api["languages"])
     _check("api.tasks", "registerTaskProvider" in api["tasks"])
@@ -9848,6 +9849,27 @@ def test_vscode_api() -> None:
                in api["commands"]["getCommands"]()
                and "vscode.executeSignatureHelpProvider"
                in api["commands"]["getCommands"]())
+        scm = api["scm"]["createSourceControl"](
+            "selftest-scm", "Selftest SCM",
+            Uri.parse("file:///workspace"),
+            {"contextValue": "repository"})
+        scm_group = scm.createResourceGroup("workingTree", "Working Tree")
+        scm_group.contextValue = "exportable"
+        scm_group.resourceStates = [{"contextValue": "diffable"}]
+        scm_context = ns.runtime_context_snapshot()
+        _check("scm.createSourceControl contributes VS Code menu context",
+               scm.id == "selftest-scm"
+               and scm.label == "Selftest SCM"
+               and scm.groups[0].id == "workingTree"
+               and scm.groups[0].contextValue == "exportable"
+               and scm_context.get("scmProvider") == "selftest-scm"
+               and scm_context.get("scmProviderRootUri")
+               == "file:///workspace"
+               and scm_context.get("scmProviderHasRootUri") is True
+               and scm_context.get("scmProviderContext") == "repository"
+               and scm_context.get("scm.providerCount") == 1
+               and scm_context.get("scmProviderCount") == 1)
+
         class _TaskProvider:
             def provideTasks(self):
                 return [{
@@ -9873,6 +9895,29 @@ def test_vscode_api() -> None:
                and len(task_start) == 1
                and len(task_end) == 1
                and api["tasks"]["taskExecutions"] == [])
+        long_task_done = threading.Event()
+
+        class _LongTaskProvider:
+            def provideTasks(self):
+                return [{
+                    "type": "selftest-long",
+                    "label": "long task",
+                    "run": lambda: long_task_done.wait(1.0),
+                }]
+
+        api["tasks"]["registerTaskProvider"](
+            "selftest-long", _LongTaskProvider())
+        long_task = api["tasks"]["fetchTasks"]({"type": "selftest-long"})[0]
+        long_execution = api["tasks"]["executeTask"](long_task)
+        task_running = _wait_until(
+            lambda: ns.runtime_context_snapshot().get("taskRunning") is True)
+        long_task_done.set()
+        long_task_finished = _wait_until(
+            lambda: long_execution.exitStatus is not None)
+        _check("task runtime context tracks active task execution",
+               task_running
+               and long_task_finished
+               and ns.runtime_context_snapshot().get("taskRunning") is False)
 
         class _DebugProvider:
             def resolveDebugConfiguration(self, folder, config):
@@ -9880,7 +9925,7 @@ def test_vscode_api() -> None:
 
         debug_target = os.path.join(tmpdir, "debug_target.py")
         with open(debug_target, "w", encoding="utf-8") as fh:
-            fh.write("print('debug ok')\n")
+            fh.write("import time\nprint('debug ok')\ntime.sleep(0.2)\n")
         debug_start = []
         debug_end = []
         api["debug"]["onDidStartDebugSession"](lambda session: debug_start.append(session))
@@ -9891,14 +9936,29 @@ def test_vscode_api() -> None:
             "name": "selftest-debug",
             "program": debug_target,
         })
+        debug_running = _wait_until(
+            lambda: ns.runtime_context_snapshot().get("inDebugMode") is True)
+        debug_context = ns.runtime_context_snapshot()
         debug_done = _wait_until(lambda: len(debug_end) == 1)
         _check("debug.startDebugging launches local python program",
                debug_started is True
                and len(debug_start) == 1
+               and debug_running
+               and debug_context.get("debugState") == "running"
+               and debug_context.get("debugType") == "python"
                and debug_done
                and debug_start[0].type == "python"
                and debug_end[0].exitStatus.get("code") == 0
-               and api["debug"]["activeDebugSession"] is None)
+               and api["debug"]["activeDebugSession"] is None
+               and ns.runtime_context_snapshot().get("inDebugMode") is False
+               and ns.runtime_context_snapshot().get("debugState")
+               == "inactive")
+        scm.dispose()
+        _check("scm.dispose clears provider runtime context",
+               ns.runtime_context_snapshot().get("scmProvider") is None
+               and ns.runtime_context_snapshot().get("scm.providerCount") == 0
+               and ns.runtime_context_snapshot().get(
+                   "scmProviderHasRootUri") is False)
         manifest_desc = ExtensionDescription.from_package_json({
             "name": "task-debug-manifest",
             "publisher": "test",
@@ -12019,8 +12079,37 @@ def test_app_extension_runtime_support() -> None:
                         "command": "selftest.activity.resource",
                         "title": "Resource Activity",
                     },
+                    {
+                        "command": "selftest.activity.scmTitle",
+                        "title": "SCM Runtime Title",
+                    },
+                    {
+                        "command": "selftest.activity.idleTaskTitle",
+                        "title": "Idle Task Title",
+                    },
+                    {
+                        "command": "selftest.activity.debugInactiveTitle",
+                        "title": "Debug Inactive Title",
+                    },
                 ],
                 "menus": {
+                    "editor/title": [
+                        {
+                            "command": "selftest.activity.scmTitle",
+                            "when": "scmProvider == selftest-activity-scm && scmProviderHasRootUri && scmProviderContext == repository",
+                            "group": "navigation@1",
+                        },
+                        {
+                            "command": "selftest.activity.idleTaskTitle",
+                            "when": "!taskRunning",
+                            "group": "navigation@2",
+                        },
+                        {
+                            "command": "selftest.activity.debugInactiveTitle",
+                            "when": "debugState == inactive && !inDebugMode",
+                            "group": "navigation@3",
+                        },
+                    ],
                     "view/title": [
                         {
                             "command": "selftest.activity.openItem",
@@ -12226,6 +12315,11 @@ def test_app_extension_runtime_support() -> None:
         activity_tree_provider = _ActivityTreeProvider()
         activity_command_log = []
         activity_api = api._vscode_ns.build(activity_desc)
+        activity_scm = activity_api["scm"]["createSourceControl"](
+            "selftest-activity-scm",
+            "Selftest Activity SCM",
+            activity_api["Uri"].parse("file:///workspace"),
+            {"contextValue": "repository"})
         activity_api["commands"]["registerCommand"](
             "selftest.activity.refresh",
             lambda *args: activity_command_log.append(
@@ -12304,11 +12398,23 @@ def test_app_extension_runtime_support() -> None:
             item.get("id"): item
             for item in activity_items.get("selftest.activity", {}).get("views", [])
         }
+        activity_editor_title_actions = api.list_editor_title_actions({
+            "resourceUri": "file:///workspace/runtime-context.txt",
+        }).get("actions", [])
+        activity_editor_title_commands = [
+            action.get("command") for action in activity_editor_title_actions
+        ]
         _check("activity bar containers include runtime extension views",
                activity_items.get("selftest.activity", {}).get("view_count") == 2
                and activity_views.get("selftest.activity.tree", {}).get("runtimeState", {}).get("kind") == "treeView"
                and activity_views.get("selftest.activity.webview", {}).get("runtimeState", {}).get("kind") == "webviewView"
                and "command-webview" in activity_views.get("selftest.activity.webview", {}).get("runtimeState", {}).get("html", ""))
+        _check("editor title actions honor SCM task and debug runtime context",
+               "selftest.activity.scmTitle" in activity_editor_title_commands
+               and "selftest.activity.idleTaskTitle"
+               in activity_editor_title_commands
+               and "selftest.activity.debugInactiveTitle"
+               in activity_editor_title_commands)
         all_view_containers = api.list_extension_view_containers().get("items", [])
         panel_containers = api.list_extension_view_containers("panel").get("items", [])
         secondary_containers = api.list_extension_view_containers(
@@ -12638,6 +12744,7 @@ def test_app_extension_runtime_support() -> None:
                refreshed_activity_views.get("selftest.activity.tree", {})
                .get("runtimeState", {}).get("refreshVersion", 0)
                > before_activity_version)
+        activity_scm.dispose()
 
         contribs = api.get_extension_contributions().get("contributions", {})
         command_items = {

@@ -9442,7 +9442,9 @@ class AIEditorAPI:
     def _extension_runtime_when_context(self) -> Dict[str, str]:
         runtime_context: Dict[str, str] = {}
         vscode_ns = getattr(self, "_vscode_ns", None)
-        snapshot = getattr(vscode_ns, "context_keys_snapshot", None)
+        snapshot = getattr(vscode_ns, "runtime_context_snapshot", None)
+        if not callable(snapshot):
+            snapshot = getattr(vscode_ns, "context_keys_snapshot", None)
         if callable(snapshot):
             try:
                 for key, value in snapshot().items():

@@ -8,6 +8,7 @@ Implemented namespaces:
   vscode.commands     registerCommand / executeCommand
   vscode.window       showInformationMessage / createOutputChannel / ...
   vscode.workspace    getConfiguration / onDidChangeConfiguration / fs
+  vscode.scm          createSourceControl
   vscode.env          appName / language / uriScheme / clipboard
   vscode.extensions   getExtension / all
   vscode.lm           selectChatModels / registerTool
@@ -2037,6 +2038,7 @@ class VscodeNamespace:
         self._language_configurations: Dict[str, List[Dict[str, Any]]] = {}
         self._diagnostic_collections: Dict[str, Any] = {}
         self._file_system_providers: Dict[str, Dict[str, Any]] = {}
+        self._source_controls: Dict[str, "_SourceControl"] = {}
         self._chat_context_providers: Dict[str, Dict[str, Any]] = {
             "workspace": {},
             "explicit": {},
@@ -2096,6 +2098,7 @@ class VscodeNamespace:
         self._auth_api: Optional[Dict[str, Any]] = None
         self._tasks_api: Optional[Dict[str, Any]] = None
         self._debug_api: Optional[Dict[str, Any]] = None
+        self._scm_api: Optional[Dict[str, Any]] = None
         self._extensions_api: Optional[Dict[str, Any]] = None
         self._language_command_disposables: List[Callable] = []
         self._language_provider_request_callback: Optional[Callable[[Dict[str, Any]], Any]] = None
@@ -2134,6 +2137,33 @@ class VscodeNamespace:
     def context_keys_snapshot(self) -> Dict[str, Any]:
         with self._context_lock:
             return dict(self._context_keys)
+
+    def runtime_context_snapshot(self) -> Dict[str, Any]:
+        context = self.context_keys_snapshot()
+        active_debug = self._active_debug_session()
+        context.update({
+            "taskRunning": bool(self._task_executions),
+            "inDebugMode": active_debug is not None,
+            "debugState": "running" if active_debug is not None else "inactive",
+        })
+        if active_debug is not None:
+            context["debugType"] = str(getattr(active_debug, "type", "") or "")
+        active_scm = self._active_source_control()
+        active_scm_count = len(self._source_controls)
+        context["scm.providerCount"] = active_scm_count
+        context["scmProviderCount"] = active_scm_count
+        if active_scm is not None:
+            root_uri = str(active_scm.rootUri or "")
+            context.update({
+                "scmProvider": active_scm.id,
+                "scmProviderRootUri": root_uri,
+                "scmProviderHasRootUri": bool(root_uri),
+            })
+            if active_scm.contextValue:
+                context["scmProviderContext"] = active_scm.contextValue
+        else:
+            context["scmProviderHasRootUri"] = False
+        return context
 
     def _register_language_execute_commands(self) -> None:
         commands = {
@@ -4059,6 +4089,7 @@ class VscodeNamespace:
             "commands": self._build_commands(),
             "window": window_api,
             "workspace": self._build_workspace(),
+            "scm": self._build_scm(),
             "env": self._build_env(),
             "extensions": self._build_extensions(),
             "languages": self._build_languages(),
@@ -5397,6 +5428,37 @@ class VscodeNamespace:
         self._task_providers[task_type] = provider
         return Disposable(lambda: self._task_providers.pop(task_type, None))
 
+    def _build_scm(self) -> Dict[str, Any]:
+        if self._scm_api is None:
+            self._scm_api = {
+                "createSourceControl": self._create_source_control,
+            }
+        return self._scm_api
+
+    def _create_source_control(
+            self, scm_id: Any, label: Any, root_uri: Any = None,
+            options: Any = None) -> "_SourceControl":
+        normalized_id = str(scm_id or "").strip()
+        if not normalized_id:
+            normalized_id = f"scm-{len(self._source_controls) + 1}"
+        control = _SourceControl(
+            namespace=self,
+            scm_id=normalized_id,
+            label=str(label or normalized_id),
+            root_uri=root_uri,
+            options=options if isinstance(options, dict) else {},
+        )
+        self._source_controls[normalized_id] = control
+        return control
+
+    def _dispose_source_control(self, scm_id: str) -> None:
+        self._source_controls.pop(str(scm_id or ""), None)
+
+    def _active_source_control(self) -> Optional["_SourceControl"]:
+        for control in self._source_controls.values():
+            return control
+        return None
+
     def _sync_tasks_state(self) -> None:
         if self._tasks_api is None:
             return
@@ -5561,14 +5623,18 @@ class VscodeNamespace:
     def _sync_debug_state(self) -> None:
         if self._debug_api is None:
             return
+        active = self._active_debug_session()
+        self._debug_api["activeDebugSession"] = active
+        self._debug_api["debuggers"] = list(
+            self._host.ext_points.all_contributions.get("debuggers", []))
+
+    def _active_debug_session(self) -> Optional["_DebugSession"]:
         active = None
         for session in reversed(self._debug_sessions):
             if not session.terminated:
                 active = session
                 break
-        self._debug_api["activeDebugSession"] = active
-        self._debug_api["debuggers"] = list(
-            self._host.ext_points.all_contributions.get("debuggers", []))
+        return active
 
     def _start_debugging(self, folder: Any, name_or_config: Any,
                          parent: Any = None) -> bool:
@@ -6898,6 +6964,67 @@ class _DebugSession:
             self.terminated = True
             on_finish()
         threading.Thread(target=_wait, daemon=True).start()
+
+
+class _SourceControlInputBox:
+    def __init__(self) -> None:
+        self.value = ""
+        self.placeholder = ""
+        self.visible = True
+        self.enabled = True
+
+
+class _SourceControlResourceGroup:
+    def __init__(self, group_id: str, label: str) -> None:
+        self.id = group_id
+        self.label = label
+        self.resourceStates: List[Any] = []
+        self.hideWhenEmpty = False
+        self.contextValue = ""
+        self._disposed = False
+
+    def dispose(self) -> None:
+        self._disposed = True
+        self.resourceStates = []
+
+
+class _SourceControl:
+    def __init__(self, namespace: VSCodeNamespace, scm_id: str, label: str,
+                 root_uri: Any = None,
+                 options: Optional[Dict[str, Any]] = None) -> None:
+        self._namespace = namespace
+        self.id = scm_id
+        self.label = label
+        self.rootUri = root_uri
+        self.inputBox = _SourceControlInputBox()
+        self.count = 0
+        self.quickDiffProvider = None
+        self.statusBarCommands = None
+        self.acceptInputCommand = None
+        self.actionButton = None
+        self.contextValue = str((options or {}).get("contextValue") or "")
+        self._groups: Dict[str, _SourceControlResourceGroup] = {}
+        self._disposed = False
+
+    def createResourceGroup(
+            self, group_id: Any,
+            label: Any) -> _SourceControlResourceGroup:
+        normalized_id = str(group_id or "").strip() or "resource"
+        group = _SourceControlResourceGroup(
+            normalized_id, str(label or normalized_id))
+        self._groups[normalized_id] = group
+        return group
+
+    @property
+    def groups(self) -> List[_SourceControlResourceGroup]:
+        return [group for group in self._groups.values() if not group._disposed]
+
+    def dispose(self) -> None:
+        self._disposed = True
+        for group in list(self._groups.values()):
+            group.dispose()
+        self._groups.clear()
+        self._namespace._dispose_source_control(self.id)
 
 
 class _TreeView:
