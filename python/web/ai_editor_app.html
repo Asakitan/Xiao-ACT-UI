@@ -10242,6 +10242,29 @@ function notifyWebviewPanelViewState(viewId,isActive,isVisible){
   const visible=isVisible===undefined?!!isActive:!!isVisible;
   try{window.pywebview.api.webview_panel_view_state(String(viewId),{active:!!isActive,visible:visible,viewColumn:1})}catch(e){}
 }
+function handleWebviewFocusEvent(viewId,focused){
+  const id=String(viewId||'').trim();if(!id)return;
+  const tab=findCustomEditorTabByViewId(id);
+  if(tab&&focused&&tab.id!==activeTab)switchTab(tab.id);
+  const isProvider=!!document.getElementById('webview-frame-'+providerDomKey(id));
+  if(focused||tab||isProvider)notifyWebviewPanelViewState(id,!!focused,true);
+}
+function dispatchWebviewKeyboardEvent(viewId,data){
+  data=data||{};
+  const type=String(data.eventType||'keydown');
+  if(type!=='keydown'&&type!=='keyup')return;
+  let ev=null;
+  try{
+    ev=new KeyboardEvent(type,{
+      key:String(data.key||''),code:String(data.code||''),
+      ctrlKey:!!data.ctrlKey,shiftKey:!!data.shiftKey,
+      altKey:!!data.altKey,metaKey:!!data.metaKey,
+      repeat:!!data.repeat,bubbles:true,cancelable:true
+    });
+  }catch(e){return}
+  try{Object.defineProperty(ev,'saoWebviewId',{value:String(viewId||''),configurable:true})}catch(e){}
+  document.dispatchEvent(ev);
+}
 function clearDisposedWebviewPanel(viewId,providerId){
   const id=String(viewId||'').trim();if(!id)return false;
   delete _webviewTokens[id];
@@ -10499,6 +10522,14 @@ function _injectWebviewHtml(container,viewId,html,initialState){
     +'function _rewriteNode(n){if(!n||n.nodeType!==1)return;["src","href"].forEach(function(a){var v=n.getAttribute&&n.getAttribute(a);if(v){var r=_rewriteResourceUrl(v);if(r!==v)n.setAttribute(a,r);}});var s=n.getAttribute&&n.getAttribute("srcset");if(s){var rs=_rewriteSrcset(s);if(rs!==s)n.setAttribute("srcset",rs);}if(n.querySelectorAll)n.querySelectorAll("[src],[href],[srcset]").forEach(_rewriteNode);}'
     +'new MutationObserver(function(ms){ms.forEach(function(m){if(m.type==="attributes")_rewriteNode(m.target);else m.addedNodes&&m.addedNodes.forEach(_rewriteNode);});}).observe(document.documentElement,{subtree:true,childList:true,attributes:true,attributeFilter:["src","href","srcset"]});'
     +'document.addEventListener("DOMContentLoaded",function(){_rewriteNode(document.documentElement);});'
+    +'function _readVsCodeContext(target){var ctx={};for(var n=target;n&&n.nodeType===1;n=n.parentElement){var raw=n.getAttribute&&n.getAttribute("data-vscode-context");if(!raw)continue;try{var parsed=JSON.parse(raw);if(parsed&&typeof parsed==="object"){Object.keys(parsed).forEach(function(k){ctx[k]=parsed[k];});}}catch(e){}}return ctx;}'
+    +'function _postHostEvent(type,payload){try{payload=payload||{};payload.type=type;payload.viewId='+JSON.stringify(viewId)+';payload.token=_token;window.parent.postMessage(payload,"*");}catch(e){}}'
+    +'document.addEventListener("contextmenu",function(ev){var ctx=_readVsCodeContext(ev.target);_postHostEvent("webview-context-menu",{clientX:ev.clientX,clientY:ev.clientY,context:ctx});if(!ctx.preventDefaultContextMenuItems)ev.preventDefault();},true);'
+    +'window.addEventListener("focus",function(){_postHostEvent("webview-focus",{focused:true});},true);'
+    +'window.addEventListener("blur",function(){_postHostEvent("webview-focus",{focused:false});},true);'
+    +'document.addEventListener("focusin",function(){_postHostEvent("webview-focus",{focused:true});},true);'
+    +'document.addEventListener("keydown",function(ev){_postHostEvent("webview-key",{eventType:"keydown",key:ev.key,code:ev.code,ctrlKey:!!ev.ctrlKey,shiftKey:!!ev.shiftKey,altKey:!!ev.altKey,metaKey:!!ev.metaKey,repeat:!!ev.repeat});},true);'
+    +'document.addEventListener("keyup",function(ev){_postHostEvent("webview-key",{eventType:"keyup",key:ev.key,code:ev.code,ctrlKey:!!ev.ctrlKey,shiftKey:!!ev.shiftKey,altKey:!!ev.altKey,metaKey:!!ev.metaKey,repeat:!!ev.repeat});},true);'
     +'var _vscodeApi={postMessage:function(msg){try{window.parent.postMessage({type:"webview-message",viewId:'+JSON.stringify(viewId)+',token:_token,message:msg},"*")}catch(e){}},'
     +'setState:function(s){_state=s;try{window.parent.postMessage({type:"webview-set-state",viewId:'+JSON.stringify(viewId)+',token:_token,state:s},"*")}catch(e){}return s;},'
     +'getState:function(){return _state}};'
@@ -10528,6 +10559,24 @@ window.addEventListener('message',function(e){
     if(window.pywebview&&window.pywebview.api&&window.pywebview.api.webview_set_state){
       window.pywebview.api.webview_set_state(viewId,e.data.state);
     }
+    return;
+  }
+  if(e.data.type==='webview-context-menu'){
+    const viewId=e.data.viewId,tok=e.data.token;
+    if(!viewId||!tok||_webviewTokens[viewId]!==tok)return;
+    void showWebviewContextMenu(viewId,e.data.clientX,e.data.clientY,e.data.context);
+    return;
+  }
+  if(e.data.type==='webview-focus'){
+    const viewId=e.data.viewId,tok=e.data.token;
+    if(!viewId||!tok||_webviewTokens[viewId]!==tok)return;
+    handleWebviewFocusEvent(viewId,!!e.data.focused);
+    return;
+  }
+  if(e.data.type==='webview-key'){
+    const viewId=e.data.viewId,tok=e.data.token;
+    if(!viewId||!tok||_webviewTokens[viewId]!==tok)return;
+    dispatchWebviewKeyboardEvent(viewId,e.data);
   }
 });
 async function renderProviderTabs(){
@@ -13915,6 +13964,51 @@ function showExtensionActionMenu(x,y,actions,runner){
 }
 function runExtensionViewAction(action){
   if(action&&action.command&&!action.disabled)call('execute_command',action.command);
+}
+function webviewRuntimeRecord(viewId){
+  const id=String(viewId||'').trim();
+  if(!id)return {};
+  const cached=webviewRuntimeCache[id]||{};
+  const tab=findCustomEditorTabByViewId(id);
+  return tab?{...cached,tab:tab,view_type:customEditorViewTypeFromTab(tab)||cached.view_type||cached.viewType}:cached;
+}
+function webviewProvidedViewType(viewId){
+  const record=webviewRuntimeRecord(viewId);
+  return String(record.view_type||record.viewType||record.provider_id||record.providerId||record.id||viewId||'');
+}
+function webviewContextPayload(viewId,context){
+  const record=webviewRuntimeRecord(viewId);
+  const viewType=webviewProvidedViewType(viewId);
+  const payload={...(context&&typeof context==='object'?context:{})};
+  if(viewType){
+    payload.webviewId=viewType;
+    payload.webview=viewType;
+  }
+  if(viewId)payload.view=String(viewId);
+  if(record.provider_id||record.providerId)payload.providerId=String(record.provider_id||record.providerId);
+  if(record.tab&&record.tab.filePath)Object.assign(payload,_editorResourceContextFromPath(record.tab.filePath));
+  return payload;
+}
+function webviewContextAnchor(viewId,clientX,clientY){
+  const frame=document.getElementById('webview-frame-'+providerDomKey(viewId));
+  if(frame){
+    const box=frame.getBoundingClientRect();
+    return {x:box.left+(Number(clientX)||0),y:box.top+(Number(clientY)||0)};
+  }
+  return {x:Number(clientX)||0,y:Number(clientY)||0};
+}
+async function showWebviewContextMenu(viewId,clientX,clientY,context){
+  const id=String(viewId||'').trim();if(!id)return;
+  const viewType=webviewProvidedViewType(id);
+  const payload=webviewContextPayload(id,context);
+  let r=null;
+  try{r=await call('list_webview_context_actions',id,viewType,payload)}catch(e){r=null}
+  const actions=r&&Array.isArray(r.actions)?r.actions:[];
+  if(!actions.length)return;
+  const anchor=webviewContextAnchor(id,clientX,clientY);
+  showExtensionActionMenu(anchor.x,anchor.y,actions,action=>{
+    if(action&&action.command&&!action.disabled)call('execute_command',action.command,...(action.arguments||[]));
+  });
 }
 function extensionWelcomeEntries(view,state){
   const stateEntries=state&&Array.isArray(state.welcome)?state.welcome:[];

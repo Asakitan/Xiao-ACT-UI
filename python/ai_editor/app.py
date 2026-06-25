@@ -12915,6 +12915,7 @@ class AIEditorAPI:
         }
         if webview_id:
             menu_context["webviewId"] = webview_id
+            menu_context.setdefault("webview", webview_id)
         if view_id:
             menu_context.setdefault("view", str(view_id))
         try:
@@ -12922,6 +12923,10 @@ class AIEditorAPI:
                 "webview/context", menu_context)
         except Exception:
             actions = []
+        for action in actions:
+            if isinstance(action, dict) and "arguments" not in action:
+                action["arguments"] = [json.loads(json.dumps(
+                    dict(menu_context), ensure_ascii=False, default=str))]
         return {"actions": actions, "context": menu_context}
 
     # ── Extension marketplace API ──

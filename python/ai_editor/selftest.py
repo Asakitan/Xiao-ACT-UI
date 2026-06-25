@@ -6400,6 +6400,17 @@ console.log("quick input filter helpers ok");
            and "call('list_editor_title_actions',ctx)" in html
            and "def list_webview_context_actions(" in app_source
            and "\"webview/context\"" in app_source
+           and "function showWebviewContextMenu(viewId,clientX,clientY,context)"
+           in html
+           and "data-vscode-context" in html
+           and "webview-context-menu" in html
+           and "function handleWebviewFocusEvent(viewId,focused)" in html
+           and "function dispatchWebviewKeyboardEvent(viewId,data)" in html
+           and "menu_context.setdefault(\"webview\", webview_id)" in app_source
+           and "action[\"arguments\"] = [json.loads(json.dumps("
+           in app_source
+           and "dict(menu_context), ensure_ascii=False, default=str))]"
+           in app_source
            and "window.pywebview.api.execute_command(a.command,...(a.arguments||[]))"
            in html)
     _check("extension webview panel reveal reaches frontend",
@@ -12206,6 +12217,8 @@ let dynamicWebviewVisibility = [];
 let customEditorPanel = null;
 let customEditorDuplicateError = '';
 let customEditorTitleActionHits = 0;
+let customEditorContextActionHits = 0;
+let customEditorContextActionLast = null;
 
 async function activate(context) {
   console.log('node console probe', { source: 'selftest' });
@@ -14547,6 +14560,19 @@ async function activate(context) {
   vscode.commands.registerCommand('selftest.node.customEditorTitleActionProbe', () => ({
     hits: customEditorTitleActionHits,
   }));
+  vscode.commands.registerCommand('selftest.node.customEditorContextAction', contextArg => {
+    customEditorContextActionHits += 1;
+    customEditorContextActionLast = contextArg || null;
+    return {
+      ok: true,
+      hits: customEditorContextActionHits,
+      context: customEditorContextActionLast,
+    };
+  });
+  vscode.commands.registerCommand('selftest.node.customEditorContextActionProbe', () => ({
+    hits: customEditorContextActionHits,
+    context: customEditorContextActionLast,
+  }));
   context.subscriptions.push(vscode.window.registerCustomEditorProvider(
     'selftest.node.lifecycleEditor',
     {
@@ -14659,6 +14685,10 @@ module.exports = { activate, deactivate };
                         "command": "selftest.node.customEditorTitleAction",
                         "title": "Custom Editor Title Action",
                         "shortTitle": "CETA",
+                    }, {
+                        "command": "selftest.node.customEditorContextAction",
+                        "title": "Custom Editor Context Action",
+                        "shortTitle": "CECA",
                     }],
                     "menus": {
                         "view/item/context": [{
@@ -14671,8 +14701,8 @@ module.exports = { activate, deactivate };
                             "group": "navigation@1",
                         }],
                         "webview/context": [{
-                            "command": "selftest.node.customEditorTitleAction",
-                            "when": "webviewId == selftest.node.customEditor",
+                            "command": "selftest.node.customEditorContextAction",
+                            "when": "webviewId == selftest.node.customEditor && selftestWebviewSection == body",
                             "group": "navigation@1",
                         }],
                     },
@@ -16037,7 +16067,8 @@ module.exports = { activate, deactivate };
                 node_custom_editor_context_actions = (
                     api.list_webview_context_actions(
                         node_custom_editor.get("viewId", ""),
-                        "selftest.node.customEditor"))
+                        "selftest.node.customEditor",
+                        {"selftestWebviewSection": "body"}))
                 node_custom_editor_title_action_command = next((
                     action.get("command")
                     for action in node_custom_editor_title_actions.get(
@@ -16047,12 +16078,35 @@ module.exports = { activate, deactivate };
                 node_custom_editor_title_action_result = (
                     api.execute_command(node_custom_editor_title_action_command)
                     if node_custom_editor_title_action_command else {})
+                node_custom_editor_context_action_command = next((
+                    action.get("command")
+                    for action in node_custom_editor_context_actions.get(
+                        "actions", [])
+                    if action.get("command")
+                    == "selftest.node.customEditorContextAction"), "")
+                node_custom_editor_context_action = next((
+                    action for action in node_custom_editor_context_actions.get(
+                        "actions", [])
+                    if action.get("command")
+                    == node_custom_editor_context_action_command), {})
+                node_custom_editor_context_action_result = (
+                    api.execute_command(
+                        node_custom_editor_context_action_command,
+                        *node_custom_editor_context_action.get(
+                            "arguments", []))
+                    if node_custom_editor_context_action_command else {})
                 try:
                     node_custom_editor_title_action_probe = (
                         api._ext_host.commands.execute(
                             "selftest.node.customEditorTitleActionProbe"))
                 except Exception as exc:
                     node_custom_editor_title_action_probe = {"_error": str(exc)}
+                try:
+                    node_custom_editor_context_action_probe = (
+                        api._ext_host.commands.execute(
+                            "selftest.node.customEditorContextActionProbe"))
+                except Exception as exc:
+                    node_custom_editor_context_action_probe = {"_error": str(exc)}
                 node_custom_editor_roots = (
                     node_ui_bridge.local_resource_roots.get(
                         node_custom_editor.get("viewId", ""), []) or [])
@@ -17388,7 +17442,7 @@ module.exports = { activate, deactivate };
                 _check("extension editor/webview menus follow custom editor context",
                        "selftest.node.customEditorTitleAction"
                        in node_custom_editor_title_action_ids
-                       and "selftest.node.customEditorTitleAction"
+                       and "selftest.node.customEditorContextAction"
                        in node_custom_editor_context_action_ids
                        and node_custom_editor_title_actions.get(
                            "context", {}).get("activeCustomEditorId")
@@ -17398,15 +17452,32 @@ module.exports = { activate, deactivate };
                        and node_custom_editor_context_actions.get(
                            "context", {}).get("webviewId")
                        == "selftest.node.customEditor"
+                       and node_custom_editor_context_actions.get(
+                           "context", {}).get("webview")
+                       == "selftest.node.customEditor"
+                       and node_custom_editor_context_actions.get(
+                           "context", {}).get("selftestWebviewSection")
+                       == "body"
                        and node_custom_editor_title_action_result.get("ok")
                        is True
                        and node_custom_editor_title_action_probe.get("hits")
-                       == 1,
+                       == 1
+                       and node_custom_editor_context_action_result.get("ok")
+                       is True
+                       and node_custom_editor_context_action_probe.get("hits")
+                       == 1
+                       and node_custom_editor_context_action_probe.get(
+                           "context", {}).get("selftestWebviewSection")
+                       == "body",
                        json.dumps({
                            "title": node_custom_editor_title_actions,
                            "context": node_custom_editor_context_actions,
                            "result": node_custom_editor_title_action_result,
+                           "contextResult":
+                               node_custom_editor_context_action_result,
                            "probe": node_custom_editor_title_action_probe,
+                           "contextProbe":
+                               node_custom_editor_context_action_probe,
                        }, ensure_ascii=False))
                 node_lifecycle_output = "".join(
                     node_host._output_channels.get("node-tree-selftest", []))
