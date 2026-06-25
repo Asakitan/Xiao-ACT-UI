@@ -233,7 +233,7 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-syntax-layer { position:absolute; inset:0 0 0 50px; z-index:0; pointer-events:none;
   background:var(--bg-editor); color:var(--fg-code); font:13px/1.5 var(--mono);
   padding:8px 12px; white-space:pre; overflow:hidden; tab-size:4; }
-.editor-visual-layer { position:absolute; inset:0 0 0 50px; z-index:1; pointer-events:none;
+.editor-visual-layer { position:absolute; inset:0 0 0 50px; z-index:3; pointer-events:none;
   font:13px/1.5 var(--mono); padding:8px 12px; overflow:hidden; white-space:pre; tab-size:4; }
 .editor-whitespace-layer { position:absolute; inset:0 0 0 50px; z-index:1; pointer-events:none;
   font:13px/1.5 var(--mono); padding:8px 12px; overflow:hidden; white-space:pre; tab-size:4;
@@ -242,12 +242,18 @@ body.window-resizing * { cursor:inherit !important; }
   -webkit-text-fill-color:color-mix(in srgb,var(--fg-dim) 72%,transparent); }
 .editor-control-character { color:var(--fg-warning); -webkit-text-fill-color:var(--fg-warning);
   background:color-mix(in srgb,var(--fg-warning) 14%,transparent); border-radius:2px; }
-.editor-ruler-line,.editor-indent-guide,.editor-line-highlight-visual { position:absolute; box-sizing:border-box; }
+.editor-ruler-line,.editor-indent-guide,.editor-line-highlight-visual,.editor-bracket-guide,.editor-bracket-guide-horizontal,.editor-bracket-color { position:absolute; box-sizing:border-box; }
 .editor-ruler-line { top:0; bottom:0; width:1px; background:color-mix(in srgb,var(--fg-dim) 45%,transparent); }
 .editor-indent-guide { top:0; height:100%; width:1px; background:color-mix(in srgb,var(--fg-dim) 24%,transparent); }
 .editor-indent-guide.active { background:color-mix(in srgb,var(--fg-accent) 58%,transparent); }
 .editor-line-highlight-visual { left:0; right:0; background:var(--line-highlight); }
 .editor-line-highlight-visual.gutter { right:auto; width:0; border-left:2px solid color-mix(in srgb,var(--fg-accent) 55%,transparent); }
+.editor-bracket-color { font:inherit; white-space:pre; line-height:inherit; height:1.5em; overflow:hidden; }
+.editor-bracket-color.active { background:color-mix(in srgb,currentColor 18%,transparent); border-radius:2px; }
+.editor-bracket-guide { width:1px; background:color-mix(in srgb,var(--fg-accent) 36%,transparent); }
+.editor-bracket-guide.active { background:color-mix(in srgb,var(--fg-accent) 72%,transparent); }
+.editor-bracket-guide-horizontal { height:1px; background:color-mix(in srgb,var(--fg-accent) 30%,transparent); }
+.editor-bracket-guide-horizontal.active { background:color-mix(in srgb,var(--fg-accent) 66%,transparent); }
 .editor-highlight-layer { position:absolute; inset:0 0 0 50px; z-index:3; pointer-events:none;
   font:13px/1.5 var(--mono); padding:8px 12px; overflow:hidden; white-space:pre; tab-size:4; }
 .editor-document-highlight { position:absolute; border-radius:2px;
@@ -1978,6 +1984,13 @@ pre.code-block { overflow:visible; }
         <label class="settings-check"><input id="s-editor-guides-indentation" type="checkbox"><span><b>Indent guides</b><small>Render indentation guide lines.</small></span></label>
         <div><label>Active Indent Guide</label><select id="s-editor-guides-highlight-active-indentation" style="width:100%"><option value="true">true</option><option value="always">always</option><option value="false">false</option></select></div>
       </div>
+      <div class="settings-grid">
+        <label class="settings-check"><input id="s-editor-bracket-pair-colorization-enabled" type="checkbox"><span><b>Bracket pair colorization</b><small>Matches editor.bracketPairColorization.enabled.</small></span></label>
+        <label class="settings-check"><input id="s-editor-bracket-pair-colorization-independent-pool" type="checkbox"><span><b>Independent bracket colors</b><small>Use a separate color pool for each bracket type.</small></span></label>
+        <div><label>Bracket Pair Guides</label><select id="s-editor-guides-bracket-pairs" style="width:100%"><option value="false">false</option><option value="active">active</option><option value="true">true</option></select></div>
+        <div><label>Horizontal Bracket Guides</label><select id="s-editor-guides-bracket-pairs-horizontal" style="width:100%"><option value="active">active</option><option value="false">false</option><option value="true">true</option></select></div>
+      </div>
+      <label class="settings-check"><input id="s-editor-guides-highlight-active-bracket-pair" type="checkbox"><span><b>Highlight active bracket pair</b><small>Matches editor.guides.highlightActiveBracketPair.</small></span></label>
       <label class="settings-check"><input id="s-editor-format-on-save" type="checkbox"><span><b>Format on save</b><small>Runs the active formatter before explicit saves.</small></span></label>
       <label class="settings-check"><input id="s-editor-format-on-paste" type="checkbox"><span><b>Format on paste</b><small>Runs range formatting after paste/drop edits when a range formatter is available.</small></span></label>
       <label class="settings-check"><input id="s-editor-format-on-type" type="checkbox"><span><b>Format on type</b><small>Runs extension on-type formatting providers for typed trigger characters.</small></span></label>
@@ -2238,7 +2251,7 @@ const SETTINGS_SECTION_DEFAULTS={
   mcp:{access:'prompt',autostart:false,discovery_enabled:true,collision_behavior:'first',server_sampling:false},
   terminal:{profile:'PowerShell 7 (No Profile)',shell_path:'',shell_args:[],timeout:30,output_limit:8000,auto_approve:{}},
   extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands','views','customEditors','notebooks','terminal','statusBarItems'],enabled_contributions_explicit:false,diagnostics_enabled:false},
-  editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,formatOnPaste:false,linkedEditing:false,codeActionsOnSave:{},codeActions:{triggerOnFocusChange:false},pasteAs:{preferences:[]},tabSize:4,insertSpaces:true,wordSeparators:'`~!@#$%^&*()-=+[{]}\\|;:\'",.<>/?',quickSuggestions:{other:'offWhenInlineCompletions',comments:'off',strings:'off'},quickSuggestionsDelay:10,suggestOnTriggerCharacters:true,acceptSuggestionOnEnter:'on',acceptSuggestionOnCommitCharacter:true,hover:{enabled:'on',delay:300,hidingDelay:300,sticky:true,above:true},minimap:{enabled:true,size:'proportional',side:'right',showSlider:'mouseover',renderCharacters:true,maxColumn:120,scale:1},renderWhitespace:'selection',renderControlCharacters:true,renderLineHighlight:'line',rulers:[],guides:{bracketPairs:false,bracketPairsHorizontal:'active',highlightActiveBracketPair:true,indentation:true,highlightActiveIndentation:true}},
+  editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,formatOnPaste:false,linkedEditing:false,codeActionsOnSave:{},codeActions:{triggerOnFocusChange:false},pasteAs:{preferences:[]},tabSize:4,insertSpaces:true,wordSeparators:'`~!@#$%^&*()-=+[{]}\\|;:\'",.<>/?',quickSuggestions:{other:'offWhenInlineCompletions',comments:'off',strings:'off'},quickSuggestionsDelay:10,suggestOnTriggerCharacters:true,acceptSuggestionOnEnter:'on',acceptSuggestionOnCommitCharacter:true,hover:{enabled:'on',delay:300,hidingDelay:300,sticky:true,above:true},minimap:{enabled:true,size:'proportional',side:'right',showSlider:'mouseover',renderCharacters:true,maxColumn:120,scale:1},renderWhitespace:'selection',renderControlCharacters:true,renderLineHighlight:'line',rulers:[],bracketPairColorization:{enabled:true,independentColorPoolPerBracketType:false},guides:{bracketPairs:false,bracketPairsHorizontal:'active',highlightActiveBracketPair:true,indentation:true,highlightActiveIndentation:true}},
   files:{autoSave:'off',autoSaveDelay:1000,trimTrailingWhitespace:false,insertFinalNewline:false,trimFinalNewlines:false},
   customization:{instructions_locations:['.sao/instructions.md','.sao/instructions'],agent_locations:['.sao/agents'],workflow_locations:['.sao/workflows'],skill_locations:['.agents/skills/.local','.claude/skills/.local'],use_agent_md:true,use_claude_md:false}
 };
@@ -2246,6 +2259,7 @@ const DEFAULT_EDITOR_WORD_SEPARATORS='`~!@#$%^&*()-=+[{]}\\|;:\'",.<>/?';
 const DEFAULT_EDITOR_QUICK_SUGGESTIONS={other:'offWhenInlineCompletions',comments:'off',strings:'off'};
 const DEFAULT_EDITOR_HOVER={enabled:'on',delay:300,hidingDelay:300,sticky:true,above:true};
 const DEFAULT_EDITOR_MINIMAP={enabled:true,size:'proportional',side:'right',showSlider:'mouseover',renderCharacters:true,maxColumn:120,scale:1};
+const DEFAULT_EDITOR_BRACKET_PAIR_COLORIZATION={enabled:true,independentColorPoolPerBracketType:false};
 const DEFAULT_EDITOR_GUIDES={bracketPairs:false,bracketPairsHorizontal:'active',highlightActiveBracketPair:true,indentation:true,highlightActiveIndentation:true};
 const EXTENSION_CONTRIBUTION_OPTIONS=[
   {id:'chatParticipants',label:'Chat Participants',description:'Expose extension chat participants in the assistant surface.'},
@@ -3685,12 +3699,118 @@ function editorLeadingIndentColumns(line,tabSize){
   }
   return cols;
 }
+const EDITOR_BRACKET_PAIRS=[
+  {open:'(',close:')',type:'paren'},
+  {open:'[',close:']',type:'square'},
+  {open:'{',close:'}',type:'curly'}
+];
+const EDITOR_BRACKET_PAIR_COLORS=[
+  'var(--fg-warning)',
+  'var(--fg-accent)',
+  'var(--fg-success)',
+  'var(--fg-fn)',
+  'var(--fg-type)',
+  'var(--fg-str)'
+];
+function editorLineStarts(value){
+  const starts=[0];
+  for(let i=0;i<value.length;i++)if(value[i]==='\n')starts.push(i+1);
+  return starts;
+}
+function editorPositionFromOffsetFast(lineStarts,offset){
+  let lo=0,hi=lineStarts.length-1;
+  while(lo<=hi){
+    const mid=(lo+hi)>>1;
+    if(lineStarts[mid]<=offset)lo=mid+1;else hi=mid-1;
+  }
+  const line=Math.max(0,hi);
+  return {line,column:offset-lineStarts[line]};
+}
+function editorBracketPairs(value,cursorOffset){
+  const openMap=new Map(EDITOR_BRACKET_PAIRS.map(pair=>[pair.open,pair]));
+  const closeMap=new Map(EDITOR_BRACKET_PAIRS.map(pair=>[pair.close,pair]));
+  const stacks={paren:[],square:[],curly:[]},pairs=[];
+  for(let i=0;i<String(value||'').length;i++){
+    const ch=value[i],openPair=openMap.get(ch),closePair=closeMap.get(ch);
+    if(openPair){
+      const stack=stacks[openPair.type];
+      stack.push({offset:i,ch,type:openPair.type,depth:stack.length});
+    }else if(closePair){
+      const stack=stacks[closePair.type],open=stack.pop();
+      if(open)pairs.push({openOffset:open.offset,closeOffset:i,open:open.ch,close:ch,type:closePair.type,depth:open.depth,active:false});
+    }
+  }
+  const cursor=Number.isFinite(Number(cursorOffset))?Number(cursorOffset):0;
+  let active=null;
+  for(const pair of pairs){
+    const contains=pair.openOffset<=cursor&&cursor<=pair.closeOffset+1;
+    if(contains&&(!active||(pair.closeOffset-pair.openOffset)<(active.closeOffset-active.openOffset)))active=pair;
+  }
+  if(active)active.active=true;
+  return pairs.sort((a,b)=>a.openOffset-b.openOffset);
+}
+function editorBracketPairColor(pair,options){
+  const typeIndex=EDITOR_BRACKET_PAIRS.findIndex(item=>item.type===pair.type);
+  const index=options.independentColorPoolPerBracketType?typeIndex:pair.depth;
+  return EDITOR_BRACKET_PAIR_COLORS[((index%EDITOR_BRACKET_PAIR_COLORS.length)+EDITOR_BRACKET_PAIR_COLORS.length)%EDITOR_BRACKET_PAIR_COLORS.length];
+}
+function editorAppendBracketColor(layer,metrics,lineStarts,pair,offset,ch,color,active){
+  const pos=editorPositionFromOffsetFast(lineStarts,offset);
+  const el=document.createElement('div');
+  el.className='editor-bracket-color'+(active?' active':'');
+  el.textContent=ch;
+  el.style.left=(metrics.paddingLeft+pos.column*metrics.charWidth-metrics.scrollLeft)+'px';
+  el.style.top=(metrics.paddingTop+pos.line*metrics.lineHeight-metrics.scrollTop)+'px';
+  el.style.width=metrics.charWidth+'px';
+  el.style.height=metrics.lineHeight+'px';
+  el.style.color=color;
+  layer.appendChild(el);
+}
+function editorShouldRenderBracketGuide(mode,pair){
+  return mode===true||(mode==='active'&&pair.active);
+}
+function renderEditorBracketPairs(layer,ta,metrics,visual){
+  const colorization=visual.bracketPairColorization,guides=visual.guides;
+  const value=ta.value||'',lineStarts=editorLineStarts(value),pairs=editorBracketPairs(value,ta.selectionStart||0);
+  const activeHighlight=guides.highlightActiveBracketPair!==false;
+  pairs.forEach(pair=>{
+    const color=editorBracketPairColor(pair,colorization);
+    if(colorization.enabled){
+      const active=activeHighlight&&pair.active;
+      editorAppendBracketColor(layer,metrics,lineStarts,pair,pair.openOffset,pair.open,color,active);
+      editorAppendBracketColor(layer,metrics,lineStarts,pair,pair.closeOffset,pair.close,color,active);
+    }
+    const start=editorPositionFromOffsetFast(lineStarts,pair.openOffset);
+    const end=editorPositionFromOffsetFast(lineStarts,pair.closeOffset);
+    if(editorShouldRenderBracketGuide(guides.bracketPairs,pair)&&end.line>start.line){
+      const guide=document.createElement('div');
+      guide.className='editor-bracket-guide'+(pair.active?' active':'');
+      guide.style.left=(metrics.paddingLeft+start.column*metrics.charWidth-metrics.scrollLeft)+'px';
+      guide.style.top=(metrics.paddingTop+(start.line+1)*metrics.lineHeight-metrics.scrollTop)+'px';
+      guide.style.height=Math.max(0,(end.line-start.line)*metrics.lineHeight)+'px';
+      guide.style.background=color;
+      layer.appendChild(guide);
+    }
+    if(editorShouldRenderBracketGuide(guides.bracketPairsHorizontal,pair)&&end.line>start.line){
+      [start,end].forEach(pos=>{
+        const horizontal=document.createElement('div');
+        horizontal.className='editor-bracket-guide-horizontal'+(pair.active?' active':'');
+        horizontal.style.left=(metrics.paddingLeft+Math.min(start.column,end.column)*metrics.charWidth-metrics.scrollLeft)+'px';
+        horizontal.style.top=(metrics.paddingTop+pos.line*metrics.lineHeight+metrics.lineHeight-2-metrics.scrollTop)+'px';
+        horizontal.style.width=(Math.abs(end.column-start.column)+1)*metrics.charWidth+'px';
+        horizontal.style.background=color;
+        layer.appendChild(horizontal);
+      });
+    }
+  });
+}
 function renderEditorVisualDecorations(){
   const layer=$('editor-visual-layer'),ta=$('editor-text');if(!layer||!ta)return;
   layer.innerHTML='';
   layer.scrollTop=ta.scrollTop;layer.scrollLeft=ta.scrollLeft;
-  const metrics=editorTextMetrics(ta),visual=editorVisualOptions(),lines=(ta.value||'').split('\n');
+  const metrics={...editorTextMetrics(ta),scrollTop:ta.scrollTop,scrollLeft:ta.scrollLeft},visual=editorVisualOptions(),lines=(ta.value||'').split('\n');
   _updateLineHighlight(ta,(ta.value.substring(0,ta.selectionStart||0).split('\n').length)||1);
+  renderEditorBracketPairs(layer,ta,metrics,visual);
   visual.rulers.forEach(ruler=>{
     const el=document.createElement('div');
     el.className='editor-ruler-line';
@@ -8883,6 +9003,14 @@ function editorRenderLineHighlightMode(value){
   const text=String(value===undefined?editorSuggestSetting('renderLineHighlight'):value||'').trim();
   return ['none','gutter','line','all'].includes(text)?text:'line';
 }
+function editorBracketPairColorizationOptions(value){
+  const raw=value===undefined?editorSuggestSetting('bracketPairColorization'):value;
+  const obj=isPlainObject(raw)?raw:{};
+  return {
+    enabled:obj.enabled!==false,
+    independentColorPoolPerBracketType:obj.independentColorPoolPerBracketType===true
+  };
+}
 function editorRulers(value){
   const raw=value===undefined?editorSuggestSetting('rulers'):value;
   if(!Array.isArray(raw))return [];
@@ -8903,12 +9031,22 @@ function editorGuideActiveIndentationMode(value){
   if(text==='false')return false;
   return DEFAULT_EDITOR_GUIDES.highlightActiveIndentation;
 }
+function editorGuidePairMode(value,fallback){
+  if(value===true||value==='active'||value===false)return value;
+  const text=String(value||'').trim();
+  if(text==='true')return true;
+  if(text==='false')return false;
+  return fallback;
+}
 function editorGuidesOptions(value){
   const raw=value===undefined?editorSuggestSetting('guides'):value;
   const obj=isPlainObject(raw)?raw:{};
   return {
     ...DEFAULT_EDITOR_GUIDES,
     ...obj,
+    bracketPairs:editorGuidePairMode(obj.bracketPairs,DEFAULT_EDITOR_GUIDES.bracketPairs),
+    bracketPairsHorizontal:editorGuidePairMode(obj.bracketPairsHorizontal,DEFAULT_EDITOR_GUIDES.bracketPairsHorizontal),
+    highlightActiveBracketPair:obj.highlightActiveBracketPair!==false,
     indentation:obj.indentation!==false,
     highlightActiveIndentation:editorGuideActiveIndentationMode(obj.highlightActiveIndentation)
   };
@@ -8927,6 +9065,7 @@ function editorVisualOptions(value){
     renderControlCharacters:editorRenderControlCharactersEnabled(obj.renderControlCharacters),
     renderLineHighlight:editorRenderLineHighlightMode(obj.renderLineHighlight),
     rulers:editorRulers(obj.rulers),
+    bracketPairColorization:editorBracketPairColorizationOptions(obj.bracketPairColorization),
     guides:editorGuidesOptions(obj.guides)
   };
 }
@@ -8936,6 +9075,11 @@ function setEditorVisualInputs(prefix,value){
   setCheckedValue(prefix+'render-control-characters',visual.renderControlCharacters);
   setSelectValue(prefix+'render-line-highlight',visual.renderLineHighlight,'line');
   setInputValue(prefix+'rulers-json',JSON.stringify(visual.rulers.map(r=>r.color?{column:r.column,color:r.color}:r.column)));
+  setCheckedValue(prefix+'bracket-pair-colorization-enabled',visual.bracketPairColorization.enabled);
+  setCheckedValue(prefix+'bracket-pair-colorization-independent-pool',visual.bracketPairColorization.independentColorPoolPerBracketType);
+  setSelectValue(prefix+'guides-bracket-pairs',visual.guides.bracketPairs===true?'true':visual.guides.bracketPairs==='active'?'active':'false','false');
+  setSelectValue(prefix+'guides-bracket-pairs-horizontal',visual.guides.bracketPairsHorizontal===true?'true':visual.guides.bracketPairsHorizontal==='active'?'active':'false','active');
+  setCheckedValue(prefix+'guides-highlight-active-bracket-pair',visual.guides.highlightActiveBracketPair);
   setCheckedValue(prefix+'guides-indentation',visual.guides.indentation);
   const active=visual.guides.highlightActiveIndentation;
   setSelectValue(prefix+'guides-highlight-active-indentation',active===false?'false':active==='always'?'always':'true','true');
@@ -13652,7 +13796,7 @@ async function saveSettings(){
   config.extensions={...settingSection('extensions'),confirm_install:readCheckedValue('s-ext-confirm'),diagnostics_enabled:readCheckedValue('s-ext-diagnostics'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true),enabled_contributions:readExtensionContributionValues(),enabled_contributions_explicit:true};
   const editorSettings=settingSection('editor');
   const guidesSettings=editorGuidesOptions(editorSettings.guides);
-  config.editor={...editorSettings,defaultFormatter:readInputValue('s-editor-default-formatter').trim(),tabSize:editorTabSize(readNumberValue('s-editor-tab-size',4,true)),insertSpaces:readCheckedValue('s-editor-insert-spaces'),wordSeparators:readInputValue('s-editor-word-separators'),quickSuggestions:editorQuickSuggestionsFromInputs('s-editor-'),quickSuggestionsDelay:editorQuickSuggestionsDelay(readNumberValue('s-editor-quick-suggestions-delay',10,true)),suggestOnTriggerCharacters:readCheckedValue('s-editor-suggest-on-trigger-characters'),acceptSuggestionOnEnter:editorAcceptSuggestionOnEnterMode(readInputValue('s-editor-accept-suggestion-on-enter')),acceptSuggestionOnCommitCharacter:readCheckedValue('s-editor-accept-suggestion-on-commit-character'),hover:editorHoverOptionsFromInputs('s-editor-'),minimap:editorMinimapOptionsFromInputs('s-editor-'),renderWhitespace:editorRenderWhitespaceMode(readInputValue('s-editor-render-whitespace')),renderControlCharacters:readCheckedValue('s-editor-render-control-characters'),renderLineHighlight:editorRenderLineHighlightMode(readInputValue('s-editor-render-line-highlight')),rulers:editorRulersFromInput('s-editor-rulers-json'),guides:{...guidesSettings,indentation:readCheckedValue('s-editor-guides-indentation'),highlightActiveIndentation:editorGuideActiveIndentationMode(readInputValue('s-editor-guides-highlight-active-indentation'))},formatOnSave:readCheckedValue('s-editor-format-on-save'),formatOnPaste:readCheckedValue('s-editor-format-on-paste'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing'),codeActions:{...(isPlainObject(editorSettings.codeActions)?editorSettings.codeActions:{}),triggerOnFocusChange:readCheckedValue('s-editor-code-actions-trigger-focus')},codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)};
+  config.editor={...editorSettings,defaultFormatter:readInputValue('s-editor-default-formatter').trim(),tabSize:editorTabSize(readNumberValue('s-editor-tab-size',4,true)),insertSpaces:readCheckedValue('s-editor-insert-spaces'),wordSeparators:readInputValue('s-editor-word-separators'),quickSuggestions:editorQuickSuggestionsFromInputs('s-editor-'),quickSuggestionsDelay:editorQuickSuggestionsDelay(readNumberValue('s-editor-quick-suggestions-delay',10,true)),suggestOnTriggerCharacters:readCheckedValue('s-editor-suggest-on-trigger-characters'),acceptSuggestionOnEnter:editorAcceptSuggestionOnEnterMode(readInputValue('s-editor-accept-suggestion-on-enter')),acceptSuggestionOnCommitCharacter:readCheckedValue('s-editor-accept-suggestion-on-commit-character'),hover:editorHoverOptionsFromInputs('s-editor-'),minimap:editorMinimapOptionsFromInputs('s-editor-'),renderWhitespace:editorRenderWhitespaceMode(readInputValue('s-editor-render-whitespace')),renderControlCharacters:readCheckedValue('s-editor-render-control-characters'),renderLineHighlight:editorRenderLineHighlightMode(readInputValue('s-editor-render-line-highlight')),rulers:editorRulersFromInput('s-editor-rulers-json'),bracketPairColorization:{enabled:readCheckedValue('s-editor-bracket-pair-colorization-enabled'),independentColorPoolPerBracketType:readCheckedValue('s-editor-bracket-pair-colorization-independent-pool')},guides:{...guidesSettings,bracketPairs:editorGuidePairMode(readInputValue('s-editor-guides-bracket-pairs'),DEFAULT_EDITOR_GUIDES.bracketPairs),bracketPairsHorizontal:editorGuidePairMode(readInputValue('s-editor-guides-bracket-pairs-horizontal'),DEFAULT_EDITOR_GUIDES.bracketPairsHorizontal),highlightActiveBracketPair:readCheckedValue('s-editor-guides-highlight-active-bracket-pair'),indentation:readCheckedValue('s-editor-guides-indentation'),highlightActiveIndentation:editorGuideActiveIndentationMode(readInputValue('s-editor-guides-highlight-active-indentation'))},formatOnSave:readCheckedValue('s-editor-format-on-save'),formatOnPaste:readCheckedValue('s-editor-format-on-paste'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing'),codeActions:{...(isPlainObject(editorSettings.codeActions)?editorSettings.codeActions:{}),triggerOnFocusChange:readCheckedValue('s-editor-code-actions-trigger-focus')},codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)};
   saveEditorLanguageOverrideSettings();
   config.files={...settingSection('files'),autoSave:filesAutoSaveMode({autoSave:readInputValue('s-files-auto-save')}),autoSaveDelay:filesAutoSaveDelay({autoSaveDelay:readNumberValue('s-files-auto-save-delay',1000,true)}),trimTrailingWhitespace:readCheckedValue('s-files-trim-trailing-whitespace'),insertFinalNewline:readCheckedValue('s-files-insert-final-newline'),trimFinalNewlines:readCheckedValue('s-files-trim-final-newlines')};
   saveFilesLanguageOverrideSettings();

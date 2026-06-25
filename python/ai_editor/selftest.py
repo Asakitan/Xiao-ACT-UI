@@ -3552,6 +3552,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and "renderControlCharacters:true" in html
             and "renderLineHighlight:'line'" in html
             and "rulers:[]" in html
+            and "bracketPairColorization:{enabled:true,independentColorPoolPerBracketType:false}" in html
             and "guides:{bracketPairs:false,bracketPairsHorizontal:'active',highlightActiveBracketPair:true,indentation:true,highlightActiveIndentation:true}" in html
             and "id=\"s-editor-default-formatter\"" in html
             and "id=\"s-editor-word-separators\"" in html
@@ -3578,6 +3579,11 @@ def test_phase1_ai_editor_regressions() -> None:
             and "id=\"s-editor-render-control-characters\"" in html
             and "id=\"s-editor-render-line-highlight\"" in html
             and "id=\"s-editor-rulers-json\"" in html
+            and "id=\"s-editor-bracket-pair-colorization-enabled\"" in html
+            and "id=\"s-editor-bracket-pair-colorization-independent-pool\"" in html
+            and "id=\"s-editor-guides-bracket-pairs\"" in html
+            and "id=\"s-editor-guides-bracket-pairs-horizontal\"" in html
+            and "id=\"s-editor-guides-highlight-active-bracket-pair\"" in html
             and "id=\"s-editor-guides-indentation\"" in html
             and "id=\"s-editor-guides-highlight-active-indentation\"" in html
             and "id=\"s-editor-format-on-save\"" in html
@@ -3619,8 +3625,12 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function editorRenderWhitespaceMode(value)" in html
             and "function editorRenderControlCharactersEnabled(value)" in html
             and "function editorRenderLineHighlightMode(value)" in html
+            and "function editorBracketPairColorizationOptions(value)" in html
             and "function editorRulers(value)" in html
+            and "function editorGuidePairMode(value,fallback)" in html
             and "function editorGuidesOptions(value)" in html
+            and "function editorBracketPairs(value,cursorOffset)" in html
+            and "function renderEditorBracketPairs(layer,ta,metrics,visual)" in html
             and "function renderEditorWhitespaceLayer()" in html
             and "function renderEditorVisualDecorations()" in html
             and "async function toggleMinimap()" in html
@@ -5997,13 +6007,22 @@ function setEditorDropPasteOptionIndex(index){ _editorDropPasteOptionIndex = ind
             "editorWhitespaceShouldRender",
             "renderEditorWhitespaceLayer",
             "editorLeadingIndentColumns",
+            "editorLineStarts",
+            "editorPositionFromOffsetFast",
+            "editorBracketPairs",
+            "editorBracketPairColor",
+            "editorAppendBracketColor",
+            "editorShouldRenderBracketGuide",
+            "renderEditorBracketPairs",
             "_updateLineHighlight",
             "renderEditorVisualDecorations",
             "editorRenderWhitespaceMode",
             "editorRenderControlCharactersEnabled",
             "editorRenderLineHighlightMode",
+            "editorBracketPairColorizationOptions",
             "editorRulers",
             "editorGuideActiveIndentationMode",
+            "editorGuidePairMode",
             "editorGuidesOptions",
             "editorVisualOptions",
         ]
@@ -6012,13 +6031,21 @@ function setEditorDropPasteOptionIndex(index){ _editorDropPasteOptionIndex = ind
         js = r"""
 function assert(ok,label){ if(!ok){ throw new Error(label); } }
 const DEFAULT_EDITOR_GUIDES = { bracketPairs: false, bracketPairsHorizontal: "active", highlightActiveBracketPair: true, indentation: true, highlightActiveIndentation: true };
+const DEFAULT_EDITOR_BRACKET_PAIR_COLORIZATION = { enabled: true, independentColorPoolPerBracketType: false };
+const EDITOR_BRACKET_PAIRS = [
+  { open: "(", close: ")", type: "paren" },
+  { open: "[", close: "]", type: "square" },
+  { open: "{", close: "}", type: "curly" },
+];
+const EDITOR_BRACKET_PAIR_COLORS = ["gold", "cyan", "lime", "magenta", "orange", "pink"];
 let editorLang = "self";
 let config = { editor: {
   renderWhitespace: "selection",
   renderControlCharacters: true,
   renderLineHighlight: "all",
   rulers: [80, { column: 4, color: "#445566" }, "bad"],
-  guides: { indentation: true, highlightActiveIndentation: "always" },
+  bracketPairColorization: { enabled: true, independentColorPoolPerBracketType: false },
+  guides: { bracketPairs: true, bracketPairsHorizontal: "active", highlightActiveBracketPair: true, indentation: true, highlightActiveIndentation: "always" },
 } };
 const _editorTextMetricCache = new Map();
 function isPlainObject(value){ return !!value && typeof value === "object" && !Array.isArray(value); }
@@ -6081,6 +6108,10 @@ assert(editorRenderControlCharactersEnabled(false) === false
 assert(editorRenderLineHighlightMode("bad") === "line"
        && editorRenderLineHighlightMode("gutter") === "gutter",
        "renderLineHighlight normalizes VS Code enum");
+assert(editorBracketPairColorizationOptions({ enabled: false, independentColorPoolPerBracketType: true }).enabled === false
+       && editorBracketPairColorizationOptions({ enabled: false, independentColorPoolPerBracketType: true }).independentColorPoolPerBracketType === true
+       && editorBracketPairColorizationOptions(undefined).enabled === true,
+       "bracketPairColorization normalizes VS Code defaults");
 const rulers = editorRulers([120, { column: 4, color: "#123456" }, { column: -1 }, "x"]);
 assert(rulers.length === 3
        && rulers[0].column === 0
@@ -6088,21 +6119,40 @@ assert(rulers.length === 3
        && rulers[2].column === 120,
        "rulers accept numbers and color objects sorted by column");
 assert(editorGuidesOptions({ indentation: false, highlightActiveIndentation: "always" }).indentation === false
+       && editorGuidesOptions({ bracketPairs: "active", bracketPairsHorizontal: true, highlightActiveBracketPair: false, highlightActiveIndentation: "bad" }).bracketPairs === "active"
+       && editorGuidesOptions({ bracketPairs: "active", bracketPairsHorizontal: true, highlightActiveBracketPair: false, highlightActiveIndentation: "bad" }).bracketPairsHorizontal === true
+       && editorGuidesOptions({ bracketPairs: "active", bracketPairsHorizontal: true, highlightActiveBracketPair: false, highlightActiveIndentation: "bad" }).highlightActiveBracketPair === false
        && editorGuidesOptions({ highlightActiveIndentation: "bad" }).highlightActiveIndentation === true,
-       "guides normalize indentation and active indentation");
+       "guides normalize bracket pair and indentation options");
 renderEditorWhitespaceLayer();
 assert(whitespaceLayer.innerHTML.includes("editor-whitespace-mark")
        && whitespaceLayer.innerHTML.includes("·")
        && whitespaceLayer.innerHTML.includes("editor-control-character")
        && whitespaceLayer.innerHTML.includes("^A"),
        "whitespace layer renders selection whitespace and control characters");
-ed.selectionStart = ed.selectionEnd = "  alpha  \n    ".length;
+ed.value = "if (a) {\n    call([b]);\n}";
+ed.selectionStart = ed.selectionEnd = "if (a) {\n    ".length;
 renderEditorVisualDecorations();
 assert(visualLayer.children.some(child => child.className.includes("editor-line-highlight-visual"))
        && visualLayer.children.some(child => child.className.includes("editor-ruler-line") && child.style.background === "#445566")
-       && visualLayer.children.some(child => child.className.includes("editor-indent-guide active")),
-       "visual layer renders line highlight rulers and active indent guides");
+       && visualLayer.children.some(child => child.className.includes("editor-indent-guide active"))
+       && visualLayer.children.some(child => child.className.includes("editor-bracket-color active"))
+       && visualLayer.children.some(child => child.className.includes("editor-bracket-guide active"))
+       && visualLayer.children.some(child => child.className.includes("editor-bracket-guide-horizontal active")),
+       "visual layer renders line highlight rulers indent guides and bracket pair guides");
+const coloredBefore = visualLayer.children.filter(child => child.className.includes("editor-bracket-color")).map(child => child.style.color).join(",");
+config.editor.bracketPairColorization.independentColorPoolPerBracketType = true;
+renderEditorVisualDecorations();
+const coloredAfter = visualLayer.children.filter(child => child.className.includes("editor-bracket-color")).map(child => child.style.color).join(",");
+assert(coloredBefore !== coloredAfter, "independent bracket color pool changes color assignment");
+config.editor.bracketPairColorization.enabled = false;
+renderEditorVisualDecorations();
+assert(!visualLayer.children.some(child => child.className.includes("editor-bracket-color"))
+       && visualLayer.children.some(child => child.className.includes("editor-bracket-guide")),
+       "disabled bracket colorization keeps bracket guides available");
+config.editor.bracketPairColorization.enabled = true;
 config.editor.renderWhitespace = "trailing";
+ed.value = "alpha  \nbeta\t";
 ed.selectionStart = ed.selectionEnd = 0;
 renderEditorWhitespaceLayer();
 assert((whitespaceLayer.innerHTML.match(/editor-whitespace-mark/g) || []).length >= 2,
