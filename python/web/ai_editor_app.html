@@ -254,6 +254,22 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-bracket-guide.active { background:color-mix(in srgb,var(--fg-accent) 72%,transparent); }
 .editor-bracket-guide-horizontal { height:1px; background:color-mix(in srgb,var(--fg-accent) 30%,transparent); }
 .editor-bracket-guide-horizontal.active { background:color-mix(in srgb,var(--fg-accent) 66%,transparent); }
+.editor-fold-control,.editor-fold-highlight,.editor-sticky-scroll { position:absolute; box-sizing:border-box; }
+.editor-fold-control { left:-31px; width:20px; height:18px; color:var(--fg-dim); text-align:center;
+  font:11px/18px var(--mono); opacity:.18; transition:opacity .12s ease,color .12s ease; }
+.editor-container.folding-controls-always .editor-fold-control { opacity:.78; }
+.editor-container.folding-controls-mouseover:hover .editor-fold-control { opacity:.86; }
+.editor-container.folding-controls-never .editor-fold-control { display:none; }
+.editor-fold-control:hover { color:var(--fg); }
+.editor-fold-highlight { left:0; right:0; background:color-mix(in srgb,var(--fg-accent) 7%,transparent);
+  border-left:2px solid color-mix(in srgb,var(--fg-accent) 34%,transparent); }
+.editor-sticky-scroll { display:none; z-index:12; left:50px; right:0; top:0; max-height:40%;
+  overflow:hidden; pointer-events:none; background:color-mix(in srgb,var(--bg-editor) 94%,transparent);
+  border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent);
+  font:13px/1.5 var(--mono); color:var(--fg-code); padding:0 12px; white-space:pre; }
+.editor-sticky-scroll.visible { display:block; }
+.editor-sticky-scroll-line { height:1.5em; overflow:hidden; text-overflow:ellipsis;
+  color:var(--fg-dim); background:var(--bg-editor); }
 .editor-highlight-layer { position:absolute; inset:0 0 0 50px; z-index:3; pointer-events:none;
   font:13px/1.5 var(--mono); padding:8px 12px; overflow:hidden; white-space:pre; tab-size:4; }
 .editor-document-highlight { position:absolute; border-radius:2px;
@@ -361,6 +377,7 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-container.custom-editor .editor-ghost-layer,
 .editor-container.custom-editor .editor-codelens-layer,
 .editor-container.custom-editor .editor-color-layer,
+.editor-container.custom-editor .editor-sticky-scroll,
 .editor-container.custom-editor .minimap-container { opacity:0; pointer-events:none; }
 .editor-container.notebook-editor .line-numbers,
 .editor-container.notebook-editor .editor-textarea,
@@ -373,6 +390,7 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-container.notebook-editor .editor-ghost-layer,
 .editor-container.notebook-editor .editor-codelens-layer,
 .editor-container.notebook-editor .editor-color-layer,
+.editor-container.notebook-editor .editor-sticky-scroll,
 .editor-container.notebook-editor .minimap-container { opacity:0; pointer-events:none; }
 .editor-container.diff-editor .line-numbers,
 .editor-container.diff-editor .editor-textarea,
@@ -385,6 +403,7 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-container.diff-editor .editor-ghost-layer,
 .editor-container.diff-editor .editor-codelens-layer,
 .editor-container.diff-editor .editor-color-layer,
+.editor-container.diff-editor .editor-sticky-scroll,
 .editor-container.diff-editor .minimap-container { opacity:0; pointer-events:none; }
 .editor-container.syntax-on .editor-textarea {
   background:transparent; color:transparent; -webkit-text-fill-color:transparent;
@@ -1661,6 +1680,7 @@ pre.code-block { overflow:visible; }
       </div>
       <div class="editor-container" id="editor-container" style="display:none">
         <div class="line-numbers" id="line-nums">1</div>
+        <div class="editor-sticky-scroll" id="editor-sticky-scroll" aria-hidden="true"></div>
         <pre class="editor-syntax-layer" id="editor-syntax-highlight" aria-hidden="true"></pre>
         <div class="editor-visual-layer" id="editor-visual-layer" aria-hidden="true"></div>
         <pre class="editor-whitespace-layer" id="editor-whitespace-layer" aria-hidden="true"></pre>
@@ -1991,6 +2011,21 @@ pre.code-block { overflow:visible; }
         <div><label>Horizontal Bracket Guides</label><select id="s-editor-guides-bracket-pairs-horizontal" style="width:100%"><option value="active">active</option><option value="false">false</option><option value="true">true</option></select></div>
       </div>
       <label class="settings-check"><input id="s-editor-guides-highlight-active-bracket-pair" type="checkbox"><span><b>Highlight active bracket pair</b><small>Matches editor.guides.highlightActiveBracketPair.</small></span></label>
+      <div class="settings-grid">
+        <label class="settings-check"><input id="s-editor-folding" type="checkbox"><span><b>Code folding</b><small>Matches editor.folding.</small></span></label>
+        <div><label>Folding Strategy</label><select id="s-editor-folding-strategy" style="width:100%"><option value="auto">auto</option><option value="indentation">indentation</option></select></div>
+        <div><label>Folding Controls</label><select id="s-editor-show-folding-controls" style="width:100%"><option value="mouseover">mouseover</option><option value="always">always</option><option value="never">never</option></select></div>
+      </div>
+      <div class="settings-grid">
+        <label class="settings-check"><input id="s-editor-folding-highlight" type="checkbox"><span><b>Folding highlight</b><small>Highlight the active foldable region.</small></span></label>
+        <label class="settings-check"><input id="s-editor-unfold-on-click-after-end-of-line" type="checkbox"><span><b>Unfold after line end</b><small>Matches editor.unfoldOnClickAfterEndOfLine.</small></span></label>
+      </div>
+      <div class="settings-grid">
+        <label class="settings-check"><input id="s-editor-sticky-scroll-enabled" type="checkbox"><span><b>Sticky scroll</b><small>Show current nested scopes at the editor top.</small></span></label>
+        <div><label>Sticky Max Lines</label><input id="s-editor-sticky-scroll-max-line-count" type="number" min="1" max="20" step="1" style="width:100%"></div>
+        <div><label>Sticky Model</label><select id="s-editor-sticky-scroll-default-model" style="width:100%"><option value="outlineModel">outlineModel</option><option value="foldingProviderModel">foldingProviderModel</option><option value="indentationModel">indentationModel</option></select></div>
+        <label class="settings-check"><input id="s-editor-sticky-scroll-scroll-with-editor" type="checkbox"><span><b>Scroll with editor</b><small>Move sticky lines with horizontal editor scroll.</small></span></label>
+      </div>
       <label class="settings-check"><input id="s-editor-format-on-save" type="checkbox"><span><b>Format on save</b><small>Runs the active formatter before explicit saves.</small></span></label>
       <label class="settings-check"><input id="s-editor-format-on-paste" type="checkbox"><span><b>Format on paste</b><small>Runs range formatting after paste/drop edits when a range formatter is available.</small></span></label>
       <label class="settings-check"><input id="s-editor-format-on-type" type="checkbox"><span><b>Format on type</b><small>Runs extension on-type formatting providers for typed trigger characters.</small></span></label>
@@ -2251,7 +2286,7 @@ const SETTINGS_SECTION_DEFAULTS={
   mcp:{access:'prompt',autostart:false,discovery_enabled:true,collision_behavior:'first',server_sampling:false},
   terminal:{profile:'PowerShell 7 (No Profile)',shell_path:'',shell_args:[],timeout:30,output_limit:8000,auto_approve:{}},
   extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands','views','customEditors','notebooks','terminal','statusBarItems'],enabled_contributions_explicit:false,diagnostics_enabled:false},
-  editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,formatOnPaste:false,linkedEditing:false,codeActionsOnSave:{},codeActions:{triggerOnFocusChange:false},pasteAs:{preferences:[]},tabSize:4,insertSpaces:true,wordSeparators:'`~!@#$%^&*()-=+[{]}\\|;:\'",.<>/?',quickSuggestions:{other:'offWhenInlineCompletions',comments:'off',strings:'off'},quickSuggestionsDelay:10,suggestOnTriggerCharacters:true,acceptSuggestionOnEnter:'on',acceptSuggestionOnCommitCharacter:true,hover:{enabled:'on',delay:300,hidingDelay:300,sticky:true,above:true},minimap:{enabled:true,size:'proportional',side:'right',showSlider:'mouseover',renderCharacters:true,maxColumn:120,scale:1},renderWhitespace:'selection',renderControlCharacters:true,renderLineHighlight:'line',rulers:[],bracketPairColorization:{enabled:true,independentColorPoolPerBracketType:false},guides:{bracketPairs:false,bracketPairsHorizontal:'active',highlightActiveBracketPair:true,indentation:true,highlightActiveIndentation:true}},
+  editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,formatOnPaste:false,linkedEditing:false,codeActionsOnSave:{},codeActions:{triggerOnFocusChange:false},pasteAs:{preferences:[]},tabSize:4,insertSpaces:true,wordSeparators:'`~!@#$%^&*()-=+[{]}\\|;:\'",.<>/?',quickSuggestions:{other:'offWhenInlineCompletions',comments:'off',strings:'off'},quickSuggestionsDelay:10,suggestOnTriggerCharacters:true,acceptSuggestionOnEnter:'on',acceptSuggestionOnCommitCharacter:true,hover:{enabled:'on',delay:300,hidingDelay:300,sticky:true,above:true},minimap:{enabled:true,size:'proportional',side:'right',showSlider:'mouseover',renderCharacters:true,maxColumn:120,scale:1},folding:true,foldingStrategy:'auto',showFoldingControls:'mouseover',foldingHighlight:true,unfoldOnClickAfterEndOfLine:false,stickyScroll:{enabled:true,maxLineCount:5,defaultModel:'outlineModel',scrollWithEditor:true},renderWhitespace:'selection',renderControlCharacters:true,renderLineHighlight:'line',rulers:[],bracketPairColorization:{enabled:true,independentColorPoolPerBracketType:false},guides:{bracketPairs:false,bracketPairsHorizontal:'active',highlightActiveBracketPair:true,indentation:true,highlightActiveIndentation:true}},
   files:{autoSave:'off',autoSaveDelay:1000,trimTrailingWhitespace:false,insertFinalNewline:false,trimFinalNewlines:false},
   customization:{instructions_locations:['.sao/instructions.md','.sao/instructions'],agent_locations:['.sao/agents'],workflow_locations:['.sao/workflows'],skill_locations:['.agents/skills/.local','.claude/skills/.local'],use_agent_md:true,use_claude_md:false}
 };
@@ -2259,6 +2294,7 @@ const DEFAULT_EDITOR_WORD_SEPARATORS='`~!@#$%^&*()-=+[{]}\\|;:\'",.<>/?';
 const DEFAULT_EDITOR_QUICK_SUGGESTIONS={other:'offWhenInlineCompletions',comments:'off',strings:'off'};
 const DEFAULT_EDITOR_HOVER={enabled:'on',delay:300,hidingDelay:300,sticky:true,above:true};
 const DEFAULT_EDITOR_MINIMAP={enabled:true,size:'proportional',side:'right',showSlider:'mouseover',renderCharacters:true,maxColumn:120,scale:1};
+const DEFAULT_EDITOR_STICKY_SCROLL={enabled:true,maxLineCount:5,defaultModel:'outlineModel',scrollWithEditor:true};
 const DEFAULT_EDITOR_BRACKET_PAIR_COLORIZATION={enabled:true,independentColorPoolPerBracketType:false};
 const DEFAULT_EDITOR_GUIDES={bracketPairs:false,bracketPairsHorizontal:'active',highlightActiveBracketPair:true,indentation:true,highlightActiveIndentation:true};
 const EXTENSION_CONTRIBUTION_OPTIONS=[
@@ -3804,6 +3840,55 @@ function renderEditorBracketPairs(layer,ta,metrics,visual){
     }
   });
 }
+function renderEditorFoldingDecorations(layer,ta,metrics){
+  const options=editorFoldingOptions(),wrap=$('editor-container');
+  if(wrap){
+    ['always','never','mouseover'].forEach(mode=>wrap.classList.remove('folding-controls-'+mode));
+    wrap.classList.add('folding-controls-'+options.showFoldingControls);
+  }
+  if(!options.folding)return;
+  const regions=editorFoldingRegions(),currentLine=(ta.value.substring(0,ta.selectionStart||0).split('\n').length)-1;
+  regions.forEach(region=>{
+    const top=metrics.paddingTop+region.startLine*metrics.lineHeight-metrics.scrollTop;
+    if(top<-metrics.lineHeight||top>(($('editor-container')&&$('editor-container').offsetHeight)||0)+metrics.lineHeight)return;
+    const control=document.createElement('div');
+    control.className='editor-fold-control';
+    control.textContent='v';
+    control.style.top=top+'px';
+    control.title=(region.source||'fold')+' '+(region.startLine+1)+'-'+(region.endLine+1);
+    layer.appendChild(control);
+    if(options.foldingHighlight&&region.startLine<=currentLine&&currentLine<=region.endLine){
+      const highlight=document.createElement('div');
+      highlight.className='editor-fold-highlight';
+      highlight.style.top=top+'px';
+      highlight.style.height=Math.max(metrics.lineHeight,(region.endLine-region.startLine+1)*metrics.lineHeight)+'px';
+      layer.appendChild(highlight);
+    }
+  });
+}
+function renderEditorStickyScroll(){
+  const host=$('editor-sticky-scroll'),ta=$('editor-text');if(!host||!ta)return;
+  const sticky=editorStickyScrollOptions(),options=editorFoldingOptions();
+  if(!sticky.enabled||!options.folding){host.classList.remove('visible');host.innerHTML='';return}
+  const metrics=editorTextMetrics(ta),topLine=Math.max(0,Math.floor(ta.scrollTop/metrics.lineHeight));
+  if(topLine<=0){host.classList.remove('visible');host.innerHTML='';return}
+  const lines=(ta.value||'').split('\n');
+  const regions=editorStickyScrollRegions(sticky)
+    .filter(region=>region.startLine<topLine&&topLine<=region.endLine)
+    .sort((a,b)=>a.startLine-b.startLine||b.endLine-a.endLine)
+    .slice(-sticky.maxLineCount);
+  if(!regions.length){host.classList.remove('visible');host.innerHTML='';return}
+  host.innerHTML='';
+  host.style.transform=sticky.scrollWithEditor?'translateX('+(-ta.scrollLeft)+'px)':'translateX(0)';
+  regions.forEach(region=>{
+    const row=document.createElement('div');
+    row.className='editor-sticky-scroll-line';
+    row.textContent=(lines[region.startLine]||'').trim()||('Ln '+(region.startLine+1));
+    row.title='Ln '+(region.startLine+1)+'-'+(region.endLine+1)+' · '+(region.source||sticky.defaultModel);
+    host.appendChild(row);
+  });
+  host.classList.add('visible');
+}
 function renderEditorVisualDecorations(){
   const layer=$('editor-visual-layer'),ta=$('editor-text');if(!layer||!ta)return;
   layer.innerHTML='';
@@ -3811,6 +3896,7 @@ function renderEditorVisualDecorations(){
   const metrics={...editorTextMetrics(ta),scrollTop:ta.scrollTop,scrollLeft:ta.scrollLeft},visual=editorVisualOptions(),lines=(ta.value||'').split('\n');
   _updateLineHighlight(ta,(ta.value.substring(0,ta.selectionStart||0).split('\n').length)||1);
   renderEditorBracketPairs(layer,ta,metrics,visual);
+  renderEditorFoldingDecorations(layer,ta,metrics);
   visual.rulers.forEach(ruler=>{
     const el=document.createElement('div');
     el.className='editor-ruler-line';
@@ -3834,6 +3920,7 @@ function renderEditorVisualDecorations(){
     });
   }
   renderEditorWhitespaceLayer();
+  renderEditorStickyScroll();
 }
 function normalizeLanguageExt(ext){
   ext=String(ext||'').trim().toLowerCase();
@@ -4449,9 +4536,48 @@ function editorMarkerFoldingRegions(){
   });
   return regions.sort((a,b)=>a.startLine-b.startLine||a.endLine-b.endLine);
 }
+function editorLineIndentColumns(line,tabSize){
+  let col=0;
+  for(const ch of String(line||'')){
+    if(ch===' ')col+=1;
+    else if(ch==='\t')col+=tabSize-(col%tabSize);
+    else break;
+  }
+  return col;
+}
+function editorIndentationFoldingRegions(value){
+  const ta=$('editor-text');
+  const metrics=ta?editorTextMetrics(ta):{tabSize:4};
+  const lines=String(value==null?((typeof ed!=='undefined'&&ed&&ed.value)||''):value).split('\n');
+  const regions=[],stack=[];
+  let previous={line:-1,indent:0,blank:true};
+  lines.forEach((line,lineIndex)=>{
+    const blank=!String(line||'').trim();
+    const indent=editorLineIndentColumns(line,metrics.tabSize||4);
+    if(!blank){
+      while(stack.length&&indent<=stack[stack.length-1].indent){
+        const item=stack.pop(),end=lineIndex-1;
+        if(end>item.line)regions.push({startLine:item.line,endLine:end,label:(lines[item.line]||'').trim()||('Indent '+(regions.length+1)),kind:'indentation',source:'indentation'});
+      }
+      if(!previous.blank&&indent>previous.indent){
+        stack.push({line:previous.line,indent:previous.indent});
+      }
+      previous={line:lineIndex,indent,blank:false};
+    }
+  });
+  while(stack.length){
+    const item=stack.pop(),end=lines.length-1;
+    if(end>item.line)regions.push({startLine:item.line,endLine:end,label:(lines[item.line]||'').trim()||('Indent '+(regions.length+1)),kind:'indentation',source:'indentation'});
+  }
+  return regions.sort((a,b)=>a.startLine-b.startLine||a.endLine-b.endLine);
+}
 function editorFoldingRegions(){
+  const options=editorFoldingOptions();
+  if(!options.folding)return [];
+  const providerRegions=options.foldingStrategy==='indentation'?[]:[...editorProviderFoldingRegions(),...editorMarkerFoldingRegions()];
+  const candidates=providerRegions.length&&options.foldingStrategy==='auto'?providerRegions:editorIndentationFoldingRegions();
   const seen=new Set(),regions=[];
-  [...editorProviderFoldingRegions(),...editorMarkerFoldingRegions()].forEach(region=>{
+  candidates.forEach(region=>{
     const key=region.startLine+':'+region.endLine+':'+String(region.kind||'');
     if(seen.has(key))return;
     seen.add(key);regions.push(region);
@@ -4467,6 +4593,13 @@ function clearEditorFoldingRanges(){
 async function requestEditorFoldingRanges(quiet){
   const wrap=$('editor-container');
   if(!ed||!wrap||wrap.style.display==='none')return;
+  const options=editorFoldingOptions();
+  if(!options.folding||options.foldingStrategy==='indentation'){
+    clearEditorFoldingRanges();
+    if(!quiet)setStatus(options.folding?'Using indentation folding ranges':'Code folding disabled');
+    renderEditorVisualDecorations();
+    return;
+  }
   const requestId=++_editorFoldingRangeRequest;
   const contentLength=String(ed.value||'').length;
   const res=await editorRequestLanguageProvider('foldingRange',editorProviderPayload('foldingRange'),{
@@ -4482,6 +4615,8 @@ async function requestEditorFoldingRanges(quiet){
 }
 function scheduleEditorFoldingRanges(delay){
   clearTimeout(_editorFoldingRangeTimer);
+  const options=editorFoldingOptions();
+  if(!options.folding||options.foldingStrategy==='indentation'){clearEditorFoldingRanges();return}
   _editorFoldingRangeTimer=setTimeout(()=>requestEditorFoldingRanges(true),delay==null?680:delay);
 }
 function editorCursorLine(){
@@ -4493,6 +4628,27 @@ function editorSetCursorLine(line){
   let pos=0;for(let i=0;i<target;i++)pos+=lines[i].length+1;
   ed.selectionStart=ed.selectionEnd=pos;ed.focus();updateCursorPos();
   ed.scrollTop=Math.max(0,(target-5)*18);
+}
+function editorClickAfterLineEndInfo(event,ta,metrics){
+  if(!event||!ta||!metrics||typeof ta.getBoundingClientRect!=='function')return null;
+  const rect=ta.getBoundingClientRect();
+  const line=Math.max(0,Math.floor((event.clientY-rect.top+ta.scrollTop-metrics.paddingTop)/metrics.lineHeight));
+  const lines=(ta.value||'').split('\n');
+  if(line>=lines.length)return null;
+  const column=Math.floor((event.clientX-rect.left+ta.scrollLeft-metrics.paddingLeft)/metrics.charWidth);
+  return {line,column,lineLength:(lines[line]||'').length};
+}
+function handleEditorUnfoldOnClickAfterEndOfLine(event){
+  const options=editorFoldingOptions();
+  if(!options.folding||!options.unfoldOnClickAfterEndOfLine)return false;
+  const ta=$('editor-text');if(!ta)return false;
+  const info=editorClickAfterLineEndInfo(event,ta,editorTextMetrics(ta));
+  if(!info||info.column<=info.lineLength)return false;
+  const region=editorFoldingRegions().find(item=>item.startLine===info.line);
+  if(!region)return false;
+  setStatus('Fold region '+(region.startLine+1)+'-'+(region.endLine+1)+' selected for unfold');
+  editorSetCursorLine(region.startLine);
+  return true;
 }
 function goToFoldRegion(direction){
   const regions=editorFoldingRegions();
@@ -8530,6 +8686,7 @@ ed.addEventListener('click',e=>{editorCancelSnippetSession(false);closeEditorDro
 ed.addEventListener('dblclick',()=>editorSelectWordAtCursor());
 ed.addEventListener('keyup',e=>{updateCursorPos();renderEditorInlineCompletion();scheduleEditorDocumentHighlights();scheduleEditorLinkedEditingRanges();scheduleEditorHover(e)});
 ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();renderEditorInlayHints(_editorInlayHints);renderEditorDocumentHighlights(_editorDocumentHighlights);renderEditorDiagnostics(_editorDiagnostics);if(_editorSemanticTokensRangeActive)scheduleEditorSemanticTokens(260);updateCursorPos();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorDropPasteOptions();closeEditorReferences();closeEditorHierarchy();closeEditorLinks();closeEditorColorPresentationMenu()});
+ed.addEventListener('mousedown',handleEditorUnfoldOnClickAfterEndOfLine);
 ed.addEventListener('keydown',function(e){
   if(handleEditorDropPasteOptionsKey(e))return;
   if(handleEditorLinksKey(e))return;
@@ -8991,6 +9148,84 @@ function setEditorMinimapInputs(prefix,value){
   setCheckedValue(prefix+'minimap-render-characters',minimap.renderCharacters);
   setInputValue(prefix+'minimap-max-column',minimap.maxColumn);
   setSelectValue(prefix+'minimap-scale',String(minimap.scale),String(DEFAULT_EDITOR_MINIMAP.scale));
+}
+function editorFoldingStrategyMode(value){
+  const text=String(value===undefined?editorSuggestSetting('foldingStrategy'):value||'').trim();
+  return ['auto','indentation'].includes(text)?text:'auto';
+}
+function editorShowFoldingControlsMode(value){
+  const text=String(value===undefined?editorSuggestSetting('showFoldingControls'):value||'').trim();
+  return ['always','never','mouseover'].includes(text)?text:'mouseover';
+}
+function editorFoldingOptions(value){
+  const raw=value===undefined?editorEffectiveSection('editor'):value;
+  const obj=isPlainObject(raw)?raw:{};
+  return {
+    folding:obj.folding!==false,
+    foldingStrategy:editorFoldingStrategyMode(obj.foldingStrategy),
+    showFoldingControls:editorShowFoldingControlsMode(obj.showFoldingControls),
+    foldingHighlight:obj.foldingHighlight!==false,
+    unfoldOnClickAfterEndOfLine:obj.unfoldOnClickAfterEndOfLine===true
+  };
+}
+function editorFoldingOptionsFromInputs(prefix){
+  return {
+    folding:readCheckedValue(prefix+'folding'),
+    foldingStrategy:editorFoldingStrategyMode(readInputValue(prefix+'folding-strategy')),
+    showFoldingControls:editorShowFoldingControlsMode(readInputValue(prefix+'show-folding-controls')),
+    foldingHighlight:readCheckedValue(prefix+'folding-highlight'),
+    unfoldOnClickAfterEndOfLine:readCheckedValue(prefix+'unfold-on-click-after-end-of-line')
+  };
+}
+function setEditorFoldingInputs(prefix,value){
+  const folding=editorFoldingOptions(value);
+  setCheckedValue(prefix+'folding',folding.folding);
+  setSelectValue(prefix+'folding-strategy',folding.foldingStrategy,'auto');
+  setSelectValue(prefix+'show-folding-controls',folding.showFoldingControls,'mouseover');
+  setCheckedValue(prefix+'folding-highlight',folding.foldingHighlight);
+  setCheckedValue(prefix+'unfold-on-click-after-end-of-line',folding.unfoldOnClickAfterEndOfLine);
+}
+function editorStickyScrollModel(value){
+  const text=String(value||'').trim();
+  return ['outlineModel','foldingProviderModel','indentationModel'].includes(text)?text:DEFAULT_EDITOR_STICKY_SCROLL.defaultModel;
+}
+function editorStickyScrollLineCount(value){
+  const n=Math.trunc(Number(value));
+  return Number.isFinite(n)?Math.min(20,Math.max(1,n)):DEFAULT_EDITOR_STICKY_SCROLL.maxLineCount;
+}
+function editorStickyScrollOptions(value){
+  const raw=value===undefined?editorSuggestSetting('stickyScroll'):value;
+  const obj=isPlainObject(raw)?raw:{};
+  return {
+    enabled:obj.enabled!==false,
+    maxLineCount:editorStickyScrollLineCount(obj.maxLineCount),
+    defaultModel:editorStickyScrollModel(obj.defaultModel),
+    scrollWithEditor:obj.scrollWithEditor!==false
+  };
+}
+function editorStickyScrollRegions(sticky){
+  const model=(sticky&&sticky.defaultModel)||DEFAULT_EDITOR_STICKY_SCROLL.defaultModel;
+  if(model==='indentationModel')return editorIndentationFoldingRegions();
+  if(model==='foldingProviderModel'){
+    const provider=[...editorProviderFoldingRegions(),...editorMarkerFoldingRegions()];
+    return provider.length?provider:editorIndentationFoldingRegions();
+  }
+  return editorFoldingRegions();
+}
+function editorStickyScrollOptionsFromInputs(prefix){
+  return {
+    enabled:readCheckedValue(prefix+'sticky-scroll-enabled'),
+    maxLineCount:editorStickyScrollLineCount(readNumberValue(prefix+'sticky-scroll-max-line-count',DEFAULT_EDITOR_STICKY_SCROLL.maxLineCount,true)),
+    defaultModel:editorStickyScrollModel(readInputValue(prefix+'sticky-scroll-default-model')),
+    scrollWithEditor:readCheckedValue(prefix+'sticky-scroll-scroll-with-editor')
+  };
+}
+function setEditorStickyScrollInputs(prefix,value){
+  const sticky=editorStickyScrollOptions(value);
+  setCheckedValue(prefix+'sticky-scroll-enabled',sticky.enabled);
+  setInputValue(prefix+'sticky-scroll-max-line-count',sticky.maxLineCount);
+  setSelectValue(prefix+'sticky-scroll-default-model',sticky.defaultModel,DEFAULT_EDITOR_STICKY_SCROLL.defaultModel);
+  setCheckedValue(prefix+'sticky-scroll-scroll-with-editor',sticky.scrollWithEditor);
 }
 function editorRenderWhitespaceMode(value){
   const text=String(value===undefined?editorSuggestSetting('renderWhitespace'):value||'').trim();
@@ -13517,6 +13752,8 @@ function openSettings(){
   setEditorHoverInputs('s-editor-',editor.hover);
   setEditorMinimapInputs('s-editor-',editor.minimap);
   setEditorVisualInputs('s-editor-',editor);
+  setEditorFoldingInputs('s-editor-',editor);
+  setEditorStickyScrollInputs('s-editor-',editor.stickyScroll);
   setCheckedValue('s-editor-format-on-save',editor.formatOnSave===true);
   setCheckedValue('s-editor-format-on-paste',editor.formatOnPaste===true);
   setCheckedValue('s-editor-format-on-type',editor.formatOnType===true);
@@ -13796,7 +14033,45 @@ async function saveSettings(){
   config.extensions={...settingSection('extensions'),confirm_install:readCheckedValue('s-ext-confirm'),diagnostics_enabled:readCheckedValue('s-ext-diagnostics'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true),enabled_contributions:readExtensionContributionValues(),enabled_contributions_explicit:true};
   const editorSettings=settingSection('editor');
   const guidesSettings=editorGuidesOptions(editorSettings.guides);
-  config.editor={...editorSettings,defaultFormatter:readInputValue('s-editor-default-formatter').trim(),tabSize:editorTabSize(readNumberValue('s-editor-tab-size',4,true)),insertSpaces:readCheckedValue('s-editor-insert-spaces'),wordSeparators:readInputValue('s-editor-word-separators'),quickSuggestions:editorQuickSuggestionsFromInputs('s-editor-'),quickSuggestionsDelay:editorQuickSuggestionsDelay(readNumberValue('s-editor-quick-suggestions-delay',10,true)),suggestOnTriggerCharacters:readCheckedValue('s-editor-suggest-on-trigger-characters'),acceptSuggestionOnEnter:editorAcceptSuggestionOnEnterMode(readInputValue('s-editor-accept-suggestion-on-enter')),acceptSuggestionOnCommitCharacter:readCheckedValue('s-editor-accept-suggestion-on-commit-character'),hover:editorHoverOptionsFromInputs('s-editor-'),minimap:editorMinimapOptionsFromInputs('s-editor-'),renderWhitespace:editorRenderWhitespaceMode(readInputValue('s-editor-render-whitespace')),renderControlCharacters:readCheckedValue('s-editor-render-control-characters'),renderLineHighlight:editorRenderLineHighlightMode(readInputValue('s-editor-render-line-highlight')),rulers:editorRulersFromInput('s-editor-rulers-json'),bracketPairColorization:{enabled:readCheckedValue('s-editor-bracket-pair-colorization-enabled'),independentColorPoolPerBracketType:readCheckedValue('s-editor-bracket-pair-colorization-independent-pool')},guides:{...guidesSettings,bracketPairs:editorGuidePairMode(readInputValue('s-editor-guides-bracket-pairs'),DEFAULT_EDITOR_GUIDES.bracketPairs),bracketPairsHorizontal:editorGuidePairMode(readInputValue('s-editor-guides-bracket-pairs-horizontal'),DEFAULT_EDITOR_GUIDES.bracketPairsHorizontal),highlightActiveBracketPair:readCheckedValue('s-editor-guides-highlight-active-bracket-pair'),indentation:readCheckedValue('s-editor-guides-indentation'),highlightActiveIndentation:editorGuideActiveIndentationMode(readInputValue('s-editor-guides-highlight-active-indentation'))},formatOnSave:readCheckedValue('s-editor-format-on-save'),formatOnPaste:readCheckedValue('s-editor-format-on-paste'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing'),codeActions:{...(isPlainObject(editorSettings.codeActions)?editorSettings.codeActions:{}),triggerOnFocusChange:readCheckedValue('s-editor-code-actions-trigger-focus')},codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)};
+  const foldingSettings=editorFoldingOptionsFromInputs('s-editor-');
+  config.editor={
+    ...editorSettings,
+    defaultFormatter:readInputValue('s-editor-default-formatter').trim(),
+    tabSize:editorTabSize(readNumberValue('s-editor-tab-size',4,true)),
+    insertSpaces:readCheckedValue('s-editor-insert-spaces'),
+    wordSeparators:readInputValue('s-editor-word-separators'),
+    quickSuggestions:editorQuickSuggestionsFromInputs('s-editor-'),
+    quickSuggestionsDelay:editorQuickSuggestionsDelay(readNumberValue('s-editor-quick-suggestions-delay',10,true)),
+    suggestOnTriggerCharacters:readCheckedValue('s-editor-suggest-on-trigger-characters'),
+    acceptSuggestionOnEnter:editorAcceptSuggestionOnEnterMode(readInputValue('s-editor-accept-suggestion-on-enter')),
+    acceptSuggestionOnCommitCharacter:readCheckedValue('s-editor-accept-suggestion-on-commit-character'),
+    hover:editorHoverOptionsFromInputs('s-editor-'),
+    minimap:editorMinimapOptionsFromInputs('s-editor-'),
+    ...foldingSettings,
+    stickyScroll:editorStickyScrollOptionsFromInputs('s-editor-'),
+    renderWhitespace:editorRenderWhitespaceMode(readInputValue('s-editor-render-whitespace')),
+    renderControlCharacters:readCheckedValue('s-editor-render-control-characters'),
+    renderLineHighlight:editorRenderLineHighlightMode(readInputValue('s-editor-render-line-highlight')),
+    rulers:editorRulersFromInput('s-editor-rulers-json'),
+    bracketPairColorization:{
+      enabled:readCheckedValue('s-editor-bracket-pair-colorization-enabled'),
+      independentColorPoolPerBracketType:readCheckedValue('s-editor-bracket-pair-colorization-independent-pool')
+    },
+    guides:{
+      ...guidesSettings,
+      bracketPairs:editorGuidePairMode(readInputValue('s-editor-guides-bracket-pairs'),DEFAULT_EDITOR_GUIDES.bracketPairs),
+      bracketPairsHorizontal:editorGuidePairMode(readInputValue('s-editor-guides-bracket-pairs-horizontal'),DEFAULT_EDITOR_GUIDES.bracketPairsHorizontal),
+      highlightActiveBracketPair:readCheckedValue('s-editor-guides-highlight-active-bracket-pair'),
+      indentation:readCheckedValue('s-editor-guides-indentation'),
+      highlightActiveIndentation:editorGuideActiveIndentationMode(readInputValue('s-editor-guides-highlight-active-indentation'))
+    },
+    formatOnSave:readCheckedValue('s-editor-format-on-save'),
+    formatOnPaste:readCheckedValue('s-editor-format-on-paste'),
+    formatOnType:readCheckedValue('s-editor-format-on-type'),
+    linkedEditing:readCheckedValue('s-editor-linked-editing'),
+    codeActions:{...(isPlainObject(editorSettings.codeActions)?editorSettings.codeActions:{}),triggerOnFocusChange:readCheckedValue('s-editor-code-actions-trigger-focus')},
+    codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)
+  };
   saveEditorLanguageOverrideSettings();
   config.files={...settingSection('files'),autoSave:filesAutoSaveMode({autoSave:readInputValue('s-files-auto-save')}),autoSaveDelay:filesAutoSaveDelay({autoSaveDelay:readNumberValue('s-files-auto-save-delay',1000,true)}),trimTrailingWhitespace:readCheckedValue('s-files-trim-trailing-whitespace'),insertFinalNewline:readCheckedValue('s-files-insert-final-newline'),trimFinalNewlines:readCheckedValue('s-files-trim-final-newlines')};
   saveFilesLanguageOverrideSettings();
@@ -13817,6 +14092,7 @@ async function saveSettings(){
   }
   syncUI();
   if(typeof applyEditorMinimapSettings==='function')applyEditorMinimapSettings(false);
+  if(typeof scheduleEditorFoldingRanges==='function')scheduleEditorFoldingRanges(0);
   if(typeof renderEditorVisualDecorations==='function')renderEditorVisualDecorations();
   const saveResult=await call('save_config',config);
   if(!(saveResult&&saveResult.ok)){

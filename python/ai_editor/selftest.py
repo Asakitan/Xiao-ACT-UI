@@ -3548,6 +3548,12 @@ def test_phase1_ai_editor_regressions() -> None:
             and "acceptSuggestionOnEnter:'on'" in html
             and "hover:{enabled:'on',delay:300,hidingDelay:300,sticky:true,above:true}" in html
             and "minimap:{enabled:true,size:'proportional',side:'right',showSlider:'mouseover',renderCharacters:true,maxColumn:120,scale:1}" in html
+            and "folding:true" in html
+            and "foldingStrategy:'auto'" in html
+            and "showFoldingControls:'mouseover'" in html
+            and "foldingHighlight:true" in html
+            and "unfoldOnClickAfterEndOfLine:false" in html
+            and "stickyScroll:{enabled:true,maxLineCount:5,defaultModel:'outlineModel',scrollWithEditor:true}" in html
             and "renderWhitespace:'selection'" in html
             and "renderControlCharacters:true" in html
             and "renderLineHighlight:'line'" in html
@@ -3586,6 +3592,16 @@ def test_phase1_ai_editor_regressions() -> None:
             and "id=\"s-editor-guides-highlight-active-bracket-pair\"" in html
             and "id=\"s-editor-guides-indentation\"" in html
             and "id=\"s-editor-guides-highlight-active-indentation\"" in html
+            and "id=\"editor-sticky-scroll\"" in html
+            and "id=\"s-editor-folding\"" in html
+            and "id=\"s-editor-folding-strategy\"" in html
+            and "id=\"s-editor-show-folding-controls\"" in html
+            and "id=\"s-editor-folding-highlight\"" in html
+            and "id=\"s-editor-unfold-on-click-after-end-of-line\"" in html
+            and "id=\"s-editor-sticky-scroll-enabled\"" in html
+            and "id=\"s-editor-sticky-scroll-max-line-count\"" in html
+            and "id=\"s-editor-sticky-scroll-default-model\"" in html
+            and "id=\"s-editor-sticky-scroll-scroll-with-editor\"" in html
             and "id=\"s-editor-format-on-save\"" in html
             and "id=\"s-editor-format-on-paste\"" in html
             and "id=\"s-editor-format-on-type\"" in html
@@ -3622,6 +3638,17 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function editorMinimapOptions(value)" in html
             and "function applyEditorMinimapSettings(render)" in html
             and "function editorMinimapLineHeight(minimap,lineCount,height)" in html
+            and "function editorFoldingOptions(value)" in html
+            and "function editorFoldingStrategyMode(value)" in html
+            and "function editorShowFoldingControlsMode(value)" in html
+            and "function editorIndentationFoldingRegions(value)" in html
+            and "function renderEditorFoldingDecorations(layer,ta,metrics)" in html
+            and "function renderEditorStickyScroll()" in html
+            and "function editorStickyScrollOptions(value)" in html
+            and "function editorStickyScrollRegions(sticky)" in html
+            and "function editorStickyScrollLineCount(value)" in html
+            and "function editorClickAfterLineEndInfo(event,ta,metrics)" in html
+            and "function handleEditorUnfoldOnClickAfterEndOfLine(event)" in html
             and "function editorRenderWhitespaceMode(value)" in html
             and "function editorRenderControlCharactersEnabled(value)" in html
             and "function editorRenderLineHighlightMode(value)" in html
@@ -6014,6 +6041,20 @@ function setEditorDropPasteOptionIndex(index){ _editorDropPasteOptionIndex = ind
             "editorAppendBracketColor",
             "editorShouldRenderBracketGuide",
             "renderEditorBracketPairs",
+            "editorFoldingStrategyMode",
+            "editorShowFoldingControlsMode",
+            "editorFoldingOptions",
+            "editorLineIndentColumns",
+            "editorIndentationFoldingRegions",
+            "editorFoldingRegions",
+            "renderEditorFoldingDecorations",
+            "editorStickyScrollModel",
+            "editorStickyScrollLineCount",
+            "editorStickyScrollOptions",
+            "editorStickyScrollRegions",
+            "renderEditorStickyScroll",
+            "editorClickAfterLineEndInfo",
+            "handleEditorUnfoldOnClickAfterEndOfLine",
             "_updateLineHighlight",
             "renderEditorVisualDecorations",
             "editorRenderWhitespaceMode",
@@ -6032,6 +6073,7 @@ function setEditorDropPasteOptionIndex(index){ _editorDropPasteOptionIndex = ind
 function assert(ok,label){ if(!ok){ throw new Error(label); } }
 const DEFAULT_EDITOR_GUIDES = { bracketPairs: false, bracketPairsHorizontal: "active", highlightActiveBracketPair: true, indentation: true, highlightActiveIndentation: true };
 const DEFAULT_EDITOR_BRACKET_PAIR_COLORIZATION = { enabled: true, independentColorPoolPerBracketType: false };
+const DEFAULT_EDITOR_STICKY_SCROLL = { enabled: true, maxLineCount: 5, defaultModel: "outlineModel", scrollWithEditor: true };
 const EDITOR_BRACKET_PAIRS = [
   { open: "(", close: ")", type: "paren" },
   { open: "[", close: "]", type: "square" },
@@ -6046,6 +6088,12 @@ let config = { editor: {
   rulers: [80, { column: 4, color: "#445566" }, "bad"],
   bracketPairColorization: { enabled: true, independentColorPoolPerBracketType: false },
   guides: { bracketPairs: true, bracketPairsHorizontal: "active", highlightActiveBracketPair: true, indentation: true, highlightActiveIndentation: "always" },
+  folding: true,
+  foldingStrategy: "auto",
+  showFoldingControls: "mouseover",
+  foldingHighlight: true,
+  unfoldOnClickAfterEndOfLine: true,
+  stickyScroll: { enabled: true, maxLineCount: 2, defaultModel: "outlineModel", scrollWithEditor: true },
 } };
 const _editorTextMetricCache = new Map();
 function isPlainObject(value){ return !!value && typeof value === "object" && !Array.isArray(value); }
@@ -6056,6 +6104,7 @@ function makeClassList(owner){
   return {
     contains(name){ return String(owner.className || "").split(/\s+/).includes(name); },
     add(name){ owner.className = (owner.className ? owner.className + " " : "") + name; },
+    remove(name){ owner.className = String(owner.className || "").split(/\s+/).filter(item => item && item !== name).join(" "); },
   };
 }
 function makeElement(tag){
@@ -6080,9 +6129,12 @@ function makeElement(tag){
 }
 const visualLayer = makeElement("div");
 const whitespaceLayer = makeElement("pre");
+const stickyScroll = makeElement("div");
 const oldHighlight = makeElement("div");
-const container = { offsetHeight: 300 };
+const container = { offsetHeight: 300, className: "" };
+container.classList = makeClassList(container);
 const ed = { value: "  alpha  \n    beta\u0001", selectionStart: 0, selectionEnd: 2, scrollTop: 0, scrollLeft: 0 };
+ed.getBoundingClientRect = () => ({ left: 0, top: 0 });
 const document = {
   body: makeElement("body"),
   createElement: makeElement,
@@ -6090,6 +6142,7 @@ const document = {
 function $(id){
   if(id === "editor-visual-layer") return visualLayer;
   if(id === "editor-whitespace-layer") return whitespaceLayer;
+  if(id === "editor-sticky-scroll") return stickyScroll;
   if(id === "editor-line-highlight") return oldHighlight;
   if(id === "editor-container") return container;
   if(id === "editor-text") return ed;
@@ -6098,6 +6151,26 @@ function $(id){
 function getComputedStyle(){
   return { fontSize: "13px", lineHeight: "20px", paddingTop: "8px", paddingLeft: "12px", font: "13px monospace", fontFamily: "monospace", tabSize: "4" };
 }
+let statusText = "";
+function setStatus(value){ statusText = String(value || ""); }
+function updateCursorPos(){}
+function editorSetCursorLine(line){ ed._cursorLine = line; }
+let _editorFoldingRanges = [
+  { startLine: 0, endLine: 2, kind: "region", label: "provider outer" },
+  { startLine: 1, endLine: 2, kind: "region", label: "provider inner" },
+];
+let _editorFoldingRangeContentLength = String(ed.value || "").length;
+function editorProviderFoldingRegions(){
+  if(_editorFoldingRangeContentLength !== String(ed.value || "").length) return [];
+  return _editorFoldingRanges.map((range, index) => ({
+    startLine: range.startLine,
+    endLine: range.endLine,
+    kind: range.kind,
+    label: range.label || "Range " + (index + 1),
+    source: "provider",
+  }));
+}
+function editorMarkerFoldingRegions(){ return []; }
 """ + visual_js_functions + r"""
 assert(editorRenderWhitespaceMode("bogus") === "selection"
        && editorRenderWhitespaceMode("all") === "all",
@@ -6124,6 +6197,21 @@ assert(editorGuidesOptions({ indentation: false, highlightActiveIndentation: "al
        && editorGuidesOptions({ bracketPairs: "active", bracketPairsHorizontal: true, highlightActiveBracketPair: false, highlightActiveIndentation: "bad" }).highlightActiveBracketPair === false
        && editorGuidesOptions({ highlightActiveIndentation: "bad" }).highlightActiveIndentation === true,
        "guides normalize bracket pair and indentation options");
+assert(editorFoldingOptions({ folding: false, foldingStrategy: "indentation", showFoldingControls: "always", foldingHighlight: false, unfoldOnClickAfterEndOfLine: true }).folding === false
+       && editorFoldingOptions({ folding: false, foldingStrategy: "indentation", showFoldingControls: "always", foldingHighlight: false, unfoldOnClickAfterEndOfLine: true }).foldingStrategy === "indentation"
+       && editorFoldingOptions({ folding: false, foldingStrategy: "indentation", showFoldingControls: "always", foldingHighlight: false, unfoldOnClickAfterEndOfLine: true }).showFoldingControls === "always"
+       && editorFoldingOptions({ folding: false, foldingStrategy: "indentation", showFoldingControls: "always", foldingHighlight: false, unfoldOnClickAfterEndOfLine: true }).foldingHighlight === false
+       && editorFoldingOptions({ folding: false, foldingStrategy: "indentation", showFoldingControls: "always", foldingHighlight: false, unfoldOnClickAfterEndOfLine: true }).unfoldOnClickAfterEndOfLine === true
+       && editorFoldingStrategyMode("bad") === "auto"
+       && editorShowFoldingControlsMode("bad") === "mouseover",
+       "folding settings normalize VS Code defaults");
+assert(editorStickyScrollOptions({ enabled: false, maxLineCount: 99, defaultModel: "indentationModel", scrollWithEditor: false }).enabled === false
+       && editorStickyScrollOptions({ enabled: false, maxLineCount: 99, defaultModel: "indentationModel", scrollWithEditor: false }).maxLineCount === 20
+       && editorStickyScrollOptions({ enabled: false, maxLineCount: 99, defaultModel: "indentationModel", scrollWithEditor: false }).defaultModel === "indentationModel"
+       && editorStickyScrollOptions({ enabled: false, maxLineCount: 99, defaultModel: "indentationModel", scrollWithEditor: false }).scrollWithEditor === false
+       && editorStickyScrollLineCount(0) === 1
+       && editorStickyScrollModel("bogus") === "outlineModel",
+       "sticky scroll settings clamp and normalize VS Code defaults");
 renderEditorWhitespaceLayer();
 assert(whitespaceLayer.innerHTML.includes("editor-whitespace-mark")
        && whitespaceLayer.innerHTML.includes("·")
@@ -6150,6 +6238,31 @@ renderEditorVisualDecorations();
 assert(!visualLayer.children.some(child => child.className.includes("editor-bracket-color"))
        && visualLayer.children.some(child => child.className.includes("editor-bracket-guide")),
        "disabled bracket colorization keeps bracket guides available");
+config.editor.bracketPairColorization.enabled = true;
+config.editor.foldingStrategy = "indentation";
+ed.value = "root\n  child\n    grand\nnext";
+ed.selectionStart = ed.selectionEnd = ed.value.indexOf("grand");
+ed.scrollTop = 22;
+ed.scrollLeft = 8;
+_editorFoldingRangeContentLength = String(ed.value || "").length;
+const indentRegions = editorFoldingRegions();
+renderEditorVisualDecorations();
+assert(indentRegions.some(region => region.source === "indentation" && region.startLine === 0 && region.endLine === 2)
+       && visualLayer.children.some(child => child.className.includes("editor-fold-control"))
+       && visualLayer.children.some(child => child.className.includes("editor-fold-highlight"))
+       && stickyScroll.classList.contains("visible")
+       && stickyScroll.children.length <= 2
+       && stickyScroll.style.transform === "translateX(-8px)",
+       "indentation folding renders fold controls highlight and sticky scroll");
+config.editor.stickyScroll.scrollWithEditor = false;
+renderEditorStickyScroll();
+assert(stickyScroll.style.transform === "translateX(0)", "sticky scroll can ignore horizontal editor scroll");
+const clickInfo = editorClickAfterLineEndInfo({ clientX: 200, clientY: 0 }, ed, { paddingLeft: 12, paddingTop: 8, charWidth: 8, lineHeight: 20 });
+assert(clickInfo && clickInfo.line === 0 && clickInfo.column > clickInfo.lineLength,
+       "unfold click helper detects clicks after line end");
+assert(handleEditorUnfoldOnClickAfterEndOfLine({ clientX: 200, clientY: 0 }) === true
+       && statusText.includes("selected for unfold"),
+       "unfoldOnClickAfterEndOfLine routes fold-region clicks");
 config.editor.bracketPairColorization.enabled = true;
 config.editor.renderWhitespace = "trailing";
 ed.value = "alpha  \nbeta\t";
