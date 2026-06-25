@@ -3095,7 +3095,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "id=\"editor-color-layer\"" in html
            and "id=\"workspace-symbol-palette\"" in html
            and "id=\"workspace-symbol-input\"" in html
-           and "function openWorkspaceSymbolPicker()" in html
+           and "function openWorkspaceSymbolPicker(query)" in html
            and "function requestWorkspaceSymbols(quiet)" in html
            and "function resolveWorkspaceSymbol(symbol)" in html
            and "function applyWorkspaceSymbol(symbol)" in html
@@ -3106,7 +3106,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "Ctrl+T" in html
            and "id=\"document-symbol-palette\"" in html
            and "id=\"document-symbol-input\"" in html
-           and "function openDocumentSymbolPicker()" in html
+           and "function openDocumentSymbolPicker(query)" in html
            and "async function requestDocumentSymbols(quiet)" in html
            and "function flattenDocumentSymbols(symbols,level,container)" in html
            and "function applyDocumentSymbol(row)" in html
@@ -5819,6 +5819,11 @@ console.log("extension setting schema helpers ok");
     _check("frontend command palette aligns with QuickAccess basics",
            "const _CMD_HISTORY_KEY='sao-command-palette-history'" in html
            and "function commandPaletteNormalizeQuery(value)" in html
+           and "function commandPaletteQuickAccessProviders()" in html
+           and "function commandPaletteProviderPrefix(value)" in html
+           and "function commandPaletteProviderQuery(value,provider)" in html
+           and "function commandPaletteRunQuickAccessProvider(provider,query)" in html
+           and "function commandPalettePrefixEntries(value)" in html
            and "function commandPaletteFuzzyMatch(query,text)" in html
            and "function commandPaletteFilteredCommands(query,history)" in html
            and "function commandPaletteHighlightedHtml(text,ranges)" in html
@@ -5828,6 +5833,14 @@ console.log("extension setting schema helpers ok");
            and "function refreshCommandPaletteDynamicCommands()" in html
            and "call('list_command_palette_commands')" in html
            and "call('execute_command',id" in html
+           and "prefix:'?'" in html
+           and "prefix:'@'" in html
+           and "prefix:'#'" in html
+           and "openDocumentSymbolPicker(value)" in html
+           and "openWorkspaceSymbolPicker(value)" in html
+           and "openCommandPaletteWithValue('>'+value)" in html
+           and "function openWorkspaceSymbolPicker(query)" in html
+           and "function openDocumentSymbolPicker(query)" in html
            and "No matching commands" in html
            and "recently used" in html
            and "other commands" in html
@@ -5979,13 +5992,18 @@ console.log("quick input filter helpers ok");
                     pass
         command_palette_functions = [
             "commandPaletteCommandId",
+            "commandPaletteQuickAccessProviders",
+            "commandPaletteProviderPrefix",
+            "commandPaletteProviderQuery",
             "commandPaletteNormalizeQuery",
             "commandPaletteBuiltinIdSet",
             "commandPaletteNormalizeDynamicCommand",
             "commandPaletteAllCommands",
+            "commandPaletteRunQuickAccessProvider",
             "commandPaletteFuzzyMatch",
             "commandPaletteBestMatch",
             "commandPaletteFilteredCommands",
+            "commandPalettePrefixEntries",
             "commandPaletteHighlightedHtml",
         ]
         command_palette_js = "\n".join(
@@ -6003,9 +6021,41 @@ const COMMANDS = [
 ];
 let _cmdPaletteDynamicCommands = [];
 const executedCommands = [];
+let openedDocumentQuery = null;
+let openedWorkspaceQuery = null;
+let reopenedPaletteValue = null;
+let closedPaletteCount = 0;
 function call(method, ...args){ executedCommands.push({ method, args }); return Promise.resolve({ ok: true }); }
+function closeCommandPalette(){ closedPaletteCount += 1; }
+function openDocumentSymbolPicker(query){ openedDocumentQuery = query; }
+function openWorkspaceSymbolPicker(query){ openedWorkspaceQuery = query; }
+function openCommandPaletteWithValue(value){ reopenedPaletteValue = value; }
 assert(commandPaletteNormalizeQuery("> rename") === "rename", "command prefix is stripped");
 assert(commandPaletteNormalizeQuery("  >Preferences ") === "Preferences", "prefix trim matches VS Code entry");
+assert(commandPaletteQuickAccessProviders().map(provider => provider.prefix).join("") === "?>@#",
+       "QuickAccess providers expose help command document and workspace prefixes");
+assert(commandPaletteProviderPrefix("@MyClass").prefix === "@"
+       && commandPaletteProviderQuery("@MyClass") === "MyClass",
+       "document symbol prefix preserves query");
+assert(commandPaletteProviderPrefix("#Widget").prefix === "#"
+       && commandPaletteProviderQuery("#Widget") === "Widget",
+       "workspace symbol prefix preserves query");
+let prefixEntries = commandPalettePrefixEntries("?symbol");
+assert(prefixEntries.some(entry => entry.command.label.indexOf("@ Go to Symbol in Editor") === 0)
+       && prefixEntries.some(entry => entry.command.label.indexOf("# Go to Symbol in Workspace") === 0),
+       "help prefix filters and lists symbol providers");
+prefixEntries = commandPalettePrefixEntries("@EditorSymbol");
+assert(prefixEntries.length === 1 && prefixEntries[0].command.description.includes("Query: EditorSymbol"),
+       "document prefix creates a single transfer row with query context");
+prefixEntries[0].command.action();
+assert(openedDocumentQuery === "EditorSymbol" && closedPaletteCount >= 1,
+       "document prefix transfers query into document symbol picker");
+commandPalettePrefixEntries("#WorkspaceSymbol")[0].command.action();
+assert(openedWorkspaceQuery === "WorkspaceSymbol",
+       "workspace prefix transfers query into workspace symbol picker");
+commandPaletteRunQuickAccessProvider(commandPaletteProviderPrefix(">rename"), "rename");
+assert(reopenedPaletteValue === ">rename",
+       "command provider reopens command mode while preserving query");
 const fuzzy = commandPaletteFuzzyMatch("rn sym", "Rename Symbol");
 assert(fuzzy && fuzzy.ranges.length >= 2, "fuzzy non-contiguous words match");
 const highlighted = commandPaletteHighlightedHtml("Rename Symbol", [[0,2],[7,10]]);
