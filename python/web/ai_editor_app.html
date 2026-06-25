@@ -13993,9 +13993,26 @@ function setExtensionSettingError(row,message){
   if(el)el.textContent=message||'';
 }
 function extensionSettingSplitFilterValues(value){
-  return String(value||'').split(',')
-    .map(item=>item.trim().replace(/^"|"$/g,'').toLowerCase())
-    .filter(Boolean);
+  const items=[];
+  let buf='',quote='';
+  String(value||'').split('').forEach(ch=>{
+    if(quote){
+      if(ch===quote)quote='';
+      else buf+=ch;
+      return;
+    }
+    if(ch==='"'||ch==="'"){quote=ch;return}
+    if(ch===','){
+      const item=buf.trim().toLowerCase();
+      if(item)items.push(item);
+      buf='';
+      return;
+    }
+    buf+=ch;
+  });
+  const last=buf.trim().toLowerCase();
+  if(last)items.push(last);
+  return items;
 }
 function extensionSettingPushFilterValues(list,value){
   extensionSettingSplitFilterValues(value).forEach(item=>list.push(item));
@@ -14010,14 +14027,17 @@ function extensionSettingQueryTokens(raw){
   return tokens;
 }
 function extensionSettingIsFilterToken(token){
-  return /^@(modified|hidden|stable|policy|restricted)(?=$|\s)/i.test(token)
+  return /^@(modified|hidden|stable|restricted|sync)(?=$|\s)/i.test(token)
+    || /^@policy(?=$|\s|:)/i.test(token)
     || /^@(tag|ext|feature|id|lang|scope|target|type|sync|value|default):/i.test(token);
 }
 function extensionSettingFilterTokenLabel(token){
   token=String(token||'').trim();
   if(!token)return '';
-  const map={'@modified':'Modified','@hidden':'Hidden','@stable':'Stable','@policy':'Policy','@restricted':'Restricted'};
-  if(map[token])return map[token];
+  const lower=token.toLowerCase();
+  const map={'@modified':'Modified','@hidden':'Hidden','@stable':'Stable','@policy':'Policy','@restricted':'Restricted','@sync':'Sync'};
+  if(map[lower])return map[lower];
+  if(lower.startsWith('@policy:'))return 'Policy: '+(token.slice(8)||'...');
   if(token.startsWith('@tag:'))return 'Tag: '+token.slice(5);
   if(token.startsWith('@ext:'))return 'Extension: '+(token.slice(5)||'...');
   if(token.startsWith('@feature:'))return 'Feature: '+(token.slice(9)||'...');
@@ -14036,6 +14056,14 @@ function extensionSettingFilterMenuTokenActive(tokens,token){
   return wanted.endsWith(':')
     ? tokens.some(item=>String(item||'').toLowerCase().startsWith(wanted))
     : tokens.some(item=>String(item||'').toLowerCase()===wanted);
+}
+function extensionSettingLanguageFilterMatches(row,rowTags,lang){
+  lang=String(lang||'').toLowerCase();
+  if(!lang)return true;
+  const rowLang=String(row&&row.dataset&&row.dataset.extSettingLanguage||'').toLowerCase();
+  if(rowLang)return rowLang===lang;
+  return String(row&&row.dataset&&row.dataset.extSettingScope||'')==='language-overridable'
+    && !(rowTags||[]).includes('language-default');
 }
 function extensionSettingSearchTokenValue(){
   const search=$('settings-search');
@@ -14169,7 +14197,7 @@ function applyExtensionSettingsFilter(){
       const syncOk=!query.syncs.length||query.syncs.some(sync=>sync==='sync'?rowTags.includes('sync-ignored')||rowTags.includes('sync-locked'):rowTags.includes(sync));
       const idOk=!query.ids.length||query.ids.some(id=>id.endsWith('*')?(row.dataset.extSettingKey||'').toLowerCase().startsWith(id.slice(0,-1)):(row.dataset.extSettingKey||'').toLowerCase()===id);
       const featureOk=!query.features.length||query.features.some(feature=>(row.dataset.extSettingFeature||'').includes(feature));
-      const langOk=!query.languages.length||query.languages.some(lang=>(row.dataset.extSettingLanguage||'')===lang);
+      const langOk=!query.languages.length||query.languages.some(lang=>extensionSettingLanguageFilterMatches(row,rowTags,lang));
       const valueOk=!query.values.length||query.values.some(value=>(row.dataset.extSettingValue||'').includes(value));
       const defaultOk=!query.defaults.length||query.defaults.some(value=>(row.dataset.extSettingDefault||'').includes(value));
       const stableOk=!query.stableOnly||(!rowTags.includes('experimental')&&!rowTags.includes('preview'));
@@ -14491,7 +14519,7 @@ async function renderExtensionSettings(){
   const sepTarget=document.createElement('div');sepTarget.className='sep';filterMenu.appendChild(sepTarget);
   addFilterAction('Online services','@tag:usesOnlineServices');
   addFilterAction('Policy','@policy');
-  addFilterAction('Sync','@tag:sync');
+  addFilterAction('Sync','@sync');
   const sep2=document.createElement('div');sep2.className='sep';filterMenu.appendChild(sep2);
   addFilterAction('Stable','@stable',{exclude:['@tag:preview','@tag:experimental']});
   addFilterAction('Preview','@tag:preview',{exclude:['@stable','@tag:experimental']});

@@ -4955,6 +4955,8 @@ console.log("frontend signature help docs ok");
             and "@policy" in html
             and "@restricted" in html
             and "@sync" in html
+            and "addFilterAction('Sync','@sync')" in html
+            and "function extensionSettingLanguageFilterMatches(row,rowTags,lang)" in html
             and "const scopeOk=(!scopeFilter||row.dataset.extSettingScope===scopeFilter)" in html
             and "&&(!query.scopes.length||query.scopes.includes(row.dataset.extSettingScope||''))" in html
             and "const targetOk=(!targetFilter||row.dataset.extSettingTarget===targetFilter)" in html
@@ -4967,7 +4969,7 @@ console.log("frontend signature help docs ok");
             and "const syncOk=!query.syncs.length||query.syncs.some" in html
             and "const idOk=!query.ids.length||query.ids.some" in html
             and "const featureOk=!query.features.length||query.features.some" in html
-            and "const langOk=!query.languages.length||query.languages.some" in html
+            and "const langOk=!query.languages.length||query.languages.some(lang=>extensionSettingLanguageFilterMatches(row,rowTags,lang))" in html
             and "const valueOk=!query.values.length||query.values.some" in html
             and "const defaultOk=!query.defaults.length||query.defaults.some" in html
             and "const stableOk=!query.stableOnly" in html
@@ -5091,6 +5093,7 @@ console.log("frontend signature help docs ok");
             "extensionSettingIsFilterToken",
             "extensionSettingFilterTokenLabel",
             "extensionSettingFilterMenuTokenActive",
+            "extensionSettingLanguageFilterMatches",
             "extensionSettingSearchTokenValue",
             "extensionSettingSetSearchTokenValue",
             "extensionSettingAppendFilterToken",
@@ -5535,8 +5538,11 @@ assert(vscodeStyleQuery.ids[0] === "selftest.*"
        && vscodeStyleQuery.stableOnly === true
        && vscodeStyleQuery.text === "render",
        "settings query parses vscode id feature language quoted comma filters");
-assert(extensionSettingSplitFilterValues('"one,two",three').length === 3,
-       "settings query filter values split comma lists");
+const quotedCommaValues = extensionSettingSplitFilterValues('"one,two",three');
+assert(quotedCommaValues.length === 2
+       && quotedCommaValues[0] === "one,two"
+       && quotedCommaValues[1] === "three",
+       "settings query filter values preserve quoted commas");
 assert(extensionSettingQueryTokens('alpha @tag:"uses online" beta').length === 3,
        "settings query tokenizes quoted filter values");
 fakeSearch.value = "render";
@@ -5560,20 +5566,38 @@ assert(fakeSearch.value === "render" && fakeModified.checked === false
 assert(extensionSettingIsFilterToken("@feature:terminal")
        && extensionSettingIsFilterToken("@stable")
        && extensionSettingIsFilterToken("@hidden")
+       && extensionSettingIsFilterToken("@policy:SelftestPolicy")
+       && extensionSettingIsFilterToken("@sync")
        && extensionSettingIsFilterToken("@value:auto")
        && extensionSettingIsFilterToken("@default:false")
        && !extensionSettingIsFilterToken("terminal"),
        "settings filter menu identifies filter tokens");
 assert(extensionSettingFilterTokenLabel("@ext:selftest.settings-pack") === "Extension: selftest.settings-pack"
        && extensionSettingFilterTokenLabel("@id:editor.*") === "Setting: editor.*"
+       && extensionSettingFilterTokenLabel("@policy:SelftestPolicy") === "Policy: SelftestPolicy"
+       && extensionSettingFilterTokenLabel("@sync") === "Sync"
        && extensionSettingFilterTokenLabel("@value:auto") === "Value: auto"
        && extensionSettingFilterTokenLabel("@default:false") === "Default: false"
        && extensionSettingFilterTokenLabel("@hidden") === "Hidden",
        "settings filter chips label tokens");
 assert(extensionSettingFilterMenuTokenActive(["@ext:selftest.settings-pack"], "@ext:")
+       && extensionSettingFilterMenuTokenActive(["@policy:SelftestPolicy"], "@policy:")
        && extensionSettingFilterMenuTokenActive(["@stable"], "@stable")
        && !extensionSettingFilterMenuTokenActive(["@tag:preview"], "@stable"),
        "settings filter menu checks prefix tokens");
+assert(extensionSettingLanguageFilterMatches(
+         { dataset: { extSettingLanguage: "", extSettingScope: "language-overridable" } },
+         [], "python")
+       && extensionSettingLanguageFilterMatches(
+         { dataset: { extSettingLanguage: "selflang", extSettingScope: "window" } },
+         ["language-default"], "selflang")
+       && !extensionSettingLanguageFilterMatches(
+         { dataset: { extSettingLanguage: "selflang", extSettingScope: "language-overridable" } },
+         ["language-default"], "python")
+       && !extensionSettingLanguageFilterMatches(
+         { dataset: { extSettingLanguage: "", extSettingScope: "window" } },
+         [], "python"),
+       "language filter matches VS Code language-overridable settings and exact language defaults");
 fakeSearch.value = "render @ext:selftest @stable";
 extensionSettingRemoveFilterToken("@ext:selftest");
 assert(fakeSearch.value === "render @stable",
