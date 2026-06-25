@@ -1,12 +1,10 @@
 """通用进程附加与基础读取封装.
 
-只暴露 ``GameProcess`` 一个类, 内部用 pymem 完成 OpenProcess +
-ReadProcessMemory. 所有读操作均包裹 try/except, 失败返回 None 而不是抛,
+只暴露 ``GameProcess`` 一个类, 内部用驱动后端完成内存读取。
+所有读操作均包裹 try/except, 失败返回 None 而不是抛,
 因为内存扫描场景下触碰未映射页是常态。
 
 进程名通过构造函数 ``process_name`` / ``process_names`` 参数指定。
-
-依赖: pymem>=1.13 (PoC 可选依赖, 未在打包 spec 中)
 """
 
 from __future__ import annotations
@@ -22,10 +20,7 @@ from typing import Iterator, List, Optional
 
 # ───────────────────────── Win32 常量 / 结构体 ─────────────────────────
 PROCESS_QUERY_INFORMATION = 0x0400
-PROCESS_VM_READ = 0x0010
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-TH32CS_SNAPPROCESS = 0x00000002
-INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 
 MEM_COMMIT = 0x1000
 MEM_PRIVATE = 0x20000
@@ -50,32 +45,6 @@ _READABLE_PROTECTS = (
     | PAGE_EXECUTE_READWRITE
     | PAGE_EXECUTE_WRITECOPY
 )
-
-# 模块级缓存 ReadProcessMemory 原型 (argtypes 只配置一次, 避免每次调用重设)。
-# 用私有 WinDLL 实例, 不动 ctypes.windll.kernel32 共享缓存上的函数原型。
-_RPM_DIRECT = ctypes.WinDLL("kernel32").ReadProcessMemory
-_RPM_DIRECT.argtypes = [
-    ctypes.c_void_p,
-    ctypes.c_void_p,
-    ctypes.c_void_p,
-    ctypes.c_size_t,
-    ctypes.POINTER(ctypes.c_size_t),
-]
-_RPM_DIRECT.restype = wintypes.BOOL
-
-# NtReadVirtualMemory from ntdll — bypasses kernel32 parameter validation layer
-try:
-    _NTRVM = ctypes.WinDLL("ntdll").NtReadVirtualMemory
-    _NTRVM.argtypes = [
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.c_size_t,
-        ctypes.POINTER(ctypes.c_size_t),
-    ]
-    _NTRVM.restype = ctypes.c_long  # NTSTATUS
-except Exception:
-    _NTRVM = None
 
 # optional backend
 try:
@@ -105,34 +74,20 @@ except Exception:
 
 
 def _mem_read(handle, addr, buf, size, p_got):
-    """Unified read — driver / NtReadVirtualMemory / ReadProcessMemory fallback.
-
-    Driver is probed lazily on first call. If driver read fails or isn't
-    available, falls through to NtReadVirtualMemory then ReadProcessMemory.
-    """
+    """Read via driver backend only. No user-mode API fallback."""
     global _DRIVER_OK, _DRIVER_TRIED
     if _drv is not None:
         if _DRIVER_OK:
-            if _drv._rpm(handle, addr, buf, size, p_got):
-                return True
-        elif not _DRIVER_TRIED:
+            return _drv._rpm(handle, addr, buf, size, p_got)
+        if not _DRIVER_TRIED:
             _DRIVER_TRIED = True
             try:
                 _DRIVER_OK = _drv.ensure_loaded()
             except Exception:
                 _DRIVER_OK = False
             if _DRIVER_OK:
-                if _drv._rpm(handle, addr, buf, size, p_got):
-                    return True
-    if _NTRVM is not None:
-        return _NTRVM(
-            ctypes.c_void_p(handle), ctypes.c_void_p(addr),
-            buf, ctypes.c_size_t(size), p_got,
-        ) >= 0
-    return bool(_RPM_DIRECT(
-        ctypes.c_void_p(handle), ctypes.c_void_p(addr),
-        buf, ctypes.c_size_t(size), p_got,
-    ))
+                return _drv._rpm(handle, addr, buf, size, p_got)
+    return False
 
 
 class _MEMORY_BASIC_INFORMATION64(ctypes.Structure):
@@ -149,58 +104,56 @@ class _MEMORY_BASIC_INFORMATION64(ctypes.Structure):
     ]
 
 
-class _PROCESSENTRY32W(ctypes.Structure):
+class _UNICODE_STRING(ctypes.Structure):
     _fields_ = [
-        ("dwSize", wintypes.DWORD),
-        ("cntUsage", wintypes.DWORD),
-        ("th32ProcessID", wintypes.DWORD),
-        ("th32DefaultHeapID", ctypes.c_size_t),
-        ("th32ModuleID", wintypes.DWORD),
-        ("cntThreads", wintypes.DWORD),
-        ("th32ParentProcessID", wintypes.DWORD),
-        ("pcPriClassBase", wintypes.LONG),
-        ("dwFlags", wintypes.DWORD),
-        ("szExeFile", wintypes.WCHAR * wintypes.MAX_PATH),
+        ("Length", ctypes.c_ushort),
+        ("MaximumLength", ctypes.c_ushort),
+        ("Buffer", ctypes.c_void_p),
     ]
 
 
 def _iter_process_entries_wide() -> Iterator[tuple[str, int]]:
-    """Enumerate process names via the Unicode Toolhelp API.
+    """Enumerate processes via NtQuerySystemInformation(SystemProcessInformation).
 
-    ``pymem.process.process_from_name`` decodes ``PROCESSENTRY32.szExeFile``
-    with ``locale.getpreferredencoding()``.  On Windows machines configured for
-    UTF-8, unrelated processes with ANSI bytes in their executable name can make
-    that helper raise ``UnicodeDecodeError`` before it ever reaches the target.
-    The W-suffixed Toolhelp APIs return UTF-16 strings directly, avoiding that
-    locale-sensitive decode path.
+    Avoids CreateToolhelp32Snapshot which is commonly monitored by anti-cheat.
     """
-    kernel32 = ctypes.windll.kernel32
-    CreateToolhelp32Snapshot = kernel32.CreateToolhelp32Snapshot
-    Process32FirstW = kernel32.Process32FirstW
-    Process32NextW = kernel32.Process32NextW
-    CloseHandle = kernel32.CloseHandle
-
-    CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
-    CreateToolhelp32Snapshot.restype = wintypes.HANDLE
-    Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
-    Process32FirstW.restype = wintypes.BOOL
-    Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
-    Process32NextW.restype = wintypes.BOOL
-    CloseHandle.argtypes = [wintypes.HANDLE]
-    CloseHandle.restype = wintypes.BOOL
-
-    snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
-    if int(snap) == int(INVALID_HANDLE_VALUE):
+    _ntdll = ctypes.windll.ntdll
+    _SPI = 5  # SystemProcessInformation
+    buf_size = 0x100000  # 1 MB initial
+    for _ in range(3):
+        buf = ctypes.create_string_buffer(buf_size)
+        ret_len = ctypes.c_ulong(0)
+        status = _ntdll.NtQuerySystemInformation(
+            _SPI, buf, buf_size, ctypes.byref(ret_len))
+        if status == 0:
+            break
+        if status == 0xC0000004:  # STATUS_INFO_LENGTH_MISMATCH
+            buf_size = int(ret_len.value) + 0x10000
+            continue
         return
-    try:
-        entry = _PROCESSENTRY32W()
-        entry.dwSize = ctypes.sizeof(_PROCESSENTRY32W)
-        ok = Process32FirstW(snap, ctypes.byref(entry))
-        while ok:
-            yield str(entry.szExeFile), int(entry.th32ProcessID)
-            ok = Process32NextW(snap, ctypes.byref(entry))
-    finally:
-        CloseHandle(snap)
+    else:
+        return
+    offset = 0
+    raw = buf.raw
+    total = int(ret_len.value)
+    while offset < total:
+        next_entry = int.from_bytes(raw[offset:offset + 4], "little")
+        pid = int.from_bytes(raw[offset + 0x50:offset + 0x58], "little")
+        name_us_len = int.from_bytes(raw[offset + 0x38:offset + 0x3A], "little")
+        name_us_buf = int.from_bytes(raw[offset + 0x40:offset + 0x48], "little")
+        name = ""
+        if name_us_len > 0 and name_us_buf:
+            buf_offset = name_us_buf - ctypes.addressof(buf)
+            if 0 <= buf_offset <= total - name_us_len:
+                try:
+                    name = raw[buf_offset:buf_offset + name_us_len].decode("utf-16-le")
+                except Exception:
+                    pass
+        if pid > 0:
+            yield name, pid
+        if next_entry == 0:
+            break
+        offset += next_entry
 
 
 def _find_pid_by_name_wide(process_name: str) -> Optional[int]:
@@ -264,7 +217,7 @@ class GameProcess:
         from pymem import Pymem
         from pymem.exception import CouldNotOpenProcess
 
-        # ── Step 1: 只找 PID (CreateToolhelp32Snapshot, 无句柄, 不触发 ObRegisterCallbacks) ──
+        # ── Step 1: 只找 PID (NtQuerySystemInformation, 无句柄, 不触发 ObRegisterCallbacks) ──
         candidates: List[str] = []
         if process_name:
             candidates.append(process_name)
@@ -308,10 +261,8 @@ class GameProcess:
                     except Exception:
                         pass
 
-        # ── Step 3: OpenProcess — 驱动在线时只要 QUERY (不含 VM_READ, 不触发降权) ──
+        # ── Step 3: OpenProcess — 只要 QUERY (不含 VM_READ, 不触发降权) ──
         access = PROCESS_QUERY_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION
-        if not drv_attached:
-            access |= PROCESS_VM_READ
         try:
             handle = pymem.process.open(
                 found_pid, debug=False, process_access=access)
@@ -356,7 +307,7 @@ class GameProcess:
     def memory_tier_desc(self) -> str:
         if _drv is not None and _DRIVER_OK:
             return _drv.TIER_DESC.get(_drv.memory_tier(), "")
-        return "系统 API (NtRVM/RPM, 无驱动)"
+        return "无驱动"
 
     # ───── 模块 ─────
     def list_modules(self) -> List[ModuleInfo]:
@@ -589,7 +540,7 @@ class GameProcess:
                 return res
         except Exception:
             pass
-        # direct-ctypes fallback using NtRVM/RPM
+        # direct-ctypes fallback
         h = self._handle
         buf = (ctypes.c_uint64 if word_size == 8 else ctypes.c_uint32)()
         got = ctypes.c_size_t()

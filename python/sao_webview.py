@@ -424,6 +424,7 @@ class SAOWebAPI:
             'plugins.import': lambda p: self.import_plugin(p.get('archive_path', '')),
             'plugins.uninstall': lambda p: self.uninstall_plugin(p.get('plugin_id', '')),
             'plugins.open_workshop': lambda p: self._open_workshop(),
+            'plugins.resize_window': lambda p: self.resize_window(p.get('width', 800), p.get('height', 600)),
             'plugins.hotkeys': lambda p: self.get_plugin_hotkeys(),
             'plugins.set_hotkey': lambda p: self.set_plugin_hotkey(p.get('action', ''), p.get('key', '')),
             'plugins.render_ui_panel': lambda p: self.render_ui_panel(p.get('panel_id', ''), p.get('payload', '')),
@@ -639,6 +640,15 @@ class SAOWebAPI:
     def window_drag(self, dx, dy):
         """HP 窗口固定, 不允许拖拽 — 此方法保留但不执行."""
         pass
+
+    def resize_window(self, width, height):
+        """Resize the plugin manager window (called from plugin_manager.html resize handle)."""
+        try:
+            win = getattr(self._g, 'plugin_manager_win', None)
+            if win:
+                win.resize(max(580, int(width)), max(420, int(height)))
+        except Exception:
+            pass
 
     def set_ctx_menu_active(self, active, bounds=None):
         """控制 HP 窗口 click-through 区域 (右键菜单开关)"""

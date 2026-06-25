@@ -223,7 +223,7 @@ class PluginManagerPanel:
 
         # ── Row 1: Title + badge ──
         title_row = tk.Frame(body, bg=body_bg)
-        title_row.pack(fill='x', padx=16, pady=(10, 0))
+        title_row.pack(fill='x', padx=16, pady=(8, 0))
         tk.Label(title_row, text='PLUGINS', bg=body_bg,
                  fg=gold, font=get_sao_font(8, True), anchor='w').pack(side='left')
         badge_frame = tk.Frame(title_row, bg=body_bg)
@@ -232,35 +232,34 @@ class PluginManagerPanel:
         self._count_badge_parent = badge_frame
 
         title2_row = tk.Frame(body, bg=body_bg)
-        title2_row.pack(fill='x', padx=16, pady=(1, 6))
+        title2_row.pack(fill='x', padx=16, pady=(1, 4))
         tk.Label(title2_row, text='PLUGIN MANAGER', bg=body_bg,
-                 fg=value_fg, font=get_sao_font(15, True), anchor='w').pack(side='left')
+                 fg=value_fg, font=get_sao_font(13, True), anchor='w').pack(side='left')
         tk.Label(title2_row, textvariable=self._summary_var, bg=body_bg,
                  fg=label_fg, font=get_cjk_font(9)).pack(side='right')
 
         # ── Accent line ──
         tk.Frame(body, bg=gold, height=1).pack(fill='x', padx=16, pady=(0, 0))
-        tk.Frame(body, bg=sep, height=1).pack(fill='x', padx=16, pady=(1, 6))
+        tk.Frame(body, bg=sep, height=1).pack(fill='x', padx=16, pady=(1, 4))
 
         # ── Row 2: Search + action buttons ──
         toolbar = tk.Frame(body, bg=body_bg)
-        toolbar.pack(fill='x', padx=16, pady=(0, 6))
+        toolbar.pack(fill='x', padx=16, pady=(0, 4))
 
         self._search_var = tk.StringVar()
         self._search_var.trace_add('write', lambda *_a: self._on_search())
-        sao_entry(toolbar, textvariable=self._search_var, width=20).pack(side='left', padx=(0, SP_SM))
+        sao_entry(toolbar, textvariable=self._search_var, width=18).pack(side='left', padx=(0, SP_SM))
 
         action_button(toolbar, '导入', self._import_plugin, kind='normal').pack(side='left', padx=(0, SP_XS))
         action_button(toolbar, '重载全部', self._reload_all, kind='cyan').pack(side='left', padx=(0, SP_XS))
-        action_button(toolbar, '切换下个', self._cycle_next, kind='normal').pack(side='left', padx=(0, SP_XS))
 
         # ── Tag pills ──
         self._pills_row = tk.Frame(body, bg=body_bg)
-        self._pills_row.pack(fill='x', padx=16, pady=(0, 4))
+        self._pills_row.pack(fill='x', padx=16, pady=(0, 3))
 
         # ── Tabs + status ──
         tab_status = tk.Frame(body, bg=body_bg)
-        tab_status.pack(fill='x', padx=16, pady=(0, 6))
+        tab_status.pack(fill='x', padx=16, pady=(0, 4))
         for key, label in (('manage', '管理 Manage'), ('panels', '面板 Panels')):
             btn = action_button(tab_status, label, lambda k=key: self._show_tab(k), kind='normal')
             btn.pack(side='left', padx=(0, 6))
@@ -416,17 +415,26 @@ class PluginManagerPanel:
         box.pack(fill='x', pady=8, padx=4)
 
     def _render_grid(self, plugins: List[Mapping[str, Any]]) -> None:
-        """Render plugin cards in a 3-column grid layout."""
+        """Render plugin cards in a responsive column grid layout."""
         if self._list is None:
             return
-        cols = 3
+        try:
+            avail_w = self._canvas.winfo_width() if self._canvas.winfo_width() > 100 else 900
+        except Exception:
+            avail_w = 900
+        cols = max(1, min(3, avail_w // 300))
         for idx, plugin in enumerate(plugins):
             row_idx = idx // cols
             col_idx = idx % cols
             self._render_card(self._list, plugin, row_idx, col_idx)
-        # Configure grid columns to expand equally
         for c in range(cols):
             self._list.columnconfigure(c, weight=1, uniform='plugcol')
+
+    @staticmethod
+    def _truncate(text: str, max_chars: int = 28) -> str:
+        if len(text) <= max_chars:
+            return text
+        return text[:max_chars - 1] + '…'
 
     def _render_card(self, parent: tk.Frame, plugin: Mapping[str, Any],
                      row_idx: int, col_idx: int) -> None:
@@ -453,26 +461,35 @@ class PluginManagerPanel:
                                     rail=rail, rail_w=3, pad=SP_MD)
         card.grid(row=row_idx, column=col_idx, padx=5, pady=5, sticky='nsew')
 
-        # ── Name + pin star ──
+        # ── Name + pin star + version ──
         top = tk.Frame(inner, bg=card_bg)
         top.pack(fill='x', pady=(0, 1))
         if pinned:
             tk.Label(top, text='★', bg=card_bg, fg=gold,
                      font=get_cjk_font(10)).pack(side='left', padx=(0, 3))
-        tk.Label(top, text=name, bg=card_bg, fg=value_fg,
-                 anchor='w', font=get_cjk_font(11, True)).pack(side='left', fill='x', expand=True)
+        display_name = self._truncate(name, 30)
+        name_lbl = tk.Label(top, text=display_name, bg=card_bg, fg=value_fg,
+                            anchor='w', font=get_cjk_font(11, True))
+        name_lbl.pack(side='left', fill='x', expand=True)
+        if display_name != name:
+            from gui_modules.sao_panel_components import attach_tooltip
+            attach_tooltip(name_lbl, name)
         tk.Label(top, text=f'v{version}', bg=card_bg, fg=label_fg,
                  anchor='e', font=get_cjk_font(8)).pack(side='right')
 
-        # ── Description ──
-        desc = str(plugin.get('description') or plugin_id)
-        tk.Label(inner, text=desc, bg=card_bg, fg=label_fg,
-                 anchor='w', font=get_cjk_font(9), wraplength=260).pack(fill='x', pady=(0, SP_XS))
+        # ── Description (id as subtitle) ──
+        if plugin_id != name:
+            tk.Label(inner, text=plugin_id, bg=card_bg, fg=label_fg,
+                     anchor='w', font=get_cjk_font(8)).pack(fill='x')
+        desc = str(plugin.get('description') or '')
+        if desc and desc != plugin_id:
+            tk.Label(inner, text=desc, bg=card_bg, fg=label_fg,
+                     anchor='w', font=get_cjk_font(9), wraplength=320).pack(fill='x', pady=(0, SP_XS))
 
         # ── Separator ──
         tk.Frame(inner, bg=border, height=1).pack(fill='x', pady=(SP_XS, SP_XS))
 
-        # ── Bottom: badges + actions ──
+        # ── Bottom: badges + toggle + actions ──
         bottom = tk.Frame(inner, bg=card_bg)
         bottom.pack(fill='x')
 
@@ -491,8 +508,6 @@ class PluginManagerPanel:
             status_badge(bottom, f'EVT {event_failures}', kind='danger').pack(side='left', padx=(0, SP_XS))
 
         dropdown_button(bottom, '更多', [
-            ('启用 Enable', lambda pid=plugin_id: self._enable(pid)) if not enabled else
-            ('禁用 Disable', lambda pid=plugin_id: self._disable(pid)),
             ('重载 Reload', lambda pid=plugin_id: self._reload(pid)),
             ('-',),
             ('★ 取消置顶' if pinned else '☆ 置顶 Pin',
@@ -501,20 +516,25 @@ class PluginManagerPanel:
              if plugin.get('user_installed') else []),
             kind='normal').pack(side='right')
 
-        action_button(bottom, '重载', lambda pid=plugin_id: self._reload(pid),
-                      kind='cyan').pack(side='right', padx=(0, SP_XS))
+        if enabled:
+            action_button(bottom, '禁用', lambda pid=plugin_id: self._disable(pid),
+                          kind='gold').pack(side='right', padx=(0, SP_XS))
+        else:
+            action_button(bottom, '启用', lambda pid=plugin_id: self._enable(pid),
+                          kind='cyan').pack(side='right', padx=(0, SP_XS))
 
         # ── Error box (only when errors present) ──
         error = str(plugin.get('last_error') or '').strip()
         if not enabled and not error:
             error = '已停用'
         if error:
-            err_bg = '#FFF5F0' if error != '已停用' else '#FFF8EE'
-            err_fg = '#C04030' if error != '已停用' else '#B08040'
-            tk.Label(inner, text=error,
+            is_real_error = error != '已停用'
+            err_bg = _pc('card_bg_2', '#1a283b') if is_real_error else _pc('card_bg', '#162233')
+            err_fg = _pc('danger', '#ff707a') if is_real_error else label_fg
+            tk.Label(inner, text=self._truncate(error, 80),
                      bg=err_bg, fg=err_fg,
-                     anchor='w', justify='left', wraplength=260,
-                     font=get_cjk_font(9), padx=6, pady=3).pack(fill='x', pady=(SP_XS, 0))
+                     anchor='w', justify='left', wraplength=320,
+                     font=get_cjk_font(8), padx=6, pady=2).pack(fill='x', pady=(SP_XS, 0))
 
     def _import_plugin(self) -> None:
         try:
