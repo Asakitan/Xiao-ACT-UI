@@ -5155,6 +5155,11 @@ console.log("frontend signature help docs ok");
             and "function extensionSettingEnumEntries(schema,defaultValue)" in html
             and "function appendExtensionSettingEnumOptions(input,schema,defaultValue)" in html
             and "function appendExtensionSettingEnumChoices(row,schema,type,defaultValue)" in html
+            and "function extensionSettingArrayEnumSuggestions(schema,items,currentIndex)" in html
+            and "function extensionSettingObjectKeySuggestions(schema,keys)" in html
+            and "function extensionSettingSchemaForObjectKey(schema,key)" in html
+            and "function extensionSettingObjectValueSuggestion(schema,key)" in html
+            and "function extensionSettingCoerceObjectNumericValues(value,schema)" in html
             and "ext-setting-enum-choices" in html
             and "ext-setting-default-badge" in html
             and "const targetScopedValues=cfg.targetScopedValues||{}" in html
@@ -5389,6 +5394,11 @@ console.log("frontend signature help docs ok");
             "appendExtensionSettingEnumOptions",
             "renderExtensionSettingEnumDescription",
             "appendExtensionSettingEnumChoices",
+            "extensionSettingArrayEnumSuggestions",
+            "extensionSettingObjectKeySuggestions",
+            "extensionSettingSchemaForObjectKey",
+            "extensionSettingObjectValueSuggestion",
+            "extensionSettingCoerceObjectNumericValues",
             "extensionSettingSearchText",
             "extensionSettingSplitFilterValues",
             "extensionSettingPushFilterValues",
@@ -5646,6 +5656,29 @@ const containsCountSchema = {
   minContains: 2,
   maxContains: 2
 };
+const arraySuggestionSchema = {
+  type: "array",
+  uniqueItems: true,
+  items: {
+    type: "string",
+    enum: ["alpha", "beta", "gamma"],
+    enumItemLabels: ["Alpha", "Beta", "Gamma"],
+    enumDescriptions: ["First", "Second", "Third"]
+  }
+};
+const objectSuggestionSchema = {
+  type: "object",
+  properties: {
+    enabled: { type: "boolean", default: false, description: "Enable feature" },
+    level: { type: "integer", default: 2, description: "Level" },
+    mode: { type: "string", enum: ["auto", "manual"], enumItemLabels: ["Auto", "Manual"], default: "manual" }
+  },
+  patternProperties: {
+    "^port\\.": { type: "number", default: 8080 },
+    "^flag\\.": { type: "boolean" }
+  },
+  additionalProperties: { type: "integer", default: 1 }
+};
 const textarea = { type: "textarea", tagName: "TEXTAREA", value: "", rows: 0 };
 setExtensionSettingInputValue(textarea, arraySchema, "array", ["a", "b"]);
 assert(textarea.value.indexOf('"a"') >= 0, "array formatted as JSON");
@@ -5695,6 +5728,49 @@ let additionalSchemaRejected = false;
 try { readExtensionSettingInputValue(textarea, patternObjectSchema, "object"); }
 catch (err) { additionalSchemaRejected = /value.other must be an integer/.test(String(err.message)); }
 assert(additionalSchemaRejected, "object schema validates additionalProperties schema");
+const arraySuggestions = extensionSettingArrayEnumSuggestions(arraySuggestionSchema, ["alpha", "beta"], 1);
+assert(arraySuggestions.length === 2
+       && arraySuggestions.some(item => item.value === "beta" && item.label === "Beta" && item.description === "Second")
+       && arraySuggestions.some(item => item.value === "gamma" && item.label === "Gamma")
+       && !arraySuggestions.some(item => item.value === "alpha"),
+       "array enum suggestions skip duplicate values while preserving current item");
+const arraySuggestionsNoCurrent = extensionSettingArrayEnumSuggestions(arraySuggestionSchema, ["alpha", "beta"], undefined);
+assert(arraySuggestionsNoCurrent.length === 1 && arraySuggestionsNoCurrent[0].value === "gamma",
+       "array enum suggestions honor uniqueItems for new entries");
+const objectKeySuggestions = extensionSettingObjectKeySuggestions(objectSuggestionSchema, ["enabled"]);
+assert(objectKeySuggestions.length === 2
+       && objectKeySuggestions.some(item => item.value === "level" && item.description === "Level")
+       && objectKeySuggestions.some(item => item.value === "mode")
+       && !objectKeySuggestions.some(item => item.value === "enabled"),
+       "object key suggestions offer missing static properties only");
+const boolSuggestion = extensionSettingObjectValueSuggestion(objectSuggestionSchema, "enabled");
+const enumSuggestion = extensionSettingObjectValueSuggestion(objectSuggestionSchema, "mode");
+const patternSuggestion = extensionSettingObjectValueSuggestion(objectSuggestionSchema, "port.http");
+const additionalSuggestion = extensionSettingObjectValueSuggestion(objectSuggestionSchema, "threads");
+assert(boolSuggestion.type === "boolean" && boolSuggestion.data === false
+       && enumSuggestion.type === "enum" && enumSuggestion.data === "manual"
+       && enumSuggestion.options.some(item => item.value === "auto" && item.label === "Auto")
+       && patternSuggestion.type === "number" && patternSuggestion.data === 8080
+       && additionalSuggestion.type === "integer" && additionalSuggestion.data === 1,
+       "object value suggestions use property pattern and additional schemas");
+assert(extensionSettingSchemaForObjectKey(objectSuggestionSchema, "flag.debug").type === "boolean"
+       && extensionSettingSchemaForObjectKey(objectSuggestionSchema, "missing").type === "integer",
+       "object key schema resolver falls back through patternProperties then additionalProperties");
+const coercedObject = extensionSettingCoerceObjectNumericValues(
+  { level: "3", "port.http": "9090", threads: "4", enabled: "false" },
+  objectSuggestionSchema);
+assert(coercedObject.level === 3
+       && coercedObject["port.http"] === 9090
+       && coercedObject.threads === 4
+       && coercedObject.enabled === "false",
+       "object numeric coercion follows VS Code property pattern and additional schemas");
+textarea.value = '{"level":"3","port.http":"9090","threads":"4","mode":"auto","enabled":false}';
+const parsedObjectSetting = readExtensionSettingInputValue(textarea, objectSuggestionSchema, "object");
+assert(parsedObjectSetting.level === 3
+       && parsedObjectSetting["port.http"] === 9090
+       && parsedObjectSetting.threads === 4
+       && parsedObjectSetting.mode === "auto",
+       "object setting read coerces numeric schema values before validation");
 extensionSettingValidateSchemaValue(5, anyOfSchema, "value");
 extensionSettingValidateSchemaValue("auto", anyOfSchema, "value");
 let anyOfRejected = false;
