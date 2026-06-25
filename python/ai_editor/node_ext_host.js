@@ -1211,6 +1211,24 @@ function _customEditorDocumentKey(viewType, uriLike, viewId = '') {
     return viewId ? `${base}|${String(viewId)}` : base;
 }
 
+function _customEditorSupportsMultipleEditors(reg) {
+    return !!(
+        reg
+        && reg.options
+        && reg.options.supportsMultipleEditorsPerDocument
+    );
+}
+
+function _customEditorDocumentEntryKey(viewType, uriLike, viewId, supportsMultiple) {
+    return _customEditorDocumentKey(
+        viewType, uriLike, supportsMultiple ? viewId : '');
+}
+
+function _customEditorSingletonEntry(viewType, uriLike) {
+    return _customEditorDocuments.get(
+        _customEditorDocumentKey(viewType, uriLike)) || null;
+}
+
 function _customEditorEntryForMessage(msg) {
     const viewId = String(msg.viewId || msg.view_id || '');
     if (viewId && _customEditorViewKeys.has(viewId)) {
@@ -1246,6 +1264,8 @@ function _customEditorStatePayload(entry, kind, extra = {}) {
         dirty: !!entry.dirty,
         editable: !!entry.editable,
         textEditor: !!entry.textEditor,
+        supportsMultipleEditorsPerDocument:
+            !!entry.supportsMultipleEditorsPerDocument,
         supportsSave: !!entry.textEditor || typeof provider.saveCustomDocument === 'function',
         supportsSaveAs: !!entry.textEditor || typeof provider.saveCustomDocumentAs === 'function',
         supportsRevert: !!entry.textEditor || typeof provider.revertCustomDocument === 'function',
@@ -5759,11 +5779,15 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 return new Disposable(() => {
                     changeSubscription?.dispose?.();
                     _customEditorProviders.delete(normalized);
+                    const disposedDocuments = new Set();
                     for (const [key, entry] of [..._customEditorDocuments.entries()]) {
                         if (entry.viewType !== normalized) continue;
                         _customEditorDocuments.delete(key);
                         if (entry.viewId) _customEditorViewKeys.delete(entry.viewId);
-                        try { entry.document?.dispose?.(); } catch {}
+                        if (!disposedDocuments.has(entry.document)) {
+                            disposedDocuments.add(entry.document);
+                            try { entry.document?.dispose?.(); } catch {}
+                        }
                     }
                     send({
                         type: 'custom_editor_provider_disposed',
@@ -7579,6 +7603,24 @@ async function resolveCustomEditor(msg) {
         return;
     }
     const uri = _workspaceUriFromInput(msg.uri || msg.resource || msg.path);
+    const supportsMultiple = _customEditorSupportsMultipleEditors(reg);
+    if (!supportsMultiple) {
+        const existingEntry = _customEditorSingletonEntry(viewType, uri);
+        if (existingEntry) {
+            send({
+                type: 'custom_editor_resolved',
+                requestId: msg.requestId,
+                viewType,
+                viewId: existingEntry.viewId,
+                uri: existingEntry.uri.toString(),
+                ok: true,
+                reused: true,
+                ..._customEditorStatePayload(
+                    existingEntry, existingEntry.lastKind || 'resolved'),
+            });
+            return;
+        }
+    }
     const viewId = String(
         msg.viewId || `custom-${_safeViewIdPart(viewType)}-${_nextViewHandle++}`);
     const title = String(msg.title || path.basename(uri.fsPath || uri.path || viewType));
@@ -7596,12 +7638,14 @@ async function resolveCustomEditor(msg) {
         if (typeof reg.provider.resolveCustomTextEditor === 'function') {
             document = await _workspaceOpenTextDocument(uri);
             await reg.provider.resolveCustomTextEditor(document, panel, token);
-            const key = _customEditorDocumentKey(viewType, document.uri, viewId);
+            const key = _customEditorDocumentEntryKey(
+                viewType, document.uri, viewId, supportsMultiple);
             customEntry = {
                 viewType,
                 uri: _workspaceUriFromInput(document.uri),
                 viewId,
                 provider: reg.provider,
+                supportsMultipleEditorsPerDocument: supportsMultiple,
                 document,
                 dirty: !!document.isDirty,
                 contentDirty: !!document.isDirty,
@@ -7633,12 +7677,14 @@ async function resolveCustomEditor(msg) {
             }
             await reg.provider.resolveCustomEditor(document, panel, token);
             if (!document.uri) document.uri = uri;
-            const key = _customEditorDocumentKey(viewType, document.uri, viewId);
+            const key = _customEditorDocumentEntryKey(
+                viewType, document.uri, viewId, supportsMultiple);
             customEntry = {
                 viewType,
                 uri: _workspaceUriFromInput(document.uri),
                 viewId,
                 provider: reg.provider,
+                supportsMultipleEditorsPerDocument: supportsMultiple,
                 document,
                 dirty: false,
                 contentDirty: false,

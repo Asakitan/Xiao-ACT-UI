@@ -5544,7 +5544,9 @@ console.log("quick input filter helpers ok");
            and "undo_extension_custom_editor" in html
            and "redo_extension_custom_editor" in html
            and "event==='custom_editor_changed'" in html
-           and "applyCustomEditorState(data)" in html)
+           and "applyCustomEditorState(data)" in html
+           and "supportsMultipleEditorsPerDocument" in html
+           and "supports_multiple_editors_per_document" in html)
     with tempfile.TemporaryDirectory() as webview_tmp, \
             tempfile.TemporaryDirectory() as outside_tmp:
         import urllib.request
@@ -5927,6 +5929,12 @@ console.log("quick input filter helpers ok");
            and "def dispose_webview_panel(self, view_id: str)" in extension_host_source
            and "function handleDisposeWebviewPanel(msg)" in node_ext_host_source
            and "case 'dispose_webview_panel':" in node_ext_host_source)
+    _check("extension custom editor singleton lifecycle follows VS Code",
+           "function _customEditorSupportsMultipleEditors(reg)" in node_ext_host_source
+           and "function _customEditorSingletonEntry(viewType, uriLike)" in node_ext_host_source
+           and "reused: true" in node_ext_host_source
+           and "supportsMultipleEditorsPerDocument:" in node_ext_host_source
+           and "const disposedDocuments = new Set()" in node_ext_host_source)
     _check("extension webview panel view state reaches Node",
            "function notifyWebviewPanelViewState(viewId,isActive,isVisible)" in html
            and "webview_panel_view_state" in html
@@ -13593,6 +13601,33 @@ async function activate(context) {
     },
     { supportsMultipleEditorsPerDocument: true },
   ));
+  const singletonStats = { open: 0, resolve: 0, dispose: 0 };
+  context.subscriptions.push(vscode.window.registerCustomEditorProvider(
+    'selftest.node.singletonEditor',
+    {
+      async openCustomDocument(uri, openContext, token) {
+        singletonStats.open += 1;
+        return {
+          uri,
+          dispose() {
+            singletonStats.dispose += 1;
+            output.appendLine('single:dispose:' + uri.fsPath);
+          },
+        };
+      },
+      async resolveCustomEditor(document, panel, token) {
+        singletonStats.resolve += 1;
+        panel.webview.options = { enableScripts: true };
+        panel.webview.html = '<main data-view="singleton-editor">'
+          + document.uri.fsPath + '</main>';
+      },
+    },
+  ));
+  vscode.commands.registerCommand('selftest.node.singletonStats', () => ({
+    open: singletonStats.open,
+    resolve: singletonStats.resolve,
+    dispose: singletonStats.dispose,
+  }));
   vscode.commands.registerCommand('selftest.node.lifecycleContentChange', uriText => {
     const doc = lifecycleDocs.get(String(uriText || ''));
     if (!doc) return false;
@@ -13681,6 +13716,11 @@ module.exports = { activate, deactivate };
                         "viewType": "selftest.node.lifecycleEditor",
                         "displayName": "Node Lifecycle Editor",
                         "selector": [{"filenamePattern": "*.life"}],
+                        "priority": "default",
+                    }, {
+                        "viewType": "selftest.node.singletonEditor",
+                        "displayName": "Node Singleton Editor",
+                        "selector": [{"filenamePattern": "*.single"}],
                         "priority": "default",
                     }],
                 },
@@ -14866,6 +14906,45 @@ module.exports = { activate, deactivate };
                     node_lifecycle_uri)
                 node_lifecycle_reverted_state = node_host.custom_editor_state(
                     view_id=node_lifecycle_view_id)
+                singleton_editor_file = os.path.join(
+                    node_tree_tmp, "custom-editor.single")
+                with open(singleton_editor_file, "w", encoding="utf-8") as fh:
+                    fh.write("single-doc")
+                node_singleton_first = api.resolve_extension_custom_editor(
+                    "selftest.node.singletonEditor",
+                    singleton_editor_file,
+                    "Node Singleton Editor")
+                node_singleton_second = api.resolve_extension_custom_editor(
+                    "selftest.node.singletonEditor",
+                    singleton_editor_file,
+                    "Node Singleton Editor Duplicate")
+                node_singleton_view_id = str(
+                    node_singleton_first.get("viewId", ""))
+                try:
+                    node_singleton_stats_before_dispose = (
+                        api._ext_host.commands.execute(
+                            "selftest.node.singletonStats"))
+                except Exception as exc:
+                    node_singleton_stats_before_dispose = {"_error": str(exc)}
+                node_singleton_dispose_sent = (
+                    node_host.dispose_webview_panel(node_singleton_view_id)
+                    if node_singleton_view_id else False)
+                def _node_singleton_disposed_once() -> bool:
+                    try:
+                        stats = api._ext_host.commands.execute(
+                            "selftest.node.singletonStats")
+                    except Exception:
+                        return False
+                    return isinstance(stats, dict) and stats.get("dispose") == 1
+                _wait_until(
+                    _node_singleton_disposed_once,
+                    timeout=3.0)
+                try:
+                    node_singleton_stats_after_dispose = (
+                        api._ext_host.commands.execute(
+                            "selftest.node.singletonStats"))
+                except Exception as exc:
+                    node_singleton_stats_after_dispose = {"_error": str(exc)}
                 node_completion_items = getattr(node_completion, "items", [])
                 node_completion_labels = [
                     item.get("label") if isinstance(item, dict)
@@ -15944,9 +16023,29 @@ module.exports = { activate, deactivate };
                            "backup": node_lifecycle_backup,
                            "backup_state": node_lifecycle_backup_state,
                            "revert": node_lifecycle_revert,
-                           "reverted": node_lifecycle_reverted_state,
-                           "output": node_host._output_channels.get(
-                               "node-tree-selftest", []),
+                            "reverted": node_lifecycle_reverted_state,
+                            "output": node_host._output_channels.get(
+                                "node-tree-selftest", []),
+                        }, ensure_ascii=False))
+                _check("node host custom editor singleton reuses document and panel",
+                       node_singleton_first.get("ok") is True
+                       and node_singleton_second.get("ok") is True
+                       and node_singleton_first.get("viewId")
+                       == node_singleton_second.get("viewId")
+                       and node_singleton_second.get("reused") is True
+                       and node_singleton_second.get(
+                           "supportsMultipleEditorsPerDocument") is False
+                       and node_singleton_stats_before_dispose.get("open") == 1
+                       and node_singleton_stats_before_dispose.get("resolve") == 1
+                       and node_singleton_stats_before_dispose.get("dispose") == 0
+                       and node_singleton_dispose_sent is True
+                       and node_singleton_stats_after_dispose.get("dispose") == 1,
+                       json.dumps({
+                           "first": node_singleton_first,
+                           "second": node_singleton_second,
+                           "before": node_singleton_stats_before_dispose,
+                           "after": node_singleton_stats_after_dispose,
+                           "disposeSent": node_singleton_dispose_sent,
                        }, ensure_ascii=False))
                 _check("workspace open flow uses custom editor contribution",
                        node_opened_custom_editor.get("runtime_mode")

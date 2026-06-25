@@ -9794,6 +9794,10 @@ function applyCustomEditorState(data){
   ce.editable=!!data.editable;
   ce.textEditor=!!(data.textEditor||data.text_editor);
   ce.text_editor=ce.textEditor;
+  ce.supportsMultipleEditorsPerDocument=!!(
+    data.supportsMultipleEditorsPerDocument||
+    data.supports_multiple_editors_per_document);
+  ce.supports_multiple_editors_per_document=ce.supportsMultipleEditorsPerDocument;
   ce.kind=data.kind||ce.kind||'';
   ce.label=data.label||'';
   ce.backup_id=data.backup_id||data.backupId||'';
