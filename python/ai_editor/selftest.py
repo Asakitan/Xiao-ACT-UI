@@ -3494,6 +3494,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function showEditorFormatterPicker(providers)" in html
            and "async function formatDocumentWithProvider()" in html
            and "function editorFormatOnTypeEnabled()" in html
+           and "function editorFormatOnTypeProviderTriggers(providers)" in html
+           and "async function editorFormatOnTypeTriggerSet()" in html
+           and "function clearEditorFormatOnTypeTriggers()" in html
+           and "async function editorFormatOnTypeShouldTrigger(ch)" in html
            and "function editorLinkedEditingEnabled()" in html
            and "function filesEffectiveSection(language)" in html
            and "function editorApplyFilesSaveParticipantsToText(value,files)" in html
@@ -3518,6 +3522,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function captureEditorLinkedEditingBefore()" in html
            and "function applyEditorLinkedEditingFromInput()" in html
            and "async function requestEditorOnTypeFormatting(ch,quiet)" in html
+           and "editorProviderPayload('providerMetadata',{providerKind:'onTypeFormatting',matchedOnly:true})" in html
            and "editorProviderPayload('linkedEditing'" in html
            and "editorProviderPayload('onTypeFormatting'" in html
            and "editorRequestLanguageProvider('linkedEditing'" in html
@@ -4035,6 +4040,115 @@ console.log("frontend auto-close and Enter behavior ok");
                    (result.stderr or result.stdout).strip())
         except Exception as exc:
             _check("frontend auto-close and Enter behavior", False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
+    if not node_path:
+        _check("frontend on-type formatting trigger behavior skipped without Node.js", True)
+    else:
+        on_type_functions = [
+            "editorFormatOnTypeEnabled",
+            "editorFormatOnTypeProviderTriggers",
+            "editorFormatOnTypeTriggerSet",
+            "clearEditorFormatOnTypeTriggers",
+            "editorFormatOnTypeShouldTrigger",
+            "requestEditorOnTypeFormatting",
+        ]
+        js_functions = "\n".join(
+            _extract_js_function(html, name) for name in on_type_functions)
+        js = r"""
+let editorLang = "javascript";
+let _editorFormatOnTypeRequest = 0;
+let _editorFormatOnTypeTriggers = null;
+let _editorFormatOnTypeTriggerLang = "";
+let _editorFormatOnTypeTriggerRequest = 0;
+let formatOnTypeEnabled = true;
+let metadataCalls = 0;
+let formatCalls = 0;
+let undoCount = 0;
+let appliedEdits = [];
+let statusMessages = [];
+let mutateBeforeFormatReturn = false;
+const ed = { value: "let x=1;", selectionStart: 8, selectionEnd: 8 };
+function assert(ok, label){ if(!ok){ throw new Error(label); } }
+function isPlainObject(value){ return !!value && typeof value === "object" && !Array.isArray(value); }
+function editorEffectiveSection(section){ return section === "editor" ? { formatOnType: formatOnTypeEnabled } : {}; }
+function editorProviderPayload(kind, payload){ return { kind, ...(payload || {}) }; }
+function editorFormatOptions(){ return { tabSize: 4, insertSpaces: true }; }
+function _undoPush(){ undoCount++; }
+function setStatus(message){ statusMessages.push(String(message || "")); }
+function editorApplyTextEdits(edits){ appliedEdits.push(...edits); ed.value = "formatted"; ed.selectionStart = ed.selectionEnd = 9; return true; }
+async function editorRequestLanguageProvider(kind, payload, options){
+  if(kind === "providerMetadata"){
+    metadataCalls++;
+    return {
+      ok: true,
+      providers: [
+        { providerId: "fmt-js", kind: "onTypeFormatting", triggerCharacters: [";", "}"] },
+        { providerId: "fmt-extra", capabilities: ["onTypeFormatting"], autoFormatTriggerCharacters: [")"] },
+        { providerId: "doc", kind: "formatting", triggerCharacters: ["x"] },
+      ]
+    };
+  }
+  if(kind === "onTypeFormatting"){
+    formatCalls++;
+    assert(payload.triggerCharacter === ";", "on-type payload carries trigger character");
+    assert(payload.options && payload.options.tabSize === 4, "on-type payload carries format options");
+    if(mutateBeforeFormatReturn){ ed.value = "changed"; }
+    return { ok: true, edits: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, newText: "// " }] };
+  }
+  return { ok: false, error: "unexpected " + kind };
+}
+""" + js_functions + r"""
+(async()=>{
+  const direct = editorFormatOnTypeProviderTriggers([
+    { kind: "onTypeFormatting", triggerCharacters: [";"] },
+    { capabilities: ["onTypeFormatting"], autoFormatTriggerCharacters: [")"] },
+    { kind: "formatting", triggerCharacters: ["x"] },
+  ]);
+  assert(direct.has(";") && direct.has(")") && !direct.has("x"), "trigger extraction filters on-type providers");
+  assert(await editorFormatOnTypeShouldTrigger(";") === true, "trigger metadata enables matching character");
+  assert(await editorFormatOnTypeShouldTrigger("x") === false, "non-trigger character is ignored");
+  assert(metadataCalls === 1, "trigger metadata is cached per language");
+  assert(await requestEditorOnTypeFormatting(";", true) === true, "on-type formatting applies trigger edits");
+  assert(formatCalls === 1 && undoCount === 1 && appliedEdits.length === 1, "on-type formatting applies once with undo");
+  ed.value = "let y=2;"; ed.selectionStart = ed.selectionEnd = 8;
+  mutateBeforeFormatReturn = true;
+  assert(await requestEditorOnTypeFormatting(";", true) === false, "stale on-type edits are discarded after content changes");
+  assert(appliedEdits.length === 1, "stale on-type edits are not applied");
+  ed.value = "let z=3;"; ed.selectionStart = 1; ed.selectionEnd = 3;
+  clearEditorFormatOnTypeTriggers();
+  assert(await requestEditorOnTypeFormatting(";", true) === false, "on-type formatting ignores selections before metadata fetch");
+  assert(metadataCalls === 1, "selection guard avoids metadata fetch");
+  ed.selectionStart = ed.selectionEnd = 8; formatOnTypeEnabled = false; clearEditorFormatOnTypeTriggers();
+  assert(await editorFormatOnTypeShouldTrigger(";") === false, "disabled formatOnType does not trigger");
+  editorLang = "typescript"; formatOnTypeEnabled = true;
+  assert(await editorFormatOnTypeShouldTrigger(";") === true && metadataCalls === 2, "language change refreshes trigger metadata");
+  console.log("frontend on-type formatting trigger behavior ok");
+})().catch(err=>{ console.error(err && err.stack || err); process.exit(1); });
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check("frontend on-type formatting trigger behavior",
+                   result.returncode == 0 and "frontend on-type formatting trigger behavior ok" in result.stdout,
+                   (result.stderr or result.stdout).strip())
+        except Exception as exc:
+            _check("frontend on-type formatting trigger behavior", False, str(exc))
         finally:
             if js_path:
                 try:

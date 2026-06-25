@@ -4419,6 +4419,7 @@ function detectLanguage(code,name){
 }
 function setEditorLanguage(lang){
   editorLang=LANGUAGE_META[lang]?lang:'plaintext';
+  if(typeof clearEditorFormatOnTypeTriggers==='function')clearEditorFormatOnTypeTriggers();
   $('status-language').textContent=(LANGUAGE_ICONS[editorLang]||'{}')+' '+languageDisplayName(editorLang);
   const meta=LANGUAGE_META[editorLang]||{};
   const bits=[editorLang,...(meta.extensions||[]).map(ext=>'.'+String(ext).replace(/^\./,''))];
@@ -4629,7 +4630,7 @@ let currentSemanticTokenRules=[];
 let _editorFoldingRanges=[],_editorFoldingRangeRequest=0,_editorFoldingRangeTimer=null,_editorFoldingRangeContentLength=-1;
 let _editorDocumentColors=[],_editorDocumentColorRequest=0,_editorDocumentColorTimer=null,_editorDocumentColorContentLength=-1;
 let _editorColorPresentationMenu=null;
-let _editorFormatOnTypeRequest=0;
+let _editorFormatOnTypeRequest=0,_editorFormatOnTypeTriggers=null,_editorFormatOnTypeTriggerLang='',_editorFormatOnTypeTriggerRequest=0;
 let _editorFormatterPickSession=null;
 let _editorLinkedEditingRanges=[],_editorLinkedEditingRequest=0,_editorLinkedEditingTimer=null,_editorLinkedEditingContentLength=-1,_editorLinkedEditingBefore=null,_editorLinkedEditingApplying=false;
 let _editorSelectionRanges=[],_editorSelectionRangeIndex=-1,_editorSelectionRangeKey='';
@@ -8653,6 +8654,42 @@ function editorFormatOnTypeEnabled(){
   const editor=editorEffectiveSection('editor');
   return editor.formatOnType===true;
 }
+function editorFormatOnTypeProviderTriggers(providers){
+  const chars=new Set();
+  (Array.isArray(providers)?providers:[]).forEach(provider=>{
+    if(!provider||typeof provider!=='object')return;
+    const kind=String(provider.kind||provider.providerKind||provider.capability||'').toLowerCase();
+    const capabilities=Array.isArray(provider.capabilities)?provider.capabilities.map(v=>String(v).toLowerCase()):[];
+    if(kind&&kind!=='ontypeformatting'&&!capabilities.includes('ontypeformatting'))return;
+    const triggers=provider.triggerCharacters||provider.autoFormatTriggerCharacters||provider.triggers||[];
+    (Array.isArray(triggers)?triggers:[triggers]).forEach(ch=>{
+      ch=String(ch||'');
+      if(ch.length===1)chars.add(ch);
+    });
+  });
+  return chars;
+}
+async function editorFormatOnTypeTriggerSet(){
+  if(!editorFormatOnTypeEnabled())return new Set();
+  if(_editorFormatOnTypeTriggers&&_editorFormatOnTypeTriggerLang===editorLang)return _editorFormatOnTypeTriggers;
+  const requestId=++_editorFormatOnTypeTriggerRequest,lang=editorLang;
+  const res=await editorRequestLanguageProvider('providerMetadata',editorProviderPayload('providerMetadata',{providerKind:'onTypeFormatting',matchedOnly:true}),{
+    countKey:'providers',itemLabel:'on-type formatter',label:'On-type formatters',quiet:true,
+    isCurrent:()=>requestId===_editorFormatOnTypeTriggerRequest&&lang===editorLang
+  });
+  if(requestId!==_editorFormatOnTypeTriggerRequest||lang!==editorLang)return new Set();
+  const triggers=editorFormatOnTypeProviderTriggers(res&&res.providers);
+  _editorFormatOnTypeTriggers=triggers;_editorFormatOnTypeTriggerLang=lang;
+  return triggers;
+}
+function clearEditorFormatOnTypeTriggers(){
+  _editorFormatOnTypeTriggers=null;_editorFormatOnTypeTriggerLang='';
+}
+async function editorFormatOnTypeShouldTrigger(ch){
+  if(!editorFormatOnTypeEnabled()||typeof ch!=='string'||ch.length!==1)return false;
+  const triggers=await editorFormatOnTypeTriggerSet();
+  return triggers.has(ch);
+}
 function editorCodeActionKindIsSource(kind){
   kind=String(kind||'');
   return kind==='source'||kind.startsWith('source.');
@@ -8704,13 +8741,15 @@ function editorCodeActionsOnSaveKinds(reason){
   return editorNormalizeCodeActionKinds(kinds,excluded,{sourceOnly:saveReason==='always'});
 }
 async function requestEditorOnTypeFormatting(ch,quiet){
-  if(!editorFormatOnTypeEnabled()||typeof ch!=='string'||ch.length!==1)return false;
-  const requestId=++_editorFormatOnTypeRequest;
+  if(ed.selectionStart!==ed.selectionEnd)return false;
+  if(!await editorFormatOnTypeShouldTrigger(ch))return false;
+  const requestId=++_editorFormatOnTypeRequest,contentSnapshot=ed.value,offsetSnapshot=ed.selectionStart;
   const res=await editorRequestLanguageProvider('onTypeFormatting',editorProviderPayload('onTypeFormatting',{triggerCharacter:ch,options:editorFormatOptions()}),{
     countKey:'edits',itemLabel:'format edit',label:'Format on type',quiet:quiet===true,
     isCurrent:()=>requestId===_editorFormatOnTypeRequest
   });
   if(requestId!==_editorFormatOnTypeRequest)return false;
+  if(ed.value!==contentSnapshot||ed.selectionStart!==offsetSnapshot||ed.selectionEnd!==offsetSnapshot)return false;
   if(res&&res.error){if(!quiet)setStatus('Format on type failed: '+res.error);return false}
   if(res&&res.ok&&Array.isArray(res.edits)&&res.edits.length){
     _undoPush(true);
