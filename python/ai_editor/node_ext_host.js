@@ -4182,11 +4182,15 @@ function _createLanguageDocument(msg) {
 function _matchDocumentSelector(selector, document) {
     if (!selector || !document) return 0;
     const docLang = document.languageId || '';
-    const docScheme = (document.uri && document.uri.scheme) || 'file';
+    let docUri = document.uri;
+    const docScheme = (docUri && docUri.scheme) || 'file';
+    const notebookType = document.notebookType;
+    const notebookUri = document.notebookUri;
     const selectors = Array.isArray(selector) ? selector : [selector];
     let best = 0;
     for (const sel of selectors) {
         let score = 0;
+        let candidateUri = docUri;
         if (typeof sel === 'string') {
             score = sel === '*' ? 5 : (sel === docLang ? 10 : 0);
         } else if (typeof sel === 'object' && sel !== null) {
@@ -4200,9 +4204,20 @@ function _matchDocumentSelector(selector, document) {
                 else if (sel.language === '*') score = Math.max(score, 5);
                 else continue;
             }
+            if (sel.notebookType) {
+                if (sel.notebookType === notebookType) {
+                    score = 10;
+                    if (notebookUri) candidateUri = notebookUri;
+                } else if (sel.notebookType === '*' && notebookType !== undefined && notebookType !== null) {
+                    score = Math.max(score, 5);
+                    if (notebookUri) candidateUri = notebookUri;
+                } else {
+                    continue;
+                }
+            }
             const pattern = sel.pattern === undefined ? sel.filenamePattern : sel.pattern;
             if (pattern) {
-                if (_documentSelectorPatternMatches(pattern, document.uri)) score = 10;
+                if (_documentSelectorPatternMatches(pattern, candidateUri)) score = 10;
                 else continue;
             }
         }
@@ -4216,9 +4231,20 @@ function _documentSelectorPatternMatches(pattern, uri) {
     const rawPattern = _workspacePatternText(pattern, '');
     if (!rawPattern) return false;
     const normalizedPath = String(uri.fsPath || uri.path || uri.toString?.() || '').replace(/\\/g, '/');
+    const basePath = pattern && typeof pattern === 'object'
+        ? String(_pathFromUriLike(pattern.baseUri || pattern.base || pattern.uri) || '').replace(/\\/g, '/')
+        : '';
+    let relativePath = '';
+    if (basePath && normalizedPath) {
+        relativePath = path.relative(basePath, normalizedPath.replace(/\//g, path.sep)).replace(/\\/g, '/');
+        if (relativePath.startsWith('../') || relativePath === '..' || path.isAbsolute(relativePath)) {
+            relativePath = '';
+        }
+    }
     const candidates = new Set([
         normalizedPath,
         String(uri.path || '').replace(/\\/g, '/'),
+        relativePath,
         path.posix.basename(normalizedPath),
     ].filter(Boolean));
     const regex = _globToRegExp(rawPattern);

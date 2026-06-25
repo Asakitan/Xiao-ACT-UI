@@ -5110,8 +5110,13 @@ class VscodeNamespace:
         return Disposable(_dispose)
 
     def _language_match(self, selector: Any, document: Any) -> int:
-        language_id = getattr(document, "languageId", "")
-        uri = getattr(document, "uri", None)
+        language_id = str(self._document_selector_attr(
+            document, "languageId", "language") or "")
+        uri = self._document_selector_attr(document, "uri")
+        notebook_uri = self._document_selector_attr(
+            document, "notebookUri", "notebook_uri")
+        notebook_type = self._document_selector_attr(
+            document, "notebookType", "notebook_type")
         scheme = str(getattr(uri, "scheme", "") or "file")
         if isinstance(selector, str):
             if selector == "*":
@@ -5139,6 +5144,19 @@ class VscodeNamespace:
                     score = max(score, 5)
                 else:
                     return 0
+            wanted_notebook = selector.get("notebookType")
+            if wanted_notebook:
+                wanted_notebook = str(wanted_notebook)
+                if wanted_notebook == str(notebook_type or ""):
+                    score = 10
+                    if notebook_uri is not None:
+                        uri = notebook_uri
+                elif wanted_notebook == "*" and notebook_type is not None:
+                    score = max(score, 5)
+                    if notebook_uri is not None:
+                        uri = notebook_uri
+                else:
+                    return 0
             pattern = selector.get("pattern")
             if pattern is None:
                 pattern = selector.get("filenamePattern")
@@ -5151,20 +5169,45 @@ class VscodeNamespace:
         return 0
 
     @staticmethod
+    def _document_selector_attr(document: Any, *names: str) -> Any:
+        if isinstance(document, dict):
+            for name in names:
+                if name in document:
+                    return document.get(name)
+            return None
+        for name in names:
+            if hasattr(document, name):
+                return getattr(document, name)
+        return None
+
+    @staticmethod
     def _document_pattern_match(pattern: Any, uri: Any) -> bool:
         if uri is None:
             return False
+        base = None
         if isinstance(pattern, dict):
             pattern_text = str(pattern.get("pattern") or "")
+            base = (
+                pattern.get("base")
+                or pattern.get("baseUri")
+                or pattern.get("uri"))
         else:
             pattern_text = str(pattern or "")
         if not pattern_text:
             return False
-        candidates = {
-            str(getattr(uri, "path", "") or "").replace("\\", "/"),
-            str(getattr(uri, "fs_path", "") or "").replace("\\", "/"),
-            os.path.basename(str(getattr(uri, "path", "") or "")),
-        }
+        path_text = str(getattr(uri, "fs_path", "") or "").replace("\\", "/")
+        uri_path = str(getattr(uri, "path", "") or "").replace("\\", "/")
+        candidates = {path_text, uri_path, os.path.basename(uri_path)}
+        base_path = VscodeNamespace._selector_path_text(base)
+        if base_path and path_text:
+            try:
+                rel = os.path.relpath(
+                    path_text.replace("/", os.sep),
+                    base_path.replace("/", os.sep)).replace("\\", "/")
+                if rel and not rel.startswith("../") and rel != "..":
+                    candidates.add(rel)
+            except Exception:
+                pass
         candidates = {item for item in candidates if item}
         patterns = VscodeNamespace._expand_glob_braces(
             pattern_text.replace("\\", "/"))
@@ -5175,6 +5218,21 @@ class VscodeNamespace:
                 if fnmatch.fnmatchcase(candidate, item):
                     return True
         return False
+
+    @staticmethod
+    def _selector_path_text(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, Uri):
+            return str(value.fs_path if value.scheme == "file" else value.path).replace("\\", "/")
+        if isinstance(value, dict):
+            if value.get("fsPath"):
+                return str(value.get("fsPath")).replace("\\", "/")
+            if value.get("path"):
+                return str(value.get("path")).replace("\\", "/")
+            if value.get("uri"):
+                return VscodeNamespace._selector_path_text(value.get("uri"))
+        return str(value).replace("\\", "/")
 
     @staticmethod
     def _expand_glob_braces(pattern: str) -> List[str]:

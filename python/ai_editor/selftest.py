@@ -7428,6 +7428,13 @@ def test_vscode_api() -> None:
                and language_doc.languageId == "self-runtime-lang")
         selector_doc = ns.update_text_document_snapshot(
             "file:///workspace/src/demo.selector.py", "print(1)", "python")
+        api_uri = api["Uri"]
+        relative_base = api_uri.file("/workspace")
+        notebook_doc = type("NotebookSelectorDoc", (), {})()
+        notebook_doc.languageId = "python"
+        notebook_doc.uri = api_uri.file("C:/workspace/cell.py")
+        notebook_doc.notebookType = "jupyter-notebook"
+        notebook_doc.notebookUri = api_uri.file("C:/workspace/demo.ipynb")
         _check("languages.match scores VS Code document selectors",
                api["languages"]["match"]("*", selector_doc) == 5
                and api["languages"]["match"](
@@ -7445,7 +7452,22 @@ def test_vscode_api() -> None:
                    {"language": "python", "pattern": "**/*.py"},
                ], selector_doc) == 10
                and api["languages"]["match"](
-                   {"pattern": "**/*.js"}, selector_doc) == 0)
+                   {"pattern": "**/*.js"}, selector_doc) == 0
+               and api["languages"]["match"](
+                   {"pattern": {
+                       "base": relative_base,
+                       "pattern": "src/demo.selector.py",
+                   }}, selector_doc) == 10
+               and api["languages"]["match"](
+                   {"notebookType": "jupyter-notebook"}, notebook_doc) == 10
+               and api["languages"]["match"](
+                   {"notebookType": "*"}, notebook_doc) == 5
+               and api["languages"]["match"](
+                   {"notebookType": "jupyter-notebook",
+                    "pattern": "**/*.ipynb"}, notebook_doc) == 10
+               and api["languages"]["match"](
+                   {"notebookType": "jupyter-notebook",
+                    "pattern": "**/*.py"}, notebook_doc) == 0)
 
         class _BadCompletionProvider:
             def provideCompletionItems(self, document, position, token, context):
@@ -11655,6 +11677,14 @@ async function activate(context) {
   vscode.commands.registerCommand('selftest.node.selectorScores', uriText => {
     const uri = typeof uriText === 'string' ? vscode.Uri.parse(uriText) : uriText;
     const document = { languageId: 'python', uri };
+    const base = vscode.Uri.file(String(uri.fsPath || '').replace(/[\\/]node_provider\.py$/, ''));
+    const notebookUri = vscode.Uri.file(String(uri.fsPath || '').replace(/[\\/]node_provider\.py$/, '/demo.ipynb'));
+    const notebookDocument = {
+      languageId: 'python',
+      uri,
+      notebookType: 'jupyter-notebook',
+      notebookUri,
+    };
     return {
       star: vscode.languages.match('*', document),
       wildcardLanguage: vscode.languages.match({ language: '*' }, document),
@@ -11662,11 +11692,22 @@ async function activate(context) {
       wrongScheme: vscode.languages.match({ language: 'python', scheme: 'untitled' }, document),
       pattern: vscode.languages.match({ language: 'python', pattern: '**/node_provider.py' }, document),
       basenamePattern: vscode.languages.match({ filenamePattern: 'node_provider.py' }, document),
+      relativePattern: vscode.languages.match({ pattern: { base, pattern: 'node_provider.py' } }, document),
       arrayBest: vscode.languages.match([
         { language: 'plaintext' },
         { language: 'python', pattern: '**/*.py' },
       ], document),
       miss: vscode.languages.match({ language: 'python', pattern: '**/*.js' }, document),
+      notebookExact: vscode.languages.match({ notebookType: 'jupyter-notebook' }, notebookDocument),
+      notebookWildcard: vscode.languages.match({ notebookType: '*' }, notebookDocument),
+      notebookPattern: vscode.languages.match({
+        notebookType: 'jupyter-notebook',
+        pattern: '**/*.ipynb',
+      }, notebookDocument),
+      notebookPatternMiss: vscode.languages.match({
+        notebookType: 'jupyter-notebook',
+        pattern: '**/*.py',
+      }, notebookDocument),
     };
   });
   vscode.workspace.onDidChangeConfiguration(event => {
@@ -14661,8 +14702,13 @@ module.exports = { activate, deactivate };
                        and node_selector_scores.get("wrongScheme") == 0
                        and node_selector_scores.get("pattern") == 10
                        and node_selector_scores.get("basenamePattern") == 10
+                       and node_selector_scores.get("relativePattern") == 10
                        and node_selector_scores.get("arrayBest") == 10
-                       and node_selector_scores.get("miss") == 0)
+                       and node_selector_scores.get("miss") == 0
+                       and node_selector_scores.get("notebookExact") == 10
+                       and node_selector_scores.get("notebookWildcard") == 5
+                       and node_selector_scores.get("notebookPattern") == 10
+                       and node_selector_scores.get("notebookPatternMiss") == 0)
                 node_completion_resolved_doc = (
                     node_completion_resolved.items[0].get("documentation")
                     if node_completion_resolved.items
