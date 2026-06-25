@@ -4849,7 +4849,7 @@ console.log("frontend signature help docs ok");
             and "function extensionSettingTargetTags(scopedValues,currentTarget)" in html
             and "function extensionSettingTargetSearchText(scopedValues,type)" in html
             and "function extensionSettingMetadataTags(schema,type,scopeName,currentTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,extraTags)" in html
-            and "function renderExtensionSettingTargetOverrides(el,scopedValues)" in html
+            and "function renderExtensionSettingTargetOverrides(el,scopedValues,currentTarget)" in html
             and "function extensionSettingDeprecationText(schema)" in html
             and "function extensionSettingJsonRows(value,type)" in html
             and "function extensionSettingTextRows(value)" in html
@@ -4871,6 +4871,8 @@ console.log("frontend signature help docs ok");
             and "ext-setting-enum-desc" in html
             and "ext-setting-schema-details" in html
             and "ext-setting-schema-chip" in html
+            and "ext-setting-indicators" in html
+            and "ext-setting-indicator" in html
             and "ext-setting-tag-badge" in html
             and "ext-setting-hidden-badge" in html
             and "hidden-setting" in html
@@ -4914,6 +4916,12 @@ console.log("frontend signature help docs ok");
             and "function createExtensionSettingTargetSelect(target)" in html
             and "function extensionSettingRowTarget(row)" in html
             and "function extensionSettingScopedValues(raw)" in html
+            and "function extensionSettingOtherConfiguredTargets(scopedValues,currentTarget)" in html
+            and "function extensionSettingCurrentTargetConfigured(scopedValues,currentTarget)" in html
+            and "function extensionSettingDefaultSourceText(schema,fallbackSource)" in html
+            and "function extensionSettingWorkspaceTrustMetadata(schema)" in html
+            and "function renderExtensionSettingIndicators(wrap,schema,scopedValues,currentTarget,defaultSource)" in html
+            and "function appendExtensionSettingIndicators(row,schema,scopedValues,currentTarget,defaultSource)" in html
             and "function applyExtensionSettingResponseTargets(scopedValues,response,target,value,modified)" in html
             and "function extensionSettingValueForTarget(scopedValues,target,fallback)" in html
             and "function extensionSettingFixMarkdownLinks(text)" in html
@@ -4973,6 +4981,7 @@ console.log("frontend signature help docs ok");
             and "&&(!query.scopes.length||query.scopes.includes(row.dataset.extSettingScope||''))" in html
             and "const targetOk=(!targetFilter||row.dataset.extSettingTarget===targetFilter)" in html
             and "rowTags.includes('target:'+target)" in html
+            and "'workspace-trust'" in html
             and "const hiddenOk=query.hiddenOnly?rowTags.includes('hidden'):!rowTags.includes('hidden')" in html
             and "const extOk=!query.extensions.length||query.extensions.some" in html
             and "const typeOk=!query.types.length||query.types.includes(row.dataset.extSettingType||'')" in html
@@ -5082,6 +5091,12 @@ console.log("frontend signature help docs ok");
             "appendExtensionSettingDefaultOverrideBadge",
             "extensionSettingPolicyMetadata",
             "appendExtensionSettingPolicyBadge",
+            "extensionSettingSourceDisplay",
+            "extensionSettingDefaultSourceText",
+            "extensionSettingWorkspaceTrustMetadata",
+            "appendExtensionSettingIndicator",
+            "renderExtensionSettingIndicators",
+            "appendExtensionSettingIndicators",
             "extensionSettingTagLabel",
             "appendExtensionSettingTagBadges",
             "extensionSettingDeprecationText",
@@ -5130,6 +5145,10 @@ console.log("frontend signature help docs ok");
             "extensionSettingTargetLabel",
             "extensionSettingScopedValues",
             "extensionSettingConfiguredTargets",
+            "extensionSettingHasTargetValue",
+            "extensionSettingValueForTarget",
+            "extensionSettingOtherConfiguredTargets",
+            "extensionSettingCurrentTargetConfigured",
             "extensionSettingTargetTags",
             "extensionSettingTargetSearchText",
             "extensionSettingMetadataTags",
@@ -5844,13 +5863,47 @@ assert(metadataTags.includes("experimental")
        && metadataTags.includes("language-default"),
        "metadata tags combine schema tags target tags and extras");
 const targetOverrideHost = makeNode("div");
-renderExtensionSettingTargetOverrides(targetOverrideHost, scopedTargets);
-assert(targetOverrideHost.textContent === "Configured in: Global, Workspace Folder"
+renderExtensionSettingTargetOverrides(targetOverrideHost, scopedTargets, "workspace");
+assert(targetOverrideHost.textContent === "Also modified in: Global, Workspace Folder"
        && targetOverrideHost.style.display === "",
-       "target override note rendered");
+       "target override note rendered with other configured targets");
 renderExtensionSettingTargetOverrides(targetOverrideHost, {});
 assert(targetOverrideHost.textContent === "" && targetOverrideHost.style.display === "none",
        "target override note hidden when empty");
+const targetScoped = { global: true, workspace: false, workspaceFolder: true };
+assert(extensionSettingOtherConfiguredTargets(targetScoped, "workspace").join(",") === "global,workspaceFolder"
+       && extensionSettingCurrentTargetConfigured(targetScoped, "workspace") === true
+       && extensionSettingCurrentTargetConfigured(targetScoped, "folder") === true,
+       "settings target helpers distinguish current and other configured targets");
+assert(extensionSettingDefaultSourceText({ source: { id: "selftest.source", displayName: "Selftest Source" } }, "") === "Selftest Source"
+       && extensionSettingDefaultSourceText({}, "Fallback Extension") === "Fallback Extension",
+       "default source text resolves schema source and fallback");
+const trustMeta = extensionSettingWorkspaceTrustMetadata({ restricted: true });
+assert(trustMeta.restricted === true && trustMeta.label === "Requires workspace trust",
+       "workspace trust metadata detected for restricted settings");
+const trustTags = extensionSettingMetadataTags({ restricted: true }, "boolean", "window", "workspace", true,
+  { tag: "", ignored: false, locked: false }, { tag: "" }, { tag: "", name: "" },
+  {}, []);
+assert(trustTags.includes("workspace-trust"),
+       "metadata tags include workspace trust marker");
+const indicatorRow = makeNode("div");
+const indicatorWrap = appendExtensionSettingIndicators(
+  indicatorRow,
+  { restricted: true, source: { id: "selftest.source", displayName: "Selftest Source" } },
+  targetScoped,
+  "workspace",
+  "Fallback Extension");
+assert(indicatorRow.children.includes(indicatorWrap)
+       && indicatorWrap.children.some(n => n.textContent === "Modified in Workspace")
+       && indicatorWrap.children.some(n => n.textContent === "Also modified in Global, Workspace Folder")
+       && indicatorWrap.children.some(n => n.textContent === "Default from Selftest Source")
+       && indicatorWrap.children.some(n => n.textContent === "Requires workspace trust"),
+       "settings indicators render current target other targets default source and trust");
+renderExtensionSettingIndicators(indicatorWrap, { source: { id: "fallback.id" } }, { workspace: 1 }, "workspace", "Fallback Extension");
+assert(indicatorWrap.children.some(n => n.textContent === "Modified in Workspace")
+       && !indicatorWrap.children.some(n => n.textContent.indexOf("Also modified in") === 0)
+       && indicatorWrap.children.some(n => n.textContent === "Default from fallback.id"),
+       "settings indicators refresh when target state changes");
 assert(extensionSettingReadOnlyReason({ scope: "machine" }).indexOf("Machine setting") === 0
        && extensionSettingReadOnlyReason({ scope: "application-machine" }).indexOf("Application/machine setting") === 0
        && extensionSettingReadOnlyReason({ scope: "resource" }) === "",
