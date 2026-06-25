@@ -15611,9 +15611,16 @@ function commandPaletteContext(){
   ctx.resourceLangId=lang;
   ctx.languageId=lang;
   ctx.activeEditorLanguage=lang;
-  ctx.editorTextFocus=!(typeof isExtensionCustomEditorTab==='function'&&isExtensionCustomEditorTab(tab))&&!(typeof isExtensionNotebookTab==='function'&&isExtensionNotebookTab(tab));
+  const isTextEditor=!(typeof isExtensionCustomEditorTab==='function'&&isExtensionCustomEditorTab(tab))&&!(typeof isExtensionNotebookTab==='function'&&isExtensionNotebookTab(tab));
+  const ta=(typeof ed!=='undefined')?ed:null;
+  const hasSelection=!!(ta&&Number(ta.selectionStart)!==Number(ta.selectionEnd));
+  ctx.editorTextFocus=isTextEditor;
   ctx.textInputFocus=true;
   ctx.inQuickOpen=true;
+  ctx.editorHasSelection=hasSelection;
+  ctx.hasSelection=hasSelection;
+  ctx.activeEditorIsDirty=!!(typeof editorDirty!=='undefined'&&editorDirty);
+  ctx.editorReadonly=!!(ta&&(ta.readOnly||ta.disabled));
   if(!ctx.resourceScheme)ctx.resourceScheme=resource&&resource.indexOf('untitled:')===0?'untitled':'file';
   return ctx;
 }

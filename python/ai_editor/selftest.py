@@ -6047,8 +6047,10 @@ let openedKeybindings = false;
 let statusText = "";
 let editorLang = "python";
 let editorFileName = "app.py";
+let editorDirty = true;
 let activeTab = 4;
 let tabs = [{ id: 4, name: "app.py", filePath: "/tmp/app.py", workspacePath: "src/app.py", language: "python", runtimeMode: "text" }];
+const ed = { selectionStart: 1, selectionEnd: 4, readOnly: false, disabled: false };
 function call(method, ...args){ executedCommands.push({ method, args }); return Promise.resolve({ ok: true }); }
 function setStatus(text){ statusText = text; }
 function closeCommandPalette(){ closedPaletteCount += 1; }
@@ -6076,8 +6078,19 @@ assert(paletteContext.filePath === "/tmp/app.py"
        && paletteContext.resourceFilename === "app.py"
        && paletteContext.resourceExtname === ".py"
        && paletteContext.resourceLangId === "python"
+       && paletteContext.editorHasSelection === true
+       && paletteContext.hasSelection === true
+       && paletteContext.activeEditorIsDirty === true
+       && paletteContext.editorReadonly === false
        && paletteContext.inQuickOpen === true,
        "command palette context includes active editor resource and language");
+ed.selectionEnd = 1; editorDirty = false; ed.readOnly = true;
+paletteContext = commandPaletteContext();
+assert(paletteContext.editorHasSelection === false
+       && paletteContext.activeEditorIsDirty === false
+       && paletteContext.editorReadonly === true,
+       "command palette context tracks selection dirty and readonly state");
+ed.selectionEnd = 4; editorDirty = true; ed.readOnly = false;
 tabs[0].runtimeMode = "extension-custom-editor";
 paletteContext = commandPaletteContext();
 assert(paletteContext.editorTextFocus === false && paletteContext.resourceLangId === "python",
@@ -6977,6 +6990,26 @@ console.log("command palette quick access helpers ok");
             "title": "Python Palette Probe",
             "category": "Selftest",
             "enablement": "resourceLangId == python",
+        }, {
+            "command": "selftest.commandPalette.selection",
+            "title": "Selection Palette Probe",
+            "category": "Selftest",
+            "enablement": "editorHasSelection",
+        }, {
+            "command": "selftest.commandPalette.noSelection",
+            "title": "No Selection Palette Probe",
+            "category": "Selftest",
+            "enablement": "!editorHasSelection",
+        }, {
+            "command": "selftest.commandPalette.dirty",
+            "title": "Dirty Palette Probe",
+            "category": "Selftest",
+            "enablement": "activeEditorIsDirty",
+        }, {
+            "command": "selftest.commandPalette.writable",
+            "title": "Writable Palette Probe",
+            "category": "Selftest",
+            "enablement": "editorReadonly == false",
         }]},
     }, "/tmp/selftest-commands-pack")
     command_palette_api._ext_host.registry.register(command_desc)
@@ -6986,6 +7019,9 @@ console.log("command palette quick access helpers ok");
     palette_commands = command_palette_api.list_command_palette_commands({
         "resourceUri": "file:///tmp/readme.md",
         "resourceLangId": "markdown",
+        "editorHasSelection": True,
+        "activeEditorIsDirty": True,
+        "editorReadonly": False,
     }).get("commands", [])
     manifest_command = next(
         (item for item in palette_commands
@@ -7010,6 +7046,34 @@ console.log("command palette quick access helpers ok");
     python_context_command = next(
         (item for item in python_palette_commands
          if item.get("id") == "selftest.commandPalette.python"), {})
+    selection_command = next(
+        (item for item in palette_commands
+         if item.get("id") == "selftest.commandPalette.selection"), {})
+    no_selection_command = next(
+        (item for item in palette_commands
+         if item.get("id") == "selftest.commandPalette.noSelection"), {})
+    dirty_command = next(
+        (item for item in palette_commands
+         if item.get("id") == "selftest.commandPalette.dirty"), {})
+    writable_command = next(
+        (item for item in palette_commands
+         if item.get("id") == "selftest.commandPalette.writable"), {})
+    inactive_editor_commands = command_palette_api.list_command_palette_commands({
+        "filePath": "/tmp/app.py",
+        "language": "python",
+        "editorHasSelection": False,
+        "activeEditorIsDirty": False,
+        "editorReadonly": True,
+    }).get("commands", [])
+    no_selection_enabled = next(
+        (item for item in inactive_editor_commands
+         if item.get("id") == "selftest.commandPalette.noSelection"), {})
+    dirty_disabled = next(
+        (item for item in inactive_editor_commands
+         if item.get("id") == "selftest.commandPalette.dirty"), {})
+    writable_disabled = next(
+        (item for item in inactive_editor_commands
+         if item.get("id") == "selftest.commandPalette.writable"), {})
     _check("extension commands surface in command palette metadata",
            manifest_command.get("label") == "Selftest: Run Palette Probe"
            and manifest_command.get("title") == "Run Palette Probe"
@@ -7029,6 +7093,13 @@ console.log("command palette quick access helpers ok");
            and python_command.get("enabled") is False
            and python_context_command.get("enabled") is True
            and python_context_command.get("disabled") is False
+           and selection_command.get("enabled") is True
+           and no_selection_command.get("enabled") is False
+           and dirty_command.get("enabled") is True
+           and writable_command.get("enabled") is True
+           and no_selection_enabled.get("enabled") is True
+           and dirty_disabled.get("disabled") is True
+           and writable_disabled.get("disabled") is True
            and runtime_command.get("source") == "runtime"
            and runtime_command.get("runtimeAvailable") is True,
            json.dumps(palette_commands, ensure_ascii=False, default=str))

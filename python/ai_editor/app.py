@@ -9442,6 +9442,10 @@ class AIEditorAPI:
             "textInputFocus": "true",
             "resourceScheme": "file",
             "inQuickOpen": "true",
+            "editorReadonly": "false",
+            "activeEditorIsDirty": "false",
+            "editorHasSelection": "false",
+            "hasSelection": "false",
         }
         if not isinstance(context, dict):
             return palette_context
@@ -9457,7 +9461,7 @@ class AIEditorAPI:
         for key, value in context.items():
             if value is None:
                 continue
-            text = str(value).strip()
+            text = self._normalize_when_context_value(value)
             if text:
                 palette_context[str(key)] = text
         language = str(
@@ -11680,7 +11684,7 @@ class AIEditorAPI:
             r"^([A-Za-z_][\w.$-]*)\s+(not\s+in|in)\s+(.+)$", clause)
         if in_match:
             key, op, raw_values = in_match.groups()
-            actual = str(context.get(key, ""))
+            actual = cls._normalize_when_context_value(context.get(key, ""))
             values = cls._strip_when_values(raw_values)
             matched = actual in values
             if op.strip() == "not in":
@@ -11691,16 +11695,28 @@ class AIEditorAPI:
         if compare_match:
             key, op, raw_expected = compare_match.groups()
             expected = cls._strip_when_value(raw_expected)
-            actual = str(context.get(key, ""))
+            actual = cls._normalize_when_context_value(context.get(key, ""))
             matched = actual == expected
             if op in ("!=", "!=="):
                 matched = not matched
             return not matched if negated else matched
         if re.match(r"^[A-Za-z_][\w.$-]*$", clause):
-            matched = bool(context.get(clause, ""))
+            matched = cls._when_context_value_truthy(context.get(clause, ""))
             return not matched if negated else matched
         # Unknown context keys should not make an action visible.
         return bool(negated)
+
+    @staticmethod
+    def _normalize_when_context_value(value: Any) -> str:
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return str(value or "").strip()
+
+    @classmethod
+    def _when_context_value_truthy(cls, value: Any) -> bool:
+        text = cls._normalize_when_context_value(value).lower()
+        return bool(text) and text not in {
+            "false", "0", "none", "null", "undefined"}
 
     @classmethod
     def _extension_view_when_matches(
