@@ -5816,6 +5816,26 @@ console.log("extension setting schema helpers ok");
            and "call('extension_quick_input_action',id,action,payload||{})" in html
            and "if(event==='quick_input')" in html
            and "renderQuickInputEvent(data)" in html)
+    _check("frontend command palette aligns with QuickAccess basics",
+           "const _CMD_HISTORY_KEY='sao-command-palette-history'" in html
+           and "function commandPaletteNormalizeQuery(value)" in html
+           and "function commandPaletteFuzzyMatch(query,text)" in html
+           and "function commandPaletteFilteredCommands(query,history)" in html
+           and "function commandPaletteHighlightedHtml(text,ranges)" in html
+           and "function commandPaletteRemember(command)" in html
+           and "No matching commands" in html
+           and "recently used" in html
+           and "other commands" in html
+           and "role','combobox'" in html
+           and "list.setAttribute('role','listbox')" in html
+           and "d.setAttribute('role','option')" in html
+           and "aria-activedescendant" in html
+           and "e.key==='PageDown'" in html
+           and "e.key==='PageUp'" in html
+           and "commandPaletteMoveSelection(Infinity)" in html
+           and "commandPaletteMoveSelection(-Infinity)" in html
+           and "cmd-match" in html
+           and ".cmd-palette .cmd-empty" in html)
     if node_path:
         quick_input_functions = [
             "quickInputResourceUriPath",
@@ -5952,6 +5972,82 @@ console.log("quick input filter helpers ok");
                     os.unlink(js_path)
                 except OSError:
                     pass
+        command_palette_functions = [
+            "commandPaletteCommandId",
+            "commandPaletteNormalizeQuery",
+            "commandPaletteFuzzyMatch",
+            "commandPaletteBestMatch",
+            "commandPaletteFilteredCommands",
+            "commandPaletteHighlightedHtml",
+        ]
+        command_palette_js = "\n".join(
+            _extract_js_function(html, name)
+            for name in command_palette_functions)
+        js = command_palette_js + r"""
+function assert(ok,label){ if(!ok){ throw new Error(label); } }
+function esc(value){ return String(value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
+const COMMANDS = [
+  { id: "workbench.action.files.save", label: "File: Save", shortcut: "Ctrl+S", category: "File", description: "Save the active editor" },
+  { id: "editor.action.rename", label: "Rename Symbol", shortcut: "F2", category: "Editor", description: "Rename at cursor" },
+  { id: "workbench.action.openSettings", label: "Preferences: Open Settings", shortcut: "", category: "Preferences", description: "Open Settings UI" },
+  { id: "developer.reload", label: "Developer: Reload Window", shortcut: "", category: "Developer", description: "Reload extension host" },
+  { id: "workbench.action.terminal.new", label: "Terminal: Create New Terminal", shortcut: "Ctrl+Shift+`", category: "Terminal", description: "Create terminal" },
+];
+assert(commandPaletteNormalizeQuery("> rename") === "rename", "command prefix is stripped");
+assert(commandPaletteNormalizeQuery("  >Preferences ") === "Preferences", "prefix trim matches VS Code entry");
+const fuzzy = commandPaletteFuzzyMatch("rn sym", "Rename Symbol");
+assert(fuzzy && fuzzy.ranges.length >= 2, "fuzzy non-contiguous words match");
+const highlighted = commandPaletteHighlightedHtml("Rename Symbol", [[0,2],[7,10]]);
+assert(highlighted.includes('<span class="cmd-match">Re</span>') && highlighted.includes('<span class="cmd-match">Sym</span>'),
+       "matched ranges are highlighted");
+let filtered = commandPaletteFilteredCommands("> rn sym", {});
+assert(filtered.length === 1 && filtered[0].command.label === "Rename Symbol",
+       "query filters with normalized prefix and fuzzy match");
+filtered = commandPaletteFilteredCommands("settings", { "workbench.action.terminal.new": 50 });
+assert(filtered[0].command.label === "Preferences: Open Settings",
+       "matching command beats unrelated MRU");
+filtered = commandPaletteFilteredCommands("", { "workbench.action.terminal.new": 50 });
+assert(filtered[0].command.label === "Terminal: Create New Terminal",
+       "MRU wins when query is empty");
+filtered = commandPaletteFilteredCommands("", {});
+assert(filtered[filtered.length - 1].command.label === "Developer: Reload Window",
+       "Developer category sorts after regular commands");
+filtered = commandPaletteFilteredCommands("ctrl+s", {});
+assert(filtered[0].command.label === "File: Save",
+       "shortcut text participates in matching");
+filtered = commandPaletteFilteredCommands("active editor", {});
+assert(filtered[0].command.label === "File: Save",
+       "description text participates in matching");
+console.log("command palette quick access helpers ok");
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check("frontend command palette QuickAccess helpers",
+                   result.returncode == 0
+                   and "command palette quick access helpers ok" in result.stdout,
+                   (result.stderr or result.stdout).strip())
+        except Exception as exc:
+            _check("frontend command palette QuickAccess helpers", False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
+    else:
+        _check("frontend command palette QuickAccess helpers skipped without Node.js", True)
     _check("webview bridge preserves raw and falsy messages",
             "postExtensionMessageToWebview(iframe,msg)" in html
             and "iframe.contentWindow.postMessage(msg,'*')" in html
