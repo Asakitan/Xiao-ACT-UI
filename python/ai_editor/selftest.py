@@ -3277,6 +3277,25 @@ def test_phase1_ai_editor_regressions() -> None:
            and "if(!value){showChatWelcomeIfEmpty();return null}" in html
            and "renderWelcome();\n  setStatus(t('new_chat_title')" in html
            and "const body=latestChatMessageBody('assistant');" in html)
+    _check("frontend Assistant supports Copilot-style attached context and references",
+           'id="chat-context-area" aria-label="Attached context"' in html
+           and "chat-context-pill" in html
+           and "chat-reference-card" in html
+           and "let chatContextAttachments=[];" in html
+           and "function chatContextFromToken(token)" in html
+           and "function addChatContextAttachment(item)" in html
+           and "function chatSendContextFromInput(text)" in html
+           and "function chatPromptWithReferences(text,refs)" in html
+           and "function renderChatReferences(body,refs)" in html
+           and "before.match(/@([A-Za-z0-9_.:-]*)$/)" in html
+           and "renderChatReferences(userBody,sendContext.refs);" in html
+           and "const sendText=chatPromptWithReferences(baseSendText,sendContext.refs);" in html
+           and "setToolbarAgent(String(item.id||'').replace(/^agent:/,''));" in html
+           and "addChatContextAttachment({id:'attachment:'+a.type+':'+a.name" in html
+           and "function renderSlashPopup(matches)" in html
+           and "window.pickSlashByIndex=function(idx)" in html
+           and "role=\"option\" aria-selected=" in html
+           and "slash-item .category" in html)
     _check("frontend supports dynamic extension webview provider tabs",
             "function isExtensionWebviewProvider(providerOrId)" in html
             and "dynamicExtensionProviderDefs" in html

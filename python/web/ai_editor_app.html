@@ -762,6 +762,25 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-toolbar .hint { color:var(--fg-dim); }
 .chat-toolbar .spacer { flex:1; }
 
+.chat-attached-context { display:flex; flex-wrap:wrap; gap:5px; padding:0 8px 6px; }
+.chat-attached-context:empty { display:none; }
+.chat-context-pill { display:inline-flex; align-items:center; gap:5px; min-height:20px; max-width:260px;
+  padding:2px 8px; border:1px solid color-mix(in srgb, var(--border-focus) 35%, var(--border));
+  border-radius:999px; background:color-mix(in srgb, var(--bg-hover) 60%, var(--bg3));
+  color:var(--fg); font-size:11px; box-sizing:border-box; }
+.chat-context-pill .kind { color:var(--fg-accent); font:10px var(--mono); text-transform:uppercase; }
+.chat-context-pill .label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chat-context-pill .remove { cursor:pointer; color:var(--fg-dim); flex:0 0 auto; }
+.chat-context-pill .remove:hover { color:var(--fg-error); }
+.chat-references { margin-top:7px; display:flex; flex-direction:column; gap:4px; }
+.chat-reference-card { border:1px solid var(--border); border-radius:6px; background:var(--bg3);
+  padding:5px 7px; color:var(--fg-dim); font-size:11px; line-height:1.35; }
+.chat-reference-card .ref-head { display:flex; gap:6px; align-items:center; color:var(--fg); }
+.chat-reference-card .ref-kind { color:var(--fg-accent); font:10px var(--mono); text-transform:uppercase; }
+.chat-reference-card .ref-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chat-reference-card pre { margin:5px 0 0; white-space:pre-wrap; max-height:96px; overflow:hidden;
+  color:var(--fg-code); font:11px/1.4 var(--mono); }
+
 .chat-control-strip { display:flex; align-items:center; gap:4px; flex-wrap:wrap; min-width:0; }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
   border-radius:999px; background:var(--bg3); color:var(--fg); font:11px var(--sans);
@@ -931,6 +950,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .slash-item:hover,.slash-item.selected { background:var(--bg-hover); }
 .slash-item .cmd { color:var(--fg-accent); font:12px var(--mono); min-width:70px; }
 .slash-item .desc { color:var(--fg-dim); font-size:12px; flex:1; }
+.slash-item .category { font-size:9px; text-transform:uppercase; letter-spacing:.5px;
+  color:var(--fg-dim); border:1px solid var(--border); border-radius:3px; padding:1px 5px; }
 
 /* ── Responsive ── */
 /* ── Editor current-line highlight overlay ── */
@@ -1790,6 +1811,7 @@ pre.code-block { overflow:visible; }
                   <textarea class="chat-input" id="chat-input" rows="1" data-i18n="ask_placeholder" placeholder="Ask anything... (/ for commands, @ for context)"></textarea>
                   <button class="send-btn" id="send-btn" onclick="doSend()" title="Send"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 2.5l-5 5h3.5V13h3V7.5H13L8 2.5z"/></svg></button>
                 </div>
+                <div class="chat-attached-context" id="chat-context-area" aria-label="Attached context"></div>
                 <div class="attach-area" id="attach-area"></div>
                 <div class="chat-toolbar">
                   <div class="chat-control-strip" aria-label="Chat controls">
@@ -3533,6 +3555,93 @@ function appendSystem(text){
   if(!value){showChatWelcomeIfEmpty();return null}
   const b=createMsg('system');b.style.color='var(--fg-dim)';b.textContent=value;return b;
 }
+let chatContextAttachments=[];
+function chatContextTextSample(value,max){
+  value=String(value||'');
+  if(value.length<=max)return value;
+  return value.slice(0,max)+'\n...';
+}
+function chatContextFileLabel(){
+  const tab=activeEditorTab();
+  return String(tab.filePath||tab.name||editorFileName||'Untitled');
+}
+function chatContextFromToken(token){
+  const raw=String(token||'').trim();
+  const key=raw.replace(/^@/,'').toLowerCase();
+  const tab=activeEditorTab(),file=chatContextFileLabel();
+  const editor=(typeof ed!=='undefined'&&ed)?ed:{value:'',selectionStart:0,selectionEnd:0};
+  const value=String(editor.value||'');
+  if(key==='file')return {id:'file:'+file,kind:'file',label:file,prompt:'Current file: '+file};
+  if(key==='selection'){
+    const start=Math.min(editor.selectionStart||0,editor.selectionEnd||0),end=Math.max(editor.selectionStart||0,editor.selectionEnd||0);
+    const selected=value.slice(start,end);
+    if(!selected)return {id:'selection:empty',kind:'selection',label:'No editor selection',empty:true,prompt:''};
+    return {id:'selection:'+file+':'+start+':'+end,kind:'selection',label:file+' selection',preview:chatContextTextSample(selected,220),prompt:'Selected text from '+file+':\n```\n'+chatContextTextSample(selected,6000)+'\n```'};
+  }
+  if(key==='editor')return {id:'editor:'+file+':'+value.length,kind:'editor',label:file,prompt:'Current editor contents for '+file+':\n```\n'+chatContextTextSample(value,10000)+'\n```'};
+  if(key==='state'){
+    const state=['provider='+String(config.provider||''),'model='+String(config.model||''),'mode='+String(currentMode||''),'agent='+String(activeAgentId||'default'),'language='+String(editorLang||'plaintext')].join(', ');
+    return {id:'state:'+state,kind:'state',label:'Runtime state',preview:state,prompt:'Current IDE state: '+state};
+  }
+  if(key==='language')return {id:'language:'+String(editorLang||'plaintext'),kind:'language',label:String(editorLang||'plaintext'),prompt:'Current editor language: '+String(editorLang||'plaintext')};
+  const agent=(chatControlState&&chatControlState.agents||[]).find(a=>controlItemId(a).toLowerCase()===key);
+  if(agent)return {id:'agent:'+controlItemId(agent),kind:'agent',label:controlItemName(agent)||controlItemId(agent),prompt:'Use chat participant/agent: '+controlItemId(agent)};
+  return null;
+}
+function renderChatContextAttachments(){
+  const area=$('chat-context-area');if(!area)return;
+  area.innerHTML='';
+  chatContextAttachments.forEach((item,i)=>{
+    const pill=document.createElement('span');pill.className='chat-context-pill';
+    pill.title=(item.preview||item.prompt||item.label||'').slice(0,500);
+    pill.innerHTML='<span class="kind">'+esc(item.kind||'ctx')+'</span><span class="label">'+esc(item.label||item.id||'Context')+'</span>'+
+      '<span class="remove" onclick="removeChatContextAttachment('+i+')" aria-label="Remove context">×</span>';
+    area.appendChild(pill);
+  });
+}
+function addChatContextAttachment(item){
+  if(!item||item.empty)return false;
+  if(item.kind==='agent'){
+    setToolbarAgent(String(item.id||'').replace(/^agent:/,''));
+    return true;
+  }
+  if(!chatContextAttachments.some(x=>x.id===item.id))chatContextAttachments.push(item);
+  renderChatContextAttachments();
+  return true;
+}
+function removeChatContextAttachment(idx){
+  chatContextAttachments.splice(idx,1);
+  renderChatContextAttachments();
+}
+function chatSendContextFromInput(text){
+  let cleaned=String(text||''),refs=chatContextAttachments.slice(),seen=new Set(refs.map(r=>r.id));
+  cleaned=cleaned.replace(/(^|\s)@([A-Za-z0-9_.:-]+)/g,(m,lead,name)=>{
+    const item=chatContextFromToken('@'+name);
+    if(!item||item.empty)return m;
+    if(!seen.has(item.id)){refs.push(item);seen.add(item.id)}
+    return lead;
+  }).replace(/[ \t]{2,}/g,' ').trim();
+  chatContextAttachments=[];renderChatContextAttachments();
+  return {text:cleaned,refs};
+}
+function chatPromptWithReferences(text,refs){
+  refs=(refs||[]).filter(r=>r&&r.prompt);
+  if(!refs.length)return text;
+  return refs.map(r=>r.prompt).join('\n\n')+'\n\nUser request:\n'+text;
+}
+function renderChatReferences(body,refs){
+  refs=(refs||[]).filter(Boolean);
+  if(!body||!refs.length)return;
+  const wrap=document.createElement('div');wrap.className='chat-references';wrap.setAttribute('aria-label','Attached references');
+  refs.forEach(ref=>{
+    const card=document.createElement('div');card.className='chat-reference-card';
+    card.innerHTML='<div class="ref-head"><span class="ref-kind">'+esc(ref.kind||'ctx')+'</span><span class="ref-label">'+esc(ref.label||ref.id||'Reference')+'</span></div>';
+    if(ref.preview){const pre=document.createElement('pre');pre.textContent=ref.preview;card.appendChild(pre)}
+    wrap.appendChild(card);
+  });
+  body.parentElement.appendChild(wrap);
+}
+window.removeChatContextAttachment=removeChatContextAttachment;
 function appendApiKeyError(){
   const b=createMsg('system');b.style.color='var(--fg-warning)';
   b.innerHTML='⚠ '+esc(t('no_api_key'))+' <span style="color:var(--fg-accent);cursor:pointer;text-decoration:underline" onclick="openSettings()">'+esc(t('open_settings'))+'</span> — <b>'+esc(config.provider||'')+'</b>';
@@ -10282,10 +10391,10 @@ window.doSend=doSend;window.doStop=doStop;window.newChat=newChat;window.clearCha
 
 // ── Slash commands ──
 function getSlashCmds(){return [
-  ['/clear',t('slash_clear')],['/new',t('slash_new')],['/export',t('slash_export')],
-  ['/settings',t('slash_settings')],['/tools',t('slash_tools')],['/history',t('slash_history')],
-  ['/instructions',t('slash_instructions')],['/agents',t('slash_agents')],
-  ['/system',t('slash_system')],['/eval',t('slash_eval')],
+  ['/clear',t('slash_clear'),'chat'],['/new',t('slash_new'),'chat'],['/export',t('slash_export'),'chat'],
+  ['/settings',t('slash_settings'),'ui'],['/tools',t('slash_tools'),'ui'],['/history',t('slash_history'),'chat'],
+  ['/instructions',t('slash_instructions'),'context'],['/agents',t('slash_agents'),'agent'],
+  ['/system',t('slash_system'),'engine'],['/eval',t('slash_eval'),'engine'],
 ];}
 
 async function execSlash(raw){
@@ -10316,7 +10425,21 @@ window.execSlash=execSlash;
 
 // Slash popup (debounced 100ms)
 const chatInp=$('chat-input'),slashPopup=$('slash-popup');
-let _chatInputTimer=null;
+let _chatInputTimer=null,_slashSelectedIdx=0,_slashMatches=[];
+function renderSlashPopup(matches){
+  _slashMatches=matches.slice();_slashSelectedIdx=0;
+  if(!_slashMatches.length){slashPopup.classList.remove('open');return}
+  slashPopup.innerHTML=_slashMatches.map((c,i)=>'<div class="slash-item'+(i===0?' selected':'')+'" role="option" aria-selected="'+(i===0?'true':'false')+'" data-slash-idx="'+i+'" onmousedown="pickSlashByIndex('+i+')"><span class="cmd">'+esc(c[0])+'</span><span class="desc">'+esc(c[1])+'</span><span class="category">'+esc(c[2]||'chat')+'</span></div>').join('');
+  slashPopup.setAttribute('role','listbox');
+  slashPopup.classList.add('open');
+}
+function selectSlashIndex(next){
+  const items=slashPopup.querySelectorAll('.slash-item');if(!items.length)return;
+  items[_slashSelectedIdx].classList.remove('selected');items[_slashSelectedIdx].setAttribute('aria-selected','false');
+  _slashSelectedIdx=(next+items.length)%items.length;
+  items[_slashSelectedIdx].classList.add('selected');items[_slashSelectedIdx].setAttribute('aria-selected','true');
+  items[_slashSelectedIdx].scrollIntoView({block:'nearest'});
+}
 chatInp.addEventListener('input',function(){
   const self=this;
   if(_chatInputTimer)clearTimeout(_chatInputTimer);
@@ -10326,15 +10449,19 @@ chatInp.addEventListener('input',function(){
     if(v.startsWith('/')&&!v.includes('\n')){
       const prefix=v.split(/\s/)[0].toLowerCase();
       const matches=getSlashCmds().filter(c=>c[0].startsWith(prefix));
-      if(matches.length){
-        slashPopup.innerHTML=matches.map(c=>'<div class="slash-item" onclick="pickSlash(\''+c[0]+'\')"><span class="cmd">'+esc(c[0])+'</span><span class="desc">'+esc(c[1])+'</span></div>').join('');
-        slashPopup.classList.add('open');
-      } else slashPopup.classList.remove('open');
+      renderSlashPopup(matches);
     } else slashPopup.classList.remove('open');
     self.style.height='auto';self.style.height=Math.min(self.scrollHeight,180)+'px';
   },100);
 });
 chatInp.addEventListener('keydown',function(e){
+  if(slashPopup.classList.contains('open')){
+    if(e.key==='ArrowDown'||e.key==='ArrowUp'){
+      e.preventDefault();selectSlashIndex(_slashSelectedIdx+(e.key==='ArrowDown'?1:-1));return;
+    }
+    if(e.key==='Tab'){e.preventDefault();pickSlashByIndex(_slashSelectedIdx);return}
+    if(e.key==='Enter'&&!e.shiftKey&&!/\s/.test(this.value.trim())){e.preventDefault();pickSlashByIndex(_slashSelectedIdx);return}
+  }
   if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();slashPopup.classList.remove('open');$('at-popup').classList.remove('open');doSend()}
   if(e.key==='Escape'){
     if(slashPopup.classList.contains('open')){slashPopup.classList.remove('open');e.stopPropagation();return}
@@ -10388,6 +10515,7 @@ chatInp.addEventListener('paste',function(e){
     }
   }
 });
+window.pickSlashByIndex=function(idx){const item=_slashMatches[idx];if(item)pickSlash(item[0])};
 window.pickSlash=function(cmd){slashPopup.classList.remove('open');chatInp.value='';execSlash(cmd)};
 
 // ── Terminal ──
@@ -18468,12 +18596,13 @@ function _renderAtPopup(matches){
   if(!matches.length){atPopup.classList.remove('open');return}
   _atSelectedIdx=0;
   atPopup.innerHTML=matches.map((a,i)=>
-    '<div class="at-popup-item'+(i===0?' selected':'')+'" data-at-idx="'+i+'" onmousedown="pickAtVar(\''+esc(a[0]).replace(/'/g,"\\'")+'\')">'+
+    '<div class="at-popup-item'+(i===0?' selected':'')+'" role="option" aria-selected="'+(i===0?'true':'false')+'" data-at-idx="'+i+'" onmousedown="pickAtVar(\''+esc(a[0]).replace(/'/g,"\\'")+'\')">'+
     '<span class="at-icon">'+esc(a[3]||'')+'</span>'+
     '<span class="at-label">'+esc(a[0])+'</span>'+
     '<span class="at-desc">'+esc(a[1])+'</span>'+
     '<span class="at-category">'+esc(a[2]||'')+'</span></div>').join('');
   atPopup.className='at-popup-enhanced open';
+  atPopup.setAttribute('role','listbox');
 }
 chatInp.addEventListener('input',function(){
   if(_atPopupTimer)clearTimeout(_atPopupTimer);
@@ -18482,7 +18611,7 @@ chatInp.addEventListener('input',function(){
     _atPopupTimer=null;
     const v=self.value,pos=self.selectionStart;
     const before=v.substring(0,pos);
-    const atMatch=before.match(/@(\w*)$/);
+    const atMatch=before.match(/@([A-Za-z0-9_.:-]*)$/);
     const slashMatch=v.match(/^\/\w*/);
     const atPopup=$('at-popup');
     if(atMatch&&!slashMatch){
@@ -18502,10 +18631,10 @@ chatInp.addEventListener('keydown',function(e){
   if(!items.length)return;
   if(e.key==='ArrowDown'||e.key==='ArrowUp'){
     e.preventDefault();
-    items[_atSelectedIdx].classList.remove('selected');
+    items[_atSelectedIdx].classList.remove('selected');items[_atSelectedIdx].setAttribute('aria-selected','false');
     if(e.key==='ArrowDown')_atSelectedIdx=(_atSelectedIdx+1)%items.length;
     else _atSelectedIdx=(_atSelectedIdx-1+items.length)%items.length;
-    items[_atSelectedIdx].classList.add('selected');
+    items[_atSelectedIdx].classList.add('selected');items[_atSelectedIdx].setAttribute('aria-selected','true');
     items[_atSelectedIdx].scrollIntoView({block:'nearest'});
     return;
   }
@@ -18521,28 +18650,41 @@ document.addEventListener('mousedown',function(e){
 });
 window.pickAtVar=function(v){$('at-popup').classList.remove('open');
   const inp=$('chat-input'),val=inp.value,pos=inp.selectionStart;
-  const before=val.substring(0,pos).replace(/@\w*$/,v+' ');
+  const item=chatContextFromToken(v);
+  if(item&&addChatContextAttachment(item)){
+    const before=val.substring(0,pos).replace(/@[A-Za-z0-9_.:-]*$/,'');
+    inp.value=(before+val.substring(pos)).replace(/[ \t]{2,}/g,' ');
+    inp.selectionStart=inp.selectionEnd=before.length;inp.focus();return;
+  }
+  const before=val.substring(0,pos).replace(/@[A-Za-z0-9_.:-]*$/,v+' ');
   inp.value=before+val.substring(pos);inp.selectionStart=inp.selectionEnd=before.length;inp.focus()};
 
 // ── Agent Mode in doSend ──
 doSend=async function(){
   const inp=$('chat-input');let text=inp.value.trim();
-  if(!text||streaming)return;
-  inp.value='';inp.style.height='auto';
-  $('at-popup').classList.remove('open');
+  if(streaming)return;
+  if(!text&&!chatContextAttachments.length)return;
   if(text.startsWith('/')){execSlash(text);return}
   if(!config.api_key&&config.provider!=='ollama'){appendApiKeyError();return}
+  const sendContext=chatSendContextFromInput(text);text=sendContext.text;
+  if(!text&&sendContext.refs.length)text='Review the attached context.';
+  if(!text)return;
+  inp.value='';inp.style.height='auto';
+  $('at-popup').classList.remove('open');
   // Strip #toolName prefix — LLM understands tool hints naturally
   let toolHint='';
   const toolMatch=text.match(/^#([A-Za-z0-9_.:-]+)\s+/);
   if(toolMatch){toolHint=toolMatch[1];text=text.slice(toolMatch[0].length)}
-  createMsg('user').textContent=(toolHint?'#'+toolHint+' ':'')+text;
+  const userBody=createMsg('user');
+  userBody.textContent=(toolHint?'#'+toolHint+' ':'')+text;
+  renderChatReferences(userBody,sendContext.refs);
   streaming=true;$('send-btn').disabled=true;_setSendIcon(true);$('stop-btn').style.display='';
   {const ic=$('chat-input-container');if(ic)ic.classList.add('working')}
   setStatus(t('thinking'));
   currentMsgBody=createMsg('assistant',config.model||config.provider);streamBuf='';
   const agentMode=currentMode==='agent'||currentApproval==='autopilot'||currentApproval==='bypass';
-  const sendText=toolHint?'Use the '+toolHint+' tool: '+text:text;
+  const baseSendText=toolHint?'Use the '+toolHint+' tool: '+text:text;
+  const sendText=chatPromptWithReferences(baseSendText,sendContext.refs);
   await call('send_message',sendText,{provider:config.provider,model:config.model},agentMode);
 };
 window.doSend=doSend;
@@ -19523,15 +19665,13 @@ doSend=async function(){
       return;
     }
   }
-  // If attachments, prepend text context
+  // If attachments, promote them into the same reference model as @ context.
   if(attachments.length>0){
-    let prefix='';
     attachments.forEach(a=>{
-      if(a.type==='image')prefix+='[Attached image: '+a.name+']\n';
-      else prefix+='[Attached file: '+a.name+']\n```\n'+a.data.slice(0,3000)+'\n```\n';
+      const preview=a.type==='image'?'Image attachment':chatContextTextSample(a.data,220);
+      const prompt=a.type==='image'?'Attached image: '+a.name:'Attached file '+a.name+':\n```\n'+chatContextTextSample(a.data,6000)+'\n```';
+      addChatContextAttachment({id:'attachment:'+a.type+':'+a.name,kind:a.type,label:a.name,preview,prompt});
     });
-    const inp=$('chat-input');
-    inp.value=prefix+inp.value;
     attachments=[];renderAttachments();
   }
   return _origDoSend2();
