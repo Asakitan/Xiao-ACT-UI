@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 _PASS = 0
 _FAIL = 0
+_FAILURES: list[tuple[str, str]] = []
 
 
 def _check(label: str, ok: bool, detail: str = "") -> None:
@@ -31,7 +32,21 @@ def _check(label: str, ok: bool, detail: str = "") -> None:
         print(f"  ✓ {label}")
     else:
         _FAIL += 1
+        _FAILURES.append((label, str(detail or "")))
         print(f"  ✗ {label}" + (f" — {detail}" if detail else ""))
+
+
+def _run_test(label: str, fn) -> None:
+    global _FAIL
+    try:
+        fn()
+    except Exception as exc:
+        _FAIL += 1
+        detail = f"{type(exc).__name__}: {exc}"
+        _FAILURES.append((label, detail))
+        print(f"  ✗ {label} — {detail}")
+        import traceback
+        traceback.print_exc()
 
 
 def _wait_until(predicate, timeout: float = 2.0) -> bool:
@@ -2064,15 +2079,26 @@ def test_app_settings_parity() -> None:
             fh.write("print('tree')\n")
         with open(os.path.join(tmpdir, "README.md"), "w", encoding="utf-8") as fh:
             fh.write("# hi\n")
+        with open(os.path.join(tmpdir, "style.css"), "w", encoding="utf-8") as fh:
+            fh.write("body{}\n")
         tree_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
         tree_api._workspace_root = lambda: tmpdir
-        from ai_editor.extension_host import ExtensionHost
+        from ai_editor.extension_host import ExtensionHost, EventEmitter
         from ai_editor.vscode_api import VscodeNamespace
         tree_api._vscode_ns = VscodeNamespace(ExtensionHost())
+        tree_api._vscode_ns.set_file_decoration_change_callback(
+            tree_api._on_file_decorations_changed)
+        decoration_events = []
+        tree_api._eval_js = lambda script: decoration_events.append(script)
 
         class _WorkspaceDecorationProvider:
             def __init__(self):
                 self.calls = []
+                self._emitter = EventEmitter()
+
+            @property
+            def onDidChangeFileDecorations(self):
+                return self._emitter.event
 
             def provideFileDecoration(self, uri, token):
                 self.calls.append(str(uri))
@@ -2093,10 +2119,15 @@ def test_app_settings_parity() -> None:
                             "id": "gitDecoration.modifiedResourceForeground",
                         },
                         }
+                if str(uri).endswith("style.css"):
+                    return {
+                        "tooltip": "CSS decoration",
+                        "color": "gitDecoration.ignoredResourceForeground",
+                    }
                 return None
 
         decoration_provider = _WorkspaceDecorationProvider()
-        tree_api._vscode_ns.build()["window"][
+        decoration_disposable = tree_api._vscode_ns.build()["window"][
             "registerFileDecorationProvider"](decoration_provider)
         tree = tree_api.list_workspace_tree()
         root_names = {entry.get("name") for entry in tree.get("entries", [])}
@@ -2127,9 +2158,30 @@ def test_app_settings_parity() -> None:
         _check("workspace_file_decorations returns single path decorations",
                readme_decoration.get("decoration", {}).get("badge") == "M"
                and readme_decoration.get("path") == "README.md")
+        css_decoration = tree_api.workspace_file_decorations("style.css")
+        _check("workspace_file_decorations preserves color-only decorations",
+               css_decoration.get("decoration", {}).get("tooltip")
+               == "CSS decoration"
+               and css_decoration.get("decoration", {}).get("color", {})
+               .get("id") == "gitDecoration.ignoredResourceForeground")
         src_decoration = tree_api.workspace_file_decorations("src")
         _check("workspace_file_decorations returns propagated folder decorations",
                src_decoration.get("decoration", {}).get("badge") == "P")
+        decoration_provider._emitter.fire([
+            Uri.file(os.path.join(tmpdir, "README.md")),
+            {"fsPath": os.path.join(tmpdir, "style.css")},
+        ])
+        local_change_script = decoration_events[-1] if decoration_events else ""
+        _check("local file decoration changes emit scoped frontend refresh",
+               '"file_decorations_changed"' in local_change_script
+               and '"README.md"' in local_change_script
+               and '"style.css"' in local_change_script
+               and '"all": false' in local_change_script)
+        decoration_provider._emitter.fire(None)
+        local_all_script = decoration_events[-1] if decoration_events else ""
+        _check("local file decoration empty changes request full refresh",
+               '"file_decorations_changed"' in local_all_script
+               and '"all": true' in local_all_script)
         readme_tree_node = tree_api._tree_node_preview(
             {"id": "readme"},
             {
@@ -2164,6 +2216,12 @@ def test_app_settings_parity() -> None:
                and len(readme_decoration_calls) == 1
                and all(node.get("decoration", {}).get("badge") == "M"
                        for node in repeated_nodes))
+        decoration_disposable.dispose()
+        event_count_after_dispose = len(decoration_events)
+        decoration_provider._emitter.fire(Uri.file(os.path.join(
+            tmpdir, "README.md")))
+        _check("local file decoration provider dispose removes listener",
+               len(decoration_events) == event_count_after_dispose)
         opened = tree_api.open_workspace_file("src/sample.py")
         _check("open_workspace_file returns content and language",
                opened.get("path") == "src/sample.py"
@@ -5514,6 +5572,8 @@ console.log("quick input filter helpers ok");
            and "function applyExplorerDecoration" in html
            and "themeColorToCss(decoration.color" in html
            and "function refreshVisibleExplorerDecorations(paths)" in html
+           and "const limit=8" in html
+           and "await Promise.all(Array.from({length:Math.min(limit,rows.length)},worker))" in html
            and "call('workspace_file_decorations'" in html
            and "event==='file_decorations_changed'" in html
            and "'gitDecoration.modifiedResourceForeground':'--fg-warning'"
@@ -5735,6 +5795,9 @@ console.log("quick input filter helpers ok");
     node_ext_host_path = os.path.join(os.path.dirname(__file__), "node_ext_host.js")
     with open(node_ext_host_path, "r", encoding="utf-8") as fh:
         node_ext_host_source = fh.read()
+    vscode_api_path = os.path.join(os.path.dirname(__file__), "vscode_api.py")
+    with open(vscode_api_path, "r", encoding="utf-8") as fh:
+        vscode_api_source = fh.read()
     _check("extension QuickInput frontend actions round-trip to Node host",
            "def quick_input_changed(self, payload" in app_source
            and "self._api._emit(\"quick_input\"" in app_source
@@ -5957,6 +6020,9 @@ console.log("quick input filter helpers ok");
            and "scheduleExplorerDecorationRefresh(data)" in html
            and "scheduleExtensionActivityRefresh();" in html
            and "change[\"paths\"] = self._workspace_file_decoration_change_paths(" in app_source
+           and "def _on_file_decorations_changed(" in app_source
+           and "set_file_decoration_change_callback(" in app_source
+           and "def set_file_decoration_change_callback(" in vscode_api_source
            and "decoration_cache=decoration_cache" in app_source
            and "const _fileDecorationChangeMaxEventSize = 250" in node_ext_host_source
            and "function _fileDecorationChangedPayload(value)" in node_ext_host_source)
@@ -17394,30 +17460,38 @@ def test_tk_window() -> None:
 
 
 def main() -> None:
+    global _PASS, _FAIL
+    _PASS = 0
+    _FAIL = 0
+    _FAILURES.clear()
     print("=" * 50)
     print("SAO AI Editor — Selftest")
     print("=" * 50)
 
-    test_imports()
-    test_tool_registry()
-    test_mcp_client()
-    test_llm_engine()
-    test_conversation()
-    test_chat_controller_tool_loop()
-    test_history()
-    test_bridge()
-    test_app_settings_parity()
-    test_phase1_ai_editor_regressions()
-    test_instructions()
-    test_scopes()
-    test_extension_host()
-    test_vscode_api()
-    test_app_extension_runtime_support()
-    test_auth()
-    test_claude_proxy()
-    test_agents()
-    test_workflows()
-    test_tk_window()
+    tests = [
+        ("Imports", test_imports),
+        ("Tool Registry", test_tool_registry),
+        ("MCP Client", test_mcp_client),
+        ("LLM Engine", test_llm_engine),
+        ("Conversation", test_conversation),
+        ("Chat Controller Tool Loop", test_chat_controller_tool_loop),
+        ("History", test_history),
+        ("Bridge", test_bridge),
+        ("App Settings Parity", test_app_settings_parity),
+        ("Phase 1 AI Editor Regressions", test_phase1_ai_editor_regressions),
+        ("Instructions", test_instructions),
+        ("Scopes", test_scopes),
+        ("Extension Host", test_extension_host),
+        ("VSCode API", test_vscode_api),
+        ("App Extension Runtime Support", test_app_extension_runtime_support),
+        ("Auth", test_auth),
+        ("Claude Proxy", test_claude_proxy),
+        ("Agents", test_agents),
+        ("Workflows", test_workflows),
+        ("Tk Window", test_tk_window),
+    ]
+    for label, fn in tests:
+        _run_test(label, fn)
 
     print()
     print(f"{'=' * 50}")
@@ -17426,6 +17500,10 @@ def main() -> None:
         print(f"ALL {total} TESTS PASSED ✓")
     else:
         print(f"{_PASS}/{total} passed, {_FAIL} FAILED ✗")
+        print()
+        print("FAILED TESTS:")
+        for index, (label, detail) in enumerate(_FAILURES, 1):
+            print(f"  {index}. {label}" + (f" — {detail}" if detail else ""))
     print(f"{'=' * 50}")
 
     sys.exit(0 if _FAIL == 0 else 1)

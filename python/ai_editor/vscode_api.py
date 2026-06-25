@@ -2061,6 +2061,9 @@ class VscodeNamespace:
         self._file_decoration_request_callback: Optional[
             Callable[[Dict[str, Any]], Any]
         ] = None
+        self._file_decoration_change_callback: Optional[
+            Callable[[Dict[str, Any]], None]
+        ] = None
         self._task_providers: Dict[str, Any] = {}
         self._debug_providers: Dict[str, Any] = {}
         self._task_executions: List[_TaskExecution] = []
@@ -3935,6 +3938,24 @@ class VscodeNamespace:
         """Ask an external extension host for file-decoration results."""
         self._file_decoration_request_callback = callback
 
+    def set_file_decoration_change_callback(
+            self,
+            callback: Optional[Callable[[Dict[str, Any]], None]]) -> None:
+        """Notify the UI when a local file-decoration provider changes."""
+        self._file_decoration_change_callback = callback
+
+    def _notify_file_decorations_changed(self, value: Any) -> None:
+        callback = self._file_decoration_change_callback
+        if callback is None:
+            return
+        try:
+            callback({
+                "value": value,
+                "all": value is None,
+            })
+        except Exception:
+            pass
+
     def _notify_tree_view_changed(
             self,
             event: str,
@@ -4221,12 +4242,30 @@ class VscodeNamespace:
 
     def _register_file_decoration_provider(self, provider: Any) -> Disposable:
         self._file_decoration_providers.append(provider)
+        event = (
+            provider.get("onDidChangeFileDecorations")
+            if isinstance(provider, dict)
+            else getattr(provider, "onDidChangeFileDecorations", None)
+        )
+        change_subscription = None
+        if callable(event):
+            try:
+                change_subscription = event(
+                    self._notify_file_decorations_changed)
+            except Exception:
+                change_subscription = None
 
         def _dispose() -> None:
             try:
                 self._file_decoration_providers.remove(provider)
             except ValueError:
                 pass
+            dispose = getattr(change_subscription, "dispose", None)
+            if callable(dispose):
+                try:
+                    dispose()
+                except Exception:
+                    pass
 
         return Disposable(_dispose)
 

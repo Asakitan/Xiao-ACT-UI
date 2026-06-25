@@ -1889,6 +1889,8 @@ class AIEditorAPI:
             self._on_tree_view_changed)
         self._vscode_ns.set_webview_view_change_callback(
             self._on_webview_view_changed)
+        self._vscode_ns.set_file_decoration_change_callback(
+            self._on_file_decorations_changed)
         self._ext_host.set_command_fallback_resolver(
             self._resolve_extension_command_fallback)
         self._vscode_ns_ready.set()
@@ -4145,6 +4147,16 @@ class AIEditorAPI:
     @staticmethod
     def _safe_file_decoration_payload(value: Any) -> Dict[str, Any]:
         if not isinstance(value, dict):
+            data: Dict[str, Any] = {}
+            for attr in ("badge", "tooltip", "color", "propagate"):
+                try:
+                    item = getattr(value, attr)
+                except Exception:
+                    continue
+                if item is not None:
+                    data[attr] = item
+            value = data
+        if not isinstance(value, dict):
             return {}
         result: Dict[str, Any] = {}
         badge = value.get("badge")
@@ -4180,6 +4192,8 @@ class AIEditorAPI:
                 elif isinstance(raw, dict):
                     if str(raw.get("scheme") or "") == "file":
                         fs_path = str(raw.get("fsPath") or raw.get("path") or "")
+                    elif raw.get("fsPath") is not None:
+                        fs_path = str(raw.get("fsPath") or "")
                     elif raw.get("uri") is not None:
                         nested = self._workspace_file_decoration_change_paths(
                             raw.get("uri"))
@@ -7915,6 +7929,17 @@ class AIEditorAPI:
             "change": change,
         })
 
+    def _on_file_decorations_changed(self, payload: Dict[str, Any]) -> None:
+        """Notify the frontend that local file decorations changed."""
+        change = _as_dict(payload)
+        change["paths"] = self._workspace_file_decoration_change_paths(
+            change.get("value"))
+        change["all"] = bool(change.get("all")) or not change["paths"]
+        self._emit("file_decorations_changed", {
+            "event": "file_decoration_changed",
+            "change": change,
+        })
+
     def _shutdown_node_extension_host(self) -> None:
         """Stop the Node extension host if running."""
         for disposable in list(self._node_tree_disposables.values()):
@@ -7959,6 +7984,7 @@ class AIEditorAPI:
             self._node_ext_host = None
         self._vscode_ns.set_language_provider_request_callback(None)
         self._vscode_ns.set_file_decoration_request_callback(None)
+        self._vscode_ns.set_file_decoration_change_callback(None)
 
     def relay_node_webview_message(self, view_id: str, message: Any) -> Dict:
         """Forward a webview message to the Node extension host."""

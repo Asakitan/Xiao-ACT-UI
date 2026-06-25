@@ -9135,15 +9135,22 @@ async function refreshVisibleExplorerDecorations(paths){
   const targets=Array.isArray(paths)?paths.map(normalizeExplorerPath).filter(Boolean):[];
   const refreshAll=!targets.length;
   const rows=[...tree.querySelectorAll('.tree-row[data-workspace-path]')]
-    .filter(row=>row.dataset.workspacePath);
-  for(const row of rows){
-    if(!refreshAll&&!targets.some(path=>explorerDecorationPathMatches(row.dataset.workspacePath,path)))continue;
+    .filter(row=>row.dataset.workspacePath)
+    .filter(row=>refreshAll||targets.some(path=>explorerDecorationPathMatches(row.dataset.workspacePath,path)));
+  const limit=8;
+  let index=0;
+  async function worker(){
+    while(index<rows.length){
+      const row=rows[index++];
+      if(!row||!row.isConnected)continue;
     const label=row.querySelector('.tree-label');
     if(!label)continue;
     const res=await call('workspace_file_decorations',row.dataset.workspacePath||'');
     if(!res||res.error)continue;
     applyExplorerDecoration(row,label,res);
+    }
   }
+  await Promise.all(Array.from({length:Math.min(limit,rows.length)},worker));
 }
 function scheduleExplorerDecorationRefresh(change){
   const tree=$('explorer-tree');
