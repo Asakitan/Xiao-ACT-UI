@@ -4957,6 +4957,12 @@ console.log("frontend signature help docs ok");
             and "@sync" in html
             and "addFilterAction('Sync','@sync')" in html
             and "function extensionSettingLanguageFilterMatches(row,rowTags,lang)" in html
+            and "EXTENSION_SETTINGS_FILTER_STATE_KEY" in html
+            and "function extensionSettingRestoreFilterState()" in html
+            and "function extensionSettingTextMatchRank(row,text)" in html
+            and "function extensionSettingSortSectionRows(section,text)" in html
+            and "extensionSettingWriteFilterState(extensionSettingCaptureFilterState())" in html
+            and "extensionSettingRestoreFilterState();" in html
             and "const scopeOk=(!scopeFilter||row.dataset.extSettingScope===scopeFilter)" in html
             and "&&(!query.scopes.length||query.scopes.includes(row.dataset.extSettingScope||''))" in html
             and "const targetOk=(!targetFilter||row.dataset.extSettingTarget===targetFilter)" in html
@@ -5094,6 +5100,15 @@ console.log("frontend signature help docs ok");
             "extensionSettingFilterTokenLabel",
             "extensionSettingFilterMenuTokenActive",
             "extensionSettingLanguageFilterMatches",
+            "extensionSettingStorage",
+            "extensionSettingReadFilterState",
+            "extensionSettingWriteFilterState",
+            "extensionSettingClearFilterState",
+            "extensionSettingCaptureFilterState",
+            "extensionSettingApplyFilterState",
+            "extensionSettingRestoreFilterState",
+            "extensionSettingTextMatchRank",
+            "extensionSettingSortSectionRows",
             "extensionSettingSearchTokenValue",
             "extensionSettingSetSearchTokenValue",
             "extensionSettingAppendFilterToken",
@@ -5127,7 +5142,14 @@ console.log("frontend signature help docs ok");
             _extract_js_function(html, name) for name in setting_functions)
         js = setting_js + r"""
 function assert(ok,label){ if(!ok){ throw new Error(label); } }
+const EXTENSION_SETTINGS_FILTER_STATE_KEY='sao-ai-ext-settings-filter-v1';
 globalThis.window = { location: { href: "https://example.invalid/settings" } };
+const fakeStorageData = {};
+globalThis.localStorage = {
+  getItem(key){ return Object.prototype.hasOwnProperty.call(fakeStorageData,key) ? fakeStorageData[key] : null; },
+  setItem(key,value){ fakeStorageData[key] = String(value); },
+  removeItem(key){ delete fakeStorageData[key]; },
+};
 function makeNode(tag, text){
   const node = {
     tagName: tag ? String(tag).toUpperCase() : "",
@@ -5160,9 +5182,15 @@ globalThis.document = {
 const fakeSearch = { value: "", focused: false, focus(){ this.focused = true; } };
 const fakeModified = { checked: true };
 const fakeHidden = { checked: true };
+const fakeCategory = { value: "cat-a" };
+const fakeScope = { value: "window" };
+const fakeTarget = { value: "workspace" };
 globalThis.$ = id => id === "settings-search" ? fakeSearch : (
   id === "ext-settings-modified" ? fakeModified : (
-  id === "ext-settings-hidden" ? fakeHidden : null));
+  id === "ext-settings-hidden" ? fakeHidden : (
+  id === "ext-settings-category" ? fakeCategory : (
+  id === "ext-settings-scope" ? fakeScope : (
+  id === "ext-settings-target" ? fakeTarget : null)))));
 let filterApplyCount = 0;
 globalThis.applyExtensionSettingsFilter = () => { filterApplyCount++; };
 const arraySchema = { type: "array", items: { type: "string" } };
@@ -5598,6 +5626,75 @@ assert(extensionSettingLanguageFilterMatches(
          { dataset: { extSettingLanguage: "", extSettingScope: "window" } },
          [], "python"),
        "language filter matches VS Code language-overridable settings and exact language defaults");
+extensionSettingWriteFilterState({
+  query: "font @modified",
+  category: "cat-b",
+  scope: "resource",
+  target: "workspaceFolder",
+  modified: true,
+  hidden: true,
+});
+const storedFilterState = extensionSettingReadFilterState();
+assert(storedFilterState.query === "font @modified"
+       && storedFilterState.category === "cat-b"
+       && storedFilterState.scope === "resource"
+       && storedFilterState.target === "workspaceFolder"
+       && storedFilterState.modified === true
+       && storedFilterState.hidden === true,
+       "settings filter state persists safely");
+fakeSearch.focused = false;
+extensionSettingApplyFilterState(storedFilterState);
+assert(fakeSearch.value === "font @modified"
+       && fakeCategory.value === "cat-b"
+       && fakeScope.value === "resource"
+       && fakeTarget.value === "workspaceFolder"
+       && fakeModified.checked === true
+       && fakeHidden.checked === true
+       && fakeSearch.focused === false,
+       "settings filter state applies to controls without stealing focus");
+fakeSearch.value = "rank";
+fakeCategory.value = "cat-c";
+fakeScope.value = "machine";
+fakeTarget.value = "global";
+fakeModified.checked = false;
+fakeHidden.checked = true;
+const capturedFilterState = extensionSettingCaptureFilterState();
+assert(capturedFilterState.query === "rank"
+       && capturedFilterState.category === "cat-c"
+       && capturedFilterState.scope === "machine"
+       && capturedFilterState.target === "global"
+       && capturedFilterState.modified === false
+       && capturedFilterState.hidden === true,
+       "settings filter state captures controls");
+extensionSettingClearFilterState();
+assert(Object.keys(fakeStorageData).length === 0,
+       "settings filter state clears from storage");
+const exactRank = extensionSettingTextMatchRank(
+  { dataset: { extSettingKey: "editor.fontSize", extSettingTitle: "Font Size", extSettingSearch: "font size", extSettingFeature: "editor", extSettingValue: "14", extSettingDefault: "12" } },
+  "editor.fontSize");
+const titleRank = extensionSettingTextMatchRank(
+  { dataset: { extSettingKey: "demo.size", extSettingTitle: "Font Size", extSettingSearch: "font size", extSettingFeature: "demo", extSettingValue: "14", extSettingDefault: "12" } },
+  "font");
+const valueRank = extensionSettingTextMatchRank(
+  { dataset: { extSettingKey: "demo.mode", extSettingTitle: "Mode", extSettingSearch: "mode auto", extSettingFeature: "demo", extSettingValue: "auto", extSettingDefault: "manual" } },
+  "auto");
+assert(exactRank > titleRank && titleRank > valueRank && valueRank > 0,
+       "settings text match rank prefers exact key then title then value");
+const sortRows = [
+  { dataset: { extSettingMatchRank: "10", extSettingOrder: "1" } },
+  { dataset: { extSettingMatchRank: "80", extSettingOrder: "2" } },
+  { dataset: { extSettingMatchRank: "80", extSettingOrder: "0" } },
+];
+const sortInner = {
+  children: sortRows.slice(),
+  querySelectorAll(){ return this.children.slice(); },
+  appendChild(row){ this.children = this.children.filter(item => item !== row); this.children.push(row); return row; },
+};
+extensionSettingSortSectionRows({ querySelector(){ return sortInner; } }, "font");
+assert(sortInner.children[0] === sortRows[2]
+       && sortInner.children[1] === sortRows[1]
+       && sortInner.children[2] === sortRows[0],
+       "settings filter sorting uses match rank then original order");
 fakeSearch.value = "render @ext:selftest @stable";
 extensionSettingRemoveFilterToken("@ext:selftest");
 assert(fakeSearch.value === "render @stable",
