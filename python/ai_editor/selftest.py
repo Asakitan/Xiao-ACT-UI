@@ -7037,6 +7037,7 @@ console.log("command palette quick access helpers ok");
            and "def provide_source_control_original_resource(" in vscode_api_source
            and "def set_source_control_input_value(" in vscode_api_source
            and "def validate_source_control_input(" in vscode_api_source
+           and "def showValidationMessage(" in vscode_api_source
            and "def node_scm_provider_snapshots(" in extension_host_source
            and "def request_node_scm_original_resource(" in extension_host_source
            and "def set_node_scm_input_value(" in extension_host_source
@@ -7048,6 +7049,7 @@ console.log("command palette quick access helpers ok");
            and "statusBarCommands" in node_ext_host_source
            and "actionButton" in node_ext_host_source
            and "get validateInput()" in node_ext_host_source
+           and "showValidationMessage(message, type)" in node_ext_host_source
            and "scm_validate_input" in node_ext_host_source
            and "scm_set_input_value" in node_ext_host_source
            and "\"scm/title\"" in app_source
@@ -7069,6 +7071,7 @@ console.log("command palette quick access helpers ok");
            in html
            and "function applyScmInputValidation(box,messageEl,validation)"
            in html
+           and "function scmInputValidationPayload(input)" in html
            and "function scmCommandSpec(raw)" in html
            and "function appendScmStatusCommands(parent,commands)" in html
            and "function runScmQuickDiff(provider,resourceUri)" in html
@@ -12624,6 +12627,8 @@ def test_app_extension_runtime_support() -> None:
             return None
 
         activity_scm.inputBox.validateInput = _activity_scm_validate_input
+        activity_scm.inputBox.showValidationMessage(
+            "Python manual validation", 2)
         activity_scm.acceptInputCommand = {
             "command": "selftest.activity.scmAccept",
         }
@@ -12946,6 +12951,15 @@ def test_app_extension_runtime_support() -> None:
                    "statusResult": activity_scm_status_result,
                    "actionResult": activity_scm_action_result,
                    "secondaryResult": activity_scm_secondary_result,
+               }, ensure_ascii=False))
+        _check("SCM input showValidationMessage snapshots Python messages",
+               activity_scm_provider.get("inputBox", {}).get(
+                   "validationMessage", {}).get("message")
+               == "Python manual validation"
+               and activity_scm_provider.get("inputBox", {}).get(
+                   "validationMessage", {}).get("type") == 2,
+               json.dumps({
+                   "provider": activity_scm_provider,
                }, ensure_ascii=False))
         _check("SCM input validation runs for Python providers",
                activity_scm_provider.get("inputBox", {}).get(
@@ -13752,6 +13766,7 @@ async function activate(context) {
     }
     return undefined;
   };
+  sourceControl.inputBox.showValidationMessage('Node manual validation', 2);
   sourceControl.acceptInputCommand = {
     command: 'selftest.node.scmAcceptInput',
   };
@@ -19348,6 +19363,15 @@ module.exports = { activate, deactivate };
                            "statusResult": node_scm_status_command_result,
                            "actionResult": node_scm_action_button_result,
                            "secondaryResult": node_scm_secondary_action_result,
+                       }, ensure_ascii=False))
+                _check("node SCM input showValidationMessage reaches sidebar snapshots",
+                       node_scm_provider.get("inputBox", {}).get(
+                           "validationMessage", {}).get("message")
+                       == "Node manual validation"
+                       and node_scm_provider.get("inputBox", {}).get(
+                           "validationMessage", {}).get("type") == 2,
+                       json.dumps({
+                           "provider": node_scm_provider,
                        }, ensure_ascii=False))
                 _check("node SCM input validation round-trips through Node host",
                        node_scm_provider.get("inputBox", {}).get(

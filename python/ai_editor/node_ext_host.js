@@ -8060,6 +8060,13 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                         inputBoxState.validationMessage = null;
                         emitProviderState('scm_provider_updated');
                     },
+                    showValidationMessage(message, type) {
+                        inputBoxState.validationMessage = _normalizeScmInputValidation({
+                            message,
+                            type,
+                        });
+                        emitProviderState('scm_provider_updated');
+                    },
                     async _validateInput(value, cursorPosition) {
                         if (typeof validateInput !== 'function') {
                             inputBoxState.validationMessage = null;

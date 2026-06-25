@@ -7266,6 +7266,12 @@ class _SourceControlInputBox:
         self.validateInput = None
         self.validationMessage = None
 
+    def showValidationMessage(self, message: Any, validation_type: Any = 0) -> None:
+        self.validationMessage = _normalize_scm_input_validation({
+            "message": message,
+            "type": validation_type,
+        })
+
 
 class _SourceControlResourceGroup:
     def __init__(self, group_id: str, label: str) -> None:
