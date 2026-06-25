@@ -13491,15 +13491,44 @@ function appendExtensionSettingDefaultOverrideBadge(head,meta){
   el.title=meta.title;
   head.appendChild(el);
 }
+function extensionSettingPolicyTextValue(value){
+  if(value==null)return '';
+  if(typeof value==='string'||typeof value==='number'||typeof value==='boolean')return String(value).trim();
+  if(value&&typeof value==='object'){
+    if(value.value!=null)return String(value.value).trim();
+    if(value.key!=null)return String(value.key).trim();
+    return String(value.displayName||value.name||value.id||'').trim();
+  }
+  return '';
+}
 function extensionSettingPolicyMetadata(schema){
   const policy=schema&&schema.policy;
-  if(!policy||typeof policy!=='object')return {managed:false,label:'',tag:'',title:'',name:''};
-  const name=String(policy.name||policy.policyName||'').trim();
+  if(!policy)return {managed:false,label:'',tag:'',title:'',name:'',category:'',minimumVersion:'',description:'',detail:'',search:'',filterText:''};
+  let name='',category='',minimumVersion='',description='';
+  if(typeof policy==='string'){
+    name=policy.trim();
+  }else if(policy&&typeof policy==='object'){
+    name=String(policy.name||policy.policyName||policy.id||'').trim();
+    category=extensionSettingPolicyTextValue(policy.category);
+    minimumVersion=String(policy.minimumVersion||'').trim();
+    description=String(policy.description||policy.markdownDescription||'').trim();
+    const localization=policy.localization&&typeof policy.localization==='object'?policy.localization:{};
+    if(!description&&localization.description)description=extensionSettingPolicyTextValue(localization.description);
+  }else return {managed:false,label:'',tag:'',title:'',name:'',category:'',minimumVersion:'',description:'',detail:'',search:'',filterText:''};
   const label=name?'Policy: '+name:'Policy';
   const parts=['Can be managed by policy'];
   if(name)parts.push(name);
-  if(policy.minimumVersion)parts.push('minimum version '+String(policy.minimumVersion));
-  return {managed:true,label,tag:'policy',title:parts.join(' · '),name};
+  if(category)parts.push('category '+category);
+  if(minimumVersion)parts.push('minimum version '+minimumVersion);
+  if(description)parts.push(description);
+  const detail=[];
+  if(name)detail.push(name);
+  if(category)detail.push('category: '+category);
+  if(minimumVersion)detail.push('minimum version: '+minimumVersion);
+  if(description)detail.push(description);
+  const filterValues=[name,category,minimumVersion].map(value=>String(value||'').trim().toLowerCase()).filter(Boolean);
+  return {managed:true,label,tag:'policy',title:parts.join(' · '),name,category,minimumVersion,description,
+    detail:detail.join(' · '),search:parts.concat(['policy','managed']).join(' '),filterText:filterValues.join('\n')};
 }
 function appendExtensionSettingPolicyBadge(head,meta){
   if(!head||!meta||!meta.managed)return;
@@ -13529,8 +13558,11 @@ function extensionSettingWorkspaceTrustMetadata(schema){
   const restricted=schema&&schema.restricted===true;
   return restricted
     ? {restricted:true,label:'Requires workspace trust',
-      title:'The setting value can only be applied in a trusted workspace'}
-    : {restricted:false,label:'',title:''};
+      tag:'workspace-trust',
+      title:'The setting value can only be applied in a trusted workspace',
+      detail:'Restricted setting: workspace values are read only from trusted sources',
+      search:'restricted workspace trust trusted untrusted trusted sources'}
+    : {restricted:false,label:'',tag:'',title:'',detail:'',search:''};
 }
 function extensionSettingTagLabel(tag){
   const raw=String(tag||'').trim();
@@ -13663,7 +13695,13 @@ function extensionSettingSchemaSummary(schema,type){
   }
   if(schema.disallowConfigurationDefault===true)parts.push('configurationDefaults disabled');
   const policyMeta=extensionSettingPolicyMetadata(schema);
-  if(policyMeta.managed)parts.push(policyMeta.name?'policy: '+policyMeta.name:'policy managed');
+  if(policyMeta.managed){
+    parts.push(policyMeta.name?'policy: '+policyMeta.name:'policy managed');
+    if(policyMeta.category)parts.push('policy category: '+policyMeta.category);
+    if(policyMeta.minimumVersion)parts.push('policy minimum: '+policyMeta.minimumVersion);
+  }
+  const trustMeta=extensionSettingWorkspaceTrustMetadata(schema);
+  if(trustMeta.restricted)parts.push('workspace trust restricted');
   const constraints=extensionSettingConstraintSummary(schema,type);
   if(constraints)parts.push(constraints);
   return parts.join(' · ');
@@ -13780,6 +13818,10 @@ function extensionSettingSchemaDetailItems(schema,type,defaultValue){
   if(schema.dependentSchemas&&typeof schema.dependentSchemas==='object')push('Dependent schemas',Object.keys(schema.dependentSchemas).slice(0,4).join(', '),'dependency');
   const constraints=extensionSettingConstraintSummary(schema,type);
   if(constraints)push('Constraints',constraints,'constraint');
+  const policyMeta=extensionSettingPolicyMetadata(schema);
+  if(policyMeta.managed)push('Policy',policyMeta.detail||policyMeta.name||'managed by policy','policy');
+  const trustMeta=extensionSettingWorkspaceTrustMetadata(schema);
+  if(trustMeta.restricted)push('Workspace trust',trustMeta.detail,'workspace-trust');
   if(schema.source&&schema.source.id)push('Source',schema.source.id,'source');
   if(schema.section&&schema.section.id)push('Section',schema.section.id,'section');
   if(Object.prototype.hasOwnProperty.call(schema,'default'))push('Schema default',extensionSettingJson(defaultValue,type).replace(/\s+/g,' ').trim(),'default');
@@ -13979,7 +14021,9 @@ function extensionSettingSearchText(key,schema,type,description,deprecation,sche
     schema.disallowSyncIgnore===true?'disallowSyncIgnore sync locked':'',
     schema.disallowConfigurationDefault===true?'disallowConfigurationDefault default locked configuration defaults':''];
   const policyMeta=extensionSettingPolicyMetadata(schema);
-  if(policyMeta.managed)parts.push('policy managed '+policyMeta.name+' '+policyMeta.title);
+  if(policyMeta.managed)parts.push('policy managed '+policyMeta.search+' '+policyMeta.filterText);
+  const trustMeta=extensionSettingWorkspaceTrustMetadata(schema);
+  if(trustMeta.restricted)parts.push(trustMeta.search+' '+trustMeta.detail);
   ['tags','keywords','enumItemLabels','enumDescriptions','markdownEnumDescriptions'].forEach(name=>{
     extensionSettingList(schema,name).forEach(value=>parts.push(value));
   });
@@ -14379,17 +14423,20 @@ function appendExtensionSettingIndicators(row,schema,scopedValues,currentTarget,
 }
 function extensionSettingMetadataTags(schema,type,scopeName,currentTarget,workspaceWritable,syncMeta,defaultOverrideMeta,policyMeta,scopedValues,extraTags){
   schema=(schema&&typeof schema==='object')?schema:{};
+  const trustMeta=extensionSettingWorkspaceTrustMetadata(schema);
   return extensionSettingList(schema,'tags').map(value=>value.toLowerCase())
     .concat(extensionSettingSchemaFeatureTags(schema,type))
     .concat(extensionSettingTargetTags(scopedValues,currentTarget))
     .concat(extraTags||[])
-    .concat([scopeName,'type:'+type,type,schema.restricted===true?'restricted':'',
-      schema.restricted===true?'workspace-trust':'',
+    .concat([scopeName,'type:'+type,type,trustMeta.restricted?'restricted':'',
+      trustMeta.restricted?'workspace-trust':'',trustMeta.restricted?'trusted-sources':'',
       extensionSettingDeprecationText(schema)?'deprecated':'',
       workspaceWritable?'':'scope-readonly',syncMeta&&syncMeta.tag,
       syncMeta&&syncMeta.ignored?'sync-ignored':'',syncMeta&&syncMeta.locked?'sync-locked':'',
       defaultOverrideMeta&&defaultOverrideMeta.tag,policyMeta&&policyMeta.tag,
-      policyMeta&&policyMeta.name?policyMeta.name.toLowerCase():''])
+      policyMeta&&policyMeta.name?policyMeta.name.toLowerCase():'',
+      policyMeta&&policyMeta.category?'policy-category:'+policyMeta.category.toLowerCase():'',
+      policyMeta&&policyMeta.minimumVersion?'policy-version:'+policyMeta.minimumVersion.toLowerCase():''])
     .filter(Boolean);
 }
 function renderExtensionSettingTargetOverrides(el,scopedValues,currentTarget){
@@ -14599,7 +14646,12 @@ function extensionSettingFilterSuggestions(container,query){
     if(data.extSettingScope)dynamic.scope.add(data.extSettingScope);
     if(data.extSettingTarget)dynamic.target.add(data.extSettingTarget);
     if(data.extSettingType)dynamic.type.add(data.extSettingType);
-    if(data.extSettingPolicy)dynamic.policy.add(data.extSettingPolicy);
+    if(data.extSettingPolicy){
+      String(data.extSettingPolicy).split('\n').forEach(value=>{
+        value=String(value||'').trim().toLowerCase();
+        if(value)dynamic.policy.add(value);
+      });
+    }
     String(data.extSettingTags||'').split('\n').forEach(tag=>{
       tag=String(tag||'').trim().toLowerCase();
       if(tag&&!tag.startsWith('target:')&&!tag.startsWith('configured-target:'))dynamic.tag.add(tag);
@@ -14844,7 +14896,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       row.dataset.extSettingExtensionId=String(extId||'').toLowerCase();
       row.dataset.extSettingFeature=['language',item.language,displayName,extId].join(' ').toLowerCase();
       row.dataset.extSettingLanguage=String(item.language||'').toLowerCase();
-      row.dataset.extSettingPolicy=policyMeta.name.toLowerCase();
+      row.dataset.extSettingPolicy=policyMeta.filterText||policyMeta.name.toLowerCase();
       row.dataset.extSettingModified=modified[key]?'1':'0';
       row.dataset.modified=modified[key]?'1':'0';
       updateExtensionSettingRowValueMetadata(row,value,defaultValue,type);
@@ -15252,7 +15304,7 @@ async function renderExtensionSettings(){
       row.dataset.extSettingExtensionId=String(extId||'').toLowerCase();
       row.dataset.extSettingFeature=[displayName,title,configId,sectionDescription].join(' ').toLowerCase();
       row.dataset.extSettingLanguage='';
-      row.dataset.extSettingPolicy=policyMeta.name.toLowerCase();
+      row.dataset.extSettingPolicy=policyMeta.filterText||policyMeta.name.toLowerCase();
       row.dataset.extSettingHidden=isHiddenSetting?'1':'0';
       updateExtensionSettingRowValueMetadata(row,currentVal,defaultVal,type);
       if(!workspaceWritable)row.classList.add('scope-readonly');

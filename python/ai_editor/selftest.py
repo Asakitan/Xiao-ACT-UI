@@ -5350,6 +5350,7 @@ console.log("frontend signature help docs ok");
             "appendExtensionSettingSchemaDetails",
             "extensionSettingDefaultOverrideMetadata",
             "appendExtensionSettingDefaultOverrideBadge",
+            "extensionSettingPolicyTextValue",
             "extensionSettingPolicyMetadata",
             "appendExtensionSettingPolicyBadge",
             "extensionSettingSourceDisplay",
@@ -5546,7 +5547,16 @@ const defaultLockedSchema = {
 };
 const policySchema = {
   type: "string",
-  policy: { name: "SelftestPolicy", minimumVersion: "1.2.3" }
+  policy: {
+    name: "SelftestPolicy",
+    category: "Extensions",
+    minimumVersion: "1.2.3",
+    localization: { description: { key: "selftest.policy.desc", value: "Controls selftest policy." } }
+  }
+};
+const stringPolicySchema = {
+  type: "boolean",
+  policy: "StringPolicy"
 };
 const sourceSchema = {
   type: "string",
@@ -5800,6 +5810,16 @@ const sourceDetails = extensionSettingSchemaDetailItems(sourceSchema, "string", 
 assert(sourceDetails.some(item => item.label === "Source" && item.text === "selftest.settings-pack")
        && sourceDetails.some(item => item.label === "Section" && item.text === "selftest.core"),
        "schema detail items include source and section");
+const policyDetails = extensionSettingSchemaDetailItems(policySchema, "string", "");
+assert(policyDetails.some(item => item.label === "Policy"
+       && item.text.indexOf("SelftestPolicy") >= 0
+       && item.text.indexOf("category: Extensions") >= 0
+       && item.text.indexOf("minimum version: 1.2.3") >= 0),
+       "schema detail items include policy category and version");
+const trustDetails = extensionSettingSchemaDetailItems({ restricted: true }, "boolean", false);
+assert(trustDetails.some(item => item.label === "Workspace trust"
+       && item.text.indexOf("trusted sources") >= 0),
+       "schema detail items include workspace trust restrictions");
 const schemaDetailHost = makeNode("div");
 appendExtensionSettingSchemaDetails(schemaDetailHost, conditionalSchema, "object", {});
 assert(schemaDetailHost.children.some(n => n.className === "ext-setting-schema-details"
@@ -5818,8 +5838,12 @@ assert(extensionSettingSchemaSummary(rangedStringSchema, "string").indexOf("patt
        "string constraint summary");
 assert(extensionSettingSchemaSummary(defaultLockedSchema, "boolean").indexOf("configurationDefaults disabled") >= 0,
        "default override lock schema summary");
-assert(extensionSettingSchemaSummary(policySchema, "string").indexOf("policy: SelftestPolicy") >= 0,
+assert(extensionSettingSchemaSummary(policySchema, "string").indexOf("policy: SelftestPolicy") >= 0
+       && extensionSettingSchemaSummary(policySchema, "string").indexOf("policy category: Extensions") >= 0
+       && extensionSettingSchemaSummary(policySchema, "string").indexOf("policy minimum: 1.2.3") >= 0,
        "policy schema summary");
+assert(extensionSettingSchemaSummary({ restricted: true }, "boolean").indexOf("workspace trust restricted") >= 0,
+       "restricted schema summary includes workspace trust marker");
 assert(extensionSettingDeprecationText(deprecatedSchema) === "**Use** `new.setting`.",
        "markdown deprecation preferred");
 assert(extensionSettingDeprecationText({ deprecationMessage: "Use fallback." }) === "Use fallback.",
@@ -6003,7 +6027,7 @@ const suggestionRows = [
     extSettingScope: "language-overridable",
     extSettingTarget: "workspace",
     extSettingType: "number",
-    extSettingPolicy: "selftestpolicy",
+    extSettingPolicy: "selftestpolicy\nextensions\n1.2.3",
     extSettingTags: "preview\nsync-ignored\ntarget:workspace",
   } },
   { dataset: {
@@ -6031,7 +6055,8 @@ assert(broadSuggestions.includes("@modified ")
        && broadSuggestions.includes("@scope:language-overridable ")
        && broadSuggestions.includes("@target:workspace ")
        && broadSuggestions.includes("@type:number ")
-       && broadSuggestions.includes("@policy:selftestpolicy "),
+       && broadSuggestions.includes("@policy:selftestpolicy ")
+       && broadSuggestions.includes("@policy:extensions "),
        "settings filter suggestions include dynamic vscode-style tokens");
 assert(extensionSettingFilterSuggestions(suggestionContainer, "plain text").length === 0,
        "settings filter suggestions stay quiet for plain text tokens");
@@ -6079,16 +6104,29 @@ assert(lockedBadgeHost.children.some(n => n.textContent === "Default Locked"),
        "default override lock badge rendered");
 const policySearchText = extensionSettingSearchText("demo.policy", policySchema, "string", "", "", "");
 assert(policySearchText.indexOf("policy managed") >= 0
-       && policySearchText.indexOf("selftestpolicy") >= 0,
+       && policySearchText.indexOf("selftestpolicy") >= 0
+       && policySearchText.indexOf("extensions") >= 0
+       && policySearchText.indexOf("controls selftest policy") >= 0,
        "settings search text includes policy metadata");
+const trustSearchText = extensionSettingSearchText("demo.trust", { restricted: true }, "boolean", "", "", "");
+assert(trustSearchText.indexOf("workspace trust") >= 0
+       && trustSearchText.indexOf("trusted sources") >= 0,
+       "settings search text includes workspace trust metadata");
 const sourceSearchText = extensionSettingSearchText("demo.source", sourceSchema, "string", "", "", "");
 assert(sourceSearchText.indexOf("selftest.settings-pack") >= 0
        && sourceSearchText.indexOf("selftest.core") >= 0,
        "settings search text includes source and section metadata");
 const policyMeta = extensionSettingPolicyMetadata(policySchema);
 assert(policyMeta.managed === true && policyMeta.tag === "policy"
-       && policyMeta.name === "SelftestPolicy",
-       "policy metadata detected");
+       && policyMeta.name === "SelftestPolicy"
+       && policyMeta.category === "Extensions"
+       && policyMeta.minimumVersion === "1.2.3"
+       && policyMeta.description === "Controls selftest policy."
+       && policyMeta.filterText.indexOf("extensions") >= 0,
+       "policy metadata detected with VS Code policy fields");
+const stringPolicyMeta = extensionSettingPolicyMetadata(stringPolicySchema);
+assert(stringPolicyMeta.managed === true && stringPolicyMeta.name === "StringPolicy",
+       "string policy metadata is accepted");
 const policyBadgeHost = makeNode("div");
 appendExtensionSettingPolicyBadge(policyBadgeHost, policyMeta);
 assert(policyBadgeHost.children.some(n => n.textContent === "Policy: SelftestPolicy"),
@@ -6131,6 +6169,14 @@ const deprecatedTags = extensionSettingMetadataTags(deprecatedSchema, "string", 
   {}, []);
 assert(deprecatedTags.includes("deprecated"),
        "metadata tags include deprecated schema marker");
+const policyTags = extensionSettingMetadataTags(policySchema, "string", "window", "workspace", true,
+  { tag: "", ignored: false, locked: false }, { tag: "" }, policyMeta,
+  {}, []);
+assert(policyTags.includes("policy")
+       && policyTags.includes("selftestpolicy")
+       && policyTags.includes("policy-category:extensions")
+       && policyTags.includes("policy-version:1.2.3"),
+       "metadata tags include policy name category and version");
 const targetOverrideHost = makeNode("div");
 renderExtensionSettingTargetOverrides(targetOverrideHost, scopedTargets, "workspace");
 assert(targetOverrideHost.textContent === "Also modified in: Global, Workspace Folder"
@@ -6153,8 +6199,8 @@ assert(trustMeta.restricted === true && trustMeta.label === "Requires workspace 
 const trustTags = extensionSettingMetadataTags({ restricted: true }, "boolean", "window", "workspace", true,
   { tag: "", ignored: false, locked: false }, { tag: "" }, { tag: "", name: "" },
   {}, []);
-assert(trustTags.includes("workspace-trust"),
-       "metadata tags include workspace trust marker");
+assert(trustTags.includes("workspace-trust") && trustTags.includes("trusted-sources"),
+       "metadata tags include workspace trust markers");
 const indicatorRow = makeNode("div");
 const indicatorWrap = appendExtensionSettingIndicators(
   indicatorRow,
