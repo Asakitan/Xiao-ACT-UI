@@ -776,8 +776,9 @@ pre.code-block code .type { color:var(--fg-type); }
   color:var(--fg); font-size:11px; box-sizing:border-box; }
 .chat-context-pill .kind { color:var(--fg-accent); font:10px var(--mono); text-transform:uppercase; }
 .chat-context-pill .label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.chat-context-pill .remove { cursor:pointer; color:var(--fg-dim); flex:0 0 auto; }
-.chat-context-pill .remove:hover { color:var(--fg-error); }
+.chat-context-pill .remove { cursor:pointer; color:var(--fg-dim); flex:0 0 auto; border:0;
+  background:transparent; padding:0 1px; font:12px var(--sans); line-height:1; }
+.chat-context-pill .remove:hover,.chat-context-pill .remove:focus { color:var(--fg-error); outline:none; }
 .chat-references { margin-top:7px; display:flex; flex-direction:column; gap:4px; }
 .chat-reference-card { border:1px solid var(--border); border-radius:6px; background:var(--bg3);
   padding:5px 7px; color:var(--fg-dim); font-size:11px; line-height:1.35; }
@@ -3654,6 +3655,20 @@ function appendSystem(text){
   if(!value){showChatWelcomeIfEmpty();return null}
   const b=createMsg('system');b.style.color='var(--fg-dim)';b.textContent=value;return b;
 }
+function resizeChatInput(input,maxHeight){
+  const inp=input||$('chat-input');if(!inp)return;
+  inp.style.height='auto';
+  inp.style.height=Math.min(inp.scrollHeight,Number(maxHeight)||200)+'px';
+}
+function setChatInputValue(value,opts){
+  const inp=$('chat-input');if(!inp)return null;
+  const options=opts||{};
+  inp.value=String(value||'');
+  resizeChatInput(inp,options.maxHeight||200);
+  if(options.focus!==false)inp.focus();
+  if(options.sync!==false&&typeof syncAssistantSessionState==='function')syncAssistantSessionState();
+  return inp;
+}
 let chatContextAttachments=[];
 const ASSISTANT_SESSION_STATE_KEY='sao-ai-editor-chat-session-state';
 const ASSISTANT_SESSION_ITEMS_KEY='sao-ai-editor-chat-session-items';
@@ -3799,7 +3814,7 @@ function assistantSessionOpenItem(sessionId,opts){
   chatContextAttachments=Array.isArray(nextState.context)?nextState.context.slice(0,20):[];
   assistantSessionRenderMessages(item.messages||[]);
   renderChatContextAttachments();
-  const input=$('chat-input');if(input){input.value=nextState.draft||'';input.style.height='auto'}
+  setChatInputValue(nextState.draft||'',{focus:false,sync:false});
   renderAssistantSessionState();saveAssistantSessionState();
   assistantSessionPersistCurrent({title:fork?String(item.title||'Chat')+' (fork)':item.title,parentSessionResource:nextState.parentSessionResource||''});
   setStatus((fork?'Forked chat session: ':'Opened chat session: ')+(item.title||item.id));
@@ -3852,7 +3867,7 @@ function syncAssistantSessionState(patch){
 }
 function restoreAssistantSessionDraft(){
   const input=$('chat-input');
-  if(input&&!input.value&&assistantSessionState.draft)input.value=assistantSessionState.draft;
+  if(input&&!input.value&&assistantSessionState.draft)setChatInputValue(assistantSessionState.draft,{focus:false,sync:false});
   if(Array.isArray(assistantSessionState.context)&&assistantSessionState.context.length&&!chatContextAttachments.length){
     chatContextAttachments=assistantSessionState.context.slice(0,20);
     renderChatContextAttachments();
@@ -3933,10 +3948,10 @@ function renderChatContextAttachments(){
   const area=$('chat-context-area');if(!area)return;
   area.innerHTML='';
   chatContextAttachments.forEach((item,i)=>{
-    const pill=document.createElement('span');pill.className='chat-context-pill';
+    const pill=document.createElement('span');pill.className='chat-context-pill';pill.dataset.kind=item.kind||'ctx';
     pill.title=(item.preview||item.prompt||item.label||'').slice(0,500);
     pill.innerHTML='<span class="kind">'+esc(item.kind||'ctx')+'</span><span class="label">'+esc(item.label||item.id||'Context')+'</span>'+
-      '<span class="remove" onclick="removeChatContextAttachment('+i+')" aria-label="Remove context">×</span>';
+      '<button type="button" class="remove" onclick="removeChatContextAttachment('+i+')" aria-label="Remove context '+esc(item.label||item.id||'')+'">×</button>';
     area.appendChild(pill);
   });
   syncAssistantSessionState();
@@ -3962,6 +3977,7 @@ function addChatContextAttachment(item){
 function removeChatContextAttachment(idx){
   chatContextAttachments.splice(idx,1);
   renderChatContextAttachments();
+  const input=$('chat-input');if(input)input.focus();
 }
 function chatSendContextFromInput(text){
   let cleaned=String(text||''),refs=chatContextAttachments.slice(),seen=new Set(refs.map(r=>r.id));
@@ -11397,7 +11413,8 @@ function slashFindSession(arg){
 function slashInsertToolHint(name){
   const inp=$('chat-input'),tool=String(name||'').replace(/^#/,'').trim();
   if(!inp||!tool)return false;
-  inp.value='#'+tool+' ';inp.selectionStart=inp.selectionEnd=inp.value.length;inp.focus();
+  setChatInputValue('#'+tool+' ');
+  const target=$('chat-input');if(target)target.selectionStart=target.selectionEnd=target.value.length;
   setStatus('Tool hint: #'+tool);
   return true;
 }
@@ -11521,7 +11538,7 @@ chatInp.addEventListener('input',function(){
       });
       renderSlashPopup(matches);
     } else closeSlashPopup();
-    self.style.height='auto';self.style.height=Math.min(self.scrollHeight,180)+'px';
+    resizeChatInput(self,180);
   },100);
 });
 chatInp.addEventListener('keydown',function(e){
@@ -11568,7 +11585,7 @@ chatInp.addEventListener('keydown',function(e){
   }
 });
 chatInp.addEventListener('input',function(){
-  this.style.height='auto';this.style.height=Math.min(this.scrollHeight,200)+'px';
+  resizeChatInput(this,200);
   syncAssistantSessionState();
 });
 // ── Image paste in chat input ──
@@ -11598,7 +11615,7 @@ chatInp.addEventListener('paste',function(e){
   }
 });
 window.pickSlashByIndex=function(idx){const item=_slashMatches[idx];if(item)pickSlash(item[0])};
-window.pickSlash=function(cmd){closeSlashPopup();chatInp.value='';execSlash(cmd)};
+window.pickSlash=function(cmd){closeSlashPopup();setChatInputValue('',{focus:false});execSlash(cmd)};
 
 // ── Terminal ──
 // TERM-01: ANSI SGR escape code renderer
@@ -12551,7 +12568,7 @@ function renderToolsSidebar(toolList){
     const runtimeBadge=tool.needsExtensionRuntime?' <span style="color:var(--fg-warning);font-size:10px" title="'+esc(t('runtime_required'))+'">runtime</span>':'';
     item.innerHTML='<span style="color:var(--fg-tool);font-family:var(--mono);font-size:11px">'+esc(tool.name)+'</span>'+badge+runtimeBadge;
     item.title=[tool.description,tool.runtimeMessage].filter(Boolean).join('\n');
-    item.onclick=()=>{const inp=$('chat-input');const cur=inp.value;const prefix=cur&&!cur.endsWith(' ')?cur+' ':cur;inp.value=prefix+'#'+tool.name+' ';inp.focus()};
+    item.onclick=()=>{const inp=$('chat-input');const cur=inp.value;const prefix=cur&&!cur.endsWith(' ')?cur+' ':cur;setChatInputValue(prefix+'#'+tool.name+' ')};
     list.appendChild(item);
   });
 }
@@ -19888,16 +19905,16 @@ window.pickAtVar=function(v){$('at-popup').classList.remove('open');
   if(item&&addChatContextAttachment(item)){
     const before=val.substring(0,pos).replace(/@[A-Za-z0-9_.:-]*$/,'');
     inp.value=(before+val.substring(pos)).replace(/[ \t]{2,}/g,' ');
-    inp.selectionStart=inp.selectionEnd=before.length;inp.focus();return;
+    inp.selectionStart=inp.selectionEnd=before.length;resizeChatInput(inp,200);syncAssistantSessionState();inp.focus();return;
   }
   const before=val.substring(0,pos).replace(/@[A-Za-z0-9_.:-]*$/,v+' ');
-  inp.value=before+val.substring(pos);inp.selectionStart=inp.selectionEnd=before.length;inp.focus()};
+  inp.value=before+val.substring(pos);inp.selectionStart=inp.selectionEnd=before.length;resizeChatInput(inp,200);syncAssistantSessionState();inp.focus()};
 window.pickHashToolCompletion=function(name){$('at-popup').classList.remove('open');
   setChatCompletionState('',false);
   const inp=$('chat-input'),val=inp.value,pos=inp.selectionStart;
   const token='#'+String(name||'').replace(/^#/,'');
   const before=val.substring(0,pos).replace(/#[A-Za-z0-9_.:-]*$/,token+' ');
-  inp.value=before+val.substring(pos);inp.selectionStart=inp.selectionEnd=before.length;inp.focus()};
+  inp.value=before+val.substring(pos);inp.selectionStart=inp.selectionEnd=before.length;resizeChatInput(inp,200);syncAssistantSessionState();inp.focus()};
 
 // ── Agent Mode in doSend ──
 doSend=async function(){
@@ -19909,7 +19926,7 @@ doSend=async function(){
   const sendContext=chatSendContextFromInput(text);text=sendContext.text;
   if(!text&&sendContext.refs.length)text='Review the attached context.';
   if(!text)return;
-  inp.value='';inp.style.height='auto';
+  setChatInputValue('',{focus:false,sync:false});
   $('at-popup').classList.remove('open');setChatCompletionState('',false);
   // Strip #toolName prefix — LLM understands tool hints naturally
   let toolHint='';
@@ -20778,8 +20795,8 @@ function addMessageFooter(msgEl,role){
      // Find the user message before this assistant message
      for(let i=msgs.length-1;i>=0;i--){
        const r=msgs[i].querySelector('.msg-role.user');
-       if(r){const text=msgs[i].querySelector('.msg-body').textContent;
-         $('chat-input').value=text;doSend();break}
+        if(r){const text=msgs[i].querySelector('.msg-body').textContent;
+          setChatInputValue(text);doSend();break}
      }}},
   ].forEach(a=>{
     const b=document.createElement('span');b.className='mf-btn'+(a.cls?' '+a.cls:'');
@@ -20802,7 +20819,7 @@ function showFollowups(container,suggestions){
     if(item.tooltip)btn.title=String(item.tooltip);
     btn.onclick=()=>{
       if(item.agentId)addChatContextAttachment({id:'agent:'+item.agentId,kind:'agent',label:item.agentId});
-      $('chat-input').value=(item.subCommand?String(item.subCommand)+' ':'')+message;doSend()
+      setChatInputValue((item.subCommand?String(item.subCommand)+' ':'')+message);doSend()
     };
     div.appendChild(btn);
   });
@@ -20997,7 +21014,7 @@ function renderWelcome(){
     const btn=document.createElement('button');btn.type='button';btn.className='welcome-prompt-btn';
     btn.setAttribute('aria-label',s);
     btn.textContent=s;
-    btn.onclick=()=>{$('chat-input').value=s;$('chat-input').focus();w.remove()};
+    btn.onclick=()=>{setChatInputValue(s);w.remove()};
     prompts.appendChild(btn);
   });
   const note=document.createElement('div');

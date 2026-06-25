@@ -3393,6 +3393,18 @@ def test_phase1_ai_editor_regressions() -> None:
            and "runToolbarWorkflow()" in html
            and "slashInsertToolHint(tool.name);" in html
            and "cmd.startsWith(raw)||cmd.startsWith(prefix)" in html)
+    _check("frontend Assistant restores composer draft and accessible context chips",
+           "function resizeChatInput(input,maxHeight)" in html
+           and "function setChatInputValue(value,opts)" in html
+           and "setChatInputValue(nextState.draft||'',{focus:false,sync:false});" in html
+           and "if(input&&!input.value&&assistantSessionState.draft)setChatInputValue(assistantSessionState.draft,{focus:false,sync:false});" in html
+           and "pill.dataset.kind=item.kind||'ctx';" in html
+           and "'<button type=\"button\" class=\"remove\" onclick=\"removeChatContextAttachment('+i+')\"" in html
+           and "const input=$('chat-input');if(input)input.focus();" in html
+           and "resizeChatInput(this,200);" in html
+           and "setChatInputValue(prefix+'#'+tool.name+' ')" in html
+           and "setChatInputValue(s);w.remove()" in html
+           and "setChatInputValue((item.subCommand?String(item.subCommand)+' ':'')+message);doSend()" in html)
     _check("frontend Assistant renders response references and changed-file cards",
            "chat-response-references" in html
            and "chat-response-reference-list" in html
