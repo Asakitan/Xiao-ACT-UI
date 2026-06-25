@@ -30,9 +30,9 @@ _CURRENT_TEST_LABEL = ""
 _FAILURE_DETAIL_LINE_LIMIT = 80
 _FAILURE_POINT_LINE_LIMIT = 180
 _FAILURE_POINT_HINT_LIMIT = 6
-_FINAL_FAILURE_POINT_HEADING = "FAILED CHECKS (final):"
-_RECORDED_FAILURE_NOTE = "failure recorded; see final summary"
-_RECORDED_TEST_FAILURE_NOTE = "test failed; see final summary"
+_FINAL_FAILURE_POINT_HEADING = "FAILED CHECK POINTS (final):"
+_RECORDED_FAILURE_NOTE = "failure recorded; failure points are listed last"
+_RECORDED_TEST_FAILURE_NOTE = "test failed; failure points are listed last"
 _FAILURE_POINT_PRIORITY_KEYS = (
     "error",
     "errors",
@@ -408,6 +408,10 @@ def test_selftest_output() -> None:
         _FAILURES[:] = saved_failures
 
     output_lines = capture.getvalue().splitlines()
+    details_index = output_lines.index("FAILED CHECK DETAILS:")
+    points_index = output_lines.index(_FINAL_FAILURE_POINT_HEADING)
+    _check("failure point list is after detailed failures",
+           points_index > details_index)
     _check("failure point list is the final output block",
            output_lines[-3:] == [
                _FINAL_FAILURE_POINT_HEADING,
@@ -7082,6 +7086,24 @@ console.log("command palette quick access helpers ok");
            and "function runScmQuickDiff(provider,resourceUri)" in html
            and "call('request_scm_quick_diff_original_resource'" in html
            and "call('open_text_resource'" in html
+           and "function renderScmHistorySection(parent,provider)" in html
+           and "function loadScmHistoryProvider(provider,container,force)"
+           in html
+           and "function renderScmHistoryItems(provider,container,items)"
+           in html
+           and "function toggleScmHistoryItemChanges(provider,item,body,button)"
+           in html
+           and "function renderScmHistoryChanges(container,provider,item,changes)"
+           in html
+           and "function openScmHistoryChange(change,preferOriginal)" in html
+           and "function appendScmHistoryRefs(parent,provider)" in html
+           and "call('request_scm_history',id,op,payload||{})" in html
+           and "requestScmHistory(providerId,'provideItems',{options:{limit:10}})"
+           in html
+           and "requestScmHistory(providerId,'provideChanges'" in html
+           and "provider.hasHistoryProvider" in html
+           and "historyItemRemoteRef" in html
+           and "dataset.scmHistoryProvider" in html
            and "function renderScmProvider(parent,provider)" in html
            and "provider.hasQuickDiffProvider" in html
            and "provider.actionButton&&provider.actionButton.command" in html

@@ -9230,6 +9230,220 @@ async function runScmQuickDiff(provider,resourceUri){
   setStatus('Opened quick diff original');
   return r;
 }
+function scmHistoryRefLabel(ref){
+  if(!ref||typeof ref!=='object')return '';
+  return String(ref.label||ref.name||ref.id||ref.revision||'');
+}
+function scmHistoryItemTitle(item){
+  return String((item&&item.subject)||(item&&item.message)||(item&&item.id)||'History Item');
+}
+function scmHistoryItemMeta(item){
+  const bits=[];
+  const displayId=String((item&&item.displayId)||(item&&item.id)||'');
+  if(displayId)bits.push(displayId);
+  if(item&&item.author)bits.push(String(item.author));
+  const stats=item&&item.statistics&&typeof item.statistics==='object'?item.statistics:null;
+  if(stats){
+    const files=Number(stats.files||0),insertions=Number(stats.insertions||0),deletions=Number(stats.deletions||0);
+    const statBits=[];
+    if(files)statBits.push(files+' file'+(files===1?'':'s'));
+    if(insertions)statBits.push('+'+insertions);
+    if(deletions)statBits.push('-'+deletions);
+    if(statBits.length)bits.push(statBits.join(' '));
+  }
+  return bits.join(' · ');
+}
+function scmHistoryChangeLabel(change){
+  const uri=String((change&&change.uri)||(change&&change.modifiedUri)||(change&&change.originalUri)||'');
+  if(!uri)return 'change';
+  const clean=uri.split(/[?#]/)[0].replace(/\\/g,'/');
+  return clean.split('/').filter(Boolean).pop()||uri;
+}
+function appendScmHistoryRefs(parent,provider){
+  const refs=[
+    ['HEAD',provider&&provider.historyItemRef],
+    ['REMOTE',provider&&provider.historyItemRemoteRef],
+    ['BASE',provider&&provider.historyItemBaseRef],
+  ].filter(item=>scmHistoryRefLabel(item[1]));
+  if(!refs.length)return;
+  const row=document.createElement('div');
+  row.style.cssText='display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin:0 12px 6px 12px';
+  refs.forEach(([kind,ref])=>{
+    const chip=document.createElement('span');
+    chip.textContent=kind+': '+scmHistoryRefLabel(ref);
+    chip.title=String((ref&&ref.description)||(ref&&ref.revision)||scmHistoryRefLabel(ref));
+    chip.style.cssText='max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid var(--border);border-radius:3px;color:var(--fg-dim);font-size:10px;line-height:16px;padding:0 4px';
+    row.appendChild(chip);
+  });
+  parent.appendChild(row);
+}
+async function requestScmHistory(providerId,operation,payload){
+  const id=String(providerId||'').trim();
+  const op=String(operation||'').trim();
+  if(!id||!op)return {ok:false,error:'Missing SCM history request'};
+  return await call('request_scm_history',id,op,payload||{});
+}
+async function openScmHistoryChange(change,preferOriginal){
+  const uri=String(preferOriginal
+    ? ((change&&change.originalUri)||(change&&change.uri)||'')
+    : ((change&&change.modifiedUri)||(change&&change.uri)||(change&&change.originalUri)||''));
+  if(!uri){
+    showToast('No history change resource available','info',2200);
+    return null;
+  }
+  const opened=await call('open_text_resource',uri);
+  if(!opened||opened.error){
+    showToast((opened&&opened.error)||'History change resource could not be opened','error',3000);
+    return opened;
+  }
+  openEditorOpenResult(opened,opened.path||'');
+  setStatus((preferOriginal?'Opened history original: ':'Opened history change: ')+(opened.path||uri));
+  return opened;
+}
+function renderScmHistoryChanges(container,provider,item,changes){
+  container.innerHTML='';
+  const rows=Array.isArray(changes)?changes:[];
+  if(!rows.length){
+    const empty=document.createElement('div');
+    empty.className='tree-note';
+    empty.style.paddingLeft='24px';
+    empty.textContent='No history changes';
+    container.appendChild(empty);
+    return;
+  }
+  rows.forEach(change=>{
+    const row=document.createElement('div');
+    row.className='sb-item';
+    row.style.cssText='display:flex;align-items:center;gap:6px;padding-left:28px';
+    const label=document.createElement('div');
+    label.style.cssText='flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    label.textContent=scmHistoryChangeLabel(change);
+    label.title=String((change&&change.uri)||(change&&change.modifiedUri)||(change&&change.originalUri)||'');
+    row.onclick=()=>openScmHistoryChange(change,false);
+    row.appendChild(label);
+    if(change&&change.originalUri){
+      const original=document.createElement('button');
+      original.type='button';
+      original.className='icon-btn';
+      original.textContent='O';
+      original.title='Open Original';
+      original.style.cssText='width:20px;height:20px;font-size:10px;padding:0';
+      original.onclick=e=>{e.stopPropagation();openScmHistoryChange(change,true)};
+      row.appendChild(original);
+    }
+    container.appendChild(row);
+  });
+}
+async function toggleScmHistoryItemChanges(provider,item,body,button){
+  const providerId=scmProviderId(provider);
+  const itemId=String((item&&item.id)||(item&&item.revision)||'');
+  if(!providerId||!itemId)return;
+  if(body.dataset.loaded==='true'){
+    const hidden=body.style.display==='none';
+    body.style.display=hidden?'':'none';
+    if(button)button.textContent=hidden?'▾':'▸';
+    return;
+  }
+  body.style.display='';
+  body.innerHTML='<div class="tree-note" style="padding-left:24px">Loading history changes...</div>';
+  if(button)button.textContent='▾';
+  const r=await requestScmHistory(providerId,'provideChanges',{historyItemId:itemId,historyItemParentId:(item.parentIds&&item.parentIds[0])||item.parentId||''});
+  if(!callSucceeded(r)){
+    body.innerHTML='';
+    const err=document.createElement('div');
+    err.className='tree-note';
+    err.style.paddingLeft='24px';
+    err.textContent=callFailedMessage(r,'History changes unavailable');
+    body.appendChild(err);
+    return;
+  }
+  body.dataset.loaded='true';
+  renderScmHistoryChanges(body,provider,item,r.value);
+}
+function renderScmHistoryItems(provider,container,items){
+  container.innerHTML='';
+  const rows=Array.isArray(items)?items:[];
+  if(!rows.length){
+    const empty=document.createElement('div');
+    empty.className='tree-note';
+    empty.style.paddingLeft='16px';
+    empty.textContent='No history items';
+    container.appendChild(empty);
+    return;
+  }
+  rows.forEach(item=>{
+    const wrap=document.createElement('div');
+    wrap.dataset.scmHistoryItem=String((item&&item.id)||(item&&item.revision)||'');
+    const row=document.createElement('div');
+    row.className='sb-item';
+    row.style.cssText='display:flex;align-items:center;gap:6px;padding-left:16px';
+    const toggle=document.createElement('span');
+    toggle.textContent='▸';
+    toggle.style.cssText='width:12px;color:var(--fg-dim);flex:0 0 12px';
+    row.appendChild(toggle);
+    const text=document.createElement('div');
+    text.style.cssText='flex:1;min-width:0';
+    const title=document.createElement('div');
+    title.style.cssText='overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)';
+    title.textContent=scmHistoryItemTitle(item);
+    const meta=document.createElement('div');
+    meta.style.cssText='overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg-dim);font-size:10px;margin-top:1px';
+    meta.textContent=scmHistoryItemMeta(item);
+    text.appendChild(title);
+    if(meta.textContent)text.appendChild(meta);
+    row.appendChild(text);
+    const changes=document.createElement('div');
+    changes.style.display='none';
+    row.onclick=()=>toggleScmHistoryItemChanges(provider,item,changes,toggle);
+    wrap.appendChild(row);
+    wrap.appendChild(changes);
+    container.appendChild(wrap);
+  });
+}
+async function loadScmHistoryProvider(provider,container,force){
+  const providerId=scmProviderId(provider);
+  if(!providerId||!container)return;
+  if(container.dataset.loaded==='true'&&!force)return;
+  container.dataset.loaded='';
+  container.innerHTML='<div class="tree-note" style="padding-left:16px">Loading history...</div>';
+  const r=await requestScmHistory(providerId,'provideItems',{options:{limit:10}});
+  if(!callSucceeded(r)){
+    container.innerHTML='';
+    const err=document.createElement('div');
+    err.className='tree-note';
+    err.style.paddingLeft='16px';
+    err.textContent=callFailedMessage(r,'History unavailable');
+    container.appendChild(err);
+    return;
+  }
+  container.dataset.loaded='true';
+  renderScmHistoryItems(provider,container,r.value);
+}
+function renderScmHistorySection(parent,provider){
+  if(!provider||!provider.hasHistoryProvider)return;
+  appendScmHistoryRefs(parent,provider);
+  const header=document.createElement('div');
+  header.className='sb-group';
+  header.dataset.scmHistoryProvider=scmProviderId(provider);
+  header.style.cssText='display:flex;align-items:center;gap:6px';
+  const title=document.createElement('span');
+  title.style.cssText='flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  title.textContent='History';
+  header.appendChild(title);
+  const refresh=document.createElement('button');
+  refresh.type='button';
+  refresh.className='icon-btn';
+  refresh.textContent='↻';
+  refresh.title='Refresh History';
+  refresh.style.cssText='width:20px;height:20px;font-size:10px;padding:0';
+  header.appendChild(refresh);
+  parent.appendChild(header);
+  const body=document.createElement('div');
+  body.dataset.scmHistoryList=scmProviderId(provider);
+  parent.appendChild(body);
+  refresh.onclick=e=>{e.stopPropagation();loadScmHistoryProvider(provider,body,true)};
+  loadScmHistoryProvider(provider,body,false);
+}
 function renderScmResource(parent,provider,group,state,index){
   const row=document.createElement('div');
   row.className='sb-item';
@@ -9338,6 +9552,7 @@ function renderScmProvider(parent,provider){
   appendScmActionButtons(providerHeader,provider.titleActions);
   parent.appendChild(providerHeader);
   appendScmStatusCommands(parent,provider.statusBarCommands);
+  renderScmHistorySection(parent,provider);
   const input=provider.inputBox&&typeof provider.inputBox==='object'?provider.inputBox:null;
   if(input&&input.visible!==false){
     const providerId=scmProviderId(provider);
