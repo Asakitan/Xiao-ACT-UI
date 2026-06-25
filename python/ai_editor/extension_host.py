@@ -2890,10 +2890,15 @@ class NodeExtensionHost:
         elif msg_type == "status_bar_show":
             if self._ui_bridge:
                 try:
+                    raw_priority = msg.get("priority", 0)
+                    try:
+                        priority = int(raw_priority)
+                    except Exception:
+                        priority = 0
                     self._ui_bridge.show_status_bar_item(
                         str(msg.get("id", "")), str(msg.get("text", "")),
                         str(msg.get("tooltip", "")), msg.get("command", ""),
-                        int(msg.get("alignment", 2)), int(msg.get("priority", 0)),
+                        int(msg.get("alignment", 2)), priority,
                         msg.get("color", ""), msg.get("backgroundColor", ""),
                         str(msg.get("name", "")),
                         msg.get("accessibilityInformation"))
@@ -2928,6 +2933,30 @@ class NodeExtensionHost:
             if self._ui_bridge:
                 try:
                     self._ui_bridge.hide_terminal(str(msg.get("name", "")))
+                except Exception:
+                    pass
+
+        elif msg_type == "terminal_rename":
+            if self._ui_bridge:
+                try:
+                    rename = getattr(self._ui_bridge, "rename_terminal", None)
+                    if callable(rename):
+                        rename(
+                            str(msg.get("previousName", "")),
+                            str(msg.get("name", "")))
+                except Exception:
+                    pass
+
+        elif msg_type == "terminal_dimensions":
+            if self._ui_bridge:
+                try:
+                    handler = getattr(
+                        self._ui_bridge, "update_terminal_dimensions", None)
+                    if callable(handler):
+                        dimensions = msg.get("dimensions")
+                        handler(
+                            str(msg.get("name", "")),
+                            dimensions if isinstance(dimensions, dict) else {})
                 except Exception:
                     pass
 

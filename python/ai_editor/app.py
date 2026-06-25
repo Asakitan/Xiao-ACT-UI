@@ -1016,6 +1016,28 @@ class _AIEditorUIBridge:
             "var tp=document.getElementById('terminal-panel');if(tp){tp.style.display='none';tp.classList.remove('active')}"
         )
 
+    def rename_terminal(self, previous_name: str, name: str) -> None:
+        self._api._eval_js(
+            "(function(previousName,name){try{"
+            "if(typeof _renameTerminal==='function')"
+            "_renameTerminal(previousName,name);"
+            "}catch(e){}})("
+            f"{json.dumps(str(previous_name or ''))},"
+            f"{json.dumps(str(name or ''))});"
+        )
+
+    def update_terminal_dimensions(
+            self, name: str, dimensions: Dict[str, Any]) -> None:
+        payload = dimensions if isinstance(dimensions, dict) else {}
+        self._api._eval_js(
+            "(function(name,dimensions){try{"
+            "if(typeof _updateTerminalDimensions==='function')"
+            "_updateTerminalDimensions(name,dimensions||{});"
+            "}catch(e){}})("
+            f"{json.dumps(str(name or ''))},"
+            f"{json.dumps(payload, ensure_ascii=False)});"
+        )
+
     def run_terminal_command(self, name: str, text: str) -> Optional[str]:
         result = self._api.execute_tool(
             "runTerminal", json.dumps({"command": text}), True)

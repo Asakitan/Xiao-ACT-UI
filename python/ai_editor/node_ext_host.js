@@ -3271,6 +3271,7 @@ class TerminalObject {
         this.exitStatus = undefined;
         this.state = { isInteractedWith: false };
         this.shellIntegration = undefined;
+        this.dimensions = undefined;
         this._pty = options?.pty && typeof options.pty.open === 'function'
             ? options.pty
             : null;
@@ -3294,21 +3295,30 @@ class TerminalObject {
         });
         const nameDisposable = _terminalSubscribeEvent(pty.onDidChangeName, name => {
             if (!this._ptyOpened || this._disposed) return;
+            const previousName = this.name;
             this.name = String(name || this.name);
             send({
                 type: 'terminal_rename',
                 id: this._handle,
+                previousName,
                 name: this.name,
             });
         });
         const dimensionsDisposable = _terminalSubscribeEvent(
             pty.onDidOverrideDimensions, dimensions => {
                 if (!this._ptyOpened || this._disposed) return;
+                const columns = Number(dimensions?.columns);
+                const rows = Number(dimensions?.rows);
+                this.dimensions = (
+                    Number.isFinite(columns) && Number.isFinite(rows)
+                        ? { columns, rows }
+                        : undefined
+                );
                 send({
                     type: 'terminal_dimensions',
                     id: this._handle,
                     name: this.name,
-                    dimensions: dimensions || null,
+                    dimensions: this.dimensions || null,
                 });
             });
         this._ptyDisposables = [
@@ -5346,10 +5356,17 @@ function _statusBarAccessibility(value) {
     };
 }
 
+function _statusBarPriority(value) {
+    if (typeof value !== 'number' || Number.isNaN(value)) return undefined;
+    if (value === Number.POSITIVE_INFINITY) return Number.MAX_VALUE;
+    if (value === Number.NEGATIVE_INFINITY) return -Number.MAX_VALUE;
+    return value;
+}
+
 function _createStatusBarItemObject(id, alignment, priority) {
     const state = {
         alignment,
-        priority,
+        priority: _statusBarPriority(priority),
         text: '',
         tooltip: '',
         color: '',
@@ -5361,6 +5378,10 @@ function _createStatusBarItemObject(id, alignment, priority) {
         disposed: false,
     };
     const item = { _id: id };
+    Object.defineProperty(item, 'id', {
+        enumerable: true,
+        get() { return id; },
+    });
     function payload() {
         return {
             type: 'status_bar_show',

@@ -5958,6 +5958,7 @@ console.log("quick input filter helpers ok");
            and "function _createStatusBarItemObject" in node_ext_host_source
            and "function _statusBarCommand" in node_ext_host_source
            and "function _statusBarAccessibility" in node_ext_host_source
+           and "function _statusBarPriority" in node_ext_host_source
            and "status_bar_hide" in node_ext_host_source
            and "self._ui_bridge.hide_status_bar_item" in extension_host_source
            and "def hide_status_bar_item(self, item_id: str) -> None:"
@@ -5976,16 +5977,26 @@ console.log("quick input filter helpers ok");
            in node_ext_host_source
            and "_bindPseudoterminal" in node_ext_host_source
            and "type: 'terminal_write'" in node_ext_host_source
+           and "type: 'terminal_rename'" in node_ext_host_source
+           and "type: 'terminal_dimensions'" in node_ext_host_source
            and "type: 'terminal_command'" in node_ext_host_source
            and "msg_type == \"terminal_command\"" in extension_host_source
            and "msg_type == \"terminal_write\"" in extension_host_source
+           and "msg_type == \"terminal_rename\"" in extension_host_source
+           and "msg_type == \"terminal_dimensions\"" in extension_host_source
            and "msg.get(\"metadata\")" in extension_host_source
            and "def run_terminal_command(self, name: str, text: str)"
            in app_source
+           and "def rename_terminal(self, previous_name: str, name: str)"
+           in app_source
+           and "def update_terminal_dimensions(" in app_source
            and "metadata: Optional[Dict[str, Any]] = None" in app_source
            and "_createTerminal(name,metadata||{})" in app_source
            and "metadata:(metadata&&typeof metadata==='object')?metadata:{}"
            in html
+           and "function _renameTerminal(previousName,name)" in html
+           and "function _updateTerminalDimensions(name,dimensions)" in html
+           and "function _terminalIconText(meta)" in html
            and "def write_terminal_data(self, name: str, text: str) -> None:"
            in app_source)
     _check("extension configuration target constants match VS Code API",
@@ -13195,6 +13206,22 @@ async function activate(context) {
     item.text = 'Updated Status';
     item.hide();
     item.dispose();
+    const infiniteItem = vscode.window.createStatusBarItem(
+      'selftest.node.status.infinity',
+      vscode.StatusBarAlignment.Right,
+      Number.POSITIVE_INFINITY
+    );
+    infiniteItem.text = 'Infinity Priority';
+    infiniteItem.show();
+    infiniteItem.dispose();
+    const nanItem = vscode.window.createStatusBarItem(
+      'selftest.node.status.nan',
+      vscode.StatusBarAlignment.Right,
+      Number.NaN
+    );
+    nanItem.text = 'NaN Priority';
+    nanItem.show();
+    nanItem.dispose();
     const persistent = vscode.window.setStatusBarMessage('node persistent message');
     persistent.dispose();
     const timed = vscode.window.setStatusBarMessage('node timeout message', 5);
@@ -13213,6 +13240,9 @@ async function activate(context) {
       thenableDisposable: !!(thenable && thenable.dispose),
       cancelledDisposable: !!(cancelled && cancelled.dispose),
       itemId: item._id,
+      publicItemId: item.id,
+      infinityItemId: infiniteItem.id,
+      nanItemId: nanItem.id,
     };
   });
   vscode.commands.registerCommand('selftest.node.terminalProbe', async () => {
@@ -13274,6 +13304,7 @@ async function activate(context) {
     const ptyWrite = new vscode.EventEmitter();
     const ptyClose = new vscode.EventEmitter();
     const ptyName = new vscode.EventEmitter();
+    const ptyDimensions = new vscode.EventEmitter();
     const ptyInputs = [];
     let ptyOpenCount = 0;
     let ptyCloseCalled = 0;
@@ -13281,10 +13312,12 @@ async function activate(context) {
       onDidWrite: ptyWrite.event,
       onDidClose: ptyClose.event,
       onDidChangeName: ptyName.event,
+      onDidOverrideDimensions: ptyDimensions.event,
       open(initialDimensions) {
         ptyOpenCount += 1;
         ptyWrite.fire('pty-open\r\n');
         ptyName.fire('Node PTY Renamed');
+        ptyDimensions.fire({ columns: 120, rows: 32 });
       },
       close() {
         ptyCloseCalled += 1;
@@ -13313,6 +13346,7 @@ async function activate(context) {
       count: vscode.window.terminals.length,
       createdName: ptyCreatedName,
       currentName: ptyTerminal.name,
+      dimensions: ptyTerminal.dimensions,
       openCount: ptyOpenCount,
       closeCalled: ptyCloseCalled,
       inputs: ptyInputs,
@@ -14113,6 +14147,32 @@ module.exports = { activate, deactivate };
 
                 def hide_terminal(self, name):
                     event = {"event": "hide", "name": str(name)}
+                    self.terminal_events.append(event)
+                    emitted_events.append({
+                        "event": "terminal",
+                        "data": event,
+                    })
+
+                def rename_terminal(self, previous_name, name):
+                    event = {
+                        "event": "rename",
+                        "previousName": str(previous_name),
+                        "name": str(name),
+                    }
+                    self.terminal_events.append(event)
+                    emitted_events.append({
+                        "event": "terminal",
+                        "data": event,
+                    })
+
+                def update_terminal_dimensions(self, name, dimensions):
+                    event = {
+                        "event": "dimensions",
+                        "name": str(name),
+                        "dimensions": (
+                            dimensions if isinstance(dimensions, dict)
+                            else {}),
+                    }
                     self.terminal_events.append(event)
                     emitted_events.append({
                         "event": "terminal",
@@ -16538,6 +16598,12 @@ module.exports = { activate, deactivate };
                        and node_status_bar_probe.get(
                            "cancelledDisposable") is True
                        and node_status_bar_probe.get("itemId") == "selftest.node.status"
+                       and node_status_bar_probe.get("publicItemId")
+                       == "selftest.node.status"
+                       and node_status_bar_probe.get("infinityItemId")
+                       == "selftest.node.status.infinity"
+                       and node_status_bar_probe.get("nanItemId")
+                       == "selftest.node.status.nan"
                        and any(
                            item.get("event") == "show"
                            and item.get("id") == "selftest.node.status"
@@ -16568,6 +16634,17 @@ module.exports = { activate, deactivate };
                        and any(
                            item.get("event") == "dispose"
                            and item.get("id") == "selftest.node.status"
+                           for item in node_status_bar_events)
+                       and any(
+                           item.get("event") == "show"
+                           and item.get("id")
+                           == "selftest.node.status.infinity"
+                           and item.get("priority", 0) > 10 ** 100
+                           for item in node_status_bar_events)
+                       and any(
+                           item.get("event") == "show"
+                           and item.get("id") == "selftest.node.status.nan"
+                           and item.get("priority") == 0
                            for item in node_status_bar_events)
                        and {
                            "node persistent message",
@@ -16647,6 +16724,10 @@ module.exports = { activate, deactivate };
                        and node_terminal_pty.get("closeCalled") == 0
                        and node_terminal_pty.get(
                            "currentName") == "Node PTY Renamed"
+                       and node_terminal_pty.get(
+                           "dimensions", {}).get("columns") == 120
+                       and node_terminal_pty.get(
+                           "dimensions", {}).get("rows") == 32
                        and node_terminal_pty.get("inputs")
                        == ["typed only", "q\r"]
                        and node_terminal_pty.get("exitCode") == 7
@@ -16678,6 +16759,17 @@ module.exports = { activate, deactivate };
                        and any(
                            item.get("event") == "command"
                            and item.get("text") == "echo node-terminal"
+                           for item in node_terminal_events)
+                       and any(
+                           item.get("event") == "rename"
+                           and item.get("previousName") == "Node PTY"
+                           and item.get("name") == "Node PTY Renamed"
+                           for item in node_terminal_events)
+                       and any(
+                           item.get("event") == "dimensions"
+                           and item.get("name") == "Node PTY Renamed"
+                           and item.get("dimensions", {}).get("columns") == 120
+                           and item.get("dimensions", {}).get("rows") == 32
                            for item in node_terminal_events)
                        and any(
                            item.get("event") == "write"
