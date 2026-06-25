@@ -1910,6 +1910,17 @@ pre.code-block { overflow:visible; }
       <label>Word Separators</label>
       <input id="s-editor-word-separators" spellcheck="false" style="width:100%">
       <div class="settings-help">Matches VS Code's editor.wordSeparators for word selection, suggest replacement ranges, rename/find seeds, and word navigation.</div>
+      <div class="settings-grid">
+        <div><label>Quick Suggestions: Code</label><select id="s-editor-quick-suggestions-other" style="width:100%"><option value="on">on</option><option value="inline">inline</option><option value="off">off</option><option value="offWhenInlineCompletions">offWhenInlineCompletions</option></select></div>
+        <div><label>Quick Suggestions: Comments</label><select id="s-editor-quick-suggestions-comments" style="width:100%"><option value="off">off</option><option value="on">on</option><option value="inline">inline</option><option value="offWhenInlineCompletions">offWhenInlineCompletions</option></select></div>
+        <div><label>Quick Suggestions: Strings</label><select id="s-editor-quick-suggestions-strings" style="width:100%"><option value="off">off</option><option value="on">on</option><option value="inline">inline</option><option value="offWhenInlineCompletions">offWhenInlineCompletions</option></select></div>
+        <div><label>Quick Suggestions Delay</label><input id="s-editor-quick-suggestions-delay" type="number" min="0" step="1" style="width:100%"></div>
+      </div>
+      <div class="settings-grid">
+        <div><label>Accept Suggestion On Enter</label><select id="s-editor-accept-suggestion-on-enter" style="width:100%"><option value="on">on</option><option value="smart">smart</option><option value="off">off</option></select></div>
+        <label class="settings-check"><input id="s-editor-accept-suggestion-on-commit-character" type="checkbox"><span><b>Accept on commit character</b><small>Accepts suggestions on extension-provided commit characters.</small></span></label>
+      </div>
+      <label class="settings-check"><input id="s-editor-suggest-on-trigger-characters" type="checkbox"><span><b>Suggest on trigger characters</b><small>Automatically opens suggestions on provider trigger characters.</small></span></label>
       <label class="settings-check"><input id="s-editor-format-on-save" type="checkbox"><span><b>Format on save</b><small>Runs the active formatter before explicit saves.</small></span></label>
       <label class="settings-check"><input id="s-editor-format-on-paste" type="checkbox"><span><b>Format on paste</b><small>Runs range formatting after paste/drop edits when a range formatter is available.</small></span></label>
       <label class="settings-check"><input id="s-editor-format-on-type" type="checkbox"><span><b>Format on type</b><small>Runs extension on-type formatting providers for typed trigger characters.</small></span></label>
@@ -1943,6 +1954,17 @@ pre.code-block { overflow:visible; }
       <label>Word Separators</label>
       <input id="s-editor-lang-word-separators" spellcheck="false" style="width:100%">
       <div class="settings-help">Language-specific editor.wordSeparators for the active editor language.</div>
+      <div class="settings-grid">
+        <div><label>Quick Suggestions: Code</label><select id="s-editor-lang-quick-suggestions-other" style="width:100%"><option value="on">on</option><option value="inline">inline</option><option value="off">off</option><option value="offWhenInlineCompletions">offWhenInlineCompletions</option></select></div>
+        <div><label>Quick Suggestions: Comments</label><select id="s-editor-lang-quick-suggestions-comments" style="width:100%"><option value="off">off</option><option value="on">on</option><option value="inline">inline</option><option value="offWhenInlineCompletions">offWhenInlineCompletions</option></select></div>
+        <div><label>Quick Suggestions: Strings</label><select id="s-editor-lang-quick-suggestions-strings" style="width:100%"><option value="off">off</option><option value="on">on</option><option value="inline">inline</option><option value="offWhenInlineCompletions">offWhenInlineCompletions</option></select></div>
+        <div><label>Quick Suggestions Delay</label><input id="s-editor-lang-quick-suggestions-delay" type="number" min="0" step="1" style="width:100%"></div>
+      </div>
+      <div class="settings-grid">
+        <div><label>Accept Suggestion On Enter</label><select id="s-editor-lang-accept-suggestion-on-enter" style="width:100%"><option value="on">on</option><option value="smart">smart</option><option value="off">off</option></select></div>
+        <label class="settings-check"><input id="s-editor-lang-accept-suggestion-on-commit-character" type="checkbox"><span><b>Accept on commit character</b><small>Language-specific editor.acceptSuggestionOnCommitCharacter.</small></span></label>
+      </div>
+      <label class="settings-check"><input id="s-editor-lang-suggest-on-trigger-characters" type="checkbox"><span><b>Suggest on trigger characters</b><small>Language-specific editor.suggestOnTriggerCharacters.</small></span></label>
       <label class="settings-check"><input id="s-editor-lang-format-on-save" type="checkbox"><span><b>Format on save</b><small>Language-specific editor.formatOnSave.</small></span></label>
       <label class="settings-check"><input id="s-editor-lang-format-on-paste" type="checkbox"><span><b>Format on paste</b><small>Language-specific editor.formatOnPaste.</small></span></label>
       <label class="settings-check"><input id="s-editor-lang-format-on-type" type="checkbox"><span><b>Format on type</b><small>Language-specific editor.formatOnType.</small></span></label>
@@ -2152,11 +2174,12 @@ const SETTINGS_SECTION_DEFAULTS={
   mcp:{access:'prompt',autostart:false,discovery_enabled:true,collision_behavior:'first',server_sampling:false},
   terminal:{profile:'PowerShell 7 (No Profile)',shell_path:'',shell_args:[],timeout:30,output_limit:8000,auto_approve:{}},
   extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands','views','customEditors','notebooks','terminal','statusBarItems'],enabled_contributions_explicit:false,diagnostics_enabled:false},
-  editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,formatOnPaste:false,linkedEditing:false,codeActionsOnSave:{},codeActions:{triggerOnFocusChange:false},pasteAs:{preferences:[]},tabSize:4,insertSpaces:true,wordSeparators:'`~!@#$%^&*()-=+[{]}\\|;:\'",.<>/?'},
+  editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,formatOnPaste:false,linkedEditing:false,codeActionsOnSave:{},codeActions:{triggerOnFocusChange:false},pasteAs:{preferences:[]},tabSize:4,insertSpaces:true,wordSeparators:'`~!@#$%^&*()-=+[{]}\\|;:\'",.<>/?',quickSuggestions:{other:'offWhenInlineCompletions',comments:'off',strings:'off'},quickSuggestionsDelay:10,suggestOnTriggerCharacters:true,acceptSuggestionOnEnter:'on',acceptSuggestionOnCommitCharacter:true},
   files:{autoSave:'off',autoSaveDelay:1000,trimTrailingWhitespace:false,insertFinalNewline:false,trimFinalNewlines:false},
   customization:{instructions_locations:['.sao/instructions.md','.sao/instructions'],agent_locations:['.sao/agents'],workflow_locations:['.sao/workflows'],skill_locations:['.agents/skills/.local','.claude/skills/.local'],use_agent_md:true,use_claude_md:false}
 };
 const DEFAULT_EDITOR_WORD_SEPARATORS='`~!@#$%^&*()-=+[{]}\\|;:\'",.<>/?';
+const DEFAULT_EDITOR_QUICK_SUGGESTIONS={other:'offWhenInlineCompletions',comments:'off',strings:'off'};
 const EXTENSION_CONTRIBUTION_OPTIONS=[
   {id:'chatParticipants',label:'Chat Participants',description:'Expose extension chat participants in the assistant surface.'},
   {id:'languageModelTools',label:'LM Tools',description:'Register extension language-model tools for tool invocation.'},
@@ -4583,8 +4606,8 @@ function _editorInputWithUndo(e){
   closeDocumentSymbolPicker();
   closeEditorHierarchy();
   const ch=e&&typeof e.data==='string'?e.data:'';
-  if(editorCompletionTriggerCharacter(ch))requestEditorCompletion(ch,true);
-  else closeEditorSuggest();
+  if(editorCompletionTriggerCharacter(ch)&&editorSuggestOnTriggerCharactersEnabled())requestEditorCompletion(ch,true);
+  else if(!scheduleEditorQuickSuggestions(ch))closeEditorSuggest();
   if(editorSignatureTriggerCharacter(ch))requestEditorSignatureHelp(ch,2,true);
   else if(editorSignatureCloseCharacter(ch))closeEditorSignatureHelp();
   else if(isEditorSignatureOpen())requestEditorSignatureHelp('',3,true);
@@ -6103,6 +6126,13 @@ function editorCompletionChanged(cursor){
   clearEditorCodeLenses();scheduleEditorCodeLenses(420);
   clearEditorDocumentColors();scheduleEditorDocumentColors(460);
 }
+function editorCompletionWouldChangeText(item){
+  if(!item||!ed)return false;
+  const value=String(ed.value||''),cursor=ed.selectionStart;
+  const range=editorCompletionRangeOffsets(item,value,cursor,ed.selectionEnd);
+  const text=editorCompletionAdjustedText(editorCompletionInsertTextRaw(item)||completionLabelText(item&&item.label),item,range.start,value);
+  return value.slice(range.start,range.finish)!==String(text||'');
+}
 function editorInsertCompletionCommitCharacter(ch){
   if(!ch)return;
   editorCancelSnippetSession(false);
@@ -6151,6 +6181,7 @@ function isEditorSuggestOpen(){
 }
 function closeEditorSuggest(){
   const box=$('editor-suggest');if(!box)return;
+  clearEditorQuickSuggest();
   box.classList.remove('open');box.style.display='none';_editorSuggestItems=[];
   closeEditorSuggestDetails();
 }
@@ -6218,11 +6249,17 @@ function handleEditorSuggestKey(e){
   if(e.key==='ArrowUp'){e.preventDefault();setEditorSuggestIndex(_editorSuggestIndex-1);return true}
   if(e.key==='ArrowRight'){e.preventDefault();showEditorSuggestDetails(_editorSuggestItems[_editorSuggestIndex]);return true}
   if(e.key==='ArrowLeft'){e.preventDefault();closeEditorSuggestDetails();return true}
-  if(e.key==='Enter'||e.key==='Tab'){e.preventDefault();applyEditorCompletion(_editorSuggestItems[_editorSuggestIndex]);return true}
+  if(e.key==='Tab'){e.preventDefault();applyEditorCompletion(_editorSuggestItems[_editorSuggestIndex]);return true}
+  if(e.key==='Enter'){
+    const mode=editorAcceptSuggestionOnEnterMode(),item=_editorSuggestItems[_editorSuggestIndex];
+    if(mode==='off')return false;
+    if(mode==='smart'&&!editorCompletionWouldChangeText(item))return false;
+    e.preventDefault();applyEditorCompletion(item);return true;
+  }
   if(e.key==='Escape'){e.preventDefault();closeEditorSuggest();return true}
   if(e.key&&e.key.length===1&&!e.ctrlKey&&!e.altKey&&!e.metaKey){
     const item=_editorSuggestItems[_editorSuggestIndex];
-    if(editorCompletionCommitCharacters(item).includes(e.key)){
+    if(editorAcceptSuggestionOnCommitCharacterEnabled()&&editorCompletionCommitCharacters(item).includes(e.key)){
       e.preventDefault();applyEditorCompletion(item,{commitCharacter:e.key});return true;
     }
   }
@@ -6230,6 +6267,35 @@ function handleEditorSuggestKey(e){
 }
 function editorCompletionTriggerCharacter(ch){
   return typeof ch==='string'&&ch.length===1&&'.:#/@'.includes(ch);
+}
+let _editorQuickSuggestTimer=null;
+function clearEditorQuickSuggest(){
+  clearTimeout(_editorQuickSuggestTimer);_editorQuickSuggestTimer=null;
+}
+function editorQuickSuggestionContextAt(value,pos){
+  const span=editorLineSpanAt(value,pos),prefix=span.line.slice(0,Math.max(0,pos-span.lineStart));
+  const comments=languageCommentTokens(editorLang);
+  const scopes=editorLineStringScopes(prefix,comments.lineComment);
+  if(scopes.includes('comment'))return 'comments';
+  if(scopes.includes('string'))return 'strings';
+  return 'other';
+}
+function editorQuickSuggestionModeForContext(value,pos){
+  const quick=editorQuickSuggestions(),context=editorQuickSuggestionContextAt(value,pos);
+  return quick[context]||DEFAULT_EDITOR_QUICK_SUGGESTIONS[context]||'off';
+}
+function editorQuickSuggestionWidgetEnabled(ch){
+  if(!ch||/\s/.test(ch))return false;
+  const mode=editorQuickSuggestionModeForContext(ed.value,ed.selectionStart);
+  if(mode==='off'||mode==='inline')return false;
+  if(mode==='offWhenInlineCompletions'&&Array.isArray(_editorInlineCompletions)&&_editorInlineCompletions.some(item=>editorInlineCompletionPreviewText(item)))return false;
+  return true;
+}
+function scheduleEditorQuickSuggestions(ch){
+  clearEditorQuickSuggest();
+  if(!editorQuickSuggestionWidgetEnabled(ch))return false;
+  _editorQuickSuggestTimer=setTimeout(()=>requestEditorCompletion('',true),editorQuickSuggestionsDelay());
+  return true;
 }
 async function requestEditorCompletion(triggerCharacter,quiet){
   const requestId=++_editorSuggestRequest;
@@ -8457,6 +8523,58 @@ function editorInsertSpaces(value){return value!==false}
 function editorFormatOptions(){
   const editor=editorEffectiveSection('editor');
   return {tabSize:editorTabSize(editor.tabSize),insertSpaces:editorInsertSpaces(editor.insertSpaces)};
+}
+function editorSuggestSetting(name,language){
+  const editor=editorEffectiveSection('editor',language);
+  return editor?editor[name]:undefined;
+}
+function editorQuickSuggestionMode(value,fallback){
+  if(value===true)return 'on';
+  if(value===false)return 'off';
+  const text=String(value||'').trim();
+  return ['on','inline','off','offWhenInlineCompletions'].includes(text)?text:(fallback||'off');
+}
+function editorQuickSuggestions(value){
+  if(value===undefined)value=editorSuggestSetting('quickSuggestions');
+  if(isPlainObject(value)){
+    return {
+      other:editorQuickSuggestionMode(value.other,DEFAULT_EDITOR_QUICK_SUGGESTIONS.other),
+      comments:editorQuickSuggestionMode(value.comments,DEFAULT_EDITOR_QUICK_SUGGESTIONS.comments),
+      strings:editorQuickSuggestionMode(value.strings,DEFAULT_EDITOR_QUICK_SUGGESTIONS.strings)
+    };
+  }
+  const mode=editorQuickSuggestionMode(value,'');
+  if(mode)return {other:mode,comments:mode,strings:mode};
+  return {...DEFAULT_EDITOR_QUICK_SUGGESTIONS};
+}
+function editorQuickSuggestionsFromInputs(prefix){
+  return {
+    other:editorQuickSuggestionMode(readInputValue(prefix+'quick-suggestions-other'),DEFAULT_EDITOR_QUICK_SUGGESTIONS.other),
+    comments:editorQuickSuggestionMode(readInputValue(prefix+'quick-suggestions-comments'),DEFAULT_EDITOR_QUICK_SUGGESTIONS.comments),
+    strings:editorQuickSuggestionMode(readInputValue(prefix+'quick-suggestions-strings'),DEFAULT_EDITOR_QUICK_SUGGESTIONS.strings)
+  };
+}
+function setEditorQuickSuggestionInputs(prefix,value){
+  const quick=editorQuickSuggestions(value);
+  setSelectValue(prefix+'quick-suggestions-other',quick.other,DEFAULT_EDITOR_QUICK_SUGGESTIONS.other);
+  setSelectValue(prefix+'quick-suggestions-comments',quick.comments,DEFAULT_EDITOR_QUICK_SUGGESTIONS.comments);
+  setSelectValue(prefix+'quick-suggestions-strings',quick.strings,DEFAULT_EDITOR_QUICK_SUGGESTIONS.strings);
+}
+function editorQuickSuggestionsDelay(value){
+  const n=Math.trunc(Number(value===undefined?editorSuggestSetting('quickSuggestionsDelay'):value));
+  return Number.isFinite(n)&&n>=0?n:10;
+}
+function editorAcceptSuggestionOnEnterMode(value){
+  if(value===true)return 'on';
+  if(value===false)return 'off';
+  const text=String(value===undefined?editorSuggestSetting('acceptSuggestionOnEnter'):value||'').trim();
+  return ['on','smart','off'].includes(text)?text:'on';
+}
+function editorAcceptSuggestionOnCommitCharacterEnabled(value){
+  return (value===undefined?editorSuggestSetting('acceptSuggestionOnCommitCharacter'):value)!==false;
+}
+function editorSuggestOnTriggerCharactersEnabled(value){
+  return (value===undefined?editorSuggestSetting('suggestOnTriggerCharacters'):value)!==false;
 }
 function setDottedConfigValue(target,path,value){
   const parts=String(path||'').split('.').map(p=>p.trim()).filter(Boolean);
@@ -12783,12 +12901,13 @@ function removeManagedEditorLanguageOverrideKeys(entry){
   const managedFlat=[
     'editor.defaultFormatter','editor.default_formatter','editor.formatOnSave','editor.formatOnPaste',
     'editor.formatOnType','editor.linkedEditing','editor.codeActionsOnSave','editor.codeActions.triggerOnFocusChange',
-    'editor.tabSize','editor.insertSpaces','editor.wordSeparators'
+    'editor.tabSize','editor.insertSpaces','editor.wordSeparators','editor.quickSuggestions','editor.quickSuggestionsDelay',
+    'editor.suggestOnTriggerCharacters','editor.acceptSuggestionOnEnter','editor.acceptSuggestionOnCommitCharacter'
   ];
   managedFlat.forEach(key=>delete next[key]);
   if(isPlainObject(next.editor)){
     const editor={...next.editor};
-    ['defaultFormatter','default_formatter','formatOnSave','formatOnPaste','formatOnType','linkedEditing','codeActionsOnSave','tabSize','insertSpaces','wordSeparators'].forEach(key=>delete editor[key]);
+    ['defaultFormatter','default_formatter','formatOnSave','formatOnPaste','formatOnType','linkedEditing','codeActionsOnSave','tabSize','insertSpaces','wordSeparators','quickSuggestions','quickSuggestionsDelay','suggestOnTriggerCharacters','acceptSuggestionOnEnter','acceptSuggestionOnCommitCharacter'].forEach(key=>delete editor[key]);
     if(isPlainObject(editor.codeActions)){
       const codeActions={...editor.codeActions};
       delete codeActions.triggerOnFocusChange;
@@ -12823,6 +12942,11 @@ function saveEditorLanguageOverrideSettings(){
     entry['editor.tabSize']=editorTabSize(readNumberValue('s-editor-lang-tab-size',4,true));
     entry['editor.insertSpaces']=readCheckedValue('s-editor-lang-insert-spaces');
     entry['editor.wordSeparators']=readInputValue('s-editor-lang-word-separators');
+    entry['editor.quickSuggestions']=editorQuickSuggestionsFromInputs('s-editor-lang-');
+    entry['editor.quickSuggestionsDelay']=editorQuickSuggestionsDelay(readNumberValue('s-editor-lang-quick-suggestions-delay',10,true));
+    entry['editor.suggestOnTriggerCharacters']=readCheckedValue('s-editor-lang-suggest-on-trigger-characters');
+    entry['editor.acceptSuggestionOnEnter']=editorAcceptSuggestionOnEnterMode(readInputValue('s-editor-lang-accept-suggestion-on-enter'));
+    entry['editor.acceptSuggestionOnCommitCharacter']=readCheckedValue('s-editor-lang-accept-suggestion-on-commit-character');
     entry['editor.formatOnSave']=readCheckedValue('s-editor-lang-format-on-save');
     entry['editor.formatOnPaste']=readCheckedValue('s-editor-lang-format-on-paste');
     entry['editor.formatOnType']=readCheckedValue('s-editor-lang-format-on-type');
@@ -12875,6 +12999,11 @@ function openSettings(){
   setInputValue('s-editor-tab-size',editorTabSize(editor.tabSize));
   setCheckedValue('s-editor-insert-spaces',editorInsertSpaces(editor.insertSpaces));
   setInputValue('s-editor-word-separators',typeof editor.wordSeparators==='string'?editor.wordSeparators:DEFAULT_EDITOR_WORD_SEPARATORS);
+  setEditorQuickSuggestionInputs('s-editor-',editor.quickSuggestions);
+  setInputValue('s-editor-quick-suggestions-delay',editorQuickSuggestionsDelay(editor.quickSuggestionsDelay));
+  setCheckedValue('s-editor-suggest-on-trigger-characters',editorSuggestOnTriggerCharactersEnabled(editor.suggestOnTriggerCharacters));
+  setSelectValue('s-editor-accept-suggestion-on-enter',editorAcceptSuggestionOnEnterMode(editor.acceptSuggestionOnEnter),'on');
+  setCheckedValue('s-editor-accept-suggestion-on-commit-character',editorAcceptSuggestionOnCommitCharacterEnabled(editor.acceptSuggestionOnCommitCharacter));
   setCheckedValue('s-editor-format-on-save',editor.formatOnSave===true);
   setCheckedValue('s-editor-format-on-paste',editor.formatOnPaste===true);
   setCheckedValue('s-editor-format-on-type',editor.formatOnType===true);
@@ -12896,6 +13025,11 @@ function openSettings(){
   setInputValue('s-editor-lang-tab-size',editorTabSize(languageEditor.tabSize));
   setCheckedValue('s-editor-lang-insert-spaces',editorInsertSpaces(languageEditor.insertSpaces));
   setInputValue('s-editor-lang-word-separators',typeof languageEditor.wordSeparators==='string'?languageEditor.wordSeparators:DEFAULT_EDITOR_WORD_SEPARATORS);
+  setEditorQuickSuggestionInputs('s-editor-lang-',languageEditor.quickSuggestions);
+  setInputValue('s-editor-lang-quick-suggestions-delay',editorQuickSuggestionsDelay(languageEditor.quickSuggestionsDelay));
+  setCheckedValue('s-editor-lang-suggest-on-trigger-characters',editorSuggestOnTriggerCharactersEnabled(languageEditor.suggestOnTriggerCharacters));
+  setSelectValue('s-editor-lang-accept-suggestion-on-enter',editorAcceptSuggestionOnEnterMode(languageEditor.acceptSuggestionOnEnter),'on');
+  setCheckedValue('s-editor-lang-accept-suggestion-on-commit-character',editorAcceptSuggestionOnCommitCharacterEnabled(languageEditor.acceptSuggestionOnCommitCharacter));
   setCheckedValue('s-editor-lang-format-on-save',languageEditor.formatOnSave===true);
   setCheckedValue('s-editor-lang-format-on-paste',languageEditor.formatOnPaste===true);
   setCheckedValue('s-editor-lang-format-on-type',languageEditor.formatOnType===true);
@@ -13147,7 +13281,7 @@ async function saveSettings(){
   config.terminal={...settingSection('terminal'),profile:readInputValue('s-term-profile')||'PowerShell 7 (No Profile)',shell_path:readInputValue('s-term-shell'),shell_args:readListValue('s-term-args',false),timeout:readNumberValue('s-term-timeout',30,true),output_limit:readNumberValue('s-term-output',8000,true)};
   config.extensions={...settingSection('extensions'),confirm_install:readCheckedValue('s-ext-confirm'),diagnostics_enabled:readCheckedValue('s-ext-diagnostics'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true),enabled_contributions:readExtensionContributionValues(),enabled_contributions_explicit:true};
   const editorSettings=settingSection('editor');
-  config.editor={...editorSettings,defaultFormatter:readInputValue('s-editor-default-formatter').trim(),tabSize:editorTabSize(readNumberValue('s-editor-tab-size',4,true)),insertSpaces:readCheckedValue('s-editor-insert-spaces'),wordSeparators:readInputValue('s-editor-word-separators'),formatOnSave:readCheckedValue('s-editor-format-on-save'),formatOnPaste:readCheckedValue('s-editor-format-on-paste'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing'),codeActions:{...(isPlainObject(editorSettings.codeActions)?editorSettings.codeActions:{}),triggerOnFocusChange:readCheckedValue('s-editor-code-actions-trigger-focus')},codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)};
+  config.editor={...editorSettings,defaultFormatter:readInputValue('s-editor-default-formatter').trim(),tabSize:editorTabSize(readNumberValue('s-editor-tab-size',4,true)),insertSpaces:readCheckedValue('s-editor-insert-spaces'),wordSeparators:readInputValue('s-editor-word-separators'),quickSuggestions:editorQuickSuggestionsFromInputs('s-editor-'),quickSuggestionsDelay:editorQuickSuggestionsDelay(readNumberValue('s-editor-quick-suggestions-delay',10,true)),suggestOnTriggerCharacters:readCheckedValue('s-editor-suggest-on-trigger-characters'),acceptSuggestionOnEnter:editorAcceptSuggestionOnEnterMode(readInputValue('s-editor-accept-suggestion-on-enter')),acceptSuggestionOnCommitCharacter:readCheckedValue('s-editor-accept-suggestion-on-commit-character'),formatOnSave:readCheckedValue('s-editor-format-on-save'),formatOnPaste:readCheckedValue('s-editor-format-on-paste'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing'),codeActions:{...(isPlainObject(editorSettings.codeActions)?editorSettings.codeActions:{}),triggerOnFocusChange:readCheckedValue('s-editor-code-actions-trigger-focus')},codeActionsOnSave:editorCodeActionsOnSaveFromSettings(editorSettings.codeActionsOnSave)};
   saveEditorLanguageOverrideSettings();
   config.files={...settingSection('files'),autoSave:filesAutoSaveMode({autoSave:readInputValue('s-files-auto-save')}),autoSaveDelay:filesAutoSaveDelay({autoSaveDelay:readNumberValue('s-files-auto-save-delay',1000,true)}),trimTrailingWhitespace:readCheckedValue('s-files-trim-trailing-whitespace'),insertFinalNewline:readCheckedValue('s-files-insert-final-newline'),trimFinalNewlines:readCheckedValue('s-files-trim-final-newlines')};
   saveFilesLanguageOverrideSettings();

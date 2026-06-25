@@ -3543,8 +3543,16 @@ def test_phase1_ai_editor_regressions() -> None:
            and "codeActions:{triggerOnFocusChange:false}" in html
            and "pasteAs:{preferences:[]}" in html
            and "const DEFAULT_EDITOR_WORD_SEPARATORS='`~!@#$%^&*()" in html
+           and "quickSuggestions:{other:'offWhenInlineCompletions',comments:'off',strings:'off'}" in html
+           and "quickSuggestionsDelay:10" in html
+           and "acceptSuggestionOnEnter:'on'" in html
            and "id=\"s-editor-default-formatter\"" in html
            and "id=\"s-editor-word-separators\"" in html
+           and "id=\"s-editor-quick-suggestions-other\"" in html
+           and "id=\"s-editor-quick-suggestions-delay\"" in html
+           and "id=\"s-editor-suggest-on-trigger-characters\"" in html
+           and "id=\"s-editor-accept-suggestion-on-enter\"" in html
+           and "id=\"s-editor-accept-suggestion-on-commit-character\"" in html
            and "id=\"s-editor-format-on-save\"" in html
            and "id=\"s-editor-format-on-paste\"" in html
            and "id=\"s-editor-format-on-type\"" in html
@@ -3555,11 +3563,21 @@ def test_phase1_ai_editor_regressions() -> None:
            and "id=\"s-editor-code-actions-detected\"" in html
            and "id=\"s-editor-code-actions-trigger-focus\"" in html
            and "id=\"s-editor-lang-word-separators\"" in html
+           and "id=\"s-editor-lang-quick-suggestions-other\"" in html
+           and "id=\"s-editor-lang-quick-suggestions-delay\"" in html
+           and "id=\"s-editor-lang-suggest-on-trigger-characters\"" in html
+           and "id=\"s-editor-lang-accept-suggestion-on-enter\"" in html
+           and "id=\"s-editor-lang-accept-suggestion-on-commit-character\"" in html
            and "id=\"s-editor-lang-code-actions-on-save-json\"" in html
            and "id=\"s-editor-lang-code-actions-detected\"" in html
            and "function editorWordSeparators(language)" in html
            and "function editorIsWordSeparator(ch,language)" in html
            and "function editorWordRangeAt(value,start,end,language)" in html
+           and "function editorQuickSuggestions(value)" in html
+           and "function editorQuickSuggestionsDelay(value)" in html
+           and "function editorAcceptSuggestionOnEnterMode(value)" in html
+           and "function editorSuggestOnTriggerCharactersEnabled(value)" in html
+           and "function scheduleEditorQuickSuggestions(ch)" in html
            and "function editorFormatOnSaveEnabled()" in html
            and "function editorDefaultFormatter()" in html
            and "async function requestEditorFormattingProviders()" in html
@@ -4573,6 +4591,9 @@ const localStorage = {
   setItem(key,value){ localStore[key] = String(value); },
 };
 function assert(ok, label){ if(!ok){ throw new Error(label); } }
+function editorAcceptSuggestionOnEnterMode(){ return "on"; }
+function editorAcceptSuggestionOnCommitCharacterEnabled(){ return true; }
+function editorCompletionWouldChangeText(){ return true; }
 function editorOffsetFromPosition(value,pos){
   value = String(value || ""); pos = pos || {};
   let line = Math.max(0, Number(pos.line) || 0);
@@ -4841,6 +4862,180 @@ setTimeout(() => {
             )
         except Exception as exc:
             _check("frontend completion accept metadata", False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
+    if not node_path:
+        _check("frontend suggest option behavior skipped without Node.js", True)
+    else:
+        suggest_option_functions = [
+            "editorSuggestSetting",
+            "editorQuickSuggestionMode",
+            "editorQuickSuggestions",
+            "editorQuickSuggestionsDelay",
+            "editorAcceptSuggestionOnEnterMode",
+            "editorAcceptSuggestionOnCommitCharacterEnabled",
+            "editorSuggestOnTriggerCharactersEnabled",
+            "editorLineSpanAt",
+            "editorLineStringScopes",
+            "editorCompletionTriggerCharacter",
+            "clearEditorQuickSuggest",
+            "editorQuickSuggestionContextAt",
+            "editorQuickSuggestionModeForContext",
+            "editorQuickSuggestionWidgetEnabled",
+            "scheduleEditorQuickSuggestions",
+            "handleEditorSuggestKey",
+        ]
+        suggest_option_js_functions = "\n".join(
+            _extract_js_function(html, name) for name in suggest_option_functions)
+        js = r"""
+function assert(ok,label){ if(!ok){ throw new Error(label); } }
+const DEFAULT_EDITOR_QUICK_SUGGESTIONS = { other: "offWhenInlineCompletions", comments: "off", strings: "off" };
+let editorLang = "self";
+let config = {
+  editor: {
+    quickSuggestions: { other: "on", comments: "off", strings: "inline" },
+    quickSuggestionsDelay: 25,
+    suggestOnTriggerCharacters: false,
+    acceptSuggestionOnEnter: "off",
+    acceptSuggestionOnCommitCharacter: false,
+  },
+  "[self]": {},
+};
+const ed = { value: "alpha", selectionStart: 5, selectionEnd: 5 };
+let _editorInlineCompletions = [];
+let _editorSuggestItems = [{ label: "alpha", insertText: "alphabet", commitCharacters: ["."] }];
+let _editorSuggestIndex = 0;
+let applied = [];
+let detailsOpened = 0;
+let detailsClosed = 0;
+let suggestRequests = [];
+let scheduledDelay = -1;
+let clearedTimer = 0;
+let _editorQuickSuggestTimer = null;
+function isPlainObject(value){ return !!value && typeof value === "object" && !Array.isArray(value); }
+function settingSection(section){ return config[section] || {}; }
+function setDottedConfigValue(target,path,value){
+  const parts = String(path || "").split(".").filter(Boolean);
+  let current = target;
+  for(let i = 0; i < parts.length - 1; i++){
+    if(!isPlainObject(current[parts[i]])) current[parts[i]] = {};
+    current = current[parts[i]];
+  }
+  if(parts.length) current[parts[parts.length - 1]] = value;
+}
+function editorLanguageOverrideKey(language){
+  const id = String(language || editorLang || "").trim();
+  return id ? "[" + id + "]" : "";
+}
+function editorLanguageOverrideSection(language){ return config[editorLanguageOverrideKey(language)] || {}; }
+function editorEffectiveSection(section,language){
+  const result = { ...(settingSection(section) || {}) };
+  const override = editorLanguageOverrideSection(language);
+  if(isPlainObject(override[section])) Object.assign(result, override[section]);
+  const prefix = section + ".";
+  Object.keys(override).forEach(key => {
+    if(key.startsWith(prefix)) setDottedConfigValue(result, key.slice(prefix.length), override[key]);
+  });
+  return result;
+}
+function languageCommentTokens(){ return { lineComment: "//", blockComment: ["/*", "*/"] }; }
+function isEditorSuggestOpen(){ return true; }
+function setEditorSuggestIndex(index){ _editorSuggestIndex = index; }
+function showEditorSuggestDetails(){ detailsOpened += 1; }
+function closeEditorSuggestDetails(){ detailsClosed += 1; }
+function applyEditorCompletion(item,options){ applied.push({ item, options: options || {} }); }
+function editorCompletionCommitCharacters(item){ return (item.commitCharacters || []).filter(ch => String(ch).length === 1); }
+function editorCompletionWouldChangeText(item){ return !!(item && item.changes); }
+function editorInlineCompletionPreviewText(item){ return item && item.preview || ""; }
+function requestEditorCompletion(triggerCharacter,quiet){ suggestRequests.push({ triggerCharacter, quiet }); }
+function setTimeout(fn,delay){ scheduledDelay = delay; fn(); return 7; }
+function clearTimeout(value){ if(value) clearedTimer += 1; }
+""" + suggest_option_js_functions + r"""
+assert(editorQuickSuggestions().other === "on"
+       && editorQuickSuggestions().comments === "off"
+       && editorQuickSuggestions().strings === "inline",
+       "quickSuggestions object normalized");
+assert(editorQuickSuggestions(true).other === "on"
+       && editorQuickSuggestions(false).other === "off",
+       "legacy boolean quickSuggestions normalized");
+assert(editorQuickSuggestionsDelay() === 25
+       && editorQuickSuggestionsDelay(-1) === 10,
+       "quickSuggestionsDelay clamps to VS Code default");
+assert(editorAcceptSuggestionOnEnterMode() === "off"
+       && editorSuggestOnTriggerCharactersEnabled() === false
+       && editorAcceptSuggestionOnCommitCharacterEnabled() === false,
+       "suggest option booleans and enter mode read effective settings");
+
+let prevented = false;
+assert(handleEditorSuggestKey({ key: "Enter", preventDefault(){ prevented = true; } }) === false && !prevented,
+       "acceptSuggestionOnEnter off lets Enter fall through");
+config.editor.acceptSuggestionOnEnter = "smart";
+_editorSuggestItems = [{ label: "same", insertText: "same", changes: false }];
+assert(handleEditorSuggestKey({ key: "Enter", preventDefault(){ prevented = true; } }) === false,
+       "smart Enter skips suggestions that make no text change");
+_editorSuggestItems = [{ label: "change", insertText: "changed", changes: true }];
+prevented = false;
+assert(handleEditorSuggestKey({ key: "Enter", preventDefault(){ prevented = true; } }) === true
+       && prevented && applied.length === 1,
+       "smart Enter accepts changing suggestions");
+
+config.editor.acceptSuggestionOnCommitCharacter = false;
+_editorSuggestItems = [{ label: "dot", insertText: "dot", commitCharacters: ["."] }];
+prevented = false;
+assert(handleEditorSuggestKey({ key: ".", ctrlKey: false, altKey: false, metaKey: false, preventDefault(){ prevented = true; } }) === false
+       && !prevented,
+       "disabled commit characters do not accept suggestions");
+config.editor.acceptSuggestionOnCommitCharacter = true;
+assert(handleEditorSuggestKey({ key: ".", ctrlKey: false, altKey: false, metaKey: false, preventDefault(){ prevented = true; } }) === true
+       && applied[applied.length - 1].options.commitCharacter === ".",
+       "enabled commit characters accept suggestions");
+
+ed.value = "alpha"; ed.selectionStart = 5; suggestRequests = []; scheduledDelay = -1;
+assert(scheduleEditorQuickSuggestions("x") === true
+       && scheduledDelay === 25
+       && suggestRequests.length === 1
+       && suggestRequests[0].triggerCharacter === "",
+       "quickSuggestions schedules delayed suggest widget");
+ed.value = "// comment"; ed.selectionStart = ed.value.length; suggestRequests = [];
+assert(scheduleEditorQuickSuggestions("x") === false && suggestRequests.length === 0,
+       "quickSuggestions comments mode off suppresses widget");
+ed.value = "'string"; ed.selectionStart = ed.value.length; suggestRequests = [];
+assert(scheduleEditorQuickSuggestions("x") === false && suggestRequests.length === 0,
+       "quickSuggestions inline mode does not open suggest widget");
+config.editor.quickSuggestions = { other: "offWhenInlineCompletions", comments: "on", strings: "on" };
+_editorInlineCompletions = [{ preview: "ghost" }];
+ed.value = "plain"; ed.selectionStart = 5; suggestRequests = [];
+assert(scheduleEditorQuickSuggestions("x") === false && suggestRequests.length === 0,
+       "offWhenInlineCompletions suppresses widget while ghost text is visible");
+assert(editorCompletionTriggerCharacter(".") && !editorSuggestOnTriggerCharactersEnabled(false),
+       "suggestOnTriggerCharacters can disable provider trigger characters");
+console.log("frontend suggest option behavior ok");
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check_subprocess_result(
+                "frontend suggest option behavior",
+                result,
+                "frontend suggest option behavior ok",
+            )
+        except Exception as exc:
+            _check("frontend suggest option behavior", False, str(exc))
         finally:
             if js_path:
                 try:
