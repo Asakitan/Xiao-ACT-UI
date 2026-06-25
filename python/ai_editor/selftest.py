@@ -3376,6 +3376,23 @@ def test_phase1_ai_editor_regressions() -> None:
            and "setChatCompletionState('tool',true,'at-popup');" in html
            and "role=\"listbox\" aria-label=\"Slash commands\"" in html
            and "role=\"listbox\" aria-label=\"Chat input completions\"" in html)
+    _check("frontend Assistant exposes dynamic slash command controls",
+           "function slashCommandDynamicRows()" in html
+           and "function slashFindControlItem(rows,arg)" in html
+           and "function slashFindSession(arg)" in html
+           and "function slashInsertToolHint(name)" in html
+           and "async function slashSetProvider(arg)" in html
+           and "['/agent','Set active agent','agent']" in html
+           and "['/provider','Set chat provider or provider surface','provider']" in html
+           and "['/model','Set current model','provider']" in html
+           and "['/workflow','Run workflow','workflow']" in html
+           and "['/tool','Insert tool hint','tool']" in html
+           and "assistantSessionOpenItem(session.id);" in html
+           and "await setToolbarAgent(controlItemId(agent));" in html
+           and "updateProviderModel(config.provider,arg,true);" in html
+           and "runToolbarWorkflow()" in html
+           and "slashInsertToolHint(tool.name);" in html
+           and "cmd.startsWith(raw)||cmd.startsWith(prefix)" in html)
     _check("frontend Assistant renders response references and changed-file cards",
            "chat-response-references" in html
            and "chat-response-reference-list" in html

@@ -11365,14 +11365,49 @@ async function exportChat(){
 window.doSend=doSend;window.doStop=doStop;window.newChat=newChat;window.clearChat=clearChat;window.exportChat=exportChat;
 
 // ── Slash commands ──
+function slashCommandDynamicRows(){
+  const rows=[];
+  (chatControlState.agents||[]).forEach(a=>{const id=controlItemId(a);if(id)rows.push(['/agent '+id,controlItemName(a)||id,'agent'])});
+  (chatControlState.providers||[]).forEach(p=>{const id=controlItemId(p);if(id)rows.push(['/provider '+id,controlItemName(p)||id,'provider'])});
+  (chatControlState.workflows||[]).forEach(w=>{const id=controlItemId(w);if(id)rows.push(['/workflow '+id,controlItemName(w)||id,'workflow'])});
+  assistantSessionLoadItems().slice(0,20).forEach(s=>{if(s&&s.id)rows.push(['/session '+s.id,s.title||s.sessionResource||'Chat session','session'])});
+  chatToolCompletionItems.slice(0,40).forEach(tool=>rows.push(['/tool '+tool.name,tool.description||tool.name,'tool']));
+  return rows;
+}
 function getSlashCmds(){return [
   ['/clear',t('slash_clear'),'chat'],['/new',t('slash_new'),'chat'],['/export',t('slash_export'),'chat'],
   ['/settings',t('slash_settings'),'ui'],['/tools',t('slash_tools'),'ui'],['/history',t('slash_history'),'chat'],
-  ['/sessions','Open chat sessions','chat'],['/fork','Fork current chat session','chat'],
+  ['/sessions','Open chat sessions','chat'],['/session','Open a chat session by id or title','session'],['/fork','Fork current chat session','chat'],
   ['/attach','Attach context','context'],['/context','Attach context','context'],
-  ['/instructions',t('slash_instructions'),'context'],['/agents',t('slash_agents'),'agent'],
+  ['/instructions',t('slash_instructions'),'context'],['/agents',t('slash_agents'),'agent'],['/agent','Set active agent','agent'],
+  ['/provider','Set chat provider or provider surface','provider'],['/model','Set current model','provider'],
+  ['/workflow','Run workflow','workflow'],['/tool','Insert tool hint','tool'],
   ['/system',t('slash_system'),'engine'],['/eval',t('slash_eval'),'engine'],
-];}
+].concat(slashCommandDynamicRows());}
+function slashFindControlItem(rows,arg){
+  const q=String(arg||'').trim().toLowerCase();
+  if(!q)return null;
+  return (rows||[]).find(item=>controlItemId(item).toLowerCase()===q||controlItemName(item).toLowerCase()===q||controlItemName(item).toLowerCase().includes(q))||null;
+}
+function slashFindSession(arg){
+  const q=String(arg||'').trim().toLowerCase();
+  if(!q)return null;
+  return assistantSessionLoadItems().find(s=>String(s.id||'').toLowerCase()===q||String(s.title||'').toLowerCase().includes(q))||null;
+}
+function slashInsertToolHint(name){
+  const inp=$('chat-input'),tool=String(name||'').replace(/^#/,'').trim();
+  if(!inp||!tool)return false;
+  inp.value='#'+tool+' ';inp.selectionStart=inp.selectionEnd=inp.value.length;inp.focus();
+  setStatus('Tool hint: #'+tool);
+  return true;
+}
+async function slashSetProvider(arg){
+  const provider=slashFindControlItem(chatControlState.providers,arg);
+  const providerId=provider?controlItemId(provider):String(arg||'').trim();
+  if(!providerId){appendSystem('Usage: /provider <provider>');return}
+  if((typeof providerDefs!=='undefined'&&providerDefs[providerId])||providerId==='chat')switchRightTab(providerId);
+  else updateProviderModel(providerId,config.model||readProviderModelDefaults(providerId),true);
+}
 
 async function execSlash(raw){
   const parts=raw.trim().split(/\s+/),cmd=parts[0].toLowerCase(),arg=parts.slice(1).join(' ');
@@ -11383,10 +11418,39 @@ async function execSlash(raw){
   else if(cmd==='/tools')switchSidebar('tools');
   else if(cmd==='/history')openChatHistory();
   else if(cmd==='/sessions')openChatHistory();
+  else if(cmd==='/session'){
+    const session=slashFindSession(arg);
+    if(session)assistantSessionOpenItem(session.id);
+    else openChatHistory();
+  }
   else if(cmd==='/fork')assistantSessionForkCurrent();
   else if(cmd==='/attach'||cmd==='/context')openChatContextPicker();
   else if(cmd==='/instructions')switchSidebar('instructions')
   else if(cmd==='/agents')switchSidebar('agents')
+  else if(cmd==='/agent'){
+    const agent=slashFindControlItem(chatControlState.agents,arg);
+    if(arg&&!agent)appendSystem('Agent not found: '+arg);
+    else if(agent)await setToolbarAgent(controlItemId(agent));
+    else switchSidebar('agents');
+  }
+  else if(cmd==='/provider')await slashSetProvider(arg);
+  else if(cmd==='/model'){
+    if(arg)updateProviderModel(config.provider,arg,true);
+    else appendSystem('Usage: /model <model>');
+  }
+  else if(cmd==='/workflow'){
+    const workflow=slashFindControlItem(chatControlState.workflows,arg);
+    if(workflow){const wfSel=$('chat-workflow-sel');if(wfSel){wfSel.value=controlItemId(workflow);updateToolbarWorkflowButton()}runToolbarWorkflow()}
+    else if(arg)appendSystem('Workflow not found: '+arg);
+    else switchSidebar('agents');
+  }
+  else if(cmd==='/tool'){
+    if(!arg){switchSidebar('tools');return}
+    const tool=(chatToolCompletionItems||[]).find(t=>t.name.toLowerCase()===arg.toLowerCase()||t.name.toLowerCase().includes(arg.toLowerCase()));
+    if(tool)slashInsertToolHint(tool.name);
+    else if(arg)appendSystem('Tool not found: '+arg);
+    else switchSidebar('tools');
+  }
   else if(cmd==='/system'){
     const r=await call('execute_tool','engine',JSON.stringify({action:'system_info'}),true);
     const b=createMsg('system');b.style.fontFamily='var(--mono)';b.style.fontSize='12px';b.style.color='var(--fg-dim)';
@@ -11450,8 +11514,11 @@ chatInp.addEventListener('input',function(){
     _chatInputTimer=null;
     const v=self.value;
     if(v.startsWith('/')&&!v.includes('\n')){
-      const prefix=v.split(/\s/)[0].toLowerCase();
-      const matches=getSlashCmds().filter(c=>c[0].startsWith(prefix));
+      const raw=v.trim().toLowerCase(),prefix=v.split(/\s/)[0].toLowerCase();
+      const matches=getSlashCmds().filter(c=>{
+        const cmd=String(c[0]||'').toLowerCase(),desc=String(c[1]||'').toLowerCase();
+        return cmd.startsWith(raw)||cmd.startsWith(prefix)&&(!raw.includes(' ')||cmd.includes(raw.slice(prefix.length).trim())||desc.includes(raw.slice(prefix.length).trim()));
+      });
       renderSlashPopup(matches);
     } else closeSlashPopup();
     self.style.height='auto';self.style.height=Math.min(self.scrollHeight,180)+'px';
