@@ -881,6 +881,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .cmd-palette .cmd-item { padding:6px 12px; cursor:pointer; display:grid;
   grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:center; }
 .cmd-palette .cmd-item:hover, .cmd-palette .cmd-item.selected { background:var(--bg-hover); }
+.cmd-palette .cmd-item.disabled { opacity:.55; cursor:not-allowed; }
+.cmd-palette .cmd-item.disabled:hover { background:transparent; }
 .cmd-palette .cmd-item .label { min-width:0; font-size:13px; color:var(--fg); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cmd-palette .cmd-item .shortcut { font-size:11px; color:var(--fg-dim); font-family:var(--mono); }
 .cmd-palette .cmd-item .meta { grid-column:1/-1; display:flex; gap:8px; min-width:0;
@@ -15567,6 +15569,7 @@ function commandPaletteNormalizeDynamicCommand(raw,builtinIds){
   const category=String(raw.category||raw.source||'Extensions').trim()||'Extensions';
   const label=String(raw.label||((category&&title.indexOf(category+':')!==0)?category+': '+title:title)||id);
   const description=String(raw.description||raw.extensionId||raw.source||'Extension command');
+  const enabled=raw.disabled?false:raw.enabled!==false;
   return{
     id:id,
     commandId:id,
@@ -15577,7 +15580,14 @@ function commandPaletteNormalizeDynamicCommand(raw,builtinIds){
     extensionId:raw.extensionId||'',
     runtimeAvailable:raw.runtimeAvailable!==false,
     needsExtensionRuntime:!!raw.needsExtensionRuntime,
-    action:()=>call('execute_command',id,...(Array.isArray(raw.arguments)?raw.arguments:[])),
+    enablement:raw.enablement||'',
+    enabled:enabled,
+    disabled:!enabled,
+    disabledReason:raw.disabledReason||(!enabled&&raw.enablement?'Enablement not satisfied: '+raw.enablement:''),
+    action:()=>{
+      if(!enabled){setStatus(raw.disabledReason||'Command is disabled');return Promise.resolve({error:'Command is disabled'})}
+      return call('execute_command',id,...(Array.isArray(raw.arguments)?raw.arguments:[]));
+    },
   };
 }
 function commandPaletteAllCommands(){
@@ -15750,7 +15760,7 @@ function commandPaletteHighlightedHtml(text,ranges){
   return out+esc(value.slice(pos));
 }
 function commandPaletteSelectableItems(){
-  return Array.from($('cmd-list').querySelectorAll('.cmd-item'));
+  return Array.from($('cmd-list').querySelectorAll('.cmd-item:not(.disabled)'));
 }
 function commandPaletteSetSelected(index){
   const items=commandPaletteSelectableItems();
@@ -15773,6 +15783,10 @@ function commandPaletteMoveSelection(delta){
   else commandPaletteSetSelected((_cmdPaletteSelected+delta+items.length)%items.length);
 }
 function commandPaletteRunCommand(command){
+  if(command.disabled||command.enabled===false){
+    setStatus(command.disabledReason||'Command is disabled');
+    return;
+  }
   if(!command.noHistory)commandPaletteRemember(command);
   closeCommandPalette();
   command.action();
@@ -15794,13 +15808,16 @@ function filterCommands(){
   items.forEach((entry,visibleIndex)=>{
     if(entry.recent&&!showedRecent){const sep=document.createElement('div');sep.className='cmd-separator';sep.textContent='recently used';list.appendChild(sep);showedRecent=true}
     if(!entry.recent&&showedRecent&&!showedOther){const sep=document.createElement('div');sep.className='cmd-separator';sep.textContent='other commands';list.appendChild(sep);showedOther=true}
-    const c=entry.command,d=document.createElement('div');d.className='cmd-item';d.id='cmd-item-'+visibleIndex;
+    const c=entry.command,d=document.createElement('div');d.className='cmd-item'+(c.disabled?' disabled':'');d.id='cmd-item-'+visibleIndex;
     d.dataset.commandId=entry.id;d.setAttribute('role','option');d.setAttribute('aria-label',c.shortcut?c.label+', '+c.shortcut:c.label);
+    if(c.disabled)d.setAttribute('aria-disabled','true');
     const labelRanges=entry.match&&entry.match.field==='label'?entry.match.ranges:[];
     d.innerHTML='<span class="label">'+commandPaletteHighlightedHtml(c.label,labelRanges)+'</span>'
       +(c.shortcut?'<span class="shortcut">'+esc(c.shortcut)+'</span>':'')
       +'<span class="meta"><span class="category">'+esc(entry.category)+'</span>'
       +(c.description?'<span class="description">'+esc(c.description)+'</span>':'')
+      +(c.disabledReason?'<span class="description">'+esc(c.disabledReason)+'</span>':'')
+      +(c.enablement?'<span class="description">when '+esc(c.enablement)+'</span>':'')
       +(entry.id&&entry.id!==c.label?'<span class="description">'+esc(entry.id)+'</span>':'')
       +'</span>';
     d.onclick=()=>commandPaletteRunCommand(c);

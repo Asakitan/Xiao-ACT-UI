@@ -5833,6 +5833,13 @@ console.log("extension setting schema helpers ok");
            and "function refreshCommandPaletteDynamicCommands()" in html
            and "call('list_command_palette_commands')" in html
            and "call('execute_command',id" in html
+           and "const enabled=raw.disabled?false:raw.enabled!==false" in html
+           and "disabledReason:raw.disabledReason" in html
+           and "Command is disabled" in html
+           and ".cmd-palette .cmd-item.disabled" in html
+           and ".cmd-item:not(.disabled)" in html
+           and "aria-disabled" in html
+           and "'<span class=\"description\">when '" in html
            and "prefix:'?'" in html
            and "prefix:'@'" in html
            and "prefix:'#'" in html
@@ -6035,7 +6042,9 @@ let closedPaletteCount = 0;
 let switchedSidebar = null;
 let openedSettings = false;
 let openedKeybindings = false;
+let statusText = "";
 function call(method, ...args){ executedCommands.push({ method, args }); return Promise.resolve({ ok: true }); }
+function setStatus(text){ statusText = text; }
 function closeCommandPalette(){ closedPaletteCount += 1; }
 function openDocumentSymbolPicker(query){ openedDocumentQuery = query; }
 function openWorkspaceSymbolPicker(query){ openedWorkspaceQuery = query; }
@@ -6124,13 +6133,31 @@ const dynamic = commandPaletteNormalizeDynamicCommand({
 }, commandPaletteBuiltinIdSet());
 assert(dynamic && dynamic.label === "Selftest: Run Probe" && dynamic.id === "selftest.extension.run",
        "dynamic manifest command normalizes title category and id");
+const disabledDynamic = commandPaletteNormalizeDynamicCommand({
+  command: "selftest.extension.disabled",
+  title: "Disabled Probe",
+  category: "Selftest",
+  description: "Disabled command",
+  enablement: "neverContext",
+  enabled: false,
+  disabledReason: "Enablement not satisfied: neverContext",
+}, commandPaletteBuiltinIdSet());
+assert(disabledDynamic && disabledDynamic.disabled && disabledDynamic.enabled === false
+       && disabledDynamic.enablement === "neverContext"
+       && disabledDynamic.disabledReason === "Enablement not satisfied: neverContext",
+       "dynamic disabled command preserves enablement metadata");
+disabledDynamic.action();
+assert(statusText === "Enablement not satisfied: neverContext"
+       && !executedCommands.some(item => item.args[0] === "selftest.extension.disabled"),
+       "disabled dynamic command does not execute backend command");
 assert(commandPaletteNormalizeDynamicCommand({ command: "editor.action.rename", title: "Duplicate" }, commandPaletteBuiltinIdSet()) === null,
        "dynamic command does not duplicate built-in ids");
-_cmdPaletteDynamicCommands = [dynamic];
+_cmdPaletteDynamicCommands = [dynamic, disabledDynamic];
 filtered = commandPaletteFilteredCommands("probe", {});
-assert(filtered[0].command.id === "selftest.extension.run",
+const enabledProbe = filtered.find(entry => entry.command.id === "selftest.extension.run");
+assert(enabledProbe && enabledProbe.command.id === "selftest.extension.run",
        "dynamic command description participates in filtering");
-filtered[0].command.action();
+enabledProbe.command.action();
 assert(executedCommands[0].method === "execute_command"
        && executedCommands[0].args[0] === "selftest.extension.run",
        "dynamic command executes through backend command service");
@@ -6906,6 +6933,12 @@ console.log("command palette quick access helpers ok");
             "title": "Run Palette Probe",
             "category": "Selftest",
             "shortTitle": "Palette Probe",
+            "enablement": "editorTextFocus",
+        }, {
+            "command": "selftest.commandPalette.disabled",
+            "title": "Disabled Palette Probe",
+            "category": "Selftest",
+            "enablement": "neverContext",
         }]},
     }, "/tmp/selftest-commands-pack")
     command_palette_api._ext_host.registry.register(command_desc)
@@ -6917,6 +6950,9 @@ console.log("command palette quick access helpers ok");
     manifest_command = next(
         (item for item in palette_commands
          if item.get("id") == "selftest.commandPalette.run"), {})
+    disabled_command = next(
+        (item for item in palette_commands
+         if item.get("id") == "selftest.commandPalette.disabled"), {})
     runtime_command = next(
         (item for item in palette_commands
          if item.get("id") == "selftest.runtimeOnly.command"), {})
@@ -6928,6 +6964,12 @@ console.log("command palette quick access helpers ok");
            and manifest_command.get("extensionId") == "selftest.commands-pack"
            and manifest_command.get("extension", {}).get("displayName") == "Selftest Commands"
            and manifest_command.get("needsExtensionRuntime") is True
+           and manifest_command.get("enablement") == "editorTextFocus"
+           and manifest_command.get("enabled") is True
+           and manifest_command.get("disabled") is False
+           and disabled_command.get("enabled") is False
+           and disabled_command.get("disabled") is True
+           and disabled_command.get("disabledReason") == "Enablement not satisfied: neverContext"
            and runtime_command.get("source") == "runtime"
            and runtime_command.get("runtimeAvailable") is True,
            json.dumps(palette_commands, ensure_ascii=False, default=str))

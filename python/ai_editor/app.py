@@ -9448,6 +9448,12 @@ class AIEditorAPI:
         registered_ids = set(self._ext_host.commands.list_commands())
         entries: List[Dict[str, Any]] = []
         seen: set[str] = set()
+        palette_context = {
+            "editorTextFocus": "true",
+            "textInputFocus": "true",
+            "resourceScheme": "file",
+            "inQuickOpen": "true",
+        }
 
         def extension_info(extension_id: str) -> Dict[str, Any]:
             ext = self._ext_host.registry.get(extension_id)
@@ -9490,9 +9496,19 @@ class AIEditorAPI:
                 "needsExtensionRuntime": bool(
                     (item.get("_runtimeSupport") or {}).get(
                         "needsExtensionRuntime", False)),
+                "enabled": True,
+                "disabled": False,
             }
             if item.get("enablement") is not None:
-                entry["enablement"] = str(item.get("enablement"))
+                enablement = str(item.get("enablement"))
+                enabled = self._extension_when_matches(
+                    enablement, palette_context)
+                entry["enablement"] = enablement
+                entry["enabled"] = enabled
+                entry["disabled"] = not enabled
+                if not enabled:
+                    entry["disabledReason"] = (
+                        f"Enablement not satisfied: {enablement}")
             if item.get("icon") is not None:
                 entry["icon"] = item.get("icon")
             entries.append(entry)
@@ -9510,6 +9526,8 @@ class AIEditorAPI:
                 "source": "runtime",
                 "runtimeAvailable": True,
                 "needsExtensionRuntime": False,
+                "enabled": True,
+                "disabled": False,
             })
 
         entries.sort(key=lambda item: (
