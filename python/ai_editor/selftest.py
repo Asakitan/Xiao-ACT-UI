@@ -3834,7 +3834,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and "renderWelcome();\n  setStatus(t('new_chat_title')" in html
             and "const body=latestChatMessageBody('assistant');" in html)
     _check("frontend Assistant composer keeps normal-width controls in one row",
-           ".chat-toolbar { display:flex; align-items:center; justify-content:space-between; gap:8px;" in html
+           ".chat-toolbar { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:8px;" in html
             and "border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent);" in html
             and "min-width:0; overflow:hidden; white-space:nowrap;" in html
             and ".chat-toolbar .spacer { display:none; }" in html
@@ -3844,8 +3844,8 @@ def test_phase1_ai_editor_regressions() -> None:
             and ".chat-model-inline { width:112px; max-width:112px; padding:0 8px; font-family:var(--mono); flex:0 1 112px; }" in html
             and ".chat-select-chip.agent { width:122px; max-width:122px; flex-basis:122px; }" in html
             and ".chat-select-chip.workflow { width:104px; max-width:104px; flex-basis:104px; }" in html
-            and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px; margin-left:auto;" in html
-            and "flex:0 0 auto; min-width:max-content; width:auto; flex-wrap:nowrap; overflow:visible; white-space:nowrap;" in html
+            and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px;" in html
+            and "justify-self:end; flex:0 1 auto; min-width:0; width:auto; flex-wrap:nowrap; overflow:hidden; white-space:nowrap;" in html
             and ".chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:5px; min-width:0; max-width:148px; flex:0 1 148px;" in html
             and "color:var(--fg-dim); white-space:nowrap; overflow:hidden;" in html
             and ".chat-session-chip { max-width:76px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" in html
@@ -4677,6 +4677,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function toggleAssistantActionCarouselFocus(kind)" in html
            and "function assistantActionTrayCanNavigate(kind)" in html
            and "function assistantHasActionCarousel(kind)" in html
+           and "function assistantCurrentActionTrayItem(kind)" in html
+           and "function assistantConfirmationSkipButton(item)" in html
+           and "async function assistantAcceptCurrentConfirmation()" in html
+           and "async function assistantSkipCurrentConfirmation()" in html
+           and "async function assistantSubmitCurrentQuestionCarousel()" in html
            and "function assistantHandleInputPartShortcut(e)" in html
            and "function assistantActionTrayToggleExpanded(key)" in html
            and "function assistantActionTrayShouldIgnoreNavigationTarget(target)" in html
@@ -4722,8 +4727,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "window.navigateAssistantQuestionCarouselNext=()=>{if(!assistantActionTrayCanNavigate('questionCarousel'))return false;assistantActionTrayNavigate('questionCarousel',1);return true;};" in html
            and "window.navigateAssistantConfirmationCarouselPrevious=()=>{if(!assistantActionTrayCanNavigate('confirmation'))return false;assistantActionTrayNavigate('confirmation',-1);return true;};" in html
            and "window.navigateAssistantConfirmationCarouselNext=()=>{if(!assistantActionTrayCanNavigate('confirmation'))return false;assistantActionTrayNavigate('confirmation',1);return true;};" in html
+           and "window.acceptAssistantConfirmationCarousel=()=>assistantAcceptCurrentConfirmation();" in html
+           and "window.skipAssistantConfirmationCarousel=()=>assistantSkipCurrentConfirmation();" in html
+           and "window.submitAssistantQuestionCarousel=()=>assistantSubmitCurrentQuestionCarousel();" in html
            and "window.clearAssistantPendingActionTray=(kind)=>{assistantClearPendingActionTray(kind?{kind:String(kind)}:{});return true;};" in html
            and "if(assistantHandleInputPartShortcut(e))return;" in html
+           and "if(primary&&key==='Enter'&&!e.shiftKey)" in html
+           and "if(e.altKey&&assistantActionTrayHasFocus('confirmation'))" in html
+           and "if(assistantActionTrayHasFocus('questionCarousel'))" in html
+           and "if(assistantActionTrayHasFocus('confirmation'))" in html
            and "if(primary&&e.shiftKey&&!e.altKey&&lower==='a')" in html
            and "if(e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey&&lower==='p')" in html
            and "if(e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey&&lower==='n')" in html)

@@ -990,7 +990,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-input-container.sendable .send-btn:not(:disabled) { box-shadow:0 0 0 1px color-mix(in srgb, var(--btn) 35%, transparent); }
 .chat-input-container.streaming .send-btn { background:var(--fg-error); }
 .send-btn svg { width:14px; height:14px; }
-.chat-toolbar { display:flex; align-items:center; justify-content:space-between; gap:8px;
+.chat-toolbar { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:8px;
   padding:0 8px 7px; font-size:11px;
   border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent);
   min-width:0; overflow:hidden; white-space:nowrap; min-height:29px; }
@@ -1175,8 +1175,8 @@ pre.code-block code .type { color:var(--fg-type); }
   cursor:pointer; font-size:13px; padding:0; }
 .chat-composer-action:hover,.chat-composer-action:focus { background:var(--bg-hover); color:var(--fg);
   border-color:var(--border); outline:none; }
-.chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px; margin-left:auto;
-  flex:0 0 auto; min-width:max-content; width:auto; flex-wrap:nowrap; overflow:visible; white-space:nowrap; }
+.chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px;
+  justify-self:end; flex:0 1 auto; min-width:0; width:auto; flex-wrap:nowrap; overflow:hidden; white-space:nowrap; }
 .chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:5px; min-width:0; max-width:148px; flex:0 1 148px;
   color:var(--fg-dim); white-space:nowrap; overflow:hidden; }
 .ctx-usage { display:inline-flex; align-items:center; gap:4px; font-size:10px; color:var(--fg-dim); cursor:default; }
@@ -6219,10 +6219,65 @@ function assistantActionTrayCanNavigate(kind){
 function assistantHasActionCarousel(kind){
   return assistantActionTrayItemsByKind(kind).length>0;
 }
+function assistantCurrentActionTrayItem(kind){
+  const items=assistantActionTrayItemsByKind(kind);
+  const index=assistantActionTrayActiveIndex(items,kind);
+  return index>=0?items[index]:null;
+}
+function assistantConfirmationSkipButton(item){
+  if(!item||item.kind!=='confirmation')return null;
+  const buttons=Array.isArray(item.source&&item.source.buttons)?item.source.buttons:[];
+  return buttons.find(button=>{
+    const action=String((button&&button.action)||button||'').toLowerCase();
+    const label=String((button&&button.label)||button||'').toLowerCase();
+    return action.includes('deny')||action.includes('skip')||label.includes('deny')||label.includes('skip');
+  })||(buttons.length>1?buttons[buttons.length-1]:null);
+}
+async function assistantAcceptCurrentConfirmation(){
+  const item=assistantCurrentActionTrayItem('confirmation');
+  const button=assistantActionTrayPrimaryButton(item);
+  if(!item||!button)return false;
+  const label=String((button&&button.label)||button||'Continue');
+  const result=await assistantSubmitResponsePartAction(item.part,(button&&button.action)||'button',(button&&button.value)!==undefined?button.value:label,button,{fallbackTitle:item.source.title||'Confirmation',fallbackText:label,actionKey:item.key});
+  return !!(result&&result.ok);
+}
+async function assistantSkipCurrentConfirmation(){
+  const item=assistantCurrentActionTrayItem('confirmation');
+  const button=assistantConfirmationSkipButton(item);
+  if(!item||!button)return false;
+  const label=String((button&&button.label)||button||'Skip');
+  const result=await assistantSubmitResponsePartAction(item.part,(button&&button.action)||'button',(button&&button.value)!==undefined?button.value:label,button,{fallbackTitle:item.source.title||'Confirmation',fallbackText:label,actionKey:item.key});
+  return !!(result&&result.ok);
+}
+async function assistantSubmitCurrentQuestionCarousel(){
+  const item=assistantCurrentActionTrayItem('questionCarousel');
+  if(!item)return false;
+  const answers=chatQuestionCarouselAnswerPayload(item.card);
+  const text=chatQuestionCarouselAnswerText(item.card);
+  const result=await assistantSubmitResponsePartAction(item.part,'answers',text,null,{fallbackTitle:'Answers',fallbackText:text,answers,actionKey:item.key});
+  return !!(result&&result.ok);
+}
 function assistantHandleInputPartShortcut(e){
   const key=String(e.key||'');
   const lower=key.length===1?key.toLowerCase():key;
   const primary=!!(e.ctrlKey||e.metaKey);
+  if(primary&&key==='Enter'&&!e.shiftKey){
+    if(e.altKey&&assistantActionTrayHasFocus('confirmation')){
+      e.preventDefault();
+      void assistantSkipCurrentConfirmation();
+      return true;
+    }
+    if(assistantActionTrayHasFocus('questionCarousel')){
+      e.preventDefault();
+      void assistantSubmitCurrentQuestionCarousel();
+      return true;
+    }
+    if(assistantActionTrayHasFocus('confirmation')){
+      e.preventDefault();
+      void assistantAcceptCurrentConfirmation();
+      return true;
+    }
+  }
   if(primary&&e.shiftKey&&!e.altKey&&lower==='a'){
     if(assistantHasActionCarousel('questionCarousel')){
       e.preventDefault();
@@ -25622,6 +25677,9 @@ window.navigateAssistantQuestionCarouselPrevious=()=>{if(!assistantActionTrayCan
 window.navigateAssistantQuestionCarouselNext=()=>{if(!assistantActionTrayCanNavigate('questionCarousel'))return false;assistantActionTrayNavigate('questionCarousel',1);return true;};
 window.navigateAssistantConfirmationCarouselPrevious=()=>{if(!assistantActionTrayCanNavigate('confirmation'))return false;assistantActionTrayNavigate('confirmation',-1);return true;};
 window.navigateAssistantConfirmationCarouselNext=()=>{if(!assistantActionTrayCanNavigate('confirmation'))return false;assistantActionTrayNavigate('confirmation',1);return true;};
+window.acceptAssistantConfirmationCarousel=()=>assistantAcceptCurrentConfirmation();
+window.skipAssistantConfirmationCarousel=()=>assistantSkipCurrentConfirmation();
+window.submitAssistantQuestionCarousel=()=>assistantSubmitCurrentQuestionCarousel();
 window.clearAssistantPendingActionTray=(kind)=>{assistantClearPendingActionTray(kind?{kind:String(kind)}:{});return true;};
 
 // ── Welcome screen with suggested prompts ──
