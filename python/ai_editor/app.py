@@ -84,6 +84,105 @@ _WORKSPACE_CONTAINS_MAX_SECONDS = 2.0
 _WORKSPACE_FILE_PREVIEW_BYTES = 1024 * 1024
 _WORKSPACE_DECORATION_PROPAGATE_MAX_ENTRIES = 300
 _WORKSPACE_DECORATION_PROPAGATE_MAX_SECONDS = 0.05
+_ASSISTANT_NATIVE_RESPONSE_FIXTURES = {
+    "split-native-response-parts": {
+        "name": "split-native-response-parts",
+        "description": (
+            "Repeated/split VS Code native chat response parts for the "
+            "Assistant replay harness."
+        ),
+        "chunks": [
+            {
+                "content": "Fixture response with repeated native parts.",
+                "responseParts": [
+                    {
+                        "kind": "externalToolInvocationUpdate",
+                        "toolCallId": "fixture-tool-1",
+                        "toolName": "workspace.search",
+                        "state": "running",
+                        "progress": 0.25,
+                    },
+                    {
+                        "kind": "todoList",
+                        "todoList": [
+                            {"id": "inspect", "title": "Inspect payload", "status": "in-progress"},
+                            {"id": "render", "title": "Render cards", "status": "not-started"},
+                        ],
+                    },
+                    {
+                        "kind": "progressTask",
+                        "content": "Replay split payload",
+                        "progress": [{"message": "normalizing", "increment": 40}],
+                    },
+                ],
+            },
+            {
+                "response_parts": [
+                    {
+                        "kind": "externalToolInvocationUpdate",
+                        "toolCallId": "fixture-tool-1",
+                        "toolName": "workspace.search",
+                        "state": "complete",
+                        "progress": 1,
+                    },
+                    {
+                        "kind": "todoList",
+                        "todoList": [
+                            {"id": "inspect", "title": "Inspect payload", "status": "completed"},
+                            {"id": "render", "title": "Render cards", "status": "in-progress"},
+                        ],
+                    },
+                    {
+                        "kind": "progressTaskResult",
+                        "content": "Replay payload normalized and rendered.",
+                    },
+                    {
+                        "kind": "modifiedFilesConfirmation",
+                        "toolSpecificData": {
+                            "kind": "modifiedFilesConfirmation",
+                            "options": ["Keep", "Undo"],
+                            "modifiedFiles": [
+                                {
+                                    "uri": "file:///workspace/src/app.py",
+                                    "title": "src/app.py",
+                                    "insertions": 3,
+                                    "deletions": 1,
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "kind": "modifiedFilesConfirmation",
+                        "toolSpecificData": {
+                            "kind": "modifiedFilesConfirmation",
+                            "options": ["Keep", "Review"],
+                            "modifiedFiles": [
+                                {
+                                    "uri": "file:///workspace/src/app.py",
+                                    "title": "src/app.py",
+                                    "insertions": 5,
+                                    "deletions": 1,
+                                }
+                            ],
+                        },
+                    },
+                ],
+                "contentReferences": [
+                    {
+                        "label": "Fixture anchor",
+                        "uri": "file:///workspace/src/app.py",
+                        "range": {
+                            "start": {"line": 9, "character": 0},
+                            "end": {"line": 12, "character": 8},
+                        },
+                        "status": "complete",
+                    }
+                ],
+                "usage": {"total_tokens": 42},
+            },
+        ],
+    }
+}
 _WEBVIEW_LOCAL_URL_RE = re.compile(
     r"https://(?:webview\.local|[^/\s\"'<>)]*\.vscode-resource\.webview\.local)"
     r"/[^\s\"'<>)]*"
@@ -6939,6 +7038,31 @@ class AIEditorAPI:
         self._sync_extension_tools()
         ctrl.send(message, agent_mode=prov.auto_agent)
         return {"ok": True}
+
+    def assistant_native_response_fixture(self, name: str = "") -> Dict:
+        """Return a replayable Assistant native response payload fixture."""
+        fixture_name = str(name or "split-native-response-parts").strip()
+        if fixture_name == "list":
+            return {
+                "ok": True,
+                "fixtures": [
+                    {
+                        "name": key,
+                        "description": value.get("description", ""),
+                        "chunk_count": len(value.get("chunks") or []),
+                    }
+                    for key, value in sorted(_ASSISTANT_NATIVE_RESPONSE_FIXTURES.items())
+                ],
+            }
+        fixture = _ASSISTANT_NATIVE_RESPONSE_FIXTURES.get(fixture_name)
+        if not fixture:
+            return {
+                "error": f"Unknown Assistant native response fixture: {fixture_name}",
+                "fixtures": sorted(_ASSISTANT_NATIVE_RESPONSE_FIXTURES),
+            }
+        payload = json.loads(json.dumps(fixture))
+        payload["ok"] = True
+        return payload
 
     def provider_cancel(self, provider_id: str) -> Dict:
         if provider_id == "chat":

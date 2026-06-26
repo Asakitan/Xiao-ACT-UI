@@ -1025,6 +1025,7 @@ def test_app_settings_parity() -> None:
         "extension_quick_input_action",
         "load_history", "switch_provider", "list_chat_providers",
         "provider_send", "provider_cancel", "provider_new_chat",
+        "assistant_native_response_fixture",
         "get_model_info", "test_connection", "set_mode", "save_config",
         "get_mode", "list_models", "save_custom_model",
         "delete_custom_model", "search_extensions",
@@ -1035,6 +1036,28 @@ def test_app_settings_parity() -> None:
     )
     missing = [name for name in js_methods if not callable(getattr(api, name, None))]
     _check("AIEditorAPI JS-callable methods", not missing, ", ".join(missing))
+    fixture_list = api.assistant_native_response_fixture("list")
+    native_fixture = api.assistant_native_response_fixture("split-native-response-parts")
+    fixture_parts = []
+    for chunk in native_fixture.get("chunks", []):
+        fixture_parts.extend(chunk.get("responseParts", []))
+        fixture_parts.extend(chunk.get("response_parts", []))
+    fixture_kinds = [str(part.get("kind", "")) for part in fixture_parts]
+    _check("assistant native response replay fixture exposes split repeated payloads",
+           fixture_list.get("ok") is True
+           and any(item.get("name") == "split-native-response-parts"
+                   for item in fixture_list.get("fixtures", []))
+           and native_fixture.get("ok") is True
+           and len(native_fixture.get("chunks", [])) == 2
+           and fixture_kinds.count("externalToolInvocationUpdate") == 2
+           and fixture_kinds.count("todoList") == 2
+           and fixture_kinds.count("modifiedFilesConfirmation") == 2
+           and "progressTask" in fixture_kinds
+           and "progressTaskResult" in fixture_kinds
+           and native_fixture.get("chunks", [{}])[1].get("contentReferences"))
+    _check("assistant native response replay fixture rejects unknown names",
+           "Unknown Assistant native response fixture"
+           in api.assistant_native_response_fixture("missing-fixture").get("error", ""))
 
     from ai_editor.vscode_api import (
         CompletionItem, CompletionList, Hover, TextEdit, Position, Range,
@@ -3781,6 +3804,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and '<button class="chat-run-chip" id="chat-workflow-run" onclick="runToolbarWorkflow()" title="Run selected workflow">▶</button>\n                  </div>\n                  <div class="chat-composer-trailing" role="group"' in html
            and '<span class="spacer"></span>\n                  <div class="chat-composer-trailing" role="group"' not in html
            and '</span>\n                  </div>\n                </div>' in html)
+    _check("frontend Assistant exposes runtime composer layout snapshot",
+           "function assistantComposerLayoutSnapshot()" in html
+           and "gridTemplateColumns:toolbar?getComputedStyle(toolbar).gridTemplateColumns:''" in html
+           and "sameRow:!!(controlRect&&actionRect&&Math.abs(controlRect.top-actionRect.top)<=1)" in html
+           and "window.assistantComposerLayoutSnapshot=assistantComposerLayoutSnapshot;" in html
+           and "'chat-provider-sel','chat-model-inline','chat-agent-sel','chat-mode-trigger','chat-workflow-sel','chat-workflow-run','chat-input-status'" in html)
     _check("frontend Assistant suppresses null and empty message turns",
            "function normalizeChatMessageText(text,role)" in html
            and "function isChatEmptyLiteral(value)" in html
@@ -4525,6 +4554,23 @@ def test_phase1_ai_editor_regressions() -> None:
            and "kind==='markdown'&&contentText&&text===contentText" in html
            and "role','toolbar'" in html
            and "role',part.kind==='warning'?'alert':'note'" in html)
+    _check("frontend Assistant can replay native provider response fixtures",
+           "function assistantMergeNativeResponsePayloads(payloads)" in html
+           and "const merged={content:'',responseParts:[],contentReferences:[],usedContext:[],fileTrees:[],usage:{}};" in html
+           and "merged.response_parts=merged.responseParts;" not in html
+           and "merged.content_references=merged.contentReferences;" not in html
+           and "function assistantNativeResponseRenderSummary(body,payload,content)" in html
+           and "async function replayAssistantNativeResponseFixture(nameOrPayload,opts)" in html
+           and "fixture=await call('assistant_native_response_fixture',nameOrPayload||'split-native-response-parts');" in html
+           and "const payload=assistantMergeNativeResponsePayloads(chunks);" in html
+           and "renderChatResponseNativeParts(body,payload,content);" in html
+           and "renderChatResponseReferences(body,content,payload);" in html
+           and "body.dataset.assistantReplaySummary=JSON.stringify(summary);" in html
+           and "window.assistantMergeNativeResponsePayloads=assistantMergeNativeResponsePayloads;" in html
+           and "window.assistantNativeResponseRenderSummary=assistantNativeResponseRenderSummary;" in html
+           and "window.replayAssistantNativeResponseFixture=replayAssistantNativeResponseFixture;" in html
+           and "modifiedFileCount:parts.filter(part=>part.kind==='modifiedFilesConfirmation')" in html
+           and "todoCount:parts.filter(part=>part.kind==='todoList')" in html)
     _check("frontend Assistant applies native response text edits and file tree actions",
            "chat-response-summary" in html
            and "chat-inline-actions" in html

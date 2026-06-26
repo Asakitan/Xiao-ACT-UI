@@ -6378,6 +6378,88 @@ function renderChatResponseNativeParts(body,payload,content){
   body.appendChild(wrap);
   return true;
 }
+function assistantMergeNativeResponsePayloads(payloads){
+  const merged={content:'',responseParts:[],contentReferences:[],usedContext:[],fileTrees:[],usage:{}};
+  (Array.isArray(payloads)?payloads:[payloads]).filter(Boolean).forEach(payload=>{
+    const text=normalizeChatMessageText(payload.content||payload.text||'','assistant');
+    if(text)merged.content=text;
+    ['responseParts','response_parts','parts','response'].forEach(key=>{
+      if(Array.isArray(payload[key]))merged.responseParts.push(...payload[key]);
+    });
+    ['contentReferences','content_references','responseReferences','response_references'].forEach(key=>{
+      if(Array.isArray(payload[key]))merged.contentReferences.push(...payload[key]);
+    });
+    const used=payload.usedContext||payload.used_context||payload.used;
+    if(Array.isArray(used))merged.usedContext.push(...used);
+    else if(used&&typeof used==='object'){
+      ['documents','references','items','files','attachments'].forEach(key=>{
+        if(Array.isArray(used[key]))merged.usedContext.push(...used[key]);
+      });
+    }
+    ['fileTrees','file_trees'].forEach(key=>{if(Array.isArray(payload[key]))merged.fileTrees.push(...payload[key])});
+    if(payload.usage&&typeof payload.usage==='object')merged.usage={...merged.usage,...payload.usage};
+    if(payload.model)merged.model=payload.model;
+    if(payload.error)merged.error=payload.error;
+  });
+  return merged;
+}
+function assistantNativeResponseRenderSummary(body,payload,content){
+  const parts=normalizeChatVisibleResponseParts(payload||{},content||'');
+  const kinds=parts.map(part=>part.kind);
+  const wrap=body&&body.querySelector?body.querySelector('.chat-response-native-parts'):null;
+  return {
+    ok:!!body,
+    partCount:parts.length,
+    kinds,
+    nativeCardCount:wrap?wrap.children.length:0,
+    referenceCount:normalizeChatContentReferences(payload||{}).length,
+    fileTreeCount:normalizeChatFileTrees(payload||{}).length,
+    todoCount:parts.filter(part=>part.kind==='todoList').reduce((n,part)=>n+((part.todo&&part.todo.todoList)||[]).length,0),
+    modifiedFileCount:parts.filter(part=>part.kind==='modifiedFilesConfirmation').reduce((n,part)=>n+((part.modifiedFiles&&part.modifiedFiles.files)||[]).length,0)
+  };
+}
+async function replayAssistantNativeResponseFixture(nameOrPayload,opts){
+  opts=opts||{};
+  let fixture=nameOrPayload;
+  if(typeof nameOrPayload==='string'||!fixture){
+    fixture=await call('assistant_native_response_fixture',nameOrPayload||'split-native-response-parts');
+  }
+  if(!fixture||fixture.error)return {ok:false,error:callFailedMessage(fixture,'Fixture unavailable')};
+  const chunks=Array.isArray(fixture.chunks)?fixture.chunks:[fixture];
+  const payload=assistantMergeNativeResponsePayloads(chunks);
+  const content=normalizeChatMessageText(payload.content||'','assistant');
+  const body=createMsg('assistant',payload.model||config.model||'fixture');
+  if(content)renderMd(body,content);
+  renderChatResponseNativeParts(body,payload,content);
+  renderChatResponseReferences(body,content,payload);
+  if(opts&&opts.scroll!==false)$('chat-messages').scrollTop=$('chat-messages').scrollHeight;
+  const summary=assistantNativeResponseRenderSummary(body,payload,content);
+  body.dataset.assistantReplayFixture=String(fixture.name||nameOrPayload||'inline');
+  body.dataset.assistantReplaySummary=JSON.stringify(summary);
+  return {...summary,fixture:fixture.name||'',chunkCount:chunks.length};
+}
+function assistantComposerLayoutSnapshot(){
+  const toolbar=document.querySelector('.chat-toolbar');
+  const controls=document.querySelector('.chat-control-strip');
+  const actions=document.querySelector('.chat-composer-trailing');
+  const ids=['chat-provider-sel','chat-model-inline','chat-agent-sel','chat-mode-trigger','chat-workflow-sel','chat-workflow-run','chat-input-status'];
+  const rect=(el)=>{if(!el)return null;const r=el.getBoundingClientRect();return {top:Math.round(r.top),left:Math.round(r.left),width:Math.round(r.width),height:Math.round(r.height)}};
+  const items={};
+  ids.forEach(id=>{items[id]=rect($(id))});
+  const controlRect=rect(controls),actionRect=rect(actions);
+  return {
+    ok:!!(toolbar&&controls&&actions),
+    display:toolbar?getComputedStyle(toolbar).display:'',
+    gridTemplateColumns:toolbar?getComputedStyle(toolbar).gridTemplateColumns:'',
+    controlTop:controlRect&&controlRect.top,
+    actionTop:actionRect&&actionRect.top,
+    sameRow:!!(controlRect&&actionRect&&Math.abs(controlRect.top-actionRect.top)<=1),
+    toolbar:rect(toolbar),
+    controls:controlRect,
+    actions:actionRect,
+    items
+  };
+}
 function dedupeChatReferences(refs){
   const seen=new Set(),out=[];
   (refs||[]).forEach(ref=>{
@@ -24882,6 +24964,10 @@ onStreamEnd=function(d){
   }
 };
 window.onStreamEnd=onStreamEnd;
+window.assistantMergeNativeResponsePayloads=assistantMergeNativeResponsePayloads;
+window.assistantNativeResponseRenderSummary=assistantNativeResponseRenderSummary;
+window.replayAssistantNativeResponseFixture=replayAssistantNativeResponseFixture;
+window.assistantComposerLayoutSnapshot=assistantComposerLayoutSnapshot;
 
 // ── Welcome screen with suggested prompts ──
 function renderWelcome(){
