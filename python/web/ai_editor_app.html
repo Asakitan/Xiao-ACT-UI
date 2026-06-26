@@ -779,6 +779,23 @@ code.inline { background:var(--bg3); padding:1px 3px; border-radius:4px;
 .chat-terminal-stream { margin:0; padding:6px; border-radius:4px; background:color-mix(in srgb, #000 24%, transparent);
   color:var(--fg-code); font:11px/1.45 var(--mono); white-space:pre-wrap; max-height:220px; overflow:auto; }
 .chat-terminal-stream.stderr { color:var(--fg-error); }
+.tool-result-actions { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:0 0 8px; }
+.tool-result-action { border:1px solid var(--border); border-radius:4px; background:var(--bg2); color:var(--fg-dim);
+  font:11px/1.35 var(--sans); padding:3px 8px; cursor:pointer; }
+.tool-result-action:hover,.tool-result-action:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
+.chat-tool-ui-card { display:flex; flex-direction:column; gap:7px; margin:0 0 8px; padding:8px;
+  border:1px solid color-mix(in srgb, var(--fg-accent) 34%, var(--border)); border-radius:5px;
+  background:color-mix(in srgb, var(--bg3) 74%, transparent); color:var(--fg); font-family:var(--sans); white-space:normal; }
+.chat-tool-ui-head { display:flex; align-items:center; justify-content:space-between; gap:8px; min-width:0; }
+.chat-tool-ui-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:600; }
+.chat-tool-ui-kind { flex:0 0 auto; color:var(--fg-accent); font:10px/1.4 var(--mono); text-transform:uppercase; }
+.chat-tool-ui-desc,.chat-tool-ui-uri { color:var(--fg-dim); font:11px/1.45 var(--mono); overflow-wrap:anywhere; }
+.chat-tool-ui-frame { width:100%; height:180px; border:1px solid var(--border); border-radius:4px; background:var(--bg);
+  color-scheme:dark; }
+.chat-tool-ui-preview { margin:0; padding:6px; border-radius:4px; background:var(--bg-code);
+  color:var(--fg-code); font:11px/1.45 var(--mono); white-space:pre-wrap; max-height:160px; overflow:auto; }
+.tool-result-raw { margin:0; padding:6px; border-radius:4px; background:transparent; color:var(--fg-dim);
+  font:11px/1.45 var(--mono); white-space:pre-wrap; max-height:220px; overflow:auto; }
 
 /* Streaming word fade-in */
 .stream-word { animation:wordFade .3s ease-out; display:inline; }
@@ -5498,16 +5515,107 @@ function renderToolResult(container,name,result,callId){
   hdr.innerHTML='<span class="arrow">▸</span> Result: '+esc(name);
   const body=document.createElement('div');body.className='tool-body';
   const terminalData=terminalToolOutputData(name,result);
+  const rawText=formatToolPayload(result,'');
+  renderToolResultActions(body,name,result,rawText,{terminal:!!terminalData});
   if(terminalData){
     el.classList.add('has-terminal-output');
     renderTerminalToolOutput(body,terminalData);
   }else{
-    body.textContent=formatToolPayload(result,'');
+    const uiData=toolResultUiData(name,result);
+    if(uiData)renderToolResultUi(body,uiData);
+    const raw=document.createElement('pre');
+    raw.className='tool-result-raw';
+    raw.textContent=rawText;
+    body.appendChild(raw);
   }
   bindDisclosureHeader(hdr,body);
   el.appendChild(hdr);el.appendChild(body);container.appendChild(el);
   // Auto-open if small
   if(String(result||'').length<500){hdr.classList.add('open');body.classList.add('open');hdr.setAttribute('aria-expanded','true')}
+}
+
+function toolResultActionButton(label,title,fn){
+  const btn=document.createElement('button');
+  btn.type='button';btn.className='tool-result-action';btn.textContent=label;btn.title=title||label;btn.setAttribute('aria-label',title||label);
+  btn.onclick=e=>{e.preventDefault();e.stopPropagation();fn()};
+  return btn;
+}
+function renderToolResultActions(parent,name,result,text,opts){
+  if(!parent)return null;
+  const actions=document.createElement('div');actions.className='tool-result-actions';
+  actions.appendChild(toolResultActionButton('Copy','Copy tool result',()=>{
+    navigator.clipboard.writeText(text||'');
+    if(typeof showToast==='function')showToast(t('copied'),'success',1500);
+  }));
+  if(text){
+    actions.appendChild(toolResultActionButton('Open','Open tool result in editor',()=>{
+      openInEditor(text,guessToolResultLanguage(name,result,text));
+    }));
+  }
+  if(opts&&opts.terminal){
+    actions.appendChild(toolResultActionButton('Terminal','Show terminal panel',()=>{
+      if(typeof focusTerminal==='function')focusTerminal();
+      else if(typeof activateBottomPanelTab==='function')activateBottomPanelTab(document.querySelector('.ptab[data-ptab="terminal"]'));
+    }));
+  }
+  parent.appendChild(actions);
+  return actions;
+}
+function guessToolResultLanguage(name,result,text){
+  const lower=String(name||'').toLowerCase();
+  const sample=String(text||result||'').trim();
+  if(lower.includes('json'))return 'json';
+  if(lower.includes('html')||/<\/?[a-z][\s\S]*>/i.test(sample))return 'html';
+  if(lower.includes('css'))return 'css';
+  if(lower.includes('python')||/(^|[_\-. ])py($|[_\-. ])/.test(lower))return 'python';
+  if(lower.includes('javascript')||lower.includes('typescript')||lower.includes('node'))return lower.includes('type')?'typescript':'javascript';
+  try{JSON.parse(typeof result==='string'?result:sample);return 'json'}catch(e){}
+  return '';
+}
+function toolResultUiData(name,result){
+  const parsed=parseToolPayload(result);
+  if(!parsed||typeof parsed!=='object')return null;
+  const source=parsed.ui||parsed.toolUi||parsed.customUi||parsed.webview||parsed.resource||parsed;
+  const meta=parsed._meta||parsed.meta||{};
+  const content=Array.isArray(parsed.content)?parsed.content:[];
+  const resourcePart=content.find(p=>p&&typeof p==='object'&&(p.type==='resource'||p.resource||p.uri));
+  const htmlPart=content.find(p=>p&&typeof p==='object'&&(p.mimeType==='text/html'||p.type==='html'||p.html));
+  const textPart=content.find(p=>p&&typeof p==='object'&&(p.type==='text'||p.text));
+  const html=source.html||source.srcdoc||(htmlPart&&(htmlPart.html||htmlPart.text||htmlPart.value));
+  const outputTemplate=source.outputTemplate||source.templateUri||source.template_uri||meta['openai/outputTemplate']||meta.outputTemplate||meta.templateUri;
+  const uri=source.uri||source.url||source.href||outputTemplate||(resourcePart&&(resourcePart.uri||(resourcePart.resource&&resourcePart.resource.uri)));
+  const mimeType=source.mimeType||source.mime_type||(resourcePart&&(resourcePart.mimeType||(resourcePart.resource&&resourcePart.resource.mimeType)))||'';
+  const title=source.title||parsed.title||parsed.name||name||'Tool UI';
+  const description=source.description||source.summary||parsed.description||parsed.summary||'';
+  const kind=source.kind||source.type||(outputTemplate?'output-template':(uri&&String(uri).startsWith('mcp-resource:')?'mcp-resource':(html?'html':'resource')));
+  const preview=source.preview||source.text||source.markdown||(textPart&&(textPart.text||textPart.value))||'';
+  if(!html&&!uri&&!preview&&!/webview|ui|resource|mcp/i.test(String(kind||'')))return null;
+  return {kind,title,description,uri,mimeType,html,preview};
+}
+function renderToolResultUi(parent,data){
+  if(!parent||!data)return null;
+  const card=document.createElement('div');card.className='chat-tool-ui-card';
+  const head=document.createElement('div');head.className='chat-tool-ui-head';
+  const title=document.createElement('div');title.className='chat-tool-ui-title';title.textContent=data.title||'Tool UI';
+  const kind=document.createElement('div');kind.className='chat-tool-ui-kind';kind.textContent=data.kind||'ui';
+  head.appendChild(title);head.appendChild(kind);card.appendChild(head);
+  if(data.description){const desc=document.createElement('div');desc.className='chat-tool-ui-desc';desc.textContent=data.description;card.appendChild(desc)}
+  if(data.uri){
+    const uri=document.createElement('div');uri.className='chat-tool-ui-uri';uri.textContent=data.uri+(data.mimeType?' · '+data.mimeType:'');card.appendChild(uri);
+    const uriActions=document.createElement('div');uriActions.className='tool-result-actions';
+    uriActions.appendChild(toolResultActionButton('Copy URI','Copy tool resource URI',()=>{
+      navigator.clipboard.writeText(data.uri);
+      if(typeof showToast==='function')showToast(t('copied'),'success',1500);
+    }));
+    card.appendChild(uriActions);
+  }
+  if(data.html){
+    const frame=document.createElement('iframe');frame.className='chat-tool-ui-frame';frame.setAttribute('sandbox','');frame.srcdoc=String(data.html);card.appendChild(frame);
+  }else if(data.preview){
+    const pre=document.createElement('pre');pre.className='chat-tool-ui-preview';pre.textContent=String(data.preview);card.appendChild(pre);
+  }
+  parent.appendChild(card);
+  return card;
 }
 
 function bindDisclosureHeader(header,body){

@@ -4024,6 +4024,24 @@ def test_phase1_ai_editor_regressions() -> None:
            and "const stdout=parsed.stdout!==undefined?parsed.stdout:(parsed.output!==undefined?parsed.output:parsed.text);" in html
            and "const exitCode=parsed.exit_code!==undefined?parsed.exit_code:(parsed.exitCode!==undefined?parsed.exitCode:parsed.code);" in html
            and "err.className='chat-terminal-stream stderr';" in html)
+    _check("frontend Assistant tool results expose Copilot-style actions and dynamic UI previews",
+           "function renderToolResultActions(parent,name,result,text,opts)" in html
+           and "function toolResultActionButton(label,title,fn)" in html
+           and "Copy tool result" in html
+           and "Open tool result in editor" in html
+           and "Show terminal panel" in html
+           and "openInEditor(text,guessToolResultLanguage(name,result,text));" in html
+           and "function toolResultUiData(name,result)" in html
+           and "parsed.ui||parsed.toolUi||parsed.customUi||parsed.webview||parsed.resource||parsed" in html
+           and "meta['openai/outputTemplate']||meta.outputTemplate||meta.templateUri" in html
+           and "outputTemplate?'output-template'" in html
+           and "String(uri).startsWith('mcp-resource:')?'mcp-resource'" in html
+           and "function renderToolResultUi(parent,data)" in html
+           and "frame.setAttribute('sandbox','');" in html
+           and "Copy tool resource URI" in html
+           and "className='tool-result-raw';" in html
+           and ".chat-tool-ui-card" in html
+           and ".tool-result-actions" in html)
     _check("frontend Assistant preserves stream usage token count on idle",
            "updateTokenCount({minTokens:totalTokens});" in html
            and "async function updateTokenCount(options)" in html
