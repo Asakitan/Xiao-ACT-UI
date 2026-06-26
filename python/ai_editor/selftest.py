@@ -4431,6 +4431,7 @@ def test_phase1_ai_editor_regressions() -> None:
            "chat-response-references" in html
            and "chat-response-reference-list" in html
            and "chat-change-card" in html
+           and "chat-change-summary" in html
            and "function extractChatResponseReferences(text)" in html
            and "function extractChatChangedFiles(text)" in html
            and "function openChatResponseReference(path,line)" in html
@@ -4893,12 +4894,34 @@ def test_phase1_ai_editor_regressions() -> None:
            and "if(e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey&&lower==='n')" in html)
     _check("frontend Assistant applies native response text edits and file tree actions",
            "chat-response-summary" in html
+           and "chat-change-summary" in html
+           and "chat-change-summary-actions" in html
+           and "chat-change-summary-status" in html
            and "chat-inline-actions" in html
            and "function chatTextEditEntries(ref)" in html
            and "function chatApplyTextEditsToContent(content,edits)" in html
            and "function chatTextEditSummary(ref)" in html
+           and "function chatChangeSetRefs(refs,changes)" in html
+           and "function chatChangeSetTextEditRefs(refs)" in html
+           and "function chatMergeTextEditSummaries(refs)" in html
+           and "function chatChangeSetStats(refs,changes)" in html
+           and "async function previewChatChangeSet(refs,status,card)" in html
+           and "async function applyChatChangeSet(refs,status,card)" in html
+           and "function renderChatChangeSetSummary(wrap,refs,changes)" in html
            and "async function applyChatTextEditReference(ref)" in html
            and "editorApplyWorkspaceEdit(null,summary)" in html
+           and "confirmEditorWorkspaceEditApply('Apply Assistant Changes',summary" in html
+           and "preview.textContent='Preview all';preview.disabled=!stats.diffs;" in html
+           and "apply.textContent='Apply all';apply.disabled=!stats.edits;" in html
+           and "card.setAttribute('role','group');card.setAttribute('aria-label','Assistant changes');" in html
+           and "status.setAttribute('role','status');status.setAttribute('aria-live','polite');" in html
+           and "panel.dataset.chatChangeSetFiles=String(stats.files);" in html
+           and "panel.dataset.chatChangeSetEdits=String(stats.edits);" in html
+           and "panel.dataset.chatChangeSetDiffs=String(stats.diffs);" in html
+           and "panel.dataset.chatChangeSetState='ready';" in html
+           and "panel.dataset.chatChangeSetState='previewing';" in html
+           and "panel.dataset.chatChangeSetState=total?'applied':'ready';" in html
+           and "renderChatChangeSetSummary(wrap,refs,changes);" in html
            and "chatTextEditCount(ref)" in html
            and "modifiedOpened=chatInlineDiffResource(" in html
            and "function flattenChatFileTreeNodes(nodes,out)" in html

@@ -1052,6 +1052,14 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-response-ref .ref-diff { color:var(--fg-success); font:10px var(--mono); }
 .chat-response-ref.anchor { border-color:color-mix(in srgb, var(--border-focus) 45%, var(--border)); }
 .chat-change-card.has-diff .change-kind { color:var(--fg-accent); }
+.chat-change-summary { border:1px solid color-mix(in srgb,var(--fg-accent) 35%,var(--border)); border-radius:6px;
+  background:color-mix(in srgb,var(--bg-hover) 45%,var(--bg3)); padding:6px 8px; display:grid;
+  grid-template-columns:minmax(0,1fr) auto; gap:6px 10px; align-items:center; }
+.chat-change-summary-main { min-width:0; display:flex; flex-direction:column; gap:2px; }
+.chat-change-summary-title { color:var(--fg); font-weight:600; font-size:12px; }
+.chat-change-summary-meta,.chat-change-summary-status { color:var(--fg-dim); font:10px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chat-change-summary-actions { display:flex; align-items:center; justify-content:flex-end; gap:5px; flex-wrap:nowrap; }
+.chat-change-summary-status { grid-column:1/-1; }
 .chat-inline-actions { display:flex; flex-wrap:wrap; gap:5px; }
 .chat-inline-action { color:var(--fg-dim); background:transparent; }
 .chat-inline-action.primary { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 45%,var(--border)); }
@@ -6137,6 +6145,107 @@ async function applyChatTextEditReference(ref){
   if(total)setStatus('Applied assistant edits: '+total+(applied.skipped?' ('+applied.skipped+' skipped)':''));
   else setStatus('No assistant edits applied'+(applied.skipped?' ('+applied.skipped+' skipped)':''));
 }
+function chatChangeSetRefs(refs,changes){
+  return dedupeChatReferences([...(refs||[]),...(changes||[])].filter(ref=>ref&&(chatReferenceHasDiff(ref)||ref.isDeletion)));
+}
+function chatChangeSetTextEditRefs(refs){
+  return (refs||[]).filter(ref=>ref&&chatTextEditCount(ref));
+}
+function chatMergeTextEditSummaries(refs){
+  const merged={edits:[],tabEdits:[],workspaceEdits:[],skipped:0};
+  chatChangeSetTextEditRefs(refs).forEach(ref=>{
+    const summary=chatTextEditSummary(ref);
+    merged.edits.push(...summary.edits);
+    merged.tabEdits.push(...summary.tabEdits);
+    merged.workspaceEdits.push(...summary.workspaceEdits);
+    merged.skipped+=Number(summary.skipped)||0;
+  });
+  return merged;
+}
+function chatChangeSetStats(refs,changes){
+  const changeRefs=chatChangeSetRefs(refs,changes);
+  const editRefs=chatChangeSetTextEditRefs(changeRefs);
+  const editCount=editRefs.reduce((total,ref)=>total+chatTextEditCount(ref),0);
+  const diffCount=changeRefs.filter(ref=>chatReferenceHasDiff(ref)).length;
+  const deleteCount=changeRefs.filter(ref=>ref&&ref.isDeletion).length;
+  return {changeRefs,editRefs,files:changeRefs.length,edits:editCount,diffs:diffCount,deletions:deleteCount};
+}
+async function previewChatChangeSet(refs,status,card){
+  const changeRefs=chatChangeSetRefs(refs,[]);
+  const diffRefs=changeRefs.filter(ref=>chatReferenceHasDiff(ref));
+  if(!diffRefs.length){if(status)status.textContent='No diffs to preview';return false}
+  if(status)status.textContent='Opening '+diffRefs.length+' diff'+(diffRefs.length===1?'':'s')+'...';
+  const panel=$('chat-panel');
+  if(card)card.dataset.changeState='previewing';
+  if(panel)panel.dataset.chatChangeSetState='previewing';
+  let opened=0;
+  for(const ref of diffRefs.slice(0,12)){
+    try{if(await openChatReferenceDiff(ref))opened++}catch(e){}
+  }
+  if(card)card.dataset.changeState=opened?'previewed':'ready';
+  if(panel)panel.dataset.chatChangeSetState=opened?'previewed':'ready';
+  if(status)status.textContent=opened?'Opened '+opened+' diff'+(opened===1?'':'s'):(diffRefs.length>12?'Preview limited to 12 diffs':'No diffs opened');
+  setStatus(status?status.textContent:'Previewed assistant changes');
+  return !!opened;
+}
+async function applyChatChangeSet(refs,status,card){
+  const changeRefs=chatChangeSetRefs(refs,[]);
+  const summary=chatMergeTextEditSummaries(changeRefs);
+  const count=editorWorkspaceEditEditCount(summary);
+  if(!count){if(status)status.textContent='No editable changes to apply';setStatus('No editable assistant changes');return false}
+  if(!await confirmEditorWorkspaceEditApply('Apply Assistant Changes',summary,'Apply '+count+' assistant edit'+(count===1?'':'s')+' from this response.'))return false;
+  const panel=$('chat-panel');
+  if(card)card.dataset.changeState='applying';
+  if(panel)panel.dataset.chatChangeSetState='applying';
+  if(status)status.textContent='Applying '+count+' edit'+(count===1?'':'s')+'...';
+  _undoPush(true);
+  const applied=await editorApplyWorkspaceEdit(null,summary);
+  const total=(applied.changed?summary.edits.length:0)+(applied.tabApplied||0)+(applied.workspaceApplied||0);
+  const message=total?'Applied '+total+' assistant edit'+(total===1?'':'s')+(applied.skipped?' · '+applied.skipped+' skipped':''):'No assistant edits applied'+(applied.skipped?' · '+applied.skipped+' skipped':'');
+  if(card)card.dataset.changeState=total?'applied':'ready';
+  if(panel)panel.dataset.chatChangeSetState=total?'applied':'ready';
+  if(status)status.textContent=message;
+  setStatus(message);
+  return !!total;
+}
+function renderChatChangeSetSummary(wrap,refs,changes){
+  const stats=chatChangeSetStats(refs,changes);
+  if(!stats.files)return null;
+  const card=document.createElement('div');card.className='chat-change-summary';
+  card.setAttribute('role','group');card.setAttribute('aria-label','Assistant changes');
+  card.dataset.changeState='ready';
+  card.dataset.changeFiles=String(stats.files);
+  card.dataset.changeEdits=String(stats.edits);
+  card.dataset.changeDiffs=String(stats.diffs);
+  const main=document.createElement('div');main.className='chat-change-summary-main';
+  const title=document.createElement('div');title.className='chat-change-summary-title';title.textContent='Assistant changes';
+  const meta=document.createElement('div');meta.className='chat-change-summary-meta';
+  meta.textContent=[
+    stats.files+' file'+(stats.files===1?'':'s'),
+    stats.edits?stats.edits+' edit'+(stats.edits===1?'':'s'):'',
+    stats.diffs?stats.diffs+' diff'+(stats.diffs===1?'':'s'):'',
+    stats.deletions?stats.deletions+' deletion'+(stats.deletions===1?'':'s'):''
+  ].filter(Boolean).join(' · ');
+  main.appendChild(title);main.appendChild(meta);card.appendChild(main);
+  const actions=document.createElement('div');actions.className='chat-change-summary-actions';
+  const preview=document.createElement('button');preview.type='button';preview.className='chat-inline-action';
+  preview.textContent='Preview all';preview.disabled=!stats.diffs;preview.onclick=()=>previewChatChangeSet(stats.changeRefs,status,card);actions.appendChild(preview);
+  const apply=document.createElement('button');apply.type='button';apply.className='chat-inline-action primary';
+  apply.textContent='Apply all';apply.disabled=!stats.edits;apply.onclick=()=>applyChatChangeSet(stats.changeRefs,status,card);actions.appendChild(apply);
+  card.appendChild(actions);
+  const status=document.createElement('div');status.className='chat-change-summary-status';status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+  status.textContent=stats.edits?'Ready to preview or apply edits':'Preview-only changes';
+  card.appendChild(status);
+  const panel=$('chat-panel');
+  if(panel){
+    panel.dataset.chatChangeSetFiles=String(stats.files);
+    panel.dataset.chatChangeSetEdits=String(stats.edits);
+    panel.dataset.chatChangeSetDiffs=String(stats.diffs);
+    panel.dataset.chatChangeSetState='ready';
+  }
+  wrap.appendChild(card);
+  return card;
+}
 async function openChatResponseReference(path,line){
   const ref=typeof path==='object'?path:{path,line};
   path=String(ref.path||'').trim();
@@ -7366,6 +7475,7 @@ function renderChatResponseReferences(body,content,payload){
   ].filter(Boolean).join(' · ');
   if(summary.textContent)wrap.appendChild(summary);
   renderChatResponseMetadata(wrap,metadata);
+  renderChatChangeSetSummary(wrap,refs,changes);
   if(usedRefs.length){
     const used=document.createElement('div');used.className='chat-used-context';
     const title=document.createElement('div');title.className='chat-used-context-title';title.textContent='Used context';
