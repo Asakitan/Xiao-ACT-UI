@@ -3873,15 +3873,28 @@ def test_phase1_ai_editor_regressions() -> None:
            "const ASSISTANT_WORKFLOW_MODE_KEY='sao-ai-editor-workflow-mode';" in html
            and "function normalizeWorkflowMode(value)" in html
            and "function workflowModePopupItem(mode,label,desc,active)" in html
+           and "function workflowSlug(value)" in html
+           and "async function saveCustomWorkflowDefinition(options)" in html
            and "workflowPopup.appendChild(workflowModePopupItem('off','Off'" in html
            and "workflowPopup.appendChild(workflowModePopupItem('on','On'" in html
            and "workflowPopup.appendChild(workflowModePopupItem('custom','Custom'" in html
-           and "function workflowCustomPromptModal(seed)" in html
+           and "function workflowCustomPromptModal(seed,options)" in html
+           and "Save as workflow" in html
+           and "call('save_workflow',data)" in html
            and "function runCustomWorkflowAsAssistant(inputSeed)" in html
            and "Workflow launch" in html
            and "workflowRunId:String" in html
            and "workflowMode:normalizeWorkflowMode" in html
            and "noteAssistantChatRequest(text,sendContext.refs,toolHint,opts.workflowLaunch)" in html)
+    _check("frontend Assistant provider workflow popups are keyboard accessible",
+           "function focusChatControlPopupOption(kind,delta)" in html
+           and "function handleChatControlPopupKeydown(e,kind)" in html
+           and "row.tabIndex=-1;" in html
+           and "providerTrigger.onkeydown=e=>handleChatControlPopupKeydown(e,'provider');" in html
+           and "workflowTrigger.onkeydown=e=>handleChatControlPopupKeydown(e,'workflow');" in html
+           and "providerPopup.onkeydown=e=>handleChatControlPopupKeydown(e,'provider');" in html
+           and "workflowPopup.onkeydown=e=>handleChatControlPopupKeydown(e,'workflow');" in html
+           and ".chat-control-popup .mode-popup-item:focus" in html)
     _check("frontend Assistant suppresses null and empty message turns",
            "function normalizeChatMessageText(text,role)" in html
            and "function isChatEmptyLiteral(value)" in html
@@ -4816,6 +4829,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'composer-grid-footer'" in html
            and "assistantUiSelfCheckRecord(checks,'composer-actions-same-row'" in html
            and "assistantUiSelfCheckRecord(checks,'composer-actions-visible'" in html
+           and "function assistantControlPopupSnapshot(kind)" in html
+           and "assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'attachments-list-semantics'" in html
            and "assistantUiSelfCheckRecord(checks,'attachments-counts-sync'" in html
            and "assistantUiSelfCheckRecord(checks,'attachments-keyboard-controls'" in html

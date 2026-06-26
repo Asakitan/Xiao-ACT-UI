@@ -1165,7 +1165,10 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-popup.workflow { min-width:310px; }
 .chat-control-popup .mp-meta { display:flex; align-items:center; gap:6px; margin-top:2px; color:var(--fg-dim); font:10px var(--mono); }
 .chat-control-popup .mp-tag { border:1px solid var(--border); border-radius:999px; padding:0 5px; line-height:15px; }
+.chat-control-popup .mode-popup-item:focus { outline:1px solid var(--border-focus); outline-offset:-1px; background:var(--bg-hover); }
 .chat-control-popup-empty { color:var(--fg-dim); font-size:12px; padding:8px 12px; }
+.workflow-save-options { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px; }
+.workflow-save-options .wide { grid-column:1 / -1; }
 /* Mode popup menu (VSCode-style) */
 .mode-trigger { display:inline-flex; align-items:center; gap:4px; height:22px; padding:0 8px; flex:0 0 auto;
   border:1px solid var(--border); border-radius:999px; background:var(--bg3); color:var(--fg-accent);
@@ -7533,6 +7536,28 @@ async function replayAssistantNativeResponseFixture(nameOrPayload,opts){
 function assistantUiSelfCheckRecord(checks,name,pass,detail){
   checks.push({name,pass:!!pass,detail:detail===undefined?'':detail});
 }
+function assistantControlPopupSnapshot(kind){
+  renderChatControlPopups();
+  closeChatControlPopups();
+  const trigger=$('chat-'+kind+'-trigger');
+  const popup=$('chat-'+kind+'-popup');
+  toggleChatControlPopup(null,kind,{noFocus:true});
+  const options=popup?Array.from(popup.querySelectorAll('.mode-popup-item[role="option"]')):[];
+  const snapshot={
+    kind,
+    triggerExists:!!trigger,
+    popupExists:!!popup,
+    expanded:trigger?trigger.getAttribute('aria-expanded'):'',
+    shown:!!(popup&&popup.classList.contains('show')),
+    optionCount:options.length,
+    focusableCount:options.filter(option=>option.tabIndex===-1).length,
+    activeCount:options.filter(option=>option.classList.contains('active')).length,
+    keyboardReady:!!(trigger&&typeof trigger.onkeydown==='function'&&popup&&typeof popup.onkeydown==='function'),
+    workflowModeCount:kind==='workflow'?options.filter(option=>option.dataset.workflowMode).length:0
+  };
+  closeChatControlPopups();
+  return snapshot;
+}
 async function runAssistantUiSelfCheck(opts){
   opts=opts||{};
   const checks=[];
@@ -7541,6 +7566,10 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'composer-grid-footer',layout.display==='grid',layout.gridTemplateColumns);
   assistantUiSelfCheckRecord(checks,'composer-actions-same-row',layout.sameRow,JSON.stringify({controlTop:layout.controlTop,actionTop:layout.actionTop}));
   assistantUiSelfCheckRecord(checks,'composer-actions-visible',layout.actions&&layout.actions.width>0,layout.actions&&layout.actions.width);
+  const providerPopup=assistantControlPopupSnapshot('provider');
+  const workflowPopup=assistantControlPopupSnapshot('workflow');
+  assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready',providerPopup.shown&&providerPopup.optionCount>=1&&providerPopup.focusableCount===providerPopup.optionCount&&providerPopup.keyboardReady,JSON.stringify(providerPopup));
+  assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready',workflowPopup.shown&&workflowPopup.workflowModeCount===3&&workflowPopup.optionCount>=4&&workflowPopup.focusableCount===workflowPopup.optionCount&&workflowPopup.keyboardReady,JSON.stringify(workflowPopup));
 
   const previousAttachments=attachments.slice();
   attachments=[];
@@ -16990,23 +17019,98 @@ function workflowDisplayInputModal(name,seed){
     };
   });
 }
-function workflowCustomPromptModal(seed){
+function workflowSlug(value){
+  return String(value||'custom-workflow').trim().toLowerCase()
+    .replace(/[^a-z0-9_.:-]+/g,'-').replace(/^-+|-+$/g,'').slice(0,64)||'custom-workflow';
+}
+function populateWorkflowScopeSelect(selectId){
+  call('get_scopes').then(r=>{
+    const sel=$(selectId);if(!sel||!r||!r.scopes)return;
+    r.scopes.filter(s=>s.scope==='plugin').forEach(s=>{
+      const opt=document.createElement('option');
+      opt.value='plugin:'+s.plugin_id;
+      opt.textContent=s.label;
+      sel.appendChild(opt);
+    });
+  });
+}
+async function saveCustomWorkflowDefinition(options){
+  const opts=options||{};
+  const prompt=String(opts.prompt||'').trim();
+  const id=workflowSlug(opts.id||opts.name||'custom-workflow');
+  const name=String(opts.name||id).trim()||id;
+  if(!prompt)return {ok:false,error:'Workflow prompt is required'};
+  const data={
+    id,
+    name,
+    icon:'✎',
+    description:String(opts.description||'Custom workflow saved from Assistant toolbar'),
+    when_to_use:String(opts.when_to_use||'When this saved custom workflow matches the task'),
+    steps:[{
+      agent:String(activeAgentId||'default'),
+      label:'Custom workflow',
+      prompt,
+      output_var:'result'
+    }],
+    _scope:String(opts.scope||'workspace')
+  };
+  return call('save_workflow',data);
+}
+function workflowCustomPromptModal(seed,options){
   return new Promise(resolve=>{
+    const opts=options||{};
     const modal=document.createElement('div');
     modal.className='modal-bg open';
     modal.innerHTML='<div class="modal" style="max-width:640px"><h2>Custom Workflow</h2>'
       +'<label>Workflow Prompt</label><textarea id="wf-custom-prompt" rows="10" style="width:100%;box-sizing:border-box;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:8px;font:12px var(--mono);resize:vertical" placeholder="Define the workflow steps. Use {{input}} where the user input should go."></textarea>'
-      +'<div class="modal-actions"><button class="text-btn" id="wf-custom-cancel">Cancel</button><button class="text-btn primary" id="wf-custom-save">Save</button></div></div>';
+      +'<label class="settings-check" style="margin-top:8px"><input id="wf-custom-save-reusable" type="checkbox"><span><b>Save as workflow</b><small>Create a reusable .sao/workflows definition.</small></span></label>'
+      +'<div class="workflow-save-options" id="wf-custom-save-options" style="display:none">'
+      +'<div><label>ID</label><input id="wf-custom-id" placeholder="custom-workflow"></div>'
+      +'<div><label>Name</label><input id="wf-custom-name" placeholder="Custom Workflow"></div>'
+      +'<div class="wide"><label>Description</label><input id="wf-custom-desc" placeholder="Reusable workflow from Assistant"></div>'
+      +'<div class="wide"><label>Scope</label><select id="wf-custom-scope"><option value="workspace">Workspace</option><option value="system">System (global)</option></select></div>'
+      +'</div>'
+      +'<div class="modal-actions"><button class="text-btn" id="wf-custom-cancel">Cancel</button><button class="text-btn primary" id="wf-custom-save">Use</button></div></div>';
     document.body.appendChild(modal);
     const input=$('wf-custom-prompt');
     input.value=String(seed||'');
+    const saveReusable=$('wf-custom-save-reusable');
+    const saveOptions=$('wf-custom-save-options');
+    const nameInput=$('wf-custom-name');
+    const idInput=$('wf-custom-id');
+    const descInput=$('wf-custom-desc');
+    if(opts.name)nameInput.value=String(opts.name);
+    if(opts.id)idInput.value=workflowSlug(opts.id);
+    if(opts.description)descInput.value=String(opts.description);
+    populateWorkflowScopeSelect('wf-custom-scope');
+    const syncId=()=>{if(!idInput.value.trim())idInput.value=workflowSlug(nameInput.value||'custom-workflow')};
+    nameInput.oninput=()=>{if(!idInput.dataset.userEdited)idInput.value=workflowSlug(nameInput.value||'custom-workflow')};
+    idInput.oninput=()=>{idInput.dataset.userEdited='true'};
+    saveReusable.onchange=()=>{
+      saveOptions.style.display=saveReusable.checked?'grid':'none';
+      $('wf-custom-save').textContent=saveReusable.checked?'Save & Use':'Use';
+      if(saveReusable.checked){
+        if(!nameInput.value.trim())nameInput.value='Custom Workflow';
+        syncId();
+      }
+    };
     input.focus();
     const finish=value=>{modal.remove();resolve(value)};
     $('wf-custom-cancel').onclick=()=>finish(null);
-    $('wf-custom-save').onclick=()=>finish(input.value.trim());
+    $('wf-custom-save').onclick=()=>finish({
+      prompt:input.value.trim(),
+      saveReusable:!!saveReusable.checked,
+      id:workflowSlug(idInput.value||nameInput.value||'custom-workflow'),
+      name:nameInput.value.trim()||'Custom Workflow',
+      description:descInput.value.trim(),
+      scope:$('wf-custom-scope').value||'workspace'
+    });
     modal.onkeydown=e=>{
       if(e.key==='Escape'){e.preventDefault();finish(null)}
-      if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){e.preventDefault();finish(input.value.trim())}
+      if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){
+        e.preventDefault();
+        $('wf-custom-save').click();
+      }
     };
   });
 }
@@ -17058,9 +17162,19 @@ function workflowDisplayText(workflow,inputText,runId){
 }
 async function runCustomWorkflowAsAssistant(inputSeed){
   if(!String(assistantWorkflowCustomPrompt||'').trim()){
-    const prompt=await workflowCustomPromptModal('');
-    if(prompt===null||!prompt)return false;
-    setAssistantWorkflowMode('custom',{customPrompt:prompt});
+    const custom=await workflowCustomPromptModal('');
+    if(custom===null||!custom||!String(custom.prompt||'').trim())return false;
+    if(custom.saveReusable){
+      const saved=await saveCustomWorkflowDefinition(custom);
+      if(!callSucceeded(saved)){showToast('Save failed: '+callFailedMessage(saved,'backend unavailable'),'error',2500);return false}
+      await loadChatControls().catch(()=>{});
+      const wfSel=$('chat-workflow-sel');
+      if(wfSel)wfSel.value=custom.id;
+      setAssistantWorkflowMode('on');
+      showToast('Workflow saved: '+custom.name,'info',1800);
+      return runWorkflowAsAssistant(custom.id,custom.name,inputSeed);
+    }
+    setAssistantWorkflowMode('custom',{customPrompt:custom.prompt});
   }
   let inputText=String(inputSeed||'').trim();
   if(!inputText)inputText=await workflowDisplayInputModal('Custom Workflow','');
@@ -20054,6 +20168,7 @@ function chatControlPopupItem(kind,item,active){
   row.className='mode-popup-item'+(active?' active':'');
   row.setAttribute('role','option');
   row.setAttribute('aria-selected',active?'true':'false');
+  row.tabIndex=-1;
   row.dataset.value=id;
   const icon=document.createElement('span');
   icon.className='mp-icon';
@@ -20086,6 +20201,9 @@ function chatControlPopupItem(kind,item,active){
     if(kind==='provider')selectProviderFromPopup(id);
     else selectWorkflowFromPopup(id);
   };
+  row.onkeydown=e=>{
+    if(e.key==='Enter'||e.key===' '){e.preventDefault();row.click()}
+  };
   return row;
 }
 function workflowModePopupItem(mode,label,desc,active){
@@ -20093,21 +20211,52 @@ function workflowModePopupItem(mode,label,desc,active){
   row.className='mode-popup-item'+(active?' active':'');
   row.setAttribute('role','option');
   row.setAttribute('aria-selected',active?'true':'false');
+  row.tabIndex=-1;
   row.dataset.workflowMode=mode;
   row.innerHTML='<span class="mp-icon">'+(mode==='on'?'●':mode==='custom'?'✎':'○')+'</span>'
     +'<div class="mp-body"><div class="mp-label">'+esc(label)+'</div><div class="mp-desc">'+esc(desc)+'</div></div>';
   row.onclick=e=>{e.stopPropagation();selectWorkflowModeFromPopup(mode)};
+  row.onkeydown=e=>{
+    if(e.key==='Enter'||e.key===' '){e.preventDefault();row.click()}
+  };
   return row;
+}
+function focusChatControlPopupOption(kind,delta){
+  const popup=$('chat-'+kind+'-popup');
+  if(!popup||!popup.classList.contains('show'))return false;
+  const items=Array.from(popup.querySelectorAll('.mode-popup-item[role="option"]'));
+  if(!items.length)return false;
+  const current=document.activeElement&&items.includes(document.activeElement)?items.indexOf(document.activeElement):items.findIndex(el=>el.classList.contains('active'));
+  const next=current<0?0:(current+delta+items.length)%items.length;
+  items[next].focus();
+  return true;
+}
+function handleChatControlPopupKeydown(e,kind){
+  if(e.key==='ArrowDown'){e.preventDefault();focusChatControlPopupOption(kind,1);return true}
+  if(e.key==='ArrowUp'){e.preventDefault();focusChatControlPopupOption(kind,-1);return true}
+  if(e.key==='Home'){e.preventDefault();const first=$('chat-'+kind+'-popup')&&$('chat-'+kind+'-popup').querySelector('.mode-popup-item[role="option"]');if(first)first.focus();return true}
+  if(e.key==='End'){e.preventDefault();const items=$('chat-'+kind+'-popup')?$('chat-'+kind+'-popup').querySelectorAll('.mode-popup-item[role="option"]'):[];if(items.length)items[items.length-1].focus();return true}
+  if(e.key==='Enter'||e.key===' '){
+    const popup=$('chat-'+kind+'-popup');
+    if(popup&&popup.classList.contains('show')&&document.activeElement&&popup.contains(document.activeElement)){
+      e.preventDefault();document.activeElement.click();return true;
+    }
+    e.preventDefault();toggleChatControlPopup(e,kind);return true;
+  }
+  if(e.key==='Escape'){e.preventDefault();closeChatControlPopups();const trigger=$('chat-'+kind+'-trigger');if(trigger)trigger.focus();return true}
+  return false;
 }
 function renderChatControlPopups(){
   const providerTrigger=$('chat-provider-trigger'),providerLabelEl=$('chat-provider-trigger-label'),providerPopup=$('chat-provider-popup');
   if(providerTrigger&&providerLabelEl){
     providerLabelEl.textContent=providerLabel(config.provider||'openai');
     providerTrigger.title='Chat provider: '+providerLabelEl.textContent;
+    providerTrigger.onkeydown=e=>handleChatControlPopupKeydown(e,'provider');
   }
   if(providerPopup){
     providerPopup.innerHTML='';
     providerOptionRows().forEach(p=>providerPopup.appendChild(chatControlPopupItem('provider',p,controlItemId(p)===(config.provider||'openai'))));
+    providerPopup.onkeydown=e=>handleChatControlPopupKeydown(e,'provider');
   }
   const wfSel=$('chat-workflow-sel'),workflowTrigger=$('chat-workflow-trigger'),workflowLabelEl=$('chat-workflow-trigger-label'),workflowPopup=$('chat-workflow-popup');
   const workflowId=wfSel?String(wfSel.value||''):'';
@@ -20117,6 +20266,7 @@ function renderChatControlPopups(){
     workflowLabelEl.textContent=label||'Workflow';
     workflowTrigger.title=workflowMode==='custom'?'Workflow: Custom':workflowMode==='off'?'Workflow: Off':(workflowId?'Workflow: '+label:'Workflow: On');
     workflowTrigger.classList.toggle('muted',workflowMode==='off');
+    workflowTrigger.onkeydown=e=>handleChatControlPopupKeydown(e,'workflow');
   }
   if(workflowPopup){
     workflowPopup.innerHTML='';
@@ -20134,9 +20284,10 @@ function renderChatControlPopups(){
       empty.textContent='No workflows registered';
       workflowPopup.appendChild(empty);
     }
+    workflowPopup.onkeydown=e=>handleChatControlPopupKeydown(e,'workflow');
   }
 }
-function toggleChatControlPopup(e,kind){
+function toggleChatControlPopup(e,kind,opts){
   if(e)e.stopPropagation();
   const popup=$('chat-'+kind+'-popup'),trigger=$('chat-'+kind+'-trigger');
   if(!popup||!trigger)return;
@@ -20146,6 +20297,7 @@ function toggleChatControlPopup(e,kind){
   renderChatControlPopups();
   popup.classList.toggle('show',willOpen);
   trigger.setAttribute('aria-expanded',willOpen?'true':'false');
+  if(willOpen&&!(opts&&opts.noFocus))setTimeout(()=>focusChatControlPopupOption(kind,0),0);
 }
 function selectProviderFromPopup(providerId){
   const id=String(providerId||'').trim();
@@ -20169,9 +20321,20 @@ function selectWorkflowFromPopup(workflowId){
 async function selectWorkflowModeFromPopup(mode){
   const next=normalizeWorkflowMode(mode);
   if(next==='custom'){
-    const prompt=await workflowCustomPromptModal(assistantWorkflowCustomPrompt);
-    if(prompt===null)return;
-    setAssistantWorkflowMode('custom',{customPrompt:prompt});
+    const custom=await workflowCustomPromptModal(assistantWorkflowCustomPrompt,{name:'Custom Workflow',id:'custom-workflow'});
+    if(custom===null)return;
+    if(!String(custom.prompt||'').trim()){showToast('Workflow prompt is required','warning',1800);return}
+    if(custom.saveReusable){
+      const saved=await saveCustomWorkflowDefinition(custom);
+      if(!callSucceeded(saved)){showToast('Save failed: '+callFailedMessage(saved,'backend unavailable'),'error',2500);return}
+      await loadChatControls().catch(()=>{});
+      const wfSel=$('chat-workflow-sel');
+      if(wfSel)wfSel.value=custom.id;
+      setAssistantWorkflowMode('on');
+      showToast('Workflow saved: '+custom.name,'info',1800);
+    }else{
+      setAssistantWorkflowMode('custom',{customPrompt:custom.prompt});
+    }
   }else{
     setAssistantWorkflowMode(next);
   }
