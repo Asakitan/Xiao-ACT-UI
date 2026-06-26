@@ -1574,6 +1574,27 @@ pre.code-block { overflow:visible; }
 .followup-btn .followup-source { color:var(--fg-dim); font:10px var(--mono); border-left:1px solid var(--border);
   padding-left:5px; max-width:88px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
+/* ── Plan implement action ── */
+.chat-plan-implement { display:flex; align-items:center; gap:8px; margin-top:8px; padding:8px 10px;
+  border:1px solid color-mix(in srgb, var(--fg-accent) 30%, var(--border)); border-radius:6px;
+  background:color-mix(in srgb, var(--fg-accent) 8%, var(--bg3)); color:var(--fg);
+  transition:opacity .15s,border-color .15s,background .15s; }
+.chat-plan-implement[data-plan-state="running"] { opacity:.72; border-color:color-mix(in srgb, var(--fg-accent) 48%, var(--border)); }
+.chat-plan-implement[data-plan-state="done"] { border-color:color-mix(in srgb, var(--fg-success) 40%, var(--border)); }
+.chat-plan-implement[data-plan-state="error"] { border-color:color-mix(in srgb, var(--fg-error) 45%, var(--border)); }
+.chat-plan-icon { width:20px; flex:0 0 20px; text-align:center; color:var(--fg-accent); font-size:15px; }
+.chat-plan-main { display:flex; flex-direction:column; gap:2px; min-width:0; flex:1; }
+.chat-plan-title { font-size:12px; line-height:16px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chat-plan-meta { color:var(--fg-dim); font:10px/14px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chat-plan-actions { display:flex; align-items:center; gap:4px; flex:0 0 auto; }
+.chat-plan-run { min-height:24px; padding:3px 12px; border-radius:4px; cursor:pointer; font-size:12px;
+  background:var(--btn); color:#fff; border:1px solid color-mix(in srgb, var(--btn) 70%, var(--border)); }
+.chat-plan-run:hover,.chat-plan-run:focus { background:var(--btn-hover); outline:none; }
+.chat-plan-run:disabled { opacity:.55; cursor:default; }
+.chat-plan-dismiss { width:22px; height:22px; border:1px solid transparent; border-radius:4px; background:transparent;
+  color:var(--fg-dim); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
+.chat-plan-dismiss:hover,.chat-plan-dismiss:focus { background:var(--bg-hover); color:var(--fg); border-color:var(--border); outline:none; }
+
 /* ── File attachments ── */
 .attach-area { display:flex; flex-wrap:wrap; gap:5px; padding:0 8px 6px; }
 .attach-area:empty { display:none; }
@@ -25987,6 +26008,89 @@ doSend=async function(){
 };
 window.doSend=doSend;
 
+function syncAssistantPlanState(body,state,detail){
+  const panel=$('chat-panel');
+  const latest=body||latestChatMessageBody('assistant');
+  const bar=latest&&latest.querySelector?latest.querySelector(':scope > .chat-plan-implement'):null;
+  const next=state||(bar&&bar.dataset.planState)||'none';
+  if(panel){
+    panel.dataset.chatPlanActionState=bar?next:'none';
+    panel.dataset.chatHasPlanAction=bar?'true':'false';
+    panel.dataset.chatPlanActionDetail=detail||((bar&&bar.dataset.planDetail)||'');
+  }
+}
+function dismissAssistantPlanBar(bar,reason){
+  if(!bar)return false;
+  const body=bar.closest('.msg-body');
+  bar.dataset.planState='dismissed';
+  bar.remove();
+  syncAssistantPlanState(body,'dismissed',reason||'dismiss');
+  announceAssistantAction('Plan action dismissed');
+  return true;
+}
+async function runAssistantPlanImplementation(bar,button){
+  if(!bar||bar.dataset.planState==='running')return false;
+  const body=bar.closest('.msg-body');
+  bar.dataset.planState='running';
+  bar.dataset.planDetail='implementing';
+  if(button){
+    button.disabled=true;
+    button.setAttribute('aria-busy','true');
+    button.textContent=t('implementing');
+  }
+  syncAssistantPlanState(body,'running','implementing');
+  try{
+    await call('implement_plan');
+    bar.dataset.planState='done';
+    bar.dataset.planDetail='done';
+    if(button){
+      button.textContent=t('implement')||'Implement';
+      button.setAttribute('aria-busy','false');
+    }
+    currentMode='agent';config.mode='agent';updateModeUI();
+    syncAssistantPlanState(body,'done','implemented');
+    announceAssistantAction('Plan implementation started');
+    return true;
+  }catch(e){
+    bar.dataset.planState='error';
+    bar.dataset.planDetail='error';
+    if(button){
+      button.disabled=false;
+      button.setAttribute('aria-busy','false');
+      button.textContent=t('implement')||'Implement';
+    }
+    syncAssistantPlanState(body,'error','failed');
+    appendSystem('Plan implementation failed: '+(e&&e.message?e.message:e));
+    return false;
+  }
+}
+function renderAssistantPlanImplementBar(body){
+  if(!body||body.querySelector(':scope > .chat-plan-implement'))return null;
+  const planBar=document.createElement('div');
+  planBar.className='chat-plan-implement';
+  planBar.dataset.planState='ready';
+  planBar.dataset.planDetail='ready';
+  planBar.setAttribute('role','group');
+  planBar.setAttribute('aria-label','Plan implementation action');
+  const planIcon=document.createElement('span');planIcon.className='chat-plan-icon';planIcon.textContent='☰';planIcon.setAttribute('aria-hidden','true');
+  const main=document.createElement('div');main.className='chat-plan-main';
+  const title=document.createElement('div');title.className='chat-plan-title';title.textContent=t('plan_ready_msg')||'Plan ready. Click Implement to execute.';
+  const meta=document.createElement('div');meta.className='chat-plan-meta';meta.textContent='Mode: Plan · writes require confirmation';
+  main.appendChild(title);main.appendChild(meta);
+  const actions=document.createElement('div');actions.className='chat-plan-actions';
+  const implBtn=document.createElement('button');implBtn.type='button';implBtn.className='chat-plan-run';
+  implBtn.textContent=t('implement')||'Implement';implBtn.setAttribute('aria-label',implBtn.textContent);
+  implBtn.onclick=()=>runAssistantPlanImplementation(planBar,implBtn);
+  const dismiss=document.createElement('button');dismiss.type='button';dismiss.className='chat-plan-dismiss';
+  dismiss.textContent='×';dismiss.title='Dismiss plan action';dismiss.setAttribute('aria-label','Dismiss plan action');
+  dismiss.onclick=()=>dismissAssistantPlanBar(planBar,'button');
+  actions.appendChild(implBtn);actions.appendChild(dismiss);
+  planBar.appendChild(planIcon);planBar.appendChild(main);planBar.appendChild(actions);
+  body.appendChild(planBar);
+  syncAssistantPlanState(body,'ready','ready');
+  return planBar;
+}
+
 // ── Patch onStreamEnd to show followups + plan implement button ──
 const _origOnStreamEnd=onStreamEnd;
 onStreamEnd=function(d){
@@ -25997,22 +26101,7 @@ onStreamEnd=function(d){
     if(body){
       // Plan mode: show Implement button when plan response ends
       if(currentMode==='plan'){
-        const planBar=document.createElement('div');
-        planBar.style.cssText='display:flex;align-items:center;gap:8px;margin-top:8px;padding:8px 12px;background:color-mix(in srgb, var(--fg-accent) 8%, var(--bg3));border:1px solid color-mix(in srgb, var(--fg-accent) 30%, var(--border));border-radius:6px';
-        const planIcon=document.createElement('span');planIcon.textContent='☰';planIcon.style.fontSize='16px';
-        const planText=document.createElement('span');planText.style.cssText='flex:1;font-size:12px;color:var(--fg)';
-        planText.textContent=t('plan_ready_msg')||'Plan ready. Click Implement to execute.';
-        const implBtn=document.createElement('button');
-        implBtn.style.cssText='padding:5px 16px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;background:var(--btn);color:#fff;border:none';
-        implBtn.textContent=t('implement')||'▶ Implement';
-        implBtn.onclick=async()=>{
-          implBtn.disabled=true;implBtn.textContent=t('implementing');
-          planBar.style.opacity='0.6';
-          await call('implement_plan');
-          currentMode='agent';config.mode='agent';updateModeUI();
-        };
-        planBar.appendChild(planIcon);planBar.appendChild(planText);planBar.appendChild(implBtn);
-        body.appendChild(planBar);
+        renderAssistantPlanImplementBar(body);
       }else{
         renderChatResponseReferences(body,d.content,d);
         const suggestions=chatFollowupsFromPayload(d,d.content);

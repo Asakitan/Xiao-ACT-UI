@@ -4477,6 +4477,31 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function chatFollowupsFromPayload(payload,content)" in html
            and "item.agentId" in html
            and "renderChatResponseReferences(s,content,data);" in html)
+    _check("frontend Assistant plan implement action is stateful and accessible",
+           ".chat-plan-implement { display:flex; align-items:center; gap:8px;" in html
+           and ".chat-plan-implement[data-plan-state=\"running\"]" in html
+           and ".chat-plan-implement[data-plan-state=\"done\"]" in html
+           and ".chat-plan-implement[data-plan-state=\"error\"]" in html
+           and ".chat-plan-run:disabled" in html
+           and ".chat-plan-dismiss:hover,.chat-plan-dismiss:focus" in html
+           and "function syncAssistantPlanState(body,state,detail)" in html
+           and "function dismissAssistantPlanBar(bar,reason)" in html
+           and "function runAssistantPlanImplementation(bar,button)" in html
+           and "function renderAssistantPlanImplementBar(body)" in html
+           and "panel.dataset.chatPlanActionState=bar?next:'none';" in html
+           and "panel.dataset.chatHasPlanAction=bar?'true':'false';" in html
+           and "bar.dataset.planState='running';" in html
+           and "bar.dataset.planState='done';" in html
+           and "bar.dataset.planState='error';" in html
+           and "button.setAttribute('aria-busy','true');" in html
+           and "button.setAttribute('aria-busy','false');" in html
+           and "appendSystem('Plan implementation failed: '" in html
+           and "if(!body||body.querySelector(':scope > .chat-plan-implement'))return null;" in html
+           and "planBar.setAttribute('role','group');" in html
+           and "planBar.setAttribute('aria-label','Plan implementation action');" in html
+           and "dismiss.setAttribute('aria-label','Dismiss plan action');" in html
+           and "renderAssistantPlanImplementBar(body);" in html
+           and "await call('implement_plan');" in html)
     _check("frontend Assistant provider panels send native context payloads",
            "async function providerSend(pid)" in html
            and "drainPendingAttachmentsAsContext();" in html
