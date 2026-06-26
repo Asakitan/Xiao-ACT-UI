@@ -929,7 +929,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-action-tray { display:none; margin:7px 8px 0; }
 .chat-action-tray.active { display:block; }
 .chat-action-carousel { color:var(--fg); display:flex; flex-direction:column; max-height:min(300px,45vh);
-  border:1px solid var(--border); border-radius:6px; background:var(--bg2); overflow:hidden; }
+  border:1px solid var(--border); border-radius:6px; background:var(--bg2); overflow:hidden;
+  animation:assistantActionTraySlideIn .16s ease-out; }
 .chat-action-carousel:focus-visible,.chat-action-carousel:focus-within { border-color:var(--border-focus); }
 .chat-action-carousel-overlay { display:flex; align-items:center; gap:8px; padding:6px 8px 6px 10px;
   border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent); }
@@ -944,6 +945,21 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-action-carousel-icon:hover,.chat-action-carousel-icon:focus { background:var(--bg-hover); color:var(--fg); outline:none; }
 .chat-action-carousel-icon:disabled { opacity:.35; cursor:default; background:transparent; }
 .chat-action-carousel-content { padding:7px 8px; display:flex; flex-direction:column; gap:6px; }
+.chat-action-carousel-summary { color:var(--fg-dim); font-size:11px; line-height:1.4; white-space:pre-wrap; }
+.chat-action-carousel-preview { overflow:hidden; max-height:0; opacity:0; transform:translateY(-4px);
+  transition:max-height .18s ease,opacity .14s ease,transform .18s ease; }
+.chat-action-carousel-preview.expanded { max-height:180px; opacity:1; transform:translateY(0); }
+.chat-action-carousel-preview .chat-response-confirmation,
+.chat-action-carousel-preview .chat-response-questions { margin:0; }
+.chat-action-carousel[data-kind="questionCarousel"] .chat-action-carousel-preview.expanded { max-height:220px; }
+@keyframes assistantActionTraySlideIn {
+  from { opacity:0; transform:translateY(5px); }
+  to { opacity:1; transform:translateY(0); }
+}
+@media (prefers-reduced-motion: reduce){
+  .chat-action-carousel { animation:none; }
+  .chat-action-carousel-preview { transition:none; }
+}
 .chat-action-tray-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center; }
 .chat-action-tray-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg-dim); font-size:12px; }
 .chat-action-tray-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:5px; }
@@ -2906,6 +2922,7 @@ let _chatMessageSeq=0;
 let _providerMessageSeq=0;
 const _assistantActionTrayItems=new Map();
 let _assistantActionTrayActiveKey='';
+let _assistantActionTrayExpandedKey='';
 let _windowCloseRequested=false;
 function requestWindowClose(){
   if(_windowCloseRequested)return;
@@ -6029,6 +6046,16 @@ function assistantActionTrayTitle(item){
 function assistantActionTrayKindLabel(item){
   return item&&item.kind==='questionCarousel'?'questions':'confirm';
 }
+function assistantActionTraySummary(item){
+  if(!item)return '';
+  if(item.kind==='questionCarousel'){
+    const count=Array.isArray(item.source&&item.source.questions)?item.source.questions.length:0;
+    return count+(count===1?' question':' questions')+(item.source&&item.source.allowSkip?' • skip allowed':'');
+  }
+  const buttons=Array.isArray(item.source&&item.source.buttons)?item.source.buttons:[];
+  const message=String(item.source&&item.source.message||'').replace(/\s+/g,' ').trim();
+  return (buttons.length?buttons.length+' actions':'')+(message?(' • '+message.slice(0,160)):'');
+}
 function registerAssistantActionTrayItem(kind,part,source,card){
   const callbackButton=source&&Array.isArray(source.buttons)?source.buttons.find(button=>assistantResponsePartHasCallback(source,button)):null;
   if(!assistantResponsePartHasCallback(source,callbackButton)||!card)return;
@@ -6050,6 +6077,7 @@ function assistantActionTrayPendingItems(){
     if(!item||item.state==='submitted'||!item.card||!item.card.isConnected){_assistantActionTrayItems.delete(key);return}
     items.push(item);
   });
+  if(_assistantActionTrayExpandedKey&&items.every(item=>item.key!==_assistantActionTrayExpandedKey))_assistantActionTrayExpandedKey='';
   return items;
 }
 function assistantActionTrayActiveIndex(items){
@@ -6068,6 +6096,20 @@ function assistantActionTrayNavigate(delta){
   const next=(index+delta+items.length)%items.length;
   _assistantActionTrayActiveKey=items[next].key;
   syncAssistantActionTray();
+}
+function assistantActionTraySetActive(index){
+  const items=assistantActionTrayPendingItems();
+  if(!items.length)return;
+  const clamped=Math.max(0,Math.min(index,items.length-1));
+  _assistantActionTrayActiveKey=items[clamped].key;
+  syncAssistantActionTray();
+}
+function assistantActionTrayToggleExpanded(key){
+  _assistantActionTrayExpandedKey=_assistantActionTrayExpandedKey===key?'':key;
+  syncAssistantActionTray();
+}
+function assistantActionTrayIsExpanded(item){
+  return !!(item&&item.key&&_assistantActionTrayExpandedKey===item.key);
 }
 function assistantActionTrayPrimaryButton(item){
   if(!item||item.kind!=='confirmation')return null;
@@ -6092,6 +6134,25 @@ async function assistantActionTrayAllowAll(button){
   if(button){button.removeAttribute('aria-busy');button.disabled=false}
   syncAssistantActionTray();
 }
+async function assistantActionTraySkipAll(button){
+  const items=assistantActionTrayPendingItems();
+  if(!items.length)return;
+  if(button){button.disabled=true;button.setAttribute('aria-busy','true')}
+  for(const item of items){
+    if(!_assistantActionTrayItems.has(item.key))continue;
+    if(button&&button.dataset)button.dataset.assistantActionKey=item.key;
+    if(item.kind==='questionCarousel'){
+      await assistantSubmitResponsePartAction(item.part,'skip','Skip',null,{buttonEl:button,fallbackTitle:'Answers',fallbackText:'Skip',answers:[]});
+      continue;
+    }
+    const denyButton=(item.source.buttons||[]).find(btn=>String((btn&&btn.action)||btn||'').toLowerCase().includes('deny')||String((btn&&btn.label)||btn||'').toLowerCase().includes('deny'));
+    const actionButton=denyButton||assistantActionTrayPrimaryButton(item);
+    const label=String((actionButton&&actionButton.label)||actionButton||'Skip');
+    await assistantSubmitResponsePartAction(item.part,(actionButton&&actionButton.action)||'button',(actionButton&&actionButton.value)!==undefined?actionButton.value:label,actionButton,{buttonEl:button,fallbackTitle:item.source.title||'Confirmation',fallbackText:label});
+  }
+  if(button){button.removeAttribute('aria-busy');button.disabled=false}
+  syncAssistantActionTray();
+}
 function assistantActionTrayButton(label,title,className,onClick){
   const btn=document.createElement('button');
   btn.type='button';
@@ -6100,6 +6161,9 @@ function assistantActionTrayButton(label,title,className,onClick){
   if(title)btn.title=title;
   btn.onclick=onClick;
   return btn;
+}
+function assistantActionTrayShouldIgnoreNavigationTarget(target){
+  return !!(target&&target.closest&&target.closest('input,textarea,select,[contenteditable="true"],.chat-action-carousel-preview'));
 }
 function assistantActionTrayRenderItem(item,content){
   const row=document.createElement('div');row.className='chat-action-tray-row';row.dataset.assistantActionKey=item.key;
@@ -6129,17 +6193,22 @@ function assistantActionTrayRenderItem(item,content){
 function syncAssistantActionTray(){
   const tray=$('chat-action-tray');if(!tray)return;
   const items=assistantActionTrayPendingItems();
+  const preserveFocus=!!(document.activeElement&&tray.contains(document.activeElement));
   tray.innerHTML='';
   tray.classList.toggle('active',items.length>0);
   tray.dataset.pendingCount=String(items.length);
   tray.onkeydown=(e)=>{
+    if(assistantActionTrayShouldIgnoreNavigationTarget(e.target))return;
     if(e.key==='ArrowLeft'){e.preventDefault();assistantActionTrayNavigate(-1)}
     else if(e.key==='ArrowRight'){e.preventDefault();assistantActionTrayNavigate(1)}
+    else if(e.key==='Home'){e.preventDefault();assistantActionTraySetActive(0)}
+    else if(e.key==='End'){e.preventDefault();assistantActionTraySetActive(items.length-1)}
+    else if(e.key==='Escape'&&_assistantActionTrayExpandedKey){e.preventDefault();_assistantActionTrayExpandedKey='';syncAssistantActionTray()}
   };
   if(!items.length)return;
   const activeIndex=assistantActionTrayActiveIndex(items);
   const active=items[activeIndex];
-  const root=document.createElement('div');root.className='chat-action-carousel chat-tool-confirmation-carousel';root.tabIndex=-1;root.setAttribute('role','group');root.setAttribute('aria-label','Pending Assistant actions carousel');
+  const root=document.createElement('div');root.className='chat-action-carousel chat-tool-confirmation-carousel';root.tabIndex=-1;root.dataset.kind=active.kind;root.setAttribute('role','group');root.setAttribute('aria-label','Pending Assistant actions carousel');
   const overlay=document.createElement('div');overlay.className='chat-action-carousel-overlay chat-tool-carousel-overlay';
   const titleGroup=document.createElement('div');titleGroup.className='chat-action-carousel-title-group chat-tool-carousel-title-group';
   const kind=document.createElement('span');kind.className='chat-action-carousel-kind';kind.textContent=assistantActionTrayKindLabel(active);
@@ -6151,15 +6220,26 @@ function syncAssistantActionTray(){
     allowAll.classList.add('chat-tool-carousel-allow-all-button');
     overlayActions.appendChild(allowAll);
   }
+  const expand=assistantActionTrayButton(assistantActionTrayIsExpanded(active)?'▾':'▸',assistantActionTrayIsExpanded(active)?'Collapse details':'Expand details','chat-action-carousel-icon chat-tool-carousel-header-button',()=>assistantActionTrayToggleExpanded(active.key));
+  expand.setAttribute('aria-expanded',assistantActionTrayIsExpanded(active)?'true':'false');
+  overlayActions.appendChild(expand);
   const counter=document.createElement('span');counter.className='chat-action-carousel-counter chat-tool-carousel-step-indicator';counter.textContent=(activeIndex+1)+'/'+items.length;overlayActions.appendChild(counter);
   const prev=assistantActionTrayButton('<','Previous pending action','chat-action-carousel-icon chat-tool-carousel-nav-arrow',()=>assistantActionTrayNavigate(-1));
   const next=assistantActionTrayButton('>','Next pending action','chat-action-carousel-icon chat-tool-carousel-nav-arrow',()=>assistantActionTrayNavigate(1));
   prev.disabled=items.length<2;next.disabled=items.length<2;overlayActions.appendChild(prev);overlayActions.appendChild(next);
   const review=assistantActionTrayButton('Review','Review source response part','chat-inline-action',()=>scrollAssistantActionSource(active.card));overlayActions.appendChild(review);
+  const dismiss=assistantActionTrayButton(items.length===1?'Skip':'Skip all',items.length===1?'Skip the current pending action':'Skip all pending actions','chat-action-carousel-icon chat-tool-carousel-dismiss-button',()=>assistantActionTraySkipAll(dismiss));
+  dismiss.setAttribute('aria-label',items.length===1?'Skip':'Skip all');
+  overlayActions.appendChild(dismiss);
   overlay.appendChild(overlayActions);root.appendChild(overlay);
   const content=document.createElement('div');content.className='chat-action-carousel-content chat-tool-carousel-content';
+  const summary=document.createElement('div');summary.className='chat-action-carousel-summary';summary.textContent=assistantActionTraySummary(active);content.appendChild(summary);
   assistantActionTrayRenderItem(active,content);
+  const preview=document.createElement('div');preview.className='chat-action-carousel-preview'+(assistantActionTrayIsExpanded(active)?' expanded':'');
+  if(assistantActionTrayIsExpanded(active))preview.appendChild(active.card.cloneNode(true));
+  content.appendChild(preview);
   root.appendChild(content);tray.appendChild(root);
+  if(preserveFocus)try{root.focus({preventScroll:true})}catch(_e){root.focus()}
 }
 function assistantActionTraySnapshot(){
   const tray=$('chat-action-tray');
@@ -6175,6 +6255,8 @@ function assistantActionTraySnapshot(){
     rowCount:tray?tray.querySelectorAll('.chat-action-tray-row').length:0,
     navButtonCount:tray?tray.querySelectorAll('.chat-tool-carousel-nav-arrow').length:0,
     allowAllVisible:!!(tray&&tray.querySelector('.chat-tool-carousel-allow-all-button')),
+    expanded:!!(activeIndex>=0&&assistantActionTrayIsExpanded(items[activeIndex])),
+    dismissLabel:tray&&tray.querySelector('.chat-tool-carousel-dismiss-button')?tray.querySelector('.chat-tool-carousel-dismiss-button').getAttribute('aria-label'):'',
     callbackButtonCount:tray?tray.querySelectorAll('[data-assistant-callback="true"]').length:0,
     titles:tray?Array.from(tray.querySelectorAll('.chat-action-tray-title')).map(el=>el.childNodes[0]?el.childNodes[0].textContent:''):[],
     activeTitle:tray&&tray.querySelector('.chat-action-carousel-title')?tray.querySelector('.chat-action-carousel-title').textContent:'',
