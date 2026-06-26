@@ -1880,6 +1880,7 @@ class NodeExtensionHost:
         self._notebook_controllers: List[Dict[str, Any]] = []
         self._notebook_controller_selections: List[Dict[str, Any]] = []
         self._notebook_controller_affinities: List[Dict[str, Any]] = []
+        self._notebook_controller_detection_tasks: List[Dict[str, Any]] = []
         self._notebook_cell_status_bar_providers: List[Dict[str, Any]] = []
         self._notebook_cell_status_bar_changes: List[Dict[str, Any]] = []
         self._terminal_profile_request_lock = threading.Lock()
@@ -3604,6 +3605,23 @@ class NodeExtensionHost:
             self._notebook_controller_affinities.append(record)
             del self._notebook_controller_affinities[:-50]
 
+        elif msg_type == "notebook_controller_detection_task_registered":
+            record = {
+                "notebookType": str(msg.get("notebookType", "")),
+                "extensionId": str(msg.get("extensionId", "")),
+            }
+            self._notebook_controller_detection_tasks.append(record)
+            del self._notebook_controller_detection_tasks[:-50]
+
+        elif msg_type == "notebook_controller_detection_task_disposed":
+            notebook_type = str(msg.get("notebookType", ""))
+            extension_id = str(msg.get("extensionId", ""))
+            for index, item in enumerate(self._notebook_controller_detection_tasks):
+                if (item.get("notebookType") == notebook_type
+                        and item.get("extensionId") == extension_id):
+                    del self._notebook_controller_detection_tasks[index]
+                    break
+
         elif msg_type == "notebook_cell_status_bar_provider_registered":
             handle = int(msg.get("handle") or 0)
             if handle:
@@ -4310,6 +4328,15 @@ class NodeExtensionHost:
         return [
             dict(item)
             for item in self._notebook_controller_affinities
+        ]
+
+    def notebook_controller_detection_tasks(
+            self, notebook_type: str = "") -> List[Dict[str, Any]]:
+        wanted = str(notebook_type or "").strip()
+        return [
+            dict(item)
+            for item in self._notebook_controller_detection_tasks
+            if not wanted or item.get("notebookType") == wanted
         ]
 
     def notebook_cell_status_bar_providers(self) -> List[Dict[str, Any]]:

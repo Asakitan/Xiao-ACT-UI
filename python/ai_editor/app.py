@@ -5094,9 +5094,15 @@ class AIEditorAPI:
                     item for item in controllers
                     if item.get("notebookType") == wanted
                 ]
+        detection_tasks = []
+        if hasattr(node_host, "notebook_controller_detection_tasks"):
+            detection_tasks = node_host.notebook_controller_detection_tasks(
+                str(view_type or "").strip())
         return {
             "ok": bool(result.get("ok", True)) if isinstance(result, dict) else True,
             "controllers": controllers,
+            "detectionTasks": detection_tasks,
+            "detectionTaskCount": len(detection_tasks),
             "view_type": str(view_type or "").strip(),
             "error": result.get("error", "") if isinstance(result, dict) else "",
         }

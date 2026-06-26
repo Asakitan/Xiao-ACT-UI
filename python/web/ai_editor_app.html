@@ -348,9 +348,29 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-notebook-run:disabled,.editor-notebook-kernel:disabled { opacity:.5; cursor:default; }
 .editor-notebook-cell { border:1px solid var(--border); border-radius:5px; background:var(--bg);
   margin:0 0 10px; overflow:hidden; }
+.editor-notebook-cell.executing { border-color:color-mix(in srgb,var(--fg-accent) 55%,var(--border)); }
+.editor-notebook-cell.succeeded { border-color:color-mix(in srgb,var(--fg-success) 35%,var(--border)); }
+.editor-notebook-cell.failed { border-color:color-mix(in srgb,var(--fg-error) 45%,var(--border)); }
 .editor-notebook-cell-head { display:flex; align-items:center; gap:6px; padding:5px 8px; background:var(--bg2);
   border-bottom:1px solid var(--border); color:var(--fg-dim); font:11px var(--mono); }
 .editor-notebook-cell-kind { color:var(--fg-accent); font-weight:600; }
+.editor-notebook-cell-title { display:flex; align-items:center; gap:6px; min-width:0; flex:1 1 auto; }
+.editor-notebook-cell-actions { display:flex; align-items:center; gap:5px; flex:0 0 auto; }
+.editor-notebook-cell-run { width:22px; height:22px; display:inline-flex; align-items:center; justify-content:center;
+  border:1px solid var(--border); border-radius:4px; background:var(--bg3); color:var(--fg-accent);
+  font:11px var(--sans); cursor:pointer; padding:0; }
+.editor-notebook-cell-run:hover,.editor-notebook-cell-run:focus { border-color:var(--border-focus);
+  background:var(--bg-hover); outline:none; }
+.editor-notebook-cell-run:disabled { opacity:.45; cursor:default; color:var(--fg-dim); }
+.editor-notebook-exec { min-width:42px; color:var(--fg-dim); text-align:right; }
+.editor-notebook-exec.executing { color:var(--fg-accent); }
+.editor-notebook-exec.succeeded { color:var(--fg-success); }
+.editor-notebook-exec.failed { color:var(--fg-error); }
+.editor-notebook-progress { display:none; height:2px; background:linear-gradient(90deg,
+  transparent, var(--fg-accent), transparent); background-size:160px 2px;
+  animation:notebookCellProgress 1s linear infinite; }
+.editor-notebook-cell.executing .editor-notebook-progress { display:block; }
+@keyframes notebookCellProgress { from{background-position:-160px 0} to{background-position:160px 0} }
 .editor-notebook-cell textarea { width:100%; min-height:72px; resize:vertical; box-sizing:border-box;
   border:0; outline:none; background:var(--bg-editor); color:var(--fg-code); font:13px/1.5 var(--mono);
   padding:9px 10px; display:block; }
@@ -14239,6 +14259,66 @@ async function loadNotebookStatusBar(tab,index,host){
   if(!host.isConnected||host.dataset.tabId!==String(tab.id)||host.dataset.cellIndex!==String(index))return;
   renderNotebookStatusBarItems(host,res&&res.items);
 }
+function notebookCellIsCode(cell){
+  return Number(cell&&cell.kind) !== 1;
+}
+function notebookExecutionStateMap(tab){
+  if(!tab)return {};
+  if(!tab.notebookExecutionState||typeof tab.notebookExecutionState!=='object')tab.notebookExecutionState={};
+  return tab.notebookExecutionState;
+}
+function notebookCellExecutionOrder(cell){
+  const meta=(cell&&cell.internalMetadata)||{};
+  const raw=meta.executionOrder??(cell&&cell.executionOrder);
+  const num=Number(raw);
+  return Number.isFinite(num)?num:null;
+}
+function setNotebookCellExecutionState(tab,index,state,order,message){
+  const map=notebookExecutionStateMap(tab);
+  const key=String(index);
+  map[key]={state:String(state||'idle'),order:Number.isFinite(Number(order))?Number(order):null,message:String(message||'')};
+}
+function notebookCellExecutionText(tab,cell,index){
+  const state=(notebookExecutionStateMap(tab)[String(index)]||{});
+  const order=state.order!==null&&state.order!==undefined?state.order:notebookCellExecutionOrder(cell);
+  if(state.state==='executing')return order!==null?'[*'+order+']':'[*]';
+  if(state.state==='failed')return 'Failed';
+  if(state.state==='succeeded'&&order!==null)return '['+order+']';
+  if(order!==null)return '['+order+']';
+  return '';
+}
+function applyNotebookExecutionStateToSurface(tab){
+  const host=$('editor-notebook-host');
+  if(!host||!tab||host.dataset.tabId!==String(tab.id))return;
+  const cells=Array.isArray(tab.notebook&&tab.notebook.cells)?tab.notebook.cells:[];
+  host.querySelectorAll('.editor-notebook-cell').forEach(card=>{
+    const index=Number(card.dataset.cellIndex||0);
+    const cell=cells[index]||{};
+    const state=(notebookExecutionStateMap(tab)[String(index)]||{}).state||'idle';
+    card.classList.toggle('executing',state==='executing');
+    card.classList.toggle('succeeded',state==='succeeded');
+    card.classList.toggle('failed',state==='failed');
+    const badge=card.querySelector('.editor-notebook-exec');
+    if(badge){
+      badge.classList.toggle('executing',state==='executing');
+      badge.classList.toggle('succeeded',state==='succeeded');
+      badge.classList.toggle('failed',state==='failed');
+      badge.textContent=notebookCellExecutionText(tab,cell,index);
+      const message=(notebookExecutionStateMap(tab)[String(index)]||{}).message;
+      badge.title=message||'Execution state';
+    }
+  });
+  syncNotebookRunButtons(tab);
+}
+function syncNotebookRunButtons(tab){
+  const host=$('editor-notebook-host');
+  if(!host||!tab||host.dataset.tabId!==String(tab.id))return;
+  const running=Object.values(notebookExecutionStateMap(tab)).some(item=>item&&item.state==='executing');
+  host.querySelectorAll('.editor-notebook-run,.editor-notebook-cell-run').forEach(btn=>{
+    const hasKernel=!!(tab.selectedNotebookController||(tab.notebook&&tab.notebook.selected_controller));
+    btn.disabled=running||!hasKernel||btn.dataset.runnable==='false';
+  });
+}
 function notebookControllerLabel(controller){
   if(!controller)return 'Select Kernel';
   const label=String(controller.label||controller.id||'Kernel');
@@ -14252,9 +14332,12 @@ async function loadNotebookControllers(tab,select,runButton){
   const res=await call('notebook_controllers',viewType);
   if(!select.isConnected||select.dataset.tabId!==String(tab.id))return;
   const controllers=Array.isArray(res&&res.controllers)?res.controllers:[];
+  const detectionTasks=Array.isArray(res&&res.detectionTasks)?res.detectionTasks:[];
   tab.notebookControllers=controllers;
+  tab.notebookControllerDetectionTasks=detectionTasks;
   select.innerHTML='';
-  const empty=document.createElement('option');empty.value='';empty.textContent=controllers.length?'Select Kernel':'No Kernel';
+  const empty=document.createElement('option');empty.value='';
+  empty.textContent=controllers.length?'Select Kernel':(detectionTasks.length?'Detecting Kernels...':'No Kernel');
   select.appendChild(empty);
   controllers.forEach(controller=>{
     const opt=document.createElement('option');
@@ -14271,6 +14354,8 @@ async function loadNotebookControllers(tab,select,runButton){
   }
   select.disabled=!controllers.length;
   if(runButton)runButton.disabled=!select.value;
+  select.title=detectionTasks.length?('Notebook kernel - '+detectionTasks.length+' detection task(s) running'):'Notebook kernel';
+  syncNotebookRunButtons(tab);
 }
 function selectedNotebookController(tab,value){
   const controllers=Array.isArray(tab&&tab.notebookControllers)?tab.notebookControllers:[];
@@ -14287,6 +14372,7 @@ async function selectNotebookController(tab,value,quiet){
   if(callSucceeded(res)){
     tab.selectedNotebookController=String(controller.handle||controller.id||'');
     tab.notebook.selected_controller=tab.selectedNotebookController;
+    syncNotebookRunButtons(tab);
     if(!quiet)setStatus('Selected notebook kernel: '+notebookControllerLabel(controller));
   }else if(!quiet)setStatus('Notebook kernel selection failed: '+callFailedMessage(res,'controller unavailable'));
   return res||{ok:false,error:'controller unavailable'};
@@ -14299,13 +14385,28 @@ async function runNotebookController(tab,cellIndex){
   const path=tab.workspacePath||tab.filePath||'';
   const viewType=nb.view_type||nb.viewType||'';
   const cells=Array.isArray(nb.cells)?nb.cells:[];
-  const indices=Number.isFinite(Number(cellIndex))?[Number(cellIndex)]:cells.map((cell,index)=>index);
+  const single=Number.isFinite(Number(cellIndex));
+  const indices=single
+    ? [Number(cellIndex)].filter(index=>notebookCellIsCode(cells[index]))
+    : cells.map((cell,index)=>notebookCellIsCode(cell)?index:-1).filter(index=>index>=0);
+  if(!indices.length){setStatus('No runnable code cells');return {ok:false,error:'no runnable code cells'};}
+  indices.forEach(index=>setNotebookCellExecutionState(tab,index,'executing',notebookCellExecutionOrder(cells[index]),'Executing'));
+  applyNotebookExecutionStateToSurface(tab);
   const res=await call('execute_notebook_controller',path,nb,viewType,controller.handle||'',controller.id||'',indices);
   if(callSucceeded(res)){
     const next=res&&res.result&&res.result.notebook;
-    if(next&&Array.isArray(next.cells)){tab.notebook={...nb,...next,dirty:nb.dirty};showNotebookSurface(tab)}
+    if(next&&Array.isArray(next.cells))tab.notebook={...nb,...next,dirty:nb.dirty};
+    const nextCells=Array.isArray(tab.notebook&&tab.notebook.cells)?tab.notebook.cells:cells;
+    indices.forEach(index=>setNotebookCellExecutionState(tab,index,'succeeded',notebookCellExecutionOrder(nextCells[index]),'Succeeded'));
+    if(next&&Array.isArray(next.cells))showNotebookSurface(tab);
+    else applyNotebookExecutionStateToSurface(tab);
     setStatus('Ran notebook kernel: '+notebookControllerLabel(controller));
-  }else setStatus('Notebook run failed: '+callFailedMessage(res,'controller unavailable'));
+  }else{
+    const message=callFailedMessage(res,'controller unavailable');
+    indices.forEach(index=>setNotebookCellExecutionState(tab,index,'failed',notebookCellExecutionOrder(cells[index]),message));
+    applyNotebookExecutionStateToSurface(tab);
+    setStatus('Notebook run failed: '+message);
+  }
   return res||{ok:false,error:'controller unavailable'};
 }
 function readNotebookFromSurface(tab){
@@ -14349,8 +14450,8 @@ function showNotebookSurface(tab){
   const type=document.createElement('span');type.className='editor-notebook-type';type.textContent=nb.view_type||nb.viewType||'notebook';
   const title=document.createElement('span');title.className='editor-notebook-title';title.textContent=(nb.display_name||nb.displayName||tab.name||'Notebook')+' · '+cells.length+' cells';
   const kernel=document.createElement('select');kernel.className='editor-notebook-kernel';kernel.dataset.tabId=String(tab.id);kernel.title='Notebook kernel';
-  const run=document.createElement('button');run.type='button';run.className='editor-notebook-run';run.textContent='Run All';run.disabled=true;run.title='Run all cells';
-  kernel.onchange=()=>{selectNotebookController(tab,kernel.value).then(()=>{run.disabled=!kernel.value})};
+  const run=document.createElement('button');run.type='button';run.className='editor-notebook-run';run.textContent='Run All';run.disabled=true;run.title='Run all code cells';run.dataset.runnable=cells.some(notebookCellIsCode)?'true':'false';
+  kernel.onchange=()=>{selectNotebookController(tab,kernel.value).then(()=>syncNotebookRunButtons(tab))};
   run.onclick=()=>runNotebookController(tab);
   header.appendChild(type);header.appendChild(title);header.appendChild(kernel);header.appendChild(run);host.appendChild(header);
   loadNotebookControllers(tab,kernel,run);
@@ -14361,9 +14462,18 @@ function showNotebookSurface(tab){
   cells.forEach((cell,index)=>{
     const card=document.createElement('div');card.className='editor-notebook-cell';card.dataset.cellIndex=String(index);
     const head=document.createElement('div');head.className='editor-notebook-cell-head';
+    const titleWrap=document.createElement('div');titleWrap.className='editor-notebook-cell-title';
     const kind=document.createElement('span');kind.className='editor-notebook-cell-kind';kind.textContent=notebookCellKindLabel(cell.kind);
     const lang=document.createElement('span');lang.textContent=cell.languageId||cell.language||'plaintext';
-    head.appendChild(kind);head.appendChild(lang);card.appendChild(head);
+    titleWrap.appendChild(kind);titleWrap.appendChild(lang);head.appendChild(titleWrap);
+    const actions=document.createElement('div');actions.className='editor-notebook-cell-actions';
+    const exec=document.createElement('span');exec.className='editor-notebook-exec';exec.textContent=notebookCellExecutionText(tab,cell,index);exec.title='Execution state';
+    const cellRun=document.createElement('button');cellRun.type='button';cellRun.className='editor-notebook-cell-run';cellRun.textContent='▶';cellRun.title='Run cell';cellRun.setAttribute('aria-label','Run cell '+(index+1));
+    cellRun.dataset.runnable=notebookCellIsCode(cell)?'true':'false';
+    cellRun.disabled=!notebookCellIsCode(cell);
+    cellRun.onclick=()=>runNotebookController(tab,index);
+    actions.appendChild(exec);actions.appendChild(cellRun);head.appendChild(actions);card.appendChild(head);
+    const progress=document.createElement('div');progress.className='editor-notebook-progress';card.appendChild(progress);
     const ta=document.createElement('textarea');ta.spellcheck=false;ta.value=String(cell.value||'');
     ta.addEventListener('input',()=>{cell.value=ta.value;markNotebookDirty(tab)});
     card.appendChild(ta);
@@ -14379,6 +14489,7 @@ function showNotebookSurface(tab){
     loadNotebookStatusBar(tab,index,status);
     host.appendChild(card);
   });
+  applyNotebookExecutionStateToSurface(tab);
 }
 function hideNotebookSurface(){
   const container=$('editor-container'),host=$('editor-notebook-host');

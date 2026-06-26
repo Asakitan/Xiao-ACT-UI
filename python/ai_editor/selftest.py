@@ -910,6 +910,15 @@ class _FakeNodeCustomEditorHost:
         ]
         return {"ok": True, "value": controllers}
 
+    def notebook_controller_detection_tasks(self, notebook_type=""):
+        task = {
+            "notebookType": "selftest.notebook",
+            "extensionId": "selftest.notebookExt",
+        }
+        if notebook_type and notebook_type != task["notebookType"]:
+            return []
+        return [task]
+
     def select_notebook_controller_result(
             self, uri, notebook, view_type="", handle=None, controller_id="",
             selected=True, default=None, timeout=3.0):
@@ -942,13 +951,30 @@ class _FakeNodeCustomEditorHost:
             "controller_id": controller_id,
             "cell_indices": cell_indices,
         })
+        next_notebook = json.loads(json.dumps(notebook))
+        for order, index in enumerate(cell_indices or [], start=1):
+            try:
+                cell = next_notebook.setdefault("cells", [])[int(index)]
+            except (IndexError, TypeError, ValueError):
+                continue
+            cell["internalMetadata"] = {
+                **(cell.get("internalMetadata") or {}),
+                "executionOrder": order,
+            }
+            cell["outputs"] = [{
+                "id": f"exec-{index}",
+                "items": [{
+                    "mime": "text/plain",
+                    "dataText": f"executed:{index}",
+                }],
+            }]
         return {
             "ok": True,
             "value": {
                 "controller": self.notebook_controllers()[0],
                 "cellCount": len(cell_indices or []),
                 "cellIndices": list(cell_indices or []),
-                "notebook": notebook,
+                "notebook": next_notebook,
             },
         }
 
@@ -2948,6 +2974,9 @@ def test_app_settings_parity() -> None:
                notebook_controllers.get("ok") is True
                and notebook_controllers.get("controllers", [{}])[0].get(
                    "id") == "selftest.notebookController"
+               and notebook_controllers.get("detectionTaskCount") == 1
+               and notebook_controllers.get("detectionTasks", [{}])[0].get(
+                   "extensionId") == "selftest.notebookExt"
                and select_controller.get("ok") is True
                and select_controller.get("controller", {}).get(
                    "handle") == 11
@@ -2955,6 +2984,13 @@ def test_app_settings_parity() -> None:
                and execute_controller.get("ok") is True
                and execute_controller.get("result", {}).get(
                    "cellIndices") == [0]
+               and execute_controller.get("result", {}).get(
+                   "notebook", {}).get("cells", [{}])[0].get(
+                   "internalMetadata", {}).get("executionOrder") == 1
+               and execute_controller.get("result", {}).get(
+                   "notebook", {}).get("cells", [{}])[0].get(
+                   "outputs", [{}])[0].get("items", [{}])[0].get(
+                   "dataText") == "executed:0"
                and any(
                    item.get("action") == "select"
                    and item.get("handle") == 11
@@ -9344,14 +9380,28 @@ console.log("command palette quick access helpers ok");
            and "call('notebook_cell_status_bar_items',path,nb,viewType,index)" in html
            and "editor-notebook-statusbar" in html
            and "classList.add('has-command')" in html
+           and "function notebookCellIsCode(cell)" in html
+           and "function notebookExecutionStateMap(tab)" in html
+           and "function setNotebookCellExecutionState(tab,index,state,order,message)" in html
+           and "function applyNotebookExecutionStateToSurface(tab)" in html
+           and "function syncNotebookRunButtons(tab)" in html
            and "function loadNotebookControllers(tab,select,runButton)" in html
            and "call('notebook_controllers',viewType)" in html
+           and "tab.notebookControllerDetectionTasks=detectionTasks;" in html
+           and "Detecting Kernels..." in html
            and "function selectNotebookController(tab,value,quiet)" in html
            and "call('select_notebook_controller',path,nb,viewType,controller.handle||'',controller.id||'')" in html
            and "function runNotebookController(tab,cellIndex)" in html
            and "call('execute_notebook_controller',path,nb,viewType,controller.handle||'',controller.id||'',indices)" in html
+           and "cells.map((cell,index)=>notebookCellIsCode(cell)?index:-1)" in html
+           and "setNotebookCellExecutionState(tab,index,'executing'" in html
+           and "setNotebookCellExecutionState(tab,index,'succeeded'" in html
+           and "setNotebookCellExecutionState(tab,index,'failed'" in html
            and "editor-notebook-kernel" in html
            and "editor-notebook-run" in html
+           and "editor-notebook-cell-run" in html
+           and "editor-notebook-exec" in html
+           and "editor-notebook-progress" in html
            and "editor-notebook-output-item iframe" in html
            and "frame.sandbox=''" in html
            and "editor-notebook-output" in html
@@ -9771,8 +9821,14 @@ console.log("command palette quick access helpers ok");
            and "notebook_controllers_request" in node_ext_host_source
            and "notebook_controller_select_request" in node_ext_host_source
            and "notebook_controller_execute_request" in node_ext_host_source
+           and "notebook_controller_detection_task_registered"
+           in node_ext_host_source
            and "def notebook_serializers(self)" in extension_host_source
            and "def notebook_controllers(self)" in extension_host_source
+           and "notebook_controller_detection_tasks("
+           in extension_host_source
+           and "msg_type == \"notebook_controller_detection_task_registered\""
+           in extension_host_source
            and "def request_notebook_deserialize_result(" in extension_host_source
            and "def request_notebook_serialize_result(" in extension_host_source
            and "def request_notebook_cell_status_bar_result("
@@ -20415,6 +20471,7 @@ async function activate(context) {
     closed: [],
     controllerExecutions: [],
     controllerSelections: [],
+    detectionTaskCreated: false,
     statusBarRequests: [],
     statusBarActions: [],
     statusBarRegistered: false,
@@ -20637,6 +20694,12 @@ async function activate(context) {
       openedFromUri,
       vscode.NotebookControllerAffinity.Preferred
     );
+    const detectionTask = vscode.notebooks.createNotebookControllerDetectionTask(
+      'selftest-notebook'
+    );
+    notebookSerializerState.detectionTaskCreated = !!(
+      detectionTask && detectionTask.dispose
+    );
     const execution = controller.createNotebookCellExecution(openedFromUri.cellAt(0));
     execution.executionOrder = 9;
     execution.start(100);
@@ -20683,6 +20746,7 @@ async function activate(context) {
         && vscode.notebooks
         && vscode.notebooks.createNotebookController
       ),
+      detectionTaskCreated: notebookSerializerState.detectionTaskCreated,
       codeKind: vscode.NotebookCellKind.Code,
       markupKind: vscode.NotebookCellKind.Markup,
       uriOpenedUri: openedFromUri.uri.toString(),
@@ -22431,8 +22495,19 @@ module.exports = { activate, deactivate };
                             item.get("notebookType") == "selftest-notebook"
                             for item in node_host.notebook_controllers()),
                         timeout=3.0)
+                    _wait_until(
+                        lambda: any(
+                            item.get("notebookType") == "selftest-notebook"
+                            for item in
+                            node_host.notebook_controller_detection_tasks(
+                                "selftest-notebook")),
+                        timeout=3.0)
                 node_notebook_controllers = (
                     node_host.notebook_controllers()
+                    if node_started else [])
+                node_notebook_detection_tasks = (
+                    node_host.notebook_controller_detection_tasks(
+                        "selftest-notebook")
                     if node_started else [])
                 node_notebook_controller_list = (
                     node_host.request_notebook_controllers_result(
@@ -26411,6 +26486,8 @@ module.exports = { activate, deactivate };
                            "hasNotebookStatusBarClasses") is True
                        and node_notebook_probe.get(
                            "hasNotebookControllerClasses") is True
+                       and node_notebook_probe.get(
+                           "detectionTaskCreated") is True
                        and node_notebook_probe.get("codeKind") == 2
                        and node_notebook_probe.get("markupKind") == 1
                        and node_notebook_probe.get("openedType")
@@ -26536,6 +26613,10 @@ module.exports = { activate, deactivate };
                        and any(
                            item.get("notebookType") == "selftest-notebook"
                            and item.get("extensionId") == "selftest.node-tree"
+                           for item in node_notebook_detection_tasks)
+                       and any(
+                           item.get("notebookType") == "selftest-notebook"
+                           and item.get("extensionId") == "selftest.node-tree"
                            and item.get("hasChangeEvent") is True
                            for item in node_notebook_status_providers)
                        and any(
@@ -26580,6 +26661,7 @@ module.exports = { activate, deactivate };
                            "deserialize": node_notebook_deserialize,
                            "serialize": node_notebook_serialize,
                            "controllers": node_notebook_controllers,
+                           "detectionTasks": node_notebook_detection_tasks,
                            "controllerList": node_notebook_controller_list,
                            "controllerSelect": node_notebook_controller_select,
                            "controllerExecute": node_notebook_controller_execute,
