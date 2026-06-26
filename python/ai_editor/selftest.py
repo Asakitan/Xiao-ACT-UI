@@ -17609,6 +17609,36 @@ async function activate(context) {
 }
 module.exports = { activate };
 """)
+            node_surface_context_desc = _node_surface_desc(
+                "context",
+                {
+                    "name": "node-surface-context",
+                    "publisher": "selftest",
+                    "version": "0.0.1",
+                    "displayName": "Node Surface Context",
+                    "main": "./extension.js",
+                    "activationEvents": [
+                        "onChatContextProvider:activation.surface.context",
+                    ],
+                },
+                r"""
+const vscode = require('vscode');
+async function activate(context) {
+  vscode.chat.registerChatExplicitContextProvider(
+    'activation.surface.context',
+    {
+      provideExplicitChatContext() {
+        return [{
+          label: 'Activation Surface Context',
+          value: 'surface-context-value',
+          modelDescription: 'activated context provider',
+        }];
+      },
+    },
+  );
+}
+module.exports = { activate };
+""")
             node_extension_js = r"""
 const vscode = require('vscode');
 const fs = require('node:fs');
@@ -17915,6 +17945,83 @@ async function activate(context) {
       return { handled: true, participant: context.participant };
     },
   );
+  const chatContextEmitter = new vscode.EventEmitter();
+  vscode.chat.registerChatWorkspaceContextProvider(
+    'selftest.node.workspaceContext',
+    {
+      onDidChangeWorkspaceChatContext: chatContextEmitter.event,
+      provideWorkspaceChatContext() {
+        return [{
+          label: 'Node Workspace Context',
+          value: 'workspace-context-value',
+          modelDescription: 'workspace context from node',
+          resourceUri: vscode.Uri.parse('file:///workspace/context.md'),
+        }];
+      },
+    },
+  );
+  vscode.chat.registerChatExplicitContextProvider(
+    'selftest.node.explicitContext',
+    {
+      provideExplicitChatContext() {
+        return [{
+          label: 'Node Explicit Context',
+          modelDescription: 'explicit context from node',
+        }];
+      },
+      resolveExplicitChatContext(item) {
+        return {
+          ...item,
+          value: 'explicit-context-resolved',
+          tooltip: 'explicit tooltip',
+        };
+      },
+    },
+  );
+  vscode.chat.registerChatResourceContextProvider(
+    [{ scheme: 'file', language: 'markdown' }],
+    'selftest.node.resourceContext',
+    {
+      provideResourceChatContext(options) {
+        return {
+          label: 'Node Resource Context',
+          resourceUri: options.resource,
+          modelDescription: 'resource context from node',
+        };
+      },
+      resolveResourceChatContext(item) {
+        return {
+          ...item,
+          value: 'resource-context-resolved:' + item.resourceUri.toString(),
+        };
+      },
+    },
+  );
+  vscode.chat.registerChatContextProvider(
+    { scheme: 'file' },
+    'selftest.node.legacyContext',
+    {
+      provideWorkspaceChatContext() {
+        return [{ label: 'Legacy Workspace', value: 'legacy-workspace' }];
+      },
+      provideChatContextExplicit() {
+        return [{ label: 'Legacy Explicit', value: 'legacy-explicit' }];
+      },
+      provideChatContextForResource(options) {
+        return {
+          label: 'Legacy Resource',
+          value: 'legacy-resource:' + options.resource.toString(),
+        };
+      },
+      resolveChatContext(item) {
+        return { ...item, value: 'legacy-resolved:' + item.label };
+      },
+    },
+  );
+  vscode.commands.registerCommand('selftest.node.chatContextProbe', async () => {
+    chatContextEmitter.fire();
+    return { fired: true };
+  });
   vscode.commands.registerCommand('selftest.node.lmChatProbe', async () => {
     const localResult = await vscode.lm.invokeTool(
       'selftest_node_dynamic_tool',
@@ -21049,6 +21156,7 @@ module.exports = { activate, deactivate };
             api._ext_host.registry.register(node_surface_terminal_desc)
             api._ext_host.registry.register(node_surface_lm_tool_desc)
             api._ext_host.registry.register(node_surface_chat_desc)
+            api._ext_host.registry.register(node_surface_context_desc)
             class _NodeUiBridge:
                 def __init__(self) -> None:
                     self.webviews = {}
@@ -21422,6 +21530,7 @@ module.exports = { activate, deactivate };
                         node_surface_terminal_desc,
                         node_surface_lm_tool_desc,
                         node_surface_chat_desc,
+                        node_surface_context_desc,
                     ])
                     api._install_node_activation_event_bridge()
                     node_host.send_settings_sync({
@@ -21530,6 +21639,8 @@ module.exports = { activate, deactivate };
                     not in node_host._activated_ids,
                     "chat": node_surface_chat_desc.id
                     not in node_host._activated_ids,
+                    "context": node_surface_context_desc.id
+                    not in node_host._activated_ids,
                 }
                 if node_started:
                     node_host._send({
@@ -21587,12 +21698,18 @@ module.exports = { activate, deactivate };
                         node_host.request_chat_participant_result(
                             "activation.surface.chat",
                             "from-python", timeout=3.0))
+                    node_surface_context_result = (
+                        node_host.request_chat_context_result(
+                            "explicit",
+                            "activation.surface.context",
+                            timeout=3.0))
                 else:
                     node_surface_view_ready = False
                     node_surface_custom_result = {"ok": False}
                     node_surface_terminal_result = {"ok": False}
                     node_surface_lm_tool_result = {"ok": False}
                     node_surface_chat_result = {"ok": False}
+                    node_surface_context_result = {"ok": False}
                 node_content_provider_command_registered = _wait_until(
                     lambda: "selftest.node.contentProviderProbe"
                     in api._ext_host.commands.list_commands(),
@@ -21822,6 +21939,78 @@ module.exports = { activate, deactivate };
                         "selftest.node.lmChatProbe")
                 except Exception as exc:
                     node_lm_chat_probe = {"_error": str(exc)}
+                node_chat_context_command_registered = _wait_until(
+                    lambda: "selftest.node.chatContextProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                node_chat_context_providers = (
+                    node_host.chat_context_providers()
+                    if node_started else [])
+                node_chat_context_workspace = (
+                    node_host.request_chat_context_result(
+                        "workspace",
+                        "selftest.node.workspaceContext",
+                        timeout=3.0)
+                    if node_started else {"ok": False})
+                node_chat_context_explicit = (
+                    node_host.request_chat_context_result(
+                        "explicit",
+                        "selftest.node.explicitContext",
+                        timeout=3.0)
+                    if node_started else {"ok": False})
+                node_chat_context_explicit_item = (
+                    (node_chat_context_explicit.get("value", {})
+                     .get("items") or [{}])[0]
+                    if isinstance(node_chat_context_explicit, dict)
+                    else {})
+                node_chat_context_explicit_resolved = (
+                    node_host.resolve_chat_context_result(
+                        "explicit",
+                        "selftest.node.explicitContext",
+                        node_chat_context_explicit_item,
+                        timeout=3.0)
+                    if node_started else {"ok": False})
+                node_chat_context_resource = (
+                    node_host.request_chat_context_result(
+                        "resource",
+                        "selftest.node.resourceContext",
+                        resource="file:///workspace/context.md",
+                        timeout=3.0)
+                    if node_started else {"ok": False})
+                node_chat_context_resource_item = (
+                    (node_chat_context_resource.get("value", {})
+                     .get("items") or [{}])[0]
+                    if isinstance(node_chat_context_resource, dict)
+                    else {})
+                node_chat_context_resource_resolved = (
+                    node_host.resolve_chat_context_result(
+                        "resource",
+                        "selftest.node.resourceContext",
+                        node_chat_context_resource_item,
+                        resource="file:///workspace/context.md",
+                        timeout=3.0)
+                    if node_started else {"ok": False})
+                node_chat_context_legacy_explicit = (
+                    node_host.request_chat_context_result(
+                        "explicit",
+                        "selftest.node.legacyContext",
+                        timeout=3.0)
+                    if node_started else {"ok": False})
+                node_chat_context_legacy_resource = (
+                    node_host.request_chat_context_result(
+                        "resource",
+                        "selftest.node.legacyContext",
+                        resource="file:///workspace/legacy.txt",
+                        timeout=3.0)
+                    if node_started else {"ok": False})
+                try:
+                    node_chat_context_probe = api._ext_host.commands.execute(
+                        "selftest.node.chatContextProbe")
+                except Exception as exc:
+                    node_chat_context_probe = {"_error": str(exc)}
+                node_chat_context_changes = (
+                    node_host.chat_context_changes()
+                    if node_started else [])
                 node_progress_command_registered = _wait_until(
                     lambda: "selftest.node.progressProbe"
                     in api._ext_host.commands.list_commands(),
@@ -24800,6 +24989,9 @@ module.exports = { activate, deactivate };
                 node_surface_chat_value = (
                     node_surface_chat_result.get("value", {})
                     if isinstance(node_surface_chat_result, dict) else {})
+                node_surface_context_value = (
+                    node_surface_context_result.get("value", {})
+                    if isinstance(node_surface_context_result, dict) else {})
                 _check("node host activates lazy UI and provider surfaces dynamically",
                        node_started is True
                        and all(node_surface_before.values())
@@ -24818,6 +25010,10 @@ module.exports = { activate, deactivate };
                        and node_surface_chat_result.get("ok") is True
                        and node_surface_chat_value.get("content")
                        == "surface-chat:from-python"
+                       and node_surface_context_result.get("ok") is True
+                       and (node_surface_context_value.get("items")
+                            or [{}])[0].get("value")
+                       == "surface-context-value"
                        and node_surface_view_desc.id in node_host._activated_ids
                        and node_surface_custom_desc.id
                        in node_host._activated_ids
@@ -24826,6 +25022,8 @@ module.exports = { activate, deactivate };
                        and node_surface_lm_tool_desc.id
                        in node_host._activated_ids
                        and node_surface_chat_desc.id
+                       in node_host._activated_ids
+                       and node_surface_context_desc.id
                        in node_host._activated_ids,
                        json.dumps({
                            "before": node_surface_before,
@@ -24834,6 +25032,7 @@ module.exports = { activate, deactivate };
                            "terminal": node_surface_terminal_result,
                            "lmTool": node_surface_lm_tool_result,
                            "chat": node_surface_chat_result,
+                           "context": node_surface_context_result,
                            "viewMetadata":
                                node_ui_bridge.webview_view_metadata,
                        }, ensure_ascii=False, default=str))
@@ -25762,6 +25961,98 @@ module.exports = { activate, deactivate };
                        is True,
                        json.dumps(node_authentication_probe,
                                    ensure_ascii=False))
+                node_context_provider_keys = {
+                    (item.get("kind"), item.get("id"))
+                    for item in node_chat_context_providers
+                    if isinstance(item, dict)
+                }
+                node_context_workspace_items = (
+                    node_chat_context_workspace.get("value", {}).get("items")
+                    or [])
+                node_context_explicit_items = (
+                    node_chat_context_explicit.get("value", {}).get("items")
+                    or [])
+                node_context_explicit_resolved = (
+                    node_chat_context_explicit_resolved
+                    .get("value", {}).get("item", {}))
+                node_context_resource_items = (
+                    node_chat_context_resource.get("value", {}).get("items")
+                    or [])
+                node_context_resource_resolved = (
+                    node_chat_context_resource_resolved
+                    .get("value", {}).get("item", {}))
+                node_context_legacy_explicit_items = (
+                    node_chat_context_legacy_explicit
+                    .get("value", {}).get("items") or [])
+                node_context_legacy_resource_items = (
+                    node_chat_context_legacy_resource
+                    .get("value", {}).get("items") or [])
+                _check("node host chat context providers match VS Code surfaces",
+                       node_started is True
+                       and node_chat_context_command_registered
+                       and ("workspace", "selftest.node.workspaceContext")
+                       in node_context_provider_keys
+                       and ("explicit", "selftest.node.explicitContext")
+                       in node_context_provider_keys
+                       and ("resource", "selftest.node.resourceContext")
+                       in node_context_provider_keys
+                       and ("legacy", "selftest.node.legacyContext")
+                       in node_context_provider_keys
+                       and node_chat_context_workspace.get("ok") is True
+                       and node_context_workspace_items
+                       and node_context_workspace_items[0].get("value")
+                       == "workspace-context-value"
+                       and node_context_workspace_items[0].get("resourceUri")
+                       == "file:///workspace/context.md"
+                       and node_chat_context_explicit.get("ok") is True
+                       and node_context_explicit_items
+                       and node_context_explicit_items[0].get("label")
+                       == "Node Explicit Context"
+                       and node_context_explicit_items[0].get("value")
+                       is None
+                       and node_chat_context_explicit_resolved.get("ok")
+                       is True
+                       and node_context_explicit_resolved.get("value")
+                       == "explicit-context-resolved"
+                       and node_chat_context_resource.get("ok") is True
+                       and node_context_resource_items
+                       and node_context_resource_items[0].get("resourceUri")
+                       == "file:///workspace/context.md"
+                       and node_chat_context_resource_resolved.get("ok")
+                       is True
+                       and node_context_resource_resolved.get("value")
+                       == "resource-context-resolved:file:///workspace/context.md"
+                       and node_chat_context_legacy_explicit.get("ok")
+                       is True
+                       and node_context_legacy_explicit_items
+                       and node_context_legacy_explicit_items[0].get("value")
+                       == "legacy-explicit"
+                       and node_chat_context_legacy_resource.get("ok")
+                       is True
+                       and node_context_legacy_resource_items
+                       and node_context_legacy_resource_items[0].get("value")
+                       == "legacy-resource:file:///workspace/legacy.txt"
+                       and isinstance(node_chat_context_probe, dict)
+                       and node_chat_context_probe.get("fired") is True
+                       and any(
+                           item.get("id")
+                           == "selftest.node.workspaceContext"
+                           for item in node_chat_context_changes),
+                       json.dumps({
+                           "providers": node_chat_context_providers,
+                           "workspace": node_chat_context_workspace,
+                           "explicit": node_chat_context_explicit,
+                           "explicitResolved":
+                               node_chat_context_explicit_resolved,
+                           "resource": node_chat_context_resource,
+                           "resourceResolved":
+                               node_chat_context_resource_resolved,
+                           "legacyExplicit":
+                               node_chat_context_legacy_explicit,
+                           "legacyResource":
+                               node_chat_context_legacy_resource,
+                           "changes": node_chat_context_changes,
+                       }, ensure_ascii=False, default=str))
                 _check("node host registers dynamic LM tools and chat participants",
                        node_started is True
                        and node_lm_chat_command_registered

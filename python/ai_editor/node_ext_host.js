@@ -2386,12 +2386,14 @@ const _fileDecorationChangeMaxEventSize = 250;
 const _runtimeLanguageConfigurations = new Map(); // languageId -> [{ handle, configuration }]
 const _lmTools = new Map();              // name -> { handle, tool, extensionId, metadata }
 const _chatParticipants = new Map();     // id -> { handle, handler, extensionId }
+const _chatContextProviders = new Map(); // handle -> { handle, kind, id, selector, provider, extensionId }
 let _nextLanguageProviderHandle = 1;
 let _nextLanguageStatusHandle = 1;
 let _nextFileDecorationProviderHandle = 1;
 let _nextLanguageConfigurationHandle = 1;
 let _nextLmToolHandle = 1;
 let _nextChatParticipantHandle = 1;
+let _nextChatContextProviderHandle = 1;
 let _nextPythonCommandRequestHandle = 1;
 let _nextPythonLmRequestHandle = 1;
 let _nextExtensionActivationRequestHandle = 1;
@@ -9148,6 +9150,26 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 subscriptions.push(d);
                 return participant;
             },
+            registerChatWorkspaceContextProvider(id, provider) {
+                return _registerChatContextProvider(
+                    'workspace', id, provider, undefined,
+                    extDesc, subscriptions);
+            },
+            registerChatExplicitContextProvider(id, provider) {
+                return _registerChatContextProvider(
+                    'explicit', id, provider, undefined,
+                    extDesc, subscriptions);
+            },
+            registerChatResourceContextProvider(selector, id, provider) {
+                return _registerChatContextProvider(
+                    'resource', id, provider, selector,
+                    extDesc, subscriptions);
+            },
+            registerChatContextProvider(selector, id, provider) {
+                return _registerChatContextProvider(
+                    'legacy', id, provider, selector,
+                    extDesc, subscriptions);
+            },
         },
 
         // --- Namespace: authentication ---
@@ -11046,6 +11068,244 @@ async function handleLmToolRequest(msg) {
     } catch (err) {
         send({
             type: 'lm_tool_response',
+            requestId,
+            ok: false,
+            error: err?.message || String(err),
+        });
+    }
+}
+
+function _chatContextProviderRecord(kind, id, provider, selector, extDesc) {
+    const providerId = String(id || '');
+    if (!providerId) throw new Error('Chat context provider id is required');
+    if (!provider || typeof provider !== 'object') {
+        throw new Error('Chat context provider is required');
+    }
+    const normalizedKind = String(kind || 'explicit');
+    const entry = {
+        handle: _nextChatContextProviderHandle++,
+        kind: normalizedKind,
+        id: providerId,
+        selector: selector === undefined ? undefined : selector,
+        provider,
+        extensionId: extDesc.extensionId || '',
+    };
+    _chatContextProviders.set(entry.handle, entry);
+    send({
+        type: 'chat_context_provider_registered',
+        handle: entry.handle,
+        extensionId: entry.extensionId,
+        id: entry.id,
+        kind: entry.kind,
+        selector: _serializeLanguageValue(entry.selector),
+    });
+    let changeDisposable;
+    if (typeof provider.onDidChangeWorkspaceChatContext === 'function') {
+        changeDisposable = provider.onDidChangeWorkspaceChatContext(() => {
+            send({
+                type: 'chat_context_provider_changed',
+                handle: entry.handle,
+                extensionId: entry.extensionId,
+                id: entry.id,
+                kind: entry.kind,
+            });
+        });
+    }
+    return { entry, changeDisposable };
+}
+
+function _registerChatContextProvider(kind, id, provider, selector, extDesc, subscriptions) {
+    const { entry, changeDisposable } = _chatContextProviderRecord(
+        kind, id, provider, selector, extDesc);
+    const disposable = new Disposable(() => {
+        if (_chatContextProviders.get(entry.handle) === entry) {
+            _chatContextProviders.delete(entry.handle);
+            try { changeDisposable?.dispose?.(); } catch {}
+            send({
+                type: 'chat_context_provider_disposed',
+                handle: entry.handle,
+                extensionId: entry.extensionId,
+                id: entry.id,
+                kind: entry.kind,
+            });
+        }
+    });
+    subscriptions.push(disposable);
+    return disposable;
+}
+
+function _chatContextProviderEntries(kind, id, resource) {
+    const requestedKind = String(kind || 'explicit');
+    const providerId = String(id || '');
+    const resourceDoc = resource
+        ? _createLanguageDocument({
+            uri: _uriFromPayload(resource),
+            languageId: _languageIdForUri(_uriFromPayload(resource)),
+            text: '',
+            version: 1,
+        })
+        : null;
+    return Array.from(_chatContextProviders.values()).filter(entry => {
+        if (providerId && entry.id !== providerId) return false;
+        if (entry.kind === requestedKind) {
+            if (requestedKind === 'resource' && entry.selector !== undefined) {
+                return _matchDocumentSelector(entry.selector, resourceDoc) > 0;
+            }
+            return true;
+        }
+        if (entry.kind !== 'legacy') return false;
+        if (requestedKind === 'resource' && entry.selector !== undefined) {
+            return _matchDocumentSelector(entry.selector, resourceDoc) > 0;
+        }
+        const provider = entry.provider || {};
+        if (requestedKind === 'workspace') {
+            return typeof provider.provideWorkspaceChatContext === 'function'
+                || typeof provider.provideChatContext === 'function';
+        }
+        if (requestedKind === 'resource') {
+            return typeof provider.provideChatContextForResource === 'function'
+                || typeof provider.provideResourceChatContext === 'function'
+                || typeof provider.provideChatContext === 'function';
+        }
+        return typeof provider.provideChatContextExplicit === 'function'
+            || typeof provider.provideExplicitChatContext === 'function'
+            || typeof provider.provideChatContext === 'function';
+    });
+}
+
+function _chatContextProvideMethod(entry, kind) {
+    const provider = entry.provider || {};
+    if (kind === 'workspace') {
+        return provider.provideWorkspaceChatContext || provider.provideChatContext;
+    }
+    if (kind === 'resource') {
+        return provider.provideResourceChatContext
+            || provider.provideChatContextForResource
+            || provider.provideChatContext;
+    }
+    return provider.provideExplicitChatContext
+        || provider.provideChatContextExplicit
+        || provider.provideChatContext;
+}
+
+function _chatContextResolveMethod(entry, kind) {
+    const provider = entry.provider || {};
+    if (kind === 'resource') {
+        return provider.resolveResourceChatContext || provider.resolveChatContext;
+    }
+    if (kind === 'explicit') {
+        return provider.resolveExplicitChatContext || provider.resolveChatContext;
+    }
+    return provider.resolveChatContext;
+}
+
+function _serializeChatContextItem(item, entry, kind) {
+    const value = _serializeLanguageValue(item && typeof item === 'object'
+        ? item
+        : { value: item === undefined || item === null ? '' : String(item) });
+    if (value && typeof value === 'object') {
+        value.providerId = entry.id;
+        value.providerKind = kind;
+        value.extensionId = entry.extensionId;
+    }
+    return value;
+}
+
+async function handleChatContextProviderRequest(msg) {
+    const requestId = String(msg.requestId || '');
+    const kind = String(msg.kind || msg.operation || 'explicit');
+    const providerId = String(msg.id || msg.providerId || '');
+    if (providerId) await _activateKnownExtensionsForEvent(
+        `onChatContextProvider:${providerId}`);
+    const entries = _chatContextProviderEntries(
+        kind, providerId, msg.resource || msg.resourceUri);
+    const token = { isCancellationRequested: false, onCancellationRequested: new EventEmitter().event };
+    try {
+        const providerResults = [];
+        const items = [];
+        for (const entry of entries) {
+            const method = _chatContextProvideMethod(entry, kind);
+            if (typeof method !== 'function') continue;
+            const raw = kind === 'resource'
+                ? method.call(entry.provider, {
+                    resource: _uriFromPayload(msg.resource || msg.resourceUri),
+                }, token)
+                : method.call(entry.provider, token);
+            const result = raw && typeof raw.then === 'function' ? await raw : raw;
+            const rawItems = kind === 'resource'
+                ? (result === undefined || result === null ? [] : [result])
+                : (Array.isArray(result) ? result : []);
+            const serialized = rawItems.map(item =>
+                _serializeChatContextItem(item, entry, kind));
+            providerResults.push({
+                handle: entry.handle,
+                id: entry.id,
+                kind: entry.kind,
+                extensionId: entry.extensionId,
+                items: serialized,
+            });
+            items.push(...serialized);
+        }
+        send({
+            type: 'chat_context_provider_response',
+            requestId,
+            ok: true,
+            value: { kind, providerId, providers: providerResults, items },
+        });
+    } catch (err) {
+        send({
+            type: 'chat_context_provider_response',
+            requestId,
+            ok: false,
+            error: err?.message || String(err),
+        });
+    }
+}
+
+async function handleChatContextResolveRequest(msg) {
+    const requestId = String(msg.requestId || '');
+    const kind = String(msg.kind || msg.operation || 'explicit');
+    const providerId = String(msg.id || msg.providerId || '');
+    if (providerId) await _activateKnownExtensionsForEvent(
+        `onChatContextProvider:${providerId}`);
+    const entries = _chatContextProviderEntries(kind, providerId, msg.resource);
+    const token = { isCancellationRequested: false, onCancellationRequested: new EventEmitter().event };
+    try {
+        const entry = entries.find(item =>
+            !msg.handle || Number(msg.handle) === item.handle);
+        if (!entry) throw new Error(`Chat context provider not found: ${providerId || kind}`);
+        const method = _chatContextResolveMethod(entry, kind);
+        if (typeof method !== 'function') {
+            send({
+                type: 'chat_context_provider_response',
+                requestId,
+                ok: true,
+                value: {
+                    kind,
+                    providerId,
+                    item: _serializeChatContextItem(msg.item || {}, entry, kind),
+                },
+            });
+            return;
+        }
+        const raw = method.call(
+            entry.provider,
+            _deserializeArgFromPython(msg.item || {}),
+            token);
+        const result = raw && typeof raw.then === 'function' ? await raw : raw;
+        send({
+            type: 'chat_context_provider_response',
+            requestId,
+            ok: true,
+            value: {
+                kind,
+                providerId,
+                item: _serializeChatContextItem(result, entry, kind),
+            },
+        });
+    } catch (err) {
+        send({
+            type: 'chat_context_provider_response',
             requestId,
             ok: false,
             error: err?.message || String(err),
@@ -13135,6 +13395,12 @@ async function handleMessage(msg) {
             break;
         case 'chat_participant_request':
             await handleChatParticipantRequest(msg);
+            break;
+        case 'chat_context_provider_request':
+            await handleChatContextProviderRequest(msg);
+            break;
+        case 'chat_context_resolve_request':
+            await handleChatContextResolveRequest(msg);
             break;
         case 'tree_view_event':
             handleTreeViewEvent(msg);

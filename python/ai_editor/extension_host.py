@@ -1849,6 +1849,10 @@ class NodeExtensionHost:
         self._lm_tool_requests: Dict[str, Dict[str, Any]] = {}
         self._chat_participant_request_lock = threading.Lock()
         self._chat_participant_requests: Dict[str, Dict[str, Any]] = {}
+        self._chat_context_request_lock = threading.Lock()
+        self._chat_context_requests: Dict[str, Dict[str, Any]] = {}
+        self._chat_context_providers: List[Dict[str, Any]] = []
+        self._chat_context_changes: List[Dict[str, Any]] = []
         self._language_request_lock = threading.Lock()
         self._language_requests: Dict[str, Dict[str, Any]] = {}
         self._language_providers: List[Dict[str, Any]] = []
@@ -2968,6 +2972,56 @@ class NodeExtensionHost:
             request_id = str(msg.get("requestId", ""))
             with self._chat_participant_request_lock:
                 pending = self._chat_participant_requests.get(request_id)
+            if pending:
+                pending["response"] = msg
+                event = pending.get("event")
+                if isinstance(event, threading.Event):
+                    event.set()
+
+        elif msg_type == "chat_context_provider_registered":
+            record = {
+                "handle": msg.get("handle"),
+                "id": str(msg.get("id") or msg.get("providerId") or ""),
+                "kind": str(msg.get("kind") or ""),
+                "extensionId": str(msg.get("extensionId") or ""),
+                "selector": msg.get("selector"),
+            }
+            self._chat_context_providers = [
+                item for item in self._chat_context_providers
+                if item.get("handle") != record.get("handle")
+            ]
+            self._chat_context_providers.append(record)
+
+        elif msg_type == "chat_context_provider_disposed":
+            handle = msg.get("handle")
+            self._chat_context_providers = [
+                item for item in self._chat_context_providers
+                if item.get("handle") != handle
+            ]
+
+        elif msg_type == "chat_context_provider_changed":
+            record = {
+                "handle": msg.get("handle"),
+                "id": str(msg.get("id") or msg.get("providerId") or ""),
+                "kind": str(msg.get("kind") or ""),
+                "extensionId": str(msg.get("extensionId") or ""),
+            }
+            self._chat_context_changes.append(record)
+            if len(self._chat_context_changes) > 100:
+                self._chat_context_changes = self._chat_context_changes[-100:]
+            if self._ui_bridge:
+                try:
+                    handler = getattr(
+                        self._ui_bridge, "chat_context_provider_changed", None)
+                    if callable(handler):
+                        handler(record)
+                except Exception:
+                    pass
+
+        elif msg_type == "chat_context_provider_response":
+            request_id = str(msg.get("requestId", ""))
+            with self._chat_context_request_lock:
+                pending = self._chat_context_requests.get(request_id)
             if pending:
                 pending["response"] = msg
                 event = pending.get("event")
@@ -4861,6 +4915,107 @@ class NodeExtensionHost:
                 detail=detail,
                 error=error,
             )
+
+    def chat_context_providers(self) -> List[Dict[str, Any]]:
+        return [dict(item) for item in self._chat_context_providers]
+
+    def chat_context_changes(self) -> List[Dict[str, Any]]:
+        return [dict(item) for item in self._chat_context_changes]
+
+    def _chat_context_request_result(
+            self, payload: Dict[str, Any],
+            default: Any = None, timeout: float = 3.0) -> Dict[str, Any]:
+        started = time.perf_counter()
+        ok = False
+        timed_out = False
+        error = ""
+        detail = str(payload.get("id") or payload.get("providerId")
+                     or payload.get("kind") or "")
+        if not self.is_running:
+            error = "Node chat context provider host is not running"
+            self._record_diagnostic(
+                "chat_context", 0, ok=False, detail=detail, error=error)
+            return {"ok": False, "value": default, "error": error}
+        request_id = str(uuid.uuid4())
+        event = threading.Event()
+        with self._chat_context_request_lock:
+            self._chat_context_requests[request_id] = {"event": event}
+        try:
+            msg = dict(payload)
+            msg["requestId"] = request_id
+            sent = self._send(msg)
+            if not sent:
+                error = "Node chat context provider request could not be sent"
+                return {"ok": False, "value": default, "error": error}
+            if not event.wait(timeout):
+                timed_out = True
+                error = "Node chat context provider request timed out"
+                return {
+                    "ok": False,
+                    "value": default,
+                    "error": error,
+                    "timeout": True,
+                }
+            with self._chat_context_request_lock:
+                pending = self._chat_context_requests.get(request_id, {})
+            response = pending.get("response", {})
+            if isinstance(response, dict) and response.get("ok"):
+                ok = True
+                return {
+                    "ok": True,
+                    "value": response.get("value", default),
+                    "response": response,
+                }
+            error = (
+                response.get("error")
+                if isinstance(response, dict)
+                else "Node chat context provider failed")
+            return {"ok": False, "value": default, "error": error}
+        finally:
+            with self._chat_context_request_lock:
+                self._chat_context_requests.pop(request_id, None)
+            self._record_diagnostic(
+                "chat_context",
+                (time.perf_counter() - started) * 1000,
+                ok=ok,
+                timeout=timed_out,
+                detail=detail,
+                error=error,
+            )
+
+    def request_chat_context_result(
+            self, kind: str = "explicit", provider_id: str = "",
+            resource: Any = None, default: Any = None,
+            timeout: float = 3.0) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "type": "chat_context_provider_request",
+            "kind": str(kind or "explicit"),
+        }
+        if provider_id:
+            payload["id"] = str(provider_id)
+        if resource is not None:
+            payload["resource"] = resource
+        return self._chat_context_request_result(
+            payload, default=default, timeout=timeout)
+
+    def resolve_chat_context_result(
+            self, kind: str = "explicit", provider_id: str = "",
+            item: Any = None, handle: Optional[int] = None,
+            resource: Any = None, default: Any = None,
+            timeout: float = 3.0) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "type": "chat_context_resolve_request",
+            "kind": str(kind or "explicit"),
+            "item": item if item is not None else {},
+        }
+        if provider_id:
+            payload["id"] = str(provider_id)
+        if handle is not None:
+            payload["handle"] = int(handle)
+        if resource is not None:
+            payload["resource"] = resource
+        return self._chat_context_request_result(
+            payload, default=default, timeout=timeout)
 
     def send_tree_view_event(
             self, view_id: str, event: str, element: Any = None,
