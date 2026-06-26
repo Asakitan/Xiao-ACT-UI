@@ -3699,18 +3699,18 @@ def test_phase1_ai_editor_regressions() -> None:
             and "renderWelcome();\n  setStatus(t('new_chat_title')" in html
             and "const body=latestChatMessageBody('assistant');" in html)
     _check("frontend Assistant composer keeps normal-width controls in one row",
-           ".chat-toolbar { display:grid; grid-template-columns:minmax(0,1fr) max-content; align-items:center; column-gap:8px;" in html
+           ".chat-toolbar { display:flex; align-items:center; gap:8px; flex-wrap:nowrap;" in html
             and "border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent);" in html
             and "min-width:0; overflow:hidden; white-space:nowrap;" in html
             and ".chat-toolbar .spacer { display:none; }" in html
-            and ".chat-control-strip { display:flex; align-items:center; gap:4px; flex-wrap:nowrap; min-width:0; max-width:100%; justify-self:start;" in html
-            and "justify-self:start;\n  overflow:hidden; }" in html
+            and ".chat-control-strip { display:flex; align-items:center; gap:4px; flex-wrap:nowrap; min-width:0; max-width:100%; flex:1 1 auto;" in html
+            and "flex:1 1 auto;\n  overflow:hidden; }" in html
             and ".chat-select-chip { max-width:142px; padding:0 20px 0 8px; cursor:pointer; flex:0 0 auto; }" in html
             and ".chat-model-inline { width:116px; padding:0 8px; font-family:var(--mono); flex:0 0 116px; }" in html
             and ".chat-select-chip.agent { max-width:122px; }" in html
             and ".chat-select-chip.workflow { max-width:112px; }" in html
-            and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px; justify-self:end;" in html
-            and "min-width:max-content; width:auto; flex-wrap:nowrap; overflow:visible; white-space:nowrap;" in html
+            and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px; margin-left:auto;" in html
+            and "min-width:max-content; width:auto; flex:0 0 auto; flex-wrap:nowrap; overflow:visible; white-space:nowrap;" in html
             and ".chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:5px; min-width:0; max-width:170px; flex:0 1 auto;" in html
             and "color:var(--fg-dim); white-space:nowrap; overflow:hidden;" in html
             and ".chat-session-chip { max-width:82px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" in html
@@ -4005,6 +4005,24 @@ def test_phase1_ai_editor_regressions() -> None:
            and "const el=renderToolInvocationPart(body,{name,args:args||'No arguments',callId,state:'running',stateLabel:providerToolStateLabel(data,false)});" in html
            and "updateToolInvocationPart(el,done?(toolResultSucceeded(data)?'complete':'error'):'running',label);" in html
            and "updateToolInvocationPart(el,toolResultSucceeded(data)?'complete':'error'" in html)
+    _check("frontend Assistant tool summaries are tied to real invocation ids",
+           "chat-tool-summary" in html
+           and "function collectAssistantToolSummary(body)" in html
+           and "function updateAssistantToolSummary(body)" in html
+           and "function focusAssistantToolPart(body,callId)" in html
+           and "body.querySelector('.chat-tool-invocation[data-call-id=\"'+key+'\"]')" in html
+           and "body.querySelector('.tool-result[data-call-id=\"'+key+'\"]')" in html
+           and "summary.dataset.toolCount=String(items.length);" in html
+           and "summary.dataset.completeCount=String(complete);" in html
+           and "summary.dataset.failedCount=String(failed);" in html
+           and "summary.dataset.runningCount=String(Math.max(0,running));" in html
+           and "btn.dataset.callId=item.callId;" in html
+           and "btn.dataset.hasResult=item.hasResult?'true':'false';" in html
+           and "summary-flags" in html
+           and "focusAssistantToolPart(body,item.callId)" in html
+           and "updateAssistantToolSummary(container);" in html
+           and "updateAssistantToolSummary(el.closest('.msg-body'));" in html
+           and "renderToolResult(body,el.dataset.toolName||name,result,data.id||name);" in html)
     _check("frontend Assistant tool confirmations and terminal outputs use Copilot-style subparts",
            "confirm-bar chat-tool-confirmation" in html
            and "bar.dataset.state='waiting';" in html

@@ -721,6 +721,18 @@ code.inline { background:var(--bg3); padding:1px 3px; border-radius:4px;
 .tool-result .tool-header { color:var(--fg-dim); }
 .tool-result .tool-header .tool-name { color:var(--fg-success); }
 .tool-result .tool-header:hover { background:var(--bg-hover); }
+.chat-tool-summary { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin:4px 0 10px;
+  color:var(--fg-dim); font:11px/1.35 var(--sans); }
+.chat-tool-summary-label { font:10px/1.35 var(--mono); text-transform:uppercase; color:var(--fg-dim); }
+.chat-tool-summary-chip { display:inline-flex; align-items:center; gap:5px; max-width:100%;
+  border:1px solid var(--border); border-radius:5px; background:transparent; color:var(--fg-dim);
+  padding:2px 7px; font:11px/1.35 var(--sans); cursor:pointer; }
+.chat-tool-summary-chip:hover,.chat-tool-summary-chip:focus { border-color:var(--border-focus); color:var(--fg); background:var(--bg-hover); outline:none; }
+.chat-tool-summary-chip[data-state="complete"] { border-color:color-mix(in srgb, var(--fg-success) 34%, var(--border)); }
+.chat-tool-summary-chip[data-state="error"] { border-color:color-mix(in srgb, var(--fg-error) 44%, var(--border)); }
+.chat-tool-summary-chip .summary-tool-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:160px; }
+.chat-tool-summary-chip .summary-call-id { color:var(--fg-dim); font:10px/1.35 var(--mono); }
+.chat-tool-summary-chip .summary-flags { color:var(--fg-accent); font:10px/1.35 var(--mono); }
 
 .error-text { color:var(--fg-error); }
 .stream-cursor::after { content:''; display:inline-block; width:3em;
@@ -929,7 +941,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-input-container.sendable .send-btn:not(:disabled) { box-shadow:0 0 0 1px color-mix(in srgb, var(--btn) 35%, transparent); }
 .chat-input-container.streaming .send-btn { background:var(--fg-error); }
 .send-btn svg { width:14px; height:14px; }
-.chat-toolbar { display:grid; grid-template-columns:minmax(0,1fr) max-content; align-items:center; column-gap:8px;
+.chat-toolbar { display:flex; align-items:center; gap:8px; flex-wrap:nowrap;
   padding:0 8px 7px; font-size:11px;
   border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent);
   min-width:0; overflow:hidden; white-space:nowrap; min-height:29px; }
@@ -1003,7 +1015,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-used-context-title { color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; letter-spacing:.5px; }
 .chat-used-context-list { display:flex; flex-wrap:wrap; gap:5px; }
 
-.chat-control-strip { display:flex; align-items:center; gap:4px; flex-wrap:nowrap; min-width:0; max-width:100%; justify-self:start;
+.chat-control-strip { display:flex; align-items:center; gap:4px; flex-wrap:nowrap; min-width:0; max-width:100%; flex:1 1 auto;
   overflow:hidden; }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
   border-radius:999px; background:var(--bg3); color:var(--fg); font:11px var(--sans);
@@ -1057,8 +1069,8 @@ pre.code-block code .type { color:var(--fg-type); }
   cursor:pointer; font-size:13px; padding:0; }
 .chat-composer-action:hover,.chat-composer-action:focus { background:var(--bg-hover); color:var(--fg);
   border-color:var(--border); outline:none; }
-.chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px; justify-self:end;
-  min-width:max-content; width:auto; flex-wrap:nowrap; overflow:visible; white-space:nowrap; }
+.chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px; margin-left:auto;
+  min-width:max-content; width:auto; flex:0 0 auto; flex-wrap:nowrap; overflow:visible; white-space:nowrap; }
 .chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:5px; min-width:0; max-width:170px; flex:0 1 auto;
   color:var(--fg-dim); white-space:nowrap; overflow:hidden; }
 .ctx-usage { display:inline-flex; align-items:center; gap:4px; font-size:10px; color:var(--fg-dim); cursor:default; }
@@ -5522,6 +5534,7 @@ function renderToolCall(container,name,args){
 function renderToolResult(container,name,result,callId){
   const el=document.createElement('div');el.className='tool-result';
   if(callId)el.dataset.callId=providerDomKey(callId);
+  el.dataset.toolName=name||'tool';
   const hdr=document.createElement('div');hdr.className='tool-header';
   hdr.innerHTML='<span class="arrow">▸</span> Result: '+esc(name);
   const body=document.createElement('div');body.className='tool-body';
@@ -5543,6 +5556,7 @@ function renderToolResult(container,name,result,callId){
   el.appendChild(hdr);el.appendChild(body);container.appendChild(el);
   // Auto-open if small
   if(String(result||'').length<500){hdr.classList.add('open');body.classList.add('open');hdr.setAttribute('aria-expanded','true')}
+  updateAssistantToolSummary(container);
 }
 
 function toolResultActionButton(label,title,fn){
@@ -5719,6 +5733,7 @@ function renderToolInvocationPart(container,opts){
   body.textContent=formatToolPayload(opts.args,'No arguments');
   bindDisclosureHeader(hdr,body);
   el.appendChild(hdr);el.appendChild(body);container.appendChild(el);
+  updateAssistantToolSummary(container);
   return el;
 }
 function updateToolInvocationPart(el,state,label,detail){
@@ -5728,6 +5743,89 @@ function updateToolInvocationPart(el,state,label,detail){
   if(toolState)toolState.innerHTML=toolStateMarkup(state,label);
   const body=el.querySelector('.tool-body');
   if(body&&detail!==undefined)body.textContent=formatToolPayload(detail,'');
+  updateAssistantToolSummary(el.closest('.msg-body'));
+}
+
+function shortToolCallId(id){
+  id=String(id||'');
+  if(!id)return '';
+  return id.length>10?id.slice(0,6)+'...'+id.slice(-3):id;
+}
+function assistantToolSummaryTarget(body,callId){
+  if(!body||!callId)return null;
+  const key=providerDomKey(callId);
+  return body.querySelector('.chat-tool-invocation[data-call-id="'+key+'"]')||
+    body.querySelector('.tool-result[data-call-id="'+key+'"]');
+}
+function focusAssistantToolPart(body,callId){
+  const target=assistantToolSummaryTarget(body,callId);
+  if(!target)return false;
+  const hdr=target.querySelector('.tool-header');
+  const panel=hdr&&hdr.nextElementSibling;
+  if(hdr&&panel&&!hdr.classList.contains('open')){hdr.classList.add('open');panel.classList.add('open');hdr.setAttribute('aria-expanded','true')}
+  target.scrollIntoView({block:'nearest'});
+  if(hdr)hdr.focus();
+  return true;
+}
+function collectAssistantToolSummary(body){
+  const map=new Map();
+  if(!body)return [];
+  body.querySelectorAll('.chat-tool-invocation[data-call-id]').forEach(el=>{
+    const callId=el.dataset.callId||'', key=callId;
+    if(!key)return;
+    const item=map.get(key)||{callId:key,name:el.dataset.toolName||'tool',state:'running',hasResult:false,terminal:false,ui:false};
+    item.name=el.dataset.toolName||item.name;
+    item.state=el.dataset.state||item.state;
+    map.set(key,item);
+  });
+  body.querySelectorAll('.tool-result[data-call-id]').forEach(el=>{
+    const callId=el.dataset.callId||'', key=callId;
+    if(!key)return;
+    const item=map.get(key)||{callId:key,name:el.dataset.toolName||'tool',state:'complete',hasResult:false,terminal:false,ui:false};
+    item.name=el.dataset.toolName||item.name;
+    item.hasResult=true;
+    item.terminal=el.classList.contains('has-terminal-output')||item.terminal;
+    item.ui=!!el.querySelector('.chat-tool-ui-card')||item.ui;
+    if(!item.state||item.state==='running')item.state='complete';
+    map.set(key,item);
+  });
+  return Array.from(map.values());
+}
+function updateAssistantToolSummary(body){
+  if(!body||!body.classList||!body.classList.contains('msg-body'))return null;
+  const items=collectAssistantToolSummary(body);
+  let summary=body.querySelector(':scope > .chat-tool-summary');
+  if(!items.length){if(summary)summary.remove();return null}
+  if(!summary){
+    summary=document.createElement('div');
+    summary.className='chat-tool-summary';
+    summary.setAttribute('role','toolbar');
+    summary.setAttribute('aria-live','polite');
+    const followups=body.querySelector(':scope > .followups');
+    if(followups)body.insertBefore(summary,followups);else body.appendChild(summary);
+  }
+  const complete=items.filter(i=>i.state==='complete').length;
+  const failed=items.filter(i=>i.state==='error'||i.state==='failed'||i.state==='cancelled').length;
+  const running=items.length-complete-failed;
+  summary.dataset.toolCount=String(items.length);
+  summary.dataset.completeCount=String(complete);
+  summary.dataset.failedCount=String(failed);
+  summary.dataset.runningCount=String(Math.max(0,running));
+  summary.setAttribute('aria-label','Tool summary: '+items.length+' tools, '+complete+' complete, '+failed+' failed, '+Math.max(0,running)+' running');
+  summary.innerHTML='<span class="chat-tool-summary-label">Tools</span>';
+  items.forEach(item=>{
+    const btn=document.createElement('button');
+    btn.type='button';btn.className='chat-tool-summary-chip';
+    btn.dataset.callId=item.callId;btn.dataset.state=item.state||'running';btn.dataset.hasResult=item.hasResult?'true':'false';
+    const status=(item.state==='complete')?'✓':((item.state==='error'||item.state==='failed'||item.state==='cancelled')?'✗':'◌');
+    const flags=(item.terminal?'term ':'')+(item.ui?'ui ':'')+(item.hasResult?'result':'');
+    btn.innerHTML='<span aria-hidden="true">'+status+'</span><span class="summary-tool-name">'+esc(item.name||'tool')+'</span><span class="summary-call-id">'+esc(shortToolCallId(item.callId))+'</span>'+(flags?'<span class="summary-flags">'+esc(flags.trim())+'</span>':'');
+    btn.title=(item.name||'tool')+' · '+item.state+' · '+item.callId;
+    btn.setAttribute('aria-label','Open tool '+(item.name||'tool')+' '+item.state+' '+item.callId);
+    btn.onclick=()=>focusAssistantToolPart(body,item.callId);
+    summary.appendChild(btn);
+  });
+  return summary;
 }
 
 // ── Editor ──
@@ -12328,6 +12426,7 @@ function onToolEnd(d){
       const tb=existing.querySelector('.tool-body');
       if(hdr)hdr.innerHTML='<span class="arrow">▸</span> Result: '+esc(name);
       if(tb)tb.textContent=resultText;
+      updateAssistantToolSummary(body);
     }else renderToolResult(body,name,resultText,callId);
     if(tcEl)updateToolInvocationPart(tcEl,toolResultSucceeded(d)?'complete':'error',toolResultSucceeded(d)?'complete':'failed','Input:\n'+(tcEl.querySelector('.tool-body')?tcEl.querySelector('.tool-body').textContent:'')+'\n\nOutput:\n'+resultText);
   }
@@ -16131,7 +16230,7 @@ function renderProviderToolEnd(pid,data){
   updateProviderToolState(pid,data,true);
   const el=document.getElementById(providerToolElementId(pid,data.id||name||'last'));if(!el)return;
   const body=el.closest('.msg-body');const result=providerValueToText(data.result!==undefined?data.result:data.error);
-  if(body&&result&&!body.querySelector('.tool-result'))renderToolResult(body,el.dataset.toolName||name,result);
+  if(body&&result&&!body.querySelector('.tool-result'))renderToolResult(body,el.dataset.toolName||name,result,data.id||name);
   if(result)updateToolInvocationPart(el,toolResultSucceeded(data)?'complete':'error',toolResultSucceeded(data)?'complete':'failed','Input:\n'+(el.querySelector('.tool-body')?el.querySelector('.tool-body').textContent:'')+'\n\nOutput:\n'+result);
   providerScroll(providerRefs(pid).messages);
 }
