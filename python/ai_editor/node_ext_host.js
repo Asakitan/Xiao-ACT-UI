@@ -2385,6 +2385,7 @@ const _scmHistoryRequests = new Map(); // requestId -> CancellationTokenSource
 const _fileDecorationChangeMaxEventSize = 250;
 const _runtimeLanguageConfigurations = new Map(); // languageId -> [{ handle, configuration }]
 const _lmTools = new Map();              // name -> { handle, tool, extensionId, metadata }
+const _lmChatProviders = new Map();      // vendor -> { handle, vendor, provider, extensionId }
 const _chatParticipants = new Map();     // id -> { handle, handler, extensionId }
 const _chatContextProviders = new Map(); // handle -> { handle, kind, id, selector, provider, extensionId }
 let _nextLanguageProviderHandle = 1;
@@ -2392,6 +2393,7 @@ let _nextLanguageStatusHandle = 1;
 let _nextFileDecorationProviderHandle = 1;
 let _nextLanguageConfigurationHandle = 1;
 let _nextLmToolHandle = 1;
+let _nextLmChatProviderHandle = 1;
 let _nextChatParticipantHandle = 1;
 let _nextChatContextProviderHandle = 1;
 let _nextPythonCommandRequestHandle = 1;
@@ -2410,6 +2412,7 @@ const _onDidCloseTextDocumentEmitter = new EventEmitter();
 const _onDidChangeTextDocumentEmitter = new EventEmitter();
 const _onDidSaveTextDocumentEmitter = new EventEmitter();
 const _onDidChangeLmToolsEmitter = new EventEmitter();
+const _onDidChangeLmChatModelsEmitter = new EventEmitter();
 const _workspaceRoot = path.resolve(process.cwd());
 const _workspaceName = path.basename(_workspaceRoot) || _workspaceRoot;
 const _onDidChangeWorkspaceFoldersEmitter = new EventEmitter();
@@ -2999,6 +3002,125 @@ function _languageModelChatFromPayload(model) {
         },
     };
     return Object.freeze(apiObject);
+}
+
+function _lmChatSelectorMatches(model, selector) {
+    const sel = selector && typeof selector === 'object' ? selector : {};
+    if (sel.vendor && String(sel.vendor) !== String(model.vendor || '')) return false;
+    if (sel.id && String(sel.id) !== String(model.id || '')) return false;
+    if (sel.family && !String(model.family || '').includes(String(sel.family))) return false;
+    if (sel.version && String(sel.version) !== String(model.version || '')) return false;
+    return true;
+}
+
+function _languageModelResponseFromParts(parts) {
+    const chunks = (Array.isArray(parts) ? parts : [])
+        .map(_languageModelPartFromPayload);
+    const stream = async function* () {
+        for (const chunk of chunks) yield chunk;
+    };
+    const text = async function* () {
+        for (const chunk of chunks) {
+            const partText = _languageModelResponsePartText(chunk);
+            if (partText) yield partText;
+        }
+    };
+    return {
+        text: text(),
+        value: chunks.map(_languageModelResponsePartText).join(''),
+        stream: stream(),
+    };
+}
+
+function _languageModelChatFromProvider(entry, modelInfo) {
+    const meta = modelInfo && typeof modelInfo === 'object' ? modelInfo : {};
+    const id = String(meta.id || meta.identifier || `${entry.vendor}.model`);
+    const model = Object.assign({}, meta, {
+        id,
+        vendor: String(meta.vendor || entry.vendor),
+        family: String(meta.family || meta.vendor || entry.vendor),
+        version: String(meta.version || '1'),
+        maxInputTokens: Number(meta.maxInputTokens ?? meta.max_input_tokens ?? 0) || undefined,
+        capabilities: _normalizeLmCapabilities(meta.capabilities),
+    });
+    const apiObject = {
+        id: model.id,
+        name: String(model.name || model.id),
+        vendor: model.vendor,
+        family: model.family,
+        version: model.version,
+        maxInputTokens: model.maxInputTokens,
+        capabilities: model.capabilities,
+        countTokens(text, token) {
+            if (token?.isCancellationRequested) {
+                return Promise.reject(new Error('Language model token count cancelled'));
+            }
+            if (typeof entry.provider.provideTokenCount !== 'function') {
+                return Promise.resolve(String(text ?? '').length);
+            }
+            const raw = entry.provider.provideTokenCount(
+                model,
+                text,
+                token || { isCancellationRequested: false, onCancellationRequested: new EventEmitter().event },
+            );
+            return raw && typeof raw.then === 'function' ? raw : Promise.resolve(raw);
+        },
+        async sendRequest(messages, options, token) {
+            if (token?.isCancellationRequested) {
+                throw new Error('Language model request cancelled');
+            }
+            if (typeof entry.provider.provideLanguageModelChatResponse !== 'function') {
+                throw new Error(`Language model provider "${entry.vendor}" has no response handler`);
+            }
+            const parts = [];
+            const progress = {
+                report(part) {
+                    if (part !== undefined && part !== null) parts.push(part);
+                },
+            };
+            const activeToken = token || {
+                isCancellationRequested: false,
+                onCancellationRequested: new EventEmitter().event,
+            };
+            const raw = entry.provider.provideLanguageModelChatResponse(
+                model,
+                messages || [],
+                options || {},
+                progress,
+                activeToken,
+            );
+            if (raw && typeof raw.then === 'function') await raw;
+            if (activeToken?.isCancellationRequested) {
+                throw new Error('Language model request cancelled');
+            }
+            return _languageModelResponseFromParts(parts);
+        },
+    };
+    return Object.freeze(apiObject);
+}
+
+async function _nodeLmChatModelsForSelector(selector) {
+    const sel = selector && typeof selector === 'object' ? selector : {};
+    if (sel.vendor) {
+        await _activateKnownExtensionsForEvent(
+            `onLanguageModelChatProvider:${String(sel.vendor)}`);
+    }
+    const token = { isCancellationRequested: false, onCancellationRequested: new EventEmitter().event };
+    const models = [];
+    for (const entry of _lmChatProviders.values()) {
+        if (sel.vendor && String(sel.vendor) !== entry.vendor) continue;
+        if (typeof entry.provider.provideLanguageModelChatInformation !== 'function') continue;
+        const raw = entry.provider.provideLanguageModelChatInformation(
+            { silent: true },
+            token,
+        );
+        const infos = raw && typeof raw.then === 'function' ? await raw : raw;
+        for (const info of Array.isArray(infos) ? infos : []) {
+            const model = _languageModelChatFromProvider(entry, info);
+            if (_lmChatSelectorMatches(model, sel)) models.push(model);
+        }
+    }
+    return models;
 }
 
 function handleExecuteCommandResponse(msg) {
@@ -8985,13 +9107,16 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         // --- Namespace: lm (Language Models) ---
         lm: {
             async selectChatModels(selector) {
-                const models = await _requestPythonLm('selectChatModels', {
+                const pythonModels = await _requestPythonLm('selectChatModels', {
                     selector: _serializeLanguageValue(selector || {}),
                     extensionId: extDesc.extensionId || '',
                 }, 5000);
-                return (Array.isArray(models) ? models : [])
+                const wrappedPython = (Array.isArray(pythonModels) ? pythonModels : [])
                     .map(_languageModelChatFromPayload)
                     .filter(model => !!model.id);
+                const nodeModels = await _nodeLmChatModelsForSelector(
+                    selector || {});
+                return [...wrappedPython, ...nodeModels];
             },
             registerTool(name, tool) {
                 const toolName = String(name || '');
@@ -9107,8 +9232,67 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     tags: entry.metadata.tags || [],
                 }));
             },
-            onDidChangeChatModels: new EventEmitter().event,
             onDidChangeTools: _onDidChangeLmToolsEmitter.event,
+            onDidChangeChatModels: _onDidChangeLmChatModelsEmitter.event,
+            registerLanguageModelChatProvider(vendor, provider) {
+                const providerVendor = String(vendor || '');
+                if (!providerVendor) {
+                    throw new Error('Language model chat provider vendor is required');
+                }
+                if (!provider || typeof provider !== 'object') {
+                    throw new Error('Language model chat provider is required');
+                }
+                const entry = {
+                    handle: _nextLmChatProviderHandle++,
+                    vendor: providerVendor,
+                    provider,
+                    extensionId: extDesc.extensionId || '',
+                };
+                _lmChatProviders.set(providerVendor, entry);
+                send({
+                    type: 'lm_chat_provider_registered',
+                    handle: entry.handle,
+                    extensionId: entry.extensionId,
+                    vendor: entry.vendor,
+                });
+                let changeDisposable;
+                if (typeof provider.onDidChangeLanguageModelChatInformation === 'function') {
+                    changeDisposable = provider.onDidChangeLanguageModelChatInformation(() => {
+                        _onDidChangeLmChatModelsEmitter.fire({
+                            vendor: entry.vendor,
+                            extensionId: entry.extensionId,
+                        });
+                        send({
+                            type: 'lm_chat_provider_changed',
+                            handle: entry.handle,
+                            extensionId: entry.extensionId,
+                            vendor: entry.vendor,
+                        });
+                    });
+                }
+                const d = new Disposable(() => {
+                    if (_lmChatProviders.get(providerVendor) === entry) {
+                        _lmChatProviders.delete(providerVendor);
+                        try { changeDisposable?.dispose?.(); } catch {}
+                        send({
+                            type: 'lm_chat_provider_disposed',
+                            handle: entry.handle,
+                            extensionId: entry.extensionId,
+                            vendor: entry.vendor,
+                        });
+                        _onDidChangeLmChatModelsEmitter.fire({
+                            vendor: entry.vendor,
+                            extensionId: entry.extensionId,
+                        });
+                    }
+                });
+                subscriptions.push(d);
+                _onDidChangeLmChatModelsEmitter.fire({
+                    vendor: entry.vendor,
+                    extensionId: entry.extensionId,
+                });
+                return d;
+            },
         },
 
         // --- Namespace: chat ---

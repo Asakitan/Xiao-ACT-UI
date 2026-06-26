@@ -17585,6 +17585,47 @@ async function activate(context) {
 }
 module.exports = { activate };
 """)
+            node_surface_lm_provider_desc = _node_surface_desc(
+                "lm-provider",
+                {
+                    "name": "node-surface-lm-provider",
+                    "publisher": "selftest",
+                    "version": "0.0.1",
+                    "displayName": "Node Surface LM Provider",
+                    "main": "./extension.js",
+                    "activationEvents": [
+                        "onLanguageModelChatProvider:activation.surface.vendor",
+                    ],
+                },
+                r"""
+const vscode = require('vscode');
+async function activate(context) {
+  vscode.lm.registerLanguageModelChatProvider(
+    'activation.surface.vendor',
+    {
+      provideLanguageModelChatInformation() {
+        return [{
+          id: 'activation-surface-model',
+          name: 'Activation Surface Model',
+          vendor: 'activation.surface.vendor',
+          family: 'surface-family',
+          version: '1',
+          maxInputTokens: 1024,
+          capabilities: { supportsToolCalling: true },
+        }];
+      },
+      provideTokenCount(model, text) {
+        return String(text || '').length + 7;
+      },
+      async provideLanguageModelChatResponse(model, messages, options, progress) {
+        progress.report(new vscode.LanguageModelTextPart(
+          'surface-model:' + model.id + ':' + messages.length));
+      },
+    },
+  );
+}
+module.exports = { activate };
+""")
             node_surface_chat_desc = _node_surface_desc(
                 "chat",
                 {
@@ -17923,6 +17964,49 @@ async function activate(context) {
       ]);
     },
   });
+  const lmProviderEmitter = new vscode.EventEmitter();
+  let lmProviderModelSuffix = 'a';
+  let lmProviderEventCount = 0;
+  vscode.lm.onDidChangeChatModels(() => {
+    lmProviderEventCount += 1;
+  });
+  vscode.lm.registerLanguageModelChatProvider(
+    'selftest-node-vendor',
+    {
+      onDidChangeLanguageModelChatInformation: lmProviderEmitter.event,
+      provideLanguageModelChatInformation(options) {
+        return [{
+          id: 'selftest-node-model-' + lmProviderModelSuffix,
+          name: 'Selftest Node Model ' + lmProviderModelSuffix,
+          vendor: 'selftest-node-vendor',
+          family: 'selftest-family',
+          version: '2026.6',
+          maxInputTokens: 4096,
+          capabilities: {
+            supportsToolCalling: true,
+            supportsImageToText: true,
+          },
+          silent: !!(options && options.silent),
+        }];
+      },
+      provideTokenCount(model, text) {
+        return String(text || '').length + model.id.length;
+      },
+      async provideLanguageModelChatResponse(model, messages, options, progress) {
+        progress.report(new vscode.LanguageModelTextPart(
+          'provider-response:' + model.id + ':' + messages.length));
+        progress.report(new vscode.LanguageModelThinkingPart(
+          'provider-thinking',
+          'provider-think-id',
+          { source: 'selftest-provider' },
+        ));
+        progress.report(vscode.LanguageModelDataPart.text(
+          'provider-data',
+          'text/plain',
+        ));
+      },
+    },
+  );
   vscode.chat.createChatParticipant(
     'selftest.node.dynamicParticipant',
     (request, context, response) => {
@@ -18021,6 +18105,106 @@ async function activate(context) {
   vscode.commands.registerCommand('selftest.node.chatContextProbe', async () => {
     chatContextEmitter.fire();
     return { fired: true };
+  });
+  vscode.commands.registerCommand('selftest.node.lmProviderProbe', async () => {
+    const beforeEvents = lmProviderEventCount;
+    const vendorModels = await vscode.lm.selectChatModels({
+      vendor: 'selftest-node-vendor',
+    });
+    const familyModels = await vscode.lm.selectChatModels({
+      family: 'selftest-family',
+    });
+    const first = vendorModels[0];
+    const tokenCount = first
+      ? await first.countTokens('provider tokens')
+      : 0;
+    let responseProbe = null;
+    if (first) {
+      const response = await first.sendRequest([
+        vscode.LanguageModelChatMessage.User('hello provider'),
+        vscode.LanguageModelChatMessage.Assistant('hi user'),
+      ]);
+      const streamTypes = [];
+      const textParts = [];
+      const thinkingValues = [];
+      const dataParts = [];
+      for await (const chunk of response.stream) {
+        streamTypes.push(chunk && chunk.constructor && chunk.constructor.name);
+        if (chunk instanceof vscode.LanguageModelTextPart) {
+          textParts.push(chunk.value);
+        }
+        if (chunk instanceof vscode.LanguageModelThinkingPart) {
+          thinkingValues.push(chunk.value);
+        }
+        if (chunk instanceof vscode.LanguageModelDataPart) {
+          dataParts.push(Buffer.from(chunk.data).toString('utf8'));
+        }
+      }
+      let textAggregate = '';
+      for await (const text of response.text) {
+        textAggregate += text;
+      }
+      responseProbe = {
+        streamTypes,
+        textParts,
+        thinkingValues,
+        dataParts,
+        textAggregate,
+        value: response.value,
+      };
+    }
+    lmProviderModelSuffix = 'b';
+    lmProviderEmitter.fire();
+    const afterEventSeen = lmProviderEventCount > beforeEvents;
+    const changedModels = await vscode.lm.selectChatModels({
+      vendor: 'selftest-node-vendor',
+    });
+    return {
+      beforeEvents,
+      afterEvents: lmProviderEventCount,
+      afterEventSeen,
+      vendorCount: vendorModels.length,
+      familyCount: familyModels.length,
+      firstModel: first && {
+        id: first.id,
+        name: first.name,
+        vendor: first.vendor,
+        family: first.family,
+        version: first.version,
+        maxInputTokens: first.maxInputTokens,
+        supportsToolCalling: first.capabilities.supportsToolCalling,
+        supportsImageToText: first.capabilities.supportsImageToText,
+      },
+      tokenCount,
+      responseProbe,
+      changedModelId: changedModels[0] && changedModels[0].id,
+    };
+  });
+  vscode.commands.registerCommand('selftest.node.lmProviderLazyProbe', async () => {
+    const models = await vscode.lm.selectChatModels({
+      vendor: 'activation.surface.vendor',
+    });
+    const first = models[0];
+    let responseText = '';
+    let tokenCount = 0;
+    if (first) {
+      tokenCount = await first.countTokens('surface');
+      const response = await first.sendRequest([
+        vscode.LanguageModelChatMessage.User('lazy surface'),
+      ]);
+      for await (const text of response.text) responseText += text;
+    }
+    return {
+      count: models.length,
+      first: first && {
+        id: first.id,
+        vendor: first.vendor,
+        family: first.family,
+        supportsToolCalling: first.capabilities.supportsToolCalling,
+      },
+      tokenCount,
+      responseText,
+    };
   });
   vscode.commands.registerCommand('selftest.node.lmChatProbe', async () => {
     const localResult = await vscode.lm.invokeTool(
@@ -21155,6 +21339,7 @@ module.exports = { activate, deactivate };
             api._ext_host.registry.register(node_surface_custom_desc)
             api._ext_host.registry.register(node_surface_terminal_desc)
             api._ext_host.registry.register(node_surface_lm_tool_desc)
+            api._ext_host.registry.register(node_surface_lm_provider_desc)
             api._ext_host.registry.register(node_surface_chat_desc)
             api._ext_host.registry.register(node_surface_context_desc)
             class _NodeUiBridge:
@@ -21529,6 +21714,7 @@ module.exports = { activate, deactivate };
                         node_surface_custom_desc,
                         node_surface_terminal_desc,
                         node_surface_lm_tool_desc,
+                        node_surface_lm_provider_desc,
                         node_surface_chat_desc,
                         node_surface_context_desc,
                     ])
@@ -21637,6 +21823,8 @@ module.exports = { activate, deactivate };
                     not in node_host._activated_ids,
                     "lmTool": node_surface_lm_tool_desc.id
                     not in node_host._activated_ids,
+                    "lmProvider": node_surface_lm_provider_desc.id
+                    not in node_host._activated_ids,
                     "chat": node_surface_chat_desc.id
                     not in node_host._activated_ids,
                     "context": node_surface_context_desc.id
@@ -21694,6 +21882,12 @@ module.exports = { activate, deactivate };
                         node_host.request_lm_tool_result(
                             "activation_surface_tool",
                             {"value": "from-python"}, timeout=3.0))
+                    try:
+                        node_surface_lm_provider_probe = (
+                            api._ext_host.commands.execute(
+                                "selftest.node.lmProviderLazyProbe"))
+                    except Exception as exc:
+                        node_surface_lm_provider_probe = {"_error": str(exc)}
                     node_surface_chat_result = (
                         node_host.request_chat_participant_result(
                             "activation.surface.chat",
@@ -21708,6 +21902,7 @@ module.exports = { activate, deactivate };
                     node_surface_custom_result = {"ok": False}
                     node_surface_terminal_result = {"ok": False}
                     node_surface_lm_tool_result = {"ok": False}
+                    node_surface_lm_provider_probe = {"_error": "not started"}
                     node_surface_chat_result = {"ok": False}
                     node_surface_context_result = {"ok": False}
                 node_content_provider_command_registered = _wait_until(
@@ -21939,6 +22134,15 @@ module.exports = { activate, deactivate };
                         "selftest.node.lmChatProbe")
                 except Exception as exc:
                     node_lm_chat_probe = {"_error": str(exc)}
+                node_lm_provider_command_registered = _wait_until(
+                    lambda: "selftest.node.lmProviderProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                try:
+                    node_lm_provider_probe = api._ext_host.commands.execute(
+                        "selftest.node.lmProviderProbe")
+                except Exception as exc:
+                    node_lm_provider_probe = {"_error": str(exc)}
                 node_chat_context_command_registered = _wait_until(
                     lambda: "selftest.node.chatContextProbe"
                     in api._ext_host.commands.list_commands(),
@@ -25007,6 +25211,15 @@ module.exports = { activate, deactivate };
                        and (node_surface_lm_tool_value.get("content")
                             or [{}])[0].get("text")
                        == "surface-tool:from-python"
+                       and isinstance(node_surface_lm_provider_probe, dict)
+                       and node_surface_lm_provider_probe.get("count") == 1
+                       and node_surface_lm_provider_probe.get(
+                           "first", {}).get("id")
+                       == "activation-surface-model"
+                       and node_surface_lm_provider_probe.get("tokenCount")
+                       == len("surface") + 7
+                       and node_surface_lm_provider_probe.get("responseText")
+                       == "surface-model:activation-surface-model:1"
                        and node_surface_chat_result.get("ok") is True
                        and node_surface_chat_value.get("content")
                        == "surface-chat:from-python"
@@ -25021,6 +25234,8 @@ module.exports = { activate, deactivate };
                        in node_host._activated_ids
                        and node_surface_lm_tool_desc.id
                        in node_host._activated_ids
+                       and node_surface_lm_provider_desc.id
+                       in node_host._activated_ids
                        and node_surface_chat_desc.id
                        in node_host._activated_ids
                        and node_surface_context_desc.id
@@ -25031,6 +25246,7 @@ module.exports = { activate, deactivate };
                            "custom": node_surface_custom_result,
                            "terminal": node_surface_terminal_result,
                            "lmTool": node_surface_lm_tool_result,
+                           "lmProvider": node_surface_lm_provider_probe,
                            "chat": node_surface_chat_result,
                            "context": node_surface_context_result,
                            "viewMetadata":
@@ -26053,6 +26269,58 @@ module.exports = { activate, deactivate };
                                node_chat_context_legacy_resource,
                            "changes": node_chat_context_changes,
                        }, ensure_ascii=False, default=str))
+                node_lm_provider_response = (
+                    node_lm_provider_probe.get("responseProbe")
+                    if isinstance(node_lm_provider_probe, dict) else {})
+                _check("node host language model chat providers match VS Code API",
+                       node_started is True
+                       and node_lm_provider_command_registered
+                       and isinstance(node_lm_provider_probe, dict)
+                       and node_lm_provider_probe.get("vendorCount") == 1
+                       and node_lm_provider_probe.get("familyCount") >= 1
+                       and node_lm_provider_probe.get(
+                           "firstModel", {}).get("id")
+                       == "selftest-node-model-a"
+                       and node_lm_provider_probe.get(
+                           "firstModel", {}).get("vendor")
+                       == "selftest-node-vendor"
+                       and node_lm_provider_probe.get(
+                           "firstModel", {}).get("family")
+                       == "selftest-family"
+                       and node_lm_provider_probe.get(
+                           "firstModel", {}).get("version")
+                       == "2026.6"
+                       and node_lm_provider_probe.get(
+                           "firstModel", {}).get("maxInputTokens") == 4096
+                       and node_lm_provider_probe.get(
+                           "firstModel", {}).get("supportsToolCalling")
+                       is True
+                       and node_lm_provider_probe.get(
+                           "firstModel", {}).get("supportsImageToText")
+                       is True
+                       and node_lm_provider_probe.get("tokenCount")
+                       == len("provider tokens")
+                       + len("selftest-node-model-a")
+                       and node_lm_provider_response.get("streamTypes")
+                       == ["LanguageModelTextPart",
+                           "LanguageModelThinkingPart",
+                           "LanguageModelDataPart"]
+                       and node_lm_provider_response.get("textParts")
+                       == ["provider-response:selftest-node-model-a:2"]
+                       and node_lm_provider_response.get("thinkingValues")
+                       == ["provider-thinking"]
+                       and node_lm_provider_response.get("dataParts")
+                       == ["provider-data"]
+                       and node_lm_provider_response.get("textAggregate")
+                       == "provider-response:selftest-node-model-a:2"
+                       and node_lm_provider_response.get("value")
+                       == "provider-response:selftest-node-model-a:2"
+                       and node_lm_provider_probe.get("afterEventSeen")
+                       is True
+                       and node_lm_provider_probe.get("changedModelId")
+                       == "selftest-node-model-b",
+                       json.dumps(node_lm_provider_probe,
+                                  ensure_ascii=False, default=str))
                 _check("node host registers dynamic LM tools and chat participants",
                        node_started is True
                        and node_lm_chat_command_registered
