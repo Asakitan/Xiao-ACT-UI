@@ -3758,18 +3758,19 @@ def test_phase1_ai_editor_regressions() -> None:
             and "renderWelcome();\n  setStatus(t('new_chat_title')" in html
             and "const body=latestChatMessageBody('assistant');" in html)
     _check("frontend Assistant composer keeps normal-width controls in one row",
-           ".chat-toolbar { display:flex; align-items:center; gap:8px; flex-wrap:nowrap;" in html
+           '.chat-toolbar { display:grid; grid-template-columns:minmax(0,1fr) max-content; grid-template-areas:"controls actions";' in html
+            and "align-items:center; column-gap:8px;" in html
             and "border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent);" in html
             and "min-width:0; overflow:hidden; white-space:nowrap;" in html
             and ".chat-toolbar .spacer { display:none; }" in html
-            and ".chat-control-strip { display:flex; align-items:center; gap:4px; flex:1 1 auto; flex-wrap:nowrap; min-width:0;" in html
-            and "flex-wrap:nowrap; min-width:0;\n  overflow:hidden; }" in html
+            and ".chat-control-strip { grid-area:controls; display:flex; align-items:center; gap:4px; flex-wrap:nowrap; min-width:0;" in html
+            and "overflow:hidden; }" in html
             and ".chat-select-chip { width:142px; max-width:142px; padding:0 20px 0 8px; cursor:pointer; flex:0 1 142px; }" in html
-            and ".chat-model-inline { width:116px; padding:0 8px; font-family:var(--mono); flex:0 1 116px; }" in html
-            and ".chat-select-chip.agent { width:122px; max-width:122px; }" in html
-            and ".chat-select-chip.workflow { width:112px; max-width:112px; }" in html
-            and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px; margin-left:auto;" in html
-            and "min-width:max-content; width:auto; flex:0 0 auto; flex-wrap:nowrap; overflow:visible; white-space:nowrap;" in html
+            and ".chat-model-inline { width:116px; max-width:116px; padding:0 8px; font-family:var(--mono); flex:0 1 116px; }" in html
+            and ".chat-select-chip.agent { width:122px; max-width:122px; flex-basis:122px; }" in html
+            and ".chat-select-chip.workflow { width:112px; max-width:112px; flex-basis:112px; }" in html
+            and ".chat-composer-trailing { grid-area:actions; display:flex; align-items:center; justify-content:flex-end; gap:5px; margin-left:0;" in html
+            and "min-width:max-content; width:auto; flex-wrap:nowrap; overflow:visible; white-space:nowrap;" in html
             and ".chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:5px; min-width:0; max-width:170px; flex:0 1 auto;" in html
             and "color:var(--fg-dim); white-space:nowrap; overflow:hidden;" in html
             and ".chat-session-chip { max-width:82px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" in html
