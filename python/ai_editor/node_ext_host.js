@@ -318,6 +318,7 @@ class Location {
 }
 
 const NotebookCellKind = Object.freeze({ Markup: 1, Code: 2 });
+const NotebookCellStatusBarAlignment = Object.freeze({ Left: 1, Right: 2 });
 
 class NotebookRange {
     constructor(start, end) {
@@ -419,6 +420,19 @@ class NotebookCellOutput {
     }
     static ensureUniqueMimeTypes(items) {
         return _dedupeNotebookOutputItems((Array.isArray(items) ? items : []).map(_notebookOutputItemFromPlain));
+    }
+}
+
+class NotebookCellStatusBarItem {
+    constructor(text, alignment) {
+        this.text = String(text ?? '');
+        this.alignment = Number(alignment) === NotebookCellStatusBarAlignment.Right
+            ? NotebookCellStatusBarAlignment.Right
+            : NotebookCellStatusBarAlignment.Left;
+        this.command = undefined;
+        this.tooltip = undefined;
+        this.priority = undefined;
+        this.accessibilityInformation = undefined;
     }
 }
 
@@ -725,8 +739,10 @@ function _createNotebookDocument(viewType, uri, data, options = {}) {
         close: async () => _closeNotebookDocument(notebook.uri),
         dispose: () => _closeNotebookDocument(notebook.uri),
     };
-    _notebookDocuments.set(uri.toString(), notebook);
-    _onDidOpenNotebookDocumentEmitter.fire(notebook);
+    if (!options.transientPreview) {
+        _notebookDocuments.set(uri.toString(), notebook);
+        _onDidOpenNotebookDocumentEmitter.fire(notebook);
+    }
     return notebook;
 }
 
@@ -2457,6 +2473,8 @@ const _notebookSerializers = new Map(); // handle -> { viewType, serializer, opt
 const _notebookDocuments = new Map(); // uri string -> notebook document
 let _nextNotebookControllerHandle = 1;
 const _notebookControllers = new Map(); // handle -> controller
+let _nextNotebookStatusBarProviderHandle = 1;
+const _notebookStatusBarProviders = new Map(); // handle -> { notebookType, provider, extensionId, subscription }
 const _onDidOpenNotebookDocumentEmitter = new EventEmitter();
 const _onDidCloseNotebookDocumentEmitter = new EventEmitter();
 const _onDidChangeNotebookDocumentEmitter = new EventEmitter();
@@ -4650,6 +4668,158 @@ function _registerNotebookSerializer(extDesc, viewType, serializer, options) {
             extensionId: entry.extensionId,
         });
     });
+}
+
+function _registerNotebookCellStatusBarItemProvider(extDesc, notebookType, provider) {
+    const normalized = String(notebookType || '').trim();
+    if (!normalized) throw new Error('notebookType cannot be empty or just whitespace');
+    if (!provider || typeof provider.provideCellStatusBarItems !== 'function') {
+        throw new Error('NotebookCellStatusBarItemProvider must implement provideCellStatusBarItems');
+    }
+    const handle = _nextNotebookStatusBarProviderHandle++;
+    const entry = {
+        handle,
+        notebookType: normalized,
+        provider,
+        extensionId: extDesc.extensionId || '',
+        subscription: null,
+    };
+    if (typeof provider.onDidChangeCellStatusBarItems === 'function') {
+        entry.subscription = provider.onDidChangeCellStatusBarItems(() => {
+            send({
+                type: 'notebook_cell_status_bar_changed',
+                handle,
+                notebookType: normalized,
+                extensionId: entry.extensionId,
+            });
+        });
+    }
+    _notebookStatusBarProviders.set(handle, entry);
+    send({
+        type: 'notebook_cell_status_bar_provider_registered',
+        handle,
+        notebookType: normalized,
+        extensionId: entry.extensionId,
+        hasChangeEvent: !!entry.subscription,
+    });
+    return new Disposable(() => {
+        if (_notebookStatusBarProviders.get(handle) !== entry) return;
+        _notebookStatusBarProviders.delete(handle);
+        entry.subscription?.dispose?.();
+        send({
+            type: 'notebook_cell_status_bar_provider_disposed',
+            handle,
+            notebookType: normalized,
+            extensionId: entry.extensionId,
+        });
+    });
+}
+
+function _notebookStatusBarCommandPayload(command) {
+    if (!command) return undefined;
+    if (typeof command === 'string') {
+        return { command, title: '', arguments: [] };
+    }
+    if (typeof command === 'object') {
+        const commandId = String(command.command || command.id || '');
+        if (!commandId) return undefined;
+        return {
+            command: commandId,
+            title: String(command.title || commandId),
+            arguments: Array.isArray(command.arguments)
+                ? command.arguments.map(_plainBridgeValue)
+                : [],
+        };
+    }
+    return undefined;
+}
+
+function _notebookStatusBarItemPayload(item) {
+    if (!item || typeof item !== 'object') return null;
+    const command = _notebookStatusBarCommandPayload(item.command);
+    const payload = {
+        text: String(item.text ?? ''),
+        alignment: Number(item.alignment) === NotebookCellStatusBarAlignment.Right ? 2 : 1,
+        priority: item.priority === undefined || item.priority === null
+            ? undefined
+            : Number(item.priority),
+        tooltip: item.tooltip === undefined || item.tooltip === null
+            ? ''
+            : String(item.tooltip),
+        command: command || null,
+        accessibilityInformation: _plainBridgeValue(item.accessibilityInformation || null),
+    };
+    if (!Number.isFinite(payload.priority)) delete payload.priority;
+    return payload;
+}
+
+function _notebookDocumentFromStatusBarRequest(msg) {
+    const uri = _workspaceUriFromInput(msg.uri || msg.resourceUri || msg.path || '');
+    const existing = _notebookDocuments.get(uri.toString());
+    if (existing) return existing;
+    const viewType = String(
+        msg.viewType
+        || msg.notebookType
+        || msg.notebook?.view_type
+        || msg.notebook?.viewType
+        || 'interactive');
+    return _createNotebookDocument(
+        viewType,
+        uri,
+        msg.notebook && typeof msg.notebook === 'object' ? msg.notebook : { cells: [] },
+        { transientPreview: true });
+}
+
+async function _handleNotebookCellStatusBarRequest(msg) {
+    const requestId = String(msg.requestId || '');
+    try {
+        const notebook = _notebookDocumentFromStatusBarRequest(msg);
+        const index = Number(msg.index ?? msg.cellIndex ?? 0);
+        if (!Number.isFinite(index) || index < 0 || index >= notebook.cellCount) {
+            throw new Error('Notebook cell index is out of range');
+        }
+        const targetHandle = Number(msg.handle || 0);
+        const providers = Array.from(_notebookStatusBarProviders.values())
+            .filter(entry => (!targetHandle || entry.handle === targetHandle)
+                && entry.notebookType === notebook.notebookType);
+        const tokenSource = new CancellationTokenSource();
+        const cell = notebook.cellAt(index);
+        const items = [];
+        for (const entry of providers) {
+            const raw = await entry.provider.provideCellStatusBarItems(
+                cell,
+                tokenSource.token);
+            const values = raw === undefined || raw === null
+                ? []
+                : (Array.isArray(raw) ? raw : [raw]);
+            for (const item of values) {
+                const payload = _notebookStatusBarItemPayload(item);
+                if (payload) {
+                    payload.providerHandle = entry.handle;
+                    payload.extensionId = entry.extensionId;
+                    items.push(payload);
+                }
+            }
+        }
+        send({
+            type: 'notebook_cell_status_bar_response',
+            requestId,
+            ok: true,
+            uri: notebook.uri.toString(),
+            notebookType: notebook.notebookType,
+            index,
+            value: items,
+            providerCount: providers.length,
+        });
+    } catch (err) {
+        send({
+            type: 'notebook_cell_status_bar_response',
+            requestId,
+            ok: false,
+            error: err?.message || String(err),
+            value: [],
+        });
+    }
 }
 
 function _createNotebookController(extDesc, id, notebookType, label, handler) {
@@ -8288,6 +8458,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         NotebookCellData,
         NotebookCellOutput,
         NotebookCellOutputItem,
+        NotebookCellStatusBarItem,
         NotebookData,
         NotebookEdit,
         NotebookRange,
@@ -8339,6 +8510,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2, Hint: 3 },
         LanguageStatusSeverity: { Information: 0, Warning: 1, Error: 2 },
         NotebookCellKind,
+        NotebookCellStatusBarAlignment,
         DocumentHighlightKind: { Text: 0, Read: 1, Write: 2 },
         ProgressLocation,
         CompletionItemKind: Object.fromEntries([
@@ -8383,6 +8555,22 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             },
             getCommands(filterInternal) {
                 return Promise.resolve([..._commands.keys()]);
+            },
+        },
+
+        // --- Namespace: notebooks ---
+        notebooks: {
+            createNotebookController(id, notebookType, label, handler) {
+                const controller = _createNotebookController(
+                    extDesc, id, notebookType, label, handler);
+                subscriptions.push(new Disposable(() => controller.dispose()));
+                return controller;
+            },
+            registerNotebookCellStatusBarItemProvider(notebookType, provider) {
+                const disposable = _registerNotebookCellStatusBarItemProvider(
+                    extDesc, notebookType, provider);
+                subscriptions.push(disposable);
+                return disposable;
             },
         },
 
@@ -13893,6 +14081,9 @@ async function handleMessage(msg) {
             break;
         case 'notebook_serialize_request':
             await _handleNotebookSerializeRequest(msg);
+            break;
+        case 'notebook_cell_status_bar_request':
+            await _handleNotebookCellStatusBarRequest(msg);
             break;
         case 'lm_tool_request':
             await handleLmToolRequest(msg);

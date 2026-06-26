@@ -905,6 +905,7 @@ def test_app_settings_parity() -> None:
         "run_workflow", "get_scopes", "save_agent", "save_workflow",
         "list_workspace_tree", "workspace_file_decorations",
         "open_workspace_file", "save_workspace_notebook",
+        "notebook_cell_status_bar_items",
         "apply_workspace_text_edits", "open_external_uri",
         "editor_language_provider", "get_diagnostics",
         "get_chat_controls", "set_active_provider", "set_active_model",
@@ -9234,6 +9235,10 @@ console.log("command palette quick access helpers ok");
            and "function notebookOutputText(outputs)" in html
            and "function renderNotebookOutputs(parent,outputs)" in html
            and "function notebookOutputItemDataUrl(item,mime)" in html
+           and "function loadNotebookStatusBar(tab,index,host)" in html
+           and "call('notebook_cell_status_bar_items',path,nb,viewType,index)" in html
+           and "editor-notebook-statusbar" in html
+           and "classList.add('has-command')" in html
            and "editor-notebook-output-item iframe" in html
            and "frame.sandbox=''" in html
            and "editor-notebook-output" in html
@@ -9628,7 +9633,11 @@ console.log("command palette quick access helpers ok");
            and "class NotebookRange" in node_ext_host_source
            and "class NotebookData" in node_ext_host_source
            and "NotebookCellKind" in node_ext_host_source
+           and "class NotebookCellStatusBarItem" in node_ext_host_source
+           and "NotebookCellStatusBarAlignment" in node_ext_host_source
            and "createNotebookController(id, notebookType, label, handler)"
+           in node_ext_host_source
+           and "registerNotebookCellStatusBarItemProvider(notebookType, provider)"
            in node_ext_host_source
            and "createNotebookCellExecution(cell)" in node_ext_host_source
            and "function _workspaceApplyNotebookEdit(entry)"
@@ -9640,9 +9649,12 @@ console.log("command palette quick access helpers ok");
            and "notebook_serializer_registered" in node_ext_host_source
            and "notebook_deserialize_request" in node_ext_host_source
            and "notebook_serialize_request" in node_ext_host_source
+           and "notebook_cell_status_bar_request" in node_ext_host_source
            and "def notebook_serializers(self)" in extension_host_source
            and "def request_notebook_deserialize_result(" in extension_host_source
-           and "def request_notebook_serialize_result(" in extension_host_source)
+           and "def request_notebook_serialize_result(" in extension_host_source
+           and "def request_notebook_cell_status_bar_result("
+           in extension_host_source)
     _check("extension configuration target constants match VS Code API",
            "ConfigurationTarget: {" in node_ext_host_source
            and "Workspace: 2" in node_ext_host_source
@@ -20276,7 +20288,15 @@ async function activate(context) {
     saved: [],
     closed: [],
     controllerExecutions: [],
+    statusBarRequests: [],
+    statusBarActions: [],
+    statusBarRegistered: false,
   };
+  let notebookStatusBarEmitter = null;
+  vscode.commands.registerCommand('selftest.node.notebookStatusAction', (index, text) => {
+    notebookSerializerState.statusBarActions.push({ index, text });
+    return { ok: true, index, text };
+  });
   vscode.commands.registerCommand('selftest.node.notebookSerializerProbe', async () => {
     const fs = require('node:fs');
     const eventDisposables = [
@@ -20375,6 +20395,49 @@ async function activate(context) {
         transientDocumentMetadata: { secret: true },
       }
     );
+    if (!notebookSerializerState.statusBarRegistered) {
+      notebookStatusBarEmitter = new vscode.EventEmitter();
+      vscode.notebooks.registerNotebookCellStatusBarItemProvider(
+        'selftest-notebook',
+        {
+          onDidChangeCellStatusBarItems: notebookStatusBarEmitter.event,
+          provideCellStatusBarItems(cell, token) {
+            notebookSerializerState.statusBarRequests.push({
+              uri: cell.notebook.uri.toString(),
+              index: cell.index,
+              text: cell.document.getText(),
+              languageId: cell.document.languageId,
+              notebookType: cell.notebook.notebookType,
+              tokenCancelled: !!(token && token.isCancellationRequested),
+            });
+            const run = new vscode.NotebookCellStatusBarItem(
+              '$(play) Run Cell',
+              vscode.NotebookCellStatusBarAlignment.Left
+            );
+            run.tooltip = 'Run current cell';
+            run.priority = 100;
+            run.command = {
+              command: 'selftest.node.notebookStatusAction',
+              title: 'Run Cell',
+              arguments: [cell.index, cell.document.getText()],
+            };
+            const info = new vscode.NotebookCellStatusBarItem(
+              'Cell ' + cell.index,
+              vscode.NotebookCellStatusBarAlignment.Right
+            );
+            info.tooltip = 'Language: ' + cell.document.languageId;
+            info.priority = 1;
+            info.accessibilityInformation = {
+              label: 'Cell status ' + cell.index,
+              role: 'status',
+            };
+            return [run, info];
+          },
+        }
+      );
+      notebookSerializerState.statusBarRegistered = true;
+      notebookStatusBarEmitter.fire();
+    }
     const opened = await vscode.workspace.openNotebookDocument(
       'selftest-notebook',
       new vscode.NotebookData([
@@ -20447,8 +20510,15 @@ async function activate(context) {
         && vscode.NotebookEdit
         && vscode.NotebookRange
       ),
+      hasNotebookStatusBarClasses: !!(
+        vscode.NotebookCellStatusBarItem
+        && vscode.NotebookCellStatusBarAlignment
+        && vscode.notebooks
+        && vscode.notebooks.registerNotebookCellStatusBarItemProvider
+      ),
       codeKind: vscode.NotebookCellKind.Code,
       markupKind: vscode.NotebookCellKind.Markup,
+      uriOpenedUri: openedFromUri.uri.toString(),
       openedType: opened.notebookType,
       openedCellCount: opened.cellCount,
       openedCellText: opened.cellAt(0).document.getText(),
@@ -22188,6 +22258,54 @@ module.exports = { activate, deactivate };
                         handle=node_notebook_serializer.get("handle"),
                         timeout=3.0)
                     if node_started else {"ok": False})
+                if node_started:
+                    _wait_until(
+                        lambda: any(
+                            item.get("notebookType") == "selftest-notebook"
+                            for item in
+                            node_host.notebook_cell_status_bar_providers()),
+                        timeout=3.0)
+                node_notebook_status_providers = (
+                    node_host.notebook_cell_status_bar_providers()
+                    if node_started else [])
+                node_notebook_status_changes = (
+                    node_host.notebook_cell_status_bar_changes()
+                    if node_started else [])
+                node_notebook_status_items = (
+                    node_host.request_notebook_cell_status_bar_result(
+                        node_notebook_probe.get("uriOpenedUri")
+                        if isinstance(node_notebook_probe, dict)
+                        else "selftest://notebook.selfnb",
+                        0,
+                        notebook=(
+                            node_notebook_data
+                            if isinstance(node_notebook_data, dict)
+                            else {"cells": []}),
+                        view_type="selftest-notebook",
+                        timeout=3.0)
+                    if node_started else {"ok": False, "value": []})
+                node_notebook_status_values = (
+                    node_notebook_status_items.get("value", [])
+                    if isinstance(node_notebook_status_items, dict)
+                    else [])
+                node_notebook_status_command = next((
+                    item for item in node_notebook_status_values
+                    if isinstance(item, dict)
+                    and item.get("command", {}).get("command")
+                    == "selftest.node.notebookStatusAction"), {})
+                node_notebook_status_action = (
+                    api._ext_host.commands.execute(
+                        node_notebook_status_command.get(
+                            "command", {}).get("command"),
+                        *node_notebook_status_command.get(
+                            "command", {}).get("arguments", []))
+                    if (isinstance(node_notebook_status_command, dict)
+                        and isinstance(
+                            node_notebook_status_command.get("command"),
+                            dict)
+                        and node_notebook_status_command.get(
+                            "command", {}).get("command"))
+                    else {"ok": False})
                 try:
                     node_notebook_state = api._ext_host.commands.execute(
                         "selftest.node.notebookSerializerState")
@@ -26070,6 +26188,8 @@ module.exports = { activate, deactivate };
                        and node_notebook_command_registered
                        and isinstance(node_notebook_probe, dict)
                        and node_notebook_probe.get("hasClasses") is True
+                       and node_notebook_probe.get(
+                           "hasNotebookStatusBarClasses") is True
                        and node_notebook_probe.get("codeKind") == 2
                        and node_notebook_probe.get("markupKind") == 1
                        and node_notebook_probe.get("openedType")
@@ -26154,12 +26274,58 @@ module.exports = { activate, deactivate };
                        and any(
                            item.get("notebookType") == "selftest-notebook"
                            for item in node_notebook_state.get("closed", []))
-                       and node_notebook_state.get("serializedCells"),
+                       and node_notebook_state.get("serializedCells")
+                       and any(
+                           item.get("notebookType") == "selftest-notebook"
+                           and item.get("extensionId") == "selftest.node-tree"
+                           and item.get("hasChangeEvent") is True
+                           for item in node_notebook_status_providers)
+                       and any(
+                           item.get("notebookType") == "selftest-notebook"
+                           and item.get("extensionId") == "selftest.node-tree"
+                           for item in node_notebook_status_changes)
+                       and node_notebook_status_items.get("ok") is True
+                       and node_notebook_status_items.get(
+                           "response", {}).get("providerCount", 0) >= 1
+                       and any(
+                           item.get("text") == "$(play) Run Cell"
+                           and item.get("alignment") == 1
+                           and item.get("priority") == 100
+                           and item.get("tooltip") == "Run current cell"
+                           and item.get("command", {}).get("command")
+                           == "selftest.node.notebookStatusAction"
+                           and item.get("command", {}).get("arguments")
+                           == [0, "const answer = 42;"]
+                           for item in node_notebook_status_values)
+                       and any(
+                           item.get("text") == "Cell 0"
+                           and item.get("alignment") == 2
+                           and item.get("accessibilityInformation", {}).get(
+                               "label") == "Cell status 0"
+                           for item in node_notebook_status_values)
+                       and any(
+                           item.get("index") == 0
+                           and item.get("text") == "const answer = 42;"
+                           and item.get("languageId") == "javascript"
+                           and item.get("notebookType") == "selftest-notebook"
+                           for item in node_notebook_state.get(
+                               "statusBarRequests", []))
+                       and node_notebook_status_action.get("ok") is True
+                       and any(
+                           item.get("index") == 0
+                           and item.get("text") == "const answer = 42;"
+                           for item in node_notebook_state.get(
+                               "statusBarActions", [])),
                        json.dumps({
                            "probe": node_notebook_probe,
                            "serializers": node_notebook_serializers,
                            "deserialize": node_notebook_deserialize,
                            "serialize": node_notebook_serialize,
+                           "statusProviders":
+                               node_notebook_status_providers,
+                           "statusChanges": node_notebook_status_changes,
+                           "statusItems": node_notebook_status_items,
+                           "statusAction": node_notebook_status_action,
                            "state": node_notebook_state,
                        }, ensure_ascii=False, default=str))
                 node_task_debug_events = (

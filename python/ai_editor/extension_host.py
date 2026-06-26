@@ -1877,6 +1877,8 @@ class NodeExtensionHost:
         self._notebook_request_lock = threading.Lock()
         self._notebook_requests: Dict[str, Dict[str, Any]] = {}
         self._notebook_serializers: List[Dict[str, Any]] = []
+        self._notebook_cell_status_bar_providers: List[Dict[str, Any]] = []
+        self._notebook_cell_status_bar_changes: List[Dict[str, Any]] = []
         self._terminal_profile_request_lock = threading.Lock()
         self._terminal_profile_requests: Dict[str, Dict[str, Any]] = {}
         self._terminal_profile_providers: List[Dict[str, Any]] = []
@@ -3544,9 +3546,41 @@ class NodeExtensionHost:
                 if item.get("handle") != handle
             ]
 
+        elif msg_type == "notebook_cell_status_bar_provider_registered":
+            handle = int(msg.get("handle") or 0)
+            if handle:
+                record = {
+                    "handle": handle,
+                    "notebookType": str(msg.get("notebookType", "")),
+                    "extensionId": str(msg.get("extensionId", "")),
+                    "hasChangeEvent": bool(msg.get("hasChangeEvent", False)),
+                }
+                self._notebook_cell_status_bar_providers = [
+                    item for item in self._notebook_cell_status_bar_providers
+                    if item.get("handle") != handle
+                ]
+                self._notebook_cell_status_bar_providers.append(record)
+
+        elif msg_type == "notebook_cell_status_bar_provider_disposed":
+            handle = int(msg.get("handle") or 0)
+            self._notebook_cell_status_bar_providers = [
+                item for item in self._notebook_cell_status_bar_providers
+                if item.get("handle") != handle
+            ]
+
+        elif msg_type == "notebook_cell_status_bar_changed":
+            change = {
+                "handle": int(msg.get("handle") or 0),
+                "notebookType": str(msg.get("notebookType", "")),
+                "extensionId": str(msg.get("extensionId", "")),
+            }
+            self._notebook_cell_status_bar_changes.append(change)
+            del self._notebook_cell_status_bar_changes[:-50]
+
         elif msg_type in {
                 "notebook_deserialize_response",
-                "notebook_serialize_response"}:
+                "notebook_serialize_response",
+                "notebook_cell_status_bar_response"}:
             request_id = str(msg.get("requestId", ""))
             with self._notebook_request_lock:
                 pending = self._notebook_requests.get(request_id)
@@ -4201,6 +4235,18 @@ class NodeExtensionHost:
     def notebook_serializers(self) -> List[Dict[str, Any]]:
         return [dict(item) for item in self._notebook_serializers]
 
+    def notebook_cell_status_bar_providers(self) -> List[Dict[str, Any]]:
+        return [
+            dict(item)
+            for item in self._notebook_cell_status_bar_providers
+        ]
+
+    def notebook_cell_status_bar_changes(self) -> List[Dict[str, Any]]:
+        return [
+            dict(item)
+            for item in self._notebook_cell_status_bar_changes
+        ]
+
     def _notebook_request_result(
             self,
             payload: Dict[str, Any],
@@ -4293,6 +4339,29 @@ class NodeExtensionHost:
             payload["viewType"] = str(view_type)
         return self._notebook_request_result(
             payload, default=default, timeout=timeout)
+
+    def request_notebook_cell_status_bar_result(
+            self,
+            uri: str,
+            cell_index: int,
+            notebook: Optional[Dict[str, Any]] = None,
+            view_type: str = "",
+            handle: Optional[int] = None,
+            default: Any = None,
+            timeout: float = 3.0) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "type": "notebook_cell_status_bar_request",
+            "uri": str(uri or ""),
+            "index": int(cell_index or 0),
+            "notebook": notebook if isinstance(notebook, dict) else {},
+        }
+        if handle is not None:
+            payload["handle"] = int(handle)
+        if view_type:
+            payload["viewType"] = str(view_type)
+            payload["notebookType"] = str(view_type)
+        return self._notebook_request_result(
+            payload, default=default or [], timeout=timeout)
 
     def terminal_profile_providers(self) -> List[Dict[str, Any]]:
         return [dict(item) for item in self._terminal_profile_providers]

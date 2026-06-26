@@ -5022,6 +5022,56 @@ class AIEditorAPI:
             "handle": numeric_handle,
         }
 
+    def notebook_cell_status_bar_items(
+            self, rel_path: str, notebook: Dict[str, Any],
+            view_type: str = "", cell_index: int = 0) -> Dict:
+        try:
+            full = self._resolve_workspace_path(rel_path)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "items": []}
+        node_host = getattr(self, "_node_ext_host", None)
+        if node_host is None or not getattr(node_host, "is_running", False):
+            return {
+                "ok": False,
+                "error": "Node extension host is not running",
+                "items": [],
+            }
+        view_type = str(
+            view_type
+            or (notebook or {}).get("view_type")
+            or (notebook or {}).get("viewType")
+            or "").strip()
+        if not view_type:
+            return {"ok": False, "error": "Notebook type is required", "items": []}
+        try:
+            index = int(cell_index or 0)
+        except (TypeError, ValueError):
+            index = 0
+        result = node_host.request_notebook_cell_status_bar_result(
+            full,
+            index,
+            notebook=notebook if isinstance(notebook, dict) else {},
+            view_type=view_type,
+            timeout=5.0)
+        if not result.get("ok"):
+            return {
+                "ok": False,
+                "error": result.get("error", "status bar request failed"),
+                "items": [],
+            }
+        response = result.get("response", {}) if isinstance(result, dict) else {}
+        items = result.get("value", [])
+        if not isinstance(items, list):
+            items = []
+        return {
+            "ok": True,
+            "items": items,
+            "providerCount": int(response.get("providerCount") or 0),
+            "view_type": view_type,
+            "cell_index": index,
+            "path": full,
+        }
+
     def editor_language_provider(self, payload: Dict[str, Any]) -> Dict:
         """Run VS Code language providers against the live editor buffer."""
         if not isinstance(payload, dict):
