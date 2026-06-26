@@ -3991,6 +3991,14 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("frontend Assistant message actions follow Copilot Chat footer behavior",
            "function chatMessageActionText(msgEl,markdown)" in html
            and "function chatPreviousUserMessageText(msgEl)" in html
+           and "function chatPreviousUserMessageElement(msgEl)" in html
+           and "function chatMessageStoredReferences(msgEl)" in html
+           and "function chatUserRequestFromMessage(msgEl)" in html
+           and "function chatUserRequestDisplayText(req)" in html
+           and "let _assistantEditTargetMessage=null;" in html
+           and "function clearAssistantEditTarget()" in html
+           and "function removeChatMessagesFrom(msgEl)" in html
+           and "async function sendAssistantTextRequest(rawText,opts)" in html
            and "function chatMessageCodeBlocks(msgEl)" in html
            and "function chatFirstMessageCodeBlock(msgEl)" in html
            and "function updateMessageFooterState(msgEl)" in html
@@ -3999,6 +4007,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function createMessageFooterButton(msgEl,footer,spec)" in html
            and "function setMessageFeedback(msgEl,msgId,rating)" in html
            and "function retryAssistantMessage(msgEl)" in html
+           and "function startAssistantUserMessageEdit(msgEl)" in html
+           and "function regenerateAssistantMessage(msgEl)" in html
            and "function announceAssistantAction(message)" in html
            and "role','article'" in html
            and "el.setAttribute('tabindex','-1');" in html
@@ -4011,7 +4021,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "items.indexOf(msgEl)" in html
            and "msgEl.querySelector('.msg-footer')" in html
            and "footer.setAttribute('role','toolbar');" in html
-           and "footer.setAttribute('aria-label','Assistant message actions');" in html
+           and "footer.setAttribute('aria-label',role==='user'?'User request actions':'Assistant message actions');" in html
            and "const b=document.createElement('button');b.type='button';" in html
            and "b.dataset.action=spec.action||'action';" in html
            and "if(spec.requires)b.dataset.requires=spec.requires;" in html
@@ -4036,6 +4046,16 @@ def test_phase1_ai_editor_regressions() -> None:
            and "openInEditor(block.code,block.lang)" in html
            and "className='mf-status sr-only'" in html
            and "className='mf-separator'" in html
+           and ".interactive-request .msg-footer { justify-content:flex-end; margin-left:auto; }" in html
+           and "const actions=role==='user'?[" in html
+           and "action:'edit-request'" in html
+           and "panel.dataset.chatEditingMessage='true';" in html
+           and "removeChatMessagesFrom(_assistantEditTargetMessage);" in html
+           and "clearAssistantEditTarget();" in html
+           and "sendAssistantTextRequest(req.text,{refs:req.refs,toolHint:req.toolHint,appendUser:false,clearInput:false});" in html
+           and "if(opts.appendUser!==false){" in html
+           and "action:'regenerate'" in html
+           and "if(role==='assistant'||role==='user')setTimeout(()=>addMessageFooter(msgEl,role),100);" in html
            and "announceAssistantAction('Retrying previous request')" in html
            and "chatMessageActionText(msgEl,true)" in html
            and "chatFirstMessageCodeBlock(msgEl)" in html

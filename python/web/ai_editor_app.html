@@ -1359,6 +1359,7 @@ pre.code-block { overflow:visible; }
 /* ── Message footer (rate/retry/copy) ── */
 .msg-footer { display:flex; align-items:center; gap:4px; margin-top:4px; opacity:0; transition:opacity .15s; }
 .msg:hover .msg-footer,.msg:focus-within .msg-footer,.msg.chat-message-focused .msg-footer { opacity:1; }
+.interactive-request .msg-footer { justify-content:flex-end; margin-left:auto; }
 .msg-footer .mf-btn { padding:2px 4px; border-radius:3px; font-size:14px; cursor:pointer;
   color:var(--fg-dim); background:transparent; border:none; line-height:1; }
 .msg-footer .mf-btn:hover,.msg-footer .mf-btn:focus { color:var(--fg); background:var(--bg-hover); outline:none; }
@@ -22006,24 +22007,35 @@ window.pickHashToolCompletion=function(name){$('at-popup').classList.remove('ope
   inp.value=before+val.substring(pos);inp.selectionStart=inp.selectionEnd=before.length;resizeChatInput(inp,200);syncAssistantSessionState();inp.focus()};
 
 // ── Agent Mode in doSend ──
-doSend=async function(){
-  const inp=$('chat-input');let text=inp.value.trim();
+async function sendAssistantTextRequest(rawText,opts){
+  opts=opts||{};
+  let text=String(rawText||'').trim();
   if(streaming)return;
-  if(!text&&!chatContextAttachments.length)return;
-  if(text.startsWith('/')){execSlash(text);return}
+  const fromInput=opts.fromInput!==false&&!opts.refs;
+  if(!text&&fromInput&&!chatContextAttachments.length)return;
+  if(opts.allowSlash!==false&&text.startsWith('/')){execSlash(text);return}
   if(!config.api_key&&config.provider!=='ollama'){appendApiKeyError();return}
-  const sendContext=chatSendContextFromInput(text);text=sendContext.text;
+  const sendContext=opts.refs
+    ? {text,refs:assistantSessionNormalizeRefs(opts.refs)}
+    : chatSendContextFromInput(text);
+  text=sendContext.text;
   if(!text&&sendContext.refs.length)text='Review the attached context.';
   if(!text)return;
-  setChatInputValue('',{focus:false,sync:false});
+  if(opts.clearInput!==false)setChatInputValue('',{focus:false,sync:false});
   $('at-popup').classList.remove('open');setChatCompletionState('',false);
   // Strip #toolName prefix — LLM understands tool hints naturally
-  let toolHint='';
+  let toolHint=String(opts.toolHint||'');
   const toolMatch=text.match(/^#([A-Za-z0-9_.:-]+)\s+/);
-  if(toolMatch){toolHint=toolMatch[1];text=text.slice(toolMatch[0].length)}
-  const userBody=createMsg('user');
-  userBody.textContent=(toolHint?'#'+toolHint+' ':'')+text;
-  renderChatReferences(userBody,sendContext.refs);
+  if(!toolHint&&toolMatch){toolHint=toolMatch[1];text=text.slice(toolMatch[0].length).trim()}
+  if(opts.fromInput!==false&&_assistantEditTargetMessage&&document.body.contains(_assistantEditTargetMessage)){
+    removeChatMessagesFrom(_assistantEditTargetMessage);
+    clearAssistantEditTarget();
+  }
+  if(opts.appendUser!==false){
+    const userBody=createMsg('user');
+    userBody.textContent=(toolHint?'#'+toolHint+' ':'')+text;
+    renderChatReferences(userBody,sendContext.refs);
+  }
   const requestMeta=noteAssistantChatRequest(text,sendContext.refs,toolHint);
   setChatStreamingState(true);
   setStatus(t('thinking'));
@@ -22033,6 +22045,11 @@ doSend=async function(){
   const sendText=chatPromptWithReferences(baseSendText,sendContext.refs);
   const nativeRequest=chatNativeRequestPayload(text,sendContext.refs,toolHint,config.provider);
   await call('send_message',sendText,{provider:config.provider,model:config.model,chat_session:requestMeta,native_request:nativeRequest,attachments:nativeRequest.attachments,usedContext:nativeRequest.usedContext},agentMode);
+  return true;
+}
+doSend=async function(){
+  const inp=$('chat-input');
+  return sendAssistantTextRequest(inp?inp.value:'',{fromInput:true,allowSlash:true,clearInput:true});
 };
 window.doSend=doSend;
 
@@ -22883,6 +22900,52 @@ function chatPreviousUserMessageText(msgEl){
   }
   return '';
 }
+function chatPreviousUserMessageElement(msgEl){
+  const items=chatConversationItems();
+  const index=items.indexOf(msgEl);
+  for(let i=(index>=0?index-1:items.length-1);i>=0;i--){
+    if(items[i].dataset.role==='user')return items[i];
+  }
+  return null;
+}
+function chatMessageStoredReferences(msgEl){
+  const body=msgEl&&msgEl.querySelector?msgEl.querySelector('.msg-body'):null;
+  if(!body)return [];
+  if(Array.isArray(body._chatReferences))return assistantSessionNormalizeRefs(body._chatReferences);
+  if(body.dataset&&body.dataset.chatReferences){
+    try{return assistantSessionNormalizeRefs(JSON.parse(body.dataset.chatReferences))}catch(_e){return []}
+  }
+  return [];
+}
+function chatUserRequestFromMessage(msgEl){
+  let text=chatMessageActionText(msgEl,false);
+  let toolHint='';
+  const toolMatch=text.match(/^#([A-Za-z0-9_.:-]+)\s+/);
+  if(toolMatch){toolHint=toolMatch[1];text=text.slice(toolMatch[0].length).trim()}
+  return {text,toolHint,refs:chatMessageStoredReferences(msgEl)};
+}
+function chatUserRequestDisplayText(req){
+  req=req||{};
+  return (req.toolHint?'#'+req.toolHint+' ':'')+String(req.text||'');
+}
+let _assistantEditTargetMessage=null;
+function clearAssistantEditTarget(){
+  _assistantEditTargetMessage=null;
+  const panel=$('chat-panel');if(panel)panel.dataset.chatEditingMessage='false';
+  if(typeof updateChatComposerState==='function')updateChatComposerState();
+}
+function removeChatMessagesFrom(msgEl){
+  const items=chatConversationItems();
+  const index=items.indexOf(msgEl);
+  if(index<0)return false;
+  items.slice(index).forEach(el=>el.remove());
+  _chatFocusedMessageIndex=-1;
+  refreshChatMessageNavigationState();
+  showChatWelcomeIfEmpty();
+  syncAssistantSessionState();
+  assistantSessionPersistCurrent({status:streaming?'inProgress':'completed'});
+  return true;
+}
 function chatMessageCodeBlocks(msgEl){
   const raw=chatMessageActionText(msgEl,true);
   const blocks=[];
@@ -22973,23 +23036,45 @@ function setMessageFeedback(msgEl,msgId,rating){
   showToast(t('feedback_saved'),'success',1500);
 }
 function retryAssistantMessage(msgEl){
+  return regenerateAssistantMessage(msgEl);
+}
+function startAssistantUserMessageEdit(msgEl){
   if(streaming){announceAssistantAction('Response in progress');showToast('Response in progress','warning',1800);return false}
-  const text=chatPreviousUserMessageText(msgEl);
-  if(!text){announceAssistantAction('No previous user message');showToast('No previous user message','warning',1800);return false}
+  const req=chatUserRequestFromMessage(msgEl);
+  if(!req.text){announceAssistantAction('No user request to edit');showToast('No user request to edit','warning',1800);return false}
+  _assistantEditTargetMessage=msgEl;
+  chatContextAttachments=req.refs.slice(0,20);
+  renderChatContextAttachments();
+  setChatInputValue(chatUserRequestDisplayText(req),{focus:true});
+  const panel=$('chat-panel');if(panel)panel.dataset.chatEditingMessage='true';
+  announceAssistantAction('Editing previous request');
+  setStatus('Editing previous request');
+  if(typeof updateChatComposerState==='function')updateChatComposerState();
+  return true;
+}
+function regenerateAssistantMessage(msgEl){
+  if(streaming){announceAssistantAction('Response in progress');showToast('Response in progress','warning',1800);return false}
+  const userMsg=chatPreviousUserMessageElement(msgEl);
+  if(!userMsg){announceAssistantAction('No previous user message');showToast('No previous user message','warning',1800);return false}
+  const req=chatUserRequestFromMessage(userMsg);
+  if(!req.text&&!req.refs.length){announceAssistantAction('No previous user message');showToast('No previous user message','warning',1800);return false}
   announceAssistantAction('Retrying previous request');
-  setChatInputValue(text);
-  doSend();
+  removeChatMessagesFrom(msgEl);
+  sendAssistantTextRequest(req.text,{refs:req.refs,toolHint:req.toolHint,appendUser:false,clearInput:false});
   return true;
 }
 function addMessageFooter(msgEl,role){
-  if(role!=='assistant'||!msgEl||msgEl.querySelector('.msg-footer'))return;
+  if((role!=='assistant'&&role!=='user')||!msgEl||msgEl.querySelector('.msg-footer'))return;
   const footer=document.createElement('div');footer.className='msg-footer';
   footer.setAttribute('role','toolbar');
-  footer.setAttribute('aria-label','Assistant message actions');
+  footer.setAttribute('aria-label',role==='user'?'User request actions':'Assistant message actions');
   const msgId=msgEl.dataset.messageId||('msg-'+Date.now()+'-'+Math.random().toString(36).slice(2,8));
   msgEl.dataset.messageId=msgId;
   let saved='none';try{saved=localStorage.getItem('fb-'+msgId)||'none'}catch(e){}
-  [
+  const actions=role==='user'?[
+    {icon:'✎',title:'Edit request',action:'edit-request',requires:'text',disableWhileStreaming:true,disabledTitle:t('response_in_progress'),fn:function(){startAssistantUserMessageEdit(msgEl)}},
+    {icon:'📋',title:t('copy_response'),action:'copy-user-request',requires:'text',fn:function(){const text=chatMessageActionText(msgEl,false);if(text){navigator.clipboard.writeText(text);announceAssistantAction('Request copied');setMessageFooterStatus(msgEl,t('copied'))}showToast(t('copied'),'success',1500)}},
+  ]:[
     {icon:'👍',title:t('helpful'),cls:'rate-up',feedback:'up',action:'feedback-up',requires:'text',disableWhileStreaming:true,fn:function(){setMessageFeedback(msgEl,msgId,this.classList.contains('active')?'none':'up')}},
     {icon:'👎',title:t('not_helpful'),cls:'rate-down',feedback:'down',action:'feedback-down',requires:'text',disableWhileStreaming:true,fn:function(){setMessageFeedback(msgEl,msgId,this.classList.contains('active')?'none':'down')}},
     {separator:true},
@@ -22998,8 +23083,9 @@ function addMessageFooter(msgEl,role){
     {icon:'↧',title:t('insert_response'),action:'insert-response',requires:'text',disableWhileStreaming:true,fn:function(){const text=chatMessageActionText(msgEl,true);if(text){openInEditor(text,'markdown');announceAssistantAction(t('response_inserted'));setMessageFooterStatus(msgEl,t('response_inserted'))}}},
     {icon:'⚒',title:t('apply_first_code'),action:'apply-code',requires:'code',disableWhileStreaming:true,disabledTitle:'No code block in response',fn:function(){const block=chatFirstMessageCodeBlock(msgEl);if(block){openInEditor(block.code,block.lang);announceAssistantAction(t('code_opened'));setMessageFooterStatus(msgEl,t('code_opened'))}}},
     {separator:true},
-    {icon:'🔄',title:t('retry'),action:'retry',disableWhileStreaming:true,disabledTitle:t('response_in_progress'),fn:function(){retryAssistantMessage(msgEl)}},
-  ].forEach(a=>createMessageFooterButton(msgEl,footer,a));
+    {icon:'🔄',title:t('retry'),action:'regenerate',disableWhileStreaming:true,disabledTitle:t('response_in_progress'),fn:function(){retryAssistantMessage(msgEl)}},
+  ];
+  actions.forEach(a=>createMessageFooterButton(msgEl,footer,a));
   const status=document.createElement('span');status.className='mf-status sr-only';status.setAttribute('aria-live','polite');footer.appendChild(status);
   footer.querySelectorAll('.mf-btn[data-feedback]').forEach(btn=>{if(saved===btn.dataset.feedback){btn.classList.add('active');btn.setAttribute('aria-pressed','true')}});
   msgEl.appendChild(footer);
@@ -23120,7 +23206,7 @@ const _origCreateMsg=createMsg;
 createMsg=function(role,model){
   const body=_origCreateMsg(role,model);
   const msgEl=body.parentElement;
-  if(role==='assistant')setTimeout(()=>addMessageFooter(msgEl,'assistant'),100);
+  if(role==='assistant'||role==='user')setTimeout(()=>addMessageFooter(msgEl,role),100);
   return body;
 };
 
