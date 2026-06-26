@@ -4839,7 +4839,7 @@ function _debugRejectPendingTransportRequests(transport, error) {
     transport.pending.clear();
 }
 
-function _debugCreateStreamTransport(session, config, customEventEmitter, readStream, writeStream, disposer) {
+function _debugCreateStreamTransport(session, config, customEventEmitter, readStream, writeStream, disposer, beforeLaunch) {
     const transport = {
         session,
         readStream,
@@ -4898,6 +4898,9 @@ function _debugCreateStreamTransport(session, config, customEventEmitter, readSt
             linesStartAt1: true,
             columnsStartAt1: true,
         });
+        if (typeof beforeLaunch === 'function') {
+            await beforeLaunch(transport);
+        }
         await transport.sendRequest(String(config.request || 'launch'), config || {});
         return true;
     })().catch(err => {
@@ -4908,7 +4911,7 @@ function _debugCreateStreamTransport(session, config, customEventEmitter, readSt
     return transport;
 }
 
-function _debugCreateExecutableAdapterTransport(session, descriptor, config, customEventEmitter) {
+function _debugCreateExecutableAdapterTransport(session, descriptor, config, customEventEmitter, beforeLaunch) {
     if (!(descriptor instanceof DebugAdapterExecutable) || !descriptor.command) return null;
     const options = descriptor.options && typeof descriptor.options === 'object'
         ? descriptor.options
@@ -4935,7 +4938,8 @@ function _debugCreateExecutableAdapterTransport(session, descriptor, config, cus
         () => {
             try { proc.stdin.end(); } catch {}
             try { if (!proc.killed) proc.kill(); } catch {}
-        });
+        },
+        beforeLaunch);
     transport.process = proc;
     proc.stderr.on('data', chunk => {
         const text = chunk.toString('utf8');
@@ -4954,7 +4958,7 @@ function _debugCreateExecutableAdapterTransport(session, descriptor, config, cus
     return transport;
 }
 
-function _debugCreateServerAdapterTransport(session, descriptor, config, customEventEmitter) {
+function _debugCreateServerAdapterTransport(session, descriptor, config, customEventEmitter, beforeLaunch) {
     if (!(descriptor instanceof DebugAdapterServer)) return null;
     const port = Number(descriptor.port);
     if (!Number.isFinite(port) || port <= 0) return null;
@@ -4962,26 +4966,28 @@ function _debugCreateServerAdapterTransport(session, descriptor, config, customE
     const socket = net.createConnection({ port, host });
     return _debugCreateStreamTransport(
         session, config, customEventEmitter, socket, socket,
-        () => { try { socket.destroy(); } catch {} });
+        () => { try { socket.destroy(); } catch {} },
+        beforeLaunch);
 }
 
-function _debugCreateNamedPipeAdapterTransport(session, descriptor, config, customEventEmitter) {
+function _debugCreateNamedPipeAdapterTransport(session, descriptor, config, customEventEmitter, beforeLaunch) {
     if (!(descriptor instanceof DebugAdapterNamedPipeServer)) return null;
     const pipePath = String(descriptor.path || '').trim();
     if (!pipePath) return null;
     const socket = net.createConnection({ path: pipePath });
     return _debugCreateStreamTransport(
         session, config, customEventEmitter, socket, socket,
-        () => { try { socket.destroy(); } catch {} });
+        () => { try { socket.destroy(); } catch {} },
+        beforeLaunch);
 }
 
-function _debugCreateAdapterTransport(session, descriptor, config, customEventEmitter) {
+function _debugCreateAdapterTransport(session, descriptor, config, customEventEmitter, beforeLaunch) {
     return _debugCreateExecutableAdapterTransport(
-        session, descriptor, config, customEventEmitter)
+        session, descriptor, config, customEventEmitter, beforeLaunch)
         || _debugCreateServerAdapterTransport(
-            session, descriptor, config, customEventEmitter)
+            session, descriptor, config, customEventEmitter, beforeLaunch)
         || _debugCreateNamedPipeAdapterTransport(
-            session, descriptor, config, customEventEmitter);
+            session, descriptor, config, customEventEmitter, beforeLaunch);
 }
 
 function _notebookSerializerByHandleOrViewType(handle, viewType) {
@@ -10693,6 +10699,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             const _onDidChangeActiveStackItem = new EventEmitter();
             const _onDidChangeBreakpoints = new EventEmitter();
             const _breakpoints = [];
+            const _knownBreakpointSourceUris = new Map();
             const protocolBreakpointFor = (breakpoint) => {
                 if (!breakpoint) return undefined;
                 const idNumber = Number(String(breakpoint.id || '').replace(/^\D+/, ''));
@@ -10733,6 +10740,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                         removed: [],
                         changed: [],
                     });
+                    syncActiveDebugBreakpoints();
                 }
             };
             const removeBreakpoints = (items) => {
@@ -10748,8 +10756,102 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                         removed: removed.slice(),
                         changed: [],
                     });
+                    syncActiveDebugBreakpoints();
                 }
             };
+            function breakpointSourceKey(uri) {
+                return String(uri?.fsPath || uri?.path || uri || '');
+            }
+            function sourceDescriptorFor(uri) {
+                const sourcePath = breakpointSourceKey(uri);
+                return {
+                    path: sourcePath,
+                    name: sourcePath ? path.basename(sourcePath) : undefined,
+                };
+            }
+            function sourceBreakpointPayload(breakpoint) {
+                const start = breakpoint.location?.range?.start || {};
+                return {
+                    line: Number(start.line || 0) + 1,
+                    column: Number(start.character || 0) + 1,
+                    condition: breakpoint.condition,
+                    hitCondition: breakpoint.hitCondition,
+                    logMessage: breakpoint.logMessage,
+                };
+            }
+            async function synchronizeBreakpointsToTransport(transport) {
+                if (!transport || transport.error) return [];
+                const syncLog = [];
+                const sourceGroups = new Map();
+                const functionBreakpoints = [];
+                const dataBreakpoints = [];
+                for (const breakpoint of _breakpoints) {
+                    if (breakpoint instanceof SourceBreakpoint && breakpoint.location?.uri) {
+                        const key = breakpointSourceKey(breakpoint.location.uri);
+                        if (!sourceGroups.has(key)) {
+                            sourceGroups.set(key, {
+                                uri: breakpoint.location.uri,
+                                breakpoints: [],
+                            });
+                        }
+                        sourceGroups.get(key).breakpoints.push(
+                            sourceBreakpointPayload(breakpoint));
+                        _knownBreakpointSourceUris.set(key, breakpoint.location.uri);
+                    } else if (breakpoint instanceof FunctionBreakpoint) {
+                        functionBreakpoints.push({
+                            name: breakpoint.functionName,
+                            condition: breakpoint.condition,
+                            hitCondition: breakpoint.hitCondition,
+                        });
+                    } else if (breakpoint instanceof DataBreakpoint) {
+                        dataBreakpoints.push({
+                            dataId: breakpoint.dataId,
+                            accessType: breakpoint.accessType,
+                            condition: breakpoint.condition,
+                            hitCondition: breakpoint.hitCondition,
+                        });
+                    }
+                }
+                for (const [key, uri] of _knownBreakpointSourceUris.entries()) {
+                    const group = sourceGroups.get(key) || { uri, breakpoints: [] };
+                    await transport.sendRequest('setBreakpoints', {
+                        source: sourceDescriptorFor(group.uri),
+                        breakpoints: group.breakpoints,
+                        lines: group.breakpoints.map(item => item.line),
+                    });
+                    syncLog.push({
+                        command: 'setBreakpoints',
+                        source: breakpointSourceKey(group.uri),
+                        count: group.breakpoints.length,
+                    });
+                }
+                await transport.sendRequest('setFunctionBreakpoints', {
+                    breakpoints: functionBreakpoints,
+                });
+                syncLog.push({
+                    command: 'setFunctionBreakpoints',
+                    count: functionBreakpoints.length,
+                });
+                await transport.sendRequest('setDataBreakpoints', {
+                    breakpoints: dataBreakpoints,
+                });
+                syncLog.push({
+                    command: 'setDataBreakpoints',
+                    count: dataBreakpoints.length,
+                });
+                transport.breakpointSyncLog = syncLog;
+                return syncLog;
+            }
+            function syncActiveDebugBreakpoints() {
+                const session = _activeDebugSession;
+                const transport = session && session._debugAdapterTransport;
+                if (!transport) return;
+                const run = async () => {
+                    if (transport.ready) await transport.ready;
+                    await synchronizeBreakpointsToTransport(transport);
+                };
+                run().catch(err => _debugCallTrackers(session, 'onError', err));
+            }
             const activeDebugConsole = {
                 append(value) {
                     if (!value) return;
@@ -10926,7 +11028,8 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                         session,
                         session.adapterDescriptor,
                         config,
-                        _onDidReceiveDebugSessionCustomEvent);
+                        _onDidReceiveDebugSessionCustomEvent,
+                        transport => synchronizeBreakpointsToTransport(transport));
                     _debugCallTrackers(session, 'onWillStartSession');
                     _debugUpdateActive(session, _onDidChangeActiveDebugSession);
                     _onDidStartDebugSession.fire(session);

@@ -10133,9 +10133,13 @@ console.log("command palette quick access helpers ok");
            and "const net = require('node:net')" in node_ext_host_source
            and "function _debugDapFrame(message)" in node_ext_host_source
            and "function _debugParseDapFrames(transport, chunk)" in node_ext_host_source
-           and "function _debugCreateServerAdapterTransport(session, descriptor, config, customEventEmitter)" in node_ext_host_source
-           and "function _debugCreateNamedPipeAdapterTransport(session, descriptor, config, customEventEmitter)" in node_ext_host_source
-           and "function _debugCreateAdapterTransport(session, descriptor, config, customEventEmitter)" in node_ext_host_source
+           and "function _debugCreateServerAdapterTransport(session, descriptor, config, customEventEmitter, beforeLaunch)" in node_ext_host_source
+           and "function _debugCreateNamedPipeAdapterTransport(session, descriptor, config, customEventEmitter, beforeLaunch)" in node_ext_host_source
+           and "function _debugCreateAdapterTransport(session, descriptor, config, customEventEmitter, beforeLaunch)" in node_ext_host_source
+           and "synchronizeBreakpointsToTransport(transport)" in node_ext_host_source
+           and "transport.breakpointSyncLog = syncLog" in node_ext_host_source
+           and "setFunctionBreakpoints" in node_ext_host_source
+           and "setDataBreakpoints" in node_ext_host_source
            and "net.createConnection({ port, host })" in node_ext_host_source
            and "net.createConnection({ path: pipePath })" in node_ext_host_source
            and "transport.sendRequest('initialize'" in node_ext_host_source
@@ -10163,6 +10167,7 @@ console.log("command palette quick access helpers ok");
            and "get activeDebugConsole()" in node_ext_host_source
            and "onDidReceiveDebugSessionCustomEvent" in node_ext_host_source
            and "session._debugAdapterTransport = _debugCreateAdapterTransport" in node_ext_host_source
+           and "transport => synchronizeBreakpointsToTransport(transport)" in node_ext_host_source
            and "target._debugAdapterTransport?.dispose?.()" in node_ext_host_source
            and "provideDebugConfigurations(" in node_ext_host_source
            and "DebugConsoleMode: { Separate: 0, MergeWithParent: 1 }"
@@ -21589,6 +21594,20 @@ async function activate(context) {
     const dapCustomResponse = dapSession
       ? await dapSession.customRequest('selftest/custom', { value: 'dap-ok' })
       : null;
+    const dapInitialBreakpointSync = dapSession
+      ? await dapSession.customRequest('selftest/breakpoints', {})
+      : null;
+    const dapRuntimeBreakpoint = new vscode.FunctionBreakpoint('runtimeAdded');
+    vscode.debug.addBreakpoints([dapRuntimeBreakpoint]);
+    await new Promise(resolve => setTimeout(resolve, 60));
+    const dapBreakpointSyncAfterAdd = dapSession
+      ? await dapSession.customRequest('selftest/breakpoints', {})
+      : null;
+    vscode.debug.removeBreakpoints([dapRuntimeBreakpoint]);
+    await new Promise(resolve => setTimeout(resolve, 60));
+    const dapBreakpointSyncAfterRemove = dapSession
+      ? await dapSession.customRequest('selftest/breakpoints', {})
+      : null;
     await vscode.debug.stopDebugging(dapSession);
     const childStarted = await vscode.debug.startDebugging(undefined, {
       type: 'node-debug',
@@ -21711,6 +21730,9 @@ async function activate(context) {
       fallbackExecutableArgs,
       dapDebugStarted,
       dapCustomResponse,
+      dapInitialBreakpointSync,
+      dapBreakpointSyncAfterAdd,
+      dapBreakpointSyncAfterRemove,
       customRequestResult,
       debugBreakpointEvents,
       breakpointsAfterAddCount: breakpointsAfterAdd.length,
@@ -22374,6 +22396,7 @@ module.exports = { activate, deactivate };
                 fh.write(r"""
 let buffer = "";
 let seq = 1;
+const breakpointRequests = [];
 function send(message) {
   const payload = JSON.stringify(message);
   process.stdout.write("Content-Length: " + Buffer.byteLength(payload, "utf8") + "\r\n\r\n" + payload);
@@ -22402,8 +22425,32 @@ function handle(request) {
     event("dapCustom", { value: "from-adapter" });
     return;
   }
+  if (request.command === "setBreakpoints"
+      || request.command === "setFunctionBreakpoints"
+      || request.command === "setDataBreakpoints") {
+    breakpointRequests.push({
+      command: request.command,
+      arguments: request.arguments || {},
+    });
+    const requested = request.arguments && Array.isArray(request.arguments.breakpoints)
+      ? request.arguments.breakpoints
+      : [];
+    response(request, {
+      breakpoints: requested.map((item, index) => ({
+        id: index + 1,
+        verified: true,
+        line: item.line,
+        column: item.column,
+      })),
+    });
+    return;
+  }
   if (request.command === "selftest/custom") {
     response(request, { echo: request.arguments && request.arguments.value });
+    return;
+  }
+  if (request.command === "selftest/breakpoints") {
+    response(request, { requests: breakpointRequests });
     return;
   }
   response(request, {});
@@ -27647,6 +27694,26 @@ process.stdin.resume();
                 node_debug_events = (
                     node_task_debug_probe.get("debugEvents", [])
                     if isinstance(node_task_debug_probe, dict) else [])
+                dap_initial_breakpoint_requests = (
+                    node_task_debug_probe.get(
+                        "dapInitialBreakpointSync", {}).get(
+                            "requests", [])
+                    if isinstance(node_task_debug_probe, dict) else [])
+                dap_after_add_breakpoint_requests = (
+                    node_task_debug_probe.get(
+                        "dapBreakpointSyncAfterAdd", {}).get(
+                            "requests", [])
+                    if isinstance(node_task_debug_probe, dict) else [])
+                dap_after_remove_breakpoint_requests = (
+                    node_task_debug_probe.get(
+                        "dapBreakpointSyncAfterRemove", {}).get(
+                            "requests", [])
+                    if isinstance(node_task_debug_probe, dict) else [])
+                dap_function_breakpoint_counts = [
+                    len(item.get("arguments", {}).get("breakpoints", []))
+                    for item in dap_after_remove_breakpoint_requests
+                    if item.get("command") == "setFunctionBreakpoints"
+                ]
                 _check("node host task and debug lifecycles match VS Code API",
                        node_started is True
                        and node_task_debug_command_registered
@@ -27847,6 +27914,37 @@ process.stdin.resume();
                            "dapDebugStarted") is True
                        and node_task_debug_probe.get(
                            "dapCustomResponse", {}).get("echo") == "dap-ok"
+                       and [
+                           item.get("command")
+                           for item in dap_initial_breakpoint_requests
+                       ] == [
+                           "setBreakpoints",
+                           "setFunctionBreakpoints",
+                           "setDataBreakpoints",
+                       ]
+                       and len(dap_initial_breakpoint_requests[0].get(
+                           "arguments", {}).get("breakpoints", [])) == 1
+                       and len(dap_initial_breakpoint_requests[1].get(
+                           "arguments", {}).get("breakpoints", [])) == 1
+                       and len(dap_initial_breakpoint_requests[2].get(
+                           "arguments", {}).get("breakpoints", [])) == 1
+                       and dap_initial_breakpoint_requests[0].get(
+                           "arguments", {}).get(
+                               "breakpoints", [{}])[0].get("line") == 3
+                       and dap_initial_breakpoint_requests[0].get(
+                           "arguments", {}).get(
+                               "breakpoints", [{}])[0].get("column") == 5
+                       and dap_initial_breakpoint_requests[1].get(
+                           "arguments", {}).get(
+                               "breakpoints", [{}])[0].get(
+                                   "name") == "main"
+                       and dap_initial_breakpoint_requests[2].get(
+                           "arguments", {}).get(
+                               "breakpoints", [{}])[0].get(
+                                   "dataId") == "data-id"
+                       and len(dap_after_add_breakpoint_requests) >= 6
+                       and len(dap_after_remove_breakpoint_requests) >= 9
+                       and dap_function_breakpoint_counts[-3:] == [1, 2, 1]
                        and "dapCustom:from-adapter" in node_task_debug_probe.get(
                            "customDebugEvents", [])
                        and node_task_debug_probe.get(
@@ -27904,6 +28002,8 @@ process.stdin.resume();
                        and node_task_debug_probe.get(
                            "debugBreakpointEvents") == [
                                {"added": 3, "removed": 0, "changed": 0},
+                               {"added": 1, "removed": 0, "changed": 0},
+                               {"added": 0, "removed": 1, "changed": 0},
                                {"added": 0, "removed": 1, "changed": 0},
                                {"added": 0, "removed": 2, "changed": 0},
                            ]
