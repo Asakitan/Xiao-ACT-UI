@@ -3881,11 +3881,28 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function workflowCustomPromptModal(seed,options)" in html
            and "Save as workflow" in html
            and "call('save_workflow',data)" in html
+           and "function editWorkflowFromPopup(id)" in html
+           and "async function deleteWorkflowFromPopup(id)" in html
+           and "function workflowRunSummary(workflow)" in html
            and "function runCustomWorkflowAsAssistant(inputSeed)" in html
            and "Workflow launch" in html
            and "workflowRunId:String" in html
+           and "workflowStepLabels:workflowRunSummary(workflow).labels" in html
+           and "'\\nPlan: '+summary.text" in html
            and "workflowMode:normalizeWorkflowMode" in html
            and "noteAssistantChatRequest(text,sendContext.refs,toolHint,opts.workflowLaunch)" in html)
+    _check("frontend Assistant workflow popup exposes saved workflow edit actions",
+           ".workflow-popup-actions" in html
+           and ".workflow-popup-action" in html
+           and "editWorkflowFromPopup(id)" in html
+           and "deleteWorkflowFromPopup(id)" in html
+           and "edit.setAttribute('aria-label','Edit workflow '+name);" in html
+           and "del.setAttribute('aria-label','Delete workflow '+name);" in html
+           and "function createWorkflow(existing)" in html
+           and "modal.innerHTML='<div class=\"modal\"><h2>'+(existing?'Edit Workflow':'New Workflow')+'</h2>'" in html
+           and "$('wf-id').readOnly=true;" in html
+           and "edit.onclick=e=>{e.stopPropagation();createWorkflow(w)};" in html
+           and "Plain chat without workflow orchestration" in html)
     _check("frontend Assistant provider workflow popups are keyboard accessible",
            "function focusChatControlPopupOption(kind,delta)" in html
            and "function handleChatControlPopupKeydown(e,kind)" in html

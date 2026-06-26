@@ -1167,6 +1167,11 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-popup .mp-tag { border:1px solid var(--border); border-radius:999px; padding:0 5px; line-height:15px; }
 .chat-control-popup .mode-popup-item:focus { outline:1px solid var(--border-focus); outline-offset:-1px; background:var(--bg-hover); }
 .chat-control-popup-empty { color:var(--fg-dim); font-size:12px; padding:8px 12px; }
+.workflow-popup-actions { display:flex; align-items:center; gap:3px; margin-left:6px; flex-shrink:0; opacity:0; transition:opacity .12s ease; }
+.mode-popup-item:hover .workflow-popup-actions,.mode-popup-item:focus .workflow-popup-actions { opacity:1; }
+.workflow-popup-action { width:20px; height:20px; border:1px solid transparent; border-radius:4px; background:transparent; color:var(--fg-dim); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
+.workflow-popup-action:hover,.workflow-popup-action:focus { border-color:var(--border-focus); background:var(--bg-hover); color:var(--fg); outline:none; }
+.workflow-popup-action.delete:hover,.workflow-popup-action.delete:focus { color:var(--fg-error); }
 .workflow-save-options { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px; }
 .workflow-save-options .wide { grid-column:1 / -1; }
 /* Mode popup menu (VSCode-style) */
@@ -16970,6 +16975,10 @@ async function refreshAgents(){
     runBtn.onclick=e=>{e.stopPropagation();promptRunWorkflow(w.id,w.name)};
     row.appendChild(icon);row.appendChild(info);row.appendChild(runBtn);
     if(!w.builtin){
+      const edit=document.createElement('span');edit.textContent='✎';edit.title='Edit';
+      edit.style.cssText='cursor:pointer;font-size:11px;opacity:0.6;color:var(--fg-accent)';
+      edit.onclick=e=>{e.stopPropagation();createWorkflow(w)};
+      row.appendChild(edit);
       const del=document.createElement('span');del.textContent='✕';del.title='Delete';
       del.style.cssText='cursor:pointer;font-size:11px;opacity:0.5;color:var(--fg-error,#f44)';
       del.onclick=e=>{e.stopPropagation();deleteWorkflow(w.id)};
@@ -16990,9 +16999,25 @@ async function clearAgent(){
   activeAgentId='';refreshAgents();appendSystem('Agent deactivated');}
 window.clearAgent=clearAgent;
 async function deleteAgent(id){if(!confirm('Delete agent "'+id+'"?'))return;const r=await call('delete_agent',id);if(!callSucceeded(r)){showToast('Delete failed: '+callFailedMessage(r,'backend unavailable'),'error',2500);return}refreshAgents()}
-async function deleteWorkflow(id){if(!confirm('Delete workflow "'+id+'"?'))return;const r=await call('delete_workflow',id);if(!callSucceeded(r)){showToast('Delete failed: '+callFailedMessage(r,'backend unavailable'),'error',2500);return}refreshAgents()}
+async function deleteWorkflow(id){if(!confirm('Delete workflow "'+id+'"?'))return false;const r=await call('delete_workflow',id);if(!callSucceeded(r)){showToast('Delete failed: '+callFailedMessage(r,'backend unavailable'),'error',2500);return false}refreshAgents();return true}
+async function deleteWorkflowFromPopup(id){
+  id=String(id||'').trim();if(!id)return;
+  closeChatControlPopups();
+  const selected=$('chat-workflow-sel');
+  const deleted=await deleteWorkflow(id);
+  if(!deleted)return;
+  if(selected&&selected.value===id)selected.value='';
+  await loadChatControls().catch(()=>refreshAgents());
+}
 function workflowById(id){
   return (chatControlState.workflows||[]).find(w=>controlItemId(w)===String(id||''))||null;
+}
+function editWorkflowFromPopup(id){
+  id=String(id||'').trim();if(!id)return;
+  const workflow=workflowById(id);
+  if(!workflow)return;
+  closeChatControlPopups();
+  createWorkflow(workflow);
 }
 function workflowRunNewId(workflowId){
   return 'wf-'+String(workflowId||'run').replace(/[^A-Za-z0-9_.:-]+/g,'-')+'-'+Date.now().toString(36);
@@ -17118,6 +17143,16 @@ function workflowStepPrompt(step,inputVar){
   const prompt=String((step&&step.prompt)||'').trim();
   return prompt.replace(/\{\{input\}\}/g,inputVar||'{{workflow_input}}');
 }
+function workflowRunSummary(workflow){
+  const steps=workflowStepList(workflow);
+  const agents=workflowAgentList(workflow);
+  return {
+    stepCount:steps.length,
+    agents,
+    labels:steps.map((step,index)=>String((step&&step.label)||('Step '+(index+1)))),
+    text:steps.length+' steps · '+(agents.join(' → ')||'default')
+  };
+}
 function workflowLaunchPrompt(workflow,inputText,runId){
   const id=controlItemId(workflow),name=controlItemName(workflow)||id;
   const steps=workflowStepList(workflow);
@@ -17157,8 +17192,9 @@ function workflowLaunchPrompt(workflow,inputText,runId){
 }
 function workflowDisplayText(workflow,inputText,runId){
   const name=controlItemName(workflow)||controlItemId(workflow)||'Workflow';
+  const summary=workflowRunSummary(workflow);
   const sample=String(inputText||'').replace(/\s+/g,' ').trim().slice(0,220);
-  return 'Run workflow: '+name+'\nRun: '+runId+(sample?'\n\n'+sample:'');
+  return 'Run workflow: '+name+'\nRun: '+runId+'\nPlan: '+summary.text+(sample?'\n\n'+sample:'');
 }
 async function runCustomWorkflowAsAssistant(inputSeed){
   if(!String(assistantWorkflowCustomPrompt||'').trim()){
@@ -17198,7 +17234,8 @@ async function runWorkflowObjectAsAssistant(workflow,inputText){
     workflowId:String(id||''),
     workflowLabel:workflowName,
     workflowStepCount:workflowStepList(workflow).length,
-    workflowAgents:workflowAgentList(workflow)
+    workflowAgents:workflowAgentList(workflow),
+    workflowStepLabels:workflowRunSummary(workflow).labels
   };
   const input=$('chat-input');
   if(input&&String(input.value||'').trim()===inputText)setChatInputValue('',{focus:false,sync:false});
@@ -17248,9 +17285,10 @@ function createAgent(){
     modal.remove();refreshAgents();
   };
 }
-function createWorkflow(){
+function createWorkflow(existing){
+  existing=existing||null;
   const modal=document.createElement('div');modal.className='modal-bg';modal.classList.add('open');
-  modal.innerHTML='<div class="modal"><h2>New Workflow</h2>'
+  modal.innerHTML='<div class="modal"><h2>'+(existing?'Edit Workflow':'New Workflow')+'</h2>'
     +'<label>ID (slug)</label><input id="wf-id" placeholder="my-workflow">'
     +'<label>Name</label><input id="wf-name" placeholder="My Workflow">'
     +'<label>Icon</label><input id="wf-icon" value="⚡" style="width:60px">'
@@ -17264,6 +17302,15 @@ function createWorkflow(){
     document.getElementById('wf-scope').appendChild(opt);
   })});
   document.body.appendChild(modal);modal.onclick=e=>{if(e.target===modal)modal.remove()};
+  if(existing){
+    $('wf-id').value=controlItemId(existing);
+    $('wf-id').readOnly=true;
+    $('wf-name').value=controlItemName(existing);
+    $('wf-icon').value=existing.icon||'⚡';
+    $('wf-desc').value=existing.description||'';
+    $('wf-steps').value=JSON.stringify(workflowStepList(existing),null,2);
+    if(existing._scope)$('wf-scope').value=existing._scope;
+  }
   document.getElementById('wf-save').onclick=async()=>{
     let steps;try{steps=JSON.parse($('wf-steps').value)}catch{showToast('Invalid JSON','error');return}
     const data={id:$('wf-id').value.trim(),name:$('wf-name').value.trim(),icon:$('wf-icon').value,
@@ -17271,7 +17318,7 @@ function createWorkflow(){
     if(!data.id||!data.name)return;
     const r=await call('save_workflow',data);
     if(!callSucceeded(r)){showToast('Save failed: '+callFailedMessage(r,'backend unavailable'),'error',2500);return}
-    modal.remove();refreshAgents();
+    modal.remove();await loadChatControls().catch(()=>refreshAgents());refreshAgents();
   };
 }
 window.refreshAgents=refreshAgents;window.createAgent=createAgent;window.createWorkflow=createWorkflow;
@@ -20196,6 +20243,27 @@ function chatControlPopupItem(kind,item,active){
   }
   row.appendChild(icon);
   row.appendChild(body);
+  if(kind==='workflow'&&id&&!item.builtin){
+    const actions=document.createElement('div');
+    actions.className='workflow-popup-actions';
+    const edit=document.createElement('button');
+    edit.type='button';
+    edit.className='workflow-popup-action edit';
+    edit.title='Edit workflow';
+    edit.setAttribute('aria-label','Edit workflow '+name);
+    edit.textContent='✎';
+    edit.onclick=e=>{e.preventDefault();e.stopPropagation();editWorkflowFromPopup(id)};
+    const del=document.createElement('button');
+    del.type='button';
+    del.className='workflow-popup-action delete';
+    del.title='Delete workflow';
+    del.setAttribute('aria-label','Delete workflow '+name);
+    del.textContent='×';
+    del.onclick=e=>{e.preventDefault();e.stopPropagation();deleteWorkflowFromPopup(id)};
+    actions.appendChild(edit);
+    actions.appendChild(del);
+    row.appendChild(actions);
+  }
   row.onclick=e=>{
     e.stopPropagation();
     if(kind==='provider')selectProviderFromPopup(id);
@@ -20270,7 +20338,7 @@ function renderChatControlPopups(){
   }
   if(workflowPopup){
     workflowPopup.innerHTML='';
-    workflowPopup.appendChild(workflowModePopupItem('off','Off','Do not add workflow orchestration to chat prompts',workflowMode==='off'));
+    workflowPopup.appendChild(workflowModePopupItem('off','Off','Plain chat without workflow orchestration',workflowMode==='off'));
     workflowPopup.appendChild(workflowModePopupItem('on','On','Use the selected workflow when running from the toolbar',workflowMode==='on'));
     workflowPopup.appendChild(workflowModePopupItem('custom','Custom','Use your custom workflow prompt text',workflowMode==='custom'));
     const topSep=document.createElement('div');topSep.className='mode-popup-sep';workflowPopup.appendChild(topSep);
