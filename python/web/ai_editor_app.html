@@ -11457,7 +11457,7 @@ function onError(d){
 function onIdle(){
   setStatus(t('ready'));streaming=false;
   setChatStreamingState(false);
-  updateTokenCount();
+  updateTokenCount({minTokens:totalTokens});
   syncAssistantSessionState({requestInProgress:false});
   assistantSessionPersistCurrent({status:'completed'});
   const ci=$('chat-input');if(ci)ci.focus();
@@ -11538,10 +11538,13 @@ async function uploadImage(){
 }
 
 // ── Token counting ──
-async function updateTokenCount(){
+async function updateTokenCount(options){
+  const opts=options||{};
   const r=await call('count_conversation_tokens');
   if(r&&r.tokens!==undefined){
-    totalTokens=r.tokens;
+    const reported=Math.max(0,Number(r.tokens)||0);
+    const floor=Math.max(0,Number(opts.minTokens)||0);
+    totalTokens=Math.max(reported,floor);
     updateContextUsage(totalTokens);
     const statusTokens=$('status-tokens');if(statusTokens)statusTokens.textContent=totalTokens+' tokens';
   }
@@ -19398,6 +19401,7 @@ function appendExtensionContainerTitleActions(parent,item){
     btn.style.cssText='width:22px;height:22px;border:0;background:transparent;color:var(--fg-dim);padding:0';
     btn.textContent=extensionActionGlyph(action);
     btn.title=extensionActionTitle(action);
+    btn.setAttribute('aria-label',extensionActionTitle(action));
     btn.disabled=extensionActionDisabled(action);
     applyExtensionActionMetadata(btn,action,context);
     btn.onclick=e=>{e.stopPropagation();runExtensionViewAction(action)};
@@ -19408,6 +19412,7 @@ function appendExtensionContainerTitleActions(parent,item){
     const more=document.createElement('button');more.type='button';more.className='icon-btn';
     more.style.cssText='width:22px;height:22px;border:0;background:transparent;color:var(--fg-dim);padding:0';
     more.textContent='...';more.title='More actions';more.setAttribute('aria-haspopup','menu');
+    more.setAttribute('aria-label','More actions');
     more.onclick=e=>{e.stopPropagation();showExtensionActionMenu(e.clientX,e.clientY,secondary,runExtensionViewAction,context)};
     box.appendChild(more);
   }
@@ -19427,6 +19432,7 @@ function appendExtensionTitleActions(title,view,state){
     btn.style.cssText='width:22px;height:22px;border:0;background:transparent;color:var(--fg-dim);padding:0';
     btn.textContent=extensionActionGlyph(action);
     btn.title=extensionActionTitle(action);
+    btn.setAttribute('aria-label',extensionActionTitle(action));
     btn.disabled=extensionActionDisabled(action);
     applyExtensionActionMetadata(btn,action,context);
     btn.onclick=e=>{e.stopPropagation();runExtensionViewAction(action)};
@@ -19437,6 +19443,7 @@ function appendExtensionTitleActions(title,view,state){
     const more=document.createElement('button');more.type='button';more.className='icon-btn';
     more.style.cssText='width:22px;height:22px;border:0;background:transparent;color:var(--fg-dim);padding:0';
     more.textContent='...';more.title='More actions';more.setAttribute('aria-haspopup','menu');
+    more.setAttribute('aria-label','More actions');
     more.onclick=e=>{e.stopPropagation();showExtensionActionMenu(e.clientX,e.clientY,secondary,runExtensionViewAction,context)};
     box.appendChild(more);
   }

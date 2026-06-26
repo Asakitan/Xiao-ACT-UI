@@ -3453,6 +3453,13 @@ def test_phase1_ai_editor_regressions() -> None:
            and "clearAssistantPending(currentMsgBody);" in html
            and "syncAssistantSessionState();\n    }\n  }\n  if(e.key==='ArrowDown'" in html
            and "restoreAssistantSessionDraft();\nupdateChatComposerState();" in html)
+    _check("frontend Assistant preserves stream usage token count on idle",
+           "updateTokenCount({minTokens:totalTokens});" in html
+           and "async function updateTokenCount(options)" in html
+           and "const opts=options||{};" in html
+           and "const reported=Math.max(0,Number(r.tokens)||0);" in html
+           and "const floor=Math.max(0,Number(opts.minTokens)||0);" in html
+           and "totalTokens=Math.max(reported,floor);" in html)
     _check("frontend Assistant message actions follow Copilot Chat footer behavior",
            "function chatMessageActionText(msgEl,markdown)" in html
            and "function chatPreviousUserMessageText(msgEl)" in html
@@ -8542,6 +8549,8 @@ console.log("extension setting schema helpers ok");
             and "function sortedExtensionActions(actions)" in html
             and "function extensionTitleActionBuckets(actions)" in html
             and "function applyExtensionActionMetadata(el,action,context)" in html
+            and "btn.setAttribute('aria-label',extensionActionTitle(action));" in html
+            and "more.setAttribute('aria-label','More actions');" in html
             and "function extensionWelcomeEntries(view,state)" in html
             and "function appendExtensionWelcomeContent(parent,entries)" in html
             and "function appendExtensionWelcomeLine(parent,line)" in html
