@@ -827,6 +827,21 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-response-pending .pending-dot:nth-child(3) { animation-delay:.28s; }
 @keyframes assistantPendingPulse { 0%,80%,100%{opacity:.35;transform:translateY(0)}
   40%{opacity:1;transform:translateY(-2px)} }
+.chat-progress-stack { display:flex; flex-direction:column; gap:4px; margin:4px 0 8px; color:var(--fg-dim); }
+.chat-progress-item { display:grid; grid-template-columns:14px minmax(0,1fr) auto; align-items:center; gap:6px;
+  min-height:20px; font:11px/18px var(--sans); }
+.chat-progress-icon { width:10px; height:10px; border-radius:50%; border:1px solid var(--border);
+  box-sizing:border-box; background:var(--bg3); }
+.chat-progress-item[data-state="running"] .chat-progress-icon { border-color:var(--fg-accent);
+  border-top-color:transparent; animation:spin .8s linear infinite; }
+.chat-progress-item[data-state="complete"] .chat-progress-icon { border-color:var(--fg-success); background:var(--fg-success); }
+.chat-progress-item[data-state="error"] .chat-progress-icon { border-color:var(--fg-error); background:var(--fg-error); }
+.chat-progress-main { min-width:0; display:flex; align-items:center; gap:6px; }
+.chat-progress-label { color:var(--fg); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chat-progress-detail { color:var(--fg-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chat-progress-elapsed { color:var(--fg-dim); font:10px var(--mono); white-space:nowrap; }
+.chat-progress-meter { grid-column:2/4; height:2px; background:var(--bg3); border-radius:2px; overflow:hidden; }
+.chat-progress-fill { height:100%; background:var(--fg-accent); width:0%; transition:width .18s; }
 .chat-toolbar-head { display:none; align-items:center; gap:6px; flex-wrap:wrap; min-height:26px;
   padding:7px 8px 0; color:var(--fg-dim); }
 .chat-toolbar-head.has-state { display:flex; }
@@ -2761,6 +2776,12 @@ window._onEditorEvent=function(event,data){
   else if(event==='show_progress'){
     const msg=data.message||'';const inc=data.increment;
     const label=inc!=null?msg+' ('+Math.round(inc)+'%)':msg;
+    updateAssistantProgress('progress',msg||'Working...',{
+      id:data.id||'workbench',
+      detail:inc!=null?Math.round(inc)+'%':'',
+      percent:inc!=null?Math.max(0,Math.min(100,Number(inc))):undefined,
+      state:'running'
+    });
     setStatus(label||'Working...');
   }
   else if(event==='dispose_status_bar_item'){_removeExtStatusBarItem(data.id)}
@@ -3855,6 +3876,96 @@ function clearAssistantPending(body){
   if(!body||!body.querySelectorAll)return;
   body.querySelectorAll('.chat-response-pending').forEach(el=>el.remove());
 }
+function assistantProgressKey(kind,id){
+  return String(kind||'progress')+':'+String(id||kind||'current');
+}
+function assistantProgressState(body){
+  if(!body)return null;
+  if(!body._assistantProgress)body._assistantProgress={items:{},order:[]};
+  return body._assistantProgress;
+}
+function ensureAssistantProgressStack(body){
+  if(!body)return null;
+  let stack=body.querySelector('.chat-progress-stack');
+  if(!stack){
+    stack=document.createElement('div');
+    stack.className='chat-progress-stack';
+    stack.setAttribute('role','status');
+    stack.setAttribute('aria-live','polite');
+    stack.setAttribute('aria-label','Assistant progress');
+    body.appendChild(stack);
+  }
+  return stack;
+}
+function assistantProgressElapsed(startedAt,endedAt){
+  const start=Number(startedAt)||Date.now();
+  const end=Number(endedAt)||Date.now();
+  const seconds=Math.max(0,Math.round((end-start)/1000));
+  return seconds<60?seconds+'s':Math.floor(seconds/60)+'m '+(seconds%60)+'s';
+}
+function renderAssistantProgressItem(parent,item){
+  let row=Array.from(parent.querySelectorAll('.chat-progress-item')).find(el=>el.dataset.progressKey===item.key);
+  if(!row){
+    row=document.createElement('div');
+    row.className='chat-progress-item';
+    row.dataset.progressKey=item.key;
+    row.innerHTML='<span class="chat-progress-icon" aria-hidden="true"></span><span class="chat-progress-main"><span class="chat-progress-label"></span><span class="chat-progress-detail"></span></span><span class="chat-progress-elapsed"></span>';
+    parent.appendChild(row);
+  }
+  row.dataset.kind=item.kind||'progress';
+  row.dataset.state=item.state||'running';
+  row.querySelector('.chat-progress-label').textContent=item.label||'Working';
+  row.querySelector('.chat-progress-detail').textContent=item.detail||'';
+  row.querySelector('.chat-progress-elapsed').textContent=assistantProgressElapsed(item.startedAt,item.endedAt);
+  const percent=Number(item.percent);
+  let meter=row.querySelector('.chat-progress-meter');
+  if(Number.isFinite(percent)){
+    if(!meter){
+      meter=document.createElement('div');meter.className='chat-progress-meter';
+      meter.innerHTML='<span class="chat-progress-fill"></span>';
+      row.appendChild(meter);
+    }
+    meter.querySelector('.chat-progress-fill').style.width=Math.max(0,Math.min(100,percent))+'%';
+  }else if(meter)meter.remove();
+  return row;
+}
+function updateAssistantProgress(kind,label,opts){
+  opts=opts||{};
+  const body=opts.body||currentMsgBody||latestChatMessageBody('assistant')||ensureAssistantBody();
+  if(!body)return null;
+  const state=assistantProgressState(body);
+  const key=assistantProgressKey(kind,opts.id);
+  const now=Date.now();
+  const existing=state.items[key]||{key,kind,startedAt:now};
+  const next={...existing,kind,key,label:label||existing.label||'Working',
+    detail:opts.detail!==undefined?String(opts.detail||''):(existing.detail||''),
+    state:opts.state||existing.state||'running',
+    percent:opts.percent!==undefined?opts.percent:existing.percent,
+    startedAt:existing.startedAt||now,
+    endedAt:opts.state&&opts.state!=='running'?(opts.endedAt||now):existing.endedAt};
+  state.items[key]=next;
+  if(!state.order.includes(key))state.order.push(key);
+  const stack=ensureAssistantProgressStack(body);
+  if(stack)renderAssistantProgressItem(stack,next);
+  return next;
+}
+function completeAssistantProgress(kind,id,state,label,detail){
+  return updateAssistantProgress(kind,label||'',{id,state:state||'complete',detail});
+}
+function renderAssistantProgressSummary(body){
+  const progress=body&&body._assistantProgress;
+  if(!body||!progress||!progress.order||!progress.order.length)return;
+  const stack=ensureAssistantProgressStack(body);
+  if(!stack)return;
+  stack.innerHTML='';
+  progress.order.slice(-8).forEach(key=>{
+    const item=progress.items[key];
+    if(!item)return;
+    if(item.state==='running')item.state='complete';
+    if(!item.endedAt)item.endedAt=Date.now();
+    renderAssistantProgressItem(stack,item);
+  });
+}
 function renderAssistantPending(body,label){
   if(!body||body.querySelector('.chat-response-pending'))return;
   const pending=document.createElement('div');
@@ -3862,6 +3973,7 @@ function renderAssistantPending(body,label){
   pending.setAttribute('aria-label',label||t('thinking'));
   pending.innerHTML='<span class="pending-dot"></span><span class="pending-dot"></span><span class="pending-dot"></span><span class="pending-label">'+esc(label||t('thinking'))+'</span>';
   body.appendChild(pending);
+  updateAssistantProgress('response',label||t('thinking'),{body,id:'stream',state:'running'});
 }
 function isChatEmptyLiteral(value){
   const normalized=String(value==null?'':value).replace(/\u00a0/g,' ').trim().toLowerCase();
@@ -3895,7 +4007,7 @@ function normalizeChatMessageText(text,role){
 function chatMessageBodyHasContent(body){
   if(!body)return false;
   if(String(body.textContent||'').trim())return true;
-  return !!body.querySelector('.tool-call,.thinking-block,.chat-response-pending,.chat-response-references,.chat-change-card,.followups,.confirm-bar,img');
+  return !!body.querySelector('.tool-call,.thinking-block,.chat-response-pending,.chat-progress-stack,.chat-response-references,.chat-change-card,.followups,.confirm-bar,img');
 }
 function removeChatMessageBody(body){
   const msg=body&&body.closest?body.closest('.msg'):null;
@@ -11630,6 +11742,11 @@ function onThinkingDelta(d){
   thinkingBuf+=(d.content||'');
   if(!currentMsgBody&&(d.content||''))ensureAssistantBody();
   if(currentMsgBody)clearAssistantPending(currentMsgBody);
+  updateAssistantProgress('thinking',t('thinking'),{
+    id:'thinking',
+    detail:thinkingBuf.split(/\s+/).filter(Boolean).length+' words',
+    state:'running'
+  });
   if(!thinkingEl&&currentMsgBody){
     thinkingEl=document.createElement('div');thinkingEl.className='thinking-block';
     const hdr=document.createElement('div');hdr.className='thinking-header open';
@@ -11646,16 +11763,19 @@ function onThinkingDelta(d){
 
 function finalizeThinking(){
   if(thinkingEl&&thinkingEl._hdr){
-    thinkingEl._hdr.innerHTML='<span class="arrow">▸</span> '+esc(tf('thinking_words',thinkingBuf.split(/\s+/).length));
+    const wordCount=thinkingBuf.split(/\s+/).filter(Boolean).length;
+    thinkingEl._hdr.innerHTML='<span class="arrow">▸</span> '+esc(tf('thinking_words',wordCount));
     thinkingEl._hdr.classList.remove('open');
     if(thinkingEl._body)thinkingEl._body.classList.remove('open');
+    completeAssistantProgress('thinking','thinking','complete',t('thinking'),wordCount+' words');
   }
   thinkingBuf='';thinkingEl=null;
 }
 
 // ── Tool state rendering ──
 function renderToolCallWithState(container,name,args,callId){
-  const el=document.createElement('div');el.className='tool-call';el.id='tc-'+callId;el.dataset.toolName=name;
+  const el=document.createElement('div');el.className='tool-call';el.id='tc-'+providerDomKey(callId);el.dataset.toolName=name;
+  el.dataset.callId=providerDomKey(callId);
   const hdr=document.createElement('div');hdr.className='tool-header';
   hdr.innerHTML='<span class="arrow">▸</span> Tool: '+esc(name)+
     '<span class="tool-state"><span class="spinner"></span></span>';
@@ -11667,7 +11787,7 @@ function renderToolCallWithState(container,name,args,callId){
 }
 
 function markToolComplete(callId,success){
-  const el=document.getElementById('tc-'+callId);
+  const el=document.getElementById('tc-'+providerDomKey(callId));
   if(!el)return;
   const state=el.querySelector('.tool-state');
   if(state) state.innerHTML=success?'<span class="checkmark">✓</span>':'<span class="error-mark">✗</span>';
@@ -11696,6 +11816,11 @@ function onStreamDelta(d){
   const text=d.content||'';
   streamBuf+=text;
   streamWordQueue+=text;
+  updateAssistantProgress('response','Streaming response',{
+    id:'stream',
+    detail:streamBuf.length+' chars',
+    state:'running'
+  });
   if(!streamFlushTimer){
     streamFlushTimer=requestAnimationFrame(flushStreamWords);
   }
@@ -11725,6 +11850,7 @@ function onStreamEnd(d){
     currentMsgBody.classList.remove('stream-cursor');
     clearAssistantPending(currentMsgBody);
     currentMsgBody.textContent='';
+    renderAssistantProgressSummary(currentMsgBody);
     // Render thinking block if present
     if(d.thinking){
       const tb=document.createElement('div');tb.className='thinking-block';
@@ -11740,6 +11866,7 @@ function onStreamEnd(d){
     if(finalMarkdown)renderMd(currentMsgBody,finalMarkdown);
     if(d.tool_calls)d.tool_calls.forEach(tc=>{rememberMainTool(tc.id,tc.name);renderToolCallWithState(currentMsgBody,tc.name,tc.arguments,tc.id)});
     if(d.error){const e=document.createElement('div');e.className='error-text';e.textContent='⚠ '+d.error;currentMsgBody.appendChild(e)}
+    completeAssistantProgress('response','stream',d.error?'error':'complete',d.error?'Response failed':'Response complete',finalMarkdown?finalMarkdown.length+' chars':'');
     if(!chatMessageBodyHasContent(currentMsgBody))removeChatMessageBody(currentMsgBody);
   }
   pruneEmptyChatMessages();
@@ -11766,23 +11893,38 @@ function onStreamEnd(d){
 
 function onToolStart(d){
   rememberMainTool(d&&d.id,d&&d.name);
-  setStatus(tf('provider_status_tool_running',d.name||'tool'));
+  const body=ensureAssistantBody();
+  const callId=(d&&d.id)||((d&&d.name)||'tool')+'-'+Date.now();
+  if(body&&!document.getElementById('tc-'+providerDomKey(callId)))renderToolCallWithState(body,(d&&d.name)||'tool',JSON.stringify((d&&d.arguments)||{}),callId);
+  updateAssistantProgress('tool',(d&&d.name)||'Tool',{
+    id:callId,
+    detail:'running',
+    state:'running'
+  });
+  setStatus(tf('provider_status_tool_running',(d&&d.name)||'tool'));
 }
 function onToolProgress(d){
   const progress=Number(d&&d.progress);
-  const pct=Number.isFinite(progress)?Math.max(0,Math.min(100,Math.round(progress*100))):0;
-  const el=d&&d.id?document.getElementById('tc-'+d.id):null;
+  const pct=Number.isFinite(progress)?Math.max(0,Math.min(100,Math.round(progress<=1?progress*100:progress))):0;
+  const callId=d&&d.id?String(d.id):'tool';
+  const el=d&&d.id?document.getElementById('tc-'+providerDomKey(d.id)):null;
   if(el){
     const state=el.querySelector('.tool-state');
     if(state)state.innerHTML='<span class="spinner"></span><span>'+pct+'%</span>';
   }
+  updateAssistantProgress('tool',(d&&d.name)||lookupMainTool(callId)||'Tool',{
+    id:callId,
+    detail:pct+'%',
+    percent:pct,
+    state:'running'
+  });
   setStatus('Tool: '+((d&&d.name)||'running')+' '+pct+'%');
 }
 function onToolEnd(d){
   var callId=d&&d.id?String(d.id):'';
   if(d&&d.name)rememberMainTool(callId,d.name);
   markToolComplete(callId,toolResultSucceeded(d));
-  var tcEl=callId?document.getElementById('tc-'+callId):null;
+  var tcEl=callId?document.getElementById('tc-'+providerDomKey(callId)):null;
   var name=(d&&d.name)||lookupMainTool(callId)||(tcEl&&tcEl.dataset.toolName)||'?';
   if(tcEl&&name&&!tcEl.dataset.toolName)tcEl.dataset.toolName=name;
   var body=tcEl?tcEl.closest('.msg-body'):null;
@@ -11799,6 +11941,7 @@ function onToolEnd(d){
       }
     }else renderToolResult(body,name,d.result||'',callId);
   }
+  completeAssistantProgress('tool',callId,toolResultSucceeded(d)?'complete':'error',name,toolResultSucceeded(d)?'complete':'failed');
 }
 function onTokenWarning(d){
   const used=Number(d&&d.used)||0, limit=Number(d&&d.limit)||0;
@@ -11810,6 +11953,7 @@ function onTokenWarning(d){
 }
 function onError(d){
   const message=normalizeChatSystemText(d&&d.error!==undefined?d.error:d)||'Unknown error';
+  completeAssistantProgress('response','stream','error','Response failed',message);
   appendSystem('⚠ Error: '+message);setStatus(t('status_error'))
   pruneEmptyChatMessages();
 }

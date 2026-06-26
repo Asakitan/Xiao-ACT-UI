@@ -3773,6 +3773,28 @@ def test_phase1_ai_editor_regressions() -> None:
            and "clearAssistantPending(currentMsgBody);" in html
            and "syncAssistantSessionState();\n    }\n  }\n  if(e.key==='ArrowDown'" in html
            and "restoreAssistantSessionDraft();\nupdateChatComposerState();" in html)
+    _check("frontend Assistant renders Copilot-style progress state parts",
+           "chat-progress-stack" in html
+           and "chat-progress-item" in html
+           and "chat-progress-meter" in html
+           and "function assistantProgressKey(kind,id)" in html
+           and "function assistantProgressState(body)" in html
+           and "function ensureAssistantProgressStack(body)" in html
+           and "function updateAssistantProgress(kind,label,opts)" in html
+           and "function completeAssistantProgress(kind,id,state,label,detail)" in html
+           and "function renderAssistantProgressSummary(body)" in html
+           and "updateAssistantProgress('response',label||t('thinking')" in html
+           and "updateAssistantProgress('response','Streaming response'" in html
+           and "renderAssistantProgressSummary(currentMsgBody);" in html
+           and "completeAssistantProgress('response','stream',d.error?'error':'complete'" in html
+           and "updateAssistantProgress('thinking',t('thinking')" in html
+           and "completeAssistantProgress('thinking','thinking','complete'" in html
+           and "updateAssistantProgress('tool',(d&&d.name)||'Tool'" in html
+           and "updateAssistantProgress('tool',(d&&d.name)||lookupMainTool(callId)||'Tool'" in html
+           and "completeAssistantProgress('tool',callId,toolResultSucceeded(d)?'complete':'error'" in html
+           and "updateAssistantProgress('progress',msg||'Working...'" in html
+           and "completeAssistantProgress('response','stream','error','Response failed',message);" in html
+           and ".chat-progress-stack,.chat-response-references" in html)
     _check("frontend Assistant preserves stream usage token count on idle",
            "updateTokenCount({minTokens:totalTokens});" in html
            and "async function updateTokenCount(options)" in html
