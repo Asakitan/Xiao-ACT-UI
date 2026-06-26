@@ -2577,9 +2577,32 @@ def test_app_settings_parity() -> None:
                any(row.get("id") == "Misodee.vscode-nbt"
                    and row.get("displayName") == "NBT Viewer"
                    and row.get("activated") is True
+                   and row.get("state") == "installed"
+                   and row.get("runtimeState") == "active"
+                   and row.get("canUninstall") is False
                    and "customEditors" in row.get("contributes", [])
                    for row in installed_rows),
                json.dumps(installed_rows, ensure_ascii=False))
+    with patch("ai_editor.extensions.list_installed", return_value=[{
+        "id": "Allowed.sample",
+        "displayName": "Allowed Sample",
+        "publisher": "Allowed",
+        "version": "1.2.3",
+        "installed_at": 123.0,
+        "has_manifest": True,
+        "ext_dir": "C:/extensions/allowed.sample",
+        "manifest_path": "C:/extensions/allowed.sample/package.json",
+        "contributes": ["commands"],
+    }]):
+        persisted_rows = ext_api.list_installed_extensions().get("extensions", [])
+        _check("installed marketplace extensions expose uninstallable state",
+               any(row.get("id") == "Allowed.sample"
+                   and row.get("installed") is True
+                   and row.get("state") == "installed"
+                   and row.get("runtimeState") in {"loaded", "active", "installed"}
+                   and row.get("canUninstall") is True
+                   for row in persisted_rows),
+               json.dumps(persisted_rows, ensure_ascii=False))
     with patch("ai_editor.extensions.list_installed", return_value=[]), \
             patch("ai_editor.extensions.search_extensions", return_value=[{
                 "id": "Misodee.vscode-nbt",
@@ -2588,7 +2611,10 @@ def test_app_settings_parity() -> None:
         searched_exts = ext_api.search_extensions("nbt").get("extensions", [])
         _check("marketplace search marks runtime extensions installed",
                searched_exts
-               and searched_exts[0].get("installed") is True,
+               and searched_exts[0].get("installed") is True
+               and searched_exts[0].get("state") == "installed"
+               and searched_exts[0].get("runtimeState") == "active"
+               and searched_exts[0].get("canUninstall") is False,
                json.dumps(searched_exts, ensure_ascii=False))
     with patch("ai_editor.extensions.list_installed", return_value=[]), \
             patch("ai_editor.extensions.get_extension_detail", return_value={
@@ -2598,8 +2624,25 @@ def test_app_settings_parity() -> None:
         detail = ext_api.get_extension_detail("Misodee", "vscode-nbt")
         _check("extension detail marks runtime extensions installed",
                detail.get("installed") is True
+               and detail.get("state") == "installed"
+               and detail.get("runtimeState") == "active"
                and detail.get("id") == "Misodee.vscode-nbt",
                json.dumps(detail, ensure_ascii=False))
+    ext_events = []
+    ext_api._emit = lambda event, data: ext_events.append((event, data))
+    ext_api._ext_host.unregister_extension = lambda ext_id: ext_id == "Allowed.sample"
+    with patch("ai_editor.extensions.uninstall_extension",
+               return_value={"ok": True, "id": "Allowed.sample", "removed": ["state"]}):
+        uninstalled = ext_api.uninstall_extension("Allowed.sample", confirmed=True)
+        _check("extension uninstall reports uninstalled state and emits refresh",
+               uninstalled.get("ok") is True
+               and uninstalled.get("state") == "uninstalled"
+               and uninstalled.get("removedRuntime") is True
+               and any(event == "extensions_changed"
+                       and data.get("action") == "uninstalled"
+                       and data.get("state") == "uninstalled"
+                       for event, data in ext_events),
+               json.dumps({"result": uninstalled, "events": ext_events}, ensure_ascii=False))
 
     controls_gui = _SettingsGui({"ai_editor": {
         "provider": "openai",
@@ -8692,8 +8735,15 @@ console.log("extension setting schema helpers ok");
             "function mergeInstalledExtensionMetadata(items)" in html
             and "function extensionSourceBadge(ext)" in html
             and "function extensionActiveBadge(ext)" in html
+            and "function extensionStateBadge(ext)" in html
+            and "function extensionButtonState(ext)" in html
+            and "function setExtensionOperation(extId,state)" in html
+            and "function handleExtensionsChanged(data)" in html
+            and "else if(event==='extensions_changed'){handleExtensionsChanged(data)}" in html
             and "source==='runtime'" in html
             and "source==='persisted'" in html
+            and "ext.canUninstall" in html
+            and "data-state" in html
             and "renderExtCard(list,{...cached,...e,installed:true})" in html
             and "Path: " in html)
     _check("frontend renders extension activity bar views dynamically",

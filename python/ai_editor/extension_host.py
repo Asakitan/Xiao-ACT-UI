@@ -1698,6 +1698,15 @@ class ExtensionHost:
                 self._emit_change({"activated": [desc.id]})
         return desc
 
+    def unregister_extension(self, ext_id: str) -> bool:
+        """Deactivate and remove a single extension from the runtime registry."""
+        desc = self.registry.get(ext_id)
+        if desc is None:
+            return False
+        self.activator.deactivate(ext_id)
+        self.registry.unregister(ext_id)
+        return True
+
     def start(self) -> List[ActivatedExtension]:
         self._started = True
         results = self.activator.activate_by_event("*")

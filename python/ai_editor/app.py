@@ -9289,6 +9289,10 @@ class AIEditorAPI:
             "isBuiltin": bool(row.get("isBuiltin")),
             "has_manifest": bool(row.get("has_manifest", True)),
             "source": str(row.get("source") or ("persisted" if row.get("installed_at") else "runtime")),
+            "installed": True,
+            "state": str(row.get("state") or "installed"),
+            "runtimeState": str(row.get("runtimeState") or ""),
+            "canUninstall": bool(row.get("canUninstall", False)),
         }
 
     def _installed_extension_rows(self) -> List[Dict[str, Any]]:
@@ -9325,6 +9329,18 @@ class AIEditorAPI:
         except Exception:
             pass
         rows = list(rows_by_id.values())
+        for row in rows:
+            persisted = bool(float(row.get("installed_at") or 0))
+            runtime_loaded = str(row.get("source") or "").casefold() == "runtime" or bool(row.get("manifest_path"))
+            row["installed"] = True
+            row["state"] = "installed"
+            if row.get("activated"):
+                row["runtimeState"] = "active"
+            elif runtime_loaded:
+                row["runtimeState"] = "loaded"
+            else:
+                row["runtimeState"] = "installed"
+            row["canUninstall"] = bool(persisted and not row.get("isBuiltin"))
         rows.sort(key=lambda item: (
             -int(bool(item.get("installed_at"))),
             -float(item.get("installed_at") or 0),
@@ -9332,12 +9348,43 @@ class AIEditorAPI:
         ))
         return rows
 
-    def _installed_extension_id_set(self) -> set[str]:
+    def _installed_extension_row_map(self) -> Dict[str, Dict[str, Any]]:
         return {
-            str(item.get("id") or "").casefold()
+            str(item.get("id") or "").casefold(): item
             for item in self._installed_extension_rows()
             if str(item.get("id") or "").strip()
         }
+
+    def _installed_extension_id_set(self) -> set[str]:
+        return set(self._installed_extension_row_map().keys())
+
+    @staticmethod
+    def _merge_extension_install_state(
+            row: Dict[str, Any],
+            installed: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        if installed:
+            row["installed"] = True
+            row["state"] = str(installed.get("state") or "installed")
+            row["runtimeState"] = str(installed.get("runtimeState") or "installed")
+            row["canUninstall"] = bool(installed.get("canUninstall"))
+            row["installedVersion"] = str(installed.get("version") or "")
+            row["installed_at"] = float(installed.get("installed_at") or 0)
+            row["source"] = str(installed.get("source") or "")
+            row["activated"] = bool(installed.get("activated"))
+            if installed.get("ext_dir"):
+                row["ext_dir"] = installed.get("ext_dir")
+            if installed.get("contributes"):
+                row["contributes"] = installed.get("contributes")
+        else:
+            row["installed"] = False
+            row["state"] = "uninstalled"
+            row["runtimeState"] = "uninstalled"
+            row["canUninstall"] = False
+        return row
+
+    def _extension_state_for_id(self, ext_id: str) -> Dict[str, Any]:
+        installed = self._installed_extension_row_map().get(str(ext_id or "").casefold())
+        return self._merge_extension_install_state({"id": str(ext_id or "")}, installed)
 
     def _count_extension_manifests(self) -> int:
         """Count VS Code-compatible package.json manifests without activation."""
@@ -14524,10 +14571,11 @@ class AIEditorAPI:
         try:
             from ai_editor.extensions import search_extensions
             results = search_extensions(query, page=page)
-            installed_ids = self._installed_extension_id_set()
+            installed_rows = self._installed_extension_row_map()
             for r in results:
                 if isinstance(r, dict) and "id" in r:
-                    r["installed"] = str(r["id"]).casefold() in installed_ids
+                    self._merge_extension_install_state(
+                        r, installed_rows.get(str(r["id"]).casefold()))
             return {"extensions": results}
         except Exception as exc:
             return {"error": str(exc)}
@@ -14564,14 +14612,27 @@ class AIEditorAPI:
 
                     # Emit event so the frontend refreshes the extensions list
                     display = desc.display_name or desc.name or ext_id
+                    row = self._extension_state_for_id(desc.id)
+                    result.update({
+                        "installed": True,
+                        "state": "installed",
+                        "runtimeState": row.get("runtimeState", "installed"),
+                        "canUninstall": row.get("canUninstall", True),
+                        "extension": row,
+                    })
                     self._emit("extensions_changed", {
+                        "action": "installed",
                         "installed": ext_id,
-                        "extensions": self._ext_host.list_extensions(),
+                        "state": "installed",
+                        "extension": row,
+                        "extensions": self._installed_extension_rows(),
                     })
                     self._emit("show_message", {
                         "level": "info",
                         "message": f"Extension {display} installed and activated",
                     })
+            elif result.get("ok"):
+                result.update(self._extension_state_for_id(ext_id))
             return result
         except Exception as exc:
             return {"error": str(exc)}
@@ -14583,7 +14644,46 @@ class AIEditorAPI:
             if policy.get("confirm_install", True) and not confirmed:
                 return {"error": "Extension uninstall requires confirmation", "requires_confirmation": True}
             from ai_editor.extensions import uninstall_extension
-            return uninstall_extension(ext_id)
+            result = uninstall_extension(ext_id)
+            if result.get("ok"):
+                self._ensure_engine()
+                removed_runtime = False
+                try:
+                    removed_runtime = bool(self._ext_host.unregister_extension(ext_id))
+                except Exception:
+                    removed_runtime = False
+                node_deactivated = False
+                node_host = getattr(self, "_node_ext_host", None)
+                if node_host is not None:
+                    try:
+                        node_deactivated = bool(node_host.deactivate(ext_id))
+                    except Exception:
+                        node_deactivated = False
+                try:
+                    self._register_ext_tools()
+                except Exception:
+                    pass
+                result.update({
+                    "installed": False,
+                    "state": "uninstalled",
+                    "runtimeState": "uninstalled",
+                    "canUninstall": False,
+                    "removedRuntime": removed_runtime,
+                    "nodeDeactivated": node_deactivated,
+                })
+                self._emit("extensions_changed", {
+                    "action": "uninstalled",
+                    "uninstalled": ext_id,
+                    "state": "uninstalled",
+                    "extension": {"id": ext_id, "installed": False, "state": "uninstalled",
+                                  "runtimeState": "uninstalled", "canUninstall": False},
+                    "extensions": self._installed_extension_rows(),
+                })
+                self._emit("show_message", {
+                    "level": "info",
+                    "message": f"Extension {ext_id} uninstalled",
+                })
+            return result
         except Exception as exc:
             return {"error": str(exc)}
 
@@ -14600,9 +14700,9 @@ class AIEditorAPI:
             from ai_editor.extensions import get_extension_detail
             result = get_extension_detail(publisher, name)
             if result:
-                result["installed"] = (
-                    str(result.get("id") or "").casefold()
-                    in self._installed_extension_id_set())
+                installed = self._installed_extension_row_map().get(
+                    str(result.get("id") or "").casefold())
+                self._merge_extension_install_state(result, installed)
                 return result
             return {"error": "Not found"}
         except Exception as exc:

@@ -1370,6 +1370,7 @@ pre.code-block { overflow:visible; }
 .ext-btn.uninstall { background:transparent; color:var(--fg-dim); border:1px solid var(--border); }
 .ext-btn.uninstall:hover { color:var(--fg-error); border-color:var(--fg-error); }
 .ext-btn.installed { background:transparent; color:var(--fg-success); border:1px solid var(--fg-success); pointer-events:none; }
+.ext-btn.pending { opacity:.7; pointer-events:none; }
 .ext-badge { display:inline-flex; align-items:center; gap:2px; background:var(--bg3); padding:1px 5px;
   border-radius:3px; font-size:9px; color:var(--fg-dim); }
 .ext-badge.runtime { color:var(--fg-accent); border:1px solid color-mix(in srgb, var(--fg-accent) 35%, transparent); }
@@ -2721,6 +2722,7 @@ window._onEditorEvent=function(event,data){
   else if(event==='hide_status_bar_item'){_removeExtStatusBarItem(data.id)}
   else if(event==='show_language_status_item'){_upsertLanguageStatusItem(data)}
   else if(event==='remove_language_status_item'){_removeLanguageStatusItem(data.id)}
+  else if(event==='extensions_changed'){handleExtensionsChanged(data)}
 };
 
 // ── LN-05+LN-09: Layout persistence ──
@@ -3419,7 +3421,7 @@ en:{
   edit_prefix:'Edit: ',delete_inst_confirm:'Delete instruction file "$1"?',
   // extensions
   license_required:'License required.',no_data:'No data.',no_ext_found:'No extensions found',
-  install_btn:'Install',installing:'Installing...',installed_btn:'✓ Installed',
+  install_btn:'Install',installing:'Installing...',installed_btn:'✓ Installed',uninstall_btn:'Uninstall',uninstalling:'Uninstalling...',
   uninstall_confirm:'Uninstall extension?',
   // mcp
   no_mcp_servers:'No MCP servers configured.',mcp_id_cmd_required:'Server ID and command/URL required',
@@ -3547,7 +3549,7 @@ zh:{
   save_failed:'✗ 保存失败',inst_name_prompt:'指令文件名 (不含 .md):',
   edit_prefix:'编辑: ',delete_inst_confirm:'删除指令文件「$1」？',
   license_required:'需要许可证。',no_data:'无数据。',no_ext_found:'未找到扩展',
-  install_btn:'安装',installing:'安装中...',installed_btn:'✓ 已安装',
+  install_btn:'安装',installing:'安装中...',installed_btn:'✓ 已安装',uninstall_btn:'卸载',uninstalling:'卸载中...',
   uninstall_confirm:'卸载此扩展？',
   no_mcp_servers:'未配置 MCP 服务器。',mcp_id_cmd_required:'服务器 ID 和命令/URL 必填',
   mcp_added:'MCP 服务器已添加',mcp_add_failed:'添加服务器失败',mcp_status_prefix:'MCP 状态未加载。',
@@ -3621,8 +3623,14 @@ function tf(key,...args){return String(t(key)).replace(/\$(\d+)/g,(_,n)=>String(
 function localizeDynamicUi(){
   if(typeof localizeProviderUi==='function')localizeProviderUi();
   if(typeof renderRuntimeSupport==='function'&&window._lastRuntimeSupportSummary){renderRuntimeSupport(window._lastRuntimeSupportSummary)}
-  document.querySelectorAll('.ext-btn.install').forEach(btn=>{btn.textContent=t('install_btn')});
-  document.querySelectorAll('.ext-btn.installed').forEach(btn=>{btn.textContent=t('installed_btn')});
+  if(typeof extensionButtonState==='function'){
+    document.querySelectorAll('.ext-btn[data-ext-id]').forEach(btn=>{
+      const ext=lookupExtensionState({id:btn.dataset.extId,vsixUrl:btn.dataset.vsix});
+      const next=extensionButtonState(ext);
+      btn.className=next.cls;btn.textContent=next.text;btn.dataset.state=next.state;
+      btn.setAttribute('aria-disabled',next.disabled?'true':'false');
+    });
+  }
 }
 function setLang(lang,options){
   const opts=isPlainObject(options)?options:{};
@@ -19049,6 +19057,12 @@ $('settings-modal').onclick=e=>{if(e.target.id==='settings-modal')closeSettings(
 // ── Ready ──
 // ── Extensions marketplace ──
 let extCache=[];
+let extInstalledById=Object.create(null);
+let extOperationState=Object.create(null);
+
+function extKey(extOrId){
+  return String((extOrId&&extOrId.id)||extOrId||'').toLowerCase();
+}
 
 function contributionTotal(counts){
   if(!counts||typeof counts!=='object')return 0;
@@ -19100,22 +19114,38 @@ async function refreshInstalledExts(){
   const r=await call('list_installed_extensions');
   const list=$('ext-installed-list');
   const header=$('ext-installed-header');
-  if(!r||!r.extensions||!r.extensions.length){list.innerHTML='';header.style.display='none';return}
+  if(!r||!r.extensions||!r.extensions.length){
+    extInstalledById=Object.create(null);
+    extCache=extCache.map(ext=>({...ext,installed:false,state:'uninstalled',runtimeState:'uninstalled',canUninstall:false}));
+    list.innerHTML='';header.style.display='none';
+    if(extCache.length)renderExtList($('ext-marketplace-list'),extCache);
+    return;
+  }
   header.style.display='';
   list.innerHTML='';
-  mergeInstalledExtensionMetadata(r.extensions||[]);
+  extInstalledById=mergeInstalledExtensionMetadata(r.extensions||[]);
   r.extensions.forEach(e=>{
     const cached=extCache.find(c=>String(c.id||'').toLowerCase()===String(e.id||'').toLowerCase());
     if(cached){renderExtCard(list,{...cached,...e,installed:true})}
     else{
-      const card=document.createElement('div');card.className='ext-card';
-      const badges=[extensionSourceBadge(e),extensionActiveBadge(e),e.version?'<span class="ext-badge">v'+esc(e.version)+'</span>':'',extensionContribSummary(e)?'<span class="ext-badge">'+esc(extensionContribSummary(e))+'</span>':''].filter(Boolean).join('');
-      card.innerHTML='<div class="ext-icon">📦</div><div class="ext-info"><div class="ext-name">'+esc(e.displayName||e.name||e.id)+'</div><div class="ext-desc">'+esc(e.description||'Installed')+'</div>'
-        +'<div class="ext-meta wrap"><span class="ext-publisher">'+esc(e.publisher||'')+'</span>'+badges+'</div></div>';
-      list.appendChild(card);
+      renderExtCard(list,{...e,installed:true});
     }
   });
   if(extCache.length)renderExtList($('ext-marketplace-list'),extCache);
+}
+
+function handleExtensionsChanged(data){
+  const rows=Array.isArray(data&&data.extensions)?data.extensions:[];
+  if(rows.length)extInstalledById=mergeInstalledExtensionMetadata(rows);
+  const removed=String((data&&data.uninstalled)||'').toLowerCase();
+  if(removed){
+    delete extInstalledById[removed];
+    extCache=extCache.map(ext=>extKey(ext)===removed?{...ext,installed:false,state:'uninstalled',runtimeState:'uninstalled',canUninstall:false}:ext);
+  }
+  if(extCache.length)renderExtList($('ext-marketplace-list'),extCache);
+  refreshInstalledExts();
+  refreshRuntimeSupport();
+  renderExtensionActivityBar();
 }
 
 // Extension-contributed activity bar icons
@@ -20242,6 +20272,14 @@ function extensionActiveBadge(ext){
   return ext&&ext.activated?'<span class="ext-badge active">Active</span>':'';
 }
 
+function extensionStateBadge(ext){
+  const state=String(ext&&ext.runtimeState||ext&&ext.state||'').toLowerCase();
+  if(state==='active')return '<span class="ext-badge active">Active</span>';
+  if(state==='loaded')return '<span class="ext-badge runtime">Loaded</span>';
+  if(state==='installed')return '<span class="ext-badge persisted">Installed</span>';
+  return '';
+}
+
 function mergeInstalledExtensionMetadata(items){
   const rows=Array.isArray(items)?items:[];
   const byId=Object.create(null);
@@ -20253,15 +20291,56 @@ function mergeInstalledExtensionMetadata(items){
   return byId;
 }
 
+function lookupExtensionState(ext){
+  const key=extKey(ext);
+  const cached=extCache.find(item=>extKey(item)===key);
+  const installed=extInstalledById[key];
+  return {...(cached||{}),...(ext||{}),...(installed||{})};
+}
+
+function extensionOperation(ext){
+  return extOperationState[extKey(ext)]||'';
+}
+
+function extensionButtonState(ext){
+  const op=extensionOperation(ext);
+  if(op==='installing')return {cls:'ext-btn install pending',text:t('installing'),disabled:true,state:op};
+  if(op==='uninstalling')return {cls:'ext-btn uninstall pending',text:t('uninstalling'),disabled:true,state:op};
+  if(ext&&ext.installed){
+    if(ext.canUninstall)return {cls:'ext-btn uninstall',text:t('uninstall_btn'),disabled:false,state:'installed'};
+    return {cls:'ext-btn installed',text:t('installed_btn'),disabled:true,state:'installed'};
+  }
+  return {cls:'ext-btn install',text:t('install_btn'),disabled:false,state:'uninstalled'};
+}
+
+function extensionButtonHtml(ext,vsix){
+  const state=extensionButtonState(ext);
+  return '<span class="'+state.cls+'" data-ext-id="'+esc(ext.id||'')+'" data-vsix="'+esc(vsix||ext.vsixUrl||'')+'" data-state="'+esc(state.state)+'" aria-disabled="'+(state.disabled?'true':'false')+'" onclick="toggleExtInstall(this,event)">'+esc(state.text)+'</span>';
+}
+
+function setExtensionOperation(extId,state){
+  const key=extKey(extId);
+  if(!key)return;
+  if(state)extOperationState[key]=state;else delete extOperationState[key];
+  document.querySelectorAll('.ext-btn[data-ext-id]').forEach(btn=>{
+    if(extKey(btn.dataset.extId)!==key)return;
+    const ext=lookupExtensionState({id:btn.dataset.extId,vsixUrl:btn.dataset.vsix});
+    const next=extensionButtonState(ext);
+    btn.className=next.cls;
+    btn.textContent=next.text;
+    btn.dataset.state=next.state;
+    btn.setAttribute('aria-disabled',next.disabled?'true':'false');
+  });
+}
+
 function renderExtCard(container,ext){
+  ext=lookupExtensionState(ext);
   const card=document.createElement('div');card.className='ext-card';
   const iconEl=ext.iconUrl?'<img src="'+esc(ext.iconUrl)+'" onerror="this.parentElement.textContent=\'📦\'">':'📦';
   const stars=ext.rating?('★'.repeat(Math.round(ext.rating))+'☆'.repeat(5-Math.round(ext.rating))):'';
   const instCount=ext.installCount>=1000?(Math.round(ext.installCount/1000)+'K'):ext.installCount;
-  const btnClass=ext.installed?'ext-btn installed':'ext-btn install';
-  const btnText=ext.installed?t('installed_btn'):t('install_btn');
   const sourceBadge=extensionSourceBadge(ext);
-  const activeBadge=extensionActiveBadge(ext);
+  const activeBadge=extensionStateBadge(ext)||extensionActiveBadge(ext);
   const contribSummary=extensionContribSummary(ext);
 
   card.innerHTML=
@@ -20280,21 +20359,19 @@ function renderExtCard(container,ext){
       '</div>'+
     '</div>'+
     '<div style="display:flex;align-items:center;flex-shrink:0">'+
-      '<span class="'+btnClass+'" data-ext-id="'+esc(ext.id)+'" data-vsix="'+esc(ext.vsixUrl||'')+'"'+
-        ' onclick="toggleExtInstall(this,event)">'+btnText+'</span>'+
+      extensionButtonHtml(ext)+
     '</div>';
   card.onclick=()=>showExtDetail(ext);
   container.appendChild(card);
 }
 function showExtDetail(ext){
+  ext=lookupExtensionState(ext);
   const panel=$('ext-detail-panel');if(!panel)return;
   $('ext-detail-name').textContent=ext.displayName||ext.name||ext.id;
   const body=$('ext-detail-body');
   const iconEl=ext.iconUrl?'<img src="'+esc(ext.iconUrl)+'" style="width:64px;height:64px;border-radius:6px" onerror="this.style.display=\'none\'">':'<div style="width:64px;height:64px;border-radius:6px;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:32px">📦</div>';
-  const btnClass=ext.installed?'ext-btn installed':'ext-btn install';
-  const btnText=ext.installed?t('installed_btn'):t('install_btn');
-  const detailBadges=[extensionSourceBadge(ext),extensionActiveBadge(ext),ext.version?'<span class="ext-badge">v'+esc(ext.version)+'</span>':'',extensionContribSummary(ext)?'<span class="ext-badge">'+esc(extensionContribSummary(ext))+'</span>':''].filter(Boolean).join('');
-  body.innerHTML='<div style="display:flex;gap:12px;margin-bottom:12px;align-items:flex-start">'+iconEl+'<div style="flex:1"><div style="font-size:15px;font-weight:600;color:var(--fg)">'+esc(ext.displayName||ext.name)+'</div>'+(ext.publisher?'<div style="font-size:11px;color:var(--fg-accent);margin-top:2px">'+esc(ext.publisher)+'</div>':'')+(detailBadges?'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">'+detailBadges+'</div>':'')+'<div style="margin-top:6px"><span class="'+btnClass+'" data-ext-id="'+esc(ext.id)+'" data-vsix="'+esc(ext.vsixUrl||'')+'" onclick="toggleExtInstall(this,event)">'+btnText+'</span></div></div></div>'+'<div style="font-size:12px;color:var(--fg);line-height:1.5;white-space:pre-wrap">'+esc(ext.description||'No description available.')+'</div>'+(ext.ext_dir?'<div style="margin-top:10px;font:11px/1.45 var(--mono);color:var(--fg-dim)">Path: '+esc(ext.ext_dir)+'</div>':'');
+  const detailBadges=[extensionSourceBadge(ext),extensionStateBadge(ext)||extensionActiveBadge(ext),ext.version?'<span class="ext-badge">v'+esc(ext.version)+'</span>':'',ext.installedVersion&&ext.installedVersion!==ext.version?'<span class="ext-badge">local v'+esc(ext.installedVersion)+'</span>':'',extensionContribSummary(ext)?'<span class="ext-badge">'+esc(extensionContribSummary(ext))+'</span>':''].filter(Boolean).join('');
+  body.innerHTML='<div style="display:flex;gap:12px;margin-bottom:12px;align-items:flex-start">'+iconEl+'<div style="flex:1"><div style="font-size:15px;font-weight:600;color:var(--fg)">'+esc(ext.displayName||ext.name)+'</div>'+(ext.publisher?'<div style="font-size:11px;color:var(--fg-accent);margin-top:2px">'+esc(ext.publisher)+'</div>':'')+(detailBadges?'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">'+detailBadges+'</div>':'')+'<div style="margin-top:6px">'+extensionButtonHtml(ext)+'</div></div></div>'+'<div style="font-size:12px;color:var(--fg);line-height:1.5;white-space:pre-wrap">'+esc(ext.description||'No description available.')+'</div>'+(ext.ext_dir?'<div style="margin-top:10px;font:11px/1.45 var(--mono);color:var(--fg-dim)">Path: '+esc(ext.ext_dir)+'</div>':'');
   panel.style.display='flex';
   const section=panel.previousElementSibling;if(section)section.style.display='none';
 }
@@ -20308,22 +20385,44 @@ async function toggleExtInstall(btn,event){
   event.stopPropagation();
   const extId=btn.dataset.extId;
   const vsix=btn.dataset.vsix;
-  if(btn.classList.contains('installed')||btn.classList.contains('uninstall')){
+  if(btn.getAttribute('aria-disabled')==='true')return;
+  const ext=lookupExtensionState({id:extId,vsixUrl:vsix});
+  if(ext.installed){
+    if(!ext.canUninstall){showToast(t('installed_btn'),'info');return}
     if(!confirm(t('uninstall_confirm')+'\n\n'+extId))return;
-    btn.textContent='...';
+    setExtensionOperation(extId,'uninstalling');
+    setStatus(t('uninstalling')+' '+extId+'...');
     const r=await call('uninstall_extension',extId,true);
-    if(r&&r.ok){btn.className='ext-btn install';btn.textContent=t('install_btn');setStatus(t('uninstalled_prefix')+extId)}
-    else{btn.textContent=t('installed_btn');btn.className='ext-btn installed'}
+    setExtensionOperation(extId,'');
+    if(r&&r.ok){
+      delete extInstalledById[extKey(extId)];
+      extCache=extCache.map(item=>extKey(item)===extKey(extId)?{...item,installed:false,state:'uninstalled',runtimeState:'uninstalled',canUninstall:false}:item);
+      setStatus(t('uninstalled_prefix')+extId);
+    }
+    else{
+      setStatus(t('test_failed')+': '+(r?r.error:''));
+    }
   } else {
     if(!confirm(t('install_confirm')+'\n\n'+extId))return;
-    btn.textContent=t('installing');btn.disabled=true;
+    setExtensionOperation(extId,'installing');
     setStatus(t('installing')+' '+extId+'...');
     const r=await call('install_extension',extId,vsix,true);
-    if(r&&r.ok){btn.className='ext-btn installed';btn.textContent=t('installed_btn');setStatus(t('installed_prefix')+extId)}
-    else{btn.className='ext-btn install';btn.textContent=t('install_btn');setStatus(t('test_failed')+': '+(r?r.error:''))}
-    btn.disabled=false;
+    setExtensionOperation(extId,'');
+    if(r&&r.ok){
+      if(r.extension&&r.extension.id){
+        extInstalledById[extKey(r.extension.id)]=r.extension;
+        mergeInstalledExtensionMetadata([r.extension]);
+      }else{
+        extCache=extCache.map(item=>extKey(item)===extKey(extId)?{...item,installed:true,state:'installed'}:item);
+      }
+      setStatus(t('installed_prefix')+extId);
+    }
+    else{
+      setStatus(t('test_failed')+': '+(r?r.error:''));
+    }
   }
   refreshInstalledExts();
+  if(extCache.length)renderExtList($('ext-marketplace-list'),extCache);
   renderExtensionActivityBar();
 }
 window.searchExtensions=searchExtensions;
@@ -20340,20 +20439,7 @@ function renderRecommendedExts(){
   const list=$('ext-recommended-list');if(!list)return;
   list.innerHTML='';
   RECOMMENDED_EXTENSIONS.forEach(ext=>{
-    const card=document.createElement('div');card.className='ext-card';
-    const btnClass='ext-btn install';
-    card.innerHTML=
-      '<div class="ext-icon">'+('📦')+'</div>'+
-      '<div class="ext-info">'+
-        '<div class="ext-name">'+esc(ext.displayName)+'</div>'+
-        '<div class="ext-desc">'+esc(ext.description)+'</div>'+
-        '<div class="ext-meta"><span class="ext-publisher">'+esc(ext.publisher)+'</span></div>'+
-      '</div>'+
-      '<div style="display:flex;align-items:center;flex-shrink:0">'+
-        '<span class="'+btnClass+'" data-ext-id="'+esc(ext.id)+'" data-vsix="" onclick="toggleExtInstall(this,event)">Install</span>'+
-      '</div>';
-    card.onclick=()=>showExtDetail(ext);
-    list.appendChild(card);
+    renderExtCard(list,lookupExtensionState(ext));
   });
 }
 // Render recommended on first sidebar switch (called from init path)
