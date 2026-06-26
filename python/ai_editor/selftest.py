@@ -2692,15 +2692,122 @@ def test_app_settings_parity() -> None:
     with patch("ai_editor.extensions.uninstall_extension",
                return_value={"ok": True, "id": "Allowed.sample", "removed": ["state"]}):
         uninstalled = ext_api.uninstall_extension("Allowed.sample", confirmed=True)
-        _check("extension uninstall reports uninstalled state and emits refresh",
-               uninstalled.get("ok") is True
-               and uninstalled.get("state") == "uninstalled"
-               and uninstalled.get("removedRuntime") is True
+    _check("extension uninstall reports uninstalled state and emits refresh",
+           uninstalled.get("ok") is True
+           and uninstalled.get("state") == "uninstalled"
+           and uninstalled.get("removedRuntime") is True
                and any(event == "extensions_changed"
                        and data.get("action") == "uninstalled"
                        and data.get("state") == "uninstalled"
-                       for event, data in ext_events),
-               json.dumps({"result": uninstalled, "events": ext_events}, ensure_ascii=False))
+                   for event, data in ext_events),
+           json.dumps({"result": uninstalled, "events": ext_events}, ensure_ascii=False))
+    fixture_ext_dir = tempfile.mkdtemp(prefix="sao_installed_ext_surface_")
+    try:
+        with open(os.path.join(fixture_ext_dir, "package.json"),
+                  "w", encoding="utf-8") as fh:
+            json.dump({
+                "name": "surface-fixture",
+                "publisher": "selftest",
+                "displayName": "Surface Fixture",
+                "version": "1.0.0",
+                "engines": {"vscode": "^1.80.0"},
+                "contributes": {
+                    "viewsContainers": {
+                        "activitybar": [{
+                            "id": "selftest.surface.container",
+                            "title": "Surface Fixture",
+                        }],
+                    },
+                    "views": {
+                        "selftest.surface.container": [
+                            {
+                                "id": "selftest.surface.tree",
+                                "name": "Fixture Tree",
+                            },
+                            {
+                                "id": "selftest.surface.webview",
+                                "name": "Fixture Webview",
+                                "type": "webview",
+                            },
+                        ],
+                    },
+                    "customEditors": [{
+                        "viewType": "selftest.surface.custom",
+                        "displayName": "Fixture Custom",
+                        "selector": [{"filenamePattern": "**/*.surface"}],
+                    }],
+                    "notebooks": [{
+                        "type": "selftest.surface.notebook",
+                        "displayName": "Fixture Notebook",
+                        "selector": [{"filenamePattern": "**/*.surfacenb"}],
+                    }],
+                    "commands": [{
+                        "command": "selftest.surface.command",
+                        "title": "Fixture Command",
+                    }],
+                    "menus": {
+                        "view/title": [{
+                            "command": "selftest.surface.command",
+                            "when": "view == selftest.surface.tree",
+                        }],
+                    },
+                },
+            }, fh)
+        fixture_api = AIEditorAPI(_SettingsGui({"ai_editor": {
+            "extensions": {"confirm_install": False}
+        }}))
+        installed_fixture = fixture_api.install_extension_dir(fixture_ext_dir)
+        fixture_surfaces = fixture_api.list_extension_runtime_surfaces({
+            "view": "selftest.surface.tree",
+            "editorTextFocus": True,
+        })
+        fixture_tree = {
+            item.get("id"): item
+            for item in fixture_surfaces.get("treeViews", [])
+        }
+        fixture_webview = {
+            item.get("id"): item
+            for item in fixture_surfaces.get("webviewViews", [])
+        }
+        fixture_custom = {
+            item.get("viewType"): item
+            for item in fixture_surfaces.get("customEditors", [])
+        }
+        fixture_notebooks = {
+            item.get("type"): item
+            for item in fixture_surfaces.get("notebooks", [])
+        }
+        fixture_commands = {
+            item.get("command"): item
+            for item in fixture_surfaces.get("commands", [])
+        }
+        fixture_menus = [
+            item for item in fixture_surfaces.get("menus", [])
+            if item.get("command") == "selftest.surface.command"
+        ]
+        _check("installed extension fixture exposes dynamic runtime surfaces",
+               installed_fixture.get("ok") is True
+               and installed_fixture.get("id") == "selftest.surface-fixture"
+               and fixture_surfaces.get("ok") is True
+               and fixture_tree.get("selftest.surface.tree", {}).get(
+                   "extensionId") == "selftest.surface-fixture"
+               and fixture_tree.get("selftest.surface.tree", {}).get(
+                   "runtimeAvailable") is False
+               and fixture_webview.get("selftest.surface.webview", {}).get(
+                   "extensionId") == "selftest.surface-fixture"
+               and fixture_webview.get("selftest.surface.webview", {}).get(
+                   "runtimeAvailable") is False
+               and fixture_custom.get("selftest.surface.custom", {}).get(
+                   "extensionId") == "selftest.surface-fixture"
+               and fixture_notebooks.get("selftest.surface.notebook", {}).get(
+                   "extensionId") == "selftest.surface-fixture"
+               and fixture_commands.get("selftest.surface.command", {}).get(
+                   "source") == "extension"
+               and any(item.get("menu") == "view/title"
+                       for item in fixture_menus),
+               json.dumps(fixture_surfaces, ensure_ascii=False, default=str))
+    finally:
+        shutil.rmtree(fixture_ext_dir, ignore_errors=True)
 
     controls_gui = _SettingsGui({"ai_editor": {
         "provider": "openai",
@@ -7634,6 +7741,9 @@ console.log("frontend word separator behavior ok");
            and "call('list_extension_runtime_surfaces',typeof commandPaletteContext==='function'?commandPaletteContext():{})" in html
            and "refreshRuntimeSupport();\n  renderExtensionRuntimeSurfaces();" in html
            and ".extension-runtime-mid" in html
+           and ".extension-runtime-tag" in html
+           and "source:item.runtimeOnly?'runtime-only':(runtime?'runtime':'manifest')" in html
+           and "row.extensionId" in html
            and "TreeView" in html
            and "WebviewView" in html
            and "CustomEditor" in html

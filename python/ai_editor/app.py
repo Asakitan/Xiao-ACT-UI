@@ -12382,9 +12382,14 @@ class AIEditorAPI:
         view_id = str(view.get("id") or "")
         snapshot = self._extension_view_snapshot(view_id)
         welcome = self._view_welcome_entries(view_id)
+        manifest_kind = (
+            "webviewView"
+            if str(view.get("type") or "").lower() == "webview"
+            else "treeView"
+        )
         view.update({
             "runtimeAvailable": bool(snapshot.get("runtimeAvailable")),
-            "runtimeKind": snapshot.get("kind") or "view",
+            "runtimeKind": snapshot.get("kind") or manifest_kind,
             "runtimeMessage": (
                 snapshot.get("runtimeMessage")
                 or snapshot.get("message", "")),
@@ -12555,9 +12560,14 @@ class AIEditorAPI:
         manifest_view = self._manifest_view(view_id)
         if manifest_view:
             welcome = self._view_welcome_entries(view_id)
+            manifest_kind = (
+                "webviewView"
+                if str(manifest_view.get("type") or "").lower() == "webview"
+                else "treeView"
+            )
             return {
                 "ok": False,
-                "kind": str(manifest_view.get("type") or "view"),
+                "kind": manifest_kind,
                 "runtimeAvailable": False,
                 "message": manifest_view.get("_runtimeSupport", {}).get(
                     "message", "View manifest is present but no runtime provider is registered."),

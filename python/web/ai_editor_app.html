@@ -1120,7 +1120,11 @@ pre.code-block code .type { color:var(--fg-type); }
 .extension-runtime-kind { color:var(--fg-accent); font:10px var(--mono); text-transform:uppercase; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .extension-runtime-mid { min-width:0; display:flex; flex-direction:column; gap:1px; }
 .extension-runtime-main { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg); }
-.extension-runtime-meta { color:var(--fg-dim); font:10px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.extension-runtime-meta { display:flex; flex-wrap:wrap; align-items:center; gap:4px; min-width:0; color:var(--fg-dim); font:10px var(--mono); overflow:hidden; }
+.extension-runtime-meta span { max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.extension-runtime-tag { border:1px solid color-mix(in srgb,var(--border) 80%,transparent); border-radius:999px; padding:0 5px; color:var(--fg-dim); }
+.extension-runtime-tag.runtime { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 45%,var(--border)); }
+.extension-runtime-tag.manifest { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 45%,var(--border)); }
 .extension-runtime-state { border:1px solid var(--border); border-radius:999px; padding:1px 6px; font:10px var(--mono); color:var(--fg-dim); }
 .extension-runtime-state.ready { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 50%,var(--border)); }
 .extension-runtime-state.pending { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 50%,var(--border)); }
@@ -19926,11 +19930,15 @@ function extensionRuntimeSurfaceRows(data){
   data=data||{};
   const rows=[];
   const push=(kind,item,label,meta,ready)=>{
+    const runtime=ready!==false;
+    const extensionId=String(item.extensionId||item.extension_id||item._extensionId||'');
     rows.push({
       kind,
       label:String(label||item.id||item.command||item.viewType||item.type||''),
       meta:String(meta||item.extensionId||item.container||''),
-      ready:ready!==false,
+      extensionId,
+      source:item.runtimeOnly?'runtime-only':(runtime?'runtime':'manifest'),
+      ready:runtime,
     });
   };
   (data.treeViews||[]).slice(0,8).forEach(item=>push('TreeView',item,item.name||item.id,item.id+' · '+(item.container||'runtime'),item.runtimeAvailable!==false));
@@ -19972,7 +19980,11 @@ function renderExtensionRuntimeSurfacePanel(data){
       const kind=document.createElement('div');kind.className='extension-runtime-kind';kind.textContent=row.kind;
       const mid=document.createElement('div');mid.className='extension-runtime-mid';
       const main=document.createElement('div');main.className='extension-runtime-main';main.textContent=row.label;
-      const meta=document.createElement('div');meta.className='extension-runtime-meta';meta.textContent=row.meta;
+      const meta=document.createElement('div');meta.className='extension-runtime-meta';
+      const source=document.createElement('span');source.className='extension-runtime-tag '+(row.ready?'runtime':'manifest');source.textContent=row.source;
+      meta.appendChild(source);
+      if(row.extensionId){const ext=document.createElement('span');ext.className='extension-runtime-tag';ext.textContent=row.extensionId;meta.appendChild(ext)}
+      if(row.meta){const detail=document.createElement('span');detail.textContent=row.meta;meta.appendChild(detail)}
       mid.appendChild(main);mid.appendChild(meta);
       const state=document.createElement('div');state.className='extension-runtime-state '+(row.ready?'ready':'pending');state.textContent=row.ready?'ready':'pending';
       el.appendChild(kind);el.appendChild(mid);el.appendChild(state);
