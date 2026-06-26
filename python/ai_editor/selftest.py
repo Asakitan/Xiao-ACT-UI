@@ -7196,13 +7196,17 @@ console.log("frontend word separator behavior ok");
             and "function extensionSettingRemoveFilterToken(token)" in html
             and "function extensionSettingClearFilterTokens()" in html
             and "function extensionSettingVisibleRows(container)" in html
+            and "function extensionSettingRowTags(row)" in html
+            and "function extensionSettingRowInvalid(row)" in html
             and "function extensionSettingFocusRow(row,options)" in html
             and "function extensionSettingFocusVisibleRow(delta)" in html
             and "function extensionSettingFocusFirstModifiedSetting()" in html
             and "function extensionSettingFocusFirstInvalidSetting()" in html
             and "async function extensionSettingResetVisibleModifiedSettings()" in html
-            and "function extensionSettingResultSummary(visibleRows,totalRows)" in html
-            and "function renderExtensionSettingFilterState(visibleRows,totalRows)" in html
+            and "function extensionSettingResultSummary(visibleRows,totalRows,stats)" in html
+            and "function renderExtensionSettingFilterState(visibleRows,totalRows,stats)" in html
+            and "function extensionSettingWriteFilterStateDeferred(state)" in html
+            and "_extensionSettingFilterStateWriteTimer" in html
             and "ext-settings-filter-menu-button" in html
             and "ext-settings-filter-menu" in html
             and "ext-settings-active-filters" in html
@@ -7216,6 +7220,9 @@ console.log("frontend word separator behavior ok");
             and "ext-settings-empty" in html
             and "No extension settings match the current filters." in html
             and "Clear Filter Tokens" in html
+            and "oninput=\"scheduleFilterSettings()\"" in html
+            and "function scheduleFilterSettings(delay)" in html
+            and "window.scheduleFilterSettings=scheduleFilterSettings;" in html
             and "settingsSearch.dataset.extSettingsNavigation" in html
             and "extensionSettingFocusVisibleRow(ev.shiftKey?-1:1)" in html
             and "function extensionSettingTargetName(target)" in html
@@ -7292,7 +7299,7 @@ console.log("frontend word separator behavior ok");
             and "list=\"settings-filter-suggestions\"" in html
             and "function extensionSettingFilterSuggestions(container,query)" in html
             and "function renderExtensionSettingSuggestions()" in html
-            and "extensionSettingWriteFilterState(extensionSettingCaptureFilterState())" in html
+            and "extensionSettingWriteFilterStateDeferred(extensionSettingCaptureFilterState())" in html
             and "renderExtensionSettingSuggestions();" in html
             and "extensionSettingRestoreFilterState();" in html
             and "const scopeOk=(!scopeFilter||row.dataset.extSettingScope===scopeFilter)" in html
@@ -7504,6 +7511,7 @@ console.log("frontend word separator behavior ok");
             "extensionSettingStorage",
             "extensionSettingReadFilterState",
             "extensionSettingWriteFilterState",
+            "extensionSettingWriteFilterStateDeferred",
             "extensionSettingClearFilterState",
             "extensionSettingCaptureFilterState",
             "extensionSettingApplyFilterState",
@@ -7522,6 +7530,8 @@ console.log("frontend word separator behavior ok");
             "extensionSettingRemoveFilterToken",
             "extensionSettingClearFilterTokens",
             "extensionSettingVisibleRows",
+            "extensionSettingRowTags",
+            "extensionSettingRowInvalid",
             "extensionSettingFocusRow",
             "extensionSettingFocusVisibleRow",
             "extensionSettingFocusFirstModifiedSetting",
@@ -8241,10 +8251,18 @@ const navContainer = { querySelectorAll(sel){ return sel === ".ext-setting-row" 
 globalThis.$ = id => id === "ext-settings-container" ? navContainer : originalDollar(id);
 assert(extensionSettingVisibleRows().length === 3,
        "settings visible row helper excludes hidden rows");
+assert(extensionSettingRowTags({ dataset: { extSettingTags: "preview\nexperimental" } }).join(",") === "preview,experimental",
+       "settings row tag helper parses tags");
+assert(extensionSettingRowTags(navRows[0]) === extensionSettingRowTags(navRows[0]),
+       "settings row tag helper caches repeated reads");
+assert(extensionSettingRowInvalid(navRows[1]) && !extensionSettingRowInvalid(navRows[0]),
+       "settings row invalid helper detects invalid visible rows");
 assert(extensionSettingResultSummary(3,4).indexOf("3 visible of 4 extension settings") >= 0
        && extensionSettingResultSummary(3,4).indexOf("2 modified") >= 0
        && extensionSettingResultSummary(3,4).indexOf("1 invalid") >= 0,
        "settings result summary includes visible modified and invalid counts");
+assert(extensionSettingResultSummary(3,4,{visibleRows:[],modifiedVisible:1,invalidVisible:1}).indexOf("1 modified") >= 0,
+       "settings result summary accepts precomputed filter stats");
 assert(extensionSettingFocusFirstModifiedSetting() && focusedRow === "alpha.setting",
        "settings navigation focuses first visible modified row");
 assert(extensionSettingFocusFirstInvalidSetting() && focusedRow === "beta.setting",

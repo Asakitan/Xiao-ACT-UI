@@ -2145,7 +2145,7 @@ pre.code-block { overflow:visible; }
   <div class="modal" style="max-height:90vh;overflow-y:auto">
     <h2>Settings</h2>
     <!-- SETTINGS-01: Search/filter -->
-    <input id="settings-search" list="settings-filter-suggestions" placeholder="Search settings..." oninput="filterSettings()" style="width:100%;background:var(--bg-input);color:var(--fg);border:1px solid var(--border);border-radius:var(--radius);padding:7px 10px;font:13px var(--sans);outline:none;margin-bottom:8px">
+    <input id="settings-search" list="settings-filter-suggestions" placeholder="Search settings..." oninput="scheduleFilterSettings()" style="width:100%;background:var(--bg-input);color:var(--fg);border:1px solid var(--border);border-radius:var(--radius);padding:7px 10px;font:13px var(--sans);outline:none;margin-bottom:8px">
     <datalist id="settings-filter-suggestions"></datalist>
     <div id="settings-validation-summary" class="settings-validation-summary" role="status" aria-live="polite"></div>
 
@@ -15747,7 +15747,7 @@ function validateSettingsBeforeSave(options){
 }
 function scheduleSettingsValidation(){
   applySettingsValidation(collectSettingsValidationErrors(),{});
-  const search=$('settings-search');if(search&&/@error\b/i.test(search.value||''))filterSettings();
+  const search=$('settings-search');if(search&&/@error\b/i.test(search.value||''))scheduleFilterSettings(0);
 }
 window.collectSettingsValidationErrors=collectSettingsValidationErrors;
 window.applySettingsValidation=applySettingsValidation;
@@ -16108,7 +16108,15 @@ function filterSettings(){
   }
   const inp=$('settings-search');if(inp)inp.placeholder=parsed.active?visible+' matches':'Search settings...';
 }
+let _settingsFilterTimer=0;
+function scheduleFilterSettings(delay){
+  clearTimeout(_settingsFilterTimer);
+  const wait=delay===undefined?80:Number(delay);
+  if(wait<=0){filterSettings();return}
+  _settingsFilterTimer=setTimeout(()=>{_settingsFilterTimer=0;filterSettings()},wait);
+}
 window.filterSettings=filterSettings;
+window.scheduleFilterSettings=scheduleFilterSettings;
 window.openSettings=openSettings;window.closeSettings=closeSettings;
 if($('s-model'))$('s-model').addEventListener('input',showModelInfo);
 if($('s-provider'))$('s-provider').addEventListener('change',function(){
@@ -18199,8 +18207,25 @@ function extensionSettingWriteFilterState(state){
     hidden:data.hidden===true,
   }))}catch(e){}
 }
+let _extensionSettingFilterStateWriteTimer=0;
+let _extensionSettingPendingFilterState=null;
+function extensionSettingWriteFilterStateDeferred(state){
+  if(typeof _extensionSettingPendingFilterState==='undefined'
+      || typeof _extensionSettingFilterStateWriteTimer==='undefined'){
+    extensionSettingWriteFilterState(state);
+    return;
+  }
+  _extensionSettingPendingFilterState=state&&typeof state==='object'?state:{};
+  clearTimeout(_extensionSettingFilterStateWriteTimer);
+  _extensionSettingFilterStateWriteTimer=setTimeout(()=>{
+    _extensionSettingFilterStateWriteTimer=0;
+    extensionSettingWriteFilterState(_extensionSettingPendingFilterState);
+  },120);
+}
 function extensionSettingClearFilterState(){
   const storage=extensionSettingStorage();if(!storage)return;
+  if(typeof _extensionSettingFilterStateWriteTimer!=='undefined')clearTimeout(_extensionSettingFilterStateWriteTimer);
+  if(typeof _extensionSettingPendingFilterState!=='undefined')_extensionSettingPendingFilterState=null;
   try{storage.removeItem(EXTENSION_SETTINGS_FILTER_STATE_KEY)}catch(e){}
 }
 function extensionSettingCaptureFilterState(){
@@ -18389,6 +18414,19 @@ function extensionSettingVisibleRows(container){
   return Array.from(root.querySelectorAll('.ext-setting-row'))
     .filter(row=>row.style.display!=='none'&&row.offsetParent!==null);
 }
+function extensionSettingRowTags(row){
+  const text=String(row&&row.dataset&&row.dataset.extSettingTags||'');
+  if(row&&row._extSettingTagCacheText===text&&Array.isArray(row._extSettingTagCache))return row._extSettingTagCache;
+  const tags=text.split('\n').filter(Boolean);
+  if(row){
+    row._extSettingTagCacheText=text;
+    row._extSettingTagCache=tags;
+  }
+  return tags;
+}
+function extensionSettingRowInvalid(row){
+  return !!(row&&(row.classList.contains('invalid')||row.querySelector('[aria-invalid="true"],.ext-setting-error:not(:empty)')));
+}
 function extensionSettingFocusRow(row,options){
   if(!row)return false;
   const opts=options||{};
@@ -18414,7 +18452,7 @@ function extensionSettingFocusFirstModifiedSetting(){
 }
 function extensionSettingFocusFirstInvalidSetting(){
   const rows=extensionSettingVisibleRows();
-  return extensionSettingFocusRow(rows.find(row=>row.classList.contains('invalid')||row.querySelector('[aria-invalid="true"],.ext-setting-error:not(:empty)')),{block:'center'});
+  return extensionSettingFocusRow(rows.find(extensionSettingRowInvalid),{block:'center'});
 }
 async function extensionSettingResetVisibleModifiedSettings(){
   const rows=extensionSettingVisibleRows().filter(row=>row.dataset.extSettingModified==='1'&&!row.classList.contains('scope-readonly'));
@@ -18425,15 +18463,26 @@ async function extensionSettingResetVisibleModifiedSettings(){
   }
   return rows.length;
 }
-function extensionSettingResultSummary(visibleRows,totalRows){
-  const rows=extensionSettingVisibleRows();
-  const modified=rows.filter(row=>row.dataset.extSettingModified==='1').length;
-  const invalid=rows.filter(row=>row.classList.contains('invalid')||row.querySelector('[aria-invalid="true"],.ext-setting-error:not(:empty)')).length;
+function extensionSettingResultSummary(visibleRows,totalRows,stats){
+  const data=stats&&typeof stats==='object'?stats:null;
+  const rows=data&&Array.isArray(data.visibleRows)?data.visibleRows:extensionSettingVisibleRows();
+  const modified=data?Number(data.modifiedVisible||0):rows.filter(row=>row.dataset.extSettingModified==='1').length;
+  const invalid=data?Number(data.invalidVisible||0):rows.filter(extensionSettingRowInvalid).length;
   return String(visibleRows)+' visible of '+String(totalRows)+' extension settings'
     +(modified?' · '+modified+' modified':'')
     +(invalid?' · '+invalid+' invalid':'');
 }
-function renderExtensionSettingFilterState(visibleRows,totalRows){
+function renderExtensionSettingFilterState(visibleRows,totalRows,stats){
+  stats=stats&&typeof stats==='object'?stats:{};
+  if(!Array.isArray(stats.visibleRows)){
+    const rows=extensionSettingVisibleRows();
+    stats={
+      visibleRows:rows,
+      modifiedVisible:rows.filter(row=>row.dataset.extSettingModified==='1').length,
+      invalidVisible:rows.filter(extensionSettingRowInvalid).length,
+      resettableVisible:rows.filter(row=>row.dataset.extSettingModified==='1'&&!row.classList.contains('scope-readonly')).length,
+    };
+  }
   const chips=$('ext-settings-active-filters');
   const empty=$('ext-settings-empty');
   if(chips){
@@ -18461,11 +18510,11 @@ function renderExtensionSettingFilterState(visibleRows,totalRows){
     empty.style.display=(totalRows&&visibleRows===0)?'':'none';
   }
   const summary=$('ext-settings-result-summary');
-  if(summary)summary.textContent=extensionSettingResultSummary(visibleRows,totalRows);
+  if(summary)summary.textContent=extensionSettingResultSummary(visibleRows,totalRows,stats);
   ['ext-settings-prev-result','ext-settings-next-result'].forEach(id=>{const btn=$(id);if(btn)btn.disabled=!visibleRows});
-  const modifiedBtn=$('ext-settings-first-modified');if(modifiedBtn)modifiedBtn.disabled=!extensionSettingVisibleRows().some(row=>row.dataset.extSettingModified==='1');
-  const errorBtn=$('ext-settings-first-error');if(errorBtn)errorBtn.disabled=!extensionSettingVisibleRows().some(row=>row.classList.contains('invalid')||row.querySelector('[aria-invalid="true"],.ext-setting-error:not(:empty)'));
-  const resetBtn=$('ext-settings-reset-visible');if(resetBtn)resetBtn.disabled=!extensionSettingVisibleRows().some(row=>row.dataset.extSettingModified==='1'&&!row.classList.contains('scope-readonly'));
+  const modifiedBtn=$('ext-settings-first-modified');if(modifiedBtn)modifiedBtn.disabled=!(Number(stats.modifiedVisible)||0);
+  const errorBtn=$('ext-settings-first-error');if(errorBtn)errorBtn.disabled=!(Number(stats.invalidVisible)||0);
+  const resetBtn=$('ext-settings-reset-visible');if(resetBtn)resetBtn.disabled=!(Number(stats.resettableVisible)||0);
 }
 function extensionSettingsQuery(){
   const raw=(($('settings-search')||{}).value||'').trim();
@@ -18512,13 +18561,14 @@ function applyExtensionSettingsFilter(){
   const cb=$('ext-settings-modified');if(cb)cb.checked=query.modifiedOnly;
   const hiddenCb=$('ext-settings-hidden');if(hiddenCb)hiddenCb.checked=query.hiddenOnly;
   const sections=container.querySelectorAll('details[data-ext-settings-section]');
-  let visibleRows=0,totalRows=0,visibleSections=0;
+  let visibleRows=0,totalRows=0,visibleSections=0,modifiedVisible=0,invalidVisible=0,resettableVisible=0;
+  const visibleRowList=[];
   sections.forEach(section=>{
     const categoryOk=!category||section.dataset.extSettingsCategory===category;
     let sectionRows=0;
     section.querySelectorAll('.ext-setting-row').forEach(row=>{
       totalRows++;
-      const rowTags=(row.dataset.extSettingTags||'').split('\n').filter(Boolean);
+      const rowTags=extensionSettingRowTags(row);
       const scopeOk=(!scopeFilter||row.dataset.extSettingScope===scopeFilter)
         &&(!query.scopes.length||query.scopes.includes(row.dataset.extSettingScope||''));
       const targetOk=(!targetFilter||row.dataset.extSettingTarget===targetFilter)
@@ -18545,7 +18595,12 @@ function applyExtensionSettingsFilter(){
       const show=categoryOk&&scopeOk&&targetOk&&textOk&&tagOk&&hiddenOk&&extOk&&typeOk&&policyOk&&experimentOk&&agentsWindowOk&&restrictedOk&&syncOk&&idOk&&featureOk&&langOk&&valueOk&&defaultOk&&stableOk&&modifiedOk;
       row.dataset.extSettingMatchRank=show?String(extensionSettingTextMatchRank(row,query.text)):'0';
       row.style.display=show?'':'none';
-      if(show){visibleRows++;sectionRows++}
+      if(show){
+        visibleRows++;sectionRows++;visibleRowList.push(row);
+        if(row.dataset.extSettingModified==='1')modifiedVisible++;
+        if(extensionSettingRowInvalid(row))invalidVisible++;
+        if(row.dataset.extSettingModified==='1'&&!row.classList.contains('scope-readonly'))resettableVisible++;
+      }
     });
     extensionSettingSortSectionRows(section,query.text);
     section.style.display=sectionRows?'':'none';
@@ -18557,9 +18612,9 @@ function applyExtensionSettingsFilter(){
   if(divider)divider.style.display=visibleSections?'':'none';
   const toolbar=container.querySelector('[data-ext-settings-filter="1"]');
   if(toolbar)toolbar.style.display=totalRows?'':'none';
-  renderExtensionSettingFilterState(visibleRows,totalRows);
+  renderExtensionSettingFilterState(visibleRows,totalRows,{visibleRows:visibleRowList,modifiedVisible,invalidVisible,resettableVisible});
   renderExtensionSettingSuggestions();
-  extensionSettingWriteFilterState(extensionSettingCaptureFilterState());
+  extensionSettingWriteFilterStateDeferred(extensionSettingCaptureFilterState());
 }
 function renderExtensionLanguageDefaults(languageDefaults,container,categorySelect,seenCategories){
   (Array.isArray(languageDefaults)?languageDefaults:[]).forEach(item=>{
