@@ -10139,6 +10139,10 @@ console.log("command palette quick access helpers ok");
            and "function _debugDapVariablePayload(variable)" in node_ext_host_source
            and "transport.sendRequest('scopes'" in node_ext_host_source
            and "transport.sendRequest('variables'" in node_ext_host_source
+           and "workbench.action.debug.stepOver" in node_ext_host_source
+           and "workbench.action.debug.continue" in node_ext_host_source
+           and "sendActiveDebugAdapterRequest(command, args = {})" in node_ext_host_source
+           and "activeDebugThreadArgs()" in node_ext_host_source
            and "function _debugCreateServerAdapterTransport(session, descriptor, config, customEventEmitter, beforeLaunch)" in node_ext_host_source
            and "function _debugCreateNamedPipeAdapterTransport(session, descriptor, config, customEventEmitter, beforeLaunch)" in node_ext_host_source
            and "function _debugCreateAdapterTransport(session, descriptor, config, customEventEmitter, beforeLaunch)" in node_ext_host_source
@@ -21617,6 +21621,15 @@ async function activate(context) {
       : null;
     await new Promise(resolve => setTimeout(resolve, 80));
     const dapActiveStackItem = vscode.debug.activeStackItem;
+    const debugCommandList = await vscode.commands.getCommands();
+    const debugStepOver = await vscode.commands.executeCommand('workbench.action.debug.stepOver');
+    const debugStepInto = await vscode.commands.executeCommand('workbench.action.debug.stepInto');
+    const debugStepOut = await vscode.commands.executeCommand('workbench.action.debug.stepOut');
+    const debugPause = await vscode.commands.executeCommand('workbench.action.debug.pause');
+    const debugRestart = await vscode.commands.executeCommand('workbench.action.debug.restart');
+    const debugContinue = await vscode.commands.executeCommand('workbench.action.debug.continue');
+    await new Promise(resolve => setTimeout(resolve, 60));
+    const dapActiveStackAfterContinue = vscode.debug.activeStackItem;
     const dapInitialBreakpointSync = dapSession
       ? await dapSession.customRequest('selftest/breakpoints', {})
       : null;
@@ -21767,6 +21780,18 @@ async function activate(context) {
         scopes: dapActiveStackItem.scopes,
         reason: dapActiveStackItem.reason,
       } : null,
+      dapActiveStackAfterContinue: dapActiveStackAfterContinue ? {
+        session: dapActiveStackAfterContinue.session && dapActiveStackAfterContinue.session.name,
+      } : null,
+      debugCommandList,
+      debugCommandResults: {
+        stepOver: debugStepOver,
+        stepInto: debugStepInto,
+        stepOut: debugStepOut,
+        pause: debugPause,
+        restart: debugRestart,
+        continue: debugContinue,
+      },
       customRequestResult,
       debugBreakpointEvents,
       debugStackEvents,
@@ -22433,6 +22458,7 @@ let buffer = "";
 let seq = 1;
 const breakpointRequests = [];
 const adapterCommands = [];
+const debugActionRequests = [];
 function send(message) {
   const payload = JSON.stringify(message);
   process.stdout.write("Content-Length: " + Buffer.byteLength(payload, "utf8") + "\r\n\r\n" + payload);
@@ -22517,6 +22543,22 @@ function handle(request) {
     });
     return;
   }
+  if (request.command === "next"
+      || request.command === "stepIn"
+      || request.command === "stepOut"
+      || request.command === "pause"
+      || request.command === "restart"
+      || request.command === "continue") {
+    debugActionRequests.push({
+      command: request.command,
+      arguments: request.arguments || {},
+    });
+    response(request, {});
+    if (request.command === "continue") {
+      event("continued", { threadId: 7, allThreadsContinued: true });
+    }
+    return;
+  }
   if (request.command === "setBreakpoints"
       || request.command === "setFunctionBreakpoints"
       || request.command === "setDataBreakpoints") {
@@ -22546,7 +22588,7 @@ function handle(request) {
     return;
   }
   if (request.command === "selftest/adapterState") {
-    response(request, { commands: adapterCommands });
+    response(request, { commands: adapterCommands, debugActions: debugActionRequests });
     return;
   }
   response(request, {});
@@ -27814,6 +27856,24 @@ process.stdin.resume();
                     node_task_debug_probe.get(
                         "dapAdapterState", {}).get("commands", [])
                     if isinstance(node_task_debug_probe, dict) else [])
+                node_debug_command_list = (
+                    node_task_debug_probe.get("debugCommandList", [])
+                    if isinstance(node_task_debug_probe, dict) else [])
+                node_debug_command_results = (
+                    node_task_debug_probe.get("debugCommandResults", {})
+                    if isinstance(node_task_debug_probe, dict) else {})
+                dap_debug_actions = (
+                    node_task_debug_probe.get(
+                        "dapAdapterState", {}).get("debugActions", [])
+                    if isinstance(node_task_debug_probe, dict) else [])
+                dap_debug_action_names = [
+                    item.get("command") for item in dap_debug_actions
+                ]
+                dap_debug_thread_actions = [
+                    item for item in dap_debug_actions
+                    if item.get("command") in {
+                        "next", "stepIn", "stepOut", "pause", "continue"}
+                ]
                 _check("node host task and debug lifecycles match VS Code API",
                        node_started is True
                        and node_task_debug_command_registered
@@ -28060,6 +28120,33 @@ process.stdin.resume();
                                    "variables") == []
                        and "scopes" in dap_adapter_commands
                        and "variables" in dap_adapter_commands
+                       and all(
+                           command_id in node_debug_command_list
+                           for command_id in [
+                               "workbench.action.debug.stepOver",
+                               "workbench.action.debug.stepInto",
+                               "workbench.action.debug.stepOut",
+                               "workbench.action.debug.pause",
+                               "workbench.action.debug.restart",
+                               "workbench.action.debug.continue",
+                           ])
+                       and all(
+                           isinstance(node_debug_command_results.get(key),
+                                      dict)
+                           for key in [
+                               "stepOver", "stepInto", "stepOut", "pause",
+                               "restart", "continue"
+                           ])
+                       and dap_debug_action_names == [
+                           "next", "stepIn", "stepOut", "pause", "restart",
+                           "continue"
+                       ]
+                       and all(
+                           item.get("arguments", {}).get("threadId") == 7
+                           for item in dap_debug_thread_actions)
+                       and dap_debug_actions[4].get("arguments", {}) == {}
+                       and node_task_debug_probe.get(
+                           "dapActiveStackAfterContinue") is None
                        and any(
                            item
                            and item.get("session") == "Node DAP Debug"
@@ -28068,6 +28155,8 @@ process.stdin.resume();
                            and item.get("reason") == "breakpoint"
                            for item in node_task_debug_probe.get(
                                "debugStackEvents", []))
+                       and None in node_task_debug_probe.get(
+                           "debugStackEvents", [])
                        and [
                            item.get("command")
                            for item in dap_initial_breakpoint_requests

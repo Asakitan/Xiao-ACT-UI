@@ -10993,6 +10993,34 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 };
                 run().catch(err => _debugCallTrackers(session, 'onError', err));
             }
+            async function sendActiveDebugAdapterRequest(command, args = {}) {
+                const session = _activeDebugSession;
+                const transport = session && session._debugAdapterTransport;
+                if (!transport) return false;
+                if (transport.ready) await transport.ready;
+                if (transport.error) return false;
+                return await transport.sendRequest(command, args);
+            }
+            function activeDebugThreadArgs() {
+                const threadId = _activeDebugStackItem?.thread?.id;
+                return threadId === undefined || threadId === null ? {} : { threadId };
+            }
+            const debugCommandSpecs = [
+                ['workbench.action.debug.continue', 'continue', true],
+                ['workbench.action.debug.stepOver', 'next', true],
+                ['workbench.action.debug.stepInto', 'stepIn', true],
+                ['workbench.action.debug.stepOut', 'stepOut', true],
+                ['workbench.action.debug.pause', 'pause', true],
+                ['workbench.action.debug.restart', 'restart', false],
+            ];
+            for (const [commandId, dapCommand, usesThread] of debugCommandSpecs) {
+                if (!_commands.has(commandId)) {
+                    _commands.set(commandId, () => sendActiveDebugAdapterRequest(
+                        dapCommand,
+                        usesThread ? activeDebugThreadArgs() : {},
+                    ));
+                }
+            }
             const activeDebugConsole = {
                 append(value) {
                     if (!value) return;
