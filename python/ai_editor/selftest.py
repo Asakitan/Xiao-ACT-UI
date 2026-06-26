@@ -4672,8 +4672,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantActionTrayAllowAll(button)" in html
            and "function assistantActionTraySkipAll(button,kind)" in html
            and "function assistantAutoSkipPendingQuestions(reason)" in html
+           and "function assistantClearPendingActionTray(options)" in html
            and "function focusAssistantActionCarousel(kind)" in html
            and "function toggleAssistantActionCarouselFocus(kind)" in html
+           and "function assistantActionTrayCanNavigate(kind)" in html
            and "function assistantActionTrayToggleExpanded(key)" in html
            and "function assistantActionTrayShouldIgnoreNavigationTarget(target)" in html
             and "function renderAssistantActionCarousel(container,kind,items)" in html
@@ -4694,6 +4696,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "questionCarouselCount:tray?tray.querySelectorAll('.chat-question-carousel-widget-container .chat-action-carousel').length:0" in html
            and "confirmationCarouselCount:tray?tray.querySelectorAll('.chat-tool-confirmation-carousel-container .chat-action-carousel').length:0" in html
            and "allowAllVisible:!!(tray&&tray.querySelector('.chat-tool-carousel-allow-all-button'))" in html
+           and "questionCanNavigate:assistantActionTrayCanNavigate('questionCarousel')" in html
+           and "confirmationCanNavigate:assistantActionTrayCanNavigate('confirmation')" in html
            and "expanded:!!(activeIndex>=0&&assistantActionTrayIsExpanded(items[activeIndex]))" in html
            and "questionExpanded:!!(questionItems.length&&assistantActionTrayIsExpanded(questionItems[assistantActionTrayActiveIndex(questionItems,'questionCarousel')]))" in html
            and "confirmationExpanded:!!(confirmItems.length&&assistantActionTrayIsExpanded(confirmItems[assistantActionTrayActiveIndex(confirmItems,'confirmation')]))" in html
@@ -4707,10 +4711,14 @@ def test_phase1_ai_editor_regressions() -> None:
            and "await assistantAutoSkipPendingQuestions('chat-submit');" in html
            and "await assistantAutoSkipPendingQuestions('new-chat');" in html
            and "await assistantAutoSkipPendingQuestions('image-submit');" in html
+           and "assistantClearPendingActionTray();" in html
            and "window.focusAssistantQuestionCarousel=()=>focusAssistantActionCarousel('questionCarousel');" in html
            and "window.focusAssistantConfirmationCarousel=()=>focusAssistantActionCarousel('confirmation');" in html
            and "window.toggleAssistantQuestionCarouselFocus=()=>toggleAssistantActionCarouselFocus('questionCarousel');" in html
-           and "window.toggleAssistantConfirmationCarouselFocus=()=>toggleAssistantActionCarouselFocus('confirmation');" in html)
+           and "window.toggleAssistantConfirmationCarouselFocus=()=>toggleAssistantActionCarouselFocus('confirmation');" in html
+           and "window.navigateAssistantQuestionCarouselPrevious=()=>{if(!assistantActionTrayCanNavigate('questionCarousel'))return false;assistantActionTrayNavigate('questionCarousel',-1);return true;};" in html
+           and "window.navigateAssistantQuestionCarouselNext=()=>{if(!assistantActionTrayCanNavigate('questionCarousel'))return false;assistantActionTrayNavigate('questionCarousel',1);return true;};" in html
+           and "window.clearAssistantPendingActionTray=(kind)=>{assistantClearPendingActionTray(kind?{kind:String(kind)}:{});return true;};" in html)
     _check("frontend Assistant applies native response text edits and file tree actions",
            "chat-response-summary" in html
            and "chat-inline-actions" in html

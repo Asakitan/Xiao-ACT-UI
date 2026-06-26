@@ -6046,7 +6046,11 @@ function assistantResponsePartActionKey(source,button){
 }
 function assistantActionTrayTitle(item){
   const source=item&&item.source||{};
-  return String(source.title||(item.kind==='questionCarousel'?'Answer Assistant questions':'Confirm Assistant action'));
+  if(item&&item.kind==='questionCarousel'){
+    const firstQuestion=Array.isArray(source.questions)&&source.questions.length?source.questions[0]:null;
+    return String(source.title||(firstQuestion&&(firstQuestion.title||firstQuestion.label))||'Answer Assistant questions');
+  }
+  return String(source.title||'Confirm Assistant action');
 }
 function assistantActionTrayKindLabel(item){
   return item&&item.kind==='questionCarousel'?'questions':'confirm';
@@ -6207,6 +6211,9 @@ function toggleAssistantActionCarouselFocus(kind){
   }
   return focusAssistantActionCarousel(kind);
 }
+function assistantActionTrayCanNavigate(kind){
+  return assistantActionTrayItemsByKind(kind).length>1;
+}
 function assistantActionTrayRootLabel(kind,count){
   if(kind==='questionCarousel')return count===1?'Pending Assistant questions':'Pending Assistant question carousel';
   return count===1?'Pending Assistant confirmation':'Pending Assistant confirmation carousel';
@@ -6299,6 +6306,20 @@ function assistantSetTrayItemSubmitted(actionKey){
   item.state='submitted';
   syncAssistantActionTray();
 }
+function assistantClearPendingActionTray(options){
+  options=options||{};
+  const kind=options.kind||'';
+  _assistantActionTrayItems.forEach((item,key)=>{
+    if(!item)return;
+    if(kind&&item.kind!==kind)return;
+    _assistantActionTrayItems.delete(key);
+  });
+  if(!kind||kind==='questionCarousel')_assistantActionTrayKindActiveKeys.questionCarousel='';
+  if(!kind||kind==='confirmation')_assistantActionTrayKindActiveKeys.confirmation='';
+  if(!kind)_assistantActionTrayActiveKey='';
+  if(!kind||_assistantActionTrayExpandedKey&&(!_assistantActionTrayItems.has(_assistantActionTrayExpandedKey)))_assistantActionTrayExpandedKey='';
+  syncAssistantActionTray();
+}
 async function assistantAutoSkipPendingQuestions(reason){
   const items=assistantActionTrayItemsByKind('questionCarousel');
   if(!items.length)return 0;
@@ -6344,6 +6365,8 @@ function assistantActionTraySnapshot(){
     rowCount:tray?tray.querySelectorAll('.chat-action-tray-row').length:0,
     navButtonCount:tray?tray.querySelectorAll('.chat-tool-carousel-nav-arrow').length:0,
     allowAllVisible:!!(tray&&tray.querySelector('.chat-tool-carousel-allow-all-button')),
+    questionCanNavigate:assistantActionTrayCanNavigate('questionCarousel'),
+    confirmationCanNavigate:assistantActionTrayCanNavigate('confirmation'),
     expanded:!!(activeIndex>=0&&assistantActionTrayIsExpanded(items[activeIndex])),
     questionExpanded:!!(questionItems.length&&assistantActionTrayIsExpanded(questionItems[assistantActionTrayActiveIndex(questionItems,'questionCarousel')])),
     confirmationExpanded:!!(confirmItems.length&&assistantActionTrayIsExpanded(confirmItems[assistantActionTrayActiveIndex(confirmItems,'confirmation')])),
@@ -14335,6 +14358,7 @@ async function newChat(){
   const r=await call('new_chat');
   if(!callSucceeded(r)){showToast('New chat failed: '+callFailedMessage(r,'backend unavailable'),'error',2500);return}
   $('chat-messages').innerHTML='';totalTokens=0;
+  assistantClearPendingActionTray();
   mainToolNames=Object.create(null);
   const ci=$('chat-input');if(ci){ci.value='';ci.style.height='auto'}
   chatContextAttachments=[];renderChatContextAttachments();
@@ -25546,6 +25570,9 @@ window.focusAssistantQuestionCarousel=()=>focusAssistantActionCarousel('question
 window.focusAssistantConfirmationCarousel=()=>focusAssistantActionCarousel('confirmation');
 window.toggleAssistantQuestionCarouselFocus=()=>toggleAssistantActionCarouselFocus('questionCarousel');
 window.toggleAssistantConfirmationCarouselFocus=()=>toggleAssistantActionCarouselFocus('confirmation');
+window.navigateAssistantQuestionCarouselPrevious=()=>{if(!assistantActionTrayCanNavigate('questionCarousel'))return false;assistantActionTrayNavigate('questionCarousel',-1);return true;};
+window.navigateAssistantQuestionCarouselNext=()=>{if(!assistantActionTrayCanNavigate('questionCarousel'))return false;assistantActionTrayNavigate('questionCarousel',1);return true;};
+window.clearAssistantPendingActionTray=(kind)=>{assistantClearPendingActionTray(kind?{kind:String(kind)}:{});return true;};
 
 // ── Welcome screen with suggested prompts ──
 function renderWelcome(){
