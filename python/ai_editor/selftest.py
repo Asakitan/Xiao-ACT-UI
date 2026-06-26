@@ -3699,26 +3699,27 @@ def test_phase1_ai_editor_regressions() -> None:
             and "renderWelcome();\n  setStatus(t('new_chat_title')" in html
             and "const body=latestChatMessageBody('assistant');" in html)
     _check("frontend Assistant composer keeps normal-width controls in one row",
-           ".chat-toolbar { display:flex; align-items:center; gap:6px; flex-wrap:nowrap;" in html
+           ".chat-toolbar { display:grid; grid-template-columns:minmax(0,1fr) max-content; align-items:center; column-gap:8px;" in html
             and "border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent);" in html
             and "min-width:0; overflow:hidden; white-space:nowrap;" in html
-            and ".chat-toolbar .spacer { flex:1 1 auto; min-width:8px; height:22px; }" in html
-            and ".chat-control-strip { display:flex; align-items:center; gap:4px; flex-wrap:nowrap; min-width:0; width:auto; max-width:none;" in html
-            and "flex:0 1 auto;\n  overflow:visible; }" in html
+            and ".chat-toolbar .spacer { display:none; }" in html
+            and ".chat-control-strip { display:flex; align-items:center; gap:4px; flex-wrap:nowrap; min-width:0; max-width:100%; justify-self:start;" in html
+            and "justify-self:start;\n  overflow:hidden; }" in html
             and ".chat-select-chip { max-width:142px; padding:0 20px 0 8px; cursor:pointer; flex:0 0 auto; }" in html
             and ".chat-model-inline { width:116px; padding:0 8px; font-family:var(--mono); flex:0 0 116px; }" in html
             and ".chat-select-chip.agent { max-width:122px; }" in html
             and ".chat-select-chip.workflow { max-width:112px; }" in html
-            and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px; margin-left:0;" in html
-            and "min-width:max-content; width:auto; flex:0 0 auto; flex-wrap:nowrap; overflow:visible; white-space:nowrap;" in html
+            and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px; justify-self:end;" in html
+            and "min-width:max-content; width:auto; flex-wrap:nowrap; overflow:visible; white-space:nowrap;" in html
             and ".chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:5px; min-width:0; max-width:170px; flex:0 1 auto;" in html
             and "color:var(--fg-dim); white-space:nowrap; overflow:hidden;" in html
             and ".chat-session-chip { max-width:82px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" in html
             and ".ctx-bar { width:38px; height:6px;" in html
-            and '<div class="chat-toolbar" role="toolbar" aria-label="Assistant composer">' in html
+           and '<div class="chat-toolbar" role="toolbar" aria-label="Assistant composer">' in html
            and '<div class="chat-control-strip" role="group" aria-label="Chat controls">' in html
            and '<div class="chat-composer-trailing" role="group" aria-label="Chat actions and status">' in html
-           and '<span class="spacer"></span>\n                  <div class="chat-composer-trailing" role="group"' in html
+           and '<button class="chat-run-chip" id="chat-workflow-run" onclick="runToolbarWorkflow()" title="Run selected workflow">▶</button>\n                  </div>\n                  <div class="chat-composer-trailing" role="group"' in html
+           and '<span class="spacer"></span>\n                  <div class="chat-composer-trailing" role="group"' not in html
            and '</span>\n                  </div>\n                </div>' in html)
     _check("frontend Assistant suppresses null and empty message turns",
            "function normalizeChatMessageText(text,role)" in html
