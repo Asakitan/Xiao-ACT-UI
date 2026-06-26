@@ -10022,6 +10022,9 @@ console.log("command palette quick access helpers ok");
            and "class DebugAdapterExecutable" in node_ext_host_source
            and "class DebugAdapterServer" in node_ext_host_source
            and "class DebugAdapterNamedPipeServer" in node_ext_host_source
+           and "class DebugAdapterInlineImplementation" in node_ext_host_source
+           and "function _debugExecutableFromPackage(type)" in node_ext_host_source
+           and "typeof config.debugServer === 'number'" in node_ext_host_source
            and "TaskScope: { Global: 1, Workspace: 2 }" in node_ext_host_source
            and "TaskRevealKind: { Always: 1, Silent: 2, Never: 3 }"
            in node_ext_host_source
@@ -10047,6 +10050,7 @@ console.log("command palette quick access helpers ok");
            and "get activeDebugSession()" in node_ext_host_source
            and "createDebugAdapterDescriptor" in node_ext_host_source
            and "DebugAdapterExecutable," in node_ext_host_source
+           and "DebugAdapterInlineImplementation," in node_ext_host_source
            and "msg_type == \"debug_console\"" in extension_host_source
            and "msg_type == \"task_execute\"" in extension_host_source
            and "self._ui_bridge.run_terminal_command" in extension_host_source)
@@ -21060,6 +21064,9 @@ async function activate(context) {
     let customOpened = false;
     let customCallbackDefinition = undefined;
     let descriptorCalls = 0;
+    let fallbackDescriptorCalls = 0;
+    let fallbackExecutableCommand = '';
+    let fallbackExecutableArgs = [];
     let providedDebugCount = 0;
     const trackerEvents = [];
     const customDebugEvents = [];
@@ -21166,6 +21173,45 @@ async function activate(context) {
         },
       }
     );
+    const serverFactoryDisposable = vscode.debug.registerDebugAdapterDescriptorFactory(
+      'node-server-debug',
+      {
+        createDebugAdapterDescriptor() {
+          return new vscode.DebugAdapterServer(4711, '127.0.0.1');
+        },
+      }
+    );
+    const pipeFactoryDisposable = vscode.debug.registerDebugAdapterDescriptorFactory(
+      'node-pipe-debug',
+      {
+        createDebugAdapterDescriptor() {
+          return new vscode.DebugAdapterNamedPipeServer('\\\\.\\pipe\\sao-node-debug');
+        },
+      }
+    );
+    const inlineFactoryDisposable = vscode.debug.registerDebugAdapterDescriptorFactory(
+      'node-inline-debug',
+      {
+        createDebugAdapterDescriptor() {
+          return new vscode.DebugAdapterInlineImplementation({
+            onDidSendMessage: new vscode.EventEmitter().event,
+            handleMessage(message) {},
+            dispose() {},
+          });
+        },
+      }
+    );
+    const fallbackFactoryDisposable = vscode.debug.registerDebugAdapterDescriptorFactory(
+      'node-fallback-debug',
+      {
+        createDebugAdapterDescriptor(session, executable) {
+          fallbackDescriptorCalls += 1;
+          fallbackExecutableCommand = executable && executable.command;
+          fallbackExecutableArgs = executable && executable.args;
+          return undefined;
+        },
+      }
+    );
     const trackerDisposable = vscode.debug.registerDebugAdapterTrackerFactory(
       '*',
       {
@@ -21234,6 +21280,55 @@ async function activate(context) {
       : null;
     vscode.debug.activeDebugConsole.append('debug-console');
     vscode.debug.activeDebugConsole.appendLine(' line');
+    const serverDebugStarted = await vscode.debug.startDebugging(undefined, {
+      type: 'node-server-debug',
+      name: 'Node Server Debug',
+      request: 'launch',
+    });
+    const serverDescriptor = vscode.debug.activeDebugSession
+      && vscode.debug.activeDebugSession.adapterDescriptor;
+    await vscode.debug.stopDebugging(vscode.debug.activeDebugSession);
+    const pipeDebugStarted = await vscode.debug.startDebugging(undefined, {
+      type: 'node-pipe-debug',
+      name: 'Node Pipe Debug',
+      request: 'launch',
+    });
+    const pipeDescriptor = vscode.debug.activeDebugSession
+      && vscode.debug.activeDebugSession.adapterDescriptor;
+    await vscode.debug.stopDebugging(vscode.debug.activeDebugSession);
+    const inlineDebugStarted = await vscode.debug.startDebugging(undefined, {
+      type: 'node-inline-debug',
+      name: 'Node Inline Debug',
+      request: 'launch',
+    });
+    const inlineDescriptor = vscode.debug.activeDebugSession
+      && vscode.debug.activeDebugSession.adapterDescriptor;
+    await vscode.debug.stopDebugging(vscode.debug.activeDebugSession);
+    const debugServerOverrideStarted = await vscode.debug.startDebugging(undefined, {
+      type: 'node-debug',
+      name: 'Node Debug Server Override',
+      request: 'launch',
+      debugServer: 5811,
+    });
+    const debugServerOverrideDescriptor = vscode.debug.activeDebugSession
+      && vscode.debug.activeDebugSession.adapterDescriptor;
+    await vscode.debug.stopDebugging(vscode.debug.activeDebugSession);
+    const packageDebugStarted = await vscode.debug.startDebugging(undefined, {
+      type: 'node-package-debug',
+      name: 'Node Package Debug',
+      request: 'launch',
+    });
+    const packageDescriptor = vscode.debug.activeDebugSession
+      && vscode.debug.activeDebugSession.adapterDescriptor;
+    await vscode.debug.stopDebugging(vscode.debug.activeDebugSession);
+    const fallbackDebugStarted = await vscode.debug.startDebugging(undefined, {
+      type: 'node-fallback-debug',
+      name: 'Node Fallback Debug',
+      request: 'launch',
+    });
+    const fallbackDescriptor = vscode.debug.activeDebugSession
+      && vscode.debug.activeDebugSession.adapterDescriptor;
+    await vscode.debug.stopDebugging(vscode.debug.activeDebugSession);
     const childStarted = await vscode.debug.startDebugging(undefined, {
       type: 'node-debug',
       name: 'Node Child',
@@ -21259,6 +21354,10 @@ async function activate(context) {
     debugDisposable.dispose();
     debugChainDisposable.dispose();
     factoryDisposable.dispose();
+    serverFactoryDisposable.dispose();
+    pipeFactoryDisposable.dispose();
+    inlineFactoryDisposable.dispose();
+    fallbackFactoryDisposable.dispose();
     trackerDisposable.dispose();
     customEventDisposable.dispose();
     const afterDisposeTaskCount = (await vscode.tasks.fetchTasks({ type: 'node-selftest' })).length;
@@ -21312,6 +21411,34 @@ async function activate(context) {
       adapterEnv: activeDescriptor
         && activeDescriptor.options
         && activeDescriptor.options.env,
+      hasInlineAdapterClass: !!vscode.DebugAdapterInlineImplementation,
+      serverDebugStarted,
+      serverDescriptorType: serverDescriptor && serverDescriptor.constructor && serverDescriptor.constructor.name,
+      serverDescriptorPort: serverDescriptor && serverDescriptor.port,
+      serverDescriptorHost: serverDescriptor && serverDescriptor.host,
+      pipeDebugStarted,
+      pipeDescriptorType: pipeDescriptor && pipeDescriptor.constructor && pipeDescriptor.constructor.name,
+      pipeDescriptorPath: pipeDescriptor && pipeDescriptor.path,
+      inlineDebugStarted,
+      inlineDescriptorType: inlineDescriptor && inlineDescriptor.constructor && inlineDescriptor.constructor.name,
+      inlineHasImplementation: !!(inlineDescriptor && inlineDescriptor.implementation),
+      debugServerOverrideStarted,
+      debugServerOverrideType: debugServerOverrideDescriptor && debugServerOverrideDescriptor.constructor && debugServerOverrideDescriptor.constructor.name,
+      debugServerOverridePort: debugServerOverrideDescriptor && debugServerOverrideDescriptor.port,
+      packageDebugStarted,
+      packageDescriptorType: packageDescriptor && packageDescriptor.constructor && packageDescriptor.constructor.name,
+      packageDescriptorCommand: packageDescriptor && packageDescriptor.command,
+      packageDescriptorArgs: packageDescriptor && packageDescriptor.args,
+      packageDescriptorCwd: packageDescriptor
+        && packageDescriptor.options
+        && packageDescriptor.options.cwd,
+      fallbackDebugStarted,
+      fallbackDescriptorType: fallbackDescriptor && fallbackDescriptor.constructor && fallbackDescriptor.constructor.name,
+      fallbackDescriptorCommand: fallbackDescriptor && fallbackDescriptor.command,
+      fallbackDescriptorArgs: fallbackDescriptor && fallbackDescriptor.args,
+      fallbackDescriptorCalls,
+      fallbackExecutableCommand,
+      fallbackExecutableArgs,
       customRequestResult,
       customDebugEvents,
       childStarted,
@@ -21955,6 +22082,9 @@ module.exports = { activate, deactivate };
             with open(os.path.join(node_tree_tmp, "extension.js"),
                       "w", encoding="utf-8") as fh:
                 fh.write(node_extension_js)
+            with open(os.path.join(node_tree_tmp, "debug-adapter.js"),
+                      "w", encoding="utf-8") as fh:
+                fh.write("process.stdin.resume();\n")
             node_tree_desc = ExtensionDescription.from_package_json({
                 "name": "node-tree",
                 "publisher": "selftest",
@@ -22042,6 +22172,20 @@ module.exports = { activate, deactivate };
                         "type": "selftest-notebook",
                         "displayName": "Selftest Notebook",
                         "selector": [{"filenamePattern": "*.selfnb"}],
+                    }],
+                    "debuggers": [{
+                        "type": "node-package-debug",
+                        "label": "Node Package Debug",
+                        "runtime": "node",
+                        "runtimeArgs": ["--inspect=0"],
+                        "program": "./debug-adapter.js",
+                        "args": ["--from-package"],
+                    }, {
+                        "type": "node-fallback-debug",
+                        "label": "Node Fallback Debug",
+                        "runtime": "node",
+                        "program": "./debug-adapter.js",
+                        "args": ["--fallback"],
                     }],
                     "configuration": {
                         "title": "Node Selftest",
@@ -27284,6 +27428,64 @@ module.exports = { activate, deactivate };
                        == ["--session", "Node Debug Resolved"]
                        and node_task_debug_probe.get("adapterEnv", {}).get(
                            "NODE_DEBUG_SELFTEST") == "1"
+                       and node_task_debug_probe.get(
+                           "hasInlineAdapterClass") is True
+                       and node_task_debug_probe.get(
+                           "serverDebugStarted") is True
+                       and node_task_debug_probe.get(
+                           "serverDescriptorType") == "DebugAdapterServer"
+                       and node_task_debug_probe.get(
+                           "serverDescriptorPort") == 4711
+                       and node_task_debug_probe.get(
+                           "serverDescriptorHost") == "127.0.0.1"
+                       and node_task_debug_probe.get(
+                           "pipeDebugStarted") is True
+                       and node_task_debug_probe.get(
+                           "pipeDescriptorType") == "DebugAdapterNamedPipeServer"
+                       and "sao-node-debug" in str(
+                           node_task_debug_probe.get("pipeDescriptorPath"))
+                       and node_task_debug_probe.get(
+                           "inlineDebugStarted") is True
+                       and node_task_debug_probe.get(
+                           "inlineDescriptorType") == "DebugAdapterInlineImplementation"
+                       and node_task_debug_probe.get(
+                           "inlineHasImplementation") is True
+                       and node_task_debug_probe.get(
+                           "debugServerOverrideStarted") is True
+                       and node_task_debug_probe.get(
+                           "debugServerOverrideType") == "DebugAdapterServer"
+                       and node_task_debug_probe.get(
+                           "debugServerOverridePort") == 5811
+                       and node_task_debug_probe.get(
+                           "packageDebugStarted") is True
+                       and node_task_debug_probe.get(
+                           "packageDescriptorType") == "DebugAdapterExecutable"
+                       and node_task_debug_probe.get(
+                           "packageDescriptorCommand") == "node"
+                       and "--inspect=0" in node_task_debug_probe.get(
+                           "packageDescriptorArgs", [])
+                       and any(
+                           str(item).endswith("debug-adapter.js")
+                           for item in node_task_debug_probe.get(
+                               "packageDescriptorArgs", []))
+                       and "--from-package" in node_task_debug_probe.get(
+                           "packageDescriptorArgs", [])
+                       and "sao_node_tree_ext_" in str(
+                           node_task_debug_probe.get("packageDescriptorCwd"))
+                       and node_task_debug_probe.get(
+                           "fallbackDebugStarted") is True
+                       and node_task_debug_probe.get(
+                           "fallbackDescriptorType") == "DebugAdapterExecutable"
+                       and node_task_debug_probe.get(
+                           "fallbackDescriptorCommand") == "node"
+                       and "--fallback" in node_task_debug_probe.get(
+                           "fallbackDescriptorArgs", [])
+                       and node_task_debug_probe.get(
+                           "fallbackDescriptorCalls") == 1
+                       and node_task_debug_probe.get(
+                           "fallbackExecutableCommand") == "node"
+                       and "--fallback" in node_task_debug_probe.get(
+                           "fallbackExecutableArgs", [])
                        and node_task_debug_probe.get(
                            "customRequestResult", {}).get("command")
                        == "selftest/custom"

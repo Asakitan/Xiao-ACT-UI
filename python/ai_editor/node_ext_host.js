@@ -2397,6 +2397,12 @@ class DebugAdapterNamedPipeServer {
     }
 }
 
+class DebugAdapterInlineImplementation {
+    constructor(implementation) {
+        this.implementation = implementation;
+    }
+}
+
 // -------------------------------------------------------------------------
 // Global registries
 // -------------------------------------------------------------------------
@@ -4639,6 +4645,63 @@ function _debugProviderToken() {
     };
 }
 
+function _debugContributionForType(type) {
+    const wanted = String(type || '');
+    if (!wanted) return null;
+    for (const known of _knownExtensions.values()) {
+        const debuggers = known?.manifest?.contributes?.debuggers;
+        for (const dbg of Array.isArray(debuggers) ? debuggers : []) {
+            if (dbg && String(dbg.type || '') === wanted) {
+                return { extension: known, contribution: dbg };
+            }
+        }
+    }
+    return null;
+}
+
+function _debugExecutableFromPackage(type) {
+    const found = _debugContributionForType(type);
+    if (!found) return undefined;
+    const { extension, contribution } = found;
+    const extensionPath = String(extension.extensionPath || '');
+    const executable = contribution.adapterExecutableCommand
+        || contribution.executable
+        || contribution.command;
+    if (executable) {
+        return new DebugAdapterExecutable(
+            String(executable),
+            Array.isArray(contribution.args)
+                ? contribution.args.map(item => String(item))
+                : [],
+            { cwd: extensionPath || undefined },
+        );
+    }
+    const program = contribution.program || contribution.adapter || contribution.main;
+    if (!program) return undefined;
+    const programPath = path.isAbsolute(String(program))
+        ? String(program)
+        : path.join(extensionPath, String(program));
+    const runtime = contribution.runtime || contribution.runtimeExecutable;
+    const runtimeArgs = Array.isArray(contribution.runtimeArgs)
+        ? contribution.runtimeArgs.map(item => String(item))
+        : [];
+    const args = Array.isArray(contribution.args)
+        ? contribution.args.map(item => String(item))
+        : [];
+    if (runtime) {
+        return new DebugAdapterExecutable(
+            String(runtime),
+            [...runtimeArgs, programPath, ...args],
+            { cwd: extensionPath || undefined },
+        );
+    }
+    return new DebugAdapterExecutable(
+        programPath,
+        args,
+        { cwd: extensionPath || undefined },
+    );
+}
+
 function _debugAdapterDescriptorPayload(descriptor) {
     if (!descriptor) return undefined;
     if (descriptor instanceof DebugAdapterExecutable) {
@@ -4660,6 +4723,12 @@ function _debugAdapterDescriptorPayload(descriptor) {
         return {
             type: 'pipeServer',
             path: descriptor.path,
+        };
+    }
+    if (descriptor instanceof DebugAdapterInlineImplementation) {
+        return {
+            type: 'implementation',
+            hasImplementation: !!descriptor.implementation,
         };
     }
     return _plainBridgeValue(descriptor);
@@ -10511,13 +10580,23 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                         }
                     }
                     session._debugTrackers = trackers;
+                    if (typeof config.debugServer === 'number') {
+                        session.adapterDescriptor = new DebugAdapterServer(
+                            config.debugServer);
+                    }
                     const descriptorFactory = _debugAdapterFactories.get(session.type);
-                    if (descriptorFactory
+                    const packageExecutable = _debugExecutableFromPackage(session.type);
+                    if (!session.adapterDescriptor
+                            && descriptorFactory
                             && typeof descriptorFactory.createDebugAdapterDescriptor === 'function') {
-                        session.adapterDescriptor = await Promise.resolve(
+                        const descriptor = await Promise.resolve(
                             descriptorFactory.createDebugAdapterDescriptor(
                                 session,
-                                undefined));
+                                packageExecutable));
+                        if (descriptor) session.adapterDescriptor = descriptor;
+                    }
+                    if (!session.adapterDescriptor && packageExecutable) {
+                        session.adapterDescriptor = packageExecutable;
                     }
                     _debugCallTrackers(session, 'onWillStartSession');
                     _debugUpdateActive(session, _onDidChangeActiveDebugSession);
@@ -10699,6 +10778,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         DebugAdapterExecutable,
         DebugAdapterServer,
         DebugAdapterNamedPipeServer,
+        DebugAdapterInlineImplementation,
         FileDecoration,
         MarkdownString: class {
             constructor(value = '', supportThemeIcons = false) {
