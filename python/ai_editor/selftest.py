@@ -7623,6 +7623,23 @@ console.log("frontend word separator behavior ok");
             and "function appendExtensionSettingDefaultValue(row,value,type)" in html
             and "ext-setting-default-value" in html
             and "appendExtensionSettingMarkdown(desc,description)" in html)
+    _check("frontend renders dynamic extension runtime surfaces in settings",
+           "id=\"extension-runtime-panel\"" in html
+           and "id=\"extension-runtime-summary\"" in html
+           and "id=\"extension-runtime-list\"" in html
+           and "function extensionRuntimeSurfaceRows(data)" in html
+           and "function renderExtensionRuntimeSurfacePanel(data)" in html
+           and "async function renderExtensionRuntimeSurfaces(force)" in html
+           and "window.renderExtensionRuntimeSurfaces=renderExtensionRuntimeSurfaces;" in html
+           and "call('list_extension_runtime_surfaces',typeof commandPaletteContext==='function'?commandPaletteContext():{})" in html
+           and "refreshRuntimeSupport();\n  renderExtensionRuntimeSurfaces();" in html
+           and ".extension-runtime-mid" in html
+           and "TreeView" in html
+           and "WebviewView" in html
+           and "CustomEditor" in html
+           and "Notebook" in html
+           and "Command" in html
+           and "Menu" in html)
     _check("frontend hidden deprecated settings stay editable until configured",
            "const hiddenEditable=hiddenReason==='deprecated'" in html
            and (

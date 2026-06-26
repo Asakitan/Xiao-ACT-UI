@@ -1106,6 +1106,25 @@ pre.code-block code .type { color:var(--fg-type); }
 .modal .settings-option-card input[type="checkbox"] { width:auto; flex:0 0 auto; margin-top:2px; }
 .modal .settings-option-card b { display:block; color:var(--fg); font-weight:600; }
 .modal .settings-option-card small { display:block; color:var(--fg-dim); line-height:1.35; margin-top:2px; }
+.extension-runtime-panel { margin-top:8px; border:1px solid var(--border); border-radius:6px; background:var(--bg3); overflow:hidden; }
+.extension-runtime-head { display:flex; align-items:center; gap:8px; padding:7px 8px; border-bottom:1px solid var(--border); }
+.extension-runtime-title { flex:1; min-width:0; color:var(--fg); font-size:12px; font-weight:600; }
+.extension-runtime-refresh { width:auto; height:24px; padding:2px 8px; border:1px solid var(--border); border-radius:4px; background:var(--bg2); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
+.extension-runtime-refresh:hover,.extension-runtime-refresh:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
+.extension-runtime-summary { display:flex; flex-wrap:wrap; gap:5px; padding:7px 8px; border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent); }
+.extension-runtime-chip { display:inline-flex; align-items:center; gap:4px; max-width:100%; padding:2px 6px; border:1px solid var(--border); border-radius:999px; color:var(--fg-dim); font:10px var(--mono); }
+.extension-runtime-chip strong { color:var(--fg); font-weight:600; }
+.extension-runtime-list { display:grid; gap:1px; padding:4px; }
+.extension-runtime-row { display:grid; grid-template-columns:92px minmax(0,1fr) auto; gap:7px; align-items:center; min-height:26px; padding:4px 6px; border-radius:4px; color:var(--fg-dim); font-size:11px; }
+.extension-runtime-row:hover { background:var(--bg-hover); }
+.extension-runtime-kind { color:var(--fg-accent); font:10px var(--mono); text-transform:uppercase; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.extension-runtime-mid { min-width:0; display:flex; flex-direction:column; gap:1px; }
+.extension-runtime-main { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg); }
+.extension-runtime-meta { color:var(--fg-dim); font:10px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.extension-runtime-state { border:1px solid var(--border); border-radius:999px; padding:1px 6px; font:10px var(--mono); color:var(--fg-dim); }
+.extension-runtime-state.ready { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 50%,var(--border)); }
+.extension-runtime-state.pending { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 50%,var(--border)); }
+.extension-runtime-empty { padding:8px; color:var(--fg-dim); font-size:11px; }
 .modal label.settings-danger { border:1px solid #f14c4c80; border-radius:var(--radius); padding:8px; background:#ff000012; }
 .modal input[type="checkbox"] { width:auto; }
 
@@ -2453,6 +2472,14 @@ pre.code-block { overflow:visible; }
       <div class="settings-help">Choose which VS Code contribution types are loaded into the AI Editor runtime. Custom editors and extension views stay enabled by default for plugin parity.</div>
       <div class="settings-help" id="s-ext-trust-summary">Extension trust policy not loaded.</div>
       <div class="settings-help" id="extension-runtime-status">Extension runtime status not loaded.</div>
+      <div class="extension-runtime-panel" id="extension-runtime-panel" aria-live="polite">
+        <div class="extension-runtime-head">
+          <div class="extension-runtime-title">Extension Runtime Surfaces</div>
+          <button class="extension-runtime-refresh" type="button" onclick="renderExtensionRuntimeSurfaces(true)">Refresh</button>
+        </div>
+        <div class="extension-runtime-summary" id="extension-runtime-summary"></div>
+        <div class="extension-runtime-list" id="extension-runtime-list"></div>
+      </div>
     </div>
 
     <!-- EXT-10: Extension-contributed settings -->
@@ -16515,6 +16542,7 @@ function openSettings(){
   setInputValue('s-cust-instructions',listToText(cust.instructions_locations));setInputValue('s-cust-agents',listToText(cust.agent_locations));
   setInputValue('s-cust-workflows',listToText(cust.workflow_locations));setInputValue('s-cust-skills',listToText(cust.skill_locations));
   refreshRuntimeSupport();
+  renderExtensionRuntimeSurfaces();
   renderCustomModels();
   fetchProviderModels(config.provider,config.base_url,true);
   fetchCodexModels(true);
@@ -19894,6 +19922,78 @@ async function refreshRuntimeSupport(){
   const r=await call('get_runtime_support_summary');
   if(r&&!r.error)renderRuntimeSupport(r);
 }
+function extensionRuntimeSurfaceRows(data){
+  data=data||{};
+  const rows=[];
+  const push=(kind,item,label,meta,ready)=>{
+    rows.push({
+      kind,
+      label:String(label||item.id||item.command||item.viewType||item.type||''),
+      meta:String(meta||item.extensionId||item.container||''),
+      ready:ready!==false,
+    });
+  };
+  (data.treeViews||[]).slice(0,8).forEach(item=>push('TreeView',item,item.name||item.id,item.id+' · '+(item.container||'runtime'),item.runtimeAvailable!==false));
+  (data.webviewViews||[]).slice(0,8).forEach(item=>push('WebviewView',item,item.name||item.id,item.id+' · '+(item.container||'runtime'),item.runtimeAvailable!==false));
+  (data.customEditors||[]).slice(0,8).forEach(item=>push('CustomEditor',item,item.displayName||item.viewType,item.viewType+' · states '+(item.stateCount||0),item.runtimeAvailable!==false));
+  (data.notebooks||[]).slice(0,8).forEach(item=>push('Notebook',item,item.displayName||item.type,item.type+' · serializers '+(item.serializerCount||0)+' · kernels '+(item.controllerCount||0),item.runtimeAvailable!==false));
+  (data.commands||[]).filter(item=>item&&item.source==='extension').slice(0,8).forEach(item=>push('Command',item,item.title||item.label||item.command,item.command+(item.menu?' · '+item.menu:''),item.disabled!==true));
+  (data.menus||[]).slice(0,8).forEach(item=>push('Menu',item,item.command||item.menu,item.menu+(item.when?' · '+item.when:''),true));
+  return rows;
+}
+function renderExtensionRuntimeSurfacePanel(data){
+  const summaryEl=$('extension-runtime-summary'),listEl=$('extension-runtime-list'),statusEl=$('extension-runtime-status');
+  if(!summaryEl||!listEl)return;
+  data=data||{};
+  const summary=data.summary||{};
+  const chips=[
+    ['TreeView',summary.treeViews||0],
+    ['WebviewView',summary.webviewViews||0],
+    ['CustomEditor',summary.customEditors||0],
+    ['Notebook',summary.notebooks||0],
+    ['Command',summary.commands||0],
+    ['Menu',summary.menus||0],
+  ];
+  summaryEl.innerHTML='';
+  chips.forEach(([label,value])=>{
+    const chip=document.createElement('span');chip.className='extension-runtime-chip';
+    chip.innerHTML='<strong>'+esc(String(value))+'</strong>'+esc(label);
+    summaryEl.appendChild(chip);
+  });
+  listEl.innerHTML='';
+  const rows=extensionRuntimeSurfaceRows(data);
+  if(!rows.length){
+    const empty=document.createElement('div');empty.className='extension-runtime-empty';
+    empty.textContent='No extension runtime surfaces reported.';
+    listEl.appendChild(empty);
+  }else{
+    rows.forEach(row=>{
+      const el=document.createElement('div');el.className='extension-runtime-row';
+      const kind=document.createElement('div');kind.className='extension-runtime-kind';kind.textContent=row.kind;
+      const mid=document.createElement('div');mid.className='extension-runtime-mid';
+      const main=document.createElement('div');main.className='extension-runtime-main';main.textContent=row.label;
+      const meta=document.createElement('div');meta.className='extension-runtime-meta';meta.textContent=row.meta;
+      mid.appendChild(main);mid.appendChild(meta);
+      const state=document.createElement('div');state.className='extension-runtime-state '+(row.ready?'ready':'pending');state.textContent=row.ready?'ready':'pending';
+      el.appendChild(kind);el.appendChild(mid);el.appendChild(state);
+      listEl.appendChild(el);
+    });
+  }
+  if(statusEl)statusEl.textContent='Runtime surfaces: '+String(summary.dynamicSurfaces||rows.length||0)+' dynamic entries.';
+}
+async function renderExtensionRuntimeSurfaces(force){
+  const statusEl=$('extension-runtime-status'),listEl=$('extension-runtime-list');
+  if(statusEl)statusEl.textContent='Loading extension runtime surfaces...';
+  if(listEl&&!listEl.children.length)listEl.innerHTML='<div class="extension-runtime-empty">Loading...</div>';
+  const r=await call('list_extension_runtime_surfaces',typeof commandPaletteContext==='function'?commandPaletteContext():{});
+  if(!r||r.error){
+    if(statusEl)statusEl.textContent='Extension runtime surfaces unavailable: '+callFailedMessage(r,'backend unavailable');
+    if(listEl)listEl.innerHTML='<div class="extension-runtime-empty">Unable to load extension runtime surfaces.</div>';
+    return;
+  }
+  renderExtensionRuntimeSurfacePanel(r);
+}
+window.renderExtensionRuntimeSurfaces=renderExtensionRuntimeSurfaces;
 
 async function searchExtensions(query,page){
   if(!query) query=$('ext-search')?$('ext-search').value.trim():'';
