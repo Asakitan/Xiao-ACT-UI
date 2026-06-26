@@ -3887,7 +3887,7 @@ function _workspaceRelativePath(value, includeWorkspaceFolder) {
 
 function _terminalOptionsFromArgs(nameOrOptions, shellPath, shellArgs) {
     if (nameOrOptions && typeof nameOrOptions === 'object') {
-        return Object.assign({}, nameOrOptions);
+        return _terminalNormalizeOptions(nameOrOptions);
     }
     const options = {};
     if (nameOrOptions !== undefined && nameOrOptions !== null) {
@@ -3899,7 +3899,65 @@ function _terminalOptionsFromArgs(nameOrOptions, shellPath, shellArgs) {
     if (shellArgs !== undefined && shellArgs !== null) {
         options.shellArgs = shellArgs;
     }
-    return options;
+    return _terminalNormalizeOptions(options);
+}
+
+function _terminalNormalizeShellArgs(value) {
+    if (value === undefined || value === null) return undefined;
+    return Array.isArray(value) ? value.map(item => String(item)) : String(value);
+}
+
+function _terminalNormalizeEnv(env) {
+    if (!env || typeof env !== 'object') return undefined;
+    const result = {};
+    for (const [key, value] of Object.entries(env)) {
+        result[String(key)] = value === null || value === undefined ? null : String(value);
+    }
+    return result;
+}
+
+function _terminalResolveEnv(options) {
+    const strict = options && options.strictEnv === true;
+    const result = strict ? {} : Object.assign({}, process.env);
+    const env = _terminalNormalizeEnv(options && options.env) || {};
+    for (const [key, value] of Object.entries(env)) {
+        if (value === null || value === undefined) delete result[key];
+        else result[key] = String(value);
+    }
+    return result;
+}
+
+function _terminalNormalizeOptions(options) {
+    const raw = Object.assign({}, options || {});
+    if (raw.name !== undefined && raw.name !== null) raw.name = String(raw.name);
+    if (raw.shellPath !== undefined && raw.shellPath !== null) raw.shellPath = String(raw.shellPath);
+    if (raw.shellArgs !== undefined && raw.shellArgs !== null) {
+        raw.shellArgs = _terminalNormalizeShellArgs(raw.shellArgs);
+    }
+    if (raw.env !== undefined && raw.env !== null) raw.env = _terminalNormalizeEnv(raw.env);
+    if (raw.cwd !== undefined && raw.cwd !== null && !(raw.cwd instanceof Uri)) {
+        raw.cwd = String(raw.cwd);
+    }
+    raw.strictEnv = raw.strictEnv === true;
+    raw.hideFromUser = raw.hideFromUser === true;
+    return raw;
+}
+
+function _terminalMergeOptions(baseOptions, overrideOptions) {
+    const base = _terminalNormalizeOptions(baseOptions || {});
+    const rawOverride = overrideOptions && typeof overrideOptions === 'object' ? overrideOptions : {};
+    const override = _terminalNormalizeOptions(rawOverride);
+    const merged = Object.assign({}, base, override);
+    if (!Object.prototype.hasOwnProperty.call(rawOverride, 'strictEnv')) {
+        merged.strictEnv = base.strictEnv === true;
+    }
+    if (!Object.prototype.hasOwnProperty.call(rawOverride, 'hideFromUser')) {
+        merged.hideFromUser = base.hideFromUser === true;
+    }
+    if (base.env || override.env) {
+        merged.env = Object.assign({}, base.env || {}, override.env || {});
+    }
+    return _terminalNormalizeOptions(merged);
 }
 
 function _terminalOptionValue(value) {
@@ -4547,20 +4605,22 @@ function _terminalSubscribeEvent(event, callback) {
 
 class TerminalObject {
     constructor(options = {}) {
+        const normalizedOptions = _terminalNormalizeOptions(options);
         this._handle = _nextTerminalHandle++;
         this._disposed = false;
         this._ptyOpened = false;
         this._ptyDisposables = [];
-        this.creationOptions = Object.assign({}, options || {});
-        this.name = String(options?.name || `Terminal ${this._handle}`);
+        this.creationOptions = normalizedOptions;
+        this._resolvedEnv = _terminalResolveEnv(normalizedOptions);
+        this.name = String(normalizedOptions?.name || `Terminal ${this._handle}`);
         this.processId = Promise.resolve(undefined);
         this.exitStatus = undefined;
         this.state = { isInteractedWith: false };
         this.shellIntegration = undefined;
         this._shellIntegrationObject = null;
         this.dimensions = undefined;
-        this._pty = options?.pty && typeof options.pty.open === 'function'
-            ? options.pty
+        this._pty = normalizedOptions?.pty && typeof normalizedOptions.pty.open === 'function'
+            ? normalizedOptions.pty
             : null;
         this._bindPseudoterminal();
     }
@@ -4692,6 +4752,8 @@ class TerminalObject {
             iconPath: _terminalOptionValue(options.iconPath),
             color: _terminalOptionValue(options.color),
             isTransient: options.isTransient === true,
+            strictEnv: options.strictEnv === true,
+            hideFromUser: options.hideFromUser === true,
             isPseudoterminal: !!this._pty,
             shellIntegration: !!this.shellIntegration,
         };
@@ -4768,7 +4830,7 @@ class TerminalShellIntegration {
         this.cwd = rawCwd instanceof Uri
             ? rawCwd
             : (typeof rawCwd === 'string' && rawCwd ? Uri.file(rawCwd) : undefined);
-        const envValue = _terminalOptionValue(terminal.creationOptions?.env);
+        const envValue = terminal._resolvedEnv;
         this.env = envValue && typeof envValue === 'object'
             ? Object.freeze({ isTrusted: true, value: Object.freeze(Object.assign({}, envValue)) })
             : undefined;
@@ -4785,7 +4847,10 @@ class TerminalShellIntegration {
         return _plainBridgeValue(this.cwd);
     }
     envPayload() {
-        return _plainBridgeValue(this.env);
+        const explicitEnv = _terminalOptionValue(this._terminal.creationOptions?.env);
+        return explicitEnv && typeof explicitEnv === 'object'
+            ? { isTrusted: true, value: explicitEnv }
+            : undefined;
     }
     executeCommand(commandLineOrExecutable, args) {
         const commandLine = _terminalShellCommandLine(commandLineOrExecutable, args);
@@ -4874,8 +4939,7 @@ async function _createTerminalFromProfileProvider(profileId, options) {
     if (!profile || typeof profile !== 'object' || !profile.options) {
         throw new Error(`No terminal profile options provided for id "${id}"`);
     }
-    const terminalOptions = Object.assign(
-        {},
+    const terminalOptions = _terminalMergeOptions(
         profile.options || {},
         options && typeof options === 'object' ? options : {});
     const terminal = _createTerminal(terminalOptions);

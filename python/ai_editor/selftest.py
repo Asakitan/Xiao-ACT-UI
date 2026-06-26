@@ -19193,6 +19193,8 @@ async function activate(context) {
     };
   });
   vscode.commands.registerCommand('selftest.node.terminalProbe', async () => {
+    process.env.NODE_TERMINAL_INHERIT = 'from-process';
+    process.env.NODE_TERMINAL_DROP = 'drop-me';
     const events = [];
     const disposables = [
       vscode.window.onDidOpenTerminal(terminal => {
@@ -19221,7 +19223,10 @@ async function activate(context) {
     const terminal = vscode.window.createTerminal({
       name: 'Node Terminal',
       cwd: context.extensionUri,
-      env: { NODE_TERMINAL_SELFTEST: '1' },
+      env: {
+        NODE_TERMINAL_SELFTEST: '1',
+        NODE_TERMINAL_DROP: null,
+      },
       shellPath: 'pwsh',
       shellArgs: ['-NoProfile'],
       message: 'node terminal ready',
@@ -19238,6 +19243,8 @@ async function activate(context) {
       creationEnv: terminal.creationOptions.env,
       creationShellPath: terminal.creationOptions.shellPath,
       creationShellArgs: terminal.creationOptions.shellArgs,
+      creationStrictEnv: terminal.creationOptions.strictEnv,
+      creationHideFromUser: terminal.creationOptions.hideFromUser,
       creationMessage: terminal.creationOptions.message,
       transient: terminal.creationOptions.isTransient === true,
       processId: await terminal.processId,
@@ -19258,12 +19265,37 @@ async function activate(context) {
       cwd: shellAfterShow && shellAfterShow.cwd && shellAfterShow.cwd.toString(),
       envTrusted: shellAfterShow && shellAfterShow.env && shellAfterShow.env.isTrusted,
       envValue: shellAfterShow && shellAfterShow.env && shellAfterShow.env.value,
+      inheritedEnv: shellAfterShow && shellAfterShow.env && shellAfterShow.env.value && shellAfterShow.env.value.NODE_TERMINAL_INHERIT,
+      droppedEnv: shellAfterShow && shellAfterShow.env && shellAfterShow.env.value && Object.prototype.hasOwnProperty.call(shellAfterShow.env.value, 'NODE_TERMINAL_DROP'),
       commandLine: shellExecution && shellExecution.commandLine && shellExecution.commandLine.value,
       confidence: shellExecution && shellExecution.commandLine && shellExecution.commandLine.confidence,
       hasRead: !!(shellExecution && shellExecution.read),
       enumHigh: vscode.TerminalShellExecutionCommandLineConfidence.High,
     };
     terminal.dispose();
+    const strictTerminal = vscode.window.createTerminal({
+      name: 'Node Strict Terminal',
+      env: {
+        STRICT_ONLY: 'yes',
+        NODE_TERMINAL_INHERIT: null,
+      },
+      strictEnv: true,
+      shellArgs: '-NoLogo',
+      hideFromUser: true,
+      location: vscode.TerminalLocation.Editor,
+      isTransient: true,
+    });
+    strictTerminal.show(true);
+    const strictShell = strictTerminal.shellIntegration;
+    const strict = {
+      creationShellArgs: strictTerminal.creationOptions.shellArgs,
+      strictEnv: strictTerminal.creationOptions.strictEnv,
+      hideFromUser: strictTerminal.creationOptions.hideFromUser,
+      location: strictTerminal.creationOptions.location,
+      envValue: strictShell && strictShell.env && strictShell.env.value,
+      hasInherited: strictShell && strictShell.env && strictShell.env.value && Object.prototype.hasOwnProperty.call(strictShell.env.value, 'NODE_TERMINAL_INHERIT'),
+    };
+    strictTerminal.dispose();
     const after = {
       beforeCount,
       count: vscode.window.terminals.length,
@@ -19325,7 +19357,7 @@ async function activate(context) {
       exitReason: ptyTerminal.exitStatus && ptyTerminal.exitStatus.reason,
     };
     disposables.forEach(disposable => disposable.dispose());
-    return { created, after, ptyAfter, interacted, shell, events };
+    return { created, after, ptyAfter, interacted, shell, strict, events };
   });
   vscode.commands.registerCommand('selftest.node.terminalProfileProbe', async () => {
     const provider = {
@@ -19333,6 +19365,11 @@ async function activate(context) {
         return new vscode.TerminalProfile({
           name: 'Node Profile Terminal',
           message: 'profile ready',
+          env: {
+            PROFILE_BASE: 'base',
+            PROFILE_DROP: 'drop-me',
+          },
+          strictEnv: true,
           iconPath: new vscode.ThemeIcon('terminal'),
           color: new vscode.ThemeColor('terminal.ansiCyan'),
           isTransient: true,
@@ -24377,6 +24414,9 @@ module.exports = { activate, deactivate };
                 node_terminal_shell = (
                     node_terminal_probe.get("shell", {})
                     if isinstance(node_terminal_probe, dict) else {})
+                node_terminal_strict = (
+                    node_terminal_probe.get("strict", {})
+                    if isinstance(node_terminal_probe, dict) else {})
                 _check("node host terminal APIs use existing UI bridge",
                        node_started is True
                        and node_terminal_command_registered
@@ -24392,6 +24432,10 @@ module.exports = { activate, deactivate };
                        and node_terminal_created.get("creationShellPath") == "pwsh"
                        and node_terminal_created.get("creationShellArgs")
                        == ["-NoProfile"]
+                       and node_terminal_created.get("creationStrictEnv")
+                       is False
+                       and node_terminal_created.get("creationHideFromUser")
+                       is False
                        and node_terminal_created.get(
                            "creationMessage") == "node terminal ready"
                        and node_terminal_created.get("transient") is True
@@ -24402,12 +24446,24 @@ module.exports = { activate, deactivate };
                        and node_terminal_shell.get(
                            "envValue", {}).get("NODE_TERMINAL_SELFTEST")
                        == "1"
+                       and node_terminal_shell.get(
+                           "inheritedEnv") == "from-process"
+                       and node_terminal_shell.get("droppedEnv") is False
                        and node_terminal_shell.get("commandLine")
                        == 'echo "shell integration"'
                        and node_terminal_shell.get("confidence")
                        == node_terminal_shell.get("enumHigh") == 2
                        and node_terminal_shell.get("hasRead") is True
                        and node_terminal_probe.get("interacted") is True
+                       and node_terminal_strict.get("creationShellArgs")
+                       == "-NoLogo"
+                       and node_terminal_strict.get("strictEnv") is True
+                       and node_terminal_strict.get("hideFromUser") is True
+                       and node_terminal_strict.get("location") == 2
+                       and node_terminal_strict.get(
+                           "envValue", {}).get("STRICT_ONLY") == "yes"
+                       and len(node_terminal_strict.get("envValue", {})) == 1
+                       and node_terminal_strict.get("hasInherited") is False
                        and node_terminal_after.get("count")
                        == node_terminal_after.get("beforeCount")
                        and node_terminal_after.get("exitReason")
@@ -24447,6 +24503,8 @@ module.exports = { activate, deactivate };
                            and item.get("name") == "Node Terminal"
                            and item.get("metadata", {}).get("env", {})
                            .get("NODE_TERMINAL_SELFTEST") == "1"
+                           and item.get("metadata", {}).get("env", {})
+                           .get("NODE_TERMINAL_DROP") is None
                            and item.get("metadata", {}).get("shellPath") == "pwsh"
                            and item.get("metadata", {}).get("shellArgs")
                            == ["-NoProfile"]
@@ -24457,6 +24515,15 @@ module.exports = { activate, deactivate };
                            and item.get("metadata", {}).get("color", {})
                            .get("id") == "terminal.ansiGreen"
                            and item.get("metadata", {}).get("id")
+                           for item in node_terminal_events)
+                       and any(
+                           item.get("event") == "show"
+                           and item.get("name") == "Node Strict Terminal"
+                           and item.get("metadata", {}).get("strictEnv") is True
+                           and item.get("metadata", {}).get("hideFromUser") is True
+                           and item.get("metadata", {}).get("location") == 2
+                           and item.get("metadata", {}).get("shellArgs")
+                           == "-NoLogo"
                            for item in node_terminal_events)
                        and node_active_terminal_after_probe == {}
                        and any(
@@ -24552,11 +24619,22 @@ module.exports = { activate, deactivate };
                        and node_terminal_profile_request.get(
                            "profile", {}).get("options", {}).get("name")
                        == "Node Profile Terminal"
+                       and node_terminal_profile_request.get(
+                           "profile", {}).get("options", {}).get(
+                               "env", {}).get("PROFILE_BASE") == "base"
+                       and node_terminal_profile_request.get(
+                           "terminal", {}).get("env", {}).get(
+                               "PROFILE_BASE") == "base"
+                       and node_terminal_profile_request.get(
+                           "terminal", {}).get("strictEnv") is True
                        and any(
                            item.get("event") == "show"
                            and item.get("name") == "Node Profile Terminal"
                            and item.get("metadata", {}).get("message")
                            == "profile ready"
+                           and item.get("metadata", {}).get("env", {}).get(
+                               "PROFILE_BASE") == "base"
+                           and item.get("metadata", {}).get("strictEnv") is True
                            and item.get("metadata", {}).get("iconPath", {})
                            .get("id") == "terminal"
                            and item.get("metadata", {}).get("color", {})
