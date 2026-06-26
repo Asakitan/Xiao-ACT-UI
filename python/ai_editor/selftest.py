@@ -4371,6 +4371,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "chat-response-citation" in html
            and "chat-response-confirmation" in html
            and "chat-response-questions" in html
+           and "chat-response-uri" in html
+           and "chat-response-multidiff" in html
+           and "chat-response-move" in html
+           and "chat-response-extensions" in html
+           and "chat-response-pr" in html
            and "function chatResponseVisiblePartKind(part)" in html
            and "raw==='markdownvuln'||raw==='markdownwithvulnerabilities'" in html
            and "raw==='markdowncontent'||raw==='markdown'" in html
@@ -4381,26 +4386,49 @@ def test_phase1_ai_editor_regressions() -> None:
            and "raw==='confirmation'||raw.includes('confirmation')" in html
            and "raw==='questioncarousel'||raw.includes('questioncarousel')" in html
            and "raw==='codecitation'||raw.includes('codecitation')" in html
+           and "raw==='codeblockuri'||raw.includes('codeblockuri')" in html
+           and "raw==='multidiffdata'||raw==='multidiff'" in html
+           and "raw==='move'||raw.includes('movemessage')" in html
+           and "raw==='extensions'||raw.includes('extensions')" in html
+           and "raw==='pullrequest'||raw.includes('pullrequest')" in html
            and "function chatMarkdownValueText(value)" in html
            and "function normalizeChatVulnerabilities(value)" in html
            and "function normalizeChatConfirmationPart(part)" in html
            and "function normalizeChatQuestionCarouselPart(part)" in html
            and "function normalizeChatCodeCitationPart(part)" in html
+           and "function normalizeChatCodeblockUriPart(part)" in html
+           and "function normalizeChatMultiDiffPart(part)" in html
+           and "function normalizeChatMovePart(part)" in html
+           and "function normalizeChatExtensionsPart(part)" in html
+           and "function normalizeChatPullRequestPart(part)" in html
            and "function normalizeChatVisibleResponseParts(payload,content)" in html
            and "function runChatResponseCommand(command,button)" in html
            and "function chatResponseComposerText(prefix,text)" in html
+           and "async function openChatResponseUri(value)" in html
            and "function renderChatMarkdownVulnerabilityPart(wrap,part)" in html
            and "function renderChatConfirmationPart(wrap,part)" in html
            and "function renderChatQuestionCarouselPart(wrap,part)" in html
            and "function chatQuestionCarouselAnswerText(card)" in html
            and "function renderChatCodeCitationPart(wrap,part)" in html
+           and "function renderChatCodeblockUriPart(wrap,part)" in html
+           and "function renderChatMultiDiffPart(wrap,part)" in html
+           and "function renderChatMovePart(wrap,part)" in html
+           and "function renderChatExtensionsPart(wrap,part)" in html
+           and "function renderChatPullRequestPart(wrap,part)" in html
            and "await call('execute_command',id,...(Array.isArray(command.arguments)?command.arguments:[]))" in html
            and "function renderChatResponseNativeParts(body,payload,content)" in html
            and "renderChatMarkdownVulnerabilityPart(wrap,part)" in html
            and "renderChatConfirmationPart(wrap,part)" in html
            and "renderChatQuestionCarouselPart(wrap,part)" in html
            and "renderChatCodeCitationPart(wrap,part)" in html
+           and "renderChatCodeblockUriPart(wrap,part)" in html
+           and "renderChatMultiDiffPart(wrap,part)" in html
+           and "renderChatMovePart(wrap,part)" in html
+           and "renderChatExtensionsPart(wrap,part)" in html
+           and "renderChatPullRequestPart(wrap,part)" in html
            and "chatResponseComposerText('Answers',chatQuestionCarouselAnswerText(card))" in html
+           and "chatResponseComposerText('Install extensions',exts.join(', '))" in html
+           and "openChatResponseReference(chatMultiDiffRef(entry))" in html
            and "toolResultActionButton('Copy Snippet'" in html
            and "renderChatResponseNativeParts(currentMsgBody,d,finalMarkdown);" in html
            and "renderChatResponseNativeParts(s,data,content);" in html

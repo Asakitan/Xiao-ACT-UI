@@ -1021,7 +1021,8 @@ pre.code-block code .type { color:var(--fg-type); }
   cursor:pointer; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-response-command:hover,.chat-response-command:focus { background:var(--bg-hover); color:var(--fg); outline:none; }
 .chat-response-command:disabled { opacity:.55; cursor:default; }
-.chat-response-vulns,.chat-response-citation,.chat-response-confirmation,.chat-response-questions {
+.chat-response-vulns,.chat-response-citation,.chat-response-confirmation,.chat-response-questions,
+.chat-response-uri,.chat-response-multidiff,.chat-response-move,.chat-response-extensions,.chat-response-pr {
   border:1px solid var(--border); border-radius:6px; background:var(--bg3); padding:7px 8px;
   display:flex; flex-direction:column; gap:6px; color:var(--fg-dim); font-size:12px; }
 .chat-response-vuln-list { display:flex; flex-wrap:wrap; gap:5px; }
@@ -1030,6 +1031,13 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-response-part-title { color:var(--fg); font-weight:600; }
 .chat-response-citation pre { margin:0; max-height:120px; overflow:auto; white-space:pre-wrap;
   color:var(--fg-code); font:11px/1.4 var(--mono); }
+.chat-response-part-meta { color:var(--fg-dim); font:10px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chat-response-extension-list,.chat-response-multidiff-list { display:flex; flex-direction:column; gap:4px; }
+.chat-response-extension-chip,.chat-response-diff-row { border:1px solid var(--border); border-radius:5px; background:transparent;
+  color:var(--fg); padding:4px 6px; font:11px var(--sans); max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chat-response-diff-row { cursor:pointer; text-align:left; display:flex; align-items:center; gap:6px; }
+.chat-response-diff-row:hover,.chat-response-diff-row:focus { border-color:var(--border-focus); background:var(--bg-hover); outline:none; }
+.chat-response-diff-row .diff-stat { color:var(--fg-success); font:10px var(--mono); flex:0 0 auto; }
 .chat-response-question { border-top:1px solid color-mix(in srgb,var(--border) 55%,transparent); padding-top:6px; display:flex; flex-direction:column; gap:5px; }
 .chat-response-question:first-child { border-top:0; padding-top:0; }
 .chat-response-question-options { display:flex; flex-wrap:wrap; gap:5px; }
@@ -5081,6 +5089,11 @@ function chatResponseVisiblePartKind(part){
   if(raw==='confirmation'||raw.includes('confirmation'))return 'confirmation';
   if(raw==='questioncarousel'||raw.includes('questioncarousel')||raw.includes('question_carousel'))return 'questionCarousel';
   if(raw==='codecitation'||raw.includes('codecitation')||raw.includes('code_citation'))return 'codeCitation';
+  if(raw==='codeblockuri'||raw.includes('codeblockuri')||raw.includes('codeblock_uri'))return 'codeblockUri';
+  if(raw==='multidiffdata'||raw==='multidiff'||raw.includes('multi_diff'))return 'multiDiffData';
+  if(raw==='move'||raw.includes('movemessage'))return 'move';
+  if(raw==='extensions'||raw.includes('extensions'))return 'extensions';
+  if(raw==='pullrequest'||raw.includes('pullrequest')||raw.includes('pull_request'))return 'pullRequest';
   return '';
 }
 function chatMarkdownValueText(value){
@@ -5165,6 +5178,59 @@ function normalizeChatCodeCitationPart(part){
     snippet:String((part&&part.snippet)||'')
   };
 }
+function normalizeChatCodeblockUriPart(part){
+  const uri=(part&&part.uri!==undefined)?part.uri:(part&&part.value!==undefined?part.value:part);
+  return {
+    uri:chatUriPath(uri)||String(uri||''),
+    isEdit:!!(part&&part.isEdit),
+    undoStopId:String((part&&part.undoStopId)||''),
+    subAgentInvocationId:String((part&&part.subAgentInvocationId)||'')
+  };
+}
+function normalizeChatMovePart(part){
+  const uri=(part&&part.uri!==undefined)?part.uri:(part&&part.value!==undefined?part.value:part);
+  const range=chatReferenceRange(part||{});
+  const loc=chatReferenceLocationFromPath(chatUriPath(uri)||String(uri||''),range.line,range.column,range.endLine,range.endColumn);
+  return {path:loc.path,line:loc.line,column:loc.column,endLine:loc.endLine,endColumn:loc.endColumn};
+}
+function normalizeChatExtensionsPart(part){
+  const extensions=Array.isArray(part&&part.extensions)?part.extensions:(Array.isArray(part&&part.value)?part.value:[]);
+  return extensions.map(ext=>{
+    const rec=ext&&typeof ext==='object'?ext:{id:ext};
+    return String(rec.id||rec.identifier||rec.extensionId||rec.name||rec.label||'').trim();
+  }).filter(Boolean).slice(0,24);
+}
+function normalizeChatPullRequestPart(part){
+  const command=chatResponseCommandValue(part&&part.command?part.command:part);
+  return {
+    title:String((part&&part.title)||'Pull request'),
+    description:chatMarkdownValueText(part&&(part.description||part.message||'')),
+    author:String((part&&part.author)||''),
+    linkTag:String((part&&part.linkTag)||''),
+    uri:chatUriPath(part&&part.uri)||String((part&&part.uri)||''),
+    command
+  };
+}
+function normalizeChatMultiDiffPart(part){
+  const data=(part&&part.multiDiffData)||part||{};
+  const resources=Array.isArray(data.resources)?data.resources:(Array.isArray(part&&part.value)?part.value:(Array.isArray(part&&part.resources)?part.resources:[]));
+  return {
+    title:String(data.title||part&&part.title||'Changes'),
+    readOnly:!!(part&&part.readOnly),
+    resources:resources.map((entry,index)=>{
+      const rec=entry&&typeof entry==='object'?entry:{modifiedUri:entry};
+      const originalUri=chatUriPath(rec.originalUri||rec.original||rec.beforeUri||rec.before)||'';
+      const modifiedUri=chatUriPath(rec.modifiedUri||rec.modified||rec.afterUri||rec.after)||'';
+      const goToFileUri=chatUriPath(rec.goToFileUri||rec.uri||rec.targetUri||rec.path)||'';
+      const path=goToFileUri||modifiedUri||originalUri||('Change '+(index+1));
+      return {
+        path,originalUri,modifiedUri,goToFileUri,
+        added:Number(rec.added)||0,
+        removed:Number(rec.removed)||0
+      };
+    }).filter(item=>item.path).slice(0,32)
+  };
+}
 function normalizeChatVisibleResponseParts(payload,content){
   const parts=[...(Array.isArray(payload&&payload.responseParts)?payload.responseParts:[]),
     ...(Array.isArray(payload&&payload.response_parts)?payload.response_parts:[]),
@@ -5191,6 +5257,26 @@ function normalizeChatVisibleResponseParts(payload,content){
     if(kind==='codeCitation'){
       const citation=normalizeChatCodeCitationPart(part);
       return citation.value||citation.license||citation.snippet?{kind,citation}:null;
+    }
+    if(kind==='codeblockUri'){
+      const uri=normalizeChatCodeblockUriPart(part);
+      return uri.uri?{kind,uri}:null;
+    }
+    if(kind==='multiDiffData'){
+      const diff=normalizeChatMultiDiffPart(part);
+      return diff.resources.length?{kind,diff}:null;
+    }
+    if(kind==='move'){
+      const move=normalizeChatMovePart(part);
+      return move.path?{kind,move}:null;
+    }
+    if(kind==='extensions'){
+      const extensions=normalizeChatExtensionsPart(part);
+      return extensions.length?{kind,extensions}:null;
+    }
+    if(kind==='pullRequest'){
+      const pullRequest=normalizeChatPullRequestPart(part);
+      return pullRequest.title||pullRequest.uri||pullRequest.command?{kind,pullRequest}:null;
     }
     const text=normalizeChatMessageText(chatResponsePartText(part),'assistant');
     if(!text)return null;
@@ -5661,6 +5747,91 @@ function renderChatCodeCitationPart(wrap,part){
   if(actions.children.length)card.appendChild(actions);
   wrap.appendChild(card);
 }
+async function openChatResponseUri(value){
+  const uri=String(value||'').trim();
+  if(!uri)return;
+  if(/^[A-Za-z][A-Za-z0-9+.-]*:/i.test(uri)){
+    const res=await call('open_text_resource',uri);
+    if(res&&!res.error){openEditorOpenResult(res,uri);setStatus('Opened Assistant URI: '+uri);return}
+    setStatus('Assistant URI open failed: '+((res&&res.error)||uri));return;
+  }
+  await openWorkspaceFile(uri);
+}
+function renderChatCodeblockUriPart(wrap,part){
+  const data=part.uri||{};
+  const card=document.createElement('div');card.className='chat-response-uri';card.setAttribute('role','group');card.setAttribute('aria-label','Code block URI');
+  const title=document.createElement('div');title.className='chat-response-part-title';title.textContent=data.isEdit?'Code block edit':'Code block reference';card.appendChild(title);
+  const meta=document.createElement('div');meta.className='chat-response-part-meta';meta.textContent=data.uri;card.appendChild(meta);
+  const actions=document.createElement('div');actions.className='chat-response-part-actions';
+  const open=document.createElement('button');open.type='button';open.className='chat-inline-action primary';open.textContent='Open';open.onclick=()=>openChatResponseUri(data.uri);actions.appendChild(open);
+  if(data.undoStopId){const undo=document.createElement('span');undo.className='chat-response-part-meta';undo.textContent='undo '+data.undoStopId;actions.appendChild(undo)}
+  card.appendChild(actions);wrap.appendChild(card);
+}
+function renderChatMovePart(wrap,part){
+  const move=part.move||{};
+  const card=document.createElement('div');card.className='chat-response-move';card.setAttribute('role','group');card.setAttribute('aria-label','Move target');
+  const title=document.createElement('div');title.className='chat-response-part-title';title.textContent='Move target';card.appendChild(title);
+  const meta=document.createElement('div');meta.className='chat-response-part-meta';meta.textContent=(move.path||'')+chatReferenceLocationLabel(move);card.appendChild(meta);
+  const actions=document.createElement('div');actions.className='chat-response-part-actions';
+  const open=document.createElement('button');open.type='button';open.className='chat-inline-action primary';open.textContent='Open target';open.onclick=()=>openChatResponseReference(move);actions.appendChild(open);
+  card.appendChild(actions);wrap.appendChild(card);
+}
+function renderChatExtensionsPart(wrap,part){
+  const exts=part.extensions||[];
+  const card=document.createElement('div');card.className='chat-response-extensions';card.setAttribute('role','group');card.setAttribute('aria-label','Extension recommendations');
+  const title=document.createElement('div');title.className='chat-response-part-title';title.textContent='Extensions';card.appendChild(title);
+  const list=document.createElement('div');list.className='chat-response-extension-list';
+  exts.forEach(id=>{const chip=document.createElement('div');chip.className='chat-response-extension-chip';chip.textContent=id;chip.title=id;list.appendChild(chip)});
+  card.appendChild(list);
+  const actions=document.createElement('div');actions.className='chat-response-part-actions';
+  actions.appendChild(toolResultActionButton('Copy IDs','Copy extension IDs',()=>navigator.clipboard.writeText(exts.join('\n'))));
+  const insert=document.createElement('button');insert.type='button';insert.className='chat-inline-action primary';insert.textContent='Ask to install';insert.onclick=()=>chatResponseComposerText('Install extensions',exts.join(', '));actions.appendChild(insert);
+  card.appendChild(actions);wrap.appendChild(card);
+}
+function chatMultiDiffRef(entry){
+  return {
+    path:entry.goToFileUri||entry.modifiedUri||entry.originalUri||entry.path,
+    label:pathBaseName(entry.path||entry.modifiedUri||entry.originalUri)||'Change',
+    kind:'multiDiff',
+    originalUri:entry.originalUri,
+    modifiedUri:entry.modifiedUri||entry.goToFileUri,
+    diffMeta:{added:entry.added,removed:entry.removed},
+    openable:true
+  };
+}
+function renderChatMultiDiffPart(wrap,part){
+  const diff=part.diff||{};
+  const card=document.createElement('div');card.className='chat-response-multidiff';card.setAttribute('role','group');card.setAttribute('aria-label','Multi-file diff');
+  const title=document.createElement('div');title.className='chat-response-part-title';title.textContent=diff.title||'Changes';card.appendChild(title);
+  const meta=document.createElement('div');meta.className='chat-response-part-meta';meta.textContent=(diff.resources||[]).length+' files'+(diff.readOnly?' · read-only':'');card.appendChild(meta);
+  const list=document.createElement('div');list.className='chat-response-multidiff-list';
+  (diff.resources||[]).forEach(entry=>{
+    const row=document.createElement('button');row.type='button';row.className='chat-response-diff-row';
+    const stats=(entry.added||entry.removed)?'<span class="diff-stat">+'+esc(entry.added||0)+' -'+esc(entry.removed||0)+'</span>':'';
+    row.innerHTML='<span class="change-path">'+esc(entry.path)+'</span>'+stats;
+    row.title='Open diff '+entry.path;row.onclick=()=>openChatResponseReference(chatMultiDiffRef(entry));
+    list.appendChild(row);
+  });
+  card.appendChild(list);
+  if(diff.resources&&diff.resources.length){
+    const actions=document.createElement('div');actions.className='chat-response-part-actions';
+    const open=document.createElement('button');open.type='button';open.className='chat-inline-action primary';open.textContent='Open first diff';open.onclick=()=>openChatResponseReference(chatMultiDiffRef(diff.resources[0]));actions.appendChild(open);
+    card.appendChild(actions);
+  }
+  wrap.appendChild(card);
+}
+function renderChatPullRequestPart(wrap,part){
+  const pr=part.pullRequest||{};
+  const card=document.createElement('div');card.className='chat-response-pr';card.setAttribute('role','group');card.setAttribute('aria-label','Pull request');
+  const title=document.createElement('div');title.className='chat-response-part-title';title.textContent=pr.title||'Pull request';card.appendChild(title);
+  const meta=document.createElement('div');meta.className='chat-response-part-meta';meta.textContent=[pr.author,pr.linkTag,pr.uri].filter(Boolean).join(' · ');card.appendChild(meta);
+  if(pr.description){const desc=document.createElement('div');renderMd(desc,pr.description);card.appendChild(desc)}
+  const actions=document.createElement('div');actions.className='chat-response-part-actions';
+  if(pr.command){const run=document.createElement('button');run.type='button';run.className='chat-inline-action primary';run.textContent=pr.command.title||'Open Pull Request';run.onclick=()=>runChatResponseCommand(pr.command,run);actions.appendChild(run)}
+  else if(pr.uri){const open=document.createElement('button');open.type='button';open.className='chat-inline-action primary';open.textContent='Open Pull Request';open.onclick=()=>openChatResponseUri(pr.uri);actions.appendChild(open)}
+  if(actions.children.length)card.appendChild(actions);
+  wrap.appendChild(card);
+}
 function renderChatResponseNativeParts(body,payload,content){
   const parts=normalizeChatVisibleResponseParts(payload||{},content||'');
   if(!body||!parts.length)return false;
@@ -5674,6 +5845,11 @@ function renderChatResponseNativeParts(body,payload,content){
     if(part.kind==='confirmation'){renderChatConfirmationPart(wrap,part);return}
     if(part.kind==='questionCarousel'){renderChatQuestionCarouselPart(wrap,part);return}
     if(part.kind==='codeCitation'){renderChatCodeCitationPart(wrap,part);return}
+    if(part.kind==='codeblockUri'){renderChatCodeblockUriPart(wrap,part);return}
+    if(part.kind==='multiDiffData'){renderChatMultiDiffPart(wrap,part);return}
+    if(part.kind==='move'){renderChatMovePart(wrap,part);return}
+    if(part.kind==='extensions'){renderChatExtensionsPart(wrap,part);return}
+    if(part.kind==='pullRequest'){renderChatPullRequestPart(wrap,part);return}
     if(part.kind==='command'){
       let row=wrap.lastElementChild&&wrap.lastElementChild.classList&&wrap.lastElementChild.classList.contains('chat-response-command-row')?wrap.lastElementChild:null;
       if(!row){row=document.createElement('div');row.className='chat-response-command-row';row.setAttribute('role','toolbar');row.setAttribute('aria-label','Assistant command buttons');wrap.appendChild(row)}
