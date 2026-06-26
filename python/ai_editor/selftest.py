@@ -3282,16 +3282,16 @@ def test_phase1_ai_editor_regressions() -> None:
             and "renderWelcome();\n  setStatus(t('new_chat_title')" in html
             and "const body=latestChatMessageBody('assistant');" in html)
     _check("frontend Assistant composer keeps normal-width controls in one row",
-           ".chat-toolbar { display:grid; grid-template-columns:minmax(0,1fr) max-content; align-items:center; column-gap:6px;" in html
+           ".chat-toolbar { display:flex; align-items:center; gap:6px;" in html
            and "border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent);" in html
            and "min-width:0; overflow:hidden; white-space:nowrap;" in html
-           and ".chat-toolbar .spacer { display:none; }" in html
-           and ".chat-control-strip { grid-column:1; display:flex; align-items:center; gap:4px; flex-wrap:nowrap; min-width:0;" in html
+           and ".chat-toolbar .spacer { flex:1 1 auto; min-width:6px; height:22px; }" in html
+           and ".chat-control-strip { display:flex; align-items:center; gap:4px; flex-wrap:nowrap; min-width:0; flex:1 1 auto;" in html
            and "overflow:hidden; }" in html
            and ".chat-select-chip.agent { max-width:122px; }" in html
            and ".chat-select-chip.workflow { max-width:112px; }" in html
-           and ".chat-composer-trailing { grid-column:2; display:flex; align-items:center; justify-content:flex-end; gap:5px; margin-left:0;" in html
-           and "min-width:max-content; flex-wrap:nowrap;" in html
+           and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px; margin-left:0;" in html
+           and "min-width:max-content; flex:0 0 auto; flex-wrap:nowrap;" in html
            and ".chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:5px; min-width:0; flex:0 1 auto;" in html
            and "color:var(--fg-dim); white-space:nowrap; overflow:hidden;" in html
            and ".chat-session-chip { max-width:96px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" in html
