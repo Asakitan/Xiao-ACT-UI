@@ -339,6 +339,7 @@ dictionary@ state()
         assert "Blink_Enable" in (avatar_contract.get("expression_slots") or []), avatar_contract
         assert "action_surface" in (avatar_contract.get("diagnostics") or []), avatar_contract
         assert "retarget_surface" in (avatar_contract.get("diagnostics") or []), avatar_contract
+        assert "retarget_calibration" in (avatar_contract.get("diagnostics") or []), avatar_contract
 
         workspace_settings = FakeSettings({"act_plugin_locale": "zh-CN"})
         workspace_bus = EventBus()
