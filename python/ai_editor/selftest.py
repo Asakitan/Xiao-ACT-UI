@@ -3699,12 +3699,12 @@ def test_phase1_ai_editor_regressions() -> None:
             and "renderWelcome();\n  setStatus(t('new_chat_title')" in html
             and "const body=latestChatMessageBody('assistant');" in html)
     _check("frontend Assistant composer keeps normal-width controls in one row",
-           ".chat-toolbar { display:grid; grid-template-columns:max-content minmax(8px,1fr) max-content; align-items:center; column-gap:6px;" in html
+           ".chat-toolbar { display:flex; align-items:center; gap:6px; flex-wrap:nowrap;" in html
             and "border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent);" in html
             and "min-width:0; overflow:hidden; white-space:nowrap;" in html
-            and ".chat-toolbar .spacer { min-width:8px; width:100%; height:22px; }" in html
+            and ".chat-toolbar .spacer { flex:1 1 auto; min-width:8px; height:22px; }" in html
             and ".chat-control-strip { display:flex; align-items:center; gap:4px; flex-wrap:nowrap; min-width:0; width:auto; max-width:none;" in html
-            and "flex:0 0 auto;\n  overflow:visible; }" in html
+            and "flex:0 1 auto;\n  overflow:visible; }" in html
             and ".chat-select-chip { max-width:142px; padding:0 20px 0 8px; cursor:pointer; flex:0 0 auto; }" in html
             and ".chat-model-inline { width:116px; padding:0 8px; font-family:var(--mono); flex:0 0 116px; }" in html
             and ".chat-select-chip.agent { max-width:122px; }" in html
@@ -7744,6 +7744,8 @@ console.log("frontend word separator behavior ok");
            and ".extension-runtime-tag" in html
            and "source:item.runtimeOnly?'runtime-only':(runtime?'runtime':'manifest')" in html
            and "row.extensionId" in html
+           and "['Runtime',rows.filter(row=>row.ready).length]" in html
+           and "['Manifest',rows.filter(row=>!row.ready).length]" in html
            and "TreeView" in html
            and "WebviewView" in html
            and "CustomEditor" in html
@@ -29149,6 +29151,70 @@ process.stdin.resume();
                            "contentReferences", [{}])[1].get("status")
                             == "included"),
                        json.dumps(node_dynamic_chat_result,
+                                  ensure_ascii=False, default=str))
+                node_runtime_surfaces = api.list_extension_runtime_surfaces({
+                    "resourceUri": str(Uri.file(custom_editor_file)),
+                    "resourceLangId": "plaintext",
+                    "editorTextFocus": True,
+                    "view": "selftest.node.tree",
+                    "viewItem": "nodeRoot",
+                })
+                node_runtime_tree_surfaces = list(
+                    node_runtime_surfaces.get("treeViews", []))
+                node_runtime_webview_surfaces = list(
+                    node_runtime_surfaces.get("webviewViews", []))
+                node_runtime_custom_surfaces = list(
+                    node_runtime_surfaces.get("customEditors", []))
+                node_runtime_notebook_surfaces = list(
+                    node_runtime_surfaces.get("notebooks", []))
+                node_runtime_command_surfaces = list(
+                    node_runtime_surfaces.get("commands", []))
+                node_runtime_menu_surfaces = [
+                    item for item in node_runtime_surfaces.get("menus", [])
+                    if item.get("command") == "selftest.node.openItem"
+                ]
+                _check("node-backed extension surfaces register dynamically end to end",
+                       node_started is True
+                       and node_runtime_surfaces.get("ok") is True
+                       and any(
+                           item.get("id") == "selftest.node.tree"
+                           and item.get("runtimeAvailable") is True
+                           and item.get("runtimeState", {}).get(
+                               "badge", {}).get("value") == 7
+                           for item in node_runtime_tree_surfaces)
+                       and any(
+                           item.get("kind") == "webviewView"
+                           and item.get("runtimeAvailable") is True
+                           and item.get("runtimeState", {}).get(
+                               "retainContextWhenHidden") is True
+                           for item in node_runtime_webview_surfaces)
+                       and node_dynamic_webview_view_probe.get(
+                           "disposable") is True
+                       and node_dynamic_webview_view_probe.get(
+                           "hasView") is True
+                       and node_dynamic_webview_view_probe.get(
+                           "title") == "Dynamic Webview"
+                       and node_dynamic_webview_view_probe.get(
+                           "retainContextWhenHidden") is True
+                       and any(
+                           item.get("viewType") == "selftest.node.customEditor"
+                           and item.get("runtimeAvailable") is True
+                           and item.get("stateCount", 0) >= 1
+                           for item in node_runtime_custom_surfaces)
+                       and any(
+                           item.get("type") == "selftest-notebook"
+                           and item.get("runtimeAvailable") is True
+                           and item.get("serializerCount") >= 1
+                           and item.get("controllerCount") >= 1
+                           for item in node_runtime_notebook_surfaces)
+                       and any(
+                           item.get("command") == "selftest.node.openItem"
+                           and item.get("source") in ("extension", "runtime")
+                           and item.get("runtimeAvailable") is True
+                           for item in node_runtime_command_surfaces)
+                       and any(item.get("menu") == "view/item/context"
+                               for item in node_runtime_menu_surfaces),
+                       json.dumps(node_runtime_surfaces,
                                   ensure_ascii=False, default=str))
                 _check("node host tree provider registers dynamic activity view",
                        node_started is True

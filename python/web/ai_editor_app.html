@@ -862,13 +862,13 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-input-container.sendable .send-btn:not(:disabled) { box-shadow:0 0 0 1px color-mix(in srgb, var(--btn) 35%, transparent); }
 .chat-input-container.streaming .send-btn { background:var(--fg-error); }
 .send-btn svg { width:14px; height:14px; }
-.chat-toolbar { display:grid; grid-template-columns:max-content minmax(8px,1fr) max-content; align-items:center; column-gap:6px;
+.chat-toolbar { display:flex; align-items:center; gap:6px; flex-wrap:nowrap;
   padding:0 8px 7px; font-size:11px;
   border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent);
   min-width:0; overflow:hidden; white-space:nowrap; min-height:29px; }
 .chat-toolbar > * { min-width:0; }
 .chat-toolbar .hint { color:var(--fg-dim); }
-.chat-toolbar .spacer { min-width:8px; width:100%; height:22px; }
+.chat-toolbar .spacer { flex:1 1 auto; min-width:8px; height:22px; }
 .chat-session-chip { max-width:82px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   color:var(--fg-dim); font:10px/18px var(--mono); }
 
@@ -936,7 +936,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-used-context-title { color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; letter-spacing:.5px; }
 .chat-used-context-list { display:flex; flex-wrap:wrap; gap:5px; }
 
-.chat-control-strip { display:flex; align-items:center; gap:4px; flex-wrap:nowrap; min-width:0; width:auto; max-width:none; flex:0 0 auto;
+.chat-control-strip { display:flex; align-items:center; gap:4px; flex-wrap:nowrap; min-width:0; width:auto; max-width:none; flex:0 1 auto;
   overflow:visible; }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
   border-radius:999px; background:var(--bg3); color:var(--fg); font:11px var(--sans);
@@ -19954,6 +19954,7 @@ function renderExtensionRuntimeSurfacePanel(data){
   if(!summaryEl||!listEl)return;
   data=data||{};
   const summary=data.summary||{};
+  const rows=extensionRuntimeSurfaceRows(data);
   const chips=[
     ['TreeView',summary.treeViews||0],
     ['WebviewView',summary.webviewViews||0],
@@ -19961,6 +19962,8 @@ function renderExtensionRuntimeSurfacePanel(data){
     ['Notebook',summary.notebooks||0],
     ['Command',summary.commands||0],
     ['Menu',summary.menus||0],
+    ['Runtime',rows.filter(row=>row.ready).length],
+    ['Manifest',rows.filter(row=>!row.ready).length],
   ];
   summaryEl.innerHTML='';
   chips.forEach(([label,value])=>{
@@ -19969,7 +19972,6 @@ function renderExtensionRuntimeSurfacePanel(data){
     summaryEl.appendChild(chip);
   });
   listEl.innerHTML='';
-  const rows=extensionRuntimeSurfaceRows(data);
   if(!rows.length){
     const empty=document.createElement('div');empty.className='extension-runtime-empty';
     empty.textContent='No extension runtime surfaces reported.';
