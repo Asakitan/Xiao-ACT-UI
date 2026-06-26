@@ -3274,12 +3274,24 @@ def test_phase1_ai_editor_regressions() -> None:
            and "welcome-prompt-btn" in html
            and 'id="chat-toolbar-head" aria-live="polite"' in html
            and "chat-composer-action" in html
+           and "chat-composer-trailing" in html
            and "chat-composer-meta" in html
            and "attach-name" in html
            and "const value=normalizeChatSystemText(text);" in html
            and "if(!value){showChatWelcomeIfEmpty();return null}" in html
             and "renderWelcome();\n  setStatus(t('new_chat_title')" in html
             and "const body=latestChatMessageBody('assistant');" in html)
+    _check("frontend Assistant composer keeps normal-width controls in one row",
+           ".chat-toolbar .spacer { flex:1 1 16px; min-width:8px; }" in html
+           and "border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent); flex-wrap:nowrap; }" in html
+           and ".chat-control-strip { display:flex; align-items:center; gap:4px; flex-wrap:nowrap; min-width:0; flex:0 1 auto; }" in html
+           and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:6px; margin-left:auto;" in html
+           and "flex:0 0 auto; min-width:0; flex-wrap:nowrap;" in html
+           and ".chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:6px; min-width:0; flex:0 1 auto;" in html
+           and "color:var(--fg-dim); white-space:nowrap;" in html
+           and '<div class="chat-composer-trailing" aria-label="Chat actions and status">' in html
+           and '<span class="spacer"></span>\n                  <div class="chat-composer-trailing"' in html
+           and '</span>\n                  </div>\n                </div>' in html)
     _check("frontend Assistant suppresses null and empty message turns",
            "function normalizeChatMessageText(text,role)" in html
            and "function isChatEmptyLiteral(value)" in html
