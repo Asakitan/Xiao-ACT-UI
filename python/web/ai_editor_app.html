@@ -926,12 +926,26 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-toolbar-head { display:none; align-items:center; gap:6px; flex-wrap:wrap; min-height:26px;
   padding:7px 8px 0; color:var(--fg-dim); }
 .chat-toolbar-head.has-state { display:flex; }
-.chat-action-tray { display:none; margin:7px 8px 0; padding:6px; border:1px solid var(--border);
-  border-radius:6px; background:color-mix(in srgb,var(--bg2) 94%,var(--fg-accent)); gap:6px; flex-direction:column; }
-.chat-action-tray.active { display:flex; }
+.chat-action-tray { display:none; margin:7px 8px 0; }
+.chat-action-tray.active { display:block; }
+.chat-action-carousel { color:var(--fg); display:flex; flex-direction:column; max-height:min(300px,45vh);
+  border:1px solid var(--border); border-radius:6px; background:var(--bg2); overflow:hidden; }
+.chat-action-carousel:focus-visible,.chat-action-carousel:focus-within { border-color:var(--border-focus); }
+.chat-action-carousel-overlay { display:flex; align-items:center; gap:8px; padding:6px 8px 6px 10px;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent); }
+.chat-action-carousel-title-group { display:flex; align-items:center; gap:6px; min-width:0; overflow:hidden; }
+.chat-action-carousel-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; font-size:12px; }
+.chat-action-carousel-kind { color:var(--fg-accent); font:10px var(--mono); text-transform:uppercase; flex:0 0 auto; }
+.chat-action-carousel-actions { display:flex; align-items:center; gap:4px; flex:0 0 auto; margin-left:auto; }
+.chat-action-carousel-counter { color:var(--fg-dim); font:10px var(--mono); min-width:32px; text-align:center; }
+.chat-action-carousel-icon { width:22px; height:22px; border:1px solid transparent; border-radius:4px;
+  background:transparent; color:var(--fg-dim); display:inline-flex; align-items:center; justify-content:center;
+  padding:0; cursor:pointer; font:12px var(--sans); }
+.chat-action-carousel-icon:hover,.chat-action-carousel-icon:focus { background:var(--bg-hover); color:var(--fg); outline:none; }
+.chat-action-carousel-icon:disabled { opacity:.35; cursor:default; background:transparent; }
+.chat-action-carousel-content { padding:7px 8px; display:flex; flex-direction:column; gap:6px; }
 .chat-action-tray-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center; }
-.chat-action-tray-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg); font-size:12px; }
-.chat-action-tray-meta { color:var(--fg-dim); font:10px var(--mono); margin-left:6px; }
+.chat-action-tray-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg-dim); font-size:12px; }
 .chat-action-tray-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:5px; }
 .chat-edit-banner { display:inline-flex; align-items:center; gap:6px; min-width:0; max-width:100%;
   color:var(--fg-warning); font:11px/18px var(--sans); }
@@ -2891,6 +2905,7 @@ const api=()=>window.pywebview&&window.pywebview.api;
 let _chatMessageSeq=0;
 let _providerMessageSeq=0;
 const _assistantActionTrayItems=new Map();
+let _assistantActionTrayActiveKey='';
 let _windowCloseRequested=false;
 function requestWindowClose(){
   if(_windowCloseRequested)return;
@@ -6011,6 +6026,9 @@ function assistantActionTrayTitle(item){
   const source=item&&item.source||{};
   return String(source.title||(item.kind==='questionCarousel'?'Answer Assistant questions':'Confirm Assistant action'));
 }
+function assistantActionTrayKindLabel(item){
+  return item&&item.kind==='questionCarousel'?'questions':'confirm';
+}
 function registerAssistantActionTrayItem(kind,part,source,card){
   const callbackButton=source&&Array.isArray(source.buttons)?source.buttons.find(button=>assistantResponsePartHasCallback(source,button)):null;
   if(!assistantResponsePartHasCallback(source,callbackButton)||!card)return;
@@ -6018,6 +6036,7 @@ function registerAssistantActionTrayItem(kind,part,source,card){
   if(!key)return;
   card.dataset.assistantActionKey=key;
   _assistantActionTrayItems.set(key,{key,kind,part,source,card,state:'pending'});
+  if(!_assistantActionTrayActiveKey)_assistantActionTrayActiveKey=key;
 }
 function scrollAssistantActionSource(card){
   if(!card||!card.scrollIntoView)return;
@@ -6033,49 +6052,132 @@ function assistantActionTrayPendingItems(){
   });
   return items;
 }
+function assistantActionTrayActiveIndex(items){
+  if(!items.length)return -1;
+  let index=items.findIndex(item=>item.key===_assistantActionTrayActiveKey);
+  if(index<0){
+    _assistantActionTrayActiveKey=items[0].key;
+    index=0;
+  }
+  return index;
+}
+function assistantActionTrayNavigate(delta){
+  const items=assistantActionTrayPendingItems();
+  if(items.length<2)return;
+  const index=assistantActionTrayActiveIndex(items);
+  const next=(index+delta+items.length)%items.length;
+  _assistantActionTrayActiveKey=items[next].key;
+  syncAssistantActionTray();
+}
+function assistantActionTrayPrimaryButton(item){
+  if(!item||item.kind!=='confirmation')return null;
+  const buttons=Array.isArray(item.source&&item.source.buttons)?item.source.buttons:[];
+  return buttons.find(button=>assistantResponsePartHasCallback(item.source,button))||buttons[0]||null;
+}
+function assistantActionTrayCanAllowAll(items){
+  if(!items.length||items.length<2)return false;
+  return items.every(item=>item.kind==='confirmation'&&assistantActionTrayPrimaryButton(item));
+}
+async function assistantActionTrayAllowAll(button){
+  const items=assistantActionTrayPendingItems().filter(item=>item.kind==='confirmation'&&assistantActionTrayPrimaryButton(item));
+  if(!items.length)return;
+  if(button){button.disabled=true;button.setAttribute('aria-busy','true')}
+  for(const item of items){
+    if(!_assistantActionTrayItems.has(item.key))continue;
+    const actionButton=assistantActionTrayPrimaryButton(item);
+    if(button&&button.dataset)button.dataset.assistantActionKey=item.key;
+    const label=String((actionButton&&actionButton.label)||actionButton||'Continue');
+    await assistantSubmitResponsePartAction(item.part,(actionButton&&actionButton.action)||'button',(actionButton&&actionButton.value)!==undefined?actionButton.value:label,actionButton,{buttonEl:button,fallbackTitle:item.source.title||'Confirmation',fallbackText:label});
+  }
+  if(button){button.removeAttribute('aria-busy');button.disabled=false}
+  syncAssistantActionTray();
+}
+function assistantActionTrayButton(label,title,className,onClick){
+  const btn=document.createElement('button');
+  btn.type='button';
+  btn.className=className||'chat-inline-action';
+  btn.textContent=label;
+  if(title)btn.title=title;
+  btn.onclick=onClick;
+  return btn;
+}
+function assistantActionTrayRenderItem(item,content){
+  const row=document.createElement('div');row.className='chat-action-tray-row';row.dataset.assistantActionKey=item.key;
+  const title=document.createElement('div');title.className='chat-action-tray-title';title.textContent=assistantActionTrayTitle(item);
+  row.appendChild(title);
+  const actions=document.createElement('div');actions.className='chat-action-tray-actions';
+  if(item.kind==='confirmation'){
+    (item.source.buttons||[]).forEach(button=>{
+      const label=String((button&&button.label)||button||'Continue');
+      const btn=assistantActionTrayButton(label,'Submit '+label,'chat-inline-action primary',()=>assistantSubmitResponsePartAction(item.part,(button&&button.action)||'button',(button&&button.value)!==undefined?button.value:label,button,{buttonEl:btn,fallbackTitle:item.source.title||'Confirmation',fallbackText:label}));
+      btn.dataset.assistantCallback='true';btn.dataset.assistantAction=String((button&&button.action)||label);btn.dataset.assistantActionKey=item.key;
+      actions.appendChild(btn);
+    });
+  }else if(item.kind==='questionCarousel'){
+    actions.appendChild(assistantActionTrayButton('Review','Review questions','chat-inline-action',()=>scrollAssistantActionSource(item.card)));
+    const answer=assistantActionTrayButton('Submit answers','Submit answers','chat-inline-action primary',()=>assistantSubmitResponsePartAction(item.part,'answers',chatQuestionCarouselAnswerText(item.card),null,{buttonEl:answer,fallbackTitle:'Answers',fallbackText:chatQuestionCarouselAnswerText(item.card),answers:chatQuestionCarouselAnswerPayload(item.card)}));
+    answer.dataset.assistantCallback='true';answer.dataset.assistantAction='answers';answer.dataset.assistantActionKey=item.key;
+    actions.appendChild(answer);
+    if(item.source.allowSkip){
+      const skip=assistantActionTrayButton('Skip','Skip questions','chat-inline-action',()=>assistantSubmitResponsePartAction(item.part,'skip','Skip',null,{buttonEl:skip,fallbackTitle:'Answers',fallbackText:'Skip',answers:[]}));
+      skip.dataset.assistantCallback='true';skip.dataset.assistantAction='skip';skip.dataset.assistantActionKey=item.key;
+      actions.appendChild(skip);
+    }
+  }
+  row.appendChild(actions);content.appendChild(row);
+}
 function syncAssistantActionTray(){
   const tray=$('chat-action-tray');if(!tray)return;
   const items=assistantActionTrayPendingItems();
   tray.innerHTML='';
   tray.classList.toggle('active',items.length>0);
   tray.dataset.pendingCount=String(items.length);
+  tray.onkeydown=(e)=>{
+    if(e.key==='ArrowLeft'){e.preventDefault();assistantActionTrayNavigate(-1)}
+    else if(e.key==='ArrowRight'){e.preventDefault();assistantActionTrayNavigate(1)}
+  };
   if(!items.length)return;
-  items.slice(0,4).forEach((item,index)=>{
-    const row=document.createElement('div');row.className='chat-action-tray-row';row.dataset.assistantActionKey=item.key;
-    const title=document.createElement('div');title.className='chat-action-tray-title';title.textContent=assistantActionTrayTitle(item);
-    const meta=document.createElement('span');meta.className='chat-action-tray-meta';meta.textContent=(index+1)+'/'+items.length;title.appendChild(meta);
-    row.appendChild(title);
-    const actions=document.createElement('div');actions.className='chat-action-tray-actions';
-    if(item.kind==='confirmation'){
-      (item.source.buttons||[]).forEach(button=>{
-        const label=String((button&&button.label)||button||'Continue');
-        const btn=document.createElement('button');btn.type='button';btn.className='chat-inline-action primary';btn.textContent=label;
-        btn.dataset.assistantCallback='true';btn.dataset.assistantAction=String((button&&button.action)||label);btn.dataset.assistantActionKey=item.key;
-        btn.onclick=()=>assistantSubmitResponsePartAction(item.part,(button&&button.action)||'button',(button&&button.value)!==undefined?button.value:label,button,{buttonEl:btn,fallbackTitle:item.source.title||'Confirmation',fallbackText:label});
-        actions.appendChild(btn);
-      });
-    }else if(item.kind==='questionCarousel'){
-      const review=document.createElement('button');review.type='button';review.className='chat-inline-action';review.textContent='Review';review.onclick=()=>scrollAssistantActionSource(item.card);actions.appendChild(review);
-      const answer=document.createElement('button');answer.type='button';answer.className='chat-inline-action primary';answer.textContent='Submit answers';answer.dataset.assistantCallback='true';answer.dataset.assistantAction='answers';answer.dataset.assistantActionKey=item.key;
-      answer.onclick=()=>assistantSubmitResponsePartAction(item.part,'answers',chatQuestionCarouselAnswerText(item.card),null,{buttonEl:answer,fallbackTitle:'Answers',fallbackText:chatQuestionCarouselAnswerText(item.card),answers:chatQuestionCarouselAnswerPayload(item.card)});
-      actions.appendChild(answer);
-      if(item.source.allowSkip){
-        const skip=document.createElement('button');skip.type='button';skip.className='chat-inline-action';skip.textContent='Skip';skip.dataset.assistantCallback='true';skip.dataset.assistantAction='skip';skip.dataset.assistantActionKey=item.key;
-        skip.onclick=()=>assistantSubmitResponsePartAction(item.part,'skip','Skip',null,{buttonEl:skip,fallbackTitle:'Answers',fallbackText:'Skip',answers:[]});actions.appendChild(skip);
-      }
-    }
-    row.appendChild(actions);tray.appendChild(row);
-  });
+  const activeIndex=assistantActionTrayActiveIndex(items);
+  const active=items[activeIndex];
+  const root=document.createElement('div');root.className='chat-action-carousel chat-tool-confirmation-carousel';root.tabIndex=-1;root.setAttribute('role','group');root.setAttribute('aria-label','Pending Assistant actions carousel');
+  const overlay=document.createElement('div');overlay.className='chat-action-carousel-overlay chat-tool-carousel-overlay';
+  const titleGroup=document.createElement('div');titleGroup.className='chat-action-carousel-title-group chat-tool-carousel-title-group';
+  const kind=document.createElement('span');kind.className='chat-action-carousel-kind';kind.textContent=assistantActionTrayKindLabel(active);
+  const title=document.createElement('span');title.className='chat-action-carousel-title chat-tool-carousel-collapsed-title';title.textContent=assistantActionTrayTitle(active);
+  titleGroup.appendChild(kind);titleGroup.appendChild(title);overlay.appendChild(titleGroup);
+  const overlayActions=document.createElement('div');overlayActions.className='chat-action-carousel-actions chat-tool-carousel-overlay-actions';
+  if(assistantActionTrayCanAllowAll(items)){
+    const allowAll=assistantActionTrayButton('Allow all','Submit the primary action for all pending confirmations','chat-inline-action primary',()=>assistantActionTrayAllowAll(allowAll));
+    allowAll.classList.add('chat-tool-carousel-allow-all-button');
+    overlayActions.appendChild(allowAll);
+  }
+  const counter=document.createElement('span');counter.className='chat-action-carousel-counter chat-tool-carousel-step-indicator';counter.textContent=(activeIndex+1)+'/'+items.length;overlayActions.appendChild(counter);
+  const prev=assistantActionTrayButton('<','Previous pending action','chat-action-carousel-icon chat-tool-carousel-nav-arrow',()=>assistantActionTrayNavigate(-1));
+  const next=assistantActionTrayButton('>','Next pending action','chat-action-carousel-icon chat-tool-carousel-nav-arrow',()=>assistantActionTrayNavigate(1));
+  prev.disabled=items.length<2;next.disabled=items.length<2;overlayActions.appendChild(prev);overlayActions.appendChild(next);
+  const review=assistantActionTrayButton('Review','Review source response part','chat-inline-action',()=>scrollAssistantActionSource(active.card));overlayActions.appendChild(review);
+  overlay.appendChild(overlayActions);root.appendChild(overlay);
+  const content=document.createElement('div');content.className='chat-action-carousel-content chat-tool-carousel-content';
+  assistantActionTrayRenderItem(active,content);
+  root.appendChild(content);tray.appendChild(root);
 }
 function assistantActionTraySnapshot(){
   const tray=$('chat-action-tray');
+  const items=assistantActionTrayPendingItems();
+  const activeIndex=assistantActionTrayActiveIndex(items);
   return {
     ok:!!tray,
     active:!!(tray&&tray.classList.contains('active')),
-    pendingCount:assistantActionTrayPendingItems().length,
+    pendingCount:items.length,
+    activeIndex,
+    activeKey:activeIndex>=0?items[activeIndex].key:'',
+    carouselCount:tray?tray.querySelectorAll('.chat-action-carousel').length:0,
     rowCount:tray?tray.querySelectorAll('.chat-action-tray-row').length:0,
+    navButtonCount:tray?tray.querySelectorAll('.chat-tool-carousel-nav-arrow').length:0,
+    allowAllVisible:!!(tray&&tray.querySelector('.chat-tool-carousel-allow-all-button')),
     callbackButtonCount:tray?tray.querySelectorAll('[data-assistant-callback="true"]').length:0,
     titles:tray?Array.from(tray.querySelectorAll('.chat-action-tray-title')).map(el=>el.childNodes[0]?el.childNodes[0].textContent:''):[],
+    activeTitle:tray&&tray.querySelector('.chat-action-carousel-title')?tray.querySelector('.chat-action-carousel-title').textContent:'',
   };
 }
 function assistantResponsePartContext(opts){

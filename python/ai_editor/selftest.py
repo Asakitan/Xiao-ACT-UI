@@ -4650,16 +4650,28 @@ def test_phase1_ai_editor_regressions() -> None:
            and "window.assistantSubmitResponsePartAction=assistantSubmitResponsePartAction;" in html)
     _check("frontend Assistant mirrors pending response actions above composer",
            "const _assistantActionTrayItems=new Map();" in html
+           and "let _assistantActionTrayActiveKey='';" in html
            and ".chat-action-tray.active" in html
+           and ".chat-action-carousel { color:var(--fg); display:flex; flex-direction:column; max-height:min(300px,45vh);" in html
+           and "chat-tool-confirmation-carousel" in html
+           and "chat-tool-carousel-overlay" in html
+           and "chat-tool-carousel-step-indicator" in html
            and "function registerAssistantActionTrayItem(kind,part,source,card)" in html
            and "function syncAssistantActionTray()" in html
+           and "function assistantActionTrayActiveIndex(items)" in html
+           and "function assistantActionTrayNavigate(delta)" in html
+           and "function assistantActionTrayAllowAll(button)" in html
            and "function assistantActionTraySnapshot()" in html
            and "card.dataset.assistantActionKey=key;" in html
+           and "if(!_assistantActionTrayActiveKey)_assistantActionTrayActiveKey=key;" in html
            and "registerAssistantActionTrayItem('confirmation',part,data,card);" in html
            and "registerAssistantActionTrayItem('questionCarousel',part,carousel,card);" in html
            and "button.dataset.assistantActionKey" in html
            and "tray.dataset.pendingCount=String(items.length);" in html
-           and "assistantActionTrayPendingItems().length" in html)
+           and "if(e.key==='ArrowLeft')" in html
+           and "if(assistantActionTrayCanAllowAll(items))" in html
+           and "carouselCount:tray?tray.querySelectorAll('.chat-action-carousel').length:0" in html
+           and "allowAllVisible:!!(tray&&tray.querySelector('.chat-tool-carousel-allow-all-button'))" in html)
     _check("frontend Assistant applies native response text edits and file tree actions",
            "chat-response-summary" in html
            and "chat-inline-actions" in html
