@@ -2743,6 +2743,45 @@ function _serializeTreeItem(viewId, item, element) {
     return result;
 }
 
+function _treeItemUndefinedProperties(item) {
+    if (!item || typeof item !== 'object') return new Set();
+    const keys = [
+        'label', 'description', 'tooltip', 'resourceUri', 'iconPath',
+        'command', 'contextValue', 'collapsibleState', 'checkboxState',
+        'accessibilityInformation',
+    ];
+    return new Set(keys.filter(key => item[key] === undefined));
+}
+
+function _mergeResolvedTreeItem(base, resolved, allowed) {
+    if (!base || typeof base !== 'object') return resolved || base;
+    if (!resolved || typeof resolved !== 'object') return base;
+    for (const key of allowed) {
+        if (resolved[key] !== undefined) base[key] = resolved[key];
+    }
+    return base;
+}
+
+async function _resolveTreeItemForProvider(provider, viewId, element) {
+    let item = typeof provider.getTreeItem === 'function'
+        ? await provider.getTreeItem(element)
+        : element;
+    if (!provider || typeof provider.resolveTreeItem !== 'function') {
+        return item;
+    }
+    if (!item || typeof item !== 'object') {
+        return item;
+    }
+    const allowed = _treeItemUndefinedProperties(item);
+    if (!allowed.size) return item;
+    const token = {
+        isCancellationRequested: false,
+        onCancellationRequested: new EventEmitter().event,
+    };
+    const resolved = await provider.resolveTreeItem(item, element, token);
+    return _mergeResolvedTreeItem(item, resolved, allowed);
+}
+
 function _serializeArgForPython(value, viewId) {
     if (value === undefined || value === null) return value;
     if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
@@ -13516,6 +13555,9 @@ async function handleTreeRequest(msg) {
             const raw = typeof provider.getTreeItem === 'function'
                 ? await provider.getTreeItem(element)
                 : element;
+            value = _serializeTreeItem(viewId, raw, element);
+        } else if (op === 'resolveTreeItem') {
+            const raw = await _resolveTreeItemForProvider(provider, viewId, element);
             value = _serializeTreeItem(viewId, raw, element);
         } else if (op === 'getParent') {
             const raw = typeof provider.getParent === 'function'

@@ -1470,6 +1470,15 @@ class NodeTreeDataProvider:
         value = result.get("value", {})
         return value if isinstance(value, dict) else {}
 
+    def resolveTreeItem(self, item: Any, element: Any, token: Any = None
+                        ) -> Dict[str, Any]:
+        result = self._host.request_tree_data_result(
+            self.view_id, "resolveTreeItem",
+            self._element_handle(element), default={})
+        self._remember_result_error(result)
+        value = result.get("value", {})
+        return value if isinstance(value, dict) else {}
+
     def getParent(self, element: Any) -> Optional[NodeTreeElement]:
         result = self._host.request_tree_data_result(
             self.view_id, "getParent",

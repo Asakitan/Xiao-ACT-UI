@@ -25,7 +25,7 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import quote, unquote, urlparse, urlsplit, urlunsplit
 
 # Ensure package root on path
@@ -12489,6 +12489,8 @@ class AIEditorAPI:
             child_seen = set(seen)
             child_seen.add(marker)
             item = self._tree_item_for_element(provider, child, errors=errors)
+            item = self._resolve_tree_item_for_element(
+                provider, item, child, errors=errors)
             node = self._tree_node_preview(
                 child, item, tree_view=tree_view,
                 view_id=getattr(tree_view, "id", ""),
@@ -12558,6 +12560,68 @@ class AIEditorAPI:
         except Exception as exc:
             self._append_tree_provider_error(errors, "getTreeItem", exc)
             return element
+
+    def _resolve_tree_item_for_element(
+            self, provider: Any, item: Any, element: Any,
+            errors: Optional[List[Dict[str, Any]]] = None) -> Any:
+        resolver = getattr(provider, "resolveTreeItem", None)
+        if not callable(resolver):
+            return item
+        guarded_item, defined_values = self._tree_item_resolution_guard(item)
+        try:
+            resolved = _resolve_vscode_provider_result(
+                resolver(guarded_item, element, None), default=None)
+            self._append_last_tree_provider_error(
+                provider, errors, "resolveTreeItem")
+            return self._merge_resolved_tree_item(
+                item, resolved, defined_values)
+        except TypeError:
+            try:
+                resolved = _resolve_vscode_provider_result(
+                    resolver(guarded_item, element), default=None)
+                self._append_last_tree_provider_error(
+                    provider, errors, "resolveTreeItem")
+                return self._merge_resolved_tree_item(
+                    item, resolved, defined_values)
+            except Exception as exc:
+                self._append_tree_provider_error(
+                    errors, "resolveTreeItem", exc)
+                return item
+        except Exception as exc:
+            self._append_tree_provider_error(errors, "resolveTreeItem", exc)
+            return item
+
+    @classmethod
+    def _tree_item_resolution_guard(cls, item: Any) -> Tuple[Any, Dict[str, Any]]:
+        keys = [
+            "label", "description", "tooltip", "resourceUri", "iconPath",
+            "command", "contextValue", "collapsibleState", "checkboxState",
+            "accessibilityInformation",
+        ]
+        defined: Dict[str, Any] = {}
+        for key in keys:
+            value = cls._tree_value(item, key)
+            if value is not None:
+                defined[key] = value
+        return item, defined
+
+    @classmethod
+    def _merge_resolved_tree_item(
+            cls, original: Any, resolved: Any,
+            defined_values: Dict[str, Any]) -> Any:
+        item = resolved if resolved is not None else original
+        if not defined_values:
+            return item
+        if isinstance(item, dict):
+            for key, value in defined_values.items():
+                item[key] = value
+            return item
+        for key, value in defined_values.items():
+            try:
+                setattr(item, key, value)
+            except Exception:
+                pass
+        return item
 
     def _tree_node_preview(self, element: Any, item: Any,
                            tree_view: Any = None,

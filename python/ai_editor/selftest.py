@@ -18567,6 +18567,7 @@ async function activate(context) {
     description: 'from-js',
     children: [{ id: 'leaf', label: 'Node Leaf' }],
   };
+  const treeResolveState = { calls: 0, ids: [] };
   const emitter = new vscode.EventEmitter();
   const provider = {
     onDidChangeTreeData: emitter.event,
@@ -18583,11 +18584,31 @@ async function activate(context) {
         element.children ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
       );
       item.description = element.description || 'leaf-desc';
-      item.tooltip = 'tooltip:' + element.id;
+      if (element.children) {
+        item.tooltip = 'tooltip:' + element.id;
+      }
       item.contextValue = element.children ? 'nodeRoot' : 'nodeLeaf';
       item.resourceUri = vscode.Uri.file('/workspace/' + element.id + '.txt');
-      item.iconPath = new vscode.ThemeIcon(element.children ? 'folder' : 'file');
+      if (element.children) {
+        item.iconPath = new vscode.ThemeIcon('folder');
+      }
       item.checkboxState = element.children ? vscode.TreeItemCheckboxState.Checked : vscode.TreeItemCheckboxState.Unchecked;
+      return item;
+    },
+    resolveTreeItem(item, element, token) {
+      treeResolveState.calls += 1;
+      treeResolveState.ids.push(element && element.id);
+      item.tooltip = 'resolved-tooltip:' + element.id;
+      item.command = {
+        command: 'selftest.node.openItem',
+        title: 'Open ' + element.id,
+        arguments: [element],
+      };
+      item.iconPath = new vscode.ThemeIcon('file');
+      item.accessibilityInformation = {
+        label: 'Accessible ' + element.id,
+        role: 'treeitem',
+      };
       return item;
     },
   };
@@ -19046,6 +19067,7 @@ async function activate(context) {
   vscode.commands.registerCommand('selftest.node.openItem', element => {
     output.appendLine('open:' + (element && element.id));
   });
+  vscode.commands.registerCommand('selftest.node.treeResolveProbe', () => treeResolveState);
   vscode.commands.registerCommand('selftest.node.workspaceProbe', async () => {
     const decoder = new TextDecoder();
     const encoder = new TextEncoder();
@@ -22395,6 +22417,10 @@ module.exports = { activate, deactivate };
                     timeout=3.0)
                 node_command_registered = _wait_until(
                     lambda: "selftest.node.openItem"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                node_tree_resolve_command_registered = _wait_until(
+                    lambda: "selftest.node.treeResolveProbe"
                     in api._ext_host.commands.list_commands(),
                     timeout=3.0)
                 node_workspace_command_registered = _wait_until(
@@ -26772,11 +26798,35 @@ module.exports = { activate, deactivate };
                 node_handle = node_nodes[0].get("handle", "") if node_nodes else ""
                 loaded_node_children = api.load_extension_tree_children(
                     "selftest.node.tree", node_handle)
+                try:
+                    node_tree_resolve_probe = api._ext_host.commands.execute(
+                        "selftest.node.treeResolveProbe")
+                except Exception as exc:
+                    node_tree_resolve_probe = {"_error": str(exc)}
                 _check("node host tree provider lazy loads JS children",
                        loaded_node_children.get("ok") is True
                        and loaded_node_children.get("nodes", [{}])[0].get("label") == "Node Leaf"
                        and loaded_node_children.get("nodes", [{}])[0].get("contextValue") == "nodeLeaf"
                        and loaded_node_children.get("nodes", [{}])[0].get("themeIcon", {}).get("id") == "file")
+                node_leaf = loaded_node_children.get("nodes", [{}])[0]
+                _check("node host resolves TreeItem undefined fields dynamically",
+                       node_tree_resolve_command_registered
+                       and isinstance(node_tree_resolve_probe, dict)
+                       and node_tree_resolve_probe.get("calls", 0) >= 2
+                       and "root" in node_tree_resolve_probe.get("ids", [])
+                       and "leaf" in node_tree_resolve_probe.get("ids", [])
+                       and node_nodes[0].get("tooltip") == "tooltip:root"
+                       and node_nodes[0].get("themeIcon", {}).get("id") == "folder"
+                       and node_leaf.get("tooltip") == "resolved-tooltip:leaf"
+                       and node_leaf.get("command", {}).get("command")
+                       == "selftest.node.openItem"
+                       and node_leaf.get("accessibilityInformation", {}).get(
+                           "label") == "Accessible leaf",
+                       json.dumps({
+                           "probe": node_tree_resolve_probe,
+                           "root": node_nodes[0] if node_nodes else {},
+                           "leaf": node_leaf,
+                       }, ensure_ascii=False, default=str))
                 node_leaf_handle = loaded_node_children.get(
                     "nodes", [{}])[0].get("handle", "")
                 node_drop_result = api.drop_extension_tree_items(
