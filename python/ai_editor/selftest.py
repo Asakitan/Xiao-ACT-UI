@@ -18094,6 +18094,8 @@ async function activate(context) {
     output.appendLine('open:' + (element && element.id));
   });
   vscode.commands.registerCommand('selftest.node.workspaceProbe', async () => {
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
     const folders = vscode.workspace.workspaceFolders || [];
     const pickedFolder = await vscode.window.showWorkspaceFolderPick({
       placeHolder: 'Pick workspace folder',
@@ -18168,6 +18170,81 @@ async function activate(context) {
     let deleteMissing = false;
     try { renamedExists = (await vscode.workspace.fs.stat(renamedUri)).type === vscode.FileType.File; } catch {}
     try { await vscode.workspace.fs.stat(deleteUri); } catch { deleteMissing = true; }
+    async function fsErrorCode(promiseFactory) {
+      try {
+        await promiseFactory();
+        return 'ok';
+      } catch (error) {
+        return error && error.code ? error.code : (error && error.name ? error.name : String(error));
+      }
+    }
+    const fsParityRoot = vscode.Uri.joinPath(context.extensionUri, 'workspace-fs-parity');
+    const fsParityNested = vscode.Uri.joinPath(fsParityRoot, 'nested');
+    const fsParityChild = vscode.Uri.joinPath(fsParityNested, 'child.bin');
+    const fsParityMissing = vscode.Uri.joinPath(fsParityRoot, 'missing.txt');
+    const fsParityRenameSource = vscode.Uri.joinPath(fsParityRoot, 'rename-source.txt');
+    const fsParityRenameTarget = vscode.Uri.joinPath(fsParityRoot, 'rename-target.txt');
+    const fsParityCopySource = vscode.Uri.joinPath(fsParityRoot, 'copy-source.txt');
+    const fsParityCopyTarget = vscode.Uri.joinPath(fsParityRoot, 'copy-target.txt');
+    await vscode.workspace.fs.delete(fsParityRoot, { recursive: true }).catch(() => {});
+    await vscode.workspace.fs.createDirectory(fsParityNested);
+    await vscode.workspace.fs.writeFile(fsParityChild, Uint8Array.from([0, 255, 65]));
+    const fsParityRead = await vscode.workspace.fs.readFile(fsParityChild);
+    const fsParityEntries = await vscode.workspace.fs.readDirectory(fsParityRoot);
+    const fsParityMissingStatCode = await fsErrorCode(
+      () => vscode.workspace.fs.stat(fsParityMissing));
+    const fsParityMissingDeleteCode = await fsErrorCode(
+      () => vscode.workspace.fs.delete(fsParityMissing));
+    const fsParityNonRecursiveDeleteCode = await fsErrorCode(
+      () => vscode.workspace.fs.delete(fsParityRoot));
+    await vscode.workspace.fs.writeFile(fsParityRenameSource, encoder.encode('rename-source'));
+    await vscode.workspace.fs.writeFile(fsParityRenameTarget, encoder.encode('rename-target'));
+    const fsParityRenameExistsCode = await fsErrorCode(
+      () => vscode.workspace.fs.rename(fsParityRenameSource, fsParityRenameTarget));
+    const fsParityRenameSourceAfterExists = decoder.decode(
+      await vscode.workspace.fs.readFile(fsParityRenameSource));
+    await vscode.workspace.fs.rename(
+      fsParityRenameSource,
+      fsParityRenameTarget,
+      { overwrite: true },
+    );
+    const fsParityRenameOverwriteText = decoder.decode(
+      await vscode.workspace.fs.readFile(fsParityRenameTarget));
+    await vscode.workspace.fs.writeFile(fsParityCopySource, encoder.encode('copy-source'));
+    await vscode.workspace.fs.writeFile(fsParityCopyTarget, encoder.encode('copy-target'));
+    const fsParityCopyExistsCode = await fsErrorCode(
+      () => vscode.workspace.fs.copy(fsParityCopySource, fsParityCopyTarget));
+    await vscode.workspace.fs.copy(
+      fsParityCopySource,
+      fsParityCopyTarget,
+      { overwrite: true },
+    );
+    const fsParityCopyOverwriteText = decoder.decode(
+      await vscode.workspace.fs.readFile(fsParityCopyTarget));
+    await vscode.workspace.fs.delete(fsParityRoot, { recursive: true });
+    const fsParityRecursiveDeleteCode = await fsErrorCode(
+      () => vscode.workspace.fs.stat(fsParityRoot));
+    const fsParity = {
+      readIsUint8Array: fsParityRead instanceof Uint8Array,
+      readBytes: Array.from(fsParityRead),
+      entries: fsParityEntries.map(([name, type]) => [name, type]).sort(),
+      missingStatCode: fsParityMissingStatCode,
+      missingDeleteCode: fsParityMissingDeleteCode,
+      nonRecursiveDeleteCode: fsParityNonRecursiveDeleteCode,
+      renameExistsCode: fsParityRenameExistsCode,
+      renameSourceAfterExists: fsParityRenameSourceAfterExists,
+      renameOverwriteText: fsParityRenameOverwriteText,
+      copyExistsCode: fsParityCopyExistsCode,
+      copyOverwriteText: fsParityCopyOverwriteText,
+      recursiveDeleteCode: fsParityRecursiveDeleteCode,
+      writableFile: vscode.workspace.fs.isWritableFileSystem('file'),
+      writableUnknown: vscode.workspace.fs.isWritableFileSystem('sao-unknown'),
+      errorFactoryCodes: [
+        vscode.FileSystemError.FileNotFound(fsParityMissing).code,
+        vscode.FileSystemError.FileExists(fsParityMissing).code,
+        vscode.FileSystemError.NoPermissions(fsParityMissing).code,
+      ],
+    };
     const aiConfig = vscode.workspace.getConfiguration('ai_editor');
     const aliasConfig = vscode.workspace.getConfiguration('extensions');
     const nestedConfig = vscode.workspace.getConfiguration('ai_editor.extensions');
@@ -18344,6 +18421,7 @@ async function activate(context) {
       fileOpsApplied,
       renamedExists,
       deleteMissing,
+      fsParity,
       configBefore,
       configAfter,
       manifestConfigBefore,
@@ -22973,6 +23051,44 @@ module.exports = { activate, deactivate };
                        and node_workspace_probe.get("renamedExists") is True
                        and node_workspace_probe.get("deleteMissing") is True,
                        json.dumps(node_workspace_probe, ensure_ascii=False))
+                node_workspace_fs_parity = (
+                    node_workspace_probe.get("fsParity", {})
+                    if isinstance(node_workspace_probe, dict) else {})
+                _check("node host workspace.fs matches VS Code file semantics",
+                       node_workspace_probe.get("fileOpsApplied") is True
+                       and node_workspace_fs_parity.get("readIsUint8Array")
+                       is True
+                       and node_workspace_fs_parity.get("readBytes")
+                       == [0, 255, 65]
+                       and ["nested", 2] in node_workspace_fs_parity.get(
+                           "entries", [])
+                       and node_workspace_fs_parity.get("missingStatCode")
+                       == "FileNotFound"
+                       and node_workspace_fs_parity.get("missingDeleteCode")
+                       == "FileNotFound"
+                       and node_workspace_fs_parity.get(
+                           "nonRecursiveDeleteCode") != "ok"
+                       and node_workspace_fs_parity.get("renameExistsCode")
+                       == "FileExists"
+                       and node_workspace_fs_parity.get(
+                           "renameSourceAfterExists") == "rename-source"
+                       and node_workspace_fs_parity.get(
+                           "renameOverwriteText") == "rename-source"
+                       and node_workspace_fs_parity.get("copyExistsCode")
+                       == "FileExists"
+                       and node_workspace_fs_parity.get(
+                           "copyOverwriteText") == "copy-source"
+                       and node_workspace_fs_parity.get(
+                           "recursiveDeleteCode") == "FileNotFound"
+                       and node_workspace_fs_parity.get("writableFile")
+                       is True
+                       and node_workspace_fs_parity.get("writableUnknown")
+                       is None
+                       and node_workspace_fs_parity.get(
+                           "errorFactoryCodes")
+                       == ["FileNotFound", "FileExists", "NoPermissions"],
+                       json.dumps(node_workspace_fs_parity,
+                                  ensure_ascii=False))
                 custom_editor_message_seen = _wait_until(
                     lambda: "custom:ping" in "".join(
                         node_host._output_channels.get("node-tree-selftest", [])),

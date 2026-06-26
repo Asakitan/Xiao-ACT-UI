@@ -219,6 +219,26 @@ class Uri {
     }
 }
 
+function _fileSystemErrorMessage(messageOrUri) {
+    if (messageOrUri instanceof Uri) return messageOrUri.toString();
+    if (messageOrUri === undefined || messageOrUri === null) return '';
+    return String(messageOrUri);
+}
+
+class FileSystemError extends Error {
+    constructor(messageOrUri, code = 'Unknown') {
+        super(_fileSystemErrorMessage(messageOrUri));
+        this.name = 'FileSystemError';
+        this.code = code || 'Unknown';
+    }
+    static FileNotFound(messageOrUri) { return new FileSystemError(messageOrUri, 'FileNotFound'); }
+    static FileExists(messageOrUri) { return new FileSystemError(messageOrUri, 'FileExists'); }
+    static FileNotADirectory(messageOrUri) { return new FileSystemError(messageOrUri, 'FileNotADirectory'); }
+    static FileIsADirectory(messageOrUri) { return new FileSystemError(messageOrUri, 'FileIsADirectory'); }
+    static NoPermissions(messageOrUri) { return new FileSystemError(messageOrUri, 'NoPermissions'); }
+    static Unavailable(messageOrUri) { return new FileSystemError(messageOrUri, 'Unavailable'); }
+}
+
 const WEBVIEW_RESOURCE_AUTHORITY_SUFFIX = '.vscode-resource.webview.local';
 const WEBVIEW_CSP_SOURCE = "'self' https://webview.local https://*.vscode-resource.webview.local";
 
@@ -4788,13 +4808,42 @@ async function _callFileSystemProvider(uri, methodNames, args, fallback) {
     throw new Error(`Filesystem provider for ${uri.scheme} is missing ${methodNames[0]}`);
 }
 
+function _nodeFileSystemError(error, uri) {
+    if (error instanceof FileSystemError) return error;
+    const code = String(error?.code || '');
+    if (code === 'ENOENT') return FileSystemError.FileNotFound(uri);
+    if (code === 'EEXIST' || code === 'ERR_FS_CP_EEXIST') return FileSystemError.FileExists(uri);
+    if (code === 'ENOTDIR') return FileSystemError.FileNotADirectory(uri);
+    if (code === 'EISDIR' || code === 'ERR_FS_EISDIR') return FileSystemError.FileIsADirectory(uri);
+    if (code === 'EACCES' || code === 'EPERM') return FileSystemError.NoPermissions(uri);
+    return new FileSystemError(error?.message || uri, 'Unknown');
+}
+
+async function _withFileSystemErrors(uri, fn) {
+    try {
+        return await fn();
+    } catch (error) {
+        throw _nodeFileSystemError(error, uri);
+    }
+}
+
+async function _workspaceFsTargetExists(uri) {
+    try {
+        await fsp.lstat(uri.fsPath);
+        return true;
+    } catch (error) {
+        if (String(error?.code || '') === 'ENOENT') return false;
+        throw error;
+    }
+}
+
 async function _workspaceFsReadFile(uriInput) {
     const uri = _workspaceUriFromInput(uriInput);
     const value = await _callFileSystemProvider(
         uri,
         ['readFile', 'read_file'],
         [uri],
-        () => fsp.readFile(uri.fsPath),
+        () => _withFileSystemErrors(uri, () => fsp.readFile(uri.fsPath)),
     );
     return _contentToUint8Array(value);
 }
@@ -4807,7 +4856,7 @@ async function _workspaceFsWriteFile(uriInput, content) {
         ['writeFile', 'write_file'],
         [uri, bytes, { create: true, overwrite: true }],
         async () => {
-            await fsp.writeFile(uri.fsPath, bytes);
+            await _withFileSystemErrors(uri, () => fsp.writeFile(uri.fsPath, bytes));
             const cached = _workspaceTextDocuments.get(uri.toString());
             if (cached) {
                 const oldText = cached.getText();
@@ -4830,7 +4879,7 @@ async function _workspaceFsStat(uriInput) {
         ['stat'],
         [uri],
         async () => {
-            const s = await fsp.stat(uri.fsPath);
+            const s = await _withFileSystemErrors(uri, () => fsp.stat(uri.fsPath));
             return {
                 type: s.isDirectory() ? 2 : 1,
                 size: s.size,
@@ -4848,7 +4897,9 @@ async function _workspaceFsReadDirectory(uriInput) {
         uri,
         ['readDirectory', 'read_directory'],
         [uri],
-        () => fsp.readdir(uri.fsPath, { withFileTypes: true })
+        () => _withFileSystemErrors(
+            uri,
+            () => fsp.readdir(uri.fsPath, { withFileTypes: true }))
             .then(ents => ents.map(e => [e.name, e.isDirectory() ? 2 : 1])),
     );
 }
@@ -4859,7 +4910,7 @@ async function _workspaceFsCreateDirectory(uriInput) {
         uri,
         ['createDirectory', 'create_directory'],
         [uri],
-        () => fsp.mkdir(uri.fsPath, { recursive: true }),
+        () => _withFileSystemErrors(uri, () => fsp.mkdir(uri.fsPath, { recursive: true })),
     );
 }
 
@@ -4870,7 +4921,13 @@ async function _workspaceFsDelete(uriInput, options) {
         ['delete', 'deleteFile', 'delete_file'],
         [uri, options || {}],
         async () => {
-            await fsp.rm(uri.fsPath, { force: true });
+            await _withFileSystemErrors(
+                uri,
+                () => fsp.rm(uri.fsPath, {
+                    recursive: !!(options && options.recursive),
+                    force: false,
+                }),
+            );
             _workspaceCloseTextDocument(uri);
         },
     );
@@ -4887,10 +4944,18 @@ async function _workspaceFsRename(srcInput, dstInput, options) {
         ['rename', 'renameFile', 'rename_file'],
         [src, dst, options || {}],
         async () => {
-            await fsp.rename(src.fsPath, dst.fsPath);
+            const overwrite = !!(options && options.overwrite);
+            if (path.resolve(src.fsPath) === path.resolve(dst.fsPath)) return;
+            await _withFileSystemErrors(src, async () => {
+                if (await _workspaceFsTargetExists(dst)) {
+                    if (!overwrite) throw FileSystemError.FileExists(dst);
+                    await fsp.rm(dst.fsPath, { recursive: true, force: false });
+                }
+                await fsp.rename(src.fsPath, dst.fsPath);
+            });
             const cached = _workspaceCloseTextDocument(src);
             if (cached) {
-                const text = await fsp.readFile(dst.fsPath, 'utf8');
+                const text = await _withFileSystemErrors(dst, () => fsp.readFile(dst.fsPath, 'utf8'));
                 _workspaceStoreTextDocument(_createLanguageDocument({
                     uri: dst,
                     text,
@@ -4914,10 +4979,31 @@ async function _workspaceFsCopy(srcInput, dstInput, options) {
         if (typeof copy === 'function') {
             return await copy.call(entry.provider, src, dst, options || {});
         }
+        if (!options?.overwrite) {
+            try {
+                await _workspaceFsStat(dst);
+                throw FileSystemError.FileExists(dst);
+            } catch (error) {
+                if (error instanceof FileSystemError && error.code === 'FileExists') throw error;
+                if (!(error instanceof FileSystemError && error.code === 'FileNotFound')) throw error;
+            }
+        }
         const content = await _workspaceFsReadFile(src);
         return _workspaceFsWriteFile(dst, content);
     }
-    return fsp.copyFile(src.fsPath, dst.fsPath);
+    return _withFileSystemErrors(src, async () => {
+        const overwrite = !!(options && options.overwrite);
+        if (await _workspaceFsTargetExists(dst)) {
+            if (!overwrite) throw FileSystemError.FileExists(dst);
+            await fsp.rm(dst.fsPath, { recursive: true, force: false });
+        }
+        const stat = await fsp.stat(src.fsPath);
+        if (stat.isDirectory()) {
+            await fsp.cp(src.fsPath, dst.fsPath, { recursive: true, force: overwrite });
+        } else {
+            await fsp.copyFile(src.fsPath, dst.fsPath);
+        }
+    });
 }
 
 function _workspacePatternText(pattern, fallback = '**/*') {
@@ -7796,6 +7882,16 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     'workspace.fs.copy',
                     `${_workspaceRelativePath(src)} -> ${_workspaceRelativePath(dst)}`,
                     () => _workspaceFsCopy(src, dst, options)),
+                isWritableFileSystem(scheme) {
+                    const normalized = _normalizeFileSystemScheme(scheme);
+                    if (!normalized) return undefined;
+                    if (normalized === 'file') return true;
+                    const entry = _fileSystemProviders.get(normalized);
+                    if (!entry) return undefined;
+                    return entry.options && entry.options.isReadonly === true
+                        ? false
+                        : true;
+                },
             },
             registerFileSystemProvider(scheme, provider, options) {
                 const normalized = _normalizeFileSystemScheme(scheme);
@@ -8844,6 +8940,8 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         },
         RelativePattern: class { constructor(base, pattern) { this.base = base; this.pattern = pattern; } },
         FileType: { Unknown: 0, File: 1, Directory: 2, SymbolicLink: 64 },
+        FilePermission: { Readonly: 1 },
+        FileSystemError,
         EndOfLine: { LF: 1, CRLF: 2 },
         TextEditorRevealType: { Default: 0, InCenter: 1, InCenterIfOutsideViewport: 2, AtTop: 3 },
 
