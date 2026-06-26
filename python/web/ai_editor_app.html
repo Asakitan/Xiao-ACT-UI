@@ -1625,7 +1625,7 @@ pre.code-block { overflow:visible; }
 /* ── Context menu ── */
 #ctx-menu .ctx-item { padding:4px 16px; font-size:12px; color:var(--fg); cursor:pointer;
   display:flex; align-items:center; gap:8px; white-space:nowrap; }
-#ctx-menu .ctx-item:hover { background:var(--bg-hover); }
+#ctx-menu .ctx-item:hover,#ctx-menu .ctx-item:focus { background:var(--bg-hover); outline:none; }
 #ctx-menu .ctx-item.disabled { color:var(--fg-dim); cursor:default; opacity:.55; }
 #ctx-menu .ctx-item.disabled:hover { background:transparent; }
 #ctx-menu .ctx-item .shortcut { margin-left:auto; color:var(--fg-dim); font-size:11px; }
@@ -3789,6 +3789,8 @@ en:{
   fu_explain:'Explain this code',fu_fix:'How do I fix this?',fu_full:'Show me the full file',fu_continue:'Continue',
   // context menu
   cm_copy:'Copy Message',cm_markdown:'Copy as Markdown',cm_insert:'Insert into Editor',
+  cm_copy_all_code:'Copy All Code',cm_apply_code:'Apply First Code Block',
+  cm_retry:'Retry Request',cm_edit:'Edit Request',
   cm_run:'Run in Terminal',cm_delete:'Delete Message',
   // feedback
   helpful:'Helpful',not_helpful:'Not helpful',copy_response:'Copy response',retry:'Retry',
@@ -3918,6 +3920,8 @@ zh:{
   provider_unavailable:'提供商不可用。',
   fu_explain:'解释这段代码',fu_fix:'如何修复这个问题？',fu_full:'显示完整文件',fu_continue:'继续',
   cm_copy:'复制消息',cm_markdown:'复制为 Markdown',cm_insert:'插入到编辑器',
+  cm_copy_all_code:'复制全部代码',cm_apply_code:'应用首个代码块',
+  cm_retry:'重试请求',cm_edit:'编辑请求',
   cm_run:'在终端运行',cm_delete:'删除消息',
   helpful:'有帮助',not_helpful:'没帮助',copy_response:'复制回复',retry:'重试',
   feedback_saved:'反馈已保存',
@@ -25906,27 +25910,88 @@ createMsg=function(role,model){
   return body;
 };
 
+function deleteChatMessage(msgEl){
+  if(!msgEl)return false;
+  msgEl.remove();
+  _chatFocusedMessageIndex=-1;
+  refreshChatMessageNavigationState();
+  showChatWelcomeIfEmpty();
+  syncAssistantSessionState();
+  assistantSessionPersistCurrent({status:streaming?'inProgress':'completed'});
+  announceAssistantAction('Message deleted');
+  return true;
+}
+function assistantMessageContextActions(msgEl){
+  const role=String(msgEl&&msgEl.dataset&&msgEl.dataset.role||'');
+  const body=msgEl&&msgEl.querySelector?msgEl.querySelector('.msg-body'):null;
+  const text=chatMessageActionText(msgEl,false);
+  const raw=chatMessageActionText(msgEl,true);
+  const codeText=chatAllMessageCodeBlocksText(msgEl);
+  const hasCode=!!chatFirstMessageCodeBlock(msgEl);
+  return [
+    {label:t('cm_copy'),action:'copy-message',disabled:!text,fn:()=>{navigator.clipboard.writeText(text);showToast(t('copied'),'success',1500);announceAssistantAction('Message copied')}},
+    {label:t('cm_markdown'),action:'copy-markdown',disabled:!raw,fn:()=>{navigator.clipboard.writeText(raw);showToast(t('copied'),'success',1500);announceAssistantAction('Markdown copied')}},
+    {label:t('cm_copy_all_code'),action:'copy-all-code',disabled:!codeText,fn:()=>{navigator.clipboard.writeText(codeText);showToast(t('copied'),'success',1500);announceAssistantAction(t('all_code_copied'))}},
+    {sep:true},
+    {label:t('cm_insert'),action:'insert-message',disabled:!raw||streaming,fn:()=>{openInEditor(raw,'markdown');announceAssistantAction(t('response_inserted'))}},
+    {label:t('cm_apply_code'),action:'apply-first-code',disabled:!hasCode||streaming,fn:()=>applyFirstMessageCodeBlock(msgEl)},
+    {label:t('cm_run'),action:'run-first-code',disabled:!hasCode,fn:()=>{const block=chatFirstMessageCodeBlock(msgEl);if(block)execTerminalCmd(block.code)}},
+    {sep:true},
+    {label:t('cm_retry'),action:'retry',disabled:role!=='assistant'||streaming,fn:()=>retryAssistantMessage(msgEl)},
+    {label:t('cm_edit'),action:'edit-request',disabled:role!=='user'||streaming,fn:()=>startAssistantUserMessageEdit(msgEl)},
+    {sep:true},
+    {label:t('cm_delete'),action:'delete-message',disabled:false,fn:()=>deleteChatMessage(msgEl)},
+  ];
+}
+function focusAssistantMessageMenuItem(menu,delta){
+  const items=Array.from(menu.querySelectorAll('.ctx-item:not(.disabled)'));
+  if(!items.length)return;
+  const current=items.indexOf(document.activeElement);
+  const next=current<0?0:(current+delta+items.length)%items.length;
+  items[next].focus();
+}
+function runAssistantMessageMenuItem(item){
+  if(!item||item.classList.contains('disabled'))return false;
+  const fn=item._assistantMenuAction;
+  const menu=$('ctx-menu');if(menu)menu.style.display='none';
+  if(typeof fn==='function')fn();
+  return true;
+}
+function showAssistantMessageContextMenu(ev,msgEl){
+  const menu=$('ctx-menu');if(!menu)return;
+  menu.innerHTML='';
+  menu.dataset.surface='assistant-message';
+  menu.setAttribute('role','menu');
+  menu.setAttribute('aria-label','Assistant message actions');
+  assistantMessageContextActions(msgEl).forEach(it=>{
+    if(it.sep){const s=document.createElement('div');s.className='ctx-sep';s.setAttribute('role','separator');menu.appendChild(s);return}
+    const d=document.createElement('div');d.className='ctx-item';d.tabIndex=-1;
+    d.dataset.action=it.action||'action';
+    d.setAttribute('role','menuitem');
+    d.setAttribute('aria-disabled',it.disabled?'true':'false');
+    if(it.disabled)d.classList.add('disabled');
+    d.textContent=it.label;
+    d._assistantMenuAction=it.fn;
+    d.onclick=()=>runAssistantMessageMenuItem(d);
+    menu.appendChild(d);
+  });
+  menu.onkeydown=e=>{
+    if(e.key==='ArrowDown'){e.preventDefault();focusAssistantMessageMenuItem(menu,1)}
+    else if(e.key==='ArrowUp'){e.preventDefault();focusAssistantMessageMenuItem(menu,-1)}
+    else if(e.key==='Home'){e.preventDefault();const first=menu.querySelector('.ctx-item:not(.disabled)');if(first)first.focus()}
+    else if(e.key==='End'){e.preventDefault();const items=menu.querySelectorAll('.ctx-item:not(.disabled)');if(items.length)items[items.length-1].focus()}
+    else if(e.key==='Enter'||e.key===' '){e.preventDefault();runAssistantMessageMenuItem(document.activeElement)}
+    else if(e.key==='Escape'){e.preventDefault();menu.style.display='none';msgEl.focus()}
+  };
+  menu.style.display='block';menu.style.left=ev.clientX+'px';menu.style.top=ev.clientY+'px';
+  const first=menu.querySelector('.ctx-item:not(.disabled)');
+  if(first)try{first.focus({preventScroll:true})}catch(e){}
+}
 // ── Message context menu ──
 $('chat-messages').addEventListener('contextmenu',function(e){
   const msgEl=e.target.closest('.msg');if(!msgEl)return;
   e.preventDefault();
-  const menu=$('ctx-menu');menu.innerHTML='';
-  const body=msgEl.querySelector('.msg-body');
-  const text=body?body.textContent:'';
-  [{label:t('cm_copy'),fn:()=>{navigator.clipboard.writeText(text);showToast(t('copied'),'success',1500)}},
-   {label:t('cm_markdown'),fn:()=>{const raw=(body&&body._rawMarkdown)||text;navigator.clipboard.writeText(raw);showToast(t('copied'),'success',1500)}},
-   {sep:true},
-   {label:t('cm_insert'),fn:()=>{if(text)openInEditor(text,'')}},
-   {label:t('cm_run'),fn:()=>{if(text.includes('`')){
-     const m=text.match(/```[\s\S]*?\n([\s\S]*?)```/);if(m)execTerminalCmd(m[1])}}},
-   {sep:true},
-    {label:t('cm_delete'),fn:()=>{msgEl.remove();_chatFocusedMessageIndex=-1;refreshChatMessageNavigationState();showChatWelcomeIfEmpty();syncAssistantSessionState();assistantSessionPersistCurrent({status:streaming?'inProgress':'completed'});}},
-  ].forEach(it=>{
-    if(it.sep){const s=document.createElement('div');s.className='ctx-sep';menu.appendChild(s);return}
-    const d=document.createElement('div');d.className='ctx-item';d.textContent=it.label;
-    d.onclick=()=>{menu.style.display='none';it.fn()};menu.appendChild(d);
-  });
-  menu.style.display='block';menu.style.left=e.clientX+'px';menu.style.top=e.clientY+'px';
+  showAssistantMessageContextMenu(e,msgEl);
 });
 
 // ── File drag-and-drop attachments ──

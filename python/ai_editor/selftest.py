@@ -4341,6 +4341,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "className='mf-status sr-only'" in html
            and "className='mf-separator'" in html
            and ".interactive-request .msg-footer { justify-content:flex-end; margin-left:auto; }" in html
+           and "#ctx-menu .ctx-item:hover,#ctx-menu .ctx-item:focus { background:var(--bg-hover); outline:none; }" in html
+           and "cm_copy_all_code:'Copy All Code'" in html
+           and "cm_apply_code:'Apply First Code Block'" in html
+           and "cm_retry:'Retry Request'" in html
+           and "cm_edit:'Edit Request'" in html
            and ".chat-input-container.editing" in html
            and ".chat-edit-banner" in html
            and ".chat-edit-cancel" in html
@@ -4367,8 +4372,28 @@ def test_phase1_ai_editor_regressions() -> None:
            and "chatMessageActionText(msgEl,true)" in html
            and "chatFirstMessageCodeBlock(msgEl)" in html
            and "retryAssistantMessage(msgEl)" in html
+           and "function deleteChatMessage(msgEl)" in html
+           and "function assistantMessageContextActions(msgEl)" in html
+           and "function focusAssistantMessageMenuItem(menu,delta)" in html
+           and "function runAssistantMessageMenuItem(item)" in html
+           and "function showAssistantMessageContextMenu(ev,msgEl)" in html
+           and "menu.dataset.surface='assistant-message';" in html
+           and "menu.setAttribute('role','menu');" in html
+           and "menu.setAttribute('aria-label','Assistant message actions');" in html
+           and "d.setAttribute('role','menuitem');" in html
+           and "d.setAttribute('aria-disabled',it.disabled?'true':'false');" in html
+           and "d.dataset.action=it.action||'action';" in html
+           and "d._assistantMenuAction=it.fn;" in html
+           and "focusAssistantMessageMenuItem(menu,1)" in html
+           and "focusAssistantMessageMenuItem(menu,-1)" in html
+           and "runAssistantMessageMenuItem(document.activeElement)" in html
+           and "showAssistantMessageContextMenu(e,msgEl);" in html
+           and "action:'copy-all-code'" in html
+           and "action:'apply-first-code'" in html
+           and "action:'run-first-code'" in html
+           and "action:'delete-message'" in html
            and "addMessageFooter(body.closest('.msg'),'assistant');" in html
-           and "showChatWelcomeIfEmpty();syncAssistantSessionState();assistantSessionPersistCurrent" in html
+           and "function deleteChatMessage(msgEl)" in html
            and "e.key==='Enter'&&(e.ctrlKey||e.metaKey)" in html)
     _check("frontend Assistant code block toolbar is keyboard accessible and can apply to editor",
            "const toolbar=document.createElement('div');toolbar.className='cb-toolbar';" in html
