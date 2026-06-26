@@ -926,6 +926,13 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-toolbar-head { display:none; align-items:center; gap:6px; flex-wrap:wrap; min-height:26px;
   padding:7px 8px 0; color:var(--fg-dim); }
 .chat-toolbar-head.has-state { display:flex; }
+.chat-action-tray { display:none; margin:7px 8px 0; padding:6px; border:1px solid var(--border);
+  border-radius:6px; background:color-mix(in srgb,var(--bg2) 94%,var(--fg-accent)); gap:6px; flex-direction:column; }
+.chat-action-tray.active { display:flex; }
+.chat-action-tray-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center; }
+.chat-action-tray-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg); font-size:12px; }
+.chat-action-tray-meta { color:var(--fg-dim); font:10px var(--mono); margin-left:6px; }
+.chat-action-tray-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:5px; }
 .chat-edit-banner { display:inline-flex; align-items:center; gap:6px; min-width:0; max-width:100%;
   color:var(--fg-warning); font:11px/18px var(--sans); }
 .chat-edit-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -949,15 +956,14 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-input-container.sendable .send-btn:not(:disabled) { box-shadow:0 0 0 1px color-mix(in srgb, var(--btn) 35%, transparent); }
 .chat-input-container.streaming .send-btn { background:var(--fg-error); }
 .send-btn svg { width:14px; height:14px; }
-.chat-toolbar { display:grid; grid-template-columns:minmax(0,1fr) max-content; grid-template-areas:"controls actions";
-  align-items:center; column-gap:8px;
+.chat-toolbar { display:flex; align-items:center; justify-content:space-between; gap:8px;
   padding:0 8px 7px; font-size:11px;
   border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent);
   min-width:0; overflow:hidden; white-space:nowrap; min-height:29px; }
 .chat-toolbar > * { min-width:0; }
 .chat-toolbar .hint { color:var(--fg-dim); }
 .chat-toolbar .spacer { display:none; }
-.chat-session-chip { max-width:82px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+.chat-session-chip { max-width:76px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   color:var(--fg-dim); font:10px/18px var(--mono); }
 
 .chat-attached-context { display:flex; flex-wrap:wrap; gap:5px; padding:0 8px 6px; }
@@ -1081,14 +1087,14 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-used-context-title { color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; letter-spacing:.5px; }
 .chat-used-context-list { display:flex; flex-wrap:wrap; gap:5px; }
 
-.chat-control-strip { grid-area:controls; display:flex; align-items:center; gap:4px; flex-wrap:nowrap; min-width:0;
-  overflow:hidden; }
+.chat-control-strip { display:flex; align-items:center; gap:4px; flex:1 1 auto; flex-wrap:nowrap; min-width:0;
+  overflow:hidden; max-width:100%; }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
   border-radius:999px; background:var(--bg3); color:var(--fg); font:11px var(--sans);
   outline:none; min-width:0; }
 .chat-chip,.chat-run-chip { display:inline-flex; align-items:center; gap:4px; padding:0 8px; cursor:pointer; }
-.chat-select-chip { width:142px; max-width:142px; padding:0 20px 0 8px; cursor:pointer; flex:0 1 142px; }
-.chat-model-inline { width:116px; max-width:116px; padding:0 8px; font-family:var(--mono); flex:0 1 116px; }
+.chat-select-chip { width:112px; max-width:112px; padding:0 20px 0 8px; cursor:pointer; flex:0 1 112px; }
+.chat-model-inline { width:112px; max-width:112px; padding:0 8px; font-family:var(--mono); flex:0 1 112px; }
 .chat-model-inline::placeholder { color:var(--fg-dim); }
 .chat-chip:hover,.chat-select-chip:hover,.chat-model-inline:hover,.chat-run-chip:hover,
 .chat-select-chip:focus,.chat-model-inline:focus,.chat-run-chip:focus { border-color:var(--border-focus); }
@@ -1127,7 +1133,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .mode-popup-toggle.on .mp-switch { background:var(--fg-accent); border-color:var(--fg-accent); }
 .mode-popup-toggle.on .mp-switch::after { left:13px; background:#fff; }
 .chat-select-chip.agent { width:122px; max-width:122px; flex-basis:122px; }
-.chat-select-chip.workflow { width:112px; max-width:112px; flex-basis:112px; }
+.chat-select-chip.workflow { width:104px; max-width:104px; flex-basis:104px; }
 .chat-run-chip { color:var(--fg-accent); background:color-mix(in srgb, var(--border-focus) 12%, var(--bg3)); }
 .chat-run-chip:disabled { opacity:0.45; cursor:default; color:var(--fg-dim); }
 .chat-composer-action { width:22px; height:22px; border:1px solid transparent; border-radius:4px;
@@ -1135,12 +1141,12 @@ pre.code-block code .type { color:var(--fg-type); }
   cursor:pointer; font-size:13px; padding:0; }
 .chat-composer-action:hover,.chat-composer-action:focus { background:var(--bg-hover); color:var(--fg);
   border-color:var(--border); outline:none; }
-.chat-composer-trailing { grid-area:actions; display:flex; align-items:center; justify-content:flex-end; gap:5px; margin-left:0;
-  min-width:max-content; width:auto; flex-wrap:nowrap; overflow:visible; white-space:nowrap; }
-.chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:5px; min-width:0; max-width:170px; flex:0 1 auto;
+.chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px; margin-left:auto;
+  flex:0 0 auto; min-width:max-content; width:auto; flex-wrap:nowrap; overflow:visible; white-space:nowrap; }
+.chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:5px; min-width:0; max-width:148px; flex:0 1 148px;
   color:var(--fg-dim); white-space:nowrap; overflow:hidden; }
 .ctx-usage { display:inline-flex; align-items:center; gap:4px; font-size:10px; color:var(--fg-dim); cursor:default; }
-.ctx-bar { width:38px; height:6px; background:var(--bg3); border-radius:3px; overflow:hidden; position:relative; }
+.ctx-bar { width:30px; height:6px; background:var(--bg3); border-radius:3px; overflow:hidden; position:relative; }
 .ctx-fill { height:100%; border-radius:3px; background:var(--fg-success); transition:width .3s; }
 .ctx-fill.warn { background:var(--fg-warning); }
 .ctx-fill.crit { background:var(--fg-error); }
@@ -2195,6 +2201,7 @@ pre.code-block { overflow:visible; }
               <div class="slash-popup" id="slash-popup" role="listbox" aria-label="Slash commands"></div>
               <div class="chat-input-container" id="chat-input-container">
                 <div class="chat-toolbar-head" id="chat-toolbar-head" aria-live="polite"></div>
+                <div class="chat-action-tray" id="chat-action-tray" role="group" aria-label="Pending Assistant actions"></div>
                 <div class="chat-input-row">
                   <textarea class="chat-input" id="chat-input" rows="1" data-i18n="ask_placeholder" placeholder="Ask anything... (/ commands, @ context, # tools)" aria-label="Ask Agent" aria-describedby="chat-input-status chat-input-help" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false"></textarea>
                   <button class="send-btn" id="send-btn" onclick="doSend()" title="Send" aria-label="Send" aria-disabled="true"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 2.5l-5 5h3.5V13h3V7.5H13L8 2.5z"/></svg></button>
@@ -2883,6 +2890,7 @@ function ensureAssistantBody(){
 const api=()=>window.pywebview&&window.pywebview.api;
 let _chatMessageSeq=0;
 let _providerMessageSeq=0;
+const _assistantActionTrayItems=new Map();
 let _windowCloseRequested=false;
 function requestWindowClose(){
   if(_windowCloseRequested)return;
@@ -4021,6 +4029,7 @@ function updateAssistantSurfaceState(){
 function updateChatComposerState(){
   const send=$('send-btn'),stop=$('stop-btn'),panel=$('chat-panel'),input=$('chat-input');
   const container=$('chat-input-container'),messages=$('chat-messages');
+  syncAssistantActionTray();
   const sendable=chatComposerHasSendableValue();
   if(send){
     send.disabled=streaming||!sendable;
@@ -5992,6 +6001,83 @@ function assistantResponsePartHasCallback(source,button){
   const meta=assistantResponsePartCallbackMetadata(source,button);
   return !!(meta.callbackId||meta.requestId||meta.partId);
 }
+function assistantResponsePartActionKey(source,button){
+  source=source||{};
+  button=button||{};
+  return String(button.callbackId||button.callback_id||button.requestId||button.request_id||
+    source.callbackId||source.callback_id||source.requestId||source.request_id||source.id||source.partId||source.part_id||'');
+}
+function assistantActionTrayTitle(item){
+  const source=item&&item.source||{};
+  return String(source.title||(item.kind==='questionCarousel'?'Answer Assistant questions':'Confirm Assistant action'));
+}
+function registerAssistantActionTrayItem(kind,part,source,card){
+  const callbackButton=source&&Array.isArray(source.buttons)?source.buttons.find(button=>assistantResponsePartHasCallback(source,button)):null;
+  if(!assistantResponsePartHasCallback(source,callbackButton)||!card)return;
+  const key=assistantResponsePartActionKey(source,callbackButton);
+  if(!key)return;
+  card.dataset.assistantActionKey=key;
+  _assistantActionTrayItems.set(key,{key,kind,part,source,card,state:'pending'});
+}
+function scrollAssistantActionSource(card){
+  if(!card||!card.scrollIntoView)return;
+  try{card.scrollIntoView({block:'center',behavior:'smooth'})}catch(_e){card.scrollIntoView()}
+  const first=card.querySelector('button,input,textarea,select');
+  if(first&&first.focus)try{first.focus({preventScroll:true})}catch(_e){first.focus()}
+}
+function assistantActionTrayPendingItems(){
+  const items=[];
+  _assistantActionTrayItems.forEach((item,key)=>{
+    if(!item||item.state==='submitted'||!item.card||!item.card.isConnected){_assistantActionTrayItems.delete(key);return}
+    items.push(item);
+  });
+  return items;
+}
+function syncAssistantActionTray(){
+  const tray=$('chat-action-tray');if(!tray)return;
+  const items=assistantActionTrayPendingItems();
+  tray.innerHTML='';
+  tray.classList.toggle('active',items.length>0);
+  tray.dataset.pendingCount=String(items.length);
+  if(!items.length)return;
+  items.slice(0,4).forEach((item,index)=>{
+    const row=document.createElement('div');row.className='chat-action-tray-row';row.dataset.assistantActionKey=item.key;
+    const title=document.createElement('div');title.className='chat-action-tray-title';title.textContent=assistantActionTrayTitle(item);
+    const meta=document.createElement('span');meta.className='chat-action-tray-meta';meta.textContent=(index+1)+'/'+items.length;title.appendChild(meta);
+    row.appendChild(title);
+    const actions=document.createElement('div');actions.className='chat-action-tray-actions';
+    if(item.kind==='confirmation'){
+      (item.source.buttons||[]).forEach(button=>{
+        const label=String((button&&button.label)||button||'Continue');
+        const btn=document.createElement('button');btn.type='button';btn.className='chat-inline-action primary';btn.textContent=label;
+        btn.dataset.assistantCallback='true';btn.dataset.assistantAction=String((button&&button.action)||label);btn.dataset.assistantActionKey=item.key;
+        btn.onclick=()=>assistantSubmitResponsePartAction(item.part,(button&&button.action)||'button',(button&&button.value)!==undefined?button.value:label,button,{buttonEl:btn,fallbackTitle:item.source.title||'Confirmation',fallbackText:label});
+        actions.appendChild(btn);
+      });
+    }else if(item.kind==='questionCarousel'){
+      const review=document.createElement('button');review.type='button';review.className='chat-inline-action';review.textContent='Review';review.onclick=()=>scrollAssistantActionSource(item.card);actions.appendChild(review);
+      const answer=document.createElement('button');answer.type='button';answer.className='chat-inline-action primary';answer.textContent='Submit answers';answer.dataset.assistantCallback='true';answer.dataset.assistantAction='answers';answer.dataset.assistantActionKey=item.key;
+      answer.onclick=()=>assistantSubmitResponsePartAction(item.part,'answers',chatQuestionCarouselAnswerText(item.card),null,{buttonEl:answer,fallbackTitle:'Answers',fallbackText:chatQuestionCarouselAnswerText(item.card),answers:chatQuestionCarouselAnswerPayload(item.card)});
+      actions.appendChild(answer);
+      if(item.source.allowSkip){
+        const skip=document.createElement('button');skip.type='button';skip.className='chat-inline-action';skip.textContent='Skip';skip.dataset.assistantCallback='true';skip.dataset.assistantAction='skip';skip.dataset.assistantActionKey=item.key;
+        skip.onclick=()=>assistantSubmitResponsePartAction(item.part,'skip','Skip',null,{buttonEl:skip,fallbackTitle:'Answers',fallbackText:'Skip',answers:[]});actions.appendChild(skip);
+      }
+    }
+    row.appendChild(actions);tray.appendChild(row);
+  });
+}
+function assistantActionTraySnapshot(){
+  const tray=$('chat-action-tray');
+  return {
+    ok:!!tray,
+    active:!!(tray&&tray.classList.contains('active')),
+    pendingCount:assistantActionTrayPendingItems().length,
+    rowCount:tray?tray.querySelectorAll('.chat-action-tray-row').length:0,
+    callbackButtonCount:tray?tray.querySelectorAll('[data-assistant-callback="true"]').length:0,
+    titles:tray?Array.from(tray.querySelectorAll('.chat-action-tray-title')).map(el=>el.childNodes[0]?el.childNodes[0].textContent:''):[],
+  };
+}
 function assistantResponsePartContext(opts){
   opts=opts||{};
   const anchor=opts.button||opts.card||opts.body||null;
@@ -6027,16 +6113,25 @@ function setAssistantResponsePartActionState(button,state,label){
 function finalizeAssistantResponsePartActionButton(button,result,payload){
   if(!button)return;
   const group=button.closest('.chat-response-confirmation,.chat-response-questions');
+  const actionKey=button.dataset&&button.dataset.assistantActionKey;
+  const trayItem=actionKey?_assistantActionTrayItems.get(actionKey):null;
   if(result&&result.ok){
     if(group)group.querySelectorAll('[data-assistant-callback="true"]').forEach(btn=>{
       btn.disabled=true;
       btn.setAttribute('aria-disabled','true');
     });
+    if(trayItem&&trayItem.card)trayItem.card.querySelectorAll('[data-assistant-callback="true"]').forEach(btn=>{
+      btn.disabled=true;
+      btn.setAttribute('aria-disabled','true');
+    });
+    if(trayItem)trayItem.state='submitted';
     button.textContent=button.textContent.replace(/\s*✓$/,'')+' ✓';
     setAssistantResponsePartActionState(button,'submitted','Submitted Assistant action: '+payload.action);
+    syncAssistantActionTray();
     return;
   }
   setAssistantResponsePartActionState(button,'error',callFailedMessage(result,'Assistant action failed'));
+  syncAssistantActionTray();
 }
 async function assistantSubmitResponsePartAction(part,action,value,button,opts){
   opts=opts||{};
@@ -6099,6 +6194,7 @@ function renderChatConfirmationPart(wrap,part){
   const card=document.createElement('div');card.className='chat-response-confirmation';card.setAttribute('role','group');card.setAttribute('aria-label','Assistant confirmation');
   if(data.id)card.dataset.assistantPartId=data.id;
   if(data.callbackId)card.dataset.assistantCallbackId=data.callbackId;
+  const actionKey=assistantResponsePartActionKey(data,(data.buttons||[]).find(button=>assistantResponsePartHasCallback(data,button)));
   const title=document.createElement('div');title.className='chat-response-part-title';title.textContent=data.title||'Confirmation';card.appendChild(title);
   if(data.message){const msg=document.createElement('div');renderMd(msg,data.message);card.appendChild(msg)}
   const actions=document.createElement('div');actions.className='chat-response-part-actions';
@@ -6107,16 +6203,19 @@ function renderChatConfirmationPart(wrap,part){
     const btn=document.createElement('button');btn.type='button';btn.className='chat-inline-action primary';btn.textContent=label;
     btn.dataset.assistantAction=String((button&&button.action)||label);
     if(assistantResponsePartHasCallback(data,button))btn.dataset.assistantCallback='true';
+    const buttonActionKey=assistantResponsePartActionKey(data,button)||actionKey;
+    if(buttonActionKey)btn.dataset.assistantActionKey=buttonActionKey;
     btn.onclick=()=>assistantSubmitResponsePartAction(part,(button&&button.action)||'button',(button&&button.value)!==undefined?button.value:label,button,{buttonEl:btn,fallbackTitle:data.title||'Confirmation',fallbackText:label});
     actions.appendChild(btn);
   });
-  card.appendChild(actions);wrap.appendChild(card);
+  card.appendChild(actions);wrap.appendChild(card);registerAssistantActionTrayItem('confirmation',part,data,card);
 }
 function renderChatQuestionCarouselPart(wrap,part){
   const carousel=part.carousel||{};
   const card=document.createElement('div');card.className='chat-response-questions';card.setAttribute('role','group');card.setAttribute('aria-label','Assistant questions');
   if(carousel.id)card.dataset.assistantPartId=carousel.id;
   if(carousel.callbackId)card.dataset.assistantCallbackId=carousel.callbackId;
+  const actionKey=assistantResponsePartActionKey(carousel);
   (carousel.questions||[]).forEach(question=>{
     const q=document.createElement('div');q.className='chat-response-question';q.dataset.questionId=question.id;
     const title=document.createElement('div');title.className='chat-response-part-title';title.textContent=question.title;q.appendChild(title);
@@ -6141,14 +6240,16 @@ function renderChatQuestionCarouselPart(wrap,part){
   const insert=document.createElement('button');insert.type='button';insert.className='chat-inline-action primary';insert.textContent='Insert answers';
   insert.dataset.assistantAction='answers';
   if(assistantResponsePartHasCallback(carousel,null))insert.dataset.assistantCallback='true';
+  if(actionKey)insert.dataset.assistantActionKey=actionKey;
   insert.onclick=()=>assistantSubmitResponsePartAction(part,'answers',chatQuestionCarouselAnswerText(card),null,{buttonEl:insert,fallbackTitle:'Answers',fallbackText:chatQuestionCarouselAnswerText(card),answers:chatQuestionCarouselAnswerPayload(card)});
   actions.appendChild(insert);
   if(carousel.allowSkip){
     const skip=document.createElement('button');skip.type='button';skip.className='chat-inline-action';skip.textContent='Skip';skip.dataset.assistantAction='skip';
     if(assistantResponsePartHasCallback(carousel,null))skip.dataset.assistantCallback='true';
+    if(actionKey)skip.dataset.assistantActionKey=actionKey;
     skip.onclick=()=>assistantSubmitResponsePartAction(part,'skip','Skip',null,{buttonEl:skip,fallbackTitle:'Answers',fallbackText:'Skip',answers:[]});actions.appendChild(skip);
   }
-  card.appendChild(actions);wrap.appendChild(card);
+  card.appendChild(actions);wrap.appendChild(card);registerAssistantActionTrayItem('questionCarousel',part,carousel,card);
 }
 function chatQuestionCarouselAnswerPayload(card){
   return Array.from(card.querySelectorAll('.chat-response-question')).map(q=>{
@@ -6522,6 +6623,7 @@ function renderChatResponseNativeParts(body,payload,content){
     callout.appendChild(icon);callout.appendChild(text);wrap.appendChild(callout);
   });
   body.appendChild(wrap);
+  syncAssistantActionTray();
   return true;
 }
 function assistantMergeNativeResponsePayloads(payloads){
@@ -6574,12 +6676,14 @@ function assistantNativeResponseRenderSummary(body,payload,content){
   const kinds=parts.map(part=>part.kind);
   const wrap=body&&body.querySelector?body.querySelector('.chat-response-native-parts'):null;
   const dom=assistantNativeResponseDomSnapshot(body);
+  const actionTray=assistantActionTraySnapshot();
   return {
     ok:!!body,
     partCount:parts.length,
     kinds,
     nativeCardCount:wrap?wrap.children.length:0,
     dom,
+    actionTray,
     actionButtonCount:dom.actionButtonCount,
     callbackActionCount:dom.callbackActionCount,
     confirmationCount:dom.confirmationCount,
@@ -25149,6 +25253,7 @@ window.assistantNativeResponseRenderSummary=assistantNativeResponseRenderSummary
 window.replayAssistantNativeResponseFixture=replayAssistantNativeResponseFixture;
 window.assistantComposerLayoutSnapshot=assistantComposerLayoutSnapshot;
 window.assistantSubmitResponsePartAction=assistantSubmitResponsePartAction;
+window.assistantActionTraySnapshot=assistantActionTraySnapshot;
 
 // ── Welcome screen with suggested prompts ──
 function renderWelcome(){

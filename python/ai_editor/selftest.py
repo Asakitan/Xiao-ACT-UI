@@ -3828,28 +3828,28 @@ def test_phase1_ai_editor_regressions() -> None:
            and "chat-composer-trailing" in html
            and "chat-composer-meta" in html
            and "attach-name" in html
+           and 'id="chat-action-tray" role="group" aria-label="Pending Assistant actions"' in html
            and "const value=normalizeChatSystemText(text);" in html
            and "if(!value){showChatWelcomeIfEmpty();return null}" in html
             and "renderWelcome();\n  setStatus(t('new_chat_title')" in html
             and "const body=latestChatMessageBody('assistant');" in html)
     _check("frontend Assistant composer keeps normal-width controls in one row",
-           '.chat-toolbar { display:grid; grid-template-columns:minmax(0,1fr) max-content; grid-template-areas:"controls actions";' in html
-            and "align-items:center; column-gap:8px;" in html
+           ".chat-toolbar { display:flex; align-items:center; justify-content:space-between; gap:8px;" in html
             and "border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent);" in html
             and "min-width:0; overflow:hidden; white-space:nowrap;" in html
             and ".chat-toolbar .spacer { display:none; }" in html
-            and ".chat-control-strip { grid-area:controls; display:flex; align-items:center; gap:4px; flex-wrap:nowrap; min-width:0;" in html
-            and "overflow:hidden; }" in html
-            and ".chat-select-chip { width:142px; max-width:142px; padding:0 20px 0 8px; cursor:pointer; flex:0 1 142px; }" in html
-            and ".chat-model-inline { width:116px; max-width:116px; padding:0 8px; font-family:var(--mono); flex:0 1 116px; }" in html
+            and ".chat-control-strip { display:flex; align-items:center; gap:4px; flex:1 1 auto; flex-wrap:nowrap; min-width:0;" in html
+            and "overflow:hidden; max-width:100%; }" in html
+            and ".chat-select-chip { width:112px; max-width:112px; padding:0 20px 0 8px; cursor:pointer; flex:0 1 112px; }" in html
+            and ".chat-model-inline { width:112px; max-width:112px; padding:0 8px; font-family:var(--mono); flex:0 1 112px; }" in html
             and ".chat-select-chip.agent { width:122px; max-width:122px; flex-basis:122px; }" in html
-            and ".chat-select-chip.workflow { width:112px; max-width:112px; flex-basis:112px; }" in html
-            and ".chat-composer-trailing { grid-area:actions; display:flex; align-items:center; justify-content:flex-end; gap:5px; margin-left:0;" in html
-            and "min-width:max-content; width:auto; flex-wrap:nowrap; overflow:visible; white-space:nowrap;" in html
-            and ".chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:5px; min-width:0; max-width:170px; flex:0 1 auto;" in html
+            and ".chat-select-chip.workflow { width:104px; max-width:104px; flex-basis:104px; }" in html
+            and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px; margin-left:auto;" in html
+            and "flex:0 0 auto; min-width:max-content; width:auto; flex-wrap:nowrap; overflow:visible; white-space:nowrap;" in html
+            and ".chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:5px; min-width:0; max-width:148px; flex:0 1 148px;" in html
             and "color:var(--fg-dim); white-space:nowrap; overflow:hidden;" in html
-            and ".chat-session-chip { max-width:82px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" in html
-            and ".ctx-bar { width:38px; height:6px;" in html
+            and ".chat-session-chip { max-width:76px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" in html
+            and ".ctx-bar { width:30px; height:6px;" in html
            and '<div class="chat-toolbar" role="toolbar" aria-label="Assistant composer">' in html
            and '<div class="chat-control-strip" role="group" aria-label="Chat controls">' in html
            and '<div class="chat-composer-trailing" role="group" aria-label="Chat actions and status">' in html
@@ -4612,6 +4612,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "merged.response_parts=merged.responseParts;" not in html
            and "merged.content_references=merged.contentReferences;" not in html
            and "function assistantNativeResponseRenderSummary(body,payload,content)" in html
+           and "const actionTray=assistantActionTraySnapshot();" in html
            and "function assistantNativeResponseDomSnapshot(body)" in html
            and "callbackActionCount:count('[data-assistant-callback=\"true\"]')" in html
            and "todoCardCount:count('.chat-response-todo-list')" in html
@@ -4624,6 +4625,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "window.assistantMergeNativeResponsePayloads=assistantMergeNativeResponsePayloads;" in html
            and "window.assistantNativeResponseDomSnapshot=assistantNativeResponseDomSnapshot;" in html
            and "window.assistantNativeResponseRenderSummary=assistantNativeResponseRenderSummary;" in html
+           and "window.assistantActionTraySnapshot=assistantActionTraySnapshot;" in html
            and "window.replayAssistantNativeResponseFixture=replayAssistantNativeResponseFixture;" in html
            and "modifiedFileCount:parts.filter(part=>part.kind==='modifiedFilesConfirmation')" in html
            and "todoCount:parts.filter(part=>part.kind==='todoList')" in html)
@@ -4646,6 +4648,18 @@ def test_phase1_ai_editor_regressions() -> None:
            and "skip.dataset.assistantAction='skip';" in html
            and "function chatQuestionCarouselAnswerPayload(card)" in html
            and "window.assistantSubmitResponsePartAction=assistantSubmitResponsePartAction;" in html)
+    _check("frontend Assistant mirrors pending response actions above composer",
+           "const _assistantActionTrayItems=new Map();" in html
+           and ".chat-action-tray.active" in html
+           and "function registerAssistantActionTrayItem(kind,part,source,card)" in html
+           and "function syncAssistantActionTray()" in html
+           and "function assistantActionTraySnapshot()" in html
+           and "card.dataset.assistantActionKey=key;" in html
+           and "registerAssistantActionTrayItem('confirmation',part,data,card);" in html
+           and "registerAssistantActionTrayItem('questionCarousel',part,carousel,card);" in html
+           and "button.dataset.assistantActionKey" in html
+           and "tray.dataset.pendingCount=String(items.length);" in html
+           and "assistantActionTrayPendingItems().length" in html)
     _check("frontend Assistant applies native response text edits and file tree actions",
            "chat-response-summary" in html
            and "chat-inline-actions" in html
