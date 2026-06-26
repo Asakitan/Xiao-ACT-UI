@@ -7098,6 +7098,29 @@ console.log("frontend word separator behavior ok");
            and "function editorDropPasteFilterAndSortEdits(edits,options)" in html
            and "context:{triggerKind:0,preferences}" in html
            and "handleEditorDropPasteOptionsKey(e)" in html)
+    _check("frontend validates settings before save",
+           "id=\"settings-validation-summary\"" in html
+           and "function collectSettingsValidationErrors()" in html
+           and "function settingsNumberValidation(errors,id,label,opts)" in html
+           and "function settingsJsonObjectValidation(errors,id,label)" in html
+           and "function settingsPublisherValidation(errors)" in html
+           and "function validateSettingsBeforeSave(options)" in html
+           and "window.collectSettingsValidationErrors=collectSettingsValidationErrors;" in html
+           and "window.validateSettingsBeforeSave=validateSettingsBeforeSave;" in html
+           and "const validationErrors=validateSettingsBeforeSave({focusFirst:true});" in html
+           and "if(validationErrors.length)return;" in html
+           and "setAttribute('aria-invalid','true')" in html
+           and "settings-input-invalid" in html
+           and "settings-error-text" in html
+           and "Duplicate publisher" in html
+           and "Publisher also appears in Blocked Publishers" in html
+           and "s-editor-code-actions-on-save-json" in html
+           and "s-editor-lang-code-actions-on-save-json" in html
+           and "function settingsQueryFilters(raw)" in html
+           and "function settingsGroupMatchesFilter(group,query)" in html
+           and "@(modified|error|json|ext|extensions)" in html
+           and "use @error to filter invalid settings" in html
+           and "if(query.error&&!group.querySelector('[aria-invalid=\"true\"],.settings-field.invalid,.settings-input-invalid'))return false;" in html)
     _check("frontend renders extension settings modified reset controls",
             "function renderExtensionSettings()" in html
             and "function extensionSettingValidateJsonValue(value,type)" in html

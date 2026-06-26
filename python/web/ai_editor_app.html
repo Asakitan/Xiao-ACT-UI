@@ -1391,6 +1391,14 @@ pre.code-block { overflow:visible; }
 .settings-field .s-reset:hover { color:var(--fg); background:var(--bg-hover); }
 .settings-field.modified { border-left:2px solid var(--fg-accent); padding-left:2px; }
 .settings-field.modified .s-reset { display:inline-block; }
+.settings-field.invalid, .settings-input-invalid { border-color:var(--fg-error) !important; }
+.settings-validation-summary { display:none; margin:0 0 8px; padding:7px 9px;
+  border:1px solid var(--border); border-radius:var(--radius); background:var(--bg2);
+  color:var(--fg-dim); font-size:12px; line-height:1.35; }
+.settings-validation-summary.error { display:block; color:var(--fg-error);
+  border-color:color-mix(in srgb,var(--fg-error) 55%,var(--border));
+  background:color-mix(in srgb,var(--fg-error) 8%,var(--bg2)); }
+.settings-error-text { margin:3px 0 6px; color:var(--fg-error); font-size:11px; line-height:1.35; }
 .ext-setting-row { position:relative; margin-bottom:10px; padding:6px 28px 6px 8px;
   border-left:2px solid transparent; border-radius:3px; }
 .ext-setting-row.modified { border-left-color:var(--fg-accent); background:var(--bg-hover); }
@@ -2135,6 +2143,7 @@ pre.code-block { overflow:visible; }
     <!-- SETTINGS-01: Search/filter -->
     <input id="settings-search" list="settings-filter-suggestions" placeholder="Search settings..." oninput="filterSettings()" style="width:100%;background:var(--bg-input);color:var(--fg);border:1px solid var(--border);border-radius:var(--radius);padding:7px 10px;font:13px var(--sans);outline:none;margin-bottom:8px">
     <datalist id="settings-filter-suggestions"></datalist>
+    <div id="settings-validation-summary" class="settings-validation-summary" role="status" aria-live="polite"></div>
 
     <div class="sb-group" style="padding:0;margin-top:8px">Endpoint</div>
     <label>Provider</label>
@@ -15609,6 +15618,137 @@ function readJsonObjectValue(id,fallback){
   const text=readInputValue(id).trim();if(!text)return fallback||{};
   try{const parsed=JSON.parse(text);return isPlainObject(parsed)?parsed:(fallback||{})}catch{return fallback||{}}
 }
+const SETTINGS_VALIDATION_INPUTS=[
+  's-temp','s-maxtok','s-topp','s-freqp','s-presp','s-timeout','s-maxinp','s-maxout',
+  's-xheaders','s-xbody','s-term-timeout','s-term-output','s-ext-allow','s-ext-block',
+  's-editor-tab-size','s-editor-quick-suggestions-delay','s-editor-code-actions-on-save-json',
+  's-editor-lang-tab-size','s-editor-lang-quick-suggestions-delay','s-editor-lang-code-actions-on-save-json',
+  's-files-auto-save-delay'
+];
+function settingsValidationError(id,label,message){return{id,label,message}}
+function settingsFieldHost(el){return el?(el.closest('.settings-field')||el.parentElement):null}
+function clearSettingsValidation(){
+  const modal=$('settings-modal')||document;
+  modal.querySelectorAll('[aria-invalid="true"]').forEach(el=>{el.removeAttribute('aria-invalid');el.removeAttribute('aria-describedby');el.classList.remove('settings-input-invalid')});
+  modal.querySelectorAll('.settings-field.invalid').forEach(el=>el.classList.remove('invalid'));
+  modal.querySelectorAll('.settings-error-text').forEach(el=>el.remove());
+}
+function setSettingsFieldError(id,message){
+  const el=$(id);if(!el)return;
+  el.setAttribute('aria-invalid','true');
+  el.classList.add('settings-input-invalid');
+  const errId=id+'-error';
+  el.setAttribute('aria-describedby',errId);
+  const host=settingsFieldHost(el);if(host&&host.classList)host.classList.add('invalid');
+  const anchor=host&&host.classList&&host.classList.contains('settings-field')?host:el;
+  let err=$(errId);
+  if(!err){
+    err=document.createElement('div');err.id=errId;err.className='settings-error-text';err.setAttribute('role','alert');
+    if(anchor.parentElement)anchor.parentElement.insertBefore(err,anchor.nextSibling);
+  }
+  err.textContent=message;
+}
+function renderSettingsValidationSummary(errors){
+  const summary=$('settings-validation-summary');if(!summary)return;
+  const count=errors.length;
+  summary.classList.toggle('error',count>0);
+  summary.textContent=count
+    ? count+' setting error'+(count===1?'':'s')+': '+errors[0].label+' - '+errors[0].message+(count>1?' (use @error to filter invalid settings)':'')
+    : '';
+}
+function settingsNumberValidation(errors,id,label,opts){
+  const el=$(id);if(!el)return;
+  const raw=readInputValue(id).trim();
+  if(raw===''){errors.push(settingsValidationError(id,label,'Value is required.'));return}
+  const n=Number(raw);
+  if(!Number.isFinite(n)){errors.push(settingsValidationError(id,label,'Value must be a number.'));return}
+  if(opts&&opts.integer&&Math.trunc(n)!==n){errors.push(settingsValidationError(id,label,'Value must be an integer.'));return}
+  if(opts&&opts.min!==undefined&&n<opts.min){errors.push(settingsValidationError(id,label,'Value must be at least '+opts.min+'.'));return}
+  if(opts&&opts.max!==undefined&&n>opts.max){errors.push(settingsValidationError(id,label,'Value must be at most '+opts.max+'.'));return}
+}
+function settingsJsonObjectValidation(errors,id,label){
+  const el=$(id);if(!el)return;
+  const text=readInputValue(id).trim();if(!text)return;
+  try{
+    const parsed=JSON.parse(text);
+    if(!isPlainObject(parsed))errors.push(settingsValidationError(id,label,'Value must be a JSON object.'));
+  }catch(exc){
+    errors.push(settingsValidationError(id,label,'Invalid JSON: '+(exc&&exc.message?exc.message:'parse failed')+'.'));
+  }
+}
+function settingsNormalizedPublisher(value){return String(value||'').trim().toLowerCase()}
+function settingsPublisherValidation(errors){
+  const lists=[
+    {id:'s-ext-allow',label:'Allowed Publishers',values:readListValue('s-ext-allow',true)},
+    {id:'s-ext-block',label:'Blocked Publishers',values:readListValue('s-ext-block',true)}
+  ];
+  const sets={};
+  lists.forEach(list=>{
+    const seen=new Set(),dupes=[];
+    list.values.forEach(value=>{
+      const key=settingsNormalizedPublisher(value);if(!key)return;
+      if(seen.has(key)&&!dupes.includes(key))dupes.push(key);
+      seen.add(key);
+    });
+    sets[list.id]=seen;
+    if(dupes.length)errors.push(settingsValidationError(list.id,list.label,'Duplicate publisher'+(dupes.length===1?'':'s')+': '+dupes.join(', ')+'.'));
+  });
+  const conflicts=[];
+  (sets['s-ext-allow']||new Set()).forEach(value=>{if((sets['s-ext-block']||new Set()).has(value))conflicts.push(value)});
+  if(conflicts.length){
+    errors.push(settingsValidationError('s-ext-allow','Allowed Publishers','Publisher also appears in Blocked Publishers: '+conflicts.join(', ')+'.'));
+    errors.push(settingsValidationError('s-ext-block','Blocked Publishers','Publisher also appears in Allowed Publishers: '+conflicts.join(', ')+'.'));
+  }
+}
+function collectSettingsValidationErrors(){
+  const errors=[];
+  settingsNumberValidation(errors,'s-temp','Temperature',{min:0,max:2});
+  settingsNumberValidation(errors,'s-maxtok','Max Output Tokens',{integer:true,min:1});
+  settingsNumberValidation(errors,'s-topp','Top P',{min:0,max:1});
+  settingsNumberValidation(errors,'s-freqp','Frequency Penalty',{min:-2,max:2});
+  settingsNumberValidation(errors,'s-presp','Presence Penalty',{min:-2,max:2});
+  settingsNumberValidation(errors,'s-timeout','Timeout',{integer:true,min:10,max:600});
+  settingsNumberValidation(errors,'s-maxinp','Max Input Tokens',{integer:true,min:0});
+  settingsNumberValidation(errors,'s-maxout','Max Output Tokens Override',{integer:true,min:0});
+  settingsNumberValidation(errors,'s-term-timeout','Terminal Timeout',{integer:true,min:1});
+  settingsNumberValidation(errors,'s-term-output','Terminal Output Limit',{integer:true,min:1000});
+  settingsNumberValidation(errors,'s-editor-tab-size','Editor Tab Size',{integer:true,min:1,max:16});
+  settingsNumberValidation(errors,'s-editor-quick-suggestions-delay','Editor Quick Suggestions Delay',{integer:true,min:0});
+  settingsNumberValidation(errors,'s-editor-lang-tab-size','Language Tab Size',{integer:true,min:1,max:16});
+  settingsNumberValidation(errors,'s-editor-lang-quick-suggestions-delay','Language Quick Suggestions Delay',{integer:true,min:0});
+  settingsNumberValidation(errors,'s-files-auto-save-delay','Files Auto Save Delay',{integer:true,min:0});
+  settingsJsonObjectValidation(errors,'s-xheaders','Extra Headers');
+  settingsJsonObjectValidation(errors,'s-xbody','Extra Body');
+  settingsJsonObjectValidation(errors,'s-editor-code-actions-on-save-json','Additional Code Actions On Save');
+  settingsJsonObjectValidation(errors,'s-editor-lang-code-actions-on-save-json','Language Additional Code Actions On Save');
+  settingsPublisherValidation(errors);
+  return errors;
+}
+function applySettingsValidation(errors,options){
+  errors=Array.isArray(errors)?errors:collectSettingsValidationErrors();
+  clearSettingsValidation();
+  errors.forEach(err=>setSettingsFieldError(err.id,err.message));
+  renderSettingsValidationSummary(errors);
+  if(options&&options.focusFirst&&errors.length){
+    const first=$(errors[0].id);
+    if(first&&typeof first.focus==='function')first.focus();
+    if(first&&typeof first.scrollIntoView==='function')first.scrollIntoView({block:'center',behavior:'smooth'});
+  }
+  return errors;
+}
+function validateSettingsBeforeSave(options){
+  const errors=applySettingsValidation(collectSettingsValidationErrors(),options||{});
+  if(errors.length&&options&&options.toast!==false)showToast('Fix settings validation errors before saving','error',2600);
+  return errors;
+}
+function scheduleSettingsValidation(){
+  applySettingsValidation(collectSettingsValidationErrors(),{});
+  const search=$('settings-search');if(search&&/@error\b/i.test(search.value||''))filterSettings();
+}
+window.collectSettingsValidationErrors=collectSettingsValidationErrors;
+window.applySettingsValidation=applySettingsValidation;
+window.validateSettingsBeforeSave=validateSettingsBeforeSave;
+window.scheduleSettingsValidation=scheduleSettingsValidation;
 function editorSaveSettingEnabled(value){return ['always','explicit'].includes(editorCodeActionOnSaveMode(value))}
 function editorKnownCodeActionsOnSave(setting,kind){
   if(Array.isArray(setting))return setting.includes(kind);
@@ -15905,28 +16045,53 @@ function openSettings(){
   Object.keys(SETTING_INPUT_MAP).forEach(id=>wrapSettingsField(id));markSettingsModified();
   // Add change listeners for live modified-state updates
   Object.keys(SETTING_INPUT_MAP).forEach(id=>{const el=$(id);if(el&&!el.dataset.resetWired){el.dataset.resetWired='1';el.addEventListener('input',markSettingsModified);el.addEventListener('change',markSettingsModified)}});
+  SETTINGS_VALIDATION_INPUTS.forEach(id=>{const el=$(id);if(el&&!el.dataset.validationWired){el.dataset.validationWired='1';el.addEventListener('input',scheduleSettingsValidation);el.addEventListener('change',scheduleSettingsValidation)}});
   ['s-ext-confirm','s-ext-allow','s-ext-block'].forEach(id=>{const el=$(id);if(el&&!el.dataset.trustSummaryWired){el.dataset.trustSummaryWired='1';const update=()=>renderExtensionTrustSummary({confirm_install:readCheckedValue('s-ext-confirm'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true)});el.addEventListener('input',update);el.addEventListener('change',update)}});
+  applySettingsValidation(collectSettingsValidationErrors(),{});
   $('settings-modal').classList.add('open');
 }
 function closeSettings(){$('settings-modal').classList.remove('open')}
 // SETTINGS-01: Filter settings sections by search query
+function settingsQueryFilters(raw){
+  const query=String(raw||'');
+  const filters={modified:false,error:false,json:false,extensions:false};
+  let text=query.replace(/(^|\s)@(modified|error|json|ext|extensions)(?=\s|$)/ig,(match,prefix,token)=>{
+    const key=String(token||'').toLowerCase();
+    if(key==='ext'||key==='extensions')filters.extensions=true;
+    else filters[key]=true;
+    return ' ';
+  }).trim().toLowerCase();
+  text=text.replace(/\s+/g,' ');
+  filters.text=text;
+  filters.active=!!(text||filters.modified||filters.error||filters.json||filters.extensions);
+  return filters;
+}
+function settingsGroupMatchesFilter(group,query){
+  if(!group)return false;
+  const text=(group.textContent||'').toLowerCase();
+  if(query.text&&!text.includes(query.text))return false;
+  if(query.modified&&!group.querySelector('.settings-field.modified,.ext-setting-row.modified'))return false;
+  if(query.error&&!group.querySelector('[aria-invalid="true"],.settings-field.invalid,.settings-input-invalid'))return false;
+  if(query.json&&!(/json/i.test(group.textContent||'')||group.querySelector('[id$="-json"],#s-xheaders,#s-xbody')))return false;
+  if(query.extensions&&!(group.id==='ext-settings-container'||/extension|publisher|contribution|marketplace/i.test(group.textContent||'')))return false;
+  return true;
+}
 function filterSettings(){
-  const q=($('settings-search')||{}).value||'';const lq=q.toLowerCase();
+  const q=($('settings-search')||{}).value||'';const parsed=settingsQueryFilters(q);const lq=parsed.text;
   const modal=$('settings-modal');if(!modal)return;
   const sections=modal.querySelectorAll('.sb-group, .settings-section, details, label, .settings-grid, .settings-help');
   let visible=0;
   // Collect all filterable groups: sb-group, settings-section, details
   const groups=modal.querySelectorAll('.settings-section, details');
   groups.forEach(g=>{
-    if(!lq){g.style.display='';visible++;return}
-    const text=g.textContent.toLowerCase();
-    const match=text.includes(lq);
+    if(!parsed.active){g.style.display='';visible++;return}
+    const match=settingsGroupMatchesFilter(g,parsed);
     g.style.display=match?'':'none';
     if(match)visible++;
   });
   // Also filter top-level sb-group + label pairs outside sections
   const topGroups=modal.querySelectorAll(':scope > .sb-group');
-  topGroups.forEach(g=>{if(!lq){g.style.display='';return}g.style.display=g.textContent.toLowerCase().includes(lq)?'':'none'});
+  topGroups.forEach(g=>{if(!parsed.active){g.style.display='';return}g.style.display=(!lq||g.textContent.toLowerCase().includes(lq))?'':'none'});
   // Hide/show extension settings divider based on matching sections
   const extContainer=$('ext-settings-container');
   if(extContainer){
@@ -15937,7 +16102,7 @@ function filterSettings(){
     if(extDivider)extDivider.style.display=(!lq||anyExtVisible)?'':'none';
     applyExtensionSettingsFilter();
   }
-  const inp=$('settings-search');if(inp)inp.placeholder=lq?visible+' matches':'Search settings...';
+  const inp=$('settings-search');if(inp)inp.placeholder=parsed.active?visible+' matches':'Search settings...';
 }
 window.filterSettings=filterSettings;
 window.openSettings=openSettings;window.closeSettings=closeSettings;
@@ -16069,6 +16234,8 @@ async function testConn(){
 window.testConn=testConn;
 
 async function saveSettings(){
+  const validationErrors=validateSettingsBeforeSave({focusFirst:true});
+  if(validationErrors.length)return;
   Object.assign(config,withSettingsDefaults(config));
   config.provider=$('s-provider').value;config.api_key=$('s-apikey').value;
   config.base_url=$('s-baseurl').value;config.model=$('s-model').value;
