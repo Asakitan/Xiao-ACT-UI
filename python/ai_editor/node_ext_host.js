@@ -4270,6 +4270,10 @@ function _terminalResolveEnv(options) {
         if (value === null || value === undefined) delete result[key];
         else result[key] = String(value);
     }
+    if (options && typeof options.shellIntegrationNonce === 'string'
+            && options.shellIntegrationNonce) {
+        result.VSCODE_NONCE = options.shellIntegrationNonce;
+    }
     return result;
 }
 
@@ -4283,6 +4287,10 @@ function _terminalNormalizeOptions(options) {
     if (raw.env !== undefined && raw.env !== null) raw.env = _terminalNormalizeEnv(raw.env);
     if (raw.cwd !== undefined && raw.cwd !== null && !(raw.cwd instanceof Uri)) {
         raw.cwd = String(raw.cwd);
+    }
+    if (raw.shellIntegrationNonce !== undefined
+            && raw.shellIntegrationNonce !== null) {
+        raw.shellIntegrationNonce = String(raw.shellIntegrationNonce);
     }
     raw.strictEnv = raw.strictEnv === true;
     raw.hideFromUser = raw.hideFromUser === true;
@@ -5364,6 +5372,17 @@ class TerminalObject {
             : null;
         this._bindPseudoterminal();
     }
+    _markInteracted() {
+        if (this.state && this.state.isInteractedWith === true) return false;
+        this.state = Object.assign({}, this.state || {}, { isInteractedWith: true });
+        _onDidChangeTerminalStateEmitter.fire(this);
+        send({
+            type: 'terminal_state',
+            terminal: _terminalBridgePayload(this),
+            state: _terminalOptionValue(this.state),
+        });
+        return true;
+    }
     _bindPseudoterminal() {
         const pty = this._pty;
         if (!pty) return;
@@ -5456,9 +5475,8 @@ class TerminalObject {
     }
     sendText(text, shouldExecute = true) {
         if (this._disposed) return;
-        this.state.isInteractedWith = true;
+        this._markInteracted();
         this._ensureShellIntegration();
-        _onDidChangeTerminalStateEmitter.fire(this);
         if (this._pty) {
             this._openPty();
             const data = String(text ?? '') + (shouldExecute === false ? '' : '\r');
@@ -5467,6 +5485,16 @@ class TerminalObject {
             } catch (err) {
                 log(`terminal pty input failed for ${this.name}: ${err?.message || err}`);
             }
+            return;
+        }
+        if (shouldExecute === false) {
+            send({
+                type: 'terminal_input',
+                id: this._handle,
+                name: this.name,
+                text: String(text ?? ''),
+                metadata: this.metadata(),
+            });
             return;
         }
         send({
@@ -5491,11 +5519,14 @@ class TerminalObject {
             location: _terminalOptionValue(options.location),
             iconPath: _terminalOptionValue(options.iconPath),
             color: _terminalOptionValue(options.color),
+            shellIntegrationNonce: !!options.shellIntegrationNonce,
             isTransient: options.isTransient === true,
             strictEnv: options.strictEnv === true,
             hideFromUser: options.hideFromUser === true,
             isPseudoterminal: !!this._pty,
             shellIntegration: !!this.shellIntegration,
+            state: _terminalOptionValue(this.state),
+            dimensions: _terminalOptionValue(this.dimensions),
         };
     }
     show(preserveFocus = false) {

@@ -3362,6 +3362,8 @@ class NodeExtensionHost:
                     metadata = dict(metadata)
                     if msg.get("id") is not None:
                         metadata["id"] = msg.get("id")
+                    metadata["preserveFocus"] = bool(
+                        msg.get("preserveFocus"))
                     self._ui_bridge.show_terminal(
                         str(msg.get("name", "")),
                         metadata)
@@ -3413,15 +3415,64 @@ class NodeExtensionHost:
         elif msg_type == "terminal_dispose":
             if self._ui_bridge:
                 try:
-                    self._ui_bridge.hide_terminal(str(msg.get("name", "")))
+                    dispose = getattr(self._ui_bridge, "dispose_terminal", None)
+                    if callable(dispose):
+                        dispose({
+                            "id": msg.get("id"),
+                            "name": str(msg.get("name", "")),
+                        })
+                    else:
+                        self._ui_bridge.hide_terminal(str(msg.get("name", "")))
+                except Exception:
+                    pass
+
+        elif msg_type == "terminal_state":
+            terminal = msg.get("terminal")
+            record = {
+                "terminal": terminal if isinstance(terminal, dict) else {},
+                "state": msg.get("state") if isinstance(
+                    msg.get("state"), dict) else {},
+            }
+            if self._ui_bridge:
+                try:
+                    handler = getattr(
+                        self._ui_bridge, "update_terminal_state", None)
+                    if callable(handler):
+                        handler(record)
                 except Exception:
                     pass
 
         elif msg_type == "terminal_command":
-            if self._ui_bridge and bool(msg.get("shouldExecute", True)):
+            if self._ui_bridge and not bool(msg.get("shouldExecute", True)):
+                try:
+                    inserter = getattr(
+                        self._ui_bridge, "insert_terminal_text", None)
+                    if callable(inserter):
+                        inserter(str(msg.get("name", "")),
+                                 str(msg.get("text", "")),
+                                 msg.get("metadata")
+                                 if isinstance(msg.get("metadata"), dict)
+                                 else {})
+                except Exception:
+                    pass
+            elif self._ui_bridge:
                 try:
                     self._ui_bridge.run_terminal_command(
                         str(msg.get("name", "")), str(msg.get("text", "")))
+                except Exception:
+                    pass
+
+        elif msg_type == "terminal_input":
+            if self._ui_bridge:
+                try:
+                    inserter = getattr(
+                        self._ui_bridge, "insert_terminal_text", None)
+                    if callable(inserter):
+                        inserter(str(msg.get("name", "")),
+                                 str(msg.get("text", "")),
+                                 msg.get("metadata")
+                                 if isinstance(msg.get("metadata"), dict)
+                                 else {})
                 except Exception:
                     pass
 

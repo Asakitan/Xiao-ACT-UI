@@ -22730,7 +22730,7 @@ function _terminalFromHostPayload(payload,name){
   const termName=String((payload&&payload.name)||name||'');
   return termName?_terminals.find(t=>t.name===termName):null;
 }
-function _createTerminal(name,metadata){
+function _createTerminal(name,metadata,activate=true){
   const id=_nextTermId++;
   const meta=(metadata&&typeof metadata==='object')?metadata:{};
   const outputEl=document.createElement('div');
@@ -22739,7 +22739,8 @@ function _createTerminal(name,metadata){
   $('terminal-panel').appendChild(outputEl);
   const term={id:id,hostId:_terminalHostId(meta),name:name||meta.name||('Terminal '+id),metadata:meta,dimensions:null,shellIntegration:!!meta.shellIntegration,shellCwd:null,shellEnv:null,shellExecution:null,outputEl:outputEl,history:[],historyIdx:-1,inputText:''};
   _terminals.push(term);
-  _renderTermTabs();_switchTerminal(id);
+  _renderTermTabs();
+  if(activate!==false)_switchTerminal(id);
   $('term-tab-bar').style.display='flex';
   return term;
 }
@@ -22773,6 +22774,24 @@ function _closeTerminal(id,ev){
     else _renderTermTabs();
   }
 }
+function _disposeTerminalFromHost(payload){
+  const term=_terminalFromHostPayload(payload);
+  if(!term)return;
+  _closeTerminal(term.id);
+}
+function _insertTerminalTextFromHost(name,text,metadata){
+  const payload=(metadata&&typeof metadata==='object')?metadata:{name:name};
+  let term=_terminalFromHostPayload(payload,name);
+  if(!term&&name)term=_createTerminal(name,payload);
+  if(!term)return;
+  term.metadata={...(term.metadata||{}),...payload};
+  term.inputText=(term.inputText||'')+String(text||'');
+  if(term.id===_activeTermId){
+    const input=$('term-input');
+    if(input)input.value=term.inputText;
+  }
+  _renderTermTabs();
+}
 function _terminalIconText(meta){
   const icon=meta&&meta.iconPath;
   const id=icon&&typeof icon==='object'?String(icon.id||''):'';
@@ -22791,9 +22810,29 @@ function _renderTermTabs(){
     const icon=_terminalIconText(meta);
     const dims=t.dimensions&&t.dimensions.columns&&t.dimensions.rows?(' • '+t.dimensions.columns+'x'+t.dimensions.rows):'';
     const shell=t.shellIntegration?'<span class="term-shell'+(t.shellExecution&&t.shellExecution.event==='start'?' term-running':'')+'">SI</span> ':'';
-    tab.innerHTML=(icon?'<span class="term-icon">'+esc(icon)+'</span> ':'')+shell+esc(t.name)+'<span class="term-close" onclick="_closeTerminal('+t.id+',event)">&#x2715;</span>';
+    const badges=[
+      meta.hideFromUser?'H':'',
+      meta.isTransient?'T':'',
+      meta.strictEnv?'ENV':'',
+      meta.shellIntegrationNonce?'N':'',
+      meta.state&&meta.state.isInteractedWith?'I':''
+    ].filter(Boolean).map(b=>'<span class="term-shell">'+esc(b)+'</span> ').join('');
+    tab.innerHTML=(icon?'<span class="term-icon">'+esc(icon)+'</span> ':'')+shell+badges+esc(t.name)+'<span class="term-close" onclick="_closeTerminal('+t.id+',event)">&#x2715;</span>';
     const command=t.shellExecution&&t.shellExecution.commandLine?t.shellExecution.commandLine:'';
-    tab.title=[meta.message||'',dims?dims.slice(3):'',t.shellIntegration?'Shell Integration':'',command?('Command: '+command):''].filter(Boolean).join('\n');
+    const envCount=meta.env&&typeof meta.env==='object'?Object.keys(meta.env).length:0;
+    const cwd=meta.cwd?String(meta.cwd):'';
+    tab.title=[
+      meta.message||'',
+      cwd?('CWD: '+cwd):'',
+      envCount?('Env overrides: '+envCount):'',
+      dims?dims.slice(3):'',
+      meta.hideFromUser?'Hidden until show':'',
+      meta.isTransient?'Transient':'',
+      meta.strictEnv?'Strict env':'',
+      meta.shellIntegrationNonce?'Shell integration nonce':'',
+      t.shellIntegration?'Shell Integration':'',
+      command?('Command: '+command):''
+    ].filter(Boolean).join('\n');
     const colorId=_terminalThemeColor(meta);
     if(colorId)tab.dataset.themeColor=colorId;else delete tab.dataset.themeColor;
     tab.onclick=()=>_switchTerminal(t.id);bar.appendChild(tab);
@@ -22812,6 +22851,7 @@ function _updateTerminalDimensions(name,dimensions){
   if(!term)return;
   const cols=Number(dimensions&&dimensions.columns),rows=Number(dimensions&&dimensions.rows);
   term.dimensions=(Number.isFinite(cols)&&Number.isFinite(rows))?{columns:cols,rows:rows}:null;
+  term.metadata={...(term.metadata||{}),dimensions:term.dimensions};
   _renderTermTabs();
 }
 function _setActiveTerminalFromHost(terminal){
@@ -22821,6 +22861,15 @@ function _setActiveTerminalFromHost(terminal){
   term.hostId=_terminalHostId(terminal)||term.hostId;
   term.metadata={...(term.metadata||{}),...((terminal&&typeof terminal==='object')?terminal:{})};
   _switchTerminal(term.id);
+}
+function _updateTerminalState(record){
+  const payload=record&&record.terminal?record.terminal:{};
+  let term=_terminalFromHostPayload(payload);
+  if(!term&&payload.name)term=_createTerminal(payload.name,payload);
+  if(!term)return;
+  term.hostId=_terminalHostId(payload)||term.hostId;
+  term.metadata={...(term.metadata||{}),...payload,state:(record&&record.state)||payload.state||{}};
+  _renderTermTabs();
 }
 function _updateTerminalShellIntegration(record){
   const payload=record&&record.terminal?record.terminal:{};
@@ -22856,7 +22905,7 @@ function _getActiveTermHistory(){
 }
 clearTerminal=function(){const el=_getActiveTermOutput();if(el)el.innerHTML=''};
 window.clearTerminal=clearTerminal;
-window._createTerminal=_createTerminal;window._closeTerminal=_closeTerminal;window._renameTerminal=_renameTerminal;window._updateTerminalDimensions=_updateTerminalDimensions;window._setActiveTerminalFromHost=_setActiveTerminalFromHost;window._updateTerminalShellIntegration=_updateTerminalShellIntegration;window._updateTerminalShellExecution=_updateTerminalShellExecution;
+window._createTerminal=_createTerminal;window._closeTerminal=_closeTerminal;window._disposeTerminalFromHost=_disposeTerminalFromHost;window._insertTerminalTextFromHost=_insertTerminalTextFromHost;window._renameTerminal=_renameTerminal;window._updateTerminalDimensions=_updateTerminalDimensions;window._setActiveTerminalFromHost=_setActiveTerminalFromHost;window._updateTerminalState=_updateTerminalState;window._updateTerminalShellIntegration=_updateTerminalShellIntegration;window._updateTerminalShellExecution=_updateTerminalShellExecution;
 // Re-wire terminal input for per-tab history and output
 (function(){
   const termInput=$('term-input');if(!termInput)return;

@@ -9894,6 +9894,12 @@ console.log("command palette quick access helpers ok");
            and "type: 'terminal_rename'" in node_ext_host_source
            and "type: 'terminal_dimensions'" in node_ext_host_source
            and "type: 'terminal_command'" in node_ext_host_source
+           and "type: 'terminal_input'" in node_ext_host_source
+           and "type: 'terminal_state'" in node_ext_host_source
+           and "shellIntegrationNonce: !!options.shellIntegrationNonce"
+           in node_ext_host_source
+           and "result.VSCODE_NONCE = options.shellIntegrationNonce"
+           in node_ext_host_source
            and "class TerminalLink" in node_ext_host_source
            and "registerTerminalLinkProvider(provider)" in node_ext_host_source
            and "terminal_link_request" in node_ext_host_source
@@ -9904,6 +9910,9 @@ console.log("command palette quick access helpers ok");
            and "TerminalShellExecutionCommandLineConfidence" in node_ext_host_source
            and "type: 'terminal_active'" in node_ext_host_source
            and "msg_type == \"terminal_command\"" in extension_host_source
+           and "msg_type == \"terminal_input\"" in extension_host_source
+           and "msg_type == \"terminal_state\"" in extension_host_source
+           and "dispose_terminal" in extension_host_source
            and "msg_type == \"terminal_write\"" in extension_host_source
            and "msg_type == \"terminal_rename\"" in extension_host_source
            and "msg_type == \"terminal_dimensions\"" in extension_host_source
@@ -9920,11 +9929,20 @@ console.log("command palette quick access helpers ok");
            and "def update_terminal_dimensions(" in app_source
            and "def set_active_terminal(self, terminal: Dict[str, Any])"
            in app_source
+           and "def dispose_terminal(self, terminal: Dict[str, Any])"
+           in app_source
+           and "def insert_terminal_text(" in app_source
+           and "def update_terminal_state(self, record: Dict[str, Any])"
+           in app_source
            and "def update_terminal_shell_integration(" in app_source
            and "metadata: Optional[Dict[str, Any]] = None" in app_source
-           and "_createTerminal(name,metadata||{})" in app_source
+           and "_createTerminal(name,metadata||{},!(metadata&&metadata.preserveFocus))"
+           in app_source
            and "function _terminalHostId(meta)" in html
            and "function _setActiveTerminalFromHost(terminal)" in html
+           and "function _disposeTerminalFromHost(payload)" in html
+           and "function _insertTerminalTextFromHost(name,text,metadata)" in html
+           and "function _updateTerminalState(record)" in html
            and "function _updateTerminalShellIntegration(record)" in html
            and "function _updateTerminalShellExecution(record)" in html
            and "term-shell" in html
@@ -20403,6 +20421,7 @@ async function activate(context) {
       iconPath: new vscode.ThemeIcon('terminal-powershell'),
       color: new vscode.ThemeColor('terminal.ansiGreen'),
       isTransient: true,
+      shellIntegrationNonce: 'nonce-node-terminal',
     });
     const created = {
       name: terminal.name,
@@ -20416,6 +20435,7 @@ async function activate(context) {
       creationStrictEnv: terminal.creationOptions.strictEnv,
       creationHideFromUser: terminal.creationOptions.hideFromUser,
       creationMessage: terminal.creationOptions.message,
+      creationNonce: terminal.creationOptions.shellIntegrationNonce,
       transient: terminal.creationOptions.isTransient === true,
       processId: await terminal.processId,
       shellIntegrationMissing: terminal.shellIntegration === undefined,
@@ -20435,6 +20455,7 @@ async function activate(context) {
       cwd: shellAfterShow && shellAfterShow.cwd && shellAfterShow.cwd.toString(),
       envTrusted: shellAfterShow && shellAfterShow.env && shellAfterShow.env.isTrusted,
       envValue: shellAfterShow && shellAfterShow.env && shellAfterShow.env.value,
+      nonceEnv: shellAfterShow && shellAfterShow.env && shellAfterShow.env.value && shellAfterShow.env.value.VSCODE_NONCE,
       inheritedEnv: shellAfterShow && shellAfterShow.env && shellAfterShow.env.value && shellAfterShow.env.value.NODE_TERMINAL_INHERIT,
       droppedEnv: shellAfterShow && shellAfterShow.env && shellAfterShow.env.value && Object.prototype.hasOwnProperty.call(shellAfterShow.env.value, 'NODE_TERMINAL_DROP'),
       commandLine: shellExecution && shellExecution.commandLine && shellExecution.commandLine.value,
@@ -22131,6 +22152,18 @@ module.exports = { activate, deactivate };
                         "data": event,
                     })
 
+                def dispose_terminal(self, terminal):
+                    event = {
+                        "event": "dispose",
+                        "terminal": (
+                            terminal if isinstance(terminal, dict) else {}),
+                    }
+                    self.terminal_events.append(event)
+                    emitted_events.append({
+                        "event": "terminal",
+                        "data": event,
+                    })
+
                 def rename_terminal(self, previous_name, name):
                     event = {
                         "event": "rename",
@@ -22162,6 +22195,17 @@ module.exports = { activate, deactivate };
                         "event": "active",
                         "terminal": (
                             terminal if isinstance(terminal, dict) else {}),
+                    }
+                    self.terminal_events.append(event)
+                    emitted_events.append({
+                        "event": "terminal",
+                        "data": event,
+                    })
+
+                def update_terminal_state(self, record):
+                    event = {
+                        "event": "state",
+                        "record": record if isinstance(record, dict) else {},
                     }
                     self.terminal_events.append(event)
                     emitted_events.append({
@@ -22203,6 +22247,19 @@ module.exports = { activate, deactivate };
                         "data": event,
                     })
                     return json.dumps({"stdout": "terminal:" + str(text)})
+
+                def insert_terminal_text(self, name, text, metadata=None):
+                    event = {
+                        "event": "input",
+                        "name": str(name),
+                        "text": str(text),
+                        "metadata": metadata if isinstance(metadata, dict) else {},
+                    }
+                    self.terminal_events.append(event)
+                    emitted_events.append({
+                        "event": "terminal",
+                        "data": event,
+                    })
 
                 def write_terminal_data(self, name, text):
                     event = {
@@ -26373,6 +26430,8 @@ module.exports = { activate, deactivate };
                        is False
                        and node_terminal_created.get(
                            "creationMessage") == "node terminal ready"
+                       and node_terminal_created.get(
+                           "creationNonce") == "nonce-node-terminal"
                        and node_terminal_created.get("transient") is True
                        and node_terminal_created.get(
                            "shellIntegrationMissing") is True
@@ -26381,6 +26440,8 @@ module.exports = { activate, deactivate };
                        and node_terminal_shell.get(
                            "envValue", {}).get("NODE_TERMINAL_SELFTEST")
                        == "1"
+                       and node_terminal_shell.get(
+                           "nonceEnv") == "nonce-node-terminal"
                        and node_terminal_shell.get(
                            "inheritedEnv") == "from-process"
                        and node_terminal_shell.get("droppedEnv") is False
@@ -26445,6 +26506,8 @@ module.exports = { activate, deactivate };
                            == ["-NoProfile"]
                            and item.get("metadata", {}).get("message")
                            == "node terminal ready"
+                           and item.get("metadata", {}).get(
+                               "shellIntegrationNonce") is True
                            and item.get("metadata", {}).get("iconPath", {})
                            .get("id") == "terminal-powershell"
                            and item.get("metadata", {}).get("color", {})
@@ -26457,6 +26520,7 @@ module.exports = { activate, deactivate };
                            and item.get("metadata", {}).get("strictEnv") is True
                            and item.get("metadata", {}).get("hideFromUser") is True
                            and item.get("metadata", {}).get("location") == 2
+                           and item.get("metadata", {}).get("preserveFocus") is True
                            and item.get("metadata", {}).get("shellArgs")
                            == "-NoLogo"
                            for item in node_terminal_events)
@@ -26494,8 +26558,27 @@ module.exports = { activate, deactivate };
                            and item.get("name") == "Node Terminal"
                            for item in node_terminal_events)
                        and any(
+                           item.get("event") == "state"
+                           and item.get("record", {}).get("terminal", {})
+                           .get("name") == "Node Terminal"
+                           and item.get("record", {}).get("state", {})
+                           .get("isInteractedWith") is True
+                           for item in node_terminal_events)
+                       and any(
                            item.get("event") == "command"
                            and item.get("text") == "echo node-terminal"
+                           for item in node_terminal_events)
+                       and any(
+                           item.get("event") == "input"
+                           and item.get("name") == "Node Terminal"
+                           and item.get("text") == "typed only"
+                           and item.get("metadata", {}).get("state", {})
+                           .get("isInteractedWith") is True
+                           for item in node_terminal_events)
+                       and any(
+                           item.get("event") == "dispose"
+                           and item.get("terminal", {}).get("name")
+                           in {"Node Terminal", "Node Strict Terminal"}
                            for item in node_terminal_events)
                        and any(
                            item.get("event") == "rename"

@@ -1160,10 +1160,11 @@ class _AIEditorUIBridge:
             "term=hostId?_terminals.find(function(t){return t&&String(t.hostId||'')===hostId;}):null;"
             "if(!term)term=_terminals.find(function(t){return t&&t.name===name;});}"
             "if(!term&&typeof _createTerminal==='function'){"
-            "term=_createTerminal(name,metadata||{});}"
+            "term=_createTerminal(name,metadata||{},!(metadata&&metadata.preserveFocus));}"
             "if(term){term.metadata=Object.assign({},term.metadata||{},metadata||{});"
             "if(metadata&&metadata.id!=null)term.hostId=String(metadata.id);"
-            "if(typeof _switchTerminal==='function')_switchTerminal(term.id);}"
+            "if(!(metadata&&metadata.preserveFocus)"
+            "&&typeof _switchTerminal==='function')_switchTerminal(term.id);}"
             "}catch(e){}})("
             f"{json.dumps(terminal_name)},"
             f"{json.dumps(terminal_metadata, ensure_ascii=False)});"
@@ -1172,6 +1173,16 @@ class _AIEditorUIBridge:
     def hide_terminal(self, name: str) -> None:
         self._api._eval_js(
             "var tp=document.getElementById('terminal-panel');if(tp){tp.style.display='none';tp.classList.remove('active')}"
+        )
+
+    def dispose_terminal(self, terminal: Dict[str, Any]) -> None:
+        payload = terminal if isinstance(terminal, dict) else {}
+        self._api._eval_js(
+            "(function(terminal){try{"
+            "if(typeof _disposeTerminalFromHost==='function')"
+            "_disposeTerminalFromHost(terminal||{});"
+            "}catch(e){}})("
+            f"{json.dumps(payload, ensure_ascii=False)});"
         )
 
     def rename_terminal(self, previous_name: str, name: str) -> None:
@@ -1217,6 +1228,16 @@ class _AIEditorUIBridge:
             f"{json.dumps(payload, ensure_ascii=False)});"
         )
 
+    def update_terminal_state(self, record: Dict[str, Any]) -> None:
+        payload = record if isinstance(record, dict) else {}
+        self._api._eval_js(
+            "(function(record){try{"
+            "if(typeof _updateTerminalState==='function')"
+            "_updateTerminalState(record||{});"
+            "}catch(e){}})("
+            f"{json.dumps(payload, ensure_ascii=False)});"
+        )
+
     def update_terminal_shell_execution(
             self, record: Dict[str, Any]) -> None:
         payload = record if isinstance(record, dict) else {}
@@ -1232,6 +1253,20 @@ class _AIEditorUIBridge:
         result = self._api.execute_tool(
             "runTerminal", json.dumps({"command": text}), True)
         return result
+
+    def insert_terminal_text(
+            self, name: str, text: str,
+            metadata: Optional[Dict[str, Any]] = None) -> None:
+        terminal_metadata = metadata if isinstance(metadata, dict) else {}
+        self._api._eval_js(
+            "(function(name,text,metadata){try{"
+            "if(typeof _insertTerminalTextFromHost==='function')"
+            "_insertTerminalTextFromHost(name,text,metadata||{});"
+            "}catch(e){}})("
+            f"{json.dumps(str(name or 'Extension Terminal'))},"
+            f"{json.dumps(str(text or ''))},"
+            f"{json.dumps(terminal_metadata, ensure_ascii=False)});"
+        )
 
     def write_terminal_data(self, name: str, text: str) -> None:
         script = (
