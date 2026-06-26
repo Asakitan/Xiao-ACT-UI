@@ -3836,9 +3836,9 @@ def test_phase1_ai_editor_regressions() -> None:
             and "renderWelcome();\n  setStatus(t('new_chat_title')" in html
             and "const body=latestChatMessageBody('assistant');" in html)
     _check("frontend Assistant composer keeps normal-width controls in one row",
-           ".chat-toolbar { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:8px;" in html
+           ".chat-toolbar { display:flex; align-items:center; gap:8px;" in html
             and "border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent);" in html
-            and "min-width:0; overflow:hidden; white-space:nowrap;" in html
+            and "min-width:0; overflow:hidden; white-space:nowrap; min-height:29px; flex-wrap:nowrap;" in html
             and ".chat-toolbar .spacer { display:none; }" in html
             and ".chat-control-strip { display:flex; align-items:center; gap:4px; flex:1 1 auto; flex-wrap:nowrap; min-width:0;" in html
             and "overflow:hidden; max-width:100%; }" in html
@@ -3847,7 +3847,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and ".chat-select-chip.agent { width:122px; max-width:122px; flex-basis:122px; }" in html
             and ".chat-select-chip.workflow { width:104px; max-width:104px; flex-basis:104px; }" in html
             and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px;" in html
-            and "justify-self:end; flex:0 1 auto; min-width:0; width:auto; flex-wrap:nowrap; overflow:hidden; white-space:nowrap;" in html
+            and "margin-left:auto; flex:0 0 auto; min-width:0; width:auto; flex-wrap:nowrap; overflow:hidden; white-space:nowrap;" in html
             and ".chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:5px; min-width:0; max-width:148px; flex:0 1 148px;" in html
             and "color:var(--fg-dim); white-space:nowrap; overflow:hidden;" in html
             and ".chat-session-chip { max-width:76px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" in html
@@ -3860,7 +3860,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and '</span>\n                  </div>\n                </div>' in html)
     _check("frontend Assistant exposes runtime composer layout snapshot",
            "function assistantComposerLayoutSnapshot()" in html
-           and "gridTemplateColumns:toolbar?getComputedStyle(toolbar).gridTemplateColumns:''" in html
+           and "flexWrap:toolbar?getComputedStyle(toolbar).flexWrap:''" in html
            and "sameRow:!!(controlRect&&actionRect&&Math.abs(controlRect.top-actionRect.top)<=1)" in html
            and "window.assistantComposerLayoutSnapshot=assistantComposerLayoutSnapshot;" in html
            and "'chat-provider-sel','chat-model-inline','chat-agent-sel','chat-mode-trigger','chat-workflow-sel','chat-workflow-run','chat-input-status'" in html)
@@ -3935,6 +3935,8 @@ def test_phase1_ai_editor_regressions() -> None:
            in html
            and "function assistantSessionLoadItems()" in html
            and "function assistantSessionMessageSnapshot()" in html
+           and "function assistantSessionMessageBodyText(body)" in html
+           and "clone.querySelectorAll('.chat-queued-request-meta').forEach(el=>el.remove());" in html
            and "function assistantSessionPersistCurrent(extra)" in html
            and "function assistantRestoreWorkflowSelection(workflowId,workflowLabel)" in html
            and "function assistantApplySessionControls(state)" in html
@@ -4105,17 +4107,35 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function renderChatComposerHeader()" in html
            and "function updateChatComposerState()" in html
            and "function setChatStreamingState(active)" in html
+           and "const _assistantRequestQueue=[];" in html
+           and "function assistantQueuedRequestCount()" in html
+           and "function assistantQueueTextRequest(rawText,opts)" in html
+           and "function assistantRenderQueuedRequest(item)" in html
+           and "function assistantDrainQueuedRequests()" in html
+           and "function assistantMarkQueuedRequestSending(item)" in html
            and "container.classList.toggle('sendable',sendable&&!streaming);" in html
            and "container.classList.toggle('empty',!sendable);" in html
            and "container.classList.toggle('streaming',streaming);" in html
+           and "container.classList.toggle('queued',queued>0);" in html
            and "messages.setAttribute('aria-busy',streaming?'true':'false');" in html
            and "input.placeholder=chatModePlaceholder()" in html
            and "panel.dataset.chatComposerSendable=sendable?'true':'false';" in html
            and "panel.dataset.chatComposerStreaming=streaming?'true':'false';" in html
+           and "panel.dataset.chatHasPendingRequests=queued>0?'true':'false';" in html
+           and "panel.dataset.chatPendingRequestCount=String(queued);" in html
+           and "status.textContent=queued?('QUEUED '+queued)" in html
+           and "send.disabled=!sendable;" in html
+           and "send.setAttribute('aria-label',streaming?'Queue request':t('send'));" in html
            and "panel.dataset.chatMode=normalizeMode" in html
            and "panel.dataset.chatProvider=String(config.provider||'');" in html
            and "stop.setAttribute('aria-hidden',streaming?'false':'true');" in html
            and "syncAssistantSessionState({requestInProgress:streaming});" in html
+           and "if(streaming){assistantQueueTextRequest(text,{fromInput:true,allowSlash:true,clearInput:true});return}" in html
+           and "if(assistantQueuedRequestCount())setTimeout(()=>assistantDrainQueuedRequests(),0);" in html
+           and "return assistantQueueTextRequest(text,{...opts,fromInput:opts.fromInput!==false,clearInput:opts.clearInput!==false,allowSlash:opts.allowSlash});" in html
+           and "await sendAssistantTextRequest(item.text,{refs:item.refs,toolHint:item.toolHint,fromInput:false,appendUser:false,clearInput:false,allowSlash:false,queueIfStreaming:false,autoSkipReason:'queued-request'});" in html
+           and ".msg[data-chat-request-pending=\"true\"] .msg-body" in html
+           and "chat-queued-request-meta" in html
            and "function renderAssistantPending(body,label)" in html
            and "className='chat-response-pending'" in html
            and "@keyframes assistantPendingPulse" in html
