@@ -4718,6 +4718,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "window.toggleAssistantConfirmationCarouselFocus=()=>toggleAssistantActionCarouselFocus('confirmation');" in html
            and "window.navigateAssistantQuestionCarouselPrevious=()=>{if(!assistantActionTrayCanNavigate('questionCarousel'))return false;assistantActionTrayNavigate('questionCarousel',-1);return true;};" in html
            and "window.navigateAssistantQuestionCarouselNext=()=>{if(!assistantActionTrayCanNavigate('questionCarousel'))return false;assistantActionTrayNavigate('questionCarousel',1);return true;};" in html
+           and "window.navigateAssistantConfirmationCarouselPrevious=()=>{if(!assistantActionTrayCanNavigate('confirmation'))return false;assistantActionTrayNavigate('confirmation',-1);return true;};" in html
+           and "window.navigateAssistantConfirmationCarouselNext=()=>{if(!assistantActionTrayCanNavigate('confirmation'))return false;assistantActionTrayNavigate('confirmation',1);return true;};" in html
            and "window.clearAssistantPendingActionTray=(kind)=>{assistantClearPendingActionTray(kind?{kind:String(kind)}:{});return true;};" in html)
     _check("frontend Assistant applies native response text edits and file tree actions",
            "chat-response-summary" in html

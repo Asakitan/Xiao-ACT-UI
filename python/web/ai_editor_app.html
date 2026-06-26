@@ -25572,6 +25572,8 @@ window.toggleAssistantQuestionCarouselFocus=()=>toggleAssistantActionCarouselFoc
 window.toggleAssistantConfirmationCarouselFocus=()=>toggleAssistantActionCarouselFocus('confirmation');
 window.navigateAssistantQuestionCarouselPrevious=()=>{if(!assistantActionTrayCanNavigate('questionCarousel'))return false;assistantActionTrayNavigate('questionCarousel',-1);return true;};
 window.navigateAssistantQuestionCarouselNext=()=>{if(!assistantActionTrayCanNavigate('questionCarousel'))return false;assistantActionTrayNavigate('questionCarousel',1);return true;};
+window.navigateAssistantConfirmationCarouselPrevious=()=>{if(!assistantActionTrayCanNavigate('confirmation'))return false;assistantActionTrayNavigate('confirmation',-1);return true;};
+window.navigateAssistantConfirmationCarouselNext=()=>{if(!assistantActionTrayCanNavigate('confirmation'))return false;assistantActionTrayNavigate('confirmation',1);return true;};
 window.clearAssistantPendingActionTray=(kind)=>{assistantClearPendingActionTray(kind?{kind:String(kind)}:{});return true;};
 
 // ── Welcome screen with suggested prompts ──
