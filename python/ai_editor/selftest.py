@@ -13461,6 +13461,7 @@ def test_app_extension_runtime_support() -> None:
     node_dependent_tmp = ""
     node_fs_tmp = ""
     node_uri_tmp = ""
+    node_activation_tmp = ""
     node_storage_tmp = ""
     extension_host_module._host = ExtensionHost()
     try:
@@ -16847,6 +16848,8 @@ def test_app_extension_runtime_support() -> None:
                 prefix="sao_node_dependent_ext_")
             node_fs_tmp = tempfile.mkdtemp(prefix="sao_node_fs_ext_")
             node_uri_tmp = tempfile.mkdtemp(prefix="sao_node_uri_ext_")
+            node_activation_tmp = tempfile.mkdtemp(
+                prefix="sao_node_activation_ext_")
             node_storage_tmp = tempfile.mkdtemp(prefix="sao_node_storage_")
             node_inactive_js = r"""
 async function activate(context) {
@@ -17229,6 +17232,239 @@ module.exports = { activate };
                     "onUri:selftest.node-uri",
                 ],
             }, node_uri_tmp)
+            def _node_activation_desc(dirname, manifest, source):
+                ext_dir = os.path.join(node_activation_tmp, dirname)
+                os.makedirs(ext_dir, exist_ok=True)
+                with open(os.path.join(ext_dir, "extension.js"),
+                          "w", encoding="utf-8") as fh:
+                    fh.write(source)
+                return ExtensionDescription.from_package_json(manifest, ext_dir)
+
+            node_activation_driver_desc = _node_activation_desc(
+                "driver",
+                {
+                    "name": "node-activation-driver",
+                    "publisher": "selftest",
+                    "version": "0.0.1",
+                    "displayName": "Node Activation Driver",
+                    "main": "./extension.js",
+                    "activationEvents": ["*"],
+                },
+                r"""
+const vscode = require('vscode');
+async function safe(label, fn) {
+  try { return await fn(); }
+  catch (err) { return { error: label + ': ' + (err && err.message ? err.message : String(err)) }; }
+}
+async function activate(context) {
+  vscode.commands.registerCommand('selftest.node.activationEventsProbe', async () => {
+    const language = await safe('language', async () => {
+      const doc = await vscode.workspace.openTextDocument({
+        content: 'activation language',
+        language: 'activation-lang',
+      });
+      const probe = await vscode.commands.executeCommand(
+        'selftest.node.languageActivationProbe');
+      return { docLanguage: doc.languageId, probe };
+    });
+    const tasks = await safe('tasks', async () => {
+      const filtered = await vscode.tasks.fetchTasks({ type: 'activation-task' });
+      const all = await vscode.tasks.fetchTasks();
+      return {
+        filteredNames: filtered.map(task => task.name),
+        allNames: all.map(task => task.name),
+      };
+    });
+    const debug = await safe('debug', async () => {
+      const started = await vscode.debug.startDebugging(undefined, {
+        type: 'activation-debug',
+        request: 'launch',
+        name: 'Activation Debug',
+      });
+      const active = vscode.debug.activeDebugSession;
+      await vscode.debug.stopDebugging();
+      return {
+        started,
+        activeName: active && active.name,
+        activeType: active && active.type,
+        descriptorCommand: active && active.adapterDescriptor
+          && active.adapterDescriptor.command,
+        descriptorArgs: active && active.adapterDescriptor
+          && active.adapterDescriptor.args,
+        resolved: active && active.configuration
+          && active.configuration.resolvedByActivation,
+      };
+    });
+    const auth = await safe('auth', async () => {
+      const session = await vscode.authentication.getSession(
+        'activation-auth', ['activation-scope'], { createIfNone: true });
+      return {
+        token: session && session.accessToken,
+        scope: session && session.scopes && session.scopes[0],
+      };
+    });
+    const startup = await safe('startup', async () => (
+      vscode.commands.executeCommand('selftest.node.startupFinishedProbe')));
+    return { language, tasks, debug, auth, startup };
+  });
+}
+module.exports = { activate };
+""")
+            node_activation_language_desc = _node_activation_desc(
+                "language",
+                {
+                    "name": "node-activation-language",
+                    "publisher": "selftest",
+                    "version": "0.0.1",
+                    "displayName": "Node Activation Language",
+                    "main": "./extension.js",
+                    "activationEvents": ["onLanguage:activation-lang"],
+                },
+                r"""
+const vscode = require('vscode');
+async function activate(context) {
+  vscode.commands.registerCommand('selftest.node.languageActivationProbe', () => ({
+    activated: true,
+    extensionId: context.extension && context.extension.id,
+    languages: vscode.workspace.textDocuments.map(doc => doc.languageId),
+  }));
+}
+module.exports = { activate };
+""")
+            node_activation_task_desc = _node_activation_desc(
+                "task",
+                {
+                    "name": "node-activation-task",
+                    "publisher": "selftest",
+                    "version": "0.0.1",
+                    "displayName": "Node Activation Task",
+                    "main": "./extension.js",
+                    "activationEvents": ["onTaskType:activation-task"],
+                },
+                r"""
+const vscode = require('vscode');
+async function activate() {
+  vscode.tasks.registerTaskProvider('activation-task', {
+    provideTasks() {
+      return [new vscode.Task(
+        { type: 'activation-task' },
+        vscode.TaskScope.Workspace,
+        'Activation Event Task',
+        'activation',
+        new vscode.ShellExecution('echo activation-task'),
+      )];
+    },
+  });
+}
+module.exports = { activate };
+""")
+            node_activation_debug_resolve_desc = _node_activation_desc(
+                "debug-resolve",
+                {
+                    "name": "node-activation-debug-resolve",
+                    "publisher": "selftest",
+                    "version": "0.0.1",
+                    "displayName": "Node Activation Debug Resolve",
+                    "main": "./extension.js",
+                    "activationEvents": [
+                        "onDebugResolve:activation-debug",
+                    ],
+                },
+                r"""
+const vscode = require('vscode');
+async function activate() {
+  vscode.debug.registerDebugConfigurationProvider('activation-debug', {
+    resolveDebugConfiguration(folder, config) {
+      return {
+        ...config,
+        name: 'Activation Debug Resolved',
+        resolvedByActivation: true,
+      };
+    },
+  });
+}
+module.exports = { activate };
+""")
+            node_activation_debug_adapter_desc = _node_activation_desc(
+                "debug-adapter",
+                {
+                    "name": "node-activation-debug-adapter",
+                    "publisher": "selftest",
+                    "version": "0.0.1",
+                    "displayName": "Node Activation Debug Adapter",
+                    "main": "./extension.js",
+                    "activationEvents": [
+                        "onDebugAdapterProtocolTracker:activation-debug",
+                    ],
+                },
+                r"""
+const vscode = require('vscode');
+async function activate() {
+  vscode.debug.registerDebugAdapterDescriptorFactory('activation-debug', {
+    createDebugAdapterDescriptor(session) {
+      return new vscode.DebugAdapterExecutable(
+        'activation-debug-adapter',
+        ['--session', session.name],
+        { env: { ACTIVATION_DEBUG: '1' } },
+      );
+    },
+  });
+}
+module.exports = { activate };
+""")
+            node_activation_auth_desc = _node_activation_desc(
+                "auth",
+                {
+                    "name": "node-activation-auth",
+                    "publisher": "selftest",
+                    "version": "0.0.1",
+                    "displayName": "Node Activation Auth",
+                    "main": "./extension.js",
+                    "activationEvents": [
+                        "onAuthenticationRequest:activation-auth",
+                    ],
+                },
+                r"""
+const vscode = require('vscode');
+async function activate() {
+  vscode.authentication.registerAuthenticationProvider(
+    'activation-auth',
+    'Activation Auth',
+    {
+      getSessions() { return []; },
+      createSession(scopes) {
+        return {
+          id: 'activation-auth-session',
+          accessToken: 'activation-token',
+          account: { id: 'activation-account', label: 'Activation Account' },
+          scopes,
+        };
+      },
+    },
+  );
+}
+module.exports = { activate };
+""")
+            node_activation_startup_desc = _node_activation_desc(
+                "startup",
+                {
+                    "name": "node-activation-startup",
+                    "publisher": "selftest",
+                    "version": "0.0.1",
+                    "displayName": "Node Activation Startup",
+                    "main": "./extension.js",
+                    "activationEvents": ["onStartupFinished"],
+                },
+                r"""
+const vscode = require('vscode');
+async function activate(context) {
+  vscode.commands.registerCommand('selftest.node.startupFinishedProbe', () => ({
+    startupFinished: true,
+    extensionId: context.extension && context.extension.id,
+  }));
+}
+module.exports = { activate };
+""")
             node_extension_js = r"""
 const vscode = require('vscode');
 const fs = require('node:fs');
@@ -20657,6 +20893,13 @@ module.exports = { activate, deactivate };
             api._ext_host.registry.register(node_dependent_desc)
             api._ext_host.registry.register(node_fs_desc)
             api._ext_host.registry.register(node_uri_desc)
+            api._ext_host.registry.register(node_activation_driver_desc)
+            api._ext_host.registry.register(node_activation_language_desc)
+            api._ext_host.registry.register(node_activation_task_desc)
+            api._ext_host.registry.register(node_activation_debug_resolve_desc)
+            api._ext_host.registry.register(node_activation_debug_adapter_desc)
+            api._ext_host.registry.register(node_activation_auth_desc)
+            api._ext_host.registry.register(node_activation_startup_desc)
             class _NodeUiBridge:
                 def __init__(self) -> None:
                     self.webviews = {}
@@ -21018,6 +21261,13 @@ module.exports = { activate, deactivate };
                         node_dependent_desc,
                         node_fs_desc,
                         node_uri_desc,
+                        node_activation_driver_desc,
+                        node_activation_language_desc,
+                        node_activation_task_desc,
+                        node_activation_debug_resolve_desc,
+                        node_activation_debug_adapter_desc,
+                        node_activation_auth_desc,
+                        node_activation_startup_desc,
                     ])
                     api._install_node_activation_event_bridge()
                     node_host.send_settings_sync({
@@ -21105,6 +21355,16 @@ module.exports = { activate, deactivate };
                         "selftest.node.uriHandlerProbe")
                 except Exception as exc:
                     node_uri_handler_probe = {"_error": str(exc)}
+                node_activation_events_command_registered = _wait_until(
+                    lambda: "selftest.node.activationEventsProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                try:
+                    node_activation_events_probe = (
+                        api._ext_host.commands.execute(
+                            "selftest.node.activationEventsProbe"))
+                except Exception as exc:
+                    node_activation_events_probe = {"_error": str(exc)}
                 node_content_provider_command_registered = _wait_until(
                     lambda: "selftest.node.contentProviderProbe"
                     in api._ext_host.commands.list_commands(),
@@ -24240,6 +24500,72 @@ module.exports = { activate, deactivate };
                        ],
                        json.dumps(node_uri_handler_probe,
                                   ensure_ascii=False))
+                node_activation_language = (
+                    node_activation_events_probe.get("language", {})
+                    if isinstance(node_activation_events_probe, dict) else {})
+                node_activation_language_probe = (
+                    node_activation_language.get("probe", {})
+                    if isinstance(node_activation_language, dict) else {})
+                node_activation_tasks = (
+                    node_activation_events_probe.get("tasks", {})
+                    if isinstance(node_activation_events_probe, dict) else {})
+                node_activation_debug = (
+                    node_activation_events_probe.get("debug", {})
+                    if isinstance(node_activation_events_probe, dict) else {})
+                node_activation_auth = (
+                    node_activation_events_probe.get("auth", {})
+                    if isinstance(node_activation_events_probe, dict) else {})
+                node_activation_startup = (
+                    node_activation_events_probe.get("startup", {})
+                    if isinstance(node_activation_events_probe, dict) else {})
+                _check("node host activates VS Code lazy event providers dynamically",
+                       node_started is True
+                       and node_activation_events_command_registered
+                       and isinstance(node_activation_events_probe, dict)
+                       and node_activation_language.get("docLanguage")
+                       == "activation-lang"
+                       and node_activation_language_probe.get("activated")
+                       is True
+                       and node_activation_language_probe.get("extensionId")
+                       == node_activation_language_desc.id
+                       and "activation-lang"
+                       in node_activation_language_probe.get("languages", [])
+                       and node_activation_tasks.get("filteredNames")
+                       == ["Activation Event Task"]
+                       and "Activation Event Task"
+                       in node_activation_tasks.get("allNames", [])
+                       and node_activation_debug.get("started") is True
+                       and node_activation_debug.get("activeName")
+                       == "Activation Debug Resolved"
+                       and node_activation_debug.get("activeType")
+                       == "activation-debug"
+                       and node_activation_debug.get("descriptorCommand")
+                       == "activation-debug-adapter"
+                       and node_activation_debug.get("descriptorArgs")
+                       == ["--session", "Activation Debug Resolved"]
+                       and node_activation_debug.get("resolved") is True
+                       and node_activation_auth.get("token")
+                       == "activation-token"
+                       and node_activation_auth.get("scope")
+                       == "activation-scope"
+                       and node_activation_startup.get("startupFinished")
+                       is True
+                       and node_activation_startup.get("extensionId")
+                       == node_activation_startup_desc.id
+                       and node_activation_language_desc.id
+                       in node_host._activated_ids
+                       and node_activation_task_desc.id
+                       in node_host._activated_ids
+                       and node_activation_debug_resolve_desc.id
+                       in node_host._activated_ids
+                       and node_activation_debug_adapter_desc.id
+                       in node_host._activated_ids
+                       and node_activation_auth_desc.id
+                       in node_host._activated_ids
+                       and node_activation_startup_desc.id
+                       in node_host._activated_ids,
+                       json.dumps(node_activation_events_probe,
+                                  ensure_ascii=False, default=str))
                 _check("node host opens text document content providers",
                        node_started is True
                        and node_content_provider_command_registered
@@ -25739,6 +26065,8 @@ module.exports = { activate, deactivate };
             shutil.rmtree(node_fs_tmp, ignore_errors=True)
         if node_uri_tmp:
             shutil.rmtree(node_uri_tmp, ignore_errors=True)
+        if node_activation_tmp:
+            shutil.rmtree(node_activation_tmp, ignore_errors=True)
         if node_storage_tmp:
             shutil.rmtree(node_storage_tmp, ignore_errors=True)
 

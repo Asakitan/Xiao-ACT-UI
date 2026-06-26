@@ -2353,6 +2353,7 @@ const _configurationTargetValues = {
 };
 const _extensionActivationRequests = new Map(); // requestId -> pending activation request
 const _extensionActivationInFlight = new Map(); // extensionId -> pending activation request
+const _activationEventInFlight = new Map(); // activationEvent -> Promise<number>
 const _commands = new Map();             // commandId -> handler
 const _pythonCommandRequests = new Map(); // requestId -> { resolve, reject, timer }
 const _pythonLmRequests = new Map();      // requestId -> { resolve, reject, timer }
@@ -5754,7 +5755,9 @@ async function _workspaceOpenTextDocument(uriOrPath) {
             languageId: uriOrPath.language || 'plaintext',
             version: Date.now(),
         });
-        return _workspaceStoreTextDocument(doc, true);
+        const opened = _workspaceStoreTextDocument(doc, true);
+        await _activateKnownExtensionsForDocumentLanguage(opened);
+        return opened;
     }
     const uri = _workspaceUriFromInput(uriOrPath);
     const contentEntry = _textDocumentContentProviders.get(
@@ -5764,7 +5767,11 @@ async function _workspaceOpenTextDocument(uriOrPath) {
             uri, contentEntry, true);
     }
     const cached = _workspaceTextDocuments.get(uri.toString());
-    if (cached) return _workspacePromoteTextDocument(cached);
+    if (cached) {
+        const opened = _workspacePromoteTextDocument(cached);
+        await _activateKnownExtensionsForDocumentLanguage(opened);
+        return opened;
+    }
     const providerText = await _workspaceFileSystemDocumentText(uri);
     const text = providerText === undefined
         ? (uri.scheme === 'file' ? await fsp.readFile(uri.fsPath, 'utf8') : '')
@@ -5775,7 +5782,9 @@ async function _workspaceOpenTextDocument(uriOrPath) {
         languageId: _languageIdForUri(uri),
         version: Date.now(),
     });
-    return _workspaceStoreTextDocument(doc, true);
+    const opened = _workspaceStoreTextDocument(doc, true);
+    await _activateKnownExtensionsForDocumentLanguage(opened);
+    return opened;
 }
 
 async function _workspaceFileSystemDocumentText(uri) {
@@ -5817,7 +5826,9 @@ async function _workspaceOpenTextDocumentFromContentProvider(uri, entry, fireOpe
         existing._setText(text, Date.now());
         existing.isDirty = false;
         existing.__contentProviderScheme = _normalizeFileSystemScheme(uri.scheme);
-        return fireOpen ? _workspacePromoteTextDocument(existing) : existing;
+        const opened = fireOpen ? _workspacePromoteTextDocument(existing) : existing;
+        if (fireOpen) await _activateKnownExtensionsForDocumentLanguage(opened);
+        return opened;
     }
     const doc = _createLanguageDocument({
         uri,
@@ -5827,7 +5838,9 @@ async function _workspaceOpenTextDocumentFromContentProvider(uri, entry, fireOpe
     });
     doc.isDirty = false;
     doc.__contentProviderScheme = _normalizeFileSystemScheme(uri.scheme);
-    return _workspaceStoreTextDocument(doc, fireOpen);
+    const opened = _workspaceStoreTextDocument(doc, fireOpen);
+    if (fireOpen) await _activateKnownExtensionsForDocumentLanguage(opened);
+    return opened;
 }
 
 async function _refreshTextDocumentContentProvider(scheme, uriLike) {
@@ -6721,21 +6734,58 @@ function _activationEventMatches(events, event) {
 }
 
 async function _activateKnownExtensionsForEvent(event) {
-    const targets = [];
-    for (const [extensionId, known] of _knownExtensions.entries()) {
-        if (_extensions.has(extensionId)) continue;
-        if (_activationEventMatches(known?.manifest?.activationEvents, event)) {
-            targets.push(extensionId);
+    const normalized = String(event || '').trim();
+    if (!normalized) return 0;
+    const existing = _activationEventInFlight.get(normalized);
+    if (existing) return existing;
+    const promise = (async () => {
+        const targets = [];
+        for (const [extensionId, known] of _knownExtensions.entries()) {
+            if (_extensions.has(extensionId)) continue;
+            if (_activationEventMatches(known?.manifest?.activationEvents, normalized)) {
+                targets.push(extensionId);
+            }
+        }
+        for (const extensionId of targets) {
+            try {
+                await _activateKnownExtension(extensionId);
+            } catch (err) {
+                log(`activation event ${normalized} failed for ${extensionId}: ${err.message}`);
+            }
+        }
+        return targets.length;
+    })();
+    _activationEventInFlight.set(normalized, promise);
+    try {
+        return await promise;
+    } finally {
+        _activationEventInFlight.delete(normalized);
+    }
+}
+
+async function _activateKnownExtensionsForEventPrefix(prefix) {
+    const normalized = String(prefix || '').trim();
+    if (!normalized) return 0;
+    const events = new Set();
+    for (const known of _knownExtensions.values()) {
+        const activationEvents = known?.manifest?.activationEvents;
+        if (!Array.isArray(activationEvents)) continue;
+        for (const event of activationEvents) {
+            const value = String(event || '').trim();
+            if (value.startsWith(normalized)) events.add(value);
         }
     }
-    for (const extensionId of targets) {
-        try {
-            await _activateKnownExtension(extensionId);
-        } catch (err) {
-            log(`activation event ${event} failed for ${extensionId}: ${err.message}`);
-        }
+    let activated = 0;
+    for (const event of events) {
+        activated += await _activateKnownExtensionsForEvent(event);
     }
-    return targets.length;
+    return activated;
+}
+
+async function _activateKnownExtensionsForDocumentLanguage(document) {
+    const languageId = String(document?.languageId || '').trim();
+    if (!languageId) return 0;
+    return _activateKnownExtensionsForEvent(`onLanguage:${languageId}`);
 }
 
 function _extensionIdKey(value) {
@@ -9087,7 +9137,10 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
 
         // --- Namespace: authentication ---
         authentication: {
-            getSession(providerId, scopes, options) {
+            async getSession(providerId, scopes, options) {
+                const id = String(providerId || '');
+                if (id) await _activateKnownExtensionsForEvent(
+                    `onAuthenticationRequest:${id}`);
                 return _authGetSession(providerId, scopes || [], options || {});
             },
             registerAuthenticationProvider(id, label, provider, options) {
@@ -9353,6 +9406,11 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     log('debug: startDebugging');
                     if (!config || typeof config !== 'object') return false;
                     const debugType = String(config.type || '');
+                    await _activateKnownExtensionsForEvent('onDebug');
+                    if (debugType) {
+                        await _activateKnownExtensionsForEvent(
+                            `onDebugResolve:${debugType}`);
+                    }
                     const provider = _debugConfigProviders.get(debugType);
                     if (provider && typeof provider.resolveDebugConfiguration === 'function') {
                         const resolved = await Promise.resolve(
@@ -9368,6 +9426,10 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                         configuration: { ...config },
                         parentSession: options && options.parentSession,
                     };
+                    if (session.type) {
+                        await _activateKnownExtensionsForEvent(
+                            `onDebugAdapterProtocolTracker:${session.type}`);
+                    }
                     const descriptorFactory = _debugAdapterFactories.get(session.type);
                     if (descriptorFactory
                             && typeof descriptorFactory.createDebugAdapterDescriptor === 'function') {
@@ -9434,6 +9496,15 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 },
                 async fetchTasks(filter) {
                     log('tasks: fetchTasks');
+                    const taskTypeFilter = filter && typeof filter === 'object'
+                        ? String(filter.type || '').trim()
+                        : '';
+                    if (taskTypeFilter) {
+                        await _activateKnownExtensionsForEvent(
+                            `onTaskType:${taskTypeFilter}`);
+                    } else {
+                        await _activateKnownExtensionsForEventPrefix('onTaskType:');
+                    }
                     const result = [];
                     for (const [taskType, provider] of _taskProviders.entries()) {
                         const provided = await _callTaskProvider(provider, 'provideTasks');
