@@ -5112,6 +5112,9 @@ class AIEditorAPI:
             "semanticToken": "semanticTokens",
             "semanticTokens": "semanticTokens",
             "documentSemanticTokens": "semanticTokens",
+            "semanticTokenEdits": "semanticTokensEdits",
+            "semanticTokensEdits": "semanticTokensEdits",
+            "documentSemanticTokensEdits": "semanticTokensEdits",
             "semanticTokenRange": "semanticTokensRange",
             "semanticTokensRange": "semanticTokensRange",
             "documentRangeSemanticTokens": "semanticTokensRange",
@@ -5905,6 +5908,37 @@ class AIEditorAPI:
                     "version": document.version,
                     "legend": legend_value,
                     "tokens": value,
+                }
+            if kind == "semanticTokensEdits":
+                previous_result_id = str(
+                    payload.get("previousResultId")
+                    if payload.get("previousResultId") is not None
+                    else payload.get("previous_result_id") or "")
+                legend = self._ext_host.commands.execute(
+                    "vscode.provideDocumentSemanticTokensLegend",
+                    document.uri,
+                )
+                result = self._ext_host.commands.execute(
+                    "vscode.provideDocumentSemanticTokensEdits",
+                    document.uri,
+                    previous_result_id,
+                )
+                legend_value = _json_ready_language_value(legend)
+                value = _json_ready_language_value(result)
+                if (isinstance(value, dict)
+                        and "edits" in value
+                        and value.get("legend") is not None):
+                    if not legend_value and value.get("legend") is not None:
+                        legend_value = value.get("legend")
+                    value = value.get("edits")
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "previousResultId": previous_result_id,
+                    "legend": legend_value,
+                    "edits": value,
                 }
             if kind == "semanticTokensRange":
                 token_range = _editor_provider_range(

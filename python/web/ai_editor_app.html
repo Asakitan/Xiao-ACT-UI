@@ -6720,6 +6720,42 @@ function editorSemanticTokensPayloadFromResponse(res,source,range){
   if(range)payload.range=range;
   return editorSemanticTokensData(payload)?payload:null;
 }
+function editorSemanticTokensResultId(payload){
+  const tokens=payload&&payload.tokens!==undefined?payload.tokens:payload;
+  if(tokens&&typeof tokens==='object'&&!Array.isArray(tokens)&&tokens.resultId!==undefined&&tokens.resultId!==null)return String(tokens.resultId);
+  if(payload&&payload.resultId!==undefined&&payload.resultId!==null)return String(payload.resultId);
+  return '';
+}
+function editorSemanticTokensEditsFromResponse(res){
+  if(!(res&&res.ok))return null;
+  const raw=res.edits&&typeof res.edits==='object'?res.edits:res;
+  const edits=Array.isArray(raw.edits)?raw.edits:[];
+  if(!edits.length)return null;
+  return {
+    edits,
+    resultId:raw.resultId!==undefined&&raw.resultId!==null?String(raw.resultId):'',
+    legend:res.legend||raw.legend||null
+  };
+}
+function editorSemanticTokensApplyEdits(previousPayload,editPayload){
+  const previous=editorSemanticTokensData(previousPayload);
+  const edits=editPayload&&Array.isArray(editPayload.edits)?editPayload.edits:null;
+  if(!previous||!edits||!edits.length)return null;
+  const next=previous.slice();
+  for(const edit of edits){
+    if(!edit||typeof edit!=='object')return null;
+    const start=Math.max(0,Math.min(next.length,Math.trunc(Number(edit.start)||0)));
+    const deleteCount=Math.max(0,Math.trunc(Number(edit.deleteCount)||0));
+    const data=edit.data===undefined||edit.data===null?[]:editorSemanticTokenDataArray(edit.data);
+    if(!data)return null;
+    next.splice(start,deleteCount,...data);
+  }
+  return {
+    tokens:{data:next,resultId:editPayload.resultId||editorSemanticTokensResultId(previousPayload)},
+    legend:editPayload.legend||editorSemanticTokensLegend(previousPayload),
+    source:'full'
+  };
+}
 function editorSemanticTokenFallbackLines(lines,lang,range){
   if(!range||!lines.length)return null;
   const lastLine=lines.length-1;
@@ -6881,6 +6917,18 @@ async function requestEditorSemanticTokens(quiet){
   if(requestId!==_editorSemanticTokensRequest||contentSnapshot!==String(ed.value||''))return;
   if(editorProviderResultCancelled(res))return;
   let payload=editorSemanticTokensPayloadFromResponse(res,'range',visibleRange);
+  if(!payload){
+    const previousResultId=editorSemanticTokensResultId(_editorSemanticTokens);
+    if(_editorSemanticTokens&&_editorSemanticTokens.source!=='range'&&previousResultId){
+      res=await editorRequestLanguageProvider('semanticTokensEdits',editorProviderPayload('semanticTokensEdits',{previousResultId}),{
+        label:'Semantic token edits',quiet:quiet===true,
+        isCurrent:()=>requestId===_editorSemanticTokensRequest&&contentSnapshot===String(ed.value||'')
+      });
+      if(requestId!==_editorSemanticTokensRequest||contentSnapshot!==String(ed.value||''))return;
+      if(editorProviderResultCancelled(res))return;
+      if(!(res&&res.error))payload=editorSemanticTokensApplyEdits(_editorSemanticTokens,editorSemanticTokensEditsFromResponse(res));
+    }
+  }
   if(!payload){
     res=await editorRequestLanguageProvider('semanticTokens',editorProviderPayload('semanticTokens'),{
       label:'Semantic tokens',quiet:quiet===true,

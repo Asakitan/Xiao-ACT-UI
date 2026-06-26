@@ -947,7 +947,8 @@ def test_app_settings_parity() -> None:
         SignatureHelp, SignatureInformation, ParameterInformation,
         CodeAction, DocumentLink, InlayHint, InlineCompletionItem,
         CodeLens, FoldingRange, SelectionRange, SemanticTokensLegend,
-        SemanticTokensBuilder, WorkspaceEdit, Location, Color,
+        SemanticTokensBuilder, SemanticTokensEdit, SemanticTokensEdits,
+        WorkspaceEdit, Location, Color,
         ColorInformation, ColorPresentation, SymbolInformation,
         DocumentHighlight, EvaluatableExpression, CallHierarchyItem,
         CallHierarchyIncomingCall,
@@ -4156,6 +4157,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function editorVisibleRangePayload()" in html
            and "function editorSemanticTokenFallbackLines(lines,lang,range)" in html
            and "function editorSemanticTokenDataArray(value)" in html
+           and "function editorSemanticTokensResultId(payload)" in html
+           and "function editorSemanticTokensEditsFromResponse(res)" in html
+           and "function editorSemanticTokensApplyEdits(previousPayload,editPayload)" in html
            and "function decodeEditorSemanticTokens(data,legend)" in html
            and "function editorSemanticTokenThemeStyle(token)" in html
            and "function applyExtensionSemanticTokenColors(colors)" in html
@@ -4166,8 +4170,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "sem-async" in html
            and "function scheduleEditorSemanticTokens(delay)" in html
            and "editorProviderPayload('semanticTokensRange'" in html
+           and "editorProviderPayload('semanticTokensEdits'" in html
            and "editorProviderPayload('semanticTokens'" in html
            and "editorRequestLanguageProvider('semanticTokensRange'" in html
+           and "editorRequestLanguageProvider('semanticTokensEdits'" in html
            and "editorRequestLanguageProvider('semanticTokens'" in html
            and "_editorSemanticTokensRangeActive" in html
            and "semanticTokenColors" in html
@@ -4699,6 +4705,9 @@ async function editorRequestLanguageProvider(kind, payload, options){
             "editorSemanticTokenFallbackLines",
             "editorSemanticTokenDataArray",
             "editorSemanticTokensData",
+            "editorSemanticTokensResultId",
+            "editorSemanticTokensEditsFromResponse",
+            "editorSemanticTokensApplyEdits",
             "editorSemanticTokensLegend",
             "decodeEditorSemanticTokens",
             "editorSemanticTokenClass",
@@ -4737,6 +4746,17 @@ const decoded = decodeEditorSemanticTokens(editorSemanticTokensData(payload), ed
 assert(decoded.length === 3, "unknown token type skipped");
 assert(editorSemanticTokensData({ data: { 0: 0, 1: 0, 2: 1, 3: 0, 4: 0, length: 5 } }).length === 5,
        "array-like semantic token data normalized");
+const editPayload = editorSemanticTokensEditsFromResponse({
+  ok: true,
+  edits: { resultId: "semantic-2", edits: [{ start: 5, deleteCount: 5, data: [0, 0, 4, 1, 1] }] },
+  legend
+});
+const appliedPayload = editorSemanticTokensApplyEdits(
+  { tokens: { data: [0, 0, 3, 0, 1, 0, 2, 3, 1, 0], resultId: "semantic-1" }, legend, source: "full" },
+  editPayload);
+assert(editorSemanticTokensResultId(appliedPayload) === "semantic-2"
+       && editorSemanticTokensData(appliedPayload).join(",") === "0,0,3,0,1,0,0,4,1,1",
+       "semantic token edits update prior token data");
 const rule = semanticTokenThemeRule("function.declaration:python", {
   foreground: "editor.foreground",
   fontStyle: "bold underline"
@@ -11357,7 +11377,8 @@ def test_vscode_api() -> None:
         EventEmitter, CompletionItem, CompletionList, Hover, CodeAction,
         DocumentLink, InlayHint, InlayHintLabelPart, InlineCompletionItem,
         CodeLens, FoldingRange, SelectionRange, SemanticTokensLegend,
-        SemanticTokensBuilder, TextEdit, Location, SignatureHelp,
+        SemanticTokensBuilder, SemanticTokensEdit, SemanticTokensEdits,
+        TextEdit, Location, SignatureHelp,
         SignatureInformation, Color, ColorInformation, ColorPresentation,
         SymbolInformation, DocumentHighlight, EvaluatableExpression,
         ThemeColor, FileDecoration,
@@ -12198,6 +12219,12 @@ def test_vscode_api() -> None:
                              "variable", ["readonly"])
                 return builder.build("semantic-result")
 
+            def provideDocumentSemanticTokensEdits(
+                    self, document, previous_result_id, token):
+                return SemanticTokensEdits([
+                    SemanticTokensEdit(5, 5, [0, 0, 6, 1, 1]),
+                ], "semantic-edits-" + str(previous_result_id))
+
         class _RenameProvider:
             def __init__(self):
                 self.names = []
@@ -12523,6 +12550,9 @@ def test_vscode_api() -> None:
             "vscode.provideDocumentSemanticTokensLegend", doc.uri)
         semantic_tokens = api["commands"]["executeCommand"](
             "vscode.provideDocumentSemanticTokens", doc.uri)
+        semantic_token_edits = api["commands"]["executeCommand"](
+            "vscode.provideDocumentSemanticTokensEdits",
+            doc.uri, "semantic-result")
         prepare_rename = api["commands"]["executeCommand"](
             "_executePrepareRename", doc.uri, Position(0, 0))
         rename_edit = api["commands"]["executeCommand"](
@@ -12746,6 +12776,13 @@ def test_vscode_api() -> None:
                and semantic_legend_result.tokenTypes == ["function", "variable"]
                and semantic_tokens.resultId == "semantic-result"
                and semantic_tokens.data == [0, 0, 4, 0, 0, 0, 5, 6, 1, 1])
+        _check("provideDocumentSemanticTokensEdits invokes matching providers",
+               semantic_token_edits
+               and semantic_token_edits.resultId == "semantic-edits-semantic-result"
+               and semantic_token_edits.edits
+               and semantic_token_edits.edits[0].start == 5
+               and semantic_token_edits.edits[0].deleteCount == 5
+               and semantic_token_edits.edits[0].data == [0, 0, 6, 1, 1])
         _check("executePrepareRename invokes matching providers",
                prepare_rename.get("placeholder") == "prin")
         _check("executeDocumentRenameProvider invokes matching providers",
@@ -18891,6 +18928,11 @@ async function activate(context) {
       builder.push(new vscode.Range(0, 5, 0, 9), 'variable', ['readonly']);
       return builder.build('node-semantic');
     },
+    provideDocumentSemanticTokensEdits(document, previousResultId, token) {
+      return new vscode.SemanticTokensEdits([
+        new vscode.SemanticTokensEdit(5, 5, [0, 0, 5, 1, 1]),
+      ], 'node-semantic-edits:' + previousResultId);
+    },
   }, semanticLegend);
   vscode.languages.registerRenameProvider('python', {
     prepareRename(document, position, token) {
@@ -22620,6 +22662,9 @@ module.exports = { activate, deactivate };
                     "vscode.provideDocumentSemanticTokensLegend", node_uri)
                 node_semantic_tokens = api._ext_host.commands.execute(
                     "vscode.provideDocumentSemanticTokens", node_uri)
+                node_semantic_edits = api._ext_host.commands.execute(
+                    "vscode.provideDocumentSemanticTokensEdits",
+                    node_uri, "node-semantic")
                 node_prepare_rename = api._ext_host.commands.execute(
                     "_executePrepareRename", node_uri, Position(0, 1))
                 node_rename_edit = api._ext_host.commands.execute(
@@ -22654,6 +22699,13 @@ module.exports = { activate, deactivate };
                     "language": "python",
                     "content": "print('node provider')\n",
                     "position": {"line": 0, "character": 1},
+                })
+                node_editor_semantic_edits = api.editor_language_provider({
+                    "kind": "semanticTokensEdits",
+                    "filePath": node_provider_sample,
+                    "language": "python",
+                    "content": "print('node provider')\n",
+                    "previousResultId": "node-semantic",
                 })
                 node_editor_formatting_providers = api.editor_language_provider({
                     "kind": "formattingProviders",
@@ -23756,6 +23808,15 @@ module.exports = { activate, deactivate };
                        and node_semantic_tokens.get("resultId") == "node-semantic"
                        and node_semantic_tokens.get("data")
                        == [0, 0, 4, 0, 0, 0, 5, 4, 1, 1])
+                _check("node host language provider invokes JS semantic token edits",
+                       node_semantic_edits
+                       and node_semantic_edits.get("resultId")
+                       == "node-semantic-edits:node-semantic"
+                       and node_semantic_edits.get("edits", [{}])[0].get("start") == 5
+                       and node_semantic_edits.get("edits", [{}])[0].get(
+                           "deleteCount") == 5
+                       and node_semantic_edits.get("edits", [{}])[0].get("data")
+                       == [0, 0, 5, 1, 1])
                 _check("node host language provider invokes JS prepare rename",
                        node_prepare_rename
                        and node_prepare_rename.get("placeholder") == "node")
@@ -23859,6 +23920,15 @@ module.exports = { activate, deactivate };
                        and (node_editor_diagnostics.get(
                            "diagnostics") or [{}])[0].get("message")
                        == "node diagnostic quickfix")
+                _check("editor_language_provider returns Node semantic token edits",
+                       node_editor_semantic_edits.get("ok") is True
+                       and node_editor_semantic_edits.get("previousResultId")
+                       == "node-semantic"
+                       and node_editor_semantic_edits.get("edits", {}).get(
+                           "resultId") == "node-semantic-edits:node-semantic"
+                       and node_editor_semantic_edits.get("edits", {}).get(
+                           "edits", [{}])[0].get("data")
+                       == [0, 0, 5, 1, 1])
                 _check("editor_language_provider resolves selected Node code action",
                        node_code_action_editor_resolve.get("ok") is True
                        and node_code_action_editor_resolve.get("action", {})

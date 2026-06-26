@@ -2467,6 +2467,8 @@ class VscodeNamespace:
             "vscode.provideDocumentSemanticTokensLegend": self._execute_document_semantic_tokens_legend,
             "_provideDocumentSemanticTokens": self._execute_document_semantic_tokens_provider,
             "vscode.provideDocumentSemanticTokens": self._execute_document_semantic_tokens_provider,
+            "_provideDocumentSemanticTokensEdits": self._execute_document_semantic_tokens_edits_provider,
+            "vscode.provideDocumentSemanticTokensEdits": self._execute_document_semantic_tokens_edits_provider,
             "_provideDocumentRangeSemanticTokensLegend": self._execute_document_range_semantic_tokens_legend,
             "vscode.provideDocumentRangeSemanticTokensLegend": self._execute_document_range_semantic_tokens_legend,
             "_provideDocumentRangeSemanticTokens": self._execute_document_range_semantic_tokens_provider,
@@ -3774,6 +3776,26 @@ class VscodeNamespace:
             "semanticTokens", document)
         if isinstance(external, dict) and "tokens" in external:
             return external.get("tokens")
+        return external
+
+    def _execute_document_semantic_tokens_edits_provider(
+            self, uri: Any, previous_result_id: Any = "") -> Any:
+        document = self._resolve_language_document(uri)
+        previous = "" if previous_result_id is None else str(previous_result_id)
+        for entry in self._matching_language_providers(
+                "semanticTokens", document):
+            value = self._call_language_provider(
+                entry.get("provider"), "provideDocumentSemanticTokensEdits",
+                (document, previous, CancellationToken.NONE),
+                default=None)
+            if value is not None:
+                return value
+        external = self._request_external_language_provider(
+            "semanticTokensEdits",
+            document,
+            previousResultId=previous)
+        if isinstance(external, dict) and "edits" in external:
+            return external.get("edits")
         return external
 
     def _execute_document_range_semantic_tokens_provider(

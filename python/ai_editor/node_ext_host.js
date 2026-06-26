@@ -11825,6 +11825,7 @@ function _languageProviderMethod(kind) {
         workspaceSymbol: 'provideWorkspaceSymbols',
         workspaceSymbolResolve: 'resolveWorkspaceSymbol',
         semanticTokens: 'provideDocumentSemanticTokens',
+        semanticTokensEdits: 'provideDocumentSemanticTokensEdits',
         semanticTokensLegend: 'provideDocumentSemanticTokens',
         semanticTokensRange: 'provideDocumentRangeSemanticTokens',
         semanticTokensRangeLegend: 'provideDocumentRangeSemanticTokens',
@@ -12257,6 +12258,8 @@ async function handleLanguageProviderRequest(msg) {
         }
         const providerKind = kind === 'semanticTokensLegend'
             ? 'semanticTokens'
+            : kind === 'semanticTokensEdits'
+                ? 'semanticTokens'
             : kind === 'semanticTokensRangeLegend'
                 ? 'semanticTokensRange'
                 : kind === 'colorPresentation'
@@ -12896,6 +12899,45 @@ async function handleLanguageProviderRequest(msg) {
                 ok: true,
                 kind,
                 value: _serializeLanguageValue(values),
+            });
+            return;
+        }
+
+        if (kind === 'semanticTokensEdits') {
+            const previousResultId = msg.previousResultId === undefined || msg.previousResultId === null
+                ? ''
+                : String(msg.previousResultId);
+            for (const entry of providers) {
+                if (token.isCancellationRequested) { respondCancelled(); return; }
+                const provider = entry.provider;
+                const fn = provider && provider[methodName];
+                if (typeof fn !== 'function') continue;
+                try {
+                    const value = await fn.call(provider, document, previousResultId, token);
+                    if (token.isCancellationRequested) { respondCancelled(); return; }
+                    if (value !== undefined && value !== null) {
+                        send({
+                            type: 'language_provider_response',
+                            requestId,
+                            ok: true,
+                            kind,
+                            value: {
+                                edits: _serializeLanguageValue(value),
+                                legend: _serializeLanguageValue(entry.metadata || null),
+                            },
+                        });
+                        return;
+                    }
+                } catch (err) {
+                    recordProviderError(entry, err);
+                }
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: null,
             });
             return;
         }
