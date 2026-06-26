@@ -634,7 +634,9 @@ body.window-resizing * { cursor:inherit !important; }
   box-shadow:0 2px 8px #00000040; z-index:10; }
 .scroll-down-btn:hover { background:var(--bg-hover); color:var(--fg); }
 .scroll-down-btn.visible { display:flex; }
-.msg { padding:10px 0 14px; animation:fadeIn .18s; }
+.msg { padding:10px 0 14px; animation:fadeIn .18s; border-radius:6px; outline:none; }
+.msg.chat-message-focused { box-shadow:0 0 0 1px color-mix(in srgb,var(--border-focus) 55%,transparent);
+  background:color-mix(in srgb,var(--bg-hover) 42%,transparent); }
 .interactive-item-container { display:flex; flex-direction:column; gap:6px; }
 .interactive-item-container .msg-header { min-height:24px; }
 .interactive-item-container.interactive-request { align-items:flex-end; }
@@ -1293,7 +1295,7 @@ pre.code-block { overflow:visible; }
 
 /* ── Message footer (rate/retry/copy) ── */
 .msg-footer { display:flex; gap:4px; margin-top:4px; opacity:0; transition:opacity .15s; }
-.msg:hover .msg-footer,.msg:focus-within .msg-footer { opacity:1; }
+.msg:hover .msg-footer,.msg:focus-within .msg-footer,.msg.chat-message-focused .msg-footer { opacity:1; }
 .msg-footer .mf-btn { padding:2px 4px; border-radius:3px; font-size:14px; cursor:pointer;
   color:var(--fg-dim); background:transparent; border:none; line-height:1; }
 .msg-footer .mf-btn:hover,.msg-footer .mf-btn:focus { color:var(--fg); background:var(--bg-hover); outline:none; }
@@ -3888,6 +3890,52 @@ function chatConversationItems(){
   const container=ensureChatMessagesInner();if(!container)return [];
   return Array.from(container.children).filter(el=>el.id!=='chat-welcome-msg'&&el.classList&&el.classList.contains('msg'));
 }
+let _chatFocusedMessageIndex=-1;
+function chatMessageLabel(el,index,total){
+  const role=el&&el.dataset?el.dataset.role||'assistant':'assistant';
+  const body=el&&el.querySelector?el.querySelector('.msg-body'):null;
+  const text=String(body&&body.textContent||'').replace(/\s+/g,' ').trim().slice(0,120);
+  const ordinal=(index>=0&&total>0)?' '+(index+1)+' of '+total:'';
+  return ({user:'You',assistant:'Assistant',system:'System',tool:'Tool'}[role]||role)+ordinal+(text?': '+text:'');
+}
+function refreshChatMessageNavigationState(){
+  const items=chatConversationItems(),panel=$('chat-panel');
+  items.forEach((item,index)=>{
+    if(!item.id)item.id='chat-message-'+Date.now().toString(36)+'-'+index+'-'+Math.random().toString(36).slice(2,6);
+    item.setAttribute('role','article');
+    item.setAttribute('tabindex','-1');
+    item.setAttribute('aria-label',chatMessageLabel(item,index,items.length));
+    item.dataset.chatMessageIndex=String(index);
+    item.classList.toggle('chat-message-focused',index===_chatFocusedMessageIndex);
+  });
+  if(panel){
+    panel.dataset.chatFocusedMessageIndex=String(_chatFocusedMessageIndex);
+    panel.dataset.chatMessageNavigationCount=String(items.length);
+  }
+}
+function announceAssistantAction(message){
+  const status=$('chat-input-status');
+  if(status)status.dataset.lastAssistantAction=String(message||'');
+  setStatus(message||'');
+}
+function focusChatMessage(index,opts){
+  const items=chatConversationItems();if(!items.length)return false;
+  const clamped=Math.max(0,Math.min(items.length-1,Number(index)||0));
+  _chatFocusedMessageIndex=clamped;
+  refreshChatMessageNavigationState();
+  const item=items[clamped];
+  if(item){
+    try{item.focus({preventScroll:!!(opts&&opts.preventScroll)})}catch(_e){item.focus()}
+    item.scrollIntoView({block:'nearest'});
+    announceAssistantAction('Focused message '+(clamped+1)+' of '+items.length);
+  }
+  return true;
+}
+function navigateChatMessages(delta){
+  const items=chatConversationItems();if(!items.length)return false;
+  const current=_chatFocusedMessageIndex>=0?_chatFocusedMessageIndex:items.length-1;
+  return focusChatMessage(current+delta);
+}
 function latestChatMessageBody(role){
   const items=chatConversationItems();
   for(let i=items.length-1;i>=0;i--){
@@ -3906,6 +3954,23 @@ function showChatWelcomeIfEmpty(){
   if(chatConversationItems().length)return;
   renderWelcome();
 }
+const _chatMessagesHost=$('chat-messages');
+if(_chatMessagesHost){
+  _chatMessagesHost.addEventListener('keydown',e=>{
+    if(e.altKey&&(e.key==='ArrowUp'||e.key==='ArrowDown')){
+      e.preventDefault();navigateChatMessages(e.key==='ArrowDown'?1:-1);return;
+    }
+    if(e.key==='Home'&&e.target&&e.target.closest&&e.target.closest('.msg')){
+      e.preventDefault();focusChatMessage(0);return;
+    }
+    if(e.key==='End'&&e.target&&e.target.closest&&e.target.closest('.msg')){
+      e.preventDefault();focusChatMessage(chatConversationItems().length-1);return;
+    }
+    if(e.key==='Escape'&&e.target&&e.target.closest&&e.target.closest('.msg')){
+      e.preventDefault();const input=$('chat-input');if(input)input.focus();
+    }
+  });
+}
 
 function createMsg(role,model){
   markChatHasMessages();
@@ -3913,6 +3978,9 @@ function createMsg(role,model){
   const turnClass=role==='user'?'interactive-request':role==='assistant'?'interactive-response':role==='system'?'interactive-system':'interactive-response';
   el.className='msg interactive-item-container '+turnClass+(role==='user'?' user-msg':'');
   el.dataset.role=role;
+  el.setAttribute('role','article');
+  el.setAttribute('tabindex','-1');
+  el.addEventListener('focus',()=>{_chatFocusedMessageIndex=chatConversationItems().indexOf(el);refreshChatMessageNavigationState()});
   const hdr=document.createElement('div');hdr.className='msg-header';
   const avatarIcons={user:'U',assistant:'✦',system:'ℹ',tool:'⚡'};
   const av=document.createElement('span');av.className='msg-avatar '+role;
@@ -3929,6 +3997,7 @@ function createMsg(role,model){
   container.appendChild(el);
   $('chat-messages').scrollTop=$('chat-messages').scrollHeight;
   updateAssistantSurfaceState();
+  refreshChatMessageNavigationState();
   return body;
 }
 
@@ -11905,6 +11974,9 @@ chatInp.addEventListener('input',function(){
 });
 chatInp.addEventListener('keydown',function(e){
   const contextPicker=$('chat-context-picker');
+  if(e.altKey&&(e.key==='ArrowUp'||e.key==='ArrowDown')){
+    e.preventDefault();navigateChatMessages(e.key==='ArrowDown'?1:-1);return;
+  }
   if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){
     e.preventDefault();closeSlashPopup();$('at-popup').classList.remove('open');setChatCompletionState('',false);closeChatContextPicker();doSend();return;
   }
@@ -22223,12 +22295,14 @@ function setMessageFeedback(msgEl,msgId,rating){
   });
   try{localStorage.setItem('fb-'+msgId,next)}catch(e){}
   call('save_feedback',msgId,next);
+  announceAssistantAction(next==='none'?'Feedback cleared':'Feedback saved: '+next);
   showToast(t('feedback_saved'),'success',1500);
 }
 function retryAssistantMessage(msgEl){
-  if(streaming){showToast('Response in progress','warning',1800);return false}
+  if(streaming){announceAssistantAction('Response in progress');showToast('Response in progress','warning',1800);return false}
   const text=chatPreviousUserMessageText(msgEl);
-  if(!text){showToast('No previous user message','warning',1800);return false}
+  if(!text){announceAssistantAction('No previous user message');showToast('No previous user message','warning',1800);return false}
+  announceAssistantAction('Retrying previous request');
   setChatInputValue(text);
   doSend();
   return true;
@@ -22242,14 +22316,16 @@ function addMessageFooter(msgEl,role){
   msgEl.dataset.messageId=msgId;
   let saved='none';try{saved=localStorage.getItem('fb-'+msgId)||'none'}catch(e){}
   [
-    {icon:'👍',title:t('helpful'),cls:'rate-up',feedback:'up',fn:function(){setMessageFeedback(msgEl,msgId,this.classList.contains('active')?'none':'up')}},
-    {icon:'👎',title:t('not_helpful'),cls:'rate-down',feedback:'down',fn:function(){setMessageFeedback(msgEl,msgId,this.classList.contains('active')?'none':'down')}},
-    {icon:'📋',title:t('copy_response'),fn:function(){const text=chatMessageActionText(msgEl,true);if(text)navigator.clipboard.writeText(text);showToast(t('copied'),'success',1500)}},
-    {icon:'🔄',title:t('retry'),fn:function(){retryAssistantMessage(msgEl)}},
+    {icon:'👍',title:t('helpful'),cls:'rate-up',feedback:'up',action:'feedback-up',fn:function(){setMessageFeedback(msgEl,msgId,this.classList.contains('active')?'none':'up')}},
+    {icon:'👎',title:t('not_helpful'),cls:'rate-down',feedback:'down',action:'feedback-down',fn:function(){setMessageFeedback(msgEl,msgId,this.classList.contains('active')?'none':'down')}},
+    {icon:'📋',title:t('copy_response'),action:'copy',fn:function(){const text=chatMessageActionText(msgEl,true);if(text){navigator.clipboard.writeText(text);announceAssistantAction('Response copied')}showToast(t('copied'),'success',1500)}},
+    {icon:'🔄',title:t('retry'),action:'retry',fn:function(){retryAssistantMessage(msgEl)}},
   ].forEach(a=>{
     const b=document.createElement('button');b.type='button';b.className='mf-btn'+(a.cls?' '+a.cls:'');
     b.textContent=a.icon;b.title=a.title;b.setAttribute('aria-label',a.title);
+    b.dataset.action=a.action||'action';
     if(a.feedback){b.dataset.feedback=a.feedback;b.setAttribute('aria-pressed',saved===a.feedback?'true':'false');if(saved===a.feedback)b.classList.add('active')}
+    b.addEventListener('keydown',ev=>{if(ev.key===' '||ev.key==='Enter'){ev.preventDefault();b.click()}});
     b.onclick=a.fn;footer.appendChild(b);
   });
   msgEl.appendChild(footer);
@@ -22320,7 +22396,7 @@ $('chat-messages').addEventListener('contextmenu',function(e){
    {label:t('cm_run'),fn:()=>{if(text.includes('`')){
      const m=text.match(/```[\s\S]*?\n([\s\S]*?)```/);if(m)execTerminalCmd(m[1])}}},
    {sep:true},
-    {label:t('cm_delete'),fn:()=>{msgEl.remove();showChatWelcomeIfEmpty();syncAssistantSessionState();assistantSessionPersistCurrent({status:streaming?'inProgress':'completed'});}},
+    {label:t('cm_delete'),fn:()=>{msgEl.remove();_chatFocusedMessageIndex=-1;refreshChatMessageNavigationState();showChatWelcomeIfEmpty();syncAssistantSessionState();assistantSessionPersistCurrent({status:streaming?'inProgress':'completed'});}},
   ].forEach(it=>{
     if(it.sep){const s=document.createElement('div');s.className='ctx-sep';menu.appendChild(s);return}
     const d=document.createElement('div');d.className='ctx-item';d.textContent=it.label;

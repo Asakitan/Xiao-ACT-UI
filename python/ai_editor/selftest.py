@@ -3517,6 +3517,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "chat-welcome-actions" in html
            and "welcome-prompt-btn" in html
            and 'id="chat-toolbar-head" aria-live="polite"' in html
+           and "function refreshChatMessageNavigationState()" in html
+           and "function focusChatMessage(index,opts)" in html
+           and "function navigateChatMessages(delta)" in html
            and "chat-composer-action" in html
            and "chat-composer-trailing" in html
            and "chat-composer-meta" in html
@@ -3740,12 +3743,26 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function chatPreviousUserMessageText(msgEl)" in html
            and "function setMessageFeedback(msgEl,msgId,rating)" in html
            and "function retryAssistantMessage(msgEl)" in html
+           and "function announceAssistantAction(message)" in html
+           and "role','article'" in html
+           and "el.setAttribute('tabindex','-1');" in html
+           and "el.addEventListener('focus',()=>{_chatFocusedMessageIndex=chatConversationItems().indexOf(el);refreshChatMessageNavigationState()});" in html
+           and "chat-message-focused" in html
+           and "e.altKey&&(e.key==='ArrowUp'||e.key==='ArrowDown')" in html
+           and "focusChatMessage(chatConversationItems().length-1)" in html
+           and "panel.dataset.chatFocusedMessageIndex=String(_chatFocusedMessageIndex);" in html
+           and "panel.dataset.chatMessageNavigationCount=String(items.length);" in html
            and "items.indexOf(msgEl)" in html
            and "msgEl.querySelector('.msg-footer')" in html
            and "footer.setAttribute('role','toolbar');" in html
            and "footer.setAttribute('aria-label','Assistant message actions');" in html
            and "const b=document.createElement('button');b.type='button';" in html
+           and "b.dataset.action=a.action||'action';" in html
+           and "b.addEventListener('keydown',ev=>{if(ev.key===' '||ev.key==='Enter'){ev.preventDefault();b.click()}});" in html
            and "b.dataset.feedback=a.feedback" in html
+           and "announceAssistantAction(next==='none'?'Feedback cleared':'Feedback saved: '+next);" in html
+           and "announceAssistantAction('Response copied')" in html
+           and "announceAssistantAction('Retrying previous request')" in html
            and "chatMessageActionText(msgEl,true)" in html
            and "retryAssistantMessage(msgEl)" in html
            and "addMessageFooter(body.closest('.msg'),'assistant');" in html
