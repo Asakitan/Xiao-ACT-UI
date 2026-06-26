@@ -3758,12 +3758,12 @@ def test_phase1_ai_editor_regressions() -> None:
             and "renderWelcome();\n  setStatus(t('new_chat_title')" in html
             and "const body=latestChatMessageBody('assistant');" in html)
     _check("frontend Assistant composer keeps normal-width controls in one row",
-           ".chat-toolbar { display:grid; grid-template-columns:minmax(0,1fr) max-content; align-items:center; gap:8px;" in html
+           ".chat-toolbar { display:flex; align-items:center; gap:8px; flex-wrap:nowrap;" in html
             and "border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent);" in html
             and "min-width:0; overflow:hidden; white-space:nowrap;" in html
             and ".chat-toolbar .spacer { display:none; }" in html
-            and ".chat-control-strip { display:flex; align-items:center; gap:4px; flex-wrap:nowrap; min-width:0; width:100%;" in html
-            and "width:100%;\n  overflow:hidden; }" in html
+            and ".chat-control-strip { display:flex; align-items:center; gap:4px; flex:1 1 auto; flex-wrap:nowrap; min-width:0;" in html
+            and "flex-wrap:nowrap; min-width:0;\n  overflow:hidden; }" in html
             and ".chat-select-chip { width:142px; max-width:142px; padding:0 20px 0 8px; cursor:pointer; flex:0 1 142px; }" in html
             and ".chat-model-inline { width:116px; padding:0 8px; font-family:var(--mono); flex:0 1 116px; }" in html
             and ".chat-select-chip.agent { width:122px; max-width:122px; }" in html
@@ -4376,6 +4376,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "chat-response-move" in html
            and "chat-response-extensions" in html
            and "chat-response-pr" in html
+           and "chat-response-thinking" in html
+           and "chat-response-hook" in html
+           and "chat-response-workspace-edit" in html
+           and "chat-response-notebook-edit" in html
+           and "chat-response-tool-update" in html
+           and "chat-response-clear" in html
            and "function chatResponseVisiblePartKind(part)" in html
            and "raw==='markdownvuln'||raw==='markdownwithvulnerabilities'" in html
            and "raw==='markdowncontent'||raw==='markdown'" in html
@@ -4391,6 +4397,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "raw==='move'||raw.includes('movemessage')" in html
            and "raw==='extensions'||raw.includes('extensions')" in html
            and "raw==='pullrequest'||raw.includes('pullrequest')" in html
+           and "raw==='thinking'||raw.includes('thinking')" in html
+           and "raw==='hook'||raw.includes('hook')" in html
+           and "raw==='workspaceedit'||raw.includes('workspaceedit')" in html
+           and "raw==='notebookedit'||raw.includes('notebookedit')" in html
+           and "raw==='externaltoolinvocationupdate'||raw.includes('externaltoolinvocationupdate')" in html
+           and "raw==='cleartoprevioustoolinvocation'||raw.includes('cleartoprevious')" in html
            and "function chatMarkdownValueText(value)" in html
            and "function normalizeChatVulnerabilities(value)" in html
            and "function normalizeChatConfirmationPart(part)" in html
@@ -4401,6 +4413,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function normalizeChatMovePart(part)" in html
            and "function normalizeChatExtensionsPart(part)" in html
            and "function normalizeChatPullRequestPart(part)" in html
+           and "function normalizeChatThinkingPart(part)" in html
+           and "function normalizeChatHookPart(part)" in html
+           and "function normalizeChatWorkspaceEditPart(part)" in html
+           and "function normalizeChatNotebookEditPart(part)" in html
+           and "function normalizeChatExternalToolInvocationUpdatePart(part)" in html
+           and "function normalizeChatClearToPreviousToolInvocationPart(part)" in html
            and "function normalizeChatVisibleResponseParts(payload,content)" in html
            and "function runChatResponseCommand(command,button)" in html
            and "function chatResponseComposerText(prefix,text)" in html
@@ -4415,6 +4433,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function renderChatMovePart(wrap,part)" in html
            and "function renderChatExtensionsPart(wrap,part)" in html
            and "function renderChatPullRequestPart(wrap,part)" in html
+           and "function renderChatThinkingPart(wrap,part)" in html
+           and "function renderChatHookPart(wrap,part)" in html
+           and "function renderChatWorkspaceEditPart(wrap,part)" in html
+           and "function renderChatNotebookEditPart(wrap,part)" in html
+           and "function renderChatExternalToolInvocationUpdatePart(wrap,part)" in html
+           and "function renderChatClearToPreviousToolInvocationPart(wrap,part)" in html
            and "await call('execute_command',id,...(Array.isArray(command.arguments)?command.arguments:[]))" in html
            and "function renderChatResponseNativeParts(body,payload,content)" in html
            and "renderChatMarkdownVulnerabilityPart(wrap,part)" in html
@@ -4426,9 +4450,17 @@ def test_phase1_ai_editor_regressions() -> None:
            and "renderChatMovePart(wrap,part)" in html
            and "renderChatExtensionsPart(wrap,part)" in html
            and "renderChatPullRequestPart(wrap,part)" in html
+           and "renderChatThinkingPart(wrap,part)" in html
+           and "renderChatHookPart(wrap,part)" in html
+           and "renderChatWorkspaceEditPart(wrap,part)" in html
+           and "renderChatNotebookEditPart(wrap,part)" in html
+           and "renderChatExternalToolInvocationUpdatePart(wrap,part)" in html
+           and "renderChatClearToPreviousToolInvocationPart(wrap,part)" in html
            and "chatResponseComposerText('Answers',chatQuestionCarouselAnswerText(card))" in html
            and "chatResponseComposerText('Install extensions',exts.join(', '))" in html
            and "openChatResponseReference(chatMultiDiffRef(entry))" in html
+           and "openChatResponseReference(chatWorkspaceEditRef(edit))" in html
+           and "chatToolPartSummary(data.resultDetails||data.toolSpecificData)" in html
            and "toolResultActionButton('Copy Snippet'" in html
            and "renderChatResponseNativeParts(currentMsgBody,d,finalMarkdown);" in html
            and "renderChatResponseNativeParts(s,data,content);" in html
