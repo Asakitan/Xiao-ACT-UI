@@ -4382,12 +4382,25 @@ def test_phase1_ai_editor_regressions() -> None:
            and "chat-response-notebook-edit" in html
            and "chat-response-tool-update" in html
            and "chat-response-clear" in html
+           and "chat-response-external-edit" in html
+           and "chat-response-external-edits" in html
+           and "chat-response-progress-task" in html
+           and "chat-response-todo-list" in html
+           and "chat-response-simple-tool" in html
+           and "chat-response-modified-files" in html
            and "function chatResponseVisiblePartKind(part)" in html
            and "raw==='markdownvuln'||raw==='markdownwithvulnerabilities'" in html
            and "raw==='markdowncontent'||raw==='markdown'" in html
+           and "raw==='progresstask'||raw==='progresstaskserialized'" in html
+           and "raw==='progresstaskresult'||raw==='progress_task_result'" in html
            and "raw==='warning'||raw.includes('warning')" in html
            and "raw==='info'||raw==='information'||raw.includes('info')" in html
            and "raw==='progressmessage'||raw==='progress'||raw.includes('progress')" in html
+           and "raw==='externaledit'||raw==='external_edit'" in html
+           and "raw==='externaledits'||raw==='external_edits'" in html
+           and "raw==='todolist'||raw==='todo_list'" in html
+           and "raw==='simpletoolinvocation'||raw==='simple_tool_invocation'" in html
+           and "raw==='modifiedfilesconfirmation'||raw==='modified_files_confirmation'" in html
            and "raw==='command'||raw.includes('commandbutton')" in html
            and "raw==='confirmation'||raw.includes('confirmation')" in html
            and "raw==='questioncarousel'||raw.includes('questioncarousel')" in html
@@ -4419,6 +4432,13 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function normalizeChatNotebookEditPart(part)" in html
            and "function normalizeChatExternalToolInvocationUpdatePart(part)" in html
            and "function normalizeChatClearToPreviousToolInvocationPart(part)" in html
+           and "function normalizeChatExternalEditPart(part)" in html
+           and "function normalizeChatExternalEditsPart(part)" in html
+           and "function normalizeChatProgressTaskPart(part)" in html
+           and "function normalizeChatProgressTaskResultPart(part)" in html
+           and "function normalizeChatTodoListPart(part)" in html
+           and "function normalizeChatSimpleToolInvocationPart(part)" in html
+           and "function normalizeChatModifiedFilesConfirmationPart(part)" in html
            and "function normalizeChatVisibleResponseParts(payload,content)" in html
            and "function runChatResponseCommand(command,button)" in html
            and "function chatResponseComposerText(prefix,text)" in html
@@ -4439,6 +4459,14 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function renderChatNotebookEditPart(wrap,part)" in html
            and "function renderChatExternalToolInvocationUpdatePart(wrap,part)" in html
            and "function renderChatClearToPreviousToolInvocationPart(wrap,part)" in html
+           and "function renderChatExternalEditPart(wrap,part)" in html
+           and "function renderChatExternalEditsPart(wrap,part)" in html
+           and "function renderChatProgressTaskPart(wrap,part)" in html
+           and "function renderChatProgressTaskResultPart(wrap,part)" in html
+           and "function renderChatTodoListPart(wrap,part)" in html
+           and "function renderChatSimpleToolInvocationPart(wrap,part)" in html
+           and "function renderChatModifiedFilesConfirmationPart(wrap,part)" in html
+           and "function renderChatToolSpecificData(card,data)" in html
            and "await call('execute_command',id,...(Array.isArray(command.arguments)?command.arguments:[]))" in html
            and "function renderChatResponseNativeParts(body,payload,content)" in html
            and "renderChatMarkdownVulnerabilityPart(wrap,part)" in html
@@ -4456,11 +4484,24 @@ def test_phase1_ai_editor_regressions() -> None:
            and "renderChatNotebookEditPart(wrap,part)" in html
            and "renderChatExternalToolInvocationUpdatePart(wrap,part)" in html
            and "renderChatClearToPreviousToolInvocationPart(wrap,part)" in html
+           and "renderChatExternalEditPart(wrap,part)" in html
+           and "renderChatExternalEditsPart(wrap,part)" in html
+           and "renderChatProgressTaskPart(wrap,part)" in html
+           and "renderChatProgressTaskResultPart(wrap,part)" in html
+           and "renderChatTodoListPart(wrap,part)" in html
+           and "renderChatSimpleToolInvocationPart(wrap,part)" in html
+           and "renderChatModifiedFilesConfirmationPart(wrap,part)" in html
            and "chatResponseComposerText('Answers',chatQuestionCarouselAnswerText(card))" in html
            and "chatResponseComposerText('Install extensions',exts.join(', '))" in html
            and "openChatResponseReference(chatMultiDiffRef(entry))" in html
            and "openChatResponseReference(chatWorkspaceEditRef(edit))" in html
+           and "openChatResponseReference(chatExternalEditRef(edit))" in html
+           and "openChatResponseReference(chatModifiedFileRef(file))" in html
            and "chatToolPartSummary(data.resultDetails||data.toolSpecificData)" in html
+           and "const renderedSpecific=renderChatToolSpecificData(card,data.toolSpecificData)" in html
+           and "data.kind==='todoList'" in html
+           and "data.kind==='simpleToolInvocation'" in html
+           and "data.kind==='modifiedFilesConfirmation'" in html
            and "toolResultActionButton('Copy Snippet'" in html
            and "renderChatResponseNativeParts(currentMsgBody,d,finalMarkdown);" in html
            and "renderChatResponseNativeParts(s,data,content);" in html

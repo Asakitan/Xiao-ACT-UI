@@ -1024,7 +1024,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-response-vulns,.chat-response-citation,.chat-response-confirmation,.chat-response-questions,
 .chat-response-uri,.chat-response-multidiff,.chat-response-move,.chat-response-extensions,.chat-response-pr,
 .chat-response-thinking,.chat-response-hook,.chat-response-workspace-edit,.chat-response-notebook-edit,
-.chat-response-tool-update,.chat-response-clear {
+.chat-response-tool-update,.chat-response-clear,.chat-response-external-edit,.chat-response-external-edits,
+.chat-response-progress-task,.chat-response-todo-list,.chat-response-simple-tool,.chat-response-modified-files {
   border:1px solid var(--border); border-radius:6px; background:var(--bg3); padding:7px 8px;
   display:flex; flex-direction:column; gap:6px; color:var(--fg-dim); font-size:12px; }
 .chat-response-vuln-list { display:flex; flex-wrap:wrap; gap:5px; }
@@ -1040,8 +1041,16 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-response-diff-row,.chat-response-edit-row { cursor:pointer; text-align:left; display:flex; align-items:center; gap:6px; }
 .chat-response-diff-row:hover,.chat-response-diff-row:focus,.chat-response-edit-row:hover,.chat-response-edit-row:focus { border-color:var(--border-focus); background:var(--bg-hover); outline:none; }
 .chat-response-diff-row .diff-stat { color:var(--fg-success); font:10px var(--mono); flex:0 0 auto; }
-.chat-response-thinking .thinking-body,.chat-response-tool-update pre { max-height:140px; overflow:auto; white-space:pre-wrap;
+.chat-response-thinking .thinking-body,.chat-response-tool-update pre,.chat-response-simple-tool pre { max-height:140px; overflow:auto; white-space:pre-wrap;
   color:var(--fg-code); font:11px/1.4 var(--mono); margin:0; }
+.chat-response-todo-list ul,.chat-response-tool-specific .chat-response-todo-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:4px; }
+.chat-response-todo-list li { display:flex; align-items:center; gap:6px; min-width:0; color:var(--fg); }
+.chat-response-todo-list .todo-state { width:16px; flex:0 0 16px; color:var(--fg-dim); text-align:center; }
+.chat-response-todo-list .todo-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chat-response-todo-list .todo-state.in-progress { color:var(--fg-accent); }
+.chat-response-todo-list .todo-state.completed { color:var(--fg-success); }
+.chat-response-tool-specific { border-top:1px solid color-mix(in srgb,var(--border) 55%,transparent);
+  padding-top:6px; display:flex; flex-direction:column; gap:5px; }
 .chat-response-question { border-top:1px solid color-mix(in srgb,var(--border) 55%,transparent); padding-top:6px; display:flex; flex-direction:column; gap:5px; }
 .chat-response-question:first-child { border-top:0; padding-top:0; }
 .chat-response-question-options { display:flex; flex-wrap:wrap; gap:5px; }
@@ -5086,9 +5095,16 @@ function chatResponseVisiblePartKind(part){
   const raw=String(part&&(part.kind||part.type||part.$type||part.name||part.responsePartKind||'')).toLowerCase();
   if(raw==='markdownvuln'||raw==='markdownwithvulnerabilities'||raw.includes('vulnerab'))return 'markdownVuln';
   if(raw==='markdowncontent'||raw==='markdown'||raw==='markdown_content')return 'markdown';
+  if(raw==='progresstask'||raw==='progresstaskserialized'||raw==='progress_task'||raw==='progress_task_serialized')return 'progressTask';
+  if(raw==='progresstaskresult'||raw==='progress_task_result')return 'progressTaskResult';
   if(raw==='warning'||raw.includes('warning'))return 'warning';
   if(raw==='info'||raw==='information'||raw.includes('info'))return 'info';
   if(raw==='progressmessage'||raw==='progress'||raw.includes('progress'))return 'progress';
+  if(raw==='externaledit'||raw==='external_edit')return 'externalEdit';
+  if(raw==='externaledits'||raw==='external_edits')return 'externalEdits';
+  if(raw==='todolist'||raw==='todo_list')return 'todoList';
+  if(raw==='simpletoolinvocation'||raw==='simple_tool_invocation')return 'simpleToolInvocation';
+  if(raw==='modifiedfilesconfirmation'||raw==='modified_files_confirmation')return 'modifiedFilesConfirmation';
   if(raw==='command'||raw.includes('commandbutton'))return 'command';
   if(raw==='confirmation'||raw.includes('confirmation'))return 'confirmation';
   if(raw==='questioncarousel'||raw.includes('questioncarousel')||raw.includes('question_carousel'))return 'questionCarousel';
@@ -5305,6 +5321,91 @@ function normalizeChatExternalToolInvocationUpdatePart(part){
 function normalizeChatClearToPreviousToolInvocationPart(part){
   return {reason:String((part&&part.reason)||'clear')};
 }
+function normalizeChatExternalEditPart(part){
+  const uri=chatUriPath(part&&part.uri)||String((part&&part.uri)||'');
+  const originalUri=chatUriPath(part&&(part.originalUri||part.oldUri||part.beforeUri))||'';
+  const beforeContentUri=chatUriPath(part&&(part.beforeContentUri||part.originalContentUri))||'';
+  const afterContentUri=chatUriPath(part&&(part.afterContentUri||part.modifiedContentUri))||'';
+  const diff=part&&part.diff&&typeof part.diff==='object'?part.diff:{};
+  return {
+    uri,
+    path:uri||originalUri||beforeContentUri||afterContentUri,
+    editKind:String((part&&part.editKind)||part&&part.kindHint||'edit'),
+    originalUri,
+    beforeContentUri,
+    afterContentUri,
+    added:Number(diff.added!==undefined?diff.added:part&&part.added)||0,
+    removed:Number(diff.removed!==undefined?diff.removed:part&&part.removed)||0,
+    undoStopId:String((part&&part.undoStopId)||'')
+  };
+}
+function normalizeChatExternalEditsPart(part){
+  const resources=Array.isArray(part&&part.resources)?part.resources:[];
+  const contentFor=Array.isArray(part&&part.contentFor)?part.contentFor:[];
+  return {
+    start:!!(part&&part.start),
+    undoStopId:String((part&&part.undoStopId)||''),
+    resources:resources.map((res,index)=>({
+      uri:chatUriPath(res)||String(res||''),
+      contentUri:chatUriPath(contentFor[index])||String(contentFor[index]||'')
+    })).filter(item=>item.uri||item.contentUri).slice(0,32)
+  };
+}
+function normalizeChatProgressTaskPart(part){
+  const progress=Array.isArray(part&&part.progress)?part.progress:[];
+  return {
+    content:chatMarkdownValueText(part&&(part.content!==undefined?part.content:part.value)),
+    progress:progress.map(item=>({kind:chatResponseVisiblePartKind(item)||String(item&&item.kind||'progress'),text:chatResponsePartText(item)})).filter(item=>item.text).slice(0,16)
+  };
+}
+function normalizeChatProgressTaskResultPart(part){
+  return {content:chatMarkdownValueText(part&&(part.content!==undefined?part.content:part.value))};
+}
+function normalizeChatTodoListPart(part){
+  const data=part&&part.todoList?part.todoList:(part&&part.toolSpecificData&&part.toolSpecificData.todoList);
+  const list=Array.isArray(data)?data:[];
+  return {
+    todoList:list.map((todo,index)=>{
+      const rec=todo&&typeof todo==='object'?todo:{title:todo};
+      const status=String(rec.status||rec.state||'not-started').toLowerCase().replace(/_/g,'-');
+      return {
+        id:String(rec.id||index+1),
+        title:String(rec.title||rec.label||rec.text||'Task '+(index+1)),
+        status:status==='completed'||status==='done'?'completed':(status==='in-progress'||status==='running'?'in-progress':'not-started')
+      };
+    }).filter(todo=>todo.title).slice(0,32)
+  };
+}
+function normalizeChatSimpleToolInvocationPart(part){
+  const data=part&&part.toolSpecificData&&part.toolSpecificData.kind==='simpleToolInvocation'?part.toolSpecificData:part;
+  return {
+    input:String((data&&data.input)||''),
+    output:String((data&&data.output)||'')
+  };
+}
+function normalizeChatModifiedFilesConfirmationPart(part){
+  const data=part&&part.toolSpecificData&&part.toolSpecificData.kind==='modifiedFilesConfirmation'?part.toolSpecificData:part;
+  const files=Array.isArray(data&&data.modifiedFiles)?data.modifiedFiles:[];
+  return {
+    options:Array.isArray(data&&data.options)?data.options.map(opt=>String(opt||'')).filter(Boolean).slice(0,6):[],
+    files:files.map((file,index)=>{
+      const rec=file&&typeof file==='object'?file:{uri:file};
+      const uri=chatUriPath(rec.uri)||String(rec.uri||'');
+      const originalUri=chatUriPath(rec.originalUri)||String(rec.originalUri||'');
+      const modifiedContentUri=chatUriPath(rec.modifiedContentUri)||'';
+      const originalContentUri=chatUriPath(rec.originalContentUri)||'';
+      return {
+        uri,
+        originalUri,
+        modifiedContentUri,
+        originalContentUri,
+        title:String(rec.title||pathBaseName(uri)||('Modified file '+(index+1))),
+        insertions:Number(rec.insertions)||0,
+        deletions:Number(rec.deletions)||0
+      };
+    }).filter(file=>file.uri||file.originalUri||file.modifiedContentUri||file.originalContentUri).slice(0,32)
+  };
+}
 function normalizeChatVisibleResponseParts(payload,content){
   const parts=[...(Array.isArray(payload&&payload.responseParts)?payload.responseParts:[]),
     ...(Array.isArray(payload&&payload.response_parts)?payload.response_parts:[]),
@@ -5367,6 +5468,34 @@ function normalizeChatVisibleResponseParts(payload,content){
     if(kind==='notebookEdit'){
       const notebookEdit=normalizeChatNotebookEditPart(part);
       return notebookEdit.uri||notebookEdit.edits.length?{kind,notebookEdit}:null;
+    }
+    if(kind==='externalEdit'){
+      const externalEdit=normalizeChatExternalEditPart(part);
+      return externalEdit.path?{kind,externalEdit}:null;
+    }
+    if(kind==='externalEdits'){
+      const externalEdits=normalizeChatExternalEditsPart(part);
+      return externalEdits.resources.length?{kind,externalEdits}:null;
+    }
+    if(kind==='progressTask'){
+      const task=normalizeChatProgressTaskPart(part);
+      return task.content||task.progress.length?{kind,task}:null;
+    }
+    if(kind==='progressTaskResult'){
+      const result=normalizeChatProgressTaskResultPart(part);
+      return result.content?{kind,result}:null;
+    }
+    if(kind==='todoList'){
+      const todo=normalizeChatTodoListPart(part);
+      return todo.todoList.length?{kind,todo}:null;
+    }
+    if(kind==='simpleToolInvocation'){
+      const simpleTool=normalizeChatSimpleToolInvocationPart(part);
+      return simpleTool.input||simpleTool.output?{kind,simpleTool}:null;
+    }
+    if(kind==='modifiedFilesConfirmation'){
+      const modifiedFiles=normalizeChatModifiedFilesConfirmationPart(part);
+      return modifiedFiles.files.length||modifiedFiles.options.length?{kind,modifiedFiles}:null;
     }
     if(kind==='externalToolInvocationUpdate')return {kind,toolUpdate:normalizeChatExternalToolInvocationUpdatePart(part)};
     if(kind==='clearToPreviousToolInvocation')return {kind,clear:normalizeChatClearToPreviousToolInvocationPart(part)};
@@ -5994,8 +6123,9 @@ function renderChatExternalToolInvocationUpdatePart(wrap,part){
   const meta=document.createElement('div');meta.className='chat-response-part-meta';meta.textContent=[data.toolCallId,data.subagentInvocationId,data.errorMessage?'error':''].filter(Boolean).join(' · ');card.appendChild(meta);
   const msg=data.errorMessage||data.pastTenseMessage||data.invocationMessage;
   if(msg){const body=document.createElement('div');renderMd(body,msg);card.appendChild(body)}
+  const renderedSpecific=renderChatToolSpecificData(card,data.toolSpecificData);
   const details=chatToolPartSummary(data.resultDetails||data.toolSpecificData);
-  if(details){const pre=document.createElement('pre');pre.textContent=details;card.appendChild(pre)}
+  if(details&&!renderedSpecific){const pre=document.createElement('pre');pre.textContent=details;card.appendChild(pre)}
   wrap.appendChild(card);
 }
 function renderChatClearToPreviousToolInvocationPart(wrap,part){
@@ -6004,6 +6134,136 @@ function renderChatClearToPreviousToolInvocationPart(wrap,part){
   const title=document.createElement('div');title.className='chat-response-part-title';title.textContent='Tool output boundary';card.appendChild(title);
   const meta=document.createElement('div');meta.className='chat-response-part-meta';meta.textContent=data.reason||'clear';card.appendChild(meta);
   wrap.appendChild(card);
+}
+function chatExternalEditRef(edit){
+  const originalUri=edit.beforeContentUri||edit.originalUri||'';
+  const modifiedUri=edit.afterContentUri||(edit.editKind==='delete'?'':edit.uri);
+  return {
+    path:edit.uri||edit.originalUri||edit.path,
+    label:pathBaseName(edit.path)||'External edit',
+    kind:'externalEdit',
+    originalUri,
+    modifiedUri,
+    openable:true
+  };
+}
+function renderChatExternalEditPart(wrap,part){
+  const edit=part.externalEdit||{};
+  const card=document.createElement('div');card.className='chat-response-external-edit';card.setAttribute('role','group');card.setAttribute('aria-label','External edit');
+  const title=document.createElement('div');title.className='chat-response-part-title';title.textContent='External edit';card.appendChild(title);
+  const meta=document.createElement('div');meta.className='chat-response-part-meta';meta.textContent=[edit.editKind,edit.undoStopId].filter(Boolean).join(' · ');card.appendChild(meta);
+  const row=document.createElement('button');row.type='button';row.className='chat-response-edit-row';
+  row.innerHTML='<span class="change-kind">'+esc(edit.editKind||'edit')+'</span><span class="change-path">'+esc(edit.path||edit.uri||'file')+'</span><span class="diff-stat">+'+esc(edit.added||0)+' -'+esc(edit.removed||0)+'</span>';
+  row.onclick=()=>openChatResponseReference(chatExternalEditRef(edit));card.appendChild(row);
+  wrap.appendChild(card);
+}
+function renderChatExternalEditsPart(wrap,part){
+  const data=part.externalEdits||{};
+  const card=document.createElement('div');card.className='chat-response-external-edits';card.setAttribute('role','group');card.setAttribute('aria-label','External edits');
+  const title=document.createElement('div');title.className='chat-response-part-title';title.textContent=data.start?'External edits started':'External edits finished';card.appendChild(title);
+  const meta=document.createElement('div');meta.className='chat-response-part-meta';meta.textContent=[(data.resources||[]).length+' resources',data.undoStopId].filter(Boolean).join(' · ');card.appendChild(meta);
+  const list=document.createElement('div');list.className='chat-response-multidiff-list';
+  (data.resources||[]).forEach(item=>{
+    const row=document.createElement('button');row.type='button';row.className='chat-response-edit-row';
+    row.innerHTML='<span class="change-kind">'+esc(data.start?'start':'end')+'</span><span class="change-path">'+esc(item.uri||item.contentUri)+'</span>';
+    row.onclick=()=>openChatResponseUri(item.uri||item.contentUri);list.appendChild(row);
+  });
+  card.appendChild(list);wrap.appendChild(card);
+}
+function renderChatProgressTaskPart(wrap,part){
+  const task=part.task||{};
+  const card=document.createElement('div');card.className='chat-response-progress-task';card.setAttribute('role','status');card.setAttribute('aria-label','Progress task');
+  const title=document.createElement('div');title.className='chat-response-part-title';title.textContent='Progress task';card.appendChild(title);
+  if(task.content){const body=document.createElement('div');renderMd(body,task.content);card.appendChild(body)}
+  if(task.progress&&task.progress.length){
+    const list=document.createElement('div');list.className='chat-response-multidiff-list';
+    task.progress.forEach(item=>{const row=document.createElement('div');row.className='chat-response-edit-row';row.innerHTML='<span class="change-kind">'+esc(item.kind||'progress')+'</span><span class="change-path">'+esc(item.text)+'</span>';list.appendChild(row)});
+    card.appendChild(list);
+  }
+  wrap.appendChild(card);
+}
+function renderChatProgressTaskResultPart(wrap,part){
+  const result=part.result||{};
+  const card=document.createElement('div');card.className='chat-response-progress-task';card.setAttribute('role','status');card.setAttribute('aria-label','Progress task result');
+  const title=document.createElement('div');title.className='chat-response-part-title';title.textContent='Progress task result';card.appendChild(title);
+  if(result.content){const body=document.createElement('div');renderMd(body,result.content);card.appendChild(body)}
+  wrap.appendChild(card);
+}
+function renderChatTodoListPart(wrap,part){
+  const todo=part.todo||{};
+  const card=document.createElement('div');card.className='chat-response-todo-list';card.setAttribute('role','group');card.setAttribute('aria-label','Todo list');
+  const title=document.createElement('div');title.className='chat-response-part-title';title.textContent='Todo list';card.appendChild(title);
+  const list=document.createElement('ul');
+  (todo.todoList||[]).forEach(item=>{
+    const li=document.createElement('li');
+    const icon=item.status==='completed'?'✓':(item.status==='in-progress'?'•':'○');
+    li.innerHTML='<span class="todo-state '+esc(item.status)+'">'+esc(icon)+'</span><span class="todo-title">'+esc(item.title)+'</span>';
+    list.appendChild(li);
+  });
+  card.appendChild(list);wrap.appendChild(card);
+}
+function renderChatSimpleToolInvocationPart(wrap,part){
+  const simple=part.simpleTool||{};
+  const card=document.createElement('div');card.className='chat-response-simple-tool';card.setAttribute('role','group');card.setAttribute('aria-label','Simple tool invocation');
+  const title=document.createElement('div');title.className='chat-response-part-title';title.textContent='Tool input/output';card.appendChild(title);
+  if(simple.input){const input=document.createElement('pre');input.textContent='Input\n'+simple.input;card.appendChild(input)}
+  if(simple.output){const output=document.createElement('pre');output.textContent='Output\n'+simple.output;card.appendChild(output)}
+  wrap.appendChild(card);
+}
+function chatModifiedFileRef(file){
+  return {
+    path:file.uri||file.originalUri||file.modifiedContentUri||file.originalContentUri,
+    label:file.title||pathBaseName(file.uri)||'Modified file',
+    kind:'modifiedFilesConfirmation',
+    originalUri:file.originalContentUri||file.originalUri||'',
+    modifiedUri:file.modifiedContentUri||file.uri||'',
+    openable:true
+  };
+}
+function renderChatModifiedFilesConfirmationPart(wrap,part){
+  const data=part.modifiedFiles||{};
+  const card=document.createElement('div');card.className='chat-response-modified-files';card.setAttribute('role','group');card.setAttribute('aria-label','Modified files confirmation');
+  const title=document.createElement('div');title.className='chat-response-part-title';title.textContent='Modified files';card.appendChild(title);
+  const meta=document.createElement('div');meta.className='chat-response-part-meta';meta.textContent=[(data.files||[]).length+' files',(data.options||[]).join(' / ')].filter(Boolean).join(' · ');card.appendChild(meta);
+  const list=document.createElement('div');list.className='chat-response-multidiff-list';
+  (data.files||[]).forEach(file=>{
+    const row=document.createElement('button');row.type='button';row.className='chat-response-edit-row';
+    row.innerHTML='<span class="change-kind">review</span><span class="change-path">'+esc(file.title||file.uri||file.originalUri)+'</span><span class="diff-stat">+'+esc(file.insertions||0)+' -'+esc(file.deletions||0)+'</span>';
+    row.onclick=()=>openChatResponseReference(chatModifiedFileRef(file));list.appendChild(row);
+  });
+  card.appendChild(list);
+  if(data.options&&data.options.length){
+    const actions=document.createElement('div');actions.className='chat-response-part-actions';
+    data.options.forEach(opt=>{const btn=document.createElement('button');btn.type='button';btn.className='chat-inline-action';btn.textContent=opt;btn.onclick=()=>setChatInputValue(chatResponseComposerText('Modified files',opt));actions.appendChild(btn)});
+    card.appendChild(actions);
+  }
+  wrap.appendChild(card);
+}
+function renderChatToolSpecificData(card,data){
+  if(!data||typeof data!=='object')return false;
+  const section=document.createElement('div');section.className='chat-response-tool-specific';
+  if(data.kind==='todoList'){
+    const todo=normalizeChatTodoListPart(data);
+    const title=document.createElement('div');title.className='chat-response-part-title';title.textContent='Todo list';section.appendChild(title);
+    const list=document.createElement('ul');list.className='chat-response-todo-list';
+    todo.todoList.forEach(item=>{const li=document.createElement('li');const icon=item.status==='completed'?'✓':(item.status==='in-progress'?'•':'○');li.innerHTML='<span class="todo-state '+esc(item.status)+'">'+esc(icon)+'</span><span class="todo-title">'+esc(item.title)+'</span>';list.appendChild(li)});
+    section.appendChild(list);card.appendChild(section);return true;
+  }
+  if(data.kind==='simpleToolInvocation'){
+    const simple=normalizeChatSimpleToolInvocationPart(data);
+    const title=document.createElement('div');title.className='chat-response-part-title';title.textContent='Tool input/output';section.appendChild(title);
+    if(simple.input){const input=document.createElement('pre');input.textContent='Input\n'+simple.input;section.appendChild(input)}
+    if(simple.output){const output=document.createElement('pre');output.textContent='Output\n'+simple.output;section.appendChild(output)}
+    card.appendChild(section);return true;
+  }
+  if(data.kind==='modifiedFilesConfirmation'){
+    const modifiedFiles=normalizeChatModifiedFilesConfirmationPart(data);
+    const title=document.createElement('div');title.className='chat-response-part-title';title.textContent='Modified files';section.appendChild(title);
+    const list=document.createElement('div');list.className='chat-response-multidiff-list';
+    modifiedFiles.files.forEach(file=>{const row=document.createElement('button');row.type='button';row.className='chat-response-edit-row';row.innerHTML='<span class="change-kind">review</span><span class="change-path">'+esc(file.title||file.uri||file.originalUri)+'</span><span class="diff-stat">+'+esc(file.insertions||0)+' -'+esc(file.deletions||0)+'</span>';row.onclick=()=>openChatResponseReference(chatModifiedFileRef(file));list.appendChild(row)});
+    section.appendChild(list);card.appendChild(section);return true;
+  }
+  return false;
 }
 function renderChatResponseNativeParts(body,payload,content){
   const parts=normalizeChatVisibleResponseParts(payload||{},content||'');
@@ -6027,6 +6287,13 @@ function renderChatResponseNativeParts(body,payload,content){
     if(part.kind==='hook'){renderChatHookPart(wrap,part);return}
     if(part.kind==='workspaceEdit'){renderChatWorkspaceEditPart(wrap,part);return}
     if(part.kind==='notebookEdit'){renderChatNotebookEditPart(wrap,part);return}
+    if(part.kind==='externalEdit'){renderChatExternalEditPart(wrap,part);return}
+    if(part.kind==='externalEdits'){renderChatExternalEditsPart(wrap,part);return}
+    if(part.kind==='progressTask'){renderChatProgressTaskPart(wrap,part);return}
+    if(part.kind==='progressTaskResult'){renderChatProgressTaskResultPart(wrap,part);return}
+    if(part.kind==='todoList'){renderChatTodoListPart(wrap,part);return}
+    if(part.kind==='simpleToolInvocation'){renderChatSimpleToolInvocationPart(wrap,part);return}
+    if(part.kind==='modifiedFilesConfirmation'){renderChatModifiedFilesConfirmationPart(wrap,part);return}
     if(part.kind==='externalToolInvocationUpdate'){renderChatExternalToolInvocationUpdatePart(wrap,part);return}
     if(part.kind==='clearToPreviousToolInvocation'){renderChatClearToPreviousToolInvocationPart(wrap,part);return}
     if(part.kind==='command'){
