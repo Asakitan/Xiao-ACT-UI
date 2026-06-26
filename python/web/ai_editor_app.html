@@ -558,6 +558,7 @@ body.window-resizing * { cursor:inherit !important; }
 .chat-messages { flex:1; overflow-y:auto; padding:0; position:relative; display:flex; flex-direction:column; }
 .chat-messages-inner { width:100%; max-width:900px; min-height:100%; margin:0 auto;
   padding:14px 20px 18px; box-sizing:border-box; display:flex; flex-direction:column; }
+.chat-messages.empty .chat-messages-inner { justify-content:center; }
 .chat-welcome { flex:1; min-height:260px; display:flex; flex-direction:column; align-items:center;
   justify-content:center; padding:42px 20px 28px; color:var(--fg-dim); text-align:center; }
 .chat-welcome-mark { width:44px; height:44px; border-radius:12px; display:flex; align-items:center;
@@ -3683,6 +3684,20 @@ function chatComposerHasSendableValue(){
   const hasAttachments=typeof attachments!=='undefined'&&Array.isArray(attachments)&&attachments.length>0;
   return hasText||hasContext||hasAttachments;
 }
+function updateAssistantSurfaceState(){
+  const panel=$('chat-panel'),messages=$('chat-messages');
+  const count=chatConversationItems().length;
+  if(panel){
+    panel.dataset.chatSurface='copilot-chat';
+    panel.dataset.chatMessageCount=String(count);
+    panel.dataset.chatEmpty=count?'false':'true';
+  }
+  if(messages){
+    messages.classList.toggle('empty',count===0);
+    messages.dataset.chatMessageCount=String(count);
+    messages.dataset.chatEmpty=count?'false':'true';
+  }
+}
 function updateChatComposerState(){
   const send=$('send-btn'),stop=$('stop-btn'),panel=$('chat-panel'),input=$('chat-input');
   const container=$('chat-input-container'),messages=$('chat-messages');
@@ -3711,6 +3726,7 @@ function updateChatComposerState(){
   }
   if(messages)messages.setAttribute('aria-busy',streaming?'true':'false');
   if(input){input.dataset.sendable=sendable?'true':'false';input.placeholder=chatModePlaceholder()}
+  updateAssistantSurfaceState();
   renderChatComposerHeader();
 }
 function setChatStreamingState(active){
@@ -3779,6 +3795,7 @@ function pruneEmptyChatMessages(){
     if(!text&&!chatMessageBodyHasContent(body))msg.remove();
   });
   showChatWelcomeIfEmpty();
+  updateAssistantSurfaceState();
 }
 function ensureChatMessagesInner(){
   const host=$('chat-messages');if(!host)return null;
@@ -3802,6 +3819,7 @@ function latestChatMessageBody(role){
 function markChatHasMessages(){
   const wm=$('chat-welcome-msg');if(wm)wm.remove();
   const host=$('chat-messages');if(host)host.classList.remove('empty');
+  updateAssistantSurfaceState();
 }
 function showChatWelcomeIfEmpty(){
   if(chatConversationItems().length)return;
@@ -3829,6 +3847,7 @@ function createMsg(role,model){
   const container=ensureChatMessagesInner();
   container.appendChild(el);
   $('chat-messages').scrollTop=$('chat-messages').scrollHeight;
+  updateAssistantSurfaceState();
   return body;
 }
 
@@ -3911,13 +3930,26 @@ function assistantSessionLoadItems(){
 function assistantSessionSaveItems(items){
   try{
     if(typeof localStorage==='undefined')return;
-    const normalized=(Array.isArray(items)?items:[]).filter(Boolean)
+    const normalized=(Array.isArray(items)?items:[]).filter(Boolean).map(item=>{
+        const next=Object.assign({},item);
+        next.messages=assistantSessionNormalizeMessages(next.messages||[]);
+        next.messageCount=next.messages.length;
+        return next;
+      }).filter(item=>item.messageCount||item.draft||(item.context&&item.context.length))
       .sort((a,b)=>Number(b.updatedAt||0)-Number(a.updatedAt||0)).slice(0,50);
     localStorage.setItem(ASSISTANT_SESSION_ITEMS_KEY,JSON.stringify(normalized));
   }catch(e){}
 }
+function assistantSessionNormalizeMessages(messages){
+  return (Array.isArray(messages)?messages:[]).map(m=>{
+    const role=String(m&&m.role||'assistant');
+    const content=normalizeChatMessageText(m&&m.content,role);
+    if(!content&&role!=='user')return null;
+    return {role,model:String(m&&m.model||''),content};
+  }).filter(Boolean).slice(-80);
+}
 function assistantSessionMessageSnapshot(){
-  return chatConversationItems().map(msg=>{
+  return assistantSessionNormalizeMessages(chatConversationItems().map(msg=>{
     const body=msg.querySelector('.msg-body');
     const model=msg.querySelector('.msg-model');
     const role=String(msg.dataset.role||'assistant');
@@ -3927,7 +3959,7 @@ function assistantSessionMessageSnapshot(){
       model:model?String(model.textContent||''):'',
       content:content.slice(0,80000)
     };
-  }).filter(m=>m.content||m.role==='user').slice(-80);
+  }));
 }
 function assistantSessionTitleFromSnapshot(messages,draft){
   const user=(messages||[]).find(m=>m.role==='user'&&m.content);
@@ -3971,7 +4003,7 @@ function assistantSessionDeleteItem(sessionId){
 function assistantSessionRenderMessages(messages){
   const host=$('chat-messages');if(host)host.innerHTML='';
   totalTokens=0;mainToolNames=Object.create(null);
-  (messages||[]).forEach(m=>{
+  assistantSessionNormalizeMessages(messages).forEach(m=>{
     const role=String(m&&m.role||'assistant');
     const content=normalizeChatMessageText(m&&m.content,role);
     if(!content&&role!=='user')return;
@@ -3980,6 +4012,7 @@ function assistantSessionRenderMessages(messages){
     else b.textContent=content;
   });
   showChatWelcomeIfEmpty();
+  updateAssistantSurfaceState();
 }
 function assistantSessionOpenItem(sessionId,opts){
   const id=String(sessionId||'');
@@ -19582,13 +19615,11 @@ function renderExtensionTreeNode(viewId,node,depth,viewVersion,dnd,posInSet,setS
 function renderExtensionManifestView(view){
   const card=document.createElement('div');card.className='tool-call';card.style.margin='0 0 8px 0';
   const state=view.runtimeState||{};
+  applyExtensionRuntimeViewMetadata(card,view,state,state.kind||view.runtimeKind||view.type||'view');
   const welcomeEntries=extensionWelcomeEntries(view,state);
-  const title=document.createElement('div');title.className='tool-header open';
-  title.style.display='flex';title.style.alignItems='center';title.style.gap='6px';
-  const titleLabel=document.createElement('span');titleLabel.style.cssText='overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-  titleLabel.textContent=(state.title||extensionViewTitle(view));title.appendChild(titleLabel);
-  appendExtensionTitleActions(title,view,state);
+  appendExtensionRuntimeViewHeader(card,view,state,state.kind||view.runtimeKind||view.type||'view');
   const body=document.createElement('div');body.className='tool-body open';body.style.whiteSpace='normal';
+  body.dataset.viewId=extensionRuntimeViewId(view,state);
   const hasWelcome=appendExtensionWelcomeContent(body,welcomeEntries);
   if(!hasWelcome){
     const msg=document.createElement('div');
@@ -19596,17 +19627,86 @@ function renderExtensionManifestView(view){
     msg.textContent=state.message||view.runtimeMessage||'View manifest is present, but no runtime provider is registered yet.';
     body.appendChild(msg);
   }
-  card.appendChild(title);card.appendChild(body);return card;
+  card.appendChild(body);return card;
+}
+function extensionRuntimeViewId(view,state){
+  return String((state&&state.view_id)||(state&&state.viewId)||(view&&view.id)||'');
+}
+function applyExtensionRuntimeViewMetadata(host,view,state,kind){
+  if(!host)return;
+  const id=extensionRuntimeViewId(view,state);
+  host.dataset.viewId=id;
+  host.dataset.runtimeKind=String(kind||(state&&state.kind)||(view&&view.runtimeKind)||'view');
+  host.dataset.runtimeVisible=String(!state||state.visible!==false);
+  host.dataset.runtimeTitle=String((state&&state.title)||extensionViewTitle(view||{}));
+  host.dataset.runtimeDescription=String((state&&state.description)||'');
+  host.dataset.runtimeAvailable=String(!!(view&&view.runtimeAvailable)||!!(state&&state.runtimeAvailable));
+  if(state&&state.badge)host.dataset.runtimeBadge=JSON.stringify(state.badge);
+  if(state&&state.retainContextWhenHidden!==undefined)host.dataset.webviewRetainContext=String(!!state.retainContextWhenHidden);
+  if(state&&state.options)host.dataset.webviewOptions=JSON.stringify(state.options);
+}
+function appendExtensionRuntimeViewHeader(card,view,state,kind){
+  const title=document.createElement('div');title.className='tool-header open';
+  title.style.display='flex';title.style.alignItems='center';title.style.gap='6px';
+  title.dataset.viewId=extensionRuntimeViewId(view,state);
+  title.dataset.runtimeKind=String(kind||state.kind||view.runtimeKind||'view');
+  title.dataset.visible=String(state.visible!==false);
+  const titleLabel=document.createElement('span');titleLabel.style.cssText='overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  titleLabel.textContent=state.title||extensionViewTitle(view);title.appendChild(titleLabel);
+  if(state.description){
+    const desc=document.createElement('span');
+    desc.style.cssText='color:var(--fg-dim);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:38%';
+    desc.textContent=String(state.description);
+    title.appendChild(desc);
+  }
+  const viewBadge=extensionTreeViewBadgeElement(state.badge);
+  if(viewBadge)title.appendChild(viewBadge);
+  if(state.visible===false){
+    const hidden=document.createElement('span');hidden.className='ext-badge';
+    hidden.textContent='Hidden';hidden.title='View is not visible';
+    title.appendChild(hidden);
+  }
+  appendExtensionTitleActions(title,view,state);
+  card.appendChild(title);
+  return title;
 }
 function renderExtensionWebviewView(view){
   const state=view.runtimeState||{};
   const host=document.createElement('div');host.className='tool-call';host.style.margin='0 0 8px 0';
+  applyExtensionRuntimeViewMetadata(host,view,state,'webviewView');
+  const welcomeEntries=extensionWelcomeEntries(view,state);
+  appendExtensionRuntimeViewHeader(host,view,state,'webviewView');
+  const body=document.createElement('div');body.className='tool-body open';body.style.whiteSpace='normal';
+  body.dataset.viewId=extensionRuntimeViewId(view,state);
+  body.dataset.webviewVisible=String(state.visible!==false);
+  if(state.retainContextWhenHidden!==undefined)body.dataset.webviewRetainContext=String(!!state.retainContextWhenHidden);
+  const message=String(state.message||state.runtimeMessage||'').trim();
+  if(message){
+    const msg=document.createElement('div');
+    msg.style.cssText='color:var(--fg-dim);font-size:11px;padding:0 0 6px 0;line-height:1.35';
+    msg.textContent=message;
+    body.appendChild(msg);
+  }
   const html=state.html||view.html||'';
   if(html){
-    _injectWebviewHtml(host,view.id||state.view_id||state.viewId,html,state.state);
+    const frameHost=document.createElement('div');
+    frameHost.className='extension-webview-view-host';
+    frameHost.style.cssText='display:flex;min-height:220px;height:280px;border:1px solid var(--border);background:var(--bg);overflow:hidden';
+    frameHost.dataset.viewId=extensionRuntimeViewId(view,state);
+    frameHost.dataset.webviewVisible=String(state.visible!==false);
+    body.appendChild(frameHost);
+    _injectWebviewHtml(frameHost,extensionRuntimeViewId(view,state),html,state.state);
+    host.appendChild(body);
     return host;
   }
-  return renderExtensionManifestView(view);
+  const hasWelcome=appendExtensionWelcomeContent(body,welcomeEntries);
+  if(!hasWelcome){
+    const empty=document.createElement('div');
+    empty.style.cssText='color:var(--fg-dim);font-size:11px';
+    empty.textContent=view.runtimeMessage||state.runtimeMessage||'Runtime webview provider registered; no HTML reported yet.';
+    body.appendChild(empty);
+  }
+  host.appendChild(body);return host;
 }
 function renderExtensionViewsInto(contentEl,item,options){
   if(!contentEl)return;

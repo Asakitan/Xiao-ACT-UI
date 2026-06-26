@@ -3292,6 +3292,23 @@ def test_phase1_ai_editor_regressions() -> None:
            and "pruneEmptyChatMessages();" in html
            and "const message=normalizeChatSystemText(d&&d.error!==undefined?d.error:d)||'Unknown error';" in html
            and "onStreamEnd=function(d){\n  d=d||{};" in html)
+    _check("frontend Assistant sanitizes restored and persisted chat sessions",
+           "function assistantSessionNormalizeMessages(messages)" in html
+           and "next.messages=assistantSessionNormalizeMessages(next.messages||[]);" in html
+           and "next.messageCount=next.messages.length;" in html
+           and ".filter(item=>item.messageCount||item.draft||(item.context&&item.context.length))" in html
+           and "return {role,model:String(m&&m.model||''),content};" in html
+           and "return assistantSessionNormalizeMessages(chatConversationItems().map(msg=>" in html
+           and "assistantSessionNormalizeMessages(messages).forEach(m=>" in html)
+    _check("frontend Assistant exposes stable Copilot Chat surface state",
+           "function updateAssistantSurfaceState()" in html
+           and "panel.dataset.chatSurface='copilot-chat';" in html
+           and "panel.dataset.chatMessageCount=String(count);" in html
+           and "panel.dataset.chatEmpty=count?'false':'true';" in html
+           and "messages.classList.toggle('empty',count===0);" in html
+           and "messages.dataset.chatMessageCount=String(count);" in html
+           and ".chat-messages.empty .chat-messages-inner { justify-content:center; }" in html
+           and "updateAssistantSurfaceState();\n  renderChatComposerHeader();" in html)
     _check("frontend Assistant tracks Copilot-style session and input state",
            "ASSISTANT_SESSION_STATE_KEY='sao-ai-editor-chat-session-state'"
            in html
@@ -8497,7 +8514,7 @@ console.log("extension setting schema helpers ok");
             and "function extensionTreeViewBadgeElement(badge)" in html
             and "titleLabel.textContent=state.title||extensionViewTitle(view)" in html
             and "const viewBadge=extensionTreeViewBadgeElement(state.badge)" in html
-            and "const message=String(state.message||'').trim()" in html
+            and "const message=String(state.message||state.runtimeMessage||'').trim()" in html
             and "function extensionTreeThemeIconGlyph(id)" in html
             and "function extensionTreeIconPathUri(iconPath)" in html
             and "function extensionTreeIconGlyph(node,collapsible)" in html
@@ -8583,7 +8600,7 @@ console.log("extension setting schema helpers ok");
             and "call('execute_extension_tree_item_action',viewId,node.handle,action.command,...(action.arguments||[]))" in html
             and "window.pywebview.api.execute_command(node.command.command" in html
             and "function renderExtensionWebviewView(view)" in html
-            and "_injectWebviewHtml(host,view.id||state.view_id||state.viewId,html,state.state)" in html
+            and "_injectWebviewHtml(frameHost,extensionRuntimeViewId(view,state),html,state.state)" in html
             and "renderExtensionContainerContent(item)" in html
             and "function extensionContainerIconUri(item)" in html
             and "function extensionContainerIconVisual(item)" in html
@@ -15169,8 +15186,27 @@ def test_app_extension_runtime_support() -> None:
         }, "/tmp/selftest-command-webview")
         api._ext_host.ext_points.process(command_webview_desc)
         class _CommandWebviewProvider:
+            def __init__(
+                    self,
+                    html="<div>command-webview</div>",
+                    title="Command Runtime Webview",
+                    description="command runtime subtitle",
+                    badge=None,
+                    retain_context=True):
+                self.html = html
+                self.title = title
+                self.description = description
+                self.badge = badge
+                self.retain_context = retain_context
+
             def resolveWebviewView(self, view, context=None, token=None):
-                view.webview.html = "<div>command-webview</div>"
+                view.title = self.title
+                view.description = self.description
+                view.badge = self.badge
+                view.webview.options = {
+                    "retainContextWhenHidden": self.retain_context,
+                }
+                view.webview.html = self.html
         api._vscode_ns.build(command_webview_desc)["window"]["registerWebviewViewProvider"](
             "selftest.command.webview.view", _CommandWebviewProvider())
         command_webview_result = api._ext_host.commands.execute("selftest.command.webview")
@@ -15772,7 +15808,12 @@ def test_app_extension_runtime_support() -> None:
         activity_api["window"]["registerTreeDataProvider"](
             "selftest.secondary.collapsed", _TreeProvider())
         activity_api["window"]["registerWebviewViewProvider"](
-            "selftest.activity.webview", _CommandWebviewProvider())
+            "selftest.activity.webview",
+            _CommandWebviewProvider(
+                "<div>command-webview</div>",
+                "Activity Runtime Webview",
+                "webview subtitle",
+                {"value": 4, "tooltip": "webview badge"}))
         activity_tree_view = api._vscode_ns._tree_views.get("selftest.activity.tree")
         activity_selection_events = []
         activity_expand_events = []
@@ -16280,6 +16321,23 @@ def test_app_extension_runtime_support() -> None:
                .get("runtimeState", {}).get("dragAndDrop", {}).get("canDrag") is True
                and activity_views.get("selftest.activity.tree", {})
                .get("runtimeState", {}).get("dragAndDrop", {}).get("canDrop") is True)
+        activity_webview_state = activity_views.get(
+            "selftest.activity.webview", {}).get("runtimeState", {})
+        _check("activity WebviewView exposes runtime chrome state",
+               activity_webview_state.get("kind") == "webviewView"
+               and activity_webview_state.get("title")
+               == "Activity Runtime Webview"
+               and activity_webview_state.get("description")
+               == "webview subtitle"
+               and activity_webview_state.get("badge", {}).get("value") == 4
+               and activity_webview_state.get("badge", {}).get("tooltip")
+               == "webview badge"
+               and activity_webview_state.get(
+                   "retainContextWhenHidden") is True
+               and activity_webview_state.get(
+                   "options", {}).get("retainContextWhenHidden") is True
+               and activity_webview_state.get("visible") is True
+               and "command-webview" in activity_webview_state.get("html", ""))
         html_path = os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
             "web", "ai_editor_app.html")
@@ -16341,6 +16399,20 @@ def test_app_extension_runtime_support() -> None:
                and "applyExtensionActionMetadata(btn,action,actionContext());" in html
                and "showExtensionActionMenu(e.clientX,e.clientY,actionBuckets.context,action=>runExtensionTreeItemAction(viewId,node,action),actionContext())" in html
                and "if(extensionActionDisabled(action))" in html)
+        _check("frontend WebviewView surfaces render runtime chrome",
+               "function extensionRuntimeViewId(view,state)" in html
+               and "function applyExtensionRuntimeViewMetadata(host,view,state,kind)" in html
+               and "function appendExtensionRuntimeViewHeader(card,view,state,kind)" in html
+               and "host.dataset.runtimeKind=String(kind||(state&&state.kind)||(view&&view.runtimeKind)||'view');" in html
+               and "host.dataset.runtimeVisible=String(!state||state.visible!==false);" in html
+               and "host.dataset.runtimeTitle=String((state&&state.title)||extensionViewTitle(view||{}));" in html
+               and "host.dataset.runtimeDescription=String((state&&state.description)||'');" in html
+               and "host.dataset.webviewRetainContext=String(!!state.retainContextWhenHidden);" in html
+               and "host.dataset.webviewOptions=JSON.stringify(state.options);" in html
+               and "hidden.textContent='Hidden';hidden.title='View is not visible';" in html
+               and "frameHost.className='extension-webview-view-host';" in html
+               and "_injectWebviewHtml(frameHost,extensionRuntimeViewId(view,state),html,state.state)" in html
+               and "empty.textContent=view.runtimeMessage||state.runtimeMessage||'Runtime webview provider registered; no HTML reported yet.';" in html)
         activity_tree_welcome = activity_views.get(
             "selftest.activity.tree", {}).get(
                 "runtimeState", {}).get("welcome", [])
@@ -16573,6 +16645,22 @@ def test_app_extension_runtime_support() -> None:
                and shown_activity.get("views", [{}])[0].get("visible") is True
                and [evt.get("visible") for evt in activity_visibility_events[-2:]]
                == [False, True])
+        hidden_activity_views = {
+            item.get("id"): item for item in hidden_activity.get("views", [])
+            if isinstance(item, dict)
+        }
+        shown_activity_views = {
+            item.get("id"): item for item in shown_activity.get("views", [])
+            if isinstance(item, dict)
+        }
+        _check("activity WebviewView visibility updates with container",
+               hidden_activity_views.get(
+                   "selftest.activity.webview", {}).get("kind")
+               == "webviewView"
+               and hidden_activity_views.get(
+                   "selftest.activity.webview", {}).get("visible") is False
+               and shown_activity_views.get(
+                   "selftest.activity.webview", {}).get("visible") is True)
         item_action = api.execute_extension_tree_item_action(
             "selftest.activity.tree",
             activity_tree_handle,

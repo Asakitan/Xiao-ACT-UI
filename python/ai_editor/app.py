@@ -9386,7 +9386,7 @@ class AIEditorAPI:
 
     def set_extension_activity_view_visibility(
             self, container_id: str, visible: bool) -> Dict:
-        """Report extension activity container visibility to runtime TreeViews."""
+        """Report extension view container visibility to runtime views."""
         self._ensure_engine()
         normalized_container_id = str(container_id or "").strip()
         if not normalized_container_id:
@@ -9402,22 +9402,32 @@ class AIEditorAPI:
             if not view_id:
                 continue
             tree_view = self._vscode_ns._tree_views.get(view_id)
-            if tree_view is None:
+            webview_view = self._vscode_ns._webview_views.get(view_id)
+            runtime_view = tree_view or webview_view
+            if runtime_view is None:
                 continue
-            apply_state = getattr(tree_view, "apply_state", None)
+            apply_state = getattr(runtime_view, "apply_state", None)
             if callable(apply_state):
                 apply_state({"visible": next_visible})
             else:
                 try:
-                    tree_view.visible = next_visible
+                    runtime_view.visible = next_visible
                 except Exception:
                     pass
-            self._notify_node_tree_view_visibility(
-                view_id, tree_view, next_visible)
+            if tree_view is not None:
+                self._notify_node_tree_view_visibility(
+                    view_id, tree_view, next_visible)
+            elif webview_view is not None:
+                emitter = getattr(webview_view, "_visibility_emitter", None)
+                try:
+                    if emitter is not None:
+                        emitter.fire({"visible": next_visible})
+                except Exception:
+                    pass
             changed.append({
                 "id": view_id,
-                "kind": "treeView",
-                "visible": bool(getattr(tree_view, "visible", False)),
+                "kind": "treeView" if tree_view is not None else "webviewView",
+                "visible": bool(getattr(runtime_view, "visible", False)),
             })
         return {
             "ok": True,
@@ -11827,15 +11837,28 @@ class AIEditorAPI:
                 self._vscode_ns._register_webview_view_provider(view_id, provider)
                 webview_view = self._vscode_ns._webview_views.get(view_id)
             welcome = self._view_welcome_entries(view_id)
+            webview = getattr(webview_view, "webview", None)
+            webview_options = (
+                getattr(webview, "options", {})
+                if webview is not None else {})
+            if not isinstance(webview_options, dict):
+                webview_options = {}
             return {
                 "ok": True,
                 "kind": "webviewView",
                 "runtimeAvailable": True,
-                "message": "Runtime webview provider registered.",
+                "runtimeMessage": "Runtime webview provider registered.",
+                "message": getattr(webview_view, "message", ""),
                 "title": getattr(webview_view, "title", view_id),
+                "description": getattr(webview_view, "description", ""),
+                "badge": getattr(webview_view, "badge", None),
                 "titleActions": self._view_title_actions(view_id),
                 "welcome": welcome,
-                "html": getattr(getattr(webview_view, "webview", None), "html", ""),
+                "html": getattr(webview, "html", ""),
+                "state": getattr(webview, "state", None),
+                "options": dict(webview_options),
+                "retainContextWhenHidden": bool(
+                    webview_options.get("retainContextWhenHidden")),
                 "visible": bool(getattr(webview_view, "visible", False)),
             }
         manifest_view = self._manifest_view(view_id)
