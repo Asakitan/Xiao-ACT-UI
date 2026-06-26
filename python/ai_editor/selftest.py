@@ -20600,6 +20600,85 @@ async function activate(context) {
       disposable: !!(disposable && disposable.dispose),
     };
   });
+  vscode.commands.registerCommand('selftest.node.terminalEnvCollectionProbe', async () => {
+    const envCollection = context.environmentVariableCollection;
+    envCollection.clear();
+    envCollection.replace('SAO_ENV_REPLACE', 'from-collection');
+    envCollection.append('SAO_ENV_APPEND', '+collection');
+    envCollection.prepend('SAO_ENV_PREPEND', 'collection+');
+    envCollection.append('SAO_ENV_SHELL_ONLY', 'shell-only', {
+      applyAtProcessCreation: false,
+      applyAtShellIntegration: true,
+    });
+    const scopedRoot = vscode.Uri.joinPath(context.extensionUri, 'scoped-terminal');
+    const scopedCollection = envCollection.getScoped({
+      workspaceFolder: {
+        uri: scopedRoot,
+        name: 'scoped-terminal',
+        index: 1,
+      },
+    });
+    scopedCollection.replace('SAO_ENV_SCOPED', 'scoped-value');
+    const terminal = vscode.window.createTerminal({
+      name: 'Node Env Terminal',
+      cwd: scopedRoot,
+      env: {
+        SAO_ENV_APPEND: 'base',
+        SAO_ENV_PREPEND: 'base',
+        SAO_ENV_EXPLICIT: 'explicit',
+      },
+      isTransient: true,
+    });
+    terminal.show(true);
+    const envValue = terminal.shellIntegration
+      && terminal.shellIntegration.env
+      && terminal.shellIntegration.env.value || {};
+    const strictTerminal = vscode.window.createTerminal({
+      name: 'Node Strict Env Terminal',
+      env: { SAO_ENV_REPLACE: 'strict-explicit' },
+      strictEnv: true,
+      isTransient: true,
+    });
+    strictTerminal.show(true);
+    const strictEnvValue = strictTerminal.shellIntegration
+      && strictTerminal.shellIntegration.env
+      && strictTerminal.shellIntegration.env.value || {};
+    if (globalThis.__saoTerminalEnvProfileDisposable) {
+      globalThis.__saoTerminalEnvProfileDisposable.dispose();
+    }
+    globalThis.__saoTerminalEnvProfileDisposable = vscode.window.registerTerminalProfileProvider(
+      'selftest.node.envprofile',
+      {
+        provideTerminalProfile() {
+          return new vscode.TerminalProfile({
+            name: 'Node Env Profile Terminal',
+            env: {
+              SAO_ENV_APPEND: 'profile',
+              SAO_ENV_PREPEND: 'profile',
+            },
+            isTransient: true,
+          });
+        },
+      },
+    );
+    terminal.dispose();
+    strictTerminal.dispose();
+    return {
+      replace: envValue.SAO_ENV_REPLACE,
+      append: envValue.SAO_ENV_APPEND,
+      prepend: envValue.SAO_ENV_PREPEND,
+      explicit: envValue.SAO_ENV_EXPLICIT,
+      scoped: envValue.SAO_ENV_SCOPED,
+      shellOnlyPresent: Object.prototype.hasOwnProperty.call(
+        envValue, 'SAO_ENV_SHELL_ONLY'),
+      strictReplace: strictEnvValue.SAO_ENV_REPLACE,
+      strictAppendPresent: Object.prototype.hasOwnProperty.call(
+        strictEnvValue, 'SAO_ENV_APPEND'),
+      profileDisposable: !!(
+        globalThis.__saoTerminalEnvProfileDisposable
+        && globalThis.__saoTerminalEnvProfileDisposable.dispose),
+    };
+  });
   const terminalLinkState = { handled: [], providedLines: [] };
   vscode.commands.registerCommand('selftest.node.terminalLinkProbe', async () => {
     const terminal = vscode.window.createTerminal({
@@ -22725,6 +22804,26 @@ module.exports = { activate, deactivate };
                 node_terminal_profile_events = list(
                     node_ui_bridge.terminal_events[
                         node_terminal_profile_start:])
+                node_terminal_env_command_registered = _wait_until(
+                    lambda: "selftest.node.terminalEnvCollectionProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                try:
+                    node_terminal_env_probe = (
+                        api._ext_host.commands.execute(
+                            "selftest.node.terminalEnvCollectionProbe"))
+                except Exception as exc:
+                    node_terminal_env_probe = {"_error": str(exc)}
+                node_terminal_env_profile_start = len(
+                    node_ui_bridge.terminal_events)
+                node_terminal_env_profile_request = (
+                    node_host.request_terminal_profile_result(
+                        "selftest.node.envprofile",
+                        timeout=3.0)
+                    if node_started else {"ok": False})
+                node_terminal_env_profile_events = list(
+                    node_ui_bridge.terminal_events[
+                        node_terminal_env_profile_start:])
                 node_terminal_link_command_registered = _wait_until(
                     lambda: "selftest.node.terminalLinkProbe"
                     in api._ext_host.commands.list_commands(),
@@ -26769,6 +26868,54 @@ module.exports = { activate, deactivate };
                            "providers": node_terminal_profile_providers,
                            "request": node_terminal_profile_request,
                            "events": node_terminal_profile_events,
+                       }, ensure_ascii=False, default=str))
+                _check("node host terminal env collections apply to dynamic terminals",
+                       node_started is True
+                       and node_terminal_env_command_registered
+                       and isinstance(node_terminal_env_probe, dict)
+                       and node_terminal_env_probe.get("replace")
+                       == "from-collection"
+                       and node_terminal_env_probe.get("append")
+                       == "base+collection"
+                       and node_terminal_env_probe.get("prepend")
+                       == "collection+base"
+                       and node_terminal_env_probe.get("explicit")
+                       == "explicit"
+                       and node_terminal_env_probe.get("scoped")
+                       == "scoped-value"
+                       and node_terminal_env_probe.get(
+                           "shellOnlyPresent") is False
+                       and node_terminal_env_probe.get("strictReplace")
+                       == "strict-explicit"
+                       and node_terminal_env_probe.get(
+                           "strictAppendPresent") is False
+                       and node_terminal_env_probe.get(
+                           "profileDisposable") is True
+                       and node_terminal_env_profile_request.get("ok") is True
+                       and node_terminal_env_profile_request.get(
+                           "terminal", {}).get("name")
+                       == "Node Env Profile Terminal"
+                       and node_terminal_env_profile_request.get(
+                           "terminal", {}).get("env", {}).get(
+                               "SAO_ENV_APPEND") == "profile"
+                       and any(
+                           item.get("event") == "shellIntegration"
+                           and item.get("record", {}).get("terminal", {})
+                           .get("name") == "Node Env Profile Terminal"
+                           and item.get("record", {}).get("env", {})
+                           .get("value", {}).get("SAO_ENV_REPLACE")
+                           == "from-collection"
+                           and item.get("record", {}).get("env", {})
+                           .get("value", {}).get(
+                               "SAO_ENV_APPEND") == "profile+collection"
+                           and item.get("record", {}).get("env", {})
+                           .get("value", {}).get(
+                               "SAO_ENV_PREPEND") == "collection+profile"
+                           for item in node_terminal_env_profile_events),
+                       json.dumps({
+                           "probe": node_terminal_env_probe,
+                           "profileRequest": node_terminal_env_profile_request,
+                           "events": node_terminal_env_profile_events,
                        }, ensure_ascii=False, default=str))
                 _check("node host terminal link providers round-trip links",
                        node_started is True

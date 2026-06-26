@@ -1495,6 +1495,22 @@ function _normalizeEnvironmentMutatorOptions(options) {
     return normalized;
 }
 
+function _environmentCollectionShared(extensionId) {
+    const key = String(extensionId || 'extension');
+    let shared = _environmentVariableCollections.get(key);
+    if (!shared) {
+        shared = {
+            extensionId: key,
+            map: new Map(),
+            descriptions: new Map(),
+            persistent: true,
+            emitter: new EventEmitter(),
+        };
+        _environmentVariableCollections.set(key, shared);
+    }
+    return shared;
+}
+
 function _environmentDescriptionValue(description) {
     if (description === undefined || description === null) return undefined;
     const raw = typeof description === 'string'
@@ -2488,6 +2504,7 @@ let _nextTerminalHandle = 1;
 const _terminalProfileProviders = new Map(); // id -> { provider, extensionId }
 const _terminalLinkProviders = new Set();
 const _terminalLinkCache = new Map(); // terminal handle -> Map<link id, { provider, link }>
+const _environmentVariableCollections = new Map(); // extension id -> shared collection
 let _nextTerminalLinkHandle = 1;
 let _nextTerminalShellExecutionHandle = 1;
 const _onDidChangeActiveTerminalEmitter = new EventEmitter();
@@ -4263,6 +4280,56 @@ function _terminalNormalizeEnv(env) {
     return result;
 }
 
+function _terminalEnvironmentKey(env, variable) {
+    const name = String(variable);
+    if (process.platform !== 'win32') return name;
+    const lower = name.toLowerCase();
+    return Object.keys(env).find(key => String(key).toLowerCase() === lower) || name;
+}
+
+function _terminalCwdPath(options) {
+    const cwd = options && options.cwd;
+    if (!cwd) return _workspaceRoot;
+    if (cwd instanceof Uri) return cwd.fsPath || _workspaceRoot;
+    return path.resolve(String(cwd || _workspaceRoot));
+}
+
+function _environmentMutatorMatchesTerminalScope(mutator, options) {
+    const folder = mutator && mutator.scope && mutator.scope.workspaceFolder;
+    if (!folder || !folder.uri) return true;
+    const folderPath = path.resolve(folder.uri.fsPath || folder.uri.path || '');
+    if (!folderPath) return false;
+    const rel = path.relative(folderPath, _terminalCwdPath(options));
+    return !rel || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function _terminalApplyEnvironmentCollections(env, options) {
+    if (options && options.strictEnv === true) return env;
+    for (const shared of _environmentVariableCollections.values()) {
+        for (const mutator of shared.map.values()) {
+            if (!mutator || mutator.options?.applyAtProcessCreation === false) {
+                continue;
+            }
+            if (!_environmentMutatorMatchesTerminalScope(mutator, options)) {
+                continue;
+            }
+            const key = _terminalEnvironmentKey(env, mutator.variable);
+            const current = env[key] === undefined || env[key] === null
+                ? ''
+                : String(env[key]);
+            const value = String(mutator.value ?? '');
+            if (mutator.type === EnvironmentVariableMutatorType.Replace) {
+                env[key] = value;
+            } else if (mutator.type === EnvironmentVariableMutatorType.Append) {
+                env[key] = current + value;
+            } else if (mutator.type === EnvironmentVariableMutatorType.Prepend) {
+                env[key] = value + current;
+            }
+        }
+    }
+    return env;
+}
+
 function _terminalResolveEnv(options) {
     const strict = options && options.strictEnv === true;
     const result = strict ? {} : Object.assign({}, process.env);
@@ -4275,7 +4342,7 @@ function _terminalResolveEnv(options) {
             && options.shellIntegrationNonce) {
         result.VSCODE_NONCE = options.shellIntegrationNonce;
     }
-    return result;
+    return _terminalApplyEnvironmentCollections(result, options);
 }
 
 function _terminalNormalizeOptions(options) {
@@ -5654,9 +5721,9 @@ class TerminalShellIntegration {
         return _plainBridgeValue(this.cwd);
     }
     envPayload() {
-        const explicitEnv = _terminalOptionValue(this._terminal.creationOptions?.env);
-        return explicitEnv && typeof explicitEnv === 'object'
-            ? { isTrusted: true, value: explicitEnv }
+        const resolvedEnv = _terminalOptionValue(this._terminal._resolvedEnv);
+        return resolvedEnv && typeof resolvedEnv === 'object'
+            ? { isTrusted: true, value: resolvedEnv }
             : undefined;
     }
     executeCommand(commandLineOrExecutable, args) {
@@ -8679,7 +8746,22 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
     const globalState = new Memento(storagePaths.globalState);
     const workspaceState = new Memento(storagePaths.workspaceState);
     const secretStorage = new SecretStorage(storagePaths.secrets);
-    const environmentVariableCollection = new EnvironmentVariableCollection();
+    const environmentCollectionShared = _environmentCollectionShared(
+        extDesc.extensionId || extDesc.name || '');
+    const environmentVariableCollection = new EnvironmentVariableCollection(
+        environmentCollectionShared,
+    );
+    subscriptions.push(new Disposable(() => {
+        if (_environmentVariableCollections.get(environmentCollectionShared.extensionId)
+                !== environmentCollectionShared) {
+            return;
+        }
+        environmentCollectionShared.map.clear();
+        environmentCollectionShared.descriptions.clear();
+        environmentCollectionShared.emitter.dispose();
+        _environmentVariableCollections.delete(
+            environmentCollectionShared.extensionId);
+    }));
     const extensionUri = Uri.file(extensionPath);
     const extensionKind = _extensionKindValue(extDesc.manifest?.extensionKind);
 
