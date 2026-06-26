@@ -9345,6 +9345,7 @@ class AIEditorAPI:
             "displayName": str(row.get("displayName") or row.get("display_name") or row.get("name") or ext_id),
             "description": str(row.get("description") or ""),
             "version": str(row.get("version") or ""),
+            "latestVersion": str(row.get("latestVersion") or row.get("latest_version") or row.get("version") or ""),
             "publisher": str(row.get("publisher") or ""),
             "ext_dir": ext_dir,
             "manifest_path": manifest_path,
@@ -9359,6 +9360,9 @@ class AIEditorAPI:
             "state": str(row.get("state") or "installed"),
             "runtimeState": str(row.get("runtimeState") or ""),
             "canUninstall": bool(row.get("canUninstall", False)),
+            "outdated": bool(row.get("outdated", False)),
+            "outdatedTargetPlatform": bool(row.get("outdatedTargetPlatform", False)),
+            "canUpdate": bool(row.get("canUpdate", False)),
         }
 
     def _installed_extension_rows(self) -> List[Dict[str, Any]]:
@@ -9407,6 +9411,11 @@ class AIEditorAPI:
             else:
                 row["runtimeState"] = "installed"
             row["canUninstall"] = bool(persisted and not row.get("isBuiltin"))
+            row["latestVersion"] = str(row.get("latestVersion") or row.get("version") or "")
+            row["installedVersion"] = str(row.get("installedVersion") or row.get("version") or "")
+            row["outdated"] = False
+            row["outdatedTargetPlatform"] = False
+            row["canUpdate"] = False
             self._decorate_extension_trust(row)
         rows.sort(key=lambda item: (
             -int(bool(item.get("installed_at"))),
@@ -9429,12 +9438,18 @@ class AIEditorAPI:
     def _merge_extension_install_state(
             row: Dict[str, Any],
             installed: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        gallery_version = str(row.get("latestVersion") or row.get("version") or "")
+        row["latestVersion"] = gallery_version
         if installed:
+            installed_version = str(installed.get("version") or "")
             row["installed"] = True
             row["state"] = str(installed.get("state") or "installed")
             row["runtimeState"] = str(installed.get("runtimeState") or "installed")
             row["canUninstall"] = bool(installed.get("canUninstall"))
-            row["installedVersion"] = str(installed.get("version") or "")
+            row["installedVersion"] = installed_version
+            if installed_version:
+                row["version"] = installed_version
+            row["latestVersion"] = gallery_version or installed_version
             row["installed_at"] = float(installed.get("installed_at") or 0)
             row["source"] = str(installed.get("source") or "")
             row["activated"] = bool(installed.get("activated"))
@@ -9442,16 +9457,52 @@ class AIEditorAPI:
                 row["ext_dir"] = installed.get("ext_dir")
             if installed.get("contributes"):
                 row["contributes"] = installed.get("contributes")
+            row["outdated"] = bool(
+                row.get("canUninstall")
+                and row.get("latestVersion")
+                and installed_version
+                and AIEditorAPI._extension_version_newer(
+                    str(row.get("latestVersion") or ""), installed_version)
+            )
+            row["outdatedTargetPlatform"] = False
+            row["canUpdate"] = bool(row.get("outdated") and row.get("canUninstall"))
         else:
             row["installed"] = False
             row["state"] = "uninstalled"
             row["runtimeState"] = "uninstalled"
             row["canUninstall"] = False
+            row["outdated"] = False
+            row["outdatedTargetPlatform"] = False
+            row["canUpdate"] = False
         return row
 
     def _extension_state_for_id(self, ext_id: str) -> Dict[str, Any]:
         installed = self._installed_extension_row_map().get(str(ext_id or "").casefold())
         return self._merge_extension_install_state({"id": str(ext_id or "")}, installed)
+
+    @staticmethod
+    def _extension_version_parts(version: str) -> List[Any]:
+        parts: List[Any] = []
+        for raw in re.split(r"[.\-+_]", str(version or "")):
+            if raw == "":
+                continue
+            parts.append(int(raw) if raw.isdigit() else raw.casefold())
+        return parts
+
+    @classmethod
+    def _extension_version_newer(cls, latest: str, current: str) -> bool:
+        latest_parts = cls._extension_version_parts(latest)
+        current_parts = cls._extension_version_parts(current)
+        max_len = max(len(latest_parts), len(current_parts))
+        for idx in range(max_len):
+            left = latest_parts[idx] if idx < len(latest_parts) else 0
+            right = current_parts[idx] if idx < len(current_parts) else 0
+            if left == right:
+                continue
+            if isinstance(left, int) and isinstance(right, int):
+                return left > right
+            return str(left) > str(right)
+        return False
 
     def _count_extension_manifests(self) -> int:
         """Count VS Code-compatible package.json manifests without activation."""

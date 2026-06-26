@@ -2639,6 +2639,36 @@ def test_app_settings_parity() -> None:
                and searched_exts[0].get("trust", {}).get("verdict") == "allowed"
                and searched_exts[0].get("publisherKey") == "misodee",
                json.dumps(searched_exts, ensure_ascii=False))
+    with patch("ai_editor.extensions.list_installed", return_value=[{
+        "id": "Misodee.vscode-nbt",
+        "displayName": "NBT Viewer",
+        "publisher": "Misodee",
+        "version": "0.9.5",
+        "installed_at": 123.0,
+        "has_manifest": True,
+        "ext_dir": "C:/extensions/misodee.vscode-nbt",
+        "manifest_path": "C:/extensions/misodee.vscode-nbt/package.json",
+        "contributes": ["customEditors"],
+    }]), patch("ai_editor.extensions.search_extensions", return_value=[{
+        "id": "Misodee.vscode-nbt",
+        "displayName": "NBT Viewer",
+        "version": "1.0.0",
+        "latestVersion": "1.0.0",
+        "installCount": 1000,
+        "categories": ["Other"],
+        "lastUpdated": "2026-06-20T00:00:00Z",
+    }]):
+        update_rows = ext_api.search_extensions("nbt").get("extensions", [])
+        _check("marketplace search exposes installed update metadata",
+               update_rows
+               and update_rows[0].get("version") == "0.9.5"
+               and update_rows[0].get("latestVersion") == "1.0.0"
+               and update_rows[0].get("installedVersion") == "0.9.5"
+               and update_rows[0].get("outdated") is True
+               and update_rows[0].get("canUpdate") is True
+               and update_rows[0].get("installCount") == 1000
+               and "Other" in update_rows[0].get("categories", []),
+               json.dumps(update_rows, ensure_ascii=False))
     with patch("ai_editor.extensions.list_installed", return_value=[]), \
             patch("ai_editor.extensions.get_extension_detail", return_value={
                 "id": "Misodee.vscode-nbt",
@@ -8763,6 +8793,8 @@ console.log("extension setting schema helpers ok");
             and "function extensionSourceBadge(ext)" in html
             and "function extensionActiveBadge(ext)" in html
             and "function extensionStateBadge(ext)" in html
+            and "function extensionUpdateBadge(ext)" in html
+            and "function extensionMarketplaceMetadata(ext)" in html
             and "function extensionTrustBadge(ext)" in html
             and "function extensionInstallPreflightText(preflight,extId)" in html
             and "function extensionButtonState(ext)" in html
@@ -8772,6 +8804,10 @@ console.log("extension setting schema helpers ok");
             and "get_extension_install_preflight" in html
             and "function renderExtensionTrustSummary(ext)" in html
             and "s-ext-trust-summary" in html
+            and "ext.outdated&&ext.canUpdate" in html
+            and "t('update_btn')" in html
+            and "t('updating')" in html
+            and "latest v" in html
             and "source==='runtime'" in html
             and "source==='persisted'" in html
             and "ext.canUninstall" in html

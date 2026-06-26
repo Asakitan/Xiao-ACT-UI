@@ -3422,7 +3422,7 @@ en:{
   edit_prefix:'Edit: ',delete_inst_confirm:'Delete instruction file "$1"?',
   // extensions
   license_required:'License required.',no_data:'No data.',no_ext_found:'No extensions found',
-  install_btn:'Install',installing:'Installing...',installed_btn:'✓ Installed',uninstall_btn:'Uninstall',uninstalling:'Uninstalling...',
+  install_btn:'Install',installing:'Installing...',installed_btn:'✓ Installed',uninstall_btn:'Uninstall',uninstalling:'Uninstalling...',update_btn:'Update',updating:'Updating...',outdated:'Outdated',
   uninstall_confirm:'Uninstall extension?',install_blocked:'Install blocked',trust_allowed:'Trusted publisher',trust_restricted:'Publisher restricted',trust_blocked:'Publisher blocked',trust_unknown:'Unknown publisher',
   // mcp
   no_mcp_servers:'No MCP servers configured.',mcp_id_cmd_required:'Server ID and command/URL required',
@@ -3494,7 +3494,7 @@ en:{
   runtime_access:'access',runtime_autostart:'autostart',runtime_discovered:'discovered',runtime_connected:'connected',runtime_on:'on',runtime_off:'off',
   extension_runtime_status_missing:'Extension runtime status not loaded.',mcp_runtime_status_missing:'MCP status not loaded.',
   searching:'Searching...',no_tools:'No tools available',runtime_required:'Requires extension runtime handler',
-  install_confirm:'Install extension?',uninstalled_prefix:'Uninstalled: ',installed_prefix:'Installed: ',save_failed_prefix:'Save failed: ',
+  install_confirm:'Install extension?',update_confirm:'Update extension?',uninstalled_prefix:'Uninstalled: ',installed_prefix:'Installed: ',updated_prefix:'Updated: ',save_failed_prefix:'Save failed: ',
 },
 zh:{
   file:'文件',edit:'编辑',selection:'选择',view:'视图',go:'转到',run:'运行',terminal:'终端',help:'帮助',
@@ -3550,7 +3550,7 @@ zh:{
   save_failed:'✗ 保存失败',inst_name_prompt:'指令文件名 (不含 .md):',
   edit_prefix:'编辑: ',delete_inst_confirm:'删除指令文件「$1」？',
   license_required:'需要许可证。',no_data:'无数据。',no_ext_found:'未找到扩展',
-  install_btn:'安装',installing:'安装中...',installed_btn:'✓ 已安装',uninstall_btn:'卸载',uninstalling:'卸载中...',
+  install_btn:'安装',installing:'安装中...',installed_btn:'✓ 已安装',uninstall_btn:'卸载',uninstalling:'卸载中...',update_btn:'更新',updating:'更新中...',outdated:'可更新',
   uninstall_confirm:'卸载此扩展？',install_blocked:'安装被阻止',trust_allowed:'受信任发布者',trust_restricted:'发布者受限',trust_blocked:'发布者已阻止',trust_unknown:'未知发布者',
   no_mcp_servers:'未配置 MCP 服务器。',mcp_id_cmd_required:'服务器 ID 和命令/URL 必填',
   mcp_added:'MCP 服务器已添加',mcp_add_failed:'添加服务器失败',mcp_status_prefix:'MCP 状态未加载。',
@@ -3615,7 +3615,7 @@ zh:{
   runtime_access:'访问',runtime_autostart:'自动启动',runtime_discovered:'已发现',runtime_connected:'已连接',runtime_on:'开',runtime_off:'关',
   extension_runtime_status_missing:'扩展运行时状态未加载。',mcp_runtime_status_missing:'MCP 状态未加载。',
   searching:'搜索中...',no_tools:'没有可用工具',runtime_required:'需要扩展运行时处理器',
-  install_confirm:'安装此扩展？',uninstalled_prefix:'已卸载: ',installed_prefix:'已安装: ',save_failed_prefix:'保存失败: ',
+  install_confirm:'安装此扩展？',update_confirm:'更新此扩展？',uninstalled_prefix:'已卸载: ',installed_prefix:'已安装: ',updated_prefix:'已更新: ',save_failed_prefix:'保存失败: ',
 }};
 let _curLang='en';
 function normalizeUiLanguage(lang){return lang==='zh'||lang==='en'?lang:''}
@@ -20294,6 +20294,21 @@ function extensionStateBadge(ext){
   return '';
 }
 
+function extensionUpdateBadge(ext){
+  return ext&&ext.outdated?'<span class="ext-badge active">'+esc(t('outdated'))+'</span>':'';
+}
+
+function extensionMarketplaceMetadata(ext){
+  const rows=[];
+  const cats=Array.isArray(ext&&ext.categories)?ext.categories.filter(Boolean):[];
+  if(cats.length)rows.push('Categories: '+cats.slice(0,4).join(', '));
+  if(ext&&ext.installCount)rows.push('Installs: '+String(ext.installCount));
+  if(ext&&ext.rating)rows.push('Rating: '+String(ext.rating)+(ext.ratingCount?' ('+ext.ratingCount+')':''));
+  if(ext&&ext.lastUpdated)rows.push('Updated: '+String(ext.lastUpdated).slice(0,10));
+  if(ext&&ext.latestVersion&&ext.latestVersion!==ext.version)rows.push('Latest: '+ext.latestVersion);
+  return rows;
+}
+
 function extensionTrustBadge(ext){
   const trust=ext&&ext.trust||{};
   const verdict=String(trust.verdict||'').toLowerCase();
@@ -20338,8 +20353,10 @@ function extensionOperation(ext){
 function extensionButtonState(ext){
   const op=extensionOperation(ext);
   if(op==='installing')return {cls:'ext-btn install pending',text:t('installing'),disabled:true,state:op};
+  if(op==='updating')return {cls:'ext-btn install pending',text:t('updating'),disabled:true,state:op};
   if(op==='uninstalling')return {cls:'ext-btn uninstall pending',text:t('uninstalling'),disabled:true,state:op};
   if(ext&&ext.installed){
+    if(ext.outdated&&ext.canUpdate)return {cls:'ext-btn install',text:t('update_btn'),disabled:false,state:'outdated'};
     if(ext.canUninstall)return {cls:'ext-btn uninstall',text:t('uninstall_btn'),disabled:false,state:'installed'};
     return {cls:'ext-btn installed',text:t('installed_btn'),disabled:true,state:'installed'};
   }
@@ -20388,6 +20405,7 @@ function renderExtCard(container,ext){
         (ext.version?'<span class="ext-badge">v'+esc(ext.version)+'</span>':'')+
         sourceBadge+
         activeBadge+
+        extensionUpdateBadge(ext)+
         extensionTrustBadge(ext)+
         (contribSummary?'<span class="ext-badge">'+esc(contribSummary)+'</span>':'')+
       '</div>'+
@@ -20404,9 +20422,11 @@ function showExtDetail(ext){
   $('ext-detail-name').textContent=ext.displayName||ext.name||ext.id;
   const body=$('ext-detail-body');
   const iconEl=ext.iconUrl?'<img src="'+esc(ext.iconUrl)+'" style="width:64px;height:64px;border-radius:6px" onerror="this.style.display=\'none\'">':'<div style="width:64px;height:64px;border-radius:6px;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:32px">📦</div>';
-  const detailBadges=[extensionSourceBadge(ext),extensionStateBadge(ext)||extensionActiveBadge(ext),extensionTrustBadge(ext),ext.version?'<span class="ext-badge">v'+esc(ext.version)+'</span>':'',ext.installedVersion&&ext.installedVersion!==ext.version?'<span class="ext-badge">local v'+esc(ext.installedVersion)+'</span>':'',extensionContribSummary(ext)?'<span class="ext-badge">'+esc(extensionContribSummary(ext))+'</span>':''].filter(Boolean).join('');
+  const detailBadges=[extensionSourceBadge(ext),extensionStateBadge(ext)||extensionActiveBadge(ext),extensionUpdateBadge(ext),extensionTrustBadge(ext),ext.version?'<span class="ext-badge">v'+esc(ext.version)+'</span>':'',ext.latestVersion&&ext.latestVersion!==ext.version?'<span class="ext-badge">latest v'+esc(ext.latestVersion)+'</span>':'',ext.installedVersion&&ext.installedVersion!==ext.version?'<span class="ext-badge">local v'+esc(ext.installedVersion)+'</span>':'',extensionContribSummary(ext)?'<span class="ext-badge">'+esc(extensionContribSummary(ext))+'</span>':''].filter(Boolean).join('');
   const trustReason=ext.trust&&ext.trust.reason?'<div style="margin-top:10px;font-size:11px;color:var(--fg-dim);line-height:1.45">Trust: '+esc(ext.trust.reason)+'</div>':'';
-  body.innerHTML='<div style="display:flex;gap:12px;margin-bottom:12px;align-items:flex-start">'+iconEl+'<div style="flex:1"><div style="font-size:15px;font-weight:600;color:var(--fg)">'+esc(ext.displayName||ext.name)+'</div>'+(ext.publisher?'<div style="font-size:11px;color:var(--fg-accent);margin-top:2px">'+esc(ext.publisher)+'</div>':'')+(detailBadges?'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">'+detailBadges+'</div>':'')+'<div style="margin-top:6px">'+extensionButtonHtml(ext)+'</div></div></div>'+'<div style="font-size:12px;color:var(--fg);line-height:1.5;white-space:pre-wrap">'+esc(ext.description||'No description available.')+'</div>'+trustReason+(ext.ext_dir?'<div style="margin-top:10px;font:11px/1.45 var(--mono);color:var(--fg-dim)">Path: '+esc(ext.ext_dir)+'</div>':'');
+  const marketplaceMeta=extensionMarketplaceMetadata(ext);
+  const marketplaceMetaHtml=marketplaceMeta.length?'<div style="margin-top:10px;font-size:11px;color:var(--fg-dim);line-height:1.45">'+marketplaceMeta.map(esc).join('<br>')+'</div>':'';
+  body.innerHTML='<div style="display:flex;gap:12px;margin-bottom:12px;align-items:flex-start">'+iconEl+'<div style="flex:1"><div style="font-size:15px;font-weight:600;color:var(--fg)">'+esc(ext.displayName||ext.name)+'</div>'+(ext.publisher?'<div style="font-size:11px;color:var(--fg-accent);margin-top:2px">'+esc(ext.publisher)+'</div>':'')+(detailBadges?'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">'+detailBadges+'</div>':'')+'<div style="margin-top:6px">'+extensionButtonHtml(ext)+'</div></div></div>'+'<div style="font-size:12px;color:var(--fg);line-height:1.5;white-space:pre-wrap">'+esc(ext.description||'No description available.')+'</div>'+marketplaceMetaHtml+trustReason+(ext.ext_dir?'<div style="margin-top:10px;font:11px/1.45 var(--mono);color:var(--fg-dim)">Path: '+esc(ext.ext_dir)+'</div>':'');
   panel.style.display='flex';
   const section=panel.previousElementSibling;if(section)section.style.display='none';
 }
@@ -20423,6 +20443,36 @@ async function toggleExtInstall(btn,event){
   if(btn.getAttribute('aria-disabled')==='true')return;
   const ext=lookupExtensionState({id:extId,vsixUrl:vsix});
   if(ext.installed){
+    if(ext.outdated&&ext.canUpdate){
+      const preflight=await call('get_extension_install_preflight',extId,vsix,btn.dataset.publisher||ext.publisherKey||ext.publisherId||'',btn.dataset.displayName||ext.displayName||ext.name||'');
+      if(!preflight||preflight.error){setStatus(t('test_failed')+': '+(preflight?preflight.error:''));return}
+      if(preflight.ok===false){
+        const reason=(preflight.trust&&preflight.trust.reason)||'';
+        showToast(t('install_blocked')+(reason?': '+reason:''),'warning',5000);
+        setStatus(t('install_blocked')+': '+extId);
+        return;
+      }
+      if(!confirm(extensionInstallPreflightText({...preflight,requiresManifestDownload:false},extId).replace(t('install_confirm'),t('update_confirm'))))return;
+      setExtensionOperation(extId,'updating');
+      setStatus(t('updating')+' '+extId+'...');
+      const r=await call('install_extension',extId,vsix,true);
+      setExtensionOperation(extId,'');
+      if(r&&r.ok){
+        if(r.extension&&r.extension.id){
+          extInstalledById[extKey(r.extension.id)]=r.extension;
+          mergeInstalledExtensionMetadata([r.extension]);
+        }else{
+          extCache=extCache.map(item=>extKey(item)===extKey(extId)?{...item,installed:true,state:'installed',outdated:false,canUpdate:false}:item);
+        }
+        setStatus(t('updated_prefix')+extId);
+      }else{
+        setStatus(t('test_failed')+': '+(r?r.error:''));
+      }
+      refreshInstalledExts();
+      if(extCache.length)renderExtList($('ext-marketplace-list'),extCache);
+      renderExtensionActivityBar();
+      return;
+    }
     if(!ext.canUninstall){showToast(t('installed_btn'),'info');return}
     if(!confirm(t('uninstall_confirm')+'\n\n'+extId))return;
     setExtensionOperation(extId,'uninstalling');

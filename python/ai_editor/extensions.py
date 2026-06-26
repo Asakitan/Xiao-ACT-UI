@@ -168,6 +168,7 @@ def _parse_one_extension(ext: Dict[str, Any]) -> Dict[str, Any]:
         "displayName": ext.get("displayName", ""),
         "description": ext.get("shortDescription", ""),
         "version": version,
+        "latestVersion": version,
         "publisher": pub_display,
         "publisherId": pub_name,
         "iconUrl": icon_url,
