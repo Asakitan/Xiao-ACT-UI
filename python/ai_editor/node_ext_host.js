@@ -2361,6 +2361,7 @@ const _windowDialogRequests = new Map();  // requestId -> { resolve, timer, clea
 const _envClipboardRequests = new Map();  // requestId -> { resolve, timer, cleanup, action }
 const _webviewViewProviders = new Map(); // viewType -> { provider, options }
 const _webviewViews = new Map();         // viewId -> WebviewView
+const _webviewViewActivationResolving = new Set(); // viewType pending explicit onView resolve
 const _webviewPanels = new Map();        // viewId -> WebviewPanel-like object
 const _webviewPanelSerializers = new Map(); // viewType -> { serializer, extensionId, extensionPath }
 const _customEditorProviders = new Map(); // viewType -> { provider, options, extensionId }
@@ -5021,6 +5022,7 @@ function _createTerminal(nameOrOptions, shellPath, shellArgs) {
 
 async function _createTerminalFromProfileProvider(profileId, options) {
     const id = String(profileId || '');
+    if (id) await _activateKnownExtensionsForEvent(`onTerminalProfile:${id}`);
     const entry = _terminalProfileProviders.get(id);
     if (!entry) {
         throw new Error(`No terminal profile provider registered for id "${id}"`);
@@ -5046,6 +5048,15 @@ async function _createTerminalFromProfileProvider(profileId, options) {
         profile: _plainBridgeValue({ options: profile.options || {} }),
         terminal: Object.assign({ id: terminal._handle }, terminal.metadata()),
     };
+}
+
+function _disposeTerminalById(id) {
+    const handle = Number(id);
+    if (!Number.isFinite(handle)) return false;
+    const terminal = _terminals.find(item => item && item._handle === handle);
+    if (!terminal) return false;
+    terminal.dispose();
+    return true;
 }
 
 function _terminalForLinkRequest(msg) {
@@ -8171,7 +8182,9 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     viewType,
                     extensionId: extDesc.extensionId || '',
                 });
-                setImmediate(() => resolveWebviewView(viewType));
+                if (!_webviewViewActivationResolving.has(String(viewType || ''))) {
+                    setImmediate(() => { void resolveWebviewView(viewType); });
+                }
                 log(`registered WebviewViewProvider: ${viewType}`);
                 return new Disposable(() => {
                     _webviewViewProviders.delete(viewType);
@@ -9066,6 +9079,8 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 const toolName = typeof nameOrInfo === 'string'
                     ? nameOrInfo
                     : String(nameOrInfo?.name || nameOrInfo?.id || '');
+                if (toolName) await _activateKnownExtensionsForEvent(
+                    `onLanguageModelTool:${toolName}`);
                 const entry = _lmTools.get(toolName);
                 if (!entry) throw new Error(`Language model tool not found: ${toolName}`);
                 const result = await _invokeLmToolEntry(
@@ -10422,7 +10437,7 @@ async function activateExtension(msg) {
         // Resolve any pending webview view providers that were registered
         // during activate(). For each, resolve immediately so Python knows.
         for (const [viewType] of _webviewViewProviders) {
-            resolveWebviewView(viewType);
+            void resolveWebviewView(viewType);
         }
 
         _completeExtensionActivation(extensionId, true, '');
@@ -10444,10 +10459,20 @@ async function activateExtension(msg) {
 // -------------------------------------------------------------------------
 // Resolve a webview view (call provider.resolveWebviewView)
 // -------------------------------------------------------------------------
-function resolveWebviewView(viewType, state) {
-    const reg = _webviewViewProviders.get(viewType);
+async function resolveWebviewView(viewType, state) {
+    const normalized = String(viewType || '');
+    let reg = _webviewViewProviders.get(normalized);
+    if (!reg && normalized) {
+        _webviewViewActivationResolving.add(normalized);
+        try {
+            await _activateKnownExtensionsForEvent(`onView:${normalized}`);
+        } finally {
+            _webviewViewActivationResolving.delete(normalized);
+        }
+        reg = _webviewViewProviders.get(normalized);
+    }
     if (!reg) {
-        log(`no provider for viewType=${viewType}`);
+        log(`no provider for viewType=${normalized}`);
         return;
     }
     const viewId = `view-${_nextViewHandle++}`;
@@ -10455,7 +10480,7 @@ function resolveWebviewView(viewType, state) {
         ? reg.options.webviewOptions
         : {};
     const view = new WebviewView(
-        viewId, viewType, viewOptions,
+        viewId, normalized, viewOptions,
         _defaultLocalResourceRoots(reg.extensionPath));
     _webviewViews.set(viewId, view);
     view._emitMetadata();
@@ -10465,18 +10490,19 @@ function resolveWebviewView(viewType, state) {
         const result = reg.provider.resolveWebviewView(view, { state: state ?? null }, token);
         if (result && typeof result.then === 'function') {
             result.catch(err => {
-                log(`resolveWebviewView error for ${viewType}: ${err.message}`);
-                send({ type: 'error', extensionId: viewType, error: err.message });
+                log(`resolveWebviewView error for ${normalized}: ${err.message}`);
+                send({ type: 'error', extensionId: normalized, error: err.message });
             });
         }
     } catch (err) {
-        log(`resolveWebviewView error for ${viewType}: ${err.message}`);
-        send({ type: 'error', extensionId: viewType, error: err.message });
+        log(`resolveWebviewView error for ${normalized}: ${err.message}`);
+        send({ type: 'error', extensionId: normalized, error: err.message });
     }
 }
 
 async function resolveCustomEditor(msg) {
     const viewType = String(msg.viewType || msg.customEditorId || '');
+    if (viewType) await _activateKnownExtensionsForEvent(`onCustomEditor:${viewType}`);
     const reg = _customEditorProviders.get(viewType);
     if (!reg) {
         const error = `no custom editor provider for viewType=${viewType}`;
@@ -10996,6 +11022,8 @@ async function executeCommand(commandId, args, requestId) {
 async function handleLmToolRequest(msg) {
     const requestId = String(msg.requestId || '');
     const name = String(msg.name || msg.toolName || '');
+    if (name) await _activateKnownExtensionsForEvent(
+        `onLanguageModelTool:${name}`);
     const entry = _lmTools.get(name);
     if (!entry) {
         send({
@@ -11028,6 +11056,8 @@ async function handleLmToolRequest(msg) {
 async function handleChatParticipantRequest(msg) {
     const requestId = String(msg.requestId || '');
     const participantId = String(msg.participantId || msg.id || '');
+    if (participantId) await _activateKnownExtensionsForEvent(
+        `onChatParticipant:${participantId}`);
     const entry = _chatParticipants.get(participantId);
     if (!entry || typeof entry.handler !== 'function') {
         send({
@@ -13019,7 +13049,7 @@ async function handleMessage(msg) {
             handleDisposeWebviewPanel(msg);
             break;
         case 'resolve_webview_view':
-            resolveWebviewView(msg.viewType, msg.state);
+            await resolveWebviewView(msg.viewType, msg.state);
             break;
         case 'resolve_custom_editor':
             await resolveCustomEditor(msg);
@@ -13081,6 +13111,9 @@ async function handleMessage(msg) {
             break;
         case 'terminal_profile_request':
             await handleTerminalProfileRequest(msg);
+            break;
+        case 'terminal_dispose_request':
+            _disposeTerminalById(msg.id ?? msg.handle);
             break;
         case 'terminal_link_request':
             await handleTerminalLinkRequest(msg);

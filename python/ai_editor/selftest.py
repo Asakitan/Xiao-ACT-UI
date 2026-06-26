@@ -9752,7 +9752,7 @@ console.log("command palette quick access helpers ok");
            in node_ext_host_source
            and "this.webview._setPanelMetadata(this.viewType, next);"
            in node_ext_host_source
-           and "setImmediate(() => resolveWebviewView(viewType))"
+           and "setImmediate(() => { void resolveWebviewView(viewType); });"
            in node_ext_host_source
            and "elif msg_type in {\"webview_view_metadata\", \"webview_view_visibility\"}"
            in extension_host_source
@@ -13462,6 +13462,7 @@ def test_app_extension_runtime_support() -> None:
     node_fs_tmp = ""
     node_uri_tmp = ""
     node_activation_tmp = ""
+    node_surface_tmp = ""
     node_storage_tmp = ""
     extension_host_module._host = ExtensionHost()
     try:
@@ -16850,6 +16851,8 @@ def test_app_extension_runtime_support() -> None:
             node_uri_tmp = tempfile.mkdtemp(prefix="sao_node_uri_ext_")
             node_activation_tmp = tempfile.mkdtemp(
                 prefix="sao_node_activation_ext_")
+            node_surface_tmp = tempfile.mkdtemp(
+                prefix="sao_node_surface_ext_")
             node_storage_tmp = tempfile.mkdtemp(prefix="sao_node_storage_")
             node_inactive_js = r"""
 async function activate(context) {
@@ -17462,6 +17465,147 @@ async function activate(context) {
     startupFinished: true,
     extensionId: context.extension && context.extension.id,
   }));
+}
+module.exports = { activate };
+""")
+            def _node_surface_desc(dirname, manifest, source):
+                ext_dir = os.path.join(node_surface_tmp, dirname)
+                os.makedirs(ext_dir, exist_ok=True)
+                with open(os.path.join(ext_dir, "extension.js"),
+                          "w", encoding="utf-8") as fh:
+                    fh.write(source)
+                return ExtensionDescription.from_package_json(manifest, ext_dir)
+
+            node_surface_view_desc = _node_surface_desc(
+                "view",
+                {
+                    "name": "node-surface-view",
+                    "publisher": "selftest",
+                    "version": "0.0.1",
+                    "displayName": "Node Surface View",
+                    "main": "./extension.js",
+                    "activationEvents": ["onView:activation.surface.view"],
+                },
+                r"""
+const vscode = require('vscode');
+async function activate(context) {
+  vscode.window.registerWebviewViewProvider('activation.surface.view', {
+    resolveWebviewView(view) {
+      view.title = 'Activation Surface View';
+      view.description = 'Activated on view';
+      view.badge = { value: 5, tooltip: 'surface' };
+      view.webview.html = '<main data-view="activation-surface-view"></main>';
+    },
+  }, { webviewOptions: { retainContextWhenHidden: true } });
+}
+module.exports = { activate };
+""")
+            node_surface_custom_desc = _node_surface_desc(
+                "custom",
+                {
+                    "name": "node-surface-custom",
+                    "publisher": "selftest",
+                    "version": "0.0.1",
+                    "displayName": "Node Surface Custom",
+                    "main": "./extension.js",
+                    "activationEvents": [
+                        "onCustomEditor:activation.surface.custom",
+                    ],
+                },
+                r"""
+const vscode = require('vscode');
+async function activate(context) {
+  vscode.window.registerCustomEditorProvider('activation.surface.custom', {
+    resolveCustomTextEditor(document, panel) {
+      panel.webview.html =
+        '<main data-view="activation-surface-custom">' +
+        document.uri.toString() + '</main>';
+    },
+  });
+}
+module.exports = { activate };
+""")
+            node_surface_terminal_desc = _node_surface_desc(
+                "terminal",
+                {
+                    "name": "node-surface-terminal",
+                    "publisher": "selftest",
+                    "version": "0.0.1",
+                    "displayName": "Node Surface Terminal",
+                    "main": "./extension.js",
+                    "activationEvents": [
+                        "onTerminalProfile:activation.surface.profile",
+                    ],
+                },
+                r"""
+const vscode = require('vscode');
+async function activate(context) {
+  vscode.window.registerTerminalProfileProvider('activation.surface.profile', {
+    provideTerminalProfile() {
+      return new vscode.TerminalProfile({
+        name: 'Activation Surface Terminal',
+        env: { SURFACE_PROFILE: '1' },
+        strictEnv: true,
+        isTransient: true,
+      });
+    },
+  });
+}
+module.exports = { activate };
+""")
+            node_surface_lm_tool_desc = _node_surface_desc(
+                "lm-tool",
+                {
+                    "name": "node-surface-lm-tool",
+                    "publisher": "selftest",
+                    "version": "0.0.1",
+                    "displayName": "Node Surface LM Tool",
+                    "main": "./extension.js",
+                    "activationEvents": [
+                        "onLanguageModelTool:activation_surface_tool",
+                    ],
+                },
+                r"""
+const vscode = require('vscode');
+async function activate(context) {
+  vscode.lm.registerTool('activation_surface_tool', {
+    description: 'Activation surface tool',
+    inputSchema: {
+      type: 'object',
+      properties: { value: { type: 'string' } },
+      required: ['value'],
+    },
+    invoke(options) {
+      const value = options && options.input && options.input.value;
+      return new vscode.LanguageModelToolResult([
+        new vscode.LanguageModelTextPart('surface-tool:' + value),
+      ]);
+    },
+  });
+}
+module.exports = { activate };
+""")
+            node_surface_chat_desc = _node_surface_desc(
+                "chat",
+                {
+                    "name": "node-surface-chat",
+                    "publisher": "selftest",
+                    "version": "0.0.1",
+                    "displayName": "Node Surface Chat",
+                    "main": "./extension.js",
+                    "activationEvents": [
+                        "onChatParticipant:activation.surface.chat",
+                    ],
+                },
+                r"""
+const vscode = require('vscode');
+async function activate(context) {
+  vscode.chat.createChatParticipant(
+    'activation.surface.chat',
+    (request, context, response) => {
+      response.markdown('surface-chat:' + request.prompt);
+    },
+  );
 }
 module.exports = { activate };
 """)
@@ -20900,6 +21044,11 @@ module.exports = { activate, deactivate };
             api._ext_host.registry.register(node_activation_debug_adapter_desc)
             api._ext_host.registry.register(node_activation_auth_desc)
             api._ext_host.registry.register(node_activation_startup_desc)
+            api._ext_host.registry.register(node_surface_view_desc)
+            api._ext_host.registry.register(node_surface_custom_desc)
+            api._ext_host.registry.register(node_surface_terminal_desc)
+            api._ext_host.registry.register(node_surface_lm_tool_desc)
+            api._ext_host.registry.register(node_surface_chat_desc)
             class _NodeUiBridge:
                 def __init__(self) -> None:
                     self.webviews = {}
@@ -21268,6 +21417,11 @@ module.exports = { activate, deactivate };
                         node_activation_debug_adapter_desc,
                         node_activation_auth_desc,
                         node_activation_startup_desc,
+                        node_surface_view_desc,
+                        node_surface_custom_desc,
+                        node_surface_terminal_desc,
+                        node_surface_lm_tool_desc,
+                        node_surface_chat_desc,
                     ])
                     api._install_node_activation_event_bridge()
                     node_host.send_settings_sync({
@@ -21365,6 +21519,80 @@ module.exports = { activate, deactivate };
                             "selftest.node.activationEventsProbe"))
                 except Exception as exc:
                     node_activation_events_probe = {"_error": str(exc)}
+                node_surface_before = {
+                    "view": node_surface_view_desc.id
+                    not in node_host._activated_ids,
+                    "custom": node_surface_custom_desc.id
+                    not in node_host._activated_ids,
+                    "terminal": node_surface_terminal_desc.id
+                    not in node_host._activated_ids,
+                    "lmTool": node_surface_lm_tool_desc.id
+                    not in node_host._activated_ids,
+                    "chat": node_surface_chat_desc.id
+                    not in node_host._activated_ids,
+                }
+                if node_started:
+                    node_host._send({
+                        "type": "resolve_webview_view",
+                        "viewType": "activation.surface.view",
+                        "state": {"from": "selftest"},
+                    })
+                    node_surface_view_ready = _wait_until(
+                        lambda: any(
+                            item.get("view_type")
+                            == "activation.surface.view"
+                            and item.get("metadata", {}).get("title")
+                            == "Activation Surface View"
+                            for item in
+                            node_ui_bridge.webview_view_metadata.values()),
+                        timeout=3.0)
+                    node_surface_custom_file = os.path.join(
+                        node_tree_tmp, "activation-surface-custom.txt")
+                    with open(node_surface_custom_file, "w",
+                              encoding="utf-8") as fh:
+                        fh.write("surface custom")
+                    node_surface_custom_result = (
+                        node_host.request_custom_editor_result(
+                            "activation.surface.custom",
+                            Uri.file(node_surface_custom_file).to_string(),
+                            title="Activation Surface Custom",
+                            timeout=3.0))
+                    node_surface_terminal_event_start = len(
+                        node_ui_bridge.terminal_events)
+                    node_surface_terminal_shell_start = len(
+                        node_host._terminal_shell_integrations)
+                    node_surface_terminal_result = (
+                        node_host.request_terminal_profile_result(
+                            "activation.surface.profile", timeout=3.0))
+                    node_surface_terminal_id = (
+                        (node_surface_terminal_result.get("terminal") or {})
+                        .get("id"))
+                    if node_surface_terminal_id is not None:
+                        node_host._send({
+                            "type": "terminal_dispose_request",
+                            "id": node_surface_terminal_id,
+                        })
+                        _wait_until(
+                            lambda: not node_host.active_terminal(),
+                            timeout=3.0)
+                    del node_ui_bridge.terminal_events[
+                        node_surface_terminal_event_start:]
+                    del node_host._terminal_shell_integrations[
+                        node_surface_terminal_shell_start:]
+                    node_surface_lm_tool_result = (
+                        node_host.request_lm_tool_result(
+                            "activation_surface_tool",
+                            {"value": "from-python"}, timeout=3.0))
+                    node_surface_chat_result = (
+                        node_host.request_chat_participant_result(
+                            "activation.surface.chat",
+                            "from-python", timeout=3.0))
+                else:
+                    node_surface_view_ready = False
+                    node_surface_custom_result = {"ok": False}
+                    node_surface_terminal_result = {"ok": False}
+                    node_surface_lm_tool_result = {"ok": False}
+                    node_surface_chat_result = {"ok": False}
                 node_content_provider_command_registered = _wait_until(
                     lambda: "selftest.node.contentProviderProbe"
                     in api._ext_host.commands.list_commands(),
@@ -24566,6 +24794,49 @@ module.exports = { activate, deactivate };
                        in node_host._activated_ids,
                        json.dumps(node_activation_events_probe,
                                   ensure_ascii=False, default=str))
+                node_surface_lm_tool_value = (
+                    node_surface_lm_tool_result.get("value", {})
+                    if isinstance(node_surface_lm_tool_result, dict) else {})
+                node_surface_chat_value = (
+                    node_surface_chat_result.get("value", {})
+                    if isinstance(node_surface_chat_result, dict) else {})
+                _check("node host activates lazy UI and provider surfaces dynamically",
+                       node_started is True
+                       and all(node_surface_before.values())
+                       and node_surface_view_ready is True
+                       and node_surface_custom_result.get("ok") is True
+                       and node_surface_custom_result.get("viewType")
+                       == "activation.surface.custom"
+                       and node_surface_terminal_result.get("ok") is True
+                       and node_surface_terminal_result.get(
+                           "terminal", {}).get("name")
+                       == "Activation Surface Terminal"
+                       and node_surface_lm_tool_result.get("ok") is True
+                       and (node_surface_lm_tool_value.get("content")
+                            or [{}])[0].get("text")
+                       == "surface-tool:from-python"
+                       and node_surface_chat_result.get("ok") is True
+                       and node_surface_chat_value.get("content")
+                       == "surface-chat:from-python"
+                       and node_surface_view_desc.id in node_host._activated_ids
+                       and node_surface_custom_desc.id
+                       in node_host._activated_ids
+                       and node_surface_terminal_desc.id
+                       in node_host._activated_ids
+                       and node_surface_lm_tool_desc.id
+                       in node_host._activated_ids
+                       and node_surface_chat_desc.id
+                       in node_host._activated_ids,
+                       json.dumps({
+                           "before": node_surface_before,
+                           "viewReady": node_surface_view_ready,
+                           "custom": node_surface_custom_result,
+                           "terminal": node_surface_terminal_result,
+                           "lmTool": node_surface_lm_tool_result,
+                           "chat": node_surface_chat_result,
+                           "viewMetadata":
+                               node_ui_bridge.webview_view_metadata,
+                       }, ensure_ascii=False, default=str))
                 _check("node host opens text document content providers",
                        node_started is True
                        and node_content_provider_command_registered
@@ -26067,6 +26338,8 @@ module.exports = { activate, deactivate };
             shutil.rmtree(node_uri_tmp, ignore_errors=True)
         if node_activation_tmp:
             shutil.rmtree(node_activation_tmp, ignore_errors=True)
+        if node_surface_tmp:
+            shutil.rmtree(node_surface_tmp, ignore_errors=True)
         if node_storage_tmp:
             shutil.rmtree(node_storage_tmp, ignore_errors=True)
 
