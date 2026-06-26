@@ -805,6 +805,8 @@ pre.code-block code .type { color:var(--fg-type); }
   background:var(--bg3); transition:border-color .15s, box-shadow .35s, background .15s; overflow:visible; }
 .chat-input-container:focus-within { border-color:var(--border-focus); box-shadow:0 0 0 1px var(--border-focus); }
 .chat-input-container.sendable { border-color:color-mix(in srgb, var(--border-focus) 35%, var(--border)); }
+.chat-input-container.editing { border-color:color-mix(in srgb, var(--fg-warning) 55%, var(--border-focus));
+  background:color-mix(in srgb, var(--fg-warning) 5%, var(--bg3)); }
 .chat-input-container.empty .chat-toolbar { border-top-color:transparent; }
 .chat-input-container.completion-open { border-color:color-mix(in srgb, var(--fg-accent) 65%, var(--border-focus));
   box-shadow:0 0 0 1px color-mix(in srgb, var(--fg-accent) 45%, transparent), 0 -8px 28px #00000026; }
@@ -853,6 +855,12 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-toolbar-head { display:none; align-items:center; gap:6px; flex-wrap:wrap; min-height:26px;
   padding:7px 8px 0; color:var(--fg-dim); }
 .chat-toolbar-head.has-state { display:flex; }
+.chat-edit-banner { display:inline-flex; align-items:center; gap:6px; min-width:0; max-width:100%;
+  color:var(--fg-warning); font:11px/18px var(--sans); }
+.chat-edit-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chat-edit-cancel { border:0; background:transparent; color:var(--fg-dim); border-radius:3px;
+  font:11px/18px var(--sans); padding:1px 5px; cursor:pointer; }
+.chat-edit-cancel:hover,.chat-edit-cancel:focus { color:var(--fg); background:var(--bg-hover); outline:none; }
 .chat-head-spacer { flex:1; min-width:8px; }
 .chat-head-status { color:var(--fg-dim); font:10px/16px var(--mono); text-transform:uppercase; }
 .chat-head-status.running { color:var(--fg-accent); }
@@ -2060,7 +2068,7 @@ pre.code-block { overflow:visible; }
                   <textarea class="chat-input" id="chat-input" rows="1" data-i18n="ask_placeholder" placeholder="Ask anything... (/ commands, @ context, # tools)" aria-label="Ask Agent" aria-describedby="chat-input-status chat-input-help" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false"></textarea>
                   <button class="send-btn" id="send-btn" onclick="doSend()" title="Send" aria-label="Send" aria-disabled="true"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 2.5l-5 5h3.5V13h3V7.5H13L8 2.5z"/></svg></button>
                 </div>
-                <div class="sr-only" id="chat-input-help">Enter sends, Shift+Enter inserts a new line, Ctrl+Enter also sends, Escape stops a running response.</div>
+                <div class="sr-only" id="chat-input-help">Enter sends, Shift+Enter inserts a new line, Ctrl+Enter also sends, Escape cancels editing or stops a running response.</div>
                 <div class="chat-attached-context" id="chat-context-area" aria-label="Attached context"></div>
                 <div class="attach-area" id="attach-area"></div>
                 <div class="chat-toolbar" role="toolbar" aria-label="Assistant composer">
@@ -3836,6 +3844,14 @@ function renderChatComposerHeader(){
   const head=$('chat-toolbar-head');if(!head)return;
   const state=chatControlDisplayState();
   head.innerHTML='';
+  if(typeof assistantEditActive==='function'&&assistantEditActive()){
+    const banner=document.createElement('span');banner.className='chat-edit-banner';
+    const label=document.createElement('span');label.className='chat-edit-label';label.textContent='Editing request';
+    const cancel=document.createElement('button');cancel.type='button';cancel.className='chat-edit-cancel';
+    cancel.textContent='Cancel';cancel.setAttribute('aria-label','Cancel request edit');
+    cancel.onclick=()=>cancelAssistantEdit('button');
+    banner.appendChild(label);banner.appendChild(cancel);head.appendChild(banner);
+  }
   appendChatHeadPill(head,t('mode_'+state.mode)||state.mode,true);
   appendChatHeadPill(head,state.provider+(state.model?' · '+state.model:''),!!state.model);
   appendChatHeadPill(head,'Agent: '+state.agent,!!state.agentId);
@@ -3887,6 +3903,7 @@ function updateChatComposerState(){
     container.classList.toggle('sendable',sendable&&!streaming);
     container.classList.toggle('empty',!sendable);
     container.classList.toggle('streaming',streaming);
+    container.classList.toggle('editing',typeof assistantEditActive==='function'&&assistantEditActive());
     container.dataset.mode=normalizeMode(typeof currentMode==='string'?currentMode:'agent');
     container.dataset.provider=String(config.provider||'');
     container.dataset.agent=(typeof activeAgentId==='string'?activeAgentId:'')||'';
@@ -3894,6 +3911,7 @@ function updateChatComposerState(){
   if(panel){
     panel.dataset.chatComposerSendable=sendable?'true':'false';
     panel.dataset.chatComposerStreaming=streaming?'true':'false';
+    panel.dataset.chatEditingMessage=(typeof assistantEditActive==='function'&&assistantEditActive())?'true':'false';
     panel.dataset.chatMode=normalizeMode(typeof currentMode==='string'?currentMode:'agent');
     panel.dataset.chatProvider=String(config.provider||'');
     panel.dataset.chatAgent=(typeof activeAgentId==='string'?activeAgentId:'')||'';
@@ -12406,6 +12424,7 @@ chatInp.addEventListener('keydown',function(e){
     if(slashPopup.classList.contains('open')){closeSlashPopup();e.stopPropagation();return}
     if($('at-popup').classList.contains('open')){$('at-popup').classList.remove('open');setChatCompletionState('',false);e.stopPropagation();return}
     if(contextPicker&&contextPicker.classList.contains('open')){closeChatContextPicker();e.stopPropagation();return}
+    if(typeof cancelAssistantEdit==='function'&&cancelAssistantEdit('escape')){e.preventDefault();e.stopPropagation();return}
     if(streaming){doStop();e.stopPropagation()}
   }
   // ── History navigation (↑/↓) ──
@@ -22029,7 +22048,7 @@ async function sendAssistantTextRequest(rawText,opts){
   if(!toolHint&&toolMatch){toolHint=toolMatch[1];text=text.slice(toolMatch[0].length).trim()}
   if(opts.fromInput!==false&&_assistantEditTargetMessage&&document.body.contains(_assistantEditTargetMessage)){
     removeChatMessagesFrom(_assistantEditTargetMessage);
-    clearAssistantEditTarget();
+    clearAssistantEditTarget({restore:false});
   }
   if(opts.appendUser!==false){
     const userBody=createMsg('user');
@@ -22929,10 +22948,30 @@ function chatUserRequestDisplayText(req){
   return (req.toolHint?'#'+req.toolHint+' ':'')+String(req.text||'');
 }
 let _assistantEditTargetMessage=null;
-function clearAssistantEditTarget(){
+let _assistantEditRestoreState=null;
+function assistantEditActive(){
+  return !!(_assistantEditTargetMessage&&document.body.contains(_assistantEditTargetMessage));
+}
+function clearAssistantEditTarget(options){
+  const opts=options||{};
+  const restore=!!opts.restore;
+  const saved=_assistantEditRestoreState;
   _assistantEditTargetMessage=null;
+  _assistantEditRestoreState=null;
+  if(restore&&saved){
+    chatContextAttachments=Array.isArray(saved.refs)?saved.refs.slice(0,20):[];
+    renderChatContextAttachments();
+    setChatInputValue(saved.draft||'',{focus:true});
+  }
   const panel=$('chat-panel');if(panel)panel.dataset.chatEditingMessage='false';
   if(typeof updateChatComposerState==='function')updateChatComposerState();
+}
+function cancelAssistantEdit(source){
+  if(!assistantEditActive())return false;
+  clearAssistantEditTarget({restore:true});
+  announceAssistantAction('Request edit cancelled');
+  setStatus('Request edit cancelled');
+  return true;
 }
 function removeChatMessagesFrom(msgEl){
   const items=chatConversationItems();
@@ -23043,6 +23082,8 @@ function startAssistantUserMessageEdit(msgEl){
   const req=chatUserRequestFromMessage(msgEl);
   if(!req.text){announceAssistantAction('No user request to edit');showToast('No user request to edit','warning',1800);return false}
   _assistantEditTargetMessage=msgEl;
+  const input=$('chat-input');
+  _assistantEditRestoreState={draft:input?String(input.value||''):'',refs:assistantSessionNormalizeRefs(chatContextAttachments||[])};
   chatContextAttachments=req.refs.slice(0,20);
   renderChatContextAttachments();
   setChatInputValue(chatUserRequestDisplayText(req),{focus:true});

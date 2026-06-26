@@ -3885,6 +3885,7 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("frontend Assistant composer completion popups expose VS Code-style state",
            "placeholder=\"Ask anything... (/ commands, @ context, # tools)\" aria-label=\"Ask Agent\" aria-describedby=\"chat-input-status chat-input-help\" aria-autocomplete=\"list\" aria-haspopup=\"listbox\" aria-expanded=\"false\"" in html
            and '<div class="sr-only" id="chat-input-help">' in html
+           and "Escape cancels editing or stops a running response." in html
            and '<span class="chat-composer-meta" id="chat-input-status" role="status" aria-live="polite">' in html
            and "ask_placeholder:'Ask anything... (/ commands, @ context, # tools)'" in html
            and "ask_placeholder:'输入问题... (/ 命令, @ 上下文, # 工具)'" in html
@@ -3996,7 +3997,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function chatUserRequestFromMessage(msgEl)" in html
            and "function chatUserRequestDisplayText(req)" in html
            and "let _assistantEditTargetMessage=null;" in html
-           and "function clearAssistantEditTarget()" in html
+           and "let _assistantEditRestoreState=null;" in html
+           and "function assistantEditActive()" in html
+           and "function clearAssistantEditTarget(options)" in html
+           and "function cancelAssistantEdit(source)" in html
            and "function removeChatMessagesFrom(msgEl)" in html
            and "async function sendAssistantTextRequest(rawText,opts)" in html
            and "function chatMessageCodeBlocks(msgEl)" in html
@@ -4047,11 +4051,24 @@ def test_phase1_ai_editor_regressions() -> None:
            and "className='mf-status sr-only'" in html
            and "className='mf-separator'" in html
            and ".interactive-request .msg-footer { justify-content:flex-end; margin-left:auto; }" in html
+           and ".chat-input-container.editing" in html
+           and ".chat-edit-banner" in html
+           and ".chat-edit-cancel" in html
+           and "banner.className='chat-edit-banner';" in html
+           and "cancel.className='chat-edit-cancel';" in html
+           and "cancel.setAttribute('aria-label','Cancel request edit');" in html
+           and "cancel.onclick=()=>cancelAssistantEdit('button');" in html
            and "const actions=role==='user'?[" in html
            and "action:'edit-request'" in html
+           and "_assistantEditRestoreState={draft:input?String(input.value||''):'',refs:assistantSessionNormalizeRefs(chatContextAttachments||[])};" in html
+           and "clearAssistantEditTarget({restore:true});" in html
+           and "clearAssistantEditTarget({restore:false});" in html
+           and "container.classList.toggle('editing',typeof assistantEditActive==='function'&&assistantEditActive());" in html
            and "panel.dataset.chatEditingMessage='true';" in html
+           and "panel.dataset.chatEditingMessage=(typeof assistantEditActive==='function'&&assistantEditActive())?'true':'false';" in html
+           and "cancelAssistantEdit('escape')" in html
            and "removeChatMessagesFrom(_assistantEditTargetMessage);" in html
-           and "clearAssistantEditTarget();" in html
+           and "clearAssistantEditTarget({restore:false});" in html
            and "sendAssistantTextRequest(req.text,{refs:req.refs,toolHint:req.toolHint,appendUser:false,clearInput:false});" in html
            and "if(opts.appendUser!==false){" in html
            and "action:'regenerate'" in html
