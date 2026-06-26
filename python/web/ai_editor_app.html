@@ -6184,6 +6184,29 @@ function assistantActionTrayButton(label,title,className,onClick){
 function assistantActionTrayShouldIgnoreNavigationTarget(target){
   return !!(target&&target.closest&&target.closest('input,textarea,select,[contenteditable="true"],.chat-action-carousel-preview'));
 }
+function assistantActionTrayContainer(kind){
+  const tray=$('chat-action-tray');
+  if(!tray)return null;
+  return kind==='questionCarousel'?tray.querySelector('.chat-question-carousel-widget-container'):tray.querySelector('.chat-tool-confirmation-carousel-container');
+}
+function assistantActionTrayHasFocus(kind){
+  const container=assistantActionTrayContainer(kind);
+  return !!(container&&document.activeElement&&container.contains(document.activeElement));
+}
+function focusAssistantActionCarousel(kind){
+  const container=assistantActionTrayContainer(kind);
+  if(!container||!container.querySelector('.chat-action-carousel'))return false;
+  try{container.focus({preventScroll:true})}catch(_e){container.focus()}
+  return true;
+}
+function toggleAssistantActionCarouselFocus(kind){
+  if(assistantActionTrayHasFocus(kind)){
+    const input=$('chat-input');
+    if(input){input.focus();return true}
+    return false;
+  }
+  return focusAssistantActionCarousel(kind);
+}
 function assistantActionTrayRootLabel(kind,count){
   if(kind==='questionCarousel')return count===1?'Pending Assistant questions':'Pending Assistant question carousel';
   return count===1?'Pending Assistant confirmation':'Pending Assistant confirmation carousel';
@@ -6265,6 +6288,27 @@ function renderAssistantActionCarousel(container,kind,items){
   root.appendChild(content);container.appendChild(root);
   if(preserveFocus)try{container.focus({preventScroll:true})}catch(_e){container.focus()}
 }
+function assistantSetTrayItemSubmitted(actionKey){
+  if(!actionKey)return;
+  const item=_assistantActionTrayItems.get(actionKey);
+  if(!item)return;
+  if(item.card)item.card.querySelectorAll('[data-assistant-callback="true"]').forEach(btn=>{
+    btn.disabled=true;
+    btn.setAttribute('aria-disabled','true');
+  });
+  item.state='submitted';
+  syncAssistantActionTray();
+}
+async function assistantAutoSkipPendingQuestions(reason){
+  const items=assistantActionTrayItemsByKind('questionCarousel');
+  if(!items.length)return 0;
+  for(const item of items){
+    if(!_assistantActionTrayItems.has(item.key))continue;
+    const result=await assistantSubmitResponsePartAction(item.part,'skip','Skip',null,{fallbackTitle:'Answers',fallbackText:'Skip',answers:[],actionKey:item.key,autoReason:reason||'user-submit'});
+    if(!(result&&result.ok))break;
+  }
+  return items.length;
+}
 function syncAssistantActionTray(){
   const tray=$('chat-action-tray');if(!tray)return;
   const items=assistantActionTrayPendingItems();
@@ -6303,6 +6347,8 @@ function assistantActionTraySnapshot(){
     expanded:!!(activeIndex>=0&&assistantActionTrayIsExpanded(items[activeIndex])),
     questionExpanded:!!(questionItems.length&&assistantActionTrayIsExpanded(questionItems[assistantActionTrayActiveIndex(questionItems,'questionCarousel')])),
     confirmationExpanded:!!(confirmItems.length&&assistantActionTrayIsExpanded(confirmItems[assistantActionTrayActiveIndex(confirmItems,'confirmation')])),
+    questionFocused:assistantActionTrayHasFocus('questionCarousel'),
+    confirmationFocused:assistantActionTrayHasFocus('confirmation'),
     dismissLabel:tray&&tray.querySelector('.chat-tool-carousel-dismiss-button')?tray.querySelector('.chat-tool-carousel-dismiss-button').getAttribute('aria-label'):'',
     questionDismissLabel:questionWrap&&questionWrap.querySelector('.chat-tool-carousel-dismiss-button')?questionWrap.querySelector('.chat-tool-carousel-dismiss-button').getAttribute('aria-label'):'',
     confirmationDismissLabel:confirmWrap&&confirmWrap.querySelector('.chat-tool-carousel-dismiss-button')?confirmWrap.querySelector('.chat-tool-carousel-dismiss-button').getAttribute('aria-label'):'',
@@ -6399,6 +6445,7 @@ async function assistantSubmitResponsePartAction(part,action,value,button,opts){
   const result=await call('assistant_response_part_action',payload);
   if(result&&result.ok){
     finalizeAssistantResponsePartActionButton(buttonEl,result,payload);
+    if(!buttonEl&&opts.actionKey)assistantSetTrayItemSubmitted(opts.actionKey);
     setStatus('Submitted Assistant action: '+payload.action);
     return result;
   }
@@ -14197,6 +14244,7 @@ async function uploadImage(){
     try{
       const result=await window.pywebview.api.open_file_dialog();
       if(result&&result.path){
+        await assistantAutoSkipPendingQuestions('image-submit');
         const text=($('chat-input').value.trim())||'What is in this image?';
         $('chat-input').value='';
         createMsg('user').innerHTML=esc(text)+'<br><span style="color:var(--fg-dim);font-size:12px">📷 '+esc(result.name||'image')+'</span>';
@@ -14216,6 +14264,7 @@ async function uploadImage(){
     const file=input.files[0];document.body.removeChild(input);if(!file)return;
     const reader=new FileReader();
     reader.onload=async()=>{
+      await assistantAutoSkipPendingQuestions('image-submit');
       const base64=reader.result.split(',')[1];
       const mime=file.type||'image/png';
       const text=($('chat-input').value.trim())||'What is in this image?';
@@ -14251,6 +14300,7 @@ const _chatHistory=[];let _chatHistoryIdx=-1;let _chatDraft='';
 async function doSend(){
   const inp=$('chat-input'),text=inp.value.trim();
   if(!text||streaming)return;
+  await assistantAutoSkipPendingQuestions('chat-submit');
   // Push to history (cap 50)
   if(!_chatHistory.length||_chatHistory[_chatHistory.length-1]!==text){
     _chatHistory.push(text);if(_chatHistory.length>50)_chatHistory.shift();
@@ -14280,6 +14330,7 @@ async function doStop(){
   setStatus(t('ready'));
 }
 async function newChat(){
+  await assistantAutoSkipPendingQuestions('new-chat');
   assistantSessionPersistCurrent({status:'completed'});
   const r=await call('new_chat');
   if(!callSucceeded(r)){showToast('New chat failed: '+callFailedMessage(r,'backend unavailable'),'error',2500);return}
@@ -24101,6 +24152,7 @@ async function sendAssistantTextRequest(rawText,opts){
   opts=opts||{};
   let text=String(rawText||'').trim();
   if(streaming)return;
+  await assistantAutoSkipPendingQuestions(opts.autoSkipReason||'chat-submit');
   const fromInput=opts.fromInput!==false&&!opts.refs;
   if(!text&&fromInput&&!chatContextAttachments.length)return;
   if(opts.allowSlash!==false&&text.startsWith('/')){execSlash(text);return}
@@ -25420,6 +25472,7 @@ doSend=async function(){
   const imageAttachments=attachments.filter(a=>a.type==='image');
   if(imageAttachments.length===1&&attachments.length===1){
     const img=imageAttachments[0];
+    await assistantAutoSkipPendingQuestions('image-submit');
     const inp=$('chat-input');
     const text=inp.value.trim()||'What is in this image?';
     const parts=String(img.data||'').split(',');
@@ -25489,6 +25542,10 @@ window.replayAssistantNativeResponseFixture=replayAssistantNativeResponseFixture
 window.assistantComposerLayoutSnapshot=assistantComposerLayoutSnapshot;
 window.assistantSubmitResponsePartAction=assistantSubmitResponsePartAction;
 window.assistantActionTraySnapshot=assistantActionTraySnapshot;
+window.focusAssistantQuestionCarousel=()=>focusAssistantActionCarousel('questionCarousel');
+window.focusAssistantConfirmationCarousel=()=>focusAssistantActionCarousel('confirmation');
+window.toggleAssistantQuestionCarouselFocus=()=>toggleAssistantActionCarouselFocus('questionCarousel');
+window.toggleAssistantConfirmationCarouselFocus=()=>toggleAssistantActionCarouselFocus('confirmation');
 
 // ── Welcome screen with suggested prompts ──
 function renderWelcome(){

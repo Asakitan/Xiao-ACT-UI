@@ -4671,10 +4671,13 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantActionTrayNavigate(kind,delta)" in html
            and "function assistantActionTrayAllowAll(button)" in html
            and "function assistantActionTraySkipAll(button,kind)" in html
+           and "function assistantAutoSkipPendingQuestions(reason)" in html
+           and "function focusAssistantActionCarousel(kind)" in html
+           and "function toggleAssistantActionCarouselFocus(kind)" in html
            and "function assistantActionTrayToggleExpanded(key)" in html
            and "function assistantActionTrayShouldIgnoreNavigationTarget(target)" in html
-           and "function renderAssistantActionCarousel(container,kind,items)" in html
-           and "function assistantActionTraySnapshot()" in html
+            and "function renderAssistantActionCarousel(container,kind,items)" in html
+            and "function assistantActionTraySnapshot()" in html
            and "card.dataset.assistantActionKey=key;" in html
            and "if(!_assistantActionTrayActiveKey)_assistantActionTrayActiveKey=key;" in html
            and "if(!_assistantActionTrayKindActiveKeys[kind])_assistantActionTrayKindActiveKeys[kind]=key;" in html
@@ -4694,11 +4697,20 @@ def test_phase1_ai_editor_regressions() -> None:
            and "expanded:!!(activeIndex>=0&&assistantActionTrayIsExpanded(items[activeIndex]))" in html
            and "questionExpanded:!!(questionItems.length&&assistantActionTrayIsExpanded(questionItems[assistantActionTrayActiveIndex(questionItems,'questionCarousel')]))" in html
            and "confirmationExpanded:!!(confirmItems.length&&assistantActionTrayIsExpanded(confirmItems[assistantActionTrayActiveIndex(confirmItems,'confirmation')]))" in html
+           and "questionFocused:assistantActionTrayHasFocus('questionCarousel')" in html
+           and "confirmationFocused:assistantActionTrayHasFocus('confirmation')" in html
            and "dismissLabel:tray&&tray.querySelector('.chat-tool-carousel-dismiss-button')" in html
            and "questionDismissLabel:questionWrap&&questionWrap.querySelector('.chat-tool-carousel-dismiss-button')" in html
            and "confirmationDismissLabel:confirmWrap&&confirmWrap.querySelector('.chat-tool-carousel-dismiss-button')" in html
            and "questionActiveTitle:questionWrap&&questionWrap.querySelector('.chat-action-carousel-title')" in html
-           and "confirmationActiveTitle:confirmWrap&&confirmWrap.querySelector('.chat-action-carousel-title')" in html)
+           and "confirmationActiveTitle:confirmWrap&&confirmWrap.querySelector('.chat-action-carousel-title')" in html
+           and "await assistantAutoSkipPendingQuestions('chat-submit');" in html
+           and "await assistantAutoSkipPendingQuestions('new-chat');" in html
+           and "await assistantAutoSkipPendingQuestions('image-submit');" in html
+           and "window.focusAssistantQuestionCarousel=()=>focusAssistantActionCarousel('questionCarousel');" in html
+           and "window.focusAssistantConfirmationCarousel=()=>focusAssistantActionCarousel('confirmation');" in html
+           and "window.toggleAssistantQuestionCarouselFocus=()=>toggleAssistantActionCarouselFocus('questionCarousel');" in html
+           and "window.toggleAssistantConfirmationCarouselFocus=()=>toggleAssistantActionCarouselFocus('confirmation');" in html)
     _check("frontend Assistant applies native response text edits and file tree actions",
            "chat-response-summary" in html
            and "chat-inline-actions" in html
