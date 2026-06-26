@@ -702,14 +702,16 @@ code.inline { background:var(--bg3); padding:1px 3px; border-radius:4px;
 
 /* Tool calls */
 .tool-call { border-radius:6px; margin:0 0 14px; overflow:hidden;
-  border:1px solid var(--border); }
+  border:1px solid var(--border); background:color-mix(in srgb, var(--bg3) 55%, transparent); }
 .tool-call:last-child { margin-bottom:0; }
 .tool-header { padding:6px 10px; font:12px var(--mono); color:var(--fg-dim);
-  cursor:pointer; display:flex; align-items:center; gap:6px; user-select:none; }
-.tool-header:hover { background:var(--bg-hover); }
+  cursor:pointer; display:flex; align-items:center; gap:6px; user-select:none; outline:none; }
+.tool-header:hover,.tool-header:focus { background:var(--bg-hover); color:var(--fg); }
 .tool-header .arrow { font-size:10px; transition:transform .15s; display:inline-block; }
 .tool-header.open .arrow { transform:rotate(90deg); }
 .tool-header .tool-name { color:var(--fg-tool); }
+.tool-call[data-state="complete"] { border-color:color-mix(in srgb, var(--fg-success) 32%, var(--border)); }
+.tool-call[data-state="error"] { border-color:color-mix(in srgb, var(--fg-error) 45%, var(--border)); }
 .tool-body { padding:0 10px 8px; font:11px/1.5 var(--mono); color:var(--fg-dim);
   white-space:pre-wrap; display:none; max-height:300px; overflow-y:auto; }
 .tool-body.open { display:block; }
@@ -747,6 +749,7 @@ code.inline { background:var(--bg3); padding:1px 3px; border-radius:4px;
 @keyframes spin { to{transform:rotate(360deg)} }
 .tool-state .checkmark { color:var(--fg-success); font-size:13px; }
 .tool-state .error-mark { color:var(--fg-error); font-size:13px; }
+.tool-state .state-text { color:var(--fg-dim); }
 
 /* Confirmation dialog */
 .confirm-bar { display:flex; align-items:center; gap:8px; padding:8px 12px;
@@ -839,7 +842,10 @@ pre.code-block code .type { color:var(--fg-type); }
   40%{opacity:1;transform:translateY(-2px)} }
 .chat-progress-stack { display:flex; flex-direction:column; gap:4px; margin:4px 0 8px; color:var(--fg-dim); }
 .chat-progress-item { display:grid; grid-template-columns:14px minmax(0,1fr) auto; align-items:center; gap:6px;
-  min-height:20px; font:11px/18px var(--sans); }
+  min-height:20px; font:11px/18px var(--sans); border-radius:4px; padding:1px 2px; outline:none; }
+.chat-progress-item[data-expandable="true"] { cursor:pointer; }
+.chat-progress-item[data-expandable="true"]:hover,
+.chat-progress-item[data-expandable="true"]:focus { background:var(--bg-hover); }
 .chat-progress-icon { width:10px; height:10px; border-radius:50%; border:1px solid var(--border);
   box-sizing:border-box; background:var(--bg3); }
 .chat-progress-item[data-state="running"] .chat-progress-icon { border-color:var(--fg-accent);
@@ -852,6 +858,10 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-progress-elapsed { color:var(--fg-dim); font:10px var(--mono); white-space:nowrap; }
 .chat-progress-meter { grid-column:2/4; height:2px; background:var(--bg3); border-radius:2px; overflow:hidden; }
 .chat-progress-fill { height:100%; background:var(--fg-accent); width:0%; transition:width .18s; }
+.chat-progress-more { grid-column:2/4; display:none; margin:2px 0 3px; padding:5px 7px;
+  border-left:2px solid var(--border); color:var(--fg-dim); background:color-mix(in srgb, var(--bg3) 55%, transparent);
+  font:10px/1.45 var(--mono); white-space:pre-wrap; max-height:160px; overflow:auto; }
+.chat-progress-item.open .chat-progress-more { display:block; }
 .chat-toolbar-head { display:none; align-items:center; gap:6px; flex-wrap:wrap; min-height:26px;
   padding:7px 8px 0; color:var(--fg-dim); }
 .chat-toolbar-head.has-state { display:flex; }
@@ -1065,7 +1075,6 @@ pre.code-block code .type { color:var(--fg-type); }
 .provider-footer .ctx-bar { width:42px; }
 .provider-stream-content { white-space:pre-wrap; }
 .provider-tool-msg .msg-body { display:flex; flex-direction:column; gap:6px; }
-.tool-state .state-text { color:var(--fg-dim); }
 
 /* ── Terminal panel ── */
 .terminal-panel { flex:1; display:none; flex-direction:column; }
@@ -3966,7 +3975,7 @@ function renderAssistantProgressItem(parent,item){
     row=document.createElement('div');
     row.className='chat-progress-item';
     row.dataset.progressKey=item.key;
-    row.innerHTML='<span class="chat-progress-icon" aria-hidden="true"></span><span class="chat-progress-main"><span class="chat-progress-label"></span><span class="chat-progress-detail"></span></span><span class="chat-progress-elapsed"></span>';
+    row.innerHTML='<span class="chat-progress-icon" aria-hidden="true"></span><span class="chat-progress-main"><span class="chat-progress-label"></span><span class="chat-progress-detail"></span></span><span class="chat-progress-elapsed"></span><pre class="chat-progress-more"></pre>';
     parent.appendChild(row);
   }
   row.dataset.kind=item.kind||'progress';
@@ -3974,6 +3983,35 @@ function renderAssistantProgressItem(parent,item){
   row.querySelector('.chat-progress-label').textContent=item.label||'Working';
   row.querySelector('.chat-progress-detail').textContent=item.detail||'';
   row.querySelector('.chat-progress-elapsed').textContent=assistantProgressElapsed(item.startedAt,item.endedAt);
+  const more=row.querySelector('.chat-progress-more');
+  const longDetail=item.longDetail||'';
+  row.dataset.expandable=longDetail?'true':'false';
+  if(longDetail){
+    row.setAttribute('role','button');
+    row.setAttribute('tabindex','0');
+  }else{
+    row.removeAttribute('role');
+    row.removeAttribute('tabindex');
+  }
+  if(more){
+    more.textContent=longDetail;
+    more.setAttribute('aria-hidden',row.classList.contains('open')?'false':'true');
+  }
+  row.setAttribute('aria-expanded',row.classList.contains('open')?'true':'false');
+  if(!row._progressDisclosureBound){
+    row._progressDisclosureBound=true;
+    const toggle=()=>{
+      if(row.dataset.expandable!=='true')return;
+      row.classList.toggle('open');
+      row.setAttribute('aria-expanded',row.classList.contains('open')?'true':'false');
+      const details=row.querySelector('.chat-progress-more');
+      if(details)details.setAttribute('aria-hidden',row.classList.contains('open')?'false':'true');
+    };
+    row.addEventListener('click',toggle);
+    row.addEventListener('keydown',e=>{
+      if(e.key==='Enter'||e.key===' '){e.preventDefault();toggle()}
+    });
+  }
   const percent=Number(item.percent);
   let meter=row.querySelector('.chat-progress-meter');
   if(Number.isFinite(percent)){
@@ -3996,6 +4034,7 @@ function updateAssistantProgress(kind,label,opts){
   const existing=state.items[key]||{key,kind,startedAt:now};
   const next={...existing,kind,key,label:label||existing.label||'Working',
     detail:opts.detail!==undefined?String(opts.detail||''):(existing.detail||''),
+    longDetail:opts.longDetail!==undefined?String(opts.longDetail||''):(existing.longDetail||''),
     state:opts.state||existing.state||'running',
     percent:opts.percent!==undefined?opts.percent:existing.percent,
     startedAt:existing.startedAt||now,
@@ -5431,13 +5470,7 @@ function renderInline(c,text){
 }
 
 function renderToolCall(container,name,args){
-  const el=document.createElement('div');el.className='tool-call';
-  const hdr=document.createElement('div');hdr.className='tool-header';
-  hdr.innerHTML='<span class="arrow">▸</span> Tool: '+esc(name);
-  const body=document.createElement('div');body.className='tool-body';
-  try{body.textContent=JSON.stringify(JSON.parse(args),null,2)}catch{body.textContent=args}
-  hdr.onclick=()=>{hdr.classList.toggle('open');body.classList.toggle('open')};
-  el.appendChild(hdr);el.appendChild(body);container.appendChild(el);
+  return renderToolInvocationPart(container,{name,args,state:'complete'});
 }
 
 function renderToolResult(container,name,result,callId){
@@ -5447,10 +5480,62 @@ function renderToolResult(container,name,result,callId){
   hdr.innerHTML='<span class="arrow">▸</span> Result: '+esc(name);
   const body=document.createElement('div');body.className='tool-body';
   try{body.textContent=JSON.stringify(JSON.parse(result),null,2)}catch{body.textContent=result}
-  hdr.onclick=()=>{hdr.classList.toggle('open');body.classList.toggle('open')};
+  bindDisclosureHeader(hdr,body);
   el.appendChild(hdr);el.appendChild(body);container.appendChild(el);
   // Auto-open if small
-  if(result.length<500){hdr.classList.add('open');body.classList.add('open')}
+  if(result.length<500){hdr.classList.add('open');body.classList.add('open');hdr.setAttribute('aria-expanded','true')}
+}
+
+function bindDisclosureHeader(header,body){
+  if(!header||!body)return;
+  header.setAttribute('role','button');
+  header.setAttribute('tabindex','0');
+  header.setAttribute('aria-expanded',header.classList.contains('open')?'true':'false');
+  const sync=()=>header.setAttribute('aria-expanded',header.classList.contains('open')?'true':'false');
+  const toggle=()=>{header.classList.toggle('open');body.classList.toggle('open');sync()};
+  header.onclick=toggle;
+  header.onkeydown=e=>{
+    if(e.key==='Enter'||e.key===' '){e.preventDefault();toggle()}
+  };
+  sync();
+}
+function formatToolPayload(value,fallback){
+  if(value===undefined||value===null||value==='')return fallback||'';
+  if(typeof value!=='string'){
+    try{return JSON.stringify(value,null,2)}catch{return String(value)}
+  }
+  try{return JSON.stringify(JSON.parse(value),null,2)}catch{return value}
+}
+function toolStateMarkup(state,label){
+  state=String(state||'running').toLowerCase();
+  const text=label?'<span class="state-text">'+esc(label)+'</span>':'';
+  if(state==='complete')return '<span class="checkmark">✓</span>'+text;
+  if(state==='error'||state==='failed'||state==='cancelled')return '<span class="error-mark">✗</span>'+text;
+  return '<span class="spinner"></span>'+text;
+}
+function renderToolInvocationPart(container,opts){
+  opts=opts||{};
+  const name=opts.name||'tool',callId=opts.callId||opts.id||'';
+  const el=document.createElement('div');
+  el.className='tool-call chat-tool-invocation';
+  el.dataset.toolName=name;
+  el.dataset.state=opts.state||'running';
+  if(callId){el.id='tc-'+providerDomKey(callId);el.dataset.callId=providerDomKey(callId)}
+  const hdr=document.createElement('div');hdr.className='tool-header';
+  hdr.innerHTML='<span class="arrow">▸</span><span class="tool-prefix">Tool:</span> <span class="tool-name">'+esc(name)+'</span><span class="tool-state">'+toolStateMarkup(opts.state,opts.stateLabel||opts.detail||'')+'</span>';
+  const body=document.createElement('div');body.className='tool-body';
+  body.textContent=formatToolPayload(opts.args,'No arguments');
+  bindDisclosureHeader(hdr,body);
+  el.appendChild(hdr);el.appendChild(body);container.appendChild(el);
+  return el;
+}
+function updateToolInvocationPart(el,state,label,detail){
+  if(!el)return;
+  el.dataset.state=state||'running';
+  const toolState=el.querySelector('.tool-state');
+  if(toolState)toolState.innerHTML=toolStateMarkup(state,label);
+  const body=el.querySelector('.tool-body');
+  if(body&&detail!==undefined)body.textContent=formatToolPayload(detail,'');
 }
 
 // ── Editor ──
@@ -11896,23 +11981,13 @@ function finalizeThinking(){
 
 // ── Tool state rendering ──
 function renderToolCallWithState(container,name,args,callId){
-  const el=document.createElement('div');el.className='tool-call';el.id='tc-'+providerDomKey(callId);el.dataset.toolName=name;
-  el.dataset.callId=providerDomKey(callId);
-  const hdr=document.createElement('div');hdr.className='tool-header';
-  hdr.innerHTML='<span class="arrow">▸</span> Tool: '+esc(name)+
-    '<span class="tool-state"><span class="spinner"></span></span>';
-  const body=document.createElement('div');body.className='tool-body';
-  try{body.textContent=JSON.stringify(JSON.parse(args),null,2)}catch{body.textContent=args}
-  hdr.onclick=()=>{hdr.classList.toggle('open');body.classList.toggle('open')};
-  el.appendChild(hdr);el.appendChild(body);container.appendChild(el);
-  return el;
+  return renderToolInvocationPart(container,{name,args,callId,state:'running',stateLabel:'running'});
 }
 
 function markToolComplete(callId,success){
   const el=document.getElementById('tc-'+providerDomKey(callId));
   if(!el)return;
-  const state=el.querySelector('.tool-state');
-  if(state) state.innerHTML=success?'<span class="checkmark">✓</span>':'<span class="error-mark">✗</span>';
+  updateToolInvocationPart(el,success?'complete':'error',success?'complete':'failed');
 }
 
 function toolResultSucceeded(data){
@@ -12017,10 +12092,12 @@ function onToolStart(d){
   rememberMainTool(d&&d.id,d&&d.name);
   const body=ensureAssistantBody();
   const callId=(d&&d.id)||((d&&d.name)||'tool')+'-'+Date.now();
-  if(body&&!document.getElementById('tc-'+providerDomKey(callId)))renderToolCallWithState(body,(d&&d.name)||'tool',JSON.stringify((d&&d.arguments)||{}),callId);
+  const argsText=formatToolPayload((d&&d.arguments)||{},'No arguments');
+  if(body&&!document.getElementById('tc-'+providerDomKey(callId)))renderToolCallWithState(body,(d&&d.name)||'tool',argsText,callId);
   updateAssistantProgress('tool',(d&&d.name)||'Tool',{
     id:callId,
     detail:'running',
+    longDetail:'Input:\n'+argsText,
     state:'running'
   });
   setStatus(tf('provider_status_tool_running',(d&&d.name)||'tool'));
@@ -12031,8 +12108,7 @@ function onToolProgress(d){
   const callId=d&&d.id?String(d.id):'tool';
   const el=d&&d.id?document.getElementById('tc-'+providerDomKey(d.id)):null;
   if(el){
-    const state=el.querySelector('.tool-state');
-    if(state)state.innerHTML='<span class="spinner"></span><span>'+pct+'%</span>';
+    updateToolInvocationPart(el,'running',pct+'%');
   }
   updateAssistantProgress('tool',(d&&d.name)||lookupMainTool(callId)||'Tool',{
     id:callId,
@@ -12054,16 +12130,22 @@ function onToolEnd(d){
   if(body){
     const resultKey=callId?providerDomKey(callId):'';
     const existing=resultKey?body.querySelector('.tool-result[data-call-id="'+resultKey+'"]'):null;
+    const resultText=formatToolPayload(d&&d.result!==undefined?d.result:(d&&d.error),d&&d.error?String(d.error):'');
     if(existing){
       const hdr=existing.querySelector('.tool-header');
       const tb=existing.querySelector('.tool-body');
       if(hdr)hdr.innerHTML='<span class="arrow">▸</span> Result: '+esc(name);
-      if(tb){
-        try{tb.textContent=JSON.stringify(JSON.parse(d.result||''),null,2)}catch{tb.textContent=d.result||''}
-      }
-    }else renderToolResult(body,name,d.result||'',callId);
+      if(tb)tb.textContent=resultText;
+    }else renderToolResult(body,name,resultText,callId);
+    if(tcEl)updateToolInvocationPart(tcEl,toolResultSucceeded(d)?'complete':'error',toolResultSucceeded(d)?'complete':'failed','Input:\n'+(tcEl.querySelector('.tool-body')?tcEl.querySelector('.tool-body').textContent:'')+'\n\nOutput:\n'+resultText);
   }
   completeAssistantProgress('tool',callId,toolResultSucceeded(d)?'complete':'error',name,toolResultSucceeded(d)?'complete':'failed');
+  updateAssistantProgress('tool',name,{
+    id:callId,
+    state:toolResultSucceeded(d)?'complete':'error',
+    detail:toolResultSucceeded(d)?'complete':'failed',
+    longDetail:'Output:\n'+formatToolPayload(d&&d.result!==undefined?d.result:(d&&d.error),d&&d.error?String(d.error):'')
+  });
 }
 function onTokenWarning(d){
   const used=Number(d&&d.used)||0, limit=Number(d&&d.limit)||0;
@@ -15796,22 +15878,15 @@ function renderProviderToolStart(pid,data){
   const args=providerValueToText(data.arguments);
   if(existing){updateProviderToolState(pid,data,false);return existing}
   const body=createProviderMessage(pid,'tool',name);if(!body)return null;
-  const el=document.createElement('div');el.className='tool-call';el.id=providerToolElementId(pid,callId);el.dataset.toolName=name;
-  const hdr=document.createElement('div');hdr.className='tool-header';
-  hdr.innerHTML='<span class="arrow">▸</span> Tool: <span class="tool-name">'+esc(name)+'</span><span class="tool-state"><span class="spinner"></span><span class="state-text">'+esc(providerToolStateLabel(data,false))+'</span></span>';
-  const tb=document.createElement('div');tb.className='tool-body';
-  try{tb.textContent=JSON.stringify(JSON.parse(args),null,2)}catch{tb.textContent=args||'No arguments'}
-  hdr.onclick=()=>{hdr.classList.toggle('open');tb.classList.toggle('open')};
-  el.appendChild(hdr);el.appendChild(tb);body.appendChild(el);providerScroll(providerRefs(pid).messages);return el;
+  const el=renderToolInvocationPart(body,{name,args:args||'No arguments',callId,state:'running',stateLabel:providerToolStateLabel(data,false)});
+  el.id=providerToolElementId(pid,callId);
+  providerScroll(providerRefs(pid).messages);return el;
 }
 function updateProviderToolState(pid,data,done){
   const callId=data.id||data.name||'last';let el=document.getElementById(providerToolElementId(pid,callId));
   if(!el)el=renderProviderToolStart(pid,data||{});if(!el)return;
-  const label=providerToolStateLabel(data,done),state=el.querySelector('.tool-state');
-  if(state){
-    const mark=done?(toolResultSucceeded(data)?'<span class="checkmark">✓</span>':'<span class="error-mark">✗</span>'):'<span class="spinner"></span>';
-    state.innerHTML=mark+'<span class="state-text">'+esc(label)+'</span>';
-  }
+  const label=providerToolStateLabel(data,done);
+  updateToolInvocationPart(el,done?(toolResultSucceeded(data)?'complete':'error'):'running',label);
 }
 function renderProviderToolEnd(pid,data){
   data=data||{};const name=data.name||lookupProviderTool(pid,data.id)||'tool';
@@ -15820,6 +15895,7 @@ function renderProviderToolEnd(pid,data){
   const el=document.getElementById(providerToolElementId(pid,data.id||name||'last'));if(!el)return;
   const body=el.closest('.msg-body');const result=providerValueToText(data.result!==undefined?data.result:data.error);
   if(body&&result&&!body.querySelector('.tool-result'))renderToolResult(body,el.dataset.toolName||name,result);
+  if(result)updateToolInvocationPart(el,toolResultSucceeded(data)?'complete':'error',toolResultSucceeded(data)?'complete':'failed','Input:\n'+(el.querySelector('.tool-body')?el.querySelector('.tool-body').textContent:'')+'\n\nOutput:\n'+result);
   providerScroll(providerRefs(pid).messages);
 }
 function appendProviderError(pid,error){

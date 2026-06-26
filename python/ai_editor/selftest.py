@@ -3965,12 +3965,16 @@ def test_phase1_ai_editor_regressions() -> None:
            "chat-progress-stack" in html
            and "chat-progress-item" in html
            and "chat-progress-meter" in html
+           and "chat-progress-more" in html
            and "function assistantProgressKey(kind,id)" in html
            and "function assistantProgressState(body)" in html
            and "function ensureAssistantProgressStack(body)" in html
            and "function updateAssistantProgress(kind,label,opts)" in html
            and "function completeAssistantProgress(kind,id,state,label,detail)" in html
            and "function renderAssistantProgressSummary(body)" in html
+           and "longDetail:opts.longDetail!==undefined?String(opts.longDetail||''):(existing.longDetail||'')" in html
+           and "row.dataset.expandable=longDetail?'true':'false';" in html
+           and "row.addEventListener('keydown',e=>{" in html
            and "updateAssistantProgress('response',label||t('thinking')" in html
            and "updateAssistantProgress('response','Streaming response'" in html
            and "renderAssistantProgressSummary(currentMsgBody);" in html
@@ -3980,9 +3984,27 @@ def test_phase1_ai_editor_regressions() -> None:
            and "updateAssistantProgress('tool',(d&&d.name)||'Tool'" in html
            and "updateAssistantProgress('tool',(d&&d.name)||lookupMainTool(callId)||'Tool'" in html
            and "completeAssistantProgress('tool',callId,toolResultSucceeded(d)?'complete':'error'" in html
+           and "longDetail:'Input:\\n'+argsText" in html
+           and "longDetail:'Output:\\n'+formatToolPayload" in html
            and "updateAssistantProgress('progress',msg||'Working...'" in html
            and "completeAssistantProgress('response','stream','error','Response failed',message);" in html
            and ".chat-progress-stack,.chat-response-references" in html)
+    _check("frontend Assistant tool invocations use Copilot-style collapsible parts",
+           "function bindDisclosureHeader(header,body)" in html
+           and "header.setAttribute('role','button');" in html
+           and "header.setAttribute('aria-expanded',header.classList.contains('open')?'true':'false');" in html
+           and "function renderToolInvocationPart(container,opts)" in html
+           and "className='tool-call chat-tool-invocation'" in html
+           and "el.dataset.state=opts.state||'running';" in html
+           and "function updateToolInvocationPart(el,state,label,detail)" in html
+           and "renderToolInvocationPart(container,{name,args,state:'complete'});" in html
+           and "return renderToolInvocationPart(container,{name,args,callId,state:'running',stateLabel:'running'});" in html
+           and "updateToolInvocationPart(el,success?'complete':'error',success?'complete':'failed');" in html
+           and "updateToolInvocationPart(el,'running',pct+'%');" in html
+           and "updateToolInvocationPart(tcEl,toolResultSucceeded(d)?'complete':'error'" in html
+           and "const el=renderToolInvocationPart(body,{name,args:args||'No arguments',callId,state:'running',stateLabel:providerToolStateLabel(data,false)});" in html
+           and "updateToolInvocationPart(el,done?(toolResultSucceeded(data)?'complete':'error'):'running',label);" in html
+           and "updateToolInvocationPart(el,toolResultSucceeded(data)?'complete':'error'" in html)
     _check("frontend Assistant preserves stream usage token count on idle",
            "updateTokenCount({minTokens:totalTokens});" in html
            and "async function updateTokenCount(options)" in html
