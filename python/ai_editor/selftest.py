@@ -17256,6 +17256,11 @@ async function activate(context) {
     contextValue: 'diffable',
   }];
   context.subscriptions.push(sourceControl);
+  const subscriptionDisposeBefore = context.globalState.get('disposeCount', 0);
+  context.subscriptions.push(new vscode.Disposable(() => {
+    const disposeCount = context.globalState.get('disposeCount', 0);
+    context.globalState.update('disposeCount', disposeCount + 1);
+  }));
   const secretEvents = [];
   context.secrets.onDidChange(event => {
     secretEvents.push(event && event.key);
@@ -17268,7 +17273,56 @@ async function activate(context) {
   await context.globalState.update('deleteProbe', 'remove-me');
   await context.globalState.update('deleteProbe', undefined);
   await context.secrets.store('token', 'secret-' + (globalBefore + 1));
+  await context.secrets.store('deleteProbeSecret', 'remove-me');
+  await context.secrets.delete('deleteProbeSecret');
   context.globalState.setKeysForSync(['activationCount']);
+  const envCollection = context.environmentVariableCollection;
+  const envEvents = [];
+  if (envCollection && typeof envCollection.onDidChangeCollection === 'function') {
+    envCollection.onDidChangeCollection(() => envEvents.push('change'), null, context.subscriptions);
+  }
+  envCollection.persistent = true;
+  envCollection.description = 'Node env collection\n\nignored details';
+  envCollection.replace('SAO_REPLACE', 'R', { applyAtProcessCreation: true });
+  envCollection.append('SAO_APPEND', 'A', {
+    applyAtProcessCreation: false,
+    applyAtShellIntegration: true,
+  });
+  envCollection.prepend('SAO_PREPEND', 'P');
+  const envReplace = envCollection.get('SAO_REPLACE');
+  const envEntriesBeforeDelete = Array.from(envCollection).map(([variable, mutator]) => [
+    variable,
+    mutator.value,
+    mutator.type,
+    mutator.options,
+  ]);
+  const envForEach = [];
+  envCollection.forEach((variable, mutator, collection) => {
+    envForEach.push([variable, mutator.value, collection === envCollection]);
+  });
+  const workspaceFolder = {
+    uri: vscode.Uri.joinPath(context.extensionUri, 'scoped-workspace'),
+    name: 'scoped-workspace',
+    index: 99,
+  };
+  const scopedEnv = envCollection.getScoped({ workspaceFolder });
+  scopedEnv.replace('SAO_SCOPED', 'S');
+  const scopedRootVisible = envCollection.get('SAO_SCOPED');
+  const scopedValue = scopedEnv.get('SAO_SCOPED');
+  let envInvalidOptions = '';
+  try {
+    envCollection.replace('SAO_INVALID', 'bad', {
+      applyAtProcessCreation: false,
+    });
+  } catch (error) {
+    envInvalidOptions = String(error && error.message || error);
+  }
+  envCollection.delete('SAO_APPEND');
+  const envAfterDelete = envCollection.get('SAO_APPEND');
+  const envPersistentAfterSet = envCollection.persistent;
+  const envDescriptionBeforeClear = envCollection.description;
+  envCollection.clear();
+  const envAfterClear = Array.from(envCollection);
   const nodeDiagnostics = vscode.languages.createDiagnosticCollection(
     'node-selftest');
   if (context.extensionUri) {
@@ -17299,10 +17353,25 @@ async function activate(context) {
     globalStoragePath: context.globalStoragePath,
     logPath: context.logPath,
     asAbsolutePath: context.asAbsolutePath('package.json').replace(/\\/g, '/'),
+    asAbsolutePathNormalized: context.asAbsolutePath('sub/../package.json')
+      .replace(/\\/g, '/'),
     extensionMode: context.extensionMode,
     extensionId: context.extension && context.extension.id,
     packageName: context.extension && context.extension.packageJSON
       && context.extension.packageJSON.name,
+    subscriptionDisposeBefore,
+    envPersistent: envPersistentAfterSet,
+    envDescription: envDescriptionBeforeClear,
+    envReplace,
+    envEntriesBeforeDelete,
+    envForEach,
+    envEventsCount: envEvents.length,
+    envAfterDelete,
+    envAfterClearCount: envAfterClear.length,
+    envInvalidOptions,
+    envMutatorEnum: vscode.EnvironmentVariableMutatorType,
+    scopedEnvValue: scopedValue && scopedValue.value,
+    scopedRootVisible,
   };
   vscode.lm.registerTool('selftest_node_dynamic_tool', {
     description: 'Node dynamic tool',
@@ -24801,7 +24870,9 @@ module.exports = { activate, deactivate };
                        and node_context_first.get("workspaceAfter") == 1
                        and node_context_first.get("secretBefore") is None
                        and node_context_first.get("secretAfter") == "secret-1"
-                       and node_context_first.get("secretEvents") == ["token"]
+                       and node_context_first.get("secretEvents")
+                       == ["token", "deleteProbeSecret",
+                           "deleteProbeSecret"]
                        and node_context_first.get("deleteRemoved") is True
                        and "activationCount" in node_context_first.get("globalKeys", [])
                        and "activationCount" in node_context_first.get("workspaceKeys", [])
@@ -24810,6 +24881,41 @@ module.exports = { activate, deactivate };
                        and node_context_first.get("packageName") == node_tree_desc.name
                        and node_context_first.get("asAbsolutePath", "")
                        .endswith("/package.json")
+                       and node_context_first.get("asAbsolutePathNormalized", "")
+                       .endswith("/package.json")
+                       and node_context_first.get("subscriptionDisposeBefore") == 0
+                       and node_context_first.get("envPersistent") is True
+                       and node_context_first.get("envDescription")
+                       == "Node env collection"
+                       and node_context_first.get("envReplace", {}).get("value") == "R"
+                       and node_context_first.get("envReplace", {}).get("type") == 1
+                       and node_context_first.get("envReplace", {}).get("options", {})
+                       .get("applyAtProcessCreation") is True
+                       and ["SAO_REPLACE", "R", 1, {
+                           "applyAtProcessCreation": True,
+                           "applyAtShellIntegration": False,
+                       }]
+                       in node_context_first.get("envEntriesBeforeDelete", [])
+                       and ["SAO_APPEND", "A", 2, {
+                           "applyAtProcessCreation": False,
+                           "applyAtShellIntegration": True,
+                       }] in node_context_first.get("envEntriesBeforeDelete", [])
+                       and ["SAO_PREPEND", "P", 3, {"applyAtProcessCreation": True}]
+                       in node_context_first.get("envEntriesBeforeDelete", [])
+                       and ["SAO_REPLACE", "R", True]
+                       in node_context_first.get("envForEach", [])
+                       and node_context_first.get("envAfterDelete") is None
+                       and node_context_first.get("envAfterClearCount") == 0
+                       and "either process creation or shell integration"
+                       in node_context_first.get("envInvalidOptions", "")
+                       and node_context_first.get("envMutatorEnum") == {
+                           "Replace": 1,
+                           "Append": 2,
+                           "Prepend": 3,
+                       }
+                       and node_context_first.get("scopedEnvValue") == "S"
+                       and node_context_first.get("scopedRootVisible") is None
+                       and node_context_first.get("envEventsCount", 0) >= 6
                        and storage_root_url in node_context_first.get("storageUri", "")
                        and storage_root_url in node_context_first.get("globalStorageUri", "")
                        and storage_root_url in node_context_first.get("logUri", "")
@@ -24820,6 +24926,7 @@ module.exports = { activate, deactivate };
                        and node_context_second.get("workspaceAfter") == 2
                        and node_context_second.get("secretBefore") == "secret-1"
                        and node_context_second.get("secretAfter") == "secret-2"
+                       and node_context_second.get("subscriptionDisposeBefore") == 1
                        and node_context_second.get("deleteRemoved") is True,
                        json.dumps({
                            "first": node_context_first,

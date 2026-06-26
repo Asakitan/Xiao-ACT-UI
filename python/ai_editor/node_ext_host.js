@@ -1425,6 +1425,158 @@ class SecretStorage {
 }
 
 // -------------------------------------------------------------------------
+// EnvironmentVariableCollection
+// -------------------------------------------------------------------------
+const EnvironmentVariableMutatorType = {
+    Replace: 1,
+    Append: 2,
+    Prepend: 3,
+};
+
+function _environmentScopeKey(scope) {
+    const folder = scope && scope.workspaceFolder;
+    if (!folder || !folder.uri) return '';
+    return folder.uri.toString();
+}
+
+function _normalizeEnvironmentMutatorOptions(options) {
+    if (!options) return { applyAtProcessCreation: true };
+    const normalized = {
+        applyAtProcessCreation: options.applyAtProcessCreation ?? false,
+        applyAtShellIntegration: options.applyAtShellIntegration ?? false,
+    };
+    if (!normalized.applyAtProcessCreation && !normalized.applyAtShellIntegration) {
+        throw new Error(
+            'EnvironmentVariableMutatorOptions must apply at either process creation or shell integration');
+    }
+    return normalized;
+}
+
+function _environmentDescriptionValue(description) {
+    if (description === undefined || description === null) return undefined;
+    const raw = typeof description === 'string'
+        ? description
+        : String(description.value ?? description);
+    return raw.split('\n\n')[0];
+}
+
+class EnvironmentVariableCollection {
+    constructor(shared, scope) {
+        this._shared = shared || {
+            map: new Map(),
+            descriptions: new Map(),
+            persistent: true,
+            emitter: new EventEmitter(),
+        };
+        this._scope = scope;
+        this.onDidChangeCollection = this._shared.emitter.event;
+    }
+
+    get persistent() { return this._shared.persistent; }
+    set persistent(value) {
+        const normalized = !!value;
+        if (this._shared.persistent !== normalized) {
+            this._shared.persistent = normalized;
+            this._shared.emitter.fire();
+        }
+    }
+
+    get description() {
+        return this._shared.descriptions.get(_environmentScopeKey(this._scope));
+    }
+    set description(value) {
+        const key = _environmentScopeKey(this._scope);
+        const normalized = _environmentDescriptionValue(value);
+        if (normalized === undefined) {
+            this._shared.descriptions.delete(key);
+        } else {
+            this._shared.descriptions.set(key, normalized);
+        }
+        this._shared.emitter.fire();
+    }
+
+    getScoped(scope) {
+        return new EnvironmentVariableCollection(this._shared, scope);
+    }
+
+    _key(variable) {
+        const name = String(variable);
+        const scopeKey = _environmentScopeKey(this._scope);
+        return scopeKey ? `${name}:::${scopeKey}` : name;
+    }
+
+    _set(variable, value, type, options) {
+        const name = String(variable);
+        this._shared.map.set(this._key(name), {
+            variable: name,
+            value: String(value),
+            type,
+            options: _normalizeEnvironmentMutatorOptions(options),
+            scope: this._scope,
+        });
+        this._shared.emitter.fire();
+    }
+
+    replace(variable, value, options) {
+        this._set(variable, value, EnvironmentVariableMutatorType.Replace, options);
+    }
+
+    append(variable, value, options) {
+        this._set(variable, value, EnvironmentVariableMutatorType.Append, options);
+    }
+
+    prepend(variable, value, options) {
+        this._set(variable, value, EnvironmentVariableMutatorType.Prepend, options);
+    }
+
+    get(variable) {
+        const mutator = this._shared.map.get(this._key(variable));
+        if (!mutator) return undefined;
+        const { scope, ...publicMutator } = mutator;
+        return publicMutator;
+    }
+
+    _variableMap() {
+        const scopeKey = _environmentScopeKey(this._scope);
+        const result = new Map();
+        for (const mutator of this._shared.map.values()) {
+            if (_environmentScopeKey(mutator.scope) === scopeKey) {
+                const { scope, ...publicMutator } = mutator;
+                result.set(mutator.variable, publicMutator);
+            }
+        }
+        return result;
+    }
+
+    forEach(callback, thisArg) {
+        if (typeof callback !== 'function') return;
+        for (const [variable, mutator] of this._variableMap()) {
+            callback.call(thisArg, variable, mutator, this);
+        }
+    }
+
+    [Symbol.iterator]() {
+        return this._variableMap().entries();
+    }
+
+    delete(variable) {
+        this._shared.map.delete(this._key(variable));
+        this._shared.emitter.fire();
+    }
+
+    clear() {
+        const scopeKey = _environmentScopeKey(this._scope);
+        for (const [key, mutator] of [...this._shared.map.entries()]) {
+            if (_environmentScopeKey(mutator.scope) === scopeKey) {
+                this._shared.map.delete(key);
+            }
+        }
+        this._shared.descriptions.delete(scopeKey);
+        this._shared.emitter.fire();
+    }
+}
+
+// -------------------------------------------------------------------------
 // Webview + WebviewView
 // -------------------------------------------------------------------------
 let _nextViewHandle = 1;
@@ -7278,6 +7430,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
     const globalState = new Memento(storagePaths.globalState);
     const workspaceState = new Memento(storagePaths.workspaceState);
     const secretStorage = new SecretStorage(storagePaths.secrets);
+    const environmentVariableCollection = new EnvironmentVariableCollection();
     const extensionUri = Uri.file(extensionPath);
     const extensionKind = _extensionKindValue(extDesc.manifest?.extensionKind);
 
@@ -7286,7 +7439,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         extensionPath,
         extensionUri,
         asAbsolutePath(relativePath) {
-            return path.resolve(extensionPath, relativePath || '');
+            return path.join(extensionPath, relativePath || '');
         },
         globalState,
         workspaceState,
@@ -7307,18 +7460,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             extensionKind,
             exports: undefined,
         },
-        environmentVariableCollection: {
-            persistent: false,
-            description: '',
-            replace: () => {},
-            append: () => {},
-            prepend: () => {},
-            get: () => undefined,
-            forEach: () => {},
-            delete: () => {},
-            clear: () => {},
-            [Symbol.iterator]: function* () {},
-        },
+        environmentVariableCollection,
         languageModelAccessInformation: {
             onDidChange: new EventEmitter().event,
             canSendRequest: () => true,
@@ -7395,6 +7537,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         TreeItemCheckboxState: { Unchecked: 0, Checked: 1 },
         ExtensionKind: { UI: 1, Workspace: 2 },
         ExtensionMode: { Production: 1, Development: 2, Test: 3 },
+        EnvironmentVariableMutatorType,
         DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2, Hint: 3 },
         LanguageStatusSeverity: { Information: 0, Warning: 1, Error: 2 },
         NotebookCellKind,
