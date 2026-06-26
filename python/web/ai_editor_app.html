@@ -1005,6 +1005,22 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-inline-action { color:var(--fg-dim); background:transparent; }
 .chat-inline-action.primary { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 45%,var(--border)); }
 .chat-inline-action:disabled { opacity:.5; cursor:default; }
+.chat-response-native-parts { margin-top:8px; display:flex; flex-direction:column; gap:6px; }
+.chat-response-part { color:var(--fg); font-size:12px; line-height:1.45; }
+.chat-response-callout { display:grid; grid-template-columns:18px minmax(0,1fr); gap:7px; align-items:start;
+  border:1px solid var(--border); border-radius:6px; background:var(--bg3); padding:7px 8px;
+  color:var(--fg-dim); font-size:12px; line-height:1.45; }
+.chat-response-callout.warning { border-color:color-mix(in srgb,var(--fg-warning) 45%,var(--border)); }
+.chat-response-callout.info { border-color:color-mix(in srgb,var(--fg-accent) 35%,var(--border)); }
+.chat-response-callout.progress { background:color-mix(in srgb,var(--bg-hover) 55%,var(--bg3)); }
+.chat-response-callout .part-icon { color:var(--fg-accent); text-align:center; }
+.chat-response-callout.warning .part-icon { color:var(--fg-warning); }
+.chat-response-command-row { display:flex; flex-wrap:wrap; gap:5px; align-items:center; }
+.chat-response-command { border:1px solid color-mix(in srgb,var(--fg-accent) 45%,var(--border)); border-radius:6px;
+  background:transparent; color:var(--fg-accent); padding:4px 8px; font:11px var(--sans);
+  cursor:pointer; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chat-response-command:hover,.chat-response-command:focus { background:var(--bg-hover); color:var(--fg); outline:none; }
+.chat-response-command:disabled { opacity:.55; cursor:default; }
 .chat-change-set { margin-top:7px; display:flex; flex-direction:column; gap:5px; }
 .chat-change-card { justify-content:flex-start; width:fit-content; }
 .chat-file-tree { border:1px solid var(--border); border-radius:6px; background:var(--bg3);
@@ -4169,7 +4185,7 @@ function normalizeChatMessageText(text,role){
 function chatMessageBodyHasContent(body){
   if(!body)return false;
   if(String(body.textContent||'').trim())return true;
-  return !!body.querySelector('.tool-call,.thinking-block,.chat-response-pending,.chat-progress-stack,.chat-response-references,.chat-change-card,.followups,.confirm-bar,img');
+  return !!body.querySelector('.tool-call,.thinking-block,.chat-response-pending,.chat-progress-stack,.chat-response-references,.chat-response-native-parts,.chat-change-card,.followups,.confirm-bar,img');
 }
 function removeChatMessageBody(body){
   const msg=body&&body.closest?body.closest('.msg'):null;
@@ -5031,10 +5047,69 @@ function extractChatResponseReferences(text){
 function chatResponsePartKind(part){
   const raw=String(part&&(part.kind||part.type||part.$type||part.name||part.responsePartKind||'')).toLowerCase();
   if(raw.includes('filetree')||raw.includes('file_tree')||raw.includes('tree'))return 'fileTree';
-  if(raw.includes('anchor'))return 'anchor';
+  if(raw.includes('anchor')||raw.includes('inlinereference'))return 'anchor';
   if(raw.includes('reference'))return 'reference';
   if(raw.includes('textedit')||raw.includes('text_edit')||raw.includes('edit'))return 'textEdit';
   return '';
+}
+function chatResponseVisiblePartKind(part){
+  const raw=String(part&&(part.kind||part.type||part.$type||part.name||part.responsePartKind||'')).toLowerCase();
+  if(raw==='markdowncontent'||raw==='markdown'||raw==='markdown_content'||raw==='markdownvuln')return 'markdown';
+  if(raw==='warning'||raw.includes('warning'))return 'warning';
+  if(raw==='info'||raw==='information'||raw.includes('info'))return 'info';
+  if(raw==='progressmessage'||raw==='progress'||raw.includes('progress'))return 'progress';
+  if(raw==='command'||raw.includes('commandbutton'))return 'command';
+  return '';
+}
+function chatMarkdownValueText(value){
+  if(value===undefined||value===null)return '';
+  if(typeof value==='string')return value;
+  if(Array.isArray(value))return value.map(chatMarkdownValueText).filter(Boolean).join('\n');
+  if(typeof value==='object'){
+    if(value.value!==undefined)return chatMarkdownValueText(value.value);
+    if(value.markdown!==undefined)return chatMarkdownValueText(value.markdown);
+    if(value.text!==undefined)return chatMarkdownValueText(value.text);
+    if(value.content!==undefined)return chatMarkdownValueText(value.content);
+    if(value.message!==undefined)return chatMarkdownValueText(value.message);
+  }
+  return String(value||'');
+}
+function chatResponsePartText(part){
+  if(!part)return '';
+  return chatMarkdownValueText(part.content!==undefined?part.content:(part.value!==undefined?part.value:(part.text!==undefined?part.text:part.message)));
+}
+function chatResponseCommandValue(part){
+  if(!part)return null;
+  const source=part.command||part.value||part.action||part;
+  if(typeof source==='string')return {command:source,title:source,arguments:[]};
+  if(!source||typeof source!=='object')return null;
+  const id=String(source.command||source.id||source.name||'').trim();
+  if(!id)return null;
+  return {
+    command:id,
+    title:String(source.title||source.label||source.command||source.id||id),
+    tooltip:String(source.tooltip||source.description||id),
+    arguments:Array.isArray(source.arguments)?source.arguments:(Array.isArray(source.args)?source.args:[])
+  };
+}
+function normalizeChatVisibleResponseParts(payload,content){
+  const parts=[...(Array.isArray(payload&&payload.responseParts)?payload.responseParts:[]),
+    ...(Array.isArray(payload&&payload.response_parts)?payload.response_parts:[]),
+    ...(Array.isArray(payload&&payload.parts)?payload.parts:[]),
+    ...(Array.isArray(payload&&payload.response)?payload.response:[])];
+  const contentText=normalizeChatMessageText(content||'','assistant');
+  return parts.map(part=>{
+    const kind=chatResponseVisiblePartKind(part);
+    if(!kind)return null;
+    if(kind==='command'){
+      const command=chatResponseCommandValue(part);
+      return command?{kind,command}:null;
+    }
+    const text=normalizeChatMessageText(chatResponsePartText(part),'assistant');
+    if(!text)return null;
+    if(kind==='markdown'&&contentText&&text===contentText)return null;
+    return {kind,text};
+  }).filter(Boolean).slice(0,24);
 }
 function normalizeChatNativeReference(raw,kindOverride){
   if(!raw)return null;
@@ -5047,6 +5122,7 @@ function normalizeChatNativeReference(raw,kindOverride){
   else if(rec.target!==undefined)source=rec.target;
   else if(rec.targetUri!==undefined)source=rec.targetUri;
   else if(rec.resourceUri!==undefined)source=rec.resourceUri;
+  else if(rec.inlineReference!==undefined)source=rec.inlineReference;
   else if(rec.location!==undefined)source=rec.location;
   else if(rec.path!==undefined)source=rec.path;
   const sourceObj=source&&typeof source==='object'?source:null;
@@ -5155,9 +5231,10 @@ function normalizeChatFileTrees(payload){
     ...(Array.isArray(payload&&payload.file_trees)?payload.file_trees:[])];
   return parts.map(part=>{
     const kind=chatResponsePartKind(part);
-    const value=Array.isArray(part&&part.value)?part.value:(Array.isArray(part&&part.tree)?part.tree:(Array.isArray(part)?part:[]));
+    const treeData=part&&part.treeData;
+    const value=treeData?[treeData]:(Array.isArray(part&&part.value)?part.value:(Array.isArray(part&&part.tree)?part.tree:(Array.isArray(part)?part:[])));
     if(kind!=='fileTree'&&!value.length)return null;
-    const base=chatFileTreeBasePath(part||{});
+    const base=chatFileTreeBasePath(part||{})||chatUriPath(treeData&&treeData.uri)||'';
     const count={value:0};
     const nodes=value.map(node=>normalizeChatFileTreeNode(node,base,0,count)).filter(Boolean);
     return nodes.length?{base,nodes,count:count.value}:null;
@@ -5401,6 +5478,41 @@ function renderChatFileTrees(wrap,fileTrees){
     else{const empty=document.createElement('div');empty.className='chat-file-tree-empty';empty.textContent='No files';box.appendChild(empty)}
     wrap.appendChild(box);
   });
+}
+async function runChatResponseCommand(command,button){
+  const id=String(command&&command.command||'').trim();
+  if(!id)return;
+  if(button){button.disabled=true;button.dataset.running='true'}
+  const result=await call('execute_command',id,...(Array.isArray(command.arguments)?command.arguments:[]));
+  if(result&&result.error)setStatus('Assistant command failed: '+result.error);
+  else setStatus('Assistant command ran: '+(command.title||id));
+  if(button){button.disabled=false;button.dataset.running='false'}
+}
+function renderChatResponseNativeParts(body,payload,content){
+  const parts=normalizeChatVisibleResponseParts(payload||{},content||'');
+  if(!body||!parts.length)return false;
+  const wrap=document.createElement('div');wrap.className='chat-response-native-parts';wrap.setAttribute('aria-label','Native response parts');
+  parts.forEach(part=>{
+    if(part.kind==='markdown'){
+      const el=document.createElement('div');el.className='chat-response-part markdown';
+      renderMd(el,part.text);wrap.appendChild(el);return;
+    }
+    if(part.kind==='command'){
+      let row=wrap.lastElementChild&&wrap.lastElementChild.classList&&wrap.lastElementChild.classList.contains('chat-response-command-row')?wrap.lastElementChild:null;
+      if(!row){row=document.createElement('div');row.className='chat-response-command-row';row.setAttribute('role','toolbar');row.setAttribute('aria-label','Assistant command buttons');wrap.appendChild(row)}
+      const btn=document.createElement('button');btn.type='button';btn.className='chat-response-command';
+      btn.textContent=part.command.title||part.command.command;btn.title=part.command.tooltip||part.command.command;
+      btn.onclick=()=>runChatResponseCommand(part.command,btn);
+      row.appendChild(btn);return;
+    }
+    const callout=document.createElement('div');callout.className='chat-response-callout '+part.kind;
+    callout.setAttribute('role',part.kind==='warning'?'alert':'note');
+    const icon=document.createElement('span');icon.className='part-icon';icon.textContent=part.kind==='warning'?'⚠':(part.kind==='info'?'ⓘ':'…');
+    const text=document.createElement('div');text.className='part-text';renderMd(text,part.text);
+    callout.appendChild(icon);callout.appendChild(text);wrap.appendChild(callout);
+  });
+  body.appendChild(wrap);
+  return true;
 }
 function dedupeChatReferences(refs){
   const seen=new Set(),out=[];
@@ -12432,6 +12544,7 @@ function onStreamEnd(d){
     const finalMarkdown=normalizeChatMessageText(streamBuf||d.content||'','assistant');
     currentMsgBody._rawMarkdown=finalMarkdown;
     if(finalMarkdown)renderMd(currentMsgBody,finalMarkdown);
+    renderChatResponseNativeParts(currentMsgBody,d,finalMarkdown);
     if(d.tool_calls)d.tool_calls.forEach(tc=>{rememberMainTool(tc.id,tc.name);renderToolCallWithState(currentMsgBody,tc.name,tc.arguments,tc.id)});
     if(d.error){const e=document.createElement('div');e.className='error-text';e.textContent='⚠ '+d.error;currentMsgBody.appendChild(e)}
     completeAssistantProgress('response','stream',d.error?'error':'complete',d.error?'Response failed':'Response complete',finalMarkdown?finalMarkdown.length+' chars':'');
@@ -16455,13 +16568,15 @@ window._onEditorEvent=function(event,data){
       setProviderRunning(pid,true,t('provider_status_thinking'),'running');
       onProviderThinkingDelta(mc,pid,data);
     }else if(event==='provider_stream_end'){
-      const s=mc.querySelector('.msg-body.streaming')||((data.content||data.thinking||data.error)?getProviderStreamBody(mc,pid):null);if(s){
+      const hasParts=normalizeChatVisibleResponseParts(data,data&&data.content).length;
+      const s=mc.querySelector('.msg-body.streaming')||((data.content||data.thinking||data.error||hasParts)?getProviderStreamBody(mc,pid):null);if(s){
         const streamed=s._streamContent?s._streamContent.textContent:'';
         const content=data.content!==undefined&&data.content!==''?data.content:streamed;
         const thinking=data.thinking||s._thinkingBuf||'';
         s.classList.remove('streaming');s.innerHTML='';s._streamContent=null;s._thinkingEl=null;s._thinkingBuf='';
         if(thinking)renderProviderThinkingBlock(s,thinking,false);
         if(content)renderMd(s,content);
+        renderChatResponseNativeParts(s,data,content);
         renderChatResponseReferences(s,content,data);
         if(data.error&&!content){const e=document.createElement('div');e.className='error-text';e.textContent='⚠ '+data.error;s.appendChild(e)}
       }

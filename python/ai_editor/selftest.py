@@ -4332,6 +4332,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "payload.response_parts" in html
            and "payload.parts" in html
            and "kind==='anchor'" in html
+           and "raw.includes('anchor')||raw.includes('inlinereference')" in html
+           and "rec.inlineReference!==undefined" in html
            and "kind==='textEdit'" in html
            and "function chatReferenceLocationLabel(ref)" in html
            and "function chatReferenceHasDiff(ref)" in html
@@ -4351,12 +4353,38 @@ def test_phase1_ai_editor_regressions() -> None:
            and "payload&&payload.file_trees" in html
            and "kind==='fileTree'" in html
            and "Array.isArray(part&&part.value)" in html
+           and "const treeData=part&&part.treeData;" in html
+           and "const value=treeData?[treeData]" in html
+           and "chatUriPath(treeData&&treeData.uri)" in html
            and "part.baseUri||part.base_uri||part.base" in html
            and "count.value>=120" in html
            and "role','tree'" in html
            and "role','treeitem'" in html
            and "openChatFileTreePath(node.path)" in html
            and "renderChatFileTrees(wrap,fileTrees)" in html)
+    _check("frontend Assistant renders VS Code native message and command response parts",
+           "chat-response-native-parts" in html
+           and "chat-response-callout" in html
+           and "chat-response-command-row" in html
+           and "chat-response-command" in html
+           and "function chatResponseVisiblePartKind(part)" in html
+           and "raw==='markdowncontent'||raw==='markdown'" in html
+           and "raw==='warning'||raw.includes('warning')" in html
+           and "raw==='info'||raw==='information'||raw.includes('info')" in html
+           and "raw==='progressmessage'||raw==='progress'||raw.includes('progress')" in html
+           and "raw==='command'||raw.includes('commandbutton')" in html
+           and "function chatMarkdownValueText(value)" in html
+           and "function normalizeChatVisibleResponseParts(payload,content)" in html
+           and "function runChatResponseCommand(command,button)" in html
+           and "await call('execute_command',id,...(Array.isArray(command.arguments)?command.arguments:[]))" in html
+           and "function renderChatResponseNativeParts(body,payload,content)" in html
+           and "renderChatResponseNativeParts(currentMsgBody,d,finalMarkdown);" in html
+           and "renderChatResponseNativeParts(s,data,content);" in html
+           and "const hasParts=normalizeChatVisibleResponseParts(data,data&&data.content).length;" in html
+           and "chat-response-native-parts" in html
+           and "kind==='markdown'&&contentText&&text===contentText" in html
+           and "role','toolbar'" in html
+           and "role',part.kind==='warning'?'alert':'note'" in html)
     _check("frontend Assistant applies native response text edits and file tree actions",
            "chat-response-summary" in html
            and "chat-inline-actions" in html
