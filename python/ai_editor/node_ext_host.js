@@ -2219,6 +2219,12 @@ const _authenticationProviders = new Map(); // id -> { label, provider, options,
 const _authenticationSessions = new Map();  // id -> AuthenticationSession[]
 const _onDidChangeAuthenticationSessionsEmitter = new EventEmitter();
 const _onDidChangeConfigurationEmitter = new EventEmitter();
+const _windowState = Object.freeze({ focused: true, active: true });
+const _onDidChangeWindowStateEmitter = new EventEmitter();
+const _envLogLevel = 3; // vscode.LogLevel.Info
+const _onDidChangeTelemetryEnabledEmitter = new EventEmitter();
+const _onDidChangeShellEmitter = new EventEmitter();
+const _onDidChangeLogLevelEmitter = new EventEmitter();
 let _nextUntitledDocument = 1;
 let _nextProgressHandle = 1;
 let _nextQuickInputHandle = 1;
@@ -2950,6 +2956,47 @@ function _requestEnvClipboard(action, text = '', token = undefined) {
             text: String(text ?? ''),
         });
     });
+}
+
+function _telemetryDataObject(data) {
+    return data && typeof data === 'object' && !Array.isArray(data)
+        ? data
+        : {};
+}
+
+function _telemetryErrorObject(value) {
+    if (value instanceof Error) return value;
+    const message = value === undefined || value === null ? 'error' : String(value);
+    return new Error(message);
+}
+
+function _createTelemetryLogger(sender) {
+    let disposed = false;
+    const safeSender = sender && typeof sender === 'object' ? sender : {};
+    return {
+        logUsage(eventName, data) {
+            if (disposed || typeof safeSender.sendEventData !== 'function') return;
+            try {
+                safeSender.sendEventData(String(eventName || ''), _telemetryDataObject(data));
+            } catch (err) {
+                log(`telemetry logUsage failed: ${err?.message || err}`);
+            }
+        },
+        logError(errorOrEventName, data) {
+            if (disposed || typeof safeSender.sendErrorData !== 'function') return;
+            try {
+                safeSender.sendErrorData(
+                    _telemetryErrorObject(errorOrEventName),
+                    _telemetryDataObject(data),
+                );
+            } catch (err) {
+                log(`telemetry logError failed: ${err?.message || err}`);
+            }
+        },
+        dispose() {
+            disposed = true;
+        },
+    };
 }
 
 function _serializeLanguagePosition(value) {
@@ -7673,6 +7720,8 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             onDidChangeTerminalShellIntegration: _onDidChangeTerminalShellIntegrationEmitter.event,
             onDidStartTerminalShellExecution: _onDidStartTerminalShellExecutionEmitter.event,
             onDidEndTerminalShellExecution: _onDidEndTerminalShellExecutionEmitter.event,
+            get state() { return { ..._windowState }; },
+            onDidChangeWindowState: _onDidChangeWindowStateEmitter.event,
             get activeTextEditor() { return undefined; },
             get visibleTextEditors() { return []; },
             get activeColorTheme() { return { kind: 2 }; }, // Dark
@@ -7844,11 +7893,16 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         // --- Namespace: env ---
         env: {
             appName: 'SAO AI Editor',
+            appHost: 'desktop',
             appRoot: process.cwd(),
             language: 'en',
             machineId: 'node-ext-host',
             sessionId: `session-${Date.now()}`,
             uriScheme: 'vscode',
+            remoteName: undefined,
+            isNewAppInstall: false,
+            isAppPortable: false,
+            isTelemetryEnabled: false,
             clipboard: {
                 readText: () => _requestEnvClipboard('read'),
                 writeText: value => _requestEnvClipboard('write', value),
@@ -7866,9 +7920,11 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             },
             get shell() { return process.platform === 'win32' ? 'powershell.exe' : '/bin/bash'; },
             get uiKind() { return 1; }, // Desktop
-            createTelemetryLogger() {
-                return { logUsage() {}, logError() {}, dispose() {} };
-            },
+            get logLevel() { return _envLogLevel; },
+            onDidChangeTelemetryEnabled: _onDidChangeTelemetryEnabledEmitter.event,
+            onDidChangeShell: _onDidChangeShellEmitter.event,
+            onDidChangeLogLevel: _onDidChangeLogLevelEmitter.event,
+            createTelemetryLogger: _createTelemetryLogger,
         },
 
         // --- Namespace: extensions ---

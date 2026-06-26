@@ -3282,13 +3282,16 @@ def test_phase1_ai_editor_regressions() -> None:
             and "renderWelcome();\n  setStatus(t('new_chat_title')" in html
             and "const body=latestChatMessageBody('assistant');" in html)
     _check("frontend Assistant composer keeps normal-width controls in one row",
-           ".chat-toolbar .spacer { flex:1 1 16px; min-width:8px; }" in html
-           and "border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent); flex-wrap:nowrap; }" in html
-           and ".chat-control-strip { display:flex; align-items:center; gap:4px; flex-wrap:nowrap; min-width:0; flex:0 1 auto; }" in html
-           and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:6px; margin-left:auto;" in html
-           and "flex:0 0 auto; min-width:0; flex-wrap:nowrap;" in html
-           and ".chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:6px; min-width:0; flex:0 1 auto;" in html
-           and "color:var(--fg-dim); white-space:nowrap;" in html
+           "border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent); flex-wrap:nowrap;" in html
+           and "min-width:0; overflow:hidden; white-space:nowrap;" in html
+           and ".chat-toolbar .spacer { display:none; }" in html
+           and ".chat-control-strip { display:flex; align-items:center; gap:4px; flex-wrap:nowrap; min-width:0; flex:1 1 auto;" in html
+           and "overflow:hidden; }" in html
+           and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px; margin-left:0;" in html
+           and "flex:0 0 auto; min-width:max-content; flex-wrap:nowrap;" in html
+           and ".chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:5px; min-width:0; flex:0 1 auto;" in html
+           and "color:var(--fg-dim); white-space:nowrap; overflow:hidden;" in html
+           and "max-width:86px; overflow:hidden; text-overflow:ellipsis;" in html
            and '<div class="chat-composer-trailing" aria-label="Chat actions and status">' in html
            and '<span class="spacer"></span>\n                  <div class="chat-composer-trailing"' in html
            and '</span>\n                  </div>\n                </div>' in html)
@@ -19339,6 +19342,54 @@ async function activate(context) {
       errorIsUndefined: error === undefined,
     };
   });
+  vscode.commands.registerCommand('selftest.node.envWindowStateProbe', async () => {
+    const eventCounts = { window: 0, telemetry: 0, shell: 0, log: 0 };
+    const disposables = [
+      vscode.window.onDidChangeWindowState(() => { eventCounts.window += 1; }),
+      vscode.env.onDidChangeTelemetryEnabled(() => { eventCounts.telemetry += 1; }),
+      vscode.env.onDidChangeShell(() => { eventCounts.shell += 1; }),
+      vscode.env.onDidChangeLogLevel(() => { eventCounts.log += 1; }),
+    ];
+    const telemetryEvents = [];
+    const sender = {
+      sendEventData(eventName, data) {
+        telemetryEvents.push({ type: 'event', eventName, data });
+      },
+      sendErrorData(error, data) {
+        telemetryEvents.push({
+          type: 'error',
+          message: error && error.message ? error.message : String(error),
+          data,
+        });
+      },
+    };
+    const logger = vscode.env.createTelemetryLogger(
+      sender,
+      { ignoreBuiltInCommonProperties: true },
+    );
+    logger.logUsage('selftestUsage', { foo: 'bar' });
+    logger.logError(new Error('selftestError'), { kind: 'probe' });
+    const loggerDisposable = !!(logger && logger.dispose);
+    logger.dispose();
+    disposables.forEach(disposable => disposable.dispose());
+    return {
+      appHost: vscode.env.appHost,
+      isAppPortable: vscode.env.isAppPortable,
+      remoteNamePresent: Object.prototype.hasOwnProperty.call(vscode.env, 'remoteName'),
+      remoteName: vscode.env.remoteName,
+      logLevel: vscode.env.logLevel,
+      uiKindDesktop: vscode.env.uiKind === vscode.UIKind.Desktop,
+      windowFocused: vscode.window.state && vscode.window.state.focused,
+      windowActive: vscode.window.state && vscode.window.state.active,
+      eventCounts,
+      loggerDisposable,
+      telemetryEvents,
+      hasTelemetryEvent: typeof vscode.env.onDidChangeTelemetryEnabled === 'function',
+      hasShellEvent: typeof vscode.env.onDidChangeShell === 'function',
+      hasLogEvent: typeof vscode.env.onDidChangeLogLevel === 'function',
+      hasWindowStateEvent: typeof vscode.window.onDidChangeWindowState === 'function',
+    };
+  });
   vscode.commands.registerCommand('selftest.node.authenticationProbe', async () => {
     const authEvents = [];
     const eventDisposable = vscode.authentication.onDidChangeSessions(event => {
@@ -20679,6 +20730,16 @@ module.exports = { activate, deactivate };
                             "selftest.node.messageOptionsProbe"))
                 except Exception as exc:
                     node_message_options_probe = {"_error": str(exc)}
+                node_env_window_command_registered = _wait_until(
+                    lambda: "selftest.node.envWindowStateProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                try:
+                    node_env_window_probe = (
+                        api._ext_host.commands.execute(
+                            "selftest.node.envWindowStateProbe"))
+                except Exception as exc:
+                    node_env_window_probe = {"_error": str(exc)}
                 node_authentication_command_registered = _wait_until(
                     lambda: "selftest.node.authenticationProbe"
                     in api._ext_host.commands.list_commands(),
@@ -24166,6 +24227,39 @@ module.exports = { activate, deactivate };
                        is True,
                        json.dumps(node_message_options_probe,
                                   ensure_ascii=False))
+                _check("node host env and window state APIs match VS Code basics",
+                       node_started is True
+                       and node_env_window_command_registered
+                       and isinstance(node_env_window_probe, dict)
+                       and node_env_window_probe.get("appHost") == "desktop"
+                       and node_env_window_probe.get("isAppPortable") is False
+                       and node_env_window_probe.get("remoteNamePresent") is True
+                       and node_env_window_probe.get("remoteName") is None
+                       and node_env_window_probe.get("logLevel") == 3
+                       and node_env_window_probe.get("uiKindDesktop") is True
+                       and node_env_window_probe.get("windowFocused") is True
+                       and node_env_window_probe.get("windowActive") is True
+                       and node_env_window_probe.get("hasTelemetryEvent") is True
+                       and node_env_window_probe.get("hasShellEvent") is True
+                       and node_env_window_probe.get("hasLogEvent") is True
+                       and node_env_window_probe.get("hasWindowStateEvent") is True
+                       and node_env_window_probe.get("loggerDisposable") is True
+                       and node_env_window_probe.get("eventCounts") == {
+                           "window": 0, "telemetry": 0, "shell": 0, "log": 0}
+                       and any(
+                           item.get("type") == "event"
+                           and item.get("eventName") == "selftestUsage"
+                           and item.get("data", {}).get("foo") == "bar"
+                           for item in node_env_window_probe.get(
+                               "telemetryEvents", []))
+                       and any(
+                           item.get("type") == "error"
+                           and item.get("message") == "selftestError"
+                           and item.get("data", {}).get("kind") == "probe"
+                           for item in node_env_window_probe.get(
+                               "telemetryEvents", [])),
+                       json.dumps(node_env_window_probe,
+                                  ensure_ascii=False, default=str))
                 _check("node host authentication providers supply sessions",
                        node_started is True
                        and node_authentication_command_registered
