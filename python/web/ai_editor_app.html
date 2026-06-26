@@ -5406,13 +5406,75 @@ function normalizeChatModifiedFilesConfirmationPart(part){
     }).filter(file=>file.uri||file.originalUri||file.modifiedContentUri||file.originalContentUri).slice(0,32)
   };
 }
+function chatMergeFileList(prev,next){
+  const files=[...(prev&&prev.files||[])];
+  const seen=Object.create(null);
+  files.forEach((file,index)=>{seen[file.uri||file.modifiedContentUri||file.originalUri||file.title||index]=index});
+  (next&&next.files||[]).forEach(file=>{
+    const key=file.uri||file.modifiedContentUri||file.originalUri||file.title||String(files.length);
+    if(seen[key]!==undefined)files[seen[key]]={...files[seen[key]],...file};
+    else {seen[key]=files.length;files.push(file)}
+  });
+  return files.slice(0,32);
+}
+function chatMergeTodoList(prev,next){
+  const todos=[...(prev&&prev.todoList||[])],seen=Object.create(null);
+  todos.forEach((todo,index)=>{seen[todo.id||todo.title||index]=index});
+  (next&&next.todoList||[]).forEach(todo=>{
+    const key=todo.id||todo.title||String(todos.length);
+    if(seen[key]!==undefined)todos[seen[key]]={...todos[seen[key]],...todo};
+    else {seen[key]=todos.length;todos.push(todo)}
+  });
+  return {todoList:todos.slice(0,32)};
+}
+function chatMergeResourceList(prev,next){
+  const resources=[...(prev&&prev.resources||[])],seen=Object.create(null);
+  resources.forEach((item,index)=>{seen[item.uri||item.contentUri||index]=index});
+  (next&&next.resources||[]).forEach(item=>{
+    const key=item.uri||item.contentUri||String(resources.length);
+    if(seen[key]!==undefined)resources[seen[key]]={...resources[seen[key]],...item};
+    else {seen[key]=resources.length;resources.push(item)}
+  });
+  return resources.slice(0,32);
+}
+function chatMergeVisibleResponseParts(parts){
+  const out=[],indexByKey=Object.create(null);
+  let lastProgressTaskIndex=-1;
+  (parts||[]).forEach(part=>{
+    if(!part)return;
+    let key='';
+    if(part.kind==='externalToolInvocationUpdate')key='tool-update:'+(part.toolUpdate.toolCallId||part.toolUpdate.toolName||'last');
+    else if(part.kind==='externalEdit')key='external-edit:'+(part.externalEdit.editKind||'edit')+':'+(part.externalEdit.path||part.externalEdit.uri);
+    else if(part.kind==='externalEdits')key='external-edits:'+(part.externalEdits.undoStopId||(part.externalEdits.resources||[]).map(r=>r.uri||r.contentUri).join('|'));
+    else if(part.kind==='todoList')key='todo-list';
+    else if(part.kind==='simpleToolInvocation')key='simple-tool:'+(part.simpleTool.input||'');
+    else if(part.kind==='modifiedFilesConfirmation')key='modified-files';
+    else if(part.kind==='progressTaskResult'&&lastProgressTaskIndex>=0){
+      out[lastProgressTaskIndex]={...out[lastProgressTaskIndex],task:{...out[lastProgressTaskIndex].task,resultContent:part.result.content}};
+      return;
+    }
+    if(part.kind==='progressTask')lastProgressTaskIndex=out.length;
+    if(key&&indexByKey[key]!==undefined){
+      const prev=out[indexByKey[key]];
+      if(part.kind==='externalToolInvocationUpdate')out[indexByKey[key]]={...prev,toolUpdate:{...prev.toolUpdate,...part.toolUpdate}};
+      else if(part.kind==='externalEdits')out[indexByKey[key]]={...prev,externalEdits:{...prev.externalEdits,...part.externalEdits,resources:chatMergeResourceList(prev.externalEdits,part.externalEdits)}};
+      else if(part.kind==='todoList')out[indexByKey[key]]={...prev,todo:chatMergeTodoList(prev.todo,part.todo)};
+      else if(part.kind==='modifiedFilesConfirmation')out[indexByKey[key]]={...prev,modifiedFiles:{options:[...new Set([...(prev.modifiedFiles.options||[]),...(part.modifiedFiles.options||[])])].slice(0,6),files:chatMergeFileList(prev.modifiedFiles,part.modifiedFiles)}};
+      else out[indexByKey[key]]=part;
+    }else{
+      if(key)indexByKey[key]=out.length;
+      out.push(part);
+    }
+  });
+  return out.slice(0,24);
+}
 function normalizeChatVisibleResponseParts(payload,content){
   const parts=[...(Array.isArray(payload&&payload.responseParts)?payload.responseParts:[]),
     ...(Array.isArray(payload&&payload.response_parts)?payload.response_parts:[]),
     ...(Array.isArray(payload&&payload.parts)?payload.parts:[]),
     ...(Array.isArray(payload&&payload.response)?payload.response:[])];
   const contentText=normalizeChatMessageText(content||'','assistant');
-  return parts.map(part=>{
+  const normalized=parts.map(part=>{
     const kind=chatResponseVisiblePartKind(part);
     if(!kind)return null;
     if(kind==='command'){
@@ -5503,7 +5565,8 @@ function normalizeChatVisibleResponseParts(payload,content){
     if(!text)return null;
     if(kind==='markdown'&&contentText&&text===contentText)return null;
     return {kind,text};
-  }).filter(Boolean).slice(0,24);
+  }).filter(Boolean);
+  return chatMergeVisibleResponseParts(normalized);
 }
 function normalizeChatNativeReference(raw,kindOverride){
   if(!raw)return null;
@@ -6173,13 +6236,14 @@ function renderChatExternalEditsPart(wrap,part){
 function renderChatProgressTaskPart(wrap,part){
   const task=part.task||{};
   const card=document.createElement('div');card.className='chat-response-progress-task';card.setAttribute('role','status');card.setAttribute('aria-label','Progress task');
-  const title=document.createElement('div');title.className='chat-response-part-title';title.textContent='Progress task';card.appendChild(title);
+  const title=document.createElement('div');title.className='chat-response-part-title';title.textContent=task.resultContent?'Progress task complete':'Progress task';card.appendChild(title);
   if(task.content){const body=document.createElement('div');renderMd(body,task.content);card.appendChild(body)}
   if(task.progress&&task.progress.length){
     const list=document.createElement('div');list.className='chat-response-multidiff-list';
     task.progress.forEach(item=>{const row=document.createElement('div');row.className='chat-response-edit-row';row.innerHTML='<span class="change-kind">'+esc(item.kind||'progress')+'</span><span class="change-path">'+esc(item.text)+'</span>';list.appendChild(row)});
     card.appendChild(list);
   }
+  if(task.resultContent){const result=document.createElement('div');renderMd(result,task.resultContent);card.appendChild(result)}
   wrap.appendChild(card);
 }
 function renderChatProgressTaskResultPart(wrap,part){

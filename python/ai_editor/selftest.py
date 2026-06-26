@@ -4439,7 +4439,20 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function normalizeChatTodoListPart(part)" in html
            and "function normalizeChatSimpleToolInvocationPart(part)" in html
            and "function normalizeChatModifiedFilesConfirmationPart(part)" in html
+           and "function chatMergeFileList(prev,next)" in html
+           and "function chatMergeTodoList(prev,next)" in html
+           and "function chatMergeResourceList(prev,next)" in html
+           and "function chatMergeVisibleResponseParts(parts)" in html
+           and "key='tool-update:'+(part.toolUpdate.toolCallId||part.toolUpdate.toolName||'last')" in html
+           and "key='external-edit:'+(part.externalEdit.editKind||'edit')+':'+(part.externalEdit.path||part.externalEdit.uri)" in html
+           and "key='external-edits:'+(part.externalEdits.undoStopId||(part.externalEdits.resources||[]).map(r=>r.uri||r.contentUri).join('|'))" in html
+           and "key='todo-list'" in html
+           and "key='simple-tool:'+(part.simpleTool.input||'')" in html
+           and "key='modified-files'" in html
+           and "progressTaskResult'&&lastProgressTaskIndex>=0" in html
+           and "resultContent:part.result.content" in html
            and "function normalizeChatVisibleResponseParts(payload,content)" in html
+           and "return chatMergeVisibleResponseParts(normalized);" in html
            and "function runChatResponseCommand(command,button)" in html
            and "function chatResponseComposerText(prefix,text)" in html
            and "async function openChatResponseUri(value)" in html
@@ -4491,6 +4504,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "renderChatTodoListPart(wrap,part)" in html
            and "renderChatSimpleToolInvocationPart(wrap,part)" in html
            and "renderChatModifiedFilesConfirmationPart(wrap,part)" in html
+           and "task.resultContent?'Progress task complete':'Progress task'" in html
            and "chatResponseComposerText('Answers',chatQuestionCarouselAnswerText(card))" in html
            and "chatResponseComposerText('Install extensions',exts.join(', '))" in html
            and "openChatResponseReference(chatMultiDiffRef(entry))" in html
