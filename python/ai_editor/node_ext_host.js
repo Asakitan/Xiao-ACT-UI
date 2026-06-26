@@ -4855,6 +4855,33 @@ function _debugDapStackFramePayload(frame) {
     };
 }
 
+function _debugDapVariablePayload(variable) {
+    const payload = variable && typeof variable === 'object' ? variable : {};
+    return {
+        name: String(payload.name || ''),
+        value: payload.value === undefined || payload.value === null
+            ? ''
+            : String(payload.value),
+        type: payload.type === undefined || payload.type === null
+            ? undefined
+            : String(payload.type),
+        variablesReference: Number(payload.variablesReference || 0),
+        evaluateName: payload.evaluateName,
+    };
+}
+
+function _debugDapScopePayload(scope, variables) {
+    const payload = scope && typeof scope === 'object' ? scope : {};
+    return {
+        name: String(payload.name || ''),
+        variablesReference: Number(payload.variablesReference || 0),
+        expensive: !!payload.expensive,
+        variables: Array.isArray(variables)
+            ? variables.map(_debugDapVariablePayload)
+            : [],
+    };
+}
+
 function _debugDapThreadPayload(thread) {
     const payload = thread && typeof thread === 'object' ? thread : {};
     return {
@@ -4893,10 +4920,33 @@ function _debugRefreshActiveStackItem(transport, stoppedBody) {
             : [];
         const threadPayload = _debugDapThreadPayload(selectedThread);
         const framePayload = frames.length ? _debugDapStackFramePayload(frames[0]) : undefined;
+        const scopePayloads = [];
+        if (framePayload && framePayload.id !== undefined) {
+            const scopesResponse = await transport.sendRequest('scopes', {
+                frameId: framePayload.id,
+            }, 1200);
+            const scopes = Array.isArray(scopesResponse?.scopes)
+                ? scopesResponse.scopes
+                : [];
+            for (const scope of scopes) {
+                const reference = Number(scope?.variablesReference || 0);
+                let variables = [];
+                if (reference > 0) {
+                    const variablesResponse = await transport.sendRequest('variables', {
+                        variablesReference: reference,
+                    }, 1200);
+                    variables = Array.isArray(variablesResponse?.variables)
+                        ? variablesResponse.variables
+                        : [];
+                }
+                scopePayloads.push(_debugDapScopePayload(scope, variables));
+            }
+        }
         _debugSetActiveStackItem(transport, {
             session: transport.session,
             thread: threadPayload,
             frame: framePayload,
+            scopes: scopePayloads,
             reason: body.reason,
         });
     };

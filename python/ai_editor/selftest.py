@@ -10135,6 +10135,10 @@ console.log("command palette quick access helpers ok");
            and "function _debugParseDapFrames(transport, chunk)" in node_ext_host_source
            and "function _debugHandleDapEventState(transport, message)" in node_ext_host_source
            and "function _debugRefreshActiveStackItem(transport, stoppedBody)" in node_ext_host_source
+           and "function _debugDapScopePayload(scope, variables)" in node_ext_host_source
+           and "function _debugDapVariablePayload(variable)" in node_ext_host_source
+           and "transport.sendRequest('scopes'" in node_ext_host_source
+           and "transport.sendRequest('variables'" in node_ext_host_source
            and "function _debugCreateServerAdapterTransport(session, descriptor, config, customEventEmitter, beforeLaunch)" in node_ext_host_source
            and "function _debugCreateNamedPipeAdapterTransport(session, descriptor, config, customEventEmitter, beforeLaunch)" in node_ext_host_source
            and "function _debugCreateAdapterTransport(session, descriptor, config, customEventEmitter, beforeLaunch)" in node_ext_host_source
@@ -21760,6 +21764,7 @@ async function activate(context) {
         session: dapActiveStackItem.session && dapActiveStackItem.session.name,
         thread: dapActiveStackItem.thread,
         frame: dapActiveStackItem.frame,
+        scopes: dapActiveStackItem.scopes,
         reason: dapActiveStackItem.reason,
       } : null,
       customRequestResult,
@@ -22478,6 +22483,37 @@ function handle(request) {
         column: 3,
       }],
       totalFrames: 1,
+    });
+    return;
+  }
+  if (request.command === "scopes") {
+    response(request, {
+      scopes: [{
+        name: "Locals",
+        variablesReference: 101,
+        expensive: false,
+      }, {
+        name: "Globals",
+        variablesReference: 0,
+        expensive: true,
+      }],
+    });
+    return;
+  }
+  if (request.command === "variables") {
+    response(request, {
+      variables: [{
+        name: "answer",
+        value: "42",
+        type: "number",
+        variablesReference: 0,
+        evaluateName: "answer",
+      }, {
+        name: "name",
+        value: "sao",
+        type: "string",
+        variablesReference: 0,
+      }],
     });
     return;
   }
@@ -27997,6 +28033,33 @@ process.stdin.resume();
                        and node_task_debug_probe.get(
                            "dapActiveStackItem", {}).get(
                                "frame", {}).get("line") == 12
+                       and node_task_debug_probe.get(
+                           "dapActiveStackItem", {}).get(
+                               "scopes", [{}])[0].get("name") == "Locals"
+                       and node_task_debug_probe.get(
+                           "dapActiveStackItem", {}).get(
+                               "scopes", [{}])[0].get(
+                                   "variablesReference") == 101
+                       and node_task_debug_probe.get(
+                           "dapActiveStackItem", {}).get(
+                               "scopes", [{}])[0].get(
+                                   "variables", [{}])[0].get(
+                                       "name") == "answer"
+                       and node_task_debug_probe.get(
+                           "dapActiveStackItem", {}).get(
+                               "scopes", [{}])[0].get(
+                                   "variables", [{}])[0].get(
+                                       "value") == "42"
+                       and node_task_debug_probe.get(
+                           "dapActiveStackItem", {}).get(
+                               "scopes", [{}, {}])[1].get(
+                                   "name") == "Globals"
+                       and node_task_debug_probe.get(
+                           "dapActiveStackItem", {}).get(
+                               "scopes", [{}, {}])[1].get(
+                                   "variables") == []
+                       and "scopes" in dap_adapter_commands
+                       and "variables" in dap_adapter_commands
                        and any(
                            item
                            and item.get("session") == "Node DAP Debug"
