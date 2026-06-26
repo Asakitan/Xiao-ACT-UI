@@ -3836,7 +3836,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and "renderWelcome();\n  setStatus(t('new_chat_title')" in html
             and "const body=latestChatMessageBody('assistant');" in html)
     _check("frontend Assistant composer keeps normal-width controls in one row",
-           ".chat-toolbar { display:flex; align-items:center; gap:8px;" in html
+           ".chat-toolbar { display:grid; grid-template-columns:minmax(0,1fr) max-content; align-items:center; column-gap:8px; row-gap:0;" in html
             and "border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent);" in html
             and "min-width:0; overflow:hidden; white-space:nowrap; min-height:29px; flex-wrap:nowrap;" in html
             and ".chat-toolbar .spacer { display:none; }" in html
@@ -3847,7 +3847,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and ".chat-select-chip.agent { width:122px; max-width:122px; flex-basis:122px; }" in html
             and ".chat-select-chip.workflow { width:104px; max-width:104px; flex-basis:104px; }" in html
             and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px;" in html
-            and "margin-left:auto; flex:0 0 auto; min-width:0; width:auto; flex-wrap:nowrap; overflow:hidden; white-space:nowrap;" in html
+            and "margin-left:auto; flex:0 0 auto; min-width:max-content; width:max-content; flex-wrap:nowrap; overflow:hidden; white-space:nowrap;" in html
             and ".chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:5px; min-width:0; max-width:148px; flex:0 1 148px;" in html
             and "color:var(--fg-dim); white-space:nowrap; overflow:hidden;" in html
             and ".chat-session-chip { max-width:76px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" in html
@@ -3860,6 +3860,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and '</span>\n                  </div>\n                </div>' in html)
     _check("frontend Assistant exposes runtime composer layout snapshot",
            "function assistantComposerLayoutSnapshot()" in html
+           and "gridTemplateColumns:toolbar?getComputedStyle(toolbar).gridTemplateColumns:''" in html
            and "flexWrap:toolbar?getComputedStyle(toolbar).flexWrap:''" in html
            and "sameRow:!!(controlRect&&actionRect&&Math.abs(controlRect.top-actionRect.top)<=1)" in html
            and "window.assistantComposerLayoutSnapshot=assistantComposerLayoutSnapshot;" in html
@@ -4029,8 +4030,28 @@ def test_phase1_ai_editor_regressions() -> None:
             and "const imageRef=chatContextRefFromAttachment({...img,mime});" in html
             and "function renderSlashPopup(matches)" in html
             and "window.pickSlashByIndex=function(idx)" in html
-            and "role=\"option\" aria-selected=" in html
+           and "role=\"option\" aria-selected=" in html
            and "slash-item .category" in html)
+    _check("frontend Assistant pending attachments stay accessible and stateful",
+           'id="attach-area"' in html
+           and "function assistantAttachmentCounts()" in html
+           and "function syncAssistantAttachmentState()" in html
+           and "function clearAttachments()" in html
+           and "area.setAttribute('role','list');" in html
+           and "area.setAttribute('aria-label',counts.total?'Attached files ('+counts.total+')':'No attached files');" in html
+           and "panel.dataset.chatPendingAttachmentCount=String(counts.total);" in html
+           and "panel.dataset.chatPendingImageAttachmentCount=String(counts.images);" in html
+           and "panel.dataset.chatPendingFileAttachmentCount=String(counts.files);" in html
+           and "panel.dataset.chatHasPendingAttachments=counts.total?'true':'false';" in html
+           and "pill.setAttribute('role','listitem');" in html
+           and "pill.onkeydown=ev=>{\n      if(ev.key==='Delete'||ev.key==='Backspace')" in html
+           and "remove.className='attach-remove';" in html
+           and "remove.setAttribute('aria-label','Remove attachment '+(a.name||''));" in html
+           and "clear.className='attach-clear';" in html
+           and "clear.setAttribute('aria-label','Clear all attachments');" in html
+           and "window.clearAttachments=clearAttachments;" in html
+           and ".attach-pill:focus { outline:none; border-color:var(--border-focus); background:var(--bg-hover); }" in html
+           and ".attach-remove,.attach-clear { border:0; background:transparent; color:var(--fg-dim); cursor:pointer;" in html)
     _check("frontend Assistant exposes Copilot-style input completions",
            "function chatInputSymbolCompletions()" in html
            and "function chatInputSessionCompletionItems()" in html

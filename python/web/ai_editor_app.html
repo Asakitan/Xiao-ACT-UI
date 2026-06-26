@@ -1000,7 +1000,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-input-container.sendable .send-btn:not(:disabled) { box-shadow:0 0 0 1px color-mix(in srgb, var(--btn) 35%, transparent); }
 .chat-input-container.streaming .send-btn { background:var(--fg-error); }
 .send-btn svg { width:14px; height:14px; }
-.chat-toolbar { display:flex; align-items:center; gap:8px;
+.chat-toolbar { display:grid; grid-template-columns:minmax(0,1fr) max-content; align-items:center; column-gap:8px; row-gap:0;
   padding:0 8px 7px; font-size:11px;
   border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent);
   min-width:0; overflow:hidden; white-space:nowrap; min-height:29px; flex-wrap:nowrap; }
@@ -1186,7 +1186,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-composer-action:hover,.chat-composer-action:focus { background:var(--bg-hover); color:var(--fg);
   border-color:var(--border); outline:none; }
 .chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px;
-  margin-left:auto; flex:0 0 auto; min-width:0; width:auto; flex-wrap:nowrap; overflow:hidden; white-space:nowrap; }
+  margin-left:auto; flex:0 0 auto; min-width:max-content; width:max-content; flex-wrap:nowrap; overflow:hidden; white-space:nowrap; }
 .chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:5px; min-width:0; max-width:148px; flex:0 1 148px;
   color:var(--fg-dim); white-space:nowrap; overflow:hidden; }
 .ctx-usage { display:inline-flex; align-items:center; gap:4px; font-size:10px; color:var(--fg-dim); cursor:default; }
@@ -1601,9 +1601,14 @@ pre.code-block { overflow:visible; }
 .attach-pill { display:inline-flex; align-items:center; gap:5px; padding:2px 8px;
   background:var(--bg); border:1px solid var(--border); border-radius:999px;
   font-size:11px; color:var(--fg-dim); max-width:220px; min-height:20px; box-sizing:border-box; }
+.attach-pill:focus { outline:none; border-color:var(--border-focus); background:var(--bg-hover); }
 .attach-pill .attach-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.attach-pill .remove { cursor:pointer; font-size:13px; flex:0 0 auto; }
-.attach-pill .remove:hover { color:var(--fg-error); }
+.attach-remove,.attach-clear { border:0; background:transparent; color:var(--fg-dim); cursor:pointer;
+  display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; padding:0 1px; line-height:1; }
+.attach-remove { font-size:13px; }
+.attach-clear { height:20px; padding:0 7px; border:1px solid var(--border); border-radius:999px; font-size:11px; }
+.attach-remove:hover,.attach-remove:focus,.attach-clear:hover,.attach-clear:focus {
+  color:var(--fg-error); border-color:var(--border-focus); outline:none; }
 
 /* ── Progress spinner ── */
 .progress-indicator { display:flex; align-items:center; gap:8px; padding:4px 0;
@@ -7321,6 +7326,7 @@ function assistantComposerLayoutSnapshot(){
   return {
     ok:!!(toolbar&&controls&&actions),
     display:toolbar?getComputedStyle(toolbar).display:'',
+    gridTemplateColumns:toolbar?getComputedStyle(toolbar).gridTemplateColumns:'',
     flexWrap:toolbar?getComputedStyle(toolbar).flexWrap:'',
     controlTop:controlRect&&controlRect.top,
     actionTop:actionRect&&actionRect.top,
@@ -26019,24 +26025,79 @@ document.addEventListener('drop',e=>{
 function addAttachment(name,type,data){
   attachments.push({name,type,data});
   renderAttachments();
-  syncAssistantSessionState();
 }
 function removeAttachment(idx){
-  attachments.splice(idx,1);
+  if(idx<0||idx>=attachments.length)return false;
+  const removed=attachments.splice(idx,1)[0];
   renderAttachments();
-  syncAssistantSessionState();
+  announceAssistantAction('Removed attachment '+(removed&&removed.name?removed.name:''));
+  return true;
+}
+function clearAttachments(){
+  if(!attachments.length)return false;
+  attachments=[];
+  renderAttachments();
+  announceAssistantAction('Attachments cleared');
+  return true;
+}
+function assistantAttachmentCounts(){
+  const total=attachments.length;
+  const images=attachments.filter(a=>a&&a.type==='image').length;
+  return {total,images,files:total-images};
+}
+function syncAssistantAttachmentState(){
+  const area=$('attach-area'),panel=$('chat-panel');
+  const counts=assistantAttachmentCounts();
+  if(area){
+    area.dataset.attachmentCount=String(counts.total);
+    area.dataset.imageAttachmentCount=String(counts.images);
+    area.dataset.fileAttachmentCount=String(counts.files);
+    area.setAttribute('role','list');
+    area.setAttribute('aria-label',counts.total?'Attached files ('+counts.total+')':'No attached files');
+    area.setAttribute('aria-live','polite');
+  }
+  if(panel){
+    panel.dataset.chatPendingAttachmentCount=String(counts.total);
+    panel.dataset.chatPendingImageAttachmentCount=String(counts.images);
+    panel.dataset.chatPendingFileAttachmentCount=String(counts.files);
+    panel.dataset.chatHasPendingAttachments=counts.total?'true':'false';
+  }
 }
 function renderAttachments(){
-  const area=$('attach-area');area.innerHTML='';
+  const area=$('attach-area');if(!area)return;
+  area.innerHTML='';
   attachments.forEach((a,i)=>{
-    const pill=document.createElement('span');pill.className='attach-pill';
-    pill.innerHTML=(a.type==='image'?'🖼':'📄')+' <span class="attach-name">'+esc(a.name)+'</span>'+
-      '<span class="remove" onclick="removeAttachment('+i+')">×</span>';
+    const pill=document.createElement('span');pill.className='attach-pill';pill.tabIndex=0;
+    pill.dataset.attachmentIndex=String(i);
+    pill.dataset.attachmentType=a.type==='image'?'image':'file';
+    pill.setAttribute('role','listitem');
+    pill.setAttribute('aria-label',(a.type==='image'?'Image attachment ':'File attachment ')+(a.name||''));
+    pill.onkeydown=ev=>{
+      if(ev.key==='Delete'||ev.key==='Backspace'){ev.preventDefault();removeAttachment(i)}
+    };
+    const icon=document.createElement('span');icon.className='attach-icon';icon.setAttribute('aria-hidden','true');
+    icon.textContent=a.type==='image'?'🖼':'📄';
+    const name=document.createElement('span');name.className='attach-name';name.textContent=a.name||'attachment';
+    const remove=document.createElement('button');remove.type='button';remove.className='attach-remove';
+    remove.textContent='×';remove.title='Remove attachment';
+    remove.setAttribute('aria-label','Remove attachment '+(a.name||''));
+    remove.onclick=ev=>{ev.stopPropagation();removeAttachment(i)};
+    pill.appendChild(icon);pill.appendChild(name);pill.appendChild(remove);
     area.appendChild(pill);
   });
+  if(attachments.length>1){
+    const clear=document.createElement('button');clear.type='button';clear.className='attach-clear';
+    clear.textContent='Clear all';clear.title='Clear all attachments';
+    clear.setAttribute('aria-label','Clear all attachments');
+    clear.onclick=clearAttachments;
+    area.appendChild(clear);
+  }
+  syncAssistantAttachmentState();
   syncAssistantSessionState();
 }
 window.removeAttachment=removeAttachment;
+window.clearAttachments=clearAttachments;
+window.syncAssistantAttachmentState=syncAssistantAttachmentState;
 restoreAssistantSessionDraft();
 updateChatComposerState();
 
