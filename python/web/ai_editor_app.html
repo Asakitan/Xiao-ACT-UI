@@ -7377,7 +7377,46 @@ function assistantNativeResponseDomSnapshot(body){
     questionCount:count('.chat-response-questions'),
     todoCardCount:count('.chat-response-todo-list'),
     modifiedFilesCount:count('.chat-response-modified-files'),
+    changeSummaryCount:count('.chat-change-summary'),
+    changeSummaryActionCount:count('.chat-change-summary-actions button'),
+    changeSummaryStatusCount:count('.chat-change-summary-status[role="status"]'),
     classCounts
+  };
+}
+function assistantChangeSetDomSnapshot(body){
+  const card=body&&body.querySelector?body.querySelector('.chat-change-summary'):null;
+  const panel=$('chat-panel');
+  const buttons=card?Array.from(card.querySelectorAll('.chat-change-summary-actions button')):[];
+  return {
+    ok:!!card,
+    files:card?Number(card.dataset.changeFiles||0):0,
+    edits:card?Number(card.dataset.changeEdits||0):0,
+    diffs:card?Number(card.dataset.changeDiffs||0):0,
+    state:card?String(card.dataset.changeState||''):'',
+    statusText:card?String((card.querySelector('.chat-change-summary-status')||{}).textContent||''):'',
+    actionCount:buttons.length,
+    previewDisabled:buttons[0]?!!buttons[0].disabled:null,
+    applyDisabled:buttons[1]?!!buttons[1].disabled:null,
+    panelFiles:panel?Number(panel.dataset.chatChangeSetFiles||0):0,
+    panelEdits:panel?Number(panel.dataset.chatChangeSetEdits||0):0,
+    panelDiffs:panel?Number(panel.dataset.chatChangeSetDiffs||0):0,
+    panelState:panel?String(panel.dataset.chatChangeSetState||''):''
+  };
+}
+function assistantAttachmentDomSnapshot(){
+  const area=$('attach-area'),panel=$('chat-panel');
+  return {
+    ok:!!area,
+    role:area?area.getAttribute('role'):'',
+    ariaLive:area?area.getAttribute('aria-live'):'',
+    count:area?Number(area.dataset.attachmentCount||0):0,
+    imageCount:area?Number(area.dataset.imageAttachmentCount||0):0,
+    fileCount:area?Number(area.dataset.fileAttachmentCount||0):0,
+    listItemCount:area?area.querySelectorAll('.attach-pill[role="listitem"]').length:0,
+    removeButtonCount:area?area.querySelectorAll('button.attach-remove[aria-label^="Remove attachment"]').length:0,
+    clearButtonCount:area?area.querySelectorAll('button.attach-clear[aria-label="Clear all attachments"]').length:0,
+    panelCount:panel?Number(panel.dataset.chatPendingAttachmentCount||0):0,
+    panelHasAttachments:panel?String(panel.dataset.chatHasPendingAttachments||'false'):'false'
   };
 }
 function assistantNativeResponseRenderSummary(body,payload,content){
@@ -7385,6 +7424,7 @@ function assistantNativeResponseRenderSummary(body,payload,content){
   const kinds=parts.map(part=>part.kind);
   const wrap=body&&body.querySelector?body.querySelector('.chat-response-native-parts'):null;
   const dom=assistantNativeResponseDomSnapshot(body);
+  const changeSet=assistantChangeSetDomSnapshot(body);
   const actionTray=assistantActionTraySnapshot();
   return {
     ok:!!body,
@@ -7397,6 +7437,7 @@ function assistantNativeResponseRenderSummary(body,payload,content){
     callbackActionCount:dom.callbackActionCount,
     confirmationCount:dom.confirmationCount,
     questionCount:dom.questionCount,
+    changeSet,
     referenceCount:normalizeChatContentReferences(payload||{}).length,
     fileTreeCount:normalizeChatFileTrees(payload||{}).length,
     todoCount:parts.filter(part=>part.kind==='todoList').reduce((n,part)=>n+((part.todo&&part.todo.todoList)||[]).length,0),
@@ -7422,6 +7463,65 @@ async function replayAssistantNativeResponseFixture(nameOrPayload,opts){
   body.dataset.assistantReplayFixture=String(fixture.name||nameOrPayload||'inline');
   body.dataset.assistantReplaySummary=JSON.stringify(summary);
   return {...summary,fixture:fixture.name||'',chunkCount:chunks.length};
+}
+function assistantUiSelfCheckRecord(checks,name,pass,detail){
+  checks.push({name,pass:!!pass,detail:detail===undefined?'':detail});
+}
+async function runAssistantUiSelfCheck(opts){
+  opts=opts||{};
+  const checks=[];
+  const layout=assistantComposerLayoutSnapshot();
+  assistantUiSelfCheckRecord(checks,'composer-layout-present',layout.ok,layout.display);
+  assistantUiSelfCheckRecord(checks,'composer-grid-footer',layout.display==='grid',layout.gridTemplateColumns);
+  assistantUiSelfCheckRecord(checks,'composer-actions-same-row',layout.sameRow,JSON.stringify({controlTop:layout.controlTop,actionTop:layout.actionTop}));
+  assistantUiSelfCheckRecord(checks,'composer-actions-visible',layout.actions&&layout.actions.width>0,layout.actions&&layout.actions.width);
+
+  const previousAttachments=attachments.slice();
+  attachments=[];
+  renderAttachments();
+  addAttachment('assistant-selfcheck.txt','file','hello');
+  addAttachment('assistant-selfcheck.png','image','data:image/png;base64,AA==');
+  const attachmentSnapshot=assistantAttachmentDomSnapshot();
+  assistantUiSelfCheckRecord(checks,'attachments-list-semantics',attachmentSnapshot.role==='list'&&attachmentSnapshot.ariaLive==='polite',JSON.stringify(attachmentSnapshot));
+  assistantUiSelfCheckRecord(checks,'attachments-counts-sync',attachmentSnapshot.count===2&&attachmentSnapshot.imageCount===1&&attachmentSnapshot.fileCount===1&&attachmentSnapshot.panelCount===2,JSON.stringify(attachmentSnapshot));
+  assistantUiSelfCheckRecord(checks,'attachments-keyboard-controls',attachmentSnapshot.listItemCount===2&&attachmentSnapshot.removeButtonCount===2&&attachmentSnapshot.clearButtonCount===1,JSON.stringify(attachmentSnapshot));
+  attachments=previousAttachments;
+  renderAttachments();
+
+  const fixture={
+    name:'assistant-ui-self-check',
+    content:'Prepared one generated edit.',
+    contentReferences:[{
+      kind:'textEdit',
+      uri:'assistant-selfcheck.txt',
+      label:'assistant-selfcheck.txt',
+      edit:{range:{start:{line:0,character:0},end:{line:0,character:0}},newText:'hello'}
+    }]
+  };
+  const beforeCount=document.querySelectorAll('.msg').length;
+  const replay=await replayAssistantNativeResponseFixture(fixture,{scroll:false});
+  const body=latestChatMessageBody('assistant');
+  const changeSet=assistantChangeSetDomSnapshot(body);
+  assistantUiSelfCheckRecord(checks,'change-set-summary-rendered',changeSet.ok&&changeSet.files===1&&changeSet.edits===1,JSON.stringify(changeSet));
+  assistantUiSelfCheckRecord(checks,'change-set-actions-stateful',changeSet.actionCount===2&&changeSet.previewDisabled===false&&changeSet.applyDisabled===false&&changeSet.state==='ready',JSON.stringify(changeSet));
+  assistantUiSelfCheckRecord(checks,'change-set-panel-datasets',changeSet.panelFiles===1&&changeSet.panelEdits===1&&changeSet.panelState==='ready',JSON.stringify(changeSet));
+  assistantUiSelfCheckRecord(checks,'native-replay-summary-includes-changes',replay&&replay.changeSet&&replay.changeSet.ok&&replay.dom&&replay.dom.changeSummaryCount>=1,JSON.stringify(replay&&replay.changeSet));
+  if(opts.cleanup!==false&&body){
+    const msg=body.closest('.msg');
+    if(msg)msg.remove();
+    showChatWelcomeIfEmpty();
+    updateAssistantSurfaceState();
+  }
+  assistantUiSelfCheckRecord(checks,'selfcheck-cleanup',opts.cleanup===false||document.querySelectorAll('.msg').length===beforeCount,document.querySelectorAll('.msg').length);
+  const failed=checks.filter(check=>!check.pass);
+  const result={ok:failed.length===0,total:checks.length,failed,checks,layout,attachmentSnapshot,changeSet};
+  const panel=$('chat-panel');
+  if(panel){
+    panel.dataset.chatUiSelfCheckOk=result.ok?'true':'false';
+    panel.dataset.chatUiSelfCheckFailed=String(failed.length);
+    panel.dataset.chatUiSelfCheckTotal=String(checks.length);
+  }
+  return result;
 }
 function assistantComposerLayoutSnapshot(){
   const toolbar=document.querySelector('.chat-toolbar');
@@ -26350,8 +26450,11 @@ onStreamEnd=function(d){
 window.onStreamEnd=onStreamEnd;
 window.assistantMergeNativeResponsePayloads=assistantMergeNativeResponsePayloads;
 window.assistantNativeResponseDomSnapshot=assistantNativeResponseDomSnapshot;
+window.assistantChangeSetDomSnapshot=assistantChangeSetDomSnapshot;
+window.assistantAttachmentDomSnapshot=assistantAttachmentDomSnapshot;
 window.assistantNativeResponseRenderSummary=assistantNativeResponseRenderSummary;
 window.replayAssistantNativeResponseFixture=replayAssistantNativeResponseFixture;
+window.runAssistantUiSelfCheck=runAssistantUiSelfCheck;
 window.assistantComposerLayoutSnapshot=assistantComposerLayoutSnapshot;
 window.assistantSubmitResponsePartAction=assistantSubmitResponsePartAction;
 window.assistantActionTraySnapshot=assistantActionTraySnapshot;

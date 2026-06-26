@@ -4767,8 +4767,13 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantNativeResponseRenderSummary(body,payload,content)" in html
            and "const actionTray=assistantActionTraySnapshot();" in html
            and "function assistantNativeResponseDomSnapshot(body)" in html
+           and "function assistantChangeSetDomSnapshot(body)" in html
+           and "function assistantAttachmentDomSnapshot()" in html
            and "callbackActionCount:count('[data-assistant-callback=\"true\"]')" in html
            and "todoCardCount:count('.chat-response-todo-list')" in html
+           and "changeSummaryCount:count('.chat-change-summary')" in html
+           and "changeSummaryActionCount:count('.chat-change-summary-actions button')" in html
+           and "changeSummaryStatusCount:count('.chat-change-summary-status[role=\"status\"]')" in html
            and "async function replayAssistantNativeResponseFixture(nameOrPayload,opts)" in html
            and "fixture=await call('assistant_native_response_fixture',nameOrPayload||'split-native-response-parts');" in html
            and "const payload=assistantMergeNativeResponsePayloads(chunks);" in html
@@ -4777,11 +4782,36 @@ def test_phase1_ai_editor_regressions() -> None:
            and "body.dataset.assistantReplaySummary=JSON.stringify(summary);" in html
            and "window.assistantMergeNativeResponsePayloads=assistantMergeNativeResponsePayloads;" in html
            and "window.assistantNativeResponseDomSnapshot=assistantNativeResponseDomSnapshot;" in html
+           and "window.assistantChangeSetDomSnapshot=assistantChangeSetDomSnapshot;" in html
+           and "window.assistantAttachmentDomSnapshot=assistantAttachmentDomSnapshot;" in html
            and "window.assistantNativeResponseRenderSummary=assistantNativeResponseRenderSummary;" in html
            and "window.assistantActionTraySnapshot=assistantActionTraySnapshot;" in html
            and "window.replayAssistantNativeResponseFixture=replayAssistantNativeResponseFixture;" in html
+           and "changeSet=assistantChangeSetDomSnapshot(body)" in html
            and "modifiedFileCount:parts.filter(part=>part.kind==='modifiedFilesConfirmation')" in html
            and "todoCount:parts.filter(part=>part.kind==='todoList')" in html)
+    _check("frontend Assistant exposes DOM-level UI self check",
+           "async function runAssistantUiSelfCheck(opts)" in html
+           and "function assistantUiSelfCheckRecord(checks,name,pass,detail)" in html
+           and "assistantUiSelfCheckRecord(checks,'composer-layout-present'" in html
+           and "assistantUiSelfCheckRecord(checks,'composer-grid-footer'" in html
+           and "assistantUiSelfCheckRecord(checks,'composer-actions-same-row'" in html
+           and "assistantUiSelfCheckRecord(checks,'composer-actions-visible'" in html
+           and "assistantUiSelfCheckRecord(checks,'attachments-list-semantics'" in html
+           and "assistantUiSelfCheckRecord(checks,'attachments-counts-sync'" in html
+           and "assistantUiSelfCheckRecord(checks,'attachments-keyboard-controls'" in html
+           and "assistantUiSelfCheckRecord(checks,'change-set-summary-rendered'" in html
+           and "assistantUiSelfCheckRecord(checks,'change-set-actions-stateful'" in html
+           and "assistantUiSelfCheckRecord(checks,'change-set-panel-datasets'" in html
+           and "assistantUiSelfCheckRecord(checks,'native-replay-summary-includes-changes'" in html
+           and "assistantUiSelfCheckRecord(checks,'selfcheck-cleanup'" in html
+           and "attachments=previousAttachments;\n  renderAttachments();" in html
+           and "contentReferences:[{" in html
+           and "edit:{range:{start:{line:0,character:0},end:{line:0,character:0}},newText:'hello'}" in html
+           and "panel.dataset.chatUiSelfCheckOk=result.ok?'true':'false';" in html
+           and "panel.dataset.chatUiSelfCheckFailed=String(failed.length);" in html
+           and "panel.dataset.chatUiSelfCheckTotal=String(checks.length);" in html
+           and "window.runAssistantUiSelfCheck=runAssistantUiSelfCheck;" in html)
     _check("frontend Assistant response part actions submit callback metadata",
            "function assistantSubmitResponsePartAction(part,action,value,button,opts)" in html
            and "call('assistant_response_part_action',payload)" in html
