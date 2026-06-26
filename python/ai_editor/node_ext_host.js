@@ -4814,10 +4814,14 @@ function _debugHandleDapMessage(transport, message) {
         if (pending) {
             clearTimeout(pending.timer);
             transport.pending.delete(Number(message.request_seq));
+            const body = message.body === undefined ? {} : message.body;
+            if (pending.command === 'initialize' && body && typeof body === 'object') {
+                transport.capabilities = body;
+            }
             if (message.success === false) {
                 pending.reject(new Error(message.message || 'Debug adapter request failed'));
             } else {
-                pending.resolve(message.body === undefined ? {} : message.body);
+                pending.resolve(body);
             }
         }
     }
@@ -4828,6 +4832,83 @@ function _debugHandleDapMessage(transport, message) {
             event: String(message.event || ''),
             body: _plainBridgeValue(message.body || {}),
         });
+        _debugHandleDapEventState(transport, message);
+    }
+}
+
+function _debugDapSourcePayload(source) {
+    const payload = source && typeof source === 'object' ? source : {};
+    return {
+        name: payload.name,
+        path: payload.path,
+    };
+}
+
+function _debugDapStackFramePayload(frame) {
+    const payload = frame && typeof frame === 'object' ? frame : {};
+    return {
+        id: payload.id,
+        name: String(payload.name || ''),
+        source: _debugDapSourcePayload(payload.source || {}),
+        line: payload.line,
+        column: payload.column,
+    };
+}
+
+function _debugDapThreadPayload(thread) {
+    const payload = thread && typeof thread === 'object' ? thread : {};
+    return {
+        id: payload.id,
+        name: String(payload.name || `Thread ${payload.id || ''}`).trim(),
+    };
+}
+
+function _debugSetActiveStackItem(transport, item) {
+    transport.activeStackItem = item || undefined;
+    transport.session.activeStackItem = item || undefined;
+    try { transport.onActiveStackItem?.(item || undefined); } catch {}
+}
+
+function _debugRefreshActiveStackItem(transport, stoppedBody) {
+    if (!transport || transport.error) return;
+    const body = stoppedBody && typeof stoppedBody === 'object' ? stoppedBody : {};
+    const run = async () => {
+        const threadsResponse = await transport.sendRequest('threads', {}, 1200);
+        const threads = Array.isArray(threadsResponse?.threads)
+            ? threadsResponse.threads
+            : [];
+        const selectedThread = threads.find(item => item?.id === body.threadId)
+            || threads[0]
+            || (body.threadId !== undefined
+                ? { id: body.threadId, name: `Thread ${body.threadId}` }
+                : undefined);
+        if (!selectedThread) return;
+        const stackResponse = await transport.sendRequest('stackTrace', {
+            threadId: selectedThread.id,
+            startFrame: 0,
+            levels: 1,
+        }, 1200);
+        const frames = Array.isArray(stackResponse?.stackFrames)
+            ? stackResponse.stackFrames
+            : [];
+        const threadPayload = _debugDapThreadPayload(selectedThread);
+        const framePayload = frames.length ? _debugDapStackFramePayload(frames[0]) : undefined;
+        _debugSetActiveStackItem(transport, {
+            session: transport.session,
+            thread: threadPayload,
+            frame: framePayload,
+            reason: body.reason,
+        });
+    };
+    run().catch(err => _debugCallTrackers(transport.session, 'onError', err));
+}
+
+function _debugHandleDapEventState(transport, message) {
+    const eventName = String(message.event || '');
+    if (eventName === 'stopped') {
+        _debugRefreshActiveStackItem(transport, message.body || {});
+    } else if (eventName === 'continued' || eventName === 'terminated' || eventName === 'exited') {
+        _debugSetActiveStackItem(transport, undefined);
     }
 }
 
@@ -4864,7 +4945,12 @@ function _debugCreateStreamTransport(session, config, customEventEmitter, readSt
                     transport.pending.delete(seq);
                     reject(new Error(`Debug adapter request timed out: ${request.command}`));
                 }, timeoutMs);
-                transport.pending.set(seq, { resolve, reject, timer });
+                transport.pending.set(seq, {
+                    resolve,
+                    reject,
+                    timer,
+                    command: request.command,
+                });
                 try {
                     writeStream.write(_debugDapFrame(request));
                 } catch (err) {
@@ -4900,6 +4986,10 @@ function _debugCreateStreamTransport(session, config, customEventEmitter, readSt
         });
         if (typeof beforeLaunch === 'function') {
             await beforeLaunch(transport);
+        }
+        if (transport.capabilities?.supportsConfigurationDoneRequest === true) {
+            await transport.sendRequest('configurationDone', {});
+            transport.configurationDoneSent = true;
         }
         await transport.sendRequest(String(config.request || 'launch'), config || {});
         return true;
@@ -10700,6 +10790,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             const _onDidChangeBreakpoints = new EventEmitter();
             const _breakpoints = [];
             const _knownBreakpointSourceUris = new Map();
+            let _activeDebugStackItem = undefined;
             const protocolBreakpointFor = (breakpoint) => {
                 if (!breakpoint) return undefined;
                 const idNumber = Number(String(breakpoint.id || '').replace(/^\D+/, ''));
@@ -11030,6 +11121,12 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                         config,
                         _onDidReceiveDebugSessionCustomEvent,
                         transport => synchronizeBreakpointsToTransport(transport));
+                    if (session._debugAdapterTransport) {
+                        session._debugAdapterTransport.onActiveStackItem = item => {
+                            _activeDebugStackItem = item;
+                            _onDidChangeActiveStackItem.fire(item);
+                        };
+                    }
                     _debugCallTrackers(session, 'onWillStartSession');
                     _debugUpdateActive(session, _onDidChangeActiveDebugSession);
                     _onDidStartDebugSession.fire(session);
@@ -11052,6 +11149,12 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     if (_activeDebugSession && _activeDebugSession.id === target.id) {
                         _debugUpdateActive(null, _onDidChangeActiveDebugSession);
                     }
+                    if (_activeDebugStackItem
+                            && _activeDebugStackItem.session
+                            && _activeDebugStackItem.session.id === target.id) {
+                        _activeDebugStackItem = undefined;
+                        _onDidChangeActiveStackItem.fire(undefined);
+                    }
                     _onDidTerminateDebugSession.fire(target);
                     send({
                         type: 'debug_stop',
@@ -11071,7 +11174,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     _onDidReceiveDebugSessionCustomEvent.event,
                 onDidTerminateDebugSession: _onDidTerminateDebugSession.event,
                 onDidChangeBreakpoints: _onDidChangeBreakpoints.event,
-                get activeStackItem() { return undefined; },
+                get activeStackItem() { return _activeDebugStackItem; },
                 onDidChangeActiveStackItem: _onDidChangeActiveStackItem.event,
                 _onDidStartDebugSession,
                 _onDidTerminateDebugSession,

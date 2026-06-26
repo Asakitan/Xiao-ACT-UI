@@ -10133,11 +10133,15 @@ console.log("command palette quick access helpers ok");
            and "const net = require('node:net')" in node_ext_host_source
            and "function _debugDapFrame(message)" in node_ext_host_source
            and "function _debugParseDapFrames(transport, chunk)" in node_ext_host_source
+           and "function _debugHandleDapEventState(transport, message)" in node_ext_host_source
+           and "function _debugRefreshActiveStackItem(transport, stoppedBody)" in node_ext_host_source
            and "function _debugCreateServerAdapterTransport(session, descriptor, config, customEventEmitter, beforeLaunch)" in node_ext_host_source
            and "function _debugCreateNamedPipeAdapterTransport(session, descriptor, config, customEventEmitter, beforeLaunch)" in node_ext_host_source
            and "function _debugCreateAdapterTransport(session, descriptor, config, customEventEmitter, beforeLaunch)" in node_ext_host_source
            and "synchronizeBreakpointsToTransport(transport)" in node_ext_host_source
            and "transport.breakpointSyncLog = syncLog" in node_ext_host_source
+           and "supportsConfigurationDoneRequest === true" in node_ext_host_source
+           and "transport.sendRequest('configurationDone'" in node_ext_host_source
            and "setFunctionBreakpoints" in node_ext_host_source
            and "setDataBreakpoints" in node_ext_host_source
            and "net.createConnection({ port, host })" in node_ext_host_source
@@ -10162,6 +10166,8 @@ console.log("command palette quick access helpers ok");
            and "removeBreakpoints" in node_ext_host_source
            and "onDidChangeBreakpoints: _onDidChangeBreakpoints.event" in node_ext_host_source
            and "getDebugProtocolBreakpoint(breakpoint)" in node_ext_host_source
+           and "get activeStackItem() { return _activeDebugStackItem; }" in node_ext_host_source
+           and "onDidChangeActiveStackItem: _onDidChangeActiveStackItem.event" in node_ext_host_source
            and "registerDebugAdapterTrackerFactory(type, factory)"
            in node_ext_host_source
            and "get activeDebugConsole()" in node_ext_host_source
@@ -21165,6 +21171,7 @@ async function activate(context) {
     const taskEvents = [];
     const debugEvents = [];
     const debugBreakpointEvents = [];
+    const debugStackEvents = [];
     const disposables = [
       vscode.tasks.onDidStartTask(event => {
         taskEvents.push('start:' + event.execution.task.name);
@@ -21193,6 +21200,16 @@ async function activate(context) {
           removed: event.removed.length,
           changed: event.changed.length,
         });
+      }),
+      vscode.debug.onDidChangeActiveStackItem(item => {
+        debugStackEvents.push(item
+          ? {
+              session: item.session && item.session.name,
+              thread: item.thread && item.thread.name,
+              frame: item.frame && item.frame.name,
+              reason: item.reason,
+            }
+          : null);
       }),
     ];
     let resolvedTask = false;
@@ -21594,6 +21611,8 @@ async function activate(context) {
     const dapCustomResponse = dapSession
       ? await dapSession.customRequest('selftest/custom', { value: 'dap-ok' })
       : null;
+    await new Promise(resolve => setTimeout(resolve, 80));
+    const dapActiveStackItem = vscode.debug.activeStackItem;
     const dapInitialBreakpointSync = dapSession
       ? await dapSession.customRequest('selftest/breakpoints', {})
       : null;
@@ -21607,6 +21626,9 @@ async function activate(context) {
     await new Promise(resolve => setTimeout(resolve, 60));
     const dapBreakpointSyncAfterRemove = dapSession
       ? await dapSession.customRequest('selftest/breakpoints', {})
+      : null;
+    const dapAdapterState = dapSession
+      ? await dapSession.customRequest('selftest/adapterState', {})
       : null;
     await vscode.debug.stopDebugging(dapSession);
     const childStarted = await vscode.debug.startDebugging(undefined, {
@@ -21733,8 +21755,16 @@ async function activate(context) {
       dapInitialBreakpointSync,
       dapBreakpointSyncAfterAdd,
       dapBreakpointSyncAfterRemove,
+      dapAdapterState,
+      dapActiveStackItem: dapActiveStackItem ? {
+        session: dapActiveStackItem.session && dapActiveStackItem.session.name,
+        thread: dapActiveStackItem.thread,
+        frame: dapActiveStackItem.frame,
+        reason: dapActiveStackItem.reason,
+      } : null,
       customRequestResult,
       debugBreakpointEvents,
+      debugStackEvents,
       breakpointsAfterAddCount: breakpointsAfterAdd.length,
       breakpointsAfterAddKinds: breakpointsAfterAdd.map(item => item.constructor.name),
       breakpointsAfterAddEnabled: breakpointsAfterAdd.map(item => item.enabled),
@@ -22397,6 +22427,7 @@ module.exports = { activate, deactivate };
 let buffer = "";
 let seq = 1;
 const breakpointRequests = [];
+const adapterCommands = [];
 function send(message) {
   const payload = JSON.stringify(message);
   process.stdout.write("Content-Length: " + Buffer.byteLength(payload, "utf8") + "\r\n\r\n" + payload);
@@ -22415,14 +22446,39 @@ function event(name, body) {
   send({ seq: seq++, type: "event", event: name, body: body || {} });
 }
 function handle(request) {
+  adapterCommands.push(request.command);
   if (request.command === "initialize") {
-    response(request, { supportsConfigurationDoneRequest: false });
+    response(request, { supportsConfigurationDoneRequest: true });
     event("initialized", {});
+    return;
+  }
+  if (request.command === "configurationDone") {
+    response(request, {});
     return;
   }
   if (request.command === "launch") {
     response(request, {});
     event("dapCustom", { value: "from-adapter" });
+    event("stopped", { reason: "breakpoint", threadId: 7 });
+    return;
+  }
+  if (request.command === "threads") {
+    response(request, {
+      threads: [{ id: 7, name: "Main Thread" }],
+    });
+    return;
+  }
+  if (request.command === "stackTrace") {
+    response(request, {
+      stackFrames: [{
+        id: 41,
+        name: "mainFrame",
+        source: { path: "debug-target.js", name: "debug-target.js" },
+        line: 12,
+        column: 3,
+      }],
+      totalFrames: 1,
+    });
     return;
   }
   if (request.command === "setBreakpoints"
@@ -22450,7 +22506,11 @@ function handle(request) {
     return;
   }
   if (request.command === "selftest/breakpoints") {
-    response(request, { requests: breakpointRequests });
+    response(request, { requests: breakpointRequests, commands: adapterCommands });
+    return;
+  }
+  if (request.command === "selftest/adapterState") {
+    response(request, { commands: adapterCommands });
     return;
   }
   response(request, {});
@@ -27714,6 +27774,10 @@ process.stdin.resume();
                     for item in dap_after_remove_breakpoint_requests
                     if item.get("command") == "setFunctionBreakpoints"
                 ]
+                dap_adapter_commands = (
+                    node_task_debug_probe.get(
+                        "dapAdapterState", {}).get("commands", [])
+                    if isinstance(node_task_debug_probe, dict) else [])
                 _check("node host task and debug lifecycles match VS Code API",
                        node_started is True
                        and node_task_debug_command_registered
@@ -27914,6 +27978,33 @@ process.stdin.resume();
                            "dapDebugStarted") is True
                        and node_task_debug_probe.get(
                            "dapCustomResponse", {}).get("echo") == "dap-ok"
+                       and "configurationDone" in dap_adapter_commands
+                       and dap_adapter_commands.index(
+                           "configurationDone") < dap_adapter_commands.index(
+                               "launch")
+                       and node_task_debug_probe.get(
+                           "dapActiveStackItem", {}).get(
+                               "session") == "Node DAP Debug"
+                       and node_task_debug_probe.get(
+                           "dapActiveStackItem", {}).get(
+                               "thread", {}).get("id") == 7
+                       and node_task_debug_probe.get(
+                           "dapActiveStackItem", {}).get(
+                               "thread", {}).get("name") == "Main Thread"
+                       and node_task_debug_probe.get(
+                           "dapActiveStackItem", {}).get(
+                               "frame", {}).get("name") == "mainFrame"
+                       and node_task_debug_probe.get(
+                           "dapActiveStackItem", {}).get(
+                               "frame", {}).get("line") == 12
+                       and any(
+                           item
+                           and item.get("session") == "Node DAP Debug"
+                           and item.get("thread") == "Main Thread"
+                           and item.get("frame") == "mainFrame"
+                           and item.get("reason") == "breakpoint"
+                           for item in node_task_debug_probe.get(
+                               "debugStackEvents", []))
                        and [
                            item.get("command")
                            for item in dap_initial_breakpoint_requests
