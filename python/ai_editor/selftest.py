@@ -3543,8 +3543,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "color:var(--fg-dim); white-space:nowrap; overflow:hidden;" in html
            and ".chat-session-chip { max-width:96px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" in html
            and ".ctx-bar { width:38px; height:6px;" in html
-           and '<div class="chat-composer-trailing" aria-label="Chat actions and status">' in html
-           and '<span class="spacer"></span>\n                  <div class="chat-composer-trailing"' in html
+           and '<div class="chat-toolbar" role="toolbar" aria-label="Assistant composer">' in html
+           and '<div class="chat-control-strip" role="group" aria-label="Chat controls">' in html
+           and '<div class="chat-composer-trailing" role="group" aria-label="Chat actions and status">' in html
+           and '<span class="spacer"></span>\n                  <div class="chat-composer-trailing" role="group"' in html
            and '</span>\n                  </div>\n                </div>' in html)
     _check("frontend Assistant suppresses null and empty message turns",
            "function normalizeChatMessageText(text,role)" in html
@@ -3652,7 +3654,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "if(key.startsWith('tab:'))" in html
            and "if(key.startsWith('symbol:'))" in html)
     _check("frontend Assistant composer completion popups expose VS Code-style state",
-           "placeholder=\"Ask anything... (/ commands, @ context, # tools)\" aria-autocomplete=\"list\" aria-expanded=\"false\"" in html
+           "placeholder=\"Ask anything... (/ commands, @ context, # tools)\" aria-label=\"Ask Agent\" aria-describedby=\"chat-input-status chat-input-help\" aria-autocomplete=\"list\" aria-haspopup=\"listbox\" aria-expanded=\"false\"" in html
+           and '<div class="sr-only" id="chat-input-help">' in html
+           and '<span class="chat-composer-meta" id="chat-input-status" role="status" aria-live="polite">' in html
            and "ask_placeholder:'Ask anything... (/ commands, @ context, # tools)'" in html
            and "ask_placeholder:'输入问题... (/ 命令, @ 上下文, # 工具)'" in html
            and "note.textContent='Enter to send, Shift+Enter for newline, / commands, @ context, # tools.'" in html
@@ -3663,6 +3667,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "setChatCompletionState('slash',true,'slash-popup');" in html
            and "setChatCompletionState('mention',true,'at-popup');" in html
            and "setChatCompletionState('tool',true,'at-popup');" in html
+           and "input.removeAttribute('aria-activedescendant');" in html
+           and "id=\"slash-option-'+i+'\"" in html
+           and "id=\"chat-completion-option-'+i+'\"" in html
            and "role=\"listbox\" aria-label=\"Slash commands\"" in html
            and "role=\"listbox\" aria-label=\"Chat input completions\"" in html)
     _check("frontend Assistant exposes dynamic slash command controls",
@@ -3712,6 +3719,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "panel.dataset.chatComposerStreaming=streaming?'true':'false';" in html
            and "panel.dataset.chatMode=normalizeMode" in html
            and "panel.dataset.chatProvider=String(config.provider||'');" in html
+           and "stop.setAttribute('aria-hidden',streaming?'false':'true');" in html
+           and "syncAssistantSessionState({requestInProgress:streaming});" in html
            and "function renderAssistantPending(body,label)" in html
            and "className='chat-response-pending'" in html
            and "@keyframes assistantPendingPulse" in html
@@ -3823,6 +3832,9 @@ def test_phase1_ai_editor_regressions() -> None:
            'class="chat-context-picker" id="chat-context-picker" role="dialog" aria-label="Attach context"' in html
            and 'id="chat-context-picker-input" aria-label="Search context"' in html
            and 'onclick="openChatContextPicker()" title="Attach context" aria-label="Attach context"' in html
+           and "id=\"chat-context-option-'+i+'\"" in html
+           and "input.setAttribute('aria-activedescendant',active.id);" in html
+           and "input.removeAttribute('aria-activedescendant');" in html
            and "['/attach','Attach context','context']" in html
            and "else if(cmd==='/attach'||cmd==='/context')openChatContextPicker();" in html
            and "function chatContextPickerItems()" in html

@@ -44,6 +44,9 @@
   --statusbar-bg: #f0f0f0; --statusbar-fg: #3b3a3c;
 }
 * { margin:0; padding:0; box-sizing:border-box; }
+.sr-only { position:absolute !important; width:1px !important; height:1px !important; padding:0 !important;
+  margin:-1px !important; overflow:hidden !important; clip:rect(0,0,0,0) !important;
+  white-space:nowrap !important; border:0 !important; }
 body { font:13px/1.4 var(--sans); color:var(--fg); background:var(--bg);
   display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 body.window-closing { pointer-events:none; animation:windowCloseOut .18s ease-in forwards; }
@@ -1980,13 +1983,14 @@ pre.code-block { overflow:visible; }
               <div class="chat-input-container" id="chat-input-container">
                 <div class="chat-toolbar-head" id="chat-toolbar-head" aria-live="polite"></div>
                 <div class="chat-input-row">
-                  <textarea class="chat-input" id="chat-input" rows="1" data-i18n="ask_placeholder" placeholder="Ask anything... (/ commands, @ context, # tools)" aria-autocomplete="list" aria-expanded="false"></textarea>
-                  <button class="send-btn" id="send-btn" onclick="doSend()" title="Send"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 2.5l-5 5h3.5V13h3V7.5H13L8 2.5z"/></svg></button>
+                  <textarea class="chat-input" id="chat-input" rows="1" data-i18n="ask_placeholder" placeholder="Ask anything... (/ commands, @ context, # tools)" aria-label="Ask Agent" aria-describedby="chat-input-status chat-input-help" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false"></textarea>
+                  <button class="send-btn" id="send-btn" onclick="doSend()" title="Send" aria-label="Send" aria-disabled="true"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 2.5l-5 5h3.5V13h3V7.5H13L8 2.5z"/></svg></button>
                 </div>
+                <div class="sr-only" id="chat-input-help">Enter sends, Shift+Enter inserts a new line, Ctrl+Enter also sends, Escape stops a running response.</div>
                 <div class="chat-attached-context" id="chat-context-area" aria-label="Attached context"></div>
                 <div class="attach-area" id="attach-area"></div>
-                <div class="chat-toolbar">
-                  <div class="chat-control-strip" aria-label="Chat controls">
+                <div class="chat-toolbar" role="toolbar" aria-label="Assistant composer">
+                  <div class="chat-control-strip" role="group" aria-label="Chat controls">
                     <select class="chat-select-chip" id="chat-provider-sel" title="Chat provider">
                       <option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
                       <option value="deepseek">DeepSeek</option><option value="ollama">Ollama</option>
@@ -2040,14 +2044,14 @@ pre.code-block { overflow:visible; }
                     <button class="chat-run-chip" id="chat-workflow-run" onclick="runToolbarWorkflow()" title="Run selected workflow">▶</button>
                   </div>
                   <span class="spacer"></span>
-                  <div class="chat-composer-trailing" aria-label="Chat actions and status">
+                  <div class="chat-composer-trailing" role="group" aria-label="Chat actions and status">
                     <!-- Tools checkbox removed — mode controls tool access -->
-                    <button class="chat-composer-action" id="stop-btn" style="display:none;color:var(--fg-error)" onclick="doStop()" title="Stop" aria-label="Stop">■</button>
+                    <button class="chat-composer-action" id="stop-btn" style="display:none;color:var(--fg-error)" onclick="doStop()" title="Stop" aria-label="Stop" aria-hidden="true">■</button>
                     <button class="chat-composer-action" onclick="newChat()" data-i18n-title="new_chat_title" title="New chat" aria-label="New chat">＋</button>
                     <button class="chat-composer-action" onclick="openChatHistory()" data-i18n-title="history" title="History" aria-label="History">◷</button>
                     <button class="chat-composer-action" onclick="openChatContextPicker()" title="Attach context" aria-label="Attach context">@</button>
                     <button class="chat-composer-action" onclick="uploadImage()" title="Attach image" aria-label="Attach image">📎</button>
-                    <span class="chat-composer-meta">
+                    <span class="chat-composer-meta" id="chat-input-status" role="status" aria-live="polite">
                       <span class="chat-session-chip" id="chat-session-chip" title="Chat session">Local - 0 req</span>
                       <span class="model-chip" id="model-chip" onclick="openSettings()" title="Change model">-</span>
                       <span class="ctx-usage" id="ctx-usage" title="Context window usage">
@@ -3780,7 +3784,11 @@ function updateChatComposerState(){
     send.setAttribute('aria-label',streaming?t('stop'):t('send'));
     send.title=streaming?'Response in progress':(sendable?t('send'):t('ask_placeholder'));
   }
-  if(stop)stop.style.display=streaming?'':'none';
+  if(stop){
+    stop.style.display=streaming?'':'none';
+    stop.setAttribute('aria-hidden',streaming?'false':'true');
+    stop.disabled=!streaming;
+  }
   if(container){
     container.classList.toggle('sendable',sendable&&!streaming);
     container.classList.toggle('empty',!sendable);
@@ -3806,6 +3814,7 @@ function setChatStreamingState(active){
   _setSendIcon(streaming);
   const ic=$('chat-input-container');
   if(ic)ic.classList.toggle('working',streaming);
+  syncAssistantSessionState({requestInProgress:streaming});
   updateChatComposerState();
 }
 function clearAssistantPending(body){
@@ -4370,15 +4379,19 @@ function renderChatContextPicker(){
   if(_chatContextPickerIndex>=_chatContextPickerFiltered.length)_chatContextPickerIndex=Math.max(0,_chatContextPickerFiltered.length-1);
   if(!_chatContextPickerFiltered.length){
     list.innerHTML='<div class="chat-context-picker-empty">No matching context</div>';
+    if(input)input.removeAttribute('aria-activedescendant');
     return;
   }
   list.innerHTML=_chatContextPickerFiltered.map((item,i)=>
-    '<div class="chat-context-picker-item'+(i===_chatContextPickerIndex?' selected':'')+'" role="option" aria-selected="'+(i===_chatContextPickerIndex?'true':'false')+'" data-context-picker-idx="'+i+'" onmousedown="pickChatContextPickerItem('+i+')">'+
+    '<div class="chat-context-picker-item'+(i===_chatContextPickerIndex?' selected':'')+'" id="chat-context-option-'+i+'" role="option" aria-selected="'+(i===_chatContextPickerIndex?'true':'false')+'" data-context-picker-idx="'+i+'" onmousedown="pickChatContextPickerItem('+i+')">'+
     '<span class="ctx-icon">'+esc(item.icon||'@')+'</span><span class="ctx-main"><span class="ctx-label">'+esc(item.label||item.id||'Context')+'</span>'+
     '<span class="ctx-desc">'+esc(item.description||item.preview||item.prompt||'')+'</span></span><span class="ctx-kind">'+esc(item.kind||'ctx')+'</span></div>').join('');
+  const active=list.querySelector('[data-context-picker-idx="'+_chatContextPickerIndex+'"]');
+  if(input&&active&&active.id)input.setAttribute('aria-activedescendant',active.id);
 }
 function closeChatContextPicker(){
   const picker=$('chat-context-picker');if(picker)picker.classList.remove('open');
+  const input=$('chat-context-picker-input');if(input)input.removeAttribute('aria-activedescendant');
   if(typeof setChatCompletionState==='function')setChatCompletionState('',false);
 }
 async function openChatContextPicker(){
@@ -11848,6 +11861,7 @@ function setChatCompletionState(kind,open,controlsId){
   if(input){
     input.setAttribute('aria-expanded',open?'true':'false');
     if(open&&controlsId)input.setAttribute('aria-controls',controlsId);else input.removeAttribute('aria-controls');
+    if(!open)input.removeAttribute('aria-activedescendant');
   }
 }
 function closeSlashPopup(){
@@ -11858,16 +11872,18 @@ function renderSlashPopup(matches){
   _slashMatches=matches.slice();_slashSelectedIdx=0;
   if(!_slashMatches.length){closeSlashPopup();return}
   $('at-popup').classList.remove('open');closeChatContextPicker();
-  slashPopup.innerHTML=_slashMatches.map((c,i)=>'<div class="slash-item'+(i===0?' selected':'')+'" role="option" aria-selected="'+(i===0?'true':'false')+'" data-slash-idx="'+i+'" onmousedown="pickSlashByIndex('+i+')"><span class="cmd">'+esc(c[0])+'</span><span class="desc">'+esc(c[1])+'</span><span class="category">'+esc(c[2]||'chat')+'</span></div>').join('');
+  slashPopup.innerHTML=_slashMatches.map((c,i)=>'<div class="slash-item'+(i===0?' selected':'')+'" id="slash-option-'+i+'" role="option" aria-selected="'+(i===0?'true':'false')+'" data-slash-idx="'+i+'" onmousedown="pickSlashByIndex('+i+')"><span class="cmd">'+esc(c[0])+'</span><span class="desc">'+esc(c[1])+'</span><span class="category">'+esc(c[2]||'chat')+'</span></div>').join('');
   slashPopup.setAttribute('role','listbox');
   slashPopup.classList.add('open');
   setChatCompletionState('slash',true,'slash-popup');
+  $('chat-input').setAttribute('aria-activedescendant','slash-option-0');
 }
 function selectSlashIndex(next){
   const items=slashPopup.querySelectorAll('.slash-item');if(!items.length)return;
   items[_slashSelectedIdx].classList.remove('selected');items[_slashSelectedIdx].setAttribute('aria-selected','false');
   _slashSelectedIdx=(next+items.length)%items.length;
   items[_slashSelectedIdx].classList.add('selected');items[_slashSelectedIdx].setAttribute('aria-selected','true');
+  if(items[_slashSelectedIdx].id)$('chat-input').setAttribute('aria-activedescendant',items[_slashSelectedIdx].id);
   items[_slashSelectedIdx].scrollIntoView({block:'nearest'});
 }
 chatInp.addEventListener('input',function(){
@@ -21222,7 +21238,7 @@ function _renderAtPopup(matches){
   _chatCompletionMode='mention';
   closeSlashPopup();closeChatContextPicker();
   atPopup.innerHTML=matches.map((a,i)=>
-    '<div class="at-popup-item'+(i===0?' selected':'')+'" role="option" aria-selected="'+(i===0?'true':'false')+'" data-at-idx="'+i+'" onmousedown="pickAtVar(\''+esc(a[0]).replace(/'/g,"\\'")+'\')">'+
+    '<div class="at-popup-item'+(i===0?' selected':'')+'" id="chat-completion-option-'+i+'" role="option" aria-selected="'+(i===0?'true':'false')+'" data-at-idx="'+i+'" onmousedown="pickAtVar(\''+esc(a[0]).replace(/'/g,"\\'")+'\')">'+
     '<span class="at-icon">'+esc(a[3]||'')+'</span>'+
     '<span class="at-label">'+esc(a[0])+'</span>'+
     '<span class="at-desc">'+esc(a[1])+'</span>'+
@@ -21230,6 +21246,7 @@ function _renderAtPopup(matches){
   atPopup.className='at-popup-enhanced open';
   atPopup.setAttribute('role','listbox');
   setChatCompletionState('mention',true,'at-popup');
+  $('chat-input').setAttribute('aria-activedescendant','chat-completion-option-0');
 }
 function getHashToolCompletions(prefix){
   const query=String(prefix||'').toLowerCase();
@@ -21242,7 +21259,7 @@ function renderHashToolPopup(matches){
   _chatCompletionMode='tool';
   closeSlashPopup();closeChatContextPicker();
   atPopup.innerHTML=matches.map((tool,i)=>
-    '<div class="at-popup-item'+(i===0?' selected':'')+'" role="option" aria-selected="'+(i===0?'true':'false')+'" data-at-idx="'+i+'" onmousedown="pickHashToolCompletion(\''+esc(tool.name).replace(/'/g,"\\'")+'\')">'+
+    '<div class="at-popup-item'+(i===0?' selected':'')+'" id="chat-completion-option-'+i+'" role="option" aria-selected="'+(i===0?'true':'false')+'" data-at-idx="'+i+'" onmousedown="pickHashToolCompletion(\''+esc(tool.name).replace(/'/g,"\\'")+'\')">'+
     '<span class="at-icon">#</span>'+
     '<span class="at-label">'+esc(tool.label||('#'+tool.name))+'</span>'+
     '<span class="at-desc">'+esc(tool.description||'Tool')+'</span>'+
@@ -21250,6 +21267,7 @@ function renderHashToolPopup(matches){
   atPopup.className='at-popup-enhanced open';
   atPopup.setAttribute('role','listbox');
   setChatCompletionState('tool',true,'at-popup');
+  $('chat-input').setAttribute('aria-activedescendant','chat-completion-option-0');
 }
 chatInp.addEventListener('input',function(){
   if(_atPopupTimer)clearTimeout(_atPopupTimer);
@@ -21287,6 +21305,7 @@ chatInp.addEventListener('keydown',function(e){
     if(e.key==='ArrowDown')_atSelectedIdx=(_atSelectedIdx+1)%items.length;
     else _atSelectedIdx=(_atSelectedIdx-1+items.length)%items.length;
     items[_atSelectedIdx].classList.add('selected');items[_atSelectedIdx].setAttribute('aria-selected','true');
+    if(items[_atSelectedIdx].id)$('chat-input').setAttribute('aria-activedescendant',items[_atSelectedIdx].id);
     items[_atSelectedIdx].scrollIntoView({block:'nearest'});
     return;
   }
