@@ -7114,6 +7114,9 @@ class AIEditorAPI:
     def assistant_response_part_action(self, payload: Optional[Dict[str, Any]] = None) -> Dict:
         """Record an Assistant response-part action for provider callbacks/debug replay."""
         data = payload if isinstance(payload, dict) else {}
+        provider_id = str(data.get("providerId") or data.get("provider_id") or "chat").strip() or "chat"
+        session_id = str(data.get("sessionId") or data.get("session_id") or "")
+        message_id = str(data.get("messageId") or data.get("message_id") or "")
         action = {
             "kind": str(data.get("kind") or ""),
             "partId": str(data.get("partId") or data.get("id") or ""),
@@ -7124,19 +7127,76 @@ class AIEditorAPI:
             "button": data.get("button") if isinstance(data.get("button"), dict) else None,
             "answers": data.get("answers") if isinstance(data.get("answers"), list) else None,
             "data": data.get("data") if isinstance(data.get("data"), dict) else None,
+            "providerId": provider_id,
+            "sessionId": session_id,
+            "messageId": message_id,
+            "surface": str(data.get("surface") or ""),
             "timestamp": time.time(),
         }
         if not (action["callbackId"] or action["requestId"] or action["partId"]):
             return {"error": "Assistant response part action is missing callback metadata."}
         if not action["action"]:
             return {"error": "Assistant response part action is missing an action."}
+        dispatch_result = self._dispatch_assistant_response_part_action(provider_id, action)
         self._assistant_response_part_actions.append(action)
         del self._assistant_response_part_actions[:-20]
+        if dispatch_result.get("ok") is False:
+            return {
+                "error": dispatch_result.get("error") or "Assistant response part action dispatch failed.",
+                "action": action,
+                "dispatch": dispatch_result,
+                "recent": list(self._assistant_response_part_actions),
+            }
         return {
             "ok": True,
             "action": action,
+            "dispatch": dispatch_result,
             "recent": list(self._assistant_response_part_actions),
         }
+
+    def _dispatch_assistant_response_part_action(
+            self, provider_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
+        if not provider_id or provider_id == "chat":
+            return {"ok": True, "dispatched": False, "reason": "builtin-chat"}
+        ctrl = getattr(self, "_provider_controllers", {}).get(provider_id)
+        if ctrl is None:
+            return {"ok": True, "dispatched": False, "reason": "provider-controller-not-created"}
+        for name in (
+            "handle_response_part_action",
+            "response_part_action",
+            "on_response_part_action",
+        ):
+            handler = getattr(ctrl, name, None)
+            if callable(handler):
+                try:
+                    result = handler(dict(action))
+                    return {
+                        "ok": True,
+                        "dispatched": True,
+                        "handler": name,
+                        "result": result,
+                    }
+                except Exception as exc:
+                    return {
+                        "ok": False,
+                        "dispatched": True,
+                        "handler": name,
+                        "error": str(exc),
+                    }
+        return {"ok": True, "dispatched": False, "reason": "provider-action-handler-missing"}
+
+    def list_assistant_response_part_actions(
+            self, provider_id: str = "", limit: int = 20) -> Dict:
+        """Return recent Assistant response-part actions for UI/provider diagnostics."""
+        provider_filter = str(provider_id or "").strip()
+        try:
+            count = max(1, min(100, int(limit)))
+        except (TypeError, ValueError):
+            count = 20
+        actions = list(self._assistant_response_part_actions)
+        if provider_filter:
+            actions = [item for item in actions if item.get("providerId") == provider_filter]
+        return {"ok": True, "actions": actions[-count:]}
 
     def provider_cancel(self, provider_id: str) -> Dict:
         if provider_id == "chat":

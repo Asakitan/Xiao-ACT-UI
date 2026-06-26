@@ -1026,6 +1026,7 @@ def test_app_settings_parity() -> None:
         "load_history", "switch_provider", "list_chat_providers",
         "provider_send", "provider_cancel", "provider_new_chat",
         "assistant_native_response_fixture", "assistant_response_part_action",
+        "list_assistant_response_part_actions",
         "get_model_info", "test_connection", "set_mode", "save_config",
         "get_mode", "list_models", "save_custom_model",
         "delete_custom_model", "search_extensions",
@@ -1071,11 +1072,20 @@ def test_app_settings_parity() -> None:
         "callbackId": "callback-confirm-1",
         "action": "apply",
         "value": "apply",
+        "providerId": "chat",
+        "sessionId": "chat-session:selftest",
+        "messageId": "chat-1",
     })
     _check("assistant response part actions are recorded for callbacks",
            action_result.get("ok") is True
            and action_result.get("action", {}).get("callbackId") == "callback-confirm-1"
+           and action_result.get("action", {}).get("sessionId") == "chat-session:selftest"
+           and action_result.get("dispatch", {}).get("reason") == "builtin-chat"
            and action_result.get("recent", [{}])[-1].get("action") == "apply")
+    recent_actions = api.list_assistant_response_part_actions("chat", 5)
+    _check("assistant response part actions can be queried by provider",
+           recent_actions.get("ok") is True
+           and recent_actions.get("actions", [{}])[-1].get("messageId") == "chat-1")
     _check("assistant native response replay fixture rejects unknown names",
            "Unknown Assistant native response fixture"
            in api.assistant_native_response_fixture("missing-fixture").get("error", ""))
@@ -3594,6 +3604,7 @@ def test_phase1_ai_editor_regressions() -> None:
             self.is_running = False
             self.sent = []
             self.new_chat_calls = 0
+            self.response_part_actions = []
 
         def send(self, message: str, agent_mode: bool = False) -> None:
             self.sent.append((message, agent_mode))
@@ -3603,6 +3614,10 @@ def test_phase1_ai_editor_regressions() -> None:
 
         def new_conversation(self, system_prompt: str = "") -> None:
             self.new_chat_calls += 1
+
+        def handle_response_part_action(self, action):
+            self.response_part_actions.append(action)
+            return {"handled": True, "count": len(self.response_part_actions)}
 
     copilot_new = api_cli.provider_new_chat("copilot")
     _check("provider_new_chat resets native Copilot surface without provider controller",
@@ -3647,6 +3662,22 @@ def test_phase1_ai_editor_regressions() -> None:
            provider_payload_result.get("ok") is True
            and plugin_provider_api._provider_controllers["plugin-demo"].sent[-1]
            == ("Context:\nnotes\n\nUser request:\nreview", False))
+    provider_action = plugin_provider_api.assistant_response_part_action({
+        "providerId": "plugin-demo",
+        "kind": "questionCarousel",
+        "partId": "questions-1",
+        "requestId": "request-plugin-demo",
+        "callbackId": "callback-plugin-demo",
+        "action": "answers",
+        "answers": [{"id": "scope", "values": ["focused"]}],
+        "messageId": "provider-plugin-demo-1",
+    })
+    _check("assistant response part actions dispatch to provider controllers",
+           provider_action.get("ok") is True
+           and provider_action.get("dispatch", {}).get("dispatched") is True
+           and provider_action.get("dispatch", {}).get("handler") == "handle_response_part_action"
+           and plugin_provider_api._provider_controllers["plugin-demo"]
+               .response_part_actions[-1].get("callbackId") == "callback-plugin-demo")
     _check("unregister_chat_provider removes custom providers only",
            plugin_provider_api.unregister_chat_provider("plugin-demo").get("ok") is True
            and plugin_provider_api._provider_registry.get("plugin-demo") is None)
@@ -4600,6 +4631,16 @@ def test_phase1_ai_editor_regressions() -> None:
            "function assistantSubmitResponsePartAction(part,action,value,button,opts)" in html
            and "call('assistant_response_part_action',payload)" in html
            and "assistantResponsePartCallbackMetadata(source,button)" in html
+           and "function assistantResponsePartContext(opts)" in html
+           and "providerId:context.providerId" in html
+           and "sessionId:context.sessionId" in html
+           and "messageId:context.messageId" in html
+           and "surface:context.surface" in html
+           and "function setAssistantResponsePartActionState(button,state,label)" in html
+           and "function finalizeAssistantResponsePartActionButton(button,result,payload)" in html
+           and "button.setAttribute('aria-busy','true');" in html
+           and "button.textContent=button.textContent.replace(/\\s*✓$/,'')+' ✓';" in html
+           and "opts.buttonEl||" in html
            and "btn.dataset.assistantCallback='true';" in html
            and "insert.dataset.assistantAction='answers';" in html
            and "skip.dataset.assistantAction='skip';" in html

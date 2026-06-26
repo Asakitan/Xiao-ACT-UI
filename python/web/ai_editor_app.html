@@ -1006,6 +1006,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-inline-action { color:var(--fg-dim); background:transparent; }
 .chat-inline-action.primary { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 45%,var(--border)); }
 .chat-inline-action:disabled { opacity:.5; cursor:default; }
+.chat-inline-action.submitted { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 45%,var(--border)); }
+.chat-inline-action.error { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 45%,var(--border)); }
 .chat-response-native-parts { margin-top:8px; display:flex; flex-direction:column; gap:6px; }
 .chat-response-part { color:var(--fg); font-size:12px; line-height:1.45; }
 .chat-response-callout { display:grid; grid-template-columns:18px minmax(0,1fr); gap:7px; align-items:start;
@@ -2879,6 +2881,8 @@ function ensureAssistantBody(){
 
 // ── API ──
 const api=()=>window.pywebview&&window.pywebview.api;
+let _chatMessageSeq=0;
+let _providerMessageSeq=0;
 let _windowCloseRequested=false;
 function requestWindowClose(){
   if(_windowCloseRequested)return;
@@ -4340,6 +4344,8 @@ function createMsg(role,model){
   const turnClass=role==='user'?'interactive-request':role==='assistant'?'interactive-response':role==='system'?'interactive-system':'interactive-response';
   el.className='msg interactive-item-container '+turnClass+(role==='user'?' user-msg':'');
   el.dataset.role=role;
+  el.dataset.messageId='chat-'+(++_chatMessageSeq);
+  el.dataset.surface='chat';
   el.setAttribute('role','article');
   el.setAttribute('tabindex','-1');
   el.addEventListener('focus',()=>{_chatFocusedMessageIndex=chatConversationItems().indexOf(el);refreshChatMessageNavigationState()});
@@ -4354,6 +4360,8 @@ function createMsg(role,model){
   if(model){const m=document.createElement('span');m.className='msg-model';m.textContent=model;hdr.appendChild(m)}
   el.appendChild(hdr);
   const body=document.createElement('div');body.className='msg-body';
+  body.dataset.messageId=el.dataset.messageId;
+  body.dataset.surface='chat';
   el.appendChild(body);
   const container=ensureChatMessagesInner();
   container.appendChild(el);
@@ -5984,14 +5992,64 @@ function assistantResponsePartHasCallback(source,button){
   const meta=assistantResponsePartCallbackMetadata(source,button);
   return !!(meta.callbackId||meta.requestId||meta.partId);
 }
+function assistantResponsePartContext(opts){
+  opts=opts||{};
+  const anchor=opts.button||opts.card||opts.body||null;
+  const body=anchor&&anchor.closest?anchor.closest('.msg-body'):null;
+  const msg=anchor&&anchor.closest?anchor.closest('.msg'):null;
+  const panel=anchor&&anchor.closest?anchor.closest('.right-panel[data-provider-id]'):null;
+  const chatPanel=anchor&&anchor.closest?anchor.closest('[data-chat-session-resource]'):null;
+  const providerId=(body&&body.dataset.providerId)||(msg&&msg.dataset.providerId)||(panel&&panel.dataset.providerId)||'chat';
+  const sessionResource=(chatPanel&&chatPanel.dataset.chatSessionResource)||assistantSessionResource();
+  const sessionType=(chatPanel&&chatPanel.dataset.chatSessionType)||(assistantSessionState&&assistantSessionState.type)||'local';
+  return {
+    providerId,
+    sessionId:sessionResource,
+    sessionType,
+    messageId:(body&&body.dataset.messageId)||(msg&&msg.dataset.messageId)||'',
+    surface:(body&&body.dataset.surface)||(msg&&msg.dataset.surface)||(providerId==='chat'?'chat':'provider')
+  };
+}
+function setAssistantResponsePartActionState(button,state,label){
+  if(!button)return;
+  button.dataset.actionState=state||'';
+  button.classList.toggle('submitted',state==='submitted');
+  button.classList.toggle('error',state==='error');
+  if(state==='pending'){
+    button.disabled=true;
+    button.setAttribute('aria-busy','true');
+  }else{
+    button.removeAttribute('aria-busy');
+    if(state!=='submitted')button.disabled=false;
+  }
+  if(label)button.title=label;
+}
+function finalizeAssistantResponsePartActionButton(button,result,payload){
+  if(!button)return;
+  const group=button.closest('.chat-response-confirmation,.chat-response-questions');
+  if(result&&result.ok){
+    if(group)group.querySelectorAll('[data-assistant-callback="true"]').forEach(btn=>{
+      btn.disabled=true;
+      btn.setAttribute('aria-disabled','true');
+    });
+    button.textContent=button.textContent.replace(/\s*✓$/,'')+' ✓';
+    setAssistantResponsePartActionState(button,'submitted','Submitted Assistant action: '+payload.action);
+    return;
+  }
+  setAssistantResponsePartActionState(button,'error',callFailedMessage(result,'Assistant action failed'));
+}
 async function assistantSubmitResponsePartAction(part,action,value,button,opts){
   opts=opts||{};
+  const buttonEl=opts.buttonEl||(button&&button.nodeType===1?button:null);
+  const buttonMeta=button&&button.nodeType===1?null:button;
   const source=(part&&(part.confirmation||part.carousel))||part||{};
-  const meta=assistantResponsePartCallbackMetadata(source,button);
+  const meta=assistantResponsePartCallbackMetadata(source,buttonMeta);
   if(!(meta.callbackId||meta.requestId||meta.partId)){
     if(opts.fallbackText)chatResponseComposerText(opts.fallbackTitle||'Response',opts.fallbackText);
     return {ok:false,fallback:true,error:'missing callback metadata'};
   }
+  setAssistantResponsePartActionState(buttonEl,'pending','Submitting Assistant action...');
+  const context=assistantResponsePartContext({...opts,button:buttonEl});
   const payload={
     kind:String((part&&part.kind)||source.kind||''),
     partId:meta.partId,
@@ -5999,16 +6057,23 @@ async function assistantSubmitResponsePartAction(part,action,value,button,opts){
     callbackId:meta.callbackId,
     action:String(action||'submit'),
     value:value,
-    button:button&&typeof button==='object'?button:null,
+    button:buttonMeta&&typeof buttonMeta==='object'?buttonMeta:null,
     answers:opts.answers||null,
-    data:source.data&&typeof source.data==='object'?source.data:null
+    data:source.data&&typeof source.data==='object'?source.data:null,
+    providerId:context.providerId,
+    sessionId:context.sessionId,
+    sessionType:context.sessionType,
+    messageId:context.messageId,
+    surface:context.surface
   };
   const result=await call('assistant_response_part_action',payload);
   if(result&&result.ok){
+    finalizeAssistantResponsePartActionButton(buttonEl,result,payload);
     setStatus('Submitted Assistant action: '+payload.action);
     return result;
   }
   const message=callFailedMessage(result,'Assistant action failed');
+  finalizeAssistantResponsePartActionButton(buttonEl,result,payload);
   if(opts.fallbackText)chatResponseComposerText(opts.fallbackTitle||'Response',opts.fallbackText);
   else setStatus(message);
   return result||{error:message};
@@ -6042,7 +6107,7 @@ function renderChatConfirmationPart(wrap,part){
     const btn=document.createElement('button');btn.type='button';btn.className='chat-inline-action primary';btn.textContent=label;
     btn.dataset.assistantAction=String((button&&button.action)||label);
     if(assistantResponsePartHasCallback(data,button))btn.dataset.assistantCallback='true';
-    btn.onclick=()=>assistantSubmitResponsePartAction(part,(button&&button.action)||'button',(button&&button.value)!==undefined?button.value:label,button,{fallbackTitle:data.title||'Confirmation',fallbackText:label});
+    btn.onclick=()=>assistantSubmitResponsePartAction(part,(button&&button.action)||'button',(button&&button.value)!==undefined?button.value:label,button,{buttonEl:btn,fallbackTitle:data.title||'Confirmation',fallbackText:label});
     actions.appendChild(btn);
   });
   card.appendChild(actions);wrap.appendChild(card);
@@ -6076,12 +6141,12 @@ function renderChatQuestionCarouselPart(wrap,part){
   const insert=document.createElement('button');insert.type='button';insert.className='chat-inline-action primary';insert.textContent='Insert answers';
   insert.dataset.assistantAction='answers';
   if(assistantResponsePartHasCallback(carousel,null))insert.dataset.assistantCallback='true';
-  insert.onclick=()=>assistantSubmitResponsePartAction(part,'answers',chatQuestionCarouselAnswerText(card),null,{fallbackTitle:'Answers',fallbackText:chatQuestionCarouselAnswerText(card),answers:chatQuestionCarouselAnswerPayload(card)});
+  insert.onclick=()=>assistantSubmitResponsePartAction(part,'answers',chatQuestionCarouselAnswerText(card),null,{buttonEl:insert,fallbackTitle:'Answers',fallbackText:chatQuestionCarouselAnswerText(card),answers:chatQuestionCarouselAnswerPayload(card)});
   actions.appendChild(insert);
   if(carousel.allowSkip){
     const skip=document.createElement('button');skip.type='button';skip.className='chat-inline-action';skip.textContent='Skip';skip.dataset.assistantAction='skip';
     if(assistantResponsePartHasCallback(carousel,null))skip.dataset.assistantCallback='true';
-    skip.onclick=()=>assistantSubmitResponsePartAction(part,'skip','Skip',null,{fallbackTitle:'Answers',fallbackText:'Skip',answers:[]});actions.appendChild(skip);
+    skip.onclick=()=>assistantSubmitResponsePartAction(part,'skip','Skip',null,{buttonEl:skip,fallbackTitle:'Answers',fallbackText:'Skip',answers:[]});actions.appendChild(skip);
   }
   card.appendChild(actions);wrap.appendChild(card);
 }
@@ -17362,12 +17427,19 @@ async function renderProviderTabs(){
 function createProviderMessage(pid,role,model,text){
   const refs=providerRefs(pid),mc=refs.messages;if(!mc)return null;clearProviderEmpty(pid);
   const msg=document.createElement('div');msg.className='msg'+(role==='user'?' user-msg':role==='tool'?' provider-tool-msg':'');
+  msg.dataset.providerId=pid;
+  msg.dataset.messageId='provider-'+providerDomKey(pid)+'-'+(++_providerMessageSeq);
+  msg.dataset.surface='provider';
   const hdr=document.createElement('div');hdr.className='msg-header';
   const av=document.createElement('span');av.className='msg-avatar '+role;av.textContent={user:'U',assistant:'✦',tool:'⚡',error:'!'}[role]||'ℹ';
   const label=document.createElement('span');label.className='msg-role '+role;label.textContent={user:t('role_you'),assistant:providerDisplayName(pid),tool:t('role_tool'),error:t('status_error')}[role]||role;
   hdr.appendChild(av);hdr.appendChild(label);
   if(model){const m=document.createElement('span');m.className='msg-model';m.textContent=model;hdr.appendChild(m)}
-  const body=document.createElement('div');body.className='msg-body';if(text!==undefined)body.textContent=text;
+  const body=document.createElement('div');body.className='msg-body';
+  body.dataset.providerId=pid;
+  body.dataset.messageId=msg.dataset.messageId;
+  body.dataset.surface='provider';
+  if(text!==undefined)body.textContent=text;
   msg.appendChild(hdr);msg.appendChild(body);mc.appendChild(msg);providerScroll(mc);return body;
 }
 async function providerSend(pid){
