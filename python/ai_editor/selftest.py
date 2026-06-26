@@ -10120,6 +10120,10 @@ console.log("command palette quick access helpers ok");
            and "class CustomExecution" in node_ext_host_source
            and "class TaskGroup" in node_ext_host_source
            and "class Task" in node_ext_host_source
+           and "class Breakpoint" in node_ext_host_source
+           and "class SourceBreakpoint" in node_ext_host_source
+           and "class FunctionBreakpoint" in node_ext_host_source
+           and "class DataBreakpoint" in node_ext_host_source
            and "class DebugAdapterExecutable" in node_ext_host_source
            and "class DebugAdapterServer" in node_ext_host_source
            and "class DebugAdapterNamedPipeServer" in node_ext_host_source
@@ -10150,6 +10154,10 @@ console.log("command palette quick access helpers ok");
            and "async startDebugging(folder, config, options)"
            in node_ext_host_source
            and "stopDebugging(session)" in node_ext_host_source
+           and "addBreakpoints" in node_ext_host_source
+           and "removeBreakpoints" in node_ext_host_source
+           and "onDidChangeBreakpoints: _onDidChangeBreakpoints.event" in node_ext_host_source
+           and "getDebugProtocolBreakpoint(breakpoint)" in node_ext_host_source
            and "registerDebugAdapterTrackerFactory(type, factory)"
            in node_ext_host_source
            and "get activeDebugConsole()" in node_ext_host_source
@@ -21151,6 +21159,7 @@ async function activate(context) {
   vscode.commands.registerCommand('selftest.node.taskDebugProbe', async () => {
     const taskEvents = [];
     const debugEvents = [];
+    const debugBreakpointEvents = [];
     const disposables = [
       vscode.tasks.onDidStartTask(event => {
         taskEvents.push('start:' + event.execution.task.name);
@@ -21172,6 +21181,13 @@ async function activate(context) {
       }),
       vscode.debug.onDidTerminateDebugSession(session => {
         debugEvents.push('end:' + session.name);
+      }),
+      vscode.debug.onDidChangeBreakpoints(event => {
+        debugBreakpointEvents.push({
+          added: event.added.length,
+          removed: event.removed.length,
+          changed: event.changed.length,
+        });
       }),
     ];
     let resolvedTask = false;
@@ -21457,6 +21473,39 @@ async function activate(context) {
       { env: { PROCESS_ARGS: '1' } }
     );
     const customGroup = new vscode.TaskGroup('lint', 'Lint');
+    const debugSourceBreakpoint = new vscode.SourceBreakpoint(
+      new vscode.Location(
+        vscode.Uri.file(path.join(context.extensionUri.fsPath, 'debug-target.js')),
+        new vscode.Position(2, 4)
+      ),
+      false,
+      'x > 1',
+      '3',
+      'log {x}'
+    );
+    const debugFunctionBreakpoint = new vscode.FunctionBreakpoint(
+      'main',
+      true,
+      'ready',
+      '1',
+      'fn log'
+    );
+    const debugDataBreakpoint = new vscode.DataBreakpoint(
+      'data-id',
+      true,
+      'Data Label',
+      ['read', 'write'],
+      'write',
+      true,
+      'dataReady',
+      '5'
+    );
+    vscode.debug.addBreakpoints([
+      debugSourceBreakpoint,
+      debugFunctionBreakpoint,
+      debugDataBreakpoint,
+    ]);
+    const breakpointsAfterAdd = vscode.debug.breakpoints;
     const debugStarted = await vscode.debug.startDebugging(undefined, {
       type: 'node-debug',
       name: 'Node Debug',
@@ -21470,6 +21519,9 @@ async function activate(context) {
     const activeDescriptor = parentSession && parentSession.adapterDescriptor;
     const customRequestResult = parentSession
       ? await parentSession.customRequest('selftest/custom', { value: 'ok' })
+      : null;
+    const sourceProtocolBreakpoint = parentSession
+      ? await parentSession.getDebugProtocolBreakpoint(debugSourceBreakpoint)
       : null;
     vscode.debug.activeDebugConsole.append('debug-console');
     vscode.debug.activeDebugConsole.appendLine(' line');
@@ -21558,6 +21610,10 @@ async function activate(context) {
     await vscode.debug.stopDebugging(vscode.debug.activeDebugSession);
     const activeAfterDebug = vscode.debug.activeDebugSession
       && vscode.debug.activeDebugSession.name;
+    vscode.debug.removeBreakpoints([debugFunctionBreakpoint]);
+    const breakpointsAfterPartialRemove = vscode.debug.breakpoints;
+    vscode.debug.removeBreakpoints([debugSourceBreakpoint, debugDataBreakpoint]);
+    const breakpointsAfterClear = vscode.debug.breakpoints;
     providerDisposable.dispose();
     customProviderDisposable.dispose();
     debugDisposable.dispose();
@@ -21656,6 +21712,18 @@ async function activate(context) {
       dapDebugStarted,
       dapCustomResponse,
       customRequestResult,
+      debugBreakpointEvents,
+      breakpointsAfterAddCount: breakpointsAfterAdd.length,
+      breakpointsAfterAddKinds: breakpointsAfterAdd.map(item => item.constructor.name),
+      breakpointsAfterAddEnabled: breakpointsAfterAdd.map(item => item.enabled),
+      breakpointsAfterAddConditions: breakpointsAfterAdd.map(item => item.condition),
+      sourceBreakpointPath: debugSourceBreakpoint.location.uri.fsPath,
+      sourceBreakpointLine: debugSourceBreakpoint.location.range.start.line,
+      functionBreakpointName: debugFunctionBreakpoint.functionName,
+      dataBreakpointAccessType: debugDataBreakpoint.accessType,
+      sourceProtocolBreakpoint,
+      breakpointsAfterPartialRemoveCount: breakpointsAfterPartialRemove.length,
+      breakpointsAfterClearCount: breakpointsAfterClear.length,
       customDebugEvents,
       childStarted,
       childParentName,
@@ -27787,6 +27855,58 @@ process.stdin.resume();
                        and node_task_debug_probe.get(
                            "customRequestResult", {}).get(
                                "body", {}).get("value") == "ok"
+                       and node_task_debug_probe.get(
+                           "breakpointsAfterAddCount") == 3
+                       and node_task_debug_probe.get(
+                           "breakpointsAfterAddKinds") == [
+                               "SourceBreakpoint",
+                               "FunctionBreakpoint",
+                               "DataBreakpoint",
+                           ]
+                       and node_task_debug_probe.get(
+                           "breakpointsAfterAddEnabled") == [
+                               False,
+                               True,
+                               True,
+                           ]
+                       and node_task_debug_probe.get(
+                           "breakpointsAfterAddConditions") == [
+                               "x > 1",
+                               "ready",
+                               "dataReady",
+                           ]
+                       and str(node_task_debug_probe.get(
+                           "sourceBreakpointPath")).endswith(
+                               "debug-target.js")
+                       and node_task_debug_probe.get(
+                           "sourceBreakpointLine") == 2
+                       and node_task_debug_probe.get(
+                           "functionBreakpointName") == "main"
+                       and node_task_debug_probe.get(
+                           "dataBreakpointAccessType") == "write"
+                       and node_task_debug_probe.get(
+                           "sourceProtocolBreakpoint", {}).get(
+                               "verified") is False
+                       and node_task_debug_probe.get(
+                           "sourceProtocolBreakpoint", {}).get(
+                               "line") == 3
+                       and node_task_debug_probe.get(
+                           "sourceProtocolBreakpoint", {}).get(
+                               "column") == 5
+                       and str(node_task_debug_probe.get(
+                           "sourceProtocolBreakpoint", {}).get(
+                               "source", {}).get("path")).endswith(
+                                   "debug-target.js")
+                       and node_task_debug_probe.get(
+                           "breakpointsAfterPartialRemoveCount") == 2
+                       and node_task_debug_probe.get(
+                           "breakpointsAfterClearCount") == 0
+                       and node_task_debug_probe.get(
+                           "debugBreakpointEvents") == [
+                               {"added": 3, "removed": 0, "changed": 0},
+                               {"added": 0, "removed": 1, "changed": 0},
+                               {"added": 0, "removed": 2, "changed": 0},
+                           ]
                        and "selftest/custom:ok" in node_task_debug_probe.get(
                            "customDebugEvents", [])
                        and node_task_debug_probe.get("childStarted") is True

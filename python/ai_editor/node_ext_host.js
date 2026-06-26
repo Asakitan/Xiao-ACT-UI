@@ -2399,6 +2399,47 @@ class DebugAdapterNamedPipeServer {
     }
 }
 
+class Breakpoint {
+    constructor(enabled = true, condition = undefined, hitCondition = undefined, logMessage = undefined) {
+        this.id = `breakpoint-${_nextDebugBreakpointHandle++}`;
+        this.enabled = enabled === undefined ? true : !!enabled;
+        this.condition = condition === undefined || condition === null
+            ? undefined : String(condition);
+        this.hitCondition = hitCondition === undefined || hitCondition === null
+            ? undefined : String(hitCondition);
+        this.logMessage = logMessage === undefined || logMessage === null
+            ? undefined : String(logMessage);
+    }
+}
+
+class SourceBreakpoint extends Breakpoint {
+    constructor(location, enabled = true, condition = undefined, hitCondition = undefined, logMessage = undefined) {
+        super(enabled, condition, hitCondition, logMessage);
+        this.location = location;
+    }
+}
+
+class FunctionBreakpoint extends Breakpoint {
+    constructor(functionName, enabled = true, condition = undefined, hitCondition = undefined, logMessage = undefined) {
+        super(enabled, condition, hitCondition, logMessage);
+        this.functionName = String(functionName || '');
+    }
+}
+
+class DataBreakpoint extends Breakpoint {
+    constructor(dataId, canPersist = false, label = undefined, accessTypes = undefined, accessType = undefined, enabled = true, condition = undefined, hitCondition = undefined) {
+        super(enabled, condition, hitCondition, undefined);
+        this.dataId = String(dataId || '');
+        this.canPersist = !!canPersist;
+        this.label = label === undefined || label === null ? undefined : String(label);
+        this.accessTypes = Array.isArray(accessTypes)
+            ? accessTypes.map(item => String(item))
+            : undefined;
+        this.accessType = accessType === undefined || accessType === null
+            ? undefined : String(accessType);
+    }
+}
+
 class DebugAdapterInlineImplementation {
     constructor(implementation) {
         this.implementation = implementation;
@@ -2472,6 +2513,7 @@ let _nextWindowDialogRequestHandle = 1;
 let _nextEnvClipboardRequestHandle = 1;
 let _nextTaskExecutionHandle = 1;
 let _nextDebugSessionHandle = 1;
+let _nextDebugBreakpointHandle = 1;
 let _activeDebugSession = null;
 const _debugAdapterTrackerFactories = []; // { type, factory }
 let _envClipboardFallbackText = '';
@@ -9107,6 +9149,10 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         Disposable,
         EventEmitter,
         CancellationTokenSource,
+        Breakpoint,
+        SourceBreakpoint,
+        FunctionBreakpoint,
+        DataBreakpoint,
         TerminalProfile,
         TerminalLink,
         McpStdioServerDefinition,
@@ -10645,6 +10691,65 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             const _onDidChangeActiveDebugSession = new EventEmitter();
             const _onDidReceiveDebugSessionCustomEvent = new EventEmitter();
             const _onDidChangeActiveStackItem = new EventEmitter();
+            const _onDidChangeBreakpoints = new EventEmitter();
+            const _breakpoints = [];
+            const protocolBreakpointFor = (breakpoint) => {
+                if (!breakpoint) return undefined;
+                const idNumber = Number(String(breakpoint.id || '').replace(/^\D+/, ''));
+                const payload = {
+                    id: Number.isFinite(idNumber) ? idNumber : undefined,
+                    verified: breakpoint.enabled !== false,
+                };
+                if (breakpoint instanceof SourceBreakpoint && breakpoint.location) {
+                    const range = breakpoint.location.range || {};
+                    const start = range.start || {};
+                    payload.source = {
+                        path: breakpoint.location.uri && breakpoint.location.uri.fsPath,
+                        name: breakpoint.location.uri
+                            ? path.basename(breakpoint.location.uri.fsPath || breakpoint.location.uri.path || '')
+                            : undefined,
+                    };
+                    payload.line = Number(start.line || 0) + 1;
+                    payload.column = Number(start.character || 0) + 1;
+                } else if (breakpoint instanceof FunctionBreakpoint) {
+                    payload.name = breakpoint.functionName;
+                } else if (breakpoint instanceof DataBreakpoint) {
+                    payload.dataId = breakpoint.dataId;
+                    payload.accessType = breakpoint.accessType;
+                }
+                return payload;
+            };
+            const addBreakpoints = (items) => {
+                const added = [];
+                for (const breakpoint of Array.isArray(items) ? items : []) {
+                    if (!(breakpoint instanceof Breakpoint)) continue;
+                    if (_breakpoints.includes(breakpoint)) continue;
+                    _breakpoints.push(breakpoint);
+                    added.push(breakpoint);
+                }
+                if (added.length) {
+                    _onDidChangeBreakpoints.fire({
+                        added: added.slice(),
+                        removed: [],
+                        changed: [],
+                    });
+                }
+            };
+            const removeBreakpoints = (items) => {
+                const removed = [];
+                for (const breakpoint of Array.isArray(items) ? items : []) {
+                    const index = _breakpoints.indexOf(breakpoint);
+                    if (index < 0) continue;
+                    removed.push(..._breakpoints.splice(index, 1));
+                }
+                if (removed.length) {
+                    _onDidChangeBreakpoints.fire({
+                        added: [],
+                        removed: removed.slice(),
+                        changed: [],
+                    });
+                }
+            };
             const activeDebugConsole = {
                 append(value) {
                     if (!value) return;
@@ -10780,8 +10885,8 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                             });
                             return Promise.resolve({ command: event.event, body: event.body });
                         },
-                        getDebugProtocolBreakpoint() {
-                            return Promise.resolve(undefined);
+                        getDebugProtocolBreakpoint(breakpoint) {
+                            return Promise.resolve(protocolBreakpointFor(breakpoint));
                         },
                     };
                     if (session.type) {
@@ -10854,13 +10959,15 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 },
                 get activeDebugSession() { return _activeDebugSession; },
                 get activeDebugConsole() { return activeDebugConsole; },
-                get breakpoints() { return []; },
+                get breakpoints() { return _breakpoints.slice(); },
+                addBreakpoints,
+                removeBreakpoints,
                 onDidChangeActiveDebugSession: _onDidChangeActiveDebugSession.event,
                 onDidStartDebugSession: _onDidStartDebugSession.event,
                 onDidReceiveDebugSessionCustomEvent:
                     _onDidReceiveDebugSessionCustomEvent.event,
                 onDidTerminateDebugSession: _onDidTerminateDebugSession.event,
-                onDidChangeBreakpoints: new EventEmitter().event,
+                onDidChangeBreakpoints: _onDidChangeBreakpoints.event,
                 get activeStackItem() { return undefined; },
                 onDidChangeActiveStackItem: _onDidChangeActiveStackItem.event,
                 _onDidStartDebugSession,
@@ -11000,6 +11107,10 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         CustomExecution,
         Task,
         TaskGroup,
+        Breakpoint,
+        SourceBreakpoint,
+        FunctionBreakpoint,
+        DataBreakpoint,
         DebugAdapterExecutable,
         DebugAdapterServer,
         DebugAdapterNamedPipeServer,
