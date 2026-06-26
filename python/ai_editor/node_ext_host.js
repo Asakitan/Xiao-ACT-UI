@@ -23,6 +23,7 @@ const readline = require('node:readline');
 const fsp = require('node:fs/promises');
 const os = require('node:os');
 const util = require('node:util');
+const childProcess = require('node:child_process');
 
 // -------------------------------------------------------------------------
 // Logging — stderr only
@@ -4732,6 +4733,159 @@ function _debugAdapterDescriptorPayload(descriptor) {
         };
     }
     return _plainBridgeValue(descriptor);
+}
+
+function _debugDapFrame(message) {
+    const payload = JSON.stringify(message || {});
+    return `Content-Length: ${Buffer.byteLength(payload, 'utf8')}\r\n\r\n${payload}`;
+}
+
+function _debugParseDapFrames(transport, chunk) {
+    transport.buffer += chunk.toString('utf8');
+    for (;;) {
+        const headerEnd = transport.buffer.indexOf('\r\n\r\n');
+        if (headerEnd < 0) return;
+        const header = transport.buffer.slice(0, headerEnd);
+        const match = /Content-Length:\s*(\d+)/i.exec(header);
+        if (!match) {
+            transport.buffer = transport.buffer.slice(headerEnd + 4);
+            continue;
+        }
+        const length = Number(match[1]);
+        const bodyStart = headerEnd + 4;
+        if (transport.buffer.length < bodyStart + length) return;
+        const raw = transport.buffer.slice(bodyStart, bodyStart + length);
+        transport.buffer = transport.buffer.slice(bodyStart + length);
+        try {
+            _debugHandleDapMessage(transport, JSON.parse(raw));
+        } catch (err) {
+            _debugCallTrackers(transport.session, 'onError', err);
+        }
+    }
+}
+
+function _debugHandleDapMessage(transport, message) {
+    if (!message || typeof message !== 'object') return;
+    if (message.type === 'response' && message.request_seq !== undefined) {
+        const pending = transport.pending.get(Number(message.request_seq));
+        if (pending) {
+            clearTimeout(pending.timer);
+            transport.pending.delete(Number(message.request_seq));
+            if (message.success === false) {
+                pending.reject(new Error(message.message || 'Debug adapter request failed'));
+            } else {
+                pending.resolve(message.body === undefined ? {} : message.body);
+            }
+        }
+    }
+    if (message.type === 'event') {
+        _debugCallTrackers(transport.session, 'onDidSendMessage', message);
+        transport.customEventEmitter.fire({
+            session: transport.session,
+            event: String(message.event || ''),
+            body: _plainBridgeValue(message.body || {}),
+        });
+    }
+}
+
+function _debugRejectPendingTransportRequests(transport, error) {
+    for (const pending of transport.pending.values()) {
+        clearTimeout(pending.timer);
+        pending.reject(error);
+    }
+    transport.pending.clear();
+}
+
+function _debugCreateAdapterTransport(session, descriptor, config, customEventEmitter) {
+    if (!(descriptor instanceof DebugAdapterExecutable) || !descriptor.command) return null;
+    const options = descriptor.options && typeof descriptor.options === 'object'
+        ? descriptor.options
+        : {};
+    const cwd = options.cwd ? String(options.cwd) : _workspaceRoot;
+    const env = Object.assign({}, process.env, options.env || {});
+    let proc;
+    try {
+        proc = childProcess.spawn(
+            descriptor.command,
+            Array.isArray(descriptor.args) ? descriptor.args : [],
+            { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true },
+        );
+    } catch (err) {
+        _debugCallTrackers(session, 'onError', err);
+        return { session, error: err, pending: new Map(), dispose() {} };
+    }
+    const transport = {
+        session,
+        process: proc,
+        customEventEmitter,
+        buffer: '',
+        seq: 1,
+        pending: new Map(),
+        error: null,
+        sendRequest(command, args, timeoutMs = 1200) {
+            if (transport.error) return Promise.reject(transport.error);
+            const seq = transport.seq++;
+            const request = {
+                seq,
+                type: 'request',
+                command: String(command || ''),
+                arguments: _plainBridgeValue(args || {}),
+            };
+            _debugCallTrackers(session, 'onWillReceiveMessage', request);
+            return new Promise((resolve, reject) => {
+                const timer = setTimeout(() => {
+                    transport.pending.delete(seq);
+                    reject(new Error(`Debug adapter request timed out: ${request.command}`));
+                }, timeoutMs);
+                transport.pending.set(seq, { resolve, reject, timer });
+                try {
+                    proc.stdin.write(_debugDapFrame(request));
+                } catch (err) {
+                    clearTimeout(timer);
+                    transport.pending.delete(seq);
+                    reject(err);
+                }
+            });
+        },
+        dispose() {
+            _debugRejectPendingTransportRequests(
+                transport, new Error('Debug session stopped'));
+            try { proc.stdin.end(); } catch {}
+            try {
+                if (!proc.killed) proc.kill();
+            } catch {}
+        },
+    };
+    proc.stdout.on('data', chunk => _debugParseDapFrames(transport, chunk));
+    proc.stderr.on('data', chunk => {
+        const text = chunk.toString('utf8');
+        if (text) send({ type: 'output', channel: 'Debug Adapter', text });
+    });
+    proc.on('error', err => {
+        transport.error = err;
+        _debugRejectPendingTransportRequests(transport, err);
+        _debugCallTrackers(session, 'onError', err);
+    });
+    proc.on('exit', (code, signal) => {
+        _debugRejectPendingTransportRequests(
+            transport, new Error(`Debug adapter exited: ${code}:${signal}`));
+        _debugCallTrackers(session, 'onExit', code, signal);
+    });
+    transport.ready = (async () => {
+        await transport.sendRequest('initialize', {
+            adapterID: session.type,
+            pathFormat: 'path',
+            linesStartAt1: true,
+            columnsStartAt1: true,
+        });
+        await transport.sendRequest(String(config.request || 'launch'), config || {});
+        return true;
+    })().catch(err => {
+        transport.error = err;
+        _debugCallTrackers(session, 'onError', err);
+        return false;
+    });
+    return transport;
 }
 
 function _notebookSerializerByHandleOrViewType(handle, viewType) {
@@ -10541,7 +10695,18 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                         workspaceFolder: folder || undefined,
                         configuration: { ...config },
                         parentSession: normalizedOptions.parentSession,
-                        customRequest(command, args) {
+                        async customRequest(command, args) {
+                            const transport = session._debugAdapterTransport;
+                            if (transport) {
+                                try {
+                                    if (transport.ready) await transport.ready;
+                                    if (!transport.error) {
+                                        return await transport.sendRequest(command, args);
+                                    }
+                                } catch (err) {
+                                    _debugCallTrackers(session, 'onError', err);
+                                }
+                            }
                             const request = {
                                 type: 'request',
                                 command: String(command || ''),
@@ -10598,6 +10763,11 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     if (!session.adapterDescriptor && packageExecutable) {
                         session.adapterDescriptor = packageExecutable;
                     }
+                    session._debugAdapterTransport = _debugCreateAdapterTransport(
+                        session,
+                        session.adapterDescriptor,
+                        config,
+                        _onDidReceiveDebugSessionCustomEvent);
                     _debugCallTrackers(session, 'onWillStartSession');
                     _debugUpdateActive(session, _onDidChangeActiveDebugSession);
                     _onDidStartDebugSession.fire(session);
@@ -10616,6 +10786,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     const target = session || _activeDebugSession;
                     if (!target) return Promise.resolve();
                     _debugCallTrackers(target, 'onWillStopSession');
+                    try { target._debugAdapterTransport?.dispose?.(); } catch {}
                     if (_activeDebugSession && _activeDebugSession.id === target.id) {
                         _debugUpdateActive(null, _onDidChangeActiveDebugSession);
                     }

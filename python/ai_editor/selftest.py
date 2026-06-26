@@ -10125,6 +10125,12 @@ console.log("command palette quick access helpers ok");
            and "class DebugAdapterNamedPipeServer" in node_ext_host_source
            and "class DebugAdapterInlineImplementation" in node_ext_host_source
            and "function _debugExecutableFromPackage(type)" in node_ext_host_source
+           and "const childProcess = require('node:child_process')" in node_ext_host_source
+           and "function _debugDapFrame(message)" in node_ext_host_source
+           and "function _debugParseDapFrames(transport, chunk)" in node_ext_host_source
+           and "function _debugCreateAdapterTransport(session, descriptor, config, customEventEmitter)" in node_ext_host_source
+           and "transport.sendRequest('initialize'" in node_ext_host_source
+           and "transport.sendRequest(String(config.request || 'launch')" in node_ext_host_source
            and "typeof config.debugServer === 'number'" in node_ext_host_source
            and "TaskScope: { Global: 1, Workspace: 2 }" in node_ext_host_source
            and "TaskRevealKind: { Always: 1, Silent: 2, Never: 3 }"
@@ -10143,6 +10149,8 @@ console.log("command palette quick access helpers ok");
            in node_ext_host_source
            and "get activeDebugConsole()" in node_ext_host_source
            and "onDidReceiveDebugSessionCustomEvent" in node_ext_host_source
+           and "session._debugAdapterTransport = _debugCreateAdapterTransport" in node_ext_host_source
+           and "target._debugAdapterTransport?.dispose?.()" in node_ext_host_source
            and "provideDebugConfigurations(" in node_ext_host_source
            and "DebugConsoleMode: { Separate: 0, MergeWithParent: 1 }"
            in node_ext_host_source
@@ -18193,6 +18201,7 @@ module.exports = { activate };
             node_extension_js = r"""
 const vscode = require('vscode');
 const fs = require('node:fs');
+const path = require('node:path');
 const output = vscode.window.createOutputChannel('node-tree-selftest');
 const workspaceEvents = {
   open: 0,
@@ -21313,6 +21322,21 @@ async function activate(context) {
         },
       }
     );
+    const dapFactoryDisposable = vscode.debug.registerDebugAdapterDescriptorFactory(
+      'node-dap-debug',
+      {
+        createDebugAdapterDescriptor() {
+          return new vscode.DebugAdapterExecutable(
+            process.execPath,
+            [path.join(context.extensionUri.fsPath, 'dap-adapter.js')],
+            {
+              cwd: context.extensionUri.fsPath,
+              env: { NODE_DAP_SELFTEST: '1' },
+            }
+          );
+        },
+      }
+    );
     const trackerDisposable = vscode.debug.registerDebugAdapterTrackerFactory(
       '*',
       {
@@ -21430,6 +21454,16 @@ async function activate(context) {
     const fallbackDescriptor = vscode.debug.activeDebugSession
       && vscode.debug.activeDebugSession.adapterDescriptor;
     await vscode.debug.stopDebugging(vscode.debug.activeDebugSession);
+    const dapDebugStarted = await vscode.debug.startDebugging(undefined, {
+      type: 'node-dap-debug',
+      name: 'Node DAP Debug',
+      request: 'launch',
+    });
+    const dapSession = vscode.debug.activeDebugSession;
+    const dapCustomResponse = dapSession
+      ? await dapSession.customRequest('selftest/custom', { value: 'dap-ok' })
+      : null;
+    await vscode.debug.stopDebugging(dapSession);
     const childStarted = await vscode.debug.startDebugging(undefined, {
       type: 'node-debug',
       name: 'Node Child',
@@ -21459,6 +21493,7 @@ async function activate(context) {
     pipeFactoryDisposable.dispose();
     inlineFactoryDisposable.dispose();
     fallbackFactoryDisposable.dispose();
+    dapFactoryDisposable.dispose();
     trackerDisposable.dispose();
     customEventDisposable.dispose();
     const afterDisposeTaskCount = (await vscode.tasks.fetchTasks({ type: 'node-selftest' })).length;
@@ -21540,6 +21575,8 @@ async function activate(context) {
       fallbackDescriptorCalls,
       fallbackExecutableCommand,
       fallbackExecutableArgs,
+      dapDebugStarted,
+      dapCustomResponse,
       customRequestResult,
       customDebugEvents,
       childStarted,
@@ -22186,6 +22223,66 @@ module.exports = { activate, deactivate };
             with open(os.path.join(node_tree_tmp, "debug-adapter.js"),
                       "w", encoding="utf-8") as fh:
                 fh.write("process.stdin.resume();\n")
+            with open(os.path.join(node_tree_tmp, "dap-adapter.js"),
+                      "w", encoding="utf-8") as fh:
+                fh.write(r"""
+let buffer = "";
+let seq = 1;
+function send(message) {
+  const payload = JSON.stringify(message);
+  process.stdout.write("Content-Length: " + Buffer.byteLength(payload, "utf8") + "\r\n\r\n" + payload);
+}
+function response(request, body) {
+  send({
+    seq: seq++,
+    type: "response",
+    request_seq: request.seq,
+    command: request.command,
+    success: true,
+    body: body || {},
+  });
+}
+function event(name, body) {
+  send({ seq: seq++, type: "event", event: name, body: body || {} });
+}
+function handle(request) {
+  if (request.command === "initialize") {
+    response(request, { supportsConfigurationDoneRequest: false });
+    event("initialized", {});
+    return;
+  }
+  if (request.command === "launch") {
+    response(request, {});
+    event("dapCustom", { value: "from-adapter" });
+    return;
+  }
+  if (request.command === "selftest/custom") {
+    response(request, { echo: request.arguments && request.arguments.value });
+    return;
+  }
+  response(request, {});
+}
+process.stdin.on("data", chunk => {
+  buffer += chunk.toString("utf8");
+  for (;;) {
+    const headerEnd = buffer.indexOf("\r\n\r\n");
+    if (headerEnd < 0) return;
+    const header = buffer.slice(0, headerEnd);
+    const match = /Content-Length:\s*(\d+)/i.exec(header);
+    if (!match) {
+      buffer = buffer.slice(headerEnd + 4);
+      continue;
+    }
+    const length = Number(match[1]);
+    const bodyStart = headerEnd + 4;
+    if (buffer.length < bodyStart + length) return;
+    const body = buffer.slice(bodyStart, bodyStart + length);
+    buffer = buffer.slice(bodyStart + length);
+    handle(JSON.parse(body));
+  }
+});
+process.stdin.resume();
+""")
             node_tree_desc = ExtensionDescription.from_package_json({
                 "name": "node-tree",
                 "publisher": "selftest",
@@ -27587,6 +27684,12 @@ module.exports = { activate, deactivate };
                            "fallbackExecutableCommand") == "node"
                        and "--fallback" in node_task_debug_probe.get(
                            "fallbackExecutableArgs", [])
+                       and node_task_debug_probe.get(
+                           "dapDebugStarted") is True
+                       and node_task_debug_probe.get(
+                           "dapCustomResponse", {}).get("echo") == "dap-ok"
+                       and "dapCustom:from-adapter" in node_task_debug_probe.get(
+                           "customDebugEvents", [])
                        and node_task_debug_probe.get(
                            "customRequestResult", {}).get("command")
                        == "selftest/custom"
