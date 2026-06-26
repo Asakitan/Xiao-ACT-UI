@@ -3743,7 +3743,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "resizeChatInput(this,200);" in html
            and "setChatInputValue(prefix+'#'+tool.name+' ')" in html
            and "setChatInputValue(s);w.remove()" in html
-           and "setChatInputValue((item.subCommand?String(item.subCommand)+' ':'')+message);doSend()" in html)
+           and "function activateFollowupButton(btn)" in html
+           and "setChatInputValue((command?command+' ':'')+message);" in html
+           and "doSend();" in html)
     _check("frontend Assistant composer uses Copilot-style send readiness and pending state",
            "function chatComposerHasSendableValue()" in html
            and "function chatModePlaceholder()" in html
@@ -3846,6 +3848,42 @@ def test_phase1_ai_editor_regressions() -> None:
            and "renderChatResponseReferences(body,d.content,d);" in html
            and "div.setAttribute('aria-label','Suggested follow-up prompts');" in html
            and "const btn=document.createElement('button');btn.type='button';btn.className='followup-btn';" in html)
+    _check("frontend Assistant response metadata and used context are visible",
+           "chat-response-metadata" in html
+           and "chat-response-meta-chip" in html
+           and "function normalizeChatResponseMetadata(payload,content,refs,fileTrees,changes)" in html
+           and "function renderChatResponseMetadata(wrap,metadata)" in html
+           and "chatPayloadFirstValue(payload,['model','modelId','model_id'])" in html
+           and "normalizeChatUsageValue(usage,'total')" in html
+           and "latencyMs','elapsedMs','durationMs'" in html
+           and "finishReason','finish_reason','stopReason'" in html
+           and "renderChatResponseMetadata(wrap,metadata);" in html
+           and "usedRefs.length?usedRefs.length+' used'" in html
+           and "chat-used-context-list" in html
+           and "usedRefs.slice(0,8).forEach(ref=>" in html)
+    _check("frontend Assistant followups use Copilot-style toolbar keyboard flow",
+           "function normalizeFollowupSuggestion(item,index)" in html
+           and "function selectFollowup(container,index,focus)" in html
+           and "function activateFollowupButton(btn)" in html
+           and "function onFollowupKeydown(ev)" in html
+           and "div.setAttribute('role','toolbar');" in html
+           and "div.dataset.followupCount=String(div.children.length);" in html
+           and "btn.tabIndex=i===0?0:-1;" in html
+           and "btn.dataset.followupMessage=item.message;" in html
+           and "btn.dataset.followupKind=item.kind;" in html
+           and "btn.dataset.followupSource=item.source;" in html
+           and "btn.dataset.followupAgent=item.agentId;" in html
+           and "btn.dataset.followupCommand=item.subCommand;" in html
+           and "btn.dataset.followupTool=item.toolHint;" in html
+           and "if(agentId)addChatContextAttachment({id:'agent:'+agentId" in html
+           and "if(toolHint)addChatContextAttachment({id:'tool:'+toolHint" in html
+           and "announceAssistantAction('Follow-up selected: '" in html
+           and "ev.key==='ArrowRight'||ev.key==='ArrowDown'" in html
+           and "ev.key==='Home'" in html
+           and "ev.key==='End'" in html
+           and "ev.key==='Escape'" in html
+           and "payload&&payload.suggestedFollowups" in html
+           and "payload&&payload.suggested_followups" in html)
     _check("frontend Assistant accepts provider-native references usedContext and followups",
            "function normalizeChatContentReferences(payload)" in html
            and "function normalizeChatUsedContext(payload)" in html
