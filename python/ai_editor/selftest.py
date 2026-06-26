@@ -3845,7 +3845,9 @@ def test_phase1_ai_editor_regressions() -> None:
             and ".chat-select-chip { width:112px; max-width:112px; padding:0 20px 0 8px; cursor:pointer; flex:0 1 112px; }" in html
             and ".chat-model-inline { width:112px; max-width:112px; padding:0 8px; font-family:var(--mono); flex:0 1 112px; }" in html
             and ".chat-select-chip.agent { width:122px; max-width:122px; flex-basis:122px; }" in html
-            and ".chat-select-chip.workflow { width:104px; max-width:104px; flex-basis:104px; }" in html
+            and ".chat-select-chip.workflow { width:118px; max-width:118px; flex-basis:118px; }" in html
+            and ".chat-control-menu { position:relative; display:inline-flex; align-items:center; flex:0 0 auto; min-width:0; }" in html
+            and ".chat-control-popup.workflow { min-width:310px; }" in html
             and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px;" in html
             and "margin-left:auto; flex:0 0 auto; min-width:max-content; width:max-content; flex-wrap:nowrap; overflow:hidden; white-space:nowrap;" in html
             and ".chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:5px; min-width:0; max-width:148px; flex:0 1 148px;" in html
@@ -3855,6 +3857,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and '<div class="chat-toolbar" role="toolbar" aria-label="Assistant composer">' in html
            and '<div class="chat-control-strip" role="group" aria-label="Chat controls">' in html
            and '<div class="chat-composer-trailing" role="group" aria-label="Chat actions and status">' in html
+           and 'id="chat-workflow-trigger" onclick="toggleChatControlPopup(event,\'workflow\')"' in html
+           and '<select class="chat-select-chip workflow muted chat-control-native" id="chat-workflow-sel" title="Workflow" aria-hidden="true" tabindex="-1">' in html
            and '<button class="chat-run-chip" id="chat-workflow-run" onclick="runToolbarWorkflow()" title="Run selected workflow">▶</button>\n                  </div>\n                  <div class="chat-composer-trailing" role="group"' in html
            and '<span class="spacer"></span>\n                  <div class="chat-composer-trailing" role="group"' not in html
            and '</span>\n                  </div>\n                </div>' in html)
@@ -3864,7 +3868,20 @@ def test_phase1_ai_editor_regressions() -> None:
            and "flexWrap:toolbar?getComputedStyle(toolbar).flexWrap:''" in html
            and "sameRow:!!(controlRect&&actionRect&&Math.abs(controlRect.top-actionRect.top)<=1)" in html
            and "window.assistantComposerLayoutSnapshot=assistantComposerLayoutSnapshot;" in html
-           and "'chat-provider-sel','chat-model-inline','chat-agent-sel','chat-mode-trigger','chat-workflow-sel','chat-workflow-run','chat-input-status'" in html)
+           and "'chat-provider-trigger','chat-model-inline','chat-agent-sel','chat-mode-trigger','chat-workflow-trigger','chat-workflow-run','chat-input-status'" in html)
+    _check("frontend Assistant workflow launch has stateful on off custom modes",
+           "const ASSISTANT_WORKFLOW_MODE_KEY='sao-ai-editor-workflow-mode';" in html
+           and "function normalizeWorkflowMode(value)" in html
+           and "function workflowModePopupItem(mode,label,desc,active)" in html
+           and "workflowPopup.appendChild(workflowModePopupItem('off','Off'" in html
+           and "workflowPopup.appendChild(workflowModePopupItem('on','On'" in html
+           and "workflowPopup.appendChild(workflowModePopupItem('custom','Custom'" in html
+           and "function workflowCustomPromptModal(seed)" in html
+           and "function runCustomWorkflowAsAssistant(inputSeed)" in html
+           and "Workflow launch" in html
+           and "workflowRunId:String" in html
+           and "workflowMode:normalizeWorkflowMode" in html
+           and "noteAssistantChatRequest(text,sendContext.refs,toolHint,opts.workflowLaunch)" in html)
     _check("frontend Assistant suppresses null and empty message turns",
            "function normalizeChatMessageText(text,role)" in html
            and "function isChatEmptyLiteral(value)" in html
@@ -3903,7 +3920,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantSessionControlSnapshot()" in html
            and "function syncAssistantSessionState(patch)" in html
            and "function restoreAssistantSessionDraft()" in html
-           and "function noteAssistantChatRequest(text,refs,toolHint)" in html
+           and "function noteAssistantChatRequest(text,refs,toolHint,meta)" in html
            and "let _assistantSessionSaveTimer=null;" in html
            and "let _assistantSessionStateSavePending=false;" in html
            and "function writeAssistantSessionState()" in html
@@ -3923,11 +3940,13 @@ def test_phase1_ai_editor_regressions() -> None:
            and "panel.dataset.chatApproval=assistantSessionState.approval||'';" in html
            and "panel.dataset.chatAgentId=assistantSessionState.agentId||'';" in html
            and "panel.dataset.chatWorkflowId=assistantSessionState.workflowId||'';" in html
+           and "panel.dataset.chatWorkflowMode=assistantSessionState.workflowMode||assistantWorkflowMode||'off';" in html
            and "approval:String(src.approval||config.approval||'default')" in html
            and "agentId:String(src.agentId||'')" in html
            and "workflowId:String(src.workflowId||'')" in html
            and "workflowLabel:String(src.workflowLabel||'')" in html
-           and "noteAssistantChatRequest(text,sendContext.refs,toolHint);"
+           and "workflowMode:normalizeWorkflowMode(src.workflowMode||assistantWorkflowMode)" in html
+           and "noteAssistantChatRequest(text,sendContext.refs,toolHint,opts.workflowLaunch);"
            in html
            and "chat_session:requestMeta" in html
            and "restoreAssistantSessionDraft();" in html)
@@ -4154,7 +4173,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "if(streaming){assistantQueueTextRequest(text,{fromInput:true,allowSlash:true,clearInput:true});return}" in html
            and "if(assistantQueuedRequestCount())setTimeout(()=>assistantDrainQueuedRequests(),0);" in html
            and "return assistantQueueTextRequest(text,{...opts,fromInput:opts.fromInput!==false,clearInput:opts.clearInput!==false,allowSlash:opts.allowSlash});" in html
-           and "await sendAssistantTextRequest(item.text,{refs:item.refs,toolHint:item.toolHint,fromInput:false,appendUser:false,clearInput:false,allowSlash:false,queueIfStreaming:false,autoSkipReason:'queued-request'});" in html
+           and "await sendAssistantTextRequest(item.text,{refs:item.refs,toolHint:item.toolHint,workflowLaunch:item.workflowLaunch,fromInput:false,appendUser:false,clearInput:false,allowSlash:false,queueIfStreaming:false,autoSkipReason:'queued-request'});" in html
            and ".msg[data-chat-request-pending=\"true\"] .msg-body" in html
            and "chat-queued-request-meta" in html
            and "function renderAssistantPending(body,label)" in html

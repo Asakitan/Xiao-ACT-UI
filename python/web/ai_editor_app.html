@@ -1153,6 +1153,19 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-chip.muted,.chat-select-chip.muted { color:var(--fg-dim); }
 .chat-select-chip.mode { color:var(--fg-accent); border-color:color-mix(in srgb, var(--border-focus) 50%, var(--border)); }
 .chat-select-chip.agent.active { color:var(--fg); border-color:color-mix(in srgb, var(--fg-success) 45%, var(--border)); }
+.chat-control-menu { position:relative; display:inline-flex; align-items:center; flex:0 0 auto; min-width:0; }
+.chat-control-native { display:none; }
+.chat-control-trigger { justify-content:space-between; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.chat-control-trigger .control-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chat-control-trigger .control-caret { font-size:8px; opacity:.65; margin-left:4px; flex:0 0 auto; }
+.chat-control-trigger.provider { width:112px; max-width:112px; flex-basis:112px; }
+.chat-control-trigger.workflow { width:118px; max-width:118px; flex-basis:118px; }
+.chat-control-popup { min-width:250px; max-width:min(360px, calc(100vw - 24px)); max-height:300px; overflow:auto; }
+.chat-control-popup.provider { min-width:230px; }
+.chat-control-popup.workflow { min-width:310px; }
+.chat-control-popup .mp-meta { display:flex; align-items:center; gap:6px; margin-top:2px; color:var(--fg-dim); font:10px var(--mono); }
+.chat-control-popup .mp-tag { border:1px solid var(--border); border-radius:999px; padding:0 5px; line-height:15px; }
+.chat-control-popup-empty { color:var(--fg-dim); font-size:12px; padding:8px 12px; }
 /* Mode popup menu (VSCode-style) */
 .mode-trigger { display:inline-flex; align-items:center; gap:4px; height:22px; padding:0 8px; flex:0 0 auto;
   border:1px solid var(--border); border-radius:999px; background:var(--bg3); color:var(--fg-accent);
@@ -1185,7 +1198,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .mode-popup-toggle.on .mp-switch { background:var(--fg-accent); border-color:var(--fg-accent); }
 .mode-popup-toggle.on .mp-switch::after { left:13px; background:#fff; }
 .chat-select-chip.agent { width:122px; max-width:122px; flex-basis:122px; }
-.chat-select-chip.workflow { width:104px; max-width:104px; flex-basis:104px; }
+.chat-select-chip.workflow { width:118px; max-width:118px; flex-basis:118px; }
 .chat-run-chip { color:var(--fg-accent); background:color-mix(in srgb, var(--border-focus) 12%, var(--bg3)); }
 .chat-run-chip:disabled { opacity:0.45; cursor:default; color:var(--fg-dim); }
 .chat-composer-action { width:22px; height:22px; border:1px solid transparent; border-radius:4px;
@@ -2296,11 +2309,17 @@ pre.code-block { overflow:visible; }
                 <div class="attach-area" id="attach-area"></div>
                 <div class="chat-toolbar" role="toolbar" aria-label="Assistant composer">
                   <div class="chat-control-strip" role="group" aria-label="Chat controls">
-                    <select class="chat-select-chip" id="chat-provider-sel" title="Chat provider">
-                      <option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
-                      <option value="deepseek">DeepSeek</option><option value="ollama">Ollama</option>
-                      <option value="custom">Custom</option>
-                    </select>
+                    <div class="chat-control-menu" id="chat-provider-menu">
+                      <button type="button" class="chat-select-chip chat-control-trigger provider" id="chat-provider-trigger" onclick="toggleChatControlPopup(event,'provider')" title="Chat provider" aria-haspopup="listbox" aria-expanded="false">
+                        <span class="control-label" id="chat-provider-trigger-label">OpenAI</span><span class="control-caret">▾</span>
+                      </button>
+                      <div class="mode-popup chat-control-popup provider" id="chat-provider-popup" role="listbox" aria-label="Chat provider"></div>
+                      <select class="chat-select-chip chat-control-native" id="chat-provider-sel" title="Chat provider" aria-hidden="true" tabindex="-1">
+                        <option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
+                        <option value="deepseek">DeepSeek</option><option value="ollama">Ollama</option>
+                        <option value="custom">Custom</option>
+                      </select>
+                    </div>
                     <input class="chat-model-inline" id="chat-model-inline" placeholder="model" title="Chat model">
                     <select class="chat-select-chip agent muted" id="chat-agent-sel" title="Active agent">
                       <option value="">Agent: Default</option>
@@ -2343,9 +2362,15 @@ pre.code-block { overflow:visible; }
                         </div>
                       </div>
                     </div>
-                    <select class="chat-select-chip workflow muted" id="chat-workflow-sel" title="Workflow">
-                      <option value="">Workflow</option>
-                    </select>
+                    <div class="chat-control-menu" id="chat-workflow-menu">
+                      <button type="button" class="chat-select-chip chat-control-trigger workflow muted" id="chat-workflow-trigger" onclick="toggleChatControlPopup(event,'workflow')" title="Workflow" aria-haspopup="listbox" aria-expanded="false">
+                        <span class="control-label" id="chat-workflow-trigger-label">Workflow</span><span class="control-caret">▾</span>
+                      </button>
+                      <div class="mode-popup chat-control-popup workflow" id="chat-workflow-popup" role="listbox" aria-label="Workflow"></div>
+                      <select class="chat-select-chip workflow muted chat-control-native" id="chat-workflow-sel" title="Workflow" aria-hidden="true" tabindex="-1">
+                        <option value="">Workflow</option>
+                      </select>
+                    </div>
                     <button class="chat-run-chip" id="chat-workflow-run" onclick="runToolbarWorkflow()" title="Run selected workflow">▶</button>
                   </div>
                   <div class="chat-composer-trailing" role="group" aria-label="Chat actions and status">
@@ -4517,6 +4542,25 @@ function setChatInputValue(value,opts){
 let chatContextAttachments=[];
 const ASSISTANT_SESSION_STATE_KEY='sao-ai-editor-chat-session-state';
 const ASSISTANT_SESSION_ITEMS_KEY='sao-ai-editor-chat-session-items';
+const ASSISTANT_WORKFLOW_MODE_KEY='sao-ai-editor-workflow-mode';
+const ASSISTANT_WORKFLOW_CUSTOM_PROMPT_KEY='sao-ai-editor-workflow-custom-prompt';
+function normalizeWorkflowMode(value){
+  const v=String(value||'off').toLowerCase();
+  return v==='on'||v==='custom'||v==='off'?v:'off';
+}
+let assistantWorkflowMode=normalizeWorkflowMode((()=>{try{return localStorage.getItem(ASSISTANT_WORKFLOW_MODE_KEY)}catch(_e){return 'off'}})());
+let assistantWorkflowCustomPrompt=(()=>{try{return String(localStorage.getItem(ASSISTANT_WORKFLOW_CUSTOM_PROMPT_KEY)||'')}catch(_e){return ''}})();
+function setAssistantWorkflowMode(mode,opts){
+  assistantWorkflowMode=normalizeWorkflowMode(mode);
+  try{localStorage.setItem(ASSISTANT_WORKFLOW_MODE_KEY,assistantWorkflowMode)}catch(_e){}
+  if(opts&&opts.customPrompt!==undefined){
+    assistantWorkflowCustomPrompt=String(opts.customPrompt||'');
+    try{localStorage.setItem(ASSISTANT_WORKFLOW_CUSTOM_PROMPT_KEY,assistantWorkflowCustomPrompt)}catch(_e){}
+  }
+  if(typeof updateToolbarWorkflowButton==='function')updateToolbarWorkflowButton();
+  if(typeof syncAssistantSessionState==='function')syncAssistantSessionState({workflowMode:assistantWorkflowMode});
+  if(typeof renderChatControlPopups==='function')renderChatControlPopups();
+}
 function assistantSessionNewId(){return 'local-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,8)}
 function assistantWorkflowDisplayLabel(value){
   return String(value||'').replace(/^⚡\s*/,'').replace(/^Saved\s+/,'').trim();
@@ -4544,7 +4588,9 @@ function assistantSessionControlSnapshot(){
     approval:normalizeApproval(currentApproval||config.approval||'default'),
     agentId:String(activeAgentId||''),
     workflowId,
-    workflowLabel:assistantSelectedWorkflowLabel()
+    workflowLabel:assistantSelectedWorkflowLabel(),
+    workflowRunId:String(assistantSessionState&&assistantSessionState.workflowRunId||''),
+    workflowMode:normalizeWorkflowMode(assistantWorkflowMode)
   };
 }
 function assistantSessionDefaults(seed){
@@ -4569,7 +4615,9 @@ function assistantSessionDefaults(seed){
     approval:String(src.approval||config.approval||'default'),
     agentId:String(src.agentId||''),
     workflowId:String(src.workflowId||''),
-    workflowLabel:String(src.workflowLabel||'')
+    workflowLabel:String(src.workflowLabel||''),
+    workflowRunId:String(src.workflowRunId||''),
+    workflowMode:normalizeWorkflowMode(src.workflowMode||assistantWorkflowMode)
   };
 }
 function loadAssistantSessionState(){
@@ -4764,6 +4812,7 @@ function assistantApplySessionControls(state){
   currentMode=config.mode;
   currentApproval=config.approval;
   activeAgentId=String(desired.agentId||'');
+  assistantWorkflowMode=normalizeWorkflowMode(desired.workflowMode||assistantWorkflowMode);
   syncUI();
   renderChatControlOptions();
   assistantRestoreWorkflowSelection(desired.workflowId,desired.workflowLabel);
@@ -4847,6 +4896,7 @@ function renderAssistantSessionState(){
       +'\nMode: '+(assistantSessionState.mode||'-')
       +'\nApproval: '+(assistantSessionState.approval||'-')
       +'\nAgent: '+(assistantSessionState.agentId||'Default')
+      +'\nWorkflow Mode: '+(assistantSessionState.workflowMode||assistantWorkflowMode||'off')
       +'\nWorkflow: '+(assistantSessionState.workflowLabel||assistantSessionState.workflowId||'-');
   }
   if(panel){
@@ -4863,6 +4913,7 @@ function renderAssistantSessionState(){
     panel.dataset.chatApproval=assistantSessionState.approval||'';
     panel.dataset.chatAgentId=assistantSessionState.agentId||'';
     panel.dataset.chatWorkflowId=assistantSessionState.workflowId||'';
+    panel.dataset.chatWorkflowMode=assistantSessionState.workflowMode||assistantWorkflowMode||'off';
   }
   if(typeof updateChatComposerState==='function')updateChatComposerState();
 }
@@ -4878,6 +4929,8 @@ function syncAssistantSessionState(patch){
   next.agentId=String(controls.agentId||next.agentId||'');
   next.workflowId=String(controls.workflowId||next.workflowId||'');
   next.workflowLabel=String(controls.workflowLabel||next.workflowLabel||'');
+  next.workflowRunId=String(controls.workflowRunId||next.workflowRunId||'');
+  next.workflowMode=normalizeWorkflowMode(controls.workflowMode||next.workflowMode||assistantWorkflowMode);
   next.draft=input?String(input.value||''):String(next.draft||'');
   next.inputHasText=!!(next.draft&&next.draft.trim());
   next.context=patch&&Object.prototype.hasOwnProperty.call(patch,'context')
@@ -4917,16 +4970,29 @@ window.addEventListener('beforeunload',event=>{
   event.returnValue=message;
   return message;
 });
-function noteAssistantChatRequest(text,refs,toolHint){
+function noteAssistantChatRequest(text,refs,toolHint,meta){
+  const launch=meta&&typeof meta==='object'?meta:{};
   const id='request-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,7);
   assistantSessionState.requestCount=Math.max(0,Number(assistantSessionState.requestCount||0))+1;
   assistantSessionState.lastRequestId=id;
   assistantSessionState.lastPromptSample=String((toolHint?'#'+toolHint+' ':'')+(text||'')).slice(0,500);
+  if(launch.workflowRunId)assistantSessionState.workflowRunId=String(launch.workflowRunId);
+  if(launch.workflowId)assistantSessionState.workflowId=String(launch.workflowId);
+  if(launch.workflowLabel)assistantSessionState.workflowLabel=String(launch.workflowLabel);
   const context=Array.isArray(refs)?refs.slice(0,20):assistantSessionContextSnapshot();
   assistantSessionState.context=context;
   syncAssistantSessionState({requestInProgress:true,context});
   assistantSessionPersistCurrent({status:'inProgress'});
-  return {id,sessionResource:assistantSessionResource(),sessionType:assistantSessionState.type};
+  return {
+    id,
+    sessionResource:assistantSessionResource(),
+    sessionType:assistantSessionState.type,
+    workflowRunId:String(launch.workflowRunId||assistantSessionState.workflowRunId||''),
+    workflowId:String(launch.workflowId||assistantSessionState.workflowId||''),
+    workflowLabel:String(launch.workflowLabel||assistantSessionState.workflowLabel||''),
+    workflowStepCount:Number(launch.workflowStepCount||0),
+    workflowAgents:Array.isArray(launch.workflowAgents)?launch.workflowAgents:[]
+  };
 }
 function chatContextTextSample(value,max){
   value=String(value||'');
@@ -7527,7 +7593,7 @@ function assistantComposerLayoutSnapshot(){
   const toolbar=document.querySelector('.chat-toolbar');
   const controls=document.querySelector('.chat-control-strip');
   const actions=document.querySelector('.chat-composer-trailing');
-  const ids=['chat-provider-sel','chat-model-inline','chat-agent-sel','chat-mode-trigger','chat-workflow-sel','chat-workflow-run','chat-input-status'];
+  const ids=['chat-provider-trigger','chat-model-inline','chat-agent-sel','chat-mode-trigger','chat-workflow-trigger','chat-workflow-run','chat-input-status'];
   const rect=(el)=>{if(!el)return null;const r=el.getBoundingClientRect();return {top:Math.round(r.top),left:Math.round(r.left),width:Math.round(r.width),height:Math.round(r.height)}};
   const items={};
   ids.forEach(id=>{items[id]=rect($(id))});
@@ -14866,7 +14932,7 @@ function assistantQueuedRequestSelector(messageId){
 }
 function assistantRenderQueuedRequest(item){
   const body=createMsg('user');
-  body.textContent=(item.toolHint?'#'+item.toolHint+' ':'')+item.text;
+  body.textContent=item.displayText||((item.toolHint?'#'+item.toolHint+' ':'')+item.text);
   renderChatReferences(body,item.refs||[]);
   const meta=document.createElement('span');
   meta.className='chat-queued-request-meta';
@@ -14897,7 +14963,7 @@ function assistantQueueTextRequest(rawText,opts){
   if(opts.clearInput!==false)setChatInputValue('',{focus:true,sync:false});
   const popup=$('at-popup');if(popup)popup.classList.remove('open');
   if(typeof setChatCompletionState==='function')setChatCompletionState('',false);
-  const item={id:'queued-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,7),text,refs:sendContext.refs,toolHint,createdAt:Date.now(),messageId:''};
+  const item={id:'queued-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,7),text,refs:sendContext.refs,toolHint,createdAt:Date.now(),messageId:'',displayText:String(opts.displayText||''),workflowLaunch:opts.workflowLaunch||null};
   _assistantRequestQueue.push(item);
   assistantRenderQueuedRequest(item);
   syncAssistantSessionState({requestInProgress:true});
@@ -14919,7 +14985,7 @@ async function assistantDrainQueuedRequests(){
   const item=_assistantRequestQueue.shift();
   assistantMarkQueuedRequestSending(item);
   updateChatComposerState();
-  await sendAssistantTextRequest(item.text,{refs:item.refs,toolHint:item.toolHint,fromInput:false,appendUser:false,clearInput:false,allowSlash:false,queueIfStreaming:false,autoSkipReason:'queued-request'});
+  await sendAssistantTextRequest(item.text,{refs:item.refs,toolHint:item.toolHint,workflowLaunch:item.workflowLaunch,fromInput:false,appendUser:false,clearInput:false,allowSlash:false,queueIfStreaming:false,autoSkipReason:'queued-request'});
   return true;
 }
 
@@ -15057,7 +15123,7 @@ async function execSlash(raw){
   }
   else if(cmd==='/workflow'){
     const workflow=slashFindControlItem(chatControlState.workflows,arg);
-    if(workflow){const wfSel=$('chat-workflow-sel');if(wfSel){wfSel.value=controlItemId(workflow);updateToolbarWorkflowButton()}runToolbarWorkflow()}
+    if(workflow){const wfSel=$('chat-workflow-sel');if(wfSel){wfSel.value=controlItemId(workflow);setAssistantWorkflowMode('on');updateToolbarWorkflowButton()}runToolbarWorkflow()}
     else if(arg)appendSystem('Workflow not found: '+arg);
     else switchSidebar('agents');
   }
@@ -16896,16 +16962,146 @@ async function clearAgent(){
 window.clearAgent=clearAgent;
 async function deleteAgent(id){if(!confirm('Delete agent "'+id+'"?'))return;const r=await call('delete_agent',id);if(!callSucceeded(r)){showToast('Delete failed: '+callFailedMessage(r,'backend unavailable'),'error',2500);return}refreshAgents()}
 async function deleteWorkflow(id){if(!confirm('Delete workflow "'+id+'"?'))return;const r=await call('delete_workflow',id);if(!callSucceeded(r)){showToast('Delete failed: '+callFailedMessage(r,'backend unavailable'),'error',2500);return}refreshAgents()}
-function promptRunWorkflow(id,name){
-  const input=prompt('Input for workflow "'+name+'":');if(!input)return;
-  appendSystem('⚡ Running workflow: '+name+'...');
-  call('run_workflow',id,input).then(r=>{
-    if(!r)return;
-    if(r.error){appendSystem('Workflow error: '+r.error);return}
-    let out='⚡ Workflow **'+name+'** complete:\n\n';
-    if(r.steps)r.steps.forEach((s,i)=>{out+='### Step '+(i+1)+': '+(s.label||'')+(s.error?' ❌':' ✓')+'\n'+s.output+'\n\n'});
-    const el=createMsg('assistant','workflow');renderMd(el,out);
+function workflowById(id){
+  return (chatControlState.workflows||[]).find(w=>controlItemId(w)===String(id||''))||null;
+}
+function workflowRunNewId(workflowId){
+  return 'wf-'+String(workflowId||'run').replace(/[^A-Za-z0-9_.:-]+/g,'-')+'-'+Date.now().toString(36);
+}
+function workflowDisplayInputModal(name,seed){
+  return new Promise(resolve=>{
+    const modal=document.createElement('div');
+    modal.className='modal-bg open';
+    modal.innerHTML='<div class="modal" style="max-width:560px"><h2>Run Workflow</h2>'
+      +'<label>Workflow</label><input id="wf-run-name" readonly>'
+      +'<label>Input</label><textarea id="wf-run-input" rows="7" style="width:100%;box-sizing:border-box;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:8px;font:12px var(--sans);resize:vertical"></textarea>'
+      +'<div class="modal-actions"><button class="text-btn" id="wf-run-cancel">Cancel</button><button class="text-btn primary" id="wf-run-start">Start</button></div></div>';
+    document.body.appendChild(modal);
+    const done=value=>{modal.remove();resolve(value)};
+    $('wf-run-name').value=name||'Workflow';
+    const input=$('wf-run-input');
+    input.value=String(seed||'');
+    input.focus();
+    $('wf-run-cancel').onclick=()=>done('');
+    $('wf-run-start').onclick=()=>done(input.value.trim());
+    modal.onkeydown=e=>{
+      if(e.key==='Escape'){e.preventDefault();done('')}
+      if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){e.preventDefault();done(input.value.trim())}
+    };
   });
+}
+function workflowCustomPromptModal(seed){
+  return new Promise(resolve=>{
+    const modal=document.createElement('div');
+    modal.className='modal-bg open';
+    modal.innerHTML='<div class="modal" style="max-width:640px"><h2>Custom Workflow</h2>'
+      +'<label>Workflow Prompt</label><textarea id="wf-custom-prompt" rows="10" style="width:100%;box-sizing:border-box;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:8px;font:12px var(--mono);resize:vertical" placeholder="Define the workflow steps. Use {{input}} where the user input should go."></textarea>'
+      +'<div class="modal-actions"><button class="text-btn" id="wf-custom-cancel">Cancel</button><button class="text-btn primary" id="wf-custom-save">Save</button></div></div>';
+    document.body.appendChild(modal);
+    const input=$('wf-custom-prompt');
+    input.value=String(seed||'');
+    input.focus();
+    const finish=value=>{modal.remove();resolve(value)};
+    $('wf-custom-cancel').onclick=()=>finish(null);
+    $('wf-custom-save').onclick=()=>finish(input.value.trim());
+    modal.onkeydown=e=>{
+      if(e.key==='Escape'){e.preventDefault();finish(null)}
+      if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){e.preventDefault();finish(input.value.trim())}
+    };
+  });
+}
+function workflowStepPrompt(step,inputVar){
+  const prompt=String((step&&step.prompt)||'').trim();
+  return prompt.replace(/\{\{input\}\}/g,inputVar||'{{workflow_input}}');
+}
+function workflowLaunchPrompt(workflow,inputText,runId){
+  const id=controlItemId(workflow),name=controlItemName(workflow)||id;
+  const steps=workflowStepList(workflow);
+  const agents=workflowAgentList(workflow);
+  const lines=[
+    'Workflow launch',
+    '',
+    'Session: '+assistantSessionResource(),
+    'Workflow run: '+runId,
+    'Workflow: '+name+' ('+id+')',
+    'Provider: '+providerLabel(config.provider||'')+(config.model?' / '+config.model:''),
+    'Mode: '+normalizeMode(currentMode||config.mode||'agent'),
+    'Agents: '+(agents.join(', ')||'default'),
+    '',
+    'User input:',
+    inputText,
+    '',
+    'Run the workflow as a multi-agent sequence. Use each step prompt as the task contract for that step. Keep step outputs clearly separated, then finish with a concise final result.',
+    '',
+    'Steps:'
+  ];
+  if(steps.length){
+    steps.forEach((step,index)=>{
+      const agent=String((step&&step.agent)||'default');
+      const label=String((step&&step.label)||('Step '+(index+1)));
+      const outputVar=String((step&&step.output_var)||'');
+      lines.push((index+1)+'. '+label);
+      lines.push('   Agent: '+agent);
+      if(outputVar)lines.push('   Output variable: '+outputVar);
+      lines.push('   Prompt:');
+      workflowStepPrompt(step,'<user input above>').split(/\r?\n/).forEach(row=>lines.push('   '+row));
+    });
+  }else{
+    lines.push('1. Complete the workflow task using the user input above.');
+  }
+  return lines.join('\n');
+}
+function workflowDisplayText(workflow,inputText,runId){
+  const name=controlItemName(workflow)||controlItemId(workflow)||'Workflow';
+  const sample=String(inputText||'').replace(/\s+/g,' ').trim().slice(0,220);
+  return 'Run workflow: '+name+'\nRun: '+runId+(sample?'\n\n'+sample:'');
+}
+async function runCustomWorkflowAsAssistant(inputSeed){
+  if(!String(assistantWorkflowCustomPrompt||'').trim()){
+    const prompt=await workflowCustomPromptModal('');
+    if(prompt===null||!prompt)return false;
+    setAssistantWorkflowMode('custom',{customPrompt:prompt});
+  }
+  let inputText=String(inputSeed||'').trim();
+  if(!inputText)inputText=await workflowDisplayInputModal('Custom Workflow','');
+  if(!inputText)return false;
+  const workflow={
+    id:'custom',
+    name:'Custom Workflow',
+    description:'User-defined workflow prompt',
+    icon:'✎',
+    steps:[{agent:activeAgentId||'default',label:'Custom workflow',prompt:assistantWorkflowCustomPrompt||'{{input}}',output_var:'result'}]
+  };
+  return runWorkflowObjectAsAssistant(workflow,inputText);
+}
+async function runWorkflowObjectAsAssistant(workflow,inputText){
+  const id=controlItemId(workflow),workflowName=controlItemName(workflow)||id;
+  const runId=workflowRunNewId(id);
+  const prompt=workflowLaunchPrompt(workflow,inputText,runId);
+  const refs=assistantSessionContextSnapshot();
+  const launch={
+    workflowRunId:runId,
+    workflowId:String(id||''),
+    workflowLabel:workflowName,
+    workflowStepCount:workflowStepList(workflow).length,
+    workflowAgents:workflowAgentList(workflow)
+  };
+  const input=$('chat-input');
+  if(input&&String(input.value||'').trim()===inputText)setChatInputValue('',{focus:false,sync:false});
+  assistantSessionState.workflowRunId=runId;
+  syncAssistantSessionState({workflowRunId:runId,workflowMode:assistantWorkflowMode});
+  return sendAssistantTextRequest(prompt,{refs,workflowLaunch:launch,displayText:workflowDisplayText(workflow,inputText,runId),fromInput:false,appendUser:true,clearInput:false,allowSlash:false,toolHint:'workflow'});
+}
+async function runWorkflowAsAssistant(id,name,inputSeed){
+  const workflow=workflowById(id)||{id,name:name||id,steps:[]};
+  const workflowName=controlItemName(workflow)||name||id;
+  let inputText=String(inputSeed||'').trim();
+  if(!inputText)inputText=await workflowDisplayInputModal(workflowName,'');
+  if(!inputText)return false;
+  return runWorkflowObjectAsAssistant(workflow,inputText);
+}
+function promptRunWorkflow(id,name){
+  return runWorkflowAsAssistant(id,name,'');
 }
 function onWorkflowStep(d){setStatus('⚡ '+(d.label||'Step '+(d.step+1))+' ('+d.status+')')}
 function createAgent(){
@@ -19817,6 +20013,25 @@ function normalizeControlList(value,key){
 }
 function controlItemId(item){return String((item&&typeof item==='object'&&(item.id||item.value||item.name))||item||'')}
 function controlItemName(item){return String((item&&typeof item==='object'&&(item.name||item.label||item.id||item.value))||item||'')}
+function controlItemDescription(item){return String((item&&typeof item==='object'&&(item.description||item.detail||item.when_to_use))||'')}
+function workflowStepList(workflow){
+  return workflow&&Array.isArray(workflow.steps)?workflow.steps:[];
+}
+function workflowAgentList(workflow){
+  const agents=[];
+  workflowStepList(workflow).forEach(step=>{
+    const id=String((step&&step.agent)||'default').trim()||'default';
+    if(!agents.includes(id))agents.push(id);
+  });
+  return agents;
+}
+function providerOptionRows(){
+  const rows=chatControlState.providers&&chatControlState.providers.length?chatControlState.providers:[
+    {id:'openai',name:'OpenAI'},{id:'anthropic',name:'Anthropic'},
+    {id:'deepseek',name:'DeepSeek'},{id:'ollama',name:'Ollama'},{id:'custom',name:'Custom'}
+  ];
+  return rows.filter(Boolean);
+}
 function renderProviderControlOptions(providers){
   const rows=normalizeControlList(providers,'providers');
   if(!rows.length)return;
@@ -19825,6 +20040,154 @@ function renderProviderControlOptions(providers){
     rows.forEach(p=>ensureSelectOption(sel,controlItemId(p),controlItemName(p)));
   });
 }
+function closeChatControlPopups(except){
+  ['provider','workflow'].forEach(kind=>{
+    if(kind===except)return;
+    const popup=$('chat-'+kind+'-popup'),trigger=$('chat-'+kind+'-trigger');
+    if(popup)popup.classList.remove('show');
+    if(trigger)trigger.setAttribute('aria-expanded','false');
+  });
+}
+function chatControlPopupItem(kind,item,active){
+  const id=controlItemId(item),name=controlItemName(item)||id;
+  const row=document.createElement('div');
+  row.className='mode-popup-item'+(active?' active':'');
+  row.setAttribute('role','option');
+  row.setAttribute('aria-selected',active?'true':'false');
+  row.dataset.value=id;
+  const icon=document.createElement('span');
+  icon.className='mp-icon';
+  icon.textContent=kind==='workflow'?(item.icon||'▶'):'◉';
+  const body=document.createElement('div');
+  body.className='mp-body';
+  const label=document.createElement('div');
+  label.className='mp-label';
+  label.textContent=name;
+  body.appendChild(label);
+  const desc=controlItemDescription(item);
+  if(desc){
+    const d=document.createElement('div');
+    d.className='mp-desc';
+    d.textContent=desc;
+    body.appendChild(d);
+  }
+  if(kind==='workflow'){
+    const meta=document.createElement('div');
+    meta.className='mp-meta';
+    const steps=workflowStepList(item);
+    const agents=workflowAgentList(item);
+    meta.innerHTML='<span class="mp-tag">'+steps.length+' steps</span><span>'+esc(agents.join(' → ')||'default')+'</span>';
+    body.appendChild(meta);
+  }
+  row.appendChild(icon);
+  row.appendChild(body);
+  row.onclick=e=>{
+    e.stopPropagation();
+    if(kind==='provider')selectProviderFromPopup(id);
+    else selectWorkflowFromPopup(id);
+  };
+  return row;
+}
+function workflowModePopupItem(mode,label,desc,active){
+  const row=document.createElement('div');
+  row.className='mode-popup-item'+(active?' active':'');
+  row.setAttribute('role','option');
+  row.setAttribute('aria-selected',active?'true':'false');
+  row.dataset.workflowMode=mode;
+  row.innerHTML='<span class="mp-icon">'+(mode==='on'?'●':mode==='custom'?'✎':'○')+'</span>'
+    +'<div class="mp-body"><div class="mp-label">'+esc(label)+'</div><div class="mp-desc">'+esc(desc)+'</div></div>';
+  row.onclick=e=>{e.stopPropagation();selectWorkflowModeFromPopup(mode)};
+  return row;
+}
+function renderChatControlPopups(){
+  const providerTrigger=$('chat-provider-trigger'),providerLabelEl=$('chat-provider-trigger-label'),providerPopup=$('chat-provider-popup');
+  if(providerTrigger&&providerLabelEl){
+    providerLabelEl.textContent=providerLabel(config.provider||'openai');
+    providerTrigger.title='Chat provider: '+providerLabelEl.textContent;
+  }
+  if(providerPopup){
+    providerPopup.innerHTML='';
+    providerOptionRows().forEach(p=>providerPopup.appendChild(chatControlPopupItem('provider',p,controlItemId(p)===(config.provider||'openai'))));
+  }
+  const wfSel=$('chat-workflow-sel'),workflowTrigger=$('chat-workflow-trigger'),workflowLabelEl=$('chat-workflow-trigger-label'),workflowPopup=$('chat-workflow-popup');
+  const workflowId=wfSel?String(wfSel.value||''):'';
+  const workflowMode=normalizeWorkflowMode(assistantWorkflowMode);
+  if(workflowTrigger&&workflowLabelEl){
+    const label=workflowMode==='off'?'Workflow: Off':workflowMode==='custom'?'Workflow: Custom':(workflowId?assistantSelectedWorkflowLabel():'Workflow: On');
+    workflowLabelEl.textContent=label||'Workflow';
+    workflowTrigger.title=workflowMode==='custom'?'Workflow: Custom':workflowMode==='off'?'Workflow: Off':(workflowId?'Workflow: '+label:'Workflow: On');
+    workflowTrigger.classList.toggle('muted',workflowMode==='off');
+  }
+  if(workflowPopup){
+    workflowPopup.innerHTML='';
+    workflowPopup.appendChild(workflowModePopupItem('off','Off','Do not add workflow orchestration to chat prompts',workflowMode==='off'));
+    workflowPopup.appendChild(workflowModePopupItem('on','On','Use the selected workflow when running from the toolbar',workflowMode==='on'));
+    workflowPopup.appendChild(workflowModePopupItem('custom','Custom','Use your custom workflow prompt text',workflowMode==='custom'));
+    const topSep=document.createElement('div');topSep.className='mode-popup-sep';workflowPopup.appendChild(topSep);
+    workflowPopup.appendChild(chatControlPopupItem('workflow',{id:'',name:'No preset workflow',description:'Keep workflow mode but clear the preset selection',icon:'○',steps:[]},!workflowId));
+    if(chatControlState.workflows.length){
+      const sep=document.createElement('div');sep.className='mode-popup-sep';workflowPopup.appendChild(sep);
+      chatControlState.workflows.forEach(w=>workflowPopup.appendChild(chatControlPopupItem('workflow',w,controlItemId(w)===workflowId)));
+    }else{
+      const empty=document.createElement('div');
+      empty.className='chat-control-popup-empty';
+      empty.textContent='No workflows registered';
+      workflowPopup.appendChild(empty);
+    }
+  }
+}
+function toggleChatControlPopup(e,kind){
+  if(e)e.stopPropagation();
+  const popup=$('chat-'+kind+'-popup'),trigger=$('chat-'+kind+'-trigger');
+  if(!popup||!trigger)return;
+  const willOpen=!popup.classList.contains('show');
+  closeModePopup();
+  closeChatControlPopups(kind);
+  renderChatControlPopups();
+  popup.classList.toggle('show',willOpen);
+  trigger.setAttribute('aria-expanded',willOpen?'true':'false');
+}
+function selectProviderFromPopup(providerId){
+  const id=String(providerId||'').trim();
+  if(!id)return;
+  const sel=$('chat-provider-sel');
+  if(sel)sel.value=id;
+  closeChatControlPopups();
+  const model=config.model||readProviderModelDefaults(id);
+  updateProviderModel(id,model,true);
+  renderChatControlPopups();
+}
+function selectWorkflowFromPopup(workflowId){
+  const sel=$('chat-workflow-sel');
+  if(sel)sel.value=String(workflowId||'');
+  if(workflowId&&normalizeWorkflowMode(assistantWorkflowMode)==='off')setAssistantWorkflowMode('on');
+  closeChatControlPopups();
+  updateToolbarWorkflowButton();
+  syncAssistantSessionState();
+  renderChatControlPopups();
+}
+async function selectWorkflowModeFromPopup(mode){
+  const next=normalizeWorkflowMode(mode);
+  if(next==='custom'){
+    const prompt=await workflowCustomPromptModal(assistantWorkflowCustomPrompt);
+    if(prompt===null)return;
+    setAssistantWorkflowMode('custom',{customPrompt:prompt});
+  }else{
+    setAssistantWorkflowMode(next);
+  }
+  closeChatControlPopups();
+}
+window.toggleChatControlPopup=toggleChatControlPopup;
+window.selectProviderFromPopup=selectProviderFromPopup;
+window.selectWorkflowFromPopup=selectWorkflowFromPopup;
+window.selectWorkflowModeFromPopup=selectWorkflowModeFromPopup;
+document.addEventListener('click',e=>{
+  if(e.target.closest&&e.target.closest('.chat-control-menu'))return;
+  closeChatControlPopups();
+});
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape')closeChatControlPopups();
+});
 function renderChatControlOptions(){
   const agentSel=$('chat-agent-sel');
   if(agentSel){
@@ -19854,6 +20217,7 @@ function renderChatControlOptions(){
     wfSel.classList.toggle('muted',!wfSel.value);
   }
   updateToolbarWorkflowButton();
+  renderChatControlPopups();
 }
 async function loadChatControls(){
   const controls=await call('get_chat_controls');
@@ -19887,13 +20251,14 @@ function bindChatToolbarControls(){
     const next=e.target.value;
     const model=config.model||readProviderModelDefaults(next);
     updateProviderModel(next,model,true);
+    renderChatControlPopups();
   };
   const model=$('chat-model-inline');if(model){
     model.onchange=e=>updateProviderModel(config.provider,e.target.value,true);
     model.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();model.blur()}else if(e.key==='Escape'){model.value=config.model||'';model.blur()}};
   }
   const agent=$('chat-agent-sel');if(agent)agent.onchange=e=>setToolbarAgent(e.target.value);
-  const workflow=$('chat-workflow-sel');if(workflow)workflow.onchange=updateToolbarWorkflowButton;
+  const workflow=$('chat-workflow-sel');if(workflow)workflow.onchange=()=>{updateToolbarWorkflowButton();renderChatControlPopups()};
 }
 async function setToolbarAgent(agentId){
   let r=await call('set_chat_controls',{agent_id:agentId||''});
@@ -19918,13 +20283,23 @@ function updateToolbarWorkflowButton(){
   const wfSel=$('chat-workflow-sel'),run=$('chat-workflow-run');
   if(!wfSel||!run)return;
   const selected=wfSel.selectedIndex>=0&&wfSel.options?wfSel.options[wfSel.selectedIndex]:null;
-  run.disabled=!wfSel.value||!!(selected&&selected.disabled);
+  const workflowMode=normalizeWorkflowMode(assistantWorkflowMode);
+  run.disabled=workflowMode==='off'||(workflowMode==='on'&&(!wfSel.value||!!(selected&&selected.disabled)))||(workflowMode==='custom'&&!String(assistantWorkflowCustomPrompt||'').trim());
+  run.title=workflowMode==='off'?'Workflow is Off':workflowMode==='custom'?'Run custom workflow':'Run selected workflow';
   wfSel.classList.toggle('muted',!wfSel.value);
+  const trigger=$('chat-workflow-trigger');
+  if(trigger)trigger.classList.toggle('muted',workflowMode==='off');
+  if(typeof renderChatControlPopups==='function')renderChatControlPopups();
 }
 function runToolbarWorkflow(){
-  const wfSel=$('chat-workflow-sel');if(!wfSel||!wfSel.value){switchSidebar('agents');return}
+  const wfSel=$('chat-workflow-sel');
+  const workflowMode=normalizeWorkflowMode(assistantWorkflowMode);
+  if(workflowMode==='off'){toggleChatControlPopup(null,'workflow');return}
+  if(workflowMode==='on'&&(!wfSel||!wfSel.value)){switchSidebar('agents');return}
   const wf=chatControlState.workflows.find(w=>controlItemId(w)===wfSel.value);
-  promptRunWorkflow(wfSel.value,(wf&&controlItemName(wf))||wfSel.value);
+  const input=$('chat-input');
+  if(workflowMode==='custom')runCustomWorkflowAsAssistant(input?input.value:'');
+  else runWorkflowAsAssistant(wfSel.value,(wf&&controlItemName(wf))||wfSel.value,input?input.value:'');
 }
 window.runToolbarWorkflow=runToolbarWorkflow;
 
@@ -24828,10 +25203,10 @@ async function sendAssistantTextRequest(rawText,opts){
   }
   if(opts.appendUser!==false){
     const userBody=createMsg('user');
-    userBody.textContent=(toolHint?'#'+toolHint+' ':'')+text;
+    userBody.textContent=String(opts.displayText||'')||((toolHint?'#'+toolHint+' ':'')+text);
     renderChatReferences(userBody,sendContext.refs);
   }
-  const requestMeta=noteAssistantChatRequest(text,sendContext.refs,toolHint);
+  const requestMeta=noteAssistantChatRequest(text,sendContext.refs,toolHint,opts.workflowLaunch);
   setChatStreamingState(true);
   setStatus(t('thinking'));
   currentMsgBody=createMsg('assistant',config.model||config.provider);streamBuf='';renderAssistantPending(currentMsgBody,t('thinking'));
