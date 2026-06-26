@@ -927,7 +927,11 @@ pre.code-block code .type { color:var(--fg-type); }
   padding:7px 8px 0; color:var(--fg-dim); }
 .chat-toolbar-head.has-state { display:flex; }
 .chat-action-tray { display:none; margin:7px 8px 0; }
-.chat-action-tray.active { display:block; }
+.chat-action-tray.active { display:flex; flex-direction:column; gap:8px; }
+.chat-action-tray .chat-question-carousel-widget-container:empty,
+.chat-action-tray .chat-tool-confirmation-carousel-container:empty { display:none; }
+.chat-action-tray .chat-question-carousel-widget-container,
+.chat-action-tray .chat-tool-confirmation-carousel-container { width:100%; position:relative; display:flex; flex-direction:column; }
 .chat-action-carousel { color:var(--fg); display:flex; flex-direction:column; max-height:min(300px,45vh);
   border:1px solid var(--border); border-radius:6px; background:var(--bg2); overflow:hidden;
   animation:assistantActionTraySlideIn .16s ease-out; }
@@ -2923,6 +2927,7 @@ let _providerMessageSeq=0;
 const _assistantActionTrayItems=new Map();
 let _assistantActionTrayActiveKey='';
 let _assistantActionTrayExpandedKey='';
+const _assistantActionTrayKindActiveKeys={confirmation:'',questionCarousel:''};
 let _windowCloseRequested=false;
 function requestWindowClose(){
   if(_windowCloseRequested)return;
@@ -6064,6 +6069,7 @@ function registerAssistantActionTrayItem(kind,part,source,card){
   card.dataset.assistantActionKey=key;
   _assistantActionTrayItems.set(key,{key,kind,part,source,card,state:'pending'});
   if(!_assistantActionTrayActiveKey)_assistantActionTrayActiveKey=key;
+  if(!_assistantActionTrayKindActiveKeys[kind])_assistantActionTrayKindActiveKeys[kind]=key;
 }
 function scrollAssistantActionSource(card){
   if(!card||!card.scrollIntoView)return;
@@ -6078,30 +6084,43 @@ function assistantActionTrayPendingItems(){
     items.push(item);
   });
   if(_assistantActionTrayExpandedKey&&items.every(item=>item.key!==_assistantActionTrayExpandedKey))_assistantActionTrayExpandedKey='';
+  Object.keys(_assistantActionTrayKindActiveKeys).forEach(kind=>{
+    if(_assistantActionTrayKindActiveKeys[kind]&&items.every(item=>item.kind!==kind||item.key!==_assistantActionTrayKindActiveKeys[kind]))_assistantActionTrayKindActiveKeys[kind]='';
+  });
   return items;
 }
-function assistantActionTrayActiveIndex(items){
+function assistantActionTrayItemsByKind(kind){
+  return assistantActionTrayPendingItems().filter(item=>item.kind===kind);
+}
+function assistantActionTrayActiveIndex(items,kind){
   if(!items.length)return -1;
-  let index=items.findIndex(item=>item.key===_assistantActionTrayActiveKey);
+  const activeKey=kind?_assistantActionTrayKindActiveKeys[kind]:_assistantActionTrayActiveKey;
+  let index=items.findIndex(item=>item.key===activeKey);
   if(index<0){
-    _assistantActionTrayActiveKey=items[0].key;
+    if(kind)_assistantActionTrayKindActiveKeys[kind]=items[0].key;
+    else _assistantActionTrayActiveKey=items[0].key;
     index=0;
   }
   return index;
 }
-function assistantActionTrayNavigate(delta){
-  const items=assistantActionTrayPendingItems();
+function assistantActionTraySetActiveKey(item){
+  if(!item)return;
+  _assistantActionTrayActiveKey=item.key;
+  _assistantActionTrayKindActiveKeys[item.kind]=item.key;
+}
+function assistantActionTrayNavigate(kind,delta){
+  const items=assistantActionTrayItemsByKind(kind);
   if(items.length<2)return;
-  const index=assistantActionTrayActiveIndex(items);
+  const index=assistantActionTrayActiveIndex(items,kind);
   const next=(index+delta+items.length)%items.length;
-  _assistantActionTrayActiveKey=items[next].key;
+  assistantActionTraySetActiveKey(items[next]);
   syncAssistantActionTray();
 }
-function assistantActionTraySetActive(index){
-  const items=assistantActionTrayPendingItems();
+function assistantActionTraySetActive(kind,index){
+  const items=assistantActionTrayItemsByKind(kind);
   if(!items.length)return;
   const clamped=Math.max(0,Math.min(index,items.length-1));
-  _assistantActionTrayActiveKey=items[clamped].key;
+  assistantActionTraySetActiveKey(items[clamped]);
   syncAssistantActionTray();
 }
 function assistantActionTrayToggleExpanded(key){
@@ -6134,8 +6153,8 @@ async function assistantActionTrayAllowAll(button){
   if(button){button.removeAttribute('aria-busy');button.disabled=false}
   syncAssistantActionTray();
 }
-async function assistantActionTraySkipAll(button){
-  const items=assistantActionTrayPendingItems();
+async function assistantActionTraySkipAll(button,kind){
+  const items=kind?assistantActionTrayItemsByKind(kind):assistantActionTrayPendingItems();
   if(!items.length)return;
   if(button){button.disabled=true;button.setAttribute('aria-busy','true')}
   for(const item of items){
@@ -6165,6 +6184,10 @@ function assistantActionTrayButton(label,title,className,onClick){
 function assistantActionTrayShouldIgnoreNavigationTarget(target){
   return !!(target&&target.closest&&target.closest('input,textarea,select,[contenteditable="true"],.chat-action-carousel-preview'));
 }
+function assistantActionTrayRootLabel(kind,count){
+  if(kind==='questionCarousel')return count===1?'Pending Assistant questions':'Pending Assistant question carousel';
+  return count===1?'Pending Assistant confirmation':'Pending Assistant confirmation carousel';
+}
 function assistantActionTrayRenderItem(item,content){
   const row=document.createElement('div');row.className='chat-action-tray-row';row.dataset.assistantActionKey=item.key;
   const title=document.createElement('div');title.className='chat-action-tray-title';title.textContent=assistantActionTrayTitle(item);
@@ -6190,32 +6213,33 @@ function assistantActionTrayRenderItem(item,content){
   }
   row.appendChild(actions);content.appendChild(row);
 }
-function syncAssistantActionTray(){
-  const tray=$('chat-action-tray');if(!tray)return;
-  const items=assistantActionTrayPendingItems();
-  const preserveFocus=!!(document.activeElement&&tray.contains(document.activeElement));
-  tray.innerHTML='';
-  tray.classList.toggle('active',items.length>0);
-  tray.dataset.pendingCount=String(items.length);
-  tray.onkeydown=(e)=>{
+function renderAssistantActionCarousel(container,kind,items){
+  if(!container)return;
+  container.innerHTML='';
+  container.dataset.pendingCount=String(items.length);
+  container.tabIndex=-1;
+  if(!items.length)return;
+  const preserveFocus=!!(document.activeElement&&container.contains(document.activeElement));
+  const activeIndex=assistantActionTrayActiveIndex(items,kind);
+  const active=items[activeIndex];
+  const keyHandler=(e)=>{
     if(assistantActionTrayShouldIgnoreNavigationTarget(e.target))return;
-    if(e.key==='ArrowLeft'){e.preventDefault();assistantActionTrayNavigate(-1)}
-    else if(e.key==='ArrowRight'){e.preventDefault();assistantActionTrayNavigate(1)}
-    else if(e.key==='Home'){e.preventDefault();assistantActionTraySetActive(0)}
-    else if(e.key==='End'){e.preventDefault();assistantActionTraySetActive(items.length-1)}
+    if(e.key==='ArrowLeft'){e.preventDefault();assistantActionTrayNavigate(kind,-1)}
+    else if(e.key==='ArrowRight'){e.preventDefault();assistantActionTrayNavigate(kind,1)}
+    else if(e.key==='Home'){e.preventDefault();assistantActionTraySetActive(kind,0)}
+    else if(e.key==='End'){e.preventDefault();assistantActionTraySetActive(kind,items.length-1)}
     else if(e.key==='Escape'&&_assistantActionTrayExpandedKey){e.preventDefault();_assistantActionTrayExpandedKey='';syncAssistantActionTray()}
   };
-  if(!items.length)return;
-  const activeIndex=assistantActionTrayActiveIndex(items);
-  const active=items[activeIndex];
-  const root=document.createElement('div');root.className='chat-action-carousel chat-tool-confirmation-carousel';root.tabIndex=-1;root.dataset.kind=active.kind;root.setAttribute('role','group');root.setAttribute('aria-label','Pending Assistant actions carousel');
+  container.onkeydown=keyHandler;
+  const root=document.createElement('div');root.className='chat-action-carousel chat-tool-confirmation-carousel';root.tabIndex=-1;root.dataset.kind=kind;root.setAttribute('role','group');root.setAttribute('aria-label',assistantActionTrayRootLabel(kind,items.length));
+  root.onkeydown=keyHandler;
   const overlay=document.createElement('div');overlay.className='chat-action-carousel-overlay chat-tool-carousel-overlay';
   const titleGroup=document.createElement('div');titleGroup.className='chat-action-carousel-title-group chat-tool-carousel-title-group';
-  const kind=document.createElement('span');kind.className='chat-action-carousel-kind';kind.textContent=assistantActionTrayKindLabel(active);
+  const kindLabel=document.createElement('span');kindLabel.className='chat-action-carousel-kind';kindLabel.textContent=assistantActionTrayKindLabel(active);
   const title=document.createElement('span');title.className='chat-action-carousel-title chat-tool-carousel-collapsed-title';title.textContent=assistantActionTrayTitle(active);
-  titleGroup.appendChild(kind);titleGroup.appendChild(title);overlay.appendChild(titleGroup);
+  titleGroup.appendChild(kindLabel);titleGroup.appendChild(title);overlay.appendChild(titleGroup);
   const overlayActions=document.createElement('div');overlayActions.className='chat-action-carousel-actions chat-tool-carousel-overlay-actions';
-  if(assistantActionTrayCanAllowAll(items)){
+  if(kind==='confirmation'&&assistantActionTrayCanAllowAll(items)){
     const allowAll=assistantActionTrayButton('Allow all','Submit the primary action for all pending confirmations','chat-inline-action primary',()=>assistantActionTrayAllowAll(allowAll));
     allowAll.classList.add('chat-tool-carousel-allow-all-button');
     overlayActions.appendChild(allowAll);
@@ -6224,11 +6248,11 @@ function syncAssistantActionTray(){
   expand.setAttribute('aria-expanded',assistantActionTrayIsExpanded(active)?'true':'false');
   overlayActions.appendChild(expand);
   const counter=document.createElement('span');counter.className='chat-action-carousel-counter chat-tool-carousel-step-indicator';counter.textContent=(activeIndex+1)+'/'+items.length;overlayActions.appendChild(counter);
-  const prev=assistantActionTrayButton('<','Previous pending action','chat-action-carousel-icon chat-tool-carousel-nav-arrow',()=>assistantActionTrayNavigate(-1));
-  const next=assistantActionTrayButton('>','Next pending action','chat-action-carousel-icon chat-tool-carousel-nav-arrow',()=>assistantActionTrayNavigate(1));
+  const prev=assistantActionTrayButton('<','Previous pending action','chat-action-carousel-icon chat-tool-carousel-nav-arrow',()=>assistantActionTrayNavigate(kind,-1));
+  const next=assistantActionTrayButton('>','Next pending action','chat-action-carousel-icon chat-tool-carousel-nav-arrow',()=>assistantActionTrayNavigate(kind,1));
   prev.disabled=items.length<2;next.disabled=items.length<2;overlayActions.appendChild(prev);overlayActions.appendChild(next);
   const review=assistantActionTrayButton('Review','Review source response part','chat-inline-action',()=>scrollAssistantActionSource(active.card));overlayActions.appendChild(review);
-  const dismiss=assistantActionTrayButton(items.length===1?'Skip':'Skip all',items.length===1?'Skip the current pending action':'Skip all pending actions','chat-action-carousel-icon chat-tool-carousel-dismiss-button',()=>assistantActionTraySkipAll(dismiss));
+  const dismiss=assistantActionTrayButton(items.length===1?'Skip':'Skip all',items.length===1?'Skip the current pending action':'Skip all pending actions','chat-action-carousel-icon chat-tool-carousel-dismiss-button',()=>assistantActionTraySkipAll(dismiss,kind));
   dismiss.setAttribute('aria-label',items.length===1?'Skip':'Skip all');
   overlayActions.appendChild(dismiss);
   overlay.appendChild(overlayActions);root.appendChild(overlay);
@@ -6238,13 +6262,30 @@ function syncAssistantActionTray(){
   const preview=document.createElement('div');preview.className='chat-action-carousel-preview'+(assistantActionTrayIsExpanded(active)?' expanded':'');
   if(assistantActionTrayIsExpanded(active))preview.appendChild(active.card.cloneNode(true));
   content.appendChild(preview);
-  root.appendChild(content);tray.appendChild(root);
-  if(preserveFocus)try{root.focus({preventScroll:true})}catch(_e){root.focus()}
+  root.appendChild(content);container.appendChild(root);
+  if(preserveFocus)try{container.focus({preventScroll:true})}catch(_e){container.focus()}
+}
+function syncAssistantActionTray(){
+  const tray=$('chat-action-tray');if(!tray)return;
+  const items=assistantActionTrayPendingItems();
+  tray.innerHTML='';
+  tray.classList.toggle('active',items.length>0);
+  tray.dataset.pendingCount=String(items.length);
+  if(!items.length)return;
+  const questionWrap=document.createElement('div');questionWrap.className='chat-question-carousel-widget-container';questionWrap.dataset.pendingCount=String(items.filter(item=>item.kind==='questionCarousel').length);
+  const confirmWrap=document.createElement('div');confirmWrap.className='chat-tool-confirmation-carousel-container';confirmWrap.dataset.pendingCount=String(items.filter(item=>item.kind==='confirmation').length);
+  tray.appendChild(questionWrap);tray.appendChild(confirmWrap);
+  renderAssistantActionCarousel(questionWrap,'questionCarousel',items.filter(item=>item.kind==='questionCarousel'));
+  renderAssistantActionCarousel(confirmWrap,'confirmation',items.filter(item=>item.kind==='confirmation'));
 }
 function assistantActionTraySnapshot(){
   const tray=$('chat-action-tray');
   const items=assistantActionTrayPendingItems();
+  const questionItems=items.filter(item=>item.kind==='questionCarousel');
+  const confirmItems=items.filter(item=>item.kind==='confirmation');
   const activeIndex=assistantActionTrayActiveIndex(items);
+  const questionWrap=tray?tray.querySelector('.chat-question-carousel-widget-container'):null;
+  const confirmWrap=tray?tray.querySelector('.chat-tool-confirmation-carousel-container'):null;
   return {
     ok:!!tray,
     active:!!(tray&&tray.classList.contains('active')),
@@ -6252,14 +6293,24 @@ function assistantActionTraySnapshot(){
     activeIndex,
     activeKey:activeIndex>=0?items[activeIndex].key:'',
     carouselCount:tray?tray.querySelectorAll('.chat-action-carousel').length:0,
+    questionCarouselCount:tray?tray.querySelectorAll('.chat-question-carousel-widget-container .chat-action-carousel').length:0,
+    confirmationCarouselCount:tray?tray.querySelectorAll('.chat-tool-confirmation-carousel-container .chat-action-carousel').length:0,
+    questionPendingCount:questionItems.length,
+    confirmationPendingCount:confirmItems.length,
     rowCount:tray?tray.querySelectorAll('.chat-action-tray-row').length:0,
     navButtonCount:tray?tray.querySelectorAll('.chat-tool-carousel-nav-arrow').length:0,
     allowAllVisible:!!(tray&&tray.querySelector('.chat-tool-carousel-allow-all-button')),
     expanded:!!(activeIndex>=0&&assistantActionTrayIsExpanded(items[activeIndex])),
+    questionExpanded:!!(questionItems.length&&assistantActionTrayIsExpanded(questionItems[assistantActionTrayActiveIndex(questionItems,'questionCarousel')])),
+    confirmationExpanded:!!(confirmItems.length&&assistantActionTrayIsExpanded(confirmItems[assistantActionTrayActiveIndex(confirmItems,'confirmation')])),
     dismissLabel:tray&&tray.querySelector('.chat-tool-carousel-dismiss-button')?tray.querySelector('.chat-tool-carousel-dismiss-button').getAttribute('aria-label'):'',
+    questionDismissLabel:questionWrap&&questionWrap.querySelector('.chat-tool-carousel-dismiss-button')?questionWrap.querySelector('.chat-tool-carousel-dismiss-button').getAttribute('aria-label'):'',
+    confirmationDismissLabel:confirmWrap&&confirmWrap.querySelector('.chat-tool-carousel-dismiss-button')?confirmWrap.querySelector('.chat-tool-carousel-dismiss-button').getAttribute('aria-label'):'',
     callbackButtonCount:tray?tray.querySelectorAll('[data-assistant-callback="true"]').length:0,
     titles:tray?Array.from(tray.querySelectorAll('.chat-action-tray-title')).map(el=>el.childNodes[0]?el.childNodes[0].textContent:''):[],
     activeTitle:tray&&tray.querySelector('.chat-action-carousel-title')?tray.querySelector('.chat-action-carousel-title').textContent:'',
+    questionActiveTitle:questionWrap&&questionWrap.querySelector('.chat-action-carousel-title')?questionWrap.querySelector('.chat-action-carousel-title').textContent:'',
+    confirmationActiveTitle:confirmWrap&&confirmWrap.querySelector('.chat-action-carousel-title')?confirmWrap.querySelector('.chat-action-carousel-title').textContent:'',
   };
 }
 function assistantResponsePartContext(opts){

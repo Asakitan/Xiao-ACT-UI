@@ -4652,37 +4652,53 @@ def test_phase1_ai_editor_regressions() -> None:
            "const _assistantActionTrayItems=new Map();" in html
            and "let _assistantActionTrayActiveKey='';" in html
            and "let _assistantActionTrayExpandedKey='';" in html
+           and "const _assistantActionTrayKindActiveKeys={confirmation:'',questionCarousel:''};" in html
            and ".chat-action-tray.active" in html
+           and ".chat-action-tray .chat-question-carousel-widget-container:empty" in html
+           and ".chat-action-tray .chat-tool-confirmation-carousel-container:empty" in html
            and ".chat-action-carousel { color:var(--fg); display:flex; flex-direction:column; max-height:min(300px,45vh);" in html
            and "animation:assistantActionTraySlideIn .16s ease-out;" in html
            and ".chat-action-carousel-preview.expanded" in html
            and "chat-tool-confirmation-carousel" in html
+           and "chat-question-carousel-widget-container" in html
+           and "chat-tool-confirmation-carousel-container" in html
            and "chat-tool-carousel-overlay" in html
            and "chat-tool-carousel-step-indicator" in html
            and "function registerAssistantActionTrayItem(kind,part,source,card)" in html
            and "function syncAssistantActionTray()" in html
-           and "function assistantActionTrayActiveIndex(items)" in html
-           and "function assistantActionTrayNavigate(delta)" in html
+           and "function assistantActionTrayItemsByKind(kind)" in html
+           and "function assistantActionTrayActiveIndex(items,kind)" in html
+           and "function assistantActionTrayNavigate(kind,delta)" in html
            and "function assistantActionTrayAllowAll(button)" in html
-           and "function assistantActionTraySkipAll(button)" in html
+           and "function assistantActionTraySkipAll(button,kind)" in html
            and "function assistantActionTrayToggleExpanded(key)" in html
            and "function assistantActionTrayShouldIgnoreNavigationTarget(target)" in html
+           and "function renderAssistantActionCarousel(container,kind,items)" in html
            and "function assistantActionTraySnapshot()" in html
            and "card.dataset.assistantActionKey=key;" in html
            and "if(!_assistantActionTrayActiveKey)_assistantActionTrayActiveKey=key;" in html
+           and "if(!_assistantActionTrayKindActiveKeys[kind])_assistantActionTrayKindActiveKeys[kind]=key;" in html
            and "registerAssistantActionTrayItem('confirmation',part,data,card);" in html
            and "registerAssistantActionTrayItem('questionCarousel',part,carousel,card);" in html
            and "button.dataset.assistantActionKey" in html
            and "tray.dataset.pendingCount=String(items.length);" in html
             and "if(e.key==='ArrowLeft')" in html
-            and "if(assistantActionTrayCanAllowAll(items))" in html
+            and "if(kind==='confirmation'&&assistantActionTrayCanAllowAll(items))" in html
            and "else if(e.key==='Home')" in html
            and "else if(e.key==='End')" in html
            and "else if(e.key==='Escape'&&_assistantActionTrayExpandedKey)" in html
            and "carouselCount:tray?tray.querySelectorAll('.chat-action-carousel').length:0" in html
+           and "questionCarouselCount:tray?tray.querySelectorAll('.chat-question-carousel-widget-container .chat-action-carousel').length:0" in html
+           and "confirmationCarouselCount:tray?tray.querySelectorAll('.chat-tool-confirmation-carousel-container .chat-action-carousel').length:0" in html
            and "allowAllVisible:!!(tray&&tray.querySelector('.chat-tool-carousel-allow-all-button'))" in html
            and "expanded:!!(activeIndex>=0&&assistantActionTrayIsExpanded(items[activeIndex]))" in html
-           and "dismissLabel:tray&&tray.querySelector('.chat-tool-carousel-dismiss-button')" in html)
+           and "questionExpanded:!!(questionItems.length&&assistantActionTrayIsExpanded(questionItems[assistantActionTrayActiveIndex(questionItems,'questionCarousel')]))" in html
+           and "confirmationExpanded:!!(confirmItems.length&&assistantActionTrayIsExpanded(confirmItems[assistantActionTrayActiveIndex(confirmItems,'confirmation')]))" in html
+           and "dismissLabel:tray&&tray.querySelector('.chat-tool-carousel-dismiss-button')" in html
+           and "questionDismissLabel:questionWrap&&questionWrap.querySelector('.chat-tool-carousel-dismiss-button')" in html
+           and "confirmationDismissLabel:confirmWrap&&confirmWrap.querySelector('.chat-tool-carousel-dismiss-button')" in html
+           and "questionActiveTitle:questionWrap&&questionWrap.querySelector('.chat-action-carousel-title')" in html
+           and "confirmationActiveTitle:confirmWrap&&confirmWrap.querySelector('.chat-action-carousel-title')" in html)
     _check("frontend Assistant applies native response text edits and file tree actions",
            "chat-response-summary" in html
            and "chat-inline-actions" in html
