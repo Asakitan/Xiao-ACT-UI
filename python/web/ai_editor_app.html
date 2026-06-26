@@ -1021,6 +1021,24 @@ pre.code-block code .type { color:var(--fg-type); }
   cursor:pointer; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-response-command:hover,.chat-response-command:focus { background:var(--bg-hover); color:var(--fg); outline:none; }
 .chat-response-command:disabled { opacity:.55; cursor:default; }
+.chat-response-vulns,.chat-response-citation,.chat-response-confirmation,.chat-response-questions {
+  border:1px solid var(--border); border-radius:6px; background:var(--bg3); padding:7px 8px;
+  display:flex; flex-direction:column; gap:6px; color:var(--fg-dim); font-size:12px; }
+.chat-response-vuln-list { display:flex; flex-wrap:wrap; gap:5px; }
+.chat-response-vuln-chip { border:1px solid color-mix(in srgb,var(--fg-warning) 45%,var(--border));
+  border-radius:999px; padding:2px 7px; color:var(--fg-warning); font:10px var(--mono); }
+.chat-response-part-title { color:var(--fg); font-weight:600; }
+.chat-response-citation pre { margin:0; max-height:120px; overflow:auto; white-space:pre-wrap;
+  color:var(--fg-code); font:11px/1.4 var(--mono); }
+.chat-response-question { border-top:1px solid color-mix(in srgb,var(--border) 55%,transparent); padding-top:6px; display:flex; flex-direction:column; gap:5px; }
+.chat-response-question:first-child { border-top:0; padding-top:0; }
+.chat-response-question-options { display:flex; flex-wrap:wrap; gap:5px; }
+.chat-response-question-option { display:inline-flex; align-items:center; gap:5px; color:var(--fg);
+  border:1px solid var(--border); border-radius:6px; padding:3px 7px; background:transparent; cursor:pointer; }
+.chat-response-question-option:hover,.chat-response-question-option:focus-within { border-color:var(--border-focus); background:var(--bg-hover); }
+.chat-response-question input[type="text"] { width:100%; min-width:0; box-sizing:border-box; border:1px solid var(--border);
+  border-radius:5px; background:var(--bg); color:var(--fg); padding:5px 7px; font:12px var(--sans); }
+.chat-response-part-actions { display:flex; flex-wrap:wrap; gap:5px; }
 .chat-change-set { margin-top:7px; display:flex; flex-direction:column; gap:5px; }
 .chat-change-card { justify-content:flex-start; width:fit-content; }
 .chat-file-tree { border:1px solid var(--border); border-radius:6px; background:var(--bg3);
@@ -5054,11 +5072,15 @@ function chatResponsePartKind(part){
 }
 function chatResponseVisiblePartKind(part){
   const raw=String(part&&(part.kind||part.type||part.$type||part.name||part.responsePartKind||'')).toLowerCase();
-  if(raw==='markdowncontent'||raw==='markdown'||raw==='markdown_content'||raw==='markdownvuln')return 'markdown';
+  if(raw==='markdownvuln'||raw==='markdownwithvulnerabilities'||raw.includes('vulnerab'))return 'markdownVuln';
+  if(raw==='markdowncontent'||raw==='markdown'||raw==='markdown_content')return 'markdown';
   if(raw==='warning'||raw.includes('warning'))return 'warning';
   if(raw==='info'||raw==='information'||raw.includes('info'))return 'info';
   if(raw==='progressmessage'||raw==='progress'||raw.includes('progress'))return 'progress';
   if(raw==='command'||raw.includes('commandbutton'))return 'command';
+  if(raw==='confirmation'||raw.includes('confirmation'))return 'confirmation';
+  if(raw==='questioncarousel'||raw.includes('questioncarousel')||raw.includes('question_carousel'))return 'questionCarousel';
+  if(raw==='codecitation'||raw.includes('codecitation')||raw.includes('code_citation'))return 'codeCitation';
   return '';
 }
 function chatMarkdownValueText(value){
@@ -5092,6 +5114,57 @@ function chatResponseCommandValue(part){
     arguments:Array.isArray(source.arguments)?source.arguments:(Array.isArray(source.args)?source.args:[])
   };
 }
+function normalizeChatVulnerabilities(value){
+  return (Array.isArray(value)?value:[]).map(item=>{
+    const rec=item&&typeof item==='object'?item:{title:item};
+    const title=String(rec.title||rec.name||rec.label||rec.type||rec.id||'Vulnerability');
+    const description=String(rec.description||rec.message||rec.detail||'');
+    const severity=String(rec.severity||rec.level||rec.kind||'').trim();
+    return {title,description,severity};
+  }).filter(item=>item.title).slice(0,12);
+}
+function normalizeChatConfirmationPart(part){
+  const buttons=Array.isArray(part&&part.buttons)?part.buttons:[];
+  return {
+    title:String((part&&part.title)||'Confirmation'),
+    message:chatMarkdownValueText(part&&(part.message!==undefined?part.message:part.content)),
+    buttons:buttons.length?buttons.map(button=>String(button||'')).filter(Boolean).slice(0,6):['Continue'],
+    data:part&&part.data
+  };
+}
+function normalizeChatQuestionCarouselPart(part){
+  const questions=Array.isArray(part&&part.questions)?part.questions:[];
+  return {
+    allowSkip:!!(part&&part.allowSkip),
+    questions:questions.map((q,index)=>{
+      const rec=q&&typeof q==='object'?q:{title:q};
+      const options=Array.isArray(rec.options)?rec.options:[];
+      return {
+        id:String(rec.id||'q'+index),
+        type:String(rec.type||'text'),
+        title:String(rec.title||rec.label||'Question'),
+        message:chatMarkdownValueText(rec.message||rec.description||''),
+        allowFreeformInput:rec.allowFreeformInput!==false,
+        defaultValue:rec.defaultValue,
+        options:options.map((opt,optIndex)=>{
+          const item=opt&&typeof opt==='object'?opt:{label:opt,value:opt};
+          return {
+            id:String(item.id||'o'+optIndex),
+            label:String(item.label||item.title||item.value||'Option'),
+            value:String(item.value!==undefined?item.value:(item.label||item.title||''))
+          };
+        }).slice(0,12)
+      };
+    }).filter(q=>q.title).slice(0,8)
+  };
+}
+function normalizeChatCodeCitationPart(part){
+  return {
+    value:String((part&&part.value)||''),
+    license:String((part&&part.license)||''),
+    snippet:String((part&&part.snippet)||'')
+  };
+}
 function normalizeChatVisibleResponseParts(payload,content){
   const parts=[...(Array.isArray(payload&&payload.responseParts)?payload.responseParts:[]),
     ...(Array.isArray(payload&&payload.response_parts)?payload.response_parts:[]),
@@ -5104,6 +5177,20 @@ function normalizeChatVisibleResponseParts(payload,content){
     if(kind==='command'){
       const command=chatResponseCommandValue(part);
       return command?{kind,command}:null;
+    }
+    if(kind==='markdownVuln'){
+      const text=normalizeChatMessageText(chatResponsePartText(part),'assistant');
+      if(!text)return null;
+      return {kind,text,vulnerabilities:normalizeChatVulnerabilities(part&&part.vulnerabilities)};
+    }
+    if(kind==='confirmation')return {kind,confirmation:normalizeChatConfirmationPart(part)};
+    if(kind==='questionCarousel'){
+      const carousel=normalizeChatQuestionCarouselPart(part);
+      return carousel.questions.length?{kind,carousel}:null;
+    }
+    if(kind==='codeCitation'){
+      const citation=normalizeChatCodeCitationPart(part);
+      return citation.value||citation.license||citation.snippet?{kind,citation}:null;
     }
     const text=normalizeChatMessageText(chatResponsePartText(part),'assistant');
     if(!text)return null;
@@ -5488,6 +5575,92 @@ async function runChatResponseCommand(command,button){
   else setStatus('Assistant command ran: '+(command.title||id));
   if(button){button.disabled=false;button.dataset.running='false'}
 }
+function chatResponseComposerText(prefix,text){
+  const value=[prefix,text].filter(Boolean).join(': ');
+  setChatInputValue(value,{focus:true});
+  setStatus('Inserted Assistant response part into composer');
+}
+function renderChatMarkdownVulnerabilityPart(wrap,part){
+  const card=document.createElement('div');card.className='chat-response-vulns';
+  const body=document.createElement('div');body.className='chat-response-part markdown';renderMd(body,part.text);card.appendChild(body);
+  if(part.vulnerabilities&&part.vulnerabilities.length){
+    const title=document.createElement('div');title.className='chat-response-part-title';title.textContent='Detected concerns';card.appendChild(title);
+    const list=document.createElement('div');list.className='chat-response-vuln-list';
+    part.vulnerabilities.forEach(v=>{
+      const chip=document.createElement('span');chip.className='chat-response-vuln-chip';
+      chip.textContent=(v.severity?v.severity+' · ':'')+v.title;
+      chip.title=v.description||v.title;
+      list.appendChild(chip);
+    });
+    card.appendChild(list);
+  }
+  wrap.appendChild(card);
+}
+function renderChatConfirmationPart(wrap,part){
+  const data=part.confirmation||{};
+  const card=document.createElement('div');card.className='chat-response-confirmation';card.setAttribute('role','group');card.setAttribute('aria-label','Assistant confirmation');
+  const title=document.createElement('div');title.className='chat-response-part-title';title.textContent=data.title||'Confirmation';card.appendChild(title);
+  if(data.message){const msg=document.createElement('div');renderMd(msg,data.message);card.appendChild(msg)}
+  const actions=document.createElement('div');actions.className='chat-response-part-actions';
+  (data.buttons||['Continue']).forEach(label=>{
+    const btn=document.createElement('button');btn.type='button';btn.className='chat-inline-action primary';btn.textContent=label;
+    btn.onclick=()=>chatResponseComposerText(data.title||'Confirmation',label);
+    actions.appendChild(btn);
+  });
+  card.appendChild(actions);wrap.appendChild(card);
+}
+function renderChatQuestionCarouselPart(wrap,part){
+  const carousel=part.carousel||{};
+  const card=document.createElement('div');card.className='chat-response-questions';card.setAttribute('role','group');card.setAttribute('aria-label','Assistant questions');
+  (carousel.questions||[]).forEach(question=>{
+    const q=document.createElement('div');q.className='chat-response-question';q.dataset.questionId=question.id;
+    const title=document.createElement('div');title.className='chat-response-part-title';title.textContent=question.title;q.appendChild(title);
+    if(question.message){const msg=document.createElement('div');renderMd(msg,question.message);q.appendChild(msg)}
+    if(question.options&&question.options.length){
+      const opts=document.createElement('div');opts.className='chat-response-question-options';
+      const inputType=String(question.type||'').toLowerCase()==='multiselect'?'checkbox':'radio';
+      question.options.forEach(option=>{
+        const label=document.createElement('label');label.className='chat-response-question-option';
+        const input=document.createElement('input');input.type=inputType;input.name='chat-response-question-'+question.id;input.value=option.value||option.label;
+        if(String(question.defaultValue||'')===input.value)input.checked=true;
+        label.appendChild(input);label.appendChild(document.createTextNode(option.label));opts.appendChild(label);
+      });
+      q.appendChild(opts);
+    }
+    if(!question.options.length||question.allowFreeformInput){
+      const input=document.createElement('input');input.type='text';input.placeholder='Answer';input.value=question.defaultValue!==undefined?String(question.defaultValue):'';q.appendChild(input);
+    }
+    card.appendChild(q);
+  });
+  const actions=document.createElement('div');actions.className='chat-response-part-actions';
+  const insert=document.createElement('button');insert.type='button';insert.className='chat-inline-action primary';insert.textContent='Insert answers';
+  insert.onclick=()=>chatResponseComposerText('Answers',chatQuestionCarouselAnswerText(card));
+  actions.appendChild(insert);
+  if(carousel.allowSkip){
+    const skip=document.createElement('button');skip.type='button';skip.className='chat-inline-action';skip.textContent='Skip';skip.onclick=()=>chatResponseComposerText('Answers','Skip');actions.appendChild(skip);
+  }
+  card.appendChild(actions);wrap.appendChild(card);
+}
+function chatQuestionCarouselAnswerText(card){
+  return Array.from(card.querySelectorAll('.chat-response-question')).map(q=>{
+    const title=(q.querySelector('.chat-response-part-title')||{}).textContent||'Question';
+    const checked=Array.from(q.querySelectorAll('input[type="radio"]:checked,input[type="checkbox"]:checked')).map(input=>input.value);
+    const text=Array.from(q.querySelectorAll('input[type="text"]')).map(input=>input.value).filter(Boolean);
+    return title+': '+checked.concat(text).filter(Boolean).join(', ');
+  }).filter(Boolean).join('\n');
+}
+function renderChatCodeCitationPart(wrap,part){
+  const c=part.citation||{};
+  const card=document.createElement('div');card.className='chat-response-citation';card.setAttribute('role','note');card.setAttribute('aria-label','Code citation');
+  const title=document.createElement('div');title.className='chat-response-part-title';title.textContent='Code citation';card.appendChild(title);
+  const meta=document.createElement('div');meta.textContent=[c.value,c.license].filter(Boolean).join(' · ');card.appendChild(meta);
+  if(c.snippet){const pre=document.createElement('pre');pre.textContent=c.snippet;card.appendChild(pre)}
+  const actions=document.createElement('div');actions.className='chat-response-part-actions';
+  if(c.snippet){actions.appendChild(toolResultActionButton('Copy Snippet','Copy cited code snippet',()=>navigator.clipboard.writeText(c.snippet)))}
+  if(c.value&&isLikelyChatFileReferencePath(c.value)){const open=document.createElement('button');open.type='button';open.className='chat-inline-action primary';open.textContent='Open';open.onclick=()=>openChatResponseReference({path:c.value,label:c.value,openable:true});actions.appendChild(open)}
+  if(actions.children.length)card.appendChild(actions);
+  wrap.appendChild(card);
+}
 function renderChatResponseNativeParts(body,payload,content){
   const parts=normalizeChatVisibleResponseParts(payload||{},content||'');
   if(!body||!parts.length)return false;
@@ -5497,6 +5670,10 @@ function renderChatResponseNativeParts(body,payload,content){
       const el=document.createElement('div');el.className='chat-response-part markdown';
       renderMd(el,part.text);wrap.appendChild(el);return;
     }
+    if(part.kind==='markdownVuln'){renderChatMarkdownVulnerabilityPart(wrap,part);return}
+    if(part.kind==='confirmation'){renderChatConfirmationPart(wrap,part);return}
+    if(part.kind==='questionCarousel'){renderChatQuestionCarouselPart(wrap,part);return}
+    if(part.kind==='codeCitation'){renderChatCodeCitationPart(wrap,part);return}
     if(part.kind==='command'){
       let row=wrap.lastElementChild&&wrap.lastElementChild.classList&&wrap.lastElementChild.classList.contains('chat-response-command-row')?wrap.lastElementChild:null;
       if(!row){row=document.createElement('div');row.className='chat-response-command-row';row.setAttribute('role','toolbar');row.setAttribute('aria-label','Assistant command buttons');wrap.appendChild(row)}

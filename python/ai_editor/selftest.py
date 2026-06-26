@@ -4367,17 +4367,41 @@ def test_phase1_ai_editor_regressions() -> None:
            and "chat-response-callout" in html
            and "chat-response-command-row" in html
            and "chat-response-command" in html
+           and "chat-response-vulns" in html
+           and "chat-response-citation" in html
+           and "chat-response-confirmation" in html
+           and "chat-response-questions" in html
            and "function chatResponseVisiblePartKind(part)" in html
+           and "raw==='markdownvuln'||raw==='markdownwithvulnerabilities'" in html
            and "raw==='markdowncontent'||raw==='markdown'" in html
            and "raw==='warning'||raw.includes('warning')" in html
            and "raw==='info'||raw==='information'||raw.includes('info')" in html
            and "raw==='progressmessage'||raw==='progress'||raw.includes('progress')" in html
            and "raw==='command'||raw.includes('commandbutton')" in html
+           and "raw==='confirmation'||raw.includes('confirmation')" in html
+           and "raw==='questioncarousel'||raw.includes('questioncarousel')" in html
+           and "raw==='codecitation'||raw.includes('codecitation')" in html
            and "function chatMarkdownValueText(value)" in html
+           and "function normalizeChatVulnerabilities(value)" in html
+           and "function normalizeChatConfirmationPart(part)" in html
+           and "function normalizeChatQuestionCarouselPart(part)" in html
+           and "function normalizeChatCodeCitationPart(part)" in html
            and "function normalizeChatVisibleResponseParts(payload,content)" in html
            and "function runChatResponseCommand(command,button)" in html
+           and "function chatResponseComposerText(prefix,text)" in html
+           and "function renderChatMarkdownVulnerabilityPart(wrap,part)" in html
+           and "function renderChatConfirmationPart(wrap,part)" in html
+           and "function renderChatQuestionCarouselPart(wrap,part)" in html
+           and "function chatQuestionCarouselAnswerText(card)" in html
+           and "function renderChatCodeCitationPart(wrap,part)" in html
            and "await call('execute_command',id,...(Array.isArray(command.arguments)?command.arguments:[]))" in html
            and "function renderChatResponseNativeParts(body,payload,content)" in html
+           and "renderChatMarkdownVulnerabilityPart(wrap,part)" in html
+           and "renderChatConfirmationPart(wrap,part)" in html
+           and "renderChatQuestionCarouselPart(wrap,part)" in html
+           and "renderChatCodeCitationPart(wrap,part)" in html
+           and "chatResponseComposerText('Answers',chatQuestionCarouselAnswerText(card))" in html
+           and "toolResultActionButton('Copy Snippet'" in html
            and "renderChatResponseNativeParts(currentMsgBody,d,finalMarkdown);" in html
            and "renderChatResponseNativeParts(s,data,content);" in html
            and "const hasParts=normalizeChatVisibleResponseParts(data,data&&data.content).length;" in html
