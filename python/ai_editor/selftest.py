@@ -19577,6 +19577,23 @@ async function activate(context) {
       vscode.Uri.parse('sao-resource://host.name/path/to/asset.svg'));
     const httpUrl = panel.webview.asWebviewUri(
       vscode.Uri.parse('https://example.com/cdn/app.js?x=1#top'));
+    const fromUri = vscode.Uri.from({
+      scheme: 'selfdoc',
+      authority: 'host.name',
+      path: '/folder/a file.md',
+      query: 'q=1&name=a b',
+      fragment: 'frag value',
+    });
+    const fromJson = fromUri.toJSON();
+    const revived = vscode.Uri.from(fromJson);
+    const revivedViaStatic = vscode.Uri.revive(fromJson);
+    const fileSpecial = vscode.Uri.file('C:\\codey\\c#\\a file.txt');
+    const parsedWindows = vscode.Uri.parse('file:///C:/codey/file.txt');
+    const joinedVirtual = vscode.Uri.joinPath(
+      vscode.Uri.parse('selfdoc://host.name/root/child?keep=1#frag'),
+      '..',
+      'next file.md',
+    );
     panel.webview.html = '<meta http-equiv="Content-Security-Policy" content="img-src '
       + panel.webview.cspSource + '"><main data-view="uri-probe"></main>';
     return {
@@ -19585,6 +19602,15 @@ async function activate(context) {
       authorityUrl: authorityUrl.toString(),
       httpUrl: httpUrl.toString(),
       cspSource: panel.webview.cspSource,
+      fromUri: fromUri.toString(),
+      fromUriRaw: fromUri.toString(true),
+      fromJson,
+      revived: revived.toString(true),
+      revivedViaStatic: revivedViaStatic.toString(true),
+      fileSpecialEncoded: fileSpecial.toString(),
+      fileSpecialRaw: fileSpecial.toString(true),
+      parsedWindowsFsPath: parsedWindows.fsPath.replace(/\\/g, '/'),
+      joinedVirtual: joinedVirtual.toString(true),
     };
   });
   vscode.commands.registerCommand('selftest.node.webviewDisposeProbe', async () => {
@@ -22651,6 +22677,32 @@ module.exports = { activate, deactivate };
                            ".vscode-resource.webview.local/path/to/asset.svg")
                        and node_webview_uri_probe.get("httpUrl") == (
                            "https://example.com/cdn/app.js?x=1#top")
+                       and node_webview_uri_probe.get("fromUri") == (
+                           "selfdoc://host.name/folder/a%20file.md"
+                           "?q=1&name=a b#frag value")
+                       and node_webview_uri_probe.get("fromUriRaw") == (
+                           "selfdoc://host.name/folder/a file.md"
+                           "?q=1&name=a b#frag value")
+                       and node_webview_uri_probe.get("revived") == (
+                           "selfdoc://host.name/folder/a file.md"
+                           "?q=1&name=a b#frag value")
+                       and node_webview_uri_probe.get("revivedViaStatic") == (
+                           "selfdoc://host.name/folder/a file.md"
+                           "?q=1&name=a b#frag value")
+                       and node_webview_uri_probe.get("fromJson", {}).get(
+                           "scheme") == "selfdoc"
+                       and node_webview_uri_probe.get("fromJson", {}).get(
+                           "authority") == "host.name"
+                       and node_webview_uri_probe.get("fromJson", {}).get(
+                           "path") == "/folder/a file.md"
+                       and node_webview_uri_probe.get("fileSpecialEncoded") == (
+                           "file:///C:/codey/c%23/a%20file.txt")
+                       and node_webview_uri_probe.get("fileSpecialRaw") == (
+                           "file:///C:/codey/c%23/a file.txt")
+                       and node_webview_uri_probe.get(
+                           "parsedWindowsFsPath") == "C:/codey/file.txt"
+                       and node_webview_uri_probe.get("joinedVirtual") == (
+                           "selfdoc://host.name/root/next file.md?keep=1#frag")
                        and "https://*.vscode-resource.webview.local"
                        in node_webview_uri_probe.get("cspSource", "")
                        and "cdn.example.com"

@@ -98,6 +98,45 @@ class Disposable {
 // -------------------------------------------------------------------------
 // Uri
 // -------------------------------------------------------------------------
+function _uriEncodePath(value, skipEncoding, scheme) {
+    const raw = String(value || '').replace(/\\/g, '/');
+    if (skipEncoding) return raw.replace(/[?#]/g, ch => encodeURIComponent(ch));
+    const encoded = raw.split('/').map(part => encodeURIComponent(part)).join('/');
+    return scheme === 'file' ? encoded.replace(/%3A/gi, ':') : encoded;
+}
+
+function _uriNormalizePath(value) {
+    let raw = String(value || '').replace(/\\/g, '/');
+    raw = raw.replace(/\/+/g, '/');
+    if (/^[a-zA-Z]:\//.test(raw)) raw = '/' + raw;
+    if (!raw.startsWith('/') && raw) raw = '/' + raw;
+    return raw || '/';
+}
+
+function _uriFsPath(scheme, authority, uriPath) {
+    let raw = String(uriPath || '').replace(/\//g, path.sep);
+    if (String(authority || '')) {
+        const suffix = raw.startsWith(path.sep) ? raw : path.sep + raw;
+        return `${path.sep}${path.sep}${authority}${suffix}`;
+    }
+    if (/^[\\/][a-zA-Z]:[\\/]/.test(raw)) raw = raw.slice(1);
+    return raw;
+}
+
+function _uriJoinPath(basePath, segments) {
+    if (!basePath) throw new Error('Uri.joinPath requires a base path');
+    const cleaned = segments.map(segment => String(segment || '').replace(/\\/g, '/'));
+    const driveMatch = /^\/[a-zA-Z]:($|\/)/.exec(basePath);
+    let joined = path.posix.normalize(path.posix.join(basePath, ...cleaned));
+    if (driveMatch && !/^\/[a-zA-Z]:($|\/)/.test(joined)) {
+        const driveRoot = driveMatch[0].replace(/\/$/, '');
+        const withoutRoot = joined.replace(/^\/+/, '');
+        joined = withoutRoot ? `${driveRoot}/${withoutRoot}` : driveRoot;
+    }
+    if (!joined.startsWith('/')) joined = '/' + joined;
+    return joined;
+}
+
 class Uri {
     constructor(scheme, authority, path_, query, fragment) {
         this.scheme = scheme || 'file';
@@ -106,16 +145,18 @@ class Uri {
         this.query = query || '';
         this.fragment = fragment || '';
     }
-    get fsPath() { return this.path.replace(/\//g, path.sep); }
-    toString() {
+    get fsPath() { return _uriFsPath(this.scheme, this.authority, this.path); }
+    toString(skipEncoding) {
         let result;
+        const encodedPath = _uriEncodePath(this.path, !!skipEncoding, this.scheme);
         if (this.scheme === 'file') {
-            const p = this.path.startsWith('/') ? this.path : '/' + this.path;
+            const p = encodedPath.startsWith('/') ? encodedPath : '/' + encodedPath;
             result = `file://${this.authority}${p}`;
         } else if (this.authority) {
-            result = `${this.scheme}://${this.authority}${this.path}`;
+            const p = encodedPath.startsWith('/') ? encodedPath : '/' + encodedPath;
+            result = `${this.scheme}://${this.authority}${p}`;
         } else {
-            result = `${this.scheme}:${this.path}`;
+            result = `${this.scheme}:${encodedPath}`;
         }
         if (this.query) result += `?${this.query}`;
         if (this.fragment) result += `#${this.fragment}`;
@@ -130,15 +171,51 @@ class Uri {
             change.fragment ?? this.fragment,
         );
     }
-    static file(fsPath) { return new Uri('file', '', fsPath.replace(/\\/g, '/')); }
-    static parse(value) {
+    toJSON() {
+        return {
+            scheme: this.scheme,
+            authority: this.authority,
+            path: this.path,
+            query: this.query,
+            fragment: this.fragment,
+            fsPath: this.fsPath,
+        };
+    }
+    static file(fsPath) {
+        const raw = String(fsPath || '').replace(/\\/g, '/');
+        const uncMatch = /^\/\/([^/]+)\/(.*)$/.exec(raw);
+        if (uncMatch) return new Uri('file', uncMatch[1], '/' + uncMatch[2], '', '');
+        return new Uri('file', '', _uriNormalizePath(raw), '', '');
+    }
+    static parse(value, strict) {
+        if (strict && (!value || !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(String(value)))) {
+            throw new Error(`Invalid URI: ${value}`);
+        }
         try {
             const u = new URL(value);
             return new Uri(u.protocol.replace(/:$/, ''), u.host, decodeURIComponent(u.pathname), u.search.replace(/^\?/, ''), u.hash.replace(/^#/, ''));
-        } catch { return Uri.file(value); }
+        } catch {
+            if (strict) throw new Error(`Invalid URI: ${value}`);
+            return Uri.file(value);
+        }
     }
+    static from(value) {
+        if (value instanceof Uri) return value;
+        if (!value || typeof value !== 'object') {
+            throw new Error('Uri.from requires URI components');
+        }
+        return new Uri(
+            value.scheme || 'file',
+            value.authority || '',
+            value.path || '',
+            value.query || '',
+            value.fragment || '',
+        );
+    }
+    static revive(value) { return Uri.from(value); }
     static joinPath(base, ...segments) {
-        return Uri.file(path.join(base.fsPath, ...segments));
+        const uri = Uri.from(base);
+        return uri.with({ path: _uriJoinPath(uri.path, segments) });
     }
 }
 
@@ -173,7 +250,7 @@ function _asWebviewResourceUri(localUri) {
     return new Uri(
         'https',
         `${authorityPrefix}${WEBVIEW_RESOURCE_AUTHORITY_SUFFIX}`,
-        _encodeWebviewResourcePath(uri.path),
+        uri.path,
         uri.query,
         uri.fragment,
     );
