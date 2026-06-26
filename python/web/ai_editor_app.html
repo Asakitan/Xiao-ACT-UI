@@ -1540,7 +1540,8 @@ pre.code-block:hover .cb-toolbar { opacity:1; }
 pre.code-block { overflow:visible; }
 .cb-btn { padding:2px 6px; border-radius:3px; font-size:11px; cursor:pointer;
   background:var(--bg2); color:var(--fg-dim); border:1px solid var(--border); }
-.cb-btn:hover { background:var(--bg-hover); color:var(--fg); }
+.cb-btn:hover,.cb-btn:focus { background:var(--bg-hover); color:var(--fg); outline:none; }
+.cb-btn:disabled { opacity:.4; cursor:default; background:var(--bg2); color:var(--fg-dim); }
 
 /* ── Message footer (rate/retry/copy) ── */
 .msg-footer { display:flex; align-items:center; gap:4px; margin-top:4px; opacity:0; transition:opacity .15s; }
@@ -3700,9 +3701,11 @@ en:{
   // tool sidebar
   no_history:'No history',untitled:'Untitled',no_files:'No files to show',workspace_load_failed:'Failed to load workspace files',file_preview_limited:'Opened preview (file truncated)',
   // code block actions
-  copy_code:'Copy',insert_code:'Insert',run_code:'Run',new_file_code:'New File',copied:'Copied',
-  copy_markdown:'Copy Markdown',insert_response:'Insert Response',apply_first_code:'Apply First Code Block',
+  copy_code:'Copy',insert_code:'Insert',apply_code:'Apply',run_code:'Run',new_file_code:'New File',copied:'Copied',
+  copy_markdown:'Copy Markdown',copy_all_code:'Copy All Code',insert_response:'Insert Response',apply_first_code:'Apply First Code Block',
   action_unavailable:'Action unavailable',response_inserted:'Response inserted into editor',
+  code_inserted:'Code inserted into editor',code_applied:'Code applied to editor selection',
+  all_code_copied:'All code blocks copied',
   code_opened:'Code block opened in editor',actions_ready:'Actions ready',response_in_progress:'Response in progress',
   // thinking
   thinking_words:'Thinking ($1 words)',
@@ -3838,9 +3841,11 @@ zh:{
   requires_confirmation:'需要确认',allow:'✓ 允许',deny:'✗ 拒绝',
   confirm_allowed:'已允许',confirm_denied:'已拒绝',confirm_auto_approved:'已自动允许',confirm_user_action:'用户操作',confirm_bypass_reason:'权限模式',
   no_history:'无历史记录',untitled:'未命名',no_files:'没有可显示的文件',workspace_load_failed:'加载工作区文件失败',file_preview_limited:'已打开预览（文件被截断）',
-  copy_code:'复制',insert_code:'插入',run_code:'运行',new_file_code:'新建文件',copied:'已复制',
-  copy_markdown:'复制 Markdown',insert_response:'插入回复',apply_first_code:'应用首个代码块',
+  copy_code:'复制',insert_code:'插入',apply_code:'应用',run_code:'运行',new_file_code:'新建文件',copied:'已复制',
+  copy_markdown:'复制 Markdown',copy_all_code:'复制全部代码',insert_response:'插入回复',apply_first_code:'应用首个代码块',
   action_unavailable:'动作不可用',response_inserted:'回复已插入编辑器',
+  code_inserted:'代码已插入编辑器',code_applied:'代码已应用到编辑器选区',
+  all_code_copied:'已复制全部代码块',
   code_opened:'代码块已在编辑器打开',actions_ready:'动作就绪',response_in_progress:'回复生成中',
   thinking_words:'思考中 ($1 词)',
   slash_clear:'清除聊天',slash_new:'新对话',slash_export:'导出到剪贴板',
@@ -7401,12 +7406,13 @@ function renderMd(container,text){
       const toolbar=document.createElement('div');toolbar.className='cb-toolbar';
       const _code=inner,_lang=lang;
       [{t:t('copy_code'),icon:'📋',fn:()=>{navigator.clipboard.writeText(_code);showToast(t('copied'),'success',1500)}},
-       {t:t('insert_code'),icon:'📥',fn:()=>openInEditor(_code,_lang)},
+       {t:t('insert_code'),icon:'📥',fn:()=>assistantInsertCodeIntoEditor(_code,{lang:_lang,replaceSelection:false})},
+       {t:t('apply_code'),icon:'⚒',fn:()=>assistantInsertCodeIntoEditor(_code,{lang:_lang,replaceSelection:true})},
        {t:t('run_code'),icon:'▶',fn:()=>execTerminalCmd(_code)},
        {t:t('new_file_code'),icon:'📄',fn:()=>addTab(_lang||'code',_code,_lang)}
       ].forEach(a=>{
-        const b=document.createElement('span');b.className='cb-btn';b.textContent=a.icon;b.title=a.t;
-        b.onclick=a.fn;toolbar.appendChild(b);
+        const b=document.createElement('button');b.type='button';b.className='cb-btn';b.textContent=a.icon;b.title=a.t;
+        b.setAttribute('aria-label',a.t);b.onclick=a.fn;toolbar.appendChild(b);
       });
       pre.appendChild(toolbar);
       container.appendChild(pre);
@@ -7840,6 +7846,39 @@ function openInEditor(code,lang){
   if(typeof scheduleEditorSemanticTokens==='function')scheduleEditorSemanticTokens(300);
   if(typeof scheduleEditorFoldingRanges==='function')scheduleEditorFoldingRanges(360);
   if(typeof scheduleEditorDocumentColors==='function')scheduleEditorDocumentColors(420);
+}
+function assistantEnsureTextEditorForCodeAction(){
+  showEditorArea();
+  if(typeof hideDiffEditorSurface==='function')hideDiffEditorSurface();
+  if(typeof hideCustomEditorSurface==='function')hideCustomEditorSurface();
+  if(typeof hideNotebookSurface==='function')hideNotebookSurface();
+  const welcome=$('editor-welcome'),container=$('editor-container');
+  if(welcome)welcome.style.display='none';
+  if(container)container.style.display='flex';
+  if(typeof closeEditorSuggest==='function')closeEditorSuggest();
+  if(typeof closeEditorHover==='function')closeEditorHover();
+  if(typeof closeEditorSignatureHelp==='function')closeEditorSignatureHelp();
+  if(typeof closeEditorCodeActions==='function')closeEditorCodeActions();
+  if(ed&&ed.focus)ed.focus();
+  return !!ed;
+}
+function assistantInsertCodeIntoEditor(code,opts){
+  opts=opts||{};
+  const text=String(code||'');
+  if(!text||!assistantEnsureTextEditorForCodeAction())return false;
+  const value=String(ed.value||'');
+  const selectionStart=Math.max(0,Math.min(value.length,Number(ed.selectionStart)||0));
+  const selectionEnd=Math.max(0,Math.min(value.length,Number(ed.selectionEnd)||selectionStart));
+  const replace=!!opts.replaceSelection&&selectionStart!==selectionEnd;
+  const start=replace?Math.min(selectionStart,selectionEnd):selectionEnd;
+  const end=replace?Math.max(selectionStart,selectionEnd):selectionEnd;
+  const ok=editorInsertPlainTextAtRange(text,editorRangePayloadFromOffsets(value,start,end));
+  if(ok){
+    if(opts.lang&&LANGUAGES.includes(opts.lang))setEditorLanguage(opts.lang);
+    const message=replace?t('code_applied'):t('code_inserted');
+    announceAssistantAction(message);setStatus(message);showToast(message,'success',1500);
+  }
+  return ok;
 }
 function showEditorArea(){
   _editorVis=true;
@@ -25500,6 +25539,16 @@ function chatFirstMessageCodeBlock(msgEl){
   const blocks=chatMessageCodeBlocks(msgEl);
   return blocks.length?blocks[0]:null;
 }
+function chatAllMessageCodeBlocksText(msgEl){
+  return chatMessageCodeBlocks(msgEl).map(block=>block.code).filter(Boolean).join('\n\n');
+}
+function applyFirstMessageCodeBlock(msgEl){
+  const block=chatFirstMessageCodeBlock(msgEl);
+  if(!block)return false;
+  const ok=assistantInsertCodeIntoEditor(block.code,{lang:block.lang,replaceSelection:true});
+  if(ok)setMessageFooterStatus(msgEl,t('code_applied'));
+  return ok;
+}
 function setMessageFooterStatus(msgEl,message){
   const status=msgEl&&msgEl.querySelector?msgEl.querySelector('.mf-status'):null;
   if(status)status.textContent=message||'';
@@ -25508,7 +25557,9 @@ function updateMessageFooterState(msgEl){
   const footer=msgEl&&msgEl.querySelector?msgEl.querySelector('.msg-footer'):null;
   if(!footer)return;
   const hasText=!!chatMessageActionText(msgEl,false);
-  const hasCode=!!chatFirstMessageCodeBlock(msgEl);
+  const codeBlocks=chatMessageCodeBlocks(msgEl);
+  const hasCode=!!codeBlocks.length;
+  const hasMultipleCode=codeBlocks.length>1;
   footer.querySelectorAll('.mf-btn').forEach(btn=>{
     const requires=String(btn.dataset.requires||'').split(/\s+/).filter(Boolean);
     let disabled=false;
@@ -25522,6 +25573,8 @@ function updateMessageFooterState(msgEl){
   });
   footer.dataset.hasText=hasText?'true':'false';
   footer.dataset.hasCode=hasCode?'true':'false';
+  footer.dataset.codeBlockCount=String(codeBlocks.length);
+  footer.dataset.hasMultipleCodeBlocks=hasMultipleCode?'true':'false';
   footer.dataset.streaming=streaming?'true':'false';
   setMessageFooterStatus(msgEl,streaming?t('response_in_progress'):(hasText?t('actions_ready'):t('action_unavailable')));
 }
@@ -25612,8 +25665,9 @@ function addMessageFooter(msgEl,role){
     {separator:true},
     {icon:'📋',title:t('copy_response'),action:'copy',requires:'text',fn:function(){const text=chatMessageActionText(msgEl,false);if(text){navigator.clipboard.writeText(text);announceAssistantAction('Response copied');setMessageFooterStatus(msgEl,t('copied'))}showToast(t('copied'),'success',1500)}},
     {icon:'M↓',title:t('copy_markdown'),action:'copy-markdown',requires:'text',fn:function(){const text=chatMessageActionText(msgEl,true);if(text){navigator.clipboard.writeText(text);announceAssistantAction('Markdown copied');setMessageFooterStatus(msgEl,t('copied'))}showToast(t('copied'),'success',1500)}},
+    {icon:'{}',title:t('copy_all_code'),action:'copy-all-code',requires:'code',fn:function(){const text=chatAllMessageCodeBlocksText(msgEl);if(text){navigator.clipboard.writeText(text);announceAssistantAction(t('all_code_copied'));setMessageFooterStatus(msgEl,t('all_code_copied'))}showToast(t('copied'),'success',1500)}},
     {icon:'↧',title:t('insert_response'),action:'insert-response',requires:'text',disableWhileStreaming:true,fn:function(){const text=chatMessageActionText(msgEl,true);if(text){openInEditor(text,'markdown');announceAssistantAction(t('response_inserted'));setMessageFooterStatus(msgEl,t('response_inserted'))}}},
-    {icon:'⚒',title:t('apply_first_code'),action:'apply-code',requires:'code',disableWhileStreaming:true,disabledTitle:'No code block in response',fn:function(){const block=chatFirstMessageCodeBlock(msgEl);if(block){openInEditor(block.code,block.lang);announceAssistantAction(t('code_opened'));setMessageFooterStatus(msgEl,t('code_opened'))}}},
+    {icon:'⚒',title:t('apply_first_code'),action:'apply-code',requires:'code',disableWhileStreaming:true,disabledTitle:'No code block in response',fn:function(){applyFirstMessageCodeBlock(msgEl)}},
     {separator:true},
     {icon:'🔄',title:t('retry'),action:'regenerate',disableWhileStreaming:true,disabledTitle:t('response_in_progress'),fn:function(){retryAssistantMessage(msgEl)}},
   ];

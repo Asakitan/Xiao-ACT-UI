@@ -4285,6 +4285,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "async function sendAssistantTextRequest(rawText,opts)" in html
            and "function chatMessageCodeBlocks(msgEl)" in html
            and "function chatFirstMessageCodeBlock(msgEl)" in html
+           and "function chatAllMessageCodeBlocksText(msgEl)" in html
+           and "function applyFirstMessageCodeBlock(msgEl)" in html
+           and "function assistantEnsureTextEditorForCodeAction()" in html
+           and "function assistantInsertCodeIntoEditor(code,opts)" in html
            and "function updateMessageFooterState(msgEl)" in html
            and "function updateMessageFootersState()" in html
            and "function runMessageFooterAction(btn,msgEl,fn)" in html
@@ -4313,6 +4317,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "btn.setAttribute('aria-disabled',disabled?'true':'false');" in html
            and "btn.dataset.ready=disabled?'false':'true';" in html
            and "footer.dataset.hasCode=hasCode?'true':'false';" in html
+           and "footer.dataset.codeBlockCount=String(codeBlocks.length);" in html
+           and "footer.dataset.hasMultipleCodeBlocks=hasMultipleCode?'true':'false';" in html
            and "footer.dataset.streaming=streaming?'true':'false';" in html
            and "updateMessageFootersState();" in html
            and "b.addEventListener('keydown',ev=>{if(ev.key===' '||ev.key==='Enter'){ev.preventDefault();b.click()}});" in html
@@ -4320,14 +4326,18 @@ def test_phase1_ai_editor_regressions() -> None:
            and "announceAssistantAction(next==='none'?'Feedback cleared':'Feedback saved: '+next);" in html
            and "announceAssistantAction('Response copied')" in html
            and "announceAssistantAction('Markdown copied')" in html
+           and "t('copy_all_code')" in html
            and "t('insert_response')" in html
            and "t('apply_first_code')" in html
            and "action:'copy-markdown'" in html
+           and "action:'copy-all-code'" in html
            and "action:'insert-response'" in html
            and "action:'apply-code'" in html
            and "requires:'code'" in html
            and "openInEditor(text,'markdown')" in html
-           and "openInEditor(block.code,block.lang)" in html
+           and "assistantInsertCodeIntoEditor(block.code,{lang:block.lang,replaceSelection:true})" in html
+           and "editorInsertPlainTextAtRange(text,editorRangePayloadFromOffsets(value,start,end))" in html
+           and "const message=replace?t('code_applied'):t('code_inserted');" in html
            and "className='mf-status sr-only'" in html
            and "className='mf-separator'" in html
            and ".interactive-request .msg-footer { justify-content:flex-end; margin-left:auto; }" in html
@@ -4360,6 +4370,17 @@ def test_phase1_ai_editor_regressions() -> None:
            and "addMessageFooter(body.closest('.msg'),'assistant');" in html
            and "showChatWelcomeIfEmpty();syncAssistantSessionState();assistantSessionPersistCurrent" in html
            and "e.key==='Enter'&&(e.ctrlKey||e.metaKey)" in html)
+    _check("frontend Assistant code block toolbar is keyboard accessible and can apply to editor",
+           "const toolbar=document.createElement('div');toolbar.className='cb-toolbar';" in html
+           and "{t:t('insert_code'),icon:'📥',fn:()=>assistantInsertCodeIntoEditor(_code,{lang:_lang,replaceSelection:false})}" in html
+           and "{t:t('apply_code'),icon:'⚒',fn:()=>assistantInsertCodeIntoEditor(_code,{lang:_lang,replaceSelection:true})}" in html
+           and "const b=document.createElement('button');b.type='button';b.className='cb-btn';" in html
+           and "b.setAttribute('aria-label',a.t);b.onclick=a.fn;toolbar.appendChild(b);" in html
+           and ".cb-btn:hover,.cb-btn:focus { background:var(--bg-hover); color:var(--fg); outline:none; }" in html
+           and ".cb-btn:disabled { opacity:.4; cursor:default; background:var(--bg2); color:var(--fg-dim); }" in html
+           and "copy_all_code:'Copy All Code'" in html
+           and "code_inserted:'Code inserted into editor'" in html
+           and "code_applied:'Code applied to editor selection'" in html)
     _check("frontend Assistant renders response references and changed-file cards",
            "chat-response-references" in html
            and "chat-response-reference-list" in html
