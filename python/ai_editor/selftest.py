@@ -4095,7 +4095,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "resizeChatInput(this,200);" in html
            and "setChatInputValue(prefix+'#'+tool.name+' ')" in html
            and "setChatInputValue(s);w.remove()" in html
-           and "function activateFollowupButton(btn)" in html
+           and "function activateFollowupButton(btn,opts)" in html
            and "setChatInputValue((command?command+' ':'')+message);" in html
            and "doSend();" in html)
     _check("frontend Assistant composer uses Copilot-style send readiness and pending state",
@@ -4413,13 +4413,28 @@ def test_phase1_ai_editor_regressions() -> None:
            and "const key=[normalized.kind,normalized.message,normalized.subCommand,normalized.agentId,normalized.toolHint].join('\\n').toLowerCase();" in html
            and "items.sort((a,b)=>{" in html
            and "function selectFollowup(container,index,focus)" in html
-           and "function activateFollowupButton(btn)" in html
+           and "function dismissFollowups(container,reason)" in html
+           and "function syncAssistantFollowupState(body,extra)" in html
+           and "function followupDraftText(btn)" in html
+           and "function draftFollowupButton(btn,opts)" in html
+           and "function activateFollowupButton(btn,opts)" in html
            and "function onFollowupKeydown(ev)" in html
+           and "panel.dataset.chatFollowupCount=String(count);" in html
+           and "panel.dataset.chatHasFollowups=count?'true':'false';" in html
+           and "panel.dataset.chatFollowupNativeCount=followups?String(followups.dataset.nativeFollowupCount||'0'):'0';" in html
+           and "panel.dataset.chatFollowupGeneratedCount=followups?String(followups.dataset.generatedFollowupCount||'0'):'0';" in html
+           and "if(opts.draftOnly)return draftFollowupButton(btn,opts);" in html
+           and "return (command?command+' ':'')+(toolHint?'#'+toolHint+' ':'')+message;" in html
            and "div.setAttribute('role','toolbar');" in html
            and "div.setAttribute('aria-label','Suggested follow-up prompts ('+items.length+')');" in html
-           and "div.dataset.followupCount=String(div.children.length);" in html
+           and "if(container.querySelector(':scope > .followups'))return;" in html
+           and "const head=document.createElement('div');head.className='followup-head';" in html
+           and "dismiss.setAttribute('aria-label','Dismiss suggested follow-ups');" in html
+           and "dismiss.onclick=()=>dismissFollowups(div,'button');" in html
+           and "div.dataset.followupCount=String(div.querySelectorAll('.followup-btn').length);" in html
            and "div.dataset.nativeFollowupCount=String(items.filter(item=>item.source&&item.source!=='generated').length);" in html
            and "div.dataset.generatedFollowupCount=String(items.filter(item=>!item.source||item.source==='generated').length);" in html
+           and "syncAssistantFollowupState(container,{reason:'render'});" in html
            and "btn.tabIndex=i===0?0:-1;" in html
            and "btn.dataset.followupMessage=item.message;" in html
            and "btn.dataset.followupKind=item.kind;" in html
@@ -4433,10 +4448,14 @@ def test_phase1_ai_editor_regressions() -> None:
            and "if(agentId)addChatContextAttachment({id:'agent:'+agentId" in html
            and "if(toolHint)addChatContextAttachment({id:'tool:'+toolHint" in html
            and "announceAssistantAction('Follow-up selected: '" in html
+           and "btn.onclick=ev=>activateFollowupButton(btn,{draftOnly:ev.ctrlKey||ev.metaKey||ev.shiftKey});" in html
            and "ev.key==='ArrowRight'||ev.key==='ArrowDown'" in html
            and "ev.key==='Home'" in html
            and "ev.key==='End'" in html
+           and "ev.key==='Delete'||ev.key==='Backspace'" in html
            and "ev.key==='Escape'" in html
+           and ".followup-head" in html
+           and ".followup-dismiss" in html
            and "payload&&payload.suggestedFollowups" in html
            and "payload&&payload.suggested_followups" in html)
     _check("frontend Assistant accepts provider-native references usedContext and followups",

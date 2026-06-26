@@ -1558,6 +1558,12 @@ pre.code-block { overflow:visible; }
 /* ── Follow-up suggestions ── */
 .followups { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; align-items:center;
   padding-top:6px; border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent); }
+.followup-head { display:flex; align-items:center; gap:6px; flex:1 0 100%; min-width:0; color:var(--fg-dim);
+  font:10px/18px var(--mono); text-transform:uppercase; }
+.followup-head-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.followup-dismiss { margin-left:auto; width:20px; height:20px; border:1px solid transparent; border-radius:4px;
+  background:transparent; color:var(--fg-dim); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
+.followup-dismiss:hover,.followup-dismiss:focus { background:var(--bg-hover); color:var(--fg); border-color:var(--border); outline:none; }
 .followup-btn { display:inline-flex; align-items:center; gap:5px; max-width:100%;
   min-height:24px; padding:3px 8px; border-radius:5px; font-size:12px; cursor:pointer;
   background:transparent; color:var(--fg-accent); border:1px solid color-mix(in srgb, var(--border-focus) 40%, var(--border));
@@ -25724,16 +25730,67 @@ function selectFollowup(container,index,focus){
   container.dataset.activeIndex=String(next);
   if(focus)buttons[next].focus();
 }
-function activateFollowupButton(btn){
+function dismissFollowups(container,reason){
+  if(!container)return false;
+  const body=container.closest('.msg-body');
+  container.dataset.dismissed='true';
+  container.remove();
+  syncAssistantFollowupState(body,{reason:reason||'dismiss'});
+  announceAssistantAction('Follow-ups dismissed');
+  return true;
+}
+function syncAssistantFollowupState(body,extra){
+  const panel=$('chat-panel');
+  const latest=body||latestChatMessageBody('assistant');
+  const followups=latest&&latest.querySelector?latest.querySelector(':scope > .followups'):null;
+  const count=followups?followups.querySelectorAll('.followup-btn').length:0;
+  if(panel){
+    panel.dataset.chatFollowupCount=String(count);
+    panel.dataset.chatHasFollowups=count?'true':'false';
+    panel.dataset.chatFollowupNativeCount=followups?String(followups.dataset.nativeFollowupCount||'0'):'0';
+    panel.dataset.chatFollowupGeneratedCount=followups?String(followups.dataset.generatedFollowupCount||'0'):'0';
+    panel.dataset.chatFollowupLastAction=extra&&extra.reason?String(extra.reason):'';
+  }
+}
+function followupDraftText(btn){
+  const message=String(btn&&btn.dataset?btn.dataset.followupMessage||'':'').trim();
+  if(!message)return '';
+  const command=String(btn.dataset.followupCommand||'').trim();
+  const toolHint=String(btn.dataset.followupTool||'').trim();
+  return (command?command+' ':'')+(toolHint?'#'+toolHint+' ':'')+message;
+}
+function draftFollowupButton(btn,opts){
+  if(!btn)return false;
+  const text=followupDraftText(btn);
+  if(!text)return false;
+  const agentId=String(btn.dataset.followupAgent||'').trim();
+  const toolHint=String(btn.dataset.followupTool||'').trim();
+  if(agentId)addChatContextAttachment({id:'agent:'+agentId,kind:'agent',label:agentId});
+  if(toolHint)addChatContextAttachment({id:'tool:'+toolHint,kind:'tool',label:toolHint});
+  setChatInputValue(text,{focus:true});
+  const msg=btn.closest('.msg'),body=msg&&msg.querySelector?msg.querySelector('.msg-body'):null;
+  syncAssistantFollowupState(body,{reason:'draft'});
+  announceAssistantAction('Follow-up inserted: '+(btn.dataset.followupTitle||text));
+  if(opts&&opts.dismiss){
+    const container=btn.closest('.followups');
+    if(container)dismissFollowups(container,'draft-dismiss');
+  }
+  return true;
+}
+function activateFollowupButton(btn,opts){
+  opts=opts||{};
   if(!btn)return false;
   const message=String(btn.dataset.followupMessage||'').trim();
   if(!message)return false;
+  if(opts.draftOnly)return draftFollowupButton(btn,opts);
   const agentId=String(btn.dataset.followupAgent||'').trim();
   const command=String(btn.dataset.followupCommand||'').trim();
   const toolHint=String(btn.dataset.followupTool||'').trim();
   if(agentId)addChatContextAttachment({id:'agent:'+agentId,kind:'agent',label:agentId});
   if(toolHint)addChatContextAttachment({id:'tool:'+toolHint,kind:'tool',label:toolHint});
   setChatInputValue((command?command+' ':'')+message);
+  const msg=btn.closest('.msg'),body=msg&&msg.querySelector?msg.querySelector('.msg-body'):null;
+  syncAssistantFollowupState(body,{reason:'send'});
   announceAssistantAction('Follow-up selected: '+(btn.dataset.followupTitle||message));
   doSend();
   return true;
@@ -25748,17 +25805,25 @@ function onFollowupKeydown(ev){
   else if(ev.key==='ArrowLeft'||ev.key==='ArrowUp'){ev.preventDefault();selectFollowup(container,(index-1+buttons.length)%buttons.length,true)}
   else if(ev.key==='Home'){ev.preventDefault();selectFollowup(container,0,true)}
   else if(ev.key==='End'){ev.preventDefault();selectFollowup(container,buttons.length-1,true)}
-  else if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();activateFollowupButton(buttons[index])}
+  else if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();activateFollowupButton(buttons[index],{draftOnly:ev.ctrlKey||ev.metaKey||ev.shiftKey})}
+  else if(ev.key==='Delete'||ev.key==='Backspace'){ev.preventDefault();dismissFollowups(container,'keyboard')}
   else if(ev.key==='Escape'){const input=$('chat-input');if(input){ev.preventDefault();input.focus()}}
 }
 function showFollowups(container,suggestions){
   if(!suggestions||!suggestions.length)return;
+  if(container.querySelector(':scope > .followups'))return;
   const items=normalizeFollowupSuggestions(suggestions);
   if(!items.length)return;
   const div=document.createElement('div');div.className='followups';
   div.setAttribute('role','toolbar');
   div.setAttribute('aria-label','Suggested follow-up prompts ('+items.length+')');
   div.addEventListener('keydown',onFollowupKeydown);
+  const head=document.createElement('div');head.className='followup-head';
+  const title=document.createElement('span');title.className='followup-head-title';title.textContent='Suggested follow-ups';
+  const dismiss=document.createElement('button');dismiss.type='button';dismiss.className='followup-dismiss';
+  dismiss.textContent='×';dismiss.title='Dismiss follow-ups';dismiss.setAttribute('aria-label','Dismiss suggested follow-ups');
+  dismiss.onclick=()=>dismissFollowups(div,'button');
+  head.appendChild(title);head.appendChild(dismiss);div.appendChild(head);
   items.forEach((item,i)=>{
     const btn=document.createElement('button');btn.type='button';btn.className='followup-btn';
     btn.tabIndex=i===0?0:-1;
@@ -25774,17 +25839,18 @@ function showFollowups(container,suggestions){
     btn.setAttribute('aria-posinset',String(i+1));
     btn.setAttribute('aria-setsize',String(items.length));
     btn.innerHTML='<span class="followup-kind">'+esc(item.kind)+'</span><span class="followup-title">'+esc(item.title)+'</span>'+(item.source&&item.source!=='generated'?'<span class="followup-source">'+esc(item.source)+'</span>':'');
-    btn.title=item.tooltip+(item.source?'\nSource: '+item.source:'')+(item.subCommand?'\nCommand: '+item.subCommand:'');
+    btn.title=item.tooltip+(item.source?'\nSource: '+item.source:'')+(item.subCommand?'\nCommand: '+item.subCommand:'')+'\nCtrl/Shift+Enter or Ctrl/Shift+Click inserts without sending.';
     btn.setAttribute('aria-label','Follow-up: '+item.title+(item.source?' from '+item.source:''));
-    btn.onclick=()=>activateFollowupButton(btn);
+    btn.onclick=ev=>activateFollowupButton(btn,{draftOnly:ev.ctrlKey||ev.metaKey||ev.shiftKey});
     div.appendChild(btn);
   });
-  if(!div.children.length)return;
-  div.dataset.followupCount=String(div.children.length);
+  if(!div.querySelector('.followup-btn'))return;
+  div.dataset.followupCount=String(div.querySelectorAll('.followup-btn').length);
   div.dataset.nativeFollowupCount=String(items.filter(item=>item.source&&item.source!=='generated').length);
   div.dataset.generatedFollowupCount=String(items.filter(item=>!item.source||item.source==='generated').length);
   div.dataset.activeIndex='0';
   container.appendChild(div);
+  syncAssistantFollowupState(container,{reason:'render'});
 }
 
 // Auto-generate follow-ups from assistant response
