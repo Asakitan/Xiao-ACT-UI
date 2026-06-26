@@ -17758,6 +17758,7 @@ async function activate(context) {
   });
   vscode.workspace.onDidChangeConfiguration(event => {
     configEvents.count += 1;
+    configEvents.last = event;
     configEvents.aiEditor = event.affectsConfiguration('ai_editor');
     configEvents.extensions = event.affectsConfiguration('extensions');
     configEvents.diagnostics = event.affectsConfiguration('ai_editor.extensions.diagnostics_enabled');
@@ -18532,19 +18533,32 @@ async function activate(context) {
       plainEditorTabSize: editorPlainConfig.get('tabSize', 'missing'),
       inspectModeDefault: manifestLanguageConfig.inspect('mode').defaultValue,
       inspectModeLanguageDefault: manifestLanguageConfig.inspect('mode').defaultLanguageValue,
+      inspectModeLanguageIds: manifestLanguageConfig.inspect('mode').languageIds,
       inspectTabLanguageDefault: editorLanguageConfig.inspect('tabSize').defaultLanguageValue,
+      inspectTabLanguageIds: editorLanguageConfig.inspect('tabSize').languageIds,
     };
     const configBefore = {
       aiDiagnostics: aiConfig.get('extensions.diagnostics_enabled'),
       aliasDiagnostics: aliasConfig.get('diagnostics_enabled'),
       nestedDiagnostics: nestedConfig.get('diagnostics_enabled'),
       rootDiagnostics: rootConfig.get('ai_editor.extensions.diagnostics_enabled'),
+      aliasSectionProbe: aliasConfig.probe_flag,
+      nestedSectionDiagnostics: nestedConfig.diagnostics_enabled,
       aiProbe: aiConfig.get('extensions.probe_flag'),
       aliasProbe: aliasConfig.get('probe_flag'),
       nestedProbe: nestedConfig.get('probe_flag'),
       rootProbe: rootConfig.get('ai_editor.extensions.probe_flag'),
       hasAlias: aliasConfig.has('diagnostics_enabled'),
       inspectKey: aiConfig.inspect('extensions.diagnostics_enabled').key,
+    };
+    const cloneProbe = aiConfig.get('extensions');
+    cloneProbe.probe_flag = 'mutated-clone';
+    const sectionCloneProbe = aiConfig.get();
+    sectionCloneProbe.extensions.probe_flag = 'mutated-section-clone';
+    const configCloneIsolation = {
+      nestedAfterCloneMutation: nestedConfig.get('probe_flag'),
+      rootAfterCloneMutation: rootConfig.get('ai_editor.extensions.probe_flag'),
+      sectionAfterCloneMutation: aiConfig.get('extensions.probe_flag'),
     };
     await aliasConfig.update('probe_flag', false);
     const configAfter = {
@@ -18620,11 +18634,39 @@ async function activate(context) {
     };
     await manifestLanguageConfig.update(
       'persist_probe', 'language-persisted', undefined, true);
+    await manifestLanguageConfig.update('mode', 'auto-language-default');
     const manifestLanguageConfigPersist = {
       scoped: manifestLanguageConfig.get('persist_probe'),
       plain: manifestConfig.get('persist_probe', 'missing'),
       hasScoped: manifestLanguageConfig.has('persist_probe'),
+      autoMode: manifestLanguageConfig.get('mode'),
+      autoPlainMode: manifestConfig.get('mode'),
+      autoWorkspaceLanguage:
+        manifestLanguageConfig.inspect('mode').workspaceLanguageValue,
     };
+    await manifestLanguageConfig.update('mode', undefined);
+    const manifestLanguageConfigAutoReset = {
+      mode: manifestLanguageConfig.get('mode'),
+      workspaceLanguage:
+        manifestLanguageConfig.inspect('mode').workspaceLanguageValue,
+      languageIds: manifestLanguageConfig.inspect('mode').languageIds,
+    };
+    const scopedEventsBefore = configEvents.count;
+    await manifestLanguageConfig.update('mode', 'scope-event', undefined, true);
+    const scopedEventResult = {
+      eventCountDelta: configEvents.count - scopedEventsBefore,
+      selflang: configEvents.last
+        && configEvents.last.affectsConfiguration(
+          'selftest.node.mode',
+          { languageId: 'selflang' }),
+      otherlang: configEvents.last
+        && configEvents.last.affectsConfiguration(
+          'selftest.node.mode',
+          { languageId: 'otherlang' }),
+      unscoped: configEvents.last
+        && configEvents.last.affectsConfiguration('selftest.node.mode'),
+    };
+    await manifestLanguageConfig.update('mode', undefined, undefined, true);
     await nestedConfig.update('transient_probe', 'present');
     await nestedConfig.update('transient_probe', undefined);
     const configRemoved = !nestedConfig.has('transient_probe')
@@ -18688,12 +18730,15 @@ async function activate(context) {
       workspaceTrust,
       watcherEvents,
       configBefore,
+      configCloneIsolation,
       configAfter,
       manifestConfigBefore,
       manifestLanguageConfigBefore,
       manifestLanguageConfigSet,
       manifestLanguageConfigReset,
       manifestLanguageConfigPersist,
+      manifestLanguageConfigAutoReset,
+      scopedEventResult,
       manifestConfigSet,
       manifestGlobalConfigSet,
       manifestFolderConfigSet,
@@ -22914,6 +22959,9 @@ module.exports = { activate, deactivate };
                 node_config_after = (
                     node_workspace_probe.get("configAfter", {})
                     if isinstance(node_workspace_probe, dict) else {})
+                node_config_clone_isolation = (
+                    node_workspace_probe.get("configCloneIsolation", {})
+                    if isinstance(node_workspace_probe, dict) else {})
                 node_manifest_config_before = (
                     node_workspace_probe.get("manifestConfigBefore", {})
                     if isinstance(node_workspace_probe, dict) else {})
@@ -22929,6 +22977,13 @@ module.exports = { activate, deactivate };
                     if isinstance(node_workspace_probe, dict) else {})
                 node_manifest_language_config_persist = (
                     node_workspace_probe.get("manifestLanguageConfigPersist", {})
+                    if isinstance(node_workspace_probe, dict) else {})
+                node_manifest_language_config_auto_reset = (
+                    node_workspace_probe.get(
+                        "manifestLanguageConfigAutoReset", {})
+                    if isinstance(node_workspace_probe, dict) else {})
+                node_scoped_event_result = (
+                    node_workspace_probe.get("scopedEventResult", {})
                     if isinstance(node_workspace_probe, dict) else {})
                 node_language_api = (
                     node_workspace_probe.get("languageApi", {})
@@ -22957,10 +23012,19 @@ module.exports = { activate, deactivate };
                        and node_config_before.get("aliasDiagnostics") is True
                        and node_config_before.get("nestedDiagnostics") is True
                        and node_config_before.get("rootDiagnostics") is True
+                       and node_config_before.get("aliasSectionProbe") is True
+                       and node_config_before.get(
+                           "nestedSectionDiagnostics") is True
                        and node_config_before.get("aiProbe") is True
                        and node_config_before.get("aliasProbe") is True
                        and node_config_before.get("nestedProbe") is True
                        and node_config_before.get("rootProbe") is True
+                       and node_config_clone_isolation.get(
+                           "nestedAfterCloneMutation") is True
+                       and node_config_clone_isolation.get(
+                           "rootAfterCloneMutation") is True
+                       and node_config_clone_isolation.get(
+                           "sectionAfterCloneMutation") is True
                        and node_config_before.get("hasAlias") is True
                        and node_config_before.get("inspectKey")
                        == "ai_editor.extensions.diagnostics_enabled"
@@ -23063,8 +23127,12 @@ module.exports = { activate, deactivate };
                            "inspectModeDefault") == "manual"
                        and node_manifest_language_config_before.get(
                            "inspectModeLanguageDefault") == "language"
+                       and "selflang" in node_manifest_language_config_before.get(
+                           "inspectModeLanguageIds", [])
                        and node_manifest_language_config_before.get(
-                           "inspectTabLanguageDefault") == 2,
+                           "inspectTabLanguageDefault") == 2
+                       and "selflang" in node_manifest_language_config_before.get(
+                           "inspectTabLanguageIds", []),
                        json.dumps(node_manifest_language_config_before,
                                   ensure_ascii=False, default=str))
                 _check("node host language configuration overrides persist like VS Code",
@@ -23093,11 +23161,31 @@ module.exports = { activate, deactivate };
                            "plain") == "missing"
                        and node_manifest_language_config_persist.get(
                            "hasScoped") is True
+                       and node_manifest_language_config_persist.get(
+                           "autoMode") == "auto-language-default"
+                       and node_manifest_language_config_persist.get(
+                           "autoPlainMode") == "manual"
+                       and node_manifest_language_config_persist.get(
+                           "autoWorkspaceLanguage")
+                       == "auto-language-default"
+                       and node_manifest_language_config_auto_reset.get(
+                           "mode") == "language"
+                       and node_manifest_language_config_auto_reset.get(
+                           "workspaceLanguage") is None
+                       and "selflang" in node_manifest_language_config_auto_reset.get(
+                           "languageIds", [])
+                       and node_scoped_event_result.get(
+                           "eventCountDelta") >= 1
+                       and node_scoped_event_result.get("selflang") is True
+                       and node_scoped_event_result.get("otherlang") is False
+                       and node_scoped_event_result.get("unscoped") is True
                        and node_language_config_persisted is True,
                        json.dumps({
                            "set": node_manifest_language_config_set,
                            "reset": node_manifest_language_config_reset,
                            "persist": node_manifest_language_config_persist,
+                           "autoReset": node_manifest_language_config_auto_reset,
+                           "scopedEvent": node_scoped_event_result,
                            "persisted": node_language_config_persisted,
                                "settings": getattr(getattr(
                                    getattr(api, "_gui_ref", None),

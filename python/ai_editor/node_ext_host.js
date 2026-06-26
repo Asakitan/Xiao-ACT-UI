@@ -9706,6 +9706,10 @@ function _configCloneValue(value) {
     }
 }
 
+function _configHasPath(data, pathParts) {
+    return _configLookup(data, pathParts) !== _CONFIG_MISSING;
+}
+
 function _configSetDefault(pathParts, value) {
     if (!Array.isArray(pathParts) || !pathParts.length) return;
     _configSet(_configurationDefaults, pathParts, _configCloneValue(value));
@@ -9885,6 +9889,34 @@ function _configLanguageDefaultLookup(pathParts, overrideIdentifier) {
     const id = String(overrideIdentifier || '').trim();
     if (!id || !_configurationLanguageDefaults[id]) return _CONFIG_MISSING;
     return _configLookup(_configurationLanguageDefaults[id], pathParts);
+}
+
+function _configLanguageIdsForPath(pathParts) {
+    if (!Array.isArray(pathParts) || !pathParts.length) return [];
+    const ids = new Set();
+    for (const [languageId, defaults] of Object.entries(_configurationLanguageDefaults)) {
+        if (_configHasPath(defaults, pathParts)) ids.add(languageId);
+    }
+    for (const key of Object.keys(_settings || {})) {
+        for (const languageId of _configOverrideIdentifiersFromKey(key)) {
+            const store = _settings[key];
+            if (!store || typeof store !== 'object') continue;
+            if (_configLanguageOverrideLookup(pathParts, languageId)
+                    !== _CONFIG_MISSING) {
+                ids.add(languageId);
+            }
+        }
+    }
+    return Array.from(ids).sort();
+}
+
+function _configShouldUpdateLanguage(pathParts, overrideIdentifier, overrideInLanguage) {
+    if (overrideInLanguage === true) return !!overrideIdentifier;
+    if (overrideInLanguage === false || !overrideIdentifier) return false;
+    return _configLanguageDefaultLookup(pathParts, overrideIdentifier)
+            !== _CONFIG_MISSING
+        || _configLanguageOverrideLookup(pathParts, overrideIdentifier)
+            !== _CONFIG_MISSING;
 }
 
 function _configDefaultLookup(pathParts, overrideIdentifier) {
@@ -10096,12 +10128,17 @@ function _configFullPath(section, key) {
     return _configPath(section).concat(_configPath(key));
 }
 
-function _fireConfigurationChanged(pathParts) {
+function _fireConfigurationChanged(pathParts, overrideIdentifier = '') {
     const fullKey = pathParts.join('.');
     _onDidChangeConfigurationEmitter.fire({
-        affectsConfiguration(sect) {
+        affectsConfiguration(sect, scope) {
             const probe = _configPath(sect).join('.');
             if (!probe) return true;
+            const scopeOverride = _configOverrideIdentifierFromScope(scope);
+            if (scopeOverride && overrideIdentifier
+                    && scopeOverride !== overrideIdentifier) {
+                return false;
+            }
             return fullKey === probe
                 || fullKey.startsWith(probe + '.')
                 || probe.startsWith(fullKey + '.');
@@ -10113,17 +10150,17 @@ function _createConfigProxy(section, overrideIdentifier = '') {
     const sectionPath = _configPath(section);
     const sectionData = () => _configEffectiveSection(
         sectionPath, overrideIdentifier);
-    return {
+    const proxy = {
         get(key, defaultValue) {
             if (arguments.length === 0 || key === undefined) {
                 const data = sectionData();
-                return data && typeof data === 'object'
-                    ? Object.assign({}, data)
-                    : data;
+                return _configCloneValue(data);
             }
             const value = _configEffectiveLookup(
                 _configFullPath(section, key), overrideIdentifier);
-            return value === _CONFIG_MISSING ? defaultValue : value;
+            return value === _CONFIG_MISSING
+                ? defaultValue
+                : _configCloneValue(value);
         },
         has(key) {
             return _configEffectiveLookup(
@@ -10142,12 +10179,14 @@ function _createConfigProxy(section, overrideIdentifier = '') {
             const defaultValue = _configLookup(_configurationDefaults, pathParts);
             const defaultLanguageValue = _configLanguageDefaultLookup(
                 pathParts, overrideIdentifier);
+            const languageIds = _configLanguageIdsForPath(pathParts);
             if (globalValue === _CONFIG_MISSING
                     && workspaceValue === _CONFIG_MISSING
                     && workspaceFolderValue === _CONFIG_MISSING
                     && languageValue === _CONFIG_MISSING
                     && defaultValue === _CONFIG_MISSING
-                    && defaultLanguageValue === _CONFIG_MISSING) {
+                    && defaultLanguageValue === _CONFIG_MISSING
+                    && !languageIds.length) {
                 return undefined;
             }
             return {
@@ -10173,6 +10212,8 @@ function _createConfigProxy(section, overrideIdentifier = '') {
                 workspaceFolderValue: workspaceFolderValue === _CONFIG_MISSING
                     ? undefined
                     : _configCloneValue(workspaceFolderValue),
+                workspaceFolderLanguageValue: undefined,
+                languageIds,
                 target: _configurationUpdateTargets[fullKey] || undefined,
             };
         },
@@ -10180,7 +10221,8 @@ function _createConfigProxy(section, overrideIdentifier = '') {
             const pathParts = _configFullPath(section, key);
             const fullKey = pathParts.join('.');
             const targetName = _configurationTargetName(configTarget);
-            const languageOverrideIdentifier = overrideInLanguage
+            const languageOverrideIdentifier = _configShouldUpdateLanguage(
+                pathParts, overrideIdentifier, overrideInLanguage)
                 ? overrideIdentifier
                 : '';
             if (languageOverrideIdentifier) {
@@ -10223,10 +10265,19 @@ function _createConfigProxy(section, overrideIdentifier = '') {
                 message.value = value;
             }
             send(message);
-            _fireConfigurationChanged(pathParts);
+            _fireConfigurationChanged(pathParts, languageOverrideIdentifier);
             return Promise.resolve();
         },
     };
+    const data = sectionData();
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+        for (const [key, value] of Object.entries(data)) {
+            if (!Object.prototype.hasOwnProperty.call(proxy, key)) {
+                proxy[key] = _configCloneValue(value);
+            }
+        }
+    }
+    return proxy;
 }
 
 // -------------------------------------------------------------------------
