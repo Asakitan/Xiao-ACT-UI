@@ -3758,6 +3758,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function syncAssistantSessionState(patch)" in html
            and "function restoreAssistantSessionDraft()" in html
            and "function noteAssistantChatRequest(text,refs,toolHint)" in html
+           and "let _assistantSessionSaveTimer=null;" in html
+           and "let _assistantSessionStateSavePending=false;" in html
+           and "function writeAssistantSessionState()" in html
+           and "function flushAssistantSessionState()" in html
+           and "setTimeout(()=>{\n    _assistantSessionSaveTimer=null;\n    writeAssistantSessionState();" in html
            and 'id="chat-session-chip"' in html
            and "panel.dataset.chatSessionResource=assistantSessionResource();"
            in html
@@ -3784,7 +3789,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantSessionHasInProgressWork()" in html
            and "function assistantSessionBeforeUnloadMessage()" in html
            and "window.addEventListener('beforeunload',event=>" in html
+           and "flushAssistantSessionState();\n  if(!assistantSessionHasInProgressWork())return;" in html
            and "event.returnValue=message;" in html
+           and "saveAssistantSessionState({immediate:true});" in html
+           and "if(document.visibilityState==='hidden'){flushAssistantSessionState();" in html
            and "const refs=assistantSessionNormalizeRefs(" in html
            and "if(refs.length)out.references=refs;" in html
            and "body._chatReferences" in html

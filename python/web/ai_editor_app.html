@@ -4247,11 +4247,36 @@ function assistantSessionNormalizeRefs(refs){
   }));
 }
 function assistantSessionContextSnapshot(){return assistantSessionNormalizeRefs(chatContextAttachments||[])}
-function saveAssistantSessionState(){
+let _assistantSessionSaveTimer=null;
+let _assistantSessionStateSavePending=false;
+let _assistantSessionLastSavedAt=0;
+function writeAssistantSessionState(){
   try{
-    if(typeof localStorage==='undefined')return;
+    if(typeof localStorage==='undefined'){_assistantSessionStateSavePending=false;return false}
     localStorage.setItem(ASSISTANT_SESSION_STATE_KEY,JSON.stringify(assistantSessionState));
-  }catch(e){}
+    _assistantSessionLastSavedAt=Date.now();
+    _assistantSessionStateSavePending=false;
+    return true;
+  }catch(e){_assistantSessionStateSavePending=false;return false}
+}
+function saveAssistantSessionState(options){
+  const opts=options||{};
+  _assistantSessionStateSavePending=true;
+  if(opts.immediate){
+    if(_assistantSessionSaveTimer){clearTimeout(_assistantSessionSaveTimer);_assistantSessionSaveTimer=null}
+    return writeAssistantSessionState();
+  }
+  if(_assistantSessionSaveTimer)return false;
+  _assistantSessionSaveTimer=setTimeout(()=>{
+    _assistantSessionSaveTimer=null;
+    writeAssistantSessionState();
+  },Number(opts.delayMs)||250);
+  return true;
+}
+function flushAssistantSessionState(){
+  if(_assistantSessionSaveTimer){clearTimeout(_assistantSessionSaveTimer);_assistantSessionSaveTimer=null}
+  if(_assistantSessionStateSavePending)return writeAssistantSessionState();
+  return false;
 }
 function assistantSessionLoadItems(){
   try{
@@ -4375,7 +4400,7 @@ function assistantSessionOpenItem(sessionId,opts){
   assistantSessionRenderMessages(item.messages||[]);
   renderChatContextAttachments();
   setChatInputValue(nextState.draft||'',{focus:false,sync:false});
-  renderAssistantSessionState();saveAssistantSessionState();
+  renderAssistantSessionState();saveAssistantSessionState({immediate:true});
   assistantSessionPersistCurrent({title:fork?String(item.title||'Chat')+' (fork)':item.title,parentSessionResource:nextState.parentSessionResource||''});
   setStatus((fork?'Forked chat session: ':'Opened chat session: ')+(item.title||item.id));
   return true;
@@ -4441,7 +4466,7 @@ function restoreAssistantSessionDraft(){
 }
 function resetAssistantSessionState(){
   assistantSessionState=assistantSessionDefaults({provider:config.provider,model:config.model,mode:currentMode});
-  saveAssistantSessionState();
+  saveAssistantSessionState({immediate:true});
   renderAssistantSessionState();
 }
 function assistantSessionHasInProgressWork(){
@@ -4451,6 +4476,7 @@ function assistantSessionBeforeUnloadMessage(){
   return 'A session is in progress. The session will stop if you close or reload the window.';
 }
 window.addEventListener('beforeunload',event=>{
+  flushAssistantSessionState();
   if(!assistantSessionHasInProgressWork())return;
   const message=assistantSessionBeforeUnloadMessage();
   event.preventDefault();
@@ -11732,7 +11758,7 @@ async function runEditorAutoSave(mode){
 ed.addEventListener('blur',()=>{triggerEditorCodeActionsOnFocusChange();triggerEditorAutoSave('onFocusChange')});
 window.addEventListener('blur',()=>{triggerEditorCodeActionsOnFocusChange();triggerEditorAutoSave('onWindowChange')});
 document.addEventListener('visibilitychange',()=>{
-  if(document.visibilityState==='hidden'){triggerEditorCodeActionsOnFocusChange();triggerEditorAutoSave('onWindowChange')}
+  if(document.visibilityState==='hidden'){flushAssistantSessionState();triggerEditorCodeActionsOnFocusChange();triggerEditorAutoSave('onWindowChange')}
 });
 
 // ── Language picker ──
