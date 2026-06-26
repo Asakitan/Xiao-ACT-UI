@@ -3737,7 +3737,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "next.messages=assistantSessionNormalizeMessages(next.messages||[]);" in html
            and "next.messageCount=next.messages.length;" in html
            and ".filter(item=>item.messageCount||item.draft||(item.context&&item.context.length))" in html
-           and "return {role,model:String(m&&m.model||''),content};" in html
+           and "const out={role,model:String(m&&m.model||''),content};"
+           in html
+           and "if(refs.length)out.references=refs;" in html
            and "return assistantSessionNormalizeMessages(chatConversationItems().map(msg=>" in html
            and "assistantSessionNormalizeMessages(messages).forEach(m=>" in html)
     _check("frontend Assistant exposes stable Copilot Chat surface state",
@@ -3779,6 +3781,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantSessionPersistCurrent(extra)" in html
            and "function assistantSessionOpenItem(sessionId,opts)" in html
            and "function assistantSessionForkCurrent()" in html
+           and "const refs=assistantSessionNormalizeRefs(" in html
+           and "if(refs.length)out.references=refs;" in html
+           and "body._chatReferences" in html
+           and "renderChatReferences(b,m.references);" in html
            and "window.assistantSessionOpenItem=assistantSessionOpenItem"
            in html
            and "assistantSessionPersistCurrent({status:streaming?'inProgress':'completed'});"
@@ -3822,8 +3828,14 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function drainPendingAttachmentsAsContext()" in html
             and "function chatNativeRequestPayload(text,refs,toolHint,providerId)" in html
             and "attachments:attachmentRefs" in html
-            and "usedContext:normalizedRefs.map" in html
+            and "contentReferences:referenceRows" in html
+            and "content_references:referenceRows" in html
+            and "usedContext:usedRows" in html
+            and "used_context:usedRows" in html
+            and "contextSummary:usedRows.length" in html
             and "function renderChatReferences(body,refs)" in html
+            and "body.dataset.chatReferenceCount=String(normalized.length);" in html
+            and "msg.dataset.chatHasReferences='true';" in html
             and "before.match(/@([A-Za-z0-9_.:-]*)$/)" in html
             and "renderChatReferences(userBody,sendContext.refs);" in html
             and "native_request:nativeRequest" in html

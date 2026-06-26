@@ -4270,7 +4270,11 @@ function assistantSessionNormalizeMessages(messages){
     const role=String(m&&m.role||'assistant');
     const content=normalizeChatMessageText(m&&m.content,role);
     if(!content&&role!=='user')return null;
-    return {role,model:String(m&&m.model||''),content};
+    const refs=assistantSessionNormalizeRefs(
+      m&&Array.isArray(m.references)?m.references:[]);
+    const out={role,model:String(m&&m.model||''),content};
+    if(refs.length)out.references=refs;
+    return out;
   }).filter(Boolean).slice(-80);
 }
 function assistantSessionMessageSnapshot(){
@@ -4279,10 +4283,16 @@ function assistantSessionMessageSnapshot(){
     const model=msg.querySelector('.msg-model');
     const role=String(msg.dataset.role||'assistant');
     const content=normalizeChatMessageText((body&&body._rawMarkdown)||((body&&body.textContent)||''),role);
+    let references=[];
+    if(body&&Array.isArray(body._chatReferences))references=body._chatReferences;
+    else if(body&&body.dataset&&body.dataset.chatReferences){
+      try{references=JSON.parse(body.dataset.chatReferences)}catch(_e){references=[]}
+    }
     return {
       role,
       model:model?String(model.textContent||''):'',
-      content:content.slice(0,80000)
+      content:content.slice(0,80000),
+      references
     };
   }));
 }
@@ -4335,6 +4345,7 @@ function assistantSessionRenderMessages(messages){
     const b=createMsg(role,m&&m.model);
     if(role==='assistant')renderMd(b,content);
     else b.textContent=content;
+    if(role==='user'&&Array.isArray(m&&m.references)&&m.references.length)renderChatReferences(b,m.references);
   });
   showChatWelcomeIfEmpty();
   updateAssistantSurfaceState();
@@ -4581,18 +4592,33 @@ function drainPendingAttachmentsAsContext(){
 function chatNativeRequestPayload(text,refs,toolHint,providerId){
   const normalizedRefs=(refs||[]).filter(Boolean);
   const attachmentRefs=normalizedRefs.filter(ref=>ref&&ref.attachment).map(ref=>ref.attachment);
+  const referenceRows=normalizedRefs.map(ref=>({id:ref.id||'',kind:ref.kind||'ctx',label:ref.label||ref.id||'',preview:ref.preview||'',prompt:ref.prompt||''}));
+  const usedRows=normalizedRefs.map(ref=>({id:ref.id||'',kind:ref.kind||'ctx',label:ref.label||ref.id||'',uri:ref.path||ref.uri||'',preview:ref.preview||''}));
   return {
     text:String(text||''),toolHint:String(toolHint||''),providerId:String(providerId||config.provider||''),
-    references:normalizedRefs.map(ref=>({id:ref.id||'',kind:ref.kind||'ctx',label:ref.label||ref.id||'',preview:ref.preview||'',prompt:ref.prompt||''})),
+    references:referenceRows,
+    contentReferences:referenceRows,
+    content_references:referenceRows,
     attachments:attachmentRefs,
-    usedContext:normalizedRefs.map(ref=>({id:ref.id||'',kind:ref.kind||'ctx',label:ref.label||ref.id||'',uri:ref.path||ref.uri||'',preview:ref.preview||''}))
+    usedContext:usedRows,
+    used_context:usedRows,
+    contextSummary:usedRows.length?usedRows.length+' attached context item'+(usedRows.length===1?'':'s'):''
   };
 }
 function renderChatReferences(body,refs){
   refs=(refs||[]).filter(Boolean);
   if(!body||!refs.length)return;
+  const normalized=assistantSessionNormalizeRefs(refs);
+  body._chatReferences=normalized;
+  body.dataset.chatReferenceCount=String(normalized.length);
+  try{body.dataset.chatReferences=JSON.stringify(normalized)}catch(_e){body.dataset.chatReferences='[]'}
+  const msg=body.closest?body.closest('.msg'):body.parentElement;
+  if(msg){
+    msg.dataset.chatReferenceCount=String(normalized.length);
+    msg.dataset.chatHasReferences='true';
+  }
   const wrap=document.createElement('div');wrap.className='chat-references';wrap.setAttribute('aria-label','Attached references');
-  refs.forEach(ref=>{
+  normalized.forEach(ref=>{
     const card=document.createElement('div');card.className='chat-reference-card';
     card.innerHTML='<div class="ref-head"><span class="ref-kind">'+esc(ref.kind||'ctx')+'</span><span class="ref-label">'+esc(ref.label||ref.id||'Reference')+'</span></div>';
     if(ref.preview){const pre=document.createElement('pre');pre.textContent=ref.preview;card.appendChild(pre)}
