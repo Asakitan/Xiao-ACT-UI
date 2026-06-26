@@ -3781,6 +3781,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantSessionPersistCurrent(extra)" in html
            and "function assistantSessionOpenItem(sessionId,opts)" in html
            and "function assistantSessionForkCurrent()" in html
+           and "function assistantSessionHasInProgressWork()" in html
+           and "function assistantSessionBeforeUnloadMessage()" in html
+           and "window.addEventListener('beforeunload',event=>" in html
+           and "event.returnValue=message;" in html
            and "const refs=assistantSessionNormalizeRefs(" in html
            and "if(refs.length)out.references=refs;" in html
            and "body._chatReferences" in html
@@ -3796,12 +3800,17 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function selectHistoryItem(index)" in html
            and "function activateHistorySelection()" in html
            and "function confirmDeleteAssistantSession(session)" in html
+           and "function assistantHistorySessionChips(session,current)" in html
            and "function renderHistorySessionItem(list,session,index)" in html
            and "function renderHistoryBackendItem(list,entry,index)" in html
            and "visibleSessions=localSessions.filter" in html
            and "visibleBackend=backendEntries.filter" in html
            and "item.className='sb-item'+(current?' current':'');" in html
-           and "marker.className='history-session-current';" in html
+           and "item.dataset.sessionStatus=String(session.status||'completed');" in html
+           and "item.dataset.sessionContextCount=String(Array.isArray(session.context)?session.context.length:0);" in html
+           and "main.className='history-session-main';" in html
+           and "el.className='history-session-chip '+chip.kind;" in html
+           and ".history-session-chip.running" in html
            and "list.setAttribute('aria-activedescendant',active.id);" in html
            and "if(e.key==='ArrowDown'||e.key==='ArrowUp')" in html
            and "if(e.key==='Delete')" in html

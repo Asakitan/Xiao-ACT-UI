@@ -160,6 +160,14 @@ body.window-resizing * { cursor:inherit !important; }
   font:10px var(--sans); padding:1px 3px; border-radius:3px; flex-shrink:0; }
 .history-session-action:hover,.history-session-action:focus { color:var(--fg); background:var(--bg-hover); outline:none; }
 .history-session-action.delete { color:var(--fg-error); }
+.history-session-main { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
+.history-session-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.history-session-meta { display:flex; align-items:center; gap:4px; min-width:0; overflow:hidden; }
+.history-session-chip { max-width:96px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:var(--fg-dim); border:1px solid var(--border); border-radius:999px; padding:0 5px; font:10px/15px var(--mono); }
+.history-session-chip.running { color:var(--fg-accent); border-color:color-mix(in srgb,var(--border-focus) 60%,var(--border)); }
+.history-session-chip.draft { color:var(--fg-warning); }
+.history-session-chip.context { color:var(--fg-success); }
 .sb-group { padding:8px 16px 4px; font-size:11px; font-weight:600; color:var(--fg-dim);
   text-transform:uppercase; letter-spacing:0.5px; }
 .tree-root { padding:4px 0 10px; }
@@ -4436,6 +4444,19 @@ function resetAssistantSessionState(){
   saveAssistantSessionState();
   renderAssistantSessionState();
 }
+function assistantSessionHasInProgressWork(){
+  return !!(streaming||assistantSessionState.requestInProgress);
+}
+function assistantSessionBeforeUnloadMessage(){
+  return 'A session is in progress. The session will stop if you close or reload the window.';
+}
+window.addEventListener('beforeunload',event=>{
+  if(!assistantSessionHasInProgressWork())return;
+  const message=assistantSessionBeforeUnloadMessage();
+  event.preventDefault();
+  event.returnValue=message;
+  return message;
+});
 function noteAssistantChatRequest(text,refs,toolHint){
   const id='request-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,7);
   assistantSessionState.requestCount=Math.max(0,Number(assistantSessionState.requestCount||0))+1;
@@ -13406,6 +13427,18 @@ function confirmDeleteAssistantSession(session){
   const title=String(session&&session.title||'Chat session');
   return window.confirm('Delete local chat session "'+title+'"?');
 }
+function assistantHistorySessionChips(session,current){
+  const chips=[];
+  const status=String(session&&session.status||'completed');
+  const contextCount=Array.isArray(session&&session.context)?session.context.length:0;
+  if(current)chips.push({label:'current',kind:'current'});
+  if(status==='inProgress'||session&&session.requestInProgress)chips.push({label:'running',kind:'running'});
+  else if(session&&session.draft)chips.push({label:'draft',kind:'draft'});
+  chips.push({label:String(session&&session.requestCount||0)+' req',kind:'count'});
+  if(contextCount)chips.push({label:contextCount+' ctx',kind:'context'});
+  if(session&&session.provider)chips.push({label:String(session.provider),kind:'provider'});
+  return chips.slice(0,5);
+}
 function renderHistorySessionItem(list,session,index){
   const current=String(session.id||'')===String(assistantSessionState.id||'');
   const item=document.createElement('div');item.className='sb-item'+(current?' current':'');
@@ -13414,17 +13447,27 @@ function renderHistorySessionItem(list,session,index){
   item.setAttribute('tabindex','-1');
   item.dataset.sessionId=String(session.id||'');
   item.dataset.historyKind='session';
-  item.setAttribute('aria-label','Assistant session '+String(session.title||session.id||'Chat session')+(current?' current':''));
-  item.style.cssText='display:flex;align-items:center;gap:4px';
-  const label=document.createElement('span');label.style.cssText='flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-  label.textContent=String(session.title||'Chat session').slice(0,34);label.title=(session.sessionResource||'')+'\n'+(session.title||'');
-  if(current){const marker=document.createElement('span');marker.className='history-session-current';marker.textContent='current';item.appendChild(marker)}
-  const meta=document.createElement('span');meta.className='meta';meta.textContent=String(session.requestCount||0)+' req';
+  const chips=assistantHistorySessionChips(session,current);
+  item.dataset.sessionStatus=String(session.status||'completed');
+  item.dataset.sessionContextCount=String(Array.isArray(session.context)?session.context.length:0);
+  item.setAttribute('aria-label','Assistant session '+String(session.title||session.id||'Chat session')+' '+chips.map(c=>c.label).join(' '));
+  item.style.cssText='display:flex;align-items:center;gap:6px';
+  const main=document.createElement('span');main.className='history-session-main';
+  const label=document.createElement('span');label.className='history-session-title';
+  label.textContent=String(session.title||'Chat session').slice(0,46);label.title=(session.sessionResource||'')+'\n'+(session.title||'');
+  const meta=document.createElement('span');meta.className='history-session-meta';
+  chips.forEach(chip=>{
+    const el=document.createElement('span');
+    el.className='history-session-chip '+chip.kind;
+    el.textContent=chip.label;
+    meta.appendChild(el);
+  });
+  main.appendChild(label);main.appendChild(meta);
   const fork=document.createElement('button');fork.type='button';fork.className='history-session-action fork';fork.textContent='fork';fork.title='Fork session';fork.setAttribute('aria-label','Fork session');
   fork.onclick=ev=>{ev.stopPropagation();assistantSessionOpenItem(session.id,{fork:true});announceAssistantAction('Forked chat session');refreshHistory()};
   const del=document.createElement('button');del.type='button';del.className='history-session-action delete';del.textContent='x';del.title='Delete local session';del.setAttribute('aria-label','Delete local session');
   del.onclick=ev=>{ev.stopPropagation();if(confirmDeleteAssistantSession(session)){assistantSessionDeleteItem(session.id);announceAssistantAction('Deleted chat session');refreshHistory()}};
-  item.appendChild(label);item.appendChild(meta);item.appendChild(fork);item.appendChild(del);
+  item.appendChild(main);item.appendChild(fork);item.appendChild(del);
   item.onclick=()=>assistantSessionOpenItem(session.id);
   list.appendChild(item);
   return {kind:'session',id:session.id,element:item,open:()=>assistantSessionOpenItem(session.id)};
