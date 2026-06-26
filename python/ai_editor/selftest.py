@@ -3576,10 +3576,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "panel.dataset.chatSurface='copilot-chat';" in html
            and "panel.dataset.chatMessageCount=String(count);" in html
            and "panel.dataset.chatEmpty=count?'false':'true';" in html
-           and "messages.classList.toggle('empty',count===0);" in html
-           and "messages.dataset.chatMessageCount=String(count);" in html
-           and ".chat-messages.empty .chat-messages-inner { justify-content:center; }" in html
-           and "updateAssistantSurfaceState();\n  renderChatComposerHeader();" in html)
+            and "messages.classList.toggle('empty',count===0);" in html
+            and "messages.dataset.chatMessageCount=String(count);" in html
+            and ".chat-messages.empty .chat-messages-inner { justify-content:center; }" in html
+            and "updateAssistantSurfaceState();\n  updateMessageFootersState();\n  renderChatComposerHeader();" in html)
     _check("frontend Assistant tracks Copilot-style session and input state",
            "ASSISTANT_SESSION_STATE_KEY='sao-ai-editor-chat-session-state'"
            in html
@@ -3758,6 +3758,12 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("frontend Assistant message actions follow Copilot Chat footer behavior",
            "function chatMessageActionText(msgEl,markdown)" in html
            and "function chatPreviousUserMessageText(msgEl)" in html
+           and "function chatMessageCodeBlocks(msgEl)" in html
+           and "function chatFirstMessageCodeBlock(msgEl)" in html
+           and "function updateMessageFooterState(msgEl)" in html
+           and "function updateMessageFootersState()" in html
+           and "function runMessageFooterAction(btn,msgEl,fn)" in html
+           and "function createMessageFooterButton(msgEl,footer,spec)" in html
            and "function setMessageFeedback(msgEl,msgId,rating)" in html
            and "function retryAssistantMessage(msgEl)" in html
            and "function announceAssistantAction(message)" in html
@@ -3774,13 +3780,32 @@ def test_phase1_ai_editor_regressions() -> None:
            and "footer.setAttribute('role','toolbar');" in html
            and "footer.setAttribute('aria-label','Assistant message actions');" in html
            and "const b=document.createElement('button');b.type='button';" in html
-           and "b.dataset.action=a.action||'action';" in html
+           and "b.dataset.action=spec.action||'action';" in html
+           and "if(spec.requires)b.dataset.requires=spec.requires;" in html
+           and "if(spec.disableWhileStreaming)b.dataset.disableWhileStreaming='true';" in html
+           and "btn.setAttribute('aria-disabled',disabled?'true':'false');" in html
+           and "btn.dataset.ready=disabled?'false':'true';" in html
+           and "footer.dataset.hasCode=hasCode?'true':'false';" in html
+           and "footer.dataset.streaming=streaming?'true':'false';" in html
+           and "updateMessageFootersState();" in html
            and "b.addEventListener('keydown',ev=>{if(ev.key===' '||ev.key==='Enter'){ev.preventDefault();b.click()}});" in html
-           and "b.dataset.feedback=a.feedback" in html
+           and "b.dataset.feedback=spec.feedback" in html
            and "announceAssistantAction(next==='none'?'Feedback cleared':'Feedback saved: '+next);" in html
            and "announceAssistantAction('Response copied')" in html
+           and "announceAssistantAction('Markdown copied')" in html
+           and "t('insert_response')" in html
+           and "t('apply_first_code')" in html
+           and "action:'copy-markdown'" in html
+           and "action:'insert-response'" in html
+           and "action:'apply-code'" in html
+           and "requires:'code'" in html
+           and "openInEditor(text,'markdown')" in html
+           and "openInEditor(block.code,block.lang)" in html
+           and "className='mf-status sr-only'" in html
+           and "className='mf-separator'" in html
            and "announceAssistantAction('Retrying previous request')" in html
            and "chatMessageActionText(msgEl,true)" in html
+           and "chatFirstMessageCodeBlock(msgEl)" in html
            and "retryAssistantMessage(msgEl)" in html
            and "addMessageFooter(body.closest('.msg'),'assistant');" in html
            and "showChatWelcomeIfEmpty();syncAssistantSessionState();assistantSessionPersistCurrent" in html
