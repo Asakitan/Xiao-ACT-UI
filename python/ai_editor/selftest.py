@@ -18434,6 +18434,74 @@ async function activate(context) {
         vscode.FileSystemError.NoPermissions(fsParityMissing).code,
       ],
     };
+    const workspaceTrustEvents = [];
+    const workspaceTrustDisposable = vscode.workspace.onDidGrantWorkspaceTrust(
+      () => workspaceTrustEvents.push('grant'));
+    const workspaceTrustBefore = vscode.workspace.isTrusted;
+    const workspaceTrustRequest = await vscode.workspace.requestWorkspaceTrust({
+      message: 'selftest workspace trust',
+    });
+    workspaceTrustDisposable.dispose();
+    const watcherRoot = vscode.Uri.joinPath(context.extensionUri, 'workspace-watch');
+    const watcherOne = vscode.Uri.joinPath(watcherRoot, 'one.txt');
+    const watcherCopy = vscode.Uri.joinPath(watcherRoot, 'copy.txt');
+    const watcherRenamed = vscode.Uri.joinPath(watcherRoot, 'renamed.txt');
+    const watcherIgnored = vscode.Uri.joinPath(watcherRoot, 'ignored.txt');
+    const watcherDisposed = vscode.Uri.joinPath(watcherRoot, 'disposed.txt');
+    await vscode.workspace.fs.delete(watcherRoot, { recursive: true }).catch(() => {});
+    await vscode.workspace.fs.createDirectory(watcherRoot);
+    const watcherEvents = {
+      create: [],
+      change: [],
+      delete: [],
+      ignoredCreate: [],
+      ignoredChange: [],
+      ignoredDelete: [],
+      disposed: [],
+      flags: {},
+    };
+    const watcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(watcherRoot, '*.txt'));
+    watcherEvents.flags.main = {
+      create: watcher.ignoreCreateEvents,
+      change: watcher.ignoreChangeEvents,
+      delete: watcher.ignoreDeleteEvents,
+    };
+    watcher.onDidCreate(uri => watcherEvents.create.push(uri.toString()));
+    watcher.onDidChange(uri => watcherEvents.change.push(uri.toString()));
+    watcher.onDidDelete(uri => watcherEvents.delete.push(uri.toString()));
+    const ignoredWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(watcherRoot, 'ignored.txt'),
+      { ignoreChangeEvents: true });
+    watcherEvents.flags.ignored = {
+      create: ignoredWatcher.ignoreCreateEvents,
+      change: ignoredWatcher.ignoreChangeEvents,
+      delete: ignoredWatcher.ignoreDeleteEvents,
+    };
+    ignoredWatcher.onDidCreate(uri => watcherEvents.ignoredCreate.push(uri.toString()));
+    ignoredWatcher.onDidChange(uri => watcherEvents.ignoredChange.push(uri.toString()));
+    ignoredWatcher.onDidDelete(uri => watcherEvents.ignoredDelete.push(uri.toString()));
+    const disposedWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(watcherRoot, 'disposed.txt'));
+    disposedWatcher.onDidCreate(uri => watcherEvents.disposed.push(uri.toString()));
+    disposedWatcher.dispose();
+    await vscode.workspace.fs.writeFile(watcherOne, encoder.encode('one'));
+    await vscode.workspace.fs.writeFile(watcherOne, encoder.encode('two'));
+    await vscode.workspace.fs.copy(watcherOne, watcherCopy, { overwrite: true });
+    await vscode.workspace.fs.rename(watcherCopy, watcherRenamed, { overwrite: true });
+    await vscode.workspace.fs.delete(watcherOne);
+    await vscode.workspace.fs.writeFile(watcherIgnored, encoder.encode('ignored-one'));
+    await vscode.workspace.fs.writeFile(watcherIgnored, encoder.encode('ignored-two'));
+    await vscode.workspace.fs.delete(watcherIgnored);
+    await vscode.workspace.fs.writeFile(watcherDisposed, encoder.encode('disposed'));
+    watcher.dispose();
+    ignoredWatcher.dispose();
+    await vscode.workspace.fs.delete(watcherRoot, { recursive: true });
+    const workspaceTrust = {
+      before: workspaceTrustBefore,
+      request: workspaceTrustRequest,
+      events: workspaceTrustEvents,
+    };
     const aiConfig = vscode.workspace.getConfiguration('ai_editor');
     const aliasConfig = vscode.workspace.getConfiguration('extensions');
     const nestedConfig = vscode.workspace.getConfiguration('ai_editor.extensions');
@@ -18611,6 +18679,8 @@ async function activate(context) {
       renamedExists,
       deleteMissing,
       fsParity,
+      workspaceTrust,
+      watcherEvents,
       configBefore,
       configAfter,
       manifestConfigBefore,
@@ -18657,6 +18727,12 @@ async function activate(context) {
     const fileCopyUri = vscode.Uri.joinPath(context.extensionUri, 'selfmem-copy.txt');
     const localSourceUri = vscode.Uri.joinPath(context.extensionUri, 'local-source.txt');
     const crossRenameTargetUri = vscode.Uri.joinPath(context.extensionUri, 'selfmem-renamed-to-file.txt');
+    const providerWatcherEvents = { create: [], change: [], delete: [] };
+    const providerWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(rootUri, '*.txt'));
+    providerWatcher.onDidCreate(uri => providerWatcherEvents.create.push(uri.toString()));
+    providerWatcher.onDidChange(uri => providerWatcherEvents.change.push(uri.toString()));
+    providerWatcher.onDidDelete(uri => providerWatcherEvents.delete.push(uri.toString()));
     const helloDoc = await vscode.workspace.openTextDocument(helloUri);
     const helloDocText = helloDoc.getText();
     const fsExtAfter = vscode.extensions.getExtension('selftest.node-filesystem');
@@ -18695,6 +18771,7 @@ async function activate(context) {
     const renamedText = decoder.decode(await vscode.workspace.fs.readFile(renamedUri));
     await vscode.workspace.fs.delete(renamedUri);
     const afterDelete = await vscode.workspace.fs.readDirectory(rootUri);
+    providerWatcher.dispose();
     const providerInternals = await vscode.commands.executeCommand(
       'selftest.node.fsProviderInternals');
     return {
@@ -18721,6 +18798,7 @@ async function activate(context) {
       readonlyDeleteCode,
       writableSelfMem,
       writableSelfRo,
+      providerWatcherEvents,
       providerInternals,
     };
   });
@@ -23333,6 +23411,58 @@ module.exports = { activate, deactivate };
                        == ["FileNotFound", "FileExists", "NoPermissions"],
                        json.dumps(node_workspace_fs_parity,
                                   ensure_ascii=False))
+                node_workspace_trust = (
+                    node_workspace_probe.get("workspaceTrust", {})
+                    if isinstance(node_workspace_probe, dict) else {})
+                _check("node host workspace trust APIs match VS Code basics",
+                       node_workspace_trust.get("before") is True
+                       and node_workspace_trust.get("request") is True
+                       and node_workspace_trust.get("events") == [],
+                       json.dumps(node_workspace_trust,
+                                  ensure_ascii=False))
+                node_workspace_watchers = (
+                    node_workspace_probe.get("watcherEvents", {})
+                    if isinstance(node_workspace_probe, dict) else {})
+                _check("node host createFileSystemWatcher tracks workspace.fs changes",
+                       node_workspace_watchers.get("flags", {}).get("main")
+                       == {"create": False, "change": False, "delete": False}
+                       and node_workspace_watchers.get("flags", {}).get(
+                           "ignored") == {
+                               "create": False,
+                               "change": True,
+                               "delete": False,
+                           }
+                       and any(str(uri).endswith("/workspace-watch/one.txt")
+                               for uri in node_workspace_watchers.get(
+                                   "create", []))
+                       and any(str(uri).endswith("/workspace-watch/copy.txt")
+                               for uri in node_workspace_watchers.get(
+                                   "create", []))
+                       and any(str(uri).endswith(
+                           "/workspace-watch/renamed.txt")
+                               for uri in node_workspace_watchers.get(
+                                   "create", []))
+                       and any(str(uri).endswith("/workspace-watch/one.txt")
+                               for uri in node_workspace_watchers.get(
+                                   "change", []))
+                       and any(str(uri).endswith("/workspace-watch/copy.txt")
+                               for uri in node_workspace_watchers.get(
+                                   "delete", []))
+                       and any(str(uri).endswith("/workspace-watch/one.txt")
+                               for uri in node_workspace_watchers.get(
+                                   "delete", []))
+                       and any(str(uri).endswith(
+                           "/workspace-watch/ignored.txt")
+                               for uri in node_workspace_watchers.get(
+                                   "ignoredCreate", []))
+                       and node_workspace_watchers.get("ignoredChange") == []
+                       and any(str(uri).endswith(
+                           "/workspace-watch/ignored.txt")
+                               for uri in node_workspace_watchers.get(
+                                   "ignoredDelete", []))
+                       and node_workspace_watchers.get("disposed") == [],
+                       json.dumps(node_workspace_watchers,
+                                  ensure_ascii=False))
                 custom_editor_message_seen = _wait_until(
                     lambda: "custom:ping" in "".join(
                         node_host._output_channels.get("node-tree-selftest", [])),
@@ -23858,6 +23988,27 @@ module.exports = { activate, deactivate };
                            .get("providerEvents", [])),
                        json.dumps(node_file_system_probe,
                                    ensure_ascii=False))
+                node_provider_watchers = (
+                    node_file_system_probe.get("providerWatcherEvents", {})
+                    if isinstance(node_file_system_probe, dict) else {})
+                _check("node host FileSystemProvider events reach dynamic watchers",
+                       any(uri == "selfmem:/created.txt"
+                           for uri in node_provider_watchers.get(
+                               "create", []))
+                       and any(uri == "selfmem:/from-file.txt"
+                               for uri in node_provider_watchers.get(
+                                   "create", []))
+                       and any(uri == "selfmem:/renamed.txt"
+                               for uri in node_provider_watchers.get(
+                                   "create", []))
+                       and any(uri == "selfmem:/created.txt"
+                               for uri in node_provider_watchers.get(
+                                   "delete", []))
+                       and any(uri == "selfmem:/renamed.txt"
+                               for uri in node_provider_watchers.get(
+                                   "delete", [])),
+                       json.dumps(node_provider_watchers,
+                                  ensure_ascii=False))
                 _check("node host activates URI handlers dynamically",
                        node_started is True
                        and node_uri_handler_command_registered

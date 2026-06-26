@@ -2341,6 +2341,8 @@ const _onDidChangeLmToolsEmitter = new EventEmitter();
 const _workspaceRoot = path.resolve(process.cwd());
 const _workspaceName = path.basename(_workspaceRoot) || _workspaceRoot;
 const _onDidChangeWorkspaceFoldersEmitter = new EventEmitter();
+const _onDidGrantWorkspaceTrustEmitter = new EventEmitter();
+let _workspaceTrusted = process.env.SAO_AI_EDITOR_WORKSPACE_TRUSTED === '0' ? false : true;
 let _workspaceFolders = [{
     uri: Uri.file(_workspaceRoot),
     name: _workspaceName,
@@ -2373,6 +2375,7 @@ const _onDidStartTerminalShellExecutionEmitter = new EventEmitter();
 const _onDidEndTerminalShellExecutionEmitter = new EventEmitter();
 const _workspaceDefaultSkipDirs = new Set(['.git', 'node_modules', '__pycache__', '.venv', 'venv']);
 const _workspaceSymbolCache = new Map(); // handle -> { provider, symbol }
+const _fileSystemWatchers = new Set();
 let _nextWorkspaceSymbolHandle = 1;
 const _completionItemCache = new Map(); // handle -> { provider, item, resolved }
 let _nextCompletionItemHandle = 1;
@@ -4964,6 +4967,10 @@ function _fileSystemProviderReadonly(entry) {
     return !!(entry && entry.options && entry.options.isReadonly);
 }
 
+function _fileSystemProviderHasEvents(entry) {
+    return typeof (entry && entry.provider && entry.provider.onDidChangeFile) === 'function';
+}
+
 function _ensureFileSystemProviderWritable(entry, uri) {
     if (_fileSystemProviderReadonly(entry)) {
         throw FileSystemError.NoPermissions(uri);
@@ -5058,6 +5065,7 @@ function _subscribeFileSystemProviderEvents(entry) {
         const normalizedEvents = _normalizeFileSystemProviderEvents(events);
         if (!normalizedEvents.length) return;
         entry.lastEvents = normalizedEvents;
+        _workspaceFireFileWatcherEvents(normalizedEvents);
         send({
             type: 'filesystem_changed',
             scheme: entry.scheme,
@@ -5121,11 +5129,15 @@ async function _workspaceFsWriteFile(uriInput, content) {
     const uri = _workspaceUriFromInput(uriInput);
     const bytes = _contentToUint8Array(content);
     const entry = await _fileSystemProviderForUri(uri);
+    const existed = await _workspaceFsTargetExists(uri).catch(error => {
+        if (error instanceof FileSystemError && error.code === 'FileNotFound') return false;
+        throw error;
+    });
     if (entry) {
         _ensureFileSystemProviderWritable(entry, uri);
         await _workspaceFsProviderMkdirp(entry, _fileSystemProviderParentUri(uri));
     }
-    return _callFileSystemProvider(
+    const result = await _callFileSystemProvider(
         uri,
         ['writeFile', 'write_file'],
         [uri, bytes, { create: true, overwrite: true }],
@@ -5147,6 +5159,10 @@ async function _workspaceFsWriteFile(uriInput, content) {
             }
         },
     );
+    if (!entry || !_fileSystemProviderHasEvents(entry)) {
+        _workspaceFireFileWatchers(uri, existed ? FileChangeType.Changed : FileChangeType.Created);
+    }
+    return result;
 }
 
 async function _workspaceFsStat(uriInput) {
@@ -5184,23 +5200,33 @@ async function _workspaceFsReadDirectory(uriInput) {
 async function _workspaceFsCreateDirectory(uriInput) {
     const uri = _workspaceUriFromInput(uriInput);
     const entry = await _fileSystemProviderForUri(uri);
+    const existed = await _workspaceFsTargetExists(uri).catch(error => {
+        if (error instanceof FileSystemError && error.code === 'FileNotFound') return false;
+        throw error;
+    });
     if (entry) {
         _ensureFileSystemProviderWritable(entry, uri);
-        return _workspaceFsProviderMkdirp(entry, uri);
+        const result = await _workspaceFsProviderMkdirp(entry, uri);
+        if (!existed && !_fileSystemProviderHasEvents(entry)) {
+            _workspaceFireFileWatchers(uri, FileChangeType.Created);
+        }
+        return result;
     }
-    return _callFileSystemProvider(
+    const result = await _callFileSystemProvider(
         uri,
         ['createDirectory', 'create_directory'],
         [uri],
         () => _withFileSystemErrors(uri, () => fsp.mkdir(uri.fsPath, { recursive: true })),
     );
+    if (!existed) _workspaceFireFileWatchers(uri, FileChangeType.Created);
+    return result;
 }
 
 async function _workspaceFsDelete(uriInput, options) {
     const uri = _workspaceUriFromInput(uriInput);
     const entry = await _fileSystemProviderForUri(uri);
     if (entry) _ensureFileSystemProviderWritable(entry, uri);
-    return _callFileSystemProvider(
+    const result = await _callFileSystemProvider(
         uri,
         ['delete', 'deleteFile', 'delete_file'],
         [uri, options || {}],
@@ -5215,6 +5241,10 @@ async function _workspaceFsDelete(uriInput, options) {
             _workspaceCloseTextDocument(uri);
         },
     );
+    if (!entry || !_fileSystemProviderHasEvents(entry)) {
+        _workspaceFireFileWatchers(uri, FileChangeType.Deleted);
+    }
+    return result;
 }
 
 async function _workspaceFsRename(srcInput, dstInput, options) {
@@ -5230,7 +5260,11 @@ async function _workspaceFsRename(srcInput, dstInput, options) {
         _ensureFileSystemProviderWritable(entry, src);
         _ensureFileSystemProviderWritable(entry, dst);
     }
-    return _callFileSystemProvider(
+    const dstExisted = await _workspaceFsTargetExists(dst).catch(error => {
+        if (error instanceof FileSystemError && error.code === 'FileNotFound') return false;
+        throw error;
+    });
+    const result = await _callFileSystemProvider(
         src,
         ['rename', 'renameFile', 'rename_file'],
         [src, dst, options || {}],
@@ -5259,6 +5293,11 @@ async function _workspaceFsRename(srcInput, dstInput, options) {
             }
         },
     );
+    if (!entry || !_fileSystemProviderHasEvents(entry)) {
+        _workspaceFireFileWatchers(src, FileChangeType.Deleted);
+        _workspaceFireFileWatchers(dst, dstExisted ? FileChangeType.Changed : FileChangeType.Created);
+    }
+    return result;
 }
 
 async function _workspaceFsCopy(srcInput, dstInput, options) {
@@ -5280,9 +5319,17 @@ async function _workspaceFsCopy(srcInput, dstInput, options) {
         _ensureFileSystemProviderWritable(entry, dst);
         const copy = entry.provider && entry.provider.copy;
         if (typeof copy === 'function') {
-            return await _withProviderFileSystemErrors(
+            const dstExisted = await _workspaceFsTargetExists(dst).catch(error => {
+                if (error instanceof FileSystemError && error.code === 'FileNotFound') return false;
+                throw error;
+            });
+            const result = await _withProviderFileSystemErrors(
                 src,
                 () => copy.call(entry.provider, src, dst, options || {}));
+            if (!_fileSystemProviderHasEvents(entry)) {
+                _workspaceFireFileWatchers(dst, dstExisted ? FileChangeType.Changed : FileChangeType.Created);
+            }
+            return result;
         }
         if (!options?.overwrite) {
             try {
@@ -5296,9 +5343,13 @@ async function _workspaceFsCopy(srcInput, dstInput, options) {
         const content = await _workspaceFsReadFile(src);
         return _workspaceFsWriteFile(dst, content);
     }
+    const dstExisted = await _workspaceFsTargetExists(dst).catch(error => {
+        if (error instanceof FileSystemError && error.code === 'FileNotFound') return false;
+        throw error;
+    });
     return _withFileSystemErrors(src, async () => {
         const overwrite = !!(options && options.overwrite);
-        if (await _workspaceFsTargetExists(dst)) {
+        if (dstExisted) {
             if (!overwrite) throw FileSystemError.FileExists(dst);
             await fsp.rm(dst.fsPath, { recursive: true, force: false });
         }
@@ -5309,6 +5360,7 @@ async function _workspaceFsCopy(srcInput, dstInput, options) {
         } else {
             await fsp.copyFile(src.fsPath, dst.fsPath);
         }
+        _workspaceFireFileWatchers(dst, dstExisted ? FileChangeType.Changed : FileChangeType.Created);
     });
 }
 
@@ -5372,6 +5424,119 @@ function _globToRegExp(pattern) {
         }
     }
     return new RegExp(source + '$');
+}
+
+function _workspacePatternBaseUri(pattern) {
+    if (!pattern || typeof pattern !== 'object') return Uri.file(_workspaceRoot);
+    const base = pattern.baseUri || pattern.base || pattern.uri;
+    if (!base) return Uri.file(_workspaceRoot);
+    return _workspaceUriFromInput(base);
+}
+
+function _workspaceUriMatchTexts(uri, pattern) {
+    const normalized = uri instanceof Uri ? uri : _workspaceUriFromInput(uri);
+    const texts = new Set();
+    if (pattern && typeof pattern === 'object') {
+        const baseUri = _workspacePatternBaseUri(pattern);
+        if (!baseUri || baseUri.scheme !== normalized.scheme
+            || String(baseUri.authority || '') !== String(normalized.authority || '')) {
+            return [];
+        }
+        if (normalized.scheme === 'file') {
+            const rel = path.relative(baseUri.fsPath, normalized.fsPath).replace(/\\/g, '/');
+            if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) texts.add(rel);
+        } else {
+            const basePath = String(baseUri.path || '/').replace(/\/+$/, '');
+            const uriPath = String(normalized.path || '');
+            if (!basePath || uriPath === basePath || uriPath.startsWith(basePath + '/')) {
+                const rel = uriPath.slice(basePath.length).replace(/^\/+/, '');
+                if (rel) texts.add(rel);
+            }
+        }
+        return Array.from(texts).filter(Boolean);
+    }
+    const pathText = String(normalized.path || '').replace(/^\/+/, '');
+    if (pathText) texts.add(pathText);
+    if (normalized.scheme === 'file') {
+        const rel = path.relative(_workspaceRoot, normalized.fsPath).replace(/\\/g, '/');
+        if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) texts.add(rel);
+        texts.add(path.basename(normalized.fsPath));
+    } else {
+        const parts = String(normalized.path || '').split('/').filter(Boolean);
+        if (parts.length) texts.add(parts[parts.length - 1]);
+    }
+    return Array.from(texts).filter(Boolean);
+}
+
+function _workspaceCreateFileSystemWatcher(pattern, optionsOrIgnoreCreate, ignoreChange, ignoreDelete) {
+    const options = optionsOrIgnoreCreate && typeof optionsOrIgnoreCreate === 'object'
+        ? {
+            ignoreCreateEvents: !!optionsOrIgnoreCreate.ignoreCreateEvents,
+            ignoreChangeEvents: !!optionsOrIgnoreCreate.ignoreChangeEvents,
+            ignoreDeleteEvents: !!optionsOrIgnoreCreate.ignoreDeleteEvents,
+        }
+        : {
+            ignoreCreateEvents: !!optionsOrIgnoreCreate,
+            ignoreChangeEvents: !!ignoreChange,
+            ignoreDeleteEvents: !!ignoreDelete,
+        };
+    const createEmitter = new EventEmitter();
+    const changeEmitter = new EventEmitter();
+    const deleteEmitter = new EventEmitter();
+    const record = {
+        pattern,
+        regex: _globToRegExp(_workspacePatternText(pattern)),
+        options,
+        createEmitter,
+        changeEmitter,
+        deleteEmitter,
+        disposed: false,
+    };
+    const watcher = {
+        get ignoreCreateEvents() { return record.options.ignoreCreateEvents; },
+        get ignoreChangeEvents() { return record.options.ignoreChangeEvents; },
+        get ignoreDeleteEvents() { return record.options.ignoreDeleteEvents; },
+        onDidCreate: createEmitter.event,
+        onDidChange: changeEmitter.event,
+        onDidDelete: deleteEmitter.event,
+        dispose() {
+            if (record.disposed) return;
+            record.disposed = true;
+            _fileSystemWatchers.delete(record);
+            createEmitter.dispose();
+            changeEmitter.dispose();
+            deleteEmitter.dispose();
+        },
+    };
+    record.watcher = watcher;
+    _fileSystemWatchers.add(record);
+    return watcher;
+}
+
+function _workspaceWatcherMatches(record, uri) {
+    if (!record || record.disposed) return false;
+    return _workspaceUriMatchTexts(uri, record.pattern).some(text => record.regex.test(text));
+}
+
+function _workspaceFireFileWatchers(uriInput, type) {
+    if (!_fileSystemWatchers.size) return;
+    const uri = uriInput instanceof Uri ? uriInput : _workspaceUriFromInput(uriInput);
+    for (const record of Array.from(_fileSystemWatchers)) {
+        if (!_workspaceWatcherMatches(record, uri)) continue;
+        if (type === FileChangeType.Created && !record.options.ignoreCreateEvents) {
+            record.createEmitter.fire(uri);
+        } else if (type === FileChangeType.Changed && !record.options.ignoreChangeEvents) {
+            record.changeEmitter.fire(uri);
+        } else if (type === FileChangeType.Deleted && !record.options.ignoreDeleteEvents) {
+            record.deleteEmitter.fire(uri);
+        }
+    }
+}
+
+function _workspaceFireFileWatcherEvents(events) {
+    for (const event of events || []) {
+        _workspaceFireFileWatchers(event.uri, Number(event.type || FileChangeType.Changed));
+    }
 }
 
 function _workspaceDefaultSkipDir(name) {
@@ -8136,6 +8301,16 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 const folder = _workspaceFolder();
                 return folder ? folder.uri.fsPath : undefined;
             },
+            get isTrusted() {
+                return _workspaceTrusted;
+            },
+            requestWorkspaceTrust() {
+                const wasTrusted = _workspaceTrusted;
+                _workspaceTrusted = true;
+                if (!wasTrusted) _onDidGrantWorkspaceTrustEmitter.fire();
+                return Promise.resolve(true);
+            },
+            onDidGrantWorkspaceTrust: _onDidGrantWorkspaceTrustEmitter.event,
             get textDocuments() {
                 return Array.from(_workspaceTextDocuments.values()).filter(
                     _workspaceDocumentIsOpened);
@@ -8233,6 +8408,10 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     _workspacePatternText(include),
                     () => _workspaceFindFiles(include, exclude, maxResults),
                 );
+            },
+            createFileSystemWatcher(pattern, optionsOrIgnoreCreate, ignoreChange, ignoreDelete) {
+                return _workspaceCreateFileSystemWatcher(
+                    pattern, optionsOrIgnoreCreate, ignoreChange, ignoreDelete);
             },
             applyEdit(edit) {
                 return _diagnoseAsync(
