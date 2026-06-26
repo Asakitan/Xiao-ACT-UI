@@ -10451,6 +10451,291 @@ class AIEditorAPI:
             "contributions": contributions,
         }
 
+    @staticmethod
+    def _extension_surface_extension_id(item: Dict[str, Any]) -> str:
+        return str(
+            item.get("_extensionId")
+            or item.get("extensionId")
+            or item.get("extension_id")
+            or "")
+
+    def _extension_surface_menu_items(self) -> List[Dict[str, Any]]:
+        ext_points = getattr(self._ext_host, "ext_points", None)
+        contributions = (
+            getattr(ext_points, "all_contributions", {}) if ext_points else {})
+        menus = contributions.get("menus", {}) if isinstance(
+            contributions, dict) else {}
+        if not isinstance(menus, dict):
+            return []
+        result: List[Dict[str, Any]] = []
+        for menu_id, items in menus.items():
+            if not isinstance(items, list):
+                continue
+            for index, item in enumerate(items):
+                if not isinstance(item, dict):
+                    continue
+                result.append({
+                    "menu": str(menu_id),
+                    "command": str(item.get("command") or ""),
+                    "when": str(item.get("when") or ""),
+                    "enablement": str(item.get("enablement") or ""),
+                    "group": str(item.get("group") or ""),
+                    "order": self._extension_menu_order(item.get("group", "")),
+                    "extensionId": self._extension_surface_extension_id(item),
+                    "hasArguments": isinstance(item.get("arguments"), list),
+                    "hasAlt": bool(item.get("alt")),
+                    "index": index,
+                })
+        result.sort(key=lambda item: (
+            str(item.get("menu") or ""),
+            str(self._extension_menu_group_name(item.get("group", ""))),
+            float(item.get("order", 0.0)),
+            int(item.get("index", 0)),
+            str(item.get("command") or "")))
+        return result
+
+    def _extension_surface_custom_editors(
+            self,
+            contributions: Dict[str, Any]) -> List[Dict[str, Any]]:
+        host = getattr(self, "_node_ext_host", None)
+        host_running = bool(host is not None and getattr(host, "is_running", False))
+        states: List[Dict[str, Any]] = []
+        if host_running and hasattr(host, "list_custom_editor_states"):
+            try:
+                states = [
+                    dict(item)
+                    for item in host.list_custom_editor_states()
+                    if isinstance(item, dict)
+                ]
+            except Exception:
+                states = []
+        result: List[Dict[str, Any]] = []
+        for item in contributions.get("customEditors", []):
+            if not isinstance(item, dict):
+                continue
+            view_type = str(item.get("viewType") or "").strip()
+            matching_states = [
+                state for state in states
+                if str(state.get("viewType") or state.get("view_type") or "")
+                == view_type
+            ]
+            result.append({
+                "viewType": view_type,
+                "displayName": str(
+                    item.get("displayName")
+                    or item.get("name")
+                    or view_type),
+                "extensionId": self._extension_surface_extension_id(item),
+                "selector": item.get("selector", []),
+                "priority": str(item.get("priority") or ""),
+                "runtimeAvailable": bool(host_running and matching_states),
+                "nodeHostRunning": host_running,
+                "stateCount": len(matching_states),
+                "states": matching_states,
+            })
+        return result
+
+    def _extension_surface_notebooks(
+            self,
+            contributions: Dict[str, Any]) -> List[Dict[str, Any]]:
+        host = getattr(self, "_node_ext_host", None)
+        host_running = bool(host is not None and getattr(host, "is_running", False))
+        serializers = host.notebook_serializers() if (
+            host_running and hasattr(host, "notebook_serializers")) else []
+        controllers = host.notebook_controllers() if (
+            host_running and hasattr(host, "notebook_controllers")) else []
+        detection_tasks = (
+            host.notebook_controller_detection_tasks("")
+            if host_running
+            and hasattr(host, "notebook_controller_detection_tasks")
+            else [])
+        serializers = [
+            dict(item) for item in serializers if isinstance(item, dict)
+        ]
+        controllers = [
+            dict(item) for item in controllers if isinstance(item, dict)
+        ]
+        detection_tasks = [
+            dict(item) for item in detection_tasks if isinstance(item, dict)
+        ]
+        result: List[Dict[str, Any]] = []
+        for item in contributions.get("notebooks", []):
+            if not isinstance(item, dict):
+                continue
+            notebook_type = str(
+                item.get("type")
+                or item.get("viewType")
+                or item.get("id")
+                or "").strip()
+            matching_serializers = [
+                serializer for serializer in serializers
+                if str(serializer.get("viewType") or "") == notebook_type
+            ]
+            matching_controllers = [
+                controller for controller in controllers
+                if str(controller.get("notebookType") or "") == notebook_type
+            ]
+            matching_detection = [
+                task for task in detection_tasks
+                if str(task.get("notebookType") or "") == notebook_type
+            ]
+            result.append({
+                "type": notebook_type,
+                "displayName": str(
+                    item.get("displayName")
+                    or item.get("name")
+                    or notebook_type),
+                "extensionId": self._extension_surface_extension_id(item),
+                "selector": item.get("selector", []),
+                "runtimeAvailable": bool(matching_serializers),
+                "nodeHostRunning": host_running,
+                "serializerCount": len(matching_serializers),
+                "controllerCount": len(matching_controllers),
+                "detectionTaskCount": len(matching_detection),
+                "serializers": matching_serializers,
+                "controllers": matching_controllers,
+                "detectionTasks": matching_detection,
+            })
+        return result
+
+    def list_extension_runtime_surfaces(
+            self, context: Any = None) -> Dict[str, Any]:
+        """Return dynamic extension UI/runtime surfaces for smoke diagnostics."""
+        self._ensure_engine()
+        ext_points = getattr(getattr(self, "_ext_host", None), "ext_points", None)
+        has_contributions = bool(getattr(ext_points, "all_contributions", {}) or {})
+        if not has_contributions and not getattr(self, "_extensions_inited", False):
+            try:
+                self.init_extensions()
+            except Exception:
+                pass
+        try:
+            self._register_ext_tools()
+        except Exception:
+            pass
+        ext_points = getattr(self._ext_host, "ext_points", None)
+        contributions = (
+            getattr(ext_points, "all_contributions", {}) if ext_points else {})
+        if not isinstance(contributions, dict):
+            contributions = {}
+        views_by_container = contributions.get("views", {})
+        if not isinstance(views_by_container, dict):
+            views_by_container = {}
+        manifest_view_ids: set[str] = set()
+        views: List[Dict[str, Any]] = []
+        for container_id, items in views_by_container.items():
+            for item in items if isinstance(items, list) else []:
+                if not isinstance(item, dict):
+                    continue
+                decorated = self._decorate_extension_view(item)
+                view_id = str(decorated.get("id") or "")
+                if view_id:
+                    manifest_view_ids.add(view_id)
+                views.append({
+                    "id": view_id,
+                    "name": str(decorated.get("name") or view_id),
+                    "container": str(container_id),
+                    "extensionId": self._extension_surface_extension_id(
+                        decorated),
+                    "kind": str(
+                        decorated.get("runtimeKind")
+                        or decorated.get("type")
+                        or "view"),
+                    "type": str(decorated.get("type") or ""),
+                    "runtimeAvailable": bool(
+                        decorated.get("runtimeAvailable")),
+                    "runtimeState": decorated.get("runtimeState", {}),
+                    "titleActions": decorated.get("titleActions", []),
+                    "welcome": decorated.get("welcome", []),
+                })
+        runtime_ids = set(getattr(self._vscode_ns, "_tree_data_providers", {}).keys())
+        runtime_ids.update(getattr(self._vscode_ns, "_tree_views", {}).keys())
+        runtime_ids.update(
+            getattr(self._vscode_ns, "_webview_view_providers", {}).keys())
+        runtime_ids.update(getattr(self._vscode_ns, "_webview_views", {}).keys())
+        for view_id in sorted(str(item) for item in runtime_ids - manifest_view_ids):
+            snapshot = self._extension_view_snapshot(view_id)
+            if not snapshot.get("runtimeAvailable"):
+                continue
+            views.append({
+                "id": view_id,
+                "name": str(snapshot.get("title") or view_id),
+                "container": "",
+                "extensionId": "",
+                "kind": str(snapshot.get("kind") or "view"),
+                "type": "",
+                "runtimeAvailable": True,
+                "runtimeOnly": True,
+                "runtimeState": snapshot,
+                "titleActions": snapshot.get("titleActions", []),
+                "welcome": snapshot.get("welcome", []),
+            })
+        view_containers: List[Dict[str, Any]] = []
+        for location in ("activitybar", "panel", "secondarySidebar"):
+            view_containers.extend(
+                self.list_extension_view_containers(location).get("items", []))
+        for builtin in ("explorer", "scm", "debug", "test"):
+            item = self.list_extension_container_views(builtin).get("item")
+            if isinstance(item, dict) and item.get("view_count"):
+                view_containers.append(item)
+        try:
+            command_payload = self.list_command_palette_commands(context or {})
+            commands = command_payload.get("commands", [])
+        except Exception:
+            commands = [
+                dict(item)
+                for item in contributions.get("commands", [])
+                if isinstance(item, dict)
+            ]
+        menus = self._extension_surface_menu_items()
+        custom_editors = self._extension_surface_custom_editors(contributions)
+        notebooks = self._extension_surface_notebooks(contributions)
+        webview_views = [
+            item for item in views
+            if str(item.get("kind") or "").lower() == "webviewview"
+        ]
+        tree_views = [
+            item for item in views
+            if str(item.get("kind") or "").lower() == "treeview"
+        ]
+        return json.loads(json.dumps({
+            "ok": True,
+            "views": views,
+            "treeViews": tree_views,
+            "webviewViews": webview_views,
+            "viewContainers": view_containers,
+            "customEditors": custom_editors,
+            "notebooks": notebooks,
+            "commands": commands,
+            "menus": menus,
+            "summary": {
+                "views": len(views),
+                "treeViews": len(tree_views),
+                "webviewViews": len(webview_views),
+                "viewContainers": len(view_containers),
+                "customEditors": len(custom_editors),
+                "customEditorStates": sum(
+                    int(item.get("stateCount", 0))
+                    for item in custom_editors),
+                "notebooks": len(notebooks),
+                "notebookSerializers": sum(
+                    int(item.get("serializerCount", 0))
+                    for item in notebooks),
+                "notebookControllers": sum(
+                    int(item.get("controllerCount", 0))
+                    for item in notebooks),
+                "commands": len(commands),
+                "runtimeCommands": sum(
+                    1 for item in commands
+                    if item.get("runtimeAvailable")),
+                "menus": len(menus),
+                "dynamicSurfaces": (
+                    len(tree_views) + len(webview_views)
+                    + len(custom_editors) + len(notebooks)
+                    + len(commands) + len(menus)),
+            },
+        }, ensure_ascii=False, default=str))
+
     def get_extension_host_diagnostics(self, reset: bool = False) -> Dict:
         """Return lightweight Node extension host request diagnostics."""
         host = getattr(self, "_node_ext_host", None)

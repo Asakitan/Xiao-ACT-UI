@@ -1003,6 +1003,7 @@ def test_app_settings_parity() -> None:
         "set_active_mode", "set_provider_model", "set_chat_provider",
         "set_chat_controls",
         "get_extension_contributions",
+        "list_extension_runtime_surfaces",
         "list_extension_settings", "get_extension_setting",
         "set_extension_setting", "reset_extension_setting",
         "set_extension_language_setting", "reset_extension_language_setting",
@@ -3040,6 +3041,56 @@ def test_app_settings_parity() -> None:
                and "onNotebook:selftest.notebook"
                in tree_api._ext_host.activated_events,
                json.dumps(opened_notebook, ensure_ascii=False))
+        tree_api._ext_host = _FakeExtensionHost({
+            "customEditors": [{
+                "viewType": "selftest.customNbt",
+                "displayName": "Selftest NBT",
+                "selector": [{"filenamePattern": "**/*.{nbt,dat}"}],
+                "priority": "default",
+                "_extensionId": "selftest.custom",
+            }],
+            "notebooks": [{
+                "type": "selftest.notebook",
+                "displayName": "Selftest Notebook",
+                "selector": [{"filenamePattern": "**/*.selfnb"}],
+                "_extensionId": "selftest.notebookExt",
+            }],
+        })
+        tree_api._node_ext_host = _FakeNodeCustomEditorHost()
+        tree_api._controller = object()
+        tree_api._extensions_inited = True
+        tree_api._vscode_ns = type("_SurfaceNamespace", (), {
+            "_tree_data_providers": {},
+            "_tree_views": {},
+            "_webview_view_providers": {},
+            "_webview_views": {},
+        })()
+        runtime_surfaces = tree_api.list_extension_runtime_surfaces()
+        custom_surface = {
+            item.get("viewType"): item
+            for item in runtime_surfaces.get("customEditors", [])
+        }
+        notebook_surface = {
+            item.get("type"): item
+            for item in runtime_surfaces.get("notebooks", [])
+        }
+        _check("extension runtime surface smoke exposes custom editors and notebooks dynamically",
+               runtime_surfaces.get("ok") is True
+               and runtime_surfaces.get("summary", {}).get("customEditors") == 1
+               and runtime_surfaces.get("summary", {}).get("notebooks") == 1
+               and custom_surface.get("selftest.customNbt", {}).get(
+                   "runtimeAvailable") is True
+               and custom_surface.get("selftest.customNbt", {}).get(
+                   "stateCount") == 1
+               and notebook_surface.get("selftest.notebook", {}).get(
+                   "runtimeAvailable") is True
+               and notebook_surface.get("selftest.notebook", {}).get(
+                   "serializerCount") == 1
+               and notebook_surface.get("selftest.notebook", {}).get(
+                   "controllerCount") == 1
+               and notebook_surface.get("selftest.notebook", {}).get(
+                   "detectionTaskCount") == 1,
+               json.dumps(runtime_surfaces, ensure_ascii=False, default=str))
         save_notebook = tree_api.save_workspace_notebook(
             "assets/demo.selfnb",
             opened_notebook.get("notebook", {}),
@@ -17501,6 +17552,51 @@ def test_app_extension_runtime_support() -> None:
         _check("contributions expose runtime-backed view metadata",
                decorated_views.get("selftest.command.tree.view", {}).get("runtimeState", {}).get("kind") == "treeView"
                and decorated_views.get("selftest.command.webview.view", {}).get("runtimeState", {}).get("kind") == "webviewView")
+        activity_surfaces = api.list_extension_runtime_surfaces({
+            "resourceUri": "file:///workspace/node-a.txt",
+            "resourceLangId": "plaintext",
+            "editorTextFocus": True,
+        })
+        activity_tree_surfaces = {
+            item.get("id"): item
+            for item in activity_surfaces.get("treeViews", [])
+        }
+        activity_webview_surfaces = {
+            item.get("id"): item
+            for item in activity_surfaces.get("webviewViews", [])
+        }
+        activity_command_surfaces = {
+            item.get("command"): item
+            for item in activity_surfaces.get("commands", [])
+        }
+        activity_menu_surfaces = [
+            item for item in activity_surfaces.get("menus", [])
+            if str(item.get("command") or "").startswith("selftest.activity.")
+        ]
+        _check("extension runtime surface smoke exposes tree webview command and menu dynamics",
+               activity_surfaces.get("ok") is True
+               and activity_surfaces.get("summary", {}).get("treeViews", 0) >= 1
+               and activity_surfaces.get("summary", {}).get("webviewViews", 0) >= 1
+               and activity_surfaces.get("summary", {}).get("commands", 0) >= 1
+               and activity_surfaces.get("summary", {}).get("menus", 0) >= 1
+               and activity_tree_surfaces.get(
+                   "selftest.activity.tree", {}).get("runtimeAvailable") is True
+               and activity_tree_surfaces.get(
+                   "selftest.activity.tree", {}).get("runtimeState", {}).get(
+                       "badge", {}).get("value") == 8
+               and activity_webview_surfaces.get(
+                   "selftest.activity.webview", {}).get("runtimeAvailable") is True
+               and activity_webview_surfaces.get(
+                   "selftest.activity.webview", {}).get("runtimeState", {}).get(
+                       "badge", {}).get("value") == 4
+               and activity_command_surfaces.get(
+                   "selftest.activity.refresh", {}).get(
+                       "source") == "extension"
+               and any(
+                   item.get("menu") == "view/item/context"
+                   and item.get("command") == "selftest.activity.openItem"
+                   for item in activity_menu_surfaces),
+               json.dumps(activity_surfaces, ensure_ascii=False, default=str))
 
         workspace_contains_tmp = tempfile.mkdtemp(
             prefix="sao_workspace_contains_")
