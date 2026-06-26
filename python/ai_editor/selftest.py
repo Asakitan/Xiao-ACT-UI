@@ -4005,6 +4005,25 @@ def test_phase1_ai_editor_regressions() -> None:
            and "const el=renderToolInvocationPart(body,{name,args:args||'No arguments',callId,state:'running',stateLabel:providerToolStateLabel(data,false)});" in html
            and "updateToolInvocationPart(el,done?(toolResultSucceeded(data)?'complete':'error'):'running',label);" in html
            and "updateToolInvocationPart(el,toolResultSucceeded(data)?'complete':'error'" in html)
+    _check("frontend Assistant tool confirmations and terminal outputs use Copilot-style subparts",
+           "confirm-bar chat-tool-confirmation" in html
+           and "bar.dataset.state='waiting';" in html
+           and "bar.setAttribute('role','group');" in html
+           and "bar.setAttribute('aria-label','Tool confirmation: '+(d.name||'tool'));" in html
+           and "const actions=document.createElement('div');actions.className='confirm-actions';" in html
+           and "const allow=document.createElement('button');allow.type='button';allow.className='confirm-btn confirm-allow';" in html
+           and "const deny=document.createElement('button');deny.type='button';deny.className='confirm-btn confirm-deny';" in html
+           and "bar.dataset.state=allowed?'allowed':'denied';" in html
+           and "actions.querySelectorAll('button').forEach(b=>b.disabled=true);" in html
+           and "if(body)renderConfirmBar(body,data,providerRefs(pid).messages,'Provider confirmation');" in html
+           and "chat-terminal-tool-output" in html
+           and "function terminalToolOutputData(name,result)" in html
+           and "function renderTerminalToolOutput(parent,data)" in html
+           and "const terminalData=terminalToolOutputData(name,result);" in html
+           and "el.classList.add('has-terminal-output');" in html
+           and "const stdout=parsed.stdout!==undefined?parsed.stdout:(parsed.output!==undefined?parsed.output:parsed.text);" in html
+           and "const exitCode=parsed.exit_code!==undefined?parsed.exit_code:(parsed.exitCode!==undefined?parsed.exitCode:parsed.code);" in html
+           and "err.className='chat-terminal-stream stderr';" in html)
     _check("frontend Assistant preserves stream usage token count on idle",
            "updateTokenCount({minTokens:totalTokens});" in html
            and "async function updateTokenCount(options)" in html

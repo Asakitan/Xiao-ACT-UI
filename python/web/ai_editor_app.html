@@ -754,13 +754,31 @@ code.inline { background:var(--bg3); padding:1px 3px; border-radius:4px;
 /* Confirmation dialog */
 .confirm-bar { display:flex; align-items:center; gap:8px; padding:8px 12px;
   background:var(--bg3); border:1px solid var(--border); border-radius:6px; margin:4px 0; }
-.confirm-bar .msg { flex:1; font-size:12px; color:var(--fg-warning); }
+.confirm-bar.chat-tool-confirmation { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center;
+  gap:8px; border-color:color-mix(in srgb, var(--fg-warning) 36%, var(--border)); }
+.confirm-bar[data-state="allowed"] { border-color:color-mix(in srgb, var(--fg-success) 42%, var(--border)); opacity:.72; }
+.confirm-bar[data-state="denied"] { border-color:color-mix(in srgb, var(--fg-error) 48%, var(--border)); opacity:.72; }
+.confirm-bar .msg { min-width:0; font-size:12px; color:var(--fg-warning); }
+.confirm-title { display:flex; align-items:center; gap:6px; min-width:0; color:var(--fg); }
+.confirm-title .tool-name { color:var(--fg-tool); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.confirm-detail { margin-top:3px; color:var(--fg-dim); font:11px/1.45 var(--mono); white-space:pre-wrap; max-height:96px; overflow:auto; }
+.confirm-actions { display:inline-flex; align-items:center; gap:6px; }
 .confirm-btn { padding:4px 12px; border-radius:4px; cursor:pointer; font-size:11px; font-weight:600; }
 .confirm-allow { background:transparent; color:var(--fg-success); border:1px solid var(--fg-success); }
 .confirm-allow:hover { background:color-mix(in srgb, var(--fg-success) 15%, transparent); }
 .confirm-deny { background:transparent; color:var(--fg-error); border:1px solid var(--fg-error); }
 .confirm-deny:hover { background:color-mix(in srgb, var(--fg-error) 15%, transparent); }
 .confirm-skip { background:transparent; color:var(--fg-dim); border:1px solid var(--border); }
+.confirm-btn:disabled { opacity:.55; cursor:default; }
+
+.chat-terminal-tool-output { display:flex; flex-direction:column; gap:6px; border:1px solid var(--border);
+  border-radius:5px; background:var(--bg-code); color:var(--fg-code); padding:7px; }
+.chat-terminal-tool-head { display:flex; align-items:center; justify-content:space-between; gap:8px;
+  color:var(--fg-dim); font:10px/1.4 var(--mono); text-transform:uppercase; }
+.chat-terminal-command { color:var(--fg); font:11px/1.45 var(--mono); white-space:pre-wrap; }
+.chat-terminal-stream { margin:0; padding:6px; border-radius:4px; background:color-mix(in srgb, #000 24%, transparent);
+  color:var(--fg-code); font:11px/1.45 var(--mono); white-space:pre-wrap; max-height:220px; overflow:auto; }
+.chat-terminal-stream.stderr { color:var(--fg-error); }
 
 /* Streaming word fade-in */
 .stream-word { animation:wordFade .3s ease-out; display:inline; }
@@ -5479,11 +5497,17 @@ function renderToolResult(container,name,result,callId){
   const hdr=document.createElement('div');hdr.className='tool-header';
   hdr.innerHTML='<span class="arrow">▸</span> Result: '+esc(name);
   const body=document.createElement('div');body.className='tool-body';
-  try{body.textContent=JSON.stringify(JSON.parse(result),null,2)}catch{body.textContent=result}
+  const terminalData=terminalToolOutputData(name,result);
+  if(terminalData){
+    el.classList.add('has-terminal-output');
+    renderTerminalToolOutput(body,terminalData);
+  }else{
+    body.textContent=formatToolPayload(result,'');
+  }
   bindDisclosureHeader(hdr,body);
   el.appendChild(hdr);el.appendChild(body);container.appendChild(el);
   // Auto-open if small
-  if(result.length<500){hdr.classList.add('open');body.classList.add('open');hdr.setAttribute('aria-expanded','true')}
+  if(String(result||'').length<500){hdr.classList.add('open');body.classList.add('open');hdr.setAttribute('aria-expanded','true')}
 }
 
 function bindDisclosureHeader(header,body){
@@ -5505,6 +5529,55 @@ function formatToolPayload(value,fallback){
     try{return JSON.stringify(value,null,2)}catch{return String(value)}
   }
   try{return JSON.stringify(JSON.parse(value),null,2)}catch{return value}
+}
+function parseToolPayload(value){
+  if(value===undefined||value===null||value==='')return null;
+  if(typeof value==='object')return value;
+  if(typeof value==='string'){
+    try{return JSON.parse(value)}catch(e){return null}
+  }
+  return null;
+}
+function terminalToolOutputData(name,result){
+  const lower=String(name||'').toLowerCase();
+  const parsed=parseToolPayload(result);
+  const terminalName=/terminal|shell|command|powershell|bash|cmd/.test(lower);
+  if(!parsed||typeof parsed!=='object'){
+    if(terminalName&&typeof result==='string'&&result.trim()){
+      return {command:name||'terminal',stdout:result,stderr:'',exitCode:''};
+    }
+    return null;
+  }
+  const stdout=parsed.stdout!==undefined?parsed.stdout:(parsed.output!==undefined?parsed.output:parsed.text);
+  const stderr=parsed.stderr!==undefined?parsed.stderr:parsed.error;
+  const command=parsed.command||parsed.cmd||parsed.shell_command||parsed.shellCommand||parsed.args;
+  const exitCode=parsed.exit_code!==undefined?parsed.exit_code:(parsed.exitCode!==undefined?parsed.exitCode:parsed.code);
+  if(!terminalName&&stdout===undefined&&stderr===undefined&&command===undefined&&exitCode===undefined)return null;
+  return {
+    command:formatToolPayload(command||name||'terminal',''),
+    stdout:stdout===undefined?'':String(stdout),
+    stderr:stderr===undefined?'':String(stderr),
+    exitCode:exitCode===undefined?'':String(exitCode)
+  };
+}
+function renderTerminalToolOutput(parent,data){
+  if(!parent||!data)return null;
+  const box=document.createElement('div');box.className='chat-terminal-tool-output';
+  const head=document.createElement('div');head.className='chat-terminal-tool-head';
+  const title=document.createElement('span');title.textContent='Terminal output';
+  const status=document.createElement('span');status.textContent=data.exitCode!==''?'exit '+data.exitCode:'running';
+  head.appendChild(title);head.appendChild(status);box.appendChild(head);
+  if(data.command){
+    const cmd=document.createElement('div');cmd.className='chat-terminal-command';cmd.textContent='$ '+data.command;box.appendChild(cmd);
+  }
+  if(data.stdout){
+    const out=document.createElement('pre');out.className='chat-terminal-stream stdout';out.textContent=data.stdout;box.appendChild(out);
+  }
+  if(data.stderr){
+    const err=document.createElement('pre');err.className='chat-terminal-stream stderr';err.textContent=data.stderr;box.appendChild(err);
+  }
+  parent.appendChild(box);
+  return box;
 }
 function toolStateMarkup(state,label){
   state=String(state||'running').toLowerCase();
@@ -12175,15 +12248,29 @@ function renderConfirmBar(container,d,scrollEl,statusPrefix){
   if(!container||!d)return null;
   const existing=d.id?document.getElementById('confirm-'+providerDomKey(d.id)):null;
   if(existing)return existing;
-  const bar=document.createElement('div');bar.className='confirm-bar';
+  const bar=document.createElement('div');bar.className='confirm-bar chat-tool-confirmation';
   if(d.id)bar.id='confirm-'+providerDomKey(d.id);
-  const msg=document.createElement('span');msg.className='msg';
-  msg.innerHTML='⚠ <b>'+esc(d.name||'tool')+'</b> '+esc(t('requires_confirmation'));
-  const allow=document.createElement('span');allow.className='confirm-btn confirm-allow';allow.textContent=t('allow');
-  const deny=document.createElement('span');deny.className='confirm-btn confirm-deny';deny.textContent=t('deny');
+  bar.dataset.state='waiting';
+  bar.dataset.toolName=d.name||'tool';
+  bar.setAttribute('role','group');
+  bar.setAttribute('aria-label','Tool confirmation: '+(d.name||'tool'));
+  const msg=document.createElement('div');msg.className='msg';
+  const title=document.createElement('div');title.className='confirm-title';
+  title.innerHTML='<span aria-hidden="true">⚠</span><span class="tool-name">'+esc(d.name||'tool')+'</span><span>'+esc(t('requires_confirmation'))+'</span>';
+  msg.appendChild(title);
+  const detailText=formatToolPayload((d&&d.arguments)!==undefined?d.arguments:(d&&d.input), '');
+  if(detailText){
+    const detail=document.createElement('pre');detail.className='confirm-detail';detail.textContent=detailText;msg.appendChild(detail);
+  }
+  const actions=document.createElement('div');actions.className='confirm-actions';
+  const allow=document.createElement('button');allow.type='button';allow.className='confirm-btn confirm-allow';allow.textContent=t('allow');
+  const deny=document.createElement('button');deny.type='button';deny.className='confirm-btn confirm-deny';deny.textContent=t('deny');
+  allow.setAttribute('aria-label','Allow tool '+(d.name||'tool'));
+  deny.setAttribute('aria-label','Deny tool '+(d.name||'tool'));
   allow.onclick=()=>confirmTool(d.id,true,allow);
   deny.onclick=()=>confirmTool(d.id,false,deny);
-  bar.appendChild(msg);bar.appendChild(allow);bar.appendChild(deny);container.appendChild(bar);
+  actions.appendChild(allow);actions.appendChild(deny);
+  bar.appendChild(msg);bar.appendChild(actions);container.appendChild(bar);
   if(scrollEl)scrollEl.scrollTop=scrollEl.scrollHeight;
   setStatus((statusPrefix||'Waiting for confirmation')+': '+(d.name||'tool'));
   return bar;
@@ -12199,8 +12286,14 @@ function onToolConfirm(d){
 }
 window.confirmTool=async function(callId,allowed,btn){
   const bar=btn.closest('.confirm-bar');
-  if(bar){bar.innerHTML='<span class="msg">'+(allowed?'✓ Allowed':'✗ Denied')+'</span>';
-    bar.style.opacity='0.5'}
+  if(bar){
+    bar.dataset.state=allowed?'allowed':'denied';
+    bar.setAttribute('aria-label',(allowed?'Allowed ':'Denied ')+(bar.dataset.toolName||'tool'));
+    const actions=bar.querySelector('.confirm-actions');
+    if(actions)actions.querySelectorAll('button').forEach(b=>b.disabled=true);
+    const msg=bar.querySelector('.msg');
+    if(msg)msg.innerHTML='<div class="confirm-title"><span aria-hidden="true">'+(allowed?'✓':'✗')+'</span><span class="tool-name">'+esc(bar.dataset.toolName||'tool')+'</span><span>'+(allowed?'Allowed':'Denied')+'</span></div>';
+  }
   await call('confirm_tool',callId,allowed);
 };
 
