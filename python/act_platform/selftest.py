@@ -314,6 +314,31 @@ dictionary@ state()
     if os.path.isfile(workspace_cutegirl_manifest):
         from .runtime import default_plugin_dirs
 
+        with open(workspace_cutegirl_manifest, "r", encoding="utf-8") as f:
+            cutegirl_manifest_data = json.load(f)
+        avatar_contract = cutegirl_manifest_data.get("avatar_contract") or {}
+        action_slots = avatar_contract.get("action_slots") or []
+        for required_action in (
+            "idle",
+            "blink-look",
+            "speaking",
+            "listening",
+            "thinking",
+            "typing",
+            "wave",
+            "happy",
+            "confused",
+            "error",
+            "success",
+            "dance",
+            "dragged",
+            "dropped",
+        ):
+            assert required_action in action_slots, avatar_contract
+        assert "K_Peace" in (avatar_contract.get("hand_sign_slots") or []), avatar_contract
+        assert "Blink_Enable" in (avatar_contract.get("expression_slots") or []), avatar_contract
+        assert "action_surface" in (avatar_contract.get("diagnostics") or []), avatar_contract
+
         workspace_settings = FakeSettings({"act_plugin_locale": "zh-CN"})
         workspace_bus = EventBus()
         workspace_manager = PluginManager(
@@ -346,6 +371,9 @@ dictionary@ state()
         assert cutegirl_menu.get("surface") == "unioverlay", cutegirl_menu
         assert "script.avatar.expression" in action_ids, cutegirl_menu
         assert "script.avatar.action" in action_ids, cutegirl_menu
+        assert "script.avatar.hand_sign" in action_ids, cutegirl_menu
+        assert "script.avatar.say" in action_ids, cutegirl_menu
+        assert "script.physics.probe" in action_ids, cutegirl_menu
         assert "script.render.set_quality" in action_ids, cutegirl_menu
         cutegirl_record.enabled = True
         menu_entry = next(
