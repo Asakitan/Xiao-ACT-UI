@@ -7195,13 +7195,29 @@ console.log("frontend word separator behavior ok");
             and "function extensionSettingToggleFilterToken(token,excludeTokens)" in html
             and "function extensionSettingRemoveFilterToken(token)" in html
             and "function extensionSettingClearFilterTokens()" in html
+            and "function extensionSettingVisibleRows(container)" in html
+            and "function extensionSettingFocusRow(row,options)" in html
+            and "function extensionSettingFocusVisibleRow(delta)" in html
+            and "function extensionSettingFocusFirstModifiedSetting()" in html
+            and "function extensionSettingFocusFirstInvalidSetting()" in html
+            and "async function extensionSettingResetVisibleModifiedSettings()" in html
+            and "function extensionSettingResultSummary(visibleRows,totalRows)" in html
             and "function renderExtensionSettingFilterState(visibleRows,totalRows)" in html
             and "ext-settings-filter-menu-button" in html
             and "ext-settings-filter-menu" in html
             and "ext-settings-active-filters" in html
+            and "ext-settings-result-summary" in html
+            and "ext-settings-filter-actions" in html
+            and "ext-settings-prev-result" in html
+            and "ext-settings-next-result" in html
+            and "ext-settings-first-modified" in html
+            and "ext-settings-first-error" in html
+            and "ext-settings-reset-visible" in html
             and "ext-settings-empty" in html
             and "No extension settings match the current filters." in html
             and "Clear Filter Tokens" in html
+            and "settingsSearch.dataset.extSettingsNavigation" in html
+            and "extensionSettingFocusVisibleRow(ev.shiftKey?-1:1)" in html
             and "function extensionSettingTargetName(target)" in html
             and "function createExtensionSettingTargetSelect(target)" in html
             and "function extensionSettingRowTarget(row)" in html
@@ -7505,6 +7521,13 @@ console.log("frontend word separator behavior ok");
             "extensionSettingToggleFilterToken",
             "extensionSettingRemoveFilterToken",
             "extensionSettingClearFilterTokens",
+            "extensionSettingVisibleRows",
+            "extensionSettingFocusRow",
+            "extensionSettingFocusVisibleRow",
+            "extensionSettingFocusFirstModifiedSetting",
+            "extensionSettingFocusFirstInvalidSetting",
+            "extensionSettingResetVisibleModifiedSettings",
+            "extensionSettingResultSummary",
             "extensionSettingTargetName",
             "extensionSettingTargetLabel",
             "extensionSettingScopedValues",
@@ -8173,6 +8196,66 @@ extensionSettingClearFilterTokens();
 assert(fakeSearch.value === "render" && fakeModified.checked === false
        && fakeHidden.checked === false,
        "settings filter menu clears filter tokens and preserves text");
+const originalDollar = globalThis.$;
+let focusedRow = "";
+let resetClicks = 0;
+function makeSettingRow(key, opts){
+  opts = opts || {};
+  const classes = new Set(opts.classes || []);
+  const input = { focus(){ document.activeElement = this; focusedRow = key; } };
+  const reset = { click(){ resetClicks++; } };
+  return {
+    style: { display: opts.hidden ? "none" : "" },
+    offsetParent: opts.detached ? null : {},
+    dataset: {
+      extSettingKey: key,
+      extSettingModified: opts.modified ? "1" : "0",
+    },
+    classList: {
+      contains(name){ return classes.has(name); },
+      add(name){ classes.add(name); },
+      remove(name){ classes.delete(name); },
+    },
+    closest(selector){
+      if(selector === ".ext-setting-row")return this;
+      if(selector === "details[data-ext-settings-section]")return { open: false };
+      return null;
+    },
+    querySelector(selector){
+      if(String(selector).indexOf("aria-invalid") >= 0 && opts.invalid)return {};
+      if(String(selector).indexOf("aria-invalid") >= 0)return null;
+      if(String(selector).indexOf("s-reset") >= 0)return reset;
+      return input;
+    },
+    scrollIntoView(){ this.scrolled = true; },
+    focus(){ document.activeElement = this; focusedRow = key; },
+  };
+}
+const navRows = [
+  makeSettingRow("alpha.setting", { modified: true }),
+  makeSettingRow("beta.setting", { invalid: true }),
+  makeSettingRow("hidden.setting", { hidden: true, modified: true }),
+  makeSettingRow("readonly.setting", { modified: true, classes: ["scope-readonly"] }),
+];
+const navContainer = { querySelectorAll(sel){ return sel === ".ext-setting-row" ? navRows : []; } };
+globalThis.$ = id => id === "ext-settings-container" ? navContainer : originalDollar(id);
+assert(extensionSettingVisibleRows().length === 3,
+       "settings visible row helper excludes hidden rows");
+assert(extensionSettingResultSummary(3,4).indexOf("3 visible of 4 extension settings") >= 0
+       && extensionSettingResultSummary(3,4).indexOf("2 modified") >= 0
+       && extensionSettingResultSummary(3,4).indexOf("1 invalid") >= 0,
+       "settings result summary includes visible modified and invalid counts");
+assert(extensionSettingFocusFirstModifiedSetting() && focusedRow === "alpha.setting",
+       "settings navigation focuses first visible modified row");
+assert(extensionSettingFocusFirstInvalidSetting() && focusedRow === "beta.setting",
+       "settings navigation focuses first visible invalid row");
+document.activeElement = navRows[0];
+assert(extensionSettingFocusVisibleRow(1) && focusedRow === "beta.setting",
+       "settings navigation advances through visible rows");
+const resetPromise = extensionSettingResetVisibleModifiedSettings();
+assert(resetPromise && typeof resetPromise.then === "function" && resetClicks === 1,
+       "settings bulk reset clicks visible writable modified rows");
+globalThis.$ = originalDollar;
 assert(extensionSettingIsFilterToken("@feature:terminal")
        && extensionSettingIsFilterToken("@stable")
        && extensionSettingIsFilterToken("@hidden")

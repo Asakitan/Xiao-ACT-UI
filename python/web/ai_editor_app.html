@@ -1496,6 +1496,11 @@ pre.code-block { overflow:visible; }
   color:var(--fg-dim); border-radius:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .ext-settings-active-filters button:hover { color:var(--fg); border-color:var(--fg-accent); }
 .ext-settings-empty { display:none; grid-column:1 / -1; color:var(--fg-dim); font-size:11px; padding:3px 0 1px; }
+.ext-settings-result-summary { grid-column:1 / -1; color:var(--fg-dim); font:11px var(--mono); min-height:16px; }
+.ext-settings-filter-actions { grid-column:1 / -1; display:flex; align-items:center; gap:5px; flex-wrap:wrap; }
+.ext-settings-filter-actions button { height:22px; padding:1px 7px; border:1px solid var(--border); background:var(--bg3); color:var(--fg-dim); border-radius:3px; }
+.ext-settings-filter-actions button:hover:not(:disabled) { color:var(--fg); border-color:var(--fg-accent); }
+.ext-settings-filter-actions button:disabled { opacity:.45; cursor:default; }
 
 /* ── SETTINGS-05: Keyboard shortcuts editor ── */
 .kb-modal-bg { position:fixed; inset:0; background:#00000080; z-index:700; display:none; align-items:center; justify-content:center; }
@@ -18378,6 +18383,56 @@ function extensionSettingClearFilterTokens(){
   const hidden=$('ext-settings-hidden');if(hidden)hidden.checked=false;
   applyExtensionSettingsFilter();
 }
+function extensionSettingVisibleRows(container){
+  const root=container||$('ext-settings-container');
+  if(!root)return [];
+  return Array.from(root.querySelectorAll('.ext-setting-row'))
+    .filter(row=>row.style.display!=='none'&&row.offsetParent!==null);
+}
+function extensionSettingFocusRow(row,options){
+  if(!row)return false;
+  const opts=options||{};
+  const section=row.closest('details[data-ext-settings-section]');
+  if(section)section.open=true;
+  try{row.scrollIntoView({block:opts.block||'center',behavior:opts.behavior||'smooth'})}catch(e){try{row.scrollIntoView()}catch(_e){}}
+  const input=row.querySelector('[data-ext-setting-input="1"],button,select,textarea,input');
+  try{(input||row).focus({preventScroll:true})}catch(e){try{(input||row).focus()}catch(_e){}}
+  row.classList.add('active');
+  setTimeout(()=>row.classList.remove('active'),900);
+  return true;
+}
+function extensionSettingFocusVisibleRow(delta){
+  const rows=extensionSettingVisibleRows();
+  if(!rows.length)return false;
+  const active=document.activeElement&&document.activeElement.closest?document.activeElement.closest('.ext-setting-row'):null;
+  let index=active?rows.indexOf(active):-1;
+  index=(index+Number(delta||1)+rows.length)%rows.length;
+  return extensionSettingFocusRow(rows[index],{block:'nearest'});
+}
+function extensionSettingFocusFirstModifiedSetting(){
+  return extensionSettingFocusRow(extensionSettingVisibleRows().find(row=>row.dataset.extSettingModified==='1'),{block:'center'});
+}
+function extensionSettingFocusFirstInvalidSetting(){
+  const rows=extensionSettingVisibleRows();
+  return extensionSettingFocusRow(rows.find(row=>row.classList.contains('invalid')||row.querySelector('[aria-invalid="true"],.ext-setting-error:not(:empty)')),{block:'center'});
+}
+async function extensionSettingResetVisibleModifiedSettings(){
+  const rows=extensionSettingVisibleRows().filter(row=>row.dataset.extSettingModified==='1'&&!row.classList.contains('scope-readonly'));
+  for(const row of rows){
+    const reset=row.querySelector('.s-reset');
+    if(reset)reset.click();
+    await new Promise(resolve=>setTimeout(resolve,0));
+  }
+  return rows.length;
+}
+function extensionSettingResultSummary(visibleRows,totalRows){
+  const rows=extensionSettingVisibleRows();
+  const modified=rows.filter(row=>row.dataset.extSettingModified==='1').length;
+  const invalid=rows.filter(row=>row.classList.contains('invalid')||row.querySelector('[aria-invalid="true"],.ext-setting-error:not(:empty)')).length;
+  return String(visibleRows)+' visible of '+String(totalRows)+' extension settings'
+    +(modified?' · '+modified+' modified':'')
+    +(invalid?' · '+invalid+' invalid':'');
+}
 function renderExtensionSettingFilterState(visibleRows,totalRows){
   const chips=$('ext-settings-active-filters');
   const empty=$('ext-settings-empty');
@@ -18405,6 +18460,12 @@ function renderExtensionSettingFilterState(visibleRows,totalRows){
     empty.textContent=totalRows?'No extension settings match the current filters.':'';
     empty.style.display=(totalRows&&visibleRows===0)?'':'none';
   }
+  const summary=$('ext-settings-result-summary');
+  if(summary)summary.textContent=extensionSettingResultSummary(visibleRows,totalRows);
+  ['ext-settings-prev-result','ext-settings-next-result'].forEach(id=>{const btn=$(id);if(btn)btn.disabled=!visibleRows});
+  const modifiedBtn=$('ext-settings-first-modified');if(modifiedBtn)modifiedBtn.disabled=!extensionSettingVisibleRows().some(row=>row.dataset.extSettingModified==='1');
+  const errorBtn=$('ext-settings-first-error');if(errorBtn)errorBtn.disabled=!extensionSettingVisibleRows().some(row=>row.classList.contains('invalid')||row.querySelector('[aria-invalid="true"],.ext-setting-error:not(:empty)'));
+  const resetBtn=$('ext-settings-reset-visible');if(resetBtn)resetBtn.disabled=!extensionSettingVisibleRows().some(row=>row.dataset.extSettingModified==='1'&&!row.classList.contains('scope-readonly'));
 }
 function extensionSettingsQuery(){
   const raw=(($('settings-search')||{}).value||'').trim();
@@ -18555,6 +18616,9 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       const defaultSource=extensionSettingDefaultSourceText(schema,displayName||extId);
       const shortKey=key.split('.').pop()||key;
       const row=document.createElement('div');row.className='ext-setting-row settings-field';
+      row.tabIndex=-1;
+      row.setAttribute('role','group');
+      row.setAttribute('aria-label',headerLabel+' '+key);
       if(!workspaceWritable)row.classList.add('scope-readonly');
       row.dataset.extSettingKey=key;
       row.dataset.extSettingOrder=String(inner.children.length);
@@ -18862,8 +18926,21 @@ async function renderExtensionSettings(){
   };
   const count=document.createElement('span');count.className='ext-settings-count';count.id='ext-settings-filter-count';count.textContent='0 / 0';
   const activeFilters=document.createElement('div');activeFilters.className='ext-settings-active-filters';activeFilters.id='ext-settings-active-filters';
+  const resultSummary=document.createElement('div');resultSummary.className='ext-settings-result-summary';resultSummary.id='ext-settings-result-summary';
+  const resultActions=document.createElement('div');resultActions.className='ext-settings-filter-actions';resultActions.id='ext-settings-filter-actions';
+  const addResultAction=(id,label,title,handler)=>{
+    const btn=document.createElement('button');btn.type='button';btn.id=id;btn.textContent=label;btn.title=title;btn.onclick=handler;resultActions.appendChild(btn);return btn;
+  };
+  addResultAction('ext-settings-prev-result','Previous','Focus previous visible extension setting',()=>extensionSettingFocusVisibleRow(-1));
+  addResultAction('ext-settings-next-result','Next','Focus next visible extension setting',()=>extensionSettingFocusVisibleRow(1));
+  addResultAction('ext-settings-first-modified','First Modified','Focus first visible modified extension setting',()=>extensionSettingFocusFirstModifiedSetting());
+  addResultAction('ext-settings-first-error','First Error','Focus first visible invalid extension setting',()=>extensionSettingFocusFirstInvalidSetting());
+  addResultAction('ext-settings-reset-visible','Reset Visible Modified','Reset modified extension settings currently visible after filtering',async()=>{
+    const count=await extensionSettingResetVisibleModifiedSettings();
+    if(count)showToast('Reset '+count+' visible modified extension setting'+(count===1?'':'s'),'info');
+  });
   const emptyState=document.createElement('div');emptyState.className='ext-settings-empty';emptyState.id='ext-settings-empty';
-  filter.appendChild(categorySelect);filter.appendChild(scopeSelect);filter.appendChild(targetSelect);filter.appendChild(modifiedLabel);filter.appendChild(hiddenLabel);filter.appendChild(filterButton);filter.appendChild(clearButton);filter.appendChild(count);filter.appendChild(filterMenu);filter.appendChild(activeFilters);filter.appendChild(emptyState);
+  filter.appendChild(categorySelect);filter.appendChild(scopeSelect);filter.appendChild(targetSelect);filter.appendChild(modifiedLabel);filter.appendChild(hiddenLabel);filter.appendChild(filterButton);filter.appendChild(clearButton);filter.appendChild(count);filter.appendChild(filterMenu);filter.appendChild(activeFilters);filter.appendChild(resultSummary);filter.appendChild(resultActions);filter.appendChild(emptyState);
   fragment.appendChild(filter);
   const seenCategories=new Set();
   const orderedConfigs=configs.slice().sort((a,b)=>{
@@ -18973,6 +19050,9 @@ async function renderExtensionSettings(){
         ?extensionSettingValueForTarget(scopedValues,targetName,defaultVal)
         :(Object.prototype.hasOwnProperty.call(valueMap,key)?valueMap[key]:defaultVal);
       const row=document.createElement('div');row.className='ext-setting-row settings-field';row.dataset.extSettingKey=key;
+      row.tabIndex=-1;
+      row.setAttribute('role','group');
+      row.setAttribute('aria-label',headerLabel+' '+key);
       if(isHiddenSetting)row.classList.add('hidden-setting');
       if(hiddenEditable)row.classList.add('hidden-editable');
       row.dataset.extSettingOrder=String(inner.children.length);
@@ -19199,6 +19279,16 @@ async function renderExtensionSettings(){
   targetSelect.onchange=applyExtensionSettingsFilter;
   modifiedBox.onchange=applyExtensionSettingsFilter;
   hiddenBox.onchange=applyExtensionSettingsFilter;
+  const settingsSearch=$('settings-search');
+  if(settingsSearch&&!settingsSearch.dataset.extSettingsNavigation){
+    settingsSearch.dataset.extSettingsNavigation='1';
+    settingsSearch.addEventListener('keydown',ev=>{
+      if(ev.key==='Enter'&&!ev.altKey&&!ev.ctrlKey&&!ev.metaKey){
+        ev.preventDefault();
+        extensionSettingFocusVisibleRow(ev.shiftKey?-1:1);
+      }
+    });
+  }
   applyExtensionSettingsFilter();
 }
 
