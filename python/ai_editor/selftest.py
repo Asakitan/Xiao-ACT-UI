@@ -16997,9 +16997,22 @@ const encoder = new TextEncoder();
 const files = new Map([
   ['/hello.txt', encoder.encode('from-selfmem')],
 ]);
+const dirs = new Set(['/']);
+const providerEvents = [];
+const watchLog = [];
 
 function key(uri) {
   return uri && uri.path ? uri.path : '/';
+}
+
+function parentKey(name) {
+  if (!name || name === '/') return '/';
+  const idx = name.lastIndexOf('/');
+  return idx <= 0 ? '/' : name.slice(0, idx);
+}
+
+function baseName(name) {
+  return String(name || '/').replace(/\/+$/, '').split('/').pop() || '';
 }
 
 function bytes(value) {
@@ -17009,43 +17022,110 @@ function bytes(value) {
 }
 
 async function activate(context) {
+  const fileEmitter = new vscode.EventEmitter();
+  fileEmitter.event(events => {
+    for (const event of Array.isArray(events) ? events : [events]) {
+      providerEvents.push([
+        event.uri && event.uri.toString(),
+        event.type,
+      ]);
+    }
+  });
   const provider = {
-    watch() {
-      return new vscode.Disposable(() => {});
+    onDidChangeFile: fileEmitter.event,
+    watch(uri, options) {
+      watchLog.push([
+        uri && uri.toString(),
+        !!(options && options.recursive),
+        Array.isArray(options && options.excludes)
+          ? options.excludes.slice()
+          : [],
+      ]);
+      return new vscode.Disposable(() => {
+        watchLog.push(['disposed', uri && uri.toString()]);
+      });
     },
     stat(uri) {
       const name = key(uri);
       if (name === '/') {
         return { type: vscode.FileType.Directory, ctime: 1, mtime: 1, size: 0 };
       }
+      if (dirs.has(name)) {
+        return { type: vscode.FileType.Directory, ctime: 1, mtime: 1, size: 0 };
+      }
       const data = files.get(name);
-      if (!data) throw new Error('missing: ' + name);
+      if (!data) throw vscode.FileSystemError.FileNotFound(uri);
       return { type: vscode.FileType.File, ctime: 1, mtime: 2, size: data.length };
     },
     readDirectory(uri) {
-      if (key(uri) !== '/') return [];
-      return [...files.keys()].map(name => [
-        name.replace(/^\//, ''),
-        vscode.FileType.File,
-      ]);
+      const root = key(uri).replace(/\/+$/, '') || '/';
+      if (!dirs.has(root)) throw vscode.FileSystemError.FileNotFound(uri);
+      const rows = [];
+      for (const dir of dirs) {
+        if (dir !== root && parentKey(dir) === root) {
+          rows.push([baseName(dir), vscode.FileType.Directory]);
+        }
+      }
+      for (const name of files.keys()) {
+        if (parentKey(name) === root) {
+          rows.push([baseName(name), vscode.FileType.File]);
+        }
+      }
+      return rows.sort((a, b) => a[0].localeCompare(b[0]));
     },
     readFile(uri) {
       const data = files.get(key(uri));
-      if (!data) throw new Error('missing: ' + key(uri));
+      if (!data) throw vscode.FileSystemError.FileNotFound(uri);
       return data;
     },
     writeFile(uri, content) {
-      files.set(key(uri), bytes(content));
+      const name = key(uri);
+      const parent = parentKey(name);
+      if (!dirs.has(parent)) throw vscode.FileSystemError.FileNotFound(parent);
+      const type = files.has(name)
+        ? vscode.FileChangeType.Changed
+        : vscode.FileChangeType.Created;
+      files.set(name, bytes(content));
+      fileEmitter.fire([{ uri, type }]);
     },
-    createDirectory(uri) {},
-    delete(uri) {
-      files.delete(key(uri));
+    createDirectory(uri) {
+      const name = key(uri).replace(/\/+$/, '') || '/';
+      const parent = parentKey(name);
+      if (name !== '/' && !dirs.has(parent)) {
+        throw vscode.FileSystemError.FileNotFound(parent);
+      }
+      dirs.add(name);
+      fileEmitter.fire([{ uri, type: vscode.FileChangeType.Created }]);
     },
-    rename(oldUri, newUri) {
+    delete(uri, options) {
+      const name = key(uri);
+      if (files.delete(name)) {
+        fileEmitter.fire([{ uri, type: vscode.FileChangeType.Deleted }]);
+        return;
+      }
+      if (!dirs.has(name)) throw vscode.FileSystemError.FileNotFound(uri);
+      const children = [...files.keys()].filter(child => child.startsWith(name + '/'));
+      const childDirs = [...dirs].filter(child => child !== name && child.startsWith(name + '/'));
+      if ((children.length || childDirs.length) && !(options && options.recursive)) {
+        throw vscode.FileSystemError.NoPermissions(uri);
+      }
+      for (const child of children) files.delete(child);
+      for (const child of childDirs) dirs.delete(child);
+      if (name !== '/') dirs.delete(name);
+      fileEmitter.fire([{ uri, type: vscode.FileChangeType.Deleted }]);
+    },
+    rename(oldUri, newUri, options) {
       const data = files.get(key(oldUri));
-      if (!data) throw new Error('missing: ' + key(oldUri));
+      if (!data) throw vscode.FileSystemError.FileNotFound(oldUri);
+      if (files.has(key(newUri)) && !(options && options.overwrite)) {
+        throw vscode.FileSystemError.FileExists(newUri);
+      }
       files.set(key(newUri), data);
       files.delete(key(oldUri));
+      fileEmitter.fire([
+        { uri: oldUri, type: vscode.FileChangeType.Deleted },
+        { uri: newUri, type: vscode.FileChangeType.Created },
+      ]);
     },
   };
   context.subscriptions.push(vscode.workspace.registerFileSystemProvider(
@@ -17053,6 +17133,42 @@ async function activate(context) {
     provider,
     { isCaseSensitive: true },
   ));
+  let duplicateRegisterError = '';
+  try {
+    vscode.workspace.registerFileSystemProvider('selfmem', provider);
+  } catch (error) {
+    duplicateRegisterError = String(error && error.message || error);
+  }
+  const readOnlyProvider = {
+    stat(uri) {
+      if (key(uri) === '/' || key(uri) === '/readonly.txt') {
+        return {
+          type: key(uri) === '/' ? vscode.FileType.Directory : vscode.FileType.File,
+          ctime: 1,
+          mtime: 1,
+          size: key(uri) === '/' ? 0 : 8,
+        };
+      }
+      throw vscode.FileSystemError.FileNotFound(uri);
+    },
+    readDirectory() { return [['readonly.txt', vscode.FileType.File]]; },
+    readFile() { return encoder.encode('readonly'); },
+    writeFile() { throw new Error('readonly provider write should not be called'); },
+    createDirectory() { throw new Error('readonly provider create should not be called'); },
+    delete() { throw new Error('readonly provider delete should not be called'); },
+    rename() { throw new Error('readonly provider rename should not be called'); },
+  };
+  context.subscriptions.push(vscode.workspace.registerFileSystemProvider(
+    'selfro',
+    readOnlyProvider,
+    { isReadonly: { value: 'Read only test filesystem' } },
+  ));
+  vscode.commands.registerCommand('selftest.node.fsProviderInternals', () => ({
+    duplicateRegisterError,
+    providerEvents: providerEvents.slice(),
+    watchLog: watchLog.slice(),
+    fileChangeType: vscode.FileChangeType,
+  }));
   return {
     name: 'nodeFileSystemApi',
     extensionId: context.extension && context.extension.id,
@@ -18516,25 +18632,67 @@ async function activate(context) {
   vscode.commands.registerCommand('selftest.node.fileSystemActivationProbe', async () => {
     const decoder = new TextDecoder();
     const encoder = new TextEncoder();
+    async function fsErrorCode(promiseFactory) {
+      try {
+        await promiseFactory();
+        return 'ok';
+      } catch (error) {
+        return error && error.code ? error.code : String(error && error.message || error);
+      }
+    }
     const fsExt = vscode.extensions.getExtension('selftest.node-filesystem');
     const beforeActive = fsExt && fsExt.isActive === false;
     const rootUri = vscode.Uri.parse('selfmem:/');
     const helloUri = vscode.Uri.parse('selfmem:/hello.txt');
     const createdUri = vscode.Uri.parse('selfmem:/created.txt');
     const renamedUri = vscode.Uri.parse('selfmem:/renamed.txt');
+    const nestedUri = vscode.Uri.parse('selfmem:/folder/deep/nested.txt');
+    const selfMemFromFileUri = vscode.Uri.parse('selfmem:/from-file.txt');
+    const crossRenameSourceUri = vscode.Uri.parse('selfmem:/cross-rename.txt');
+    const selfRoUri = vscode.Uri.parse('selfro:/readonly.txt');
+    const fileCopyUri = vscode.Uri.joinPath(context.extensionUri, 'selfmem-copy.txt');
+    const localSourceUri = vscode.Uri.joinPath(context.extensionUri, 'local-source.txt');
+    const crossRenameTargetUri = vscode.Uri.joinPath(context.extensionUri, 'selfmem-renamed-to-file.txt');
     const helloDoc = await vscode.workspace.openTextDocument(helloUri);
     const helloDocText = helloDoc.getText();
     const fsExtAfter = vscode.extensions.getExtension('selftest.node-filesystem');
     const afterActive = fsExtAfter && fsExtAfter.isActive === true;
     const helloText = decoder.decode(await vscode.workspace.fs.readFile(helloUri));
+    const safeCopyBytes = await vscode.workspace.fs.readFile(helloUri);
+    safeCopyBytes[0] = 'X'.charCodeAt(0);
+    const safeCopyText = decoder.decode(await vscode.workspace.fs.readFile(helloUri));
     await vscode.workspace.fs.writeFile(createdUri, encoder.encode('created-data'));
     const createdText = decoder.decode(await vscode.workspace.fs.readFile(createdUri));
     const createdStat = await vscode.workspace.fs.stat(createdUri);
+    await vscode.workspace.fs.writeFile(nestedUri, encoder.encode('nested-data'));
+    const nestedText = decoder.decode(await vscode.workspace.fs.readFile(nestedUri));
+    const nestedParentEntries = await vscode.workspace.fs.readDirectory(vscode.Uri.parse('selfmem:/folder'));
+    await vscode.workspace.fs.delete(fileCopyUri).catch(() => {});
+    await vscode.workspace.fs.copy(helloUri, fileCopyUri, { overwrite: true });
+    const fileCopyText = decoder.decode(await vscode.workspace.fs.readFile(fileCopyUri));
+    await vscode.workspace.fs.writeFile(localSourceUri, encoder.encode('local-source'));
+    await vscode.workspace.fs.copy(localSourceUri, selfMemFromFileUri, { overwrite: true });
+    const selfMemFromFileText = decoder.decode(await vscode.workspace.fs.readFile(selfMemFromFileUri));
+    await vscode.workspace.fs.writeFile(crossRenameSourceUri, encoder.encode('cross-rename'));
+    await vscode.workspace.fs.delete(crossRenameTargetUri).catch(() => {});
+    await vscode.workspace.fs.rename(crossRenameSourceUri, crossRenameTargetUri, { overwrite: true });
+    const crossRenameText = decoder.decode(await vscode.workspace.fs.readFile(crossRenameTargetUri));
+    const crossRenameSourceCode = await fsErrorCode(
+      () => vscode.workspace.fs.stat(crossRenameSourceUri));
+    const readonlyText = decoder.decode(await vscode.workspace.fs.readFile(selfRoUri));
+    const readonlyWriteCode = await fsErrorCode(
+      () => vscode.workspace.fs.writeFile(selfRoUri, encoder.encode('blocked')));
+    const readonlyDeleteCode = await fsErrorCode(
+      () => vscode.workspace.fs.delete(selfRoUri));
+    const writableSelfMem = vscode.workspace.fs.isWritableFileSystem('selfmem');
+    const writableSelfRo = vscode.workspace.fs.isWritableFileSystem('selfro');
     const beforeRename = await vscode.workspace.fs.readDirectory(rootUri);
     await vscode.workspace.fs.rename(createdUri, renamedUri, { overwrite: true });
     const renamedText = decoder.decode(await vscode.workspace.fs.readFile(renamedUri));
     await vscode.workspace.fs.delete(renamedUri);
     const afterDelete = await vscode.workspace.fs.readDirectory(rootUri);
+    const providerInternals = await vscode.commands.executeCommand(
+      'selftest.node.fsProviderInternals');
     return {
       beforeActive,
       afterActive,
@@ -18542,11 +18700,24 @@ async function activate(context) {
       helloDocText,
       helloDocDirty: helloDoc.isDirty,
       helloDocFileName: helloDoc.fileName,
+      safeCopyText,
       createdText,
       createdType: createdStat.type,
       beforeRename: beforeRename.map(([name]) => name).sort(),
       renamedText,
       afterDelete: afterDelete.map(([name]) => name).sort(),
+      nestedText,
+      nestedParentEntries: nestedParentEntries.map(([name, type]) => [name, type]).sort(),
+      fileCopyText,
+      selfMemFromFileText,
+      crossRenameText,
+      crossRenameSourceCode,
+      readonlyText,
+      readonlyWriteCode,
+      readonlyDeleteCode,
+      writableSelfMem,
+      writableSelfRo,
+      providerInternals,
     };
   });
   vscode.commands.registerCommand('selftest.node.uriHandlerProbe', async () => {
@@ -23629,15 +23800,58 @@ module.exports = { activate, deactivate };
                        and node_file_system_probe.get("helloDocDirty") is False
                        and node_file_system_probe.get("helloDocFileName")
                        == "selfmem:/hello.txt"
+                       and node_file_system_probe.get("safeCopyText")
+                       == "from-selfmem"
                        and node_file_system_probe.get("createdText")
                        == "created-data"
                        and node_file_system_probe.get("createdType") == 1
+                       and node_file_system_probe.get("nestedText")
+                       == "nested-data"
+                       and ["deep", 2] in node_file_system_probe.get(
+                           "nestedParentEntries", [])
+                       and node_file_system_probe.get("fileCopyText")
+                       == "from-selfmem"
+                       and node_file_system_probe.get("selfMemFromFileText")
+                       == "local-source"
+                       and node_file_system_probe.get("crossRenameText")
+                       == "cross-rename"
+                       and node_file_system_probe.get(
+                           "crossRenameSourceCode") == "FileNotFound"
+                       and node_file_system_probe.get("readonlyText")
+                       == "readonly"
+                       and node_file_system_probe.get(
+                           "readonlyWriteCode") == "NoPermissions"
+                       and node_file_system_probe.get(
+                           "readonlyDeleteCode") == "NoPermissions"
+                       and node_file_system_probe.get("writableSelfMem")
+                       is True
+                       and node_file_system_probe.get("writableSelfRo")
+                       is False
                        and node_file_system_probe.get("renamedText")
                        == "created-data"
                        and node_file_system_probe.get("beforeRename")
-                       == ["created.txt", "hello.txt"]
+                       == ["created.txt", "folder", "from-file.txt",
+                           "hello.txt"]
                        and node_file_system_probe.get("afterDelete")
-                       == ["hello.txt"],
+                       == ["folder", "from-file.txt", "hello.txt"]
+                       and "already registered" in node_file_system_probe
+                       .get("providerInternals", {})
+                       .get("duplicateRegisterError", "")
+                       and node_file_system_probe.get(
+                           "providerInternals", {}).get("fileChangeType")
+                       == {"Changed": 1, "Created": 2, "Deleted": 3}
+                       and any(
+                           event[0] == "selfmem:/created.txt"
+                           and event[1] == 2
+                           for event in node_file_system_probe.get(
+                               "providerInternals", {})
+                           .get("providerEvents", []))
+                       and any(
+                           event[0] == "selfmem:/renamed.txt"
+                           and event[1] == 3
+                           for event in node_file_system_probe.get(
+                               "providerInternals", {})
+                           .get("providerEvents", [])),
                        json.dumps(node_file_system_probe,
                                    ensure_ascii=False))
                 _check("node host activates URI handlers dynamically",
