@@ -4676,6 +4676,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function focusAssistantActionCarousel(kind)" in html
            and "function toggleAssistantActionCarouselFocus(kind)" in html
            and "function assistantActionTrayCanNavigate(kind)" in html
+           and "function assistantHasActionCarousel(kind)" in html
+           and "function assistantHandleInputPartShortcut(e)" in html
            and "function assistantActionTrayToggleExpanded(key)" in html
            and "function assistantActionTrayShouldIgnoreNavigationTarget(target)" in html
             and "function renderAssistantActionCarousel(container,kind,items)" in html
@@ -4720,7 +4722,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "window.navigateAssistantQuestionCarouselNext=()=>{if(!assistantActionTrayCanNavigate('questionCarousel'))return false;assistantActionTrayNavigate('questionCarousel',1);return true;};" in html
            and "window.navigateAssistantConfirmationCarouselPrevious=()=>{if(!assistantActionTrayCanNavigate('confirmation'))return false;assistantActionTrayNavigate('confirmation',-1);return true;};" in html
            and "window.navigateAssistantConfirmationCarouselNext=()=>{if(!assistantActionTrayCanNavigate('confirmation'))return false;assistantActionTrayNavigate('confirmation',1);return true;};" in html
-           and "window.clearAssistantPendingActionTray=(kind)=>{assistantClearPendingActionTray(kind?{kind:String(kind)}:{});return true;};" in html)
+           and "window.clearAssistantPendingActionTray=(kind)=>{assistantClearPendingActionTray(kind?{kind:String(kind)}:{});return true;};" in html
+           and "if(assistantHandleInputPartShortcut(e))return;" in html
+           and "if(primary&&e.shiftKey&&!e.altKey&&lower==='a')" in html
+           and "if(e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey&&lower==='p')" in html
+           and "if(e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey&&lower==='n')" in html)
     _check("frontend Assistant applies native response text edits and file tree actions",
            "chat-response-summary" in html
            and "chat-inline-actions" in html

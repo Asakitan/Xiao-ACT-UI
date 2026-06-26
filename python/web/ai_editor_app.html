@@ -6119,6 +6119,7 @@ function assistantActionTrayNavigate(kind,delta){
   const next=(index+delta+items.length)%items.length;
   assistantActionTraySetActiveKey(items[next]);
   syncAssistantActionTray();
+  focusAssistantActionCarousel(kind);
 }
 function assistantActionTraySetActive(kind,index){
   const items=assistantActionTrayItemsByKind(kind);
@@ -6126,6 +6127,7 @@ function assistantActionTraySetActive(kind,index){
   const clamped=Math.max(0,Math.min(index,items.length-1));
   assistantActionTraySetActiveKey(items[clamped]);
   syncAssistantActionTray();
+  focusAssistantActionCarousel(kind);
 }
 function assistantActionTrayToggleExpanded(key){
   _assistantActionTrayExpandedKey=_assistantActionTrayExpandedKey===key?'':key;
@@ -6213,6 +6215,51 @@ function toggleAssistantActionCarouselFocus(kind){
 }
 function assistantActionTrayCanNavigate(kind){
   return assistantActionTrayItemsByKind(kind).length>1;
+}
+function assistantHasActionCarousel(kind){
+  return assistantActionTrayItemsByKind(kind).length>0;
+}
+function assistantHandleInputPartShortcut(e){
+  const key=String(e.key||'');
+  const lower=key.length===1?key.toLowerCase():key;
+  const primary=!!(e.ctrlKey||e.metaKey);
+  if(primary&&e.shiftKey&&!e.altKey&&lower==='a'){
+    if(assistantHasActionCarousel('questionCarousel')){
+      e.preventDefault();
+      toggleAssistantActionCarouselFocus('questionCarousel');
+      return true;
+    }
+    if(assistantHasActionCarousel('confirmation')){
+      e.preventDefault();
+      toggleAssistantActionCarouselFocus('confirmation');
+      return true;
+    }
+  }
+  if(e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey&&lower==='p'){
+    if(assistantActionTrayHasFocus('questionCarousel')&&assistantActionTrayCanNavigate('questionCarousel')){
+      e.preventDefault();
+      assistantActionTrayNavigate('questionCarousel',-1);
+      return true;
+    }
+    if(assistantActionTrayHasFocus('confirmation')&&assistantActionTrayCanNavigate('confirmation')){
+      e.preventDefault();
+      assistantActionTrayNavigate('confirmation',-1);
+      return true;
+    }
+  }
+  if(e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey&&lower==='n'){
+    if(assistantActionTrayHasFocus('questionCarousel')&&assistantActionTrayCanNavigate('questionCarousel')){
+      e.preventDefault();
+      assistantActionTrayNavigate('questionCarousel',1);
+      return true;
+    }
+    if(assistantActionTrayHasFocus('confirmation')&&assistantActionTrayCanNavigate('confirmation')){
+      e.preventDefault();
+      assistantActionTrayNavigate('confirmation',1);
+      return true;
+    }
+  }
+  return false;
 }
 function assistantActionTrayRootLabel(kind,count){
   if(kind==='questionCarousel')return count===1?'Pending Assistant questions':'Pending Assistant question carousel';
@@ -24874,6 +24921,7 @@ const _GLOBAL_SHORTCUT_MAP={
   'Ctrl+L':()=>clearChat(),
 };
 document.addEventListener('keydown',e=>{
+  if(assistantHandleInputPartShortcut(e))return;
   if(e.key==='P'&&e.ctrlKey&&e.shiftKey){e.preventDefault();openCommandPalette()}
   if(e.key==='t'&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();openWorkspaceSymbolPicker();return}
   if((e.key==='o'||e.key==='O')&&e.ctrlKey&&e.shiftKey&&!e.altKey){e.preventDefault();openDocumentSymbolPicker();return}
