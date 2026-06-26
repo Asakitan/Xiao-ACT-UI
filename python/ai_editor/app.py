@@ -5024,6 +5024,56 @@ class AIEditorAPI:
         suffix = os.path.splitext(urlparse(str(uri or "")).path)[1].lower()
         return _EDITOR_LANGUAGE_BY_EXT.get(suffix, "plaintext")
 
+    @staticmethod
+    def _chat_resource_type(mime_type: str, has_content: bool, has_blob: bool) -> str:
+        mime = str(mime_type or "").split(";", 1)[0].strip().lower()
+        if mime.startswith("image/"):
+            return "image"
+        if mime.startswith("text/") or mime in {
+                "application/json", "application/ld+json",
+                "application/xml", "application/javascript"}:
+            return "text"
+        if has_blob:
+            return "blob"
+        return "text" if has_content else "blob"
+
+    @staticmethod
+    def _data_uri_resource(uri: str) -> Dict[str, Any]:
+        header, _, body = str(uri or "").partition(",")
+        meta = header[5:] if header.lower().startswith("data:") else ""
+        parts = [p for p in meta.split(";") if p]
+        mime_type = parts[0] if parts and "/" in parts[0] else "text/plain"
+        is_base64 = any(p.lower() == "base64" for p in parts[1:] if p)
+        if is_base64:
+            blob = body.strip()
+            byte_len = 0
+            try:
+                byte_len = len(base64.b64decode(blob.encode("ascii"), validate=False))
+            except Exception:
+                byte_len = 0
+            result: Dict[str, Any] = {
+                "ok": True,
+                "kind": "data",
+                "uri": uri,
+                "mimeType": mime_type,
+                "contentType": AIEditorAPI._chat_resource_type(mime_type, False, True),
+                "blob": blob,
+                "byteLength": byte_len,
+            }
+            if str(mime_type).lower().startswith("image/"):
+                result["imageDataUri"] = uri
+            return result
+        content = unquote(body)
+        return {
+            "ok": True,
+            "kind": "data",
+            "uri": uri,
+            "mimeType": mime_type,
+            "contentType": AIEditorAPI._chat_resource_type(mime_type, True, False),
+            "content": content,
+            "language": AIEditorAPI._language_for_mime_or_uri(mime_type, uri),
+        }
+
     def resolve_chat_resource(self, uri: str) -> Dict:
         """Resolve a Copilot-style chat resource URI for preview/open actions.
 
@@ -5055,6 +5105,8 @@ class AIEditorAPI:
                 "external": True,
                 "label": os.path.basename(parsed.path) or parsed.netloc or text,
             }
+        if scheme == "data":
+            return self._data_uri_resource(text)
         if scheme in {"mcp-resource", "mcp", "ui"}:
             self._ensure_engine()
             if not self._mcp:
@@ -5068,6 +5120,7 @@ class AIEditorAPI:
             if not result.get("ok"):
                 return {"kind": "mcp-resource", **result}
             content = str(result.get("content") or "")
+            blob = str(result.get("blob") or "")
             mime_type = str(result.get("mimeType") or result.get("mime_type") or "")
             content_type = str(result.get("contentType") or "")
             if content and len(content.encode("utf-8", errors="replace")) > _WORKSPACE_FILE_PREVIEW_BYTES:
@@ -5075,6 +5128,15 @@ class AIEditorAPI:
                 content = raw[:_WORKSPACE_FILE_PREVIEW_BYTES].decode(
                     "utf-8", errors="replace")
                 result["truncated"] = True
+            if blob:
+                result["byteLength"] = 0
+                try:
+                    result["byteLength"] = len(base64.b64decode(
+                        blob.encode("ascii"), validate=False))
+                except Exception:
+                    result["byteLength"] = 0
+                if str(mime_type).lower().startswith("image/"):
+                    result["imageDataUri"] = f"data:{mime_type};base64,{blob}"
             result.update({
                 "ok": True,
                 "kind": "mcp-resource",
@@ -5082,7 +5144,8 @@ class AIEditorAPI:
                 "requestedUri": text,
                 "content": content,
                 "mimeType": mime_type or "text/plain",
-                "contentType": content_type or ("text" if content else "blob"),
+                "contentType": content_type or self._chat_resource_type(
+                    mime_type, bool(content), bool(blob)),
                 "language": self._language_for_mime_or_uri(mime_type, str(result.get("uri") or text)),
                 "name": os.path.basename(urlparse(str(result.get("uri") or text)).path) or "MCP Resource",
             })

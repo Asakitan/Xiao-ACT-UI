@@ -2559,12 +2559,28 @@ def test_app_settings_parity() -> None:
             "mimeType": "text/html",
             "text": "<main>selftest resource</main>",
         }]})
+    png_blob = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8"
+        "/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+    mcp_policy_api._mcp._clients["selftest_tools"].add_resource(
+        "ui://widget/pixel.png",
+        lambda uri: {"contents": [{
+            "uri": uri,
+            "mimeType": "image/png",
+            "blob": png_blob,
+        }]})
     resolved_mcp_resource = mcp_policy_api.resolve_chat_resource(
         "mcp-resource://selftest_tools/ui%3A%2F%2Fwidget%2Fselftest.html")
+    resolved_mcp_image = mcp_policy_api.resolve_chat_resource(
+        "mcp-resource://selftest_tools/ui%3A%2F%2Fwidget%2Fpixel.png")
     resolved_ui_resource = mcp_policy_api.resolve_chat_resource(
         "ui://widget/selftest.html")
     resolved_external_resource = mcp_policy_api.resolve_chat_resource(
         "https://example.invalid/widget.html")
+    resolved_data_image = mcp_policy_api.resolve_chat_resource(
+        "data:image/png;base64," + png_blob)
+    resolved_data_text = mcp_policy_api.resolve_chat_resource(
+        "data:text/markdown,%23%20hello")
     missing_mcp_resource = mcp_policy_api.resolve_chat_resource(
         "mcp-resource://missing/ui%3A%2F%2Fwidget%2Fmissing.html")
     _check("MCP chat resource resolver opens already connected resources",
@@ -2574,15 +2590,25 @@ def test_app_settings_parity() -> None:
            and resolved_mcp_resource.get("mimeType") == "text/html"
            and resolved_mcp_resource.get("language") == "html"
            and "selftest resource" in resolved_mcp_resource.get("content", "")
+           and resolved_mcp_image.get("contentType") == "image"
+           and resolved_mcp_image.get("imageDataUri", "").startswith("data:image/png;base64,")
+           and resolved_mcp_image.get("byteLength", 0) > 0
            and resolved_ui_resource.get("ok") is True
            and resolved_ui_resource.get("serverId") == "selftest_tools"
            and resolved_external_resource.get("external") is True
+           and resolved_data_image.get("contentType") == "image"
+           and resolved_data_image.get("imageDataUri", "").startswith("data:image/png;base64,")
+           and resolved_data_text.get("language") == "markdown"
+           and resolved_data_text.get("content") == "# hello"
            and missing_mcp_resource.get("ok") is False
            and "MCP server not found" in missing_mcp_resource.get("error", ""),
            json.dumps({
                "mcp": resolved_mcp_resource,
+               "image": resolved_mcp_image,
                "ui": resolved_ui_resource,
                "external": resolved_external_resource,
+               "dataImage": resolved_data_image,
+               "dataText": resolved_data_text,
                "missing": missing_mcp_resource,
            }, ensure_ascii=False))
 
@@ -4102,6 +4128,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "card.dataset.resourceState='loading';" in html
            and "result.external&&result.uri" in html
            and "result.blob&&!result.content" in html
+           and "function resourceByteLabel(bytes)" in html
+           and "function renderResolvedToolResource(card,result)" in html
+           and "chat-tool-resource-preview" in html
+           and "result.imageDataUri" in html
+           and "Previewed image resource" in html
            and "openInEditor(content,lang);" in html
            and "frame.setAttribute('sandbox','');" in html
            and "Copy tool resource URI" in html

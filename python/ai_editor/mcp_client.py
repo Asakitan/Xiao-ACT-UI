@@ -124,12 +124,13 @@ def _extract_resource_read_result(result: Any, uri: str = "") -> Dict[str, Any]:
             "contents": contents,
         }
     if first.get("blob") is not None:
+        content_type = "image" if mime.lower().startswith("image/") else "blob"
         return {
             "ok": True,
             "uri": resource_uri,
             "blob": str(first.get("blob") or ""),
             "mimeType": mime or "application/octet-stream",
-            "contentType": "blob",
+            "contentType": content_type,
             "contents": contents,
         }
     return {

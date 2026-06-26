@@ -808,10 +808,18 @@ code.inline { background:var(--bg3); padding:1px 3px; border-radius:4px;
 .chat-tool-ui-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:600; }
 .chat-tool-ui-kind { flex:0 0 auto; color:var(--fg-accent); font:10px/1.4 var(--mono); text-transform:uppercase; }
 .chat-tool-ui-desc,.chat-tool-ui-uri { color:var(--fg-dim); font:11px/1.45 var(--mono); overflow-wrap:anywhere; }
+.chat-tool-ui-card[data-resource-state="loading"] { border-color:color-mix(in srgb, var(--fg-accent) 54%, var(--border)); }
+.chat-tool-ui-card[data-resource-state="error"] { border-color:color-mix(in srgb, var(--fg-error) 52%, var(--border)); }
+.chat-tool-ui-card[data-resource-state="ready"] { border-color:color-mix(in srgb, var(--fg-success) 42%, var(--border)); }
 .chat-tool-ui-frame { width:100%; height:180px; border:1px solid var(--border); border-radius:4px; background:var(--bg);
   color-scheme:dark; }
 .chat-tool-ui-preview { margin:0; padding:6px; border-radius:4px; background:var(--bg-code);
   color:var(--fg-code); font:11px/1.45 var(--mono); white-space:pre-wrap; max-height:160px; overflow:auto; }
+.chat-tool-resource-preview { display:flex; flex-direction:column; gap:6px; border:1px solid var(--border);
+  border-radius:4px; padding:6px; background:color-mix(in srgb, var(--bg2) 70%, transparent); }
+.chat-tool-resource-preview img { display:block; max-width:100%; max-height:220px; object-fit:contain;
+  border-radius:4px; background:var(--bg); }
+.chat-tool-resource-meta { color:var(--fg-dim); font:10px/1.45 var(--mono); overflow-wrap:anywhere; }
 .tool-result-raw { margin:0; padding:6px; border-radius:4px; background:transparent; color:var(--fg-dim);
   font:11px/1.45 var(--mono); white-space:pre-wrap; max-height:220px; overflow:auto; }
 
@@ -5644,6 +5652,46 @@ function renderToolResultUi(parent,data){
   return card;
 }
 
+function resourceByteLabel(bytes){
+  const n=Number(bytes);
+  if(!Number.isFinite(n)||n<=0)return '';
+  if(n<1024)return Math.round(n)+' B';
+  if(n<1024*1024)return (n/1024).toFixed(1)+' KB';
+  return (n/1024/1024).toFixed(1)+' MB';
+}
+function renderResolvedToolResource(card,result){
+  if(!card||!result)return null;
+  card.querySelectorAll('.chat-tool-resource-preview').forEach(el=>el.remove());
+  const preview=document.createElement('div');
+  preview.className='chat-tool-resource-preview';
+  preview.setAttribute('role','region');
+  preview.setAttribute('aria-label','Resolved tool resource preview');
+  const mime=String(result.mimeType||result.mime_type||'');
+  const byteLabel=resourceByteLabel(result.byteLength);
+  const meta=document.createElement('div');
+  meta.className='chat-tool-resource-meta';
+  meta.textContent=[result.contentType||'resource',mime,byteLabel,result.uri||result.requestedUri||''].filter(Boolean).join(' · ');
+  if(result.imageDataUri){
+    const img=document.createElement('img');
+    img.src=String(result.imageDataUri);
+    img.alt=String(result.name||result.uri||'Tool resource image');
+    preview.appendChild(img);
+  }else if(result.content!==undefined&&String(result.content||'')){
+    const pre=document.createElement('pre');
+    pre.className='chat-tool-ui-preview';
+    pre.textContent=String(result.content||'');
+    preview.appendChild(pre);
+  }else if(result.blob){
+    const note=document.createElement('div');
+    note.className='chat-tool-resource-meta';
+    note.textContent='Binary resource preview is not available for this mime type.';
+    preview.appendChild(note);
+  }
+  preview.appendChild(meta);
+  card.appendChild(preview);
+  return preview;
+}
+
 async function openToolResourceUri(data,card){
   const uri=String(data&&data.uri||'').trim();
   if(!uri)return null;
@@ -5656,8 +5704,13 @@ async function openToolResourceUri(data,card){
     return result;
   }
   if(card)card.dataset.resourceState='ready';
+  if(card)renderResolvedToolResource(card,result);
   if(result.external&&result.uri){
     try{window.open(result.uri,'_blank','noopener,noreferrer')}catch(_e){}
+    return result;
+  }
+  if(result.imageDataUri){
+    if(typeof showToast==='function')showToast('Previewed image resource','success',1400);
     return result;
   }
   if(result.blob&&!result.content){
