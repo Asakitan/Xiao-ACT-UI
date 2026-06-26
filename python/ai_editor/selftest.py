@@ -8493,7 +8493,7 @@ console.log("extension setting schema helpers ok");
     _check("frontend renders extension activity bar views dynamically",
             "function renderExtensionContainerContent(item)" in html
             and "function renderExtensionTreeView(view)" in html
-            and "function renderExtensionTreeNode(viewId,node,depth,viewVersion,dnd)" in html
+            and "function renderExtensionTreeNode(viewId,node,depth,viewVersion,dnd,posInSet,setSize)" in html
             and "function extensionTreeViewBadgeElement(badge)" in html
             and "titleLabel.textContent=state.title||extensionViewTitle(view)" in html
             and "const viewBadge=extensionTreeViewBadgeElement(state.badge)" in html
@@ -8502,8 +8502,9 @@ console.log("extension setting schema helpers ok");
             and "function extensionTreeIconPathUri(iconPath)" in html
             and "function extensionTreeIconGlyph(node,collapsible)" in html
             and "function extensionTreeItemTitle(node)" in html
-            and "wrap.dataset.contextValue=String(node.contextValue)" in html
-            and "wrap.dataset.resourceUri=String(node.resourceUri)" in html
+            and "function applyExtensionTreeNodeContext(wrap,row,viewId,node,depth,posInSet,setSize)" in html
+            and "wrap.dataset.contextValue=contextValue;" in html
+            and "if(resource)wrap.dataset.resourceUri=resource;" in html
             and "node.accessibilityInformation||{}" in html
             and "node.themeIcon?node.themeIcon:(node?node.iconPath:null)" in html
             and "applyExplorerDecoration(row,label,node)" in html
@@ -16274,6 +16275,36 @@ def test_app_extension_runtime_support() -> None:
                .get("runtimeState", {}).get("dragAndDrop", {}).get("canDrag") is True
                and activity_views.get("selftest.activity.tree", {})
                .get("runtimeState", {}).get("dragAndDrop", {}).get("canDrop") is True)
+        html_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "web", "ai_editor_app.html")
+        with open(html_path, "r", encoding="utf-8") as fh:
+            html = fh.read()
+        _check("frontend activity TreeView exposes VS Code-style item semantics",
+               "function applyExtensionTreeNodeContext(wrap,row,viewId,node,depth,posInSet,setSize)" in html
+               and "wrap.setAttribute('aria-level',String(depth+1));" in html
+               and "wrap.setAttribute('aria-posinset',String(Number(posInSet)+1));" in html
+               and "wrap.setAttribute('aria-setsize',String(Number(setSize)||1));" in html
+               and "['resourceScheme','resourceFilename','resourceExtname','resourceDirname'].forEach(key=>" in html
+               and "row.dataset.viewItem=contextValue;" in html
+               and "function selectExtensionTreeNode(row,wrap)" in html
+               and "node.firstElementChild&&node.firstElementChild.classList" in html)
+        _check("frontend activity TreeView separates inline and context actions",
+               "function extensionTreeActionBuckets(actions)" in html
+               and "const inline=rows.filter(action=>action.inline===true&&!action.submenu);" in html
+               and "const context=rows.filter(action=>action.inline!==true||action.submenu);" in html
+               and "ext-tree-inline-action" in html
+               and "actionBuckets.inline.slice(0,3).forEach(action=>" in html
+               and "showExtensionActionMenu(e.clientX,e.clientY,actionBuckets.context" in html)
+        _check("frontend extension menus expose accessible dynamic metadata",
+               "menu.setAttribute('role','menu');" in html
+               and "menu.setAttribute('aria-label','Extension actions');" in html
+               and "d.setAttribute('role','menuitem');" in html
+               and "d.dataset.command=String(action.command||'');" in html
+               and "d.dataset.submenu=String(action.submenu||'');" in html
+               and "d.dataset.group=group;" in html
+               and "d.setAttribute('aria-disabled',action.disabled&&!subActions.length?'true':'false');" in html
+               and "d.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();d.click()}}" in html)
         activity_tree_welcome = activity_views.get(
             "selftest.activity.tree", {}).get(
                 "runtimeState", {}).get("welcome", [])

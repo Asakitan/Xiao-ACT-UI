@@ -18869,9 +18869,13 @@ function extensionTreeItemTitle(node){
 function showExtensionActionMenu(x,y,actions,runner){
   const menu=$('ctx-menu');if(!menu)return;
   menu.innerHTML='';
+  menu.setAttribute('role','menu');
+  menu.setAttribute('aria-label','Extension actions');
   appendExtensionActionMenuItems(menu,actions,runner,0);
   if(!menu.children.length)return;
   menu.style.display='block';menu.style.left=x+'px';menu.style.top=y+'px';
+  const first=menu.querySelector('.ctx-item:not(.disabled)');
+  if(first)try{first.focus({preventScroll:true})}catch(e){}
 }
 function extensionSubmenuActions(action){
   const items=(action&&Array.isArray(action.submenuActions)&&action.submenuActions.length)
@@ -18896,9 +18900,15 @@ function appendExtensionActionMenuItems(menu,actions,runner,level){
     }
     lastGroup=group;
     const d=document.createElement('div');d.className='ctx-item';
+    d.tabIndex=-1;
+    d.setAttribute('role','menuitem');
+    d.dataset.command=String(action.command||'');
+    d.dataset.submenu=String(action.submenu||'');
+    d.dataset.group=group;
     const subActions=extensionSubmenuActions(action);
     if(subActions.length)d.classList.add('submenu');
     if(action.disabled&&!subActions.length)d.classList.add('disabled');
+    d.setAttribute('aria-disabled',action.disabled&&!subActions.length?'true':'false');
     const label=document.createElement('span');
     label.textContent=action.title||action.command||action.submenu||'Command';
     d.appendChild(label);
@@ -18911,6 +18921,7 @@ function appendExtensionActionMenuItems(menu,actions,runner,level){
       closeExtensionSubmenus(menu,level+1);
       if(!subActions.length)return;
       const sub=document.createElement('div');sub.className='ctx-submenu';sub.dataset.level=String(level+1);
+      sub.setAttribute('role','menu');
       appendExtensionActionMenuItems(sub,subActions,runner,level+1);
       if(!sub.children.length)return;
       document.body.appendChild(sub);
@@ -18923,6 +18934,7 @@ function appendExtensionActionMenuItems(menu,actions,runner,level){
       menu.appendChild(sub);
     };
     d.onclick=()=>{if(subActions.length)return;if(action.disabled)return;menu.style.display='none';closeExtensionSubmenus(menu,0);runner(action)};
+    d.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();d.click()}};
     menu.appendChild(d);
   });
 }
@@ -19109,7 +19121,7 @@ async function loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion,
   const nextVersion=responseVersion||expectedVersion;
   node.children=nodes;node.childrenLoaded=true;node.lazyChildren=false;
   childBox.innerHTML='';
-  nodes.forEach(child=>childBox.appendChild(renderExtensionTreeNode(viewId,child,depth+1,nextVersion,dnd)));
+  nodes.forEach((child,index)=>childBox.appendChild(renderExtensionTreeNode(viewId,child,depth+1,nextVersion,dnd,index,nodes.length)));
   return true;
 }
 function reportExtensionTreeExpanded(viewId,node,expanded){
@@ -19182,6 +19194,57 @@ function focusRevealedExtensionTree(tree){
       target.classList.add('active');
     }
   });
+}
+function extensionTreeResourceContext(node){
+  const raw=node&&node.resourceUri?String(node.resourceUri):'';
+  return raw?_editorResourceContextFromPath(raw):{};
+}
+function applyExtensionTreeNodeContext(wrap,row,viewId,node,depth,posInSet,setSize){
+  const handle=node&&node.handle?String(node.handle):'';
+  const contextValue=node&&node.contextValue?String(node.contextValue):'';
+  const resource=node&&node.resourceUri?String(node.resourceUri):'';
+  const ctx=extensionTreeResourceContext(node);
+  wrap.dataset.viewId=String(viewId||'');
+  wrap.dataset.depth=String(depth);
+  wrap.dataset.handle=handle;
+  wrap.dataset.contextValue=contextValue;
+  wrap.dataset.viewItem=contextValue;
+  if(resource)wrap.dataset.resourceUri=resource;
+  Object.entries(ctx).forEach(([key,value])=>{
+    if(value!==undefined&&value!==null&&value!=='')wrap.dataset[key]=String(value);
+  });
+  wrap.setAttribute('aria-level',String(depth+1));
+  if(posInSet!==undefined)wrap.setAttribute('aria-posinset',String(Number(posInSet)+1));
+  if(setSize!==undefined)wrap.setAttribute('aria-setsize',String(Number(setSize)||1));
+  row.dataset.viewId=wrap.dataset.viewId;
+  row.dataset.handle=handle;
+  row.dataset.contextValue=contextValue;
+  row.dataset.viewItem=contextValue;
+  row.dataset.resourceUri=resource;
+  ['resourceScheme','resourceFilename','resourceExtname','resourceDirname'].forEach(key=>{
+    if(wrap.dataset[key])row.dataset[key]=wrap.dataset[key];
+  });
+}
+function selectExtensionTreeNode(row,wrap){
+  const tree=wrap&&wrap.closest?wrap.closest('[role="tree"]'):null;
+  if(tree){
+    tree.querySelectorAll('.ext-tree-node[aria-selected="true"]').forEach(node=>{
+      if(node!==wrap){
+        node.setAttribute('aria-selected','false');
+        const item=node.firstElementChild&&node.firstElementChild.classList&&node.firstElementChild.classList.contains('sb-item')
+          ?node.firstElementChild:null;
+        if(item)item.classList.remove('active');
+      }
+    });
+  }
+  row.classList.add('active');
+  wrap.setAttribute('aria-selected','true');
+}
+function extensionTreeActionBuckets(actions){
+  const rows=Array.isArray(actions)?actions.filter(Boolean):[];
+  const inline=rows.filter(action=>action.inline===true&&!action.submenu);
+  const context=rows.filter(action=>action.inline!==true||action.submenu);
+  return {inline,context:context.length?context:rows};
 }
 function appendExtensionContainerTitleActions(parent,item){
   if(!parent||!item)return false;
@@ -19271,7 +19334,7 @@ function renderExtensionTreeView(view){
       tree.ondragover=e=>allowExtensionTreeDrop(e,tree.dataset.viewId,dnd);
       tree.ondrop=e=>dropExtensionTreeItems(e,tree.dataset.viewId,null,dnd);
     }
-    nodes.forEach(node=>tree.appendChild(renderExtensionTreeNode(tree.dataset.viewId,node,0,viewVersion,dnd)));
+    nodes.forEach((node,index)=>tree.appendChild(renderExtensionTreeNode(tree.dataset.viewId,node,0,viewVersion,dnd,index,nodes.length)));
     body.appendChild(tree);
     if(state.treeError){
       body.appendChild(extensionTreeStatusRow(-1,extensionTreeErrorText(state.treeError,'Unable to load tree items'),'error',()=>renderExtensionActivityBar()));
@@ -19290,16 +19353,14 @@ function renderExtensionTreeView(view){
   }
   card.appendChild(title);card.appendChild(body);return card;
 }
-function renderExtensionTreeNode(viewId,node,depth,viewVersion,dnd){
+function renderExtensionTreeNode(viewId,node,depth,viewVersion,dnd,posInSet,setSize){
   const wrap=document.createElement('div');wrap.className='ext-tree-node';wrap.setAttribute('role','treeitem');
-  if(node.handle)wrap.dataset.handle=String(node.handle);
-  if(node.contextValue)wrap.dataset.contextValue=String(node.contextValue);
-  if(node.resourceUri)wrap.dataset.resourceUri=String(node.resourceUri);
   if(node.revealed)wrap.dataset.revealed='1';
   if(node.focused)wrap.dataset.focused='1';
   node.refreshVersion=Number(viewVersion||node.refreshVersion||0)||0;
   const row=document.createElement('div');row.className='sb-item';row.style.cssText='display:flex;align-items:center;gap:4px;padding:3px 0 3px '+(depth*12)+'px;min-height:22px';
   row.tabIndex=0;row.setAttribute('role','button');
+  applyExtensionTreeNodeContext(wrap,row,viewId,node,depth,posInSet,setSize);
   if(dnd&&dnd.canDrag&&node.handle){
     row.draggable=true;
     row.ondragstart=e=>startExtensionTreeDrag(e,viewId,node,dnd);
@@ -19347,18 +19408,30 @@ function renderExtensionTreeNode(viewId,node,depth,viewVersion,dnd){
   const desc=document.createElement('span');desc.style.cssText='color:var(--fg-dim);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:42%';
   desc.textContent=node.description||'';
   const actions=Array.isArray(node.actions)?node.actions:[];
+  const actionBuckets=extensionTreeActionBuckets(actions);
   row.appendChild(icon);row.appendChild(label);if(node.description)row.appendChild(desc);
-  if(actions.length){
+  actionBuckets.inline.slice(0,3).forEach(action=>{
+    const btn=document.createElement('button');btn.type='button';btn.className='icon-btn ext-tree-inline-action';
+    btn.style.cssText='width:18px;height:18px;flex:0 0 18px;border:0;background:transparent;color:var(--fg-dim);padding:0';
+    btn.textContent=extensionActionGlyph(action);
+    btn.title=action.title||action.command||'Command';
+    btn.disabled=!!action.disabled;
+    btn.dataset.command=String(action.command||'');
+    btn.onclick=e=>{e.stopPropagation();runExtensionTreeItemAction(viewId,node,action)};
+    row.appendChild(btn);
+  });
+  if(actionBuckets.context.length){
     const actionBtn=document.createElement('button');actionBtn.type='button';actionBtn.className='icon-btn';
     actionBtn.style.cssText='width:18px;height:18px;flex:0 0 18px;border:0;background:transparent;color:var(--fg-dim);padding:0';
     actionBtn.textContent='...';actionBtn.title='Tree item actions';
-    actionBtn.onclick=e=>{e.stopPropagation();showExtensionActionMenu(e.clientX,e.clientY,actions,action=>runExtensionTreeItemAction(viewId,node,action))};
+    actionBtn.setAttribute('aria-haspopup','menu');
+    actionBtn.onclick=e=>{e.stopPropagation();showExtensionActionMenu(e.clientX,e.clientY,actionBuckets.context,action=>runExtensionTreeItemAction(viewId,node,action))};
     row.appendChild(actionBtn);
   }
   applyExplorerDecoration(row,label,node);
   const childBox=document.createElement('div');childBox.style.display=collapsible===2?'':'none';
   if(collapsible)wrap.setAttribute('aria-expanded',collapsible===2?'true':'false');
-  children.forEach(child=>childBox.appendChild(renderExtensionTreeNode(viewId,child,depth+1,viewVersion,dnd)));
+  children.forEach((child,index)=>childBox.appendChild(renderExtensionTreeNode(viewId,child,depth+1,viewVersion,dnd,index,children.length)));
   const setOpen=async (open,notify=true)=>{
     if(open&&collapsible&&node.lazyChildren&&!node.childrenLoaded){
       const loaded=await loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion,dnd);
@@ -19367,7 +19440,7 @@ function renderExtensionTreeNode(viewId,node,depth,viewVersion,dnd){
     childBox.style.display=open?'':'none';twist.textContent=open?'▾':'▸';wrap.setAttribute('aria-expanded',open?'true':'false');
     if(collapsible&&notify)reportExtensionTreeExpanded(viewId,node,open);
   };
-  const selectNode=()=>{row.classList.add('active');wrap.setAttribute('aria-selected','true');if(viewId&&node.handle)call('select_extension_tree_item',viewId,node.handle)};
+  const selectNode=()=>{selectExtensionTreeNode(row,wrap);if(viewId&&node.handle)call('select_extension_tree_item',viewId,node.handle)};
   void setOpen(collapsible===2,false);
   twist.onclick=e=>{e.stopPropagation();if(collapsible)void setOpen(childBox.style.display==='none')};
   const activateNode=()=>{
@@ -19385,10 +19458,10 @@ function renderExtensionTreeNode(viewId,node,depth,viewVersion,dnd){
     else if(e.key==='ArrowLeft'&&collapsible&&childBox.style.display!=='none'){e.preventDefault();void setOpen(false)}
   };
   row.oncontextmenu=e=>{
-    if(!actions.length)return;
+    if(!actionBuckets.context.length)return;
     e.preventDefault();e.stopPropagation();
     selectNode();
-    showExtensionActionMenu(e.clientX,e.clientY,actions,action=>runExtensionTreeItemAction(viewId,node,action));
+    showExtensionActionMenu(e.clientX,e.clientY,actionBuckets.context,action=>runExtensionTreeItemAction(viewId,node,action));
   };
   wrap.appendChild(row);wrap.appendChild(childBox);return wrap;
 }
