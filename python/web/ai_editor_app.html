@@ -762,6 +762,12 @@ code.inline { background:var(--bg3); padding:1px 3px; border-radius:4px;
 .confirm-title { display:flex; align-items:center; gap:6px; min-width:0; color:var(--fg); }
 .confirm-title .tool-name { color:var(--fg-tool); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .confirm-detail { margin-top:3px; color:var(--fg-dim); font:11px/1.45 var(--mono); white-space:pre-wrap; max-height:96px; overflow:auto; }
+.confirm-decision { margin-top:5px; display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+  color:var(--fg-dim); font:11px/1.35 var(--sans); }
+.confirm-decision .confirm-result { font-weight:600; }
+.confirm-decision .confirm-reason { font-family:var(--mono); }
+.confirm-bar[data-state="allowed"] .confirm-result { color:var(--fg-success); }
+.confirm-bar[data-state="denied"] .confirm-result { color:var(--fg-error); }
 .confirm-actions { display:inline-flex; align-items:center; gap:6px; }
 .confirm-btn { padding:4px 12px; border-radius:4px; cursor:pointer; font-size:11px; font-weight:600; }
 .confirm-allow { background:transparent; color:var(--fg-success); border:1px solid var(--fg-success); }
@@ -1421,14 +1427,17 @@ pre.code-block { overflow:visible; }
 .msg-footer .mf-separator { width:1px; height:14px; background:var(--border); opacity:.7; }
 
 /* ── Follow-up suggestions ── */
-.followups { display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; align-items:center; }
+.followups { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; align-items:center;
+  padding-top:6px; border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent); }
 .followup-btn { display:inline-flex; align-items:center; gap:5px; max-width:100%;
-  padding:4px 8px; border-radius:999px; font-size:12px; cursor:pointer;
+  min-height:24px; padding:3px 8px; border-radius:5px; font-size:12px; cursor:pointer;
   background:transparent; color:var(--fg-accent); border:1px solid color-mix(in srgb, var(--border-focus) 40%, var(--border));
   transition:background .15s,border-color .15s,color .15s; text-align:left; }
 .followup-btn:hover,.followup-btn:focus,.followup-btn[data-active="true"] { background:var(--bg-hover); border-color:var(--border-focus); outline:none; }
 .followup-btn .followup-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .followup-btn .followup-kind { color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; }
+.followup-btn .followup-source { color:var(--fg-dim); font:10px var(--mono); border-left:1px solid var(--border);
+  padding-left:5px; max-width:88px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
 /* ── File attachments ── */
 .attach-area { display:flex; flex-wrap:wrap; gap:5px; padding:0 8px 6px; }
@@ -3552,6 +3561,7 @@ en:{
   role_you:'You',role_copilot:'Assistant',role_system:'System',role_tool:'Tool',
   // tool confirm
   requires_confirmation:'requires confirmation',allow:'✓ Allow',deny:'✗ Deny',
+  confirm_allowed:'Allowed',confirm_denied:'Denied',confirm_auto_approved:'Auto approved',confirm_user_action:'User action',confirm_bypass_reason:'permission mode',
   // tool sidebar
   no_history:'No history',untitled:'Untitled',no_files:'No files to show',workspace_load_failed:'Failed to load workspace files',file_preview_limited:'Opened preview (file truncated)',
   // code block actions
@@ -3691,6 +3701,7 @@ zh:{
   tokens_suffix:' tokens',approval_level:'权限等级',
   role_you:'你',role_copilot:'助手',role_system:'系统',role_tool:'工具',
   requires_confirmation:'需要确认',allow:'✓ 允许',deny:'✗ 拒绝',
+  confirm_allowed:'已允许',confirm_denied:'已拒绝',confirm_auto_approved:'已自动允许',confirm_user_action:'用户操作',confirm_bypass_reason:'权限模式',
   no_history:'无历史记录',untitled:'未命名',no_files:'没有可显示的文件',workspace_load_failed:'加载工作区文件失败',file_preview_limited:'已打开预览（文件被截断）',
   copy_code:'复制',insert_code:'插入',run_code:'运行',new_file_code:'新建文件',copied:'已复制',
   copy_markdown:'复制 Markdown',insert_response:'插入回复',apply_first_code:'应用首个代码块',
@@ -12360,6 +12371,7 @@ function renderConfirmBar(container,d,scrollEl,statusPrefix){
   if(d.id)bar.id='confirm-'+providerDomKey(d.id);
   bar.dataset.state='waiting';
   bar.dataset.toolName=d.name||'tool';
+  bar.dataset.confirmKind='waiting';
   bar.setAttribute('role','group');
   bar.setAttribute('aria-label','Tool confirmation: '+(d.name||'tool'));
   const msg=document.createElement('div');msg.className='msg';
@@ -12383,8 +12395,37 @@ function renderConfirmBar(container,d,scrollEl,statusPrefix){
   setStatus((statusPrefix||'Waiting for confirmation')+': '+(d.name||'tool'));
   return bar;
 }
+function updateConfirmBarDecision(bar,allowed,opts){
+  if(!bar)return;
+  opts=opts||{};
+  const toolName=bar.dataset.toolName||'tool';
+  const kind=opts.kind||'userAction';
+  const label=opts.label||(allowed?t('confirm_allowed'):t('confirm_denied'));
+  const reason=opts.reason||t('confirm_user_action');
+  bar.dataset.state=allowed?'allowed':'denied';
+  bar.dataset.confirmKind=kind;
+  bar.dataset.confirmReason=reason;
+  bar.setAttribute('aria-label',label+' '+toolName+'; '+reason);
+  const actions=bar.querySelector('.confirm-actions');
+  if(actions)actions.querySelectorAll('button').forEach(b=>b.disabled=true);
+  let title=bar.querySelector('.confirm-title');
+  if(title)title.innerHTML='<span aria-hidden="true">'+(allowed?'✓':'✗')+'</span><span class="tool-name">'+esc(toolName)+'</span><span>'+esc(label)+'</span>';
+  let decision=bar.querySelector('.confirm-decision');
+  if(!decision){
+    const msg=bar.querySelector('.msg');
+    decision=document.createElement('div');
+    decision.className='confirm-decision';
+    if(msg)msg.appendChild(decision);
+  }
+  if(decision)decision.innerHTML='<span class="confirm-result">'+esc(label)+'</span><span class="confirm-reason">'+esc(reason)+'</span>';
+}
 function onToolConfirm(d){
   if(currentApproval==='bypass'||currentApproval==='autopilot'){
+    const msgs=$('chat-messages');
+    let body=latestChatMessageBody();
+    if(!body){body=createMsg('system');body.style.color='var(--fg-dim)'}
+    const bar=renderConfirmBar(body,d,msgs,'Auto approving tool');
+    updateConfirmBarDecision(bar,true,{kind:'confirmationNotNeeded',label:t('confirm_auto_approved'),reason:(currentApproval||'')+' '+t('confirm_bypass_reason')});
     call('confirm_tool',d.id,true);return;
   }
   const msgs=$('chat-messages');
@@ -12395,12 +12436,7 @@ function onToolConfirm(d){
 window.confirmTool=async function(callId,allowed,btn){
   const bar=btn.closest('.confirm-bar');
   if(bar){
-    bar.dataset.state=allowed?'allowed':'denied';
-    bar.setAttribute('aria-label',(allowed?'Allowed ':'Denied ')+(bar.dataset.toolName||'tool'));
-    const actions=bar.querySelector('.confirm-actions');
-    if(actions)actions.querySelectorAll('button').forEach(b=>b.disabled=true);
-    const msg=bar.querySelector('.msg');
-    if(msg)msg.innerHTML='<div class="confirm-title"><span aria-hidden="true">'+(allowed?'✓':'✗')+'</span><span class="tool-name">'+esc(bar.dataset.toolName||'tool')+'</span><span>'+(allowed?'Allowed':'Denied')+'</span></div>';
+    updateConfirmBarDecision(bar,allowed,{kind:'userAction',reason:t('confirm_user_action')});
   }
   await call('confirm_tool',callId,allowed);
 };
@@ -23426,6 +23462,23 @@ function normalizeFollowupSuggestion(item,index){
     toolHint:String(rec.toolHint||rec.tool_hint||rec.tool||'').trim()
   };
 }
+function normalizeFollowupSuggestions(suggestions){
+  const seen=new Set(),items=[];
+  (suggestions||[]).forEach((item,index)=>{
+    const normalized=normalizeFollowupSuggestion(item,index);
+    if(!normalized)return;
+    const key=[normalized.kind,normalized.message,normalized.subCommand,normalized.agentId,normalized.toolHint].join('\n').toLowerCase();
+    if(seen.has(key))return;
+    seen.add(key);items.push(normalized);
+  });
+  items.sort((a,b)=>{
+    const ar=a.source&&a.source!=='generated'?0:1;
+    const br=b.source&&b.source!=='generated'?0:1;
+    if(ar!==br)return ar-br;
+    return a.index-b.index;
+  });
+  return items.slice(0,6);
+}
 function selectFollowup(container,index,focus){
   const buttons=Array.from(container.querySelectorAll('.followup-btn'));
   if(!buttons.length)return;
@@ -23467,11 +23520,13 @@ function onFollowupKeydown(ev){
 }
 function showFollowups(container,suggestions){
   if(!suggestions||!suggestions.length)return;
+  const items=normalizeFollowupSuggestions(suggestions);
+  if(!items.length)return;
   const div=document.createElement('div');div.className='followups';
   div.setAttribute('role','toolbar');
-  div.setAttribute('aria-label','Suggested follow-up prompts');
+  div.setAttribute('aria-label','Suggested follow-up prompts ('+items.length+')');
   div.addEventListener('keydown',onFollowupKeydown);
-  suggestions.map(normalizeFollowupSuggestion).filter(Boolean).slice(0,5).forEach((item,i)=>{
+  items.forEach((item,i)=>{
     const btn=document.createElement('button');btn.type='button';btn.className='followup-btn';
     btn.tabIndex=i===0?0:-1;
     btn.dataset.active=i===0?'true':'false';
@@ -23483,7 +23538,9 @@ function showFollowups(container,suggestions){
     if(item.agentId)btn.dataset.followupAgent=item.agentId;
     if(item.subCommand)btn.dataset.followupCommand=item.subCommand;
     if(item.toolHint)btn.dataset.followupTool=item.toolHint;
-    btn.innerHTML='<span class="followup-kind">'+esc(item.kind)+'</span><span class="followup-title">'+esc(item.title)+'</span>';
+    btn.setAttribute('aria-posinset',String(i+1));
+    btn.setAttribute('aria-setsize',String(items.length));
+    btn.innerHTML='<span class="followup-kind">'+esc(item.kind)+'</span><span class="followup-title">'+esc(item.title)+'</span>'+(item.source&&item.source!=='generated'?'<span class="followup-source">'+esc(item.source)+'</span>':'');
     btn.title=item.tooltip+(item.source?'\nSource: '+item.source:'')+(item.subCommand?'\nCommand: '+item.subCommand:'');
     btn.setAttribute('aria-label','Follow-up: '+item.title+(item.source?' from '+item.source:''));
     btn.onclick=()=>activateFollowupButton(btn);
@@ -23491,6 +23548,8 @@ function showFollowups(container,suggestions){
   });
   if(!div.children.length)return;
   div.dataset.followupCount=String(div.children.length);
+  div.dataset.nativeFollowupCount=String(items.filter(item=>item.source&&item.source!=='generated').length);
+  div.dataset.generatedFollowupCount=String(items.filter(item=>!item.source||item.source==='generated').length);
   div.dataset.activeIndex='0';
   container.appendChild(div);
 }

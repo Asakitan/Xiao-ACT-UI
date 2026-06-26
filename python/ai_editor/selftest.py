@@ -4008,12 +4008,20 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("frontend Assistant tool confirmations and terminal outputs use Copilot-style subparts",
            "confirm-bar chat-tool-confirmation" in html
            and "bar.dataset.state='waiting';" in html
+           and "bar.dataset.confirmKind='waiting';" in html
            and "bar.setAttribute('role','group');" in html
            and "bar.setAttribute('aria-label','Tool confirmation: '+(d.name||'tool'));" in html
+           and "function updateConfirmBarDecision(bar,allowed,opts)" in html
+           and "bar.dataset.confirmKind=kind;" in html
+           and "bar.dataset.confirmReason=reason;" in html
+           and "confirm-decision" in html
+           and "confirm-result" in html
+           and "confirm-reason" in html
+           and "updateConfirmBarDecision(bar,true,{kind:'confirmationNotNeeded',label:t('confirm_auto_approved'),reason:(currentApproval||'')+' '+t('confirm_bypass_reason')});" in html
            and "const actions=document.createElement('div');actions.className='confirm-actions';" in html
            and "const allow=document.createElement('button');allow.type='button';allow.className='confirm-btn confirm-allow';" in html
            and "const deny=document.createElement('button');deny.type='button';deny.className='confirm-btn confirm-deny';" in html
-           and "bar.dataset.state=allowed?'allowed':'denied';" in html
+           and "updateConfirmBarDecision(bar,allowed,{kind:'userAction',reason:t('confirm_user_action')});" in html
            and "actions.querySelectorAll('button').forEach(b=>b.disabled=true);" in html
            and "if(body)renderConfirmBar(body,data,providerRefs(pid).messages,'Provider confirmation');" in html
            and "chat-terminal-tool-output" in html
@@ -4151,7 +4159,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "chatReferenceLineOffset(ed.value,ref.line)" in html
            and "else await openWorkspaceFile(path)" in html
            and "renderChatResponseReferences(body,d.content,d);" in html
-           and "div.setAttribute('aria-label','Suggested follow-up prompts');" in html
+           and "div.setAttribute('aria-label','Suggested follow-up prompts ('+items.length+')');" in html
            and "const btn=document.createElement('button');btn.type='button';btn.className='followup-btn';" in html)
     _check("frontend Assistant response metadata and used context are visible",
            "chat-response-metadata" in html
@@ -4168,11 +4176,17 @@ def test_phase1_ai_editor_regressions() -> None:
            and "usedRefs.slice(0,8).forEach(ref=>" in html)
     _check("frontend Assistant followups use Copilot-style toolbar keyboard flow",
            "function normalizeFollowupSuggestion(item,index)" in html
+           and "function normalizeFollowupSuggestions(suggestions)" in html
+           and "const key=[normalized.kind,normalized.message,normalized.subCommand,normalized.agentId,normalized.toolHint].join('\\n').toLowerCase();" in html
+           and "items.sort((a,b)=>{" in html
            and "function selectFollowup(container,index,focus)" in html
            and "function activateFollowupButton(btn)" in html
            and "function onFollowupKeydown(ev)" in html
            and "div.setAttribute('role','toolbar');" in html
+           and "div.setAttribute('aria-label','Suggested follow-up prompts ('+items.length+')');" in html
            and "div.dataset.followupCount=String(div.children.length);" in html
+           and "div.dataset.nativeFollowupCount=String(items.filter(item=>item.source&&item.source!=='generated').length);" in html
+           and "div.dataset.generatedFollowupCount=String(items.filter(item=>!item.source||item.source==='generated').length);" in html
            and "btn.tabIndex=i===0?0:-1;" in html
            and "btn.dataset.followupMessage=item.message;" in html
            and "btn.dataset.followupKind=item.kind;" in html
@@ -4180,6 +4194,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "btn.dataset.followupAgent=item.agentId;" in html
            and "btn.dataset.followupCommand=item.subCommand;" in html
            and "btn.dataset.followupTool=item.toolHint;" in html
+           and "btn.setAttribute('aria-posinset',String(i+1));" in html
+           and "btn.setAttribute('aria-setsize',String(items.length));" in html
+           and "followup-source" in html
            and "if(agentId)addChatContextAttachment({id:'agent:'+agentId" in html
            and "if(toolHint)addChatContextAttachment({id:'tool:'+toolHint" in html
            and "announceAssistantAction('Follow-up selected: '" in html
