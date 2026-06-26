@@ -2449,6 +2449,7 @@ let _nextEnvClipboardRequestHandle = 1;
 let _nextTaskExecutionHandle = 1;
 let _nextDebugSessionHandle = 1;
 let _activeDebugSession = null;
+const _debugAdapterTrackerFactories = []; // { type, factory }
 let _envClipboardFallbackText = '';
 const _languageDocumentTextCache = new Map(); // uri -> { version, text }
 const _workspaceTextDocuments = new Map(); // uri -> TextDocument-like object
@@ -4530,9 +4531,44 @@ function _debugSessionPayload(session) {
         id: session.id,
         type: session.type,
         name: session.name,
+        parentSession: session.parentSession
+            ? { id: session.parentSession.id, name: session.parentSession.name }
+            : undefined,
         configuration: _plainBridgeValue(session.configuration || {}),
         adapterDescriptor: _debugAdapterDescriptorPayload(
             session.adapterDescriptor),
+    };
+}
+
+function _debugTrackerEntriesForType(type) {
+    const wanted = String(type || '');
+    return _debugAdapterTrackerFactories.filter(entry => {
+        return entry && (entry.type === '*' || entry.type === wanted);
+    });
+}
+
+function _debugCallTrackers(session, method, ...args) {
+    const trackers = Array.isArray(session?._debugTrackers)
+        ? session._debugTrackers
+        : [];
+    for (const tracker of trackers) {
+        try {
+            if (tracker && typeof tracker[method] === 'function') {
+                tracker[method](...args);
+            }
+        } catch (err) {
+            if (method !== 'onError' && tracker
+                    && typeof tracker.onError === 'function') {
+                try { tracker.onError(err); } catch {}
+            }
+        }
+    }
+}
+
+function _debugProviderToken() {
+    return {
+        isCancellationRequested: false,
+        onCancellationRequested: () => new Disposable(),
     };
 }
 
@@ -8727,6 +8763,8 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         },
         TerminalLocation: { Panel: 1, Editor: 2 },
         TaskScope: { Global: 1, Workspace: 2 },
+        DebugConsoleMode: { Separate: 0, MergeWithParent: 1 },
+        DebugConfigurationProviderTriggerKind: { Initial: 1, Dynamic: 2 },
         TerminalExitReason: {
             Unknown: 0,
             Shutdown: 1,
@@ -10246,19 +10284,83 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             const _onDidStartDebugSession = new EventEmitter();
             const _onDidTerminateDebugSession = new EventEmitter();
             const _onDidChangeActiveDebugSession = new EventEmitter();
+            const _onDidReceiveDebugSessionCustomEvent = new EventEmitter();
+            const _onDidChangeActiveStackItem = new EventEmitter();
+            const activeDebugConsole = {
+                append(value) {
+                    if (!value) return;
+                    send({
+                        type: 'debug_console',
+                        text: String(value),
+                        newline: false,
+                    });
+                },
+                appendLine(value) {
+                    send({
+                        type: 'debug_console',
+                        text: String(value ?? ''),
+                        newline: true,
+                    });
+                },
+            };
             return {
                 registerDebugAdapterDescriptorFactory(type, factory) {
                     _debugAdapterFactories.set(type, factory);
                     log(`debug: registered adapter factory for "${type}"`);
                     return new Disposable(() => _debugAdapterFactories.delete(type));
                 },
-                registerDebugConfigurationProvider(type, provider) {
-                    _debugConfigProviders.set(type, provider);
+                registerDebugAdapterTrackerFactory(type, factory) {
+                    const entry = {
+                        type: String(type || '*'),
+                        factory,
+                    };
+                    _debugAdapterTrackerFactories.push(entry);
+                    log(`debug: registered adapter tracker for "${entry.type}"`);
+                    return new Disposable(() => {
+                        const index = _debugAdapterTrackerFactories.indexOf(entry);
+                        if (index >= 0) _debugAdapterTrackerFactories.splice(index, 1);
+                    });
+                },
+                registerDebugConfigurationProvider(type, provider, triggerKind = 1) {
+                    const key = String(type || '');
+                    const entry = { provider, triggerKind };
+                    const list = _debugConfigProviders.get(key) || [];
+                    list.push(entry);
+                    _debugConfigProviders.set(key, list);
                     log(`debug: registered config provider for "${type}"`);
-                    return new Disposable(() => _debugConfigProviders.delete(type));
+                    return new Disposable(() => {
+                        const current = _debugConfigProviders.get(key) || [];
+                        const next = current.filter(item => item !== entry);
+                        if (next.length) _debugConfigProviders.set(key, next);
+                        else _debugConfigProviders.delete(key);
+                    });
                 },
                 async startDebugging(folder, config, options) {
                     log('debug: startDebugging');
+                    if (typeof config === 'string') {
+                        const wantedName = config;
+                        await _activateKnownExtensionsForEvent('onDebug');
+                        let providedConfig = null;
+                        for (const entries of _debugConfigProviders.values()) {
+                            for (const entry of entries || []) {
+                                const provider = entry && entry.provider;
+                                if (provider
+                                        && typeof provider.provideDebugConfigurations === 'function') {
+                                    const provided = await Promise.resolve(
+                                        provider.provideDebugConfigurations(
+                                            folder, _debugProviderToken()));
+                                    const match = (Array.isArray(provided) ? provided : [])
+                                        .find(item => item && item.name === wantedName);
+                                    if (match) {
+                                        providedConfig = match;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (providedConfig) break;
+                        }
+                        config = providedConfig;
+                    }
                     if (!config || typeof config !== 'object') return false;
                     const debugType = String(config.type || '');
                     await _activateKnownExtensionsForEvent('onDebug');
@@ -10266,25 +10368,67 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                         await _activateKnownExtensionsForEvent(
                             `onDebugResolve:${debugType}`);
                     }
-                    const provider = _debugConfigProviders.get(debugType);
-                    if (provider && typeof provider.resolveDebugConfiguration === 'function') {
-                        const resolved = await Promise.resolve(
-                            provider.resolveDebugConfiguration(folder, { ...config }));
-                        if (!resolved) return false;
-                        config = resolved;
+                    const providers = _debugConfigProviders.get(debugType) || [];
+                    for (const entry of providers) {
+                        const provider = entry && entry.provider;
+                        if (provider
+                                && typeof provider.resolveDebugConfiguration === 'function') {
+                            const resolved = await Promise.resolve(
+                                provider.resolveDebugConfiguration(
+                                    folder, { ...config }, _debugProviderToken()));
+                            if (!resolved) return false;
+                            config = resolved;
+                        }
                     }
+                    const normalizedOptions = options && options.id && options.type
+                        ? { parentSession: options }
+                        : (options && typeof options === 'object' ? options : {});
                     const session = {
                         id: `debug-${_nextDebugSessionHandle++}`,
                         type: String(config.type || debugType || 'debug'),
                         name: String(config.name || config.type || 'Debug'),
                         workspaceFolder: folder || undefined,
                         configuration: { ...config },
-                        parentSession: options && options.parentSession,
+                        parentSession: normalizedOptions.parentSession,
+                        customRequest(command, args) {
+                            const request = {
+                                type: 'request',
+                                command: String(command || ''),
+                                arguments: _plainBridgeValue(args || {}),
+                            };
+                            _debugCallTrackers(session, 'onWillReceiveMessage', request);
+                            const event = {
+                                type: 'event',
+                                event: String(command || ''),
+                                body: _plainBridgeValue(args || {}),
+                            };
+                            _debugCallTrackers(session, 'onDidSendMessage', event);
+                            _onDidReceiveDebugSessionCustomEvent.fire({
+                                session,
+                                event: event.event,
+                                body: event.body,
+                            });
+                            return Promise.resolve({ command: event.event, body: event.body });
+                        },
+                        getDebugProtocolBreakpoint() {
+                            return Promise.resolve(undefined);
+                        },
                     };
                     if (session.type) {
                         await _activateKnownExtensionsForEvent(
                             `onDebugAdapterProtocolTracker:${session.type}`);
                     }
+                    const trackers = [];
+                    for (const entry of _debugTrackerEntriesForType(session.type)) {
+                        const factory = entry && entry.factory;
+                        if (factory
+                                && typeof factory.createDebugAdapterTracker === 'function') {
+                            const tracker = await Promise.resolve(
+                                factory.createDebugAdapterTracker(session));
+                            if (tracker) trackers.push(tracker);
+                        }
+                    }
+                    session._debugTrackers = trackers;
                     const descriptorFactory = _debugAdapterFactories.get(session.type);
                     if (descriptorFactory
                             && typeof descriptorFactory.createDebugAdapterDescriptor === 'function') {
@@ -10293,6 +10437,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                                 session,
                                 undefined));
                     }
+                    _debugCallTrackers(session, 'onWillStartSession');
                     _debugUpdateActive(session, _onDidChangeActiveDebugSession);
                     _onDidStartDebugSession.fire(session);
                     send({
@@ -10300,11 +10445,16 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                         session: _debugSessionPayload(session),
                         config: _plainBridgeValue(config || {}),
                     });
+                    _debugCallTrackers(session, 'onDidSendMessage', {
+                        type: 'event',
+                        event: 'initialized',
+                    });
                     return true;
                 },
                 stopDebugging(session) {
                     const target = session || _activeDebugSession;
                     if (!target) return Promise.resolve();
+                    _debugCallTrackers(target, 'onWillStopSession');
                     if (_activeDebugSession && _activeDebugSession.id === target.id) {
                         _debugUpdateActive(null, _onDidChangeActiveDebugSession);
                     }
@@ -10313,14 +10463,20 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                         type: 'debug_stop',
                         session: _debugSessionPayload(target),
                     });
+                    _debugCallTrackers(target, 'onExit', undefined, undefined);
                     return Promise.resolve();
                 },
                 get activeDebugSession() { return _activeDebugSession; },
+                get activeDebugConsole() { return activeDebugConsole; },
                 get breakpoints() { return []; },
                 onDidChangeActiveDebugSession: _onDidChangeActiveDebugSession.event,
                 onDidStartDebugSession: _onDidStartDebugSession.event,
+                onDidReceiveDebugSessionCustomEvent:
+                    _onDidReceiveDebugSessionCustomEvent.event,
                 onDidTerminateDebugSession: _onDidTerminateDebugSession.event,
                 onDidChangeBreakpoints: new EventEmitter().event,
+                get activeStackItem() { return undefined; },
+                onDidChangeActiveStackItem: _onDidChangeActiveStackItem.event,
                 _onDidStartDebugSession,
                 _onDidTerminateDebugSession,
                 _onDidChangeActiveDebugSession,
@@ -10566,6 +10722,8 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         TaskScope: { Global: 1, Workspace: 2 },
         TaskRevealKind: { Always: 1, Silent: 2, Never: 3 },
         TaskPanelKind: { Shared: 1, Dedicated: 2, New: 3 },
+        DebugConsoleMode: { Separate: 0, MergeWithParent: 1 },
+        DebugConfigurationProviderTriggerKind: { Initial: 1, Dynamic: 2 },
 
         LanguageModelChatMessage,
     };

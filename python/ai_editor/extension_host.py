@@ -3759,6 +3759,18 @@ class NodeExtensionHost:
                 except Exception:
                     pass
 
+        elif msg_type == "debug_console":
+            if self._ui_bridge:
+                try:
+                    writer = getattr(self._ui_bridge, "show_output", None)
+                    if callable(writer):
+                        text = str(msg.get("text", ""))
+                        if bool(msg.get("newline")):
+                            text += "\n"
+                        writer("Debug Console", text)
+                except Exception:
+                    pass
+
         elif msg_type in ("progress_start", "progress_report", "progress_done"):
             progress_handler = (
                 getattr(self._ui_bridge, "show_progress", None)

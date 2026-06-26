@@ -10035,9 +10035,19 @@ console.log("command palette quick access helpers ok");
            and "async startDebugging(folder, config, options)"
            in node_ext_host_source
            and "stopDebugging(session)" in node_ext_host_source
+           and "registerDebugAdapterTrackerFactory(type, factory)"
+           in node_ext_host_source
+           and "get activeDebugConsole()" in node_ext_host_source
+           and "onDidReceiveDebugSessionCustomEvent" in node_ext_host_source
+           and "provideDebugConfigurations(" in node_ext_host_source
+           and "DebugConsoleMode: { Separate: 0, MergeWithParent: 1 }"
+           in node_ext_host_source
+           and "DebugConfigurationProviderTriggerKind: { Initial: 1, Dynamic: 2 }"
+           in node_ext_host_source
            and "get activeDebugSession()" in node_ext_host_source
            and "createDebugAdapterDescriptor" in node_ext_host_source
            and "DebugAdapterExecutable," in node_ext_host_source
+           and "msg_type == \"debug_console\"" in extension_host_source
            and "msg_type == \"task_execute\"" in extension_host_source
            and "self._ui_bridge.run_terminal_command" in extension_host_source)
     _check("extension workspace folder picker uses dynamic QuickPick",
@@ -20967,9 +20977,13 @@ async function activate(context) {
     ];
     let resolvedTask = false;
     let resolvedDebug = false;
+    let resolvedDebugChain = false;
     let customOpened = false;
     let customCallbackDefinition = undefined;
     let descriptorCalls = 0;
+    let providedDebugCount = 0;
+    const trackerEvents = [];
+    const customDebugEvents = [];
     const providerDisposable = vscode.tasks.registerTaskProvider('node-selftest', {
       provideTasks() {
         const task = new vscode.Task(
@@ -21031,11 +21045,31 @@ async function activate(context) {
     const debugDisposable = vscode.debug.registerDebugConfigurationProvider(
       'node-debug',
       {
+        provideDebugConfigurations() {
+          providedDebugCount += 1;
+          return [{
+            type: 'node-debug',
+            name: 'Node Provided Debug',
+            request: 'launch',
+            program: 'provided-target.js',
+          }];
+        },
         resolveDebugConfiguration(folder, config) {
           resolvedDebug = true;
           return { ...config, name: config.name + ' Resolved' };
         },
-      }
+      },
+      vscode.DebugConfigurationProviderTriggerKind.Initial
+    );
+    const debugChainDisposable = vscode.debug.registerDebugConfigurationProvider(
+      'node-debug',
+      {
+        resolveDebugConfiguration(folder, config) {
+          resolvedDebugChain = true;
+          return { ...config, chained: true };
+        },
+      },
+      vscode.DebugConfigurationProviderTriggerKind.Dynamic
     );
     const factoryDisposable = vscode.debug.registerDebugAdapterDescriptorFactory(
       'node-debug',
@@ -21053,6 +21087,37 @@ async function activate(context) {
         },
       }
     );
+    const trackerDisposable = vscode.debug.registerDebugAdapterTrackerFactory(
+      '*',
+      {
+        createDebugAdapterTracker(session) {
+          trackerEvents.push('create:' + session.name);
+          return {
+            onWillStartSession() {
+              trackerEvents.push('willStart:' + session.name);
+            },
+            onWillReceiveMessage(message) {
+              trackerEvents.push('willReceive:' + message.command);
+            },
+            onDidSendMessage(message) {
+              trackerEvents.push('didSend:' + (message.event || message.command));
+            },
+            onWillStopSession() {
+              trackerEvents.push('willStop:' + session.name);
+            },
+            onExit(code, signal) {
+              trackerEvents.push('exit:' + code + ':' + signal);
+            },
+            onError(error) {
+              trackerEvents.push('error:' + String(error && error.message || error));
+            },
+          };
+        },
+      }
+    );
+    const customEventDisposable = vscode.debug.onDidReceiveDebugSessionCustomEvent(event => {
+      customDebugEvents.push(event.event + ':' + event.body.value);
+    });
     const fetched = await vscode.tasks.fetchTasks({ type: 'node-selftest' });
     const fetchedBySource = await vscode.tasks.fetchTasks({ source: 'selftest-custom' });
     const fetchedMissing = await vscode.tasks.fetchTasks({ type: 'node-selftest-missing' });
@@ -21079,18 +21144,46 @@ async function activate(context) {
       name: 'Node Debug',
       request: 'launch',
       program: 'debug-target.js',
+    }, {
+      consoleMode: vscode.DebugConsoleMode.Separate,
     });
-    const activeDebugName = vscode.debug.activeDebugSession
+    const parentSession = vscode.debug.activeDebugSession;
+    const activeDebugName = parentSession && parentSession.name;
+    const activeDescriptor = parentSession && parentSession.adapterDescriptor;
+    const customRequestResult = parentSession
+      ? await parentSession.customRequest('selftest/custom', { value: 'ok' })
+      : null;
+    vscode.debug.activeDebugConsole.append('debug-console');
+    vscode.debug.activeDebugConsole.appendLine(' line');
+    const childStarted = await vscode.debug.startDebugging(undefined, {
+      type: 'node-debug',
+      name: 'Node Child',
+      request: 'launch',
+      program: 'child-target.js',
+    }, parentSession);
+    const childParentName = vscode.debug.activeDebugSession
+      && vscode.debug.activeDebugSession.parentSession
+      && vscode.debug.activeDebugSession.parentSession.name;
+    await vscode.debug.stopDebugging(vscode.debug.activeDebugSession);
+    await vscode.debug.stopDebugging(parentSession);
+    const providedStarted = await vscode.debug.startDebugging(
+      undefined,
+      'Node Provided Debug'
+    );
+    const providedDebugName = vscode.debug.activeDebugSession
       && vscode.debug.activeDebugSession.name;
-    const activeDescriptor = vscode.debug.activeDebugSession
-      && vscode.debug.activeDebugSession.adapterDescriptor;
     await vscode.debug.stopDebugging(vscode.debug.activeDebugSession);
     const activeAfterDebug = vscode.debug.activeDebugSession
       && vscode.debug.activeDebugSession.name;
     providerDisposable.dispose();
     customProviderDisposable.dispose();
     debugDisposable.dispose();
+    debugChainDisposable.dispose();
     factoryDisposable.dispose();
+    trackerDisposable.dispose();
+    customEventDisposable.dispose();
+    const afterDisposeTaskCount = (await vscode.tasks.fetchTasks({ type: 'node-selftest' })).length;
+    const providedAfterDispose = await vscode.debug.startDebugging(undefined, 'Node Provided Debug');
     disposables.forEach(disposable => disposable.dispose());
     return {
       taskCount: fetched.length,
@@ -21133,17 +21226,30 @@ async function activate(context) {
       activeDebugName,
       activeAfterDebug,
       resolvedDebug,
+      resolvedDebugChain,
       descriptorCalls,
       adapterCommand: activeDescriptor && activeDescriptor.command,
       adapterArgs: activeDescriptor && activeDescriptor.args,
       adapterEnv: activeDescriptor
         && activeDescriptor.options
         && activeDescriptor.options.env,
+      customRequestResult,
+      customDebugEvents,
+      childStarted,
+      childParentName,
+      providedStarted,
+      providedDebugName,
+      providedDebugCount,
+      providedAfterDispose,
+      afterDisposeTaskCount,
+      trackerEvents,
       debugEvents,
       hasTaskClasses: !!(vscode.Task && vscode.ShellExecution && vscode.ProcessExecution && vscode.CustomExecution && vscode.TaskGroup),
       taskScopeWorkspace: vscode.TaskScope.Workspace,
       taskRevealSilent: vscode.TaskRevealKind.Silent,
       taskPanelDedicated: vscode.TaskPanelKind.Dedicated,
+      debugConsoleModeMerge: vscode.DebugConsoleMode.MergeWithParent,
+      debugTriggerDynamic: vscode.DebugConfigurationProviderTriggerKind.Dynamic,
     };
   });
   vscode.commands.registerCommand('selftest.node.messageOptionsProbe', async () => {
@@ -26976,7 +27082,12 @@ module.exports = { activate, deactivate };
                            "customGroupLabel") == "Lint"
                        and node_task_debug_probe.get("taskRevealSilent") == 2
                        and node_task_debug_probe.get("taskPanelDedicated") == 2
+                       and node_task_debug_probe.get(
+                           "debugConsoleModeMerge") == 1
+                       and node_task_debug_probe.get(
+                           "debugTriggerDynamic") == 2
                        and node_task_debug_probe.get("resolvedTask") is True
+                       and node_task_debug_probe.get("afterDisposeTaskCount") == 0
                        and "start:Node Selftest Task"
                        in node_task_debug_events
                        and "process:0" in node_task_debug_events
@@ -27017,13 +27128,46 @@ module.exports = { activate, deactivate };
                        and node_task_debug_probe.get("activeAfterDebug")
                        in {None, ""}
                        and node_task_debug_probe.get("resolvedDebug") is True
-                       and node_task_debug_probe.get("descriptorCalls") == 1
+                       and node_task_debug_probe.get(
+                           "resolvedDebugChain") is True
+                       and node_task_debug_probe.get("descriptorCalls") == 3
                        and node_task_debug_probe.get("adapterCommand")
                        == "node-debug-adapter"
                        and node_task_debug_probe.get("adapterArgs")
                        == ["--session", "Node Debug Resolved"]
                        and node_task_debug_probe.get("adapterEnv", {}).get(
                            "NODE_DEBUG_SELFTEST") == "1"
+                       and node_task_debug_probe.get(
+                           "customRequestResult", {}).get("command")
+                       == "selftest/custom"
+                       and node_task_debug_probe.get(
+                           "customRequestResult", {}).get(
+                               "body", {}).get("value") == "ok"
+                       and "selftest/custom:ok" in node_task_debug_probe.get(
+                           "customDebugEvents", [])
+                       and node_task_debug_probe.get("childStarted") is True
+                       and node_task_debug_probe.get("childParentName")
+                       == "Node Debug Resolved"
+                       and node_task_debug_probe.get("providedStarted") is True
+                       and node_task_debug_probe.get("providedDebugName")
+                       == "Node Provided Debug Resolved"
+                       and node_task_debug_probe.get("providedDebugCount") == 1
+                       and node_task_debug_probe.get("providedAfterDispose")
+                       is False
+                       and "create:Node Debug Resolved"
+                       in node_task_debug_probe.get("trackerEvents", [])
+                       and "willStart:Node Debug Resolved"
+                       in node_task_debug_probe.get("trackerEvents", [])
+                       and "didSend:initialized"
+                       in node_task_debug_probe.get("trackerEvents", [])
+                       and "willReceive:selftest/custom"
+                       in node_task_debug_probe.get("trackerEvents", [])
+                       and "didSend:selftest/custom"
+                       in node_task_debug_probe.get("trackerEvents", [])
+                       and "willStop:Node Debug Resolved"
+                       in node_task_debug_probe.get("trackerEvents", [])
+                       and "exit:undefined:undefined"
+                       in node_task_debug_probe.get("trackerEvents", [])
                        and "active:Node Debug Resolved" in node_debug_events
                        and "start:Node Debug Resolved:node-debug"
                        in node_debug_events
