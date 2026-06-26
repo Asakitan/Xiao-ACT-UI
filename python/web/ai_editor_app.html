@@ -5165,17 +5165,37 @@ function normalizeChatVulnerabilities(value){
 }
 function normalizeChatConfirmationPart(part){
   const buttons=Array.isArray(part&&part.buttons)?part.buttons:[];
+  const normalizeButton=(button,index)=>{
+    const rec=button&&typeof button==='object'?button:{label:button,value:button};
+    const label=String(rec.label||rec.title||rec.value||rec.id||'Continue');
+    return {
+      id:String(rec.id||rec.action||('button'+index)),
+      label,
+      value:rec.value!==undefined?rec.value:label,
+      action:String(rec.action||rec.id||label),
+      callbackId:rec.callbackId||rec.callback_id||null,
+      requestId:rec.requestId||rec.request_id||null,
+      data:rec.data
+    };
+  };
   return {
+    id:String((part&&(part.id||part.partId||part.part_id))||''),
+    requestId:String((part&&(part.requestId||part.request_id))||''),
+    callbackId:String((part&&(part.callbackId||part.callback_id))||''),
     title:String((part&&part.title)||'Confirmation'),
     message:chatMarkdownValueText(part&&(part.message!==undefined?part.message:part.content)),
-    buttons:buttons.length?buttons.map(button=>String(button||'')).filter(Boolean).slice(0,6):['Continue'],
+    buttons:buttons.length?buttons.map(normalizeButton).filter(button=>button.label).slice(0,6):[normalizeButton('Continue',0)],
     data:part&&part.data
   };
 }
 function normalizeChatQuestionCarouselPart(part){
   const questions=Array.isArray(part&&part.questions)?part.questions:[];
   return {
+    id:String((part&&(part.id||part.partId||part.part_id))||''),
+    requestId:String((part&&(part.requestId||part.request_id))||''),
+    callbackId:String((part&&(part.callbackId||part.callback_id))||''),
     allowSkip:!!(part&&part.allowSkip),
+    data:part&&part.data,
     questions:questions.map((q,index)=>{
       const rec=q&&typeof q==='object'?q:{title:q};
       const options=Array.isArray(rec.options)?rec.options:[];
@@ -5951,6 +5971,48 @@ function chatResponseComposerText(prefix,text){
   setChatInputValue(value,{focus:true});
   setStatus('Inserted Assistant response part into composer');
 }
+function assistantResponsePartCallbackMetadata(source,button){
+  source=source||{};
+  button=button||{};
+  return {
+    partId:String(source.id||source.partId||source.part_id||''),
+    requestId:String(button.requestId||button.request_id||source.requestId||source.request_id||''),
+    callbackId:String(button.callbackId||button.callback_id||source.callbackId||source.callback_id||'')
+  };
+}
+function assistantResponsePartHasCallback(source,button){
+  const meta=assistantResponsePartCallbackMetadata(source,button);
+  return !!(meta.callbackId||meta.requestId||meta.partId);
+}
+async function assistantSubmitResponsePartAction(part,action,value,button,opts){
+  opts=opts||{};
+  const source=(part&&(part.confirmation||part.carousel))||part||{};
+  const meta=assistantResponsePartCallbackMetadata(source,button);
+  if(!(meta.callbackId||meta.requestId||meta.partId)){
+    if(opts.fallbackText)chatResponseComposerText(opts.fallbackTitle||'Response',opts.fallbackText);
+    return {ok:false,fallback:true,error:'missing callback metadata'};
+  }
+  const payload={
+    kind:String((part&&part.kind)||source.kind||''),
+    partId:meta.partId,
+    requestId:meta.requestId,
+    callbackId:meta.callbackId,
+    action:String(action||'submit'),
+    value:value,
+    button:button&&typeof button==='object'?button:null,
+    answers:opts.answers||null,
+    data:source.data&&typeof source.data==='object'?source.data:null
+  };
+  const result=await call('assistant_response_part_action',payload);
+  if(result&&result.ok){
+    setStatus('Submitted Assistant action: '+payload.action);
+    return result;
+  }
+  const message=callFailedMessage(result,'Assistant action failed');
+  if(opts.fallbackText)chatResponseComposerText(opts.fallbackTitle||'Response',opts.fallbackText);
+  else setStatus(message);
+  return result||{error:message};
+}
 function renderChatMarkdownVulnerabilityPart(wrap,part){
   const card=document.createElement('div');card.className='chat-response-vulns';
   const body=document.createElement('div');body.className='chat-response-part markdown';renderMd(body,part.text);card.appendChild(body);
@@ -5970,12 +6032,17 @@ function renderChatMarkdownVulnerabilityPart(wrap,part){
 function renderChatConfirmationPart(wrap,part){
   const data=part.confirmation||{};
   const card=document.createElement('div');card.className='chat-response-confirmation';card.setAttribute('role','group');card.setAttribute('aria-label','Assistant confirmation');
+  if(data.id)card.dataset.assistantPartId=data.id;
+  if(data.callbackId)card.dataset.assistantCallbackId=data.callbackId;
   const title=document.createElement('div');title.className='chat-response-part-title';title.textContent=data.title||'Confirmation';card.appendChild(title);
   if(data.message){const msg=document.createElement('div');renderMd(msg,data.message);card.appendChild(msg)}
   const actions=document.createElement('div');actions.className='chat-response-part-actions';
-  (data.buttons||['Continue']).forEach(label=>{
+  (data.buttons||[{label:'Continue',value:'Continue'}]).forEach(button=>{
+    const label=String((button&&button.label)||button||'Continue');
     const btn=document.createElement('button');btn.type='button';btn.className='chat-inline-action primary';btn.textContent=label;
-    btn.onclick=()=>chatResponseComposerText(data.title||'Confirmation',label);
+    btn.dataset.assistantAction=String((button&&button.action)||label);
+    if(assistantResponsePartHasCallback(data,button))btn.dataset.assistantCallback='true';
+    btn.onclick=()=>assistantSubmitResponsePartAction(part,(button&&button.action)||'button',(button&&button.value)!==undefined?button.value:label,button,{fallbackTitle:data.title||'Confirmation',fallbackText:label});
     actions.appendChild(btn);
   });
   card.appendChild(actions);wrap.appendChild(card);
@@ -5983,6 +6050,8 @@ function renderChatConfirmationPart(wrap,part){
 function renderChatQuestionCarouselPart(wrap,part){
   const carousel=part.carousel||{};
   const card=document.createElement('div');card.className='chat-response-questions';card.setAttribute('role','group');card.setAttribute('aria-label','Assistant questions');
+  if(carousel.id)card.dataset.assistantPartId=carousel.id;
+  if(carousel.callbackId)card.dataset.assistantCallbackId=carousel.callbackId;
   (carousel.questions||[]).forEach(question=>{
     const q=document.createElement('div');q.className='chat-response-question';q.dataset.questionId=question.id;
     const title=document.createElement('div');title.className='chat-response-part-title';title.textContent=question.title;q.appendChild(title);
@@ -6005,12 +6074,24 @@ function renderChatQuestionCarouselPart(wrap,part){
   });
   const actions=document.createElement('div');actions.className='chat-response-part-actions';
   const insert=document.createElement('button');insert.type='button';insert.className='chat-inline-action primary';insert.textContent='Insert answers';
-  insert.onclick=()=>chatResponseComposerText('Answers',chatQuestionCarouselAnswerText(card));
+  insert.dataset.assistantAction='answers';
+  if(assistantResponsePartHasCallback(carousel,null))insert.dataset.assistantCallback='true';
+  insert.onclick=()=>assistantSubmitResponsePartAction(part,'answers',chatQuestionCarouselAnswerText(card),null,{fallbackTitle:'Answers',fallbackText:chatQuestionCarouselAnswerText(card),answers:chatQuestionCarouselAnswerPayload(card)});
   actions.appendChild(insert);
   if(carousel.allowSkip){
-    const skip=document.createElement('button');skip.type='button';skip.className='chat-inline-action';skip.textContent='Skip';skip.onclick=()=>chatResponseComposerText('Answers','Skip');actions.appendChild(skip);
+    const skip=document.createElement('button');skip.type='button';skip.className='chat-inline-action';skip.textContent='Skip';skip.dataset.assistantAction='skip';
+    if(assistantResponsePartHasCallback(carousel,null))skip.dataset.assistantCallback='true';
+    skip.onclick=()=>assistantSubmitResponsePartAction(part,'skip','Skip',null,{fallbackTitle:'Answers',fallbackText:'Skip',answers:[]});actions.appendChild(skip);
   }
   card.appendChild(actions);wrap.appendChild(card);
+}
+function chatQuestionCarouselAnswerPayload(card){
+  return Array.from(card.querySelectorAll('.chat-response-question')).map(q=>{
+    const title=(q.querySelector('.chat-response-part-title')||{}).textContent||'Question';
+    const checked=Array.from(q.querySelectorAll('input[type="radio"]:checked,input[type="checkbox"]:checked')).map(input=>input.value);
+    const text=Array.from(q.querySelectorAll('input[type="text"]')).map(input=>input.value).filter(Boolean);
+    return {id:q.dataset.questionId||'',title,values:checked,text};
+  });
 }
 function chatQuestionCarouselAnswerText(card){
   return Array.from(card.querySelectorAll('.chat-response-question')).map(q=>{
@@ -6403,15 +6484,41 @@ function assistantMergeNativeResponsePayloads(payloads){
   });
   return merged;
 }
+function assistantNativeResponseDomSnapshot(body){
+  const count=(selector)=>body&&body.querySelectorAll?body.querySelectorAll(selector).length:0;
+  const classCounts={};
+  if(body&&body.querySelectorAll){
+    body.querySelectorAll('.chat-response-native-parts > *').forEach(el=>{
+      const cls=String(el.className||'').split(/\s+/).filter(Boolean)[0]||el.tagName.toLowerCase();
+      classCounts[cls]=(classCounts[cls]||0)+1;
+    });
+  }
+  return {
+    nativeCardCount:count('.chat-response-native-parts > *'),
+    actionButtonCount:count('.chat-response-part-actions button,.chat-inline-action'),
+    callbackActionCount:count('[data-assistant-callback="true"]'),
+    confirmationCount:count('.chat-response-confirmation'),
+    questionCount:count('.chat-response-questions'),
+    todoCardCount:count('.chat-response-todo-list'),
+    modifiedFilesCount:count('.chat-response-modified-files'),
+    classCounts
+  };
+}
 function assistantNativeResponseRenderSummary(body,payload,content){
   const parts=normalizeChatVisibleResponseParts(payload||{},content||'');
   const kinds=parts.map(part=>part.kind);
   const wrap=body&&body.querySelector?body.querySelector('.chat-response-native-parts'):null;
+  const dom=assistantNativeResponseDomSnapshot(body);
   return {
     ok:!!body,
     partCount:parts.length,
     kinds,
     nativeCardCount:wrap?wrap.children.length:0,
+    dom,
+    actionButtonCount:dom.actionButtonCount,
+    callbackActionCount:dom.callbackActionCount,
+    confirmationCount:dom.confirmationCount,
+    questionCount:dom.questionCount,
     referenceCount:normalizeChatContentReferences(payload||{}).length,
     fileTreeCount:normalizeChatFileTrees(payload||{}).length,
     todoCount:parts.filter(part=>part.kind==='todoList').reduce((n,part)=>n+((part.todo&&part.todo.todoList)||[]).length,0),
@@ -24965,9 +25072,11 @@ onStreamEnd=function(d){
 };
 window.onStreamEnd=onStreamEnd;
 window.assistantMergeNativeResponsePayloads=assistantMergeNativeResponsePayloads;
+window.assistantNativeResponseDomSnapshot=assistantNativeResponseDomSnapshot;
 window.assistantNativeResponseRenderSummary=assistantNativeResponseRenderSummary;
 window.replayAssistantNativeResponseFixture=replayAssistantNativeResponseFixture;
 window.assistantComposerLayoutSnapshot=assistantComposerLayoutSnapshot;
+window.assistantSubmitResponsePartAction=assistantSubmitResponsePartAction;
 
 // ── Welcome screen with suggested prompts ──
 function renderWelcome(){

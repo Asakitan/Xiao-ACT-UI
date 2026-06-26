@@ -85,6 +85,52 @@ _WORKSPACE_FILE_PREVIEW_BYTES = 1024 * 1024
 _WORKSPACE_DECORATION_PROPAGATE_MAX_ENTRIES = 300
 _WORKSPACE_DECORATION_PROPAGATE_MAX_SECONDS = 0.05
 _ASSISTANT_NATIVE_RESPONSE_FIXTURES = {
+    "actionable-response-parts": {
+        "name": "actionable-response-parts",
+        "description": (
+            "Confirmation and question response parts with callback metadata "
+            "for Assistant action replay."
+        ),
+        "chunks": [
+            {
+                "content": "Fixture response with actionable Assistant parts.",
+                "responseParts": [
+                    {
+                        "kind": "confirmation",
+                        "id": "confirm-apply-edits",
+                        "requestId": "request-actionable-1",
+                        "callbackId": "callback-confirm-1",
+                        "title": "Apply edits?",
+                        "message": "Review the generated changes before continuing.",
+                        "buttons": [
+                            {"id": "apply", "label": "Apply", "value": "apply"},
+                            {"id": "cancel", "label": "Cancel", "value": "cancel"},
+                        ],
+                        "data": {"source": "selftest"},
+                    },
+                    {
+                        "kind": "questionCarousel",
+                        "id": "questions-1",
+                        "requestId": "request-actionable-1",
+                        "callbackId": "callback-question-1",
+                        "allowSkip": True,
+                        "questions": [
+                            {
+                                "id": "scope",
+                                "title": "Scope",
+                                "type": "singleChoice",
+                                "options": [
+                                    {"id": "focused", "label": "Focused", "value": "focused"},
+                                    {"id": "broad", "label": "Broad", "value": "broad"},
+                                ],
+                                "defaultValue": "focused",
+                            }
+                        ],
+                    },
+                ],
+            }
+        ],
+    },
     "split-native-response-parts": {
         "name": "split-native-response-parts",
         "description": (
@@ -1845,6 +1891,7 @@ class AIEditorAPI:
         self._extension_snippet_cache: Dict[str, Dict[str, Any]] = {}
         self._language_provider_request_lock = threading.Lock()
         self._active_language_provider_requests: Dict[str, str] = {}
+        self._assistant_response_part_actions: List[Dict[str, Any]] = []
 
     @classmethod
     def _ensure_webview_resource_server(cls) -> _WebviewResourceServer:
@@ -7063,6 +7110,33 @@ class AIEditorAPI:
         payload = json.loads(json.dumps(fixture))
         payload["ok"] = True
         return payload
+
+    def assistant_response_part_action(self, payload: Optional[Dict[str, Any]] = None) -> Dict:
+        """Record an Assistant response-part action for provider callbacks/debug replay."""
+        data = payload if isinstance(payload, dict) else {}
+        action = {
+            "kind": str(data.get("kind") or ""),
+            "partId": str(data.get("partId") or data.get("id") or ""),
+            "requestId": str(data.get("requestId") or ""),
+            "callbackId": str(data.get("callbackId") or ""),
+            "action": str(data.get("action") or ""),
+            "value": data.get("value"),
+            "button": data.get("button") if isinstance(data.get("button"), dict) else None,
+            "answers": data.get("answers") if isinstance(data.get("answers"), list) else None,
+            "data": data.get("data") if isinstance(data.get("data"), dict) else None,
+            "timestamp": time.time(),
+        }
+        if not (action["callbackId"] or action["requestId"] or action["partId"]):
+            return {"error": "Assistant response part action is missing callback metadata."}
+        if not action["action"]:
+            return {"error": "Assistant response part action is missing an action."}
+        self._assistant_response_part_actions.append(action)
+        del self._assistant_response_part_actions[:-20]
+        return {
+            "ok": True,
+            "action": action,
+            "recent": list(self._assistant_response_part_actions),
+        }
 
     def provider_cancel(self, provider_id: str) -> Dict:
         if provider_id == "chat":

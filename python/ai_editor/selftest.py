@@ -1025,7 +1025,7 @@ def test_app_settings_parity() -> None:
         "extension_quick_input_action",
         "load_history", "switch_provider", "list_chat_providers",
         "provider_send", "provider_cancel", "provider_new_chat",
-        "assistant_native_response_fixture",
+        "assistant_native_response_fixture", "assistant_response_part_action",
         "get_model_info", "test_connection", "set_mode", "save_config",
         "get_mode", "list_models", "save_custom_model",
         "delete_custom_model", "search_extensions",
@@ -1038,6 +1038,7 @@ def test_app_settings_parity() -> None:
     _check("AIEditorAPI JS-callable methods", not missing, ", ".join(missing))
     fixture_list = api.assistant_native_response_fixture("list")
     native_fixture = api.assistant_native_response_fixture("split-native-response-parts")
+    actionable_fixture = api.assistant_native_response_fixture("actionable-response-parts")
     fixture_parts = []
     for chunk in native_fixture.get("chunks", []):
         fixture_parts.extend(chunk.get("responseParts", []))
@@ -1055,6 +1056,26 @@ def test_app_settings_parity() -> None:
            and "progressTask" in fixture_kinds
            and "progressTaskResult" in fixture_kinds
            and native_fixture.get("chunks", [{}])[1].get("contentReferences"))
+    actionable_parts = actionable_fixture.get("chunks", [{}])[0].get("responseParts", [])
+    _check("assistant native response replay fixture exposes actionable callback parts",
+           actionable_fixture.get("ok") is True
+           and any(item.get("name") == "actionable-response-parts"
+                   for item in fixture_list.get("fixtures", []))
+           and any(part.get("kind") == "confirmation" and part.get("callbackId")
+                   for part in actionable_parts)
+           and any(part.get("kind") == "questionCarousel" and part.get("requestId")
+                   for part in actionable_parts))
+    action_result = api.assistant_response_part_action({
+        "kind": "confirmation",
+        "partId": "confirm-apply-edits",
+        "callbackId": "callback-confirm-1",
+        "action": "apply",
+        "value": "apply",
+    })
+    _check("assistant response part actions are recorded for callbacks",
+           action_result.get("ok") is True
+           and action_result.get("action", {}).get("callbackId") == "callback-confirm-1"
+           and action_result.get("recent", [{}])[-1].get("action") == "apply")
     _check("assistant native response replay fixture rejects unknown names",
            "Unknown Assistant native response fixture"
            in api.assistant_native_response_fixture("missing-fixture").get("error", ""))
@@ -4535,7 +4556,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "renderChatSimpleToolInvocationPart(wrap,part)" in html
            and "renderChatModifiedFilesConfirmationPart(wrap,part)" in html
            and "task.resultContent?'Progress task complete':'Progress task'" in html
-           and "chatResponseComposerText('Answers',chatQuestionCarouselAnswerText(card))" in html
+           and "assistantSubmitResponsePartAction(part,'answers',chatQuestionCarouselAnswerText(card),null" in html
            and "chatResponseComposerText('Install extensions',exts.join(', '))" in html
            and "openChatResponseReference(chatMultiDiffRef(entry))" in html
            and "openChatResponseReference(chatWorkspaceEditRef(edit))" in html
@@ -4560,6 +4581,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "merged.response_parts=merged.responseParts;" not in html
            and "merged.content_references=merged.contentReferences;" not in html
            and "function assistantNativeResponseRenderSummary(body,payload,content)" in html
+           and "function assistantNativeResponseDomSnapshot(body)" in html
+           and "callbackActionCount:count('[data-assistant-callback=\"true\"]')" in html
+           and "todoCardCount:count('.chat-response-todo-list')" in html
            and "async function replayAssistantNativeResponseFixture(nameOrPayload,opts)" in html
            and "fixture=await call('assistant_native_response_fixture',nameOrPayload||'split-native-response-parts');" in html
            and "const payload=assistantMergeNativeResponsePayloads(chunks);" in html
@@ -4567,10 +4591,20 @@ def test_phase1_ai_editor_regressions() -> None:
            and "renderChatResponseReferences(body,content,payload);" in html
            and "body.dataset.assistantReplaySummary=JSON.stringify(summary);" in html
            and "window.assistantMergeNativeResponsePayloads=assistantMergeNativeResponsePayloads;" in html
+           and "window.assistantNativeResponseDomSnapshot=assistantNativeResponseDomSnapshot;" in html
            and "window.assistantNativeResponseRenderSummary=assistantNativeResponseRenderSummary;" in html
            and "window.replayAssistantNativeResponseFixture=replayAssistantNativeResponseFixture;" in html
            and "modifiedFileCount:parts.filter(part=>part.kind==='modifiedFilesConfirmation')" in html
            and "todoCount:parts.filter(part=>part.kind==='todoList')" in html)
+    _check("frontend Assistant response part actions submit callback metadata",
+           "function assistantSubmitResponsePartAction(part,action,value,button,opts)" in html
+           and "call('assistant_response_part_action',payload)" in html
+           and "assistantResponsePartCallbackMetadata(source,button)" in html
+           and "btn.dataset.assistantCallback='true';" in html
+           and "insert.dataset.assistantAction='answers';" in html
+           and "skip.dataset.assistantAction='skip';" in html
+           and "function chatQuestionCarouselAnswerPayload(card)" in html
+           and "window.assistantSubmitResponsePartAction=assistantSubmitResponsePartAction;" in html)
     _check("frontend Assistant applies native response text edits and file tree actions",
            "chat-response-summary" in html
            and "chat-inline-actions" in html
