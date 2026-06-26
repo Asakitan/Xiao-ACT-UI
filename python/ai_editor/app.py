@@ -6760,11 +6760,12 @@ class AIEditorAPI:
             result.update({"persist_error": persist_error, "applied": True})
         return result
 
-    def provider_send(self, provider_id: str, text: str) -> Dict:
+    def provider_send(self, provider_id: str, text: str, metadata: Optional[Dict] = None) -> Dict:
         """Send a message to a specific provider's conversation."""
         self._ensure_engine()
+        request_meta = metadata if isinstance(metadata, dict) else {}
         if provider_id == "chat":
-            return self.send_message(text)
+            return self.send_message(text, {"native_request": request_meta} if request_meta else None)
         message = str(text or "").strip()
         if not message:
             return {"error": "Empty message", "provider": provider_id}
@@ -6775,7 +6776,7 @@ class AIEditorAPI:
         if unavailable:
             return {"error": unavailable, "provider": provider_id, "available": False}
         if self._provider_uses_native_chat(prov):
-            return self.send_message(message)
+            return self.send_message(message, {"native_request": request_meta} if request_meta else None)
         if self._provider_uses_extension_webview(prov):
             return {"error": "Provider input is owned by its extension WebviewView.",
                     "provider": provider_id, "runtime_mode": "extension-webview"}

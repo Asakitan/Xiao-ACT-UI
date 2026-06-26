@@ -4388,6 +4388,53 @@ function chatPromptWithReferences(text,refs){
   if(!refs.length)return text;
   return refs.map(r=>r.prompt).join('\n\n')+'\n\nUser request:\n'+text;
 }
+function chatAttachmentId(a){
+  return 'attachment:'+String(a&&a.type||'file')+':'+String(a&&a.name||'attachment');
+}
+function chatAttachmentMime(a){
+  if(a&&a.mime)return String(a.mime);
+  const data=String(a&&a.data||'');
+  const match=data.match(/^data:([^;]+);/);
+  if(match)return match[1];
+  return a&&a.type==='image'?'image/png':'text/plain';
+}
+function chatAttachmentPrompt(a){
+  const name=String(a&&a.name||'Attachment');
+  if(a&&a.type==='image')return 'Attached image: '+name;
+  return 'Attached file '+name+':\n```\n'+chatContextTextSample(a&&a.data,6000)+'\n```';
+}
+function normalizeChatAttachment(a){
+  const type=String(a&&a.type||'file');
+  const name=String(a&&a.name||'Attachment');
+  const data=String(a&&a.data||'');
+  return {
+    id:chatAttachmentId(a),kind:type,type,name,label:name,mime:chatAttachmentMime(a),
+    size:data.length,preview:type==='image'?'Image attachment':chatContextTextSample(data,220),
+    prompt:chatAttachmentPrompt(a),dataUrl:type==='image'?data:'',text:type==='image'?'':data
+  };
+}
+function chatContextRefFromAttachment(a){
+  const normalized=normalizeChatAttachment(a);
+  return {id:normalized.id,kind:normalized.kind,label:normalized.label,preview:normalized.preview,
+    prompt:normalized.prompt,attachment:normalized};
+}
+function drainPendingAttachmentsAsContext(){
+  if(typeof attachments==='undefined'||!Array.isArray(attachments)||!attachments.length)return [];
+  const refs=attachments.map(a=>chatContextRefFromAttachment(a));
+  refs.forEach(ref=>addChatContextAttachment(ref));
+  attachments=[];renderAttachments();
+  return refs;
+}
+function chatNativeRequestPayload(text,refs,toolHint,providerId){
+  const normalizedRefs=(refs||[]).filter(Boolean);
+  const attachmentRefs=normalizedRefs.filter(ref=>ref&&ref.attachment).map(ref=>ref.attachment);
+  return {
+    text:String(text||''),toolHint:String(toolHint||''),providerId:String(providerId||config.provider||''),
+    references:normalizedRefs.map(ref=>({id:ref.id||'',kind:ref.kind||'ctx',label:ref.label||ref.id||'',preview:ref.preview||'',prompt:ref.prompt||''})),
+    attachments:attachmentRefs,
+    usedContext:normalizedRefs.map(ref=>({id:ref.id||'',kind:ref.kind||'ctx',label:ref.label||ref.id||'',uri:ref.path||ref.uri||'',preview:ref.preview||''}))
+  };
+}
 function renderChatReferences(body,refs){
   refs=(refs||[]).filter(Boolean);
   if(!body||!refs.length)return;
@@ -4683,14 +4730,26 @@ function normalizeChatNativeReference(raw,kindOverride){
 }
 function normalizeChatUsedContext(payload){
   const used=payload&&(payload.usedContext||payload.used_context||payload.used);
-  const docs=Array.isArray(used&&used.documents)?used.documents:(Array.isArray(used)?used:[]);
+  const docs=[
+    ...(Array.isArray(used&&used.documents)?used.documents:[]),
+    ...(Array.isArray(used&&used.references)?used.references:[]),
+    ...(Array.isArray(used&&used.items)?used.items:[]),
+    ...(Array.isArray(used&&used.files)?used.files:[]),
+    ...(Array.isArray(used&&used.attachments)?used.attachments:[]),
+    ...(Array.isArray(payload&&payload.usedContextReferences)?payload.usedContextReferences:[]),
+    ...(Array.isArray(payload&&payload.used_context_references)?payload.used_context_references:[]),
+    ...(Array.isArray(used)?used:[])
+  ];
   return docs.map(doc=>{
-    const path=chatUriPath(doc.uri||doc.path||doc.filePath||doc);
-    if(!path)return null;
-    const ranges=Array.isArray(doc.ranges)?doc.ranges:[];
+    const rec=doc&&typeof doc==='object'?doc:{uri:doc};
+    const path=chatUriPath(rec.uri||rec.path||rec.filePath||rec.fsPath||rec.resourceUri||rec.id||rec.label||rec.name||rec);
+    const label=String(rec.label||rec.name||rec.title||path||'Used context');
+    const ranges=Array.isArray(rec.ranges)?rec.ranges:(rec.range?[rec.range]:[]);
     const first=ranges[0]||{};
-    const line=chatReferenceLine({range:first});
-    return {path,label:path,line,kind:'used',status:'used',openable:isLikelyChatFileReferencePath(path)};
+    const line=chatReferenceLine({range:first,line:rec.line});
+    const kind=String(rec.kind||rec.type||'used');
+    return {path:path||label,label,line,kind:kind==='attachment'?'used':kind,status:rec.status||'used',
+      openable:!!path&&isLikelyChatFileReferencePath(path)};
   }).filter(Boolean);
 }
 function normalizeChatContentReferences(payload){
@@ -15284,11 +15343,19 @@ function createProviderMessage(pid,role,model,text){
 async function providerSend(pid){
   const p=providerDefs[pid];
   if(p&&p.available===false){appendProviderError(pid,providerUnavailableText(p));updateProviderStatus(pid,t('provider_status_unavailable'),'error');setStatus(providerDisplayName(pid)+': '+t('provider_status_unavailable'));return}
-  const inp=providerRefs(pid).input;if(!inp)return;const text=inp.value.trim();if(!text)return;
+  const inp=providerRefs(pid).input;if(!inp)return;let text=inp.value.trim();
   const state=providerUiState[pid]||{};if(state.running)return;
+  drainPendingAttachmentsAsContext();
+  const sendContext=chatSendContextFromInput(text);text=sendContext.text;
+  if(!text&&sendContext.refs.length)text='Review the attached context.';
+  if(!text)return;
   inp.value='';
-  createProviderMessage(pid,'user','',text);setProviderRunning(pid,true,t('provider_status_thinking'),'running');
-  let r;try{r=await call('provider_send',pid,text)}catch(e){r={error:String(e)}}
+  const userBody=createProviderMessage(pid,'user','',text);
+  renderChatReferences(userBody,sendContext.refs);
+  setProviderRunning(pid,true,t('provider_status_thinking'),'running');
+  const nativeRequest=chatNativeRequestPayload(text,sendContext.refs,'',pid);
+  const sendText=chatPromptWithReferences(text,sendContext.refs);
+  let r;try{r=await call('provider_send',pid,sendText,nativeRequest)}catch(e){r={error:String(e)}}
   if(r&&r.error){appendProviderError(pid,r.error);setProviderRunning(pid,false,r.available===false?t('provider_status_unavailable'):t('provider_status_error'),'error');setStatus(providerDisplayName(pid)+': '+(r.available===false?t('provider_status_unavailable'):t('provider_status_error')))}
 }
 async function providerCancel(pid){
@@ -21535,7 +21602,8 @@ doSend=async function(){
   const agentMode=currentMode==='agent'||currentApproval==='autopilot'||currentApproval==='bypass';
   const baseSendText=toolHint?'Use the '+toolHint+' tool: '+text:text;
   const sendText=chatPromptWithReferences(baseSendText,sendContext.refs);
-  await call('send_message',sendText,{provider:config.provider,model:config.model,chat_session:requestMeta},agentMode);
+  const nativeRequest=chatNativeRequestPayload(text,sendContext.refs,toolHint,config.provider);
+  await call('send_message',sendText,{provider:config.provider,model:config.model,chat_session:requestMeta,native_request:nativeRequest,attachments:nativeRequest.attachments,usedContext:nativeRequest.usedContext},agentMode);
 };
 window.doSend=doSend;
 
@@ -22642,9 +22710,12 @@ doSend=async function(){
       const header=parts[0]||'';
       const mimeMatch=header.match(/^data:([^;]+);base64$/);
       const mime=mimeMatch?mimeMatch[1]:'image/png';
+      const imageRef=chatContextRefFromAttachment({...img,mime});
       inp.value='';attachments=[];renderAttachments();
-      noteAssistantChatRequest(text,[{id:'attachment:image:'+img.name,kind:'image',label:img.name}],'');
-      createMsg('user').innerHTML=esc(text)+'<br><img src="'+img.data+'" style="max-width:300px;max-height:200px;border-radius:4px;margin-top:6px">';
+      noteAssistantChatRequest(text,[imageRef],'');
+      const userBody=createMsg('user');
+      userBody.innerHTML=esc(text)+'<br><img src="'+img.data+'" style="max-width:300px;max-height:200px;border-radius:4px;margin-top:6px">';
+      renderChatReferences(userBody,[imageRef]);
       setChatStreamingState(true);
       setStatus('Analyzing image...');
       currentMsgBody=createMsg('assistant',config.model||config.provider);streamBuf='';renderAssistantPending(currentMsgBody,'Analyzing image...');
@@ -22653,14 +22724,7 @@ doSend=async function(){
     }
   }
   // If attachments, promote them into the same reference model as @ context.
-  if(attachments.length>0){
-    attachments.forEach(a=>{
-      const preview=a.type==='image'?'Image attachment':chatContextTextSample(a.data,220);
-      const prompt=a.type==='image'?'Attached image: '+a.name:'Attached file '+a.name+':\n```\n'+chatContextTextSample(a.data,6000)+'\n```';
-      addChatContextAttachment({id:'attachment:'+a.type+':'+a.name,kind:a.type,label:a.name,preview,prompt});
-    });
-    attachments=[];renderAttachments();
-  }
+  drainPendingAttachmentsAsContext();
   return _origDoSend2();
 };
 window.doSend=doSend;

@@ -3374,6 +3374,18 @@ def test_phase1_ai_editor_regressions() -> None:
            and plugin_new_chat_again.get("created_controller") is False)
     _check("provider_send rejects empty provider message payloads",
            plugin_provider_api.provider_send("plugin-demo", "   ").get("error") == "Empty message")
+    plugin_provider_api._provider_controllers["plugin-demo"] = _FakeProviderController()
+    provider_payload = {
+        "references": [{"id": "workspace:file.py", "kind": "file"}],
+        "attachments": [{"id": "attachment:file:notes.txt", "name": "notes.txt"}],
+        "usedContext": [{"label": "notes.txt"}],
+    }
+    provider_payload_result = plugin_provider_api.provider_send(
+        "plugin-demo", "Context:\nnotes\n\nUser request:\nreview", provider_payload)
+    _check("provider_send accepts native request metadata while preserving controller send",
+           provider_payload_result.get("ok") is True
+           and plugin_provider_api._provider_controllers["plugin-demo"].sent[-1]
+           == ("Context:\nnotes\n\nUser request:\nreview", False))
     _check("unregister_chat_provider removes custom providers only",
            plugin_provider_api.unregister_chat_provider("plugin-demo").get("ok") is True
            and plugin_provider_api._provider_registry.get("plugin-demo") is None)
@@ -3644,18 +3656,29 @@ def test_phase1_ai_editor_regressions() -> None:
            and "chat-reference-card" in html
            and "let chatContextAttachments=[];" in html
            and "function chatContextFromToken(token)" in html
-           and "function addChatContextAttachment(item)" in html
-           and "function chatSendContextFromInput(text)" in html
-           and "function chatPromptWithReferences(text,refs)" in html
-           and "function renderChatReferences(body,refs)" in html
-           and "before.match(/@([A-Za-z0-9_.:-]*)$/)" in html
-           and "renderChatReferences(userBody,sendContext.refs);" in html
-           and "const sendText=chatPromptWithReferences(baseSendText,sendContext.refs);" in html
-           and "setToolbarAgent(String(item.id||'').replace(/^agent:/,''));" in html
-           and "addChatContextAttachment({id:'attachment:'+a.type+':'+a.name" in html
-           and "function renderSlashPopup(matches)" in html
-           and "window.pickSlashByIndex=function(idx)" in html
-           and "role=\"option\" aria-selected=" in html
+            and "function addChatContextAttachment(item)" in html
+            and "function chatSendContextFromInput(text)" in html
+            and "function chatPromptWithReferences(text,refs)" in html
+            and "function chatAttachmentId(a)" in html
+            and "function normalizeChatAttachment(a)" in html
+            and "function chatContextRefFromAttachment(a)" in html
+            and "function drainPendingAttachmentsAsContext()" in html
+            and "function chatNativeRequestPayload(text,refs,toolHint,providerId)" in html
+            and "attachments:attachmentRefs" in html
+            and "usedContext:normalizedRefs.map" in html
+            and "function renderChatReferences(body,refs)" in html
+            and "before.match(/@([A-Za-z0-9_.:-]*)$/)" in html
+            and "renderChatReferences(userBody,sendContext.refs);" in html
+            and "native_request:nativeRequest" in html
+            and "attachments:nativeRequest.attachments" in html
+            and "usedContext:nativeRequest.usedContext" in html
+            and "const sendText=chatPromptWithReferences(baseSendText,sendContext.refs);" in html
+            and "setToolbarAgent(String(item.id||'').replace(/^agent:/,''));" in html
+            and "drainPendingAttachmentsAsContext();" in html
+            and "const imageRef=chatContextRefFromAttachment({...img,mime});" in html
+            and "function renderSlashPopup(matches)" in html
+            and "window.pickSlashByIndex=function(idx)" in html
+            and "role=\"option\" aria-selected=" in html
            and "slash-item .category" in html)
     _check("frontend Assistant exposes Copilot-style input completions",
            "function chatInputSymbolCompletions()" in html
@@ -3832,11 +3855,25 @@ def test_phase1_ai_editor_regressions() -> None:
            and "payload.contentReferences" in html
            and "payload.content_references" in html
            and "payload.usedContext||payload.used_context" in html
+           and "used&&used.references" in html
+           and "used&&used.items" in html
+           and "used&&used.files" in html
+           and "used&&used.attachments" in html
+           and "payload&&payload.usedContextReferences" in html
            and "ref.diffMeta" in html
            and "ref.status" in html
            and "function chatFollowupsFromPayload(payload,content)" in html
            and "item.agentId" in html
            and "renderChatResponseReferences(s,content,data);" in html)
+    _check("frontend Assistant provider panels send native context payloads",
+           "async function providerSend(pid)" in html
+           and "drainPendingAttachmentsAsContext();" in html
+           and "const sendContext=chatSendContextFromInput(text);text=sendContext.text;" in html
+           and "if(!text&&sendContext.refs.length)text='Review the attached context.'" in html
+           and "renderChatReferences(userBody,sendContext.refs);" in html
+           and "const nativeRequest=chatNativeRequestPayload(text,sendContext.refs,'',pid);" in html
+           and "const sendText=chatPromptWithReferences(text,sendContext.refs);" in html
+           and "await call('provider_send',pid,sendText,nativeRequest)" in html)
     _check("frontend Assistant opens rich response anchors ranges and diffs",
            "function chatReferenceLocationFromPath(path,line,column,endLine,endColumn)" in html
            and "function chatReferenceRange(value)" in html
