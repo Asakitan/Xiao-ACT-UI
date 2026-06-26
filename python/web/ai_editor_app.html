@@ -18812,6 +18812,56 @@ function extensionActionGlyph(action){
   if(icon&&icon.length<=3)return icon;
   return '...';
 }
+function extensionActionGroupName(action){
+  return String((action&&action.groupName)||((action&&action.group)||'').split('@',1)[0]||'');
+}
+function extensionActionOrder(action){
+  const raw=action&&action.order!==undefined?action.order:String((action&&action.group)||'').split('@').pop();
+  const n=Number(raw);
+  return Number.isFinite(n)?n:0;
+}
+function sortedExtensionActions(actions){
+  const rows=Array.isArray(actions)?actions.filter(Boolean):[];
+  return rows.slice().sort((a,b)=>{
+    const ar=Number(a.groupRank!==undefined?a.groupRank:(extensionActionGroupName(a)==='navigation'?0:extensionActionGroupName(a)==='inline'?10:100));
+    const br=Number(b.groupRank!==undefined?b.groupRank:(extensionActionGroupName(b)==='navigation'?0:extensionActionGroupName(b)==='inline'?10:100));
+    if(ar!==br)return ar-br;
+    const ao=extensionActionOrder(a),bo=extensionActionOrder(b);
+    if(ao!==bo)return ao-bo;
+    return String(a.title||a.command||a.submenu||'').localeCompare(String(b.title||b.command||b.submenu||''));
+  });
+}
+function extensionTitleActionBuckets(actions){
+  const rows=sortedExtensionActions(actions);
+  const primary=rows.filter(action=>action.navigation===true||extensionActionGroupName(action)==='navigation');
+  const secondary=rows.filter(action=>!(action.navigation===true||extensionActionGroupName(action)==='navigation'));
+  return {primary:primary.length?primary:rows.slice(0,3),secondary:secondary.length?secondary:rows.slice(3)};
+}
+function extensionActionDisabled(action){return !!(action&&(action.disabled||action.enabled===false))}
+function extensionActionTitle(action){
+  const base=String((action&&action.shortTitle)||(action&&action.title)||(action&&action.command)||(action&&action.submenu)||'Command');
+  const reason=String((action&&action.disabledReason)||'');
+  return reason?base+' - '+reason:base;
+}
+function applyExtensionActionMetadata(el,action,context){
+  if(!el||!action)return;
+  const group=String(action.groupName||action.group||'');
+  el.dataset.command=String(action.command||'');
+  el.dataset.submenu=String(action.submenu||'');
+  el.dataset.group=group;
+  el.dataset.groupName=extensionActionGroupName(action);
+  el.dataset.order=String(extensionActionOrder(action));
+  el.dataset.extensionId=String(action.extensionId||action.extension_id||'');
+  el.dataset.view=String(action.view||(context&&context.view)||'');
+  el.dataset.viewItem=String(action.viewItem||(context&&context.viewItem)||'');
+  el.dataset.viewContainer=String(action.viewContainer||(context&&context.viewContainer)||'');
+  el.dataset.itemType=String(action.itemType||'command');
+  if(action.alt&&action.alt.command)el.dataset.altCommand=String(action.alt.command);
+  if(action.disabledReason)el.dataset.disabledReason=String(action.disabledReason);
+  if(context&&context.treeViewId)el.dataset.treeViewId=String(context.treeViewId);
+  if(context&&context.treeItemHandle)el.dataset.treeItemHandle=String(context.treeItemHandle);
+  if(context&&Array.isArray(context.selectedTreeItems))el.dataset.selectedTreeItems=JSON.stringify(context.selectedTreeItems);
+}
 function extensionTreeThemeIconGlyph(id){
   id=String(id||'').toLowerCase();
   const map={
@@ -18866,12 +18916,12 @@ function extensionTreeItemTitle(node){
   if(checkbox&&checkbox.tooltip)parts.push(String(checkbox.tooltip));
   return parts.join('\n');
 }
-function showExtensionActionMenu(x,y,actions,runner){
+function showExtensionActionMenu(x,y,actions,runner,context){
   const menu=$('ctx-menu');if(!menu)return;
   menu.innerHTML='';
   menu.setAttribute('role','menu');
   menu.setAttribute('aria-label','Extension actions');
-  appendExtensionActionMenuItems(menu,actions,runner,0);
+  appendExtensionActionMenuItems(menu,sortedExtensionActions(actions),runner,0,context||{});
   if(!menu.children.length)return;
   menu.style.display='block';menu.style.left=x+'px';menu.style.top=y+'px';
   const first=menu.querySelector('.ctx-item:not(.disabled)');
@@ -18889,29 +18939,36 @@ function closeExtensionSubmenus(menu,level){
     if(Number(sub.dataset.level||0)>=level)sub.remove();
   });
 }
-function appendExtensionActionMenuItems(menu,actions,runner,level){
+function appendExtensionActionMenuItems(menu,actions,runner,level,context){
   let lastGroup=null;
-  (actions||[]).forEach(action=>{
+  sortedExtensionActions(actions).forEach(action=>{
     const group=String(action.groupName||action.group||'');
     if(lastGroup!==null&&group!==lastGroup){
       const sep=document.createElement('div');
       sep.className='ctx-sep';
+      sep.setAttribute('role','separator');
+      sep.dataset.group=group;
       menu.appendChild(sep);
     }
     lastGroup=group;
     const d=document.createElement('div');d.className='ctx-item';
     d.tabIndex=-1;
     d.setAttribute('role','menuitem');
-    d.dataset.command=String(action.command||'');
-    d.dataset.submenu=String(action.submenu||'');
-    d.dataset.group=group;
+    applyExtensionActionMetadata(d,action,context);
     const subActions=extensionSubmenuActions(action);
     if(subActions.length)d.classList.add('submenu');
-    if(action.disabled&&!subActions.length)d.classList.add('disabled');
-    d.setAttribute('aria-disabled',action.disabled&&!subActions.length?'true':'false');
+    const disabled=extensionActionDisabled(action)&&!subActions.length;
+    if(disabled)d.classList.add('disabled');
+    d.setAttribute('aria-disabled',disabled?'true':'false');
+    d.title=extensionActionTitle(action);
     const label=document.createElement('span');
     label.textContent=action.title||action.command||action.submenu||'Command';
     d.appendChild(label);
+    if(action.disabledReason){
+      const reason=document.createElement('span');reason.className='shortcut';
+      reason.textContent=String(action.disabledReason);
+      d.appendChild(reason);
+    }
     if(subActions.length){
       const arrow=document.createElement('span');arrow.className='submenu-arrow';arrow.textContent='›';
       d.appendChild(arrow);
@@ -18922,7 +18979,7 @@ function appendExtensionActionMenuItems(menu,actions,runner,level){
       if(!subActions.length)return;
       const sub=document.createElement('div');sub.className='ctx-submenu';sub.dataset.level=String(level+1);
       sub.setAttribute('role','menu');
-      appendExtensionActionMenuItems(sub,subActions,runner,level+1);
+      appendExtensionActionMenuItems(sub,subActions,runner,level+1,context);
       if(!sub.children.length)return;
       document.body.appendChild(sub);
       const box=d.getBoundingClientRect();
@@ -18933,13 +18990,18 @@ function appendExtensionActionMenuItems(menu,actions,runner,level){
       sub.style.left=left+'px';sub.style.top=top+'px';
       menu.appendChild(sub);
     };
-    d.onclick=()=>{if(subActions.length)return;if(action.disabled)return;menu.style.display='none';closeExtensionSubmenus(menu,0);runner(action)};
+    d.onclick=()=>{if(subActions.length)return;if(extensionActionDisabled(action)){if(action.disabledReason)setStatus(String(action.disabledReason));return}menu.style.display='none';closeExtensionSubmenus(menu,0);runner(action)};
     d.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();d.click()}};
     menu.appendChild(d);
   });
 }
 function runExtensionViewAction(action){
-  if(action&&action.command&&!action.disabled)call('execute_command',action.command,...(action.arguments||[]));
+  if(!action||!action.command)return;
+  if(extensionActionDisabled(action)){
+    if(action.disabledReason)setStatus(String(action.disabledReason));
+    return;
+  }
+  call('execute_command',action.command,...(action.arguments||[]));
 }
 function webviewRuntimeRecord(viewId){
   const id=String(viewId||'').trim();
@@ -18993,13 +19055,25 @@ function extensionWelcomeEntries(view,state){
   return raw.filter(entry=>entry&&String(entry.contents||entry.content||'').trim());
 }
 function extensionWelcomeCommandFromUri(uri){
-  let command=String(uri||'');
-  if(!command.startsWith('command:'))return '';
-  command=command.slice('command:'.length);
-  const queryIndex=command.indexOf('?');
-  if(queryIndex>=0)command=command.slice(0,queryIndex);
+  return extensionWelcomeCommandPayloadFromUri(uri).command;
+}
+function extensionWelcomeCommandPayloadFromUri(uri){
+  let raw=String(uri||'').trim();
+  if(!raw.startsWith('command:'))return {command:'',arguments:[]};
+  raw=raw.slice('command:'.length);
+  const queryIndex=raw.indexOf('?');
+  let command=queryIndex>=0?raw.slice(0,queryIndex):raw;
+  const query=queryIndex>=0?raw.slice(queryIndex+1):'';
   try{command=decodeURIComponent(command)}catch(e){}
-  return command.trim();
+  const payload={command:command.trim(),arguments:[]};
+  if(query){
+    try{
+      const decoded=decodeURIComponent(query);
+      const parsed=JSON.parse(decoded);
+      payload.arguments=Array.isArray(parsed)?parsed:[parsed];
+    }catch(e){payload.arguments=[]}
+  }
+  return payload;
 }
 function extensionWelcomeExternalLinkTarget(uri){
   const raw=String(uri||'').trim();
@@ -19026,13 +19100,16 @@ function appendExtensionWelcomeLine(parent,line){
     if(match.index>last)parent.appendChild(document.createTextNode(text.slice(last,match.index)));
     const label=match[1]||match[2];
     const linkTarget=String(match[2]||'').trim();
-    const command=extensionWelcomeCommandFromUri(linkTarget);
+    const commandPayload=extensionWelcomeCommandPayloadFromUri(linkTarget);
+    const command=commandPayload.command;
     const external=command?'':extensionWelcomeExternalLinkTarget(linkTarget);
     if(command){
       const btn=document.createElement('button');btn.type='button';btn.className='link-btn';
       btn.style.cssText='border:0;background:transparent;color:var(--fg-accent);padding:0;font:inherit;cursor:pointer;text-align:left';
       btn.textContent=label;btn.title=command;
-      btn.onclick=e=>{e.stopPropagation();call('execute_command',command)};
+      btn.dataset.command=command;
+      btn.dataset.arguments=JSON.stringify(commandPayload.arguments||[]);
+      btn.onclick=e=>{e.stopPropagation();call('execute_command',command,...(commandPayload.arguments||[]))};
       parent.appendChild(btn);
     }else if(external){
       const a=document.createElement('a');
@@ -19050,9 +19127,16 @@ function appendExtensionWelcomeContent(parent,entries){
   const visible=Array.isArray(entries)?entries:[];
   if(!visible.length)return false;
   const box=document.createElement('div');box.className='ext-view-welcome';
+  box.setAttribute('role','region');
+  box.setAttribute('aria-label','View welcome');
   box.style.cssText='display:flex;flex-direction:column;gap:8px;color:var(--fg-dim);font-size:11px;line-height:1.45;padding:0 0 8px 0';
   visible.forEach(entry=>{
     const block=document.createElement('div');
+    block.dataset.view=String(entry.view||'');
+    block.dataset.group=String(entry.group||'');
+    block.dataset.order=String(entry.order!==undefined?entry.order:'');
+    block.dataset.extensionId=String(entry.extension_id||entry.extensionId||'');
+    if(entry.when)block.dataset.when=String(entry.when);
     block.style.cssText='display:flex;flex-direction:column;gap:2px';
     String(entry.contents||entry.content||'').split(/\r?\n/).forEach(line=>{
       const row=document.createElement('div');
@@ -19066,7 +19150,11 @@ function appendExtensionWelcomeContent(parent,entries){
   return true;
 }
 function runExtensionTreeItemAction(viewId,node,action){
-  if(!action||!action.command||action.disabled)return;
+  if(!action||!action.command)return;
+  if(extensionActionDisabled(action)){
+    if(action.disabledReason)setStatus(String(action.disabledReason));
+    return;
+  }
   if(viewId&&node&&node.handle)call('execute_extension_tree_item_action',viewId,node.handle,action.command,...(action.arguments||[]));
   else call('execute_command',action.command,...(action.arguments||[]));
 }
@@ -19240,8 +19328,25 @@ function selectExtensionTreeNode(row,wrap){
   row.classList.add('active');
   wrap.setAttribute('aria-selected','true');
 }
+function extensionTreeSelectedHandles(wrap){
+  const tree=wrap&&wrap.closest?wrap.closest('[role="tree"]'):null;
+  if(!tree)return [];
+  return Array.from(tree.querySelectorAll('.ext-tree-node[aria-selected="true"]'))
+    .map(node=>String(node.dataset.handle||'')).filter(Boolean);
+}
+function extensionTreeActionContext(viewId,node,wrap){
+  const selected=extensionTreeSelectedHandles(wrap);
+  const handle=node&&node.handle?String(node.handle):'';
+  return {
+    view:String(viewId||''),
+    viewItem:String((node&&node.contextValue)||''),
+    treeViewId:String(viewId||''),
+    treeItemHandle:handle,
+    selectedTreeItems:selected.includes(handle)?selected:(handle?[handle]:selected),
+  };
+}
 function extensionTreeActionBuckets(actions){
-  const rows=Array.isArray(actions)?actions.filter(Boolean):[];
+  const rows=sortedExtensionActions(actions);
   const inline=rows.filter(action=>action.inline===true&&!action.submenu);
   const context=rows.filter(action=>action.inline!==true||action.submenu);
   return {inline,context:context.length?context:rows};
@@ -19250,23 +19355,27 @@ function appendExtensionContainerTitleActions(parent,item){
   if(!parent||!item)return false;
   const actions=Array.isArray(item.titleActions)?item.titleActions:[];
   if(!actions.length)return false;
+  const buckets=extensionTitleActionBuckets(actions);
   const box=document.createElement('div');
   box.className='ext-container-title-actions';
   box.style.cssText='margin-left:auto;display:flex;align-items:center;gap:2px';
-  actions.slice(0,3).forEach(action=>{
+  const context={viewContainer:item.id||'',viewContainerLocation:item.location||''};
+  buckets.primary.slice(0,3).forEach(action=>{
     const btn=document.createElement('button');btn.type='button';btn.className='icon-btn';
     btn.style.cssText='width:22px;height:22px;border:0;background:transparent;color:var(--fg-dim);padding:0';
     btn.textContent=extensionActionGlyph(action);
-    btn.title=action.shortTitle||action.title||action.command||'Command';
-    btn.disabled=!!action.disabled;
+    btn.title=extensionActionTitle(action);
+    btn.disabled=extensionActionDisabled(action);
+    applyExtensionActionMetadata(btn,action,context);
     btn.onclick=e=>{e.stopPropagation();runExtensionViewAction(action)};
     box.appendChild(btn);
   });
-  if(actions.length>3){
+  const secondary=buckets.secondary.concat(buckets.primary.slice(3));
+  if(secondary.length){
     const more=document.createElement('button');more.type='button';more.className='icon-btn';
     more.style.cssText='width:22px;height:22px;border:0;background:transparent;color:var(--fg-dim);padding:0';
-    more.textContent='...';more.title='More actions';
-    more.onclick=e=>{e.stopPropagation();showExtensionActionMenu(e.clientX,e.clientY,actions.slice(3),runExtensionViewAction)};
+    more.textContent='...';more.title='More actions';more.setAttribute('aria-haspopup','menu');
+    more.onclick=e=>{e.stopPropagation();showExtensionActionMenu(e.clientX,e.clientY,secondary,runExtensionViewAction,context)};
     box.appendChild(more);
   }
   parent.appendChild(box);
@@ -19277,21 +19386,25 @@ function appendExtensionTitleActions(title,view,state){
     ?state.titleActions
     :(Array.isArray(view.titleActions)?view.titleActions:[]);
   if(!actions.length)return;
+  const buckets=extensionTitleActionBuckets(actions);
+  const context={view:view.id||state.view_id||state.viewId||''};
   const box=document.createElement('div');box.style.cssText='margin-left:auto;display:flex;align-items:center;gap:2px';
-  actions.slice(0,3).forEach(action=>{
+  buckets.primary.slice(0,3).forEach(action=>{
     const btn=document.createElement('button');btn.type='button';btn.className='icon-btn';
     btn.style.cssText='width:22px;height:22px;border:0;background:transparent;color:var(--fg-dim);padding:0';
     btn.textContent=extensionActionGlyph(action);
-    btn.title=action.title||action.command||'Command';
-    btn.disabled=!!action.disabled;
+    btn.title=extensionActionTitle(action);
+    btn.disabled=extensionActionDisabled(action);
+    applyExtensionActionMetadata(btn,action,context);
     btn.onclick=e=>{e.stopPropagation();runExtensionViewAction(action)};
     box.appendChild(btn);
   });
-  if(actions.length>3){
+  const secondary=buckets.secondary.concat(buckets.primary.slice(3));
+  if(secondary.length){
     const more=document.createElement('button');more.type='button';more.className='icon-btn';
     more.style.cssText='width:22px;height:22px;border:0;background:transparent;color:var(--fg-dim);padding:0';
-    more.textContent='...';more.title='More actions';
-    more.onclick=e=>{e.stopPropagation();showExtensionActionMenu(e.clientX,e.clientY,actions.slice(3),runExtensionViewAction)};
+    more.textContent='...';more.title='More actions';more.setAttribute('aria-haspopup','menu');
+    more.onclick=e=>{e.stopPropagation();showExtensionActionMenu(e.clientX,e.clientY,secondary,runExtensionViewAction,context)};
     box.appendChild(more);
   }
   title.appendChild(box);
@@ -19409,14 +19522,15 @@ function renderExtensionTreeNode(viewId,node,depth,viewVersion,dnd,posInSet,setS
   desc.textContent=node.description||'';
   const actions=Array.isArray(node.actions)?node.actions:[];
   const actionBuckets=extensionTreeActionBuckets(actions);
+  const actionContext=()=>extensionTreeActionContext(viewId,node,wrap);
   row.appendChild(icon);row.appendChild(label);if(node.description)row.appendChild(desc);
   actionBuckets.inline.slice(0,3).forEach(action=>{
     const btn=document.createElement('button');btn.type='button';btn.className='icon-btn ext-tree-inline-action';
     btn.style.cssText='width:18px;height:18px;flex:0 0 18px;border:0;background:transparent;color:var(--fg-dim);padding:0';
     btn.textContent=extensionActionGlyph(action);
-    btn.title=action.title||action.command||'Command';
-    btn.disabled=!!action.disabled;
-    btn.dataset.command=String(action.command||'');
+    btn.title=extensionActionTitle(action);
+    btn.disabled=extensionActionDisabled(action);
+    applyExtensionActionMetadata(btn,action,actionContext());
     btn.onclick=e=>{e.stopPropagation();runExtensionTreeItemAction(viewId,node,action)};
     row.appendChild(btn);
   });
@@ -19425,7 +19539,7 @@ function renderExtensionTreeNode(viewId,node,depth,viewVersion,dnd,posInSet,setS
     actionBtn.style.cssText='width:18px;height:18px;flex:0 0 18px;border:0;background:transparent;color:var(--fg-dim);padding:0';
     actionBtn.textContent='...';actionBtn.title='Tree item actions';
     actionBtn.setAttribute('aria-haspopup','menu');
-    actionBtn.onclick=e=>{e.stopPropagation();showExtensionActionMenu(e.clientX,e.clientY,actionBuckets.context,action=>runExtensionTreeItemAction(viewId,node,action))};
+    actionBtn.onclick=e=>{e.stopPropagation();showExtensionActionMenu(e.clientX,e.clientY,actionBuckets.context,action=>runExtensionTreeItemAction(viewId,node,action),actionContext())};
     row.appendChild(actionBtn);
   }
   applyExplorerDecoration(row,label,node);
@@ -19461,7 +19575,7 @@ function renderExtensionTreeNode(viewId,node,depth,viewVersion,dnd,posInSet,setS
     if(!actionBuckets.context.length)return;
     e.preventDefault();e.stopPropagation();
     selectNode();
-    showExtensionActionMenu(e.clientX,e.clientY,actionBuckets.context,action=>runExtensionTreeItemAction(viewId,node,action));
+    showExtensionActionMenu(e.clientX,e.clientY,actionBuckets.context,action=>runExtensionTreeItemAction(viewId,node,action),actionContext());
   };
   wrap.appendChild(row);wrap.appendChild(childBox);return wrap;
 }

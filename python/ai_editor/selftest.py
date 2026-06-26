@@ -8515,22 +8515,26 @@ console.log("extension setting schema helpers ok");
             and "event==='extension_tree_changed'" in html
             and "function scheduleExtensionActivityRefresh()" in html
             and "function appendExtensionTitleActions(title,view,state)" in html
-            and "function showExtensionActionMenu(x,y,actions,runner)" in html
+            and "function showExtensionActionMenu(x,y,actions,runner,context)" in html
             and "function extensionSubmenuActions(action)" in html
-            and "function appendExtensionActionMenuItems(menu,actions,runner,level)" in html
+            and "function appendExtensionActionMenuItems(menu,actions,runner,level,context)" in html
             and "function closeExtensionSubmenus(menu,level)" in html
             and "d.classList.add('submenu')" in html
             and "arrow.className='submenu-arrow'" in html
             and "sub.className='ctx-submenu'" in html
+            and "function sortedExtensionActions(actions)" in html
+            and "function extensionTitleActionBuckets(actions)" in html
+            and "function applyExtensionActionMetadata(el,action,context)" in html
             and "function extensionWelcomeEntries(view,state)" in html
             and "function appendExtensionWelcomeContent(parent,entries)" in html
             and "function appendExtensionWelcomeLine(parent,line)" in html
             and "function extensionWelcomeCommandFromUri(uri)" in html
+            and "function extensionWelcomeCommandPayloadFromUri(uri)" in html
             and "function extensionWelcomeExternalLinkTarget(uri)" in html
             and "function openExtensionWelcomeLink(target)" in html
-            and "command.startsWith('command:')" in html
+            and "raw.startsWith('command:')" in html
             and "/^(https?:|mailto:)$/i.test(target.protocol)" in html
-            and "call('execute_command',command)" in html
+            and "call('execute_command',command,...(commandPayload.arguments||[]))" in html
             and "call('open_external_uri',target)" in html
             and "a.rel='noopener noreferrer'" in html
             and "const welcomeEntries=extensionWelcomeEntries(view,state)" in html
@@ -8564,7 +8568,8 @@ console.log("extension setting schema helpers ok");
             and "function focusRevealedExtensionTree(tree)" in html
             and "function appendExtensionContainerTitleActions(parent,item)" in html
             and "Array.isArray(item.titleActions)?item.titleActions:[]" in html
-            and "showExtensionActionMenu(e.clientX,e.clientY,actions.slice(3),runExtensionViewAction)" in html
+            and "const buckets=extensionTitleActionBuckets(actions)" in html
+            and "showExtensionActionMenu(e.clientX,e.clientY,secondary,runExtensionViewAction,context)" in html
             and "options.showContainerActions!==false" in html
             and "header.querySelectorAll('.ext-container-title-actions,.spacer')" in html
             and ".ext-tree-node[data-revealed=\"1\"]>.sb-item" in html
@@ -8590,7 +8595,7 @@ console.log("extension setting schema helpers ok");
             and "call('list_extension_view_containers','panel')" in html
             and "className='ptab extension-panel-tab'" in html
             and "className='terminal-panel extension-panel-container'" in html
-            and "if(action.disabled&&!subActions.length)d.classList.add('disabled')" in html
+            and "if(disabled)d.classList.add('disabled')" in html
             and "if(action.alt&&action.alt.command)d.title='Alt: '" in html
             and "call('execute_command',action.command,...(action.arguments||[]))" in html
             and "if(action&&action.command&&!action.disabled)" in html
@@ -16291,6 +16296,7 @@ def test_app_extension_runtime_support() -> None:
                and "node.firstElementChild&&node.firstElementChild.classList" in html)
         _check("frontend activity TreeView separates inline and context actions",
                "function extensionTreeActionBuckets(actions)" in html
+               and "const rows=sortedExtensionActions(actions);" in html
                and "const inline=rows.filter(action=>action.inline===true&&!action.submenu);" in html
                and "const context=rows.filter(action=>action.inline!==true||action.submenu);" in html
                and "ext-tree-inline-action" in html
@@ -16300,11 +16306,41 @@ def test_app_extension_runtime_support() -> None:
                "menu.setAttribute('role','menu');" in html
                and "menu.setAttribute('aria-label','Extension actions');" in html
                and "d.setAttribute('role','menuitem');" in html
-               and "d.dataset.command=String(action.command||'');" in html
-               and "d.dataset.submenu=String(action.submenu||'');" in html
-               and "d.dataset.group=group;" in html
-               and "d.setAttribute('aria-disabled',action.disabled&&!subActions.length?'true':'false');" in html
+               and "function applyExtensionActionMetadata(el,action,context)" in html
+               and "el.dataset.command=String(action.command||'');" in html
+               and "el.dataset.submenu=String(action.submenu||'');" in html
+               and "el.dataset.groupName=extensionActionGroupName(action);" in html
+               and "el.dataset.extensionId=String(action.extensionId||action.extension_id||'');" in html
+               and "sep.setAttribute('role','separator');" in html
+               and "d.setAttribute('aria-disabled',disabled?'true':'false');" in html
+               and "if(action.disabledReason)setStatus(String(action.disabledReason));" in html
                and "d.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();d.click()}}" in html)
+        _check("frontend view title actions follow VS Code navigation buckets",
+               "function extensionTitleActionBuckets(actions)" in html
+               and "const primary=rows.filter(action=>action.navigation===true||extensionActionGroupName(action)==='navigation');" in html
+               and "const secondary=rows.filter(action=>!(action.navigation===true||extensionActionGroupName(action)==='navigation'));" in html
+               and "buckets.primary.slice(0,3).forEach(action=>" in html
+               and "const secondary=buckets.secondary.concat(buckets.primary.slice(3));" in html
+               and "more.setAttribute('aria-haspopup','menu');" in html
+               and "showExtensionActionMenu(e.clientX,e.clientY,secondary,runExtensionViewAction,context)" in html)
+        _check("frontend welcome content supports command arguments and metadata",
+               "function extensionWelcomeCommandPayloadFromUri(uri)" in html
+               and "const parsed=JSON.parse(decoded);" in html
+               and "payload.arguments=Array.isArray(parsed)?parsed:[parsed];" in html
+               and "btn.dataset.arguments=JSON.stringify(commandPayload.arguments||[]);" in html
+               and "call('execute_command',command,...(commandPayload.arguments||[]))" in html
+               and "box.setAttribute('role','region');" in html
+               and "box.setAttribute('aria-label','View welcome');" in html
+               and "block.dataset.extensionId=String(entry.extension_id||entry.extensionId||'');" in html
+               and "block.dataset.when=String(entry.when);" in html)
+        _check("frontend TreeView item actions expose VS Code action context",
+               "function extensionTreeSelectedHandles(wrap)" in html
+               and "function extensionTreeActionContext(viewId,node,wrap)" in html
+               and "treeItemHandle:handle," in html
+               and "selectedTreeItems:selected.includes(handle)?selected:(handle?[handle]:selected)," in html
+               and "applyExtensionActionMetadata(btn,action,actionContext());" in html
+               and "showExtensionActionMenu(e.clientX,e.clientY,actionBuckets.context,action=>runExtensionTreeItemAction(viewId,node,action),actionContext())" in html
+               and "if(extensionActionDisabled(action))" in html)
         activity_tree_welcome = activity_views.get(
             "selftest.activity.tree", {}).get(
                 "runtimeState", {}).get("welcome", [])
