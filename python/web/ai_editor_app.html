@@ -336,8 +336,16 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-notebook-host.active { display:block; }
 .editor-notebook-header { display:flex; align-items:center; gap:8px; margin:0 0 10px; color:var(--fg-dim);
   font-size:12px; }
+.editor-notebook-title { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .editor-notebook-type { color:var(--fg-accent); font:11px var(--mono); border:1px solid color-mix(in srgb,var(--fg-accent) 45%,var(--border));
   border-radius:3px; padding:1px 5px; }
+.editor-notebook-kernel { height:24px; max-width:230px; min-width:150px; border:1px solid var(--border);
+  border-radius:4px; background:var(--bg3); color:var(--fg); font:11px var(--sans); padding:0 7px; }
+.editor-notebook-run { height:24px; border:1px solid var(--border); border-radius:4px; background:var(--bg3);
+  color:var(--fg-accent); font:11px var(--sans); padding:0 8px; cursor:pointer; }
+.editor-notebook-run:hover,.editor-notebook-run:focus,.editor-notebook-kernel:hover,.editor-notebook-kernel:focus {
+  border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
+.editor-notebook-run:disabled,.editor-notebook-kernel:disabled { opacity:.5; cursor:default; }
 .editor-notebook-cell { border:1px solid var(--border); border-radius:5px; background:var(--bg);
   margin:0 0 10px; overflow:hidden; }
 .editor-notebook-cell-head { display:flex; align-items:center; gap:6px; padding:5px 8px; background:var(--bg2);
@@ -804,14 +812,13 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-input-container.sendable .send-btn:not(:disabled) { box-shadow:0 0 0 1px color-mix(in srgb, var(--btn) 35%, transparent); }
 .chat-input-container.streaming .send-btn { background:var(--fg-error); }
 .send-btn svg { width:14px; height:14px; }
-.chat-toolbar { display:grid; grid-template-columns:minmax(0, max-content) minmax(8px, 1fr) max-content;
-  align-items:center; column-gap:6px;
+.chat-toolbar { display:flex; align-items:center; gap:6px;
   padding:0 8px 7px; font-size:11px;
   border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent);
   min-width:0; overflow:hidden; white-space:nowrap; min-height:29px; }
 .chat-toolbar > * { min-width:0; }
 .chat-toolbar .hint { color:var(--fg-dim); }
-.chat-toolbar .spacer { width:auto; min-width:8px; height:22px; }
+.chat-toolbar .spacer { flex:1 1 8px; width:auto; min-width:8px; height:22px; }
 .chat-session-chip { max-width:96px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   color:var(--fg-dim); font:10px/18px var(--mono); }
 
@@ -872,7 +879,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-used-context { display:flex; flex-direction:column; gap:4px; margin-bottom:2px; }
 .chat-used-context-title { color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; letter-spacing:.5px; }
 
-.chat-control-strip { display:flex; align-items:center; gap:4px; flex-wrap:nowrap; min-width:0; max-width:100%;
+.chat-control-strip { display:flex; align-items:center; gap:4px; flex:1 1 auto; flex-wrap:nowrap; min-width:0; max-width:100%;
   overflow:hidden; }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
   border-radius:999px; background:var(--bg3); color:var(--fg); font:11px var(--sans);
@@ -14232,6 +14239,75 @@ async function loadNotebookStatusBar(tab,index,host){
   if(!host.isConnected||host.dataset.tabId!==String(tab.id)||host.dataset.cellIndex!==String(index))return;
   renderNotebookStatusBarItems(host,res&&res.items);
 }
+function notebookControllerLabel(controller){
+  if(!controller)return 'Select Kernel';
+  const label=String(controller.label||controller.id||'Kernel');
+  const detail=String(controller.description||controller.detail||'');
+  return detail?label+' - '+detail:label;
+}
+async function loadNotebookControllers(tab,select,runButton){
+  if(!tab||!tab.notebook||!select)return;
+  const nb=tab.notebook||{};
+  const viewType=nb.view_type||nb.viewType||'';
+  const res=await call('notebook_controllers',viewType);
+  if(!select.isConnected||select.dataset.tabId!==String(tab.id))return;
+  const controllers=Array.isArray(res&&res.controllers)?res.controllers:[];
+  tab.notebookControllers=controllers;
+  select.innerHTML='';
+  const empty=document.createElement('option');empty.value='';empty.textContent=controllers.length?'Select Kernel':'No Kernel';
+  select.appendChild(empty);
+  controllers.forEach(controller=>{
+    const opt=document.createElement('option');
+    opt.value=String(controller.handle||controller.id||'');
+    opt.textContent=notebookControllerLabel(controller);
+    opt.dataset.controllerId=String(controller.id||'');
+    select.appendChild(opt);
+  });
+  const selected=tab.selectedNotebookController||nb.selected_controller||nb.selectedController||'';
+  if(selected)select.value=String(selected);
+  if(!select.value&&controllers.length===1){
+    select.value=String(controllers[0].handle||controllers[0].id||'');
+    await selectNotebookController(tab,select.value,true);
+  }
+  select.disabled=!controllers.length;
+  if(runButton)runButton.disabled=!select.value;
+}
+function selectedNotebookController(tab,value){
+  const controllers=Array.isArray(tab&&tab.notebookControllers)?tab.notebookControllers:[];
+  const wanted=String(value||'');
+  return controllers.find(controller=>String(controller.handle||'')===wanted||String(controller.id||'')===wanted)||null;
+}
+async function selectNotebookController(tab,value,quiet){
+  const controller=selectedNotebookController(tab,value);
+  if(!tab||!tab.notebook||!controller)return {ok:false,error:'notebook controller unavailable'};
+  const nb=readNotebookFromSurface(tab);
+  const path=tab.workspacePath||tab.filePath||'';
+  const viewType=nb.view_type||nb.viewType||'';
+  const res=await call('select_notebook_controller',path,nb,viewType,controller.handle||'',controller.id||'');
+  if(callSucceeded(res)){
+    tab.selectedNotebookController=String(controller.handle||controller.id||'');
+    tab.notebook.selected_controller=tab.selectedNotebookController;
+    if(!quiet)setStatus('Selected notebook kernel: '+notebookControllerLabel(controller));
+  }else if(!quiet)setStatus('Notebook kernel selection failed: '+callFailedMessage(res,'controller unavailable'));
+  return res||{ok:false,error:'controller unavailable'};
+}
+async function runNotebookController(tab,cellIndex){
+  if(!tab||!tab.notebook)return {ok:false,error:'not a notebook tab'};
+  const controller=selectedNotebookController(tab,tab.selectedNotebookController||(tab.notebook&&tab.notebook.selected_controller));
+  if(!controller){setStatus('Select a notebook kernel first');return {ok:false,error:'controller unavailable'};}
+  const nb=readNotebookFromSurface(tab);
+  const path=tab.workspacePath||tab.filePath||'';
+  const viewType=nb.view_type||nb.viewType||'';
+  const cells=Array.isArray(nb.cells)?nb.cells:[];
+  const indices=Number.isFinite(Number(cellIndex))?[Number(cellIndex)]:cells.map((cell,index)=>index);
+  const res=await call('execute_notebook_controller',path,nb,viewType,controller.handle||'',controller.id||'',indices);
+  if(callSucceeded(res)){
+    const next=res&&res.result&&res.result.notebook;
+    if(next&&Array.isArray(next.cells)){tab.notebook={...nb,...next,dirty:nb.dirty};showNotebookSurface(tab)}
+    setStatus('Ran notebook kernel: '+notebookControllerLabel(controller));
+  }else setStatus('Notebook run failed: '+callFailedMessage(res,'controller unavailable'));
+  return res||{ok:false,error:'controller unavailable'};
+}
 function readNotebookFromSurface(tab){
   const source=(tab&&tab.notebook)||{};
   const host=$('editor-notebook-host');
@@ -14271,8 +14347,13 @@ function showNotebookSurface(tab){
   host.innerHTML='';
   const header=document.createElement('div');header.className='editor-notebook-header';
   const type=document.createElement('span');type.className='editor-notebook-type';type.textContent=nb.view_type||nb.viewType||'notebook';
-  const title=document.createElement('span');title.textContent=(nb.display_name||nb.displayName||tab.name||'Notebook')+' · '+cells.length+' cells';
-  header.appendChild(type);header.appendChild(title);host.appendChild(header);
+  const title=document.createElement('span');title.className='editor-notebook-title';title.textContent=(nb.display_name||nb.displayName||tab.name||'Notebook')+' · '+cells.length+' cells';
+  const kernel=document.createElement('select');kernel.className='editor-notebook-kernel';kernel.dataset.tabId=String(tab.id);kernel.title='Notebook kernel';
+  const run=document.createElement('button');run.type='button';run.className='editor-notebook-run';run.textContent='Run All';run.disabled=true;run.title='Run all cells';
+  kernel.onchange=()=>{selectNotebookController(tab,kernel.value).then(()=>{run.disabled=!kernel.value})};
+  run.onclick=()=>runNotebookController(tab);
+  header.appendChild(type);header.appendChild(title);header.appendChild(kernel);header.appendChild(run);host.appendChild(header);
+  loadNotebookControllers(tab,kernel,run);
   if(!cells.length){
     const empty=document.createElement('div');empty.className='editor-notebook-empty';empty.textContent='Empty notebook';
     host.appendChild(empty);return;

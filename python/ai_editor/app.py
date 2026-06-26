@@ -5072,6 +5072,121 @@ class AIEditorAPI:
             "path": full,
         }
 
+    def notebook_controllers(self, view_type: str = "") -> Dict:
+        node_host = getattr(self, "_node_ext_host", None)
+        if node_host is None or not getattr(node_host, "is_running", False):
+            return {
+                "ok": False,
+                "error": "Node extension host is not running",
+                "controllers": [],
+            }
+        result = node_host.request_notebook_controllers_result(
+            str(view_type or "").strip(),
+            timeout=3.0)
+        controllers = result.get("value", []) if isinstance(result, dict) else []
+        if not isinstance(controllers, list):
+            controllers = []
+        if not controllers:
+            controllers = node_host.notebook_controllers()
+            wanted = str(view_type or "").strip()
+            if wanted:
+                controllers = [
+                    item for item in controllers
+                    if item.get("notebookType") == wanted
+                ]
+        return {
+            "ok": bool(result.get("ok", True)) if isinstance(result, dict) else True,
+            "controllers": controllers,
+            "view_type": str(view_type or "").strip(),
+            "error": result.get("error", "") if isinstance(result, dict) else "",
+        }
+
+    def select_notebook_controller(
+            self, rel_path: str, notebook: Dict[str, Any],
+            view_type: str = "", handle: Any = None,
+            controller_id: str = "") -> Dict:
+        try:
+            full = self._resolve_workspace_path(rel_path)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        node_host = getattr(self, "_node_ext_host", None)
+        if node_host is None or not getattr(node_host, "is_running", False):
+            return {"ok": False, "error": "Node extension host is not running"}
+        view_type = str(
+            view_type
+            or (notebook or {}).get("view_type")
+            or (notebook or {}).get("viewType")
+            or "").strip()
+        numeric_handle: Optional[int] = None
+        if handle is not None and str(handle).strip():
+            try:
+                numeric_handle = int(handle)
+            except (TypeError, ValueError):
+                numeric_handle = None
+        result = node_host.select_notebook_controller_result(
+            full,
+            notebook if isinstance(notebook, dict) else {},
+            view_type=view_type,
+            handle=numeric_handle,
+            controller_id=str(controller_id or ""),
+            selected=True,
+            timeout=3.0)
+        response = result.get("value") if isinstance(result, dict) else None
+        return {
+            "ok": bool(result.get("ok")) if isinstance(result, dict) else False,
+            "controller": (
+                response.get("controller")
+                if isinstance(response, dict) else None),
+            "selected": (
+                bool(response.get("selected"))
+                if isinstance(response, dict) else False),
+            "error": result.get("error", "") if isinstance(result, dict) else "",
+        }
+
+    def execute_notebook_controller(
+            self, rel_path: str, notebook: Dict[str, Any],
+            view_type: str = "", handle: Any = None,
+            controller_id: str = "", cell_indices: Optional[List[int]] = None) -> Dict:
+        try:
+            full = self._resolve_workspace_path(rel_path)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        node_host = getattr(self, "_node_ext_host", None)
+        if node_host is None or not getattr(node_host, "is_running", False):
+            return {"ok": False, "error": "Node extension host is not running"}
+        view_type = str(
+            view_type
+            or (notebook or {}).get("view_type")
+            or (notebook or {}).get("viewType")
+            or "").strip()
+        numeric_handle: Optional[int] = None
+        if handle is not None and str(handle).strip():
+            try:
+                numeric_handle = int(handle)
+            except (TypeError, ValueError):
+                numeric_handle = None
+        indices: List[int] = []
+        if isinstance(cell_indices, list):
+            for value in cell_indices:
+                try:
+                    indices.append(int(value))
+                except (TypeError, ValueError):
+                    pass
+        result = node_host.execute_notebook_controller_result(
+            full,
+            notebook if isinstance(notebook, dict) else {},
+            view_type=view_type,
+            handle=numeric_handle,
+            controller_id=str(controller_id or ""),
+            cell_indices=indices,
+            timeout=8.0)
+        value = result.get("value") if isinstance(result, dict) else None
+        return {
+            "ok": bool(result.get("ok")) if isinstance(result, dict) else False,
+            "result": value if isinstance(value, dict) else {},
+            "error": result.get("error", "") if isinstance(result, dict) else "",
+        }
+
     def editor_language_provider(self, payload: Dict[str, Any]) -> Dict:
         """Run VS Code language providers against the live editor buffer."""
         if not isinstance(payload, dict):

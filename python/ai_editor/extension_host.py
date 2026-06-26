@@ -1877,6 +1877,9 @@ class NodeExtensionHost:
         self._notebook_request_lock = threading.Lock()
         self._notebook_requests: Dict[str, Dict[str, Any]] = {}
         self._notebook_serializers: List[Dict[str, Any]] = []
+        self._notebook_controllers: List[Dict[str, Any]] = []
+        self._notebook_controller_selections: List[Dict[str, Any]] = []
+        self._notebook_controller_affinities: List[Dict[str, Any]] = []
         self._notebook_cell_status_bar_providers: List[Dict[str, Any]] = []
         self._notebook_cell_status_bar_changes: List[Dict[str, Any]] = []
         self._terminal_profile_request_lock = threading.Lock()
@@ -3546,6 +3549,61 @@ class NodeExtensionHost:
                 if item.get("handle") != handle
             ]
 
+        elif msg_type == "notebook_controller_registered":
+            handle = int(msg.get("handle") or 0)
+            if handle:
+                record = {
+                    "handle": handle,
+                    "id": str(msg.get("id", "")),
+                    "notebookType": str(msg.get("notebookType", "")),
+                    "label": str(msg.get("label", "")),
+                    "description": str(msg.get("description", "")),
+                    "detail": str(msg.get("detail", "")),
+                    "supportedLanguages": (
+                        list(msg.get("supportedLanguages"))
+                        if isinstance(msg.get("supportedLanguages"), list)
+                        else []),
+                    "supportsExecutionOrder": bool(
+                        msg.get("supportsExecutionOrder", True)),
+                    "extensionId": str(msg.get("extensionId", "")),
+                }
+                self._notebook_controllers = [
+                    item for item in self._notebook_controllers
+                    if item.get("handle") != handle
+                ]
+                self._notebook_controllers.append(record)
+
+        elif msg_type == "notebook_controller_disposed":
+            handle = int(msg.get("handle") or 0)
+            self._notebook_controllers = [
+                item for item in self._notebook_controllers
+                if item.get("handle") != handle
+            ]
+
+        elif msg_type == "notebook_controller_selection_changed":
+            record = {
+                "handle": int(msg.get("handle") or 0),
+                "id": str(msg.get("id", "")),
+                "notebookType": str(msg.get("notebookType", "")),
+                "uri": str(msg.get("uri", "")),
+                "selected": bool(msg.get("selected", False)),
+                "extensionId": str(msg.get("extensionId", "")),
+            }
+            self._notebook_controller_selections.append(record)
+            del self._notebook_controller_selections[:-50]
+
+        elif msg_type == "notebook_controller_affinity_changed":
+            record = {
+                "handle": int(msg.get("handle") or 0),
+                "id": str(msg.get("id", "")),
+                "notebookType": str(msg.get("notebookType", "")),
+                "uri": str(msg.get("uri", "")),
+                "affinity": int(msg.get("affinity") or 0),
+                "extensionId": str(msg.get("extensionId", "")),
+            }
+            self._notebook_controller_affinities.append(record)
+            del self._notebook_controller_affinities[:-50]
+
         elif msg_type == "notebook_cell_status_bar_provider_registered":
             handle = int(msg.get("handle") or 0)
             if handle:
@@ -3580,7 +3638,8 @@ class NodeExtensionHost:
         elif msg_type in {
                 "notebook_deserialize_response",
                 "notebook_serialize_response",
-                "notebook_cell_status_bar_response"}:
+                "notebook_cell_status_bar_response",
+                "notebook_controller_response"}:
             request_id = str(msg.get("requestId", ""))
             with self._notebook_request_lock:
                 pending = self._notebook_requests.get(request_id)
@@ -4235,6 +4294,24 @@ class NodeExtensionHost:
     def notebook_serializers(self) -> List[Dict[str, Any]]:
         return [dict(item) for item in self._notebook_serializers]
 
+    def notebook_controllers(self) -> List[Dict[str, Any]]:
+        return [
+            dict(item)
+            for item in self._notebook_controllers
+        ]
+
+    def notebook_controller_selections(self) -> List[Dict[str, Any]]:
+        return [
+            dict(item)
+            for item in self._notebook_controller_selections
+        ]
+
+    def notebook_controller_affinities(self) -> List[Dict[str, Any]]:
+        return [
+            dict(item)
+            for item in self._notebook_controller_affinities
+        ]
+
     def notebook_cell_status_bar_providers(self) -> List[Dict[str, Any]]:
         return [
             dict(item)
@@ -4337,6 +4414,75 @@ class NodeExtensionHost:
             payload["handle"] = int(handle)
         if view_type:
             payload["viewType"] = str(view_type)
+        return self._notebook_request_result(
+            payload, default=default, timeout=timeout)
+
+    def request_notebook_controllers_result(
+            self,
+            notebook_type: str = "",
+            default: Any = None,
+            timeout: float = 3.0) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "type": "notebook_controllers_request",
+        }
+        if notebook_type:
+            payload["notebookType"] = str(notebook_type)
+            payload["viewType"] = str(notebook_type)
+        return self._notebook_request_result(
+            payload, default=default or [], timeout=timeout)
+
+    def select_notebook_controller_result(
+            self,
+            uri: str,
+            notebook: Dict[str, Any],
+            view_type: str = "",
+            handle: Optional[int] = None,
+            controller_id: str = "",
+            selected: bool = True,
+            default: Any = None,
+            timeout: float = 3.0) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "type": "notebook_controller_select_request",
+            "uri": str(uri or ""),
+            "notebook": notebook if isinstance(notebook, dict) else {},
+            "selected": bool(selected),
+        }
+        if handle is not None:
+            payload["handle"] = int(handle)
+        if controller_id:
+            payload["controllerId"] = str(controller_id)
+        if view_type:
+            payload["viewType"] = str(view_type)
+            payload["notebookType"] = str(view_type)
+        return self._notebook_request_result(
+            payload, default=default, timeout=timeout)
+
+    def execute_notebook_controller_result(
+            self,
+            uri: str,
+            notebook: Dict[str, Any],
+            view_type: str = "",
+            handle: Optional[int] = None,
+            controller_id: str = "",
+            cell_indices: Optional[List[int]] = None,
+            default: Any = None,
+            timeout: float = 5.0) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "type": "notebook_controller_execute_request",
+            "uri": str(uri or ""),
+            "notebook": notebook if isinstance(notebook, dict) else {},
+            "cellIndices": [
+                int(value)
+                for value in (cell_indices if isinstance(cell_indices, list) else [])
+            ],
+        }
+        if handle is not None:
+            payload["handle"] = int(handle)
+        if controller_id:
+            payload["controllerId"] = str(controller_id)
+        if view_type:
+            payload["viewType"] = str(view_type)
+            payload["notebookType"] = str(view_type)
         return self._notebook_request_result(
             payload, default=default, timeout=timeout)
 

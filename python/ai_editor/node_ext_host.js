@@ -319,6 +319,7 @@ class Location {
 
 const NotebookCellKind = Object.freeze({ Markup: 1, Code: 2 });
 const NotebookCellStatusBarAlignment = Object.freeze({ Left: 1, Right: 2 });
+const NotebookControllerAffinity = Object.freeze({ Default: 1, Preferred: 2 });
 
 class NotebookRange {
     constructor(start, end) {
@@ -2473,6 +2474,7 @@ const _notebookSerializers = new Map(); // handle -> { viewType, serializer, opt
 const _notebookDocuments = new Map(); // uri string -> notebook document
 let _nextNotebookControllerHandle = 1;
 const _notebookControllers = new Map(); // handle -> controller
+const _selectedNotebookControllers = new Map(); // notebook uri string -> controller handle
 let _nextNotebookStatusBarProviderHandle = 1;
 const _notebookStatusBarProviders = new Map(); // handle -> { notebookType, provider, extensionId, subscription }
 const _onDidOpenNotebookDocumentEmitter = new EventEmitter();
@@ -4829,6 +4831,8 @@ function _createNotebookController(extDesc, id, notebookType, label, handler) {
         throw new Error('NotebookController id and notebookType are required');
     }
     const handle = _nextNotebookControllerHandle++;
+    const selectedEmitter = new EventEmitter();
+    const affinities = new Map();
     const controller = {
         id: normalizedId,
         notebookType: normalizedType,
@@ -4840,11 +4844,46 @@ function _createNotebookController(extDesc, id, notebookType, label, handler) {
         executeHandler: typeof handler === 'function' ? handler : undefined,
         extensionId: extDesc.extensionId || '',
         _handle: handle,
+        _selectedEmitter: selectedEmitter,
+        _affinities: affinities,
+        get onDidChangeSelectedNotebooks() {
+            return selectedEmitter.event;
+        },
         createNotebookCellExecution(cell) {
             return _createNotebookCellExecution(controller, cell);
         },
+        updateNotebookAffinity(notebook, affinity) {
+            if (!notebook || !notebook.uri) {
+                throw new Error('Notebook affinity requires a notebook document');
+            }
+            const normalizedAffinity = Number(affinity) === NotebookControllerAffinity.Preferred
+                ? NotebookControllerAffinity.Preferred
+                : NotebookControllerAffinity.Default;
+            const uri = notebook.uri.toString();
+            affinities.set(uri, normalizedAffinity);
+            send({
+                type: 'notebook_controller_affinity_changed',
+                handle,
+                id: normalizedId,
+                notebookType: normalizedType,
+                uri,
+                affinity: normalizedAffinity,
+                extensionId: controller.extensionId,
+            });
+        },
         dispose() {
+            for (const [uri, selectedHandle] of [..._selectedNotebookControllers.entries()]) {
+                if (selectedHandle === handle) _selectedNotebookControllers.delete(uri);
+            }
             _notebookControllers.delete(handle);
+            selectedEmitter.dispose();
+            send({
+                type: 'notebook_controller_disposed',
+                handle,
+                id: normalizedId,
+                notebookType: normalizedType,
+                extensionId: controller.extensionId,
+            });
         },
     };
     _notebookControllers.set(handle, controller);
@@ -4854,9 +4893,186 @@ function _createNotebookController(extDesc, id, notebookType, label, handler) {
         id: normalizedId,
         notebookType: normalizedType,
         label: controller.label,
+        description: controller.description || '',
+        detail: controller.detail || '',
+        supportedLanguages: Array.isArray(controller.supportedLanguages)
+            ? controller.supportedLanguages.slice()
+            : [],
+        supportsExecutionOrder: controller.supportsExecutionOrder !== false,
         extensionId: controller.extensionId,
     });
     return controller;
+}
+
+function _notebookControllerPayload(controller) {
+    if (!controller) return null;
+    return {
+        handle: controller._handle,
+        id: controller.id,
+        notebookType: controller.notebookType,
+        label: String(controller.label || controller.id || ''),
+        description: controller.description === undefined || controller.description === null
+            ? ''
+            : String(controller.description),
+        detail: controller.detail === undefined || controller.detail === null
+            ? ''
+            : String(controller.detail),
+        supportedLanguages: Array.isArray(controller.supportedLanguages)
+            ? controller.supportedLanguages.map(value => String(value))
+            : [],
+        supportsExecutionOrder: controller.supportsExecutionOrder !== false,
+        extensionId: controller.extensionId || '',
+    };
+}
+
+function _notebookControllerByHandleOrId(handle, id, notebookType) {
+    const numericHandle = Number(handle);
+    if (Number.isFinite(numericHandle) && _notebookControllers.has(numericHandle)) {
+        return _notebookControllers.get(numericHandle);
+    }
+    const wantedId = String(id || '').trim();
+    const wantedType = String(notebookType || '').trim();
+    for (const controller of _notebookControllers.values()) {
+        if (wantedId && controller.id !== wantedId) continue;
+        if (wantedType && controller.notebookType !== wantedType) continue;
+        return controller;
+    }
+    return null;
+}
+
+function _notebookDocumentFromControllerRequest(msg) {
+    const uri = _workspaceUriFromInput(msg.uri || msg.resourceUri || msg.path || '');
+    const existing = _notebookDocuments.get(uri.toString());
+    if (existing) return existing;
+    const viewType = String(
+        msg.viewType
+        || msg.notebookType
+        || msg.notebook?.view_type
+        || msg.notebook?.viewType
+        || 'interactive');
+    return _createNotebookDocument(
+        viewType,
+        uri,
+        msg.notebook && typeof msg.notebook === 'object' ? msg.notebook : { cells: [] },
+        { transientPreview: true });
+}
+
+function _sendNotebookControllerResponse(requestId, ok, extra = {}) {
+    send({
+        type: 'notebook_controller_response',
+        requestId,
+        ok: !!ok,
+        ...extra,
+    });
+}
+
+async function _handleNotebookControllersRequest(msg) {
+    const requestId = String(msg.requestId || '');
+    const notebookType = String(msg.notebookType || msg.viewType || '').trim();
+    const values = Array.from(_notebookControllers.values())
+        .filter(controller => !notebookType || controller.notebookType === notebookType)
+        .map(_notebookControllerPayload)
+        .filter(Boolean);
+    _sendNotebookControllerResponse(requestId, true, { value: values });
+}
+
+async function _handleNotebookControllerSelectRequest(msg) {
+    const requestId = String(msg.requestId || '');
+    try {
+        const notebook = _notebookDocumentFromControllerRequest(msg);
+        const controller = _notebookControllerByHandleOrId(
+            msg.handle,
+            msg.controllerId || msg.id,
+            msg.notebookType || msg.viewType || notebook.notebookType);
+        if (!controller) throw new Error('Notebook controller not found');
+        if (controller.notebookType !== notebook.notebookType) {
+            throw new Error('Notebook controller does not match notebook type');
+        }
+        const uri = notebook.uri.toString();
+        const selected = msg.selected !== false;
+        const previousHandle = _selectedNotebookControllers.get(uri);
+        if (selected) {
+            if (previousHandle && previousHandle !== controller._handle) {
+                const previous = _notebookControllers.get(previousHandle);
+                previous?._selectedEmitter?.fire?.({ notebook, selected: false });
+                send({
+                    type: 'notebook_controller_selection_changed',
+                    handle: previousHandle,
+                    id: previous?.id || '',
+                    notebookType: notebook.notebookType,
+                    uri,
+                    selected: false,
+                    extensionId: previous?.extensionId || '',
+                });
+            }
+            _selectedNotebookControllers.set(uri, controller._handle);
+        } else if (previousHandle === controller._handle) {
+            _selectedNotebookControllers.delete(uri);
+        }
+        controller._selectedEmitter.fire({ notebook, selected });
+        send({
+            type: 'notebook_controller_selection_changed',
+            handle: controller._handle,
+            id: controller.id,
+            notebookType: notebook.notebookType,
+            uri,
+            selected,
+            extensionId: controller.extensionId,
+        });
+        _sendNotebookControllerResponse(requestId, true, {
+            value: {
+                controller: _notebookControllerPayload(controller),
+                selected,
+                uri,
+            },
+        });
+    } catch (err) {
+        _sendNotebookControllerResponse(requestId, false, {
+            error: err?.message || String(err),
+            value: null,
+        });
+    }
+}
+
+async function _handleNotebookControllerExecuteRequest(msg) {
+    const requestId = String(msg.requestId || '');
+    try {
+        const notebook = _notebookDocumentFromControllerRequest(msg);
+        const controller = _notebookControllerByHandleOrId(
+            msg.handle,
+            msg.controllerId || msg.id,
+            msg.notebookType || msg.viewType || notebook.notebookType);
+        if (!controller) throw new Error('Notebook controller not found');
+        if (typeof controller.executeHandler !== 'function') {
+            throw new Error('Notebook controller does not implement executeHandler');
+        }
+        if (controller.notebookType !== notebook.notebookType) {
+            throw new Error('Notebook controller does not match notebook type');
+        }
+        const rawIndices = Array.isArray(msg.cellIndices)
+            ? msg.cellIndices
+            : (msg.cellIndex === undefined ? [] : [msg.cellIndex]);
+        const cells = (rawIndices.length ? rawIndices : notebook.getCells().map(cell => cell.index))
+            .map(value => Number(value))
+            .filter(index => Number.isFinite(index) && index >= 0 && index < notebook.cellCount)
+            .map(index => notebook.cellAt(index));
+        await Promise.resolve(controller.executeHandler(cells, notebook, controller));
+        _sendNotebookControllerResponse(requestId, true, {
+            uri: notebook.uri.toString(),
+            notebookType: notebook.notebookType,
+            value: {
+                controller: _notebookControllerPayload(controller),
+                cellCount: cells.length,
+                cellIndices: cells.map(cell => cell.index),
+                notebook: _notebookDataPayload(notebook._data),
+            },
+        });
+    } catch (err) {
+        _sendNotebookControllerResponse(requestId, false, {
+            error: err?.message || String(err),
+            value: null,
+        });
+    }
 }
 
 function _createNotebookCellExecution(controller, cell) {
@@ -8511,6 +8727,8 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         LanguageStatusSeverity: { Information: 0, Warning: 1, Error: 2 },
         NotebookCellKind,
         NotebookCellStatusBarAlignment,
+        NotebookControllerAffinity,
+        NotebookControllerAffinity2: NotebookControllerAffinity,
         DocumentHighlightKind: { Text: 0, Read: 1, Write: 2 },
         ProgressLocation,
         CompletionItemKind: Object.fromEntries([
@@ -8565,6 +8783,22 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     extDesc, id, notebookType, label, handler);
                 subscriptions.push(new Disposable(() => controller.dispose()));
                 return controller;
+            },
+            createNotebookControllerDetectionTask(notebookType) {
+                const normalized = String(notebookType || '').trim();
+                if (!normalized) throw new Error('notebookType cannot be empty or just whitespace');
+                send({
+                    type: 'notebook_controller_detection_task_registered',
+                    notebookType: normalized,
+                    extensionId: extDesc.extensionId || '',
+                });
+                const disposable = new Disposable(() => send({
+                    type: 'notebook_controller_detection_task_disposed',
+                    notebookType: normalized,
+                    extensionId: extDesc.extensionId || '',
+                }));
+                subscriptions.push(disposable);
+                return disposable;
             },
             registerNotebookCellStatusBarItemProvider(notebookType, provider) {
                 const disposable = _registerNotebookCellStatusBarItemProvider(
@@ -14084,6 +14318,15 @@ async function handleMessage(msg) {
             break;
         case 'notebook_cell_status_bar_request':
             await _handleNotebookCellStatusBarRequest(msg);
+            break;
+        case 'notebook_controllers_request':
+            await _handleNotebookControllersRequest(msg);
+            break;
+        case 'notebook_controller_select_request':
+            await _handleNotebookControllerSelectRequest(msg);
+            break;
+        case 'notebook_controller_execute_request':
+            await _handleNotebookControllerExecuteRequest(msg);
             break;
         case 'lm_tool_request':
             await handleLmToolRequest(msg);
