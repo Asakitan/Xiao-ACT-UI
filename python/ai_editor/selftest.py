@@ -3821,9 +3821,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "chat-welcome-actions" in html
            and "welcome-prompt-btn" in html
            and 'id="chat-toolbar-head" aria-live="polite"' in html
-           and "function refreshChatMessageNavigationState()" in html
-           and "function focusChatMessage(index,opts)" in html
-           and "function navigateChatMessages(delta)" in html
+           and "if(state.workflowId)labels.push('Workflow: '+state.workflow);" in html
+           and "if(state.approval!=='default')labels.push(state.approvalLabel);" in html
+            and "function refreshChatMessageNavigationState()" in html
+            and "function focusChatMessage(index,opts)" in html
+            and "function navigateChatMessages(delta)" in html
            and "chat-composer-action" in html
            and "chat-composer-trailing" in html
            and "chat-composer-meta" in html
@@ -3897,6 +3899,7 @@ def test_phase1_ai_editor_regressions() -> None:
            "ASSISTANT_SESSION_STATE_KEY='sao-ai-editor-chat-session-state'"
            in html
            and "function assistantSessionResource()" in html
+           and "function assistantSessionControlSnapshot()" in html
            and "function syncAssistantSessionState(patch)" in html
            and "function restoreAssistantSessionDraft()" in html
            and "function noteAssistantChatRequest(text,refs,toolHint)" in html
@@ -3916,6 +3919,13 @@ def test_phase1_ai_editor_regressions() -> None:
            in html
            and "panel.dataset.chatHasFileAttachments=assistantSessionState.hasFileAttachments?'true':'false';"
            in html
+           and "panel.dataset.chatApproval=assistantSessionState.approval||'';" in html
+           and "panel.dataset.chatAgentId=assistantSessionState.agentId||'';" in html
+           and "panel.dataset.chatWorkflowId=assistantSessionState.workflowId||'';" in html
+           and "approval:String(src.approval||config.approval||'default')" in html
+           and "agentId:String(src.agentId||'')" in html
+           and "workflowId:String(src.workflowId||'')" in html
+           and "workflowLabel:String(src.workflowLabel||'')" in html
            and "noteAssistantChatRequest(text,sendContext.refs,toolHint);"
            in html
            and "chat_session:requestMeta" in html
@@ -3926,6 +3936,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantSessionLoadItems()" in html
            and "function assistantSessionMessageSnapshot()" in html
            and "function assistantSessionPersistCurrent(extra)" in html
+           and "function assistantRestoreWorkflowSelection(workflowId,workflowLabel)" in html
+           and "function assistantApplySessionControls(state)" in html
            and "function assistantSessionOpenItem(sessionId,opts)" in html
            and "function assistantSessionForkCurrent()" in html
            and "function assistantSessionHasInProgressWork()" in html
@@ -3943,6 +3955,7 @@ def test_phase1_ai_editor_regressions() -> None:
            in html
            and "assistantSessionPersistCurrent({status:streaming?'inProgress':'completed'});"
            in html
+           and "assistantApplySessionControls(nextState);" in html
            and 'id="history-search" placeholder="Search chat sessions" aria-label="Search chat sessions" aria-controls="history-list"' in html
            and 'id="history-list" role="listbox" tabindex="0" aria-label="Chat history and sessions"' in html
            and "function historyQuery()" in html
@@ -3958,9 +3971,16 @@ def test_phase1_ai_editor_regressions() -> None:
            and "item.className='sb-item'+(current?' current':'');" in html
            and "item.dataset.sessionStatus=String(session.status||'completed');" in html
            and "item.dataset.sessionContextCount=String(Array.isArray(session.context)?session.context.length:0);" in html
+           and "item.dataset.sessionProvider=String(session.provider||'');" in html
+           and "item.dataset.sessionMode=String(session.mode||'');" in html
+           and "item.dataset.sessionAgentId=String(session.agentId||'');" in html
+           and "item.dataset.sessionWorkflowId=String(session.workflowId||'');" in html
+           and "item.dataset.sessionApproval=String(session.approval||'');" in html
            and "main.className='history-session-main';" in html
            and "el.className='history-session-chip '+chip.kind;" in html
            and ".history-session-chip.running" in html
+           and ".history-session-chip.workflow" in html
+           and ".history-session-chip.approval" in html
            and "list.setAttribute('aria-activedescendant',active.id);" in html
            and "if(e.key==='ArrowDown'||e.key==='ArrowUp')" in html
            and "if(e.key==='Delete')" in html
@@ -3971,6 +3991,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "if(confirmDeleteAssistantSession(session)){assistantSessionDeleteItem(session.id);announceAssistantAction('Deleted chat session');refreshHistory()}" in html
            and "['/sessions','Open chat sessions','chat']" in html
            and "else if(cmd==='/fork')assistantSessionForkCurrent();"
+           and "visibleSessions=localSessions.filter(s=>historyMatchesQuery([s.title,s.sessionResource,s.id,s.provider,s.model,s.mode,s.agentId,s.workflowId,s.workflowLabel,s.approval,s.parentSessionResource],query));"
            in html)
     _check("frontend Assistant supports Copilot-style attached context and references",
            'id="chat-context-area" aria-label="Attached context"' in html

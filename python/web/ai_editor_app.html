@@ -168,6 +168,11 @@ body.window-resizing * { cursor:inherit !important; }
 .history-session-chip.running { color:var(--fg-accent); border-color:color-mix(in srgb,var(--border-focus) 60%,var(--border)); }
 .history-session-chip.draft { color:var(--fg-warning); }
 .history-session-chip.context { color:var(--fg-success); }
+.history-session-chip.provider { color:var(--fg-accent); }
+.history-session-chip.mode { color:var(--fg-bright); }
+.history-session-chip.workflow { color:var(--fg-success); }
+.history-session-chip.approval { color:var(--fg-warning); }
+.history-session-chip.fork { color:var(--fg-bright); }
 .sb-group { padding:8px 16px 4px; font-size:11px; font-weight:600; color:var(--fg-dim);
   text-transform:uppercase; letter-spacing:0.5px; }
 .tree-root { padding:4px 0 10px; }
@@ -3982,7 +3987,11 @@ function chatControlDisplayState(){
   const mode=normalizeMode(typeof currentMode==='string'?currentMode:'agent');
   const agentId=typeof activeAgentId==='string'?activeAgentId:'';
   const agent=agentId?String(agentId):'Default';
-  return {provider,model,mode,agent,agentId};
+  const workflowId=assistantSelectedWorkflowId();
+  const workflow=assistantSelectedWorkflowLabel();
+  const approval=normalizeApproval(config.approval||'default');
+  const approvalLabel=t('approval_'+approval)||approval;
+  return {provider,model,mode,agent,agentId,workflow,workflowId,approval,approvalLabel};
 }
 function appendChatHeadPill(parent,label,strong){
   const pill=document.createElement('span');
@@ -3996,7 +4005,14 @@ function renderAssistantStatePills(parent,pillClass){
   if(!parent)return;
   parent.innerHTML='';
   const state=chatControlDisplayState();
-  [state.provider+(state.model?' · '+state.model:''),t('mode_'+state.mode)||state.mode,'Agent: '+state.agent].forEach((label,idx)=>{
+  const labels=[
+    state.provider+(state.model?' · '+state.model:''),
+    t('mode_'+state.mode)||state.mode,
+    'Agent: '+state.agent
+  ];
+  if(state.workflowId)labels.push('Workflow: '+state.workflow);
+  if(state.approval!=='default')labels.push(state.approvalLabel);
+  labels.forEach((label,idx)=>{
     const pill=document.createElement('span');
     pill.className=pillClass+(idx===0?' strong':'');
     pill.textContent=label;
@@ -4034,6 +4050,8 @@ function renderChatComposerHeader(){
   appendChatHeadPill(head,t('mode_'+state.mode)||state.mode,true);
   appendChatHeadPill(head,state.provider+(state.model?' · '+state.model:''),!!state.model);
   appendChatHeadPill(head,'Agent: '+state.agent,!!state.agentId);
+  if(state.workflowId)appendChatHeadPill(head,'Workflow: '+state.workflow,false);
+  if(state.approval!=='default')appendChatHeadPill(head,state.approvalLabel,false);
   const spacer=document.createElement('span');spacer.className='chat-head-spacer';head.appendChild(spacer);
   const status=document.createElement('span');
   status.className='chat-head-status '+(streaming?'running':(chatComposerHasSendableValue()?'ready':''));
@@ -4441,6 +4459,35 @@ let chatContextAttachments=[];
 const ASSISTANT_SESSION_STATE_KEY='sao-ai-editor-chat-session-state';
 const ASSISTANT_SESSION_ITEMS_KEY='sao-ai-editor-chat-session-items';
 function assistantSessionNewId(){return 'local-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,8)}
+function assistantWorkflowDisplayLabel(value){
+  return String(value||'').replace(/^⚡\s*/,'').replace(/^Saved\s+/,'').trim();
+}
+function assistantSelectedWorkflowId(){
+  const wfSel=$('chat-workflow-sel');
+  return wfSel?String(wfSel.value||'').trim():'';
+}
+function assistantSelectedWorkflowLabel(){
+  const id=assistantSelectedWorkflowId();
+  if(!id)return '';
+  const wfSel=$('chat-workflow-sel');
+  const selected=wfSel&&wfSel.selectedIndex>=0&&wfSel.options?wfSel.options[wfSel.selectedIndex]:null;
+  const label=selected?assistantWorkflowDisplayLabel(selected.text||''):'';
+  if(label)return label;
+  const workflow=(chatControlState&&chatControlState.workflows||[]).find(w=>controlItemId(w)===id);
+  return assistantWorkflowDisplayLabel(controlItemName(workflow)||id);
+}
+function assistantSessionControlSnapshot(){
+  const workflowId=assistantSelectedWorkflowId();
+  return {
+    provider:String(config.provider||''),
+    model:String(config.model||''),
+    mode:normalizeMode(currentMode||config.mode||'agent'),
+    approval:normalizeApproval(currentApproval||config.approval||'default'),
+    agentId:String(activeAgentId||''),
+    workflowId,
+    workflowLabel:assistantSelectedWorkflowLabel()
+  };
+}
 function assistantSessionDefaults(seed){
   const now=Date.now(),src=seed&&typeof seed==='object'?seed:{};
   return {
@@ -4459,7 +4506,11 @@ function assistantSessionDefaults(seed){
     parentSessionResource:String(src.parentSessionResource||''),
     provider:String(src.provider||config.provider||''),
     model:String(src.model||config.model||''),
-    mode:String(src.mode||config.mode||'agent')
+    mode:String(src.mode||config.mode||'agent'),
+    approval:String(src.approval||config.approval||'default'),
+    agentId:String(src.agentId||''),
+    workflowId:String(src.workflowId||''),
+    workflowLabel:String(src.workflowLabel||'')
   };
 }
 function loadAssistantSessionState(){
@@ -4570,6 +4621,7 @@ function assistantSessionTitleFromSnapshot(messages,draft){
 function assistantSessionCurrentItem(extra){
   const messages=assistantSessionMessageSnapshot();
   const state=assistantSessionDefaults(assistantSessionState);
+  const controls=assistantSessionControlSnapshot();
   return Object.assign({
     id:state.id,
     type:state.type,
@@ -4580,12 +4632,17 @@ function assistantSessionCurrentItem(extra){
     updatedAt:Date.now(),
     requestCount:state.requestCount,
     messageCount:messages.length,
-    provider:state.provider,
-    model:state.model,
-    mode:state.mode,
+    provider:controls.provider,
+    model:controls.model,
+    mode:controls.mode,
+    approval:controls.approval,
+    agentId:controls.agentId,
+    workflowId:controls.workflowId,
+    workflowLabel:controls.workflowLabel,
+    parentSessionResource:state.parentSessionResource,
     draft:state.draft,
     context:state.context,
-    state,
+    state:Object.assign({},state,controls),
     messages
   },extra||{});
 }
@@ -4616,6 +4673,61 @@ function assistantSessionRenderMessages(messages){
   showChatWelcomeIfEmpty();
   updateAssistantSurfaceState();
 }
+function assistantRestoreWorkflowSelection(workflowId,workflowLabel){
+  const wfSel=$('chat-workflow-sel');if(!wfSel)return false;
+  Array.from(wfSel.options||[]).forEach(option=>{if(option&&option.dataset&&option.dataset.sessionMissing==='true')option.remove()});
+  const id=String(workflowId||'').trim();
+  if(!id){wfSel.value='';updateToolbarWorkflowButton();return true}
+  let option=Array.from(wfSel.options||[]).find(row=>String(row.value||'')===id)||null;
+  if(!option&&workflowLabel){
+    option=new Option('Saved '+assistantWorkflowDisplayLabel(workflowLabel),id);
+    option.dataset.sessionMissing='true';
+    option.disabled=true;
+    wfSel.add(option);
+  }
+  if(option)wfSel.value=id;
+  updateToolbarWorkflowButton();
+  return !!option;
+}
+function assistantApplySessionControls(state){
+  const desired=assistantSessionDefaults(state||{});
+  config.provider=String(desired.provider||config.provider||'openai');
+  config.model=String(desired.model||config.model||'');
+  config.mode=normalizeMode(desired.mode||config.mode||'agent');
+  config.approval=normalizeApproval(desired.approval||config.approval||'default');
+  currentMode=config.mode;
+  currentApproval=config.approval;
+  activeAgentId=String(desired.agentId||'');
+  syncUI();
+  renderChatControlOptions();
+  assistantRestoreWorkflowSelection(desired.workflowId,desired.workflowLabel);
+  updateModeUI();
+  call('set_chat_controls',{
+    provider:config.provider,
+    model:config.model,
+    mode:currentMode,
+    approval:currentApproval,
+    agent_id:activeAgentId||''
+  }).then(res=>{
+    if(!callSucceededOrApplied(res))return;
+    const controls=res&&res.controls?res.controls:null;
+    if(controls){
+      if(controls.provider)config.provider=controls.provider;
+      if(controls.model!==undefined)config.model=controls.model;
+      if(controls.mode)currentMode=normalizeMode(controls.mode);
+      if(controls.approval)currentApproval=normalizeApproval(controls.approval);
+      activeAgentId=controls.active_agent_id||controls.activeAgentId||controls.agent_id||activeAgentId||'';
+      config.mode=currentMode;
+      config.approval=currentApproval;
+      renderChatControlOptions();
+      syncUI();
+      assistantRestoreWorkflowSelection(desired.workflowId,desired.workflowLabel);
+      updateModeUI();
+      renderAssistantSessionState();
+      updateAssistantSurfaceState();
+    }
+  }).catch(()=>{});
+}
 function assistantSessionOpenItem(sessionId,opts){
   const id=String(sessionId||'');
   const item=assistantSessionLoadItems().find(s=>String(s.id)===id);
@@ -4623,12 +4735,21 @@ function assistantSessionOpenItem(sessionId,opts){
   assistantSessionPersistCurrent({status:'completed'});
   const fork=!!(opts&&opts.fork);
   const now=Date.now();
-  const nextState=assistantSessionDefaults(Object.assign({},item.state||{},fork?{
+  const nextState=assistantSessionDefaults(Object.assign({},item.state||{},{
+    provider:item.provider,
+    model:item.model,
+    mode:item.mode,
+    approval:item.approval,
+    agentId:item.agentId,
+    workflowId:item.workflowId,
+    workflowLabel:item.workflowLabel
+  },fork?{
     id:assistantSessionNewId(),createdAt:now,updatedAt:now,
     requestInProgress:false,draft:'',lastRequestId:'',
     parentSessionResource:item.sessionResource||('sao-ai-chat://'+(item.type||'local')+'/'+item.id)
   }:{requestInProgress:false}));
   assistantSessionState=nextState;
+  assistantApplySessionControls(nextState);
   chatContextAttachments=Array.isArray(nextState.context)?nextState.context.slice(0,20):[];
   assistantSessionRenderMessages(item.messages||[]);
   renderChatContextAttachments();
@@ -4654,7 +4775,13 @@ function renderAssistantSessionState(){
   const suffix=assistantSessionState.requestInProgress?' running':assistantSessionState.inputHasText?' draft':ctx?' ctx':'';
   if(chip){
     chip.textContent=(assistantSessionState.type==='local'?'Local':assistantSessionState.type)+' - '+req+' req'+(req===1?'':'s')+suffix;
-    chip.title='Session: '+assistantSessionResource()+'\nProvider: '+(assistantSessionState.provider||'-')+'\nModel: '+(assistantSessionState.model||'-');
+    chip.title='Session: '+assistantSessionResource()
+      +'\nProvider: '+(assistantSessionState.provider||'-')
+      +'\nModel: '+(assistantSessionState.model||'-')
+      +'\nMode: '+(assistantSessionState.mode||'-')
+      +'\nApproval: '+(assistantSessionState.approval||'-')
+      +'\nAgent: '+(assistantSessionState.agentId||'Default')
+      +'\nWorkflow: '+(assistantSessionState.workflowLabel||assistantSessionState.workflowId||'-');
   }
   if(panel){
     panel.dataset.chatSessionResource=assistantSessionResource();
@@ -4667,16 +4794,24 @@ function renderAssistantSessionState(){
     panel.dataset.chatProvider=assistantSessionState.provider||'';
     panel.dataset.chatModel=assistantSessionState.model||'';
     panel.dataset.chatMode=assistantSessionState.mode||'';
+    panel.dataset.chatApproval=assistantSessionState.approval||'';
+    panel.dataset.chatAgentId=assistantSessionState.agentId||'';
+    panel.dataset.chatWorkflowId=assistantSessionState.workflowId||'';
   }
   if(typeof updateChatComposerState==='function')updateChatComposerState();
 }
 function syncAssistantSessionState(patch){
   const input=$('chat-input');
   const next=Object.assign({},assistantSessionState,patch||{});
+  const controls=assistantSessionControlSnapshot();
   next.updatedAt=Date.now();
-  next.provider=String(config.provider||next.provider||'');
-  next.model=String(config.model||next.model||'');
-  next.mode=String(currentMode||next.mode||'');
+  next.provider=String(controls.provider||next.provider||'');
+  next.model=String(controls.model||next.model||'');
+  next.mode=String(controls.mode||next.mode||'');
+  next.approval=String(controls.approval||next.approval||'default');
+  next.agentId=String(controls.agentId||next.agentId||'');
+  next.workflowId=String(controls.workflowId||next.workflowId||'');
+  next.workflowLabel=String(controls.workflowLabel||next.workflowLabel||'');
   next.draft=input?String(input.value||''):String(next.draft||'');
   next.inputHasText=!!(next.draft&&next.draft.trim());
   next.context=patch&&Object.prototype.hasOwnProperty.call(patch,'context')
@@ -4698,7 +4833,7 @@ function restoreAssistantSessionDraft(){
   syncAssistantSessionState({requestInProgress:false});
 }
 function resetAssistantSessionState(){
-  assistantSessionState=assistantSessionDefaults({provider:config.provider,model:config.model,mode:currentMode});
+  assistantSessionState=assistantSessionDefaults(Object.assign({provider:config.provider,model:config.model,mode:currentMode},assistantSessionControlSnapshot()));
   saveAssistantSessionState({immediate:true});
   renderAssistantSessionState();
 }
@@ -15725,10 +15860,15 @@ function assistantHistorySessionChips(session,current){
   if(current)chips.push({label:'current',kind:'current'});
   if(status==='inProgress'||session&&session.requestInProgress)chips.push({label:'running',kind:'running'});
   else if(session&&session.draft)chips.push({label:'draft',kind:'draft'});
+  if(session&&session.parentSessionResource)chips.push({label:'fork',kind:'fork'});
   chips.push({label:String(session&&session.requestCount||0)+' req',kind:'count'});
   if(contextCount)chips.push({label:contextCount+' ctx',kind:'context'});
-  if(session&&session.provider)chips.push({label:String(session.provider),kind:'provider'});
-  return chips.slice(0,5);
+  if(session&&session.provider)chips.push({label:providerLabel(session.provider),kind:'provider'});
+  if(session&&session.mode)chips.push({label:t('mode_'+session.mode)||String(session.mode),kind:'mode'});
+  if(session&&session.agentId)chips.push({label:String(session.agentId),kind:'agent'});
+  if(session&&session.workflowLabel)chips.push({label:assistantWorkflowDisplayLabel(session.workflowLabel),kind:'workflow'});
+  if(session&&session.approval&&String(session.approval)!=='default')chips.push({label:t('approval_'+session.approval)||String(session.approval),kind:'approval'});
+  return chips.slice(0,6);
 }
 function renderHistorySessionItem(list,session,index){
   const current=String(session.id||'')===String(assistantSessionState.id||'');
@@ -15741,11 +15881,26 @@ function renderHistorySessionItem(list,session,index){
   const chips=assistantHistorySessionChips(session,current);
   item.dataset.sessionStatus=String(session.status||'completed');
   item.dataset.sessionContextCount=String(Array.isArray(session.context)?session.context.length:0);
+  item.dataset.sessionProvider=String(session.provider||'');
+  item.dataset.sessionMode=String(session.mode||'');
+  item.dataset.sessionAgentId=String(session.agentId||'');
+  item.dataset.sessionWorkflowId=String(session.workflowId||'');
+  item.dataset.sessionApproval=String(session.approval||'');
   item.setAttribute('aria-label','Assistant session '+String(session.title||session.id||'Chat session')+' '+chips.map(c=>c.label).join(' '));
   item.style.cssText='display:flex;align-items:center;gap:6px';
   const main=document.createElement('span');main.className='history-session-main';
   const label=document.createElement('span');label.className='history-session-title';
-  label.textContent=String(session.title||'Chat session').slice(0,46);label.title=(session.sessionResource||'')+'\n'+(session.title||'');
+  label.textContent=String(session.title||'Chat session').slice(0,46);
+  label.title=[
+    session.sessionResource||'',
+    session.title||'',
+    'Provider: '+String(providerLabel(session.provider)||'-'),
+    'Model: '+String(session.model||'-'),
+    'Mode: '+String((session.mode?(t('mode_'+session.mode)||session.mode):'-')||'-'),
+    'Approval: '+String((session.approval?(t('approval_'+session.approval)||session.approval):'-')||'-'),
+    'Agent: '+String(session.agentId||'Default'),
+    'Workflow: '+String(session.workflowLabel||session.workflowId||'-')
+  ].filter(Boolean).join('\n');
   const meta=document.createElement('span');meta.className='history-session-meta';
   chips.forEach(chip=>{
     const el=document.createElement('span');
@@ -15787,7 +15942,7 @@ async function refreshHistory(){
   const query=historyQuery();
   const localSessions=assistantSessionLoadItems();
   const backendEntries=(r&&Array.isArray(r.entries))?r.entries:[];
-  const visibleSessions=localSessions.filter(s=>historyMatchesQuery([s.title,s.sessionResource,s.id,s.provider,s.model],query));
+  const visibleSessions=localSessions.filter(s=>historyMatchesQuery([s.title,s.sessionResource,s.id,s.provider,s.model,s.mode,s.agentId,s.workflowId,s.workflowLabel,s.approval,s.parentSessionResource],query));
   const visibleBackend=backendEntries.filter(e=>historyMatchesQuery([e.title,e.id,e.message_count],query));
   if(!visibleSessions.length&&!visibleBackend.length){list.innerHTML='<div class="sb-item" style="color:var(--fg-dim)" role="note">'+esc(query?'No matching chat sessions':t('no_history'))+'</div>';list.removeAttribute('aria-activedescendant');return}
   if(visibleSessions.length){
@@ -19394,7 +19549,8 @@ async function setToolbarMode(mode){
 function updateToolbarWorkflowButton(){
   const wfSel=$('chat-workflow-sel'),run=$('chat-workflow-run');
   if(!wfSel||!run)return;
-  run.disabled=!wfSel.value;
+  const selected=wfSel.selectedIndex>=0&&wfSel.options?wfSel.options[wfSel.selectedIndex]:null;
+  run.disabled=!wfSel.value||!!(selected&&selected.disabled);
   wfSel.classList.toggle('muted',!wfSel.value);
 }
 function runToolbarWorkflow(){
