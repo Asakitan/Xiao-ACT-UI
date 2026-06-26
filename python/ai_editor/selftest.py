@@ -10126,9 +10126,12 @@ console.log("command palette quick access helpers ok");
            and "class DebugAdapterInlineImplementation" in node_ext_host_source
            and "function _debugExecutableFromPackage(type)" in node_ext_host_source
            and "const childProcess = require('node:child_process')" in node_ext_host_source
+           and "const net = require('node:net')" in node_ext_host_source
            and "function _debugDapFrame(message)" in node_ext_host_source
            and "function _debugParseDapFrames(transport, chunk)" in node_ext_host_source
+           and "function _debugCreateServerAdapterTransport(session, descriptor, config, customEventEmitter)" in node_ext_host_source
            and "function _debugCreateAdapterTransport(session, descriptor, config, customEventEmitter)" in node_ext_host_source
+           and "net.createConnection({ port, host })" in node_ext_host_source
            and "transport.sendRequest('initialize'" in node_ext_host_source
            and "transport.sendRequest(String(config.request || 'launch')" in node_ext_host_source
            and "typeof config.debugServer === 'number'" in node_ext_host_source
@@ -18202,6 +18205,7 @@ module.exports = { activate };
 const vscode = require('vscode');
 const fs = require('node:fs');
 const path = require('node:path');
+const net = require('node:net');
 const output = vscode.window.createOutputChannel('node-tree-selftest');
 const workspaceEvents = {
   open: 0,
@@ -21180,6 +21184,59 @@ async function activate(context) {
     let providedDebugCount = 0;
     const trackerEvents = [];
     const customDebugEvents = [];
+    function dapFrame(message) {
+      const payload = JSON.stringify(message);
+      return 'Content-Length: ' + Buffer.byteLength(payload, 'utf8') + '\r\n\r\n' + payload;
+    }
+    function attachDapSocket(socket, label) {
+      let buffer = '';
+      let seq = 1;
+      function send(message) { socket.write(dapFrame(message)); }
+      function response(request, body) {
+        send({
+          seq: seq++,
+          type: 'response',
+          request_seq: request.seq,
+          command: request.command,
+          success: true,
+          body: body || {},
+        });
+      }
+      function event(name, body) {
+        send({ seq: seq++, type: 'event', event: name, body: body || {} });
+      }
+      socket.on('data', chunk => {
+        buffer += chunk.toString('utf8');
+        for (;;) {
+          const headerEnd = buffer.indexOf('\r\n\r\n');
+          if (headerEnd < 0) return;
+          const header = buffer.slice(0, headerEnd);
+          const match = /Content-Length:\s*(\d+)/i.exec(header);
+          if (!match) { buffer = buffer.slice(headerEnd + 4); continue; }
+          const length = Number(match[1]);
+          const bodyStart = headerEnd + 4;
+          if (buffer.length < bodyStart + length) return;
+          const body = buffer.slice(bodyStart, bodyStart + length);
+          buffer = buffer.slice(bodyStart + length);
+          const request = JSON.parse(body);
+          if (request.command === 'initialize') {
+            response(request, { adapter: label });
+            event('initialized', {});
+          } else if (request.command === 'launch') {
+            response(request, {});
+            event('serverCustom', { value: label });
+          } else if (request.command === 'selftest/server') {
+            response(request, { echo: request.arguments && request.arguments.value });
+          } else {
+            response(request, {});
+          }
+        }
+      });
+    }
+    const dapServer = net.createServer(socket => attachDapSocket(socket, 'server-dap'));
+    const dapServerPort = await new Promise(resolve => {
+      dapServer.listen(0, '127.0.0.1', () => resolve(dapServer.address().port));
+    });
     const providerDisposable = vscode.tasks.registerTaskProvider('node-selftest', {
       provideTasks() {
         const task = new vscode.Task(
@@ -21287,7 +21344,7 @@ async function activate(context) {
       'node-server-debug',
       {
         createDebugAdapterDescriptor() {
-          return new vscode.DebugAdapterServer(4711, '127.0.0.1');
+          return new vscode.DebugAdapterServer(dapServerPort, '127.0.0.1');
         },
       }
     );
@@ -21410,9 +21467,12 @@ async function activate(context) {
       name: 'Node Server Debug',
       request: 'launch',
     });
-    const serverDescriptor = vscode.debug.activeDebugSession
-      && vscode.debug.activeDebugSession.adapterDescriptor;
-    await vscode.debug.stopDebugging(vscode.debug.activeDebugSession);
+    const serverSession = vscode.debug.activeDebugSession;
+    const serverDescriptor = serverSession && serverSession.adapterDescriptor;
+    const serverCustomResponse = serverSession
+      ? await serverSession.customRequest('selftest/server', { value: 'server-ok' })
+      : null;
+    await vscode.debug.stopDebugging(serverSession);
     const pipeDebugStarted = await vscode.debug.startDebugging(undefined, {
       type: 'node-pipe-debug',
       name: 'Node Pipe Debug',
@@ -21499,6 +21559,7 @@ async function activate(context) {
     const afterDisposeTaskCount = (await vscode.tasks.fetchTasks({ type: 'node-selftest' })).length;
     const providedAfterDispose = await vscode.debug.startDebugging(undefined, 'Node Provided Debug');
     disposables.forEach(disposable => disposable.dispose());
+    await new Promise(resolve => dapServer.close(resolve));
     return {
       taskCount: fetched.length,
       sourceTaskCount: fetchedBySource.length,
@@ -21552,6 +21613,7 @@ async function activate(context) {
       serverDescriptorType: serverDescriptor && serverDescriptor.constructor && serverDescriptor.constructor.name,
       serverDescriptorPort: serverDescriptor && serverDescriptor.port,
       serverDescriptorHost: serverDescriptor && serverDescriptor.host,
+      serverCustomResponse,
       pipeDebugStarted,
       pipeDescriptorType: pipeDescriptor && pipeDescriptor.constructor && pipeDescriptor.constructor.name,
       pipeDescriptorPath: pipeDescriptor && pipeDescriptor.path,
@@ -27632,10 +27694,18 @@ process.stdin.resume();
                            "serverDebugStarted") is True
                        and node_task_debug_probe.get(
                            "serverDescriptorType") == "DebugAdapterServer"
+                       and isinstance(
+                           node_task_debug_probe.get("serverDescriptorPort"),
+                           int)
                        and node_task_debug_probe.get(
-                           "serverDescriptorPort") == 4711
+                           "serverDescriptorPort") > 0
                        and node_task_debug_probe.get(
                            "serverDescriptorHost") == "127.0.0.1"
+                       and node_task_debug_probe.get(
+                           "serverCustomResponse", {}).get(
+                               "echo") == "server-ok"
+                       and "serverCustom:server-dap" in node_task_debug_probe.get(
+                           "customDebugEvents", [])
                        and node_task_debug_probe.get(
                            "pipeDebugStarted") is True
                        and node_task_debug_probe.get(

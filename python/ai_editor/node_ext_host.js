@@ -24,6 +24,7 @@ const fsp = require('node:fs/promises');
 const os = require('node:os');
 const util = require('node:util');
 const childProcess = require('node:child_process');
+const net = require('node:net');
 
 // -------------------------------------------------------------------------
 // Logging — stderr only
@@ -4796,27 +4797,11 @@ function _debugRejectPendingTransportRequests(transport, error) {
     transport.pending.clear();
 }
 
-function _debugCreateAdapterTransport(session, descriptor, config, customEventEmitter) {
-    if (!(descriptor instanceof DebugAdapterExecutable) || !descriptor.command) return null;
-    const options = descriptor.options && typeof descriptor.options === 'object'
-        ? descriptor.options
-        : {};
-    const cwd = options.cwd ? String(options.cwd) : _workspaceRoot;
-    const env = Object.assign({}, process.env, options.env || {});
-    let proc;
-    try {
-        proc = childProcess.spawn(
-            descriptor.command,
-            Array.isArray(descriptor.args) ? descriptor.args : [],
-            { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true },
-        );
-    } catch (err) {
-        _debugCallTrackers(session, 'onError', err);
-        return { session, error: err, pending: new Map(), dispose() {} };
-    }
+function _debugCreateStreamTransport(session, config, customEventEmitter, readStream, writeStream, disposer) {
     const transport = {
         session,
-        process: proc,
+        readStream,
+        writeStream,
         customEventEmitter,
         buffer: '',
         seq: 1,
@@ -4839,7 +4824,7 @@ function _debugCreateAdapterTransport(session, descriptor, config, customEventEm
                 }, timeoutMs);
                 transport.pending.set(seq, { resolve, reject, timer });
                 try {
-                    proc.stdin.write(_debugDapFrame(request));
+                    writeStream.write(_debugDapFrame(request));
                 } catch (err) {
                     clearTimeout(timer);
                     transport.pending.delete(seq);
@@ -4850,26 +4835,19 @@ function _debugCreateAdapterTransport(session, descriptor, config, customEventEm
         dispose() {
             _debugRejectPendingTransportRequests(
                 transport, new Error('Debug session stopped'));
-            try { proc.stdin.end(); } catch {}
-            try {
-                if (!proc.killed) proc.kill();
-            } catch {}
+            try { writeStream.end(); } catch {}
+            try { disposer?.(); } catch {}
         },
     };
-    proc.stdout.on('data', chunk => _debugParseDapFrames(transport, chunk));
-    proc.stderr.on('data', chunk => {
-        const text = chunk.toString('utf8');
-        if (text) send({ type: 'output', channel: 'Debug Adapter', text });
-    });
-    proc.on('error', err => {
+    readStream.on('data', chunk => _debugParseDapFrames(transport, chunk));
+    readStream.on('error', err => {
         transport.error = err;
         _debugRejectPendingTransportRequests(transport, err);
         _debugCallTrackers(session, 'onError', err);
     });
-    proc.on('exit', (code, signal) => {
+    readStream.on('close', () => {
         _debugRejectPendingTransportRequests(
-            transport, new Error(`Debug adapter exited: ${code}:${signal}`));
-        _debugCallTrackers(session, 'onExit', code, signal);
+            transport, new Error('Debug adapter transport closed'));
     });
     transport.ready = (async () => {
         await transport.sendRequest('initialize', {
@@ -4886,6 +4864,70 @@ function _debugCreateAdapterTransport(session, descriptor, config, customEventEm
         return false;
     });
     return transport;
+}
+
+function _debugCreateExecutableAdapterTransport(session, descriptor, config, customEventEmitter) {
+    if (!(descriptor instanceof DebugAdapterExecutable) || !descriptor.command) return null;
+    const options = descriptor.options && typeof descriptor.options === 'object'
+        ? descriptor.options
+        : {};
+    const cwd = options.cwd ? String(options.cwd) : _workspaceRoot;
+    const env = Object.assign({}, process.env, options.env || {});
+    let proc;
+    try {
+        proc = childProcess.spawn(
+            descriptor.command,
+            Array.isArray(descriptor.args) ? descriptor.args : [],
+            { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true },
+        );
+    } catch (err) {
+        _debugCallTrackers(session, 'onError', err);
+        return { session, error: err, pending: new Map(), dispose() {} };
+    }
+    const transport = _debugCreateStreamTransport(
+        session,
+        config,
+        customEventEmitter,
+        proc.stdout,
+        proc.stdin,
+        () => {
+            try { proc.stdin.end(); } catch {}
+            try { if (!proc.killed) proc.kill(); } catch {}
+        });
+    transport.process = proc;
+    proc.stderr.on('data', chunk => {
+        const text = chunk.toString('utf8');
+        if (text) send({ type: 'output', channel: 'Debug Adapter', text });
+    });
+    proc.on('error', err => {
+        transport.error = err;
+        _debugRejectPendingTransportRequests(transport, err);
+        _debugCallTrackers(session, 'onError', err);
+    });
+    proc.on('exit', (code, signal) => {
+        _debugRejectPendingTransportRequests(
+            transport, new Error(`Debug adapter exited: ${code}:${signal}`));
+        _debugCallTrackers(session, 'onExit', code, signal);
+    });
+    return transport;
+}
+
+function _debugCreateServerAdapterTransport(session, descriptor, config, customEventEmitter) {
+    if (!(descriptor instanceof DebugAdapterServer)) return null;
+    const port = Number(descriptor.port);
+    if (!Number.isFinite(port) || port <= 0) return null;
+    const host = descriptor.host || '127.0.0.1';
+    const socket = net.createConnection({ port, host });
+    return _debugCreateStreamTransport(
+        session, config, customEventEmitter, socket, socket,
+        () => { try { socket.destroy(); } catch {} });
+}
+
+function _debugCreateAdapterTransport(session, descriptor, config, customEventEmitter) {
+    return _debugCreateExecutableAdapterTransport(
+        session, descriptor, config, customEventEmitter)
+        || _debugCreateServerAdapterTransport(
+            session, descriptor, config, customEventEmitter);
 }
 
 function _notebookSerializerByHandleOrViewType(handle, viewType) {
