@@ -2194,31 +2194,95 @@ class OutputChannel {
 
 class ProcessExecution {
     constructor(processValue, argsOrOptions, options) {
-        this.process = String(processValue || '');
+        if (typeof processValue !== 'string') {
+            throw new Error('process must be a string');
+        }
+        this.process = processValue;
         if (Array.isArray(argsOrOptions)) {
             this.args = argsOrOptions.map(item => String(item));
-            this.options = options || {};
+            this.options = options;
         } else {
             this.args = [];
-            this.options = argsOrOptions || {};
+            this.options = argsOrOptions;
         }
+    }
+    computeId() {
+        return ['process', this.process, ...(this.args || [])]
+            .map(item => String(item).replace(/,/g, ',,'))
+            .join(',') + ',';
     }
 }
 
 class ShellExecution {
     constructor(commandLineOrCommand, argsOrOptions, options) {
         if (Array.isArray(argsOrOptions)) {
-            this.command = String(commandLineOrCommand || '');
-            this.args = argsOrOptions.map(item => String(item));
-            this.options = options || {};
+            if (commandLineOrCommand === undefined || commandLineOrCommand === null) {
+                throw new Error('command cannot be undefined or null');
+            }
+            this.command = commandLineOrCommand;
+            this.args = argsOrOptions;
+            this.options = options;
             this.commandLine = undefined;
         } else {
+            if (typeof commandLineOrCommand !== 'string') {
+                throw new Error('commandLine must be a string');
+            }
             this.commandLine = String(commandLineOrCommand || '');
             this.command = undefined;
             this.args = [];
-            this.options = argsOrOptions || {};
+            this.options = argsOrOptions;
         }
     }
+    computeId() {
+        const values = ['shell'];
+        if (this.commandLine !== undefined) values.push(this.commandLine);
+        if (this.command !== undefined) values.push(_shellTokenText(this.command));
+        for (const arg of this.args || []) values.push(_shellTokenText(arg));
+        return values.map(item => String(item).replace(/,/g, ',,')).join(',') + ',';
+    }
+}
+
+class CustomExecution {
+    constructor(callback) {
+        if (typeof callback !== 'function') {
+            throw new Error('CustomExecution callback must be a function');
+        }
+        this.callback = callback;
+    }
+    computeId() {
+        return `customExecution:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+    }
+}
+
+class TaskGroup {
+    constructor(id, label) {
+        if (typeof id !== 'string' || typeof label !== 'string') {
+            throw new Error('TaskGroup id and label must be strings');
+        }
+        this._id = id;
+        this.label = label;
+        this.isDefault = undefined;
+    }
+    get id() { return this._id; }
+    static from(value) {
+        switch (value) {
+            case 'clean': return TaskGroup.Clean;
+            case 'build': return TaskGroup.Build;
+            case 'rebuild': return TaskGroup.Rebuild;
+            case 'test': return TaskGroup.Test;
+            default: return undefined;
+        }
+    }
+}
+TaskGroup.Clean = new TaskGroup('clean', 'Clean');
+TaskGroup.Build = new TaskGroup('build', 'Build');
+TaskGroup.Rebuild = new TaskGroup('rebuild', 'Rebuild');
+TaskGroup.Test = new TaskGroup('test', 'Test');
+
+function _taskNormalizeProblemMatchers(value) {
+    if (typeof value === 'string') return [value];
+    if (Array.isArray(value)) return value.map(item => String(item));
+    return [];
 }
 
 class Task {
@@ -2232,16 +2296,20 @@ class Task {
             this.name = scopeOrName;
             this.source = String(nameOrSource || '');
             this.execution = sourceOrExecution;
-            this.problemMatchers = executionOrProblemMatchers || [];
+            this.problemMatchers = _taskNormalizeProblemMatchers(
+                executionOrProblemMatchers);
+            this.hasDefinedMatchers = executionOrProblemMatchers !== undefined;
         } else {
             this.scope = scopeOrName;
             this.name = String(nameOrSource || this.definition.type || 'task');
             this.source = String(sourceOrExecution || '');
             this.execution = executionOrProblemMatchers;
-            this.problemMatchers = problemMatchers || [];
+            this.problemMatchers = _taskNormalizeProblemMatchers(problemMatchers);
+            this.hasDefinedMatchers = problemMatchers !== undefined;
         }
         this.isBackground = false;
         this.group = undefined;
+        this.detail = undefined;
         this.presentationOptions = {};
         this.runOptions = {};
     }
@@ -3984,6 +4052,13 @@ function _terminalOptionValue(value) {
 function _plainBridgeValue(value) {
     if (value === undefined || value === null) return value;
     if (value instanceof Uri) return value.toString();
+    if (value instanceof TaskGroup) {
+        return {
+            id: value.id,
+            label: value.label,
+            isDefault: value.isDefault,
+        };
+    }
     if (value instanceof ProcessExecution) {
         return {
             type: 'process',
@@ -4000,6 +4075,9 @@ function _plainBridgeValue(value) {
             args: value.args || [],
             options: _plainBridgeValue(value.options || {}),
         };
+    }
+    if (value instanceof CustomExecution) {
+        return { type: 'customExecution' };
     }
     if (value instanceof ThemeIcon || value instanceof ThemeColor) {
         return _terminalOptionValue(value);
@@ -4026,7 +4104,12 @@ function _taskType(task) {
 function _taskMatchesFilter(task, filter) {
     if (!filter || typeof filter !== 'object') return true;
     const filterType = String(filter.type || '');
-    return !filterType || _taskType(task) === filterType;
+    if (filterType && _taskType(task) !== filterType) return false;
+    const filterSource = filter.source === undefined || filter.source === null
+        ? ''
+        : String(filter.source);
+    if (filterSource && String(task?.source || '') !== filterSource) return false;
+    return true;
 }
 
 function _serializeTask(task) {
@@ -4041,13 +4124,24 @@ function _serializeTask(task) {
         execution: _plainBridgeValue(task.execution),
         commandLine: executionSpec.commandLine || undefined,
         problemMatchers: _plainBridgeValue(task.problemMatchers || []),
+        hasDefinedMatchers: task.hasDefinedMatchers === true,
+        isBackground: task.isBackground === true,
+        group: _plainBridgeValue(task.group),
+        detail: task.detail === undefined ? undefined : String(task.detail),
         presentationOptions: _plainBridgeValue(task.presentationOptions || {}),
         runOptions: _plainBridgeValue(task.runOptions || {}),
     };
 }
 
+function _shellTokenText(value) {
+    if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'value')) {
+        return String(value.value);
+    }
+    return String(value ?? '');
+}
+
 function _quoteCommandToken(value) {
-    const text = String(value ?? '');
+    const text = _shellTokenText(value);
     if (!text) return '""';
     if (!/[\s"'`$&|<>]/.test(text)) return text;
     return JSON.stringify(text);
@@ -4080,6 +4174,8 @@ function _taskExecutionSpec(task) {
         ].map(_quoteCommandToken).join(' ');
         cwd = execution.options && execution.options.cwd;
         env = execution.options && execution.options.env;
+    } else if (execution instanceof CustomExecution) {
+        kind = 'customExecution';
     } else if (execution && typeof execution === 'object') {
         kind = String(
             execution.type
@@ -9321,6 +9417,10 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             const _onDidStartTaskProcess = new EventEmitter();
             const _onDidEndTaskProcess = new EventEmitter();
             const endExecution = (execution, exitCode = undefined) => {
+                if (!execution || execution._ended) return;
+                execution._ended = true;
+                try { execution._customPtyCloseDisposable?.dispose?.(); } catch {}
+                try { execution._customPtyWriteDisposable?.dispose?.(); } catch {}
                 const index = _taskExecutions.indexOf(execution);
                 if (index >= 0) _taskExecutions.splice(index, 1);
                 _onDidEndTask.fire({ execution, task: execution.task });
@@ -9354,6 +9454,9 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                         id: `task-${_nextTaskExecutionHandle++}`,
                         task: resolved,
                         terminate() {
+                            if (execution._customPty && typeof execution._customPty.close === 'function') {
+                                try { execution._customPty.close(); } catch {}
+                            }
                             send({
                                 type: 'task_terminate',
                                 executionId: execution.id,
@@ -9378,6 +9481,35 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                             kind: executionSpec.kind,
                         },
                     });
+                    if (resolved.execution instanceof CustomExecution) {
+                        try {
+                            const pty = await Promise.resolve(
+                                resolved.execution.callback(resolved.definition || {}));
+                            if (pty && typeof pty === 'object') {
+                                execution._customPty = pty;
+                                execution._customPtyWriteDisposable =
+                                    _terminalSubscribeEvent(pty.onDidWrite, data => {
+                                        send({
+                                            type: 'task_write',
+                                            executionId: execution.id,
+                                            text: String(data ?? ''),
+                                        });
+                                    });
+                                execution._customPtyCloseDisposable =
+                                    _terminalSubscribeEvent(pty.onDidClose, code => {
+                                        endExecution(
+                                            execution,
+                                            typeof code === 'number' ? code : undefined);
+                                    });
+                                if (typeof pty.open === 'function') {
+                                    pty.open(undefined);
+                                }
+                            }
+                        } catch (err) {
+                            endExecution(execution, 1);
+                            throw err;
+                        }
+                    }
                     return execution;
                 },
                 onDidStartTask: _onDidStartTask.event,
@@ -9397,7 +9529,9 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         ThemeColor,
         ProcessExecution,
         ShellExecution,
+        CustomExecution,
         Task,
+        TaskGroup,
         DebugAdapterExecutable,
         DebugAdapterServer,
         DebugAdapterNamedPipeServer,
@@ -9498,48 +9632,11 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         TextEditorRevealType: { Default: 0, InCenter: 1, InCenterIfOutsideViewport: 2, AtTop: 3 },
 
         // --- Task types ---
-        ShellExecution: class {
-            constructor(commandLineOrCommand, argsOrOptions, options) {
-                if (Array.isArray(argsOrOptions)) {
-                    this.command = commandLineOrCommand;
-                    this.args = argsOrOptions;
-                    this.options = options;
-                } else {
-                    this.commandLine = commandLineOrCommand;
-                    this.options = argsOrOptions;
-                }
-            }
-        },
-        ProcessExecution: class {
-            constructor(process_, args, options) {
-                this.process = process_;
-                this.args = args || [];
-                this.options = options;
-            }
-        },
-        Task: class {
-            constructor(definition, scopeOrName, nameOrSource, sourceOrExecution, execution) {
-                this.definition = definition;
-                if (typeof scopeOrName === 'string') {
-                    // 4-arg form: (definition, name, source, execution)
-                    this.name = scopeOrName;
-                    this.source = nameOrSource;
-                    this.execution = sourceOrExecution;
-                } else {
-                    // 5-arg form: (definition, scope, name, source, execution)
-                    this.scope = scopeOrName;
-                    this.name = nameOrSource;
-                    this.source = sourceOrExecution;
-                    this.execution = execution;
-                }
-                this.isBackground = false;
-                this.presentationOptions = {};
-                this.problemMatchers = [];
-                this.group = undefined;
-                this.detail = undefined;
-            }
-        },
-        TaskGroup: { Clean: { id: 'clean' }, Build: { id: 'build' }, Rebuild: { id: 'rebuild' }, Test: { id: 'test' } },
+        ShellExecution,
+        ProcessExecution,
+        CustomExecution,
+        Task,
+        TaskGroup,
         TaskScope: { Global: 1, Workspace: 2 },
         TaskRevealKind: { Always: 1, Silent: 2, Never: 3 },
         TaskPanelKind: { Shared: 1, Dedicated: 2, New: 3 },

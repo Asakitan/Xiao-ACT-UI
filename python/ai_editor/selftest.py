@@ -9638,11 +9638,17 @@ console.log("command palette quick access helpers ok");
     _check("extension task and debug runtimes expose VS Code lifecycle",
            "class ProcessExecution" in node_ext_host_source
            and "class ShellExecution" in node_ext_host_source
+           and "class CustomExecution" in node_ext_host_source
+           and "class TaskGroup" in node_ext_host_source
            and "class Task" in node_ext_host_source
            and "class DebugAdapterExecutable" in node_ext_host_source
            and "class DebugAdapterServer" in node_ext_host_source
            and "class DebugAdapterNamedPipeServer" in node_ext_host_source
            and "TaskScope: { Global: 1, Workspace: 2 }" in node_ext_host_source
+           and "TaskRevealKind: { Always: 1, Silent: 2, Never: 3 }"
+           in node_ext_host_source
+           and "TaskPanelKind: { Shared: 1, Dedicated: 2, New: 3 }"
+           in node_ext_host_source
            and "async fetchTasks(filter)" in node_ext_host_source
            and "async executeTask(task)" in node_ext_host_source
            and "commandLine: executionSpec.commandLine || ''"
@@ -19669,24 +19675,65 @@ async function activate(context) {
     ];
     let resolvedTask = false;
     let resolvedDebug = false;
+    let customOpened = false;
+    let customCallbackDefinition = undefined;
     let descriptorCalls = 0;
     const providerDisposable = vscode.tasks.registerTaskProvider('node-selftest', {
       provideTasks() {
-        return [
-          new vscode.Task(
-            { type: 'node-selftest', command: 'echo' },
-            vscode.TaskScope.Workspace,
-            'Node Selftest Task',
-            'selftest',
-            new vscode.ShellExecution('echo node-task'),
-            []
-          ),
-        ];
+        const task = new vscode.Task(
+          { type: 'node-selftest', command: 'echo' },
+          vscode.TaskScope.Workspace,
+          'Node Selftest Task',
+          'selftest',
+          new vscode.ShellExecution({ value: 'echo' }, [{ value: 'node-task' }], {
+            cwd: context.extensionUri,
+            env: { NODE_TASK_SELFTEST: '1' },
+          }),
+          '$tsc'
+        );
+        task.group = vscode.TaskGroup.Build;
+        task.group.isDefault = true;
+        task.detail = 'Task detail';
+        task.isBackground = true;
+        task.runOptions = { reevaluateOnRerun: false };
+        return [task];
       },
       resolveTask(task) {
         resolvedTask = true;
-        task.presentationOptions = { reveal: 1 };
+        task.presentationOptions = {
+          reveal: vscode.TaskRevealKind.Silent,
+          panel: vscode.TaskPanelKind.Dedicated,
+          clear: true,
+        };
         return task;
+      },
+    });
+    const customProviderDisposable = vscode.tasks.registerTaskProvider('node-selftest-custom', {
+      provideTasks() {
+        const closeEmitter = new vscode.EventEmitter();
+        const writeEmitter = new vscode.EventEmitter();
+        const task = new vscode.Task(
+          { type: 'node-selftest-custom', custom: true },
+          'Node Custom Task',
+          'selftest-custom',
+          new vscode.CustomExecution(definition => {
+            customCallbackDefinition = definition;
+            return Promise.resolve({
+              onDidWrite: writeEmitter.event,
+              onDidClose: closeEmitter.event,
+              open() {
+                customOpened = true;
+                writeEmitter.fire('custom-opened');
+              },
+              close() {
+                closeEmitter.fire(0);
+              },
+            });
+          }),
+          []
+        );
+        task.presentationOptions = { reveal: vscode.TaskRevealKind.Never };
+        return [task];
       },
     });
     const debugDisposable = vscode.debug.registerDebugConfigurationProvider(
@@ -19715,10 +19762,26 @@ async function activate(context) {
       }
     );
     const fetched = await vscode.tasks.fetchTasks({ type: 'node-selftest' });
+    const fetchedBySource = await vscode.tasks.fetchTasks({ source: 'selftest-custom' });
+    const fetchedMissing = await vscode.tasks.fetchTasks({ type: 'node-selftest-missing' });
     const execution = await vscode.tasks.executeTask(fetched[0]);
     const activeDuringTask = vscode.tasks.taskExecutions.length;
     await execution.terminate();
     const activeAfterTask = vscode.tasks.taskExecutions.length;
+    const customExecution = await vscode.tasks.executeTask(fetchedBySource[0]);
+    const activeDuringCustomTask = vscode.tasks.taskExecutions.length;
+    await customExecution.terminate();
+    const activeAfterCustomTask = vscode.tasks.taskExecutions.length;
+    const processWithOptions = new vscode.ProcessExecution('node', {
+      cwd: context.extensionUri,
+      env: { PROCESS_OPT: '1' },
+    });
+    const processWithArgs = new vscode.ProcessExecution(
+      'node',
+      ['--version'],
+      { env: { PROCESS_ARGS: '1' } }
+    );
+    const customGroup = new vscode.TaskGroup('lint', 'Lint');
     const debugStarted = await vscode.debug.startDebugging(undefined, {
       type: 'node-debug',
       name: 'Node Debug',
@@ -19733,16 +19796,45 @@ async function activate(context) {
     const activeAfterDebug = vscode.debug.activeDebugSession
       && vscode.debug.activeDebugSession.name;
     providerDisposable.dispose();
+    customProviderDisposable.dispose();
     debugDisposable.dispose();
     factoryDisposable.dispose();
     disposables.forEach(disposable => disposable.dispose());
     return {
       taskCount: fetched.length,
+      sourceTaskCount: fetchedBySource.length,
+      missingTaskCount: fetchedMissing.length,
       taskName: fetched[0] && fetched[0].name,
       taskType: fetched[0] && fetched[0].definition && fetched[0].definition.type,
+      taskProblemMatchers: fetched[0] && fetched[0].problemMatchers,
+      taskHasDefinedMatchers: fetched[0] && fetched[0].hasDefinedMatchers,
+      taskGroupId: fetched[0] && fetched[0].group && fetched[0].group.id,
+      taskGroupLabel: fetched[0] && fetched[0].group && fetched[0].group.label,
+      taskGroupDefault: fetched[0] && fetched[0].group && fetched[0].group.isDefault,
+      taskDetail: fetched[0] && fetched[0].detail,
+      taskIsBackground: fetched[0] && fetched[0].isBackground,
+      taskRunOptions: fetched[0] && fetched[0].runOptions,
+      taskPresentationOptions: fetched[0] && fetched[0].presentationOptions,
       taskExecutionId: execution && execution.id,
       activeDuringTask,
       activeAfterTask,
+      customTaskName: fetchedBySource[0] && fetchedBySource[0].name,
+      customTaskType: fetchedBySource[0] && fetchedBySource[0].definition && fetchedBySource[0].definition.type,
+      customTaskPresentationOptions: fetchedBySource[0] && fetchedBySource[0].presentationOptions,
+      customExecutionId: customExecution && customExecution.id,
+      customOpened,
+      customCallbackDefinition,
+      activeDuringCustomTask,
+      activeAfterCustomTask,
+      processWithOptionsArgs: processWithOptions.args,
+      processWithOptionsCwd: processWithOptions.options && processWithOptions.options.cwd && processWithOptions.options.cwd.toString(),
+      processWithOptionsEnv: processWithOptions.options && processWithOptions.options.env,
+      processWithArgsArgs: processWithArgs.args,
+      processWithArgsEnv: processWithArgs.options && processWithArgs.options.env,
+      taskGroupBuildLabel: vscode.TaskGroup.from('build') && vscode.TaskGroup.from('build').label,
+      taskGroupMissing: vscode.TaskGroup.from('missing'),
+      customGroupId: customGroup.id,
+      customGroupLabel: customGroup.label,
       resolvedTask,
       taskEvents,
       debugStarted,
@@ -19756,8 +19848,10 @@ async function activate(context) {
         && activeDescriptor.options
         && activeDescriptor.options.env,
       debugEvents,
-      hasTaskClasses: !!(vscode.Task && vscode.ShellExecution && vscode.ProcessExecution),
+      hasTaskClasses: !!(vscode.Task && vscode.ShellExecution && vscode.ProcessExecution && vscode.CustomExecution && vscode.TaskGroup),
       taskScopeWorkspace: vscode.TaskScope.Workspace,
+      taskRevealSilent: vscode.TaskRevealKind.Silent,
+      taskPanelDedicated: vscode.TaskPanelKind.Dedicated,
     };
   });
   vscode.commands.registerCommand('selftest.node.messageOptionsProbe', async () => {
@@ -24797,23 +24891,84 @@ module.exports = { activate, deactivate };
                        and node_task_debug_probe.get("hasTaskClasses") is True
                        and node_task_debug_probe.get("taskScopeWorkspace") == 2
                        and node_task_debug_probe.get("taskCount") == 1
+                       and node_task_debug_probe.get("sourceTaskCount") == 1
+                       and node_task_debug_probe.get("missingTaskCount") == 0
                        and node_task_debug_probe.get("taskName")
                        == "Node Selftest Task"
                        and node_task_debug_probe.get("taskType")
                        == "node-selftest"
+                       and node_task_debug_probe.get("taskProblemMatchers")
+                       == ["$tsc"]
+                       and node_task_debug_probe.get("taskHasDefinedMatchers")
+                       is True
+                       and node_task_debug_probe.get("taskGroupId") == "build"
+                       and node_task_debug_probe.get("taskGroupLabel") == "Build"
+                       and node_task_debug_probe.get("taskGroupDefault") is True
+                       and node_task_debug_probe.get("taskDetail")
+                       == "Task detail"
+                       and node_task_debug_probe.get("taskIsBackground") is True
+                       and node_task_debug_probe.get(
+                           "taskRunOptions", {}).get(
+                               "reevaluateOnRerun") is False
+                       and node_task_debug_probe.get(
+                           "taskPresentationOptions", {}).get("reveal") == 2
+                       and node_task_debug_probe.get(
+                           "taskPresentationOptions", {}).get("panel") == 2
+                       and node_task_debug_probe.get(
+                           "taskPresentationOptions", {}).get("clear") is True
                        and node_task_debug_probe.get("taskExecutionId")
                        and node_task_debug_probe.get("activeDuringTask") == 1
                        and node_task_debug_probe.get("activeAfterTask") == 0
+                       and node_task_debug_probe.get("customTaskName")
+                       == "Node Custom Task"
+                       and node_task_debug_probe.get("customTaskType")
+                       == "node-selftest-custom"
+                       and node_task_debug_probe.get(
+                           "customTaskPresentationOptions", {}).get(
+                               "reveal") == 3
+                       and node_task_debug_probe.get("customExecutionId")
+                       and node_task_debug_probe.get("customOpened") is True
+                       and node_task_debug_probe.get(
+                           "customCallbackDefinition", {}).get(
+                               "custom") is True
+                       and node_task_debug_probe.get(
+                           "activeDuringCustomTask") == 1
+                       and node_task_debug_probe.get(
+                           "activeAfterCustomTask") == 0
+                       and node_task_debug_probe.get(
+                           "processWithOptionsArgs") == []
+                       and node_task_debug_probe.get(
+                           "processWithOptionsEnv", {}).get(
+                               "PROCESS_OPT") == "1"
+                       and node_task_debug_probe.get(
+                           "processWithArgsArgs") == ["--version"]
+                       and node_task_debug_probe.get(
+                           "processWithArgsEnv", {}).get(
+                               "PROCESS_ARGS") == "1"
+                       and node_task_debug_probe.get(
+                           "taskGroupBuildLabel") == "Build"
+                       and node_task_debug_probe.get(
+                           "taskGroupMissing") is None
+                       and node_task_debug_probe.get("customGroupId") == "lint"
+                       and node_task_debug_probe.get(
+                           "customGroupLabel") == "Lint"
+                       and node_task_debug_probe.get("taskRevealSilent") == 2
+                       and node_task_debug_probe.get("taskPanelDedicated") == 2
                        and node_task_debug_probe.get("resolvedTask") is True
                        and "start:Node Selftest Task"
                        in node_task_debug_events
                        and "process:0" in node_task_debug_events
                        and "end:Node Selftest Task" in node_task_debug_events
                        and "processEnd:undefined" in node_task_debug_events
+                       and "start:Node Custom Task" in node_task_debug_events
+                       and "end:Node Custom Task" in node_task_debug_events
+                       and "processEnd:0" in node_task_debug_events
                        and any(
                            item.get("event") == "show"
                            and item.get("name") == "Task: Node Selftest Task"
                            and item.get("metadata", {}).get("kind") == "shell"
+                           and item.get("metadata", {}).get("env", {}).get(
+                               "NODE_TASK_SELFTEST") == "1"
                            for item in node_task_terminal_events)
                        and any(
                            item.get("event") == "command"
@@ -24823,6 +24978,16 @@ module.exports = { activate, deactivate };
                        and any(
                            item.get("event") == "hide"
                            and item.get("name") == "Task: Node Selftest Task"
+                           for item in node_task_terminal_events)
+                       and any(
+                           item.get("event") == "show"
+                           and item.get("name") == "Task: Node Custom Task"
+                           and item.get("metadata", {}).get("kind")
+                           == "customExecution"
+                           for item in node_task_terminal_events)
+                       and any(
+                           item.get("event") == "hide"
+                           and item.get("name") == "Task: Node Custom Task"
                            for item in node_task_terminal_events)
                        and node_task_debug_probe.get("debugStarted") is True
                        and node_task_debug_probe.get("activeDebugName")
