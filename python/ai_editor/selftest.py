@@ -3614,10 +3614,27 @@ def test_phase1_ai_editor_regressions() -> None:
            in html
            and "assistantSessionPersistCurrent({status:streaming?'inProgress':'completed'});"
            in html
+           and 'id="history-search" placeholder="Search chat sessions" aria-label="Search chat sessions" aria-controls="history-list"' in html
+           and 'id="history-list" role="listbox" tabindex="0" aria-label="Chat history and sessions"' in html
+           and "function historyQuery()" in html
+           and "function historyMatchesQuery(values,query)" in html
+           and "function selectHistoryItem(index)" in html
+           and "function activateHistorySelection()" in html
+           and "function confirmDeleteAssistantSession(session)" in html
+           and "function renderHistorySessionItem(list,session,index)" in html
+           and "function renderHistoryBackendItem(list,entry,index)" in html
+           and "visibleSessions=localSessions.filter" in html
+           and "visibleBackend=backendEntries.filter" in html
+           and "item.className='sb-item'+(current?' current':'');" in html
+           and "marker.className='history-session-current';" in html
+           and "list.setAttribute('aria-activedescendant',active.id);" in html
+           and "if(e.key==='ArrowDown'||e.key==='ArrowUp')" in html
+           and "if(e.key==='Delete')" in html
+           and "const search=$('history-search');if(search)search.focus();" in html
            and "group.textContent='▸ Assistant Sessions'" in html
-           and "fork.onclick=ev=>{ev.stopPropagation();assistantSessionOpenItem(s.id,{fork:true});refreshHistory()};"
+           and "fork.onclick=ev=>{ev.stopPropagation();assistantSessionOpenItem(session.id,{fork:true});announceAssistantAction('Forked chat session');refreshHistory()};"
            in html
-           and "assistantSessionDeleteItem(s.id);refreshHistory()" in html
+           and "if(confirmDeleteAssistantSession(session)){assistantSessionDeleteItem(session.id);announceAssistantAction('Deleted chat session');refreshHistory()}" in html
            and "['/sessions','Open chat sessions','chat']" in html
            and "else if(cmd==='/fork')assistantSessionForkCurrent();"
            in html)

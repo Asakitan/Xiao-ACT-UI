@@ -148,8 +148,18 @@ body.window-resizing * { cursor:inherit !important; }
   min-height:22px; }
 .sb-item:hover { background:var(--bg-hover); color:var(--fg); }
 .sb-item.active { background:var(--bg-active); color:var(--fg); }
+.sb-item:focus { outline:1px solid var(--border-focus); outline-offset:-1px; background:var(--bg-hover); color:var(--fg); }
 .sb-item.multi-line { white-space:normal; align-items:flex-start; padding:6px 12px; }
 .sb-item .meta { font-size:10px; color:var(--fg-dim); margin-left:auto; }
+.history-search-wrap { padding:6px 10px 4px; }
+.history-search { width:100%; height:24px; border:1px solid var(--border); border-radius:4px;
+  background:var(--bg3); color:var(--fg); padding:0 7px; font:12px var(--sans); outline:none; }
+.history-search:focus { border-color:var(--border-focus); }
+.history-session-current { color:var(--fg-success); font:10px var(--mono); flex-shrink:0; }
+.history-session-action { border:0; background:transparent; color:var(--fg-dim); cursor:pointer;
+  font:10px var(--sans); padding:1px 3px; border-radius:3px; flex-shrink:0; }
+.history-session-action:hover,.history-session-action:focus { color:var(--fg); background:var(--bg-hover); outline:none; }
+.history-session-action.delete { color:var(--fg-error); }
 .sb-group { padding:8px 16px 4px; font-size:11px; font-weight:600; color:var(--fg-dim);
   text-transform:uppercase; letter-spacing:0.5px; }
 .tree-root { padding:4px 0 10px; }
@@ -1777,7 +1787,10 @@ pre.code-block { overflow:visible; }
       <div class="sb-header"><span data-i18n="history">History</span> <span class="spacer"></span>
         <span class="sb-action" onclick="refreshHistory()">↻</span>
       </div>
-      <div class="sb-section" id="history-list"></div>
+      <div class="history-search-wrap">
+        <input class="history-search" id="history-search" placeholder="Search chat sessions" aria-label="Search chat sessions" aria-controls="history-list">
+      </div>
+      <div class="sb-section" id="history-list" role="listbox" tabindex="0" aria-label="Chat history and sessions"></div>
     </div>
     <!-- Extensions sidebar (VSCode marketplace) -->
     <div class="sb-view" id="sb-extensions" style="display:none">
@@ -13012,49 +13025,126 @@ function renderToolsSidebar(toolList){
   });
 }
 
+let _historySelectedIndex=0;
+let _historyEntries=[];
+function historyQuery(){
+  const input=$('history-search');
+  return String(input&&input.value||'').trim().toLowerCase();
+}
+function historyMatchesQuery(values,query){
+  if(!query)return true;
+  return values.some(value=>String(value||'').toLowerCase().includes(query));
+}
+function selectHistoryItem(index){
+  const list=$('history-list');if(!list)return false;
+  const items=Array.from(list.querySelectorAll('.sb-item[role="option"]'));
+  if(!items.length){_historySelectedIndex=0;list.removeAttribute('aria-activedescendant');return false}
+  _historySelectedIndex=Math.max(0,Math.min(items.length-1,Number(index)||0));
+  items.forEach((item,i)=>{
+    const active=i===_historySelectedIndex;
+    item.classList.toggle('active',active);
+    item.setAttribute('aria-selected',active?'true':'false');
+  });
+  const active=items[_historySelectedIndex];
+  if(active&&active.id){
+    list.setAttribute('aria-activedescendant',active.id);
+    active.scrollIntoView({block:'nearest'});
+  }
+  return true;
+}
+function activateHistorySelection(){
+  const entry=_historyEntries[_historySelectedIndex];
+  if(entry&&typeof entry.open==='function'){entry.open();return true}
+  return false;
+}
+function confirmDeleteAssistantSession(session){
+  const title=String(session&&session.title||'Chat session');
+  return window.confirm('Delete local chat session "'+title+'"?');
+}
+function renderHistorySessionItem(list,session,index){
+  const current=String(session.id||'')===String(assistantSessionState.id||'');
+  const item=document.createElement('div');item.className='sb-item'+(current?' current':'');
+  item.id='history-session-'+index;
+  item.setAttribute('role','option');
+  item.setAttribute('tabindex','-1');
+  item.dataset.sessionId=String(session.id||'');
+  item.dataset.historyKind='session';
+  item.setAttribute('aria-label','Assistant session '+String(session.title||session.id||'Chat session')+(current?' current':''));
+  item.style.cssText='display:flex;align-items:center;gap:4px';
+  const label=document.createElement('span');label.style.cssText='flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  label.textContent=String(session.title||'Chat session').slice(0,34);label.title=(session.sessionResource||'')+'\n'+(session.title||'');
+  if(current){const marker=document.createElement('span');marker.className='history-session-current';marker.textContent='current';item.appendChild(marker)}
+  const meta=document.createElement('span');meta.className='meta';meta.textContent=String(session.requestCount||0)+' req';
+  const fork=document.createElement('button');fork.type='button';fork.className='history-session-action fork';fork.textContent='fork';fork.title='Fork session';fork.setAttribute('aria-label','Fork session');
+  fork.onclick=ev=>{ev.stopPropagation();assistantSessionOpenItem(session.id,{fork:true});announceAssistantAction('Forked chat session');refreshHistory()};
+  const del=document.createElement('button');del.type='button';del.className='history-session-action delete';del.textContent='x';del.title='Delete local session';del.setAttribute('aria-label','Delete local session');
+  del.onclick=ev=>{ev.stopPropagation();if(confirmDeleteAssistantSession(session)){assistantSessionDeleteItem(session.id);announceAssistantAction('Deleted chat session');refreshHistory()}};
+  item.appendChild(label);item.appendChild(meta);item.appendChild(fork);item.appendChild(del);
+  item.onclick=()=>assistantSessionOpenItem(session.id);
+  list.appendChild(item);
+  return {kind:'session',id:session.id,element:item,open:()=>assistantSessionOpenItem(session.id)};
+}
+function renderHistoryBackendItem(list,entry,index){
+  const item=document.createElement('div');item.className='sb-item';
+  item.id='history-entry-'+index;
+  item.setAttribute('role','option');
+  item.setAttribute('tabindex','-1');
+  item.dataset.historyKind='saved';
+  item.style.cssText='display:flex;align-items:center;gap:4px';
+  const label=document.createElement('span');label.style.cssText='flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  label.textContent=(entry.title||t('untitled')).slice(0,28);label.title=entry.title||'';
+  const meta=document.createElement('span');meta.className='meta';meta.textContent=entry.message_count+' msg';
+  const del=document.createElement('button');del.type='button';del.className='history-session-action delete';del.textContent='x';del.title='Delete';del.setAttribute('aria-label','Delete saved history');
+  del.onclick=ev=>{ev.stopPropagation();if(!window.confirm('Delete saved chat history?'))return;call('delete_history',entry.id).then(res=>{if(callSucceeded(res))refreshHistory();else showToast('Delete failed: '+callFailedMessage(res,'backend unavailable'),'error',2500)})};
+  item.appendChild(label);item.appendChild(meta);item.appendChild(del);
+  item.onclick=()=>loadHistoryConv(entry.id);
+  list.appendChild(item);
+  return {kind:'saved',id:entry.id,element:item,open:()=>loadHistoryConv(entry.id)};
+}
 async function refreshHistory(){
   assistantSessionPersistCurrent({status:streaming?'inProgress':'completed'});
   const r=await call('list_history');const list=$('history-list');list.innerHTML='';
+  _historyEntries=[];
+  const query=historyQuery();
   const localSessions=assistantSessionLoadItems();
   const backendEntries=(r&&Array.isArray(r.entries))?r.entries:[];
-  if(!localSessions.length&&!backendEntries.length){list.innerHTML='<div class="sb-item" style="color:var(--fg-dim)">'+esc(t('no_history'))+'</div>';return}
-  if(localSessions.length){
+  const visibleSessions=localSessions.filter(s=>historyMatchesQuery([s.title,s.sessionResource,s.id,s.provider,s.model],query));
+  const visibleBackend=backendEntries.filter(e=>historyMatchesQuery([e.title,e.id,e.message_count],query));
+  if(!visibleSessions.length&&!visibleBackend.length){list.innerHTML='<div class="sb-item" style="color:var(--fg-dim)" role="note">'+esc(query?'No matching chat sessions':t('no_history'))+'</div>';list.removeAttribute('aria-activedescendant');return}
+  if(visibleSessions.length){
     const group=document.createElement('div');group.className='sb-group';group.textContent='▸ Assistant Sessions';list.appendChild(group);
-    localSessions.forEach(s=>{
-      const item=document.createElement('div');item.className='sb-item';
-      item.style.cssText='display:flex;align-items:center;gap:4px';
-      const label=document.createElement('span');label.style.cssText='flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-      label.textContent=String(s.title||'Chat session').slice(0,34);label.title=(s.sessionResource||'')+'\n'+(s.title||'');
-      const meta=document.createElement('span');meta.className='meta';meta.textContent=String(s.requestCount||0)+'req';
-      const fork=document.createElement('span');fork.textContent='fork';fork.title='Fork session';
-      fork.style.cssText='cursor:pointer;font-size:10px;opacity:0.65;color:var(--fg-accent);flex-shrink:0';
-      fork.onclick=ev=>{ev.stopPropagation();assistantSessionOpenItem(s.id,{fork:true});refreshHistory()};
-      const del=document.createElement('span');del.textContent='x';del.title='Delete local session';
-      del.style.cssText='cursor:pointer;font-size:11px;opacity:0.5;color:var(--fg-error,#f44);flex-shrink:0';
-      del.onclick=ev=>{ev.stopPropagation();assistantSessionDeleteItem(s.id);refreshHistory()};
-      item.appendChild(label);item.appendChild(meta);item.appendChild(fork);item.appendChild(del);
-      item.onclick=()=>assistantSessionOpenItem(s.id);
-      list.appendChild(item);
-    });
+    visibleSessions.forEach((s,i)=>_historyEntries.push(renderHistorySessionItem(list,s,i)));
   }
-  if(backendEntries.length){
+  if(visibleBackend.length){
     const group=document.createElement('div');group.className='sb-group';group.textContent='▸ Saved History';list.appendChild(group);
   }
-  backendEntries.forEach(e=>{
-    const item=document.createElement('div');item.className='sb-item';
-    item.style.cssText='display:flex;align-items:center;gap:4px';
-    const label=document.createElement('span');label.style.cssText='flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-    label.textContent=(e.title||t('untitled')).slice(0,28);label.title=e.title||'';
-    const meta=document.createElement('span');meta.className='meta';meta.textContent=e.message_count+'msg';
-    const del=document.createElement('span');del.textContent='✕';del.title='Delete';
-    del.style.cssText='cursor:pointer;font-size:11px;opacity:0.5;color:var(--fg-error,#f44);flex-shrink:0';
-    del.onclick=ev=>{ev.stopPropagation();call('delete_history',e.id).then(res=>{if(callSucceeded(res))refreshHistory();else showToast('Delete failed: '+callFailedMessage(res,'backend unavailable'),'error',2500)})};
-    item.appendChild(label);item.appendChild(meta);item.appendChild(del);
-    item.onclick=()=>loadHistoryConv(e.id);
-    list.appendChild(item);
-  });
+  visibleBackend.forEach((e,i)=>_historyEntries.push(renderHistoryBackendItem(list,e,i)));
+  if(_historySelectedIndex>=_historyEntries.length)_historySelectedIndex=Math.max(0,_historyEntries.length-1);
+  selectHistoryItem(_historySelectedIndex);
 }
 window.refreshHistory=refreshHistory;
+const _historySearch=$('history-search');
+if(_historySearch){
+  _historySearch.addEventListener('input',()=>{_historySelectedIndex=0;refreshHistory()});
+  _historySearch.addEventListener('keydown',e=>{
+    if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();selectHistoryItem(_historySelectedIndex+(e.key==='ArrowDown'?1:-1));return}
+    if(e.key==='Enter'){e.preventDefault();activateHistorySelection();return}
+    if(e.key==='Escape'){e.preventDefault();_historySearch.value='';_historySelectedIndex=0;refreshHistory();return}
+  });
+}
+const _historyList=$('history-list');
+if(_historyList){
+  _historyList.addEventListener('keydown',e=>{
+    if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();selectHistoryItem(_historySelectedIndex+(e.key==='ArrowDown'?1:-1));return}
+    if(e.key==='Home'){e.preventDefault();selectHistoryItem(0);return}
+    if(e.key==='End'){e.preventDefault();selectHistoryItem(_historyEntries.length-1);return}
+    if(e.key==='Enter'){e.preventDefault();activateHistorySelection();return}
+    if(e.key==='Delete'){
+      const entry=_historyEntries[_historySelectedIndex];
+      if(entry&&entry.kind==='session'){e.preventDefault();const s=assistantSessionLoadItems().find(item=>String(item.id)===String(entry.id));if(s&&confirmDeleteAssistantSession(s)){assistantSessionDeleteItem(s.id);refreshHistory()}}
+    }
+  });
+}
 async function openChatHistory(){
   if(typeof _sidebarVis!=='undefined'&&!_sidebarVis){
     _sidebarVis=true;
@@ -13063,6 +13153,7 @@ async function openChatHistory(){
   }
   switchSidebar('history');
   await refreshHistory();
+  const search=$('history-search');if(search)search.focus();
   if(typeof _saveLayoutImmediate==='function')_saveLayoutImmediate();
 }
 window.openChatHistory=openChatHistory;
