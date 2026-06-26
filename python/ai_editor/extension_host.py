@@ -1853,6 +1853,10 @@ class NodeExtensionHost:
         self._chat_context_requests: Dict[str, Dict[str, Any]] = {}
         self._chat_context_providers: List[Dict[str, Any]] = []
         self._chat_context_changes: List[Dict[str, Any]] = []
+        self._mcp_server_definition_request_lock = threading.Lock()
+        self._mcp_server_definition_requests: Dict[str, Dict[str, Any]] = {}
+        self._mcp_server_definition_providers: List[Dict[str, Any]] = []
+        self._mcp_server_definition_changes: List[Dict[str, Any]] = []
         self._language_request_lock = threading.Lock()
         self._language_requests: Dict[str, Dict[str, Any]] = {}
         self._language_providers: List[Dict[str, Any]] = []
@@ -3022,6 +3026,57 @@ class NodeExtensionHost:
             request_id = str(msg.get("requestId", ""))
             with self._chat_context_request_lock:
                 pending = self._chat_context_requests.get(request_id)
+            if pending:
+                pending["response"] = msg
+                event = pending.get("event")
+                if isinstance(event, threading.Event):
+                    event.set()
+
+        elif msg_type == "mcp_server_definition_provider_registered":
+            record = {
+                "handle": msg.get("handle"),
+                "id": str(msg.get("id") or msg.get("providerId") or ""),
+                "extensionId": str(msg.get("extensionId") or ""),
+            }
+            self._mcp_server_definition_providers = [
+                item for item in self._mcp_server_definition_providers
+                if item.get("handle") != record.get("handle")
+            ]
+            self._mcp_server_definition_providers.append(record)
+
+        elif msg_type == "mcp_server_definition_provider_disposed":
+            handle = msg.get("handle")
+            self._mcp_server_definition_providers = [
+                item for item in self._mcp_server_definition_providers
+                if item.get("handle") != handle
+            ]
+
+        elif msg_type == "mcp_server_definition_provider_changed":
+            record = {
+                "handle": msg.get("handle"),
+                "id": str(msg.get("id") or msg.get("providerId") or ""),
+                "extensionId": str(msg.get("extensionId") or ""),
+            }
+            self._mcp_server_definition_changes.append(record)
+            if len(self._mcp_server_definition_changes) > 100:
+                self._mcp_server_definition_changes = (
+                    self._mcp_server_definition_changes[-100:])
+            if self._ui_bridge:
+                try:
+                    handler = getattr(
+                        self._ui_bridge,
+                        "mcp_server_definition_provider_changed", None)
+                    if callable(handler):
+                        handler(record)
+                except Exception:
+                    pass
+
+        elif msg_type in {
+                "mcp_server_definitions_response",
+                "mcp_server_resolve_response"}:
+            request_id = str(msg.get("requestId", ""))
+            with self._mcp_server_definition_request_lock:
+                pending = self._mcp_server_definition_requests.get(request_id)
             if pending:
                 pending["response"] = msg
                 event = pending.get("event")
@@ -5015,6 +5070,104 @@ class NodeExtensionHost:
         if resource is not None:
             payload["resource"] = resource
         return self._chat_context_request_result(
+            payload, default=default, timeout=timeout)
+
+    def mcp_server_definition_providers(self) -> List[Dict[str, Any]]:
+        return [dict(item) for item in self._mcp_server_definition_providers]
+
+    def mcp_server_definition_changes(self) -> List[Dict[str, Any]]:
+        return [dict(item) for item in self._mcp_server_definition_changes]
+
+    def _mcp_server_definition_request_result(
+            self, payload: Dict[str, Any],
+            default: Any = None, timeout: float = 3.0) -> Dict[str, Any]:
+        started = time.perf_counter()
+        ok = False
+        timed_out = False
+        error = ""
+        detail = str(payload.get("id") or payload.get("providerId")
+                     or payload.get("handle") or "")
+        if not self.is_running:
+            error = "Node MCP server definition provider host is not running"
+            self._record_diagnostic(
+                "mcp_server_definition", 0, ok=False,
+                detail=detail, error=error)
+            return {"ok": False, "value": default, "error": error}
+        request_id = str(uuid.uuid4())
+        event = threading.Event()
+        with self._mcp_server_definition_request_lock:
+            self._mcp_server_definition_requests[request_id] = {
+                "event": event}
+        try:
+            msg = dict(payload)
+            msg["requestId"] = request_id
+            sent = self._send(msg)
+            if not sent:
+                error = "Node MCP server definition request could not be sent"
+                return {"ok": False, "value": default, "error": error}
+            if not event.wait(timeout):
+                timed_out = True
+                error = "Node MCP server definition request timed out"
+                return {
+                    "ok": False,
+                    "value": default,
+                    "error": error,
+                    "timeout": True,
+                }
+            with self._mcp_server_definition_request_lock:
+                pending = self._mcp_server_definition_requests.get(
+                    request_id, {})
+            response = pending.get("response", {})
+            if isinstance(response, dict) and response.get("ok"):
+                ok = True
+                return {
+                    "ok": True,
+                    "value": response.get("value", default),
+                    "response": response,
+                }
+            error = (
+                response.get("error")
+                if isinstance(response, dict)
+                else "Node MCP server definition provider failed")
+            return {"ok": False, "value": default, "error": error}
+        finally:
+            with self._mcp_server_definition_request_lock:
+                self._mcp_server_definition_requests.pop(request_id, None)
+            self._record_diagnostic(
+                "mcp_server_definition",
+                (time.perf_counter() - started) * 1000,
+                ok=ok,
+                timeout=timed_out,
+                detail=detail,
+                error=error,
+            )
+
+    def request_mcp_server_definitions_result(
+            self, provider_id: str = "", handle: Optional[int] = None,
+            default: Any = None, timeout: float = 3.0) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "type": "mcp_server_definitions_request",
+        }
+        if provider_id:
+            payload["id"] = str(provider_id)
+        if handle is not None:
+            payload["handle"] = int(handle)
+        return self._mcp_server_definition_request_result(
+            payload, default=default, timeout=timeout)
+
+    def resolve_mcp_server_definition_result(
+            self, provider_id: str = "", server: Any = None,
+            handle: Optional[int] = None, default: Any = None,
+            timeout: float = 3.0) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "type": "mcp_server_resolve_request",
+            "server": server if server is not None else {},
+        }
+        if provider_id:
+            payload["id"] = str(provider_id)
+        if handle is not None:
+            payload["handle"] = int(handle)
+        return self._mcp_server_definition_request_result(
             payload, default=default, timeout=timeout)
 
     def send_tree_view_event(

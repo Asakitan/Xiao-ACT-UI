@@ -1321,6 +1321,32 @@ class LanguageModelChatMessage {
     static Assistant(content, name) { return new LanguageModelChatMessage(2, content, name); }
 }
 
+class McpStdioServerDefinition {
+    constructor(label, command, args = [], env = {}, version) {
+        this.label = label === undefined || label === null ? '' : String(label);
+        this.cwd = undefined;
+        this.command = command === undefined || command === null ? '' : String(command);
+        this.args = Array.isArray(args)
+            ? args.map(item => String(item))
+            : [];
+        this.env = env && typeof env === 'object' && !Array.isArray(env)
+            ? Object.assign({}, env)
+            : {};
+        if (version !== undefined) this.version = String(version);
+    }
+}
+
+class McpHttpServerDefinition {
+    constructor(label, uri, headers = {}, version) {
+        this.label = label === undefined || label === null ? '' : String(label);
+        this.uri = uri instanceof Uri ? uri : _uriFromPayload(uri || '');
+        this.headers = headers && typeof headers === 'object' && !Array.isArray(headers)
+            ? Object.assign({}, headers)
+            : {};
+        if (version !== undefined) this.version = String(version);
+    }
+}
+
 // -------------------------------------------------------------------------
 // Memento (globalState / workspaceState)
 // -------------------------------------------------------------------------
@@ -2386,6 +2412,7 @@ const _fileDecorationChangeMaxEventSize = 250;
 const _runtimeLanguageConfigurations = new Map(); // languageId -> [{ handle, configuration }]
 const _lmTools = new Map();              // name -> { handle, tool, extensionId, metadata }
 const _lmChatProviders = new Map();      // vendor -> { handle, vendor, provider, extensionId }
+const _mcpServerDefinitionProviders = new Map(); // handle -> { handle, id, provider, extensionId }
 const _chatParticipants = new Map();     // id -> { handle, handler, extensionId }
 const _chatContextProviders = new Map(); // handle -> { handle, kind, id, selector, provider, extensionId }
 let _nextLanguageProviderHandle = 1;
@@ -2394,6 +2421,7 @@ let _nextFileDecorationProviderHandle = 1;
 let _nextLanguageConfigurationHandle = 1;
 let _nextLmToolHandle = 1;
 let _nextLmChatProviderHandle = 1;
+let _nextMcpServerDefinitionProviderHandle = 1;
 let _nextChatParticipantHandle = 1;
 let _nextChatContextProviderHandle = 1;
 let _nextPythonCommandRequestHandle = 1;
@@ -3425,6 +3453,71 @@ function _serializeLanguageValue(value) {
         return result;
     }
     return String(value);
+}
+
+function _mcpServerDefinitionKind(definition) {
+    if (!definition || typeof definition !== 'object') return '';
+    if (definition instanceof McpHttpServerDefinition) return 'http';
+    if (definition instanceof McpStdioServerDefinition) return 'stdio';
+    if (definition.uri !== undefined) return 'http';
+    if (definition.command !== undefined) return 'stdio';
+    return '';
+}
+
+function _serializeMcpServerDefinition(definition) {
+    if (!definition || typeof definition !== 'object') return null;
+    const kind = _mcpServerDefinitionKind(definition);
+    const result = {
+        type: kind || 'stdio',
+        label: definition.label === undefined || definition.label === null
+            ? ''
+            : String(definition.label),
+    };
+    if (definition.version !== undefined) result.version = String(definition.version);
+    if (kind === 'http') {
+        result.uri = _serializeLanguageUri(definition.uri || '');
+        result.headers = definition.headers && typeof definition.headers === 'object'
+            ? _serializeLanguageValue(definition.headers)
+            : {};
+    } else {
+        result.command = definition.command === undefined || definition.command === null
+            ? ''
+            : String(definition.command);
+        result.args = Array.isArray(definition.args)
+            ? definition.args.map(item => String(item))
+            : [];
+        result.env = definition.env && typeof definition.env === 'object'
+            ? _serializeLanguageValue(definition.env)
+            : {};
+        if (definition.cwd !== undefined && definition.cwd !== null) {
+            result.cwd = _serializeLanguageUri(definition.cwd);
+        }
+    }
+    return result;
+}
+
+function _mcpServerDefinitionFromPayload(payload) {
+    const data = payload && typeof payload === 'object' ? payload : {};
+    const kind = String(data.type || (data.uri ? 'http' : 'stdio')).toLowerCase();
+    if (kind === 'http') {
+        return new McpHttpServerDefinition(
+            data.label || '',
+            _uriFromPayload(data.uri || ''),
+            data.headers && typeof data.headers === 'object' ? data.headers : {},
+            data.version,
+        );
+    }
+    const definition = new McpStdioServerDefinition(
+        data.label || '',
+        data.command || '',
+        Array.isArray(data.args) ? data.args : [],
+        data.env && typeof data.env === 'object' ? data.env : {},
+        data.version,
+    );
+    if (data.cwd !== undefined && data.cwd !== null && data.cwd !== '') {
+        definition.cwd = _uriFromPayload(data.cwd);
+    }
+    return definition;
 }
 
 function _diagnosticsForUri(uri) {
@@ -8164,6 +8257,8 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         CancellationTokenSource,
         TerminalProfile,
         TerminalLink,
+        McpStdioServerDefinition,
+        McpHttpServerDefinition,
 
         // --- Enums ---
         ViewColumn: { One: 1, Two: 2, Three: 3, Active: -1, Beside: -2 },
@@ -9234,6 +9329,53 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             },
             onDidChangeTools: _onDidChangeLmToolsEmitter.event,
             onDidChangeChatModels: _onDidChangeLmChatModelsEmitter.event,
+            registerMcpServerDefinitionProvider(id, provider) {
+                const providerId = String(id || '');
+                if (!providerId) {
+                    throw new Error('MCP server definition provider id is required');
+                }
+                if (!provider || typeof provider !== 'object') {
+                    throw new Error('MCP server definition provider is required');
+                }
+                const entry = {
+                    handle: _nextMcpServerDefinitionProviderHandle++,
+                    id: providerId,
+                    provider,
+                    extensionId: extDesc.extensionId || '',
+                };
+                _mcpServerDefinitionProviders.set(entry.handle, entry);
+                send({
+                    type: 'mcp_server_definition_provider_registered',
+                    handle: entry.handle,
+                    extensionId: entry.extensionId,
+                    id: entry.id,
+                });
+                let changeDisposable;
+                if (typeof provider.onDidChangeMcpServerDefinitions === 'function') {
+                    changeDisposable = provider.onDidChangeMcpServerDefinitions(() => {
+                        send({
+                            type: 'mcp_server_definition_provider_changed',
+                            handle: entry.handle,
+                            extensionId: entry.extensionId,
+                            id: entry.id,
+                        });
+                    });
+                }
+                const disposable = new Disposable(() => {
+                    if (_mcpServerDefinitionProviders.get(entry.handle) === entry) {
+                        _mcpServerDefinitionProviders.delete(entry.handle);
+                        try { changeDisposable?.dispose?.(); } catch {}
+                        send({
+                            type: 'mcp_server_definition_provider_disposed',
+                            handle: entry.handle,
+                            extensionId: entry.extensionId,
+                            id: entry.id,
+                        });
+                    }
+                });
+                subscriptions.push(disposable);
+                return disposable;
+            },
             registerLanguageModelChatProvider(vendor, provider) {
                 const providerVendor = String(vendor || '');
                 if (!providerVendor) {
@@ -11252,6 +11394,100 @@ async function handleLmToolRequest(msg) {
     } catch (err) {
         send({
             type: 'lm_tool_response',
+            requestId,
+            ok: false,
+            error: err?.message || String(err),
+        });
+    }
+}
+
+function _mcpServerDefinitionProviderEntries(id, handle) {
+    const providerId = String(id || '');
+    const providerHandle = Number(handle || 0);
+    return Array.from(_mcpServerDefinitionProviders.values()).filter(entry => {
+        if (providerHandle && entry.handle !== providerHandle) return false;
+        if (providerId && entry.id !== providerId) return false;
+        return true;
+    });
+}
+
+async function handleMcpServerDefinitionsRequest(msg) {
+    const requestId = String(msg.requestId || '');
+    const providerId = String(msg.id || msg.providerId || '');
+    if (providerId) await _activateKnownExtensionsForEvent(
+        `onMcpCollection:${providerId}`);
+    const entries = _mcpServerDefinitionProviderEntries(
+        providerId, msg.handle);
+    const token = { isCancellationRequested: false, onCancellationRequested: new EventEmitter().event };
+    try {
+        const providers = [];
+        const servers = [];
+        for (const entry of entries) {
+            const provider = entry.provider || {};
+            if (typeof provider.provideMcpServerDefinitions !== 'function') continue;
+            const raw = provider.provideMcpServerDefinitions.call(provider, token);
+            const result = raw && typeof raw.then === 'function' ? await raw : raw;
+            const serialized = (Array.isArray(result) ? result : [])
+                .map(_serializeMcpServerDefinition)
+                .filter(Boolean)
+                .map(server => Object.assign({}, server, {
+                    providerId: entry.id,
+                    providerHandle: entry.handle,
+                    extensionId: entry.extensionId,
+                }));
+            providers.push({
+                handle: entry.handle,
+                id: entry.id,
+                extensionId: entry.extensionId,
+                servers: serialized,
+            });
+            servers.push(...serialized);
+        }
+        send({
+            type: 'mcp_server_definitions_response',
+            requestId,
+            ok: true,
+            value: { providerId, providers, servers },
+        });
+    } catch (err) {
+        send({
+            type: 'mcp_server_definitions_response',
+            requestId,
+            ok: false,
+            error: err?.message || String(err),
+        });
+    }
+}
+
+async function handleMcpServerResolveRequest(msg) {
+    const requestId = String(msg.requestId || '');
+    const providerId = String(msg.id || msg.providerId || '');
+    if (providerId) await _activateKnownExtensionsForEvent(
+        `onMcpCollection:${providerId}`);
+    const entries = _mcpServerDefinitionProviderEntries(
+        providerId, msg.handle || msg.providerHandle);
+    const token = { isCancellationRequested: false, onCancellationRequested: new EventEmitter().event };
+    try {
+        const entry = entries[0];
+        if (!entry) throw new Error(`MCP server definition provider not found: ${providerId || msg.handle || ''}`);
+        const provider = entry.provider || {};
+        const server = _mcpServerDefinitionFromPayload(msg.server || {});
+        let resolved = server;
+        if (typeof provider.resolveMcpServerDefinition === 'function') {
+            const raw = provider.resolveMcpServerDefinition.call(provider, server, token);
+            resolved = raw && typeof raw.then === 'function' ? await raw : raw;
+        }
+        send({
+            type: 'mcp_server_resolve_response',
+            requestId,
+            ok: true,
+            value: resolved === undefined || resolved === null
+                ? null
+                : _serializeMcpServerDefinition(resolved),
+        });
+    } catch (err) {
+        send({
+            type: 'mcp_server_resolve_response',
             requestId,
             ok: false,
             error: err?.message || String(err),
@@ -13576,6 +13812,12 @@ async function handleMessage(msg) {
             break;
         case 'lm_tool_request':
             await handleLmToolRequest(msg);
+            break;
+        case 'mcp_server_definitions_request':
+            await handleMcpServerDefinitionsRequest(msg);
+            break;
+        case 'mcp_server_resolve_request':
+            await handleMcpServerResolveRequest(msg);
             break;
         case 'chat_participant_request':
             await handleChatParticipantRequest(msg);

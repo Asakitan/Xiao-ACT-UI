@@ -18030,6 +18030,45 @@ async function activate(context) {
     },
   );
   const chatContextEmitter = new vscode.EventEmitter();
+  const mcpProviderEmitter = new vscode.EventEmitter();
+  let mcpProviderVersion = '1';
+  vscode.lm.registerMcpServerDefinitionProvider(
+    'selftest.node.mcpProvider',
+    {
+      onDidChangeMcpServerDefinitions: mcpProviderEmitter.event,
+      provideMcpServerDefinitions() {
+        const stdio = new vscode.McpStdioServerDefinition(
+          'Node MCP stdio',
+          process.execPath,
+          ['server.js', '--stdio'],
+          { NODE_MCP_SELFTEST: '1', NODE_MCP_DROP: null },
+          mcpProviderVersion,
+        );
+        stdio.cwd = vscode.Uri.file(process.cwd());
+        return [
+          stdio,
+          new vscode.McpHttpServerDefinition(
+            'Node MCP http',
+            vscode.Uri.parse('https://mcp.example.test/session'),
+            { Authorization: 'Bearer selftest' },
+            '2',
+          ),
+        ];
+      },
+      resolveMcpServerDefinition(server) {
+        if (server instanceof vscode.McpStdioServerDefinition) {
+          server.args = [...server.args, '--resolved'];
+          server.env = { ...server.env, RESOLVED: '1' };
+          server.version = 'resolved-' + server.version;
+        }
+        if (server instanceof vscode.McpHttpServerDefinition) {
+          server.headers = { ...server.headers, 'X-Resolved': '1' };
+          server.version = 'resolved-' + server.version;
+        }
+        return server;
+      },
+    },
+  );
   vscode.chat.registerChatWorkspaceContextProvider(
     'selftest.node.workspaceContext',
     {
@@ -18104,6 +18143,11 @@ async function activate(context) {
   );
   vscode.commands.registerCommand('selftest.node.chatContextProbe', async () => {
     chatContextEmitter.fire();
+    return { fired: true };
+  });
+  vscode.commands.registerCommand('selftest.node.mcpProviderProbe', async () => {
+    mcpProviderVersion = '3';
+    mcpProviderEmitter.fire();
     return { fired: true };
   });
   vscode.commands.registerCommand('selftest.node.lmProviderProbe', async () => {
@@ -22143,6 +22187,49 @@ module.exports = { activate, deactivate };
                         "selftest.node.lmProviderProbe")
                 except Exception as exc:
                     node_lm_provider_probe = {"_error": str(exc)}
+                node_mcp_provider_command_registered = _wait_until(
+                    lambda: "selftest.node.mcpProviderProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                node_mcp_providers = (
+                    node_host.mcp_server_definition_providers()
+                    if node_started else [])
+                node_mcp_definitions = (
+                    node_host.request_mcp_server_definitions_result(
+                        "selftest.node.mcpProvider",
+                        timeout=3.0)
+                    if node_started else {"ok": False})
+                node_mcp_servers = (
+                    node_mcp_definitions.get("value", {}).get("servers") or []
+                    if isinstance(node_mcp_definitions, dict) else [])
+                node_mcp_stdio = next((
+                    item for item in node_mcp_servers
+                    if isinstance(item, dict) and item.get("type") == "stdio"),
+                    {})
+                node_mcp_http = next((
+                    item for item in node_mcp_servers
+                    if isinstance(item, dict) and item.get("type") == "http"),
+                    {})
+                node_mcp_stdio_resolved = (
+                    node_host.resolve_mcp_server_definition_result(
+                        "selftest.node.mcpProvider",
+                        node_mcp_stdio,
+                        timeout=3.0)
+                    if node_started else {"ok": False})
+                node_mcp_http_resolved = (
+                    node_host.resolve_mcp_server_definition_result(
+                        "selftest.node.mcpProvider",
+                        node_mcp_http,
+                        timeout=3.0)
+                    if node_started else {"ok": False})
+                try:
+                    node_mcp_provider_probe = api._ext_host.commands.execute(
+                        "selftest.node.mcpProviderProbe")
+                except Exception as exc:
+                    node_mcp_provider_probe = {"_error": str(exc)}
+                node_mcp_provider_changes = (
+                    node_host.mcp_server_definition_changes()
+                    if node_started else [])
                 node_chat_context_command_registered = _wait_until(
                     lambda: "selftest.node.chatContextProbe"
                     in api._ext_host.commands.list_commands(),
@@ -26321,6 +26408,66 @@ module.exports = { activate, deactivate };
                        == "selftest-node-model-b",
                        json.dumps(node_lm_provider_probe,
                                   ensure_ascii=False, default=str))
+                node_mcp_provider_ids = {
+                    item.get("id")
+                    for item in node_mcp_providers
+                    if isinstance(item, dict)
+                }
+                node_mcp_stdio_resolved_value = (
+                    node_mcp_stdio_resolved.get("value", {})
+                    if isinstance(node_mcp_stdio_resolved, dict) else {})
+                node_mcp_http_resolved_value = (
+                    node_mcp_http_resolved.get("value", {})
+                    if isinstance(node_mcp_http_resolved, dict) else {})
+                _check("node host MCP server definition providers match VS Code API",
+                       node_started is True
+                       and node_mcp_provider_command_registered
+                       and "selftest.node.mcpProvider" in node_mcp_provider_ids
+                       and node_mcp_definitions.get("ok") is True
+                       and len(node_mcp_servers) == 2
+                       and node_mcp_stdio.get("label") == "Node MCP stdio"
+                       and node_mcp_stdio.get("type") == "stdio"
+                       and node_mcp_stdio.get("command")
+                       and node_mcp_stdio.get("args") == [
+                           "server.js", "--stdio"]
+                       and node_mcp_stdio.get("env", {}).get(
+                           "NODE_MCP_SELFTEST") == "1"
+                       and node_mcp_stdio.get("env", {}).get(
+                           "NODE_MCP_DROP") is None
+                       and str(node_mcp_stdio.get("cwd") or "").startswith(
+                           "file://")
+                       and node_mcp_stdio.get("version") == "1"
+                       and node_mcp_http.get("label") == "Node MCP http"
+                       and node_mcp_http.get("type") == "http"
+                       and node_mcp_http.get("uri")
+                       == "https://mcp.example.test/session"
+                       and node_mcp_http.get("headers", {}).get(
+                           "Authorization") == "Bearer selftest"
+                       and node_mcp_http.get("version") == "2"
+                       and node_mcp_stdio_resolved.get("ok") is True
+                       and node_mcp_stdio_resolved_value.get("args") == [
+                           "server.js", "--stdio", "--resolved"]
+                       and node_mcp_stdio_resolved_value.get("env", {}).get(
+                           "RESOLVED") == "1"
+                       and node_mcp_stdio_resolved_value.get("version")
+                       == "resolved-1"
+                       and node_mcp_http_resolved.get("ok") is True
+                       and node_mcp_http_resolved_value.get(
+                           "headers", {}).get("X-Resolved") == "1"
+                       and node_mcp_http_resolved_value.get("version")
+                       == "resolved-2"
+                       and isinstance(node_mcp_provider_probe, dict)
+                       and node_mcp_provider_probe.get("fired") is True
+                       and any(
+                           item.get("id") == "selftest.node.mcpProvider"
+                           for item in node_mcp_provider_changes),
+                       json.dumps({
+                           "providers": node_mcp_providers,
+                           "definitions": node_mcp_definitions,
+                           "stdioResolved": node_mcp_stdio_resolved,
+                           "httpResolved": node_mcp_http_resolved,
+                           "changes": node_mcp_provider_changes,
+                       }, ensure_ascii=False, default=str))
                 _check("node host registers dynamic LM tools and chat participants",
                        node_started is True
                        and node_lm_chat_command_registered
