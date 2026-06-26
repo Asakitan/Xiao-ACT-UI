@@ -76,6 +76,72 @@ def _extract_tool_call_result(result: Any) -> str:
     return json.dumps(result, ensure_ascii=False, default=str)
 
 
+def _extract_resource_read_result(result: Any, uri: str = "") -> Dict[str, Any]:
+    if _is_rpc_error(result):
+        return {
+            "ok": False,
+            "error": f"MCP resource read failed: {_rpc_error_message(result)}",
+            "rpc_error": result.get("_rpc_error") if isinstance(result, dict) else None,
+            "uri": uri,
+        }
+    if result is None:
+        return {"ok": False, "error": "MCP resource returned no result", "uri": uri}
+    if isinstance(result, str):
+        return {
+            "ok": True,
+            "uri": uri,
+            "content": result,
+            "mimeType": "text/plain",
+            "contentType": "text",
+        }
+    if not isinstance(result, dict):
+        return {
+            "ok": True,
+            "uri": uri,
+            "content": json.dumps(result, ensure_ascii=False, default=str),
+            "mimeType": "application/json",
+            "contentType": "json",
+        }
+    contents = result.get("contents")
+    if not isinstance(contents, list) or not contents:
+        return {
+            "ok": True,
+            "uri": uri,
+            "content": json.dumps(result, ensure_ascii=False, default=str),
+            "mimeType": "application/json",
+            "contentType": "json",
+        }
+    first = contents[0] if isinstance(contents[0], dict) else {"text": contents[0]}
+    resource_uri = str(first.get("uri") or uri or "")
+    mime = str(first.get("mimeType") or first.get("mime_type") or "")
+    if first.get("text") is not None:
+        return {
+            "ok": True,
+            "uri": resource_uri,
+            "content": str(first.get("text") or ""),
+            "mimeType": mime or "text/plain",
+            "contentType": "text",
+            "contents": contents,
+        }
+    if first.get("blob") is not None:
+        return {
+            "ok": True,
+            "uri": resource_uri,
+            "blob": str(first.get("blob") or ""),
+            "mimeType": mime or "application/octet-stream",
+            "contentType": "blob",
+            "contents": contents,
+        }
+    return {
+        "ok": True,
+        "uri": resource_uri,
+        "content": json.dumps(first, ensure_ascii=False, default=str),
+        "mimeType": mime or "application/json",
+        "contentType": "json",
+        "contents": contents,
+    }
+
+
 def _read_rpc_message_from_stream(stream: Any) -> Optional[bytes]:
     first_line = stream.readline()
     if not first_line:
@@ -406,13 +472,9 @@ class McpStdioClient:
             }, ensure_ascii=False)
         return _extract_tool_call_result(result)
 
-    def read_resource(self, uri: str) -> str:
+    def read_resource(self, uri: str) -> Dict[str, Any]:
         result = self._call("resources/read", {"uri": uri})
-        if result and isinstance(result, dict):
-            contents = result.get("contents", [])
-            if contents:
-                return contents[0].get("text", "") or json.dumps(contents[0])
-        return ""
+        return _extract_resource_read_result(result, uri)
 
     @property
     def is_alive(self) -> bool:
@@ -513,6 +575,10 @@ class McpSseClient:
             }, ensure_ascii=False)
         return _extract_tool_call_result(result)
 
+    def read_resource(self, uri: str) -> Dict[str, Any]:
+        result = self._rpc("resources/read", {"uri": uri})
+        return _extract_resource_read_result(result, uri)
+
     @property
     def is_alive(self) -> bool:
         return self._alive
@@ -537,6 +603,7 @@ class InternalMcpProvider:
         self.config = McpServerConfig(id=server_id, name=name or server_id, transport="internal")
         self.tools: List[McpToolDef] = []
         self._handlers: Dict[str, Callable] = {}
+        self._resource_handlers: Dict[str, Callable] = {}
         self._alive = True
 
     def add_tool(
@@ -553,6 +620,9 @@ class InternalMcpProvider:
             server_id=self.config.id,
         ))
         self._handlers[name] = handler
+
+    def add_resource(self, uri: str, handler: Callable[..., Any]) -> None:
+        self._resource_handlers[str(uri or "")] = handler
 
     def start(self) -> bool:
         self._alive = True
@@ -578,6 +648,27 @@ class InternalMcpProvider:
             return json.dumps(result, ensure_ascii=False, default=str)
         except Exception as exc:
             return json.dumps({"error": str(exc)})
+
+    def read_resource(self, uri: str) -> Dict[str, Any]:
+        if not self._alive:
+            return {
+                "ok": False,
+                "error": f"MCP server '{self.config.id}' is not connected",
+                "uri": uri,
+            }
+        handler = self._resource_handlers.get(str(uri or ""))
+        if not handler:
+            return {
+                "ok": False,
+                "error": f"MCP resource not found on server '{self.config.id}': {uri}",
+                "uri": uri,
+                "notFound": True,
+            }
+        try:
+            result = _invoke_handler(handler, {"uri": uri})
+            return _extract_resource_read_result(result, uri)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc), "uri": uri}
 
     @property
     def is_alive(self) -> bool:
@@ -739,6 +830,87 @@ class McpManager:
                 "error": f"MCP server '{resolved['server_id']}' is not connected"
             }, ensure_ascii=False)
         return client.call_tool(resolved["tool_name"], arguments)
+
+    @staticmethod
+    def _parse_resource_uri(uri: str) -> Dict[str, str]:
+        from urllib.parse import unquote, urlparse
+
+        text = str(uri or "").strip()
+        if not text:
+            return {"server_id": "", "resource_uri": "", "error": "MCP resource URI is required"}
+        parsed = urlparse(text)
+        if parsed.scheme in {"mcp-resource", "mcp"}:
+            if parsed.netloc:
+                resource = unquote((parsed.path or "").lstrip("/")) or text
+                return {"server_id": parsed.netloc, "resource_uri": resource, "error": ""}
+            rest = text[len(parsed.scheme) + 1:]
+            if ":" in rest:
+                server_id, resource = rest.split(":", 1)
+                return {"server_id": server_id.strip("/"), "resource_uri": resource, "error": ""}
+            if "/" in rest:
+                server_id, resource = rest.split("/", 1)
+                return {"server_id": server_id.strip("/"), "resource_uri": unquote(resource), "error": ""}
+        return {"server_id": "", "resource_uri": text, "error": ""}
+
+    def read_resource(self, uri: str) -> Dict[str, Any]:
+        parsed = self._parse_resource_uri(uri)
+        if parsed.get("error"):
+            return {"ok": False, "error": parsed["error"], "uri": uri}
+        server_id = parsed.get("server_id", "")
+        resource_uri = parsed.get("resource_uri", "") or uri
+        client = None
+        if server_id:
+            client = self._clients.get(server_id)
+            if client is None:
+                return {
+                    "ok": False,
+                    "error": f"MCP server not found for resource: {server_id}",
+                    "uri": uri,
+                    "serverId": server_id,
+                }
+        else:
+            alive = [
+                c for c in self._clients.values()
+                if getattr(c, "is_alive", False) and hasattr(c, "read_resource")
+            ]
+            if len(alive) != 1:
+                return {
+                    "ok": False,
+                    "error": "MCP resource URI must identify a server when multiple or no MCP servers are connected",
+                    "uri": uri,
+                    "serverCount": len(alive),
+                }
+            client = alive[0]
+            server_id = str(getattr(getattr(client, "config", None), "id", ""))
+        if not getattr(client, "is_alive", False):
+            return {
+                "ok": False,
+                "error": f"MCP server '{server_id}' is not connected",
+                "uri": uri,
+                "serverId": server_id,
+            }
+        if not hasattr(client, "read_resource"):
+            return {
+                "ok": False,
+                "error": f"MCP server '{server_id}' does not support resource reads",
+                "uri": uri,
+                "serverId": server_id,
+            }
+        result = client.read_resource(resource_uri)
+        if isinstance(result, dict):
+            result.setdefault("serverId", server_id)
+            result.setdefault("requestedUri", uri)
+            result.setdefault("uri", resource_uri)
+            return result
+        return {
+            "ok": True,
+            "serverId": server_id,
+            "requestedUri": uri,
+            "uri": resource_uri,
+            "content": str(result or ""),
+            "mimeType": "text/plain",
+            "contentType": "text",
+        }
 
     def _resolve_tool(self, prefixed_name: str) -> Dict[str, Any]:
         rest = prefixed_name[4:]

@@ -2552,6 +2552,39 @@ def test_app_settings_parity() -> None:
         "mcp_selftest_tools_read_info", "[]") if mcp_policy_api._controller.mcp_dispatch else "{}"
     _check("MCP dispatch rejects non-object arguments explicitly",
            "must be a JSON object" in json.loads(bad_mcp_args).get("error", ""))
+    mcp_policy_api._mcp._clients["selftest_tools"].add_resource(
+        "ui://widget/selftest.html",
+        lambda uri: {"contents": [{
+            "uri": uri,
+            "mimeType": "text/html",
+            "text": "<main>selftest resource</main>",
+        }]})
+    resolved_mcp_resource = mcp_policy_api.resolve_chat_resource(
+        "mcp-resource://selftest_tools/ui%3A%2F%2Fwidget%2Fselftest.html")
+    resolved_ui_resource = mcp_policy_api.resolve_chat_resource(
+        "ui://widget/selftest.html")
+    resolved_external_resource = mcp_policy_api.resolve_chat_resource(
+        "https://example.invalid/widget.html")
+    missing_mcp_resource = mcp_policy_api.resolve_chat_resource(
+        "mcp-resource://missing/ui%3A%2F%2Fwidget%2Fmissing.html")
+    _check("MCP chat resource resolver opens already connected resources",
+           resolved_mcp_resource.get("ok") is True
+           and resolved_mcp_resource.get("kind") == "mcp-resource"
+           and resolved_mcp_resource.get("serverId") == "selftest_tools"
+           and resolved_mcp_resource.get("mimeType") == "text/html"
+           and resolved_mcp_resource.get("language") == "html"
+           and "selftest resource" in resolved_mcp_resource.get("content", "")
+           and resolved_ui_resource.get("ok") is True
+           and resolved_ui_resource.get("serverId") == "selftest_tools"
+           and resolved_external_resource.get("external") is True
+           and missing_mcp_resource.get("ok") is False
+           and "MCP server not found" in missing_mcp_resource.get("error", ""),
+           json.dumps({
+               "mcp": resolved_mcp_resource,
+               "ui": resolved_ui_resource,
+               "external": resolved_external_resource,
+               "missing": missing_mcp_resource,
+           }, ensure_ascii=False))
 
     ext_api = AIEditorAPI(_SettingsGui({"ai_editor": {
         "extensions": {"confirm_install": True, "blocked_publishers": ["blocked"]}
@@ -4063,6 +4096,13 @@ def test_phase1_ai_editor_regressions() -> None:
            and "outputTemplate?'output-template'" in html
            and "String(uri).startsWith('mcp-resource:')?'mcp-resource'" in html
            and "function renderToolResultUi(parent,data)" in html
+           and "Open tool resource through AI Editor resolver" in html
+           and "async function openToolResourceUri(data,card)" in html
+           and "call('resolve_chat_resource',uri)" in html
+           and "card.dataset.resourceState='loading';" in html
+           and "result.external&&result.uri" in html
+           and "result.blob&&!result.content" in html
+           and "openInEditor(content,lang);" in html
            and "frame.setAttribute('sandbox','');" in html
            and "Copy tool resource URI" in html
            and "className='tool-result-raw';" in html

@@ -5006,6 +5006,93 @@ class AIEditorAPI:
             "truncated": truncated,
         }
 
+    @staticmethod
+    def _language_for_mime_or_uri(mime_type: str, uri: str) -> str:
+        mime = str(mime_type or "").split(";", 1)[0].strip().lower()
+        if mime in {"text/html", "application/xhtml+xml"}:
+            return "html"
+        if mime in {"application/json", "application/ld+json"}:
+            return "json"
+        if mime in {"text/css"}:
+            return "css"
+        if mime in {"text/markdown", "text/x-markdown"}:
+            return "markdown"
+        if mime in {"application/javascript", "text/javascript"}:
+            return "javascript"
+        if mime in {"application/xml", "text/xml"}:
+            return "xml"
+        suffix = os.path.splitext(urlparse(str(uri or "")).path)[1].lower()
+        return _EDITOR_LANGUAGE_BY_EXT.get(suffix, "plaintext")
+
+    def resolve_chat_resource(self, uri: str) -> Dict:
+        """Resolve a Copilot-style chat resource URI for preview/open actions.
+
+        This intentionally does not autostart MCP servers. It only reads from
+        already-connected or internal MCP providers so resource opening remains a
+        user-visible action, not an implicit local command launch.
+        """
+        text = str(uri or "").strip()
+        if not text:
+            return {"ok": False, "error": "Resource URI is required"}
+        parsed = urlparse(text)
+        scheme = parsed.scheme.lower()
+        if scheme in {"", "file"} or re.match(r"^[A-Za-z]:[\\/]", text):
+            opened = self.open_text_resource(text)
+            if opened.get("error"):
+                return {"ok": False, **opened}
+            opened.update({
+                "ok": True,
+                "kind": "file",
+                "uri": text,
+                "contentType": "text",
+            })
+            return opened
+        if scheme in {"http", "https"}:
+            return {
+                "ok": True,
+                "kind": "external",
+                "uri": text,
+                "external": True,
+                "label": os.path.basename(parsed.path) or parsed.netloc or text,
+            }
+        if scheme in {"mcp-resource", "mcp", "ui"}:
+            self._ensure_engine()
+            if not self._mcp:
+                return {
+                    "ok": False,
+                    "error": "MCP manager is not initialized",
+                    "uri": text,
+                    "kind": "mcp-resource",
+                }
+            result = self._mcp.read_resource(text)
+            if not result.get("ok"):
+                return {"kind": "mcp-resource", **result}
+            content = str(result.get("content") or "")
+            mime_type = str(result.get("mimeType") or result.get("mime_type") or "")
+            content_type = str(result.get("contentType") or "")
+            if content and len(content.encode("utf-8", errors="replace")) > _WORKSPACE_FILE_PREVIEW_BYTES:
+                raw = content.encode("utf-8", errors="replace")
+                content = raw[:_WORKSPACE_FILE_PREVIEW_BYTES].decode(
+                    "utf-8", errors="replace")
+                result["truncated"] = True
+            result.update({
+                "ok": True,
+                "kind": "mcp-resource",
+                "uri": str(result.get("uri") or text),
+                "requestedUri": text,
+                "content": content,
+                "mimeType": mime_type or "text/plain",
+                "contentType": content_type or ("text" if content else "blob"),
+                "language": self._language_for_mime_or_uri(mime_type, str(result.get("uri") or text)),
+                "name": os.path.basename(urlparse(str(result.get("uri") or text)).path) or "MCP Resource",
+            })
+            return result
+        return {
+            "ok": False,
+            "error": f"Unsupported chat resource URI scheme: {scheme or 'path'}",
+            "uri": text,
+        }
+
     def save_workspace_notebook(
             self, rel_path: str, notebook: Dict[str, Any],
             view_type: str = "", handle: Optional[int] = None) -> Dict:

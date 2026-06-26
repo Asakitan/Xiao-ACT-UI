@@ -5628,6 +5628,7 @@ function renderToolResultUi(parent,data){
   if(data.uri){
     const uri=document.createElement('div');uri.className='chat-tool-ui-uri';uri.textContent=data.uri+(data.mimeType?' · '+data.mimeType:'');card.appendChild(uri);
     const uriActions=document.createElement('div');uriActions.className='tool-result-actions';
+    uriActions.appendChild(toolResultActionButton('Open Resource','Open tool resource through AI Editor resolver',()=>openToolResourceUri(data,card)));
     uriActions.appendChild(toolResultActionButton('Copy URI','Copy tool resource URI',()=>{
       navigator.clipboard.writeText(data.uri);
       if(typeof showToast==='function')showToast(t('copied'),'success',1500);
@@ -5641,6 +5642,33 @@ function renderToolResultUi(parent,data){
   }
   parent.appendChild(card);
   return card;
+}
+
+async function openToolResourceUri(data,card){
+  const uri=String(data&&data.uri||'').trim();
+  if(!uri)return null;
+  if(card)card.dataset.resourceState='loading';
+  const result=await call('resolve_chat_resource',uri);
+  if(!callSucceeded(result)){
+    const message=callFailedMessage(result,'Failed to open resource');
+    if(card)card.dataset.resourceState='error';
+    if(typeof showToast==='function')showToast(message,'error',2200);
+    return result;
+  }
+  if(card)card.dataset.resourceState='ready';
+  if(result.external&&result.uri){
+    try{window.open(result.uri,'_blank','noopener,noreferrer')}catch(_e){}
+    return result;
+  }
+  if(result.blob&&!result.content){
+    if(typeof showToast==='function')showToast('Resource is binary: '+(result.mimeType||'application/octet-stream'),'info',2200);
+    return result;
+  }
+  const content=result.content!==undefined?String(result.content||''):String(data.preview||'');
+  const lang=result.language||guessToolResultLanguage(data.title||data.kind||'resource',result,content);
+  openInEditor(content,lang);
+  if(typeof showToast==='function')showToast('Opened resource','success',1400);
+  return result;
 }
 
 function bindDisclosureHeader(header,body){
