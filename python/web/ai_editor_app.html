@@ -2391,6 +2391,7 @@ pre.code-block { overflow:visible; }
         </div>
       </div>
       <div class="settings-help">Choose which VS Code contribution types are loaded into the AI Editor runtime. Custom editors and extension views stay enabled by default for plugin parity.</div>
+      <div class="settings-help" id="s-ext-trust-summary">Extension trust policy not loaded.</div>
       <div class="settings-help" id="extension-runtime-status">Extension runtime status not loaded.</div>
     </div>
 
@@ -3422,7 +3423,7 @@ en:{
   // extensions
   license_required:'License required.',no_data:'No data.',no_ext_found:'No extensions found',
   install_btn:'Install',installing:'Installing...',installed_btn:'✓ Installed',uninstall_btn:'Uninstall',uninstalling:'Uninstalling...',
-  uninstall_confirm:'Uninstall extension?',
+  uninstall_confirm:'Uninstall extension?',install_blocked:'Install blocked',trust_allowed:'Trusted publisher',trust_restricted:'Publisher restricted',trust_blocked:'Publisher blocked',trust_unknown:'Unknown publisher',
   // mcp
   no_mcp_servers:'No MCP servers configured.',mcp_id_cmd_required:'Server ID and command/URL required',
   mcp_added:'MCP server added',mcp_add_failed:'Failed to add server',mcp_status_prefix:'MCP status not loaded.',
@@ -3550,7 +3551,7 @@ zh:{
   edit_prefix:'编辑: ',delete_inst_confirm:'删除指令文件「$1」？',
   license_required:'需要许可证。',no_data:'无数据。',no_ext_found:'未找到扩展',
   install_btn:'安装',installing:'安装中...',installed_btn:'✓ 已安装',uninstall_btn:'卸载',uninstalling:'卸载中...',
-  uninstall_confirm:'卸载此扩展？',
+  uninstall_confirm:'卸载此扩展？',install_blocked:'安装被阻止',trust_allowed:'受信任发布者',trust_restricted:'发布者受限',trust_blocked:'发布者已阻止',trust_unknown:'未知发布者',
   no_mcp_servers:'未配置 MCP 服务器。',mcp_id_cmd_required:'服务器 ID 和命令/URL 必填',
   mcp_added:'MCP 服务器已添加',mcp_add_failed:'添加服务器失败',mcp_status_prefix:'MCP 状态未加载。',
   s_settings:'设置',s_endpoint:'端点',s_provider:'提供商',s_api_key:'API Key (当前提供商)',
@@ -15582,6 +15583,17 @@ function renderExtensionContributionOptions(value,explicit){
   });
   syncExtensionContributionInput();
 }
+function renderExtensionTrustSummary(ext){
+  ext=ext||settingSection('extensions');
+  const allowed=Array.isArray(ext.allowed_publishers)?ext.allowed_publishers.filter(Boolean):[];
+  const blocked=Array.isArray(ext.blocked_publishers)?ext.blocked_publishers.filter(Boolean):[];
+  const confirm=ext.confirm_install!==false;
+  const text=(allowed.length
+    ? 'Allowlist active: only '+allowed.length+' publisher'+(allowed.length===1?'':'s')+' can install.'
+    : 'Blocklist mode: marketplace installs are allowed unless publisher is blocked.')
+    +' Blocked: '+blocked.length+'. Confirmation: '+(confirm?'on':'off')+'.';
+  const el=$('s-ext-trust-summary');if(el)el.textContent=text;
+}
 function stringifyJsonValue(value){
   if(!value)return'';
   if(typeof value==='string')return value;
@@ -15877,6 +15889,7 @@ function openSettings(){
   setInputValue('s-term-timeout',term.timeout??30);setInputValue('s-term-output',term.output_limit??8000);
   const ext=settingSection('extensions');
   setCheckedValue('s-ext-confirm',ext.confirm_install!==false);setCheckedValue('s-ext-diagnostics',ext.diagnostics_enabled===true);setInputValue('s-ext-allow',listToText(ext.allowed_publishers));setInputValue('s-ext-block',listToText(ext.blocked_publishers));renderExtensionContributionOptions(ext.enabled_contributions,ext.enabled_contributions_explicit===true);
+  renderExtensionTrustSummary(ext);
   const cust=settingSection('customization');
   setCheckedValue('s-cust-agent-md',cust.use_agent_md!==false);setCheckedValue('s-cust-claude-md',cust.use_claude_md===true);
   setInputValue('s-cust-instructions',listToText(cust.instructions_locations));setInputValue('s-cust-agents',listToText(cust.agent_locations));
@@ -15891,6 +15904,7 @@ function openSettings(){
   Object.keys(SETTING_INPUT_MAP).forEach(id=>wrapSettingsField(id));markSettingsModified();
   // Add change listeners for live modified-state updates
   Object.keys(SETTING_INPUT_MAP).forEach(id=>{const el=$(id);if(el&&!el.dataset.resetWired){el.dataset.resetWired='1';el.addEventListener('input',markSettingsModified);el.addEventListener('change',markSettingsModified)}});
+  ['s-ext-confirm','s-ext-allow','s-ext-block'].forEach(id=>{const el=$(id);if(el&&!el.dataset.trustSummaryWired){el.dataset.trustSummaryWired='1';const update=()=>renderExtensionTrustSummary({confirm_install:readCheckedValue('s-ext-confirm'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true)});el.addEventListener('input',update);el.addEventListener('change',update)}});
   $('settings-modal').classList.add('open');
 }
 function closeSettings(){$('settings-modal').classList.remove('open')}
@@ -20280,6 +20294,25 @@ function extensionStateBadge(ext){
   return '';
 }
 
+function extensionTrustBadge(ext){
+  const trust=ext&&ext.trust||{};
+  const verdict=String(trust.verdict||'').toLowerCase();
+  if(verdict==='blocked')return '<span class="ext-badge" title="'+esc(trust.reason||'')+'">'+esc(t('trust_blocked'))+'</span>';
+  if(verdict==='restricted')return '<span class="ext-badge" title="'+esc(trust.reason||'')+'">'+esc(t('trust_restricted'))+'</span>';
+  if(verdict==='unknown_publisher')return '<span class="ext-badge" title="'+esc(trust.reason||'')+'">'+esc(t('trust_unknown'))+'</span>';
+  if(verdict==='allowed')return '<span class="ext-badge persisted" title="'+esc(trust.reason||'')+'">'+esc(t('trust_allowed'))+'</span>';
+  return '';
+}
+
+function extensionInstallPreflightText(preflight,extId){
+  const trust=preflight&&preflight.trust||{};
+  const lines=[t('install_confirm'), '', extId||preflight&&preflight.id||''];
+  if(trust.publisher)lines.push('Publisher: '+trust.publisher);
+  if(trust.reason)lines.push('Policy: '+trust.reason);
+  if(preflight&&preflight.requiresManifestDownload)lines.push('Manifest contributions will be inspected after download.');
+  return lines.filter(line=>line!==undefined&&line!==null).join('\n');
+}
+
 function mergeInstalledExtensionMetadata(items){
   const rows=Array.isArray(items)?items:[];
   const byId=Object.create(null);
@@ -20315,7 +20348,7 @@ function extensionButtonState(ext){
 
 function extensionButtonHtml(ext,vsix){
   const state=extensionButtonState(ext);
-  return '<span class="'+state.cls+'" data-ext-id="'+esc(ext.id||'')+'" data-vsix="'+esc(vsix||ext.vsixUrl||'')+'" data-state="'+esc(state.state)+'" aria-disabled="'+(state.disabled?'true':'false')+'" onclick="toggleExtInstall(this,event)">'+esc(state.text)+'</span>';
+  return '<span class="'+state.cls+'" data-ext-id="'+esc(ext.id||'')+'" data-vsix="'+esc(vsix||ext.vsixUrl||'')+'" data-publisher="'+esc(ext.publisherKey||ext.publisherId||'')+'" data-display-name="'+esc(ext.displayName||ext.name||ext.id||'')+'" data-state="'+esc(state.state)+'" aria-disabled="'+(state.disabled?'true':'false')+'" onclick="toggleExtInstall(this,event)">'+esc(state.text)+'</span>';
 }
 
 function setExtensionOperation(extId,state){
@@ -20355,6 +20388,7 @@ function renderExtCard(container,ext){
         (ext.version?'<span class="ext-badge">v'+esc(ext.version)+'</span>':'')+
         sourceBadge+
         activeBadge+
+        extensionTrustBadge(ext)+
         (contribSummary?'<span class="ext-badge">'+esc(contribSummary)+'</span>':'')+
       '</div>'+
     '</div>'+
@@ -20370,8 +20404,9 @@ function showExtDetail(ext){
   $('ext-detail-name').textContent=ext.displayName||ext.name||ext.id;
   const body=$('ext-detail-body');
   const iconEl=ext.iconUrl?'<img src="'+esc(ext.iconUrl)+'" style="width:64px;height:64px;border-radius:6px" onerror="this.style.display=\'none\'">':'<div style="width:64px;height:64px;border-radius:6px;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:32px">📦</div>';
-  const detailBadges=[extensionSourceBadge(ext),extensionStateBadge(ext)||extensionActiveBadge(ext),ext.version?'<span class="ext-badge">v'+esc(ext.version)+'</span>':'',ext.installedVersion&&ext.installedVersion!==ext.version?'<span class="ext-badge">local v'+esc(ext.installedVersion)+'</span>':'',extensionContribSummary(ext)?'<span class="ext-badge">'+esc(extensionContribSummary(ext))+'</span>':''].filter(Boolean).join('');
-  body.innerHTML='<div style="display:flex;gap:12px;margin-bottom:12px;align-items:flex-start">'+iconEl+'<div style="flex:1"><div style="font-size:15px;font-weight:600;color:var(--fg)">'+esc(ext.displayName||ext.name)+'</div>'+(ext.publisher?'<div style="font-size:11px;color:var(--fg-accent);margin-top:2px">'+esc(ext.publisher)+'</div>':'')+(detailBadges?'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">'+detailBadges+'</div>':'')+'<div style="margin-top:6px">'+extensionButtonHtml(ext)+'</div></div></div>'+'<div style="font-size:12px;color:var(--fg);line-height:1.5;white-space:pre-wrap">'+esc(ext.description||'No description available.')+'</div>'+(ext.ext_dir?'<div style="margin-top:10px;font:11px/1.45 var(--mono);color:var(--fg-dim)">Path: '+esc(ext.ext_dir)+'</div>':'');
+  const detailBadges=[extensionSourceBadge(ext),extensionStateBadge(ext)||extensionActiveBadge(ext),extensionTrustBadge(ext),ext.version?'<span class="ext-badge">v'+esc(ext.version)+'</span>':'',ext.installedVersion&&ext.installedVersion!==ext.version?'<span class="ext-badge">local v'+esc(ext.installedVersion)+'</span>':'',extensionContribSummary(ext)?'<span class="ext-badge">'+esc(extensionContribSummary(ext))+'</span>':''].filter(Boolean).join('');
+  const trustReason=ext.trust&&ext.trust.reason?'<div style="margin-top:10px;font-size:11px;color:var(--fg-dim);line-height:1.45">Trust: '+esc(ext.trust.reason)+'</div>':'';
+  body.innerHTML='<div style="display:flex;gap:12px;margin-bottom:12px;align-items:flex-start">'+iconEl+'<div style="flex:1"><div style="font-size:15px;font-weight:600;color:var(--fg)">'+esc(ext.displayName||ext.name)+'</div>'+(ext.publisher?'<div style="font-size:11px;color:var(--fg-accent);margin-top:2px">'+esc(ext.publisher)+'</div>':'')+(detailBadges?'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">'+detailBadges+'</div>':'')+'<div style="margin-top:6px">'+extensionButtonHtml(ext)+'</div></div></div>'+'<div style="font-size:12px;color:var(--fg);line-height:1.5;white-space:pre-wrap">'+esc(ext.description||'No description available.')+'</div>'+trustReason+(ext.ext_dir?'<div style="margin-top:10px;font:11px/1.45 var(--mono);color:var(--fg-dim)">Path: '+esc(ext.ext_dir)+'</div>':'');
   panel.style.display='flex';
   const section=panel.previousElementSibling;if(section)section.style.display='none';
 }
@@ -20403,7 +20438,15 @@ async function toggleExtInstall(btn,event){
       setStatus(t('test_failed')+': '+(r?r.error:''));
     }
   } else {
-    if(!confirm(t('install_confirm')+'\n\n'+extId))return;
+    const preflight=await call('get_extension_install_preflight',extId,vsix,btn.dataset.publisher||ext.publisherKey||ext.publisherId||'',btn.dataset.displayName||ext.displayName||ext.name||'');
+    if(!preflight||preflight.error){setStatus(t('test_failed')+': '+(preflight?preflight.error:''));return}
+    if(preflight.ok===false){
+      const reason=(preflight.trust&&preflight.trust.reason)||'';
+      showToast(t('install_blocked')+(reason?': '+reason:''),'warning',5000);
+      setStatus(t('install_blocked')+': '+extId);
+      return;
+    }
+    if(!confirm(extensionInstallPreflightText(preflight,extId)))return;
     setExtensionOperation(extId,'installing');
     setStatus(t('installing')+' '+extId+'...');
     const r=await call('install_extension',extId,vsix,true);

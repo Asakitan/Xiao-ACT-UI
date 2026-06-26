@@ -1027,7 +1027,8 @@ def test_app_settings_parity() -> None:
         "get_model_info", "test_connection", "set_mode", "save_config",
         "get_mode", "list_models", "save_custom_model",
         "delete_custom_model", "search_extensions",
-        "list_installed_extensions", "uninstall_extension",
+        "list_installed_extensions", "get_extension_install_preflight",
+        "uninstall_extension",
         "install_extension", "win_minimize", "win_maximize", "win_close",
         "open_text_file", "save_file_dialog", "save_file_as", "save_feedback",
     )
@@ -2558,6 +2559,23 @@ def test_app_settings_parity() -> None:
            ext_api.install_extension("allowed.sample").get("requires_confirmation") is True)
     _check("blocked extension publisher rejected",
            "blocked" in ext_api.install_extension("blocked.sample", confirmed=True).get("error", ""))
+    blocked_preflight = ext_api.get_extension_install_preflight("blocked.sample")
+    _check("extension preflight exposes blocked publisher trust verdict",
+           blocked_preflight.get("ok") is False
+           and blocked_preflight.get("trust", {}).get("verdict") == "blocked"
+           and blocked_preflight.get("trust", {}).get("publisher") == "blocked",
+           json.dumps(blocked_preflight, ensure_ascii=False))
+    allow_api = AIEditorAPI(_SettingsGui({"ai_editor": {
+        "extensions": {"confirm_install": True, "allowed_publishers": ["allowed"]}
+    }}))
+    restricted_preflight = allow_api.get_extension_install_preflight("other.sample")
+    allowed_preflight = allow_api.get_extension_install_preflight("allowed.sample")
+    _check("extension preflight respects allowed publisher list",
+           restricted_preflight.get("ok") is False
+           and restricted_preflight.get("trust", {}).get("verdict") == "restricted"
+           and allowed_preflight.get("ok") is True
+           and allowed_preflight.get("trust", {}).get("verdict") == "allowed",
+           json.dumps({"restricted": restricted_preflight, "allowed": allowed_preflight}, ensure_ascii=False))
     ext_api._ensure_engine()
     ext_api._extensions_inited = True
     ext_api._ext_host.list_extensions = lambda: [{
@@ -2616,6 +2634,11 @@ def test_app_settings_parity() -> None:
                and searched_exts[0].get("runtimeState") == "active"
                and searched_exts[0].get("canUninstall") is False,
                json.dumps(searched_exts, ensure_ascii=False))
+        _check("marketplace search includes extension trust metadata",
+               searched_exts
+               and searched_exts[0].get("trust", {}).get("verdict") == "allowed"
+               and searched_exts[0].get("publisherKey") == "misodee",
+               json.dumps(searched_exts, ensure_ascii=False))
     with patch("ai_editor.extensions.list_installed", return_value=[]), \
             patch("ai_editor.extensions.get_extension_detail", return_value={
                 "id": "Misodee.vscode-nbt",
@@ -2627,6 +2650,10 @@ def test_app_settings_parity() -> None:
                and detail.get("state") == "installed"
                and detail.get("runtimeState") == "active"
                and detail.get("id") == "Misodee.vscode-nbt",
+               json.dumps(detail, ensure_ascii=False))
+        _check("extension detail includes extension trust metadata",
+               detail.get("trust", {}).get("verdict") == "allowed"
+               and detail.get("publisherKey") == "misodee",
                json.dumps(detail, ensure_ascii=False))
     ext_events = []
     ext_api._emit = lambda event, data: ext_events.append((event, data))
@@ -8736,13 +8763,19 @@ console.log("extension setting schema helpers ok");
             and "function extensionSourceBadge(ext)" in html
             and "function extensionActiveBadge(ext)" in html
             and "function extensionStateBadge(ext)" in html
+            and "function extensionTrustBadge(ext)" in html
+            and "function extensionInstallPreflightText(preflight,extId)" in html
             and "function extensionButtonState(ext)" in html
             and "function setExtensionOperation(extId,state)" in html
             and "function handleExtensionsChanged(data)" in html
             and "else if(event==='extensions_changed'){handleExtensionsChanged(data)}" in html
+            and "get_extension_install_preflight" in html
+            and "function renderExtensionTrustSummary(ext)" in html
+            and "s-ext-trust-summary" in html
             and "source==='runtime'" in html
             and "source==='persisted'" in html
             and "ext.canUninstall" in html
+            and "data-publisher" in html
             and "data-state" in html
             and "renderExtCard(list,{...cached,...e,installed:true})" in html
             and "Path: " in html)

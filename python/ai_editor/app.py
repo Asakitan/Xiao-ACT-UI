@@ -9237,6 +9237,61 @@ class AIEditorAPI:
     def _publisher_from_extension_id(ext_id: str) -> str:
         return ext_id.split(".", 1)[0].strip().lower() if "." in ext_id else ""
 
+    @staticmethod
+    def _publisher_key_from_extension_row(row: Dict[str, Any]) -> str:
+        for key in ("publisherId", "publisher_id", "publisherKey"):
+            value = str(row.get(key) or "").strip().lower()
+            if value:
+                return value
+        ext_id = str(row.get("id") or "").strip()
+        if ext_id:
+            return AIEditorAPI._publisher_from_extension_id(ext_id)
+        return str(row.get("publisher") or "").strip().lower()
+
+    def _extension_trust_state(
+            self,
+            ext_id: str,
+            publisher: str = "",
+            display_name: str = "") -> Dict[str, Any]:
+        settings = self._extension_settings()
+        blocked = [
+            str(x).strip().lower()
+            for x in settings.get("blocked_publishers", [])
+            if str(x).strip()
+        ]
+        allowed = [
+            str(x).strip().lower()
+            for x in settings.get("allowed_publishers", [])
+            if str(x).strip()
+        ]
+        publisher_key = (publisher or self._publisher_from_extension_id(ext_id)).strip().lower()
+        confirm_required = bool(settings.get("confirm_install", True))
+        verdict = "allowed"
+        reason = "Publisher is allowed by the current extension trust policy."
+        if publisher_key in blocked:
+            verdict = "blocked"
+            reason = f"Publisher '{publisher_key}' is blocked by policy."
+        elif allowed and publisher_key not in allowed:
+            verdict = "restricted"
+            reason = (
+                f"Publisher '{publisher_key}' is not in the allowed publishers list."
+                if publisher_key else "Publisher is unknown and an allowed publishers list is configured."
+            )
+        elif not allowed and not publisher_key:
+            verdict = "unknown_publisher"
+            reason = "Publisher is unknown; confirmation is recommended before install."
+        return {
+            "allowed": verdict in {"allowed", "unknown_publisher"},
+            "verdict": verdict,
+            "reason": reason,
+            "publisher": publisher_key,
+            "displayName": str(display_name or ext_id or ""),
+            "confirmRequired": confirm_required,
+            "allowedPublishers": allowed,
+            "blockedPublishers": blocked,
+            "policy": "allowlist" if allowed else "blocklist",
+        }
+
     def _extension_allowed(self, ext: Any) -> bool:
         settings = self._extension_settings()
         publisher = str(getattr(ext, "publisher", "") or "").strip().lower()
@@ -9257,6 +9312,17 @@ class AIEditorAPI:
         ext.id = ext_id
         ext.publisher = self._publisher_from_extension_id(ext_id)
         return self._extension_allowed(ext)
+
+    def _decorate_extension_trust(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        ext_id = str(row.get("id") or "").strip()
+        publisher = self._publisher_key_from_extension_row(row)
+        row["publisherKey"] = publisher
+        row["trust"] = self._extension_trust_state(
+            ext_id,
+            publisher=publisher,
+            display_name=str(row.get("displayName") or row.get("name") or ext_id),
+        )
+        return row
 
     @staticmethod
     def _normalize_extension_list_row(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -9341,6 +9407,7 @@ class AIEditorAPI:
             else:
                 row["runtimeState"] = "installed"
             row["canUninstall"] = bool(persisted and not row.get("isBuiltin"))
+            self._decorate_extension_trust(row)
         rows.sort(key=lambda item: (
             -int(bool(item.get("installed_at"))),
             -float(item.get("installed_at") or 0),
@@ -14576,7 +14643,104 @@ class AIEditorAPI:
                 if isinstance(r, dict) and "id" in r:
                     self._merge_extension_install_state(
                         r, installed_rows.get(str(r["id"]).casefold()))
+                    self._decorate_extension_trust(r)
             return {"extensions": results}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def get_extension_install_preflight(
+            self,
+            ext_id: str,
+            vsix_url: str = "",
+            publisher: str = "",
+            display_name: str = "") -> Dict:
+        """Return install policy and metadata without downloading a VSIX."""
+        try:
+            ext_id = str(ext_id or "").strip()
+            if not ext_id:
+                return {"error": "Extension id is required"}
+            publisher_key = str(publisher or "").strip().lower()
+            if not publisher_key:
+                publisher_key = self._publisher_from_extension_id(ext_id)
+            installed: Dict[str, Any] = {
+                "id": ext_id,
+                "installed": False,
+                "state": "uninstalled",
+                "runtimeState": "uninstalled",
+                "canUninstall": False,
+            }
+            try:
+                from ai_editor.extensions import list_installed
+                for item in list_installed():
+                    if not isinstance(item, dict):
+                        continue
+                    if str(item.get("id") or "").casefold() != ext_id.casefold():
+                        continue
+                    normalized = self._normalize_extension_list_row(item)
+                    normalized.update({
+                        "installed": True,
+                        "state": "installed",
+                        "runtimeState": "loaded" if normalized.get("manifest_path") else "installed",
+                        "canUninstall": bool(float(normalized.get("installed_at") or 0)
+                                             and not normalized.get("isBuiltin")),
+                    })
+                    installed = normalized
+                    break
+            except Exception:
+                pass
+            host = getattr(self, "_ext_host", None)
+            if host is not None:
+                try:
+                    for item in host.list_extensions():
+                        if not isinstance(item, dict):
+                            continue
+                        if str(item.get("id") or "").casefold() != ext_id.casefold():
+                            continue
+                        runtime = self._normalize_extension_list_row(item)
+                        merged = dict(installed)
+                        merged.update({k: v for k, v in runtime.items()
+                                       if v not in ("", [], 0, 0.0)
+                                       or k in {"id", "name", "displayName", "activated", "source"}})
+                        merged["installed"] = True
+                        merged["state"] = "installed"
+                        merged["runtimeState"] = "active" if merged.get("activated") else "loaded"
+                        merged["canUninstall"] = bool(float(merged.get("installed_at") or 0)
+                                                      and not merged.get("isBuiltin"))
+                        installed = merged
+                        break
+                except Exception:
+                    pass
+            trust = self._extension_trust_state(
+                ext_id,
+                publisher=publisher_key,
+                display_name=display_name or ext_id,
+            )
+            contributions = []
+            if isinstance(installed.get("contributes"), list):
+                contributions = [
+                    str(item) for item in installed.get("contributes", [])
+                    if str(item)
+                ]
+            return {
+                "ok": trust.get("allowed") is True,
+                "id": ext_id,
+                "publisherKey": publisher_key,
+                "displayName": str(display_name or installed.get("displayName") or ext_id),
+                "vsixUrl": str(vsix_url or ""),
+                "installed": bool(installed.get("installed")),
+                "state": installed.get("state", "uninstalled"),
+                "runtimeState": installed.get("runtimeState", "uninstalled"),
+                "trust": trust,
+                "requires_confirmation": bool(trust.get("confirmRequired")),
+                "requiresManifestDownload": not bool(contributions),
+                "contributions": contributions,
+                "messages": [
+                    trust.get("reason", ""),
+                    "Manifest contribution details are available after install."
+                    if not contributions else
+                    "Installed manifest contributions: " + ", ".join(contributions[:6]),
+                ],
+            }
         except Exception as exc:
             return {"error": str(exc)}
 
@@ -14585,9 +14749,17 @@ class AIEditorAPI:
         try:
             policy = self._extension_settings()
             if policy.get("confirm_install", True) and not confirmed:
-                return {"error": "Extension install requires confirmation", "requires_confirmation": True}
-            if not self._extension_id_allowed(ext_id):
-                return {"error": f"Extension blocked by trust policy: {ext_id}"}
+                return {
+                    "error": "Extension install requires confirmation",
+                    "requires_confirmation": True,
+                    "preflight": self.get_extension_install_preflight(ext_id, vsix_url),
+                }
+            preflight = self.get_extension_install_preflight(ext_id, vsix_url)
+            if not preflight.get("ok"):
+                return {
+                    "error": f"Extension blocked by trust policy: {ext_id}",
+                    "preflight": preflight,
+                }
             from ai_editor.extensions import install_extension
             result = install_extension(ext_id, vsix_url)
             if result.get("ok") and result.get("ext_dir"):
@@ -14618,6 +14790,7 @@ class AIEditorAPI:
                         "state": "installed",
                         "runtimeState": row.get("runtimeState", "installed"),
                         "canUninstall": row.get("canUninstall", True),
+                        "preflight": preflight,
                         "extension": row,
                     })
                     self._emit("extensions_changed", {
@@ -14633,6 +14806,7 @@ class AIEditorAPI:
                     })
             elif result.get("ok"):
                 result.update(self._extension_state_for_id(ext_id))
+                result["preflight"] = preflight
             return result
         except Exception as exc:
             return {"error": str(exc)}
@@ -14703,6 +14877,7 @@ class AIEditorAPI:
                 installed = self._installed_extension_row_map().get(
                     str(result.get("id") or "").casefold())
                 self._merge_extension_install_state(result, installed)
+                self._decorate_extension_trust(result)
                 return result
             return {"error": "Not found"}
         except Exception as exc:
