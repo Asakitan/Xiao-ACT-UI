@@ -10130,8 +10130,10 @@ console.log("command palette quick access helpers ok");
            and "function _debugDapFrame(message)" in node_ext_host_source
            and "function _debugParseDapFrames(transport, chunk)" in node_ext_host_source
            and "function _debugCreateServerAdapterTransport(session, descriptor, config, customEventEmitter)" in node_ext_host_source
+           and "function _debugCreateNamedPipeAdapterTransport(session, descriptor, config, customEventEmitter)" in node_ext_host_source
            and "function _debugCreateAdapterTransport(session, descriptor, config, customEventEmitter)" in node_ext_host_source
            and "net.createConnection({ port, host })" in node_ext_host_source
+           and "net.createConnection({ path: pipePath })" in node_ext_host_source
            and "transport.sendRequest('initialize'" in node_ext_host_source
            and "transport.sendRequest(String(config.request || 'launch')" in node_ext_host_source
            and "typeof config.debugServer === 'number'" in node_ext_host_source
@@ -21224,8 +21226,9 @@ async function activate(context) {
             event('initialized', {});
           } else if (request.command === 'launch') {
             response(request, {});
-            event('serverCustom', { value: label });
-          } else if (request.command === 'selftest/server') {
+            event(label === 'pipe-dap' ? 'pipeCustom' : 'serverCustom', { value: label });
+          } else if (request.command === 'selftest/server'
+              || request.command === 'selftest/pipe') {
             response(request, { echo: request.arguments && request.arguments.value });
           } else {
             response(request, {});
@@ -21237,6 +21240,14 @@ async function activate(context) {
     const dapServerPort = await new Promise(resolve => {
       dapServer.listen(0, '127.0.0.1', () => resolve(dapServer.address().port));
     });
+    const dapPipePath = process.platform === 'win32'
+      ? '\\\\.\\pipe\\sao-node-debug-' + process.pid + '-' + Date.now()
+      : require('node:path').join(
+          require('node:os').tmpdir(),
+          'sao-node-debug-' + process.pid + '-' + Date.now() + '.sock'
+        );
+    const dapPipeServer = net.createServer(socket => attachDapSocket(socket, 'pipe-dap'));
+    await new Promise(resolve => dapPipeServer.listen(dapPipePath, resolve));
     const providerDisposable = vscode.tasks.registerTaskProvider('node-selftest', {
       provideTasks() {
         const task = new vscode.Task(
@@ -21352,7 +21363,7 @@ async function activate(context) {
       'node-pipe-debug',
       {
         createDebugAdapterDescriptor() {
-          return new vscode.DebugAdapterNamedPipeServer('\\\\.\\pipe\\sao-node-debug');
+          return new vscode.DebugAdapterNamedPipeServer(dapPipePath);
         },
       }
     );
@@ -21478,9 +21489,12 @@ async function activate(context) {
       name: 'Node Pipe Debug',
       request: 'launch',
     });
-    const pipeDescriptor = vscode.debug.activeDebugSession
-      && vscode.debug.activeDebugSession.adapterDescriptor;
-    await vscode.debug.stopDebugging(vscode.debug.activeDebugSession);
+    const pipeSession = vscode.debug.activeDebugSession;
+    const pipeDescriptor = pipeSession && pipeSession.adapterDescriptor;
+    const pipeCustomResponse = pipeSession
+      ? await pipeSession.customRequest('selftest/pipe', { value: 'pipe-ok' })
+      : null;
+    await vscode.debug.stopDebugging(pipeSession);
     const inlineDebugStarted = await vscode.debug.startDebugging(undefined, {
       type: 'node-inline-debug',
       name: 'Node Inline Debug',
@@ -21560,6 +21574,7 @@ async function activate(context) {
     const providedAfterDispose = await vscode.debug.startDebugging(undefined, 'Node Provided Debug');
     disposables.forEach(disposable => disposable.dispose());
     await new Promise(resolve => dapServer.close(resolve));
+    await new Promise(resolve => dapPipeServer.close(resolve));
     return {
       taskCount: fetched.length,
       sourceTaskCount: fetchedBySource.length,
@@ -21617,6 +21632,7 @@ async function activate(context) {
       pipeDebugStarted,
       pipeDescriptorType: pipeDescriptor && pipeDescriptor.constructor && pipeDescriptor.constructor.name,
       pipeDescriptorPath: pipeDescriptor && pipeDescriptor.path,
+      pipeCustomResponse,
       inlineDebugStarted,
       inlineDescriptorType: inlineDescriptor && inlineDescriptor.constructor && inlineDescriptor.constructor.name,
       inlineHasImplementation: !!(inlineDescriptor && inlineDescriptor.implementation),
@@ -27712,6 +27728,11 @@ process.stdin.resume();
                            "pipeDescriptorType") == "DebugAdapterNamedPipeServer"
                        and "sao-node-debug" in str(
                            node_task_debug_probe.get("pipeDescriptorPath"))
+                       and node_task_debug_probe.get(
+                           "pipeCustomResponse", {}).get(
+                               "echo") == "pipe-ok"
+                       and "pipeCustom:pipe-dap" in node_task_debug_probe.get(
+                           "customDebugEvents", [])
                        and node_task_debug_probe.get(
                            "inlineDebugStarted") is True
                        and node_task_debug_probe.get(

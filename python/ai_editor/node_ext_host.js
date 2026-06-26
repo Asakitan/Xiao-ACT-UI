@@ -4923,10 +4923,22 @@ function _debugCreateServerAdapterTransport(session, descriptor, config, customE
         () => { try { socket.destroy(); } catch {} });
 }
 
+function _debugCreateNamedPipeAdapterTransport(session, descriptor, config, customEventEmitter) {
+    if (!(descriptor instanceof DebugAdapterNamedPipeServer)) return null;
+    const pipePath = String(descriptor.path || '').trim();
+    if (!pipePath) return null;
+    const socket = net.createConnection({ path: pipePath });
+    return _debugCreateStreamTransport(
+        session, config, customEventEmitter, socket, socket,
+        () => { try { socket.destroy(); } catch {} });
+}
+
 function _debugCreateAdapterTransport(session, descriptor, config, customEventEmitter) {
     return _debugCreateExecutableAdapterTransport(
         session, descriptor, config, customEventEmitter)
         || _debugCreateServerAdapterTransport(
+            session, descriptor, config, customEventEmitter)
+        || _debugCreateNamedPipeAdapterTransport(
             session, descriptor, config, customEventEmitter);
 }
 
