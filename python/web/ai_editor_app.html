@@ -1717,6 +1717,23 @@ pre.code-block code .type { color:var(--fg-type); }
   background:var(--bg3); color:var(--fg-dim); font:10px var(--mono); }
 .settings-section-overview-stats span.modified { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 45%,var(--border)); }
 .settings-section-overview-stats span.error { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 50%,var(--border)); }
+.settings-language-panel { margin:6px 0 8px; padding:8px; border:1px solid var(--border); border-radius:5px;
+  background:color-mix(in srgb,var(--bg2) 70%,transparent); color:var(--fg-dim); font-size:11px; }
+.settings-language-head { display:flex; align-items:center; gap:7px; flex-wrap:wrap; margin-bottom:6px; }
+.settings-language-head strong { color:var(--fg); font-weight:600; }
+.settings-language-head code { color:var(--fg-accent); font:11px var(--mono); }
+.settings-language-head .lang-chip { padding:1px 6px; border:1px solid var(--border); border-radius:999px;
+  background:var(--bg3); color:var(--fg-dim); font:10px var(--mono); }
+.settings-language-actions,.settings-language-chips { display:flex; flex-wrap:wrap; gap:5px; align-items:center; }
+.settings-language-actions { margin-bottom:6px; }
+.settings-language-actions button,.settings-language-chips button { height:22px; padding:1px 7px; border:1px solid var(--border);
+  border-radius:4px; background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
+.settings-language-actions button:hover,.settings-language-actions button:focus,
+.settings-language-chips button:hover,.settings-language-chips button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
+.settings-language-actions button.primary { color:var(--fg); border-color:color-mix(in srgb,var(--fg-accent) 50%,var(--border));
+  background:color-mix(in srgb,var(--fg-accent) 10%,var(--bg3)); }
+.settings-language-chips span { color:var(--fg-dim); }
+.settings-language-chips button.active { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 50%,var(--border)); }
 @keyframes settingsSectionFlash { from{background:color-mix(in srgb,var(--fg-accent) 10%,transparent)} to{background:transparent} }
 .modal label { display:block; color:var(--fg-dim); font-size:12px; margin-top:12px; margin-bottom:4px; }
 .modal input,.modal select,.modal textarea { width:100%; background:var(--bg-input);
@@ -3223,6 +3240,24 @@ pre.code-block { overflow:visible; }
       <label class="settings-check"><input id="s-files-insert-final-newline" type="checkbox"><span><b>Insert final newline</b><small>Matches files.insertFinalNewline during explicit saves.</small></span></label>
       <label class="settings-check"><input id="s-files-trim-final-newlines" type="checkbox"><span><b>Trim final newlines</b><small>Matches files.trimFinalNewlines during explicit saves.</small></span></label>
       <div class="sb-group" style="padding:0;margin-top:12px">Current Language Override</div>
+      <div id="settings-language-override-panel" class="settings-language-panel" aria-live="polite">
+        <div class="settings-language-head">
+          <strong>Active language</strong>
+          <code id="settings-language-current-key">[plaintext]</code>
+          <span id="settings-language-current-name" class="lang-chip">Plain Text</span>
+          <span id="settings-language-current-file" class="lang-chip">untitled</span>
+          <span id="settings-language-editor-state" class="lang-chip">Editor: inherited</span>
+          <span id="settings-language-files-state" class="lang-chip">Files: inherited</span>
+        </div>
+        <div class="settings-language-actions">
+          <button type="button" class="primary" onclick="settingsFocusCurrentLanguageOverride()">Current Override</button>
+          <button type="button" onclick="settingsSearchForLanguageOverride()">Search @lang</button>
+          <button type="button" onclick="settingsCopyLanguageOverrideJson()">Copy JSON</button>
+          <button type="button" onclick="settingsOpenLanguageOverrideJson()">Open JSON</button>
+          <button type="button" onclick="settingsResetCurrentLanguageOverride()">Clear Current</button>
+        </div>
+        <div id="settings-language-override-chips" class="settings-language-chips"></div>
+      </div>
       <div class="settings-help" id="s-editor-lang-override-info">Writes VS Code-style [language] editor settings for the active editor language.</div>
       <label class="settings-check"><input id="s-editor-lang-override-enabled" type="checkbox"><span><b>Override current language</b><small>Use these values only when the active editor has this language id.</small></span></label>
       <label>Default Formatter</label>
@@ -16481,6 +16516,129 @@ function filesLanguageOverrideSettings(language){
 function filesLanguageOverrideHas(language){
   return sectionLanguageOverrideHas('files',language);
 }
+function settingsActiveLanguageId(){
+  const tab=(typeof tabs!=='undefined'&&Array.isArray(tabs)?tabs.find(t=>t.id===activeTab):null)||{};
+  return String((typeof editorLang!=='undefined'&&editorLang)||tab.language||'plaintext').trim()||'plaintext';
+}
+function settingsLanguageOverrideKeys(){
+  return Object.keys(config||{}).filter(key=>/^\[[^\]]+\]$/.test(key)).sort((a,b)=>a.localeCompare(b));
+}
+function settingsLanguageFromOverrideKey(key){
+  const match=/^\[([^\]]+)\]$/.exec(String(key||''));
+  return match?match[1]:'';
+}
+function settingsLanguageOverrideState(language){
+  const id=String(language||settingsActiveLanguageId()||'plaintext');
+  const key=editorLanguageOverrideKey(id);
+  const entry=key&&isPlainObject(config[key])?config[key]:{};
+  return {
+    id,
+    key,
+    entry,
+    editor:editorLanguageOverrideHasEditor(id),
+    files:filesLanguageOverrideHas(id),
+    count:Object.keys(entry).length
+  };
+}
+function settingsLanguageOverrideJson(language){
+  const state=settingsLanguageOverrideState(language);
+  return JSON.stringify({[state.key]:state.entry||{}},null,2);
+}
+function settingsSearchForLanguageOverride(language){
+  const lang=String(language||settingsActiveLanguageId()||'plaintext').trim();
+  const input=$('settings-search');
+  if(input){
+    input.value='@lang:'+lang;
+    input.focus&&input.focus();
+  }
+  selectSettingsTarget('user',{preserveSearch:true});
+  scrollToSettingsSection('editor');
+  scheduleFilterSettings(0);
+}
+function settingsFocusCurrentLanguageOverride(){
+  settingsClearFilters();
+  selectSettingsTarget('user',{preserveSearch:true});
+  scrollToSettingsSection('editor');
+  const row=settingsVisibleRows().find(item=>settingsRowKey(item)==='editor.formatOnSave'||settingsRowKey(item)==='editor.defaultFormatter');
+  if(row)settingsHighlightRow(row);
+}
+function settingsCopyLanguageOverrideJson(language){
+  settingsCopyText(settingsLanguageOverrideJson(language),'Language override JSON');
+}
+function settingsOpenLanguageOverrideJson(language){
+  const state=settingsLanguageOverrideState(language);
+  settingsOpenJsonView();
+  settingsCopyText(JSON.stringify(state.key)+': '+JSON.stringify(state.entry||{},null,2),'Language override JSON pointer');
+  showToast('Opened settings.json for '+state.key,'info',1800);
+}
+function settingsResetCurrentLanguageOverride(){
+  setCheckedValue('s-editor-lang-override-enabled',false);
+  setCheckedValue('s-files-lang-override-enabled',false);
+  const editor=settingSection('editor');
+  const files=settingSection('files');
+  setInputValue('s-editor-lang-default-formatter',editor.defaultFormatter||editor.default_formatter||'');
+  setInputValue('s-editor-lang-tab-size',editorTabSize(editor.tabSize));
+  setCheckedValue('s-editor-lang-insert-spaces',editorInsertSpaces(editor.insertSpaces));
+  setInputValue('s-editor-lang-word-separators',typeof editor.wordSeparators==='string'?editor.wordSeparators:DEFAULT_EDITOR_WORD_SEPARATORS);
+  setEditorQuickSuggestionInputs('s-editor-lang-',editor.quickSuggestions);
+  setInputValue('s-editor-lang-quick-suggestions-delay',editorQuickSuggestionsDelay(editor.quickSuggestionsDelay));
+  setCheckedValue('s-editor-lang-suggest-on-trigger-characters',editorSuggestOnTriggerCharactersEnabled(editor.suggestOnTriggerCharacters));
+  setSelectValue('s-editor-lang-accept-suggestion-on-enter',editorAcceptSuggestionOnEnterMode(editor.acceptSuggestionOnEnter),'on');
+  setCheckedValue('s-editor-lang-accept-suggestion-on-commit-character',editorAcceptSuggestionOnCommitCharacterEnabled(editor.acceptSuggestionOnCommitCharacter));
+  setEditorHoverInputs('s-editor-lang-',editor.hover);
+  setCheckedValue('s-editor-lang-format-on-save',editor.formatOnSave===true);
+  setCheckedValue('s-editor-lang-format-on-paste',editor.formatOnPaste===true);
+  setCheckedValue('s-editor-lang-format-on-type',editor.formatOnType===true);
+  setCheckedValue('s-editor-lang-linked-editing',editor.linkedEditing===true);
+  setInputValue('s-editor-lang-organize-imports-on-save',editorCodeActionsOnSaveMode(editor.codeActionsOnSave,'source.organizeImports'));
+  setInputValue('s-editor-lang-fix-all-on-save',editorCodeActionsOnSaveMode(editor.codeActionsOnSave,'source.fixAll'));
+  setInputValue('s-editor-lang-code-actions-on-save-json',stringifyJsonObjectValue(editorCodeActionsOnSaveExtras(editor.codeActionsOnSave)));
+  setCheckedValue('s-editor-lang-code-actions-trigger-focus',isPlainObject(editor.codeActions)&&editor.codeActions.triggerOnFocusChange===true);
+  setCheckedValue('s-files-lang-trim-trailing-whitespace',files.trimTrailingWhitespace===true);
+  setCheckedValue('s-files-lang-insert-final-newline',files.insertFinalNewline===true);
+  setCheckedValue('s-files-lang-trim-final-newlines',files.trimFinalNewlines===true);
+  renderSettingsLanguageOverridePanel();
+  markSettingsModified();
+  scheduleFilterSettings(0);
+  showToast('Current language override will be cleared on save','info',1800);
+}
+function renderSettingsLanguageOverridePanel(){
+  const state=settingsLanguageOverrideState();
+  const name=languageDisplayName(state.id);
+  const tab=(typeof tabs!=='undefined'&&Array.isArray(tabs)?tabs.find(t=>t.id===activeTab):null)||{};
+  const keyEl=$('settings-language-current-key'),nameEl=$('settings-language-current-name'),fileEl=$('settings-language-current-file');
+  const editorState=$('settings-language-editor-state'),filesState=$('settings-language-files-state');
+  if(keyEl)keyEl.textContent=state.key;
+  if(nameEl)nameEl.textContent=name;
+  if(fileEl)fileEl.textContent=tab.name||tab.filePath||'untitled';
+  const editorOverride=$('s-editor-lang-override-enabled')?readCheckedValue('s-editor-lang-override-enabled'):state.editor;
+  const filesOverride=$('s-files-lang-override-enabled')?readCheckedValue('s-files-lang-override-enabled'):state.files;
+  if(editorState)editorState.textContent='Editor: '+(editorOverride?'override':'inherited');
+  if(filesState)filesState.textContent='Files: '+(filesOverride?'override':'inherited');
+  const chips=$('settings-language-override-chips');if(!chips)return;
+  chips.innerHTML='';
+  const keys=settingsLanguageOverrideKeys();
+  const label=document.createElement('span');
+  label.textContent=keys.length?'Existing overrides':'No saved language overrides';
+  chips.appendChild(label);
+  keys.slice(0,12).forEach(key=>{
+    const lang=settingsLanguageFromOverrideKey(key);
+    const item=settingsLanguageOverrideState(lang);
+    const kinds=[item.editor?'editor':'',item.files?'files':''].filter(Boolean).join('+')||'custom';
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.className=lang===state.id?'active':'';
+    btn.textContent=key+' · '+kinds;
+    btn.title='Search settings for '+key;
+    btn.onclick=()=>settingsSearchForLanguageOverride(lang);
+    chips.appendChild(btn);
+  });
+  if(keys.length>12){
+    const more=document.createElement('span');
+    more.textContent='+'+(keys.length-12)+' more';
+    chips.appendChild(more);
+  }
+}
 function editorEffectiveSection(section,language){
   const base=settingSection(section);
   const override=editorLanguageOverrideSection(language);
@@ -24433,6 +24591,7 @@ function openSettings(){
   setCheckedValue('s-files-lang-trim-final-newlines',languageFiles.trimFinalNewlines===true);
   const filesLangInfo=$('s-files-lang-override-info');
   if(filesLangInfo)filesLangInfo.textContent='Writes VS Code-style '+editorLanguageOverrideKey(editorLang)+' files settings for the active editor language.';
+  renderSettingsLanguageOverridePanel();
   // Provider keys
   const keys=config._provider_keys||config.provider_keys||{};
   if($('sk-openai'))$('sk-openai').value=keys.openai||'';
@@ -24490,6 +24649,7 @@ function openSettings(){
   Object.keys(SETTING_INPUT_MAP).forEach(id=>{const el=$(id);if(el&&!el.dataset.resetWired){el.dataset.resetWired='1';const update=()=>{markSettingsModified();scheduleFilterSettings()};el.addEventListener('input',update);el.addEventListener('change',update)}});
   restoreSettingsViewState();
   SETTINGS_VALIDATION_INPUTS.forEach(id=>{const el=$(id);if(el&&!el.dataset.validationWired){el.dataset.validationWired='1';el.addEventListener('input',scheduleSettingsValidation);el.addEventListener('change',scheduleSettingsValidation)}});
+  ['s-editor-lang-override-enabled','s-files-lang-override-enabled','s-editor-lang-default-formatter','s-editor-lang-tab-size','s-editor-lang-format-on-save','s-editor-lang-code-actions-on-save-json','s-files-lang-trim-trailing-whitespace','s-files-lang-insert-final-newline','s-files-lang-trim-final-newlines'].forEach(id=>{const el=$(id);if(el&&!el.dataset.languageOverrideWired){el.dataset.languageOverrideWired='1';const update=()=>{renderSettingsLanguageOverridePanel();markSettingsModified();scheduleFilterSettings()};el.addEventListener('input',update);el.addEventListener('change',update)}});
   ['s-ext-confirm','s-ext-allow','s-ext-block'].forEach(id=>{const el=$(id);if(el&&!el.dataset.trustSummaryWired){el.dataset.trustSummaryWired='1';const update=()=>renderExtensionTrustSummary({confirm_install:readCheckedValue('s-ext-confirm'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true)});el.addEventListener('input',update);el.addEventListener('change',update)}});
   applySettingsValidation(collectSettingsValidationErrors(),{});
   installSettingsKeyboardHandlers();
@@ -24911,6 +25071,7 @@ function installSettingsKeyboardHandlers(){
     if(ev.altKey&&String(ev.key||'').toLowerCase()==='m'){ev.preventDefault();settingsFocusFirstReviewRow('modified');return}
     if(ev.altKey&&String(ev.key||'').toLowerCase()==='c'){ev.preventDefault();settingsUseSearchHint('@common');return}
     if(ev.altKey&&String(ev.key||'').toLowerCase()==='e'){ev.preventDefault();settingsFocusFirstReviewRow('error');return}
+    if(ev.altKey&&String(ev.key||'').toLowerCase()==='g'){ev.preventDefault();settingsFocusCurrentLanguageOverride();return}
     if(ev.altKey&&String(ev.key||'').toLowerCase()==='o'){ev.preventDefault();settingsFocusFirstReviewRow('override');return}
     if(ev.altKey&&String(ev.key||'').toLowerCase()==='u'){ev.preventDefault();selectSettingsTarget('user',{preserveSearch:true});return}
     if(ev.altKey&&String(ev.key||'').toLowerCase()==='w'){ev.preventDefault();selectSettingsTarget('workspace',{preserveSearch:true});return}
@@ -24945,6 +25106,11 @@ window.scrollToSettingsSection=scrollToSettingsSection;
 window.settingsFocusVisibleRow=settingsFocusVisibleRow;
 window.settingsToggleFilterToken=settingsToggleFilterToken;
 window.settingsClearFilters=settingsClearFilters;
+window.settingsFocusCurrentLanguageOverride=settingsFocusCurrentLanguageOverride;
+window.settingsSearchForLanguageOverride=settingsSearchForLanguageOverride;
+window.settingsCopyLanguageOverrideJson=settingsCopyLanguageOverrideJson;
+window.settingsOpenLanguageOverrideJson=settingsOpenLanguageOverrideJson;
+window.settingsResetCurrentLanguageOverride=settingsResetCurrentLanguageOverride;
 window.settingsComputeReviewState=settingsComputeReviewState;
 window.renderSettingsReviewBar=renderSettingsReviewBar;
 window.settingsToggleSavePreview=settingsToggleSavePreview;

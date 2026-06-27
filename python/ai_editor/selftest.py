@@ -9734,6 +9734,14 @@ console.log("frontend word separator behavior ok");
             and "function installSettingsScrollSync()" in html
             and "btn.setAttribute('aria-selected',active?'true':'false')" in html
             and "settingsUseSearchHint('@common')" in html
+            and "id=\"settings-language-override-panel\"" in html
+            and "function settingsLanguageOverrideKeys()" in html
+            and "function renderSettingsLanguageOverridePanel()" in html
+            and "function settingsSearchForLanguageOverride(language)" in html
+            and "function settingsCopyLanguageOverrideJson(language)" in html
+            and "function settingsResetCurrentLanguageOverride()" in html
+            and "window.settingsFocusCurrentLanguageOverride=settingsFocusCurrentLanguageOverride;" in html
+            and "String(ev.key||'').toLowerCase()==='g'" in html
             and "function settingsRecordSearch(query,parsed)" in html
             and "id=\"settings-search-memory\"" in html
             and "function updateSettingsTitleStatus(visible,total)" in html
