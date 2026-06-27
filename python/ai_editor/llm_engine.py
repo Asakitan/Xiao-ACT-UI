@@ -67,7 +67,8 @@ _model_registry: Dict[str, Dict[str, Any]] = {}
 
 def register_model(name: str, max_input: int = 0, max_output: int = 0,
                     tools: bool = True, vision: bool = False,
-                    thinking: bool = False, streaming: bool = True) -> None:
+                    thinking: bool = False, streaming: bool = True,
+                    provider: str = "", base_url: str = "") -> None:
     """Register or update a model's context window and capabilities."""
     _model_registry[name] = {
         "max_input": max_input or _DEFAULT_CONTEXT["max_input"],
@@ -75,6 +76,10 @@ def register_model(name: str, max_input: int = 0, max_output: int = 0,
         "tools": tools, "vision": vision,
         "thinking": thinking, "streaming": streaming,
     }
+    if provider:
+        _model_registry[name]["provider"] = str(provider)
+    if base_url:
+        _model_registry[name]["base_url"] = str(base_url)
 
 
 def unregister_model(name: str) -> None:
@@ -94,6 +99,8 @@ def set_custom_models(models: Dict[str, Any]) -> None:
                 vision=cfg.get("vision", False),
                 thinking=cfg.get("thinking", False),
                 streaming=cfg.get("streaming", True),
+                provider=str(cfg.get("provider", "") or cfg.get("provider_id", "") or ""),
+                base_url=str(cfg.get("base_url", "") or cfg.get("endpoint", "") or ""),
             )
 
 

@@ -3838,13 +3838,13 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("frontend Assistant composer keeps normal-width controls in one row",
            ".chat-toolbar { display:grid; grid-template-columns:minmax(0,1fr) max-content; align-items:center; column-gap:8px; row-gap:0;" in html
             and "border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent);" in html
-            and "min-width:0; overflow:hidden; white-space:nowrap; min-height:29px; flex-wrap:nowrap;" in html
+            and "min-width:0; overflow:visible; white-space:nowrap; min-height:29px; flex-wrap:nowrap;" in html
             and ".chat-toolbar .spacer { display:none; }" in html
             and ".chat-control-strip { display:flex; align-items:center; gap:4px; flex:1 1 auto; flex-wrap:nowrap; min-width:0;" in html
-            and "overflow:hidden; max-width:100%; }" in html
+            and "overflow:visible; max-width:100%; }" in html
             and ".chat-select-chip { width:136px; max-width:170px; padding:0 20px 0 8px; cursor:pointer; flex:0 1 136px; }" in html
             and ".chat-model-inline { width:164px; max-width:220px; justify-content:space-between; font-family:var(--mono); flex:0 1 164px; text-align:left; }" in html
-            and ".chat-select-chip.agent { width:142px; max-width:180px; flex-basis:142px; }" in html
+            and ".chat-control-trigger.agent { width:142px; max-width:180px; flex-basis:142px; }" in html
             and ".chat-select-chip.workflow { width:142px; max-width:190px; flex-basis:142px; }" in html
             and ".chat-control-menu { position:relative; display:inline-flex; align-items:center; flex:0 0 auto; min-width:0; }" in html
             and ".chat-control-popup.model { min-width:330px; }" in html
@@ -3860,6 +3860,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and '<div class="chat-composer-trailing" role="group" aria-label="Chat actions and status">' in html
            and 'id="chat-model-inline" onclick="toggleChatControlPopup(event,\'model\')"' in html
            and 'id="chat-model-popup" role="listbox" aria-label="Chat model"' in html
+           and 'id="chat-agent-trigger" onclick="toggleChatControlPopup(event,\'agent\')"' in html
+           and 'id="chat-agent-popup" role="listbox" aria-label="Active agent"' in html
            and 'id="chat-workflow-trigger" onclick="toggleChatControlPopup(event,\'workflow\')"' in html
            and '<select class="chat-select-chip workflow muted chat-control-native" id="chat-workflow-sel" title="Workflow" aria-hidden="true" tabindex="-1">' in html
            and '<button class="chat-run-chip" id="chat-workflow-run" onclick="runToolbarWorkflow()" title="Run selected workflow">▶</button>\n                  </div>\n                  <div class="chat-composer-trailing" role="group"' in html
@@ -3871,16 +3873,38 @@ def test_phase1_ai_editor_regressions() -> None:
            and "flexWrap:toolbar?getComputedStyle(toolbar).flexWrap:''" in html
            and "sameRow:!!(controlRect&&actionRect&&Math.abs(controlRect.top-actionRect.top)<=1)" in html
            and "window.assistantComposerLayoutSnapshot=assistantComposerLayoutSnapshot;" in html
-           and "'chat-provider-trigger','chat-model-inline','chat-agent-sel','chat-mode-trigger','chat-workflow-trigger','chat-workflow-run','chat-input-status'" in html)
+           and "'chat-provider-trigger','chat-model-inline','chat-agent-trigger','chat-mode-trigger','chat-workflow-trigger','chat-workflow-run','chat-input-status'" in html)
     _check("frontend Assistant model picker uses configured models",
            "let chatControlState={agents:[],workflows:[],providers:[],models:[]};" in html
+           and "let chatProviderModelOptions=Object.create(null);" in html
+           and "function providerMatchesModelMeta(meta,provider)" in html
+           and "function providerDefaultModelFromControls(provider)" in html
            and "function modelOptionRows()" in html
+           and "normalizeControlList(chatProviderModelOptions[provider],'models')" in html
+           and "chatProviderModelOptions[String(provider||'')]=r.models.slice();" in html
            and "chatControlState.models=normalizeControlList(controls.models,'models');" in html
            and "if(controls.custom_models&&typeof controls.custom_models==='object')config.custom_models={...controls.custom_models};" in html
            and "function selectModelFromPopup(modelId)" in html
            and "else if(kind==='model')selectModelFromPopup(id);" in html
            and "window.selectModelFromPopup=selectModelFromPopup;" in html
            and "return kind==='model'?$('chat-model-inline'):$('chat-'+kind+'-trigger');" in html)
+    _check("frontend Assistant agent picker uses custom popup",
+           'id="chat-agent-trigger" onclick="toggleChatControlPopup(event,\'agent\')"' in html
+           and 'id="chat-agent-popup" role="listbox" aria-label="Active agent"' in html
+           and "function selectAgentFromPopup(agentId)" in html
+           and "else if(kind==='agent')selectAgentFromPopup(id);" in html
+           and "agentTrigger.onkeydown=e=>handleChatControlPopupKeydown(e,'agent');" in html
+           and "agentPopup.onkeydown=e=>handleChatControlPopupKeydown(e,'agent');" in html
+           and "window.selectAgentFromPopup=selectAgentFromPopup;" in html)
+    _check("frontend Assistant control popups avoid clipped native dropdowns",
+           ".chat-toolbar { display:grid; grid-template-columns:minmax(0,1fr) max-content;" in html
+           and "min-width:0; overflow:visible; white-space:nowrap; min-height:29px;" in html
+           and ".chat-control-strip { display:flex; align-items:center; gap:4px; flex:1 1 auto; flex-wrap:nowrap; min-width:0;" in html
+           and "overflow:visible; max-width:100%;" in html
+           and ".chat-control-popup { position:absolute; bottom:calc(100% + 7px); left:0; display:none;" in html
+           and ".chat-control-popup.show { display:block; }" in html
+           and "@keyframes chatControlPopupIn" in html
+           and "mode-popup chat-control-popup" not in html)
     _check("frontend Assistant workflow launch has stateful on off custom modes",
            "const ASSISTANT_WORKFLOW_MODE_KEY='sao-ai-editor-workflow-mode';" in html
            and "function normalizeWorkflowMode(value)" in html
@@ -4032,6 +4056,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantRestoreWorkflowSelection(workflowId,workflowLabel)" in html
            and "function assistantApplySessionControls(state)" in html
            and "function assistantSessionOpenItem(sessionId,opts)" in html
+           and "if(String(item.type||'')==='provider'||item.providerId){" in html
+           and "return assistantProviderOpenSessionItem(item,opts);" in html
            and "function assistantSessionForkCurrent()" in html
            and "function assistantSessionHasInProgressWork()" in html
            and "function assistantSessionBeforeUnloadMessage()" in html
@@ -4092,7 +4118,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantProviderMessageSnapshot(pid)" in html
            and "function assistantProviderSessionItem(pid,extra)" in html
            and "function assistantProviderPersistSession(pid,extra)" in html
+           and "function assistantProviderRenderMessages(pid,messages)" in html
+           and "function assistantProviderOpenSessionItem(item,opts)" in html
            and "function syncAssistantProviderSessionState(pid,patch)" in html
+           and "assistantProviderRenderMessages(pid,item.messages||[]);" in html
+           and "switchRightTab(pid);" in html
+           and "const input=providerRefs(pid).input;if(input)input.focus();" in html
            and "refs.panel.dataset.providerSessionResource=assistantProviderSessionResource(key);" in html
            and "refs.panel.dataset.providerRequestCount=String(Math.max(0,Number(state.requestCount||0)));" in html
            and "assistantSessionState.type='provider';" in html
@@ -4114,6 +4145,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "providerSession.runningType==='provider'" in html
            and "providerSession.savedProvider==='assistant-selfcheck-provider'" in html
            and "providerSession.savedMessageCount===2" in html
+           and "providerSession.opened===true" in html
+           and "providerSession.restoredMessages===2" in html
+           and "providerSession.activeProvider==='assistant-selfcheck-provider'" in html
            and "providerSession.panelResource===providerSession.resource" in html)
     _check("frontend Assistant supports Copilot-style attached context and references",
            'id="chat-context-area" aria-label="Attached context"' in html

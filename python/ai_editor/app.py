@@ -2871,6 +2871,8 @@ class AIEditorAPI:
                 "name": name,
                 "current": name == current_model,
                 "custom": name in custom_models,
+                "provider": meta.get("provider", ""),
+                "base_url": meta.get("base_url", ""),
                 "max_input": ctx["max_input"],
                 "max_output": ctx["max_output"],
                 "capabilities": get_model_capabilities(name),
@@ -15833,11 +15835,12 @@ class AIEditorAPI:
     def save_custom_model(self, model_name: str, max_input: int = 128000,
                           max_output: int = 4096, tools: bool = True,
                           vision: bool = False, thinking: bool = False,
-                          streaming: bool = True) -> Dict:
+                          streaming: bool = True, provider: str = "",
+                          base_url: str = "") -> Dict:
         """Add or update a model definition."""
         from ai_editor.llm_engine import register_model
         register_model(model_name, max_input, max_output,
-                       tools, vision, thinking, streaming)
+                       tools, vision, thinking, streaming, provider, base_url)
         persist_error = self._save_models_to_settings()
         if persist_error:
             return {
