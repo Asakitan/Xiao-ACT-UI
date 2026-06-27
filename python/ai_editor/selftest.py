@@ -4286,6 +4286,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function isCustomEndpointModelMeta(meta)" in html
            and "function isPlaceholderModelValue(value)" in html
            and "function activeModelValue()" in html
+           and "function modelIdListFromText(value)" in html
+           and "function customEndpointModelRow(model,provider,base,description)" in html
            and "function normalizeEndpointUrl(value)" in html
            and "function isCustomEndpointConfigured(provider,baseUrl)" in html
            and "function ensureToolbarModelSelection(opts)" in html
@@ -4298,10 +4300,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function customEndpointConfiguredModelRows(provider)" in html
            and "const quickModel=$('model-inp');" in html
            and "const model=String((modelInput&&modelInput.value)||(quickModel&&quickModel.value)||activeModelValue()||'').trim();" in html
+           and "return modelIdListFromText(model)" in html
+           and "const firstModel=modelIdListFromText(model)[0]||'';" in html
            and "function modelOptionRows()" in html
            and "if(!isCustomEndpointConfigured(pid,base))return [];" in html
            and "if(isPlaceholderModelValue(model))return [];" in html
-            and "provider:pid||'custom'," in html
+            and "provider:provider||'custom'," in html
             and "const endpointModel=isCustomEndpointModelMeta(meta)||isCustomEndpointConfigured(providerId||pid,baseUrl);" in html
             and "const providerMatch=!providerId||providerId===pid||providerId==='custom'||endpointModel;" in html
             and "if(meta.custom||isCustomEndpointModelMeta(meta))return true;" in html
@@ -4313,7 +4317,9 @@ def test_phase1_ai_editor_regressions() -> None:
             and "customEndpointSettingModelRows(provider).forEach(model=>pushModel(model));\n  customEndpointConfiguredModelRows(provider).forEach(model=>pushModel(model));\n  settingsModelListRows(provider).forEach(model=>pushModel(model));" in html
             and "settingsModelListRows(provider).forEach(model=>pushModel(model));\n  normalizeControlList(chatProviderModelOptions[provider],'models').forEach(model=>pushModel" in html
             and "normalizeControlList(chatProviderModelOptions[provider],'models').forEach(model=>pushModel({\n    id:controlItemId(model)" in html
-            and "return Object.keys(config.custom_models||{}).sort().map(name=>" in html
+            and "const rows=Object.keys(config.custom_models||{}).sort().map(name=>" in html
+            and "const rawModels=Array.isArray(meta.models)?meta.models.join('\\n'):(meta.models||meta.model_ids||meta.model||'');" in html
+            and "modelIdListFromText(rawModels).forEach(modelName=>" in html
             and "custom:isCustomEndpointConfigured(provider,config.base_url)" in html
             and "const activeModel=ensureToolbarModelSelection({persist:false});" in html
            and "modelPopup.dataset.source=isCustomEndpointConfigured(config.provider,config.base_url)?'custom-endpoint':'provider';" in html
@@ -4344,6 +4350,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function selectModelFromPopup(modelId)" in html
            and "const row=modelOptionRows().find(item=>controlItemId(item)===id)||null;" in html
            and "const baseUrl=String((row&&(row.base_url||row.endpoint||row.endpoint_url))||config.base_url||'').trim();" in html
+           and "if(baseUrl)config.base_url=baseUrl;" in html
            and "updateProviderModel(config.provider,id,true);" in html
            and "const payload={provider:config.provider,model:config.model,base_url:config.base_url||''};" in html
            and "else if(kind==='model')selectModelFromPopup(id);" in html

@@ -1260,6 +1260,13 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-trigger { display:inline-flex; align-items:center; gap:4px; justify-content:space-between; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   width:100%; min-height:22px; border-radius:999px!important; background:color-mix(in srgb,var(--bg3) 88%,#000); appearance:none!important; -webkit-appearance:none!important;
   transition:border-color .14s ease, background .14s ease, color .14s ease, box-shadow .14s ease; position:relative; user-select:none; }
+.chat-control-trigger.provider,.chat-control-trigger.model,.chat-control-trigger.agent,.chat-control-trigger.workflow {
+  border-radius:999px!important; border-color:color-mix(in srgb,var(--border) 88%,transparent);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,#fff 2%,transparent);
+}
+.chat-control-trigger.model { color:var(--fg); background:color-mix(in srgb,var(--bg3) 86%,#000); }
+.chat-control-trigger.model .control-caret { display:inline-flex; align-items:center; justify-content:center; }
+.chat-control-trigger.model.muted .control-label { color:var(--fg-dim); font-family:var(--mono); }
 .chat-control-trigger::before { content:''; position:absolute; inset:-3px; border-radius:999px; }
 .chat-control-trigger .control-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-control-trigger .control-caret { font-size:8px; opacity:.82; margin-left:4px; flex:0 0 auto; color:var(--fg-dim); }
@@ -8252,7 +8259,7 @@ function assistantCustomEndpointModelPickerSnapshot(){
   config.base_url='https://custom.endpoint.example/v1';
   config.model='';
   config.custom_models={'custom-endpoint-configured-model':{max_input:96000,max_output:4096,provider:'openai',base_url:'https://custom.endpoint.example/v1'}};
-  if(modelInput)modelInput.value='custom-endpoint-setting-model';
+  if(modelInput)modelInput.value='custom-endpoint-setting-model, custom-endpoint-setting-alt';
   if(baseInput)baseInput.value='https://custom.endpoint.example/v1';
   chatProviderModelOptions.openai=[{id:'custom-endpoint-fetched-model',name:'custom-endpoint-fetched-model'}];
   renderChatControlPopups();
@@ -8285,7 +8292,7 @@ function assistantCustomEndpointModelPickerSnapshot(){
     preferredWithoutSetting,
     provider:'openai',
     baseUrl:'https://custom.endpoint.example/v1',
-    settingValue:'custom-endpoint-setting-model',
+    settingValue:'custom-endpoint-setting-model, custom-endpoint-setting-alt',
     popupText:popup.visibleText,
     optionCount:popup.optionCount,
     customModelCount:popup.customModelCount,
@@ -8664,7 +8671,7 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready',providerPopup.shown&&providerPopup.optionCount>=1&&providerPopup.focusableCount===providerPopup.optionCount&&providerPopup.keyboardReady,JSON.stringify(providerPopup));
   assistantUiSelfCheckRecord(checks,'model-popup-configured-models-ready',modelPopup.shown&&modelPopup.optionCount>=1&&modelPopup.focusableCount===modelPopup.optionCount&&modelPopup.keyboardReady,JSON.stringify(modelPopup));
   assistantUiSelfCheckRecord(checks,'model-popup-custom-endpoint-models-ready',modelPopup.shown&&modelPopup.customModelCount>=1&&modelPopup.visibleText.includes('custom-endpoint-model')&&modelPopup.visibleText.toLowerCase().includes('custom endpoint'),JSON.stringify(modelPopup));
-  assistantUiSelfCheckRecord(checks,'model-popup-custom-endpoint-selection-ready',customEndpointModelPicker.provider==='openai'&&customEndpointModelPicker.rowIds.includes('custom-endpoint-setting-model')&&customEndpointModelPicker.rowIds.includes('custom-endpoint-configured-model')&&customEndpointModelPicker.rowIds.includes('custom-endpoint-fetched-model')&&customEndpointModelPicker.firstRow==='custom-endpoint-setting-model'&&customEndpointModelPicker.endpointBeforeFetched&&customEndpointModelPicker.configuredBeforeFetched&&customEndpointModelPicker.preferred==='custom-endpoint-setting-model'&&customEndpointModelPicker.firstRowWithoutSetting==='custom-endpoint-configured-model'&&customEndpointModelPicker.preferredWithoutSetting==='custom-endpoint-configured-model'&&customEndpointModelPicker.optionCount>=3&&customEndpointModelPicker.customModelCount>=3&&customEndpointModelPicker.keyboardReady,JSON.stringify(customEndpointModelPicker));
+  assistantUiSelfCheckRecord(checks,'model-popup-custom-endpoint-selection-ready',customEndpointModelPicker.provider==='openai'&&customEndpointModelPicker.rowIds.includes('custom-endpoint-setting-model')&&customEndpointModelPicker.rowIds.includes('custom-endpoint-setting-alt')&&customEndpointModelPicker.rowIds.includes('custom-endpoint-configured-model')&&customEndpointModelPicker.rowIds.includes('custom-endpoint-fetched-model')&&customEndpointModelPicker.firstRow==='custom-endpoint-setting-model'&&customEndpointModelPicker.endpointBeforeFetched&&customEndpointModelPicker.configuredBeforeFetched&&customEndpointModelPicker.preferred==='custom-endpoint-setting-model'&&customEndpointModelPicker.firstRowWithoutSetting==='custom-endpoint-configured-model'&&customEndpointModelPicker.preferredWithoutSetting==='custom-endpoint-configured-model'&&customEndpointModelPicker.optionCount>=4&&customEndpointModelPicker.customModelCount>=4&&customEndpointModelPicker.keyboardReady,JSON.stringify(customEndpointModelPicker));
   assistantUiSelfCheckRecord(checks,'composer-native-selects-hidden',layout.nativeHidden===true,JSON.stringify(layout.nativeControls));
   assistantUiSelfCheckRecord(checks,'mode-popup-custom-control-ready',modePopup.shown&&modePopup.optionCount>=6&&modePopup.modeActionCount>=6&&modePopup.keyboardReady&&!modePopup.oldModePopupPresent&&modePopup.visibleText.includes('Agent')&&modePopup.visibleText.includes('Default Approvals'),JSON.stringify(modePopup));
   assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped',[providerPopup,modelPopup,agentPopup,modePopup,workflowPopup].every(s=>s.shown&&s.display==='block'&&s.rectReady&&s.opensAboveTrigger&&s.notToolbarClipped&&!s.className.includes('mode-popup')),JSON.stringify({providerPopup,modelPopup,agentPopup,modePopup,workflowPopup}));
@@ -23770,7 +23777,8 @@ function syncEndpointDraftToChatControls(opts){
   const model=readInputValue('s-model');
   config.provider=provider;
   config.base_url=base;
-  if(!isPlaceholderModelValue(model))config.model=model;
+  const firstModel=modelIdListFromText(model)[0]||'';
+  if(firstModel)config.model=firstModel;
   renderChatControlPopups();
   syncUI();
   if(opts.fetch&&provider){
@@ -24058,6 +24066,9 @@ function activeModelValue(){
   const model=String(config.model||'').trim();
   return isPlaceholderModelValue(model)?'':model;
 }
+function modelIdListFromText(value){
+  return String(value||'').split(/[\n\r,;]+/).map(item=>item.trim()).filter(item=>item&&!isPlaceholderModelValue(item));
+}
 function normalizeEndpointUrl(value){
   return String(value||'').trim().replace(/\/+$/,'').toLowerCase();
 }
@@ -24146,6 +24157,18 @@ function settingsModelListRows(provider){
     return {id,name:String(option.textContent||id),provider:pid,custom:customEndpoint,description:customEndpoint?'Custom endpoint model':'Fetched from '+providerLabel(pid),base_url:config.base_url||''};
   }).filter(Boolean);
 }
+function customEndpointModelRow(model,provider,base,description){
+  const id=String(model||'').trim();
+  if(!id||isPlaceholderModelValue(id))return null;
+  return {
+    id,
+    name:id,
+    provider:provider||'custom',
+    custom:true,
+    description:description||'Custom endpoint model',
+    base_url:base||''
+  };
+}
 function customEndpointSettingModelRows(provider){
   const pid=String(provider||config.provider||'').trim();
   const modelInput=$('s-model');
@@ -24155,18 +24178,13 @@ function customEndpointSettingModelRows(provider){
   const base=String((baseInput&&baseInput.value)||config.base_url||'').trim();
   if(!isCustomEndpointConfigured(pid,base))return [];
   if(isPlaceholderModelValue(model))return [];
-  return [{
-    id:model,
-    name:model,
-    provider:pid||'custom',
-    custom:true,
-    description:'Custom endpoint model',
-    base_url:base
-  }];
+  return modelIdListFromText(model)
+    .map(name=>customEndpointModelRow(name,pid||'custom',base,'Custom endpoint model'))
+    .filter(Boolean);
 }
 function customEndpointConfiguredModelRows(provider){
   const pid=String(provider||config.provider||'').trim();
-  return Object.keys(config.custom_models||{}).sort().map(name=>{
+  const rows=Object.keys(config.custom_models||{}).sort().map(name=>{
     const meta=config.custom_models[name]||{};
     const providerId=String(meta.provider||meta.provider_id||meta.providerId||'').trim();
     const baseUrl=String(meta.base_url||meta.endpoint||meta.endpoint_url||'').trim();
@@ -24178,6 +24196,20 @@ function customEndpointConfiguredModelRows(provider){
       max_input:meta.max_input,max_output:meta.max_output,base_url:baseUrl
     };
   }).filter(Boolean);
+  Object.keys(config.custom_models||{}).sort().forEach(name=>{
+    const meta=config.custom_models[name]||{};
+    if(!meta||typeof meta!=='object')return;
+    const providerId=String(meta.provider||meta.provider_id||meta.providerId||'').trim();
+    const baseUrl=String(meta.base_url||meta.endpoint||meta.endpoint_url||'').trim();
+    const endpointModel=isCustomEndpointModelMeta(meta)||isCustomEndpointConfigured(providerId||pid,baseUrl);
+    if(!endpointModel&&!providerMatchesModelMeta(meta,pid))return;
+    const rawModels=Array.isArray(meta.models)?meta.models.join('\n'):(meta.models||meta.model_ids||meta.model||'');
+    modelIdListFromText(rawModels).forEach(modelName=>{
+      const row=customEndpointModelRow(modelName,providerId||pid||'custom',baseUrl,'Custom endpoint model');
+      if(row&&!rows.some(item=>controlItemId(item)===controlItemId(row)))rows.push(row);
+    });
+  });
+  return rows;
 }
 function modelOptionRows(){
   const provider=String(config.provider||'openai').trim();
@@ -24596,7 +24628,7 @@ function selectModelFromPopup(modelId){
   const provider=String((row&&row.provider)||config.provider||'openai').trim();
   const baseUrl=String((row&&(row.base_url||row.endpoint||row.endpoint_url))||config.base_url||'').trim();
   if(provider)config.provider=provider;
-  if(baseUrl||row&&isCustomEndpointModelMeta(row))config.base_url=baseUrl;
+  if(baseUrl)config.base_url=baseUrl;
   const providerSelect=$('chat-provider-sel');if(providerSelect&&provider)providerSelect.value=provider;
   const settingsProvider=$('s-provider');if(settingsProvider&&provider)settingsProvider.value=provider;
   const settingsBase=$('s-baseurl');if(settingsBase)settingsBase.value=config.base_url||'';
