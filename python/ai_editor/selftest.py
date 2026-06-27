@@ -9470,16 +9470,36 @@ console.log("frontend word separator behavior ok");
            and "function renderSettingsFilterSuggestions()" in html
            and "function removeSettingsFilterToken(token)" in html
            and "function invalidateSettingsFilterCache()" in html
-           and "function settingsFilterDomCache(modal)" in html
-           and "function settingsGroupMatchesFilter(group,query)" in html
-           and "group._settingsFilterText" in html
-           and "const cache=settingsFilterDomCache(modal);" in html
-           and "invalidateSettingsFilterCache();\n  renderExtensionSettings();" in html
-           and "@([A-Za-z][A-Za-z0-9_-]*)" in html
-           and "SETTINGS_SCOPE_FILTERS[scope]" in html
-           and "visible of '+total+' settings groups" in html
-           and "use @error to filter invalid settings" in html
-           and "if(query.error&&!group.querySelector('[aria-invalid=\"true\"],.settings-field.invalid,.settings-input-invalid'))return false;" in html)
+            and "function settingsFilterDomCache(modal)" in html
+            and "function settingsGroupMatchesFilter(group,query)" in html
+            and "group._settingsFilterText" in html
+            and "const cache=settingsFilterDomCache(modal);" in html
+            and "invalidateSettingsFilterCache();" in html
+            and "renderExtensionSettings();" in html
+            and "@([A-Za-z][A-Za-z0-9_-]*)" in html
+            and "SETTINGS_SCOPE_FILTERS[scope]" in html
+            and "visible of '+total+' settings groups" in html
+            and "use @error to filter invalid settings" in html
+            and "if(query.error&&!group.querySelector('[aria-invalid=\"true\"],.settings-field.invalid,.settings-input-invalid'))return false;" in html)
+    _check("frontend settings uses VS Code style settings layout",
+           "class=\"modal settings-modal\"" in html
+           and "class=\"settings-titlebar\"" in html
+           and "class=\"settings-searchbar\"" in html
+           and "class=\"settings-target-tabs\"" in html
+           and "class=\"settings-shell\"" in html
+           and "class=\"settings-nav\" id=\"settings-nav\"" in html
+           and "class=\"settings-main\" id=\"settings-main\"" in html
+           and "data-settings-title=\"AI / Endpoint\"" in html
+           and "data-settings-title=\"Editor / Files\"" in html
+           and "function renderSettingsNav()" in html
+           and "function scrollToSettingsSection(id)" in html
+           and "function selectSettingsTarget(target)" in html
+           and "function updateSettingsNavCounts()" in html
+           and "input.value=(input.value+' @workspace').trim();" in html
+           and "input.value=(input.value+' @extensions').trim();" in html
+           and "window.focusSettingsSearch=focusSettingsSearch;" in html
+           and "renderSettingsNav();" in html
+           and "updateSettingsNavCounts();" in html)
     _check("frontend renders extension settings modified reset controls",
             "function renderExtensionSettings()" in html
             and "function extensionSettingValidateJsonValue(value,type)" in html
