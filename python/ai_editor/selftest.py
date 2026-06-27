@@ -4204,21 +4204,21 @@ def test_phase1_ai_editor_regressions() -> None:
             and "renderWelcome();\n  setStatus(t('new_chat_title')" in html
             and "const body=latestChatMessageBody('assistant');" in html)
     _check("frontend Assistant composer keeps normal-width controls in one row",
-           ".chat-toolbar { display:grid; grid-template-columns:minmax(0,1fr) max-content; align-items:center; column-gap:8px; row-gap:0;" in html
+           ".chat-toolbar { display:grid; grid-template-columns:max-content max-content; align-items:center; column-gap:8px; row-gap:0;" in html
             and "border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent);" in html
             and "min-width:0; overflow:visible; white-space:nowrap; min-height:29px; flex-wrap:nowrap;" in html
             and ".chat-toolbar .spacer { display:none; }" in html
-             and ".chat-control-strip { display:flex; align-items:center; gap:5px; flex:1 1 auto; flex-wrap:nowrap; min-width:0;" in html
-             and "overflow:visible; max-width:100%;" in html
-             and "--chat-provider-width:126px;" in html
-             and "--chat-model-width:280px;" in html
-             and "--chat-agent-width:164px;" in html
-             and "--chat-workflow-width:174px;" in html
+             and ".chat-control-strip { display:flex; align-items:center; gap:6px; flex:0 0 auto; flex-wrap:nowrap; min-width:max-content;" in html
+             and "overflow:visible; width:max-content; max-width:none;" in html
+             and "--chat-provider-width:128px;" in html
+             and "--chat-model-width:320px;" in html
+             and "--chat-agent-width:168px;" in html
+             and "--chat-workflow-width:178px;" in html
              and "appearance:none; -webkit-appearance:none; line-height:20px;" in html
              and ".chat-select-chip { width:150px; max-width:208px; padding:0 9px; cursor:pointer; flex:0 1 150px; }" in html
              and ".chat-model-inline { width:100%; max-width:none; justify-content:space-between; font-family:var(--mono); flex:1 1 var(--chat-model-width); text-align:left; }" in html
              and ".chat-control-trigger { display:inline-flex; align-items:center; gap:4px; justify-content:space-between;" in html
-             and "border-radius:999px!important; background:var(--bg3); appearance:none!important; -webkit-appearance:none!important;" in html
+             and "border-radius:999px!important; background:color-mix(in srgb,var(--bg3) 88%,#000); appearance:none!important; -webkit-appearance:none!important;" in html
              and "#chat-model-menu { flex:1 1 var(--chat-model-width); min-width:var(--chat-model-width); }" in html
              and ".chat-control-trigger.provider { width:var(--chat-provider-width); min-width:var(--chat-provider-width); max-width:var(--chat-provider-width); flex:0 0 var(--chat-provider-width); }" in html
              and ".chat-control-trigger.model { width:100%; min-width:var(--chat-model-width); max-width:none; flex:1 1 var(--chat-model-width); }" in html
@@ -4228,7 +4228,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and "#chat-provider-menu { width:var(--chat-provider-width); flex-basis:var(--chat-provider-width); }" in html
             and "#chat-agent-menu { width:var(--chat-agent-width); flex-basis:var(--chat-agent-width); }" in html
             and "#chat-workflow-menu { width:var(--chat-workflow-width); flex-basis:var(--chat-workflow-width); }" in html
-            and ".chat-control-popup.model { min-width:430px; }" in html
+            and ".chat-control-popup.model { min-width:460px; }" in html
             and ".chat-control-popup.workflow { min-width:340px; }" in html
             and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px;" in html
             and "margin-left:auto; flex:0 0 auto; min-width:max-content; width:max-content; flex-wrap:nowrap; overflow:hidden; white-space:nowrap;" in html
@@ -4289,6 +4289,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function normalizeEndpointUrl(value)" in html
            and "function isCustomEndpointConfigured(provider,baseUrl)" in html
            and "function ensureToolbarModelSelection(opts)" in html
+           and "const endpointModel=customEndpointSettingModelRows(config.provider).map(controlItemId).find(Boolean);" in html
+           and "if(endpointModel){" in html
+           and "config.model=endpointModel;" in html
            and "function providerDefaultModelFromControls(provider)" in html
            and "function settingsModelListRows(provider)" in html
            and "function customEndpointSettingModelRows(provider)" in html
@@ -4301,15 +4304,24 @@ def test_phase1_ai_editor_regressions() -> None:
             and "if(meta.custom||isCustomEndpointModelMeta(meta))return true;" in html
             and "if(item&&(item.custom||isCustomEndpointModelMeta(item)))return 'Custom Endpoint';" in html
             and "normalizeControlList(chatProviderModelOptions[provider],'models')" in html
-            and "customEndpointSettingModelRows(provider).forEach(model=>pushModel(model));" in html
+           and "customEndpointSettingModelRows(provider).forEach(model=>pushModel(model));" in html
             and "settingsModelListRows(provider).forEach(model=>pushModel(model));" in html
-            and "customEndpointSettingModelRows(provider).forEach(model=>pushModel(model));\n  Object.keys(config.custom_models||{}).sort().forEach(name=>" in html
+            and "customEndpointSettingModelRows(provider).forEach(model=>pushModel(model));\n  settingsModelListRows(provider).forEach(model=>pushModel(model));" in html
             and "settingsModelListRows(provider).forEach(model=>pushModel(model));\n  normalizeControlList(chatProviderModelOptions[provider],'models').forEach(model=>pushModel" in html
+            and "normalizeControlList(chatProviderModelOptions[provider],'models').forEach(model=>pushModel({\n    id:controlItemId(model)" in html
+            and "Object.keys(config.custom_models||{}).sort().forEach(name=>" in html
             and "custom:isCustomEndpointConfigured(provider,config.base_url)" in html
             and "const activeModel=ensureToolbarModelSelection({persist:false});" in html
+           and "modelPopup.dataset.source=isCustomEndpointConfigured(config.provider,config.base_url)?'custom-endpoint':'provider';" in html
+           and "head.className='chat-control-popup-empty model-source';" in html
+           and "head.textContent='Custom Endpoint models';" in html
            and "function preferredModelForProvider(provider)" in html
            and "const endpointSetting=customEndpointSettingModelRows(pid).map(controlItemId).find(Boolean);" in html
            and "if(endpointSetting)return endpointSetting;" in html
+           and "const settings=settingsModelListRows(pid).map(controlItemId).find(Boolean);" in html
+           and "if(settings)return settings;" in html
+           and "const fetched=normalizeControlList(chatProviderModelOptions[pid],'models').map(controlItemId).find(Boolean);" in html
+           and "if(fetched)return fetched;" in html
            and "if(custom)return custom;" in html
            and "let chatProviderModelFetchKeys=Object.create(null);" in html
            and "function providerApiKeyForChat(provider)" in html
@@ -4342,10 +4354,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "agentPopup.onkeydown=e=>handleChatControlPopupKeydown(e,'agent');" in html
            and "window.selectAgentFromPopup=selectAgentFromPopup;" in html)
     _check("frontend Assistant control popups avoid clipped native dropdowns",
-           ".chat-toolbar { display:grid; grid-template-columns:minmax(0,1fr) max-content;" in html
+           ".chat-toolbar { display:grid; grid-template-columns:max-content max-content;" in html
            and "min-width:0; overflow:visible; white-space:nowrap; min-height:29px;" in html
-           and ".chat-control-strip { display:flex; align-items:center; gap:5px; flex:1 1 auto; flex-wrap:nowrap; min-width:0;" in html
-           and "overflow:visible; max-width:100%;" in html
+           and ".chat-control-strip { display:flex; align-items:center; gap:6px; flex:0 0 auto; flex-wrap:nowrap; min-width:max-content;" in html
+           and "overflow:visible; width:max-content; max-width:none;" in html
            and ".chat-control-native { display:none!important; visibility:hidden!important; position:absolute!important; inset:0 auto auto 0!important;" in html
            and "appearance:none; -webkit-appearance:none; line-height:20px;" in html
            and ".chat-control-trigger { display:inline-flex; align-items:center; gap:4px; justify-content:space-between;" in html
@@ -4366,6 +4378,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".chat-control-popup.align-right { left:auto; right:0; }" in html
            and ".chat-control-popup .mode-popup-item { display:flex; align-items:center; gap:8px; padding:7px 9px;" in html
            and ".chat-control-popup .mode-popup-item .mp-label { font-weight:600; white-space:nowrap; min-width:0; overflow:hidden; text-overflow:ellipsis; }" in html
+           and ".chat-control-popup-empty.model-source { padding:5px 9px 4px; color:var(--fg-accent); font:10px var(--mono); text-transform:uppercase; letter-spacing:.3px; }" in html
            and "@keyframes chatControlPopupIn" in html
            and "mode-popup chat-control-popup" not in html
            and "customSurface:!!(popup&&popup.classList.contains('chat-control-popup')&&popup.getAttribute('role')==='listbox')" in html
@@ -9725,15 +9738,27 @@ console.log("frontend word separator behavior ok");
            and "id=\"extension-runtime-summary\"" in html
            and "id=\"extension-runtime-list\"" in html
            and "id=\"extension-runtime-refresh\"" in html
+           and "id=\"extension-runtime-filter-text\"" in html
+           and "id=\"extension-runtime-filter-kind\"" in html
+           and "id=\"extension-runtime-filter-source\"" in html
            and "function extensionRuntimeSurfaceRows(data)" in html
+           and "function extensionRuntimeFilterState()" in html
+           and "function extensionRuntimeRowMatchesFilter(row,filter)" in html
+           and "function populateExtensionRuntimeKindFilter(rows)" in html
+           and "function updateExtensionRuntimeFilterSummary(visible,total)" in html
+           and "function selectExtensionRuntimeRow(rowEl)" in html
+           and "function applyExtensionRuntimeSurfaceFilter()" in html
            and "let extensionRuntimeSurfaceCache=null;" in html
            and "let extensionRuntimeSurfaceInflight=null;" in html
+           and "let extensionRuntimeSurfaceRowsLast=[];" in html
            and "const EXTENSION_RUNTIME_SURFACE_CACHE_MS=900;" in html
            and "function extensionRuntimeSurfaceCacheFresh(force)" in html
            and "function setExtensionRuntimeSurfaceLoading(loading)" in html
            and "function renderExtensionRuntimeSurfacePanel(data)" in html
            and "async function renderExtensionRuntimeSurfaces(force)" in html
            and "window.renderExtensionRuntimeSurfaces=renderExtensionRuntimeSurfaces;" in html
+           and "window.applyExtensionRuntimeSurfaceFilter=applyExtensionRuntimeSurfaceFilter;" in html
+           and "window.extensionRuntimeSurfaceRows=extensionRuntimeSurfaceRows;" in html
            and "call('list_extension_runtime_surfaces',typeof commandPaletteContext==='function'?commandPaletteContext():{})" in html
            and "refreshRuntimeSupport();\n  renderExtensionRuntimeSurfaces();" in html
            and ".extension-runtime-refresh:disabled" in html
@@ -9743,12 +9768,19 @@ console.log("frontend word separator behavior ok");
            and "source:item.runtimeOnly?'runtime-only':(runtime?'runtime':'manifest')" in html
            and "row.extensionId" in html
            and "panel.dataset.runtimeSurfaceCount=String(summary.dynamicSurfaces||rows.length||0);" in html
+           and "panel.dataset.runtimeVisibleCount=String(visible);" in html
+           and "panel.dataset.runtimeTotalCount=String(total);" in html
+           and "el.dataset.search=row.searchText||'';" in html
+           and "el.setAttribute('aria-selected','false');" in html
            and "el.setAttribute('role','listitem');" in html
            and "listEl.setAttribute('role','list');" in html
            and "setExtensionRuntimeSurfaceLoading(true);" in html
            and "extensionRuntimeSurfaceInflight=request;" in html
            and "renderExtensionRuntimeSurfacePanel({...extensionRuntimeSurfaceCache.data,_frontendCacheHit:true});" in html
-           and "statusEl.textContent='Runtime surfaces: '+String(summary.dynamicSurfaces||rows.length||0)+' dynamic entries'" in html
+           and "Runtime surfaces: '+visible+' visible of '+total+' rows" in html
+           and ".extension-runtime-filter" in html
+           and ".extension-runtime-chip.filterable" in html
+           and ".extension-runtime-row.selected" in html
            and "['Runtime',rows.filter(row=>row.ready).length]" in html
            and "['Manifest',rows.filter(row=>!row.ready).length]" in html
            and "(data.terminalProfiles||[]).slice(0,8).forEach(item=>push('TerminalProfile'" in html
@@ -11494,8 +11526,17 @@ console.log("extension setting schema helpers ok");
            and "runtimeListRole:runtimeList?runtimeList.getAttribute('role'):''" in html
            and "runtimeDatasetSources:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.source||''):[]" in html
            and "runtimePanelCount:(()=>{const panel=$('extension-runtime-panel');return panel?panel.dataset.runtimeSurfaceCount:''})()" in html
+           and "runtimePanelVisibleCount:(()=>{const panel=$('extension-runtime-panel');return panel?panel.dataset.runtimeVisibleCount:''})()" in html
+           and "runtimeFilterKinds:runtimeKindFilter?Array.from(runtimeKindFilter.options).map(opt=>opt.value).filter(Boolean):[]" in html
+           and "runtimeKindFilterVisible:runtimeKindFilterResult?runtimeKindFilterResult.visible:0" in html
+           and "runtimeSelectedRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row.selected[aria-selected=\"true\"]').length:0" in html
            and "snapshot.runtimeListRole==='list'" in html
-           and "snapshot.runtimeStatusText.includes('11 dynamic entries')" in html
+           and "snapshot.runtimeStatusText.includes('11 visible of 11 rows')" in html
+           and "snapshot.runtimeFilterKinds.includes('LMTool')" in html
+           and "snapshot.runtimeKindFilterVisible===1" in html
+           and "snapshot.runtimeTextFilterVisible===1" in html
+           and "snapshot.runtimeSelectedRows===1" in html
+           and "snapshot.runtimeChipFilterKind==='LMTool'" in html
            and "['TerminalProfile','LMTool','LMProvider','ChatParticipant','ChatContext'].every(kind=>snapshot.runtimeKinds.includes(kind))" in html
            and "window._onEditorEvent('render_webview_panel',{view_id:lifecycleViewId" in html
            and "window._onEditorEvent('update_webview_panel_title',{view_id:lifecycleViewId" in html

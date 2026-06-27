@@ -1093,7 +1093,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-input-container.sendable .send-btn:not(:disabled) { box-shadow:0 0 0 1px color-mix(in srgb, var(--btn) 35%, transparent); }
 .chat-input-container.streaming .send-btn { background:var(--fg-error); }
 .send-btn svg { width:14px; height:14px; }
-.chat-toolbar { display:grid; grid-template-columns:minmax(0,1fr) max-content; align-items:center; column-gap:8px; row-gap:0;
+.chat-toolbar { display:grid; grid-template-columns:max-content max-content; align-items:center; column-gap:8px; row-gap:0;
   padding:0 8px 7px; font-size:11px;
   border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent);
   min-width:0; overflow:visible; white-space:nowrap; min-height:29px; flex-wrap:nowrap; }
@@ -1232,14 +1232,14 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-used-context-title { color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; letter-spacing:.5px; }
 .chat-used-context-list { display:flex; flex-wrap:wrap; gap:5px; }
 
-.chat-control-strip { display:flex; align-items:center; gap:5px; flex:1 1 auto; flex-wrap:nowrap; min-width:0;
-  overflow:visible; max-width:100%;
-  --chat-provider-width:126px;
-  --chat-model-width:280px;
-  --chat-agent-width:164px;
-  --chat-workflow-width:174px; }
+.chat-control-strip { display:flex; align-items:center; gap:6px; flex:0 0 auto; flex-wrap:nowrap; min-width:max-content;
+  overflow:visible; width:max-content; max-width:none;
+  --chat-provider-width:128px;
+  --chat-model-width:320px;
+  --chat-agent-width:168px;
+  --chat-workflow-width:178px; }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
-  border-radius:999px; background:var(--bg3); color:var(--fg); font:11px var(--sans);
+  border-radius:999px; background:color-mix(in srgb,var(--bg3) 88%,#000); color:var(--fg); font:11px var(--sans);
   outline:none; min-width:0; box-sizing:border-box; appearance:none; -webkit-appearance:none; line-height:20px; }
 .chat-chip,.chat-model-inline,.chat-run-chip { display:inline-flex; align-items:center; gap:4px; padding:0 8px; cursor:pointer;
   transition:border-color .14s ease, background .14s ease, color .14s ease, box-shadow .14s ease; }
@@ -1248,7 +1248,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-model-inline .control-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-model-inline .control-caret { font-size:8px; opacity:.65; margin-left:4px; flex:0 0 auto; }
 .chat-chip:hover,.chat-select-chip:hover,.chat-model-inline:hover,.chat-run-chip:hover,
-.chat-select-chip:focus,.chat-model-inline:focus,.chat-run-chip:focus { border-color:var(--border-focus); }
+.chat-select-chip:focus,.chat-model-inline:focus,.chat-run-chip:focus { border-color:var(--border-focus); background:color-mix(in srgb,var(--bg-hover) 72%,var(--bg3)); }
 .chat-chip.muted,.chat-select-chip.muted { color:var(--fg-dim); }
 .chat-run-chip.running { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 55%,var(--border)); background:color-mix(in srgb,var(--fg-warning) 11%,var(--bg3)); }
 .chat-select-chip.mode { color:var(--fg-accent); border-color:color-mix(in srgb, var(--border-focus) 50%, var(--border)); }
@@ -1258,7 +1258,7 @@ pre.code-block code .type { color:var(--fg-type); }
 #chat-model-menu { flex:1 1 var(--chat-model-width); min-width:var(--chat-model-width); }
 .chat-control-native { display:none!important; visibility:hidden!important; position:absolute!important; inset:0 auto auto 0!important; width:0!important; height:0!important; opacity:0!important; pointer-events:none!important; appearance:none; -webkit-appearance:none; }
 .chat-control-trigger { display:inline-flex; align-items:center; gap:4px; justify-content:space-between; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-  width:100%; min-height:22px; border-radius:999px!important; background:var(--bg3); appearance:none!important; -webkit-appearance:none!important;
+  width:100%; min-height:22px; border-radius:999px!important; background:color-mix(in srgb,var(--bg3) 88%,#000); appearance:none!important; -webkit-appearance:none!important;
   transition:border-color .14s ease, background .14s ease, color .14s ease, box-shadow .14s ease; }
 .chat-control-trigger .control-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-control-trigger .control-caret { font-size:8px; opacity:.65; margin-left:4px; flex:0 0 auto; }
@@ -1281,7 +1281,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-popup.align-right { left:auto; right:0; }
 .chat-control-popup.agent { min-width:250px; }
 .chat-control-popup.provider { min-width:260px; }
-.chat-control-popup.model { min-width:430px; }
+.chat-control-popup.model { min-width:460px; }
 .chat-control-popup.mode { min-width:260px; }
 .chat-control-popup.workflow { min-width:340px; }
 .chat-control-popup .mode-popup-item { padding:7px 9px; border-radius:8px; margin:1px 0; border:1px solid transparent; }
@@ -1401,6 +1401,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-popup .mode-popup-item .mp-body { flex:1 1 auto; min-width:0; }
 .chat-control-popup .mode-popup-item .mp-label { font-weight:600; white-space:nowrap; min-width:0; overflow:hidden; text-overflow:ellipsis; }
 .chat-control-popup .mode-popup-item .mp-desc { color:var(--fg-dim); font-size:11px; margin-top:2px; white-space:normal; line-height:1.35; }
+.chat-control-popup-empty.model-source { padding:5px 9px 4px; color:var(--fg-accent); font:10px var(--mono); text-transform:uppercase; letter-spacing:.3px; }
 .chat-control-popup .workflow-mode-option { min-height:46px; align-items:center; justify-content:center; text-align:center; padding:7px 6px; }
 .chat-control-popup .workflow-mode-option .mp-icon { display:inline-flex; justify-content:center; }
 .chat-control-popup .workflow-mode-option .mp-label,
@@ -1552,17 +1553,25 @@ pre.code-block code .type { color:var(--fg-type); }
 .modal .settings-option-card b { display:block; color:var(--fg); font-weight:600; }
 .modal .settings-option-card small { display:block; color:var(--fg-dim); line-height:1.35; margin-top:2px; }
 .extension-runtime-panel { margin-top:8px; border:1px solid var(--border); border-radius:6px; background:var(--bg3); overflow:hidden; }
-.extension-runtime-head { display:flex; align-items:center; gap:8px; padding:7px 8px; border-bottom:1px solid var(--border); }
+.extension-runtime-head { display:flex; align-items:center; gap:8px; padding:7px 8px; border-bottom:1px solid var(--border); flex-wrap:wrap; }
 .extension-runtime-title { flex:1; min-width:0; color:var(--fg); font-size:12px; font-weight:600; }
 .extension-runtime-refresh { width:auto; height:24px; padding:2px 8px; border:1px solid var(--border); border-radius:4px; background:var(--bg2); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
 .extension-runtime-refresh:hover,.extension-runtime-refresh:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
 .extension-runtime-refresh:disabled { opacity:.55; cursor:default; }
+.extension-runtime-filter { display:grid; grid-template-columns:minmax(120px,1fr) minmax(92px,auto) minmax(92px,auto); gap:5px; width:100%; }
+.extension-runtime-filter input,.extension-runtime-filter select { min-width:0; height:24px; padding:2px 7px; border:1px solid var(--border);
+  border-radius:4px; background:var(--bg2); color:var(--fg); font:11px var(--sans); outline:none; }
+.extension-runtime-filter input:focus,.extension-runtime-filter select:focus { border-color:var(--border-focus); }
 .extension-runtime-summary { display:flex; flex-wrap:wrap; gap:5px; padding:7px 8px; border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent); }
 .extension-runtime-chip { display:inline-flex; align-items:center; gap:4px; max-width:100%; padding:2px 6px; border:1px solid var(--border); border-radius:999px; color:var(--fg-dim); font:10px var(--mono); }
 .extension-runtime-chip strong { color:var(--fg); font-weight:600; }
+.extension-runtime-chip.filterable { cursor:pointer; }
+.extension-runtime-chip.filterable:hover,.extension-runtime-chip.filterable:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
+.extension-runtime-chip.active { color:var(--fg-accent); border-color:var(--fg-accent); background:color-mix(in srgb,var(--fg-accent) 7%,transparent); }
 .extension-runtime-list { display:grid; gap:1px; padding:4px; }
 .extension-runtime-row { display:grid; grid-template-columns:92px minmax(0,1fr) auto; gap:7px; align-items:center; min-height:26px; padding:4px 6px; border-radius:4px; color:var(--fg-dim); font-size:11px; }
 .extension-runtime-row:hover,.extension-runtime-row:focus { background:var(--bg-hover); outline:1px solid color-mix(in srgb,var(--border-focus) 40%,transparent); outline-offset:-1px; }
+.extension-runtime-row.selected { background:color-mix(in srgb,var(--fg-accent) 8%,var(--bg-hover)); outline:1px solid color-mix(in srgb,var(--border-focus) 55%,transparent); outline-offset:-1px; }
 .extension-runtime-kind { color:var(--fg-accent); font:10px var(--mono); text-transform:uppercase; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .extension-runtime-mid { min-width:0; display:flex; flex-direction:column; gap:1px; }
 .extension-runtime-main { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg); }
@@ -3028,6 +3037,11 @@ pre.code-block { overflow:visible; }
         <div class="extension-runtime-head">
           <div class="extension-runtime-title">Extension Runtime Surfaces</div>
           <button class="extension-runtime-refresh" id="extension-runtime-refresh" type="button" onclick="renderExtensionRuntimeSurfaces(true)">Refresh</button>
+          <div class="extension-runtime-filter">
+            <input id="extension-runtime-filter-text" placeholder="Filter surfaces" aria-label="Filter extension runtime surfaces" oninput="applyExtensionRuntimeSurfaceFilter()">
+            <select id="extension-runtime-filter-kind" aria-label="Filter extension runtime surface kind" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All kinds</option></select>
+            <select id="extension-runtime-filter-source" aria-label="Filter extension runtime source" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All sources</option><option value="runtime">Runtime</option><option value="manifest">Manifest</option><option value="runtime-only">Runtime only</option></select>
+          </div>
         </div>
         <div class="extension-runtime-summary" id="extension-runtime-summary"></div>
         <div class="extension-runtime-list" id="extension-runtime-list"></div>
@@ -8824,7 +8838,7 @@ function assistantVisualLayoutSnapshot(){
     nativeBoxes,
     noOldNativeBoxes:nativeBoxes.every(item=>item.exists&&item.display==='none'&&item.ariaHidden==='true'&&item.inert===true&&item.width===0&&item.height===0),
     triggerWidths:triggerWidthMap,
-    controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=126&&triggerWidthMap['chat-model-inline']>=238&&triggerWidthMap['chat-agent-trigger']>=164&&triggerWidthMap['chat-workflow-trigger']>=174),
+    controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=300&&triggerWidthMap['chat-agent-trigger']>=168&&triggerWidthMap['chat-workflow-trigger']>=178),
     popups:popupSnapshots,
     popupsCustomSurface:popupSnapshots.every(item=>item.customSurface&&item.shown&&item.display==='block'&&item.pointerEvents==='auto'),
     popupsOpenAbove:popupSnapshots.every(item=>item.rectReady&&item.opensAboveTrigger&&item.notToolbarClipped),
@@ -24038,6 +24052,14 @@ function isCustomEndpointConfigured(provider,baseUrl){
 }
 function ensureToolbarModelSelection(opts){
   opts=opts||{};
+  const endpointModel=customEndpointSettingModelRows(config.provider).map(controlItemId).find(Boolean);
+  if(endpointModel){
+    config.model=endpointModel;
+    const inline=$('model-inp');
+    if(inline)inline.value=endpointModel;
+    if(opts.persist)persistProviderModel();
+    return endpointModel;
+  }
   const selected=activeModelValue();
   if(selected)return selected;
   const preferred=preferredModelForProvider(config.provider);
@@ -24131,6 +24153,10 @@ function modelOptionRows(){
     if(id&&!out.some(item=>controlItemId(item)===id))out.push(model);
   };
   customEndpointSettingModelRows(provider).forEach(model=>pushModel(model));
+  settingsModelListRows(provider).forEach(model=>pushModel(model));
+  normalizeControlList(chatProviderModelOptions[provider],'models').forEach(model=>pushModel({
+    id:controlItemId(model),name:controlItemName(model)||controlItemId(model),provider,custom:isCustomEndpointConfigured(provider,config.base_url),description:isCustomEndpointConfigured(provider,config.base_url)?'Custom endpoint model':'Fetched from '+providerLabel(provider),base_url:config.base_url||''
+  }));
   Object.keys(config.custom_models||{}).sort().forEach(name=>{
     const meta=config.custom_models[name]||{};
     if(!providerMatchesModelMeta(meta,provider)&&!isCustomEndpointModelMeta(meta))return;
@@ -24139,10 +24165,6 @@ function modelOptionRows(){
       max_input:meta.max_input,max_output:meta.max_output,base_url:meta.base_url||meta.endpoint||meta.endpoint_url||''
     });
   });
-  settingsModelListRows(provider).forEach(model=>pushModel(model));
-  normalizeControlList(chatProviderModelOptions[provider],'models').forEach(model=>pushModel({
-    id:controlItemId(model),name:controlItemName(model)||controlItemId(model),provider,custom:isCustomEndpointConfigured(provider,config.base_url),description:isCustomEndpointConfigured(provider,config.base_url)?'Custom endpoint model':'Fetched from '+providerLabel(provider),base_url:config.base_url||''
-  }));
   rows.forEach(model=>{
     const meta=model&&typeof model==='object'?model:{};
     if((meta.custom||providerMatchesModelMeta(meta,provider)))pushModel(model);
@@ -24157,15 +24179,15 @@ function preferredModelForProvider(provider){
   const pid=String(provider||config.provider||'').trim();
   const endpointSetting=customEndpointSettingModelRows(pid).map(controlItemId).find(Boolean);
   if(endpointSetting)return endpointSetting;
+  const settings=settingsModelListRows(pid).map(controlItemId).find(Boolean);
+  if(settings)return settings;
+  const fetched=normalizeControlList(chatProviderModelOptions[pid],'models').map(controlItemId).find(Boolean);
+  if(fetched)return fetched;
   const custom=Object.keys(config.custom_models||{}).sort().find(name=>{
     const meta=config.custom_models[name]||{};
     return isCustomEndpointModelMeta(meta)||String(meta.provider||meta.provider_id||meta.providerId||'')===pid;
   });
   if(custom)return custom;
-  const fetched=normalizeControlList(chatProviderModelOptions[pid],'models').map(controlItemId).find(Boolean);
-  if(fetched)return fetched;
-  const settings=settingsModelListRows(pid).map(controlItemId).find(Boolean);
-  if(settings)return settings;
   const defaultModel=providerDefaultModelFromControls(pid);
   if(defaultModel)return defaultModel;
   return readProviderModelDefaults(pid)||'';
@@ -24446,6 +24468,13 @@ function renderChatControlPopups(){
   if(modelPopup){
     modelPopup.innerHTML='';
     const rows=modelOptionRows();
+    modelPopup.dataset.source=isCustomEndpointConfigured(config.provider,config.base_url)?'custom-endpoint':'provider';
+    if(isCustomEndpointConfigured(config.provider,config.base_url)){
+      const head=document.createElement('div');
+      head.className='chat-control-popup-empty model-source';
+      head.textContent='Custom Endpoint models';
+      modelPopup.appendChild(head);
+    }
     if(rows.length){
       const activeModel=ensureToolbarModelSelection({persist:false});
       rows.forEach(model=>modelPopup.appendChild(chatControlPopupItem('model',model,controlItemId(model)===activeModel)));
@@ -27704,14 +27733,18 @@ function extensionRuntimeSurfaceRows(data){
   const push=(kind,item,label,meta,ready)=>{
     const runtime=ready!==false;
     const extensionId=String(item.extensionId||item.extension_id||item._extensionId||'');
-    rows.push({
+    const row={
       kind,
       label:String(label||item.id||item.command||item.viewType||item.type||''),
       meta:String(meta||item.extensionId||item.container||''),
       extensionId,
       source:item.runtimeOnly?'runtime-only':(runtime?'runtime':'manifest'),
       ready:runtime,
-    });
+      command:String(item.command||''),
+      id:String(item.id||item.viewType||item.type||item.name||item.command||''),
+    };
+    row.searchText=[row.kind,row.label,row.meta,row.extensionId,row.source,row.command,row.id].join(' ').toLowerCase();
+    rows.push(row);
   };
   (data.treeViews||[]).slice(0,8).forEach(item=>push('TreeView',item,item.name||item.id,item.id+' · '+(item.container||'runtime'),item.runtimeAvailable!==false));
   (data.webviewViews||[]).slice(0,8).forEach(item=>push('WebviewView',item,item.name||item.id,item.id+' · '+(item.container||'runtime'),item.runtimeAvailable!==false));
@@ -27724,13 +27757,83 @@ function extensionRuntimeSurfaceRows(data){
   (data.languageModelProviders||[]).slice(0,8).forEach(item=>push('LMProvider',item,item.name||item.vendor||item.id,(item.vendor||item.id)+' · models '+(item.modelCount||0),item.runtimeAvailable!==false));
   (data.chatParticipants||[]).slice(0,8).forEach(item=>push('ChatParticipant',item,item.name||item.id,item.id,item.runtimeAvailable!==false));
   (data.chatContextProviders||[]).slice(0,8).forEach(item=>push('ChatContext',item,item.id||item.kind,item.kind+(item.selector?' · selector':''),item.runtimeAvailable!==false));
-  return rows;
+  return rows.sort((a,b)=>{
+    if(a.ready!==b.ready)return a.ready?-1:1;
+    const kind=String(a.kind).localeCompare(String(b.kind));
+    if(kind)return kind;
+    return String(a.label).localeCompare(String(b.label));
+  });
 }
 let extensionRuntimeSurfaceCache=null;
 let extensionRuntimeSurfaceInflight=null;
+let extensionRuntimeSurfaceRowsLast=[];
 const EXTENSION_RUNTIME_SURFACE_CACHE_MS=900;
 function extensionRuntimeSurfaceCacheFresh(force){
   return !force&&extensionRuntimeSurfaceCache&&Date.now()-extensionRuntimeSurfaceCache.time<EXTENSION_RUNTIME_SURFACE_CACHE_MS;
+}
+function extensionRuntimeFilterState(){
+  return {
+    text:String(($('extension-runtime-filter-text')||{}).value||'').trim().toLowerCase(),
+    kind:String(($('extension-runtime-filter-kind')||{}).value||''),
+    source:String(($('extension-runtime-filter-source')||{}).value||'')
+  };
+}
+function extensionRuntimeRowMatchesFilter(row,filter){
+  if(!row)return false;
+  const f=filter||extensionRuntimeFilterState();
+  if(f.kind&&row.kind!==f.kind)return false;
+  if(f.source&&row.source!==f.source)return false;
+  if(f.text&&!String(row.searchText||'').includes(f.text))return false;
+  return true;
+}
+function populateExtensionRuntimeKindFilter(rows){
+  const select=$('extension-runtime-filter-kind');if(!select)return;
+  const current=select.value;
+  const kinds=[...new Set((rows||[]).map(row=>row.kind).filter(Boolean))].sort();
+  select.innerHTML='<option value="">All kinds</option>';
+  kinds.forEach(kind=>select.add(new Option(kind,kind)));
+  select.value=kinds.includes(current)?current:'';
+}
+function updateExtensionRuntimeFilterSummary(visible,total){
+  const panel=$('extension-runtime-panel'),statusEl=$('extension-runtime-status');
+  if(panel){
+    panel.dataset.runtimeVisibleCount=String(visible);
+    panel.dataset.runtimeTotalCount=String(total);
+  }
+  if(statusEl){
+    const base='Runtime surfaces: '+visible+' visible of '+total+' rows';
+    const cached=panel&&panel.dataset.cacheHit?(' · cached in '+panel.dataset.cacheHit):'';
+    statusEl.textContent=base+cached+'.';
+  }
+}
+function selectExtensionRuntimeRow(rowEl){
+  const list=$('extension-runtime-list');if(!rowEl||!list)return false;
+  list.querySelectorAll('.extension-runtime-row.selected').forEach(row=>row.classList.remove('selected'));
+  rowEl.classList.add('selected');
+  rowEl.setAttribute('aria-selected','true');
+  Array.from(list.querySelectorAll('.extension-runtime-row')).forEach(row=>{if(row!==rowEl)row.setAttribute('aria-selected','false')});
+  const status=$('extension-runtime-status');
+  if(status)status.textContent='Selected '+(rowEl.dataset.kind||'surface')+': '+(rowEl.dataset.label||'')+'.';
+  return true;
+}
+function applyExtensionRuntimeSurfaceFilter(){
+  const list=$('extension-runtime-list');if(!list)return;
+  const filter=extensionRuntimeFilterState();
+  let visible=0,total=0;
+  Array.from(list.querySelectorAll('.extension-runtime-row')).forEach(row=>{
+    total++;
+    const match=extensionRuntimeRowMatchesFilter({
+      kind:row.dataset.kind||'',
+      source:row.dataset.source||'',
+      searchText:row.dataset.search||''
+    },filter);
+    row.style.display=match?'':'none';
+    if(match)visible++;
+  });
+  const empty=list.querySelector('.extension-runtime-empty');
+  if(empty&&total>0)empty.style.display=visible?'none':'';
+  updateExtensionRuntimeFilterSummary(visible,total);
+  return {visible,total,filter};
 }
 function setExtensionRuntimeSurfaceLoading(loading){
   const panel=$('extension-runtime-panel'),list=$('extension-runtime-list'),button=$('extension-runtime-refresh');
@@ -27748,6 +27851,8 @@ function renderExtensionRuntimeSurfacePanel(data){
   data=data||{};
   const summary=data.summary||{};
   const rows=extensionRuntimeSurfaceRows(data);
+  extensionRuntimeSurfaceRowsLast=rows.slice();
+  populateExtensionRuntimeKindFilter(rows);
   const chips=[
     ['TreeView',summary.treeViews||0],
     ['WebviewView',summary.webviewViews||0],
@@ -27772,6 +27877,24 @@ function renderExtensionRuntimeSurfacePanel(data){
   chips.forEach(([label,value])=>{
     const chip=document.createElement('span');chip.className='extension-runtime-chip';
     chip.innerHTML='<strong>'+esc(String(value))+'</strong>'+esc(label);
+    if(['TreeView','WebviewView','CustomEditor','Notebook','Command','Menu','Terminal','LM Tool','LM Provider','Chat','Context','Runtime','Manifest'].includes(label)){
+      chip.classList.add('filterable');
+      chip.tabIndex=0;
+      chip.setAttribute('role','button');
+      chip.dataset.filterLabel=label;
+      chip.onclick=()=>{
+        const kindMap={'Terminal':'TerminalProfile','LM Tool':'LMTool','LM Provider':'LMProvider','Chat':'ChatParticipant','Context':'ChatContext'};
+        const sourceMap={Runtime:'runtime',Manifest:'manifest'};
+        const kindSel=$('extension-runtime-filter-kind'),sourceSel=$('extension-runtime-filter-source');
+        if(sourceMap[label]&&sourceSel)sourceSel.value=sourceMap[label];
+        else if(kindSel){
+          const next=kindMap[label]||label;
+          if(Array.from(kindSel.options).some(opt=>opt.value===next))kindSel.value=next;
+        }
+        applyExtensionRuntimeSurfaceFilter();
+      };
+      chip.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();chip.click()}};
+    }
     summaryEl.appendChild(chip);
   });
   listEl.innerHTML='';
@@ -27788,7 +27911,12 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.source=row.source;
       el.dataset.extensionId=row.extensionId||'';
       el.dataset.ready=row.ready?'1':'0';
+      el.dataset.search=row.searchText||'';
+      el.dataset.label=row.label||'';
+      el.setAttribute('aria-selected','false');
       el.title=[row.kind,row.label,row.meta,row.extensionId,row.source].filter(Boolean).join(' · ');
+      el.addEventListener('click',()=>selectExtensionRuntimeRow(el));
+      el.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();selectExtensionRuntimeRow(el)}});
       const kind=document.createElement('div');kind.className='extension-runtime-kind';kind.textContent=row.kind;
       const mid=document.createElement('div');mid.className='extension-runtime-mid';
       const main=document.createElement('div');main.className='extension-runtime-main';main.textContent=row.label;
@@ -27804,7 +27932,8 @@ function renderExtensionRuntimeSurfacePanel(data){
     });
   }
   listEl.setAttribute('role','list');
-  if(statusEl)statusEl.textContent='Runtime surfaces: '+String(summary.dynamicSurfaces||rows.length||0)+' dynamic entries'+(data._frontendCacheHit?' · cached in frontend':summary.cacheHit?' · cached in backend':'')+'.';
+  applyExtensionRuntimeSurfaceFilter();
+  if(statusEl&&!rows.length)statusEl.textContent='Runtime surfaces: '+String(summary.dynamicSurfaces||0)+' dynamic entries'+(data._frontendCacheHit?' · cached in frontend':summary.cacheHit?' · cached in backend':'')+'.';
 }
 async function renderExtensionRuntimeSurfaces(force){
   const statusEl=$('extension-runtime-status'),listEl=$('extension-runtime-list');
@@ -27838,6 +27967,8 @@ async function renderExtensionRuntimeSurfaces(force){
   }
 }
 window.renderExtensionRuntimeSurfaces=renderExtensionRuntimeSurfaces;
+window.applyExtensionRuntimeSurfaceFilter=applyExtensionRuntimeSurfaceFilter;
+window.extensionRuntimeSurfaceRows=extensionRuntimeSurfaceRows;
 
 async function searchExtensions(query,page){
   if(!query) query=$('ext-search')?$('ext-search').value.trim():'';
@@ -29017,7 +29148,10 @@ function extensionRuntimeDomSelfCheckSnapshot(){
   const root=document.createElement('div');
   root.style.cssText='position:absolute;left:-10000px;top:-10000px;width:760px;height:auto;visibility:hidden';
   document.body.appendChild(root);
-  const runtimeIds=['extension-runtime-summary','extension-runtime-list','extension-runtime-status'];
+  const runtimeIds=[
+    'extension-runtime-summary','extension-runtime-list','extension-runtime-status',
+    'extension-runtime-filter-text','extension-runtime-filter-kind','extension-runtime-filter-source'
+  ];
   const savedRuntime=runtimeIds.map(id=>{
     const el=$(id);
     return {id,el,html:el?el.innerHTML:'',text:el?el.textContent:'',attrs:el?Array.from(el.attributes).map(attr=>[attr.name,attr.value]):[]};
@@ -29153,6 +29287,31 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       chatContextProviders:[{id:'selftest.context',kind:'explicit',extensionId:'selftest.extension',runtimeAvailable:true}]
     };
     if(runtimeIds.every(id=>!!$(id)))renderExtensionRuntimeSurfacePanel(runtimeData);
+    const runtimeKindFilter=$('extension-runtime-filter-kind');
+    const runtimeSourceFilter=$('extension-runtime-filter-source');
+    const runtimeTextFilter=$('extension-runtime-filter-text');
+    const runtimeFilterBefore=applyExtensionRuntimeSurfaceFilter();
+    if(runtimeKindFilter)runtimeKindFilter.value='LMTool';
+    const runtimeKindFilterResult=applyExtensionRuntimeSurfaceFilter();
+    if(runtimeKindFilter)runtimeKindFilter.value='';
+    if(runtimeSourceFilter)runtimeSourceFilter.value='runtime';
+    const runtimeSourceFilterResult=applyExtensionRuntimeSurfaceFilter();
+    if(runtimeSourceFilter)runtimeSourceFilter.value='';
+    if(runtimeTextFilter)runtimeTextFilter.value='custom fixture';
+    const runtimeTextFilterResult=applyExtensionRuntimeSurfaceFilter();
+    if(runtimeTextFilter)runtimeTextFilter.value='';
+    const runtimeFirstRow=$('extension-runtime-list')&&$('extension-runtime-list').querySelector('.extension-runtime-row');
+    if(runtimeFirstRow){
+      runtimeFirstRow.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+    }
+    const runtimeSelectAfter=($('extension-runtime-status')||{}).textContent||'';
+    const runtimeChip=($('extension-runtime-summary')||document).querySelector('.extension-runtime-chip.filterable[data-filter-label="LM Tool"]');
+    if(runtimeChip)runtimeChip.click();
+    const runtimeChipFilterKind=runtimeKindFilter?runtimeKindFilter.value:'';
+    if(runtimeKindFilter)runtimeKindFilter.value='';
+    if(runtimeSourceFilter)runtimeSourceFilter.value='';
+    if(runtimeTextFilter)runtimeTextFilter.value='';
+    applyExtensionRuntimeSurfaceFilter();
 
     showExtensionActionMenu(2,2,[
       {command:'selftest.menu.primary',title:'Primary',group:'navigation@1',extensionId:'selftest.extension'},
@@ -29249,7 +29408,17 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeDatasetSources:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.source||''):[],
       runtimeDatasetReady:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(item=>item.dataset.ready==='1').length:0,
       runtimePanelCount:(()=>{const panel=$('extension-runtime-panel');return panel?panel.dataset.runtimeSurfaceCount:''})(),
+      runtimePanelVisibleCount:(()=>{const panel=$('extension-runtime-panel');return panel?panel.dataset.runtimeVisibleCount:''})(),
+      runtimePanelTotalCount:(()=>{const panel=$('extension-runtime-panel');return panel?panel.dataset.runtimeTotalCount:''})(),
       runtimeStatusText:(()=>{const status=$('extension-runtime-status');return status?status.textContent:''})(),
+      runtimeFilterKinds:runtimeKindFilter?Array.from(runtimeKindFilter.options).map(opt=>opt.value).filter(Boolean):[],
+      runtimeFilterBefore,
+      runtimeKindFilterVisible:runtimeKindFilterResult?runtimeKindFilterResult.visible:0,
+      runtimeSourceFilterVisible:runtimeSourceFilterResult?runtimeSourceFilterResult.visible:0,
+      runtimeTextFilterVisible:runtimeTextFilterResult?runtimeTextFilterResult.visible:0,
+      runtimeSelectedRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row.selected[aria-selected="true"]').length:0,
+      runtimeSelectStatus:runtimeSelectAfter,
+      runtimeChipFilterKind,
       menuRole:menu?menu.getAttribute('role'):'',
       menuLabel:menu?menu.getAttribute('aria-label'):'',
       menuItems:menu?menu.querySelectorAll('.ctx-item[role="menuitem"]').length:0,
@@ -29270,7 +29439,12 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeRows>=11&&snapshot.runtimeReadyRows>=10&&snapshot.runtimeChips>=13
       && snapshot.runtimeListRole==='list'&&snapshot.runtimeListItems===snapshot.runtimeRows
       && snapshot.runtimeDatasetReady===snapshot.runtimeReadyRows&&snapshot.runtimePanelCount==='11'
-      && snapshot.runtimeDatasetSources.includes('runtime')&&snapshot.runtimeStatusText.includes('11 dynamic entries')
+      && snapshot.runtimePanelVisibleCount==='11'&&snapshot.runtimePanelTotalCount==='11'
+      && snapshot.runtimeDatasetSources.includes('runtime')&&snapshot.runtimeStatusText.includes('11 visible of 11 rows')
+      && snapshot.runtimeFilterKinds.includes('LMTool')&&snapshot.runtimeFilterBefore.visible===11
+      && snapshot.runtimeKindFilterVisible===1&&snapshot.runtimeSourceFilterVisible===11&&snapshot.runtimeTextFilterVisible===1
+      && snapshot.runtimeSelectedRows===1&&snapshot.runtimeSelectStatus.includes('Selected')
+      && snapshot.runtimeChipFilterKind==='LMTool'
       && ['TerminalProfile','LMTool','LMProvider','ChatParticipant','ChatContext'].every(kind=>snapshot.runtimeKinds.includes(kind))
       && snapshot.menuRole==='menu'&&snapshot.menuItems===2&&snapshot.menuDisabled===1&&snapshot.menuMetadata.includes('selftest.dynamic.tree')
       && snapshot.webviewLifecycle.rendered&&snapshot.webviewLifecycle.seq>=4
