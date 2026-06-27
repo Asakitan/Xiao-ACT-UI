@@ -12890,6 +12890,25 @@ function editorApplyTextEditsToValue(value,edits){
   ops.sort((a,b)=>b.start-a.start||b.end-a.end).forEach(op=>{next=next.slice(0,op.start)+op.text+next.slice(op.end)});
   return {value:next,cursor:Math.min(next.length,primary.start+primary.text.length)};
 }
+function editorRefreshLanguageFeaturesAfterEdit(delayBase){
+  delayBase=Number.isFinite(Number(delayBase))?Number(delayBase):180;
+  clearEditorInlayHints();
+  scheduleEditorInlayHints(delayBase+20);
+  clearEditorInlineCompletions();
+  scheduleEditorInlineCompletions(delayBase+60);
+  clearEditorCodeLenses();
+  scheduleEditorCodeLenses(delayBase+240);
+  clearEditorDocumentHighlights();
+  scheduleEditorDocumentHighlights(delayBase+260);
+  clearEditorDiagnostics();
+  scheduleEditorDiagnostics(delayBase+280);
+  clearEditorSemanticTokens();
+  scheduleEditorSemanticTokens(delayBase+300);
+  clearEditorFoldingRanges();
+  scheduleEditorFoldingRanges(delayBase+320);
+  clearEditorDocumentColors();
+  scheduleEditorDocumentColors(delayBase+340);
+}
 function editorApplyTextEdits(edits){
   const result=editorApplyTextEditsToValue(ed.value,edits);
   if(!result)return false;
@@ -12897,16 +12916,7 @@ function editorApplyTextEdits(edits){
   const cursor=result.cursor;
   ed.selectionStart=ed.selectionEnd=cursor;editorDirty=true;
   updateLineNums();updateCursorPos();scheduleEditorSyntaxHighlight();
-  clearEditorInlayHints();
-  scheduleEditorInlayHints(200);
-  clearEditorInlineCompletions();
-  scheduleEditorInlineCompletions(240);
-  clearEditorCodeLenses();
-  scheduleEditorCodeLenses(420);
-  clearEditorDiagnostics();
-  scheduleEditorDiagnostics(440);
-  clearEditorDocumentColors();
-  scheduleEditorDocumentColors(460);
+  editorRefreshLanguageFeaturesAfterEdit(180);
   return true;
 }
 function isEditorSuggestOpen(){
@@ -15072,14 +15082,14 @@ ed.addEventListener('keydown',function(e){
     e.preventDefault();
     this.value=this.value.substring(0,enter.start)+enter.text+this.value.substring(enter.end);
     this.selectionStart=enter.selectionStart;this.selectionEnd=enter.selectionEnd;
-    updateLineNums();updateCursorPos()}
+    updateLineNums();updateCursorPos();requestEditorOnTypeFormatting('\n',true)}
   // Auto-closing brackets/quotes (EDIT-001)
   const pairEdit=autoPairInsertionEditForKey(editorLang,e.key,this.value,this.selectionStart,this.selectionEnd);
   if(pairEdit){
     e.preventDefault();_undoPush(true);
     this.value=this.value.substring(0,pairEdit.start)+pairEdit.text+this.value.substring(pairEdit.end);
     this.selectionStart=pairEdit.selectionStart;this.selectionEnd=pairEdit.selectionEnd;
-    updateLineNums();return}
+    updateLineNums();requestEditorOnTypeFormatting(e.key,true);return}
   const overtypeEdit=autoPairOvertypeEditForKey(editorLang,e.key,this.value,this.selectionStart,this.selectionEnd);
   if(overtypeEdit){
     e.preventDefault();this.selectionStart=overtypeEdit.selectionStart;this.selectionEnd=overtypeEdit.selectionEnd;return}
@@ -15089,7 +15099,7 @@ ed.addEventListener('keydown',function(e){
       e.preventDefault();_undoPush(true);
       this.value=this.value.substring(0,electricEdit.start)+electricEdit.text+this.value.substring(electricEdit.end);
       this.selectionStart=electricEdit.selectionStart;this.selectionEnd=electricEdit.selectionEnd;
-      updateLineNums();updateCursorPos();return}
+      updateLineNums();updateCursorPos();requestEditorOnTypeFormatting(e.key,true);return}
   }
   if(e.key==='Backspace'&&!e.ctrlKey){
     const deleteEdit=autoPairDeleteEdit(editorLang,this.value,this.selectionStart,this.selectionEnd);
@@ -16031,6 +16041,83 @@ async function requestEditorOnTypeFormatting(ch,quiet){
   if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('formatting','empty',{kind:'onType',edits:0,applied:false,message:'Formatting: on-type unavailable'});
   return false;
 }
+function removeEditorJsonTrailingCommas(value){
+  value=String(value||'');
+  let out='',inString=false,escape=false;
+  for(let i=0;i<value.length;i++){
+    const ch=value[i];
+    if(inString){
+      out+=ch;
+      if(escape)escape=false;
+      else if(ch==='\\')escape=true;
+      else if(ch==='"')inString=false;
+      continue;
+    }
+    if(ch==='"'){inString=true;out+=ch;continue}
+    if(ch===','){
+      let j=i+1;
+      while(j<value.length&&/\s/.test(value[j]))j++;
+      if(value[j]==='}'||value[j]===']')continue;
+    }
+    out+=ch;
+  }
+  return out;
+}
+function stripEditorJsoncForParse(value){
+  value=String(value||'');
+  let out='',inString=false,escape=false,lineComment=false,blockComment=false;
+  for(let i=0;i<value.length;i++){
+    const ch=value[i],next=value[i+1];
+    if(lineComment){
+      if(ch==='\r'||ch==='\n'){lineComment=false;out+=ch}
+      continue;
+    }
+    if(blockComment){
+      if(ch==='\r'||ch==='\n')out+=ch;
+      if(ch==='*'&&next==='/'){blockComment=false;i++}
+      continue;
+    }
+    if(inString){
+      out+=ch;
+      if(escape)escape=false;
+      else if(ch==='\\')escape=true;
+      else if(ch==='"')inString=false;
+      continue;
+    }
+    if(ch==='"'){inString=true;out+=ch;continue}
+    if(ch==='/'&&next==='/'){lineComment=true;i++;continue}
+    if(ch==='/'&&next==='*'){blockComment=true;i++;continue}
+    out+=ch;
+  }
+  return removeEditorJsonTrailingCommas(out);
+}
+function formatEditorJsonLikeDocument(opts){
+  const quiet=opts&&opts.quiet===true;
+  const lang=String(editorLang||'').toLowerCase();
+  if(lang!=='json'&&lang!=='jsonc')return null;
+  try{
+    const parsed=JSON.parse(lang==='jsonc'?stripEditorJsoncForParse(ed.value):ed.value);
+    const options=editorFormatOptions();
+    const next=JSON.stringify(parsed,null,options.insertSpaces?editorTabSize(options.tabSize):0)+'\n';
+    const changed=next!==ed.value;
+    if(changed){
+      _undoPush(true);
+      ed.value=next;editorDirty=true;updateLineNums();updateCursorPos();scheduleEditorSyntaxHighlight();
+      editorRefreshLanguageFeaturesAfterEdit(160);
+    }
+    if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('formatting','ready',{
+      kind:lang,edits:changed?1:0,applied:true,message:'Formatting: '+lang.toUpperCase()
+    });
+    if(!quiet)setStatus('Formatted '+lang.toUpperCase());
+    return true;
+  }catch{
+    if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('formatting','error',{
+      kind:lang,edits:0,applied:false,message:'Formatting: invalid '+lang.toUpperCase()
+    });
+    if(!quiet)setStatus('Invalid '+lang.toUpperCase());
+    return false;
+  }
+}
 async function formatDocument(options){
   const opts=isPlainObject(options)?options:{};
   const payload={options:editorFormatOptions()};
@@ -16046,20 +16133,10 @@ async function formatDocument(options){
       if(!opts.quiet)setStatus('Formatted via extension');return true
     }
   }
-  if(editorLang==='json'){
-    try{
-      ed.value=JSON.stringify(JSON.parse(ed.value),null,2);editorDirty=true;updateLineNums();updateCursorPos();scheduleEditorSyntaxHighlight();
-      if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('formatting','ready',{kind:'json',edits:1,applied:true,message:'Formatting: JSON'});
-      if(!opts.quiet)setStatus('Formatted JSON');return true
-    }
-    catch{
-      if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('formatting','error',{kind:'json',edits:0,applied:false,message:'Formatting: invalid JSON'});
-      if(!opts.quiet)setStatus('Invalid JSON')
-    }
-  } else {
-    if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('formatting',res&&res.error?'error':'empty',{kind:'document',edits:0,applied:false,message:'Formatting: unavailable'});
-    if(!opts.quiet)setStatus('Format not available for '+editorLang);
-  }
+  const jsonFormatted=formatEditorJsonLikeDocument(opts);
+  if(jsonFormatted!==null)return jsonFormatted;
+  if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('formatting',res&&res.error?'error':'empty',{kind:'document',edits:0,applied:false,message:'Formatting: unavailable'});
+  if(!opts.quiet)setStatus('Format not available for '+editorLang);
   return false;
 }
 async function formatSelection(){

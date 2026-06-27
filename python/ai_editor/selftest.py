@@ -12790,6 +12790,28 @@ console.log("command palette quick access helpers ok");
            and "featureDiffTotal" in html
            and "window.editorDirtyDiffSelfCheckSnapshot=editorDirtyDiffSelfCheckSnapshot" in html
            and "window.editorLanguageFeatureStateSnapshot=editorLanguageFeatureStateSnapshot" in html)
+    _check("frontend refreshes language state after formatter and code-action edits",
+           "function editorRefreshLanguageFeaturesAfterEdit(delayBase)" in html
+           and "clearEditorDocumentHighlights();" in html
+           and "scheduleEditorDocumentHighlights(delayBase+260)" in html
+           and "clearEditorSemanticTokens();" in html
+           and "scheduleEditorSemanticTokens(delayBase+300)" in html
+           and "clearEditorFoldingRanges();" in html
+           and "scheduleEditorFoldingRanges(delayBase+320)" in html
+           and "editorRefreshLanguageFeaturesAfterEdit(180)" in html)
+    _check("frontend triggers extension format-on-type after intercepted edits",
+           "requestEditorOnTypeFormatting('\\n',true)" in html
+           and "requestEditorOnTypeFormatting(e.key,true);return}" in html
+           and "function editorFormatOnTypeTriggerSet()" in html
+           and "providerKind:'onTypeFormatting'" in html)
+    _check("frontend formats JSONC fallback with editor indentation settings",
+           "function stripEditorJsoncForParse(value)" in html
+           and "function removeEditorJsonTrailingCommas(value)" in html
+           and "function formatEditorJsonLikeDocument(opts)" in html
+           and "lang!=='json'&&lang!=='jsonc'" in html
+           and "editorFormatOptions()" in html
+           and "options.insertSpaces?editorTabSize(options.tabSize):0" in html
+           and "Formatting: invalid '+lang.toUpperCase()" in html)
     _check("workspace auto root settings drive Explorer and Terminal cwd",
            "\"workspace\": {" in app_source
            and "\"recent_roots\": []" in app_source
