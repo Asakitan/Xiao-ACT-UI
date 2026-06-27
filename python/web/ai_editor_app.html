@@ -669,6 +669,10 @@ body.window-resizing * { cursor:inherit !important; }
   height:14px; border-radius:7px; display:inline-flex; align-items:center;
   justify-content:center; margin-left:4px; }
 .panel-tabs .spacer { flex:1; }
+.terminal-profile-select { height:22px; max-width:180px; min-width:132px; margin-left:6px;
+  border:1px solid var(--border); border-radius:4px; background:var(--bg3); color:var(--fg);
+  font:11px var(--sans); outline:none; padding:1px 22px 1px 7px; }
+.terminal-profile-select:hover,.terminal-profile-select:focus { border-color:var(--border-focus); }
 .panel-btn { color:var(--fg-dim); cursor:pointer; padding:2px 6px; font-size:13px; }
 .panel-btn:hover { color:var(--fg); }
 .panel-btn.disabled { opacity:0.35; pointer-events:none; }
@@ -2510,6 +2514,13 @@ pre.code-block { overflow:visible; }
         <div class="ptab" data-ptab="output">Output</div>
         <div class="ptab" data-ptab="problems">Problems</div>
         <span class="spacer"></span>
+        <select class="terminal-profile-select" id="terminal-profile-select" title="Terminal profile" aria-label="Terminal profile" onchange="selectTerminalProfile(this.value)">
+          <option value="PowerShell 7 (No Profile)">PowerShell 7</option>
+          <option value="Windows PowerShell">Windows PowerShell</option>
+          <option value="Command Prompt">Command Prompt</option>
+          <option value="Git Bash">Git Bash</option>
+          <option value="System Shell">System Shell</option>
+        </select>
         <span class="panel-btn disabled" data-terminal-action="stop" onclick="stopTerminalCommand()" title="Stop Running Command">&#9632;</span>
         <span class="panel-btn disabled" data-terminal-action="restart" onclick="restartTerminalCommand()" title="Restart Last Command">&#x21bb;</span>
         <span class="panel-btn" onclick="clearTerminal()" title="Clear Terminal (Ctrl+K)">&#x2715;</span>
@@ -18901,9 +18912,11 @@ function syncTerminalWorkspaceState(){
   const root=currentWorkspaceRoot();
   const out=$('terminal-output');
   if(out&&!out.dataset.lastCwd&&root)out.dataset.lastCwd=root;
+  if(typeof renderTerminalProfileSelector==='function')renderTerminalProfileSelector();
   try{if(!Array.isArray(_terminals))return}catch(_e){return}
   _terminals.forEach(term=>{
-    term.metadata={...(term.metadata||{}),cwd:term.lastCwd||term.metadata&&term.metadata.cwd||root};
+    const profile=(term.metadata&&term.metadata.profile)||currentTerminalProfile();
+    term.metadata={...terminalProfileMetadata(profile),...(term.metadata||{}),cwd:term.lastCwd||term.metadata&&term.metadata.cwd||root};
     if(!term.lastCwd&&root)term.lastCwd=root;
   });
   _renderTermTabs();
@@ -23410,6 +23423,7 @@ function syncUI(){
   const mname=ensureToolbarModelSelection({persist:false})||config.provider;
   $('status-model').textContent=mname;
   if($('model-chip'))$('model-chip').textContent=mname;
+  if(typeof renderTerminalProfileSelector==='function')renderTerminalProfileSelector();
   renderChatControlOptions();
 }
 function updateContextUsage(usedTokens){
@@ -31537,6 +31551,65 @@ let _terminals=[];
 let _activeTermId=null;
 let _nextTermId=1;
 let _terminalRunSeq=0;
+const TERMINAL_PROFILE_OPTIONS=[
+  {id:'PowerShell 7 (No Profile)',name:'PowerShell 7',shellKind:'powershell',shellPath:'pwsh',shellArgs:['-NoLogo','-NoProfile'],icon:'powershell'},
+  {id:'Windows PowerShell',name:'Windows PowerShell',shellKind:'powershell',shellPath:'powershell',shellArgs:['-NoLogo','-NoProfile'],icon:'powershell'},
+  {id:'Command Prompt',name:'Command Prompt',shellKind:'cmd',shellPath:'cmd',shellArgs:[],icon:'terminal-cmd'},
+  {id:'Git Bash',name:'Git Bash',shellKind:'posix',shellPath:'bash',shellArgs:[],icon:'terminal-bash'},
+  {id:'System Shell',name:'System Shell',shellKind:'system',shellPath:'',shellArgs:[],icon:'terminal'}
+];
+function terminalSettings(){
+  return isPlainObject(config.terminal)?mergeSectionDefaults('terminal',config.terminal):mergeSectionDefaults('terminal',{});
+}
+function terminalProfileDefinition(profile){
+  const id=String(profile||'').trim();
+  return TERMINAL_PROFILE_OPTIONS.find(item=>item.id===id)||TERMINAL_PROFILE_OPTIONS[0];
+}
+function currentTerminalProfile(){
+  const term=terminalSettings();
+  return String(term.profile||TERMINAL_PROFILE_OPTIONS[0].id);
+}
+function terminalProfileMetadata(profile){
+  const def=terminalProfileDefinition(profile||currentTerminalProfile());
+  const root=currentWorkspaceRoot();
+  return {
+    profile:def.id,
+    name:def.name,
+    shellKind:def.shellKind,
+    shellPath:def.shellPath,
+    shellArgs:def.shellArgs.slice(),
+    iconPath:{id:def.icon},
+    cwd:root||'',
+    workspaceCwd:!!root
+  };
+}
+function renderTerminalProfileSelector(){
+  const sel=$('terminal-profile-select');
+  if(!sel)return;
+  const profile=currentTerminalProfile();
+  TERMINAL_PROFILE_OPTIONS.forEach(item=>{
+    if(!Array.from(sel.options).some(option=>option.value===item.id))sel.add(new Option(item.name,item.id));
+  });
+  sel.value=TERMINAL_PROFILE_OPTIONS.some(item=>item.id===profile)?profile:TERMINAL_PROFILE_OPTIONS[0].id;
+  sel.title='Terminal profile: '+terminalProfileDefinition(sel.value).name;
+}
+async function selectTerminalProfile(profile,opts){
+  opts=opts||{};
+  const def=terminalProfileDefinition(profile);
+  config.terminal={...terminalSettings(),profile:def.id,shell_path:'',shell_args:[]};
+  setInputValue('s-term-profile',def.id);
+  setInputValue('s-term-shell','');
+  setInputValue('s-term-args','');
+  renderTerminalProfileSelector();
+  const term=typeof _getActiveTerminalRecord==='function'?_getActiveTerminalRecord():null;
+  if(term){
+    term.metadata={...terminalProfileMetadata(def.id),...(term.metadata||{}),profile:def.id,shellKind:def.shellKind,shellPath:def.shellPath,shellArgs:def.shellArgs.slice()};
+    _renderTermTabs();
+    _updateTerminalStatusLine();
+  }
+  if(opts.persist!==false)await persistConfigPatch({terminal:config.terminal},{errorPrefix:'Terminal profile save failed: ',partialPrefix:'Terminal profile updated only for current session: '});
+  return def.id;
+}
 function _terminalHostId(meta){
   if(!meta||typeof meta!=='object')return '';
   const raw=meta.id??meta.hostId??meta.terminalId;
@@ -31553,7 +31626,8 @@ function _terminalFromHostPayload(payload,name){
 }
 function _createTerminal(name,metadata,activate=true){
   const id=_nextTermId++;
-  const meta=(metadata&&typeof metadata==='object')?metadata:{};
+  const rawMeta=(metadata&&typeof metadata==='object')?metadata:{};
+  const meta={...terminalProfileMetadata(rawMeta.profile||currentTerminalProfile()),...rawMeta};
   const outputEl=document.createElement('div');
   outputEl.className='terminal-output';outputEl.id='term-out-'+id;
   outputEl.style.display='none';
@@ -31665,7 +31739,8 @@ function _renderTermTabs(){
     tab.onclick=()=>_switchTerminal(t.id);bar.appendChild(tab);
   });
   const addBtn=document.createElement('div');addBtn.className='term-tab-add';addBtn.textContent='+';
-  addBtn.onclick=()=>_createTerminal();bar.appendChild(addBtn);
+  addBtn.title='New terminal with '+terminalProfileDefinition(currentTerminalProfile()).name;
+  addBtn.onclick=()=>_createTerminal(null,terminalProfileMetadata(),true);bar.appendChild(addBtn);
 }
 function _renameTerminal(previousName,name){
   const term=_terminals.find(t=>t.name===previousName)||(_activeTermId!==null?_terminals.find(t=>t.id===_activeTermId):null);
@@ -31879,7 +31954,7 @@ function _activeTerminalRunOutput(){
 }
 function _terminalCurrentRun(out){
   if(!out||!out.dataset.terminalRunId)return null;
-  return {id:out.dataset.terminalRunId,jobId:out.dataset.terminalJobId||'',seq:Number(out.dataset.terminalJobSeq||0)||0,command:out.dataset.runningCommand||'',cwd:out.dataset.runningCwd||'',cancelled:out.dataset.terminalRunCancelled==='1'};
+  return {id:out.dataset.terminalRunId,jobId:out.dataset.terminalJobId||'',seq:Number(out.dataset.terminalJobSeq||0)||0,command:out.dataset.runningCommand||'',cwd:out.dataset.runningCwd||'',profile:out.dataset.runningProfile||'',cancelled:out.dataset.terminalRunCancelled==='1'};
 }
 function _setTerminalRun(out,run){
   if(!out)return;
@@ -31889,6 +31964,7 @@ function _setTerminalRun(out,run){
     out.dataset.terminalJobSeq=String(run.seq||0);
     out.dataset.runningCommand=run.command||'';
     out.dataset.runningCwd=run.cwd||'';
+    out.dataset.runningProfile=run.profile||currentTerminalProfile();
     out.dataset.terminalRunCancelled=run.cancelled?'1':'0';
   }else{
     delete out.dataset.terminalRunId;
@@ -31896,6 +31972,7 @@ function _setTerminalRun(out,run){
     delete out.dataset.terminalJobSeq;
     delete out.dataset.runningCommand;
     delete out.dataset.runningCwd;
+    delete out.dataset.runningProfile;
     delete out.dataset.terminalRunCancelled;
   }
   _updateTerminalActionButtons();
@@ -31917,7 +31994,7 @@ async function stopTerminalCommand(){
   let stopResult={exitCode:null,cwd:run.cwd};
   if(run.jobId){
     try{
-      const rawStop=await call('execute_tool','runTerminal',JSON.stringify({command:run.command||'',mode:'stop',jobId:run.jobId}),true);
+      const rawStop=await call('execute_tool','runTerminal',JSON.stringify({command:run.command||'',mode:'stop',jobId:run.jobId,profile:run.profile||currentTerminalProfile()}),true);
       stopResult=_terminalNormalizeResult(rawStop);
     }catch(ex){}
   }
@@ -31935,8 +32012,9 @@ function restartTerminalCommand(){
   const out=_getActiveTermOutput();
   const cmd=(term&&term.lastCommand)||(out&&out.dataset.lastCommand)||'';
   const cwd=(term&&term.lastCwd)||(out&&out.dataset.lastCwd)||currentWorkspaceRoot()||'';
+  const profile=(term&&term.metadata&&term.metadata.profile)||(out&&out.dataset.lastProfile)||currentTerminalProfile();
   if(!cmd){showToast('No terminal command to restart.','info',1800);return null}
-  return runTerminalCommand(cmd,{skipConfirm:true,out,cwd});
+  return runTerminalCommand(cmd,{skipConfirm:true,out,cwd,profile});
 }
 function _appendTerminalJobChunks(view,status){
   const chunks=Array.isArray(status&&status.chunks)?status.chunks:[];
@@ -31956,7 +32034,8 @@ async function _pollTerminalJob(runId,jobId,out,view,started,cmd,cwd){
       view.status.textContent='cancelled';
       return {cancelled:true,ignored:true,runId,jobId};
     }
-    const rawStatus=await call('execute_tool','runTerminal',JSON.stringify({command:cmd,mode:'status',jobId,sinceSeq:seq}),true);
+    const runProfile=(activeRun&&activeRun.profile)||currentTerminalProfile();
+    const rawStatus=await call('execute_tool','runTerminal',JSON.stringify({command:cmd,mode:'status',jobId,sinceSeq:seq,profile:runProfile}),true);
     const status=_terminalResultValue(rawStatus);
     if(status.error&&!status.jobId)throw new Error(status.error);
     _appendTerminalJobChunks(view,status);
@@ -32001,11 +32080,12 @@ async function runTerminalCommand(cmd,options){
   const view=_appendTerminalCommandBlock(out,cmd);
   const started=performance.now();
   const cwd=String(opts.cwd||currentWorkspaceRoot()||'');
+  const profile=String(opts.profile||currentTerminalProfile());
   const runId='term-run-'+(++_terminalRunSeq);
-  _setTerminalRun(out,{id:runId,command:cmd,cwd,cancelled:false});
-  _updateTerminalRecordForRun(cmd,'running',{exitCode:null,cwd},null);
+  _setTerminalRun(out,{id:runId,command:cmd,cwd,profile,cancelled:false});
+  _updateTerminalRecordForRun(cmd,'running',{exitCode:null,cwd,terminal:terminalProfileMetadata(profile)},null);
   try{
-    const payload={command:cmd,mode:'start'};
+    const payload={command:cmd,mode:'start',profile};
     if(cwd)payload.cwd=cwd;
     const raw=await call('execute_tool','runTerminal',JSON.stringify(payload),true);
     const activeRun=_terminalCurrentRun(out);
@@ -32017,7 +32097,7 @@ async function runTerminalCommand(cmd,options){
     }
     const startStatus=_terminalResultValue(raw);
     if(startStatus&&startStatus.jobId&&String(startStatus.state||'')==='running'){
-      _setTerminalRun(out,{id:runId,jobId:String(startStatus.jobId),seq:Number(startStatus.sequence||0)||0,command:cmd,cwd,cancelled:false});
+      _setTerminalRun(out,{id:runId,jobId:String(startStatus.jobId),seq:Number(startStatus.sequence||0)||0,command:cmd,cwd,profile,cancelled:false});
       return await _pollTerminalJob(runId,String(startStatus.jobId),out,view,started,cmd,cwd);
     }
     _setTerminalRun(out,null);
@@ -32057,6 +32137,8 @@ window.clearTerminal=clearTerminal;
 window.runTerminalCommand=runTerminalCommand;
 window.stopTerminalCommand=stopTerminalCommand;
 window.restartTerminalCommand=restartTerminalCommand;
+window.selectTerminalProfile=selectTerminalProfile;
+window.renderTerminalProfileSelector=renderTerminalProfileSelector;
 window.openWorkspaceSwitcher=openWorkspaceSwitcher;
 window.setWorkspaceRoot=setWorkspaceRoot;
 window.applyWorkspaceSwitcherInput=applyWorkspaceSwitcherInput;
@@ -32093,7 +32175,8 @@ window._createTerminal=_createTerminal;window._closeTerminal=_closeTerminal;wind
 const _origFocusTerminal=focusTerminal;
 focusTerminal=function(){
   _origFocusTerminal();
-  if(_terminals.length===0)_createTerminal();
+  renderTerminalProfileSelector();
+  if(_terminals.length===0)_createTerminal(null,terminalProfileMetadata(),true);
 };
 async function terminalUiSelfCheckSnapshot(){
   const oldCall=call;
@@ -32105,9 +32188,12 @@ async function terminalUiSelfCheckSnapshot(){
   const oldStatusClass=status?status.className:'';
   const oldStatusState=status?status.dataset.state:'';
   const oldWorkspace=config.workspace;
+  const oldTerminal=config.terminal;
   try{
     _activeTermId=null;
     config.workspace={root:'E:/VC/SAO-UI/sao_auto',root_name:'sao_auto',source:'selfcheck'};
+    await selectTerminalProfile('Windows PowerShell',{persist:false});
+    const selfTerm={metadata:terminalProfileMetadata()};
     if(defaultOut){defaultOut.style.display='';defaultOut.innerHTML='';defaultOut.dataset.terminalState='idle';defaultOut.dataset.lastCommand='';defaultOut.dataset.lastExitCode='';defaultOut.dataset.lastCwd=''}
     let n=0;
     const payloads=[],stoppedJobs=new Set();
@@ -32117,10 +32203,11 @@ async function terminalUiSelfCheckSnapshot(){
       try{data=JSON.parse(payload||'{}')}catch(e){}
       payloads.push(data);
       const cmd=String(data.command||''),jobId=cmd.includes('bad')?'job-bad':cmd.includes('slow')?'job-slow':'job-ok';
-      if(data.mode==='start')return JSON.stringify({jobId,state:'running',sequence:0,cwd:'E:/VC/SAO-UI/sao_auto',startedAt:'2026-06-27T00:00:00Z',terminal:{cwd:'E:/VC/SAO-UI/sao_auto',profile:'PowerShell 7',shellKind:'powershell',workspaceCwd:true}});
-      if(data.mode==='stop'){stoppedJobs.add(String(data.jobId||''));return JSON.stringify({jobId:data.jobId,state:'cancelled',exitCode:null,durationMs:7,cwd:'E:/VC/SAO-UI/sao_auto',startedAt:'2026-06-27T00:00:00Z',finishedAt:'2026-06-27T00:00:02Z',terminal:{cwd:'E:/VC/SAO-UI/sao_auto',profile:'PowerShell 7',shellKind:'powershell',workspaceCwd:true}})}
+      const profile=String(data.profile||'Windows PowerShell');
+      if(data.mode==='start')return JSON.stringify({jobId,state:'running',sequence:0,cwd:'E:/VC/SAO-UI/sao_auto',startedAt:'2026-06-27T00:00:00Z',terminal:{cwd:'E:/VC/SAO-UI/sao_auto',profile,shellKind:'powershell',workspaceCwd:true}});
+      if(data.mode==='stop'){stoppedJobs.add(String(data.jobId||''));return JSON.stringify({jobId:data.jobId,state:'cancelled',exitCode:null,durationMs:7,cwd:'E:/VC/SAO-UI/sao_auto',startedAt:'2026-06-27T00:00:00Z',finishedAt:'2026-06-27T00:00:02Z',terminal:{cwd:'E:/VC/SAO-UI/sao_auto',profile,shellKind:'powershell',workspaceCwd:true}})}
       if(data.mode==='status'){
-        const termMeta={cwd:'E:/VC/SAO-UI/sao_auto',profile:'PowerShell 7',shellKind:'powershell',workspaceCwd:true};
+        const termMeta={cwd:'E:/VC/SAO-UI/sao_auto',profile,shellKind:'powershell',workspaceCwd:true};
         if(stoppedJobs.has(String(data.jobId||'')))return JSON.stringify({jobId:data.jobId,state:'cancelled',exitCode:null,durationMs:20,cwd:'E:/VC/SAO-UI/sao_auto',startedAt:'2026-06-27T00:00:00Z',finishedAt:'2026-06-27T00:00:02Z',terminal:termMeta,sequence:3,chunks:[]});
         if(String(data.jobId||'')==='job-bad')return JSON.stringify({jobId,state:'error',stderr:'bad\n',exitCode:7,durationMs:9,cwd:'E:/VC/SAO-UI/sao_auto',startedAt:'2026-06-27T00:00:00Z',finishedAt:'2026-06-27T00:00:01Z',terminal:termMeta,stderrTruncated:true,sequence:2,chunks:[{seq:2,stream:'stderr',text:'bad\n'}]});
         return JSON.stringify({jobId,state:'done',stdout:'ok\n',exitCode:0,durationMs:12,cwd:'E:/VC/SAO-UI/sao_auto',startedAt:'2026-06-27T00:00:00Z',finishedAt:'2026-06-27T00:00:01Z',terminal:termMeta,sequence:1,chunks:[{seq:1,stream:'stdout',text:'ok\n'}]});
@@ -32150,17 +32237,22 @@ async function terminalUiSelfCheckSnapshot(){
       statusShellKind:status?status.dataset.shellKind:'',
       statusFinishedAt:status?status.dataset.finishedAt:'',
       statusText:status?status.textContent.trim():'',
+      selectorValue:$('terminal-profile-select')?$('terminal-profile-select').value:'',
+      createdTermProfile:selfTerm&&selfTerm.metadata?selfTerm.metadata.profile:'',
       lastCommand:defaultOut?defaultOut.dataset.lastCommand:'',
       lastCwd:defaultOut?defaultOut.dataset.lastCwd:'',
       lastProfile:defaultOut?defaultOut.dataset.lastProfile:'',
       lastShellKind:defaultOut?defaultOut.dataset.lastShellKind:'',
-      payloadCwd:payloads[0]&&payloads[0].cwd
+      payloadCwd:payloads[0]&&payloads[0].cwd,
+      payloadProfile:payloads[0]&&payloads[0].profile
     };
-    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusProfile==='PowerShell 7'&&snapshot.statusShellKind==='powershell'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='PowerShell 7'&&snapshot.lastShellKind==='powershell'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto';
+    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell';
     return snapshot;
   }finally{
     call=oldCall;
     config.workspace=oldWorkspace;
+    config.terminal=oldTerminal;
+    renderTerminalProfileSelector();
     _activeTermId=oldActive;
     if(defaultOut){
       defaultOut.innerHTML=oldDefaultHtml;

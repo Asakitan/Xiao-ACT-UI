@@ -14,6 +14,7 @@ import glob
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import threading
 import time
@@ -143,11 +144,12 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any, api_ref: Any = N
                 "mode": {"type": "string", "description": "run (default), start, status, or stop", "default": "run"},
                 "jobId": {"type": "string", "description": "Terminal job id for status/stop", "default": ""},
                 "sinceSeq": {"type": "integer", "description": "Return job chunks after this sequence", "default": 0},
+                "profile": {"type": "string", "description": "Terminal profile name to use for this command", "default": ""},
             },
             "required": ["command"],
         },
-        handler=lambda command="", cwd="", mode="run", jobId="", sinceSeq=0: _run_terminal(
-            command, cwd, gui_ref, api_ref, mode, jobId, int(sinceSeq or 0)),
+        handler=lambda command="", cwd="", mode="run", jobId="", sinceSeq=0, profile="": _run_terminal(
+            command, cwd, gui_ref, api_ref, mode, jobId, int(sinceSeq or 0), profile),
         category="terminal",
         requires_confirm=True,
         tags={"destructive": True},
@@ -561,6 +563,40 @@ def _search_files(query: str, path: str, pattern: str, case_sensitive: bool,
 _DEFAULT_TERMINAL_TIMEOUT = 30
 _DEFAULT_STDOUT_LIMIT = 8000
 _DEFAULT_STDERR_LIMIT = 4000
+_TERMINAL_PROFILE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
+    "PowerShell 7 (No Profile)": {
+        "shells": ["pwsh.exe", "pwsh"],
+        "fallbackShells": ["powershell.exe", "powershell"],
+        "args": ["-NoLogo", "-NoProfile"],
+        "kind": "powershell",
+    },
+    "Windows PowerShell": {
+        "shells": ["powershell.exe", "powershell"],
+        "args": ["-NoLogo", "-NoProfile"],
+        "kind": "powershell",
+    },
+    "Command Prompt": {
+        "shells": ["cmd.exe", "cmd"],
+        "args": [],
+        "kind": "cmd",
+    },
+    "Git Bash": {
+        "shells": [
+            r"%ProgramFiles%\Git\bin\bash.exe",
+            r"%ProgramFiles%\Git\usr\bin\bash.exe",
+            r"%LocalAppData%\Programs\Git\bin\bash.exe",
+            "bash.exe",
+            "bash",
+        ],
+        "args": [],
+        "kind": "posix",
+    },
+    "System Shell": {
+        "shells": [],
+        "args": [],
+        "kind": "system",
+    },
+}
 
 
 def _get_terminal_settings(gui_ref: Any = None) -> Dict[str, Any]:
@@ -600,6 +636,51 @@ def _terminal_args(value: Any) -> List[str]:
         except ValueError:
             return [value]
     return []
+
+
+def _terminal_profile_name(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _terminal_profile_definition(profile: str) -> Dict[str, Any]:
+    return dict(_TERMINAL_PROFILE_DEFINITIONS.get(profile) or {})
+
+
+def _terminal_shell_candidate_path(candidate: Any) -> str:
+    raw = _terminal_shell_path(candidate)
+    if not raw:
+        return ""
+    if os.path.isabs(raw) or any(sep in raw for sep in (os.sep, "/", "\\")):
+        return raw if os.path.isfile(raw) else ""
+    return shutil.which(raw) or ""
+
+
+def _resolve_terminal_profile_shell(profile: str) -> Tuple[str, List[str], Dict[str, Any]]:
+    meta: Dict[str, Any] = {
+        "profile": profile,
+        "profileResolved": False,
+        "profileFallback": False,
+        "profileShellMissing": False,
+    }
+    definition = _terminal_profile_definition(profile)
+    if not definition:
+        if profile:
+            meta["profileShellMissing"] = True
+        return "", [], meta
+    for candidate in definition.get("shells") or []:
+        path = _terminal_shell_candidate_path(candidate)
+        if path:
+            meta["profileResolved"] = True
+            return path, _terminal_args(definition.get("args")), meta
+    for candidate in definition.get("fallbackShells") or []:
+        path = _terminal_shell_candidate_path(candidate)
+        if path:
+            meta["profileResolved"] = True
+            meta["profileFallback"] = True
+            return path, _terminal_args(definition.get("args")), meta
+    if profile and profile != "System Shell":
+        meta["profileShellMissing"] = True
+    return "", _terminal_args(definition.get("args")), meta
 
 
 def _terminal_int(value: Any, default: int) -> int:
@@ -652,7 +733,7 @@ def _terminal_time_label(value: float) -> str:
 def _terminal_metadata(terminal: Dict[str, Any], timeout: int, output_limit: int,
                        explicit_shell: bool, cwd: str = "") -> Dict[str, Any]:
     shell_path = _terminal_shell_path(terminal.get("shell_path"))
-    profile = terminal.get("profile")
+    profile = _terminal_profile_name(terminal.get("profile"))
     metadata = {
         "configured": bool(terminal),
         "timeout": timeout,
@@ -662,6 +743,9 @@ def _terminal_metadata(terminal: Dict[str, Any], timeout: int, output_limit: int
         "profile": str(profile or ("Configured Shell" if explicit_shell else "System Shell")),
         "workspaceCwd": bool(cwd),
     }
+    for key in ("profileResolved", "profileFallback", "profileShellMissing"):
+        if key in terminal:
+            metadata[key] = bool(terminal.get(key))
     if cwd:
         metadata["cwd"] = cwd
     if shell_path:
@@ -690,12 +774,24 @@ _TERMINAL_JOB_MAX_OUTPUT = 256_000
 
 
 def _terminal_command_context(command: str, cwd: str, gui_ref: Any,
-                              api_ref: Any) -> Tuple[Dict[str, Any], int, int, bool, str, Any]:
+                              api_ref: Any, profile_override: str = "") -> Tuple[Dict[str, Any], int, int, bool, str, Any]:
     terminal = _get_terminal_settings(gui_ref)
+    override_profile = _terminal_profile_name(profile_override)
+    if override_profile:
+        terminal["profile"] = override_profile
     timeout = _terminal_int(terminal.get("timeout"), _DEFAULT_TERMINAL_TIMEOUT)
     output_limit = _terminal_int(terminal.get("output_limit"), _DEFAULT_STDOUT_LIMIT)
     shell_path = _terminal_shell_path(terminal.get("shell_path"))
     shell_args = _terminal_args(terminal.get("shell_args"))
+    if not shell_path:
+        profile = _terminal_profile_name(terminal.get("profile"))
+        resolved_shell, resolved_args, profile_meta = _resolve_terminal_profile_shell(profile)
+        terminal.update({k: v for k, v in profile_meta.items() if k != "profile" or v})
+        if resolved_shell:
+            shell_path = resolved_shell
+            shell_args = resolved_args
+            terminal["shell_path"] = resolved_shell
+            terminal["shell_args"] = list(resolved_args)
     explicit_shell = bool(shell_path)
     effective_cwd = os.path.abspath(cwd) if cwd else _default_terminal_cwd(api_ref)
     run_command: Any = command
@@ -838,9 +934,9 @@ def _terminal_job_snapshot(job_id: str, since_seq: int = 0) -> Dict[str, Any]:
 
 
 def _start_terminal_job(command: str, cwd: str, gui_ref: Any,
-                        api_ref: Any) -> Dict[str, Any]:
+                        api_ref: Any, profile: str = "") -> Dict[str, Any]:
     terminal, timeout, output_limit, explicit_shell, effective_cwd, run_command = (
-        _terminal_command_context(command, cwd, gui_ref, api_ref))
+        _terminal_command_context(command, cwd, gui_ref, api_ref, profile))
     kwargs: Dict[str, Any] = {
         "shell": not explicit_shell,
         "stdout": subprocess.PIPE,
@@ -913,17 +1009,18 @@ def _stop_terminal_job(job_id: str) -> Dict[str, Any]:
 
 def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
                   api_ref: Any = None, mode: str = "run",
-                  jobId: str = "", sinceSeq: int = 0) -> Dict[str, Any]:
+                  jobId: str = "", sinceSeq: int = 0,
+                  profile: str = "") -> Dict[str, Any]:
     mode = str(mode or "run").strip().lower()
     if mode == "start":
-        return _start_terminal_job(command, cwd, gui_ref, api_ref)
+        return _start_terminal_job(command, cwd, gui_ref, api_ref, profile)
     if mode == "status":
         return _terminal_job_snapshot(str(jobId or ""), sinceSeq)
     if mode == "stop":
         return _stop_terminal_job(str(jobId or ""))
     try:
         terminal, timeout, output_limit, explicit_shell, effective_cwd, run_command = (
-            _terminal_command_context(command, cwd, gui_ref, api_ref))
+            _terminal_command_context(command, cwd, gui_ref, api_ref, profile))
 
         kwargs: Dict[str, Any] = {
             "shell": not explicit_shell,
@@ -957,9 +1054,21 @@ def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
         }
     except subprocess.TimeoutExpired:
         terminal = _get_terminal_settings(gui_ref)
+        override_profile = _terminal_profile_name(profile)
+        if override_profile:
+            terminal["profile"] = override_profile
         timeout = _terminal_int(terminal.get("timeout"), _DEFAULT_TERMINAL_TIMEOUT)
         output_limit = _terminal_int(terminal.get("output_limit"), _DEFAULT_STDOUT_LIMIT)
         effective_cwd = os.path.abspath(cwd) if cwd else _default_terminal_cwd(api_ref)
+        shell_path = _terminal_shell_path(terminal.get("shell_path"))
+        if not shell_path:
+            resolved_shell, resolved_args, profile_meta = _resolve_terminal_profile_shell(
+                _terminal_profile_name(terminal.get("profile")))
+            terminal.update({k: v for k, v in profile_meta.items() if k != "profile" or v})
+            if resolved_shell:
+                terminal["shell_path"] = resolved_shell
+                terminal["shell_args"] = list(resolved_args)
+                shell_path = resolved_shell
         return {
             "command": command,
             "cwd": effective_cwd,
@@ -969,7 +1078,7 @@ def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
             "startedAt": "",
             "finishedAt": _terminal_time_label(time.time()),
             "terminal": _terminal_metadata(terminal, timeout, output_limit,
-                                           bool(_terminal_shell_path(terminal.get("shell_path"))),
+                                           bool(shell_path),
                                            effective_cwd),
         }
     except Exception as exc:

@@ -2595,6 +2595,23 @@ def test_app_settings_parity() -> None:
                and term_result.get("stdoutTruncated") is False
                and term_result.get("stderrTruncated") is False,
                json.dumps(term_result, ensure_ascii=False))
+        profile_result = json.loads(term_api.execute_tool(
+            "runTerminal",
+            json.dumps({
+                "command": f'"{sys.executable}" -c "print(123)"',
+                "profile": "System Shell",
+            }),
+            confirmed=True,
+        ))
+        _check("runTerminal accepts terminal profile override",
+               profile_result.get("exitCode") == 0
+               and profile_result.get("stdout", "").strip() == "123"
+               and profile_result.get("terminal", {}).get("profile")
+               == "System Shell"
+               and profile_result.get("terminal", {}).get("shellKind")
+               == "system"
+               and profile_result.get("terminal", {}).get("workspaceCwd") is True,
+               json.dumps(profile_result, ensure_ascii=False))
 
     from ai_editor.mcp_client import load_mcp_configs
     mcp_payload = {"ai_editor": {"mcp": {"autostart": False, "servers": [
@@ -12027,11 +12044,19 @@ console.log("command palette quick access helpers ok");
            and "function stopTerminalCommand()" in html
            and "function restartTerminalCommand()" in html
            and "async function _pollTerminalJob(" in html
+           and "terminal-profile-select" in html
+           and "const TERMINAL_PROFILE_OPTIONS=[" in html
+           and "function terminalProfileMetadata(profile)" in html
+           and "async function selectTerminalProfile(profile,opts)" in html
+           and "window.selectTerminalProfile=selectTerminalProfile" in html
            and "data-terminal-action=\"stop\"" in html
            and "data-terminal-action=\"restart\"" in html
            and "mode:'start'" in html
            and "mode:'status'" in html
            and "mode:'stop'" in html
+           and "profile:def.id,shell_path:'',shell_args:[]" in html
+           and "payload={command:cmd,mode:'start',profile}" in html
+           and "out.dataset.runningProfile=run.profile||currentTerminalProfile()" in html
            and "terminalRunCancelled" in html
            and "function _terminalNormalizeResult(raw)" in html
             and "function _terminalStateForResult(result)" in html
@@ -12048,12 +12073,19 @@ console.log("command palette quick access helpers ok");
             and "startedAt" in html
             and "finishedAt" in html
             and "stdoutTruncated" in html
+            and "payloadProfile" in html
+            and "selectorValue" in html
             and "async function terminalUiSelfCheckSnapshot()" in html
            and "window.terminalUiSelfCheckSnapshot=terminalUiSelfCheckSnapshot" in html)
     _check("terminal backend exposes cancellable job lifecycle without adding tool count",
            "mode\": {\"type\": \"string\"" in engine_tools_source
            and "jobId\": {\"type\": \"string\"" in engine_tools_source
            and "sinceSeq\": {\"type\": \"integer\"" in engine_tools_source
+           and "profile\": {\"type\": \"string\"" in engine_tools_source
+           and "_TERMINAL_PROFILE_DEFINITIONS" in engine_tools_source
+           and "def _resolve_terminal_profile_shell(" in engine_tools_source
+           and "profile_override: str = \"\"" in engine_tools_source
+           and "profileShellMissing" in engine_tools_source
            and "_TERMINAL_JOBS" in engine_tools_source
            and "def _start_terminal_job(" in engine_tools_source
            and "def _stop_terminal_job(" in engine_tools_source
