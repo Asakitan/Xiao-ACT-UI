@@ -2612,6 +2612,60 @@ def test_app_settings_parity() -> None:
                == "system"
                and profile_result.get("terminal", {}).get("workspaceCwd") is True,
                json.dumps(profile_result, ensure_ascii=False))
+        interactive_cmd = (
+            f'"{sys.executable}" -u -c '
+            '"import sys;print(\'ready\');'
+            'line=sys.stdin.readline().strip();print(\'got:\'+line)"'
+        )
+        interactive_start = json.loads(term_api.execute_tool(
+            "runTerminal",
+            json.dumps({
+                "command": interactive_cmd,
+                "mode": "start",
+                "profile": "System Shell",
+            }),
+            confirmed=True,
+        ))
+        interactive_job = interactive_start.get("jobId", "")
+        interactive_write = json.loads(term_api.execute_tool(
+            "runTerminal",
+            json.dumps({
+                "command": "",
+                "mode": "write",
+                "jobId": interactive_job,
+                "data": "from-selftest\n",
+                "profile": "System Shell",
+            }),
+            confirmed=True,
+        ))
+        interactive_status = {}
+        for _ in range(40):
+            interactive_status = json.loads(term_api.execute_tool(
+                "runTerminal",
+                json.dumps({
+                    "command": "",
+                    "mode": "status",
+                    "jobId": interactive_job,
+                    "profile": "System Shell",
+                }),
+                confirmed=True,
+            ))
+            if interactive_status.get("state") != "running":
+                break
+            time.sleep(0.05)
+        _check("runTerminal writes stdin to running terminal jobs",
+               bool(interactive_job)
+               and interactive_write.get("writtenBytes") == len("from-selftest\n")
+               and interactive_write.get("stdinBytes") == len("from-selftest\n")
+               and interactive_status.get("exitCode") == 0
+               and "got:from-selftest" in interactive_status.get("stdout", "")
+               and interactive_status.get("stdinBytes") == len("from-selftest\n")
+               and interactive_status.get("stdinClosed") is False,
+               json.dumps({
+                   "start": interactive_start,
+                   "write": interactive_write,
+                   "status": interactive_status,
+               }, ensure_ascii=False))
 
     from ai_editor.mcp_client import load_mcp_configs
     mcp_payload = {"ai_editor": {"mcp": {"autostart": False, "servers": [
@@ -12043,17 +12097,22 @@ console.log("command palette quick access helpers ok");
            and "async function runTerminalCommand(cmd,options)" in html
            and "function stopTerminalCommand()" in html
            and "function restartTerminalCommand()" in html
+           and "async function sendTerminalInput(text,options)" in html
            and "async function _pollTerminalJob(" in html
            and "terminal-profile-select" in html
+           and "terminal-stdin-line" in html
            and "const TERMINAL_PROFILE_OPTIONS=[" in html
            and "function terminalProfileMetadata(profile)" in html
            and "async function selectTerminalProfile(profile,opts)" in html
+           and "window.sendTerminalInput=sendTerminalInput" in html
            and "window.selectTerminalProfile=selectTerminalProfile" in html
            and "data-terminal-action=\"stop\"" in html
            and "data-terminal-action=\"restart\"" in html
            and "mode:'start'" in html
            and "mode:'status'" in html
+           and "mode:'write'" in html
            and "mode:'stop'" in html
+           and "run&&run.jobId&&!run.cancelled" in html
            and "profile:def.id,shell_path:'',shell_args:[]" in html
            and "payload={command:cmd,mode:'start',profile}" in html
            and "out.dataset.runningProfile=run.profile||currentTerminalProfile()" in html
@@ -12074,6 +12133,8 @@ console.log("command palette quick access helpers ok");
             and "finishedAt" in html
             and "stdoutTruncated" in html
             and "payloadProfile" in html
+            and "writePayloadData" in html
+            and "writeBytes" in html
             and "selectorValue" in html
             and "async function terminalUiSelfCheckSnapshot()" in html
            and "window.terminalUiSelfCheckSnapshot=terminalUiSelfCheckSnapshot" in html)
@@ -12081,9 +12142,14 @@ console.log("command palette quick access helpers ok");
            "mode\": {\"type\": \"string\"" in engine_tools_source
            and "jobId\": {\"type\": \"string\"" in engine_tools_source
            and "sinceSeq\": {\"type\": \"integer\"" in engine_tools_source
+           and "data\": {\"type\": \"string\"" in engine_tools_source
+           and "closeStdin\": {\"type\": \"boolean\"" in engine_tools_source
            and "profile\": {\"type\": \"string\"" in engine_tools_source
            and "_TERMINAL_PROFILE_DEFINITIONS" in engine_tools_source
            and "def _resolve_terminal_profile_shell(" in engine_tools_source
+           and "def _write_terminal_job(" in engine_tools_source
+           and "stdinBytes" in engine_tools_source
+           and "stdinClosed" in engine_tools_source
            and "profile_override: str = \"\"" in engine_tools_source
            and "profileShellMissing" in engine_tools_source
            and "_TERMINAL_JOBS" in engine_tools_source

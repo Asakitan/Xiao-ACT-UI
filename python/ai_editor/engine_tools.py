@@ -141,15 +141,17 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any, api_ref: Any = N
             "properties": {
                 "command": {"type": "string", "description": "Shell command to execute"},
                 "cwd": {"type": "string", "description": "Working directory (optional)", "default": ""},
-                "mode": {"type": "string", "description": "run (default), start, status, or stop", "default": "run"},
+                "mode": {"type": "string", "description": "run (default), start, status, write, or stop", "default": "run"},
                 "jobId": {"type": "string", "description": "Terminal job id for status/stop", "default": ""},
                 "sinceSeq": {"type": "integer", "description": "Return job chunks after this sequence", "default": 0},
                 "profile": {"type": "string", "description": "Terminal profile name to use for this command", "default": ""},
+                "data": {"type": "string", "description": "Text to write to the running terminal job stdin", "default": ""},
+                "closeStdin": {"type": "boolean", "description": "Close stdin after writing data", "default": False},
             },
             "required": ["command"],
         },
-        handler=lambda command="", cwd="", mode="run", jobId="", sinceSeq=0, profile="": _run_terminal(
-            command, cwd, gui_ref, api_ref, mode, jobId, int(sinceSeq or 0), profile),
+        handler=lambda command="", cwd="", mode="run", jobId="", sinceSeq=0, profile="", data="", closeStdin=False: _run_terminal(
+            command, cwd, gui_ref, api_ref, mode, jobId, int(sinceSeq or 0), profile, data, bool(closeStdin)),
         category="terminal",
         requires_confirm=True,
         tags={"destructive": True},
@@ -928,6 +930,8 @@ def _terminal_job_snapshot(job_id: str, since_seq: int = 0) -> Dict[str, Any]:
             "chunks": chunks,
             "stdoutTruncated": bool(job.get("stdoutTruncated")),
             "stderrTruncated": bool(job.get("stderrTruncated")),
+            "stdinBytes": int(job.get("stdinBytes") or 0),
+            "stdinClosed": bool(job.get("stdinClosed")),
             "terminal": terminal,
         }
     return snapshot
@@ -968,6 +972,8 @@ def _start_terminal_job(command: str, cwd: str, gui_ref: Any,
         "error": "",
         "sequence": 0,
         "chunks": [],
+        "stdinBytes": 0,
+        "stdinClosed": False,
         "started": time.monotonic(),
         "startedWall": time.time(),
         "finishedWall": 0,
@@ -983,6 +989,51 @@ def _start_terminal_job(command: str, cwd: str, gui_ref: Any,
     threading.Thread(target=_terminal_waiter, args=(job_id, timeout),
                      daemon=True).start()
     return _terminal_job_snapshot(job_id)
+
+
+def _write_terminal_job(job_id: str, data: str = "", close_stdin: bool = False) -> Dict[str, Any]:
+    text = str(data or "")
+    with _TERMINAL_JOB_LOCK:
+        job = _TERMINAL_JOBS.get(job_id)
+        if not job:
+            return {"error": f"Unknown terminal job: {job_id}", "jobId": job_id}
+        if job.get("state") != "running":
+            return {
+                "error": f"Terminal job is not running: {job_id}",
+                "jobId": job_id,
+                "state": job.get("state"),
+            }
+        if job.get("stdinClosed"):
+            return {"error": f"Terminal job stdin is closed: {job_id}", "jobId": job_id}
+        proc = job.get("process")
+        stdin = getattr(proc, "stdin", None) if proc is not None else None
+    if stdin is None:
+        return {"error": f"Terminal job stdin is unavailable: {job_id}", "jobId": job_id}
+
+    written = 0
+    try:
+        if text:
+            stdin.write(text)
+            stdin.flush()
+            written = len(text)
+        if close_stdin:
+            stdin.close()
+    except Exception as exc:
+        with _TERMINAL_JOB_LOCK:
+            job = _TERMINAL_JOBS.get(job_id)
+            if job is not None:
+                job["stdinClosed"] = True
+        return {"error": str(exc), "jobId": job_id, "writtenBytes": written}
+
+    with _TERMINAL_JOB_LOCK:
+        job = _TERMINAL_JOBS.get(job_id)
+        if job is not None:
+            job["stdinBytes"] = int(job.get("stdinBytes") or 0) + written
+            if close_stdin:
+                job["stdinClosed"] = True
+    snapshot = _terminal_job_snapshot(job_id)
+    snapshot["writtenBytes"] = written
+    return snapshot
 
 
 def _stop_terminal_job(job_id: str) -> Dict[str, Any]:
@@ -1010,12 +1061,15 @@ def _stop_terminal_job(job_id: str) -> Dict[str, Any]:
 def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
                   api_ref: Any = None, mode: str = "run",
                   jobId: str = "", sinceSeq: int = 0,
-                  profile: str = "") -> Dict[str, Any]:
+                  profile: str = "", data: str = "",
+                  closeStdin: bool = False) -> Dict[str, Any]:
     mode = str(mode or "run").strip().lower()
     if mode == "start":
         return _start_terminal_job(command, cwd, gui_ref, api_ref, profile)
     if mode == "status":
         return _terminal_job_snapshot(str(jobId or ""), sinceSeq)
+    if mode == "write":
+        return _write_terminal_job(str(jobId or ""), data, closeStdin)
     if mode == "stop":
         return _stop_terminal_job(str(jobId or ""))
     try:

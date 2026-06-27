@@ -2109,6 +2109,8 @@ pre.code-block { overflow:visible; }
 .terminal-command-block.running .terminal-command-status { color:var(--fg-accent); }
 .terminal-command-block.error .terminal-command-status { color:var(--fg-error); }
 .terminal-command-body { color:var(--fg); white-space:pre-wrap; }
+.terminal-stdin-line { color:var(--fg-dim); }
+.terminal-stdin-line::before { content:"> "; color:var(--fg-accent); }
 
 /* ── chat-ux-4: Inline diff view ── */
 .diff-section { margin:8px 0; border:1px solid var(--border); border-radius:6px; overflow:hidden; }
@@ -29201,6 +29203,7 @@ termOut.insertAdjacentHTML('afterend',
 const _termHistory=(function(){try{return JSON.parse(localStorage.getItem('sao-term-history'))||[]}catch(e){return []}})();
 let _termIdx=-1;
 $('term-input')&&$('term-input').addEventListener('keydown',function(e){
+  if(window.__aiTerminalEnhancedInput)return;
   if(e.key==='Enter'){const cmd=this.value.trim();this.value='';if(cmd){
     if(_termHistory[_termHistory.length-1]!==cmd){_termHistory.push(cmd);if(_termHistory.length>100)_termHistory.shift();try{localStorage.setItem('sao-term-history',JSON.stringify(_termHistory))}catch(ex){}}
     _termIdx=-1;execTerminalCmd(cmd,true)}}
@@ -32007,6 +32010,43 @@ async function stopTerminalCommand(){
   _updateTerminalRecordForRun(run.command,'cancelled',{...stopResult,cwd:stopResult.cwd||run.cwd},stopResult.durationMs);
   return {cancelled:true,runId:run.id};
 }
+function _appendTerminalInputEcho(out,text){
+  if(!out)return;
+  const block=out.querySelector('.terminal-command-block.running:last-of-type');
+  const body=block?block.querySelector('.terminal-command-body'):out;
+  if(!body)return;
+  const line=document.createElement('div');
+  line.className='terminal-stdin-line';
+  line.innerHTML=ansiToHtml(String(text||'').replace(/\r?\n$/,''));
+  body.appendChild(line);
+  out.scrollTop=out.scrollHeight;
+}
+async function sendTerminalInput(text,options){
+  const opts=options||{};
+  const out=opts.out||_activeTerminalRunOutput();
+  const run=_terminalCurrentRun(out);
+  if(!run||!run.jobId||run.cancelled)return {written:false,error:'No running terminal job'};
+  const data=String(text??'');
+  if(!data&&!opts.closeStdin)return {written:false,jobId:run.jobId};
+  _appendTerminalInputEcho(out,data);
+  const payload={command:run.command||'',mode:'write',jobId:run.jobId,data,closeStdin:!!opts.closeStdin,profile:run.profile||currentTerminalProfile()};
+  try{
+    const raw=await call('execute_tool','runTerminal',JSON.stringify(payload),true);
+    const result=_terminalResultValue(raw);
+    if(result.error){
+      const block=out?out.querySelector('.terminal-command-block.running:last-of-type'):null;
+      const body=block?block.querySelector('.terminal-command-body'):out;
+      if(body)_appendTerminalHtml(body,ansiToHtml(String(result.error))+'\n');
+    }
+    return result;
+  }catch(ex){
+    const msg=ex&&ex.message?ex.message:String(ex);
+    const block=out?out.querySelector('.terminal-command-block.running:last-of-type'):null;
+    const body=block?block.querySelector('.terminal-command-body'):out;
+    if(body)_appendTerminalHtml(body,ansiToHtml(msg)+'\n');
+    return {written:false,error:msg,jobId:run.jobId};
+  }
+}
 function restartTerminalCommand(){
   const term=_getActiveTerminalRecord();
   const out=_getActiveTermOutput();
@@ -32020,7 +32060,15 @@ function _appendTerminalJobChunks(view,status){
   const chunks=Array.isArray(status&&status.chunks)?status.chunks:[];
   chunks.forEach(chunk=>{
     const text=String(chunk&&chunk.text||'');
-    if(text)_appendTerminalHtml(view.body,ansiToHtml(text));
+    if(!text)return;
+    if(String(chunk.stream||'')==='stdin'){
+      const line=document.createElement('div');
+      line.className='terminal-stdin-line';
+      line.innerHTML=ansiToHtml(text.replace(/\r?\n$/,''));
+      view.body.appendChild(line);
+      return;
+    }
+    _appendTerminalHtml(view.body,ansiToHtml(text));
   });
 }
 async function _pollTerminalJob(runId,jobId,out,view,started,cmd,cwd){
@@ -32137,6 +32185,7 @@ window.clearTerminal=clearTerminal;
 window.runTerminalCommand=runTerminalCommand;
 window.stopTerminalCommand=stopTerminalCommand;
 window.restartTerminalCommand=restartTerminalCommand;
+window.sendTerminalInput=sendTerminalInput;
 window.selectTerminalProfile=selectTerminalProfile;
 window.renderTerminalProfileSelector=renderTerminalProfileSelector;
 window.openWorkspaceSwitcher=openWorkspaceSwitcher;
@@ -32153,13 +32202,22 @@ window._createTerminal=_createTerminal;window._closeTerminal=_closeTerminal;wind
 // Re-wire terminal input for per-tab history and output
 (function(){
   const termInput=$('term-input');if(!termInput)return;
+  window.__aiTerminalEnhancedInput=true;
   termInput.addEventListener('keydown',function(e){
     const term=_getActiveTermHistory();
     const hist=term?term.history:_termHistory;
     const getIdx=()=>term?term.historyIdx:_termIdx;
     const setIdx=(v)=>{if(term)term.historyIdx=v;else _termIdx=v};
     if(e.key==='Enter'){
-      const cmd=this.value.trim();this.value='';if(cmd){
+      const raw=this.value;
+      const out=_getActiveTermOutput();
+      const run=_terminalCurrentRun(out);
+      if(run&&run.jobId&&!run.cancelled){
+        this.value='';
+        if(raw)sendTerminalInput(raw+'\n',{out});
+        e.preventDefault();e.stopImmediatePropagation();return;
+      }
+      const cmd=raw.trim();this.value='';if(cmd){
         if(hist[hist.length-1]!==cmd){hist.push(cmd);if(hist.length>100)hist.shift()}
         setIdx(-1);
         if(!term){try{localStorage.setItem('sao-term-history',JSON.stringify(_termHistory))}catch(ex){}}
@@ -32205,6 +32263,7 @@ async function terminalUiSelfCheckSnapshot(){
       const cmd=String(data.command||''),jobId=cmd.includes('bad')?'job-bad':cmd.includes('slow')?'job-slow':'job-ok';
       const profile=String(data.profile||'Windows PowerShell');
       if(data.mode==='start')return JSON.stringify({jobId,state:'running',sequence:0,cwd:'E:/VC/SAO-UI/sao_auto',startedAt:'2026-06-27T00:00:00Z',terminal:{cwd:'E:/VC/SAO-UI/sao_auto',profile,shellKind:'powershell',workspaceCwd:true}});
+      if(data.mode==='write')return JSON.stringify({jobId:data.jobId,state:'running',writtenBytes:String(data.data||'').length,stdinBytes:String(data.data||'').length,stdinClosed:!!data.closeStdin,cwd:'E:/VC/SAO-UI/sao_auto',terminal:{cwd:'E:/VC/SAO-UI/sao_auto',profile,shellKind:'powershell',workspaceCwd:true}});
       if(data.mode==='stop'){stoppedJobs.add(String(data.jobId||''));return JSON.stringify({jobId:data.jobId,state:'cancelled',exitCode:null,durationMs:7,cwd:'E:/VC/SAO-UI/sao_auto',startedAt:'2026-06-27T00:00:00Z',finishedAt:'2026-06-27T00:00:02Z',terminal:{cwd:'E:/VC/SAO-UI/sao_auto',profile,shellKind:'powershell',workspaceCwd:true}})}
       if(data.mode==='status'){
         const termMeta={cwd:'E:/VC/SAO-UI/sao_auto',profile,shellKind:'powershell',workspaceCwd:true};
@@ -32218,6 +32277,7 @@ async function terminalUiSelfCheckSnapshot(){
     const bad=await runTerminalCommand('bad-command',{skipConfirm:true,out:defaultOut});
     const slowPromise=runTerminalCommand('slow-command',{skipConfirm:true,out:defaultOut});
     await new Promise(resolve=>setTimeout(resolve,20));
+    const wrote=await sendTerminalInput('hello stdin\n',{out:defaultOut});
     const stopped=await stopTerminalCommand();
     const slow=await slowPromise;
     const blocks=defaultOut?Array.from(defaultOut.querySelectorAll('.terminal-command-block')):[];
@@ -32231,6 +32291,7 @@ async function terminalUiSelfCheckSnapshot(){
       hasError:blocks.some(b=>b.classList.contains('error')),
       hasCancelled:blocks.some(b=>b.classList.contains('cancelled')),
       hasTruncatedNote:defaultOut?defaultOut.textContent.includes('[output truncated]'):false,
+      hasInputEcho:defaultOut?defaultOut.textContent.includes('hello stdin'):false,
       statusState:status?status.dataset.state:'',
       statusWorkspace:status?status.dataset.workspace:'',
       statusProfile:status?status.dataset.profile:'',
@@ -32244,9 +32305,11 @@ async function terminalUiSelfCheckSnapshot(){
       lastProfile:defaultOut?defaultOut.dataset.lastProfile:'',
       lastShellKind:defaultOut?defaultOut.dataset.lastShellKind:'',
       payloadCwd:payloads[0]&&payloads[0].cwd,
-      payloadProfile:payloads[0]&&payloads[0].profile
+      payloadProfile:payloads[0]&&payloads[0].profile,
+      writePayloadData:(payloads.find(p=>p&&p.mode==='write')||{}).data,
+      writeBytes:wrote&&wrote.writtenBytes
     };
-    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell';
+    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.hasInputEcho&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell'&&snapshot.writePayloadData==='hello stdin\n'&&snapshot.writeBytes===12;
     return snapshot;
   }finally{
     call=oldCall;
