@@ -3166,8 +3166,45 @@ def test_app_settings_parity() -> None:
                os.path.normcase(workspace_info.get("root", ""))
                == os.path.normcase(os.path.abspath(tmpdir))
                and workspace_info.get("source") == "configured"
+               and workspace_info.get("resolved_root") == workspace_info.get("root")
+               and workspace_info.get("configured_root") == workspace_info.get("root")
+               and workspace_info.get("recent_roots", [None])[0]
+               == workspace_info.get("root")
                and workspace_config.get("root") == workspace_info.get("root")
-               and workspace_config.get("root_name") == workspace_info.get("root_name"))
+               and workspace_config.get("root_name") == workspace_info.get("root_name")
+               and workspace_config.get("source_label") == "Configured")
+        with tempfile.TemporaryDirectory() as auto_tmp:
+            os.makedirs(os.path.join(auto_tmp, ".git"), exist_ok=True)
+            nested = os.path.join(auto_tmp, "src")
+            os.makedirs(nested, exist_ok=True)
+            active_file = os.path.join(nested, "app.py")
+            with open(active_file, "w", encoding="utf-8") as fh:
+                fh.write("print('auto')\n")
+            auto_api = AIEditorAPI(_SettingsGui({
+                "ai_editor": {
+                    "workspace": {
+                        "root": os.path.join(auto_tmp, "missing"),
+                        "auto_detect": True,
+                        "recent_roots": [auto_tmp, auto_tmp + os.sep],
+                    }
+                }
+            }))
+            auto_api._last_opened_path = active_file
+            auto_info = auto_api._workspace_info()
+            opened_auto = auto_api.open_workspace_file("src/app.py")
+            _check("workspace auto-detect follows active file git root and dedupes recents",
+                   os.path.normcase(auto_info.get("root", ""))
+                   == os.path.normcase(os.path.abspath(auto_tmp))
+                   and auto_info.get("source") == "active_file_git"
+                   and auto_info.get("auto_detected") is True
+                   and auto_info.get("configured_root") == ""
+                   and len(auto_info.get("recent_roots", [])) == 1
+                   and opened_auto.get("workspace", {}).get("source")
+                   == "active_file_git"
+                   and opened_auto.get("workspace", {}).get("resolved_root")
+                   == auto_info.get("root"),
+                   json.dumps({"info": auto_info, "opened": opened_auto},
+                              ensure_ascii=False))
         tree_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
         tree_api._workspace_root = lambda: tmpdir
         from ai_editor.extension_host import ExtensionHost, EventEmitter
@@ -12171,13 +12208,24 @@ console.log("command palette quick access helpers ok");
     _check("workspace auto root settings drive Explorer and Terminal cwd",
            "\"workspace\": {" in app_source
            and "\"recent_roots\": []" in app_source
+           and "def _dedupe_workspace_roots(" in app_source
            and "def _workspace_info(self) -> Dict[str, Any]:" in app_source
            and "def _workspace_candidates(self) -> List[Tuple[str, str]]:" in app_source
+           and "\"resolved_root\": root" in app_source
+           and "\"configured_root\": configured_root" in app_source
+           and "\"source_label\": source.replace" in app_source
            and "\"workspace\": self._workspace_info()" in app_source
            and "workspace-root-bar" in html
            and "workspace-switcher" in html
+           and "function workspaceUiSelfCheckSnapshot()" in html
+           and "window.workspaceUiSelfCheckSnapshot=workspaceUiSelfCheckSnapshot" in html
+           and "function workspaceSourceLabel(source)" in html
+           and "function workspaceRootSourceFor(root)" in html
            and "function setWorkspaceRoot(root)" in html
            and "window.openWorkspaceSwitcher=openWorkspaceSwitcher" in html
+           and "ws.resolved_root||ws.root||ws.last_root" in html
+           and "workspace-switcher-source" in html
+           and "dataset.workspaceSource" in html
            and "recent_roots" in html
            and "s-workspace-root" in html
            and "s-workspace-auto" in html

@@ -162,6 +162,8 @@ body.window-resizing * { cursor:inherit !important; }
 .workspace-switcher-item { width:100%; border:0; background:transparent; color:var(--fg-dim); text-align:left;
   padding:5px 6px; border-radius:4px; cursor:pointer; font:11px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .workspace-switcher-item:hover,.workspace-switcher-item:focus { background:var(--bg-hover); color:var(--fg); outline:none; }
+.workspace-switcher-item.active { color:var(--fg); background:var(--bg3); }
+.workspace-switcher-source { color:var(--fg-dim); font:10px var(--sans); margin-left:6px; }
 .workspace-switcher-empty { color:var(--fg-dim); font:11px var(--sans); padding:2px 0; }
 .sb-item { padding:4px 16px; cursor:pointer; display:flex; align-items:center; gap:6px;
   font-size:13px; color:var(--fg-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
@@ -3182,7 +3184,7 @@ function withSettingsDefaults(raw){
 let config=withSettingsDefaults({});
 function currentWorkspaceRoot(){
   const ws=isPlainObject(config.workspace)?config.workspace:{};
-  return String(ws.root||ws.last_root||'').trim();
+  return normalizeWorkspaceRootPath(ws.resolved_root||ws.root||ws.last_root||'');
 }
 const quickInputViews=Object.create(null);
 let activeQuickInputId='';
@@ -18899,16 +18901,30 @@ function workspaceSettings(){
 function normalizeWorkspaceRootPath(path){
   return String(path||'').trim().replace(/[\\/]+$/,'');
 }
+function workspaceSourceLabel(source){
+  const raw=String(source||'').replace(/_/g,' ').trim();
+  return raw?raw.replace(/\b\w/g,ch=>ch.toUpperCase()):'Workspace';
+}
 function workspaceRecentRoots(){
   const ws=workspaceSettings();
   const seen=new Set(),items=[];
-  [ws.root,ws.last_root,...(Array.isArray(ws.recent_roots)?ws.recent_roots:[]),...(Array.isArray(ws.roots)?ws.roots:[])]
+  [ws.resolved_root,ws.root,ws.configured_root,ws.last_root,...(Array.isArray(ws.recent_roots)?ws.recent_roots:[]),...(Array.isArray(ws.roots)?ws.roots:[])]
     .forEach(root=>{
       const value=normalizeWorkspaceRootPath(root);
       const key=value.toLowerCase();
       if(value&&!seen.has(key)){seen.add(key);items.push(value)}
     });
   return items.slice(0,10);
+}
+function workspaceRootSourceFor(root){
+  const ws=workspaceSettings();
+  const target=normalizeWorkspaceRootPath(root).toLowerCase();
+  if(!target)return '';
+  if(normalizeWorkspaceRootPath(ws.resolved_root||ws.root).toLowerCase()===target)return workspaceSourceLabel(ws.source||'active');
+  if(normalizeWorkspaceRootPath(ws.configured_root).toLowerCase()===target)return 'Configured';
+  if(normalizeWorkspaceRootPath(ws.last_root).toLowerCase()===target)return 'Last';
+  if((Array.isArray(ws.roots)?ws.roots:[]).some(item=>normalizeWorkspaceRootPath(item).toLowerCase()===target))return 'Root';
+  return 'Recent';
 }
 function syncTerminalWorkspaceState(){
   const root=currentWorkspaceRoot();
@@ -18925,13 +18941,24 @@ function syncTerminalWorkspaceState(){
   _updateTerminalStatusLine();
 }
 function updateWorkspaceChrome(info){
-  const root=normalizeWorkspaceRootPath(info&&info.root?info.root:currentWorkspaceRoot());
+  const payload=isPlainObject(info&&info.workspace)?info.workspace:(isPlainObject(info)?info:{});
+  const root=normalizeWorkspaceRootPath(payload.resolved_root||payload.root||currentWorkspaceRoot());
   const name=String(info&&info.root_name?info.root_name:pathBaseName(root));
+  const source=String(payload.source||'');
   explorerRoot=root||explorerRoot;
   explorerRootName=name||pathBaseName(explorerRoot);
-  const nameEl=$('workspace-root-name'),pathEl=$('workspace-root-path'),input=$('workspace-switcher-input');
+  const bar=$('workspace-root-bar'),nameEl=$('workspace-root-name'),pathEl=$('workspace-root-path'),input=$('workspace-switcher-input');
+  if(root){
+    config.workspace={...workspaceSettings(),...payload,root:payload.root||root,resolved_root:root,root_name:name,source};
+  }
+  if(bar){
+    bar.dataset.workspaceRoot=root||'';
+    bar.dataset.workspaceSource=source||'';
+    bar.dataset.workspaceAutoDetected=payload.auto_detected?'1':'0';
+    bar.title=[root,source?('Source: '+workspaceSourceLabel(source)):''].filter(Boolean).join('\n');
+  }
   if(nameEl)nameEl.textContent=explorerRootName||'workspace';
-  if(pathEl)pathEl.textContent=root||'Auto-detect workspace';
+  if(pathEl)pathEl.textContent=(root||'Auto-detect workspace')+(source?' · '+workspaceSourceLabel(source):'');
   if(input&&!input.value)input.value=root||'';
   renderWorkspaceSwitcherList();
   syncTerminalWorkspaceState();
@@ -18946,7 +18973,11 @@ function renderWorkspaceSwitcherList(){
   }
   roots.forEach(root=>{
     const btn=document.createElement('button');
-    btn.type='button';btn.className='workspace-switcher-item';btn.textContent=root;btn.title=root;
+    const active=normalizeWorkspaceRootPath(root).toLowerCase()===normalizeWorkspaceRootPath(currentWorkspaceRoot()).toLowerCase();
+    btn.type='button';btn.className='workspace-switcher-item'+(active?' active':'');
+    btn.title=root;
+    btn.innerHTML=esc(root)+'<span class="workspace-switcher-source">'+esc(workspaceRootSourceFor(root))+'</span>';
+    btn.setAttribute('aria-current',active?'true':'false');
     btn.onclick=()=>setWorkspaceRoot(root);
     list.appendChild(btn);
   });
@@ -18966,8 +18997,8 @@ async function setWorkspaceRoot(root){
   if(!root)return;
   const ws=workspaceSettings();
   const recent=[root,...workspaceRecentRoots().filter(item=>item.toLowerCase()!==root.toLowerCase())].slice(0,10);
-  config.workspace={...ws,root,roots:recent,recent_roots:recent,last_root:root,auto_detect:true,remember_last:true};
-  updateWorkspaceChrome({root,root_name:pathBaseName(root)});
+  config.workspace={...ws,root,resolved_root:root,configured_root:root,roots:recent,recent_roots:recent,last_root:root,source:'configured',auto_detect:true,remember_last:true};
+  updateWorkspaceChrome({root,resolved_root:root,configured_root:root,root_name:pathBaseName(root),source:'configured'});
   const switcher=$('workspace-switcher');if(switcher)switcher.classList.remove('open');
   await persistConfigPatch({workspace:config.workspace},{errorPrefix:'Workspace save failed: ',partialPrefix:'Workspace updated only for current session: '});
   explorerRoot=root;explorerRootName=pathBaseName(root);explorerSelectedPath='';
@@ -18977,6 +19008,59 @@ function applyWorkspaceSwitcherInput(){
   const input=$('workspace-switcher-input');
   return setWorkspaceRoot(input?input.value:'');
 }
+function workspaceUiSelfCheckSnapshot(){
+  const oldWorkspace=config.workspace;
+  const oldExplorerRoot=explorerRoot,oldExplorerRootName=explorerRootName,oldExplorerSelectedPath=explorerSelectedPath;
+  const input=$('workspace-switcher-input'),oldInput=input?input.value:'';
+  try{
+    config.workspace={
+      root:'',
+      configured_root:'',
+      resolved_root:'E:/VC/SAO-UI/sao_auto',
+      root_name:'sao_auto',
+      source:'active_file_git',
+      auto_detected:true,
+      auto_detect:true,
+      remember_last:true,
+      last_root:'E:/VC/SAO-UI',
+      recent_roots:['E:/VC/SAO-UI/sao_auto/','E:/VC/SAO-UI','E:/VC/SAO-UI/sao_auto'],
+      roots:['E:/VC/vscode']
+    };
+    updateWorkspaceChrome(config.workspace);
+    renderWorkspaceSwitcherList();
+    setInputValue('s-workspace-root',config.workspace.configured_root||(!config.workspace.auto_detected?config.workspace.root:''));
+    const roots=workspaceRecentRoots();
+    const activeItem=document.querySelector('#workspace-switcher-list .workspace-switcher-item.active');
+    const bar=$('workspace-root-bar'),pathEl=$('workspace-root-path');
+    const snapshot={
+      root:currentWorkspaceRoot(),
+      rootCount:roots.length,
+      roots,
+      activeText:activeItem?activeItem.textContent:'',
+      source:bar?bar.dataset.workspaceSource:'',
+      autoDetected:bar?bar.dataset.workspaceAutoDetected:'',
+      pathText:pathEl?pathEl.textContent:'',
+      settingsRoot:readInputValue('s-workspace-root'),
+      sourceLabel:workspaceSourceLabel('active_file_git')
+    };
+    snapshot.pass=snapshot.root==='E:/VC/SAO-UI/sao_auto'
+      &&snapshot.rootCount===3
+      &&snapshot.roots[0]==='E:/VC/SAO-UI/sao_auto'
+      &&snapshot.activeText.includes('Active File Git')
+      &&snapshot.source==='active_file_git'
+      &&snapshot.autoDetected==='1'
+      &&snapshot.pathText.includes('Active File Git')
+      &&snapshot.settingsRoot===''
+      &&snapshot.sourceLabel==='Active File Git';
+    return snapshot;
+  }finally{
+    config.workspace=oldWorkspace;
+    explorerRoot=oldExplorerRoot;explorerRootName=oldExplorerRootName;explorerSelectedPath=oldExplorerSelectedPath;
+    if(input)input.value=oldInput;
+    updateWorkspaceChrome(oldWorkspace||{});
+  }
+}
+window.workspaceUiSelfCheckSnapshot=workspaceUiSelfCheckSnapshot;
 
 function iconText(value){
   if(value&&typeof value==='object')return String(value.text||value.glyph||'');
@@ -19322,6 +19406,7 @@ async function openWorkspaceFile(relPath){
     showToast((res&&res.error)||t('workspace_load_failed'),'error',2500);
     return null;
   }
+  if(res.workspace)updateWorkspaceChrome(res);
   return openEditorOpenResult(res,relPath);
 }
 function diffOpenResultResource(res,uri,label){
@@ -23052,7 +23137,7 @@ function openSettings(){
   setInputValue('s-term-profile',term.profile);setInputValue('s-term-shell',term.shell_path);setInputValue('s-term-args',listToText(term.shell_args));
   setInputValue('s-term-timeout',term.timeout??30);setInputValue('s-term-output',term.output_limit??8000);
   const workspace=settingSection('workspace');
-  setInputValue('s-workspace-root',workspace.root||'');
+  setInputValue('s-workspace-root',workspace.configured_root||(!workspace.auto_detected?workspace.root:''));
   setInputValue('s-workspace-roots',listToText(workspace.roots));
   setCheckedValue('s-workspace-auto',workspace.auto_detect!==false);
   setCheckedValue('s-workspace-remember',workspace.remember_last!==false);
@@ -23329,7 +23414,8 @@ async function saveSettings(){
   config.codex={...settingSection('codex'),cli_path:readInputValue('s-codex-cli'),model:readInputValue('s-codex-model'),transport:readInputValue('s-codex-transport')||'chat_completions',cli_args:readListValue('s-codex-args',false)};
   config.mcp={...settingSection('mcp'),access:readInputValue('s-mcp-access')||'prompt',collision_behavior:readInputValue('s-mcp-collision')||'first',discovery_enabled:readCheckedValue('s-mcp-discovery'),autostart:readCheckedValue('s-mcp-autostart'),server_sampling:readCheckedValue('s-mcp-sampling')};
   config.terminal={...settingSection('terminal'),profile:readInputValue('s-term-profile')||'PowerShell 7 (No Profile)',shell_path:readInputValue('s-term-shell'),shell_args:readListValue('s-term-args',false),timeout:readNumberValue('s-term-timeout',30,true),output_limit:readNumberValue('s-term-output',8000,true)};
-  config.workspace={...settingSection('workspace'),root:readInputValue('s-workspace-root'),roots:readListValue('s-workspace-roots',false),auto_detect:readCheckedValue('s-workspace-auto'),remember_last:readCheckedValue('s-workspace-remember'),last_root:currentWorkspaceRoot()};
+  const workspaceRootInput=readInputValue('s-workspace-root');
+  config.workspace={...settingSection('workspace'),root:workspaceRootInput,configured_root:workspaceRootInput,resolved_root:currentWorkspaceRoot(),roots:readListValue('s-workspace-roots',false),recent_roots:workspaceRecentRoots(),auto_detect:readCheckedValue('s-workspace-auto'),remember_last:readCheckedValue('s-workspace-remember'),last_root:currentWorkspaceRoot()};
   config.extensions={...settingSection('extensions'),confirm_install:readCheckedValue('s-ext-confirm'),diagnostics_enabled:readCheckedValue('s-ext-diagnostics'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true),enabled_contributions:readExtensionContributionValues(),enabled_contributions_explicit:true};
   const editorSettings=settingSection('editor');
   const guidesSettings=editorGuidesOptions(editorSettings.guides);

@@ -622,6 +622,26 @@ def _normalize_workspace_section(value: Dict[str, Any]) -> Dict[str, Any]:
     return cfg
 
 
+def _dedupe_workspace_roots(values: List[Any], limit: int = 10) -> List[str]:
+    roots: List[str] = []
+    seen: Set[str] = set()
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            continue
+        expanded = os.path.abspath(os.path.expandvars(
+            os.path.expanduser(value.strip().strip('"').strip("'"))))
+        if not os.path.isdir(expanded):
+            continue
+        key = os.path.normcase(os.path.realpath(expanded))
+        if key in seen:
+            continue
+        seen.add(key)
+        roots.append(expanded)
+        if len(roots) >= limit:
+            break
+    return roots
+
+
 def _normalize_approval(value: Any, default: str = "default") -> str:
     raw = str(value or default).strip().lower()
     return raw if raw in _APPROVAL_VALUES else default
@@ -3559,12 +3579,29 @@ class AIEditorAPI:
 
     def _workspace_info(self) -> Dict[str, Any]:
         root = self._workspace_root()
+        cfg = self._workspace_config()
+        source = getattr(self, "_workspace_root_source", "") or "fallback"
+        configured_root = self._usable_workspace_root(cfg.get("root"))
+        last_root = self._usable_workspace_root(cfg.get("last_root"))
+        roots = _dedupe_workspace_roots(cfg.get("roots") or [], 16)
+        recent_roots = _dedupe_workspace_roots(
+            [root, cfg.get("root"), cfg.get("last_root")]
+            + list(cfg.get("recent_roots") or [])
+            + list(cfg.get("roots") or []),
+            10)
         return {
             "root": root,
+            "resolved_root": root,
+            "configured_root": configured_root,
+            "last_root": last_root,
+            "roots": roots,
+            "recent_roots": recent_roots,
             "root_name": os.path.basename(root.rstrip("\\/")) or root,
-            "source": getattr(self, "_workspace_root_source", "") or "fallback",
-            "auto_detected": getattr(
-                self, "_workspace_root_source", "") not in {"configured", "last_root"},
+            "source": source,
+            "source_label": source.replace("_", " ").title(),
+            "auto_detect": _as_bool(cfg.get("auto_detect"), True),
+            "remember_last": _as_bool(cfg.get("remember_last"), True),
+            "auto_detected": source not in {"configured", "last_root"},
         }
 
     def _workspace_config(self) -> Dict[str, Any]:
@@ -5258,6 +5295,7 @@ class AIEditorAPI:
             "name": os.path.basename(full),
             "path": rel,
             "absolute_path": full,
+            "workspace": self._workspace_info(),
             "content": text,
             "language": self._editor_language_for_path(full),
             "truncated": truncated,
