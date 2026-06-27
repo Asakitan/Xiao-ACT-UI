@@ -4766,7 +4766,10 @@ class VscodeNamespace:
             if isinstance(raw_webview_options, dict) else {})
         for key in (
                 "enableScripts",
+                "enableForms",
+                "enableCommandUris",
                 "localResourceRoots",
+                "portMapping",
                 "retainContextWhenHidden"):
             if key in registration_options and key not in webview_options:
                 webview_options[key] = registration_options[key]
@@ -4800,12 +4803,28 @@ class VscodeNamespace:
         return Disposable(_dispose_registration)
 
     def _create_webview_panel(self, view_type: str, title: str,
-                              column: Any = None, **kw: Any) -> Any:
+                              column: Any = None, options: Any = None,
+                              **kw: Any) -> Any:
         panel = _WebviewPanel(view_type, title, bridge=self._ui_bridge)
         if column is not None:
             panel.viewColumn = column
+        raw_options = dict(options) if isinstance(options, dict) else {}
         if kw:
-            panel.options = dict(kw)
+            raw_options.update(kw)
+        if raw_options:
+            nested = raw_options.get("webviewOptions")
+            webview_options = dict(nested) if isinstance(nested, dict) else {}
+            for key in (
+                    "enableScripts",
+                    "enableForms",
+                    "enableCommandUris",
+                    "localResourceRoots",
+                    "portMapping",
+                    "retainContextWhenHidden"):
+                if key in raw_options and key not in webview_options:
+                    webview_options[key] = raw_options[key]
+            panel.options = raw_options
+            panel.webview.options.update(webview_options)
         self._webview_panels.setdefault(view_type, []).append(panel)
         panel._on_dispose = lambda vt=view_type, instance=panel: self._dispose_webview_panel(vt, instance)
         return panel
@@ -7261,7 +7280,13 @@ class _WebviewPanel:
     def _push_html(self, html: str) -> None:
         if self._bridge is not None:
             try:
-                self._bridge.render_webview_panel(self.view_type, html)
+                options = dict(self.options or {})
+                if self.webview.options:
+                    nested = dict(options.get("webviewOptions", {}) or {})
+                    nested.update(dict(self.webview.options))
+                    options["webviewOptions"] = nested
+                self._bridge.render_webview_panel(
+                    self.view_type, html, options=options)
             except Exception:
                 pass
 

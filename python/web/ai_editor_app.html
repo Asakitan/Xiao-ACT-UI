@@ -20948,6 +20948,56 @@ const PROVIDER_TAB_LABEL_KEYS={chat:'tab_chat',copilot:'provider_copilot_label',
 let dynamicExtensionProviderDefs=Object.create(null);
 let webviewRuntimeCache=Object.create(null);
 function webviewRuntimeNow(){return Date.now()}
+function webviewRuntimeOptions(runtime){
+  const data=runtime&&typeof runtime==='object'?runtime:{};
+  const raw=data.options&&typeof data.options==='object'?data.options:{};
+  const nested=raw.webviewOptions&&typeof raw.webviewOptions==='object'?raw.webviewOptions:{};
+  return {...nested,...raw};
+}
+function webviewRuntimeOption(runtime,key,fallback){
+  const opts=webviewRuntimeOptions(runtime);
+  if(Object.prototype.hasOwnProperty.call(opts,key))return opts[key];
+  if(runtime&&Object.prototype.hasOwnProperty.call(runtime,key))return runtime[key];
+  return fallback;
+}
+function webviewRuntimeOptionEnabled(runtime,key,fallback){
+  const value=webviewRuntimeOption(runtime,key,fallback);
+  if(value===false||value==='false')return false;
+  if(value===true||value==='true')return true;
+  return !!fallback;
+}
+function webviewIframeSandbox(runtime){
+  const tokens=[];
+  if(webviewRuntimeOptionEnabled(runtime,'enableScripts',true))tokens.push('allow-scripts');
+  if(webviewRuntimeOptionEnabled(runtime,'enableForms',true))tokens.push('allow-forms');
+  tokens.push('allow-popups','allow-downloads');
+  return [...new Set(tokens)].join(' ');
+}
+function webviewCommandUriAllowed(viewId,command){
+  const runtime=webviewRuntimeCache[String(viewId||'')]||{};
+  const allowed=webviewRuntimeOption(runtime,'enableCommandUris',false);
+  const cmd=String(command||'').trim();
+  if(!cmd)return false;
+  if(allowed===true||allowed==='true')return true;
+  if(Array.isArray(allowed))return allowed.map(String).includes(cmd);
+  if(typeof allowed==='string')return allowed.split(/[,\s]+/).filter(Boolean).includes(cmd);
+  return false;
+}
+function webviewCommandUriPayload(uri){
+  return extensionWelcomeCommandPayloadFromUri(uri);
+}
+async function executeWebviewCommandUri(viewId,data){
+  const href=String(data&&data.href||'').trim();
+  const payload=data&&data.command?{command:String(data.command||''),arguments:Array.isArray(data.arguments)?data.arguments:[]}:webviewCommandUriPayload(href);
+  if(!webviewCommandUriAllowed(viewId,payload.command)){
+    setStatus('Webview command URI is not enabled: '+payload.command);
+    return false;
+  }
+  patchWebviewRuntimeLifecycle(viewId,{lastCommandUri:href,lastCommandUriCommand:payload.command});
+  const r=await call('execute_command',payload.command,...(payload.arguments||[]));
+  if(!callSucceeded(r))setStatus('Webview command failed: '+callFailedMessage(r,payload.command));
+  return callSucceeded(r);
+}
 function webviewRuntimeLifecycleState(runtime){
   if(runtime&&runtime.disposed)return 'disposed';
   if(runtime&&runtime.html)return 'rendered';
@@ -21288,7 +21338,11 @@ function rememberWebviewRuntime(viewId,data){
   const id=String(viewId||'').trim();if(!id||!data)return null;
   const existing=webviewRuntimeCache[id]||{};
   const now=webviewRuntimeNow();
-  const options={...(existing.options||{}),...((data.options&&typeof data.options==='object')?data.options:{})};
+  const incomingOptions={
+    ...((data.webviewOptions&&typeof data.webviewOptions==='object')?data.webviewOptions:{}),
+    ...((data.options&&typeof data.options==='object')?data.options:{})
+  };
+  const options={...(existing.options||{}),...incomingOptions};
   const retain=('retainContextWhenHidden' in options)?!!options.retainContextWhenHidden:!!(data.retainContextWhenHidden||existing.retainContextWhenHidden);
   const next={
     ...existing,
@@ -22430,6 +22484,7 @@ var _webviewTokens=Object.create(null);
 function _injectWebviewHtml(container,viewId,html,initialState){
   if(!container)return;
   const runtime=patchWebviewRuntimeLifecycle(viewId,{html:html,state:initialState,disposed:false,visible:true,renderedAt:(webviewRuntimeCache[viewId]&&webviewRuntimeCache[viewId].renderedAt)||webviewRuntimeNow()});
+  const runtimeOptions=webviewRuntimeOptions(runtime);
   delete container.dataset.webviewFallback;
   container.classList.add('provider-webview-host');
   container.dataset.providerSurface='extension-webview';
@@ -22449,9 +22504,13 @@ function _injectWebviewHtml(container,viewId,html,initialState){
   iframe.dataset.viewId=String(viewId||'');
   iframe.title='Extension webview '+String(viewId||'');
   iframe.style.cssText='border:none;width:100%;height:100%;flex:1;background:var(--bg)';
-  iframe.setAttribute('sandbox','allow-scripts');
+  iframe.setAttribute('sandbox',webviewIframeSandbox(runtime));
+  iframe.dataset.webviewEnableScripts=webviewRuntimeOptionEnabled(runtime,'enableScripts',true)?'true':'false';
+  iframe.dataset.webviewEnableForms=webviewRuntimeOptionEnabled(runtime,'enableForms',true)?'true':'false';
+  iframe.dataset.webviewEnableCommandUris=webviewRuntimeOption(runtime,'enableCommandUris',false)?'true':'false';
   container.appendChild(iframe);
   const initialStateJson=JSON.stringify(initialState===undefined?null:initialState).replace(/<\//g,'<\\/');
+  const runtimeOptionsJson=JSON.stringify(runtimeOptions||{}).replace(/</g,'\\u003c').replace(/<\//g,'<\\/');
   const rootStyle=getComputedStyle(document.documentElement);
   const cssValue=(name,fallback)=>String(rootStyle.getPropertyValue(name)||fallback||'').trim().replace(/[;<>]/g,'')||fallback;
   const themeKind=(document.documentElement.getAttribute('data-theme')==='light')?'light':'dark';
@@ -22476,14 +22535,17 @@ function _injectWebviewHtml(container,viewId,html,initialState){
     +'(function(){'
     +'var _token='+tokenJson+';'
     +'var _themeKind='+JSON.stringify(themeKind)+';'
+    +'var _options='+runtimeOptionsJson+';'
     +'document.documentElement.classList.add("vscode-"+_themeKind);'
     +'document.documentElement.dataset.vscodeThemeKind=_themeKind;'
     +'var _state='+initialStateJson+';'
     +'function _resourceMap(){if(window.__saoWebviewResourceMap)return window.__saoWebviewResourceMap;var el=document.getElementById("sao-webview-resource-map");try{window.__saoWebviewResourceMap=el?JSON.parse(el.textContent||"{}"):{};}catch(e){window.__saoWebviewResourceMap={};}return window.__saoWebviewResourceMap;}'
     +'function _resourceEndpointBase(){if(window.__saoWebviewResourceEndpointBase!==undefined)return window.__saoWebviewResourceEndpointBase;var el=document.getElementById("sao-webview-resource-endpoint");try{var payload=el?JSON.parse(el.textContent||"{}"):{};window.__saoWebviewResourceEndpointBase=payload&&typeof payload.base==="string"?payload.base:"";}catch(e){window.__saoWebviewResourceEndpointBase="";}return window.__saoWebviewResourceEndpointBase;}'
+    +'function _optionValue(name,fallback){return Object.prototype.hasOwnProperty.call(_options,name)?_options[name]:fallback;}'
+    +'function _portMappedUrl(v){try{var maps=_optionValue("portMapping",[]);if(!Array.isArray(maps)||!maps.length)return"";var u=new URL(v,document.baseURI||"https://webview.local/");var host=String(u.hostname||"").toLowerCase();if(!(host==="localhost"||host==="127.0.0.1"||host==="[::1]"))return"";var port=Number(u.port||((u.protocol==="https:")?443:80));for(var i=0;i<maps.length;i++){var m=maps[i]||{};if(Number(m.webviewPort)===port&&Number(m.extensionHostPort)){u.port=String(Number(m.extensionHostPort));return u.href;}}}catch(e){}return"";}'
     +'function _isLocalResourceUrl(v){if(typeof v!=="string"||!v)return false;try{var u=new URL(v,document.baseURI||"https://webview.local/");var h=String(u.hostname||"").toLowerCase();return u.protocol==="https:"&&(h==="webview.local"||/\\.vscode-resource\\.webview\\.local$/.test(h));}catch(e){return false;}}'
     +'function _endpointResourceUrl(v){if(!_isLocalResourceUrl(v))return"";var base=_resourceEndpointBase();if(!base)return"";try{var u=new URL(v,document.baseURI||"https://webview.local/");return base+"/"+encodeURIComponent(u.host)+(u.pathname||"/")+(u.search||"");}catch(e){return"";}}'
-    +'function _rewriteResourceUrl(v){if(typeof v!=="string")return v;var m=_resourceMap();var hit=m[v]||m[v.replace(/\\\\\\//g,"/")]||"";return hit||_endpointResourceUrl(v)||v;}'
+    +'function _rewriteResourceUrl(v){if(typeof v!=="string")return v;var mapped=_portMappedUrl(v);if(mapped)return mapped;var m=_resourceMap();var hit=m[v]||m[v.replace(/\\\\\\//g,"/")]||"";return hit||_endpointResourceUrl(v)||v;}'
     +'function _rewriteModuleResourceUrl(v){if(typeof v!=="string")return v;return _endpointResourceUrl(v)||_rewriteResourceUrl(v);}'
     +'function _rewriteSrcset(v){return String(v||"").split(",").map(function(part){var p=part.trim();if(!p)return p;var bits=p.split(/\\s+/);bits[0]=_rewriteResourceUrl(bits[0]);return bits.join(" ");}).join(", ");}'
     +'var _setAttr=Element.prototype.setAttribute;Element.prototype.setAttribute=function(name,value){var n=String(name||"").toLowerCase();if(n==="src"||n==="href")value=_rewriteResourceUrl(String(value));else if(n==="srcset")value=_rewriteSrcset(value);return _setAttr.call(this,name,value);};'
@@ -22502,8 +22564,11 @@ function _injectWebviewHtml(container,viewId,html,initialState){
     +'function _rewriteNode(n){if(!n||n.nodeType!==1)return;["src","href"].forEach(function(a){var v=n.getAttribute&&n.getAttribute(a);if(v){var r=_rewriteResourceUrl(v);if(r!==v)n.setAttribute(a,r);}});var s=n.getAttribute&&n.getAttribute("srcset");if(s){var rs=_rewriteSrcset(s);if(rs!==s)n.setAttribute("srcset",rs);}if(n.querySelectorAll)n.querySelectorAll("[src],[href],[srcset]").forEach(_rewriteNode);}'
     +'new MutationObserver(function(ms){ms.forEach(function(m){if(m.type==="attributes")_rewriteNode(m.target);else m.addedNodes&&m.addedNodes.forEach(_rewriteNode);});}).observe(document.documentElement,{subtree:true,childList:true,attributes:true,attributeFilter:["src","href","srcset"]});'
     +'document.addEventListener("DOMContentLoaded",function(){_rewriteNode(document.documentElement);});'
+    +'function _commandPayloadFromHref(href){var raw=String(href||"");if(raw.indexOf("command:")!==0)return{command:"",arguments:[]};raw=raw.slice(8);var qi=raw.indexOf("?"),cmd=qi>=0?raw.slice(0,qi):raw,q=qi>=0?raw.slice(qi+1):"";try{cmd=decodeURIComponent(cmd);}catch(e){}var args=[];if(q){try{var parsed=JSON.parse(decodeURIComponent(q));args=Array.isArray(parsed)?parsed:[parsed];}catch(e){args=[];}}return{command:String(cmd||"").trim(),arguments:args};}'
+    +'function _commandUriAllowed(cmd){var allowed=_optionValue("enableCommandUris",false);if(allowed===true||allowed==="true")return true;if(Array.isArray(allowed))return allowed.map(String).indexOf(String(cmd||""))>=0;if(typeof allowed==="string")return allowed.split(/[,\\s]+/).filter(Boolean).indexOf(String(cmd||""))>=0;return false;}'
     +'function _readVsCodeContext(target){var ctx={};for(var n=target;n&&n.nodeType===1;n=n.parentElement){var raw=n.getAttribute&&n.getAttribute("data-vscode-context");if(!raw)continue;try{var parsed=JSON.parse(raw);if(parsed&&typeof parsed==="object"){Object.keys(parsed).forEach(function(k){ctx[k]=parsed[k];});}}catch(e){}}return ctx;}'
     +'function _postHostEvent(type,payload){try{payload=payload||{};payload.type=type;payload.viewId='+JSON.stringify(viewId)+';payload.token=_token;window.parent.postMessage(payload,"*");}catch(e){}}'
+    +'document.addEventListener("click",function(ev){var a=ev.target&&ev.target.closest&&ev.target.closest("a[href]");if(!a)return;var href=a.getAttribute("href")||"";if(href.indexOf("command:")!==0)return;var payload=_commandPayloadFromHref(href);if(!_commandUriAllowed(payload.command))return;ev.preventDefault();_postHostEvent("webview-command-uri",{href:href,command:payload.command,arguments:payload.arguments});},true);'
     +'document.addEventListener("contextmenu",function(ev){var ctx=_readVsCodeContext(ev.target);_postHostEvent("webview-context-menu",{clientX:ev.clientX,clientY:ev.clientY,context:ctx});if(!ctx.preventDefaultContextMenuItems)ev.preventDefault();},true);'
     +'window.addEventListener("focus",function(){_postHostEvent("webview-focus",{focused:true});},true);'
     +'window.addEventListener("blur",function(){_postHostEvent("webview-focus",{focused:false});},true);'
@@ -22548,6 +22613,12 @@ window.addEventListener('message',function(e){
     const viewId=e.data.viewId,tok=e.data.token;
     if(!viewId||!tok||_webviewTokens[viewId]!==tok)return;
     void showWebviewContextMenu(viewId,e.data.clientX,e.data.clientY,e.data.context);
+    return;
+  }
+  if(e.data.type==='webview-command-uri'){
+    const viewId=e.data.viewId,tok=e.data.token;
+    if(!viewId||!tok||_webviewTokens[viewId]!==tok)return;
+    void executeWebviewCommandUri(viewId,e.data);
     return;
   }
   if(e.data.type==='webview-focus'){
@@ -29816,7 +29887,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.containerToolbarActions>=1
       && snapshot.treeGroup&&snapshot.treeRole==='tree'&&snapshot.treeNodeCount>=2
       && snapshot.treeInlineActions>=1&&snapshot.treeCheckboxCount>=1&&snapshot.treeDndReady&&snapshot.treeResourceRows>=2
-      && snapshot.webviewGroup&&snapshot.webviewFrame&&snapshot.webviewTitle.includes('selftest.dynamic.webview')&&snapshot.webviewSandbox==='allow-scripts'&&snapshot.webviewRetain
+      && snapshot.webviewGroup&&snapshot.webviewFrame&&snapshot.webviewTitle.includes('selftest.dynamic.webview')&&snapshot.webviewSandbox.includes('allow-scripts')&&snapshot.webviewSandbox.includes('allow-forms')&&snapshot.webviewSandbox.includes('allow-popups')&&snapshot.webviewSandbox.includes('allow-downloads')&&snapshot.webviewRetain
       && snapshot.manifestGroup&&snapshot.manifestHidden==='false'&&snapshot.welcomeRegions>=1&&snapshot.welcomeCommands>=1&&snapshot.welcomeExternalLinks>=1
       && snapshot.activityRole==='button'&&snapshot.activityTabIndex===0&&snapshot.activityLabel.includes('Selftest Extensions')&&snapshot.activityPanel==='ext-vc-selftest.dynamic.container'
       && snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'&&snapshot.customCapabilities

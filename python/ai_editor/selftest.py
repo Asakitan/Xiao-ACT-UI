@@ -985,6 +985,7 @@ def test_app_settings_parity() -> None:
         AIEditorAPI,
         _activate_window_handle,
         _normalize_window_geometry,
+        _window_handle_cloaked,
         _window_handle_visible_after_activation,
         _window_rect_intersects_screen,
     )
@@ -2117,6 +2118,22 @@ def test_app_settings_parity() -> None:
 
         _check("AI Editor activation verifies existing window visibility",
                _window_handle_visible_after_activation(123, _FakeUser32()) is False)
+    with patch("ai_editor.app.sys.platform", "win32"), \
+            patch("ai_editor.app._window_rect_for_handle",
+                  return_value=(10, 10, 700, 500)):
+        class _FakeVisibleUser32:
+            def IsWindowVisible(self, _hwnd):
+                return 1
+
+        class _FakeCloakedDwm:
+            def DwmGetWindowAttribute(self, _hwnd, _attr, out_value, _size):
+                out_value._obj.value = 3
+                return 0
+
+        _check("AI Editor activation rejects DWM-cloaked existing window",
+               _window_handle_cloaked(123, _FakeCloakedDwm()) is True
+               and _window_handle_visible_after_activation(
+                   123, _FakeVisibleUser32(), _FakeCloakedDwm()) is False)
     root_dir = os.path.dirname(os.path.dirname(__file__))
     panels_path = os.path.join(root_dir, "gui_modules", "sao_gui_panels_mixin.py")
     with open(panels_path, "r", encoding="utf-8") as fh:
@@ -2132,6 +2149,8 @@ def test_app_settings_parity() -> None:
     _check("AI Editor existing window activation verifies visibility before reuse",
            "def _window_handle_visible_after_activation(" in app_src
            and "existing window activation failed visibility" in app_src
+           and "DwmGetWindowAttribute" in app_src
+           and "_window_handle_cloaked(hwnd" in app_src
            and "_move_window_handle_on_screen(hwnd, user32)" in app_src
            and "_window_rect_intersects_screen(" in app_src)
 
@@ -13039,6 +13058,23 @@ console.log("command palette quick access helpers ok");
            and "function updateWebviewPanelOptions(viewId,data)" in html
            and "event==='update_webview_panel_options'" in html
            and "retainContextWhenHidden" in html)
+    _check("extension webview iframe respects VS Code webview options",
+           "function webviewRuntimeOptions(runtime)" in html
+           and "function webviewRuntimeOption(runtime,key,fallback)" in html
+           and "function webviewIframeSandbox(runtime)" in html
+           and "webviewRuntimeOptionEnabled(runtime,'enableScripts',true)" in html
+           and "webviewRuntimeOptionEnabled(runtime,'enableForms',true)" in html
+           and "webviewRuntimeOption(runtime,'enableCommandUris',false)" in html
+           and "function webviewCommandUriAllowed(viewId,command)" in html
+           and "function executeWebviewCommandUri(viewId,data)" in html
+           and "type==='webview-command-uri'" in html
+           and "function _portMappedUrl(v)" in html
+           and "Number(m.webviewPort)===port" in html
+           and "Number(m.extensionHostPort)" in html
+           and "\"enableCommandUris\"" in vscode_api_source
+           and "\"enableForms\"" in vscode_api_source
+           and "\"portMapping\"" in vscode_api_source
+           and "self._bridge.render_webview_panel(\n                    self.view_type, html, options=options)" in vscode_api_source)
     _check("extension webview panel frontend dispose reaches Node",
            "function disposeExtensionWebviewPanel(viewId,providerId)" in html
            and "function clearDisposedWebviewPanel(viewId,providerId)" in html

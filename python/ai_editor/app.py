@@ -16908,17 +16908,72 @@ def _primary_screen_bounds() -> tuple[int, int, int, int]:
     return _virtual_screen_bounds()
 
 
+def _window_handle_cloaked(hwnd: int, dwmapi: Any = None) -> bool:
+    if sys.platform != "win32" or not hwnd:
+        return False
+    try:
+        import ctypes
+        if dwmapi is None:
+            dwmapi = ctypes.windll.dwmapi
+        cloaked = ctypes.c_int(0)
+        hr = dwmapi.DwmGetWindowAttribute(
+            ctypes.c_void_p(int(hwnd)), 14, ctypes.byref(cloaked),
+            ctypes.sizeof(cloaked))
+        return int(hr or 0) == 0 and int(cloaked.value or 0) != 0
+    except Exception:
+        return False
+
+
+def _window_title_for_handle(hwnd: int, user32: Any = None) -> str:
+    if sys.platform != "win32" or not hwnd:
+        return ""
+    try:
+        import ctypes
+        if user32 is None:
+            user32 = ctypes.windll.user32
+        length = int(user32.GetWindowTextLengthW(ctypes.c_void_p(int(hwnd))) or 0)
+        if length <= 0:
+            return ""
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(ctypes.c_void_p(int(hwnd)), buffer, length + 1)
+        return str(buffer.value or "")
+    except Exception:
+        return ""
+
+
 def _find_ai_editor_window() -> int:
     if sys.platform != "win32":
         return 0
     try:
         import ctypes
+        from ctypes import wintypes
         user32 = ctypes.windll.user32
-        user32.FindWindowW.restype = ctypes.c_void_p
-        hwnd = user32.FindWindowW(None, _AI_EDITOR_WINDOW_TITLE)
-        return int(hwnd or 0)
-    except Exception:
+        matches: list[int] = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def _enum(hwnd: Any, _lparam: Any) -> bool:
+            handle = int(hwnd or 0)
+            if _window_title_for_handle(handle, user32) == _AI_EDITOR_WINDOW_TITLE:
+                matches.append(handle)
+            return True
+
+        user32.EnumWindows(_enum, 0)
+        for hwnd in matches:
+            if _window_handle_visible_after_activation(hwnd, user32):
+                return int(hwnd)
+        for hwnd in matches:
+            if not _window_handle_cloaked(hwnd):
+                return int(hwnd)
         return 0
+    except Exception:
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            user32.FindWindowW.restype = ctypes.c_void_p
+            hwnd = int(user32.FindWindowW(None, _AI_EDITOR_WINDOW_TITLE) or 0)
+            return 0 if _window_handle_cloaked(hwnd) else hwnd
+        except Exception:
+            return 0
 
 
 def _window_rect_for_handle(hwnd: int, user32: Any = None) -> Optional[tuple[int, int, int, int]]:
@@ -16984,7 +17039,8 @@ def _move_window_handle_on_screen(hwnd: int, user32: Any = None) -> bool:
         return False
 
 
-def _window_handle_visible_after_activation(hwnd: int, user32: Any = None) -> bool:
+def _window_handle_visible_after_activation(
+        hwnd: int, user32: Any = None, dwmapi: Any = None) -> bool:
     if sys.platform != "win32" or not hwnd:
         return False
     try:
@@ -16997,7 +17053,7 @@ def _window_handle_visible_after_activation(hwnd: int, user32: Any = None) -> bo
             visible = bool(user32.IsWindowVisible(hwnd_ptr))
         rect_ok = _window_rect_intersects_screen(
             _window_rect_for_handle(hwnd, user32))
-        return visible and rect_ok
+        return visible and rect_ok and not _window_handle_cloaked(hwnd, dwmapi)
     except Exception:
         return False
 
