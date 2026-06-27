@@ -11636,9 +11636,18 @@ console.log("command palette quick access helpers ok");
            and "term-shell" in html
            and "function _renameTerminal(previousName,name)" in html
            and "function _updateTerminalDimensions(name,dimensions)" in html
-           and "function _terminalIconText(meta)" in html
-           and "def write_terminal_data(self, name: str, text: str) -> None:"
-           in app_source)
+            and "function _terminalIconText(meta)" in html
+            and "def write_terminal_data(self, name: str, text: str) -> None:"
+            in app_source)
+    _check("terminal command UI reports state, exit code, and selfcheck",
+           "terminal-status-line" in html
+           and "terminal-command-block" in html
+           and "async function runTerminalCommand(cmd,options)" in html
+           and "function _terminalNormalizeResult(raw)" in html
+           and "function _terminalStateForResult(result)" in html
+           and "function _updateTerminalRecordForRun(cmd,state,result,durationMs)" in html
+           and "async function terminalUiSelfCheckSnapshot()" in html
+           and "window.terminalUiSelfCheckSnapshot=terminalUiSelfCheckSnapshot" in html)
     _check("extension notebook serializers bridge through Node host",
            "class NotebookCellData" in node_ext_host_source
            and "class NotebookCellOutputItem" in node_ext_host_source

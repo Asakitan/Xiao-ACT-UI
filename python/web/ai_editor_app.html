@@ -1395,6 +1395,19 @@ pre.code-block code .type { color:var(--fg-type); }
 .terminal-panel.active { display:flex; }
 .terminal-output { flex:1; overflow-y:auto; padding:8px 12px; font:12px/1.5 var(--mono);
   color:var(--fg-success); white-space:pre-wrap; }
+.terminal-status-line { display:flex; align-items:center; gap:8px; min-height:24px; padding:0 12px;
+  border-top:1px solid var(--border); background:var(--bg-panel); color:var(--fg-dim);
+  font:11px var(--mono); flex-shrink:0; }
+.terminal-status-line .term-status-dot { width:7px; height:7px; border-radius:50%; background:var(--fg-dim); }
+.terminal-status-line .term-status-text { color:var(--fg); }
+.terminal-status-line .term-status-detail { margin-left:auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.terminal-status-line.running .term-status-dot { background:var(--fg-accent); animation:terminalStatusPulse 1s ease-in-out infinite; }
+.terminal-status-line.running .term-status-text { color:var(--fg-accent); }
+.terminal-status-line.done .term-status-dot { background:var(--fg-success); }
+.terminal-status-line.error .term-status-dot { background:var(--fg-error); }
+.terminal-status-line.error .term-status-text { color:var(--fg-error); }
+.terminal-status-line.cancelled .term-status-dot { background:var(--fg-warning); }
+@keyframes terminalStatusPulse { 0%,100%{opacity:.45} 50%{opacity:1} }
 
 /* ── Status bar ── */
 .statusbar { display:flex; align-items:center; height:22px; background:var(--statusbar-bg);
@@ -1990,16 +2003,32 @@ pre.code-block { overflow:visible; }
   white-space:nowrap; max-width:140px; }
 .term-tab:hover { color:var(--fg); background:var(--bg-hover); }
 .term-tab.active { color:var(--fg); background:var(--bg-tab-active); }
+.term-tab.running { color:var(--fg-accent); }
+.term-tab.error { color:var(--fg-error); }
+.term-tab.done:not(.active) { color:var(--fg-success); }
 .term-tab .term-shell { font-size:9px; letter-spacing:0; color:var(--fg-accent);
   border:1px solid color-mix(in srgb, var(--fg-accent) 45%, transparent);
   border-radius:3px; padding:0 3px; line-height:13px; }
 .term-tab .term-running { color:var(--fg-warning); }
+.term-tab .term-exit { font-size:9px; opacity:.8; color:inherit; }
 .term-tab .term-close { font-size:12px; opacity:0; cursor:pointer; margin-left:2px; }
 .term-tab:hover .term-close { opacity:0.6; }
 .term-tab .term-close:hover { opacity:1; color:var(--fg-error); }
 .term-tab-add { padding:0 6px; height:22px; display:flex; align-items:center;
   color:var(--fg-dim); cursor:pointer; font-size:14px; }
 .term-tab-add:hover { color:var(--fg); }
+.terminal-command-block { margin:0 0 8px; border-left:2px solid transparent; padding-left:8px;
+  color:var(--fg); }
+.terminal-command-block.running { border-left-color:var(--fg-accent); }
+.terminal-command-block.done { border-left-color:var(--fg-success); }
+.terminal-command-block.error { border-left-color:var(--fg-error); }
+.terminal-command-block.cancelled { border-left-color:var(--fg-warning); }
+.terminal-command-head { display:flex; align-items:center; gap:8px; color:var(--fg-success); }
+.terminal-command-head .terminal-command-line { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.terminal-command-status { margin-left:auto; color:var(--fg-dim); font-size:11px; white-space:nowrap; }
+.terminal-command-block.running .terminal-command-status { color:var(--fg-accent); }
+.terminal-command-block.error .terminal-command-status { color:var(--fg-error); }
+.terminal-command-body { color:var(--fg); white-space:pre-wrap; }
 
 /* ── chat-ux-4: Inline diff view ── */
 .diff-section { margin:8px 0; border:1px solid var(--border); border-radius:6px; overflow:hidden; }
@@ -2396,6 +2425,11 @@ pre.code-block { overflow:visible; }
       <div class="term-tab-bar" id="term-tab-bar" style="display:none"></div>
       <div class="terminal-panel" id="terminal-panel">
         <div class="terminal-output" id="terminal-output"></div>
+        <div class="terminal-status-line" id="terminal-status-line" data-state="idle" role="status" aria-live="polite">
+          <span class="term-status-dot"></span>
+          <span class="term-status-text">Ready</span>
+          <span class="term-status-detail">No command has run yet</span>
+        </div>
       </div>
       <div class="terminal-panel" id="output-panel" style="display:none">
         <div class="terminal-output" id="output-content"></div>
@@ -27876,18 +27910,7 @@ window.clearTerminal=clearTerminal;
 
 // ── Terminal execution ──
 async function execTerminalCmd(cmd,skipConfirm){
-  if(!cmd)return;
-  // TERM-04: intercept clear/cls locally
-  if(cmd==='clear'||cmd==='cls'){clearTerminal();return}
-  const out=$('terminal-output');
-  _appendTerminalHtml(out,ansiToHtml('$ '+cmd)+'\n');
-  if(!skipConfirm&&currentMode!=='agent'&&currentApproval!=='bypass'&&currentApproval!=='autopilot'){
-    if(!confirm('Run terminal command?\n\n'+cmd)){_appendTerminalHtml(out,'Cancelled\n\n');return}
-  }
-  const r=await call('execute_tool','runTerminal',JSON.stringify({command:cmd}),true);
-  try{const d=JSON.parse(r);if(d.stdout)_appendTerminalHtml(out,ansiToHtml(d.stdout));if(d.stderr)_appendTerminalHtml(out,ansiToHtml(d.stderr));if(d.error)_appendTerminalHtml(out,ansiToHtml(d.error)+'\n')}
-  catch{_appendTerminalHtml(out,ansiToHtml(r)+'\n')}
-  _appendTerminalHtml(out,'\n');
+  return runTerminalCommand(cmd,{skipConfirm:!!skipConfirm});
 }
 
 // Terminal input (basic)
@@ -30252,7 +30275,7 @@ function _createTerminal(name,metadata,activate=true){
   outputEl.className='terminal-output';outputEl.id='term-out-'+id;
   outputEl.style.display='none';
   $('terminal-panel').appendChild(outputEl);
-  const term={id:id,hostId:_terminalHostId(meta),name:name||meta.name||('Terminal '+id),metadata:meta,dimensions:null,shellIntegration:!!meta.shellIntegration,shellCwd:null,shellEnv:null,shellExecution:null,outputEl:outputEl,history:[],historyIdx:-1,inputText:''};
+  const term={id:id,hostId:_terminalHostId(meta),name:name||meta.name||('Terminal '+id),metadata:meta,dimensions:null,shellIntegration:!!meta.shellIntegration,shellCwd:null,shellEnv:null,shellExecution:null,outputEl:outputEl,history:[],historyIdx:-1,inputText:'',lastCommand:'',lastExitCode:null,lastDurationMs:null,lastState:'idle'};
   _terminals.push(term);
   _renderTermTabs();
   if(activate!==false)_switchTerminal(id);
@@ -30276,6 +30299,7 @@ function _switchTerminal(id){
     termInput.value=cur?cur.inputText:'';
   }
   _renderTermTabs();
+  _updateTerminalStatusLine();
 }
 function _closeTerminal(id,ev){
   if(ev)ev.stopPropagation();
@@ -30288,6 +30312,7 @@ function _closeTerminal(id,ev){
     if(_activeTermId===id)_switchTerminal(_terminals[Math.min(idx,_terminals.length-1)].id);
     else _renderTermTabs();
   }
+  _updateTerminalStatusLine();
 }
 function _disposeTerminalFromHost(payload){
   const term=_terminalFromHostPayload(payload);
@@ -30321,7 +30346,8 @@ function _renderTermTabs(){
   const bar=$('term-tab-bar');if(!bar)return;bar.innerHTML='';
   _terminals.forEach(t=>{
     const meta=t.metadata||{};
-    const tab=document.createElement('div');tab.className='term-tab'+(t.id===_activeTermId?' active':'');
+    const state=t.lastState&&t.lastState!=='idle'?String(t.lastState):'';
+    const tab=document.createElement('div');tab.className='term-tab'+(t.id===_activeTermId?' active':'')+(state?' '+state:'');
     const icon=_terminalIconText(meta);
     const dims=t.dimensions&&t.dimensions.columns&&t.dimensions.rows?(' • '+t.dimensions.columns+'x'+t.dimensions.rows):'';
     const shell=t.shellIntegration?'<span class="term-shell'+(t.shellExecution&&t.shellExecution.event==='start'?' term-running':'')+'">SI</span> ':'';
@@ -30332,7 +30358,8 @@ function _renderTermTabs(){
       meta.shellIntegrationNonce?'N':'',
       meta.state&&meta.state.isInteractedWith?'I':''
     ].filter(Boolean).map(b=>'<span class="term-shell">'+esc(b)+'</span> ').join('');
-    tab.innerHTML=(icon?'<span class="term-icon">'+esc(icon)+'</span> ':'')+shell+badges+esc(t.name)+'<span class="term-close" onclick="_closeTerminal('+t.id+',event)">&#x2715;</span>';
+    const exitBadge=t.lastExitCode!==null&&t.lastExitCode!==undefined?'<span class="term-exit">'+esc(String(t.lastExitCode))+'</span> ':'';
+    tab.innerHTML=(icon?'<span class="term-icon">'+esc(icon)+'</span> ':'')+shell+badges+exitBadge+esc(t.name)+'<span class="term-close" onclick="_closeTerminal('+t.id+',event)">&#x2715;</span>';
     const command=t.shellExecution&&t.shellExecution.commandLine?t.shellExecution.commandLine:'';
     const envCount=meta.env&&typeof meta.env==='object'?Object.keys(meta.env).length:0;
     const cwd=meta.cwd?String(meta.cwd):'';
@@ -30346,7 +30373,9 @@ function _renderTermTabs(){
       meta.strictEnv?'Strict env':'',
       meta.shellIntegrationNonce?'Shell integration nonce':'',
       t.shellIntegration?'Shell Integration':'',
-      command?('Command: '+command):''
+      command?('Command: '+command):'',
+      t.lastExitCode!==null&&t.lastExitCode!==undefined?('Exit: '+t.lastExitCode):'',
+      t.lastDurationMs!==null&&t.lastDurationMs!==undefined?('Duration: '+t.lastDurationMs+'ms'):''
     ].filter(Boolean).join('\n');
     const colorId=_terminalThemeColor(meta);
     if(colorId)tab.dataset.themeColor=colorId;else delete tab.dataset.themeColor;
@@ -30408,7 +30437,11 @@ function _updateTerminalShellExecution(record){
   term.hostId=_terminalHostId(payload)||term.hostId;
   term.shellIntegration=true;
   term.shellExecution={event:record&&record.event?String(record.event):'',commandLine:line,exitCode:record?record.exitCode:null};
+  term.lastCommand=line||term.lastCommand||'';
+  term.lastExitCode=record&&record.exitCode!==undefined&&record.exitCode!==null?record.exitCode:term.lastExitCode;
+  term.lastState=term.shellExecution.event==='start'?'running':(term.lastExitCode&&Number(term.lastExitCode)!==0?'error':'done');
   _renderTermTabs();
+  if(term.id===_activeTermId)_updateTerminalStatusLine();
 }
 function _getActiveTermOutput(){
   if(_activeTermId!==null){const t=_terminals.find(t=>t.id===_activeTermId);if(t)return t.outputEl}
@@ -30418,8 +30451,146 @@ function _getActiveTermHistory(){
   if(_activeTermId!==null){const t=_terminals.find(t=>t.id===_activeTermId);if(t)return t}
   return null;
 }
+function _getActiveTerminalRecord(){
+  return _activeTermId!==null?_terminals.find(t=>t.id===_activeTermId)||null:null;
+}
+function _terminalResultValue(raw){
+  if(raw&&typeof raw==='object')return raw;
+  if(typeof raw!=='string')return {stdout:String(raw??'')};
+  try{
+    const parsed=JSON.parse(raw);
+    return parsed&&typeof parsed==='object'?parsed:{stdout:String(raw)};
+  }catch(ex){
+    return {stdout:raw};
+  }
+}
+function _terminalExitCode(data){
+  const candidates=[data&&data.exitCode,data&&data.exit_code,data&&data.returncode,data&&data.code];
+  for(const value of candidates){
+    if(value===null||value===undefined||value==='')continue;
+    const n=Number(value);
+    if(Number.isFinite(n))return n;
+  }
+  if(data&&data.success===false)return 1;
+  return 0;
+}
+function _terminalNormalizeResult(raw){
+  const data=_terminalResultValue(raw);
+  const stdout=data.stdout!==undefined&&data.stdout!==null?String(data.stdout):'';
+  const stderr=data.stderr!==undefined&&data.stderr!==null?String(data.stderr):'';
+  const error=data.error!==undefined&&data.error!==null?String(data.error):'';
+  const exitCode=_terminalExitCode(data);
+  const durationMs=Number.isFinite(Number(data.durationMs??data.duration_ms??data.elapsed_ms))?Number(data.durationMs??data.duration_ms??data.elapsed_ms):null;
+  return {stdout,stderr,error,exitCode,durationMs,raw:data};
+}
+function _terminalStateForResult(result){
+  return result.error||result.stderr||Number(result.exitCode)!==0?'error':'done';
+}
+function _formatTerminalDuration(ms){
+  if(ms===null||ms===undefined)return '';
+  return ms<1000?Math.round(ms)+'ms':(ms/1000).toFixed(1)+'s';
+}
+function _setTerminalStatus(state,text,detail){
+  const line=$('terminal-status-line');if(!line)return;
+  line.className='terminal-status-line '+(state||'idle');
+  line.dataset.state=state||'idle';
+  const textEl=line.querySelector('.term-status-text');
+  const detailEl=line.querySelector('.term-status-detail');
+  if(textEl)textEl.textContent=text||'Ready';
+  if(detailEl)detailEl.textContent=detail||'';
+}
+function _updateTerminalStatusLine(){
+  const term=_getActiveTerminalRecord();
+  if(term){
+    const state=term.lastState||'idle';
+    const exit=term.lastExitCode!==null&&term.lastExitCode!==undefined?('exit '+term.lastExitCode):'no exit';
+    const dur=_formatTerminalDuration(term.lastDurationMs);
+    const detail=[term.name,term.lastCommand?('$ '+term.lastCommand):'',exit,dur].filter(Boolean).join('  ');
+    _setTerminalStatus(state,state==='running'?'Running':(state==='error'?'Failed':(state==='done'?'Completed':'Ready')),detail);
+    return;
+  }
+  const out=$('terminal-output');
+  const state=out&&out.dataset.terminalState?out.dataset.terminalState:'idle';
+  const cmd=out&&out.dataset.lastCommand?('$ '+out.dataset.lastCommand):'No command has run yet';
+  const exit=out&&out.dataset.lastExitCode!==undefined&&out.dataset.lastExitCode!==''?('exit '+out.dataset.lastExitCode):'';
+  _setTerminalStatus(state,state==='running'?'Running':(state==='error'?'Failed':(state==='done'?'Completed':'Ready')),[cmd,exit].filter(Boolean).join('  '));
+}
+function _appendTerminalCommandBlock(out,cmd){
+  const block=document.createElement('div');block.className='terminal-command-block running';
+  const head=document.createElement('div');head.className='terminal-command-head';
+  const line=document.createElement('span');line.className='terminal-command-line';line.innerHTML=ansiToHtml('$ '+cmd);
+  const status=document.createElement('span');status.className='terminal-command-status';status.textContent='running';
+  const body=document.createElement('div');body.className='terminal-command-body';
+  head.appendChild(line);head.appendChild(status);block.appendChild(head);block.appendChild(body);
+  out.appendChild(block);_trimTerminalScrollback(out);out.scrollTop=out.scrollHeight;
+  return {block,status,body};
+}
+function _updateTerminalRecordForRun(cmd,state,result,durationMs){
+  const term=_getActiveTerminalRecord();
+  const exitCode=result&&result.exitCode!==undefined?result.exitCode:null;
+  if(term){
+    term.lastCommand=cmd;term.lastState=state;term.lastExitCode=exitCode;term.lastDurationMs=durationMs;
+    term.shellExecution={event:state==='running'?'start':'end',commandLine:cmd,exitCode:exitCode};
+  }else{
+    const out=$('terminal-output');
+    if(out){
+      out.dataset.terminalState=state;
+      out.dataset.lastCommand=cmd||'';
+      out.dataset.lastExitCode=exitCode===null||exitCode===undefined?'':String(exitCode);
+    }
+  }
+  _renderTermTabs();
+  _updateTerminalStatusLine();
+}
+async function runTerminalCommand(cmd,options){
+  const opts=options||{};
+  cmd=String(cmd||'').trim();
+  if(!cmd)return null;
+  const out=opts.out||_getActiveTermOutput();
+  if(cmd==='clear'||cmd==='cls'){
+    if(out)out.innerHTML='';
+    _updateTerminalRecordForRun(cmd,'done',{exitCode:0},0);
+    return {exitCode:0,stdout:'',stderr:'',error:'',durationMs:0};
+  }
+  if(!opts.skipConfirm&&currentMode!=='agent'&&currentApproval!=='bypass'&&currentApproval!=='autopilot'){
+    if(!confirm('Run terminal command?\n\n'+cmd)){
+      const cancelled=_appendTerminalCommandBlock(out,cmd);
+      cancelled.block.className='terminal-command-block cancelled';
+      cancelled.status.textContent='cancelled';
+      _updateTerminalRecordForRun(cmd,'cancelled',{exitCode:null},null);
+      return {cancelled:true};
+    }
+  }
+  const view=_appendTerminalCommandBlock(out,cmd);
+  const started=performance.now();
+  _updateTerminalRecordForRun(cmd,'running',{exitCode:null},null);
+  try{
+    const raw=await call('execute_tool','runTerminal',JSON.stringify({command:cmd}),true);
+    const result=_terminalNormalizeResult(raw);
+    const elapsed=result.durationMs!==null?result.durationMs:Math.round(performance.now()-started);
+    if(result.stdout)_appendTerminalHtml(view.body,ansiToHtml(result.stdout));
+    if(result.stderr)_appendTerminalHtml(view.body,ansiToHtml(result.stderr));
+    if(result.error)_appendTerminalHtml(view.body,ansiToHtml(result.error)+'\n');
+    const state=_terminalStateForResult(result);
+    view.block.className='terminal-command-block '+state;
+    view.status.textContent='exit '+result.exitCode+'  '+_formatTerminalDuration(elapsed);
+    _updateTerminalRecordForRun(cmd,state,result,elapsed);
+    out.scrollTop=out.scrollHeight;
+    return {...result,durationMs:elapsed,state};
+  }catch(ex){
+    const elapsed=Math.round(performance.now()-started);
+    const msg=ex&&ex.message?ex.message:String(ex);
+    _appendTerminalHtml(view.body,ansiToHtml(msg)+'\n');
+    view.block.className='terminal-command-block error';
+    view.status.textContent='error  '+_formatTerminalDuration(elapsed);
+    const result={stdout:'',stderr:'',error:msg,exitCode:1,durationMs:elapsed,state:'error'};
+    _updateTerminalRecordForRun(cmd,'error',result,elapsed);
+    return result;
+  }
+}
 clearTerminal=function(){const el=_getActiveTermOutput();if(el)el.innerHTML=''};
 window.clearTerminal=clearTerminal;
+window.runTerminalCommand=runTerminalCommand;
 window._createTerminal=_createTerminal;window._closeTerminal=_closeTerminal;window._disposeTerminalFromHost=_disposeTerminalFromHost;window._insertTerminalTextFromHost=_insertTerminalTextFromHost;window._renameTerminal=_renameTerminal;window._updateTerminalDimensions=_updateTerminalDimensions;window._setActiveTerminalFromHost=_setActiveTerminalFromHost;window._updateTerminalState=_updateTerminalState;window._updateTerminalShellIntegration=_updateTerminalShellIntegration;window._updateTerminalShellExecution=_updateTerminalShellExecution;
 // Re-wire terminal input for per-tab history and output
 (function(){
@@ -30433,14 +30604,8 @@ window._createTerminal=_createTerminal;window._closeTerminal=_closeTerminal;wind
       const cmd=this.value.trim();this.value='';if(cmd){
         if(hist[hist.length-1]!==cmd){hist.push(cmd);if(hist.length>100)hist.shift()}
         setIdx(-1);
-        const out=_getActiveTermOutput();
-        _appendTerminalHtml(out,ansiToHtml('$ '+cmd)+'\n');
-        if(cmd==='clear'||cmd==='cls'){out.innerHTML='';e.stopImmediatePropagation();return}
-        call('execute_tool','runTerminal',JSON.stringify({command:cmd}),true).then(r=>{
-          try{const d=JSON.parse(r);if(d.stdout)_appendTerminalHtml(out,ansiToHtml(d.stdout));if(d.stderr)_appendTerminalHtml(out,ansiToHtml(d.stderr));if(d.error)_appendTerminalHtml(out,ansiToHtml(d.error)+'\n')}
-          catch(ex){_appendTerminalHtml(out,ansiToHtml(r)+'\n')}
-          _appendTerminalHtml(out,'\n');
-        });
+        if(!term){try{localStorage.setItem('sao-term-history',JSON.stringify(_termHistory))}catch(ex){}}
+        runTerminalCommand(cmd,{skipConfirm:true,out:_getActiveTermOutput()});
       }
       e.stopImmediatePropagation();return;
     }
@@ -30454,6 +30619,55 @@ focusTerminal=function(){
   _origFocusTerminal();
   if(_terminals.length===0)_createTerminal();
 };
+async function terminalUiSelfCheckSnapshot(){
+  const oldCall=call;
+  const oldActive=_activeTermId;
+  const defaultOut=$('terminal-output');
+  const status=$('terminal-status-line');
+  const oldDefaultHtml=defaultOut?defaultOut.innerHTML:'';
+  const oldDefaultDataset=defaultOut?{...defaultOut.dataset}:{};
+  const oldStatusClass=status?status.className:'';
+  const oldStatusState=status?status.dataset.state:'';
+  try{
+    _activeTermId=null;
+    if(defaultOut){defaultOut.style.display='';defaultOut.innerHTML='';defaultOut.dataset.terminalState='idle';defaultOut.dataset.lastCommand='';defaultOut.dataset.lastExitCode=''}
+    let n=0;
+    call=async function(method,tool,payload){
+      n++;
+      if(n===1)return JSON.stringify({stdout:'ok\n',stderr:'',exitCode:0,durationMs:12});
+      return JSON.stringify({stdout:'',stderr:'bad\n',exitCode:7,durationMs:9});
+    };
+    const ok=await runTerminalCommand('echo terminal-ok',{skipConfirm:true,out:defaultOut});
+    const bad=await runTerminalCommand('bad-command',{skipConfirm:true,out:defaultOut});
+    const blocks=defaultOut?Array.from(defaultOut.querySelectorAll('.terminal-command-block')):[];
+    const snapshot={
+      okExit:ok&&ok.exitCode,
+      badExit:bad&&bad.exitCode,
+      blockCount:blocks.length,
+      hasDone:blocks.some(b=>b.classList.contains('done')),
+      hasError:blocks.some(b=>b.classList.contains('error')),
+      statusState:status?status.dataset.state:'',
+      statusText:status?status.textContent.trim():'',
+      lastCommand:defaultOut?defaultOut.dataset.lastCommand:''
+    };
+    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.blockCount>=2&&snapshot.hasDone&&snapshot.hasError&&snapshot.statusState==='error'&&snapshot.lastCommand==='bad-command';
+    return snapshot;
+  }finally{
+    call=oldCall;
+    _activeTermId=oldActive;
+    if(defaultOut){
+      defaultOut.innerHTML=oldDefaultHtml;
+      Object.keys(defaultOut.dataset).forEach(k=>delete defaultOut.dataset[k]);
+      Object.assign(defaultOut.dataset,oldDefaultDataset);
+    }
+    if(status){status.className=oldStatusClass;status.dataset.state=oldStatusState}
+    _terminals.forEach(t=>{t.outputEl.style.display=t.id===_activeTermId?'':'none'});
+    if(defaultOut)defaultOut.style.display=_activeTermId!==null?'none':'';
+    _renderTermTabs();
+    _updateTerminalStatusLine();
+  }
+}
+window.terminalUiSelfCheckSnapshot=terminalUiSelfCheckSnapshot;
 
 // ── chat-ux-4: Inline diff view for code changes ──
 function parseDiffText(text){
