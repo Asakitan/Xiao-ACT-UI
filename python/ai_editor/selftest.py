@@ -13128,15 +13128,24 @@ console.log("command palette quick access helpers ok");
            "editor-dirty-diff-line" in html
            and "editor-dirty-diff-gutter" in html
            and "function computeEditorDirtyDiff(base,current)" in html
+           and "function editorDirtyDiffHunks(decorations)" in html
+           and "function editorDirtyDiffNavigate(direction)" in html
+           and "function openActiveEditorDirtyDiff()" in html
+           and "function renderEditorDirtyDiffToolbar(layer,state)" in html
            and "function editorDiffContentSignature(value)" in html
            and "function computeEditorDirtyDiffLcs(oldLines,newLines,start,oldEnd,newEnd)" in html
            and "function computeEditorDirtyDiffFallback(oldLines,newLines,start,oldEnd,newEnd)" in html
            and "oldLen*newLen>12000" in html
            and "algorithm:'lcs'" in html
+           and "editor-dirty-diff-toolbar" in html
+           and "editor-dirty-diff-action open" in html
+           and "Open side-by-side diff" in html
+           and ".editor-dirty-diff-line.removed" in html
            and "function renderEditorDirtyDiffDecorations(layer,ta,metrics)" in html
            and "updateEditorLanguageFeatureState('diff'" in html
            and "setActiveEditorBaselineContent" in html
            and "featureDiffTotal" in html
+           and "featureDiffHunks" in html
            and "window.editorDirtyDiffSelfCheckSnapshot=editorDirtyDiffSelfCheckSnapshot" in html
            and "window.editorLanguageFeatureStateSnapshot=editorLanguageFeatureStateSnapshot" in html)
     _check("frontend refreshes language state after formatter and code-action edits",

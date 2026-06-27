@@ -355,16 +355,30 @@ body.window-resizing * { cursor:inherit !important; }
   border-color:color-mix(in srgb,var(--fg-success) 45%,transparent); }
 .editor-document-highlight.kind-2 { background:color-mix(in srgb,var(--fg-warning) 18%,transparent);
   border-color:color-mix(in srgb,var(--fg-warning) 55%,transparent); }
-.editor-dirty-diff-line { position:absolute; left:0; right:0; pointer-events:none; opacity:.72; }
-.editor-dirty-diff-line.modified { background:color-mix(in srgb,var(--fg-accent) 8%,transparent); }
-.editor-dirty-diff-line.added { background:color-mix(in srgb,var(--fg-success) 8%,transparent); }
+.editor-dirty-diff-line { position:absolute; left:0; right:0; pointer-events:none; opacity:.78; }
+.editor-dirty-diff-line.modified { background:color-mix(in srgb,var(--fg-accent) 9%,transparent); }
+.editor-dirty-diff-line.added { background:color-mix(in srgb,var(--fg-success) 10%,transparent); }
+.editor-dirty-diff-line.removed { height:3px !important; background:color-mix(in srgb,var(--fg-error) 36%,transparent); }
 .editor-dirty-diff-gutter { position:absolute; left:-47px; width:4px; border-radius:2px; pointer-events:none; }
 .editor-dirty-diff-gutter.modified { background:var(--fg-accent); }
 .editor-dirty-diff-gutter.added { background:var(--fg-success); }
-.editor-dirty-diff-gutter.removed { height:2px !important; background:var(--fg-error); }
-.editor-dirty-diff-summary { position:absolute; right:8px; top:6px; padding:1px 6px; border:1px solid var(--border);
-  border-radius:999px; background:color-mix(in srgb,var(--bg-editor) 92%,transparent); color:var(--fg-dim);
-  font:10px var(--mono); pointer-events:none; }
+.editor-dirty-diff-gutter.removed { height:3px !important; background:var(--fg-error); box-shadow:0 0 0 1px color-mix(in srgb,var(--fg-error) 28%,transparent); }
+.editor-dirty-diff-summary { position:absolute; right:8px; top:6px; display:none; }
+.editor-dirty-diff-toolbar { position:absolute; right:8px; top:6px; z-index:7; display:flex; align-items:center; gap:4px;
+  padding:3px 5px; border:1px solid color-mix(in srgb,var(--border) 72%,transparent);
+  border-radius:5px; background:color-mix(in srgb,var(--bg-editor) 93%,transparent);
+  box-shadow:0 6px 18px rgba(0,0,0,.22); color:var(--fg-dim); font:10px var(--mono); pointer-events:auto; }
+.editor-dirty-diff-count { display:inline-flex; align-items:center; min-width:18px; justify-content:center;
+  height:16px; padding:0 4px; border-radius:3px; background:color-mix(in srgb,var(--bg3) 82%,transparent);
+  border:1px solid color-mix(in srgb,var(--border) 62%,transparent); }
+.editor-dirty-diff-count.added { color:var(--fg-success); }
+.editor-dirty-diff-count.modified { color:var(--fg-accent); }
+.editor-dirty-diff-count.removed { color:var(--fg-error); }
+.editor-dirty-diff-total { color:var(--fg); padding:0 3px; }
+.editor-dirty-diff-action { height:18px; min-width:20px; padding:0 5px; border:1px solid transparent;
+  border-radius:3px; background:transparent; color:var(--fg-dim); font:10px var(--mono); cursor:pointer; }
+.editor-dirty-diff-action:hover,.editor-dirty-diff-action:focus { outline:none; color:var(--fg-bright);
+  border-color:var(--border-focus); background:var(--bg-hover); }
 .editor-diagnostic-layer { position:absolute; inset:0 0 0 50px; z-index:4; pointer-events:none;
   font:13px/1.5 var(--mono); padding:8px 12px; overflow:hidden; white-space:pre; tab-size:4; }
 .editor-diagnostic-marker { position:absolute; height:0; min-width:7px; border-bottom:2px dotted var(--fg-error);
@@ -10545,6 +10559,93 @@ function editorDirtyDiffState(){
   _editorDirtyDiffCache={key,decorations:computed.decorations,summary:computed.summary};
   return _editorDirtyDiffCache;
 }
+function editorDirtyDiffHunks(decorations){
+  const items=(Array.isArray(decorations)?decorations:[]).map(dec=>({
+    line:Math.max(0,Number(dec&&dec.line)||0),
+    type:String(dec&&dec.type||'modified')
+  })).sort((a,b)=>a.line-b.line);
+  const hunks=[];
+  items.forEach(item=>{
+    const last=hunks[hunks.length-1];
+    if(last&&item.line<=last.endLine+1){
+      last.endLine=Math.max(last.endLine,item.line);
+      last.types[item.type]=(last.types[item.type]||0)+1;
+      last.count++;
+    }else{
+      hunks.push({line:item.line,endLine:item.line,count:1,types:{[item.type]:1}});
+    }
+  });
+  return hunks;
+}
+function editorDirtyDiffSummaryLabel(summary){
+  summary=summary||{};
+  return '+'+(summary.added||0)+' ~'+(summary.modified||0)+' -'+(summary.removed||0);
+}
+function editorDirtyDiffNavigate(direction){
+  const state=editorDirtyDiffState(),hunks=editorDirtyDiffHunks(state.decorations||[]);
+  if(!hunks.length){setStatus('Diff: clean');return false}
+  const current=editorCursorLine();
+  let target=null;
+  if(Number(direction)<0){
+    for(let i=hunks.length-1;i>=0;i--){if(hunks[i].line<current){target=hunks[i];break}}
+    if(!target)target=hunks[hunks.length-1];
+  }else{
+    target=hunks.find(h=>h.line>current)||hunks[0];
+  }
+  editorSetCursorLine(target.line);
+  setStatus('Diff hunk '+(hunks.indexOf(target)+1)+'/'+hunks.length+' · Ln '+(target.line+1));
+  renderEditorVisualDecorations();
+  return true;
+}
+function openActiveEditorDirtyDiff(){
+  const tab=activeEditorTab(),state=editorDirtyDiffState(),summary=state.summary||{};
+  if(!tab||!summary.total){setStatus('Diff: clean');return false}
+  const current=$('editor-text')?$('editor-text').value:textTabLiveContent(tab);
+  const original={name:String(tab.name||'Original'),path:tab.filePath||tab.workspacePath||tab.name||'',content:activeEditorBaselineContent(),language:tab.language};
+  const modified={name:String(tab.name||'Current'),path:tab.filePath||tab.workspacePath||tab.name||'',content:current,language:tab.language};
+  openEditorDiffResult(original,modified,{
+    key:'dirtydiff:'+String(tab.id)+':'+editorDiffContentSignature(original.content)+':'+editorDiffContentSignature(current),
+    title:'Diff: '+String(tab.name||'untitled'),
+    originalLabel:'Original',
+    modifiedLabel:'Current',
+    language:tab.language||editorLang||'plaintext'
+  });
+  return true;
+}
+function renderEditorDirtyDiffToolbar(layer,state){
+  const summary=(state&&state.summary)||{};
+  if(!summary.total)return;
+  const toolbar=document.createElement('div');
+  toolbar.className='editor-dirty-diff-toolbar';
+  toolbar.setAttribute('role','toolbar');
+  toolbar.setAttribute('aria-label','Unsaved editor diff');
+  toolbar.title='Unsaved diff: '+(summary.added||0)+' added, '+(summary.modified||0)+' modified, '+(summary.removed||0)+' removed';
+  const total=document.createElement('span');
+  total.className='editor-dirty-diff-total';
+  total.textContent=String(summary.total||0);
+  total.title='Total changed lines';
+  toolbar.appendChild(total);
+  [['added','+'],['modified','~'],['removed','-']].forEach(([key,label])=>{
+    const chip=document.createElement('span');
+    chip.className='editor-dirty-diff-count '+key;
+    chip.textContent=label+(summary[key]||0);
+    chip.title=key+' lines';
+    toolbar.appendChild(chip);
+  });
+  [['prev','↑','Previous change',-1],['next','↓','Next change',1]].forEach(([cls,label,title,dir])=>{
+    const btn=document.createElement('button');
+    btn.type='button';btn.className='editor-dirty-diff-action '+cls;btn.textContent=label;btn.title=title;btn.setAttribute('aria-label',title);
+    btn.onmousedown=e=>e.preventDefault();
+    btn.onclick=e=>{e.preventDefault();e.stopPropagation();editorDirtyDiffNavigate(dir)};
+    toolbar.appendChild(btn);
+  });
+  const open=document.createElement('button');
+  open.type='button';open.className='editor-dirty-diff-action open';open.textContent='Diff';open.title='Open side-by-side diff';open.setAttribute('aria-label','Open side-by-side diff');
+  open.onmousedown=e=>e.preventDefault();
+  open.onclick=e=>{e.preventDefault();e.stopPropagation();openActiveEditorDirtyDiff()};
+  toolbar.appendChild(open);
+  layer.appendChild(toolbar);
+}
 function renderEditorDirtyDiffDecorations(layer,ta,metrics){
   const state=editorDirtyDiffState();
   const decorations=state.decorations||[];
@@ -10558,16 +10659,15 @@ function renderEditorDirtyDiffDecorations(layer,ta,metrics){
     gutter.style.top=(top+(dec.type==='removed'?Math.max(1,metrics.lineHeight/2):0))+'px';
     gutter.style.height=metrics.lineHeight+'px';
     layer.appendChild(gutter);
-    if(dec.type!=='removed'){
-      const row=document.createElement('div');
-      row.className='editor-dirty-diff-line '+dec.type;
-      row.style.top=top+'px';
-      row.style.height=metrics.lineHeight+'px';
-      row.style.left=(-ta.scrollLeft)+'px';
-      layer.appendChild(row);
-    }
+    const row=document.createElement('div');
+    row.className='editor-dirty-diff-line '+dec.type;
+    row.style.top=(top+(dec.type==='removed'?Math.max(1,metrics.lineHeight/2):0))+'px';
+    row.style.height=metrics.lineHeight+'px';
+    row.style.left=(-ta.scrollLeft)+'px';
+    layer.appendChild(row);
   });
   const summary=state.summary||{};
+  const hunks=editorDirtyDiffHunks(decorations);
   if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('diff',summary.total?'ready':'empty',{
     mode:'dirty',
     added:summary.added||0,
@@ -10575,14 +10675,16 @@ function renderEditorDirtyDiffDecorations(layer,ta,metrics){
     removed:summary.removed||0,
     total:summary.total||0,
     decorations:decorations.length,
-    message:summary.total?('Diff: +'+(summary.added||0)+' ~'+(summary.modified||0)+' -'+(summary.removed||0)):'Diff: clean'
+    hunks:hunks.length,
+    message:summary.total?('Diff: '+editorDirtyDiffSummaryLabel(summary)+' · '+hunks.length+' hunk'+(hunks.length===1?'':'s')):'Diff: clean'
   });
   if(summary.total){
     const badge=document.createElement('div');
     badge.className='editor-dirty-diff-summary';
-    badge.textContent='+'+(summary.added||0)+' ~'+(summary.modified||0)+' -'+(summary.removed||0);
+    badge.textContent=editorDirtyDiffSummaryLabel(summary);
     badge.title='Unsaved diff: '+(summary.added||0)+' added, '+(summary.modified||0)+' modified, '+(summary.removed||0)+' removed';
     layer.appendChild(badge);
+    renderEditorDirtyDiffToolbar(layer,state);
   }
 }
 const _editorTextMetricCache=new Map();
@@ -35854,6 +35956,10 @@ function editorDirtyDiffSelfCheckSnapshot(){
     ed.value='alpha\nbeta changed\nnew\nomega';editorDirty=true;updateLineNums();renderEditorVisualDecorations();
     let dirty=editorDirtyDiffState();
     const markerCount=document.querySelectorAll('#editor-visual-layer .editor-dirty-diff-gutter').length;
+    const toolbar=document.querySelector('#editor-visual-layer .editor-dirty-diff-toolbar');
+    const actionCount=document.querySelectorAll('#editor-visual-layer .editor-dirty-diff-action').length;
+    const removedRows=document.querySelectorAll('#editor-visual-layer .editor-dirty-diff-line.removed').length;
+    const hunkCount=editorDirtyDiffHunks(dirty.decorations||[]).length;
     const featureState=editorLanguageFeatureStateSnapshot();
     setActiveEditorBaselineContent(ed.value);
     let reset=editorDirtyDiffState();
@@ -35864,12 +35970,20 @@ function editorDirtyDiffSelfCheckSnapshot(){
       modified:dirty.summary&&dirty.summary.modified||0,
       removed:dirty.summary&&dirty.summary.removed||0,
       markerCount,
+      hunkCount,
+      hasToolbar:!!toolbar,
+      toolbarText:toolbar?toolbar.textContent:'',
+      actionCount,
+      removedRows,
       featureDiffTotal:featureState.features&&featureState.features.diff&&featureState.features.diff.total||0,
+      featureDiffHunks:featureState.features&&featureState.features.diff&&featureState.features.diff.hunks||0,
       featureDiffMessage:featureState.features&&featureState.features.diff&&featureState.features.diff.message||'',
       resetTotal:reset.summary&&reset.summary.total||0,
       pass:(clean.summary&&clean.summary.total||0)===0&&
         (dirty.summary&&dirty.summary.total||0)>0&&markerCount>0&&
+        hunkCount>0&&!!toolbar&&toolbar.textContent.includes('Diff')&&actionCount>=3&&
         ((featureState.features&&featureState.features.diff&&featureState.features.diff.total)||0)>0&&
+        ((featureState.features&&featureState.features.diff&&featureState.features.diff.hunks)||0)>0&&
         (reset.summary&&reset.summary.total||0)===0
     };
   }finally{
