@@ -1172,6 +1172,15 @@ pre.code-block code .type { color:var(--fg-type); }
 .workflow-popup-action { width:20px; height:20px; border:1px solid transparent; border-radius:4px; background:transparent; color:var(--fg-dim); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
 .workflow-popup-action:hover,.workflow-popup-action:focus { border-color:var(--border-focus); background:var(--bg-hover); color:var(--fg); outline:none; }
 .workflow-popup-action.delete:hover,.workflow-popup-action.delete:focus { color:var(--fg-error); }
+.workflow-mode-strip { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:4px; padding:4px; border-bottom:1px solid var(--border); }
+.workflow-mode-option { border:1px solid var(--border); border-radius:5px; padding:5px 6px; min-height:44px; }
+.workflow-mode-option .mp-icon { display:none; }
+.workflow-mode-option .mp-label { font-size:11px; text-align:center; }
+.workflow-mode-option .mp-desc { font-size:10px; text-align:center; white-space:normal; line-height:1.25; }
+.workflow-mode-option.active { border-color:var(--fg-accent); background:color-mix(in srgb,var(--fg-accent) 14%,transparent); }
+.workflow-mode-toolbar { display:flex; align-items:center; justify-content:space-between; gap:6px; padding:5px 7px; color:var(--fg-dim); font-size:11px; border-bottom:1px solid var(--border); }
+.workflow-mode-toolbar button { height:22px; padding:1px 7px; border:1px solid var(--border); border-radius:4px; background:var(--bg3); color:var(--fg-dim); cursor:pointer; }
+.workflow-mode-toolbar button:hover,.workflow-mode-toolbar button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
 .workflow-save-options { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px; }
 .workflow-save-options .wide { grid-column:1 / -1; }
 .workflow-step-editor { display:flex; flex-direction:column; gap:8px; margin-top:4px; }
@@ -12327,9 +12336,22 @@ function normalizeEditorDiagnostic(item){
     severity:editorDiagnosticSeverityValue(item.severity),
     source:item.source==null?'':String(item.source),
     code:item.code,
+    tags:Array.isArray(item.tags)?item.tags.slice(0,8):[],
     uri:item.uri,
     file:item.file
   };
+}
+function editorDiagnosticCodeLabel(code){
+  if(code==null||code==='')return '';
+  if(typeof code==='string'||typeof code==='number')return String(code);
+  if(code&&typeof code==='object')return String(code.value||code.code||code.target||'').trim();
+  return String(code);
+}
+function editorDiagnosticTagLabel(tag){
+  const raw=String(tag||'').toLowerCase();
+  if(raw==='1'||raw==='unnecessary')return 'unnecessary';
+  if(raw==='2'||raw==='deprecated')return 'deprecated';
+  return raw;
 }
 function editorDiagnosticRangeIntersects(diagnosticRange,targetRange){
   if(!diagnosticRange||!diagnosticRange.start||!targetRange||!targetRange.start)return false;
@@ -17560,9 +17582,15 @@ function renderProblemsRows(rows){
     const sev=editorDiagnosticSeverityLabel(d.severity);
     const color=sev==='error'?'var(--fg-error)':sev==='warning'?'var(--fg-warning)':sev==='info'?'var(--fg-accent)':'var(--fg-dim)';
     const location=d.file?String(d.file)+(d.line?':'+d.line:''):'';
+    const code=editorDiagnosticCodeLabel(d.code);
+    const tags=(Array.isArray(d.tags)?d.tags:[]).map(editorDiagnosticTagLabel).filter(Boolean);
+    const meta=[d.source,code].filter(Boolean).join(' ');
+    const tagText=tags.length?' ['+tags.join(', ')+']':'';
     row.innerHTML='<span style="color:'+color+'">'+esc(sev.toUpperCase())+'</span> '
-      +(location?'<span style="color:var(--fg-accent)">'+esc(location)+'</span> ':'')+esc(d.message||'');
-    row.title=(d.source?String(d.source)+': ':'')+String(d.message||'');
+      +(location?'<span style="color:var(--fg-accent)">'+esc(location)+'</span> ':'')
+      +esc(d.message||'')
+      +(meta||tagText?' <span style="color:var(--fg-dim);font-family:var(--mono)">('+esc(meta+tagText)+')</span>':'');
+    row.title=[d.source,code,String(d.message||'')].filter(Boolean).join(': ')+(tagText?' '+tagText:'');
     row.onmousedown=()=>{if(d.range&&d.range.start){ed.focus();const off=editorOffsetFromPosition(ed.value,d.range.start);ed.selectionStart=ed.selectionEnd=off;updateCursorPos();renderEditorDiagnostics(_editorDiagnostics)}};
     el.appendChild(row);
   });
@@ -20445,7 +20473,7 @@ function chatControlPopupItem(kind,item,active){
 }
 function workflowModePopupItem(mode,label,desc,active){
   const row=document.createElement('div');
-  row.className='mode-popup-item'+(active?' active':'');
+  row.className='mode-popup-item workflow-mode-option'+(active?' active':'');
   row.setAttribute('role','option');
   row.setAttribute('aria-selected',active?'true':'false');
   row.tabIndex=-1;
@@ -20457,6 +20485,20 @@ function workflowModePopupItem(mode,label,desc,active){
     if(e.key==='Enter'||e.key===' '){e.preventDefault();row.click()}
   };
   return row;
+}
+function workflowModeToolbar(mode){
+  const bar=document.createElement('div');
+  bar.className='workflow-mode-toolbar';
+  const label=document.createElement('span');
+  label.textContent='Workflow mode: '+(mode==='custom'?'Custom':mode==='on'?'On':'Off');
+  bar.appendChild(label);
+  const edit=document.createElement('button');
+  edit.type='button';
+  edit.textContent='Edit Custom';
+  edit.title='Edit the custom workflow prompt';
+  edit.onclick=e=>{e.preventDefault();e.stopPropagation();selectWorkflowModeFromPopup('custom')};
+  bar.appendChild(edit);
+  return bar;
 }
 function focusChatControlPopupOption(kind,delta){
   const popup=$('chat-'+kind+'-popup');
@@ -20507,10 +20549,13 @@ function renderChatControlPopups(){
   }
   if(workflowPopup){
     workflowPopup.innerHTML='';
-    workflowPopup.appendChild(workflowModePopupItem('off','Off','Plain chat without workflow orchestration',workflowMode==='off'));
-    workflowPopup.appendChild(workflowModePopupItem('on','On','Use the selected workflow when running from the toolbar',workflowMode==='on'));
-    workflowPopup.appendChild(workflowModePopupItem('custom','Custom','Use your custom workflow prompt text',workflowMode==='custom'));
-    const topSep=document.createElement('div');topSep.className='mode-popup-sep';workflowPopup.appendChild(topSep);
+    const modeStrip=document.createElement('div');
+    modeStrip.className='workflow-mode-strip';
+    modeStrip.appendChild(workflowModePopupItem('off','Off','Plain chat',workflowMode==='off'));
+    modeStrip.appendChild(workflowModePopupItem('on','On','Use preset',workflowMode==='on'));
+    modeStrip.appendChild(workflowModePopupItem('custom','Custom','Use prompt',workflowMode==='custom'));
+    workflowPopup.appendChild(modeStrip);
+    workflowPopup.appendChild(workflowModeToolbar(workflowMode));
     workflowPopup.appendChild(chatControlPopupItem('workflow',{id:'',name:'No preset workflow',description:'Keep workflow mode but clear the preset selection',icon:'○',steps:[]},!workflowId));
     if(chatControlState.workflows.length){
       const sep=document.createElement('div');sep.className='mode-popup-sep';workflowPopup.appendChild(sep);

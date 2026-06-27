@@ -3873,11 +3873,16 @@ def test_phase1_ai_editor_regressions() -> None:
            "const ASSISTANT_WORKFLOW_MODE_KEY='sao-ai-editor-workflow-mode';" in html
            and "function normalizeWorkflowMode(value)" in html
            and "function workflowModePopupItem(mode,label,desc,active)" in html
+           and ".workflow-mode-strip" in html
+           and ".workflow-mode-option" in html
+           and "function workflowModeToolbar(mode)" in html
+           and "Edit Custom" in html
            and "function workflowSlug(value)" in html
            and "async function saveCustomWorkflowDefinition(options)" in html
-           and "workflowPopup.appendChild(workflowModePopupItem('off','Off'" in html
-           and "workflowPopup.appendChild(workflowModePopupItem('on','On'" in html
-           and "workflowPopup.appendChild(workflowModePopupItem('custom','Custom'" in html
+           and "modeStrip.appendChild(workflowModePopupItem('off','Off'" in html
+           and "modeStrip.appendChild(workflowModePopupItem('on','On'" in html
+           and "modeStrip.appendChild(workflowModePopupItem('custom','Custom'" in html
+           and "workflowPopup.appendChild(workflowModeToolbar(workflowMode));" in html
            and "function workflowCustomPromptModal(seed,options)" in html
            and "Save as workflow" in html
            and "call('save_workflow',data)" in html
@@ -3915,7 +3920,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "collectWorkflowStepEditor(stepEditor)" in html
            and "$('wf-id').readOnly=true;" in html
            and "edit.onclick=e=>{e.stopPropagation();createWorkflow(w)};" in html
-           and "Plain chat without workflow orchestration" in html)
+           and "Plain chat" in html)
     _check("frontend Assistant provider workflow popups are keyboard accessible",
            "function focusChatControlPopupOption(kind,delta)" in html
            and "function handleChatControlPopupKeydown(e,kind)" in html
@@ -5275,6 +5280,10 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function editorDiagnosticsForRange(range)" in html
             and "diagnostics:editorDiagnosticsForRange(actionRange)" in html
             and "function renderProblemsRows(rows)" in html
+            and "function editorDiagnosticCodeLabel(code)" in html
+            and "function editorDiagnosticTagLabel(tag)" in html
+            and "tags:Array.isArray(item.tags)?item.tags.slice(0,8):[]" in html
+            and "const code=editorDiagnosticCodeLabel(d.code);" in html
             and "function showEditorCodeActions(actions,position)" in html
            and "function codeActionKindText(kind)" in html
            and "async function resolveEditorCodeAction(action,quiet)" in html
