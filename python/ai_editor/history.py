@@ -20,6 +20,98 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def _native_summary_search_text(summary: Dict[str, Any]) -> str:
+    terms: List[str] = []
+    if summary.get("parts"):
+        terms.append("response parts")
+    if summary.get("todos"):
+        terms.append("todo list")
+    if summary.get("changes"):
+        terms.append("modified files changes edits")
+    if summary.get("refs"):
+        terms.append("references anchors")
+    if summary.get("usedContext"):
+        terms.append("used context")
+    if summary.get("trees"):
+        terms.append("file tree")
+    if summary.get("tokens"):
+        terms.append("tokens usage")
+    if summary.get("errors"):
+        terms.append("error failed")
+    terms.extend(str(v) for v in summary.get("modelLabels", []) if v)
+    terms.extend(str(v) for v in summary.get("keywords", []) if v)
+    return " ".join(terms)
+
+
+def native_summary_from_messages(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {
+        "parts": 0,
+        "todos": 0,
+        "changes": 0,
+        "refs": 0,
+        "usedContext": 0,
+        "trees": 0,
+        "tokens": 0,
+        "errors": 0,
+        "modelLabels": [],
+        "keywords": [],
+        "searchText": "",
+    }
+    models: Dict[str, bool] = {}
+    keywords: Dict[str, bool] = {}
+    for message in messages or []:
+        if not isinstance(message, dict):
+            continue
+        payload = message.get("nativePayload") or message.get("native_payload")
+        if not isinstance(payload, dict):
+            continue
+        model = str(payload.get("model") or "").strip()
+        if model:
+            models[model] = True
+        if payload.get("error"):
+            summary["errors"] += 1
+        parts = payload.get("responseParts") or payload.get("response_parts") or []
+        if isinstance(parts, list):
+            summary["parts"] += len(parts)
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                kind = str(part.get("kind") or "").strip()
+                if kind == "todoList":
+                    todo = part.get("todo") if isinstance(part.get("todo"), dict) else {}
+                    todo_list = todo.get("todoList") or part.get("todoList") or part.get("todo_list") or []
+                    summary["todos"] += len(todo_list) if isinstance(todo_list, list) else 1
+                elif kind == "modifiedFilesConfirmation":
+                    modified = part.get("modifiedFiles") if isinstance(part.get("modifiedFiles"), dict) else {}
+                    files = modified.get("files") or part.get("files") or []
+                    summary["changes"] += len(files) if isinstance(files, list) else 1
+                elif kind:
+                    keywords[kind] = True
+        for key in ("contentReferences", "content_references", "responseReferences", "response_references"):
+            refs = payload.get(key)
+            if isinstance(refs, list):
+                summary["refs"] += len(refs)
+                break
+        used_context = payload.get("usedContext") or payload.get("used_context") or []
+        if isinstance(used_context, list):
+            summary["usedContext"] += len(used_context)
+        trees = payload.get("fileTrees") or payload.get("file_trees") or []
+        if isinstance(trees, list):
+            summary["trees"] += len(trees)
+        usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+        total = usage.get("total_tokens") or usage.get("totalTokens") or usage.get("total") or 0
+        try:
+            total_int = int(total)
+        except (TypeError, ValueError):
+            total_int = 0
+        if total_int > 0:
+            summary["tokens"] += total_int
+    summary["modelLabels"] = sorted(models)
+    summary["keywords"] = sorted(keywords)
+    summary["searchText"] = _native_summary_search_text(summary)
+    return summary
+
+
 def _validate_conversation_id(conv_id: str) -> str:
     normalized = str(conv_id or "").strip()
     if not normalized:
@@ -86,6 +178,7 @@ def save_conversation(conv_id: str, title: str, messages: List[Dict[str, Any]],
         "model": model,
         "saved_at": time.time(),
         "message_count": len(messages),
+        "native_summary": native_summary_from_messages(messages),
         "messages": messages,
     }
     tmp = path + ".tmp"
@@ -119,12 +212,13 @@ def _parse_header_fast(fpath: str, cid: str) -> Optional[Dict[str, Any]]:
     parsing the full messages array.  Falls back to full parse on failure."""
     try:
         with open(fpath, "rb") as f:
-            head = f.read(256)
+            head = f.read(8192)
         text = head.decode("utf-8", errors="replace")
         # The JSON is written with indent=1, so header fields appear in the
         # first ~200 bytes before the "messages" array.
         entry: Dict[str, Any] = {"id": cid, "title": "Untitled",
-                                  "saved_at": 0, "message_count": 0, "model": ""}
+                                  "saved_at": 0, "message_count": 0,
+                                  "model": "", "native_summary": {}}
         import re
         for key in ("id", "title", "model"):
             m = re.search(rf'"{key}":\s*"([^"]*)"', text)
@@ -138,6 +232,16 @@ def _parse_header_fast(fpath: str, cid: str) -> Optional[Dict[str, Any]]:
             m = re.search(rf'"{key}":\s*(\d+)', text)
             if m:
                 entry[key] = int(m.group(1))
+        marker = '"native_summary"'
+        idx = text.find(marker)
+        if idx >= 0:
+            colon = text.find(":", idx + len(marker))
+            brace = text.find("{", colon + 1)
+            if colon >= 0 and brace >= 0:
+                try:
+                    entry["native_summary"] = json.JSONDecoder().raw_decode(text[brace:])[0]
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    entry["native_summary"] = {}
         return entry
     except (OSError, ValueError) as exc:
         logger.debug("Fast header parse failed for %s: %s", fpath, exc)

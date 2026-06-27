@@ -4091,9 +4091,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function selectHistoryItem(index)" in html
            and "function activateHistorySelection()" in html
            and "function confirmDeleteAssistantSession(session)" in html
+           and "function assistantHistoryEntryNativeSummary(entry)" in html
+           and "function assistantHistoryNativeSummaryChips(summary)" in html
            and "function assistantHistorySessionChips(session,current)" in html
            and "function renderHistorySessionItem(list,session,index)" in html
            and "function renderHistoryBackendItem(list,entry,index)" in html
+           and "function assistantSavedHistoryAffordanceSmokeSnapshot()" in html
            and "visibleSessions=localSessions.filter" in html
            and "visibleBackend=backendEntries.filter" in html
            and "item.className='sb-item'+(current?' current':'');" in html
@@ -4110,6 +4113,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "item.dataset.sessionNativeUsedContext=String(nativeSummary.usedContext);" in html
            and "item.dataset.sessionNativeTrees=String(nativeSummary.trees);" in html
            and "item.dataset.sessionNativeTokens=String(nativeSummary.tokens);" in html
+           and "item.dataset.savedNativeParts=String(nativeSummary.parts);" in html
+           and "item.dataset.savedNativeChanges=String(nativeSummary.changes);" in html
+           and "item.dataset.savedNativeRefs=String(nativeSummary.refs);" in html
+           and "item.dataset.savedNativeUsedContext=String(nativeSummary.usedContext);" in html
+           and "item.dataset.savedNativeTrees=String(nativeSummary.trees);" in html
+           and "item.dataset.savedNativeTokens=String(nativeSummary.tokens);" in html
            and "main.className='history-session-main';" in html
            and "el.className='history-session-chip '+chip.kind;" in html
            and ".history-session-chip.running" in html
@@ -4132,8 +4141,17 @@ def test_phase1_ai_editor_regressions() -> None:
            and "['/sessions','Open chat sessions','chat']" in html
            and "else if(cmd==='/fork')assistantSessionForkCurrent();"
            and "const nativeSummary=assistantHistorySessionNativeSummary(s);" in html
+           and "assistantHistoryEntryNativeSummary(e).searchText" in html
+           and "refs.onclick=ev=>{ev.stopPropagation();loadHistoryConv(entry.id,{focus:'references'})};" in html
+           and "edits.onclick=ev=>{ev.stopPropagation();loadHistoryConv(entry.id,{focus:'changes'})};" in html
+           and "tree.onclick=ev=>{ev.stopPropagation();loadHistoryConv(entry.id,{focus:'tree'})};" in html
+           and "function focusLoadedHistoryNativeSection(kind)" in html
+           and "async function loadHistoryConv(id,opts)" in html
+           and "const nativePayload=assistantSessionSerializableNativePayload(m&&m.nativePayload);" in html
+           and "rememberAssistantNativePayload(b,nativePayload);" in html
            and "nativeSummary.searchText" in html
            and "assistantUiSelfCheckRecord(checks,'history-native-affordances-visible'" in html
+           and "assistantUiSelfCheckRecord(checks,'saved-history-native-affordances-visible'" in html
            in html)
     _check("frontend Assistant provider surfaces persist Copilot-style sessions",
            "function assistantProviderSessionId(pid)" in html
@@ -4985,6 +5003,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped'" in html
            and "assistantUiSelfCheckRecord(checks,'agent-popup-configured-agents-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'history-native-affordances-visible'" in html
+           and "assistantUiSelfCheckRecord(checks,'saved-history-native-affordances-visible'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready'" in html
            and "function assistantWorkflowEditorSnapshot()" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready'" in html
@@ -5033,6 +5052,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "agent-popup-configured-agents-ready" in smoke_source
            and "provider-session-state-smoke" in smoke_source
            and "history-native-affordances-visible" in smoke_source
+           and "saved-history-native-affordances-visible" in smoke_source
            and "workflow-result-state-rendered" in smoke_source
            and "workflow-run-button-active-state" in smoke_source
            and "channel: \"msedge\"" in smoke_source
@@ -12819,7 +12839,10 @@ def test_chat_controller_tool_loop() -> None:
 
 def test_history() -> None:
     print("── History ──")
-    from ai_editor.history import save_conversation, load_conversation, list_conversations, delete_conversation
+    from ai_editor.history import (
+        save_conversation, load_conversation, list_conversations,
+        delete_conversation, native_summary_from_messages,
+    )
 
     cid = "_selftest_temp"
     save_conversation(cid, "Selftest", [{"role": "user", "content": "test"}])
@@ -12829,6 +12852,48 @@ def test_history() -> None:
 
     entries = list_conversations()
     _check("Listed", any(e["id"] == cid for e in entries))
+
+    native_cid = "_selftest_native_history"
+    native_messages = [
+        {"role": "user", "content": "inspect"},
+        {"role": "assistant", "content": "done", "nativePayload": {
+            "model": "selftest-model",
+            "responseParts": [
+                {"kind": "todoList", "todoList": [
+                    {"title": "Inspect native history", "status": "completed"}]},
+                {"kind": "modifiedFilesConfirmation", "files": [
+                    {"uri": "file:///tmp/history.py", "title": "history.py"}]},
+            ],
+            "contentReferences": [{"kind": "anchor", "label": "history.py"}],
+            "usedContext": [{"kind": "file", "label": "context.py"}],
+            "fileTrees": [{"label": "tree", "items": [{"name": "history.py"}]}],
+            "usage": {"total_tokens": 24},
+        }},
+    ]
+    summary = native_summary_from_messages(native_messages)
+    save_conversation(native_cid, "Native History", native_messages,
+                      model="selftest-model")
+    native_loaded = load_conversation(native_cid)
+    native_entries = list_conversations()
+    native_entry = next((e for e in native_entries if e["id"] == native_cid), {})
+    native_list_summary = native_entry.get("native_summary", {})
+    _check("history native summary computed",
+           summary.get("parts") == 2
+           and summary.get("todos") == 1
+           and summary.get("changes") == 1
+           and summary.get("refs") == 1
+           and summary.get("usedContext") == 1
+           and summary.get("trees") == 1
+           and summary.get("tokens") == 24
+           and "modified files" in summary.get("searchText", ""))
+    _check("history persists native payload and header summary",
+           native_loaded is not None
+           and native_loaded["messages"][1].get("nativePayload", {}).get("model") == "selftest-model"
+           and native_loaded.get("native_summary", {}).get("changes") == 1
+           and native_list_summary.get("parts") == 2
+           and native_list_summary.get("refs") == 1
+           and "file tree" in native_list_summary.get("searchText", ""))
+    delete_conversation(native_cid)
 
     delete_conversation(cid)
     _check("Deleted", load_conversation(cid) is None)
