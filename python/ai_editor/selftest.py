@@ -9480,7 +9480,7 @@ console.log("frontend word separator behavior ok");
             and "SETTINGS_SCOPE_FILTERS[scope]" in html
             and "visible of '+total+' settings groups" in html
             and "use @error to filter invalid settings" in html
-            and "if(query.error&&!group.querySelector('[aria-invalid=\"true\"],.settings-field.invalid,.settings-input-invalid'))return false;" in html)
+            and "if(query.error&&!group.querySelector('[aria-invalid=\"true\"],.settings-field.invalid:not(.settings-target-hidden),.settings-input-invalid'))return false;" in html)
     _check("frontend settings uses VS Code style settings layout",
            "class=\"modal settings-modal\"" in html
            and "class=\"settings-titlebar\"" in html
@@ -9493,13 +9493,29 @@ console.log("frontend word separator behavior ok");
            and "data-settings-title=\"Editor / Files\"" in html
            and "function renderSettingsNav()" in html
            and "function scrollToSettingsSection(id)" in html
-           and "function selectSettingsTarget(target)" in html
+           and "function selectSettingsTarget(target,options)" in html
            and "function updateSettingsNavCounts()" in html
-           and "input.value=(input.value+' @workspace').trim();" in html
-           and "input.value=(input.value+' @extensions').trim();" in html
+           and "id=\"settings-target-summary\"" in html
+           and "const SETTINGS_VIEW_STORAGE_KEY='sao.aiEditor.settings.view.v1';" in html
+           and "function settingsRowMatchesTarget(row,target)" in html
+           and "function applySettingsTargetVisibility(root)" in html
+           and "function settingsGroupMatchesTarget(group,target)" in html
+           and "function settingsVisibleGroupText(group)" in html
+           and "function renderSettingsTargetSummary(stats)" in html
+           and "function resetVisibleModifiedSettings()" in html
+           and "window.resetVisibleModifiedSettings=resetVisibleModifiedSettings;" in html
            and "window.focusSettingsSearch=focusSettingsSearch;" in html
            and "renderSettingsNav();" in html
            and "updateSettingsNavCounts();" in html)
+    _check("frontend settings target tabs filter by scope without mutating search",
+           "input.value=(input.value+' @workspace').trim();" not in html
+           and "input.value=(input.value+' @extensions').trim();" not in html
+           and "row.classList.toggle('settings-target-hidden',!show);" in html
+           and "currentSettingsTarget==='workspace'?'Search workspace settings...'" in html
+           and "persistSettingsViewState({target:currentSettingsTarget,search:q});" in html
+           and "restoreSettingsViewState();" in html
+           and "Reset Visible" in html
+           and "settingsSectionModifiedCount(section)" in html)
     _check("frontend built-in settings expose VS Code style metadata",
            "const SETTING_INPUT_META=" in html
            and "const SETTING_INPUT_MAP=Object.fromEntries" in html
