@@ -3890,6 +3890,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "async function deleteWorkflowFromPopup(id)" in html
            and "function workflowRunSummary(workflow)" in html
            and "function renderWorkflowLaunchSummary(body,launch)" in html
+           and "function updateWorkflowRunStepStatus(runId,data)" in html
+           and "workflowStepOutputVars:workflowStepList(workflow).map" in html
            and "function runCustomWorkflowAsAssistant(inputSeed)" in html
            and "Workflow launch" in html
            and "workflowRunId:String" in html
@@ -4871,6 +4873,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready'" in html
            and "function assistantWorkflowRunCardSnapshot(card)" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-run-card-rendered'" in html
+           and "assistantUiSelfCheckRecord(checks,'workflow-popup-mode-smoke'" in html
+           and "assistantUiSelfCheckRecord(checks,'workflow-run-step-status-updates'" in html
+           and "function assistantWorkflowModeSmokeSnapshot()" in html
            and ".workflow-run-card" in html
            and ".workflow-run-step-agent" in html
            and "assistantUiSelfCheckRecord(checks,'attachments-list-semantics'" in html
@@ -30688,7 +30693,8 @@ def test_agents() -> None:
 def test_workflows() -> None:
     print("── Workflows ──")
     import tempfile, shutil
-    from ai_editor.workflows import WorkflowDef, WorkflowStep, WorkflowRegistry
+    from ai_editor.workflows import (
+        WorkflowDef, WorkflowStep, WorkflowRegistry, WorkflowEngine)
 
     tmpdir = tempfile.mkdtemp(prefix="sao_wf_test_")
     try:
@@ -30742,6 +30748,57 @@ def test_workflows() -> None:
         _check("wf to_dict", d["id"] == "review-and-fix" and len(d["steps"]) == 2)
         restored = WorkflowDef.from_dict(d)
         _check("wf from_dict roundtrip", restored.id == "review-and-fix")
+
+        class _Resp:
+            def __init__(self, content: str, error: str = "") -> None:
+                self.content = content
+                self.error = error
+
+        class _FakeWorkflowLlm:
+            def __init__(self) -> None:
+                self.prompts = []
+
+            def reset_cancel(self) -> None:
+                pass
+
+            def chat_completion_stream(self, messages, tools=None,
+                                       on_delta=None):
+                prompt = messages[-1]["content"]
+                self.prompts.append(prompt)
+                return _Resp("out-" + str(len(self.prompts)))
+
+        class _FakeAgents:
+            def get(self, _agent_id):
+                return None
+
+        llm = _FakeWorkflowLlm()
+        wf_engine = WorkflowEngine(llm, _FakeAgents())
+        events = []
+        chained = WorkflowDef(
+            id="chain", name="Chain", steps=[
+                WorkflowStep(prompt="First {{input}}", output_var="first",
+                             label="First"),
+                WorkflowStep(prompt="Second {{first}}", output_var="second",
+                             label="Second", agent="reviewer"),
+            ])
+        result = wf_engine.run(
+            chained, "seed",
+            lambda i, total, step: events.append(
+                ("start", i, total, step.label, step.output_var)),
+            lambda i, total, step, output, error: events.append(
+                ("end", i, total, step.label, step.output_var, output, error)),
+            run_id="wf-selftest")
+        _check("workflow engine carries run id and step metadata",
+               result.get("workflowRunId") == "wf-selftest"
+               and result.get("steps", [{}])[0].get("output_var") == "first"
+               and result.get("steps", [{}, {}])[1].get("agent") == "reviewer"
+               and result.get("final_output") == "out-2")
+        _check("workflow engine interpolates previous step output",
+               llm.prompts == ["First seed", "Second out-1"])
+        _check("workflow engine step callbacks expose output vars",
+               events[0] == ("start", 0, 2, "First", "first")
+               and events[1] == ("end", 0, 2, "First", "first", "out-1", None)
+               and events[2] == ("start", 1, 2, "Second", "second"))
 
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

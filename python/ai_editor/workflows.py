@@ -310,8 +310,10 @@ class WorkflowEngine:
     def run(self, workflow: WorkflowDef, input_text: str,
             on_step_start: Optional[Callable] = None,
             on_step_end: Optional[Callable] = None,
+            run_id: str = "",
             ) -> Dict[str, Any]:
         """Run synchronously — call from a background thread."""
+        run_id = str(run_id or "").strip()
         context: Dict[str, str] = {"input": input_text}
         results: List[Dict[str, Any]] = []
 
@@ -352,6 +354,7 @@ class WorkflowEngine:
                 "step": i,
                 "agent": step.agent,
                 "label": step.label or f"Step {i + 1}",
+                "output_var": step.output_var,
                 "output": output,
             }
             if error:
@@ -366,4 +369,4 @@ class WorkflowEngine:
 
         final = results[-1]["output"] if results else ""
         return {"workflow": workflow.id, "steps": results,
-                "final_output": final}
+                "final_output": final, "workflowRunId": run_id}

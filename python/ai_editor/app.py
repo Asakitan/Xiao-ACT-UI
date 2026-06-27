@@ -7941,25 +7941,32 @@ class AIEditorAPI:
         self._ensure_engine()
         return self._wf_registry.delete_custom(wf_id)
 
-    def run_workflow(self, wf_id: str, input_text: str) -> Dict:
+    def run_workflow(self, wf_id: str, input_text: str,
+                     run_id: str = "") -> Dict:
         """Run a workflow from the UI. Executes in the calling thread."""
         self._ensure_engine()
         wf = self._wf_registry.get(wf_id)
         if not wf:
             return {"error": f"Workflow not found: {wf_id}"}
+        run_id = str(run_id or "").strip()
 
         def _on_start(i, total, step):
             self._emit("workflow_step", {
+                "workflowRunId": run_id, "workflowId": wf.id,
                 "step": i, "total": total,
-                "label": step.label, "status": "running"})
+                "label": step.label, "agent": step.agent,
+                "output_var": step.output_var, "status": "running"})
 
         def _on_end(i, total, step, output, error):
             self._emit("workflow_step", {
+                "workflowRunId": run_id, "workflowId": wf.id,
                 "step": i, "total": total,
-                "label": step.label, "status": "done",
+                "label": step.label, "agent": step.agent,
+                "output_var": step.output_var,
+                "status": "error" if error else "done",
                 "preview": (output or "")[:300], "error": error})
 
-        return self._wf_engine.run(wf, input_text, _on_start, _on_end)
+        return self._wf_engine.run(wf, input_text, _on_start, _on_end, run_id)
 
     # ── Engine action handlers (registered on gui._ai_engine_actions) ──
 
@@ -8042,11 +8049,12 @@ class AIEditorAPI:
     def _eng_run_workflow(self, kw: Dict) -> Dict:
         wf_id = kw.get("workflow_id", "")
         input_text = kw.get("input", "")
+        run_id = str(kw.get("run_id") or kw.get("workflowRunId") or "").strip()
         wf = self._wf_registry.get(wf_id)
         if not wf:
             return {"error": f"Workflow not found: {wf_id}",
                     "available": [w.id for w in self._wf_registry.list_all()]}
-        return self._wf_engine.run(wf, input_text)
+        return self._wf_engine.run(wf, input_text, run_id=run_id)
 
     # ── Extension Host API ──
 
