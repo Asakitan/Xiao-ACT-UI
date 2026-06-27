@@ -2916,6 +2916,13 @@ class AIEditorAPI:
         names: Dict[str, Dict[str, Any]] = {}
         for name, meta in list_all_models().items():
             names[str(name)] = _as_dict(meta)
+        for name, meta in custom_models.items():
+            model_id = str(name or "").strip()
+            if not model_id:
+                continue
+            item = _as_dict(meta)
+            item["custom"] = True
+            names[model_id] = item
         for provider in Provider:
             default_model = self._default_model_for_provider(provider.value)
             if default_model:
@@ -2924,12 +2931,13 @@ class AIEditorAPI:
             names.setdefault(current_model, {})
         items = []
         for name in sorted(names):
+            meta = _as_dict(names.get(name))
             ctx = get_model_context(name)
             items.append({
                 "id": name,
                 "name": name,
                 "current": name == current_model,
-                "custom": name in custom_models,
+                "custom": bool(meta.get("custom") or name in custom_models),
                 "provider": meta.get("provider", ""),
                 "base_url": meta.get("base_url", ""),
                 "max_input": ctx["max_input"],

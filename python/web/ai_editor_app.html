@@ -1226,11 +1226,15 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-used-context-title { color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; letter-spacing:.5px; }
 .chat-used-context-list { display:flex; flex-wrap:wrap; gap:5px; }
 
-.chat-control-strip { display:flex; align-items:center; gap:4px; flex:1 1 auto; flex-wrap:nowrap; min-width:0;
-  overflow:visible; max-width:100%; }
+.chat-control-strip { display:flex; align-items:center; gap:5px; flex:1 1 auto; flex-wrap:nowrap; min-width:0;
+  overflow:visible; max-width:100%;
+  --chat-provider-width:clamp(126px,14vw,154px);
+  --chat-model-width:clamp(238px,28vw,360px);
+  --chat-agent-width:clamp(164px,17vw,228px);
+  --chat-workflow-width:clamp(174px,18vw,248px); }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
   border-radius:999px; background:var(--bg3); color:var(--fg); font:11px var(--sans);
-  outline:none; min-width:0; }
+  outline:none; min-width:0; box-sizing:border-box; appearance:none; -webkit-appearance:none; line-height:20px; }
 .chat-chip,.chat-model-inline,.chat-run-chip { display:inline-flex; align-items:center; gap:4px; padding:0 8px; cursor:pointer;
   transition:border-color .14s ease, background .14s ease, color .14s ease, box-shadow .14s ease; }
 .chat-select-chip { width:150px; max-width:208px; padding:0 9px; cursor:pointer; flex:0 1 150px; }
@@ -1249,12 +1253,12 @@ pre.code-block code .type { color:var(--fg-type); }
   transition:border-color .14s ease, background .14s ease, color .14s ease, box-shadow .14s ease; }
 .chat-control-trigger .control-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-control-trigger .control-caret { font-size:8px; opacity:.65; margin-left:4px; flex:0 0 auto; }
-.chat-control-trigger.provider { width:148px; min-width:136px; max-width:208px; flex:0 0 148px; }
-.chat-control-trigger.model { width:280px; min-width:240px; max-width:360px; flex:0 0 280px; }
-.chat-control-trigger.agent { width:188px; min-width:168px; max-width:240px; flex:0 0 188px; }
+.chat-control-trigger.provider { width:var(--chat-provider-width); min-width:126px; max-width:154px; flex:0 0 var(--chat-provider-width); }
+.chat-control-trigger.model { width:var(--chat-model-width); min-width:238px; max-width:360px; flex:0 0 var(--chat-model-width); }
+.chat-control-trigger.agent { width:var(--chat-agent-width); min-width:164px; max-width:228px; flex:0 0 var(--chat-agent-width); }
 .chat-control-trigger.mode { width:92px; min-width:88px; max-width:120px; flex:0 0 92px; color:var(--fg-accent);
   border-color:color-mix(in srgb, var(--border-focus) 50%, var(--border)); }
-.chat-control-trigger.workflow { width:206px; min-width:184px; max-width:270px; flex:0 0 206px; }
+.chat-control-trigger.workflow { width:var(--chat-workflow-width); min-width:174px; max-width:248px; flex:0 0 var(--chat-workflow-width); }
 .chat-control-popup { position:absolute; bottom:calc(100% + 7px); left:0; display:none; min-width:250px;
   max-width:min(420px, calc(100vw - 24px)); max-height:min(360px, 55vh); overflow:auto;
   background:var(--bg2); border:1px solid color-mix(in srgb,var(--border-focus) 32%,var(--border));
@@ -8181,6 +8185,8 @@ function assistantCustomEndpointModelPickerSnapshot(){
   return {
     rowIds:rows.map(controlItemId),
     rowCount:rows.length,
+    firstRow:rows.length?controlItemId(rows[0]):'',
+    endpointBeforeFetched:rows.map(controlItemId).indexOf('custom-endpoint-setting-model')>-1&&rows.map(controlItemId).indexOf('custom-endpoint-setting-model')<rows.map(controlItemId).indexOf('custom-endpoint-fetched-model'),
     preferred,
     provider:'openai',
     baseUrl:'https://custom.endpoint.example/v1',
@@ -8537,13 +8543,14 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready',providerPopup.shown&&providerPopup.optionCount>=1&&providerPopup.focusableCount===providerPopup.optionCount&&providerPopup.keyboardReady,JSON.stringify(providerPopup));
   assistantUiSelfCheckRecord(checks,'model-popup-configured-models-ready',modelPopup.shown&&modelPopup.optionCount>=1&&modelPopup.focusableCount===modelPopup.optionCount&&modelPopup.keyboardReady,JSON.stringify(modelPopup));
   assistantUiSelfCheckRecord(checks,'model-popup-custom-endpoint-models-ready',modelPopup.shown&&modelPopup.customModelCount>=1&&modelPopup.visibleText.includes('custom-endpoint-model')&&modelPopup.visibleText.toLowerCase().includes('custom endpoint'),JSON.stringify(modelPopup));
-  assistantUiSelfCheckRecord(checks,'model-popup-custom-endpoint-selection-ready',customEndpointModelPicker.provider==='openai'&&customEndpointModelPicker.rowIds.includes('custom-endpoint-setting-model')&&customEndpointModelPicker.rowIds.includes('custom-endpoint-fetched-model')&&customEndpointModelPicker.preferred==='custom-endpoint-setting-model'&&customEndpointModelPicker.optionCount>=2&&customEndpointModelPicker.customModelCount>=2&&customEndpointModelPicker.keyboardReady,JSON.stringify(customEndpointModelPicker));
+  assistantUiSelfCheckRecord(checks,'model-popup-custom-endpoint-selection-ready',customEndpointModelPicker.provider==='openai'&&customEndpointModelPicker.rowIds.includes('custom-endpoint-setting-model')&&customEndpointModelPicker.rowIds.includes('custom-endpoint-fetched-model')&&customEndpointModelPicker.firstRow==='custom-endpoint-setting-model'&&customEndpointModelPicker.endpointBeforeFetched&&customEndpointModelPicker.preferred==='custom-endpoint-setting-model'&&customEndpointModelPicker.optionCount>=2&&customEndpointModelPicker.customModelCount>=2&&customEndpointModelPicker.keyboardReady,JSON.stringify(customEndpointModelPicker));
   assistantUiSelfCheckRecord(checks,'composer-native-selects-hidden',layout.nativeHidden===true,JSON.stringify(layout.nativeControls));
   assistantUiSelfCheckRecord(checks,'mode-popup-custom-control-ready',modePopup.shown&&modePopup.optionCount>=6&&modePopup.modeActionCount>=6&&modePopup.keyboardReady&&!modePopup.oldModePopupPresent&&modePopup.visibleText.includes('Agent')&&modePopup.visibleText.includes('Default Approvals'),JSON.stringify(modePopup));
   assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped',[providerPopup,modelPopup,agentPopup,modePopup,workflowPopup].every(s=>s.shown&&s.display==='block'&&s.rectReady&&s.opensAboveTrigger&&s.notToolbarClipped&&!s.className.includes('mode-popup')),JSON.stringify({providerPopup,modelPopup,agentPopup,modePopup,workflowPopup}));
   assistantUiSelfCheckRecord(checks,'agent-popup-configured-agents-ready',agentPopup.shown&&agentPopup.optionCount>=1&&agentPopup.focusableCount===agentPopup.optionCount&&agentPopup.keyboardReady&&agentPopup.visibleText.includes('Agent'),JSON.stringify(agentPopup));
   assistantUiSelfCheckRecord(checks,'visual-composer-fill-ready',visualLayout.ok&&visualLayout.composerLeftAligned&&visualLayout.composerRightAligned&&visualLayout.composerFillsArea&&visualLayout.composerBottomFilled,JSON.stringify(visualLayout));
   assistantUiSelfCheckRecord(checks,'visual-controls-one-row-ready',visualLayout.toolbarOneLine&&visualLayout.metaInsideTrailing&&visualLayout.buttonSurfaceReady&&visualLayout.triggerMotionReady,JSON.stringify(visualLayout));
+  assistantUiSelfCheckRecord(checks,'visual-control-widths-ready',visualLayout.controlWidthsReady===true,JSON.stringify(visualLayout.triggerWidths));
   assistantUiSelfCheckRecord(checks,'visual-no-old-control-boxes-ready',visualLayout.noOldNativeBoxes===true,JSON.stringify(visualLayout.nativeBoxes));
   assistantUiSelfCheckRecord(checks,'visual-popup-surfaces-ready',visualLayout.popupsCustomSurface&&visualLayout.popupsOpenAbove&&visualLayout.popupMotionReady,JSON.stringify(visualLayout.popups));
   assistantUiSelfCheckRecord(checks,'visual-model-custom-endpoint-ready',visualLayout.modelEndpointReady===true,JSON.stringify(visualLayout));
@@ -8703,6 +8710,8 @@ function assistantVisualLayoutSnapshot(){
   const modelPopup=popupSnapshots.find(item=>item.kind==='model')||{};
   const workflowPopup=popupSnapshots.find(item=>item.kind==='workflow')||{};
   const toolbarOverlap=!!(controlsRect&&trailingRect&&controlsRect.right>trailingRect.left+1&&Math.abs(controlsRect.top-trailingRect.top)<=1);
+  const triggerWidthMap={};
+  triggers.forEach(item=>{triggerWidthMap[item.id]=item.width});
   return {
     ok:!!(panel&&area&&container&&toolbar&&controls&&trailing),
     panel:panelRect,
@@ -8724,6 +8733,8 @@ function assistantVisualLayoutSnapshot(){
     triggerMotionReady:triggers.every(item=>item.transition.includes('border-color')&&item.transition.includes('background')),
     nativeBoxes,
     noOldNativeBoxes:nativeBoxes.every(item=>item.exists&&item.display==='none'&&item.ariaHidden==='true'&&item.width===0&&item.height===0),
+    triggerWidths:triggerWidthMap,
+    controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=126&&triggerWidthMap['chat-model-inline']>=238&&triggerWidthMap['chat-agent-trigger']>=164&&triggerWidthMap['chat-workflow-trigger']>=174),
     popups:popupSnapshots,
     popupsCustomSurface:popupSnapshots.every(item=>item.customSurface&&item.shown&&item.display==='block'&&item.pointerEvents==='auto'),
     popupsOpenAbove:popupSnapshots.every(item=>item.rectReady&&item.opensAboveTrigger&&item.notToolbarClipped),
@@ -23513,6 +23524,11 @@ function modelOptionRows(){
     const id=controlItemId(model);
     if(id&&!out.some(item=>controlItemId(item)===id))out.push(model);
   };
+  customEndpointSettingModelRows(provider).forEach(model=>pushModel(model));
+  settingsModelListRows(provider).forEach(model=>pushModel(model));
+  normalizeControlList(chatProviderModelOptions[provider],'models').forEach(model=>pushModel({
+    id:controlItemId(model),name:controlItemName(model)||controlItemId(model),provider,custom:provider==='custom'||!!String(config.base_url||'').trim(),description:provider==='custom'||!!String(config.base_url||'').trim()?'Custom endpoint model':'Fetched from '+providerLabel(provider),base_url:config.base_url||''
+  }));
   Object.keys(config.custom_models||{}).sort().forEach(name=>{
     const meta=config.custom_models[name]||{};
     pushModel({
@@ -23524,11 +23540,6 @@ function modelOptionRows(){
     const meta=model&&typeof model==='object'?model:{};
     if((meta.custom||providerMatchesModelMeta(meta,provider)))pushModel(model);
   });
-  customEndpointSettingModelRows(provider).forEach(model=>pushModel(model));
-  normalizeControlList(chatProviderModelOptions[provider],'models').forEach(model=>pushModel({
-    id:controlItemId(model),name:controlItemName(model)||controlItemId(model),provider,custom:provider==='custom',description:provider==='custom'?'Custom endpoint model':'Fetched from '+providerLabel(provider),base_url:config.base_url||''
-  }));
-  settingsModelListRows(provider).forEach(model=>pushModel(model));
   const defaultModel=providerDefaultModelFromControls(provider);
   if(defaultModel&&!out.some(item=>controlItemId(item)===defaultModel))out.push({id:defaultModel,name:defaultModel,provider,current:true,description:'Provider default'});
   const activeModel=activeModelValue();
