@@ -3898,8 +3898,19 @@ def test_phase1_ai_editor_regressions() -> None:
            and "deleteWorkflowFromPopup(id)" in html
            and "edit.setAttribute('aria-label','Edit workflow '+name);" in html
            and "del.setAttribute('aria-label','Delete workflow '+name);" in html
+           and "function defaultWorkflowStep(index)" in html
+           and "function normalizeWorkflowStepForEditor(step,index)" in html
+           and "function workflowStepFromEditorRow(row)" in html
+           and "function addWorkflowStepRow(container,step,index)" in html
+           and "function collectWorkflowStepEditor(container)" in html
            and "function createWorkflow(existing)" in html
-           and "modal.innerHTML='<div class=\"modal\"><h2>'+(existing?'Edit Workflow':'New Workflow')+'</h2>'" in html
+           and "modal.innerHTML='<div class=\"modal\" style=\"max-width:760px\"><h2>'+(existing?'Edit Workflow':'New Workflow')+'</h2>'" in html
+           and "workflow-step-editor" in html
+           and "data-step-field=\"agent\"" in html
+           and "data-step-action=\"up\"" in html
+           and "data-step-action=\"down\"" in html
+           and "data-step-action=\"delete\"" in html
+           and "collectWorkflowStepEditor(stepEditor)" in html
            and "$('wf-id').readOnly=true;" in html
            and "edit.onclick=e=>{e.stopPropagation();createWorkflow(w)};" in html
            and "Plain chat without workflow orchestration" in html)
@@ -4849,6 +4860,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantControlPopupSnapshot(kind)" in html
            and "assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready'" in html
+           and "function assistantWorkflowEditorSnapshot()" in html
+           and "assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'attachments-list-semantics'" in html
            and "assistantUiSelfCheckRecord(checks,'attachments-counts-sync'" in html
            and "assistantUiSelfCheckRecord(checks,'attachments-keyboard-controls'" in html

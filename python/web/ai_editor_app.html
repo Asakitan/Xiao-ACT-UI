@@ -1174,6 +1174,14 @@ pre.code-block code .type { color:var(--fg-type); }
 .workflow-popup-action.delete:hover,.workflow-popup-action.delete:focus { color:var(--fg-error); }
 .workflow-save-options { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px; }
 .workflow-save-options .wide { grid-column:1 / -1; }
+.workflow-step-editor { display:flex; flex-direction:column; gap:8px; margin-top:4px; }
+.workflow-step-card { border:1px solid var(--border); border-radius:6px; background:var(--bg2); padding:8px; display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:6px; align-items:end; }
+.workflow-step-card textarea { grid-column:1 / -1; min-height:58px; }
+.workflow-step-card label { margin:0; }
+.workflow-step-actions { display:flex; align-items:center; gap:3px; justify-content:flex-end; }
+.workflow-step-action { width:24px; height:24px; border:1px solid var(--border); border-radius:4px; background:var(--bg3); color:var(--fg); cursor:pointer; }
+.workflow-step-action:hover,.workflow-step-action:focus { border-color:var(--border-focus); background:var(--bg-hover); outline:none; }
+.workflow-step-add { align-self:flex-start; height:24px; border:1px solid var(--border); border-radius:4px; background:var(--bg3); color:var(--fg); cursor:pointer; padding:0 8px; }
 /* Mode popup menu (VSCode-style) */
 .mode-trigger { display:inline-flex; align-items:center; gap:4px; height:22px; padding:0 8px; flex:0 0 auto;
   border:1px solid var(--border); border-radius:999px; background:var(--bg3); color:var(--fg-accent);
@@ -7563,6 +7571,33 @@ function assistantControlPopupSnapshot(kind){
   closeChatControlPopups();
   return snapshot;
 }
+function assistantWorkflowEditorSnapshot(){
+  const before=document.querySelectorAll('.modal-bg.open').length;
+  createWorkflow({id:'assistant-selfcheck-workflow',name:'Assistant Selfcheck Workflow',icon:'⚡',description:'Selfcheck',steps:[
+    {agent:'default',label:'Inspect',prompt:'Inspect {{input}}',output_var:'inspection'},
+    {agent:'reviewer',label:'Review',prompt:'Review inspection',output_var:'review'}
+  ]});
+  const modal=Array.from(document.querySelectorAll('.modal-bg.open')).pop();
+  const editor=$('wf-step-editor');
+  const rows=editor?Array.from(editor.querySelectorAll('.workflow-step-card')):[];
+  const snapshot={
+    before,
+    modalExists:!!modal,
+    editorExists:!!editor,
+    rowCount:rows.length,
+    labelInputs:rows.filter(row=>row.querySelector('[data-step-field="label"]')).length,
+    agentInputs:rows.filter(row=>row.querySelector('[data-step-field="agent"]')).length,
+    outputInputs:rows.filter(row=>row.querySelector('[data-step-field="output_var"]')).length,
+    promptInputs:rows.filter(row=>row.querySelector('[data-step-field="prompt"]')).length,
+    moveButtons:rows.reduce((n,row)=>n+row.querySelectorAll('[data-step-action="up"],[data-step-action="down"]').length,0),
+    deleteButtons:rows.filter(row=>row.querySelector('[data-step-action="delete"]')).length,
+    addButtonExists:!!$('wf-step-add'),
+    collectedCount:editor?collectWorkflowStepEditor(editor).length:0,
+    idReadOnly:!!($('wf-id')&&$('wf-id').readOnly)
+  };
+  if(modal)modal.remove();
+  return snapshot;
+}
 async function runAssistantUiSelfCheck(opts){
   opts=opts||{};
   const checks=[];
@@ -7573,8 +7608,10 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'composer-actions-visible',layout.actions&&layout.actions.width>0,layout.actions&&layout.actions.width);
   const providerPopup=assistantControlPopupSnapshot('provider');
   const workflowPopup=assistantControlPopupSnapshot('workflow');
+  const workflowEditor=assistantWorkflowEditorSnapshot();
   assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready',providerPopup.shown&&providerPopup.optionCount>=1&&providerPopup.focusableCount===providerPopup.optionCount&&providerPopup.keyboardReady,JSON.stringify(providerPopup));
   assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready',workflowPopup.shown&&workflowPopup.workflowModeCount===3&&workflowPopup.optionCount>=4&&workflowPopup.focusableCount===workflowPopup.optionCount&&workflowPopup.keyboardReady,JSON.stringify(workflowPopup));
+  assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready',workflowEditor.modalExists&&workflowEditor.editorExists&&workflowEditor.rowCount===2&&workflowEditor.labelInputs===2&&workflowEditor.agentInputs===2&&workflowEditor.outputInputs===2&&workflowEditor.promptInputs===2&&workflowEditor.moveButtons===4&&workflowEditor.deleteButtons===2&&workflowEditor.addButtonExists&&workflowEditor.collectedCount===2&&workflowEditor.idReadOnly,JSON.stringify(workflowEditor));
 
   const previousAttachments=attachments.slice();
   attachments=[];
@@ -17019,6 +17056,57 @@ function editWorkflowFromPopup(id){
   closeChatControlPopups();
   createWorkflow(workflow);
 }
+function defaultWorkflowStep(index){
+  return {agent:'default',label:'Step '+(Number(index||0)+1),prompt:'{{input}}',output_var:'result'};
+}
+function normalizeWorkflowStepForEditor(step,index){
+  step=step||{};
+  return {
+    agent:String(step.agent||'default'),
+    label:String(step.label||('Step '+(Number(index||0)+1))),
+    prompt:String(step.prompt||'{{input}}'),
+    output_var:String(step.output_var||step.outputVar||'')
+  };
+}
+function workflowStepFromEditorRow(row){
+  return {
+    agent:row.querySelector('[data-step-field="agent"]').value.trim()||'default',
+    label:row.querySelector('[data-step-field="label"]').value.trim()||'Workflow step',
+    output_var:row.querySelector('[data-step-field="output_var"]').value.trim(),
+    prompt:row.querySelector('[data-step-field="prompt"]').value.trim()||'{{input}}'
+  };
+}
+function renumberWorkflowStepCards(container){
+  Array.from(container.querySelectorAll('.workflow-step-card')).forEach((row,index)=>{
+    row.dataset.stepIndex=String(index);
+    const title=row.querySelector('.workflow-step-title');
+    if(title)title.textContent='Step '+(index+1);
+  });
+}
+function addWorkflowStepRow(container,step,index){
+  const data=normalizeWorkflowStepForEditor(step,index);
+  const row=document.createElement('div');
+  row.className='workflow-step-card';
+  row.setAttribute('role','group');
+  row.dataset.stepIndex=String(index||0);
+  row.innerHTML='<label><span class="workflow-step-title">Step '+(Number(index||0)+1)+'</span><input data-step-field="label" placeholder="Label"></label>'
+    +'<label>Agent<input data-step-field="agent" placeholder="default"></label>'
+    +'<label>Output<input data-step-field="output_var" placeholder="result"></label>'
+    +'<div class="workflow-step-actions"><button type="button" class="workflow-step-action" data-step-action="up" title="Move step up">↑</button><button type="button" class="workflow-step-action" data-step-action="down" title="Move step down">↓</button><button type="button" class="workflow-step-action" data-step-action="delete" title="Delete step">×</button></div>'
+    +'<textarea data-step-field="prompt" rows="3" placeholder="Step prompt. Use {{input}} for the workflow input."></textarea>';
+  row.querySelector('[data-step-field="label"]').value=data.label;
+  row.querySelector('[data-step-field="agent"]').value=data.agent;
+  row.querySelector('[data-step-field="output_var"]').value=data.output_var;
+  row.querySelector('[data-step-field="prompt"]').value=data.prompt;
+  row.querySelector('[data-step-action="up"]').onclick=()=>{const prev=row.previousElementSibling;if(prev&&prev.classList.contains('workflow-step-card'))container.insertBefore(row,prev);renumberWorkflowStepCards(container)};
+  row.querySelector('[data-step-action="down"]').onclick=()=>{const next=row.nextElementSibling;if(next&&next.classList.contains('workflow-step-card'))container.insertBefore(next,row);renumberWorkflowStepCards(container)};
+  row.querySelector('[data-step-action="delete"]').onclick=()=>{if(container.querySelectorAll('.workflow-step-card').length>1){row.remove();renumberWorkflowStepCards(container)}};
+  container.appendChild(row);
+  renumberWorkflowStepCards(container);
+}
+function collectWorkflowStepEditor(container){
+  return Array.from(container.querySelectorAll('.workflow-step-card')).map(workflowStepFromEditorRow).filter(step=>step.prompt);
+}
 function workflowRunNewId(workflowId){
   return 'wf-'+String(workflowId||'run').replace(/[^A-Za-z0-9_.:-]+/g,'-')+'-'+Date.now().toString(36);
 }
@@ -17288,31 +17376,36 @@ function createAgent(){
 function createWorkflow(existing){
   existing=existing||null;
   const modal=document.createElement('div');modal.className='modal-bg';modal.classList.add('open');
-  modal.innerHTML='<div class="modal"><h2>'+(existing?'Edit Workflow':'New Workflow')+'</h2>'
+  modal.innerHTML='<div class="modal" style="max-width:760px"><h2>'+(existing?'Edit Workflow':'New Workflow')+'</h2>'
     +'<label>ID (slug)</label><input id="wf-id" placeholder="my-workflow">'
     +'<label>Name</label><input id="wf-name" placeholder="My Workflow">'
     +'<label>Icon</label><input id="wf-icon" value="⚡" style="width:60px">'
     +'<label>Description</label><input id="wf-desc">'
-    +'<label>Steps (JSON array)</label><textarea id="wf-steps" rows="8" style="width:100%;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:6px;font:12px var(--mono);resize:vertical;box-sizing:border-box" placeholder=\'[{"agent":"default","prompt":"{{input}}","output_var":"result","label":"Processing"}]\'></textarea>'
+    +'<label>Steps</label><div class="workflow-step-editor" id="wf-step-editor"></div><button type="button" class="workflow-step-add" id="wf-step-add">+ Add Step</button>'
     +'<label>Scope</label><select id="wf-scope"><option value="workspace">Workspace</option><option value="system">System (global)</option></select>'
     +'<div class="modal-btns"><span class="toolbar-btn" style="border:1px solid var(--border);padding:6px 14px;border-radius:var(--radius);cursor:pointer" onclick="this.closest(\'.modal-bg\').remove()">Cancel</span>'
     +'<button class="send-btn" id="wf-save">Save</button></div></div>';
   call('get_scopes').then(r=>{if(r&&r.scopes)r.scopes.filter(s=>s.scope==='plugin').forEach(s=>{
+    const scopeSel=document.getElementById('wf-scope');if(!scopeSel)return;
     const opt=document.createElement('option');opt.value='plugin:'+s.plugin_id;opt.textContent=s.label;
-    document.getElementById('wf-scope').appendChild(opt);
+    scopeSel.appendChild(opt);
   })});
   document.body.appendChild(modal);modal.onclick=e=>{if(e.target===modal)modal.remove()};
+  const stepEditor=$('wf-step-editor');
+  const initialSteps=existing?workflowStepList(existing):[defaultWorkflowStep(0)];
+  (initialSteps.length?initialSteps:[defaultWorkflowStep(0)]).forEach((step,index)=>addWorkflowStepRow(stepEditor,step,index));
+  $('wf-step-add').onclick=()=>addWorkflowStepRow(stepEditor,defaultWorkflowStep(stepEditor.querySelectorAll('.workflow-step-card').length),stepEditor.querySelectorAll('.workflow-step-card').length);
   if(existing){
     $('wf-id').value=controlItemId(existing);
     $('wf-id').readOnly=true;
     $('wf-name').value=controlItemName(existing);
     $('wf-icon').value=existing.icon||'⚡';
     $('wf-desc').value=existing.description||'';
-    $('wf-steps').value=JSON.stringify(workflowStepList(existing),null,2);
     if(existing._scope)$('wf-scope').value=existing._scope;
   }
   document.getElementById('wf-save').onclick=async()=>{
-    let steps;try{steps=JSON.parse($('wf-steps').value)}catch{showToast('Invalid JSON','error');return}
+    const steps=collectWorkflowStepEditor(stepEditor);
+    if(!steps.length){showToast('Add at least one workflow step','warning',1800);return}
     const data={id:$('wf-id').value.trim(),name:$('wf-name').value.trim(),icon:$('wf-icon').value,
       description:$('wf-desc').value,steps:steps,_scope:$('wf-scope').value};
     if(!data.id||!data.name)return;
