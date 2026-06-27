@@ -647,6 +647,12 @@ body.window-resizing * { cursor:inherit !important; }
 .chat-restore-banner-chip { display:inline-flex; align-items:center; min-height:17px; padding:0 6px;
   border:1px solid var(--border); border-radius:999px; background:var(--bg3); color:var(--fg-dim);
   font:10px/15px var(--mono); }
+.chat-restore-banner-groups { display:flex; flex-wrap:wrap; gap:5px 8px; margin-top:2px; }
+.chat-restore-group { display:inline-flex; align-items:center; min-width:0; gap:4px; color:var(--fg-dim); font:10px var(--mono); }
+.chat-restore-group-label { color:var(--fg-dim); flex-shrink:0; }
+.chat-restore-group-item { max-width:128px; height:19px; border:1px solid transparent; border-radius:4px; background:transparent;
+  color:var(--fg-dim); padding:0 4px; font:10px var(--mono); cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chat-restore-group-item:hover,.chat-restore-group-item:focus { color:var(--fg); border-color:var(--border-focus); background:var(--bg-hover); outline:none; }
 .chat-restore-banner-actions { display:flex; align-items:center; flex-wrap:wrap; justify-content:flex-end; gap:5px; max-width:360px; }
 .chat-restore-banner-action { height:22px; border:1px solid var(--border); border-radius:4px; background:var(--bg3);
   color:var(--fg); padding:0 7px; font:11px var(--sans); cursor:pointer; }
@@ -8167,6 +8173,8 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'action-result-state-restores-and-persists',actionResultRestore.restoredDisabled&&actionResultRestore.restoredState==='submitted'&&actionResultRestore.restoredFlag==='true'&&actionResultRestore.restoredText.includes('✓')&&actionResultRestore.restoredNativeCount===1&&actionResultRestore.trayPendingAfterRestore===0&&actionResultRestore.patchedOk&&actionResultRestore.storedOk&&actionResultRestore.storedAction==='apply'&&actionResultRestore.storedCount===1,JSON.stringify(actionResultRestore));
   assistantUiSelfCheckRecord(checks,'restored-history-banner-ready',restoredHistoryBanner.bannerExists&&restoredHistoryBanner.role==='status'&&restoredHistoryBanner.tabIndex==='-1'&&restoredHistoryBanner.restoreId==='restored-history-selfcheck'&&restoredHistoryBanner.restoreFocus==='changes'&&restoredHistoryBanner.nativeParts===2&&restoredHistoryBanner.nativeChanges===1&&restoredHistoryBanner.nativeRefs===1&&restoredHistoryBanner.nativeTrees===1&&restoredHistoryBanner.nativeActions===1&&restoredHistoryBanner.panelRestoreId==='restored-history-selfcheck'&&restoredHistoryBanner.panelRestoreParts===2&&restoredHistoryBanner.panelRestoreActions===1&&restoredHistoryBanner.chipText.includes('2 msg')&&restoredHistoryBanner.chipText.includes('1 edit')&&restoredHistoryBanner.text.includes('Restored: Restored history selfcheck'),JSON.stringify(restoredHistoryBanner));
   assistantUiSelfCheckRecord(checks,'restored-history-banner-navigation-ready',restoredHistoryBanner.actionKinds.includes('references')&&restoredHistoryBanner.actionKinds.includes('changes')&&restoredHistoryBanner.actionKinds.includes('tree')&&restoredHistoryBanner.actionKinds.includes('actions')&&restoredHistoryBanner.actionKinds.includes('continue')&&restoredHistoryBanner.disabledActions.length===0&&restoredHistoryBanner.focusChanges&&restoredHistoryBanner.focusRefs&&restoredHistoryBanner.focusTree&&restoredHistoryBanner.focusActions,JSON.stringify(restoredHistoryBanner));
+  assistantUiSelfCheckRecord(checks,'restored-history-transcript-groups-ready',restoredHistoryBanner.groupReferences>=2&&restoredHistoryBanner.groupChanges===1&&restoredHistoryBanner.groupTree===1&&restoredHistoryBanner.groupActions>=2&&restoredHistoryBanner.groupKinds.includes('references')&&restoredHistoryBanner.groupKinds.includes('changes')&&restoredHistoryBanner.groupKinds.includes('tree')&&restoredHistoryBanner.groupKinds.includes('actions')&&restoredHistoryBanner.groupTargets.includes('file:///workspace/restored.ts')&&restoredHistoryBanner.groupLabels.includes('restored.ts'),JSON.stringify(restoredHistoryBanner));
+  assistantUiSelfCheckRecord(checks,'restored-history-banner-keyboard-aria-ready',restoredHistoryBanner.toolbarRole==='toolbar'&&restoredHistoryBanner.toolbarLabel==='Restored history actions'&&restoredHistoryBanner.keyboardItems>=8&&restoredHistoryBanner.keyboardMoved&&restoredHistoryBanner.keyboardFocusedAction,JSON.stringify(restoredHistoryBanner));
   assistantUiSelfCheckRecord(checks,'fork-lineage-history-visible',forkLineage.itemExists&&forkLineage.parentResource==='sao-ai-chat://local/parent-lineage-selfcheck'&&forkLineage.parentTitle==='Parent Assistant Session'&&forkLineage.parentId==='parent-lineage-selfcheck'&&forkLineage.branchChildren===1&&forkLineage.labelTitle.includes('Forked from: Parent Assistant Session')&&forkLineage.labelTitle.includes('Branches: 1')&&forkLineage.chipLabels.includes('fork: Parent Assistant Session')&&forkLineage.chipLabels.includes('1 branch')&&forkLineage.chipKinds.some(kind=>kind.includes('lineage'))&&forkLineage.actionLabels.includes('parent')&&forkLineage.actionLabels.includes('branches')&&forkLineage.actionLabels.includes('fork')&&forkLineage.actionKinds.includes('parent-session')&&forkLineage.actionKinds.includes('branch-sessions')&&forkLineage.parentButtonEnabled&&forkLineage.branchesButtonEnabled&&forkLineage.disabledActions.length===0&&forkLineage.searchMatches,JSON.stringify(forkLineage));
   assistantUiSelfCheckRecord(checks,'fork-lineage-chip-visible',forkLineage.chipLabels.includes('fork: Parent Assistant Session')&&forkLineage.chipLabels.includes('1 branch')&&forkLineage.chipKinds.some(kind=>kind.includes('lineage'))&&forkLineage.labelTitle.includes('Forked from: Parent Assistant Session')&&forkLineage.labelTitle.includes('Branches: 1'),JSON.stringify(forkLineage));
   assistantUiSelfCheckRecord(checks,'fork-branch-navigation-visible',forkLineage.parentId==='parent-lineage-selfcheck'&&forkLineage.branchChildren===1&&forkLineage.actionKinds.includes('parent-session')&&forkLineage.actionKinds.includes('branch-sessions')&&forkLineage.parentButtonEnabled&&forkLineage.branchesButtonEnabled&&forkLineage.disabledActions.length===0&&forkLineage.searchMatches,JSON.stringify(forkLineage));
@@ -17672,10 +17680,20 @@ function assistantRestoredHistoryBannerSmokeSnapshot(){
   const banner=renderAssistantRestoredHistoryBanner(data,{focus:'changes',target:'file:///workspace/restored.ts'});
   const panel=$('chat-panel');
   const actions=banner?Array.from(banner.querySelectorAll('[data-restore-action]')):[];
+  const groupButtons=banner?Array.from(banner.querySelectorAll('[data-restore-group]')):[];
+  const toolbar=banner?banner.querySelector('.chat-restore-banner-actions'):null;
+  const firstKeyboard=groupButtons[0]||actions[0]||null;
+  const secondKeyboard=groupButtons[1]||actions[1]||null;
+  if(firstKeyboard)firstKeyboard.focus();
+  if(firstKeyboard){
+    firstKeyboard.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true,cancelable:true}));
+  }
   const snapshot={
     bannerExists:!!banner,
     role:banner?String(banner.getAttribute('role')||''):'',
     tabIndex:banner?String(banner.getAttribute('tabindex')||''):'',
+    toolbarRole:toolbar?String(toolbar.getAttribute('role')||''):'',
+    toolbarLabel:toolbar?String(toolbar.getAttribute('aria-label')||''):'',
     restoreId:banner?String(banner.dataset.restoreHistoryId||''):'',
     restoreFocus:banner?String(banner.dataset.restoreFocus||''):'',
     nativeParts:banner?Number(banner.dataset.restoreNativeParts||0):0,
@@ -17683,6 +17701,16 @@ function assistantRestoredHistoryBannerSmokeSnapshot(){
     nativeRefs:banner?Number(banner.dataset.restoreNativeRefs||0):0,
     nativeTrees:banner?Number(banner.dataset.restoreNativeTrees||0):0,
     nativeActions:banner?Number(banner.dataset.restoreNativeActions||0):0,
+    groupReferences:banner?Number(banner.dataset.restoreGroupReferences||0):0,
+    groupChanges:banner?Number(banner.dataset.restoreGroupChanges||0):0,
+    groupTree:banner?Number(banner.dataset.restoreGroupTree||0):0,
+    groupActions:banner?Number(banner.dataset.restoreGroupActions||0):0,
+    groupKinds:groupButtons.map(el=>String(el.dataset.restoreGroup||'')),
+    groupTargets:groupButtons.map(el=>String(el.dataset.restoreTarget||'')),
+    groupLabels:groupButtons.map(el=>String(el.textContent||'')),
+    keyboardItems:banner?Number(banner.dataset.restoreKeyboardItems||0):0,
+    keyboardMoved:!!(secondKeyboard&&(document.activeElement===secondKeyboard||Number(secondKeyboard.tabIndex)===0)&&(!firstKeyboard||Number(firstKeyboard.tabIndex)===-1)),
+    keyboardFocusedAction:banner?String(banner.dataset.restoreFocusedAction||''):'',
     chipText:banner?Array.from(banner.querySelectorAll('.chat-restore-banner-chip')).map(el=>String(el.textContent||'')):[],
     actionKinds:actions.map(el=>String(el.dataset.restoreAction||'')),
     disabledActions:actions.filter(el=>el.disabled).map(el=>String(el.dataset.restoreAction||'')),
@@ -19052,11 +19080,127 @@ function assistantRestoreBannerChip(label,value){
   chip.textContent=String(value)+' '+label;
   return chip;
 }
+function assistantRestoreTargetLabel(item,fallback){
+  if(!item||typeof item!=='object')return fallback||'item';
+  const value=item.label||item.title||item.name||item.path||item.uri||item.resource||fallback||'item';
+  return String(value).split(/[\\/]/).pop()||String(value)||fallback||'item';
+}
+function assistantRestoreTargetPath(item){
+  if(!item||typeof item!=='object')return '';
+  return String(item.path||item.uri||item.resource||item.file||item.href||'');
+}
+function assistantRestoreAddTarget(groups,kind,item,label){
+  if(!groups||!groups[kind])return;
+  const target=assistantRestoreTargetPath(item);
+  const key=chatHistoryTargetKey(target)||String(label||assistantRestoreTargetLabel(item,kind));
+  if(!key)return;
+  const exists=groups[kind].some(entry=>String(entry.key)===String(key));
+  if(exists)return;
+  groups[kind].push({key,target,label:assistantRestoreTargetLabel(item,label||kind)});
+}
+function assistantRestoreCollectTreeTargets(groups,node){
+  if(!node)return;
+  if(Array.isArray(node)){node.forEach(child=>assistantRestoreCollectTreeTargets(groups,child));return}
+  if(typeof node!=='object')return;
+  if(node.path||node.uri||node.resource)assistantRestoreAddTarget(groups,'tree',node,node.label||node.name||'tree');
+  ['items','children','nodes','entries'].forEach(key=>{
+    const children=node[key];
+    if(Array.isArray(children))children.forEach(child=>assistantRestoreCollectTreeTargets(groups,child));
+  });
+}
+function assistantRestoredHistoryGroups(data){
+  const groups={references:[],changes:[],tree:[],actions:[]};
+  const messages=Array.isArray(data&&data.messages)?data.messages:[];
+  messages.forEach(message=>{
+    const native=assistantSessionSerializableNativePayload(message&&message.nativePayload)||{};
+    (Array.isArray(native.contentReferences)?native.contentReferences:[]).forEach(item=>assistantRestoreAddTarget(groups,'references',item,'ref'));
+    (Array.isArray(native.usedContext)?native.usedContext:[]).forEach(item=>assistantRestoreAddTarget(groups,'references',item,'context'));
+    (Array.isArray(native.responseParts)?native.responseParts:[]).forEach(part=>{
+      if(!part||typeof part!=='object')return;
+      const files=Array.isArray(part.files)?part.files:Array.isArray(part.edits)?part.edits:[];
+      if(part.kind==='modifiedFilesConfirmation'||part.kind==='textEdit'||part.kind==='confirmationTextEdit')files.forEach(file=>assistantRestoreAddTarget(groups,'changes',file,'edit'));
+      if(part.kind==='fileTree'||part.kind==='tree'||Array.isArray(part.items)||Array.isArray(part.children))assistantRestoreCollectTreeTargets(groups,part);
+      if(part.kind==='confirmation'||part.kind==='warning'||part.kind==='progressMessage'||part.kind==='question'||Array.isArray(part.buttons)){
+        groups.actions.push({key:String(part.id||part.callbackId||part.kind||'action')+'-'+groups.actions.length,target:'',label:String(part.title||part.message||part.kind||'action').slice(0,40)});
+      }
+    });
+    (Array.isArray(native.fileTrees)?native.fileTrees:[]).forEach(tree=>assistantRestoreCollectTreeTargets(groups,tree));
+    (Array.isArray(native.actionResults)?native.actionResults:[]).forEach(item=>{
+      if(!item||typeof item!=='object')return;
+      const key=String(item.key||item.action||'action-result')+'-'+groups.actions.length;
+      if(!groups.actions.some(entry=>entry.key===key))groups.actions.push({key,target:'',label:String(item.action||item.key||'submitted').slice(0,40)});
+    });
+  });
+  Object.keys(groups).forEach(kind=>{groups[kind]=groups[kind].slice(0,4)});
+  return groups;
+}
+function renderAssistantRestoreGroups(main,groups){
+  if(!main||!groups)return null;
+  const row=document.createElement('div');
+  row.className='chat-restore-banner-groups';
+  row.setAttribute('role','list');
+  row.setAttribute('aria-label','Restored transcript sections');
+  const labels={references:'Refs',changes:'Edits',tree:'Tree',actions:'Actions'};
+  Object.keys(labels).forEach(kind=>{
+    const items=groups[kind]||[];
+    if(!items.length)return;
+    const group=document.createElement('div');
+    group.className='chat-restore-group';
+    group.setAttribute('role','group');
+    group.setAttribute('aria-label',labels[kind]+' restored targets');
+    const label=document.createElement('span');
+    label.className='chat-restore-group-label';
+    label.textContent=labels[kind]+':';
+    group.appendChild(label);
+    items.forEach(item=>{
+      const btn=document.createElement('button');
+      btn.type='button';
+      btn.className='chat-restore-group-item';
+      btn.dataset.restoreGroup=kind;
+      btn.dataset.restoreTarget=item.target||'';
+      btn.title=item.target||item.label||labels[kind];
+      btn.textContent=item.label||labels[kind];
+      btn.setAttribute('aria-label','Focus restored '+labels[kind]+' target '+(item.label||'item'));
+      btn.onclick=ev=>{ev.stopPropagation();if(!focusLoadedHistoryNativeSection(kind,item.target||''))showToast('No restored '+labels[kind]+' target found','info',1400)};
+      group.appendChild(btn);
+    });
+    row.appendChild(group);
+  });
+  if(row.children.length)main.appendChild(row);
+  return row.children.length?row:null;
+}
+function wireAssistantRestoreBannerKeyboard(banner){
+  if(!banner)return;
+  const buttons=()=>Array.from(banner.querySelectorAll('.chat-restore-banner-action:not(:disabled),.chat-restore-group-item:not(:disabled)'));
+  const sync=current=>{
+    const items=buttons();
+    items.forEach((btn,index)=>{btn.tabIndex=(btn===current||(!current&&index===0))?0:-1});
+    if(current)banner.dataset.restoreFocusedAction=String(current.dataset.restoreAction||current.dataset.restoreGroup||'');
+    banner.dataset.restoreKeyboardItems=String(items.length);
+  };
+  sync(null);
+  banner.addEventListener('focusin',ev=>{if(ev.target&&ev.target.matches&&ev.target.matches('.chat-restore-banner-action,.chat-restore-group-item'))sync(ev.target)});
+  banner.addEventListener('keydown',ev=>{
+    if(!ev.target||!ev.target.matches||!ev.target.matches('.chat-restore-banner-action,.chat-restore-group-item'))return;
+    const items=buttons();if(!items.length)return;
+    const current=Math.max(0,items.indexOf(ev.target));
+    let next=-1;
+    if(ev.key==='ArrowRight'||ev.key==='ArrowDown')next=(current+1)%items.length;
+    else if(ev.key==='ArrowLeft'||ev.key==='ArrowUp')next=(current-1+items.length)%items.length;
+    else if(ev.key==='Home')next=0;
+    else if(ev.key==='End')next=items.length-1;
+    if(next<0)return;
+    ev.preventDefault();
+    sync(items[next]);
+    items[next].focus();
+  });
+}
 function renderAssistantRestoredHistoryBanner(data,opts){
   const container=ensureChatMessagesInner();if(!container)return null;
   const previous=container.querySelector('[data-assistant-restore-banner="true"]');
   if(previous)previous.remove();
   const summary=assistantHistoryRestoreSummary(data||{});
+  const groups=assistantRestoredHistoryGroups(data||{});
   const banner=document.createElement('div');
   banner.className='chat-restore-banner';
   banner.dataset.assistantRestoreBanner='true';
@@ -19067,6 +19211,10 @@ function renderAssistantRestoredHistoryBanner(data,opts){
   banner.dataset.restoreNativeRefs=String(summary.refs||0);
   banner.dataset.restoreNativeTrees=String(summary.trees||0);
   banner.dataset.restoreNativeActions=String(summary.actions||0);
+  banner.dataset.restoreGroupReferences=String((groups.references||[]).length);
+  banner.dataset.restoreGroupChanges=String((groups.changes||[]).length);
+  banner.dataset.restoreGroupTree=String((groups.tree||[]).length);
+  banner.dataset.restoreGroupActions=String((groups.actions||[]).length);
   banner.setAttribute('role','status');
   banner.setAttribute('tabindex','-1');
   banner.setAttribute('aria-label','Restored Assistant history '+String(data&&data.title||data&&data.id||''));
@@ -19084,12 +19232,17 @@ function renderAssistantRestoredHistoryBanner(data,opts){
     assistantRestoreBannerChip('action',summary.actions),
     assistantRestoreBannerChip('tok',summary.tokens)
   ].filter(Boolean).forEach(chip=>meta.appendChild(chip));
-  main.appendChild(meta);banner.appendChild(main);
+  main.appendChild(meta);
+  renderAssistantRestoreGroups(main,groups);
+  banner.appendChild(main);
   const actions=document.createElement('div');actions.className='chat-restore-banner-actions';
+  actions.setAttribute('role','toolbar');
+  actions.setAttribute('aria-label','Restored history actions');
   const addAction=(kind,label,enabled)=>{
     const btn=document.createElement('button');
     btn.type='button';btn.className='chat-restore-banner-action';btn.textContent=label;
     btn.dataset.restoreAction=kind;btn.disabled=!enabled;
+    btn.setAttribute('aria-label','Focus restored '+label+' section');
     btn.onclick=ev=>{ev.stopPropagation();if(kind==='continue'){const input=$('chat-input');if(input)input.focus();return;}if(!focusLoadedHistoryNativeSection(kind,opts&&opts.target))showToast('No restored '+label+' target found','info',1400)};
     actions.appendChild(btn);
   };
@@ -19099,6 +19252,7 @@ function renderAssistantRestoredHistoryBanner(data,opts){
   addAction('actions','Actions',summary.actions);
   addAction('continue','Continue',true);
   banner.appendChild(actions);
+  wireAssistantRestoreBannerKeyboard(banner);
   container.insertBefore(banner,container.firstChild);
   const panel=$('chat-panel');
   if(panel){

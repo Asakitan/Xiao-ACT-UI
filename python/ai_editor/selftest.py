@@ -4178,6 +4178,13 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantHistoryPreviewDeltaRows(childSummary,currentSummary,'current')" in html
            and "banner.dataset.assistantRestoreBanner='true';" in html
            and "btn.dataset.restoreAction=kind;" in html
+           and "function assistantRestoredHistoryGroups(data)" in html
+           and "function renderAssistantRestoreGroups(main,groups)" in html
+           and "function wireAssistantRestoreBannerKeyboard(banner)" in html
+           and "btn.dataset.restoreGroup=kind;" in html
+           and "actions.setAttribute('role','toolbar');" in html
+           and "banner.dataset.restoreGroupReferences=String((groups.references||[]).length);" in html
+           and "banner.dataset.restoreKeyboardItems=String(items.length);" in html
            and "panel.dataset.restoredHistoryId=banner.dataset.restoreHistoryId;" in html
            and "focusLoadedHistoryNativeSection('actions','')" in html
            and "assistantSessionOpenResource(session.parentSessionResource)" in html
@@ -5080,6 +5087,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'saved-history-preview-restore-modal-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'restored-history-banner-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'restored-history-banner-navigation-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'restored-history-transcript-groups-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'restored-history-banner-keyboard-aria-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'fork-branch-compare-visible'" in html
            and "assistantUiSelfCheckRecord(checks,'fork-branch-compare-detail-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready'" in html
@@ -5161,6 +5170,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "saved-history-preview-restore-modal-ready" in smoke_source
            and "restored-history-banner-ready" in smoke_source
            and "restored-history-banner-navigation-ready" in smoke_source
+           and "restored-history-transcript-groups-ready" in smoke_source
+           and "restored-history-banner-keyboard-aria-ready" in smoke_source
            and "fork-branch-compare-visible" in smoke_source
            and "fork-branch-compare-detail-ready" in smoke_source
            and "workflow-result-state-rendered" in smoke_source

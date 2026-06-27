@@ -124,6 +124,8 @@ async function main() {
     "saved-history-preview-restore-modal-ready",
     "restored-history-banner-ready",
     "restored-history-banner-navigation-ready",
+    "restored-history-transcript-groups-ready",
+    "restored-history-banner-keyboard-aria-ready",
     "fork-branch-compare-visible",
     "fork-branch-compare-detail-ready",
     "workflow-popup-modes-ready",
