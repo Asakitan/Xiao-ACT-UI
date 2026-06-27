@@ -1182,6 +1182,15 @@ pre.code-block code .type { color:var(--fg-type); }
 .workflow-step-action { width:24px; height:24px; border:1px solid var(--border); border-radius:4px; background:var(--bg3); color:var(--fg); cursor:pointer; }
 .workflow-step-action:hover,.workflow-step-action:focus { border-color:var(--border-focus); background:var(--bg-hover); outline:none; }
 .workflow-step-add { align-self:flex-start; height:24px; border:1px solid var(--border); border-radius:4px; background:var(--bg3); color:var(--fg); cursor:pointer; padding:0 8px; }
+.workflow-run-card { margin-top:8px; border:1px solid var(--border); border-radius:6px; background:var(--bg2); padding:8px; display:flex; flex-direction:column; gap:6px; }
+.workflow-run-head { display:flex; align-items:center; gap:8px; min-width:0; }
+.workflow-run-icon { color:var(--fg-accent); font-size:14px; }
+.workflow-run-title { font-weight:600; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.workflow-run-meta { color:var(--fg-dim); font:10px var(--mono); }
+.workflow-run-steps { display:flex; flex-direction:column; gap:4px; }
+.workflow-run-step { display:grid; grid-template-columns:18px 1fr auto; gap:6px; align-items:center; color:var(--fg); font-size:11px; }
+.workflow-run-step-index { color:var(--fg-dim); font:10px var(--mono); text-align:right; }
+.workflow-run-step-agent { color:var(--fg-dim); font:10px var(--mono); border:1px solid var(--border); border-radius:999px; padding:0 6px; max-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 /* Mode popup menu (VSCode-style) */
 .mode-trigger { display:inline-flex; align-items:center; gap:4px; height:22px; padding:0 8px; flex:0 0 auto;
   border:1px solid var(--border); border-radius:999px; background:var(--bg3); color:var(--fg-accent);
@@ -7598,6 +7607,21 @@ function assistantWorkflowEditorSnapshot(){
   if(modal)modal.remove();
   return snapshot;
 }
+function assistantWorkflowRunCardSnapshot(card){
+  const el=card||document.querySelector('.workflow-run-card');
+  if(!el)return {exists:false};
+  const steps=Array.from(el.querySelectorAll('.workflow-run-step'));
+  return {
+    exists:true,
+    workflowId:String(el.dataset.workflowId||''),
+    workflowRunId:String(el.dataset.workflowRunId||''),
+    workflowStepCount:Number(el.dataset.workflowStepCount||0),
+    workflowAgents:String(el.dataset.workflowAgents||''),
+    renderedSteps:steps.length,
+    title:el.querySelector('.workflow-run-title')?el.querySelector('.workflow-run-title').textContent:'',
+    agentChipCount:steps.filter(step=>step.querySelector('.workflow-run-step-agent')).length
+  };
+}
 async function runAssistantUiSelfCheck(opts){
   opts=opts||{};
   const checks=[];
@@ -7609,9 +7633,13 @@ async function runAssistantUiSelfCheck(opts){
   const providerPopup=assistantControlPopupSnapshot('provider');
   const workflowPopup=assistantControlPopupSnapshot('workflow');
   const workflowEditor=assistantWorkflowEditorSnapshot();
+  const workflowBody=document.createElement('div');
+  const workflowCard=renderWorkflowLaunchSummary(workflowBody,{workflowId:'selfcheck-flow',workflowLabel:'Selfcheck Flow',workflowRunId:'wf-selfcheck',workflowStepCount:2,workflowAgents:['default','reviewer'],workflowStepLabels:['Inspect','Review']});
+  const workflowRunCard=assistantWorkflowRunCardSnapshot(workflowCard);
   assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready',providerPopup.shown&&providerPopup.optionCount>=1&&providerPopup.focusableCount===providerPopup.optionCount&&providerPopup.keyboardReady,JSON.stringify(providerPopup));
   assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready',workflowPopup.shown&&workflowPopup.workflowModeCount===3&&workflowPopup.optionCount>=4&&workflowPopup.focusableCount===workflowPopup.optionCount&&workflowPopup.keyboardReady,JSON.stringify(workflowPopup));
   assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready',workflowEditor.modalExists&&workflowEditor.editorExists&&workflowEditor.rowCount===2&&workflowEditor.labelInputs===2&&workflowEditor.agentInputs===2&&workflowEditor.outputInputs===2&&workflowEditor.promptInputs===2&&workflowEditor.moveButtons===4&&workflowEditor.deleteButtons===2&&workflowEditor.addButtonExists&&workflowEditor.collectedCount===2&&workflowEditor.idReadOnly,JSON.stringify(workflowEditor));
+  assistantUiSelfCheckRecord(checks,'workflow-run-card-rendered',workflowRunCard.exists&&workflowRunCard.workflowId==='selfcheck-flow'&&workflowRunCard.workflowRunId==='wf-selfcheck'&&workflowRunCard.workflowStepCount===2&&workflowRunCard.renderedSteps===2&&workflowRunCard.agentChipCount===2,JSON.stringify(workflowRunCard));
 
   const previousAttachments=attachments.slice();
   attachments=[];
@@ -17241,6 +17269,54 @@ function workflowRunSummary(workflow){
     text:steps.length+' steps · '+(agents.join(' → ')||'default')
   };
 }
+function renderWorkflowLaunchSummary(body,launch){
+  if(!body||!launch)return null;
+  const stepCount=Number(launch.workflowStepCount||0);
+  const agents=Array.isArray(launch.workflowAgents)?launch.workflowAgents.map(String):[];
+  const labels=Array.isArray(launch.workflowStepLabels)?launch.workflowStepLabels.map(String):[];
+  const card=document.createElement('div');
+  card.className='workflow-run-card';
+  card.setAttribute('role','group');
+  card.setAttribute('aria-label','Workflow run plan');
+  card.dataset.workflowId=String(launch.workflowId||'');
+  card.dataset.workflowRunId=String(launch.workflowRunId||'');
+  card.dataset.workflowStepCount=String(stepCount);
+  card.dataset.workflowAgents=agents.join(',');
+  const head=document.createElement('div');
+  head.className='workflow-run-head';
+  const icon=document.createElement('span');
+  icon.className='workflow-run-icon';
+  icon.textContent='▶';
+  const title=document.createElement('span');
+  title.className='workflow-run-title';
+  title.textContent=String(launch.workflowLabel||launch.workflowId||'Workflow');
+  const meta=document.createElement('span');
+  meta.className='workflow-run-meta';
+  meta.textContent=[stepCount?stepCount+' steps':'workflow',launch.workflowRunId?String(launch.workflowRunId):''].filter(Boolean).join(' · ');
+  head.appendChild(icon);head.appendChild(title);head.appendChild(meta);
+  card.appendChild(head);
+  const list=document.createElement('div');
+  list.className='workflow-run-steps';
+  const count=Math.max(stepCount,labels.length,agents.length);
+  for(let i=0;i<count;i++){
+    const row=document.createElement('div');
+    row.className='workflow-run-step';
+    row.dataset.stepIndex=String(i);
+    const index=document.createElement('span');
+    index.className='workflow-run-step-index';
+    index.textContent=String(i+1);
+    const label=document.createElement('span');
+    label.textContent=labels[i]||('Step '+(i+1));
+    const agent=document.createElement('span');
+    agent.className='workflow-run-step-agent';
+    agent.textContent=agents[i]||agents[agents.length-1]||'default';
+    row.appendChild(index);row.appendChild(label);row.appendChild(agent);
+    list.appendChild(row);
+  }
+  if(count)card.appendChild(list);
+  body.appendChild(card);
+  return card;
+}
 function workflowLaunchPrompt(workflow,inputText,runId){
   const id=controlItemId(workflow),name=controlItemName(workflow)||id;
   const steps=workflowStepList(workflow);
@@ -25528,6 +25604,7 @@ async function sendAssistantTextRequest(rawText,opts){
   if(opts.appendUser!==false){
     const userBody=createMsg('user');
     userBody.textContent=String(opts.displayText||'')||((toolHint?'#'+toolHint+' ':'')+text);
+    if(opts.workflowLaunch)renderWorkflowLaunchSummary(userBody,opts.workflowLaunch);
     renderChatReferences(userBody,sendContext.refs);
   }
   const requestMeta=noteAssistantChatRequest(text,sendContext.refs,toolHint,opts.workflowLaunch);
