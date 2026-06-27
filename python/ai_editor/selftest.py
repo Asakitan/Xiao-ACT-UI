@@ -2882,6 +2882,23 @@ def test_app_settings_parity() -> None:
                         "displayName": "Fixture Notebook",
                         "selector": [{"filenamePattern": "**/*.surfacenb"}],
                     }],
+                    "terminal": [{
+                        "id": "selftest.surface.terminal",
+                        "title": "Fixture Terminal",
+                    }],
+                    "languageModelTools": [{
+                        "name": "selftest.surface.tool",
+                        "displayName": "Fixture LM Tool",
+                        "description": "Fixture language model tool",
+                    }],
+                    "languageModelChatProviders": [{
+                        "vendor": "selftest.surface.vendor",
+                        "displayName": "Fixture LM Provider",
+                    }],
+                    "chatParticipants": [{
+                        "id": "selftest.surface.chat",
+                        "fullName": "Fixture Chat",
+                    }],
                     "commands": [{
                         "command": "selftest.surface.command",
                         "title": "Fixture Command",
@@ -2922,6 +2939,22 @@ def test_app_settings_parity() -> None:
             item.get("command"): item
             for item in fixture_surfaces.get("commands", [])
         }
+        fixture_terminal_profiles = {
+            item.get("id"): item
+            for item in fixture_surfaces.get("terminalProfiles", [])
+        }
+        fixture_lm_tools = {
+            item.get("name"): item
+            for item in fixture_surfaces.get("languageModelTools", [])
+        }
+        fixture_lm_providers = {
+            item.get("vendor"): item
+            for item in fixture_surfaces.get("languageModelProviders", [])
+        }
+        fixture_chat_participants = {
+            item.get("id"): item
+            for item in fixture_surfaces.get("chatParticipants", [])
+        }
         fixture_menus = [
             item for item in fixture_surfaces.get("menus", [])
             if item.get("command") == "selftest.surface.command"
@@ -2944,6 +2977,25 @@ def test_app_settings_parity() -> None:
                    "extensionId") == "selftest.surface-fixture"
                and fixture_commands.get("selftest.surface.command", {}).get(
                    "source") == "extension"
+               and fixture_terminal_profiles.get(
+                   "selftest.surface.terminal", {}).get(
+                       "runtimeAvailable") is False
+               and fixture_lm_tools.get("selftest.surface.tool", {}).get(
+                   "runtimeAvailable") is False
+               and fixture_lm_providers.get(
+                   "selftest.surface.vendor", {}).get(
+                       "runtimeAvailable") is False
+               and fixture_chat_participants.get(
+                   "selftest.surface.chat", {}).get(
+                       "runtimeAvailable") is False
+               and fixture_surfaces.get("summary", {}).get(
+                   "terminalProfiles") == 1
+               and fixture_surfaces.get("summary", {}).get(
+                   "languageModelTools") >= 1
+               and fixture_surfaces.get("summary", {}).get(
+                   "languageModelProviders") >= 1
+               and fixture_surfaces.get("summary", {}).get(
+                   "chatParticipants") >= 1
                and any(item.get("menu") == "view/title"
                        for item in fixture_menus),
                json.dumps(fixture_surfaces, ensure_ascii=False, default=str))
@@ -9125,12 +9177,27 @@ console.log("frontend word separator behavior ok");
            and "row.extensionId" in html
            and "['Runtime',rows.filter(row=>row.ready).length]" in html
            and "['Manifest',rows.filter(row=>!row.ready).length]" in html
+           and "(data.terminalProfiles||[]).slice(0,8).forEach(item=>push('TerminalProfile'" in html
+           and "(data.languageModelTools||[]).slice(0,8).forEach(item=>push('LMTool'" in html
+           and "(data.languageModelProviders||[]).slice(0,8).forEach(item=>push('LMProvider'" in html
+           and "(data.chatParticipants||[]).slice(0,8).forEach(item=>push('ChatParticipant'" in html
+           and "(data.chatContextProviders||[]).slice(0,8).forEach(item=>push('ChatContext'" in html
+           and "['Terminal',summary.terminalProfiles||0]" in html
+           and "['LM Tool',summary.languageModelTools||0]" in html
+           and "['LM Provider',summary.languageModelProviders||0]" in html
+           and "['Chat',summary.chatParticipants||0]" in html
+           and "['Context',summary.chatContextProviders||0]" in html
            and "TreeView" in html
            and "WebviewView" in html
            and "CustomEditor" in html
            and "Notebook" in html
            and "Command" in html
-           and "Menu" in html)
+           and "Menu" in html
+           and "TerminalProfile" in html
+           and "LMTool" in html
+           and "LMProvider" in html
+           and "ChatParticipant" in html
+           and "ChatContext" in html)
     _check("frontend hidden deprecated settings stay editable until configured",
            "const hiddenEditable=hiddenReason==='deprecated'" in html
            and (
@@ -10807,7 +10874,9 @@ console.log("extension setting schema helpers ok");
            and "snapshot.webviewGroup&&snapshot.webviewFrame" in html
            and "snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'" in html
            and "snapshot.notebookOutputItems===3" in html
-           and "snapshot.runtimeRows>=6" in html
+           and "snapshot.runtimeRows>=11" in html
+           and "snapshot.runtimeChips>=13" in html
+           and "['TerminalProfile','LMTool','LMProvider','ChatParticipant','ChatContext'].every(kind=>snapshot.runtimeKinds.includes(kind))" in html
            and "snapshot.menuRole==='menu'" in html)
     _check("frontend renders extension QuickInput dynamically",
            "id=\"quick-input-host\"" in html
@@ -30733,6 +30802,16 @@ process.stdin.resume();
                     node_runtime_surfaces.get("notebooks", []))
                 node_runtime_command_surfaces = list(
                     node_runtime_surfaces.get("commands", []))
+                node_runtime_terminal_profiles = list(
+                    node_runtime_surfaces.get("terminalProfiles", []))
+                node_runtime_lm_tools = list(
+                    node_runtime_surfaces.get("languageModelTools", []))
+                node_runtime_lm_providers = list(
+                    node_runtime_surfaces.get("languageModelProviders", []))
+                node_runtime_chat_participants = list(
+                    node_runtime_surfaces.get("chatParticipants", []))
+                node_runtime_chat_context_providers = list(
+                    node_runtime_surfaces.get("chatContextProviders", []))
                 node_runtime_menu_surfaces = [
                     item for item in node_runtime_surfaces.get("menus", [])
                     if item.get("command") == "selftest.node.openItem"
@@ -30780,6 +30859,50 @@ process.stdin.resume();
                                for item in node_runtime_menu_surfaces),
                        json.dumps(node_runtime_surfaces,
                                   ensure_ascii=False, default=str))
+                _check("node-backed provider surfaces appear in runtime surface panel data",
+                       node_started is True
+                       and node_runtime_surfaces.get("ok") is True
+                       and any(
+                           item.get("id") == "activation.surface.profile"
+                           and item.get("runtimeAvailable") is True
+                           for item in node_runtime_terminal_profiles)
+                       and any(
+                           item.get("name") == "activation_surface_tool"
+                           and item.get("runtimeAvailable") is True
+                           for item in node_runtime_lm_tools)
+                       and any(
+                           item.get("vendor") == "activation.surface.vendor"
+                           and item.get("runtimeAvailable") is True
+                           and item.get("modelCount", 0) >= 1
+                           for item in node_runtime_lm_providers)
+                       and any(
+                           item.get("id") == "activation.surface.chat"
+                           and item.get("runtimeAvailable") is True
+                           for item in node_runtime_chat_participants)
+                       and any(
+                           item.get("id") == "activation.surface.context"
+                           and item.get("kind") == "explicit"
+                           and item.get("runtimeAvailable") is True
+                           for item in node_runtime_chat_context_providers)
+                       and node_runtime_surfaces.get("summary", {}).get(
+                           "terminalProfiles", 0) >= 1
+                       and node_runtime_surfaces.get("summary", {}).get(
+                           "languageModelTools", 0) >= 1
+                       and node_runtime_surfaces.get("summary", {}).get(
+                           "languageModelProviders", 0) >= 1
+                       and node_runtime_surfaces.get("summary", {}).get(
+                           "chatParticipants", 0) >= 1
+                       and node_runtime_surfaces.get("summary", {}).get(
+                           "chatContextProviders", 0) >= 1,
+                       json.dumps({
+                           "terminalProfiles": node_runtime_terminal_profiles,
+                           "languageModelTools": node_runtime_lm_tools,
+                           "languageModelProviders": node_runtime_lm_providers,
+                           "chatParticipants": node_runtime_chat_participants,
+                           "chatContextProviders":
+                               node_runtime_chat_context_providers,
+                           "summary": node_runtime_surfaces.get("summary", {}),
+                       }, ensure_ascii=False, default=str))
                 _check("node host tree provider registers dynamic activity view",
                        node_started is True
                        and sent is True

@@ -1871,6 +1871,7 @@ class NodeExtensionHost:
         self._chat_context_requests: Dict[str, Dict[str, Any]] = {}
         self._chat_context_providers: List[Dict[str, Any]] = []
         self._chat_context_changes: List[Dict[str, Any]] = []
+        self._lm_chat_providers: List[Dict[str, Any]] = []
         self._mcp_server_definition_request_lock = threading.Lock()
         self._mcp_server_definition_requests: Dict[str, Dict[str, Any]] = {}
         self._mcp_server_definition_providers: List[Dict[str, Any]] = []
@@ -2972,6 +2973,30 @@ class NodeExtensionHost:
                     cb(msg_type, name, payload)
                 except Exception:
                     _log.exception("[NodeExtHost] on_lm_tool callback error")
+
+        elif msg_type == "lm_chat_provider_registered":
+            record = {
+                "handle": msg.get("handle"),
+                "vendor": str(msg.get("vendor") or msg.get("id") or ""),
+                "extensionId": str(msg.get("extensionId") or ""),
+            }
+            self._lm_chat_providers = [
+                item for item in self._lm_chat_providers
+                if item.get("vendor") != record.get("vendor")
+            ]
+            if record.get("vendor"):
+                self._lm_chat_providers.append(record)
+
+        elif msg_type == "lm_chat_provider_disposed":
+            vendor = str(msg.get("vendor") or msg.get("id") or "")
+            handle = msg.get("handle")
+            self._lm_chat_providers = [
+                item for item in self._lm_chat_providers
+                if not (
+                    (vendor and item.get("vendor") == vendor)
+                    or (handle is not None and item.get("handle") == handle)
+                )
+            ]
 
         elif msg_type == "lm_tool_response":
             request_id = str(msg.get("requestId", ""))
@@ -5296,6 +5321,9 @@ class NodeExtensionHost:
 
     def chat_context_providers(self) -> List[Dict[str, Any]]:
         return [dict(item) for item in self._chat_context_providers]
+
+    def language_model_chat_providers(self) -> List[Dict[str, Any]]:
+        return [dict(item) for item in self._lm_chat_providers]
 
     def chat_context_changes(self) -> List[Dict[str, Any]]:
         return [dict(item) for item in self._chat_context_changes]

@@ -11257,6 +11257,197 @@ class AIEditorAPI:
             })
         return result
 
+    def _extension_surface_terminal_profiles(
+            self, contributions: Dict[str, Any]) -> List[Dict[str, Any]]:
+        host = getattr(self, "_node_ext_host", None)
+        host_running = bool(host is not None and getattr(host, "is_running", False))
+        providers = host.terminal_profile_providers() if (
+            host_running and hasattr(host, "terminal_profile_providers")) else []
+        runtime_by_id = {
+            str(item.get("id") or item.get("profileId") or ""): dict(item)
+            for item in providers
+            if isinstance(item, dict)
+            and str(item.get("id") or item.get("profileId") or "")
+        }
+        result: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in contributions.get("terminal", []):
+            if not isinstance(item, dict):
+                continue
+            profile_id = str(item.get("id") or item.get("profileId") or "")
+            if not profile_id:
+                continue
+            seen.add(profile_id)
+            result.append({
+                "id": profile_id,
+                "title": str(item.get("title") or item.get("label") or profile_id),
+                "extensionId": self._extension_surface_extension_id(item),
+                "runtimeAvailable": profile_id in runtime_by_id,
+                "nodeHostRunning": host_running,
+            })
+        for item in providers:
+            if not isinstance(item, dict):
+                continue
+            profile_id = str(item.get("id") or item.get("profileId") or "")
+            if not profile_id or profile_id in seen:
+                continue
+            result.append({
+                "id": profile_id,
+                "extensionId": str(item.get("extensionId") or ""),
+                "runtimeAvailable": True,
+                "nodeHostRunning": host_running,
+            })
+        return result
+
+    def _extension_surface_language_model_tools(
+            self, contributions: Dict[str, Any]) -> List[Dict[str, Any]]:
+        manifest_tools = [
+            self._decorate_language_model_tool(item)
+            for item in contributions.get("languageModelTools", [])
+            if isinstance(item, dict)
+        ]
+        seen = {str(item.get("name") or "") for item in manifest_tools}
+        result = list(manifest_tools)
+        for name, tool in getattr(self._vscode_ns, "registered_tools", {}).items():
+            tool_name = str(name or "")
+            if not tool_name or tool_name in seen:
+                continue
+            extension_id = ""
+            description = ""
+            schema: Any = {}
+            if isinstance(tool, dict):
+                extension_id = str(
+                    tool.get("_extensionId") or tool.get("extensionId") or "")
+                description = str(tool.get("description") or "")
+                schema = tool.get("inputSchema") or tool.get("schema") or {}
+            else:
+                description = str(getattr(tool, "description", "") or "")
+            result.append({
+                "name": tool_name,
+                "extensionId": extension_id,
+                "description": description,
+                "inputSchema": schema if isinstance(schema, dict) else {},
+                "runtimeAvailable": self._lm_runtime_tool_available(tool),
+                "runtimeOnly": True,
+            })
+        return result
+
+    def _extension_surface_language_model_providers(
+            self, contributions: Dict[str, Any]) -> List[Dict[str, Any]]:
+        result: List[Dict[str, Any]] = []
+        host = getattr(self, "_node_ext_host", None)
+        host_running = bool(host is not None and getattr(host, "is_running", False))
+        node_providers = (
+            host.language_model_chat_providers()
+            if host_running
+            and hasattr(host, "language_model_chat_providers")
+            else [])
+        node_by_vendor = {
+            str(item.get("vendor") or item.get("id") or ""): dict(item)
+            for item in node_providers
+            if isinstance(item, dict)
+            and str(item.get("vendor") or item.get("id") or "")
+        }
+        contributed = [
+            item for item in contributions.get("languageModelChatProviders", [])
+            if isinstance(item, dict)
+        ]
+        for item in contributed:
+            vendor = str(item.get("vendor") or item.get("id") or "").strip()
+            result.append({
+                "vendor": vendor,
+                "id": vendor,
+                "extensionId": self._extension_surface_extension_id(item),
+                "runtimeAvailable": (
+                    vendor in getattr(self._vscode_ns, "_lm_providers", {})
+                    or vendor in node_by_vendor),
+            })
+        runtime_providers = getattr(self._vscode_ns, "_lm_providers", {})
+        for vendor, record in runtime_providers.items():
+            provider_id = str(vendor or "")
+            if not provider_id:
+                continue
+            if any(str(item.get("vendor") or item.get("id") or "") == provider_id
+                   for item in result):
+                continue
+            metadata = (
+                record.get("metadata", {}) if isinstance(record, dict) else {})
+            result.append({
+                "vendor": provider_id,
+                "id": provider_id,
+                "name": str(metadata.get("name") or provider_id),
+                "extensionId": str(record.get("extensionId") or "")
+                if isinstance(record, dict) else "",
+                "runtimeAvailable": True,
+                "runtimeOnly": True,
+                "modelCount": len(self._vscode_ns._select_chat_models(
+                    {"vendor": provider_id})),
+            })
+        for vendor, record in node_by_vendor.items():
+            provider_id = str(vendor or "")
+            if not provider_id:
+                continue
+            if any(str(item.get("vendor") or item.get("id") or "") == provider_id
+                   for item in result):
+                continue
+            result.append({
+                "vendor": provider_id,
+                "id": provider_id,
+                "extensionId": str(record.get("extensionId") or ""),
+                "runtimeAvailable": True,
+                "runtimeOnly": True,
+                "nodeHostRunning": host_running,
+                "modelCount": 1,
+            })
+        return result
+
+    def _extension_surface_chat_participants(
+            self, contributions: Dict[str, Any]) -> List[Dict[str, Any]]:
+        manifest_participants = [
+            self._decorate_chat_participant(item)
+            for item in contributions.get("chatParticipants", [])
+            if isinstance(item, dict)
+        ]
+        seen = {
+            str(item.get("id") or item.get("name") or "")
+            for item in manifest_participants
+        }
+        result = list(manifest_participants)
+        for participant_id, participant in getattr(
+                self._vscode_ns, "chat_participants", {}).items():
+            pid = str(participant_id or "")
+            if not pid or pid in seen:
+                continue
+            result.append({
+                "id": pid,
+                "name": str(getattr(participant, "name", "") or pid),
+                "extensionId": str(getattr(participant, "extension_id", "") or ""),
+                "runtimeAvailable": True,
+                "runtimeOnly": True,
+            })
+        return result
+
+    def _extension_surface_chat_context_providers(self) -> List[Dict[str, Any]]:
+        host = getattr(self, "_node_ext_host", None)
+        host_running = bool(host is not None and getattr(host, "is_running", False))
+        node_providers = host.chat_context_providers() if (
+            host_running and hasattr(host, "chat_context_providers")) else []
+        result: List[Dict[str, Any]] = []
+        for item in node_providers:
+            if not isinstance(item, dict):
+                continue
+            provider_id = str(item.get("id") or "")
+            kind = str(item.get("kind") or "")
+            result.append({
+                "id": provider_id,
+                "kind": kind,
+                "extensionId": str(item.get("extensionId") or ""),
+                "selector": item.get("selector"),
+                "runtimeAvailable": True,
+                "nodeHostRunning": host_running,
+            })
+        return result
+
     def list_extension_runtime_surfaces(
             self, context: Any = None) -> Dict[str, Any]:
         """Return dynamic extension UI/runtime surfaces for smoke diagnostics."""
@@ -11349,6 +11540,15 @@ class AIEditorAPI:
         menus = self._extension_surface_menu_items()
         custom_editors = self._extension_surface_custom_editors(contributions)
         notebooks = self._extension_surface_notebooks(contributions)
+        terminal_profiles = self._extension_surface_terminal_profiles(
+            contributions)
+        language_model_tools = self._extension_surface_language_model_tools(
+            contributions)
+        language_model_providers = (
+            self._extension_surface_language_model_providers(contributions))
+        chat_participants = self._extension_surface_chat_participants(
+            contributions)
+        chat_context_providers = self._extension_surface_chat_context_providers()
         webview_views = [
             item for item in views
             if str(item.get("kind") or "").lower() == "webviewview"
@@ -11367,6 +11567,11 @@ class AIEditorAPI:
             "notebooks": notebooks,
             "commands": commands,
             "menus": menus,
+            "terminalProfiles": terminal_profiles,
+            "languageModelTools": language_model_tools,
+            "languageModelProviders": language_model_providers,
+            "chatParticipants": chat_participants,
+            "chatContextProviders": chat_context_providers,
             "summary": {
                 "views": len(views),
                 "treeViews": len(tree_views),
@@ -11388,10 +11593,18 @@ class AIEditorAPI:
                     1 for item in commands
                     if item.get("runtimeAvailable")),
                 "menus": len(menus),
+                "terminalProfiles": len(terminal_profiles),
+                "languageModelTools": len(language_model_tools),
+                "languageModelProviders": len(language_model_providers),
+                "chatParticipants": len(chat_participants),
+                "chatContextProviders": len(chat_context_providers),
                 "dynamicSurfaces": (
                     len(tree_views) + len(webview_views)
                     + len(custom_editors) + len(notebooks)
-                    + len(commands) + len(menus)),
+                    + len(commands) + len(menus)
+                    + len(terminal_profiles) + len(language_model_tools)
+                    + len(language_model_providers) + len(chat_participants)
+                    + len(chat_context_providers)),
             },
         }, ensure_ascii=False, default=str))
 
