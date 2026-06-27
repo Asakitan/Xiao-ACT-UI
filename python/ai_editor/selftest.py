@@ -9744,9 +9744,22 @@ console.log("frontend word separator behavior ok");
             and "String(ev.key||'').toLowerCase()==='g'" in html
             and "function settingsRecordSearch(query,parsed)" in html
             and "id=\"settings-search-memory\"" in html
+            and "id=\"settings-search-inspector\"" in html
+            and "settings-insight-chip" in html
+            and "function renderSettingsSearchInspector(parsed,visible,total,targetStats)" in html
+            and "function settingsRemoveLastFilterToken()" in html
+            and "window.settingsRemoveLastFilterToken=settingsRemoveLastFilterToken;" in html
             and "function updateSettingsTitleStatus(visible,total)" in html
             and "settingsActiveSectionTitle()" in html
             and "settingsConfigureRowInJson(row,opts.key)" in html
+            and "function settingValueState(meta,value,target)" in html
+            and "dataset.settingValueState='1'" in html
+            and "settings-built-chip value-state" in html
+            and "detail-chip value-state" in html
+            and "Unsaved edit" in html
+            and "function settingsReviewRowBeforeAfter(row)" in html
+            and "className='before-after'" in html
+            and "No visible matches. Remove a token or switch target." in html
             and "['f','l'].includes(String(ev.key||'').toLowerCase())" in html
             and "selectSettingsTarget('workspace',{preserveSearch:true})" in html
             and "settingsFocusVisibleRow(-1)" in html

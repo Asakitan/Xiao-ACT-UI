@@ -1640,6 +1640,9 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-current-detail .detail-chip { padding:1px 6px; border:1px solid var(--border); border-radius:999px;
   background:var(--bg3); color:var(--fg-dim); font:10px var(--mono); max-width:260px; overflow:hidden;
   text-overflow:ellipsis; white-space:nowrap; }
+.settings-current-detail .detail-chip.value-state.edited { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); }
+.settings-current-detail .detail-chip.value-state.default { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 42%,var(--border)); }
+.settings-current-detail .detail-chip.value-state.override { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
 .settings-current-detail button { height:21px; padding:1px 7px; border:1px solid var(--border); border-radius:4px;
   background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
 .settings-current-detail button:hover,.settings-current-detail button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
@@ -1648,6 +1651,16 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-search-hints code { font:10px var(--mono); color:var(--fg); background:var(--bg3);
   border:1px solid var(--border); border-radius:3px; padding:1px 5px; cursor:pointer; }
 .settings-search-hints code:hover,.settings-search-hints code:focus { color:var(--fg-accent); border-color:var(--border-focus); outline:none; }
+.settings-search-inspector { grid-column:1 / -1; display:none; flex-wrap:wrap; align-items:center; gap:5px;
+  min-height:24px; color:var(--fg-dim); font-size:11px; }
+.settings-search-inspector.open { display:flex; }
+.settings-search-inspector strong { color:var(--fg); font-weight:600; }
+.settings-insight-chip { display:inline-flex; align-items:center; gap:4px; max-width:260px; min-height:20px;
+  padding:1px 7px; border:1px solid var(--border); border-radius:999px; background:var(--bg3);
+  color:var(--fg-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-insight-chip.active { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border));
+  background:color-mix(in srgb,var(--fg-accent) 7%,var(--bg3)); }
+.settings-insight-chip.warning { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 55%,var(--border)); }
 .settings-search-memory { display:none; align-items:center; gap:5px; min-height:22px; color:var(--fg-dim); font-size:11px; }
 .settings-search-memory.open { display:flex; flex-wrap:wrap; }
 .settings-search-memory button { height:21px; max-width:220px; padding:1px 7px; border:1px solid var(--border);
@@ -1674,6 +1687,11 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-save-preview-row:first-child { border-top:0; }
 .settings-save-preview-row code { color:var(--fg); font:11px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .settings-save-preview-row span { margin-left:auto; font:10px var(--mono); color:var(--fg-dim); }
+.settings-save-preview-row .before-after { display:flex; align-items:center; gap:5px; min-width:0; margin-left:0;
+  color:var(--fg-dim); overflow:hidden; }
+.settings-save-preview-row .before-after b { max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:var(--fg-dim); font-weight:400; }
+.settings-save-preview-row .before-after i { color:var(--fg-accent); font-style:normal; }
 .settings-reset-visible { width:auto; height:22px; padding:0 8px; border:1px solid var(--border);
   border-radius:4px; background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
 .settings-reset-visible:hover,.settings-reset-visible:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
@@ -2204,6 +2222,10 @@ pre.code-block { overflow:visible; }
 .settings-built-chip.modified { display:none; color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); }
 .settings-built-chip.current { max-width:340px; color:var(--fg); }
 .settings-built-chip.target.override { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); }
+.settings-built-chip.value-state { color:var(--fg-dim); }
+.settings-built-chip.value-state.edited { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); }
+.settings-built-chip.value-state.default { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 42%,var(--border)); }
+.settings-built-chip.value-state.override { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
 .settings-built-chip.inherited { max-width:340px; }
 .settings-field.modified .settings-built-chip.modified { display:inline-flex; }
 .settings-built-desc { margin:3px 0 0; color:var(--fg-dim); font-size:11px; line-height:1.35; }
@@ -3091,6 +3113,7 @@ pre.code-block { overflow:visible; }
         <code tabindex="0" onclick="settingsUseSearchHint('@lang:python')" onkeydown="settingsSearchHintKeydown(event,'@lang:python')">@lang:python</code>
         <code tabindex="0" onclick="settingsUseSearchHint('@id:editor.')" onkeydown="settingsSearchHintKeydown(event,'@id:editor.')">@id:editor.</code>
       </div>
+      <div id="settings-search-inspector" class="settings-search-inspector" aria-live="polite"></div>
       <div id="settings-search-memory" class="settings-search-memory" aria-label="Recent settings searches"></div>
       <div id="settings-target-summary" class="settings-target-summary" role="status" aria-live="polite"></div>
       <div id="settings-section-context" class="settings-section-context" role="status" aria-live="polite"></div>
@@ -3112,6 +3135,7 @@ pre.code-block { overflow:visible; }
             <button type="button" onclick="selectSettingsTarget('workspace',{preserveSearch:true})">Workspace</button>
             <button type="button" onclick="selectSettingsTarget('extensions',{preserveSearch:true})">Extensions</button>
             <button type="button" onclick="settingsUseSearchHint('@common')">Common</button>
+            <button type="button" onclick="settingsRemoveLastFilterToken()">Remove Last Filter</button>
           </div>
         </div>
 
@@ -3769,6 +3793,20 @@ function settingStableValue(value){
   if(typeof value==='object'){try{return JSON.stringify(value)}catch(e){return String(value)}}
   return String(value);
 }
+function settingValueState(meta,value,target){
+  if(!meta)return {state:'extension',label:'Extension'};
+  const inherited=settingInheritedValueForTarget(meta,target);
+  const def=settingDefaultValue(meta);
+  const stable=settingStableValue(value);
+  const inheritedStable=settingStableValue(inherited);
+  const defaultStable=settingStableValue(def);
+  const targetName=settingsBackendTargetName(target);
+  const scoped=settingHasTargetValue(meta,target);
+  if(scoped&&stable!==inheritedStable)return {state:'override',label:(targetName==='workspaceFolder'?'Folder':targetName==='workspace'?'Workspace':'User')+' override'};
+  if(stable!==inheritedStable)return {state:'edited',label:'Unsaved edit'};
+  if(stable===defaultStable)return {state:'default',label:'Default'};
+  return {state:'inherited',label:targetName==='global'?'User value':'Inherited'};
+}
 function settingsInputValue(el,meta){
   if(!el)return '';
   if(el.type==='checkbox')return el.checked===true;
@@ -3870,10 +3908,12 @@ function settingsShowRowDetails(row){
   const current=info.input&&info.meta?settingsInputValue(info.input,info.meta):((row.querySelector('[data-setting-current-value]')||{}).textContent||'');
   const inherited=info.meta?settingInheritedValueForTarget(info.meta,currentSettingsTarget):'';
   const def=info.meta?settingDefaultValue(info.meta):'';
+  const valueState=info.meta?settingValueState(info.meta,current,currentSettingsTarget):{state:'extension',label:'Extension'};
   host.innerHTML='';
   host.classList.add('open');
   const title=document.createElement('strong');title.textContent=settingsRowTitle(row);host.appendChild(title);
   const code=document.createElement('code');code.textContent=key;host.appendChild(code);
+  const stateChip=document.createElement('span');stateChip.className='detail-chip value-state '+valueState.state;stateChip.textContent=valueState.label;host.appendChild(stateChip);
   const scopeChip=document.createElement('span');scopeChip.className='detail-chip';scopeChip.textContent='Scope: '+scope;host.appendChild(scopeChip);
   const currentChip=document.createElement('span');currentChip.className='detail-chip';currentChip.textContent='Current: '+settingCompactDisplayValue(current,56);host.appendChild(currentChip);
   if(info.meta){
@@ -4054,6 +4094,7 @@ function wrapSettingsField(inputId){
     const def=document.createElement('span');def.className='settings-built-chip default';def.textContent='Default: '+settingDisplayValue(settingDefaultValue(meta));def.title=def.textContent;metaRow.appendChild(def);
     const targetChip=document.createElement('span');targetChip.className='settings-built-chip target';targetChip.dataset.settingTargetValue='1';targetChip.textContent='Target: inherited';metaRow.appendChild(targetChip);
     const inheritedChip=document.createElement('span');inheritedChip.className='settings-built-chip inherited';inheritedChip.dataset.settingInheritedValue='1';inheritedChip.textContent='Inherited: '+settingCompactDisplayValue(settingInheritedValueForTarget(meta,currentSettingsTarget));metaRow.appendChild(inheritedChip);
+    const stateChip=document.createElement('span');stateChip.className='settings-built-chip value-state';stateChip.dataset.settingValueState='1';stateChip.textContent='Inherited';metaRow.appendChild(stateChip);
     const cur=document.createElement('span');cur.className='settings-built-chip current';cur.dataset.settingCurrentValue='1';cur.textContent='Current: '+settingCompactDisplayValue(settingsInputValue(el,meta));cur.title='Current value for '+settingFriendlyName(meta,inputId);metaRow.appendChild(cur);
     const mod=document.createElement('span');mod.className='settings-built-chip modified';mod.textContent='Modified';metaRow.appendChild(mod);
     wrap.appendChild(metaRow);
@@ -4104,6 +4145,13 @@ function markSettingsModified(){
       inheritedChip.textContent=inherited;
       inheritedChip.title=inherited;
       inheritedChip.style.display=settingsBackendTargetName(currentSettingsTarget)==='global'?'none':'inline-flex';
+    }
+    const valueStateChip=wrap.querySelector('[data-setting-value-state="1"]');
+    if(valueStateChip){
+      const state=settingValueState(meta,cur,currentSettingsTarget);
+      valueStateChip.textContent=state.label;
+      valueStateChip.title='Value source: '+state.label;
+      ['edited','default','override','inherited'].forEach(cls=>valueStateChip.classList.toggle(cls,state.state===cls));
     }
     const clearButton=wrap.querySelector('[data-settings-clear-target="1"]');
     if(clearButton){
@@ -25208,6 +25256,7 @@ window.scrollToSettingsSection=scrollToSettingsSection;
 window.settingsFocusVisibleRow=settingsFocusVisibleRow;
 window.settingsToggleFilterToken=settingsToggleFilterToken;
 window.settingsClearFilters=settingsClearFilters;
+window.settingsRemoveLastFilterToken=settingsRemoveLastFilterToken;
 window.settingsFocusCurrentLanguageOverride=settingsFocusCurrentLanguageOverride;
 window.settingsSearchForLanguageOverride=settingsSearchForLanguageOverride;
 window.settingsCopyLanguageOverrideJson=settingsCopyLanguageOverrideJson;
@@ -25521,6 +25570,45 @@ function renderSettingsSearchMemory(parsed){
     host.appendChild(btn);
   });
 }
+function settingsRemoveLastFilterToken(){
+  const input=$('settings-search');if(!input)return;
+  const tokens=settingsFilterTokens(input.value).map(v=>v.trim()).filter(Boolean);
+  if(tokens.length)removeSettingsFilterToken(tokens[tokens.length-1]);
+  else{
+    input.value=String(input.value||'').trim().split(/\s+/).slice(0,-1).join(' ');
+    scheduleFilterSettings(0);
+  }
+}
+function renderSettingsSearchInspector(parsed,visible,total,targetStats){
+  const host=$('settings-search-inspector');if(!host)return;
+  host.innerHTML='';
+  const active=!!(parsed&&parsed.active);
+  host.classList.toggle('open',active||Number(visible)===0);
+  if(!host.classList.contains('open'))return;
+  const title=document.createElement('strong');
+  title.textContent=active?'Search breakdown':'Search scope';
+  host.appendChild(title);
+  const add=(text,cls)=>{
+    const chip=document.createElement('span');
+    chip.className='settings-insight-chip'+(cls?' '+cls:'');
+    chip.textContent=text;
+    host.appendChild(chip);
+  };
+  if(parsed&&parsed.text)add('Text: '+parsed.text,'active');
+  if(parsed&&parsed.scopes&&parsed.scopes.length)add('Scopes: '+parsed.scopes.join(', '),'active');
+  if(parsed&&parsed.ids&&parsed.ids.length)add('IDs: '+parsed.ids.join(', '),'active');
+  if(parsed&&parsed.features&&parsed.features.length)add('Features: '+parsed.features.join(', '),'active');
+  if(parsed&&parsed.tags&&parsed.tags.length)add('Tags: '+parsed.tags.join(', '),'active');
+  if(parsed&&parsed.languages&&parsed.languages.length)add('Languages: '+parsed.languages.join(', '),'active');
+  if(parsed&&parsed.extensionIds&&parsed.extensionIds.length)add('Extensions: '+parsed.extensionIds.join(', '),'active');
+  if(parsed&&parsed.modified)add('Modified only','active');
+  if(parsed&&parsed.common)add('Commonly used','active');
+  if(parsed&&parsed.error)add('Errors only','warning');
+  if(parsed&&parsed.json)add('JSON settings','active');
+  add(settingsTargetDisplayName(currentSettingsTarget)+': '+String((targetStats&&targetStats.visible)||0)+' visible','');
+  if(Number(total)>0)add(String(visible)+' / '+String(total)+' groups','');
+  if(Number(visible)===0)add('No visible matches. Remove a token or switch target.','warning');
+}
 function renderSettingsEmptyState(visible,total,parsed){
   const empty=$('settings-empty-state');if(!empty)return;
   const show=Number(total)>0&&Number(visible)===0;
@@ -25575,15 +25663,27 @@ function settingsFocusFirstReviewRow(kind){
   showToast('No visible '+kind+' settings','info',1400);
   return false;
 }
+function settingsReviewRowBeforeAfter(row){
+  const info=settingsMetaForRow(row);
+  if(!(info&&info.meta&&info.input))return null;
+  return {
+    before:settingCompactDisplayValue(settingInheritedValueForTarget(info.meta,currentSettingsTarget),42),
+    after:settingCompactDisplayValue(settingsInputValue(info.input,info.meta),42)
+  };
+}
 function settingsSavePreviewItems(state){
   const items=[];
   (state&&state.errors||[]).slice(0,8).forEach(row=>items.push({kind:'Error',label:settingsReviewRowLabel(row)}));
-  (state&&state.modified||[]).slice(0,12).forEach(row=>items.push({kind:'Modified',label:settingsReviewRowLabel(row)}));
+  (state&&state.modified||[]).slice(0,12).forEach(row=>items.push({kind:'Modified',label:settingsReviewRowLabel(row),delta:settingsReviewRowBeforeAfter(row)}));
   if(currentSettingsTarget!=='extensions'){
     const modifiedKeys=new Set((state&&state.modified||[]).map(settingsReviewRowLabel));
     const updates=(state&&state.targetUpdates)||settingsTargetUpdateRows();
     updates.filter(update=>update&&update.target&&(update.remove||modifiedKeys.has(update.key)||modifiedKeys.has(update.path))).slice(0,12).forEach(update=>{
-      items.push({kind:update.remove?'Clear '+update.target:'Write '+update.target,label:update.key||update.path||'Setting'});
+      items.push({
+        kind:update.remove?'Clear '+update.target:'Write '+update.target,
+        label:update.key||update.path||'Setting',
+        delta:{before:update.remove?settingCompactDisplayValue(update.value,42):'inherited',after:update.remove?'inherited':settingCompactDisplayValue(update.value,42)}
+      });
     });
   }
   return items;
@@ -25611,6 +25711,14 @@ function renderSettingsSavePreview(state,forceOpen){
   items.forEach(item=>{
     const row=document.createElement('div');row.className='settings-save-preview-row';
     const code=document.createElement('code');code.textContent=item.label;row.appendChild(code);
+    if(item.delta){
+      const delta=document.createElement('span');delta.className='before-after';
+      const before=document.createElement('b');before.textContent=item.delta.before;
+      const arrow=document.createElement('i');arrow.textContent='→';
+      const after=document.createElement('b');after.textContent=item.delta.after;
+      delta.appendChild(before);delta.appendChild(arrow);delta.appendChild(after);
+      row.appendChild(delta);
+    }
     const kind=document.createElement('span');kind.textContent=item.kind;row.appendChild(kind);
     row.onclick=()=>{
       const match=settingsVisibleRows().find(visible=>settingsReviewRowLabel(visible)===item.label);
@@ -25812,6 +25920,7 @@ function filterSettings(){
   const inp=$('settings-search');if(inp)inp.placeholder=parsed.active?visible+' matches':currentSettingsTarget==='extensions'?'Search extension settings...':currentSettingsTarget==='workspace'?'Search workspace settings...':'Search user settings...';
   settingsRecordSearch(q,parsed);
   renderSettingsActiveFilters(parsed,visible,total);
+  renderSettingsSearchInspector(parsed,visible,total,targetStats);
   renderSettingsSearchMemory(parsed);
   renderSettingsTargetSummary(targetStats);
   renderSettingsReviewBar(targetStats);
