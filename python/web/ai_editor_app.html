@@ -1249,12 +1249,12 @@ pre.code-block code .type { color:var(--fg-type); }
   transition:border-color .14s ease, background .14s ease, color .14s ease, box-shadow .14s ease; }
 .chat-control-trigger .control-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-control-trigger .control-caret { font-size:8px; opacity:.65; margin-left:4px; flex:0 0 auto; }
-.chat-control-trigger.provider { width:132px; min-width:124px; max-width:188px; flex:0 0 132px; }
-.chat-control-trigger.model { width:230px; min-width:210px; max-width:320px; flex:0 0 230px; }
-.chat-control-trigger.agent { width:168px; min-width:154px; max-width:220px; flex:0 0 168px; }
+.chat-control-trigger.provider { width:148px; min-width:136px; max-width:208px; flex:0 0 148px; }
+.chat-control-trigger.model { width:280px; min-width:240px; max-width:360px; flex:0 0 280px; }
+.chat-control-trigger.agent { width:188px; min-width:168px; max-width:240px; flex:0 0 188px; }
 .chat-control-trigger.mode { width:92px; min-width:88px; max-width:120px; flex:0 0 92px; color:var(--fg-accent);
   border-color:color-mix(in srgb, var(--border-focus) 50%, var(--border)); }
-.chat-control-trigger.workflow { width:178px; min-width:166px; max-width:240px; flex:0 0 178px; }
+.chat-control-trigger.workflow { width:206px; min-width:184px; max-width:270px; flex:0 0 206px; }
 .chat-control-popup { position:absolute; bottom:calc(100% + 7px); left:0; display:none; min-width:250px;
   max-width:min(420px, calc(100vw - 24px)); max-height:min(360px, 55vh); overflow:auto;
   background:var(--bg2); border:1px solid color-mix(in srgb,var(--border-focus) 32%,var(--border));
@@ -1266,7 +1266,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-popup.align-right { left:auto; right:0; }
 .chat-control-popup.agent { min-width:250px; }
 .chat-control-popup.provider { min-width:260px; }
-.chat-control-popup.model { min-width:390px; }
+.chat-control-popup.model { min-width:430px; }
 .chat-control-popup.mode { min-width:260px; }
 .chat-control-popup.workflow { min-width:340px; }
 .chat-control-popup .mode-popup-item { padding:7px 9px; border-radius:6px; margin:1px 0; border:1px solid transparent; }
@@ -1389,8 +1389,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-popup .workflow-mode-option .mp-icon { display:inline-flex; justify-content:center; }
 .chat-control-popup .workflow-mode-option .mp-label,
 .chat-control-popup .workflow-mode-option .mp-desc { text-align:center; }
-.chat-select-chip.agent { width:168px; max-width:220px; flex-basis:168px; }
-.chat-select-chip.workflow { width:178px; max-width:240px; flex-basis:178px; }
+.chat-select-chip.agent { width:188px; max-width:240px; flex-basis:188px; }
+.chat-select-chip.workflow { width:206px; max-width:270px; flex-basis:206px; }
 .chat-run-chip { color:var(--fg-accent); background:color-mix(in srgb, var(--border-focus) 12%, var(--bg3)); }
 .chat-run-chip:disabled { opacity:0.45; cursor:default; color:var(--fg-dim); }
 .chat-composer-action { width:22px; height:22px; border:1px solid transparent; border-radius:4px;
@@ -23157,13 +23157,14 @@ function syncUI(){
   $('provider-sel').value=config.provider;$('model-inp').value=config.model;
   const chatProvider=$('chat-provider-sel');if(chatProvider)chatProvider.value=config.provider;
   const chatModel=$('chat-model-inline');if(chatModel){
-    chatModel.value=config.model||'';
+    const activeModel=activeModelValue();
+    chatModel.value=activeModel;
     const label=$('chat-model-trigger-label');
-    if(label)label.textContent=config.model||'Model';
-    chatModel.classList.toggle('muted',!config.model);
-    chatModel.title=config.model?'Chat model: '+config.model:'Chat model';
+    if(label)label.textContent=activeModel||'Model';
+    chatModel.classList.toggle('muted',!activeModel);
+    chatModel.title=activeModel?'Chat model: '+activeModel:'Chat model';
   }
-  const mname=config.model||config.provider;
+  const mname=activeModelValue()||config.provider;
   $('status-model').textContent=mname;
   if($('model-chip'))$('model-chip').textContent=mname;
   renderChatControlOptions();
@@ -23223,6 +23224,8 @@ $('model-inp').onchange=e=>updateProviderModel(config.provider,e.target.value,tr
 // ── Inline CHAT controls ──
 let chatControlState={agents:[],workflows:[],providers:[],models:[]};
 let chatProviderModelOptions=Object.create(null);
+let chatProviderModelFetchKeys=Object.create(null);
+let chatProviderModelFetchInflight=Object.create(null);
 function normalizeControlList(value,key){
   const raw=Array.isArray(value)?value:(value&&Array.isArray(value[key])?value[key]:[]);
   return raw.filter(Boolean);
@@ -23237,6 +23240,14 @@ function controlItemId(item){
 }
 function controlItemName(item){return String((item&&typeof item==='object'&&(item.name||item.label||item.id||item.value))||item||'')}
 function controlItemDescription(item){return String((item&&typeof item==='object'&&(item.description||item.detail||item.when_to_use))||'')}
+function isPlaceholderModelValue(value){
+  const text=String(value||'').trim().toLowerCase();
+  return !text||text==='model';
+}
+function activeModelValue(){
+  const model=String(config.model||'').trim();
+  return isPlaceholderModelValue(model)?'':model;
+}
 function workflowStepList(workflow){
   return workflow&&Array.isArray(workflow.steps)?workflow.steps:[];
 }
@@ -23296,10 +23307,10 @@ function customEndpointSettingModelRows(provider){
   const pid=String(provider||config.provider||'').trim();
   const modelInput=$('s-model');
   const baseInput=$('s-baseurl');
-  const model=String((modelInput&&modelInput.value)||config.model||'').trim();
+  const model=String((modelInput&&modelInput.value)||activeModelValue()||'').trim();
   const base=String((baseInput&&baseInput.value)||config.base_url||'').trim();
   if(pid!=='custom'&&!base)return [];
-  if(!model)return [];
+  if(isPlaceholderModelValue(model))return [];
   return [{
     id:model,
     name:model,
@@ -23335,7 +23346,8 @@ function modelOptionRows(){
   settingsModelListRows(provider).forEach(model=>pushModel(model));
   const defaultModel=providerDefaultModelFromControls(provider);
   if(defaultModel&&!out.some(item=>controlItemId(item)===defaultModel))out.push({id:defaultModel,name:defaultModel,provider,current:true,description:'Provider default'});
-  if(config.model&&!out.some(item=>controlItemId(item)===config.model))out.unshift({id:config.model,name:config.model,current:true});
+  const activeModel=activeModelValue();
+  if(activeModel&&!out.some(item=>controlItemId(item)===activeModel))out.unshift({id:activeModel,name:activeModel,current:true});
   return out;
 }
 function preferredModelForProvider(provider){
@@ -23353,6 +23365,45 @@ function preferredModelForProvider(provider){
     return isCustomEndpointModelMeta(meta)||String(meta.provider||meta.provider_id||meta.providerId||'')===pid;
   });
   return custom||readProviderModelDefaults(pid)||'';
+}
+function providerApiKeyForChat(provider){
+  const pid=String(provider||config.provider||'').trim();
+  const settingsKey=providerApiKey(pid);
+  if(settingsKey)return settingsKey;
+  if(pid===String(config.provider||'').trim())return String(config.api_key||'');
+  return '';
+}
+function chatProviderModelFetchKey(provider){
+  const pid=String(provider||config.provider||'').trim();
+  const base=String(config.base_url||'').trim();
+  return pid+'|'+base+'|'+(providerApiKeyForChat(pid)?'key':'nokey');
+}
+async function refreshChatModelOptionsForProvider(provider,opts){
+  opts=opts||{};
+  const pid=String(provider||config.provider||'').trim();
+  if(!pid||!api()||!api().list_provider_models)return null;
+  const base=String(config.base_url||'').trim();
+  const shouldFetch=opts.force||pid==='custom'||!!base||!normalizeControlList(chatProviderModelOptions[pid],'models').length;
+  if(!shouldFetch)return null;
+  const key=chatProviderModelFetchKey(pid);
+  if(!opts.force&&chatProviderModelFetchKeys[pid]===key&&normalizeControlList(chatProviderModelOptions[pid],'models').length)return null;
+  if(chatProviderModelFetchInflight[pid])return chatProviderModelFetchInflight[pid];
+  chatProviderModelFetchInflight[pid]=(async()=>{
+    try{
+      const r=await call('list_provider_models',pid,base,providerApiKeyForChat(pid));
+      if(r&&Array.isArray(r.models)){
+        chatProviderModelOptions[pid]=r.models.slice();
+        chatProviderModelFetchKeys[pid]=key;
+        renderChatControlPopups();
+        const popup=$('chat-model-popup');
+        if(popup&&popup.classList.contains('show'))positionChatControlPopup('model');
+      }
+      return r;
+    }finally{
+      delete chatProviderModelFetchInflight[pid];
+    }
+  })();
+  return chatProviderModelFetchInflight[pid];
 }
 function renderProviderControlOptions(providers){
   const rows=normalizeControlList(providers,'providers');
@@ -23577,21 +23628,23 @@ function renderChatControlPopups(){
   }
   const modelTrigger=$('chat-model-inline'),modelLabelEl=$('chat-model-trigger-label'),modelPopup=$('chat-model-popup');
   if(modelTrigger&&modelLabelEl){
-    modelTrigger.value=config.model||'';
-    modelLabelEl.textContent=config.model||'Model';
-    modelTrigger.title=config.model?'Chat model: '+config.model:'Chat model';
-    modelTrigger.classList.toggle('muted',!config.model);
+    const activeModel=activeModelValue();
+    modelTrigger.value=activeModel;
+    modelLabelEl.textContent=activeModel||'Model';
+    modelTrigger.title=activeModel?'Chat model: '+activeModel:'Chat model';
+    modelTrigger.classList.toggle('muted',!activeModel);
     modelTrigger.onkeydown=e=>handleChatControlPopupKeydown(e,'model');
   }
   if(modelPopup){
     modelPopup.innerHTML='';
     const rows=modelOptionRows();
     if(rows.length){
-      rows.forEach(model=>modelPopup.appendChild(chatControlPopupItem('model',model,controlItemId(model)===(config.model||''))));
+      const activeModel=activeModelValue();
+      rows.forEach(model=>modelPopup.appendChild(chatControlPopupItem('model',model,controlItemId(model)===activeModel)));
     }else{
       const empty=document.createElement('div');
       empty.className='chat-control-popup-empty';
-      empty.textContent='No models configured. Add models in Custom Models settings.';
+      empty.textContent='No models loaded. Click again after Custom Endpoint models finish loading.';
       modelPopup.appendChild(empty);
     }
     modelPopup.onkeydown=e=>handleChatControlPopupKeydown(e,'model');
@@ -23640,6 +23693,7 @@ function toggleChatControlPopup(e,kind,opts){
   trigger.setAttribute('aria-expanded',willOpen?'true':'false');
   if(willOpen){
     positionChatControlPopup(kind);
+    if(kind==='model')refreshChatModelOptionsForProvider(config.provider,{force:false}).catch(()=>{});
     if(!(opts&&opts.noFocus))setTimeout(()=>focusChatControlPopupOption(kind,0),0);
   }
 }
