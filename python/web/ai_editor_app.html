@@ -162,7 +162,7 @@ body.window-resizing * { cursor:inherit !important; }
 .history-session-action.delete { color:var(--fg-error); }
 .history-session-main { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
 .history-session-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.history-session-meta { display:flex; align-items:center; gap:4px; min-width:0; overflow:hidden; }
+.history-session-meta { display:flex; align-items:center; gap:4px; min-width:0; overflow:hidden; flex-wrap:wrap; max-height:51px; }
 .history-session-chip { max-width:96px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   color:var(--fg-dim); border:1px solid var(--border); border-radius:999px; padding:0 5px; font:10px/15px var(--mono); }
 .history-session-chip.running { color:var(--fg-accent); border-color:color-mix(in srgb,var(--border-focus) 60%,var(--border)); }
@@ -173,6 +173,11 @@ body.window-resizing * { cursor:inherit !important; }
 .history-session-chip.workflow { color:var(--fg-success); }
 .history-session-chip.approval { color:var(--fg-warning); }
 .history-session-chip.fork { color:var(--fg-bright); }
+.history-session-chip.response { color:var(--fg-accent); border-color:color-mix(in srgb,var(--border-focus) 45%,var(--border)); }
+.history-session-chip.reference,.history-session-chip.context-part,.history-session-chip.tree { color:var(--fg-success); }
+.history-session-chip.changes { color:var(--fg-warning); }
+.history-session-chip.tokens { color:var(--fg-dim); }
+.history-session-chip.error { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 45%,var(--border)); }
 .sb-group { padding:8px 16px 4px; font-size:11px; font-weight:600; color:var(--fg-dim);
   text-transform:uppercase; letter-spacing:0.5px; }
 .tree-root { padding:4px 0 10px; }
@@ -7982,11 +7987,13 @@ async function runAssistantUiSelfCheck(opts){
   const workflowResultState=assistantWorkflowResultStateSnapshot();
   const workflowButtonState=assistantWorkflowRunButtonSnapshot();
   const providerSession=assistantProviderSessionSmokeSnapshot();
+  const historyAffordance=assistantHistoryAffordanceSmokeSnapshot();
   assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready',providerPopup.shown&&providerPopup.optionCount>=1&&providerPopup.focusableCount===providerPopup.optionCount&&providerPopup.keyboardReady,JSON.stringify(providerPopup));
   assistantUiSelfCheckRecord(checks,'model-popup-configured-models-ready',modelPopup.shown&&modelPopup.optionCount>=1&&modelPopup.focusableCount===modelPopup.optionCount&&modelPopup.keyboardReady,JSON.stringify(modelPopup));
   assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped',[providerPopup,modelPopup,agentPopup,workflowPopup].every(s=>s.shown&&s.display==='block'&&s.rectReady&&s.opensAboveTrigger&&s.notToolbarClipped&&!s.className.includes('mode-popup')),JSON.stringify({providerPopup,modelPopup,agentPopup,workflowPopup}));
   assistantUiSelfCheckRecord(checks,'agent-popup-configured-agents-ready',agentPopup.shown&&agentPopup.optionCount>=1&&agentPopup.focusableCount===agentPopup.optionCount&&agentPopup.keyboardReady&&agentPopup.visibleText.includes('Agent'),JSON.stringify(agentPopup));
   assistantUiSelfCheckRecord(checks,'provider-session-state-smoke',providerSession.runningType==='provider'&&providerSession.runningStatus==='inProgress'&&providerSession.savedType==='provider'&&providerSession.savedProvider==='assistant-selfcheck-provider'&&providerSession.savedMessageCount===2&&providerSession.savedContextCount===1&&String(providerSession.resource||'').startsWith('sao-ai-chat://provider/')&&providerSession.panelResource===providerSession.resource&&providerSession.panelRequests==='1'&&providerSession.opened===true&&providerSession.restoredMessages===2&&providerSession.savedNativePayload===true&&providerSession.restoredNativeCards>=2&&providerSession.restoredReferenceCards>=1&&providerSession.activeProvider==='assistant-selfcheck-provider'&&providerSession.sessionType==='provider'&&providerSession.sessionProvider==='assistant-selfcheck-provider',JSON.stringify(providerSession));
+  assistantUiSelfCheckRecord(checks,'history-native-affordances-visible',historyAffordance.itemExists&&historyAffordance.nativeParts===2&&historyAffordance.nativeTodos===1&&historyAffordance.nativeChanges===1&&historyAffordance.nativeRefs===1&&historyAffordance.nativeUsedContext===1&&historyAffordance.nativeTrees===1&&historyAffordance.nativeTokens===24&&historyAffordance.chipLabels.includes('2 parts')&&historyAffordance.chipLabels.includes('1 edit')&&historyAffordance.chipLabels.includes('1 ref')&&historyAffordance.chipLabels.includes('1 used')&&historyAffordance.chipLabels.includes('1 tree')&&historyAffordance.chipLabels.includes('24 tok')&&historyAffordance.searchMatches&&historyAffordance.aria.includes('2 parts')&&historyAffordance.title.includes('Modified files: 1'),JSON.stringify(historyAffordance));
   assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready',workflowPopup.shown&&workflowPopup.workflowModeCount===3&&workflowPopup.workflowModeStrip&&workflowPopup.workflowModeToolbar&&workflowPopup.optionCount>=4&&workflowPopup.focusableCount===workflowPopup.optionCount&&workflowPopup.keyboardReady,JSON.stringify(workflowPopup));
   assistantUiSelfCheckRecord(checks,'workflow-popup-mode-smoke',workflowModeSmoke.states.length===3&&workflowModeSmoke.states.every(state=>state.strip&&state.toolbar&&state.active.includes(state.mode))&&workflowModeSmoke.selected.value==='assistant-selfcheck-flow'&&workflowModeSmoke.selected.mode==='on'&&workflowModeSmoke.selected.runDisabled===false&&workflowModeSmoke.custom.prompt==='selfcheck custom workflow prompt'&&workflowModeSmoke.custom.runDisabled===false,JSON.stringify(workflowModeSmoke));
   assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready',workflowEditor.modalExists&&workflowEditor.editorExists&&workflowEditor.rowCount===2&&workflowEditor.labelInputs===2&&workflowEditor.agentInputs===2&&workflowEditor.outputInputs===2&&workflowEditor.promptInputs===2&&workflowEditor.moveButtons===4&&workflowEditor.deleteButtons===2&&workflowEditor.addButtonExists&&workflowEditor.collectedCount===2&&workflowEditor.idReadOnly,JSON.stringify(workflowEditor));
@@ -16756,10 +16763,50 @@ function confirmDeleteAssistantSession(session){
   const title=String(session&&session.title||'Chat session');
   return window.confirm('Delete local chat session "'+title+'"?');
 }
+function assistantHistorySessionNativeSummary(session){
+  const summary={parts:0,todos:0,changes:0,refs:0,usedContext:0,trees:0,tokens:0,errors:0,models:Object.create(null),keywords:[]};
+  (Array.isArray(session&&session.messages)?session.messages:[]).forEach(message=>{
+    const payload=assistantSessionSerializableNativePayload(message&&message.nativePayload);
+    if(!payload)return;
+    if(payload.model)summary.models[String(payload.model)]=true;
+    if(payload.error)summary.errors+=1;
+    if(Array.isArray(payload.responseParts)){
+      summary.parts+=payload.responseParts.length;
+      payload.responseParts.forEach(part=>{
+        if(!part)return;
+        if(part.kind==='todoList')summary.todos+=(part.todo&&Array.isArray(part.todo.todoList))?part.todo.todoList.length:1;
+        else if(part.kind==='modifiedFilesConfirmation')summary.changes+=(part.modifiedFiles&&Array.isArray(part.modifiedFiles.files))?part.modifiedFiles.files.length:1;
+        else if(part.kind)summary.keywords.push(String(part.kind));
+      });
+    }
+    if(Array.isArray(payload.contentReferences))summary.refs+=payload.contentReferences.length;
+    if(Array.isArray(payload.usedContext))summary.usedContext+=payload.usedContext.length;
+    if(Array.isArray(payload.fileTrees))summary.trees+=payload.fileTrees.length;
+    const usage=payload.usage||{};
+    const total=Number(usage.total_tokens||usage.totalTokens||usage.total||0);
+    if(Number.isFinite(total)&&total>0)summary.tokens+=total;
+  });
+  summary.modelLabels=Object.keys(summary.models);
+  summary.hasNative=!!(summary.parts||summary.refs||summary.usedContext||summary.trees||summary.tokens||summary.errors||summary.modelLabels.length);
+  summary.searchText=[
+    summary.parts?'response parts':'',
+    summary.todos?'todo list':'',
+    summary.changes?'modified files changes edits':'',
+    summary.refs?'references anchors':'',
+    summary.usedContext?'used context':'',
+    summary.trees?'file tree':'',
+    summary.tokens?'tokens usage':'',
+    summary.errors?'error failed':'',
+    ...summary.modelLabels,
+    ...summary.keywords
+  ].filter(Boolean).join(' ');
+  return summary;
+}
 function assistantHistorySessionChips(session,current){
   const chips=[];
   const status=String(session&&session.status||'completed');
   const contextCount=Array.isArray(session&&session.context)?session.context.length:0;
+  const nativeSummary=assistantHistorySessionNativeSummary(session);
   if(current)chips.push({label:'current',kind:'current'});
   if(status==='inProgress'||session&&session.requestInProgress)chips.push({label:'running',kind:'running'});
   else if(session&&session.draft)chips.push({label:'draft',kind:'draft'});
@@ -16771,7 +16818,15 @@ function assistantHistorySessionChips(session,current){
   if(session&&session.agentId)chips.push({label:String(session.agentId),kind:'agent'});
   if(session&&session.workflowLabel)chips.push({label:assistantWorkflowDisplayLabel(session.workflowLabel),kind:'workflow'});
   if(session&&session.approval&&String(session.approval)!=='default')chips.push({label:t('approval_'+session.approval)||String(session.approval),kind:'approval'});
-  return chips.slice(0,6);
+  if(nativeSummary.parts)chips.push({label:nativeSummary.parts+' part'+(nativeSummary.parts===1?'':'s'),kind:'response'});
+  if(nativeSummary.todos)chips.push({label:nativeSummary.todos+' todo',kind:'response'});
+  if(nativeSummary.changes)chips.push({label:nativeSummary.changes+' edit'+(nativeSummary.changes===1?'':'s'),kind:'changes'});
+  if(nativeSummary.refs)chips.push({label:nativeSummary.refs+' ref'+(nativeSummary.refs===1?'':'s'),kind:'reference'});
+  if(nativeSummary.usedContext)chips.push({label:nativeSummary.usedContext+' used',kind:'context-part'});
+  if(nativeSummary.trees)chips.push({label:nativeSummary.trees+' tree'+(nativeSummary.trees===1?'':'s'),kind:'tree'});
+  if(nativeSummary.tokens)chips.push({label:nativeSummary.tokens+' tok',kind:'tokens'});
+  if(nativeSummary.errors)chips.push({label:'error',kind:'error'});
+  return chips.slice(0,13);
 }
 function renderHistorySessionItem(list,session,index){
   const current=String(session.id||'')===String(assistantSessionState.id||'');
@@ -16789,6 +16844,15 @@ function renderHistorySessionItem(list,session,index){
   item.dataset.sessionAgentId=String(session.agentId||'');
   item.dataset.sessionWorkflowId=String(session.workflowId||'');
   item.dataset.sessionApproval=String(session.approval||'');
+  const nativeSummary=assistantHistorySessionNativeSummary(session);
+  item.dataset.sessionNativeParts=String(nativeSummary.parts);
+  item.dataset.sessionNativeTodos=String(nativeSummary.todos);
+  item.dataset.sessionNativeChanges=String(nativeSummary.changes);
+  item.dataset.sessionNativeRefs=String(nativeSummary.refs);
+  item.dataset.sessionNativeUsedContext=String(nativeSummary.usedContext);
+  item.dataset.sessionNativeTrees=String(nativeSummary.trees);
+  item.dataset.sessionNativeTokens=String(nativeSummary.tokens);
+  item.dataset.sessionNativeErrors=String(nativeSummary.errors);
   item.setAttribute('aria-label','Assistant session '+String(session.title||session.id||'Chat session')+' '+chips.map(c=>c.label).join(' '));
   item.style.cssText='display:flex;align-items:center;gap:6px';
   const main=document.createElement('span');main.className='history-session-main';
@@ -16802,7 +16866,15 @@ function renderHistorySessionItem(list,session,index){
     'Mode: '+String((session.mode?(t('mode_'+session.mode)||session.mode):'-')||'-'),
     'Approval: '+String((session.approval?(t('approval_'+session.approval)||session.approval):'-')||'-'),
     'Agent: '+String(session.agentId||'Default'),
-    'Workflow: '+String(session.workflowLabel||session.workflowId||'-')
+    'Workflow: '+String(session.workflowLabel||session.workflowId||'-'),
+    nativeSummary.parts?'Response parts: '+nativeSummary.parts:'',
+    nativeSummary.todos?'Todo items: '+nativeSummary.todos:'',
+    nativeSummary.changes?'Modified files: '+nativeSummary.changes:'',
+    nativeSummary.refs?'References: '+nativeSummary.refs:'',
+    nativeSummary.usedContext?'Used context: '+nativeSummary.usedContext:'',
+    nativeSummary.trees?'File trees: '+nativeSummary.trees:'',
+    nativeSummary.tokens?'Tokens: '+nativeSummary.tokens:'',
+    nativeSummary.errors?'Errors: '+nativeSummary.errors:''
   ].filter(Boolean).join('\n');
   const meta=document.createElement('span');meta.className='history-session-meta';
   chips.forEach(chip=>{
@@ -16820,6 +16892,61 @@ function renderHistorySessionItem(list,session,index){
   item.onclick=()=>assistantSessionOpenItem(session.id);
   list.appendChild(item);
   return {kind:'session',id:session.id,element:item,open:()=>assistantSessionOpenItem(session.id)};
+}
+function assistantHistoryAffordanceSmokeSnapshot(){
+  const list=document.createElement('div');
+  list.style.display='none';
+  document.body.appendChild(list);
+  const session={
+    id:'history-native-selfcheck',
+    title:'History native selfcheck',
+    status:'completed',
+    sessionResource:'sao-ai-chat://provider/history-native-selfcheck',
+    provider:'assistant-selfcheck-provider',
+    model:'selfcheck-model',
+    mode:'agent',
+    agentId:'Default',
+    workflowLabel:'Selfcheck Flow',
+    approval:'default',
+    requestCount:1,
+    context:[{kind:'file',label:'context.ts'}],
+    messages:[{
+      role:'assistant',
+      content:'history native payload',
+      nativePayload:{
+        content:'history native payload',
+        model:'selfcheck-model',
+        responseParts:[
+          {kind:'todoList',todoList:[{title:'History todo',status:'completed'}]},
+          {kind:'modifiedFilesConfirmation',files:[{uri:'file:///workspace/history.ts',title:'history.ts'}]}
+        ],
+        contentReferences:[{kind:'anchor',label:'history.ts',path:'file:///workspace/history.ts'}],
+        usedContext:[{kind:'file',label:'context.ts',path:'file:///workspace/context.ts'}],
+        fileTrees:[{label:'tree',items:[{name:'history.ts'}]}],
+        usage:{total_tokens:24}
+      }
+    }]
+  };
+  const entry=renderHistorySessionItem(list,session,0);
+  const item=entry&&entry.element;
+  const snapshot={
+    itemExists:!!item,
+    chipLabels:item?Array.from(item.querySelectorAll('.history-session-chip')).map(el=>String(el.textContent||'')):[],
+    chipKinds:item?Array.from(item.querySelectorAll('.history-session-chip')).map(el=>String(el.className||'')):[],
+    nativeParts:item?Number(item.dataset.sessionNativeParts||0):0,
+    nativeTodos:item?Number(item.dataset.sessionNativeTodos||0):0,
+    nativeChanges:item?Number(item.dataset.sessionNativeChanges||0):0,
+    nativeRefs:item?Number(item.dataset.sessionNativeRefs||0):0,
+    nativeUsedContext:item?Number(item.dataset.sessionNativeUsedContext||0):0,
+    nativeTrees:item?Number(item.dataset.sessionNativeTrees||0):0,
+    nativeTokens:item?Number(item.dataset.sessionNativeTokens||0):0,
+    aria:item?String(item.getAttribute('aria-label')||''):'',
+    title:item?String((item.querySelector('.history-session-title')||{}).title||''):'',
+    searchMatches:historyMatchesQuery([session.title,assistantHistorySessionNativeSummary(session).searchText],'modified files')
+      && historyMatchesQuery([session.title,assistantHistorySessionNativeSummary(session).searchText],'used context')
+  };
+  list.remove();
+  return snapshot;
 }
 function renderHistoryBackendItem(list,entry,index){
   const item=document.createElement('div');item.className='sb-item';
@@ -16845,7 +16972,10 @@ async function refreshHistory(){
   const query=historyQuery();
   const localSessions=assistantSessionLoadItems();
   const backendEntries=(r&&Array.isArray(r.entries))?r.entries:[];
-  const visibleSessions=localSessions.filter(s=>historyMatchesQuery([s.title,s.sessionResource,s.id,s.provider,s.model,s.mode,s.agentId,s.workflowId,s.workflowLabel,s.approval,s.parentSessionResource],query));
+  const visibleSessions=localSessions.filter(s=>{
+    const nativeSummary=assistantHistorySessionNativeSummary(s);
+    return historyMatchesQuery([s.title,s.sessionResource,s.id,s.provider,s.model,s.mode,s.agentId,s.workflowId,s.workflowLabel,s.approval,s.parentSessionResource,nativeSummary.searchText],query);
+  });
   const visibleBackend=backendEntries.filter(e=>historyMatchesQuery([e.title,e.id,e.message_count],query));
   if(!visibleSessions.length&&!visibleBackend.length){list.innerHTML='<div class="sb-item" style="color:var(--fg-dim)" role="note">'+esc(query?'No matching chat sessions':t('no_history'))+'</div>';list.removeAttribute('aria-activedescendant');return}
   if(visibleSessions.length){

@@ -109,6 +109,7 @@ async function main() {
     "control-popup-rects-unclipped",
     "agent-popup-configured-agents-ready",
     "provider-session-state-smoke",
+    "history-native-affordances-visible",
     "workflow-popup-modes-ready",
     "workflow-result-state-rendered",
     "workflow-run-button-active-state",

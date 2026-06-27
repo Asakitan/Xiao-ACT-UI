@@ -4064,6 +4064,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "if(String(item.type||'')==='provider'||item.providerId){" in html
            and "return assistantProviderOpenSessionItem(item,opts);" in html
            and "function assistantSessionForkCurrent()" in html
+           and "function assistantHistorySessionNativeSummary(session)" in html
+           and "function assistantHistoryAffordanceSmokeSnapshot()" in html
            and "function assistantSessionHasInProgressWork()" in html
            and "function assistantSessionBeforeUnloadMessage()" in html
            and "window.addEventListener('beforeunload',event=>" in html
@@ -4102,11 +4104,23 @@ def test_phase1_ai_editor_regressions() -> None:
            and "item.dataset.sessionAgentId=String(session.agentId||'');" in html
            and "item.dataset.sessionWorkflowId=String(session.workflowId||'');" in html
            and "item.dataset.sessionApproval=String(session.approval||'');" in html
+           and "item.dataset.sessionNativeParts=String(nativeSummary.parts);" in html
+           and "item.dataset.sessionNativeChanges=String(nativeSummary.changes);" in html
+           and "item.dataset.sessionNativeRefs=String(nativeSummary.refs);" in html
+           and "item.dataset.sessionNativeUsedContext=String(nativeSummary.usedContext);" in html
+           and "item.dataset.sessionNativeTrees=String(nativeSummary.trees);" in html
+           and "item.dataset.sessionNativeTokens=String(nativeSummary.tokens);" in html
            and "main.className='history-session-main';" in html
            and "el.className='history-session-chip '+chip.kind;" in html
            and ".history-session-chip.running" in html
            and ".history-session-chip.workflow" in html
            and ".history-session-chip.approval" in html
+           and ".history-session-chip.response" in html
+           and ".history-session-chip.changes" in html
+           and ".history-session-chip.reference" in html
+           and ".history-session-chip.tree" in html
+           and ".history-session-chip.tokens" in html
+           and ".history-session-chip.error" in html
            and "list.setAttribute('aria-activedescendant',active.id);" in html
            and "if(e.key==='ArrowDown'||e.key==='ArrowUp')" in html
            and "if(e.key==='Delete')" in html
@@ -4117,7 +4131,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "if(confirmDeleteAssistantSession(session)){assistantSessionDeleteItem(session.id);announceAssistantAction('Deleted chat session');refreshHistory()}" in html
            and "['/sessions','Open chat sessions','chat']" in html
            and "else if(cmd==='/fork')assistantSessionForkCurrent();"
-           and "visibleSessions=localSessions.filter(s=>historyMatchesQuery([s.title,s.sessionResource,s.id,s.provider,s.model,s.mode,s.agentId,s.workflowId,s.workflowLabel,s.approval,s.parentSessionResource],query));"
+           and "const nativeSummary=assistantHistorySessionNativeSummary(s);" in html
+           and "nativeSummary.searchText" in html
+           and "assistantUiSelfCheckRecord(checks,'history-native-affordances-visible'" in html
            in html)
     _check("frontend Assistant provider surfaces persist Copilot-style sessions",
            "function assistantProviderSessionId(pid)" in html
@@ -4968,6 +4984,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'model-popup-configured-models-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped'" in html
            and "assistantUiSelfCheckRecord(checks,'agent-popup-configured-agents-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'history-native-affordances-visible'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready'" in html
            and "function assistantWorkflowEditorSnapshot()" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready'" in html
@@ -5015,6 +5032,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "control-popup-rects-unclipped" in smoke_source
            and "agent-popup-configured-agents-ready" in smoke_source
            and "provider-session-state-smoke" in smoke_source
+           and "history-native-affordances-visible" in smoke_source
            and "workflow-result-state-rendered" in smoke_source
            and "workflow-run-button-active-state" in smoke_source
            and "channel: \"msedge\"" in smoke_source
