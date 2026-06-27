@@ -9500,6 +9500,27 @@ console.log("frontend word separator behavior ok");
            and "window.focusSettingsSearch=focusSettingsSearch;" in html
            and "renderSettingsNav();" in html
            and "updateSettingsNavCounts();" in html)
+    _check("frontend built-in settings expose VS Code style metadata",
+           "const SETTING_INPUT_META=" in html
+           and "const SETTING_INPUT_MAP=Object.fromEntries" in html
+           and "function settingsValueAtPath(root,path,fallback)" in html
+           and "function settingDefaultValue(meta)" in html
+           and "function settingsInputValue(el,meta)" in html
+           and "function setSettingsInputValue(el,meta,value)" in html
+           and "function settingsFieldWrapper(inputId)" in html
+           and "settings-field builtin-setting" in html
+           and "settings-built-meta" in html
+           and "settings-built-chip default" in html
+           and "settings-built-chip modified" in html
+           and "wrap.dataset.settingKey=meta.key||meta.path||inputId;" in html
+           and "aiEditor.provider" in html
+           and "editor.formatOnSave" in html
+           and "terminal.integrated.defaultProfile.windows" in html
+           and "workbench.colorTheme" in html
+           and "el.type==='checkbox'" in html
+           and "el.hidden||el.type==='hidden'" in html
+           and "wrap.dataset.settingModified=modified?'1':'0';" in html
+           and "updateSettingsNavCounts();" in html)
     _check("frontend renders extension settings modified reset controls",
             "function renderExtensionSettings()" in html
             and "function extensionSettingValidateJsonValue(value,type)" in html

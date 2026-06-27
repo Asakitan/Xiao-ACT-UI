@@ -2016,6 +2016,23 @@ pre.code-block { overflow:visible; }
 .settings-field.modified { border-left:2px solid var(--fg-accent); padding-left:2px; }
 .settings-field.modified .s-reset { display:inline-block; }
 .settings-field.invalid, .settings-input-invalid { border-color:var(--fg-error) !important; }
+.settings-field.builtin-setting { padding:7px 28px 7px 8px; border-radius:4px; margin:3px 0 6px;
+  border-left:2px solid transparent; background:transparent; }
+.settings-field.builtin-setting:hover { background:color-mix(in srgb,var(--bg-hover) 62%,transparent); }
+.settings-field.builtin-setting.modified { border-left-color:var(--fg-accent); background:color-mix(in srgb,var(--fg-accent) 6%,transparent); }
+.settings-field.builtin-setting .s-reset { top:8px; transform:none; }
+.settings-field.builtin-setting > label:first-child,
+.settings-field.builtin-setting > .settings-check:first-child { margin-top:0; }
+.settings-built-meta { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin:5px 0 1px;
+  color:var(--fg-dim); font:10px var(--mono); }
+.settings-built-meta code { user-select:all; color:var(--fg); background:var(--bg3);
+  border:1px solid var(--border); border-radius:3px; padding:1px 4px; font:10px var(--mono); }
+.settings-built-chip { display:inline-flex; align-items:center; max-width:260px; min-height:17px; padding:0 5px;
+  border:1px solid var(--border); border-radius:999px; color:var(--fg-dim); background:var(--bg3);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-built-chip.modified { display:none; color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); }
+.settings-field.modified .settings-built-chip.modified { display:inline-flex; }
+.settings-built-desc { margin:3px 0 0; color:var(--fg-dim); font-size:11px; line-height:1.35; }
 .settings-validation-summary { display:none; margin:0 0 8px; padding:7px 9px;
   border:1px solid var(--border); border-radius:var(--radius); background:var(--bg2);
   color:var(--fg-dim); font-size:12px; line-height:1.35; }
@@ -3346,31 +3363,159 @@ async function persistConfigPatch(patch,options){
   return result||{error:'backend unavailable'};
 }
 
-// SETTINGS-03: Per-setting reset to default
-const SETTING_INPUT_MAP={
-  's-provider':'provider','s-baseurl':'base_url','s-model':'model',
-  's-temp':'temperature','s-maxtok':'max_tokens','s-sysprompt':'system_prompt',
-  's-topp':'top_p','s-freqp':'frequency_penalty','s-presp':'presence_penalty',
-  's-timeout':'timeout','s-maxinp':'max_input_tokens','s-maxout':'max_output_tokens'
+// SETTINGS-03: Built-in setting metadata, modified state, and reset affordances.
+const SETTING_INPUT_META={
+  's-provider':{key:'aiEditor.provider',path:'provider',scope:'User',desc:'Active chat endpoint provider.'},
+  's-baseurl':{key:'aiEditor.baseUrl',path:'base_url',scope:'User',desc:'Provider base URL. Empty uses the provider default.'},
+  's-model':{key:'aiEditor.model',path:'model',scope:'User',desc:'Default model used by Assistant and toolbar model controls.'},
+  's-temp':{key:'aiEditor.temperature',path:'temperature',scope:'User',desc:'Sampling temperature for model calls.'},
+  's-maxtok':{key:'aiEditor.maxTokens',path:'max_tokens',scope:'User',desc:'Maximum output tokens requested from the provider.'},
+  's-sysprompt':{key:'aiEditor.systemPrompt',path:'system_prompt',scope:'User',desc:'Prompt prepended to Assistant conversations.'},
+  's-mode':{key:'aiEditor.mode',path:'mode',scope:'User',desc:'Default Assistant interaction mode.'},
+  's-color-theme':{key:'workbench.colorTheme',path:'color_theme',scope:'User',fallback:'',desc:'Active color theme, including extension-contributed themes.'},
+  's-file-icon-theme':{key:'workbench.iconTheme',path:'file_icon_theme',scope:'User',fallback:'',desc:'Active file icon theme for Explorer and TreeViews.'},
+  's-editor-default-formatter':{key:'editor.defaultFormatter',path:'editor.defaultFormatter',scope:'User',desc:'Default formatter extension id.'},
+  's-editor-tab-size':{key:'editor.tabSize',path:'editor.tabSize',scope:'User'},
+  's-editor-insert-spaces':{key:'editor.insertSpaces',path:'editor.insertSpaces',scope:'User'},
+  's-editor-word-separators':{key:'editor.wordSeparators',path:'editor.wordSeparators',scope:'User'},
+  's-editor-format-on-save':{key:'editor.formatOnSave',path:'editor.formatOnSave',scope:'User'},
+  's-editor-format-on-paste':{key:'editor.formatOnPaste',path:'editor.formatOnPaste',scope:'User'},
+  's-editor-format-on-type':{key:'editor.formatOnType',path:'editor.formatOnType',scope:'User'},
+  's-editor-linked-editing':{key:'editor.linkedEditing',path:'editor.linkedEditing',scope:'User'},
+  's-editor-quick-suggestions-delay':{key:'editor.quickSuggestionsDelay',path:'editor.quickSuggestionsDelay',scope:'User'},
+  's-editor-suggest-on-trigger-characters':{key:'editor.suggestOnTriggerCharacters',path:'editor.suggestOnTriggerCharacters',scope:'User'},
+  's-editor-hover-delay':{key:'editor.hover.delay',path:'editor.hover.delay',scope:'User'},
+  's-editor-hover-sticky':{key:'editor.hover.sticky',path:'editor.hover.sticky',scope:'User'},
+  's-editor-minimap-enabled':{key:'editor.minimap.enabled',path:'editor.minimap.enabled',scope:'User'},
+  's-editor-render-whitespace':{key:'editor.renderWhitespace',path:'editor.renderWhitespace',scope:'User'},
+  's-editor-rulers-json':{key:'editor.rulers',path:'editor.rulers',scope:'User',json:true},
+  's-files-auto-save':{key:'files.autoSave',path:'files.autoSave',scope:'User'},
+  's-files-auto-save-delay':{key:'files.autoSaveDelay',path:'files.autoSaveDelay',scope:'User'},
+  's-files-trim-trailing-whitespace':{key:'files.trimTrailingWhitespace',path:'files.trimTrailingWhitespace',scope:'User'},
+  's-files-insert-final-newline':{key:'files.insertFinalNewline',path:'files.insertFinalNewline',scope:'User'},
+  's-files-trim-final-newlines':{key:'files.trimFinalNewlines',path:'files.trimFinalNewlines',scope:'User'},
+  's-cc-cli':{key:'aiEditor.claudeCode.cliPath',path:'claude_code.cli_path',scope:'User'},
+  's-cc-model':{key:'aiEditor.claudeCode.model',path:'claude_code.model',scope:'User'},
+  's-codex-cli':{key:'aiEditor.codex.cliPath',path:'codex.cli_path',scope:'User'},
+  's-codex-model':{key:'aiEditor.codex.model',path:'codex.model',scope:'User'},
+  's-codex-transport':{key:'aiEditor.codex.transport',path:'codex.transport',scope:'User'},
+  's-mcp-access':{key:'aiEditor.mcp.access',path:'mcp.access',scope:'User'},
+  's-mcp-discovery':{key:'aiEditor.mcp.discoveryEnabled',path:'mcp.discovery_enabled',scope:'User'},
+  's-mcp-autostart':{key:'aiEditor.mcp.autostart',path:'mcp.autostart',scope:'User'},
+  's-term-profile':{key:'terminal.integrated.defaultProfile.windows',path:'terminal.profile',scope:'User'},
+  's-term-shell':{key:'terminal.integrated.shell.windows',path:'terminal.shell_path',scope:'User'},
+  's-term-timeout':{key:'aiEditor.terminal.timeout',path:'terminal.timeout',scope:'User'},
+  's-term-output':{key:'aiEditor.terminal.outputLimit',path:'terminal.output_limit',scope:'User'},
+  's-workspace-root':{key:'aiEditor.workspace.root',path:'workspace.root',scope:'Workspace',fallback:''},
+  's-workspace-auto':{key:'aiEditor.workspace.autoDetect',path:'workspace.auto_detect',scope:'Workspace'},
+  's-ext-confirm':{key:'extensions.confirmInstall',path:'extensions.confirm_install',scope:'User'},
+  's-ext-diagnostics':{key:'extensions.diagnostics.enabled',path:'extensions.diagnostics_enabled',scope:'User'},
+  's-ext-contribs':{key:'extensions.enabledContributions',path:'extensions.enabled_contributions',scope:'User',json:true},
+  's-cust-agent-md':{key:'aiEditor.customization.useAgentMd',path:'customization.use_agent_md',scope:'Workspace'},
+  's-cust-claude-md':{key:'aiEditor.customization.useClaudeMd',path:'customization.use_claude_md',scope:'Workspace'},
+  's-topp':{key:'aiEditor.topP',path:'top_p',scope:'User'},
+  's-freqp':{key:'aiEditor.frequencyPenalty',path:'frequency_penalty',scope:'User'},
+  's-presp':{key:'aiEditor.presencePenalty',path:'presence_penalty',scope:'User'},
+  's-timeout':{key:'aiEditor.timeout',path:'timeout',scope:'User'},
+  's-maxinp':{key:'aiEditor.maxInputTokens',path:'max_input_tokens',scope:'User'},
+  's-maxout':{key:'aiEditor.maxOutputTokens',path:'max_output_tokens',scope:'User'},
+  's-xheaders':{key:'aiEditor.extraHeaders',path:'extra_headers',scope:'User',json:true},
+  's-xbody':{key:'aiEditor.extraBody',path:'extra_body',scope:'User',json:true}
 };
+const SETTING_INPUT_MAP=Object.fromEntries(Object.entries(SETTING_INPUT_META).map(([id,meta])=>[id,meta.path]));
+function settingsValueAtPath(root,path,fallback){
+  const parts=String(path||'').split('.').filter(Boolean);
+  let cur=root;
+  for(const part of parts){
+    if(!cur||typeof cur!=='object'||!Object.prototype.hasOwnProperty.call(cur,part))return fallback;
+    cur=cur[part];
+  }
+  return cur===undefined?fallback:cur;
+}
+function settingDefaultValue(meta){
+  if(!meta)return '';
+  if(Object.prototype.hasOwnProperty.call(meta,'fallback'))return meta.fallback;
+  return settingsValueAtPath(SETTINGS_DEFAULTS,meta.path,'');
+}
+function settingDisplayValue(value){
+  if(value==null)return '';
+  if(Array.isArray(value))return value.length?'['+value.join(', ')+']':'[]';
+  if(isPlainObject(value))return Object.keys(value).length?JSON.stringify(value):'{}';
+  return String(value);
+}
+function settingStableValue(value){
+  if(value==null)return '';
+  if(typeof value==='number'&&!Number.isFinite(value))return '';
+  if(typeof value==='object'){try{return JSON.stringify(value)}catch(e){return String(value)}}
+  return String(value);
+}
+function settingsInputValue(el,meta){
+  if(!el)return '';
+  if(el.type==='checkbox')return el.checked===true;
+  if(el.type==='number'){
+    const raw=String(el.value||'').trim();
+    return raw===''?'':Number(raw);
+  }
+  if(meta&&meta.json){
+    const text=String(el.value||'').trim();
+    if(!text)return Array.isArray(settingDefaultValue(meta))?[]:{};
+    try{return JSON.parse(text)}catch(e){return text}
+  }
+  return el.value;
+}
+function setSettingsInputValue(el,meta,value){
+  if(!el)return;
+  if(el.type==='checkbox')el.checked=value===true;
+  else if(meta&&meta.json)el.value=typeof value==='string'?value:(Array.isArray(value)||isPlainObject(value)?JSON.stringify(value,null,2):'');
+  else el.value=value!=null?String(value):'';
+  try{el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}))}catch(e){}
+}
+function settingsFieldWrapper(inputId){
+  const el=$(inputId);if(!el)return null;
+  const existing=el.closest('.settings-field.builtin-setting');if(existing)return existing;
+  const label=el.closest('label.settings-check');
+  const target=label||el;
+  const parent=target.parentElement;if(!parent)return null;
+  const wrap=document.createElement('div');wrap.className='settings-field builtin-setting';
+  parent.insertBefore(wrap,target);wrap.appendChild(target);
+  return wrap;
+}
 function wrapSettingsField(inputId){
-  const el=$(inputId);if(!el||el.parentElement.classList.contains('settings-field'))return;
-  const wrap=document.createElement('div');wrap.className='settings-field';
-  el.parentElement.insertBefore(wrap,el);wrap.appendChild(el);
-  const rst=document.createElement('span');rst.className='s-reset';rst.textContent='↻';rst.title='Reset to default';
-  rst.onclick=()=>{const key=SETTING_INPUT_MAP[inputId];if(!key)return;const def=SETTINGS_DEFAULTS[key];if(el.tagName==='SELECT')el.value=String(def!=null?def:'');else el.value=def!=null?def:'';markSettingsModified()};
-  wrap.appendChild(rst);
+  const el=$(inputId),meta=SETTING_INPUT_META[inputId];if(!el||!meta)return;
+  if(el.hidden||el.type==='hidden'||el.style.display==='none')return;
+  const wrap=settingsFieldWrapper(inputId);if(!wrap)return;
+  wrap.dataset.settingKey=meta.key||meta.path||inputId;
+  wrap.dataset.settingScope=meta.scope||'User';
+  if(!wrap.querySelector('.s-reset')){
+    const rst=document.createElement('span');rst.className='s-reset';rst.textContent='↻';rst.title='Reset to default';
+    rst.onclick=()=>{setSettingsInputValue(el,meta,settingDefaultValue(meta));markSettingsModified();scheduleFilterSettings(0)};
+    wrap.appendChild(rst);
+  }
+  if(!wrap.querySelector('.settings-built-meta')){
+    const metaRow=document.createElement('div');metaRow.className='settings-built-meta';
+    const key=document.createElement('code');key.textContent=meta.key||meta.path||inputId;metaRow.appendChild(key);
+    const scope=document.createElement('span');scope.className='settings-built-chip scope';scope.textContent=meta.scope||'User';metaRow.appendChild(scope);
+    const source=document.createElement('span');source.className='settings-built-chip source';source.textContent='Built-in';metaRow.appendChild(source);
+    const def=document.createElement('span');def.className='settings-built-chip default';def.textContent='Default: '+settingDisplayValue(settingDefaultValue(meta));def.title=def.textContent;metaRow.appendChild(def);
+    const mod=document.createElement('span');mod.className='settings-built-chip modified';mod.textContent='Modified';metaRow.appendChild(mod);
+    wrap.appendChild(metaRow);
+    if(meta.desc){
+      const desc=document.createElement('div');desc.className='settings-built-desc';desc.textContent=meta.desc;wrap.appendChild(desc);
+    }
+  }
 }
 function markSettingsModified(){
-  Object.keys(SETTING_INPUT_MAP).forEach(inputId=>{
+  Object.keys(SETTING_INPUT_META).forEach(inputId=>{
     const el=$(inputId);if(!el)return;
     const wrap=el.closest('.settings-field');if(!wrap)return;
-    const key=SETTING_INPUT_MAP[inputId];const def=SETTINGS_DEFAULTS[key];
-    const cur=el.tagName==='SELECT'?el.value:(el.type==='number'?Number(el.value):el.value);
-    const defVal=def!=null?def:'';
-    const modified=String(cur)!==String(defVal);
+    const meta=SETTING_INPUT_META[inputId];
+    const cur=settingsInputValue(el,meta);
+    const defVal=settingDefaultValue(meta);
+    const modified=settingStableValue(cur)!==settingStableValue(defVal);
     wrap.classList.toggle('modified',modified);
+    wrap.dataset.settingModified=modified?'1':'0';
   });
+  updateSettingsNavCounts();
 }
 
 let streaming=false, totalTokens=0, streamBuf='', currentMsgBody=null;
