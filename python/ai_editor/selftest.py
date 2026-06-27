@@ -4113,6 +4113,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantShowSavedHistoryPreview(entry,nativeSummary)" in html
            and "function assistantSessionBranchMeta(session,sessions)" in html
            and "function assistantSessionOpenResource(resource,opts)" in html
+           and "function renderAssistantRestoredHistoryBanner(data,opts)" in html
+           and "function assistantRestoredHistoryBannerSmokeSnapshot()" in html
            and "function assistantHistorySessionChips(session,current,branchMeta)" in html
            and "function renderHistorySessionItem(list,session,index,branchMeta)" in html
            and "function renderHistoryBackendItem(list,entry,index)" in html
@@ -4174,6 +4176,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "primary.dataset.previewAction=String(opts.primaryActionKind||'primary');" in html
            and "primaryActionKind:'restore-history'" in html
            and "assistantHistoryPreviewDeltaRows(childSummary,currentSummary,'current')" in html
+           and "banner.dataset.assistantRestoreBanner='true';" in html
+           and "btn.dataset.restoreAction=kind;" in html
+           and "panel.dataset.restoredHistoryId=banner.dataset.restoreHistoryId;" in html
+           and "focusLoadedHistoryNativeSection('actions','')" in html
            and "assistantSessionOpenResource(session.parentSessionResource)" in html
            and "list.setAttribute('aria-activedescendant',active.id);" in html
            and "if(e.key==='ArrowDown'||e.key==='ArrowUp')" in html
@@ -5072,6 +5078,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'fork-branch-navigation-visible'" in html
            and "assistantUiSelfCheckRecord(checks,'saved-history-preview-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'saved-history-preview-restore-modal-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'restored-history-banner-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'restored-history-banner-navigation-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'fork-branch-compare-visible'" in html
            and "assistantUiSelfCheckRecord(checks,'fork-branch-compare-detail-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready'" in html
@@ -5151,6 +5159,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "fork-branch-navigation-visible" in smoke_source
            and "saved-history-preview-ready" in smoke_source
            and "saved-history-preview-restore-modal-ready" in smoke_source
+           and "restored-history-banner-ready" in smoke_source
+           and "restored-history-banner-navigation-ready" in smoke_source
            and "fork-branch-compare-visible" in smoke_source
            and "fork-branch-compare-detail-ready" in smoke_source
            and "workflow-result-state-rendered" in smoke_source

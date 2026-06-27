@@ -122,6 +122,8 @@ async function main() {
     "fork-branch-navigation-visible",
     "saved-history-preview-ready",
     "saved-history-preview-restore-modal-ready",
+    "restored-history-banner-ready",
+    "restored-history-banner-navigation-ready",
     "fork-branch-compare-visible",
     "fork-branch-compare-detail-ready",
     "workflow-popup-modes-ready",

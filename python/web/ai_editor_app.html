@@ -637,6 +637,20 @@ body.window-resizing * { cursor:inherit !important; }
 .chat-messages-inner { width:100%; max-width:900px; min-height:100%; margin:0 auto;
   padding:14px 20px 18px; box-sizing:border-box; display:flex; flex-direction:column; }
 .chat-messages.empty .chat-messages-inner { justify-content:center; }
+.chat-restore-banner { display:flex; align-items:flex-start; gap:10px; margin:0 0 10px; padding:8px 10px;
+  border:1px solid var(--border); border-radius:6px; background:var(--bg2); color:var(--fg-dim);
+  font:12px/1.4 var(--sans); }
+.chat-restore-banner:focus { outline:1px solid var(--border-focus); outline-offset:2px; }
+.chat-restore-banner-main { min-width:0; flex:1; display:flex; flex-direction:column; gap:3px; }
+.chat-restore-banner-title { color:var(--fg); font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.chat-restore-banner-meta { display:flex; flex-wrap:wrap; gap:5px; }
+.chat-restore-banner-chip { display:inline-flex; align-items:center; min-height:17px; padding:0 6px;
+  border:1px solid var(--border); border-radius:999px; background:var(--bg3); color:var(--fg-dim);
+  font:10px/15px var(--mono); }
+.chat-restore-banner-actions { display:flex; align-items:center; flex-wrap:wrap; justify-content:flex-end; gap:5px; max-width:360px; }
+.chat-restore-banner-action { height:22px; border:1px solid var(--border); border-radius:4px; background:var(--bg3);
+  color:var(--fg); padding:0 7px; font:11px var(--sans); cursor:pointer; }
+.chat-restore-banner-action:hover,.chat-restore-banner-action:focus { border-color:var(--border-focus); background:var(--bg-hover); outline:none; }
 .chat-welcome { flex:1; min-height:260px; display:flex; flex-direction:column; align-items:center;
   justify-content:center; padding:42px 20px 28px; color:var(--fg-dim); text-align:center; }
 .chat-welcome-mark { width:44px; height:44px; border-radius:12px; display:flex; align-items:center;
@@ -8134,6 +8148,7 @@ async function runAssistantUiSelfCheck(opts){
   const nativeOnlySession=assistantNativeOnlySessionSmokeSnapshot();
   const changeSetRestore=assistantChangeSetRestoreStateSnapshot();
   const actionResultRestore=assistantActionResultRestoreSmokeSnapshot();
+  const restoredHistoryBanner=assistantRestoredHistoryBannerSmokeSnapshot();
   const forkLineage=assistantForkLineageSmokeSnapshot();
   assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready',providerPopup.shown&&providerPopup.optionCount>=1&&providerPopup.focusableCount===providerPopup.optionCount&&providerPopup.keyboardReady,JSON.stringify(providerPopup));
   assistantUiSelfCheckRecord(checks,'model-popup-configured-models-ready',modelPopup.shown&&modelPopup.optionCount>=1&&modelPopup.focusableCount===modelPopup.optionCount&&modelPopup.keyboardReady,JSON.stringify(modelPopup));
@@ -8150,6 +8165,8 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'native-only-session-parts-persist',nativeOnlySession.normalizedCount===1&&nativeOnlySession.normalizedContent===''&&nativeOnlySession.hasNativePayload&&nativeOnlySession.serializedFollowups===1&&nativeOnlySession.renderedNativeParts>=1&&nativeOnlySession.renderedFollowups===1&&nativeOnlySession.nativeFollowups===1&&nativeOnlySession.summaryParts===1&&nativeOnlySession.summaryFollowups===1&&nativeOnlySession.searchMatches,JSON.stringify(nativeOnlySession));
   assistantUiSelfCheckRecord(checks,'change-set-state-restores-and-persists',changeSetRestore.before.state==='applied'&&changeSetRestore.before.appliedEdits===2&&changeSetRestore.before.statusText.includes('Applied 2')&&changeSetRestore.after.state==='previewed'&&changeSetRestore.after.previewedAt==='23456'&&changeSetRestore.patchedState==='previewed'&&changeSetRestore.storedState==='previewed'&&changeSetRestore.storedPreviewedDiffs===1,JSON.stringify(changeSetRestore));
   assistantUiSelfCheckRecord(checks,'action-result-state-restores-and-persists',actionResultRestore.restoredDisabled&&actionResultRestore.restoredState==='submitted'&&actionResultRestore.restoredFlag==='true'&&actionResultRestore.restoredText.includes('✓')&&actionResultRestore.restoredNativeCount===1&&actionResultRestore.trayPendingAfterRestore===0&&actionResultRestore.patchedOk&&actionResultRestore.storedOk&&actionResultRestore.storedAction==='apply'&&actionResultRestore.storedCount===1,JSON.stringify(actionResultRestore));
+  assistantUiSelfCheckRecord(checks,'restored-history-banner-ready',restoredHistoryBanner.bannerExists&&restoredHistoryBanner.role==='status'&&restoredHistoryBanner.tabIndex==='-1'&&restoredHistoryBanner.restoreId==='restored-history-selfcheck'&&restoredHistoryBanner.restoreFocus==='changes'&&restoredHistoryBanner.nativeParts===2&&restoredHistoryBanner.nativeChanges===1&&restoredHistoryBanner.nativeRefs===1&&restoredHistoryBanner.nativeTrees===1&&restoredHistoryBanner.nativeActions===1&&restoredHistoryBanner.panelRestoreId==='restored-history-selfcheck'&&restoredHistoryBanner.panelRestoreParts===2&&restoredHistoryBanner.panelRestoreActions===1&&restoredHistoryBanner.chipText.includes('2 msg')&&restoredHistoryBanner.chipText.includes('1 edit')&&restoredHistoryBanner.text.includes('Restored: Restored history selfcheck'),JSON.stringify(restoredHistoryBanner));
+  assistantUiSelfCheckRecord(checks,'restored-history-banner-navigation-ready',restoredHistoryBanner.actionKinds.includes('references')&&restoredHistoryBanner.actionKinds.includes('changes')&&restoredHistoryBanner.actionKinds.includes('tree')&&restoredHistoryBanner.actionKinds.includes('actions')&&restoredHistoryBanner.actionKinds.includes('continue')&&restoredHistoryBanner.disabledActions.length===0&&restoredHistoryBanner.focusChanges&&restoredHistoryBanner.focusRefs&&restoredHistoryBanner.focusTree&&restoredHistoryBanner.focusActions,JSON.stringify(restoredHistoryBanner));
   assistantUiSelfCheckRecord(checks,'fork-lineage-history-visible',forkLineage.itemExists&&forkLineage.parentResource==='sao-ai-chat://local/parent-lineage-selfcheck'&&forkLineage.parentTitle==='Parent Assistant Session'&&forkLineage.parentId==='parent-lineage-selfcheck'&&forkLineage.branchChildren===1&&forkLineage.labelTitle.includes('Forked from: Parent Assistant Session')&&forkLineage.labelTitle.includes('Branches: 1')&&forkLineage.chipLabels.includes('fork: Parent Assistant Session')&&forkLineage.chipLabels.includes('1 branch')&&forkLineage.chipKinds.some(kind=>kind.includes('lineage'))&&forkLineage.actionLabels.includes('parent')&&forkLineage.actionLabels.includes('branches')&&forkLineage.actionLabels.includes('fork')&&forkLineage.actionKinds.includes('parent-session')&&forkLineage.actionKinds.includes('branch-sessions')&&forkLineage.parentButtonEnabled&&forkLineage.branchesButtonEnabled&&forkLineage.disabledActions.length===0&&forkLineage.searchMatches,JSON.stringify(forkLineage));
   assistantUiSelfCheckRecord(checks,'fork-lineage-chip-visible',forkLineage.chipLabels.includes('fork: Parent Assistant Session')&&forkLineage.chipLabels.includes('1 branch')&&forkLineage.chipKinds.some(kind=>kind.includes('lineage'))&&forkLineage.labelTitle.includes('Forked from: Parent Assistant Session')&&forkLineage.labelTitle.includes('Branches: 1'),JSON.stringify(forkLineage));
   assistantUiSelfCheckRecord(checks,'fork-branch-navigation-visible',forkLineage.parentId==='parent-lineage-selfcheck'&&forkLineage.branchChildren===1&&forkLineage.actionKinds.includes('parent-session')&&forkLineage.actionKinds.includes('branch-sessions')&&forkLineage.parentButtonEnabled&&forkLineage.branchesButtonEnabled&&forkLineage.disabledActions.length===0&&forkLineage.searchMatches,JSON.stringify(forkLineage));
@@ -17628,6 +17645,65 @@ function assistantActionResultRestoreSmokeSnapshot(){
   syncAssistantActionTray();
   return snapshot;
 }
+function assistantRestoredHistoryBannerSmokeSnapshot(){
+  const host=$('chat-messages');
+  const previousHtml=host?host.innerHTML:'';
+  const previousPanelDataset=$('chat-panel')?Object.assign({},$('chat-panel').dataset):{};
+  if(host)host.innerHTML='';
+  const payload={
+    content:'restored history response',
+    model:'selfcheck-model',
+    responseParts:[
+      {kind:'modifiedFilesConfirmation',files:[{uri:'file:///workspace/restored.ts',title:'restored.ts'}]},
+      {kind:'confirmation',id:'restore-confirmation',callbackId:'restore-callback',title:'Restore action',message:'Inspect restored action',buttons:[{label:'Apply',action:'apply',value:'apply'}]}
+    ],
+    contentReferences:[{kind:'anchor',path:'file:///workspace/restored.ts',label:'restored.ts'}],
+    usedContext:[{kind:'file',path:'file:///workspace/restored-context.ts',label:'restored-context.ts'}],
+    fileTrees:[[{name:'restored.ts',path:'file:///workspace/restored.ts'}]],
+    followups:[{title:'Continue restored history',message:'Continue restored history',kind:'ask'}],
+    actionResults:[{key:'restore-action',action:'apply',ok:true}],
+    usage:{total_tokens:17}
+  };
+  const data={id:'restored-history-selfcheck',title:'Restored history selfcheck',model:'selfcheck-model',messages:[
+    {role:'user',content:'restore selfcheck'},
+    {role:'assistant',content:'restored history response',nativePayload:payload}
+  ]};
+  assistantSessionRenderMessages(data.messages);
+  const banner=renderAssistantRestoredHistoryBanner(data,{focus:'changes',target:'file:///workspace/restored.ts'});
+  const panel=$('chat-panel');
+  const actions=banner?Array.from(banner.querySelectorAll('[data-restore-action]')):[];
+  const snapshot={
+    bannerExists:!!banner,
+    role:banner?String(banner.getAttribute('role')||''):'',
+    tabIndex:banner?String(banner.getAttribute('tabindex')||''):'',
+    restoreId:banner?String(banner.dataset.restoreHistoryId||''):'',
+    restoreFocus:banner?String(banner.dataset.restoreFocus||''):'',
+    nativeParts:banner?Number(banner.dataset.restoreNativeParts||0):0,
+    nativeChanges:banner?Number(banner.dataset.restoreNativeChanges||0):0,
+    nativeRefs:banner?Number(banner.dataset.restoreNativeRefs||0):0,
+    nativeTrees:banner?Number(banner.dataset.restoreNativeTrees||0):0,
+    nativeActions:banner?Number(banner.dataset.restoreNativeActions||0):0,
+    chipText:banner?Array.from(banner.querySelectorAll('.chat-restore-banner-chip')).map(el=>String(el.textContent||'')):[],
+    actionKinds:actions.map(el=>String(el.dataset.restoreAction||'')),
+    disabledActions:actions.filter(el=>el.disabled).map(el=>String(el.dataset.restoreAction||'')),
+    panelRestoreId:panel?String(panel.dataset.restoredHistoryId||''):'',
+    panelRestoreParts:panel?Number(panel.dataset.restoredHistoryParts||0):0,
+    panelRestoreActions:panel?Number(panel.dataset.restoredHistoryActions||0):0,
+    focusChanges:focusLoadedHistoryNativeSection('changes','file:///workspace/restored.ts'),
+    focusRefs:focusLoadedHistoryNativeSection('references','file:///workspace/restored.ts'),
+    focusTree:focusLoadedHistoryNativeSection('tree','file:///workspace/restored.ts'),
+    focusActions:focusLoadedHistoryNativeSection('actions',''),
+    text:banner?String(banner.textContent||'').replace(/\s+/g,' ').trim():''
+  };
+  if(host)host.innerHTML=previousHtml;
+  if(panel){
+    delete panel.dataset.restoredHistoryId;delete panel.dataset.restoredHistoryTitle;delete panel.dataset.restoredHistoryParts;delete panel.dataset.restoredHistoryActions;
+    Object.keys(previousPanelDataset).forEach(key=>{panel.dataset[key]=previousPanelDataset[key]});
+  }
+  refreshChatMessageNavigationState();
+  updateAssistantSurfaceState();
+  return snapshot;
+}
 function assistantForkLineageSmokeSnapshot(){
   const list=document.createElement('div');
   list.style.display='none';
@@ -18947,10 +19023,91 @@ function focusLoadedHistoryNativeSection(kind,target){
       ? '.chat-file-tree,.chat-response-file-tree'
       : kind==='references'
         ? '.chat-response-references,.chat-response-reference-card'
+        : kind==='actions'
+          ? '.chat-action-tray.active,.chat-action-carousel,[data-assistant-action-key],.chat-response-confirmation,.chat-response-questions'
         : '';
   if(!selector)return false;
   const fallbackTarget=document.querySelector(selector);
   return focusLoadedHistoryElement(fallbackTarget);
+}
+function assistantHistoryRestoreSummary(data){
+  const summary=assistantHistorySessionNativeSummary({messages:data&&data.messages});
+  const raw=data&&data.native_summary;
+  if(raw&&typeof raw==='object'){
+    summary.parts=Math.max(summary.parts,Number(raw.parts||0)||0);
+    summary.changes=Math.max(summary.changes,Number(raw.changes||0)||0);
+    summary.refs=Math.max(summary.refs,Number(raw.refs||0)||0);
+    summary.usedContext=Math.max(summary.usedContext,Number(raw.usedContext||raw.used_context||0)||0);
+    summary.trees=Math.max(summary.trees,Number(raw.trees||0)||0);
+    summary.followups=Math.max(summary.followups,Number(raw.followups||0)||0);
+    summary.actions=Math.max(summary.actions,Number(raw.actions||0)||0);
+    summary.tokens=Math.max(summary.tokens,Number(raw.tokens||0)||0);
+  }
+  return summary;
+}
+function assistantRestoreBannerChip(label,value){
+  if(!value)return null;
+  const chip=document.createElement('span');
+  chip.className='chat-restore-banner-chip';
+  chip.textContent=String(value)+' '+label;
+  return chip;
+}
+function renderAssistantRestoredHistoryBanner(data,opts){
+  const container=ensureChatMessagesInner();if(!container)return null;
+  const previous=container.querySelector('[data-assistant-restore-banner="true"]');
+  if(previous)previous.remove();
+  const summary=assistantHistoryRestoreSummary(data||{});
+  const banner=document.createElement('div');
+  banner.className='chat-restore-banner';
+  banner.dataset.assistantRestoreBanner='true';
+  banner.dataset.restoreHistoryId=String(data&&data.id||opts&&opts.id||'');
+  banner.dataset.restoreFocus=String(opts&&opts.focus||'');
+  banner.dataset.restoreNativeParts=String(summary.parts||0);
+  banner.dataset.restoreNativeChanges=String(summary.changes||0);
+  banner.dataset.restoreNativeRefs=String(summary.refs||0);
+  banner.dataset.restoreNativeTrees=String(summary.trees||0);
+  banner.dataset.restoreNativeActions=String(summary.actions||0);
+  banner.setAttribute('role','status');
+  banner.setAttribute('tabindex','-1');
+  banner.setAttribute('aria-label','Restored Assistant history '+String(data&&data.title||data&&data.id||''));
+  const main=document.createElement('div');main.className='chat-restore-banner-main';
+  const title=document.createElement('div');title.className='chat-restore-banner-title';
+  title.textContent='Restored: '+String(data&&data.title||data&&data.id||'Saved history');
+  main.appendChild(title);
+  const meta=document.createElement('div');meta.className='chat-restore-banner-meta';
+  [
+    assistantRestoreBannerChip('msg',(data&&data.messages||[]).length),
+    assistantRestoreBannerChip('part',summary.parts),
+    assistantRestoreBannerChip('edit',summary.changes),
+    assistantRestoreBannerChip('ref',summary.refs),
+    assistantRestoreBannerChip('tree',summary.trees),
+    assistantRestoreBannerChip('action',summary.actions),
+    assistantRestoreBannerChip('tok',summary.tokens)
+  ].filter(Boolean).forEach(chip=>meta.appendChild(chip));
+  main.appendChild(meta);banner.appendChild(main);
+  const actions=document.createElement('div');actions.className='chat-restore-banner-actions';
+  const addAction=(kind,label,enabled)=>{
+    const btn=document.createElement('button');
+    btn.type='button';btn.className='chat-restore-banner-action';btn.textContent=label;
+    btn.dataset.restoreAction=kind;btn.disabled=!enabled;
+    btn.onclick=ev=>{ev.stopPropagation();if(kind==='continue'){const input=$('chat-input');if(input)input.focus();return;}if(!focusLoadedHistoryNativeSection(kind,opts&&opts.target))showToast('No restored '+label+' target found','info',1400)};
+    actions.appendChild(btn);
+  };
+  addAction('references','Refs',summary.refs);
+  addAction('changes','Edits',summary.changes);
+  addAction('tree','Tree',summary.trees);
+  addAction('actions','Actions',summary.actions);
+  addAction('continue','Continue',true);
+  banner.appendChild(actions);
+  container.insertBefore(banner,container.firstChild);
+  const panel=$('chat-panel');
+  if(panel){
+    panel.dataset.restoredHistoryId=banner.dataset.restoreHistoryId;
+    panel.dataset.restoredHistoryTitle=String(data&&data.title||'');
+    panel.dataset.restoredHistoryParts=String(summary.parts||0);
+    panel.dataset.restoredHistoryActions=String(summary.actions||0);
+  }
+  return banner;
 }
 async function loadHistoryConv(id,opts){
   opts=opts||{};
@@ -18971,6 +19128,7 @@ async function loadHistoryConv(id,opts){
     else if(role==='system')appendSystem(content);
     else if(role==='tool'){}// tool results shown inline with assistant
   });
+  renderAssistantRestoredHistoryBanner(Object.assign({id},data),opts);
   assistantSessionState=assistantSessionDefaults({
     provider:data.provider||config.provider,model:data.model||config.model,
     requestCount:(data.messages||[]).filter(m=>m&&m.role==='user').length,
