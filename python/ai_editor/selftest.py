@@ -9641,6 +9641,10 @@ console.log("frontend word separator behavior ok");
             and "class=\"settings-titlebar\"" in html
             and "settings-top-action primary" in html
             and "class=\"settings-searchbar\"" in html
+            and "class=\"settings-search-row\"" in html
+            and "class=\"settings-query-box\"" in html
+            and "class=\"settings-scope-control\"" in html
+            and "class=\"settings-scope-label\"" in html
             and "class=\"settings-target-tabs\"" in html
             and "class=\"settings-shell\"" in html
             and "class=\"settings-nav\" id=\"settings-nav\"" in html
@@ -9669,6 +9673,7 @@ console.log("frontend word separator behavior ok");
             and "function installSettingsKeyboardHandlers()" in html
             and "installSettingsKeyboardHandlers();" in html
             and "settings-nav-summary" in html
+            and "settings-nav-heading" in html
             and "settings-nav-badge" in html
             and "settings-nav-text" in html
             and "settings-nav-meta" in html
@@ -9681,6 +9686,7 @@ console.log("frontend word separator behavior ok");
             and "window.settingsToggleFilterToken=settingsToggleFilterToken;" in html
             and "window.settingsClearFilters=settingsClearFilters;" in html
             and "window.settingsVisibleRows=settingsVisibleRows;" in html
+            and "window.settingsHighlightRow=settingsHighlightRow;" in html
             and "window.settingsFocusActiveSection=settingsFocusActiveSection;" in html
             and "window.settingsFocusSiblingSection=settingsFocusSiblingSection;" in html
             and "window.settingsComputeReviewState=settingsComputeReviewState;" in html
@@ -9812,6 +9818,11 @@ console.log("frontend word separator behavior ok");
             and "hasResultCount" in html
             and "hasNavFilterCount" in html
             and "hasSectionContextActions" in html
+            and "hasQueryBox" in html
+            and "hasScopeControl" in html
+            and "hasNavHeading" in html
+            and "hasNavCountPills" in html
+            and "hasActiveNavRail" in html
             and "window.settingsSearchForKey=settingsSearchForKey;" in html
             and "window.settingsFilterNavCategories=settingsFilterNavCategories;" in html
             and "window.settingsUiSelfCheckSnapshot=settingsUiSelfCheckSnapshot;" in html
@@ -9833,6 +9844,9 @@ console.log("frontend word separator behavior ok");
            and "window.settingsFilterNavCategories(\"editor\")" in settings_smoke_source
            and "window.settingsClearNavFilter()" in settings_smoke_source
            and "window.settingsSearchForKey(" in settings_smoke_source
+           and "result.snapshot.hasQueryBox" in settings_smoke_source
+           and "result.snapshot.hasScopeControl" in settings_smoke_source
+           and "result.snapshot.hasActiveNavRail" in settings_smoke_source
            and "settings.png" in settings_smoke_source
            and "channel: \"msedge\"" in settings_smoke_source
            and "PASS settings-ui-browser-smoke" in settings_smoke_source

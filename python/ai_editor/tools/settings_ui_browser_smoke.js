@@ -160,6 +160,9 @@ async function main() {
   if (!result.snapshot.hasNavFilter || !result.snapshot.hasResultCount || !result.snapshot.hasNavFilterCount || !result.snapshot.hasSectionContextActions) {
     throw new Error("Settings selfcheck missing UI affordances: " + JSON.stringify(result.snapshot));
   }
+  if (!result.snapshot.hasQueryBox || !result.snapshot.hasScopeControl || !result.snapshot.hasNavHeading || !result.snapshot.hasNavCountPills || !result.snapshot.hasActiveNavRail) {
+    throw new Error("Settings selfcheck missing UI affordances: " + JSON.stringify(result.snapshot));
+  }
   if (!result.navFiltered || result.navFiltered.visible < 1 || !result.navCleared || result.navCleared.visible < result.navFiltered.visible) {
     throw new Error("Settings category filter did not behave as expected: " + JSON.stringify(result));
   }

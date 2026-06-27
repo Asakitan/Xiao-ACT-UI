@@ -1591,20 +1591,26 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-top-action.active { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 55%,var(--border));
   background:color-mix(in srgb,var(--fg-accent) 8%,var(--bg3)); }
 .settings-searchbar { position:sticky; top:0; z-index:3; display:grid;
-  grid-template-columns:minmax(220px,1fr) auto; gap:8px; align-items:start; padding:10px 18px 8px;
+  grid-template-columns:minmax(220px,1fr); gap:7px; align-items:start; padding:10px 18px 8px;
   border-bottom:1px solid var(--border); background:color-mix(in srgb,var(--bg) 92%,var(--bg2)); flex-shrink:0; }
-.settings-searchbar input#settings-search { width:100%; height:30px; box-sizing:border-box; background:var(--bg-input);
-  color:var(--fg); border:1px solid var(--border); border-radius:4px; padding:5px 10px;
+.settings-search-row { grid-column:1 / -1; display:grid; grid-template-columns:minmax(280px,1fr) auto; gap:8px; align-items:center; }
+.settings-query-box { min-width:0; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center;
+  border:1px solid var(--border); border-radius:4px; background:var(--bg-input); }
+.settings-query-box:focus-within { border-color:var(--border-focus); }
+.settings-searchbar input#settings-search { width:100%; height:32px; box-sizing:border-box; background:transparent;
+  color:var(--fg); border:0; border-radius:4px; padding:5px 10px;
   font:13px var(--sans); outline:none; }
-.settings-searchbar input#settings-search:focus { border-color:var(--border-focus); }
+.settings-searchbar input#settings-search:focus { border-color:transparent; }
+.settings-scope-control { display:inline-flex; align-items:center; gap:6px; justify-self:end; min-width:0; }
+.settings-scope-label { color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; letter-spacing:0; }
 .settings-target-tabs { display:inline-flex; align-items:center; border:1px solid var(--border); border-radius:4px; overflow:hidden; background:var(--bg3); }
 .settings-target-tabs button { height:28px; min-width:76px; padding:0 10px; border:0; border-left:1px solid var(--border);
   background:transparent; color:var(--fg-dim); font:12px var(--sans); cursor:pointer; }
 .settings-target-tabs button:first-child { border-left:0; }
 .settings-target-tabs button:hover,.settings-target-tabs button:focus { color:var(--fg); outline:none; background:var(--bg-hover); }
 .settings-target-tabs button.active { color:var(--fg); background:color-mix(in srgb,var(--fg-accent) 16%,var(--bg3)); }
-.settings-result-nav { display:inline-flex; align-items:center; gap:4px; justify-self:end; }
-.settings-result-nav button { height:28px; min-width:28px; padding:0 8px; border:1px solid var(--border);
+.settings-result-nav { display:inline-flex; align-items:center; gap:4px; justify-self:end; padding-right:4px; }
+.settings-result-nav button { height:24px; min-width:24px; padding:0 7px; border:1px solid var(--border);
   border-radius:4px; background:var(--bg3); color:var(--fg-dim); font:12px var(--sans); cursor:pointer; }
 .settings-result-nav button:hover:not(:disabled),.settings-result-nav button:focus:not(:disabled) {
   color:var(--fg); border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
@@ -1732,16 +1738,18 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-nav-memory-item:hover,.settings-nav-memory-item:focus { color:var(--fg); background:var(--bg-hover); outline:none; }
 .settings-nav-memory-item .kind { flex:0 0 auto; color:var(--fg-accent); font:10px var(--mono); }
 .settings-nav-memory-item .label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-nav-heading { padding:4px 8px 6px; color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; letter-spacing:0; }
 .settings-nav-item { width:100%; min-height:28px; display:flex; align-items:center; gap:7px;
-  border:0; border-radius:4px; background:transparent; color:var(--fg-dim); padding:5px 8px;
+  border:0; border-left:2px solid transparent; border-radius:4px; background:transparent; color:var(--fg-dim); padding:5px 8px 5px 6px;
   text-align:left; font:12px var(--sans); cursor:pointer; }
 .settings-nav-item .settings-nav-text { display:flex; flex-direction:column; min-width:0; flex:1; gap:1px; }
 .settings-nav-item .settings-nav-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .settings-nav-item .settings-nav-meta { color:var(--fg-dim); font:10px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .settings-nav-item:hover,.settings-nav-item:focus { color:var(--fg); background:var(--bg-hover); outline:none; }
-.settings-nav-item.active { color:var(--fg); background:color-mix(in srgb,var(--fg-accent) 14%,var(--bg-hover)); }
+.settings-nav-item.active { color:var(--fg); border-left-color:var(--fg-accent); background:color-mix(in srgb,var(--fg-accent) 14%,var(--bg-hover)); }
 .settings-nav-item.has-errors { color:var(--fg-error); }
-.settings-nav-item .count { margin-left:auto; min-width:18px; text-align:right; color:var(--fg-dim); font:10px var(--mono); }
+.settings-nav-item .count { margin-left:auto; min-width:20px; text-align:center; color:var(--fg-dim); font:10px var(--mono);
+  padding:1px 5px; border:1px solid color-mix(in srgb,var(--border) 70%,transparent); border-radius:999px; background:color-mix(in srgb,var(--bg3) 72%,transparent); }
 .settings-nav-item .count.has-modified { color:var(--fg-accent); }
 .settings-nav-item .count::before { content:attr(data-label); color:var(--fg-dim); font:10px var(--mono); margin-right:4px; }
 .settings-nav-item .settings-nav-badge { flex:0 0 auto; width:6px; height:6px; border-radius:999px; background:transparent; }
@@ -3126,17 +3134,24 @@ pre.code-block { overflow:visible; }
     </div>
     <!-- SETTINGS-01: Search/filter -->
     <div class="settings-searchbar">
-      <input id="settings-search" list="settings-filter-suggestions" placeholder="Search settings..." oninput="scheduleFilterSettings()" aria-label="Search settings">
-      <datalist id="settings-filter-suggestions"></datalist>
-      <div class="settings-target-tabs" role="tablist" aria-label="Settings target">
-        <button type="button" class="active" data-settings-target="user" onclick="selectSettingsTarget('user')">User</button>
-        <button type="button" data-settings-target="workspace" onclick="selectSettingsTarget('workspace')">Workspace</button>
-        <button type="button" data-settings-target="extensions" onclick="selectSettingsTarget('extensions')">Extensions</button>
-      </div>
-      <div class="settings-result-nav" aria-label="Settings results navigation">
-        <button type="button" id="settings-prev-result" title="Previous visible setting" onclick="settingsFocusVisibleRow(-1)">Prev</button>
-        <button type="button" id="settings-next-result" title="Next visible setting" onclick="settingsFocusVisibleRow(1)">Next</button>
-        <span id="settings-result-count" class="settings-result-count" aria-live="polite">0/0</span>
+      <div class="settings-search-row">
+        <div class="settings-query-box">
+          <input id="settings-search" list="settings-filter-suggestions" placeholder="Search settings..." oninput="scheduleFilterSettings()" aria-label="Search settings">
+          <datalist id="settings-filter-suggestions"></datalist>
+          <div class="settings-result-nav" aria-label="Settings results navigation">
+            <button type="button" id="settings-prev-result" title="Previous visible setting" onclick="settingsFocusVisibleRow(-1)">Prev</button>
+            <button type="button" id="settings-next-result" title="Next visible setting" onclick="settingsFocusVisibleRow(1)">Next</button>
+            <span id="settings-result-count" class="settings-result-count" aria-live="polite">0/0</span>
+          </div>
+        </div>
+        <div class="settings-scope-control">
+          <span class="settings-scope-label">Scope</span>
+          <div class="settings-target-tabs" role="tablist" aria-label="Settings target">
+            <button type="button" class="active" data-settings-target="user" onclick="selectSettingsTarget('user')">User</button>
+            <button type="button" data-settings-target="workspace" onclick="selectSettingsTarget('workspace')">Workspace</button>
+            <button type="button" data-settings-target="extensions" onclick="selectSettingsTarget('extensions')">Extensions</button>
+          </div>
+        </div>
       </div>
       <div id="settings-active-filters" class="settings-active-filters" aria-live="polite"></div>
       <div id="settings-quick-filters" class="settings-quick-filters" aria-label="Quick setting filters">
@@ -25371,6 +25386,10 @@ function renderSettingsNav(){
   personal.id='settings-nav-personal';
   nav.appendChild(personal);
   renderSettingsPersonalNav();
+  const heading=document.createElement('div');
+  heading.className='settings-nav-heading';
+  heading.textContent='Categories';
+  nav.appendChild(heading);
   if(!sections.length){
     const empty=document.createElement('div');empty.className='settings-nav-empty';empty.textContent='No settings loaded';
     nav.appendChild(empty);return;
@@ -25533,6 +25552,11 @@ function settingsUiSelfCheckSnapshot(){
     hasNavFilterEmptyState:!!$('settings-nav-filter-empty'),
     hasNavFilterCount:!!$('settings-nav-filter-count'),
     hasResultCount:!!$('settings-result-count'),
+    hasQueryBox:!!document.querySelector('.settings-search-row .settings-query-box #settings-search'),
+    hasScopeControl:!!document.querySelector('.settings-scope-control .settings-target-tabs'),
+    hasNavHeading:!!document.querySelector('.settings-nav-heading'),
+    hasNavCountPills:!!document.querySelector('.settings-nav-item .count'),
+    hasActiveNavRail:navItems.some(item=>item.classList.contains('active')&&String(getComputedStyle(item).borderLeftColor||'')!=='rgba(0, 0, 0, 0)'),
     hasDensityToggle:!!$('settings-density-toggle'),
     hasStickySectionOverview:!!overview&&String(getComputedStyle(overview).position)==='sticky',
     hasSectionContextActions:!!document.querySelector('.settings-section-context .section-actions'),
@@ -25554,6 +25578,7 @@ window.resetVisibleModifiedSettings=resetVisibleModifiedSettings;
 window.selectSettingsTarget=selectSettingsTarget;
 window.scrollToSettingsSection=scrollToSettingsSection;
 window.settingsVisibleRows=settingsVisibleRows;
+window.settingsHighlightRow=settingsHighlightRow;
 window.settingsFocusVisibleRow=settingsFocusVisibleRow;
 window.settingsFocusBoundaryRow=settingsFocusBoundaryRow;
 window.settingsFocusPagedRow=settingsFocusPagedRow;
