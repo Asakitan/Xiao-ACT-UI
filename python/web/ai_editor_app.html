@@ -6054,7 +6054,7 @@ function normalizeChatContentReferences(payload){
     ...(Array.isArray(payload&&payload.content_references)?payload.content_references:[]),
     ...(Array.isArray(payload&&payload.responseReferences)?payload.responseReferences:[]),
     ...(Array.isArray(payload&&payload.response_references)?payload.response_references:[])];
-  return [...refs.map(ref=>normalizeChatNativeReference(ref,'reference')),
+  return [...refs.map(ref=>normalizeChatNativeReference(ref)),
     ...normalizeChatResponseParts(payload)].filter(Boolean);
 }
 function normalizeChatResponseParts(payload){
@@ -7804,10 +7804,13 @@ async function runAssistantUiSelfCheck(opts){
   const workflowModeSmoke=assistantWorkflowModeSmokeSnapshot();
   const workflowEditor=assistantWorkflowEditorSnapshot();
   const workflowBody=document.createElement('div');
+  workflowBody.style.display='none';
+  document.body.appendChild(workflowBody);
   const workflowCard=renderWorkflowLaunchSummary(workflowBody,{workflowId:'selfcheck-flow',workflowLabel:'Selfcheck Flow',workflowRunId:'wf-selfcheck',workflowStepCount:2,workflowAgents:['default','reviewer'],workflowStepLabels:['Inspect','Review'],workflowStepOutputVars:['inspection','review']});
   const workflowStatusUpdated=updateWorkflowRunStepStatus('wf-selfcheck',{workflowRunId:'wf-selfcheck',step:0,status:'running',label:'Inspect',agent:'default',output_var:'inspection'})
     && updateWorkflowRunStepStatus('wf-selfcheck',{workflowRunId:'wf-selfcheck',step:1,status:'done',label:'Review',agent:'reviewer',output_var:'review',preview:'ok'});
   const workflowRunCard=assistantWorkflowRunCardSnapshot(workflowCard);
+  workflowBody.remove();
   const workflowResultState=assistantWorkflowResultStateSnapshot();
   const workflowButtonState=assistantWorkflowRunButtonSnapshot();
   assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready',providerPopup.shown&&providerPopup.optionCount>=1&&providerPopup.focusableCount===providerPopup.optionCount&&providerPopup.keyboardReady,JSON.stringify(providerPopup));
@@ -7906,7 +7909,7 @@ function renderChatResponseReferences(body,content,payload){
   const usedRefs=normalizeChatUsedContext(payload);
   const refs=dedupeChatReferences([...normalizeChatContentReferences(payload),...extractChatResponseReferences(content)]);
   const fileTrees=normalizeChatFileTrees(payload);
-  const changes=[...extractChatChangedFiles(content),...refs.filter(r=>chatReferenceHasDiff(r)||r.isDeletion).map(r=>({...r,kind:r.isDeletion?'deleted':(r.kind==='textEdit'?'textEdit':'modified'),path:r.path,diffMeta:r.diffMeta}))];
+  const changes=[...extractChatChangedFiles(content),...refs.filter(r=>r&&r.kind!=='textEdit'&&(chatReferenceHasDiff(r)||r.isDeletion)).map(r=>({...r,kind:r.isDeletion?'deleted':'modified',path:r.path,diffMeta:r.diffMeta}))];
   const metadata=normalizeChatResponseMetadata(payload,content,refs,fileTrees,changes);
   if(!body||(!refs.length&&!changes.length&&!fileTrees.length&&!metadata.length))return;
   const wrap=document.createElement('div');wrap.className='chat-response-references';wrap.setAttribute('aria-label','Response references');
@@ -21082,6 +21085,7 @@ async function cancelAssistantWorkflowRun(){
   assistantWorkflowCancelRequested=true;
   setAssistantWorkflowRunState(true,{runId:assistantWorkflowActiveRunId,cancelRequested:true});
   setStatus('Cancelling workflow run');
+  try{await call('cancel_workflow',assistantWorkflowActiveRunId)}catch(_e){}
   try{await call('provider_cancel',activeProviderId||'chat')}catch(_e){}
   return true;
 }

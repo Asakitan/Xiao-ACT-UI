@@ -3897,6 +3897,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function renderWorkflowResultSummary(body,result,launch)" in html
            and "async function runWorkflowEngineAsAssistant(workflow,inputText,launch,refs)" in html
            and "call('run_workflow',id,inputText,launch.workflowRunId)" in html
+           and "call('cancel_workflow',assistantWorkflowActiveRunId)" in html
            and "call('provider_cancel',activeProviderId||'chat')" in html
            and "if(!opts.forcePrompt&&id&&id!=='custom'&&api()&&api().run_workflow)" in html
            and "workflowStepOutputVars:workflowStepList(workflow).map" in html
@@ -4908,6 +4909,23 @@ def test_phase1_ai_editor_regressions() -> None:
            and "panel.dataset.chatUiSelfCheckFailed=String(failed.length);" in html
            and "panel.dataset.chatUiSelfCheckTotal=String(checks.length);" in html
            and "window.runAssistantUiSelfCheck=runAssistantUiSelfCheck;" in html)
+    smoke_path = os.path.join(
+        os.path.dirname(__file__), "tools", "assistant_ui_browser_smoke.js")
+    smoke_source = ""
+    if os.path.isfile(smoke_path):
+        with open(smoke_path, "r", encoding="utf-8") as fh:
+            smoke_source = fh.read()
+    _check("frontend Assistant browser smoke script exists",
+           bool(smoke_source)
+           and "window.runAssistantUiSelfCheck({ cleanup: true })" in smoke_source
+           and "workflow-result-state-rendered" in smoke_source
+           and "workflow-run-button-active-state" in smoke_source
+           and "PASS assistant-ui-browser-smoke" in smoke_source
+           and "SKIP assistant-ui-browser-smoke playwright unavailable" in smoke_source)
+    _check("backend workflow exposes run cancellation",
+           "def cancel_workflow(self, run_id: str = \"\") -> Dict:" in app_source
+           and "self._workflow_cancel_events" in app_source
+           and "cancel_requested=(" in app_source)
     _check("frontend Assistant response part actions submit callback metadata",
            "function assistantSubmitResponsePartAction(part,action,value,button,opts)" in html
            and "call('assistant_response_part_action',payload)" in html
@@ -30772,9 +30790,13 @@ def test_workflows() -> None:
         class _FakeWorkflowLlm:
             def __init__(self) -> None:
                 self.prompts = []
+                self.cancel_count = 0
 
             def reset_cancel(self) -> None:
                 pass
+
+            def cancel(self) -> None:
+                self.cancel_count += 1
 
             def chat_completion_stream(self, messages, tools=None,
                                        on_delta=None):
@@ -30814,6 +30836,30 @@ def test_workflows() -> None:
                events[0] == ("start", 0, 2, "First", "first")
                and events[1] == ("end", 0, 2, "First", "first", "out-1", None)
                and events[2] == ("start", 1, 2, "Second", "second"))
+
+        cancel_llm = _FakeWorkflowLlm()
+        cancel_engine = WorkflowEngine(cancel_llm, _FakeAgents())
+        cancel_event = threading.Event()
+        cancel_events = []
+        cancel_result = cancel_engine.run(
+            chained, "seed",
+            lambda i, total, step: cancel_events.append(("start", i)),
+            lambda i, total, step, output, error: (
+                cancel_events.append(("end", i, error)),
+                cancel_event.set()),
+            run_id="wf-cancel-selftest",
+            cancel_requested=cancel_event.is_set)
+        _check("workflow engine cancels before next step",
+               cancel_result.get("cancelled") is True
+               and cancel_result.get("workflowRunId") == "wf-cancel-selftest"
+               and len(cancel_result.get("steps", [])) == 1
+               and cancel_llm.prompts == ["First seed"]
+               and cancel_events == [("start", 0), ("end", 0, None)],
+               json.dumps({
+                   "result": cancel_result,
+                   "prompts": cancel_llm.prompts,
+                   "events": cancel_events,
+               }, ensure_ascii=False))
 
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

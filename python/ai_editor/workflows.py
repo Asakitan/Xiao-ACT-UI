@@ -19,6 +19,10 @@ from typing import Any, Callable, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+class WorkflowCancelled(Exception):
+    """Raised internally when a workflow run is cancelled."""
+
+
 def _validate_workflow_id(workflow_id: str) -> str:
     normalized = str(workflow_id or "").strip()
     if not normalized:
@@ -311,13 +315,31 @@ class WorkflowEngine:
             on_step_start: Optional[Callable] = None,
             on_step_end: Optional[Callable] = None,
             run_id: str = "",
+            cancel_requested: Optional[Callable[[], bool]] = None,
             ) -> Dict[str, Any]:
         """Run synchronously — call from a background thread."""
         run_id = str(run_id or "").strip()
         context: Dict[str, str] = {"input": input_text}
         results: List[Dict[str, Any]] = []
 
+        def _cancelled() -> bool:
+            if cancel_requested is None:
+                return False
+            try:
+                return bool(cancel_requested())
+            except Exception:
+                return False
+
         for i, step in enumerate(workflow.steps):
+            if _cancelled():
+                return {
+                    "workflow": workflow.id,
+                    "steps": results,
+                    "final_output": results[-1]["output"] if results else "",
+                    "workflowRunId": run_id,
+                    "cancelled": True,
+                    "message": "Workflow cancelled",
+                }
             if on_step_start:
                 on_step_start(i, len(workflow.steps), step)
 
@@ -338,12 +360,26 @@ class WorkflowEngine:
             error: Optional[str] = None
             try:
                 self._llm.reset_cancel()
+                if _cancelled():
+                    raise WorkflowCancelled("Workflow cancelled")
                 resp = self._llm.chat_completion_stream(
                     messages=messages, tools=None,
                     on_delta=lambda _d: None,
                 )
                 output = resp.content or ""
                 error = resp.error if resp.error else None
+                if getattr(resp, "finish_reason", "") == "cancelled":
+                    raise WorkflowCancelled("Workflow cancelled")
+                if _cancelled():
+                    raise WorkflowCancelled("Workflow cancelled")
+            except WorkflowCancelled as exc:
+                error = str(exc)
+                try:
+                    cancel = getattr(self._llm, "cancel", None)
+                    if callable(cancel):
+                        cancel()
+                except Exception:
+                    pass
             except Exception as exc:
                 error = str(exc)
 
@@ -359,11 +395,22 @@ class WorkflowEngine:
             }
             if error:
                 entry["error"] = error
+            if error == "Workflow cancelled":
+                entry["cancelled"] = True
             results.append(entry)
 
             if on_step_end:
                 on_step_end(i, len(workflow.steps), step, output, error)
 
+            if error == "Workflow cancelled":
+                return {
+                    "workflow": workflow.id,
+                    "steps": results,
+                    "final_output": output,
+                    "workflowRunId": run_id,
+                    "cancelled": True,
+                    "message": "Workflow cancelled",
+                }
             if error:
                 break
 

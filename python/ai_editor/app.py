@@ -2366,6 +2366,8 @@ class AIEditorAPI:
         self._agent_registry = get_agent_registry()
         self._wf_registry = get_workflow_registry()
         self._wf_engine = WorkflowEngine(self._engine, self._agent_registry)
+        self._workflow_cancel_lock = threading.Lock()
+        self._workflow_cancel_events: Dict[str, threading.Event] = {}
         self._active_agent_id: Optional[str] = None
 
         gui = self._gui_ref or _DummyGui()
@@ -3303,6 +3305,7 @@ class AIEditorAPI:
             evt = self._pending_confirm.pop(call_id, None)
             if evt:
                 evt.set()
+        self._cancel_active_workflows()
         if self._controller:
             self._controller.cancel()
         return {"ok": True}
@@ -7941,6 +7944,55 @@ class AIEditorAPI:
         self._ensure_engine()
         return self._wf_registry.delete_custom(wf_id)
 
+    def _workflow_cancel_event(self, run_id: str) -> Optional[threading.Event]:
+        run_id = str(run_id or "").strip()
+        if not run_id:
+            return None
+        with self._workflow_cancel_lock:
+            event = self._workflow_cancel_events.get(run_id)
+            if event is None:
+                event = threading.Event()
+                self._workflow_cancel_events[run_id] = event
+            return event
+
+    def _forget_workflow_cancel_event(self, run_id: str) -> None:
+        run_id = str(run_id or "").strip()
+        if not run_id:
+            return
+        with self._workflow_cancel_lock:
+            self._workflow_cancel_events.pop(run_id, None)
+
+    def _cancel_active_workflows(self, run_id: str = "") -> int:
+        run_id = str(run_id or "").strip()
+        with self._workflow_cancel_lock:
+            if run_id:
+                events = [self._workflow_cancel_events.get(run_id)]
+            else:
+                events = list(self._workflow_cancel_events.values())
+        count = 0
+        for event in events:
+            if event is not None:
+                event.set()
+                count += 1
+        if count:
+            try:
+                cancel = getattr(self._engine, "cancel", None)
+                if callable(cancel):
+                    cancel()
+            except Exception:
+                pass
+        return count
+
+    def cancel_workflow(self, run_id: str = "") -> Dict:
+        """Cancel one active workflow run by id, or all active workflow runs."""
+        count = self._cancel_active_workflows(run_id)
+        return {
+            "ok": True,
+            "workflowRunId": str(run_id or "").strip(),
+            "cancelled": count > 0,
+            "count": count,
+        }
+
     def run_workflow(self, wf_id: str, input_text: str,
                      run_id: str = "") -> Dict:
         """Run a workflow from the UI. Executes in the calling thread."""
@@ -7949,6 +8001,7 @@ class AIEditorAPI:
         if not wf:
             return {"error": f"Workflow not found: {wf_id}"}
         run_id = str(run_id or "").strip()
+        cancel_event = self._workflow_cancel_event(run_id)
 
         def _on_start(i, total, step):
             self._emit("workflow_step", {
@@ -7966,7 +8019,13 @@ class AIEditorAPI:
                 "status": "error" if error else "done",
                 "preview": (output or "")[:300], "error": error})
 
-        return self._wf_engine.run(wf, input_text, _on_start, _on_end, run_id)
+        try:
+            return self._wf_engine.run(
+                wf, input_text, _on_start, _on_end, run_id,
+                cancel_requested=(
+                    cancel_event.is_set if cancel_event is not None else None))
+        finally:
+            self._forget_workflow_cancel_event(run_id)
 
     # ── Engine action handlers (registered on gui._ai_engine_actions) ──
 
@@ -8054,7 +8113,14 @@ class AIEditorAPI:
         if not wf:
             return {"error": f"Workflow not found: {wf_id}",
                     "available": [w.id for w in self._wf_registry.list_all()]}
-        return self._wf_engine.run(wf, input_text, run_id=run_id)
+        cancel_event = self._workflow_cancel_event(run_id)
+        try:
+            return self._wf_engine.run(
+                wf, input_text, run_id=run_id,
+                cancel_requested=(
+                    cancel_event.is_set if cancel_event is not None else None))
+        finally:
+            self._forget_workflow_cancel_event(run_id)
 
     # ── Extension Host API ──
 
