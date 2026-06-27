@@ -9761,6 +9761,10 @@ console.log("frontend word separator behavior ok");
             and "function updateSettingsTitleStatus(visible,total)" in html
             and "settingsActiveSectionTitle()" in html
             and "position:sticky; top:0; z-index:2" in html
+            and "className='detail-actions'" in html
+            and "Focus previous visible setting" in html
+            and "Focus next visible setting" in html
+            and "Jump to the current settings section" in html
             and "detail-chip position" in html
             and "SETTINGS_DENSITY_STORAGE_KEY='sao.aiEditor.settings.density.v1'" in html
             and "function settingsReadDensity()" in html
@@ -9786,6 +9790,17 @@ console.log("frontend word separator behavior ok");
             and "selectSettingsTarget('workspace',{preserveSearch:true})" in html
             and "settingsFocusVisibleRow(-1)" in html
             and "resetVisibleModifiedSettings();" in html
+            and "function focusSettingsNavFilter()" in html
+            and "function settingsFilterNavCategories(value,options)" in html
+            and "function settingsClearNavFilter()" in html
+            and "function settingsUiSelfCheckSnapshot()" in html
+            and "id='settings-nav-filter'" in html
+            and "id='settings-nav-filter-empty'" in html
+            and "Filter categories" in html
+            and "No matching categories for" in html
+            and "window.settingsFilterNavCategories=settingsFilterNavCategories;" in html
+            and "window.settingsUiSelfCheckSnapshot=settingsUiSelfCheckSnapshot;" in html
+            and "String(ev.key||'').toLowerCase()==='n'" in html
             and "settingsRememberRecentSetting(row);" in html
             and "fav.dataset.settingsFavoriteKey=opts.key;" in html
             and "renderSettingsReviewBar(targetStats);" in html

@@ -1647,6 +1647,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-current-detail .detail-chip.value-state.edited { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); }
 .settings-current-detail .detail-chip.value-state.default { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 42%,var(--border)); }
 .settings-current-detail .detail-chip.value-state.override { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
+.settings-current-detail .detail-actions { margin-left:auto; display:inline-flex; flex-wrap:wrap; align-items:center; gap:4px; }
 .settings-current-detail button { height:21px; padding:1px 7px; border:1px solid var(--border); border-radius:4px;
   background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
 .settings-current-detail button:hover,.settings-current-detail button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
@@ -1707,6 +1708,15 @@ pre.code-block code .type { color:var(--fg-type); }
   background:color-mix(in srgb,var(--bg3) 68%,transparent); color:var(--fg-dim); font-size:11px; line-height:1.35; }
 .settings-nav-summary strong { display:block; color:var(--fg); font-size:12px; margin-bottom:2px; }
 .settings-nav-summary .settings-nav-summary-line { display:flex; justify-content:space-between; gap:8px; font:10px var(--mono); }
+.settings-nav-tools { margin:0 0 8px; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px; }
+.settings-nav-tools input { min-width:0; height:24px; box-sizing:border-box; border:1px solid var(--border);
+  border-radius:4px; background:var(--bg-input); color:var(--fg); padding:2px 7px; font:11px var(--sans); outline:none; }
+.settings-nav-tools input:focus { border-color:var(--border-focus); }
+.settings-nav-tools button { height:24px; padding:1px 7px; border:1px solid var(--border); border-radius:4px;
+  background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
+.settings-nav-tools button:hover,.settings-nav-tools button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
+.settings-nav-filter-empty { display:none; padding:6px 8px 8px; color:var(--fg-dim); font-size:11px; line-height:1.35; }
+.settings-nav-filter-empty.open { display:block; }
 .settings-nav-memory { margin:0 0 8px; padding:6px 0; border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent); }
 .settings-nav-memory-title { padding:1px 8px 5px; color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; }
 .settings-nav-memory-empty { padding:2px 8px 6px; color:var(--fg-dim); font-size:11px; }
@@ -2221,6 +2231,7 @@ pre.code-block { overflow:visible; }
 .settings-modal.compact .settings-main { padding-top:5px; padding-bottom:12px; }
 .settings-modal.compact .settings-nav { padding-top:6px; }
 .settings-modal.compact .settings-nav-summary { padding:6px; margin-bottom:6px; }
+.settings-modal.compact .settings-nav-tools { margin-bottom:6px; }
 .settings-modal.compact .settings-nav-memory { margin-bottom:6px; padding:4px 0; }
 .settings-modal.compact .settings-nav-item { min-height:24px; padding:3px 7px; }
 .settings-modal.compact .settings-section-overview { padding:4px 7px; margin-bottom:6px; }
@@ -3958,8 +3969,19 @@ function settingsShowRowDetails(row){
     const inheritedChip=document.createElement('span');inheritedChip.className='detail-chip';inheritedChip.textContent='Inherited: '+settingCompactDisplayValue(inherited,44);host.appendChild(inheritedChip);
     const defaultChip=document.createElement('span');defaultChip.className='detail-chip';defaultChip.textContent='Default: '+settingCompactDisplayValue(def,44);host.appendChild(defaultChip);
   }
-  const copy=document.createElement('button');copy.type='button';copy.textContent='Copy ID';copy.onclick=()=>settingsCopyText(key,'Setting ID');host.appendChild(copy);
-  const json=document.createElement('button');json.type='button';json.textContent='JSON';json.onclick=()=>settingsConfigureRowInJson(row,key);host.appendChild(json);
+  const actions=document.createElement('span');actions.className='detail-actions';
+  const addAction=(label,title,handler)=>{
+    const btn=document.createElement('button');btn.type='button';btn.textContent=label;btn.title=title;
+    btn.onclick=ev=>{ev.preventDefault();handler&&handler()};
+    actions.appendChild(btn);
+    return btn;
+  };
+  addAction('Prev','Focus previous visible setting',()=>settingsFocusVisibleRow(-1));
+  addAction('Next','Focus next visible setting',()=>settingsFocusVisibleRow(1));
+  addAction('Section','Jump to the current settings section',()=>settingsFocusActiveSection());
+  addAction('Copy ID','Copy setting ID',()=>settingsCopyText(key,'Setting ID'));
+  addAction('JSON','Open settings.json and copy this setting id',()=>settingsConfigureRowInJson(row,key));
+  host.appendChild(actions);
 }
 function settingsHighlightRow(row){
   if(!row)return;
@@ -24882,6 +24904,7 @@ const SETTINGS_FAVORITES_STORAGE_KEY='sao.aiEditor.settings.favorites.v1';
 const SETTINGS_RECENT_STORAGE_KEY='sao.aiEditor.settings.recent.v1';
 const SETTINGS_SEARCH_HISTORY_STORAGE_KEY='sao.aiEditor.settings.searchHistory.v1';
 const SETTINGS_DENSITY_STORAGE_KEY='sao.aiEditor.settings.density.v1';
+let _settingsNavFilterValue='';
 const SETTINGS_COMMONLY_USED_KEYS=[
   'aiEditor.provider','aiEditor.model','workbench.colorTheme','workbench.iconTheme',
   'editor.defaultFormatter','editor.tabSize','editor.insertSpaces','editor.formatOnSave',
@@ -25228,6 +25251,62 @@ function settingsFocusSiblingSection(delta){
   if(section&&section.dataset){scrollToSettingsSection(section.dataset.settingsId);return true}
   return false;
 }
+function focusSettingsNavFilter(){
+  const input=$('settings-nav-filter');
+  if(input){input.focus();input.select&&input.select();return true}
+  return false;
+}
+function settingsNavCategoryText(btn){
+  if(!btn)return '';
+  return [
+    btn.dataset&&btn.dataset.settingsNav,
+    btn.querySelector&&((btn.querySelector('.settings-nav-label')||{}).textContent),
+    btn.querySelector&&((btn.querySelector('.settings-nav-meta')||{}).textContent),
+    btn.title,
+    btn.textContent
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+function settingsFilterNavCategories(value,options){
+  const nav=$('settings-nav');if(!nav)return {visible:0,total:0,query:''};
+  const opts=options||{};
+  const query=String(value||'').trim().toLowerCase();
+  _settingsNavFilterValue=query;
+  const input=$('settings-nav-filter');
+  if(input&&input.value!==value&&!opts.preserveInput)input.value=value||'';
+  const items=Array.from(nav.querySelectorAll('.settings-nav-item'));
+  let visible=0,total=0;
+  items.forEach(btn=>{
+    const targetVisible=btn.dataset.settingsNavTargetVisible!=='0';
+    const match=!query||settingsNavCategoryText(btn).includes(query);
+    const show=targetVisible&&match;
+    btn.style.display=show?'':'none';
+    btn.setAttribute('aria-hidden',show?'false':'true');
+    if(targetVisible)total++;
+    if(show)visible++;
+  });
+  const empty=$('settings-nav-filter-empty');
+  if(empty){
+    empty.classList.toggle('open',!!query&&visible===0);
+    empty.textContent=query?'No matching categories for "'+query+'".':'';
+  }
+  const count=$('settings-nav-filter-count');
+  if(count)count.textContent=query?String(visible)+' / '+String(total):String(total);
+  if(!opts.preserveFocus&&visible){
+    const active=nav.querySelector('.settings-nav-item.active');
+    if(!active||active.style.display==='none'){
+      const first=items.find(item=>item.style.display!=='none');
+      if(first&&first.dataset&&first.dataset.settingsNav)setActiveSettingsNav(first.dataset.settingsNav);
+    }
+  }
+  return {visible,total,query};
+}
+function settingsClearNavFilter(){
+  const input=$('settings-nav-filter');
+  if(input)input.value='';
+  const state=settingsFilterNavCategories('',{preserveInput:true});
+  if(input)input.focus();
+  return state;
+}
 function renderSettingsNav(){
   const nav=$('settings-nav');if(!nav)return;
   const sections=settingsCategorySections();
@@ -25239,6 +25318,26 @@ function renderSettingsNav(){
     +'<div class="settings-nav-summary-line"><span>Modified</span><span id="settings-nav-modified-count">0</span></div>'
     +'<div class="settings-nav-summary-line"><span>Errors</span><span id="settings-nav-error-count">0</span></div>';
   nav.appendChild(summary);
+  const tools=document.createElement('div');
+  tools.className='settings-nav-tools';
+  const filter=document.createElement('input');
+  filter.id='settings-nav-filter';
+  filter.type='search';
+  filter.placeholder='Filter categories';
+  filter.value=_settingsNavFilterValue||'';
+  filter.setAttribute('aria-label','Filter settings categories');
+  filter.oninput=()=>settingsFilterNavCategories(filter.value,{preserveInput:true});
+  const clear=document.createElement('button');
+  clear.type='button';
+  clear.textContent='Clear';
+  clear.title='Clear category filter';
+  clear.onclick=()=>settingsClearNavFilter();
+  tools.appendChild(filter);tools.appendChild(clear);
+  nav.appendChild(tools);
+  const emptyFilter=document.createElement('div');
+  emptyFilter.id='settings-nav-filter-empty';
+  emptyFilter.className='settings-nav-filter-empty';
+  nav.appendChild(emptyFilter);
   const personal=document.createElement('div');
   personal.className='settings-nav-memory';
   personal.id='settings-nav-personal';
@@ -25270,6 +25369,7 @@ function renderSettingsNav(){
   });
   const first=sections.find(section=>section.style.display!=='none')||sections[0];
   setActiveSettingsNav(first?first.dataset.settingsId:'');
+  settingsFilterNavCategories(_settingsNavFilterValue,{preserveInput:true,preserveFocus:true});
 }
 function updateSettingsNavCounts(){
   const nav=$('settings-nav');if(!nav)return;
@@ -25280,6 +25380,7 @@ function updateSettingsNavCounts(){
       .find(item=>item.dataset.settingsNav===section.dataset.settingsId);
     if(!btn)return;
     const visible=section.style.display!=='none';
+    btn.dataset.settingsNavTargetVisible=visible?'1':'0';
     btn.style.display=visible?'':'none';
     const visibleCount=settingsSectionVisibleCount(section),modified=settingsSectionModifiedCount(section);
     const errors=visible?Array.from(section.querySelectorAll('.settings-field.invalid:not(.settings-target-hidden),.ext-setting-row.invalid:not(.settings-target-hidden),[aria-invalid="true"]')).filter(row=>row.style.display!=='none').length:0;
@@ -25299,6 +25400,7 @@ function updateSettingsNavCounts(){
   if(visibleEl)visibleEl.textContent=String(totalVisible);
   if(modifiedEl)modifiedEl.textContent=String(totalModified);
   if(errorEl)errorEl.textContent=String(totalErrors);
+  settingsFilterNavCategories(_settingsNavFilterValue,{preserveInput:true,preserveFocus:true});
 }
 function focusSettingsSearch(){
   const input=$('settings-search');if(input){input.focus();input.select&&input.select();}
@@ -25352,6 +25454,7 @@ function installSettingsKeyboardHandlers(){
     if(ev.altKey&&String(ev.key||'').toLowerCase()==='c'){ev.preventDefault();settingsUseSearchHint('@common');return}
     if(ev.altKey&&String(ev.key||'').toLowerCase()==='e'){ev.preventDefault();settingsFocusFirstReviewRow('error');return}
     if(ev.altKey&&String(ev.key||'').toLowerCase()==='g'){ev.preventDefault();settingsFocusCurrentLanguageOverride();return}
+    if(ev.altKey&&String(ev.key||'').toLowerCase()==='n'){ev.preventDefault();focusSettingsNavFilter();return}
     if(ev.altKey&&String(ev.key||'').toLowerCase()==='o'){ev.preventDefault();settingsFocusFirstReviewRow('override');return}
     if(ev.altKey&&String(ev.key||'').toLowerCase()==='u'){ev.preventDefault();selectSettingsTarget('user',{preserveSearch:true});return}
     if(ev.altKey&&String(ev.key||'').toLowerCase()==='w'){ev.preventDefault();selectSettingsTarget('workspace',{preserveSearch:true});return}
@@ -25387,7 +25490,32 @@ function installSettingsKeyboardHandlers(){
     }
   });
 }
+function settingsUiSelfCheckSnapshot(){
+  const modal=$('settings-modal'),nav=$('settings-nav'),main=$('settings-main');
+  const overview=document.querySelector('.settings-section-overview');
+  const navItems=nav?Array.from(nav.querySelectorAll('.settings-nav-item')):[];
+  const detail=$('settings-current-detail');
+  return {
+    pass:!!(modal&&nav&&main&&$('settings-nav-filter')&&$('settings-density-toggle')&&detail
+      &&typeof settingsFilterNavCategories==='function'
+      &&typeof settingsFocusVisibleRow==='function'
+      &&typeof settingsFocusPagedRow==='function'
+      &&typeof settingsFocusActiveSection==='function'),
+    hasNavFilter:!!$('settings-nav-filter'),
+    hasNavFilterEmptyState:!!$('settings-nav-filter-empty'),
+    hasDensityToggle:!!$('settings-density-toggle'),
+    hasStickySectionOverview:!!overview&&String(getComputedStyle(overview).position)==='sticky',
+    hasCurrentDetail:!!detail,
+    hasDetailActions:!!(detail&&detail.querySelector('.detail-actions')),
+    density:settingsReadDensity(),
+    currentTarget:currentSettingsTarget,
+    navItems:navItems.length,
+    visibleNavItems:navItems.filter(item=>item.style.display!=='none').length,
+    keyboardPaging:typeof settingsFocusBoundaryRow==='function'&&typeof settingsFocusPagedRow==='function'
+  };
+}
 window.focusSettingsSearch=focusSettingsSearch;
+window.focusSettingsNavFilter=focusSettingsNavFilter;
 window.settingsOpenJsonView=settingsOpenJsonView;
 window.settingsUseSearchHint=settingsUseSearchHint;
 window.settingsSearchHintKeydown=settingsSearchHintKeydown;
@@ -25399,6 +25527,9 @@ window.settingsFocusBoundaryRow=settingsFocusBoundaryRow;
 window.settingsFocusPagedRow=settingsFocusPagedRow;
 window.settingsFocusActiveSection=settingsFocusActiveSection;
 window.settingsFocusSiblingSection=settingsFocusSiblingSection;
+window.settingsFilterNavCategories=settingsFilterNavCategories;
+window.settingsClearNavFilter=settingsClearNavFilter;
+window.settingsUiSelfCheckSnapshot=settingsUiSelfCheckSnapshot;
 window.settingsToggleDensity=settingsToggleDensity;
 window.settingsToggleFilterToken=settingsToggleFilterToken;
 window.settingsClearFilters=settingsClearFilters;
