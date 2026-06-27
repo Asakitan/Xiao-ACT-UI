@@ -2666,6 +2666,117 @@ def test_app_settings_parity() -> None:
                    "write": interactive_write,
                    "status": interactive_status,
                }, ensure_ascii=False))
+        utf8_result = json.loads(term_api.execute_tool(
+            "runTerminal",
+            json.dumps({
+                "command": (
+                    f'"{sys.executable}" -c '
+                    '"print(\'\\u4e2d\\u6587\\u2713\')"'
+                ),
+                "profile": "System Shell",
+            }),
+            confirmed=True,
+        ))
+        env_result = json.loads(term_api.execute_tool(
+            "runTerminal",
+            json.dumps({
+                "command": (
+                    f'"{sys.executable}" -c '
+                    '"import os;print(os.environ.get(\'SAO_AI_EDITOR_TERMINAL_PROFILE\', \'\'))"'
+                ),
+                "profile": "System Shell",
+            }),
+            confirmed=True,
+        ))
+        close_cmd = (
+            f'"{sys.executable}" -u -c '
+            '"import sys;data=sys.stdin.read();print(\'closed:\'+str(len(data)))"'
+        )
+        close_start = json.loads(term_api.execute_tool(
+            "runTerminal",
+            json.dumps({
+                "command": close_cmd,
+                "mode": "start",
+                "profile": "System Shell",
+            }),
+            confirmed=True,
+        ))
+        close_job = close_start.get("jobId", "")
+        close_write = json.loads(term_api.execute_tool(
+            "runTerminal",
+            json.dumps({
+                "command": "",
+                "mode": "write",
+                "jobId": close_job,
+                "data": "abc",
+                "closeStdin": True,
+                "profile": "System Shell",
+            }),
+            confirmed=True,
+        ))
+        close_status = {}
+        for _ in range(40):
+            close_status = json.loads(term_api.execute_tool(
+                "runTerminal",
+                json.dumps({
+                    "command": "",
+                    "mode": "status",
+                    "jobId": close_job,
+                    "profile": "System Shell",
+                }),
+                confirmed=True,
+            ))
+            if close_status.get("state") != "running":
+                break
+            time.sleep(0.05)
+        stop_cmd = (
+            f'"{sys.executable}" -u -c '
+            '"import time;print(\'sleeping\');time.sleep(10)"'
+        )
+        stop_start = json.loads(term_api.execute_tool(
+            "runTerminal",
+            json.dumps({
+                "command": stop_cmd,
+                "mode": "start",
+                "profile": "System Shell",
+            }),
+            confirmed=True,
+        ))
+        stop_job = stop_start.get("jobId", "")
+        stop_result = json.loads(term_api.execute_tool(
+            "runTerminal",
+            json.dumps({
+                "command": "",
+                "mode": "stop",
+                "jobId": stop_job,
+                "profile": "System Shell",
+            }),
+            confirmed=True,
+        ))
+        _check("runTerminal preserves utf-8 output env and close/stop lifecycle",
+               utf8_result.get("exitCode") == 0
+               and "中文✓" in utf8_result.get("stdout", "")
+               and env_result.get("stdout", "").strip() == "System Shell"
+               and bool(close_job)
+               and close_write.get("writtenBytes") == 3
+               and close_write.get("stdinClosed") is True
+               and close_status.get("exitCode") == 0
+               and "closed:3" in close_status.get("stdout", "")
+               and close_status.get("stdinClosed") is True
+               and bool(stop_job)
+               and stop_result.get("state") == "cancelled"
+               and isinstance(stop_result.get("jobCount"), int)
+               and stop_start.get("profile") == "System Shell"
+               and stop_start.get("terminal", {}).get("profile") == "System Shell",
+               json.dumps({
+                   "utf8": utf8_result,
+                   "env": env_result,
+                   "close_start": close_start,
+                   "close_write": close_write,
+                   "close_status": close_status,
+                   "stop_start": stop_start,
+                   "stop_result": stop_result,
+               }, ensure_ascii=False))
 
     from ai_editor.mcp_client import load_mcp_configs
     mcp_payload = {"ai_editor": {"mcp": {"autostart": False, "servers": [
@@ -12324,8 +12435,14 @@ console.log("command palette quick access helpers ok");
             and "finishedAt" in html
             and "stdoutTruncated" in html
             and "payloadProfile" in html
-            and "writePayloadData" in html
+           and "writePayloadData" in html
             and "writeBytes" in html
+            and "terminal-input-row" in html
+            and "class=\"terminal-input\"" in html
+            and "closeStdin:true" in html
+            and "[stdin closed]" in html
+            and "closeStdinPayload" in html
+            and "closeStdinResult" in html
             and "selectorValue" in html
             and "async function terminalUiSelfCheckSnapshot()" in html
            and "window.terminalUiSelfCheckSnapshot=terminalUiSelfCheckSnapshot" in html)
@@ -12347,6 +12464,16 @@ console.log("command palette quick access helpers ok");
            and "def _start_terminal_job(" in engine_tools_source
            and "def _stop_terminal_job(" in engine_tools_source
            and "def _terminal_job_snapshot(" in engine_tools_source
+           and "_TERMINAL_JOB_TTL_SEC" in engine_tools_source
+           and "_TERMINAL_JOB_MAX_HISTORY" in engine_tools_source
+           and "def _terminal_subprocess_env(" in engine_tools_source
+           and "def _terminal_prune_jobs_locked(" in engine_tools_source
+           and "PYTHONIOENCODING" in engine_tools_source
+           and "SAO_AI_EDITOR_TERMINAL_PROFILE" in engine_tools_source
+           and "\"encoding\": \"utf-8\"" in engine_tools_source
+           and "taskkill" in engine_tools_source
+           and "jobCount" in engine_tools_source
+           and "shellArgs" in engine_tools_source
            and "subprocess.Popen" in engine_tools_source
            and "proc.terminate()" in engine_tools_source)
     _check("editor dirty diff decorations render while editing",

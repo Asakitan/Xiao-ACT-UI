@@ -1477,6 +1477,14 @@ pre.code-block code .type { color:var(--fg-type); }
 .terminal-panel.active { display:flex; }
 .terminal-output { flex:1; overflow-y:auto; padding:8px 12px; font:12px/1.5 var(--mono);
   color:var(--fg-success); white-space:pre-wrap; }
+.terminal-input-row { display:flex; align-items:center; gap:6px; min-height:27px; padding:3px 12px 5px;
+  border-top:1px solid color-mix(in srgb,var(--border) 65%,transparent); background:var(--bg-panel);
+  flex-shrink:0; box-sizing:border-box; }
+.terminal-input-prompt { color:var(--fg-success); font:12px var(--mono); flex:0 0 auto; }
+.terminal-input { flex:1 1 auto; min-width:0; height:22px; background:transparent; color:var(--fg);
+  border:0; outline:none; font:12px var(--mono); padding:0; }
+.terminal-input::placeholder { color:var(--fg-dim); }
+.terminal-input-row:focus-within { background:color-mix(in srgb,var(--bg-panel) 82%,var(--bg-hover)); }
 .terminal-status-line { display:flex; align-items:center; gap:8px; min-height:24px; padding:0 12px;
   border-top:1px solid var(--border); background:var(--bg-panel); color:var(--fg-dim);
   font:11px var(--mono); flex-shrink:0; }
@@ -29694,9 +29702,9 @@ async function execTerminalCmd(cmd,skipConfirm){
 const termOut=$('terminal-output');
 termOut.setAttribute('contenteditable','false');
 termOut.insertAdjacentHTML('afterend',
-  '<div style="display:flex;padding:4px 12px;background:var(--bg-panel)">'+
-  '<span style="color:var(--fg-success);font:12px var(--mono)">$ </span>'+
-  '<input id="term-input" style="flex:1;background:transparent;color:var(--fg);border:none;outline:none;font:12px var(--mono)" placeholder="Enter command...">'+
+  '<div class="terminal-input-row">'+
+  '<span class="terminal-input-prompt">$</span>'+
+  '<input id="term-input" class="terminal-input" placeholder="Enter command...">'+
   '</div>');
 // TERM-02: Terminal command history (up/down)
 const _termHistory=(function(){try{return JSON.parse(localStorage.getItem('sao-term-history'))||[]}catch(e){return []}})();
@@ -29710,6 +29718,7 @@ $('term-input')&&$('term-input').addEventListener('keydown',function(e){
   if(e.key==='ArrowDown'){e.preventDefault();if(_termIdx>0){_termIdx--;this.value=_termHistory[_termHistory.length-1-_termIdx]}else{_termIdx=-1;this.value=''}}
   // TERM-04: Ctrl+K clears terminal
   if(e.key==='k'&&(e.ctrlKey||e.metaKey)){e.preventDefault();clearTerminal()}
+  if(e.key==='d'&&(e.ctrlKey||e.metaKey)){e.preventDefault();sendTerminalInput('',{closeStdin:true})}
 });
 
 // ── @/# chat input completions (Copilot Chat-style dynamic context and tool refs) ──
@@ -32527,7 +32536,8 @@ async function sendTerminalInput(text,options){
   if(!run||!run.jobId||run.cancelled)return {written:false,error:'No running terminal job'};
   const data=String(text??'');
   if(!data&&!opts.closeStdin)return {written:false,jobId:run.jobId};
-  _appendTerminalInputEcho(out,data);
+  if(data)_appendTerminalInputEcho(out,data);
+  else if(opts.closeStdin)_appendTerminalInputEcho(out,'[stdin closed]');
   const payload={command:run.command||'',mode:'write',jobId:run.jobId,data,closeStdin:!!opts.closeStdin,profile:run.profile||currentTerminalProfile()};
   try{
     const raw=await call('execute_tool','runTerminal',JSON.stringify(payload),true);
@@ -32727,6 +32737,11 @@ window._createTerminal=_createTerminal;window._closeTerminal=_closeTerminal;wind
     if(e.key==='ArrowUp'&&hist.length){e.preventDefault();const idx=getIdx();if(idx<hist.length-1)setIdx(idx+1);this.value=hist[hist.length-1-getIdx()];e.stopImmediatePropagation();return}
     if(e.key==='ArrowDown'){e.preventDefault();const idx=getIdx();if(idx>0){setIdx(idx-1);this.value=hist[hist.length-1-getIdx()]}else{setIdx(-1);this.value=''}e.stopImmediatePropagation();return}
     if(e.key==='k'&&(e.ctrlKey||e.metaKey)){e.preventDefault();clearTerminal();e.stopImmediatePropagation();return}
+    if(e.key==='d'&&(e.ctrlKey||e.metaKey)){
+      e.preventDefault();
+      sendTerminalInput('',{out:_getActiveTermOutput(),closeStdin:true});
+      e.stopImmediatePropagation();return;
+    }
   },true);
 })();
 const _origFocusTerminal=focusTerminal;
@@ -32777,6 +32792,7 @@ async function terminalUiSelfCheckSnapshot(){
     const slowPromise=runTerminalCommand('slow-command',{skipConfirm:true,out:defaultOut});
     await new Promise(resolve=>setTimeout(resolve,20));
     const wrote=await sendTerminalInput('hello stdin\n',{out:defaultOut});
+    const closed=await sendTerminalInput('',{out:defaultOut,closeStdin:true});
     const stopped=await stopTerminalCommand();
     const slow=await slowPromise;
     const blocks=defaultOut?Array.from(defaultOut.querySelectorAll('.terminal-command-block')):[];
@@ -32806,9 +32822,12 @@ async function terminalUiSelfCheckSnapshot(){
       payloadCwd:payloads[0]&&payloads[0].cwd,
       payloadProfile:payloads[0]&&payloads[0].profile,
       writePayloadData:(payloads.find(p=>p&&p.mode==='write')||{}).data,
-      writeBytes:wrote&&wrote.writtenBytes
+      writeBytes:wrote&&wrote.writtenBytes,
+      closeStdinPayload:(payloads.find(p=>p&&p.mode==='write'&&p.closeStdin)||{}).closeStdin,
+      closeStdinEcho:defaultOut?defaultOut.textContent.includes('[stdin closed]'):false,
+      closeStdinResult:closed&&closed.stdinClosed
     };
-    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.hasInputEcho&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell'&&snapshot.writePayloadData==='hello stdin\n'&&snapshot.writeBytes===12;
+    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.hasInputEcho&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell'&&snapshot.writePayloadData==='hello stdin\n'&&snapshot.writeBytes===12&&snapshot.closeStdinPayload===true&&snapshot.closeStdinEcho&&snapshot.closeStdinResult===true;
     return snapshot;
   }finally{
     call=oldCall;

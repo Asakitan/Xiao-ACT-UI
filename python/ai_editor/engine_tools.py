@@ -752,6 +752,9 @@ def _terminal_metadata(terminal: Dict[str, Any], timeout: int, output_limit: int
         metadata["cwd"] = cwd
     if shell_path:
         metadata["shellPath"] = shell_path
+    shell_args = _terminal_args(terminal.get("shell_args"))
+    if shell_args:
+        metadata["shellArgs"] = shell_args
     auto_approve = terminal.get("auto_approve")
     if auto_approve not in (None, {}, [], ""):
         metadata["autoApproveConfigured"] = True
@@ -773,6 +776,8 @@ def _default_terminal_cwd(api_ref: Any = None) -> str:
 _TERMINAL_JOB_LOCK = threading.Lock()
 _TERMINAL_JOBS: Dict[str, Dict[str, Any]] = {}
 _TERMINAL_JOB_MAX_OUTPUT = 256_000
+_TERMINAL_JOB_TTL_SEC = 300
+_TERMINAL_JOB_MAX_HISTORY = 64
 
 
 def _terminal_command_context(command: str, cwd: str, gui_ref: Any,
@@ -800,6 +805,43 @@ def _terminal_command_context(command: str, cwd: str, gui_ref: Any,
     if explicit_shell:
         run_command = _build_explicit_shell_command(shell_path, shell_args, command)
     return terminal, timeout, output_limit, explicit_shell, effective_cwd, run_command
+
+
+def _terminal_subprocess_env(terminal: Dict[str, Any]) -> Dict[str, str]:
+    env = os.environ.copy()
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONUTF8", "1")
+    env["SAO_AI_EDITOR_TERMINAL_PROFILE"] = _terminal_profile_name(
+        terminal.get("profile")) or "System Shell"
+    shell_path = _terminal_shell_path(terminal.get("shell_path"))
+    if shell_path:
+        env["SAO_AI_EDITOR_TERMINAL_SHELL"] = shell_path
+    return env
+
+
+def _terminal_prune_jobs_locked(now: Optional[float] = None) -> None:
+    now = time.time() if now is None else now
+    terminal_states = {"done", "error", "cancelled", "timeout"}
+    stale_ids = [
+        job_id for job_id, job in _TERMINAL_JOBS.items()
+        if job.get("state") in terminal_states
+        and float(job.get("finishedWall") or job.get("startedWall") or 0)
+        and now - float(job.get("finishedWall") or job.get("startedWall") or 0)
+        > _TERMINAL_JOB_TTL_SEC
+    ]
+    for job_id in stale_ids:
+        _TERMINAL_JOBS.pop(job_id, None)
+    if len(_TERMINAL_JOBS) <= _TERMINAL_JOB_MAX_HISTORY:
+        return
+    completed = [
+        (float(job.get("finishedWall") or job.get("startedWall") or 0), job_id)
+        for job_id, job in _TERMINAL_JOBS.items()
+        if job.get("state") in terminal_states
+    ]
+    completed.sort()
+    overflow = max(0, len(_TERMINAL_JOBS) - _TERMINAL_JOB_MAX_HISTORY)
+    for _, job_id in completed[:overflow]:
+        _TERMINAL_JOBS.pop(job_id, None)
 
 
 def _terminal_trim_job_output(job: Dict[str, Any]) -> None:
@@ -880,7 +922,16 @@ def _terminal_waiter(job_id: str, timeout: int) -> None:
         _terminal_finish_job(job_id, exit_code, "done")
     except subprocess.TimeoutExpired:
         try:
-            proc.terminate()
+            if os.name == "nt" and getattr(proc, "pid", None):
+                subprocess.run(
+                    ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=3,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            else:
+                proc.terminate()
             proc.wait(timeout=2)
         except Exception:
             try:
@@ -908,6 +959,7 @@ def _terminal_job_snapshot(job_id: str, since_seq: int = 0) -> Dict[str, Any]:
                 job["state"] = "done" if polled == 0 else "error"
                 job["durationMs"] = int((time.monotonic() - float(job.get("started") or time.monotonic())) * 1000)
                 job["finishedWall"] = time.time()
+        _terminal_prune_jobs_locked()
         chunks = [
             dict(chunk) for chunk in job.get("chunks", [])
             if int(chunk.get("seq") or 0) > since_seq
@@ -932,6 +984,10 @@ def _terminal_job_snapshot(job_id: str, since_seq: int = 0) -> Dict[str, Any]:
             "stderrTruncated": bool(job.get("stderrTruncated")),
             "stdinBytes": int(job.get("stdinBytes") or 0),
             "stdinClosed": bool(job.get("stdinClosed")),
+            "profile": terminal.get("profile", ""),
+            "shellKind": terminal.get("shellKind", ""),
+            "shellPath": terminal.get("shellPath", ""),
+            "jobCount": len(_TERMINAL_JOBS),
             "terminal": terminal,
         }
     return snapshot
@@ -947,7 +1003,10 @@ def _start_terminal_job(command: str, cwd: str, gui_ref: Any,
         "stderr": subprocess.PIPE,
         "stdin": subprocess.PIPE,
         "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
         "bufsize": 1,
+        "env": _terminal_subprocess_env(terminal),
     }
     if effective_cwd:
         kwargs["cwd"] = effective_cwd
@@ -981,6 +1040,7 @@ def _start_terminal_job(command: str, cwd: str, gui_ref: Any,
             terminal, timeout, output_limit, explicit_shell, effective_cwd),
     }
     with _TERMINAL_JOB_LOCK:
+        _terminal_prune_jobs_locked()
         _TERMINAL_JOBS[job_id] = job
     threading.Thread(target=_terminal_reader, args=(job_id, "stdout", proc.stdout),
                      daemon=True).start()
@@ -1048,7 +1108,16 @@ def _stop_terminal_job(job_id: str) -> Dict[str, Any]:
         job["finishedWall"] = time.time()
     if proc is not None:
         try:
-            proc.terminate()
+            if os.name == "nt" and getattr(proc, "pid", None):
+                subprocess.run(
+                    ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=3,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            else:
+                proc.terminate()
             proc.wait(timeout=2)
         except Exception:
             try:
@@ -1080,7 +1149,10 @@ def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
             "shell": not explicit_shell,
             "capture_output": True,
             "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
             "timeout": timeout,
+            "env": _terminal_subprocess_env(terminal),
         }
         if effective_cwd:
             kwargs["cwd"] = effective_cwd
