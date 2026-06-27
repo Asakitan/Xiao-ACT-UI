@@ -3928,13 +3928,14 @@ function settingsSearchHintKeydown(ev,text){
     settingsUseSearchHint(text);
   }
 }
-function settingsSearchForKey(key){
+function settingsSearchForKey(key,target){
   const input=$('settings-search');if(!input)return;
   const value='@id:'+String(key||'').trim();
   if(!value.slice(4))return;
   input.value=value;
   input.focus&&input.focus();
-  if(currentSettingsTarget!=='extensions')selectSettingsTarget('extensions',{preserveSearch:true});
+  const nextTarget=['user','workspace','extensions'].includes(String(target||''))?String(target):currentSettingsTarget;
+  if(nextTarget&&nextTarget!==currentSettingsTarget)selectSettingsTarget(nextTarget,{preserveSearch:true});
   else scheduleFilterSettings(0);
 }
 function settingsMetaForRow(row){
@@ -3987,7 +3988,7 @@ function settingsShowRowDetails(row){
   addAction('Prev','Focus previous visible setting',()=>settingsFocusVisibleRow(-1));
   addAction('Next','Focus next visible setting',()=>settingsFocusVisibleRow(1));
   addAction('Section','Jump to the current settings section',()=>settingsFocusActiveSection());
-  addAction('Filter','Filter Settings to this setting ID',()=>settingsSearchForKey(key));
+  addAction('Filter','Filter Settings to this setting ID',()=>settingsSearchForKey(key,currentSettingsTarget));
   addAction('Copy ID','Copy setting ID',()=>settingsCopyText(key,'Setting ID'));
   addAction('JSON','Open settings.json and copy this setting id',()=>settingsConfigureRowInJson(row,key));
   host.appendChild(actions);
@@ -4032,7 +4033,7 @@ function settingsAddRowActions(row,opts){
     fav.classList.toggle('active',settingsIsFavorite(opts.key));
     add('JSON','Open settings.json and copy this setting id',()=>settingsConfigureRowInJson(row,opts.key));
   }
-  if(opts.key&&opts.searchable)add('⌕','Filter to this setting',()=>settingsSearchForKey(opts.key));
+  if(opts.key&&opts.searchable)add('⌕','Filter to this setting',()=>settingsSearchForKey(opts.key,opts.target||currentSettingsTarget));
   if(opts.meta&&opts.inputId)add('Default','Apply default value',()=>{const el=$(opts.inputId);if(el){setSettingsInputValue(el,opts.meta,settingDefaultValue(opts.meta));markSettingsModified();scheduleFilterSettings(0);showToast('Default applied: '+(opts.meta.key||opts.inputId),'info',1400)}});
   if(opts.meta&&opts.inputId)add('{}','Copy JSON setting entry',()=>{
     const el=$(opts.inputId);
@@ -25552,11 +25553,13 @@ window.settingsSearchHintKeydown=settingsSearchHintKeydown;
 window.resetVisibleModifiedSettings=resetVisibleModifiedSettings;
 window.selectSettingsTarget=selectSettingsTarget;
 window.scrollToSettingsSection=scrollToSettingsSection;
+window.settingsVisibleRows=settingsVisibleRows;
 window.settingsFocusVisibleRow=settingsFocusVisibleRow;
 window.settingsFocusBoundaryRow=settingsFocusBoundaryRow;
 window.settingsFocusPagedRow=settingsFocusPagedRow;
 window.settingsFocusActiveSection=settingsFocusActiveSection;
 window.settingsFocusSiblingSection=settingsFocusSiblingSection;
+window.settingsSearchForKey=settingsSearchForKey;
 window.settingsFilterNavCategories=settingsFilterNavCategories;
 window.settingsClearNavFilter=settingsClearNavFilter;
 window.settingsUiSelfCheckSnapshot=settingsUiSelfCheckSnapshot;

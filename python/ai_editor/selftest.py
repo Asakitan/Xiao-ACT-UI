@@ -9568,7 +9568,7 @@ console.log("frontend word separator behavior ok");
            and "function renderSettingsEmptyState(visible,total,parsed)" in html
            and "function settingsAddRowActions(row,opts)" in html
            and "function settingsCopyText(text,label)" in html
-            and "function settingsSearchForKey(key)" in html
+            and "function settingsSearchForKey(key,target)" in html
             and "function settingsHighlightRow(row)" in html
             and "function settingsOpenJsonView()" in html
             and "function settingsUseSearchHint(text)" in html
@@ -9680,6 +9680,7 @@ console.log("frontend word separator behavior ok");
            and "showToast(resets.length?'Reset '+resets.length+' visible modified setting'" in html
             and "window.settingsToggleFilterToken=settingsToggleFilterToken;" in html
             and "window.settingsClearFilters=settingsClearFilters;" in html
+            and "window.settingsVisibleRows=settingsVisibleRows;" in html
             and "window.settingsFocusActiveSection=settingsFocusActiveSection;" in html
             and "window.settingsFocusSiblingSection=settingsFocusSiblingSection;" in html
             and "window.settingsComputeReviewState=settingsComputeReviewState;" in html
@@ -9737,6 +9738,7 @@ console.log("frontend word separator behavior ok");
             and "id=\"settings-section-context\"" in html
             and "id=\"settings-current-detail\"" in html
             and "function settingsShowRowDetails(row)" in html
+            and "function settingsSearchForKey(key,target)" in html
             and "function installSettingsScrollSync()" in html
             and "function settingsVisibleSections()" in html
             and "function settingsSectionPosition(section)" in html
@@ -9766,6 +9768,8 @@ console.log("frontend word separator behavior ok");
             and "Focus next visible setting" in html
             and "Jump to the current settings section" in html
             and "Filter Settings to this setting ID" in html
+            and "settingsSearchForKey(key,currentSettingsTarget)" in html
+            and "settingsSearchForKey(opts.key,opts.target||currentSettingsTarget)" in html
             and "detail-chip position" in html
             and "SETTINGS_DENSITY_STORAGE_KEY='sao.aiEditor.settings.density.v1'" in html
             and "function settingsReadDensity()" in html
@@ -9808,6 +9812,7 @@ console.log("frontend word separator behavior ok");
             and "hasResultCount" in html
             and "hasNavFilterCount" in html
             and "hasSectionContextActions" in html
+            and "window.settingsSearchForKey=settingsSearchForKey;" in html
             and "window.settingsFilterNavCategories=settingsFilterNavCategories;" in html
             and "window.settingsUiSelfCheckSnapshot=settingsUiSelfCheckSnapshot;" in html
             and "String(ev.key||'').toLowerCase()==='n'" in html
@@ -9815,6 +9820,23 @@ console.log("frontend word separator behavior ok");
             and "fav.dataset.settingsFavoriteKey=opts.key;" in html
             and "renderSettingsReviewBar(targetStats);" in html
             and "renderSettingsReviewBar();" in html)
+    settings_smoke_path = os.path.join(
+        os.path.dirname(__file__), "tools", "settings_ui_browser_smoke.js")
+    settings_smoke_source = ""
+    if os.path.isfile(settings_smoke_path):
+        with open(settings_smoke_path, "r", encoding="utf-8") as fh:
+            settings_smoke_source = fh.read()
+    _check("frontend settings browser smoke script exists",
+           bool(settings_smoke_source)
+           and "window.settingsUiSelfCheckSnapshot()" in settings_smoke_source
+           and "window.openSettings();" in settings_smoke_source
+           and "window.settingsFilterNavCategories(\"editor\")" in settings_smoke_source
+           and "window.settingsClearNavFilter()" in settings_smoke_source
+           and "window.settingsSearchForKey(" in settings_smoke_source
+           and "settings.png" in settings_smoke_source
+           and "channel: \"msedge\"" in settings_smoke_source
+           and "PASS settings-ui-browser-smoke" in settings_smoke_source
+           and "SKIP settings-ui-browser-smoke playwright unavailable" in settings_smoke_source)
     _check("frontend settings saves scoped target updates",
            "function settingsBackendTargetName(target)" in html
            and "function settingTargetEntry(meta)" in html
