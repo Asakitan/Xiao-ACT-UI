@@ -7672,8 +7672,94 @@ function renderChatResponseNativeParts(body,payload,content){
   });
   applyAssistantResponseActionResults(wrap,payload||{});
   body.appendChild(wrap);
+  refreshAssistantNativeCardNavigation(body);
   syncAssistantActionTray();
   return true;
+}
+function assistantNativeCardKind(el){
+  if(!el)return 'part';
+  if(el.classList&&el.classList.contains('chat-response-ref'))return 'reference';
+  if(el.classList&&(el.classList.contains('chat-change-card')||el.classList.contains('chat-response-edit-row')))return 'edit';
+  if(el.classList&&(el.classList.contains('chat-file-tree')||el.classList.contains('chat-file-tree-row')))return 'tree';
+  if(el.dataset&&el.dataset.assistantActionKey)return 'action';
+  if(el.classList&&(el.classList.contains('chat-inline-action')||el.classList.contains('chat-response-command')))return 'action';
+  if(el.classList&&(el.classList.contains('chat-response-confirmation')||el.classList.contains('chat-response-questions')))return 'action';
+  return 'part';
+}
+function assistantNativeCardLabel(el,index,total){
+  const kind=assistantNativeCardKind(el);
+  const text=String((el&&el.getAttribute&&el.getAttribute('aria-label'))||(el&&el.title)||((el&&el.textContent)||'')).replace(/\s+/g,' ').trim().slice(0,96);
+  return 'Assistant '+kind+' card '+(index+1)+' of '+total+(text?': '+text:'');
+}
+function assistantNativeCardList(body){
+  if(!body||!body.querySelectorAll)return [];
+  const selectors=[
+    '.chat-response-ref',
+    '.chat-change-card',
+    '.chat-response-edit-row',
+    '.chat-file-tree',
+    '.chat-file-tree-row.openable',
+    '.chat-inline-action',
+    '.chat-response-command',
+    '[data-assistant-action-key]',
+    '.chat-response-confirmation',
+    '.chat-response-questions'
+  ].join(',');
+  return Array.from(body.querySelectorAll(selectors)).filter(el=>!el.disabled);
+}
+function focusAssistantNativeCard(body,index){
+  const cards=assistantNativeCardList(body);
+  if(!cards.length)return false;
+  const next=Math.max(0,Math.min(cards.length-1,Number(index)||0));
+  cards.forEach((card,i)=>{card.tabIndex=i===next?0:-1;card.dataset.chatNativeCardActive=i===next?'true':'false'});
+  const target=cards[next];
+  try{target.focus({preventScroll:true})}catch(_e){target.focus()}
+  target.scrollIntoView({block:'nearest'});
+  const panel=$('chat-panel');
+  if(panel){
+    panel.dataset.chatNativeFocusedIndex=String(next);
+    panel.dataset.chatNativeFocusedKind=assistantNativeCardKind(target);
+  }
+  return true;
+}
+function refreshAssistantNativeCardNavigation(body){
+  if(!body||!body.querySelectorAll)return null;
+  const cards=assistantNativeCardList(body);
+  const counts={reference:0,edit:0,tree:0,action:0,part:0};
+  cards.forEach((card,index)=>{
+    const kind=assistantNativeCardKind(card);
+    counts[kind]=(counts[kind]||0)+1;
+    card.dataset.chatNativeCard='true';
+    card.dataset.chatNativeCardKind=kind;
+    card.dataset.chatNativeCardIndex=String(index);
+    card.setAttribute('aria-label',assistantNativeCardLabel(card,index,cards.length));
+    if(!card.getAttribute('role')&&card.tagName.toLowerCase()!=='button')card.setAttribute('role','button');
+    card.tabIndex=index===0?0:-1;
+  });
+  body.dataset.chatNativeCardCount=String(cards.length);
+  body.dataset.chatNativeReferenceCards=String(counts.reference||0);
+  body.dataset.chatNativeEditCards=String(counts.edit||0);
+  body.dataset.chatNativeTreeCards=String(counts.tree||0);
+  body.dataset.chatNativeActionCards=String(counts.action||0);
+  if(!body.dataset.chatNativeKeyboardBound){
+    body.dataset.chatNativeKeyboardBound='true';
+    body.addEventListener('keydown',ev=>{
+      const target=ev.target&&ev.target.closest?ev.target.closest('[data-chat-native-card="true"]'):null;
+      if(!target||!body.contains(target))return;
+      const cards=assistantNativeCardList(body);
+      const current=Math.max(0,cards.indexOf(target));
+      let next=-1;
+      if(ev.key==='ArrowRight'||ev.key==='ArrowDown')next=(current+1)%cards.length;
+      else if(ev.key==='ArrowLeft'||ev.key==='ArrowUp')next=(current-1+cards.length)%cards.length;
+      else if(ev.key==='Home')next=0;
+      else if(ev.key==='End')next=cards.length-1;
+      else if((ev.key==='Enter'||ev.key===' ')&&target.tagName.toLowerCase()!=='button'){ev.preventDefault();target.click();return;}
+      if(next<0)return;
+      ev.preventDefault();
+      focusAssistantNativeCard(body,next);
+    });
+  }
+  return {total:cards.length,counts};
 }
 function assistantMergeNativeResponsePayloads(payloads){
   const merged={content:'',responseParts:[],contentReferences:[],usedContext:[],fileTrees:[],usage:{}};
@@ -8155,6 +8241,7 @@ async function runAssistantUiSelfCheck(opts){
   const changeSetRestore=assistantChangeSetRestoreStateSnapshot();
   const actionResultRestore=assistantActionResultRestoreSmokeSnapshot();
   const restoredHistoryBanner=assistantRestoredHistoryBannerSmokeSnapshot();
+  const nativeCardKeyboard=assistantNativeCardKeyboardSmokeSnapshot();
   const forkLineage=assistantForkLineageSmokeSnapshot();
   assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready',providerPopup.shown&&providerPopup.optionCount>=1&&providerPopup.focusableCount===providerPopup.optionCount&&providerPopup.keyboardReady,JSON.stringify(providerPopup));
   assistantUiSelfCheckRecord(checks,'model-popup-configured-models-ready',modelPopup.shown&&modelPopup.optionCount>=1&&modelPopup.focusableCount===modelPopup.optionCount&&modelPopup.keyboardReady,JSON.stringify(modelPopup));
@@ -8175,6 +8262,8 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'restored-history-banner-navigation-ready',restoredHistoryBanner.actionKinds.includes('references')&&restoredHistoryBanner.actionKinds.includes('changes')&&restoredHistoryBanner.actionKinds.includes('tree')&&restoredHistoryBanner.actionKinds.includes('actions')&&restoredHistoryBanner.actionKinds.includes('continue')&&restoredHistoryBanner.disabledActions.length===0&&restoredHistoryBanner.focusChanges&&restoredHistoryBanner.focusRefs&&restoredHistoryBanner.focusTree&&restoredHistoryBanner.focusActions,JSON.stringify(restoredHistoryBanner));
   assistantUiSelfCheckRecord(checks,'restored-history-transcript-groups-ready',restoredHistoryBanner.groupReferences>=2&&restoredHistoryBanner.groupChanges===1&&restoredHistoryBanner.groupTree===1&&restoredHistoryBanner.groupActions>=2&&restoredHistoryBanner.groupKinds.includes('references')&&restoredHistoryBanner.groupKinds.includes('changes')&&restoredHistoryBanner.groupKinds.includes('tree')&&restoredHistoryBanner.groupKinds.includes('actions')&&restoredHistoryBanner.groupTargets.includes('file:///workspace/restored.ts')&&restoredHistoryBanner.groupLabels.includes('restored.ts'),JSON.stringify(restoredHistoryBanner));
   assistantUiSelfCheckRecord(checks,'restored-history-banner-keyboard-aria-ready',restoredHistoryBanner.toolbarRole==='toolbar'&&restoredHistoryBanner.toolbarLabel==='Restored history actions'&&restoredHistoryBanner.keyboardItems>=8&&restoredHistoryBanner.keyboardMoved&&restoredHistoryBanner.keyboardFocusedAction,JSON.stringify(restoredHistoryBanner));
+  assistantUiSelfCheckRecord(checks,'native-response-card-navigation-ready',nativeCardKeyboard.cardCount>=8&&nativeCardKeyboard.bodyCount===nativeCardKeyboard.cardCount&&nativeCardKeyboard.refs>=1&&nativeCardKeyboard.edits>=1&&nativeCardKeyboard.trees>=1&&nativeCardKeyboard.actions>=2&&nativeCardKeyboard.kinds.includes('reference')&&nativeCardKeyboard.kinds.includes('edit')&&nativeCardKeyboard.kinds.includes('tree')&&nativeCardKeyboard.kinds.includes('action'),JSON.stringify(nativeCardKeyboard));
+  assistantUiSelfCheckRecord(checks,'native-response-card-keyboard-ready',nativeCardKeyboard.moved&&nativeCardKeyboard.endMoved&&nativeCardKeyboard.rovingZero===1&&nativeCardKeyboard.panelFocusedKind&&nativeCardKeyboard.labels.every(label=>label.includes('Assistant ')),JSON.stringify(nativeCardKeyboard));
   assistantUiSelfCheckRecord(checks,'fork-lineage-history-visible',forkLineage.itemExists&&forkLineage.parentResource==='sao-ai-chat://local/parent-lineage-selfcheck'&&forkLineage.parentTitle==='Parent Assistant Session'&&forkLineage.parentId==='parent-lineage-selfcheck'&&forkLineage.branchChildren===1&&forkLineage.labelTitle.includes('Forked from: Parent Assistant Session')&&forkLineage.labelTitle.includes('Branches: 1')&&forkLineage.chipLabels.includes('fork: Parent Assistant Session')&&forkLineage.chipLabels.includes('1 branch')&&forkLineage.chipKinds.some(kind=>kind.includes('lineage'))&&forkLineage.actionLabels.includes('parent')&&forkLineage.actionLabels.includes('branches')&&forkLineage.actionLabels.includes('fork')&&forkLineage.actionKinds.includes('parent-session')&&forkLineage.actionKinds.includes('branch-sessions')&&forkLineage.parentButtonEnabled&&forkLineage.branchesButtonEnabled&&forkLineage.disabledActions.length===0&&forkLineage.searchMatches,JSON.stringify(forkLineage));
   assistantUiSelfCheckRecord(checks,'fork-lineage-chip-visible',forkLineage.chipLabels.includes('fork: Parent Assistant Session')&&forkLineage.chipLabels.includes('1 branch')&&forkLineage.chipKinds.some(kind=>kind.includes('lineage'))&&forkLineage.labelTitle.includes('Forked from: Parent Assistant Session')&&forkLineage.labelTitle.includes('Branches: 1'),JSON.stringify(forkLineage));
   assistantUiSelfCheckRecord(checks,'fork-branch-navigation-visible',forkLineage.parentId==='parent-lineage-selfcheck'&&forkLineage.branchChildren===1&&forkLineage.actionKinds.includes('parent-session')&&forkLineage.actionKinds.includes('branch-sessions')&&forkLineage.parentButtonEnabled&&forkLineage.branchesButtonEnabled&&forkLineage.disabledActions.length===0&&forkLineage.searchMatches,JSON.stringify(forkLineage));
@@ -8349,6 +8438,7 @@ function renderChatResponseReferences(body,content,payload){
   }
   renderChatFileTrees(wrap,fileTrees);
   body.appendChild(wrap);
+  refreshAssistantNativeCardNavigation(body);
 }
 window.removeChatContextAttachment=removeChatContextAttachment;
 function appendApiKeyError(){
@@ -17730,6 +17820,47 @@ function assistantRestoredHistoryBannerSmokeSnapshot(){
   }
   refreshChatMessageNavigationState();
   updateAssistantSurfaceState();
+  return snapshot;
+}
+function assistantNativeCardKeyboardSmokeSnapshot(){
+  const body=document.createElement('div');
+  body.className='msg-body';
+  document.body.appendChild(body);
+  const payload={
+    content:'native card keyboard selfcheck',
+    responseParts:[
+      {kind:'modifiedFilesConfirmation',files:[{uri:'file:///workspace/native-card.ts',title:'native-card.ts',insertions:3,deletions:1}]},
+      {kind:'confirmation',id:'native-card-confirm',callbackId:'native-card-callback',title:'Native card action',message:'Submit native action',buttons:[{label:'Apply',action:'apply',value:'apply'}]}
+    ],
+    contentReferences:[{kind:'anchor',path:'file:///workspace/native-card.ts',label:'native-card.ts',openable:true}],
+    fileTrees:[[{name:'native-card.ts',path:'file:///workspace/native-card.ts'}]]
+  };
+  renderChatResponseNativeParts(body,payload,'native card keyboard selfcheck');
+  renderChatResponseReferences(body,'native card keyboard selfcheck',payload);
+  const cards=assistantNativeCardList(body);
+  const first=cards[0]||null,second=cards[1]||null,last=cards[cards.length-1]||null;
+  if(first)first.focus();
+  if(first)first.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true,cancelable:true}));
+  const moved=!!(second&&(document.activeElement===second||Number(second.tabIndex)===0)&&Number(first.tabIndex)===-1);
+  if(second)second.dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true,cancelable:true}));
+  const endMoved=!!(last&&(document.activeElement===last||Number(last.tabIndex)===0));
+  const snapshot={
+    cardCount:cards.length,
+    bodyCount:Number(body.dataset.chatNativeCardCount||0),
+    refs:Number(body.dataset.chatNativeReferenceCards||0),
+    edits:Number(body.dataset.chatNativeEditCards||0),
+    trees:Number(body.dataset.chatNativeTreeCards||0),
+    actions:Number(body.dataset.chatNativeActionCards||0),
+    kinds:cards.map(el=>String(el.dataset.chatNativeCardKind||'')),
+    labels:cards.map(el=>String(el.getAttribute('aria-label')||'')),
+    roles:cards.map(el=>String(el.getAttribute('role')||el.tagName.toLowerCase())),
+    rovingZero:cards.filter(el=>Number(el.tabIndex)===0).length,
+    moved,
+    endMoved,
+    panelFocusedKind:String(($('chat-panel')&&$('chat-panel').dataset.chatNativeFocusedKind)||''),
+    panelFocusedIndex:String(($('chat-panel')&&$('chat-panel').dataset.chatNativeFocusedIndex)||'')
+  };
+  body.remove();
   return snapshot;
 }
 function assistantForkLineageSmokeSnapshot(){

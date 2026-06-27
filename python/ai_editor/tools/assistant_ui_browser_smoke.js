@@ -126,6 +126,8 @@ async function main() {
     "restored-history-banner-navigation-ready",
     "restored-history-transcript-groups-ready",
     "restored-history-banner-keyboard-aria-ready",
+    "native-response-card-navigation-ready",
+    "native-response-card-keyboard-ready",
     "fork-branch-compare-visible",
     "fork-branch-compare-detail-ready",
     "workflow-popup-modes-ready",

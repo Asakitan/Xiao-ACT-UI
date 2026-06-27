@@ -4185,6 +4185,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "actions.setAttribute('role','toolbar');" in html
            and "banner.dataset.restoreGroupReferences=String((groups.references||[]).length);" in html
            and "banner.dataset.restoreKeyboardItems=String(items.length);" in html
+           and "function refreshAssistantNativeCardNavigation(body)" in html
+           and "function assistantNativeCardKeyboardSmokeSnapshot()" in html
+           and "card.dataset.chatNativeCard='true';" in html
+           and "body.dataset.chatNativeCardCount=String(cards.length);" in html
+           and "panel.dataset.chatNativeFocusedKind=assistantNativeCardKind(target);" in html
            and "panel.dataset.restoredHistoryId=banner.dataset.restoreHistoryId;" in html
            and "focusLoadedHistoryNativeSection('actions','')" in html
            and "assistantSessionOpenResource(session.parentSessionResource)" in html
@@ -5089,6 +5094,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'restored-history-banner-navigation-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'restored-history-transcript-groups-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'restored-history-banner-keyboard-aria-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'native-response-card-navigation-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'native-response-card-keyboard-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'fork-branch-compare-visible'" in html
            and "assistantUiSelfCheckRecord(checks,'fork-branch-compare-detail-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready'" in html
@@ -5172,6 +5179,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "restored-history-banner-navigation-ready" in smoke_source
            and "restored-history-transcript-groups-ready" in smoke_source
            and "restored-history-banner-keyboard-aria-ready" in smoke_source
+           and "native-response-card-navigation-ready" in smoke_source
+           and "native-response-card-keyboard-ready" in smoke_source
            and "fork-branch-compare-visible" in smoke_source
            and "fork-branch-compare-detail-ready" in smoke_source
            and "workflow-result-state-rendered" in smoke_source
