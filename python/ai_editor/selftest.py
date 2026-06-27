@@ -9741,16 +9741,23 @@ console.log("frontend word separator behavior ok");
            and "id=\"extension-runtime-filter-text\"" in html
            and "id=\"extension-runtime-filter-kind\"" in html
            and "id=\"extension-runtime-filter-source\"" in html
+           and "function extensionRuntimeSurfaceResourceUri(item)" in html
+           and "function extensionRuntimeSurfaceAction(kind,item,row)" in html
            and "function extensionRuntimeSurfaceRows(data)" in html
            and "function extensionRuntimeFilterState()" in html
            and "function extensionRuntimeRowMatchesFilter(row,filter)" in html
            and "function populateExtensionRuntimeKindFilter(rows)" in html
            and "function updateExtensionRuntimeFilterSummary(visible,total)" in html
+           and "function extensionRuntimeSurfaceRowByKey(key)" in html
+           and "function extensionRuntimeSurfaceContainerById(id)" in html
+           and "async function openExtensionRuntimeViewContainer(containerId)" in html
+           and "async function openExtensionRuntimeSurface(rowOrKey)" in html
            and "function selectExtensionRuntimeRow(rowEl)" in html
            and "function applyExtensionRuntimeSurfaceFilter()" in html
            and "let extensionRuntimeSurfaceCache=null;" in html
            and "let extensionRuntimeSurfaceInflight=null;" in html
            and "let extensionRuntimeSurfaceRowsLast=[];" in html
+           and "let extensionRuntimeSurfaceDataLast=null;" in html
            and "const EXTENSION_RUNTIME_SURFACE_CACHE_MS=900;" in html
            and "function extensionRuntimeSurfaceCacheFresh(force)" in html
            and "function setExtensionRuntimeSurfaceLoading(loading)" in html
@@ -9759,6 +9766,7 @@ console.log("frontend word separator behavior ok");
            and "window.renderExtensionRuntimeSurfaces=renderExtensionRuntimeSurfaces;" in html
            and "window.applyExtensionRuntimeSurfaceFilter=applyExtensionRuntimeSurfaceFilter;" in html
            and "window.extensionRuntimeSurfaceRows=extensionRuntimeSurfaceRows;" in html
+           and "window.openExtensionRuntimeSurface=openExtensionRuntimeSurface;" in html
            and "call('list_extension_runtime_surfaces',typeof commandPaletteContext==='function'?commandPaletteContext():{})" in html
            and "refreshRuntimeSupport();\n  renderExtensionRuntimeSurfaces();" in html
            and ".extension-runtime-refresh:disabled" in html
@@ -9767,9 +9775,20 @@ console.log("frontend word separator behavior ok");
            and ".extension-runtime-tag" in html
            and "source:item.runtimeOnly?'runtime-only':(runtime?'runtime':'manifest')" in html
            and "row.extensionId" in html
+           and "row.action=extensionRuntimeSurfaceAction(kind,item,row);" in html
+           and "row.openable=row.action&&row.action.type!=='inspect';" in html
+           and "row.key=[row.kind,row.id,row.command,row.extensionId,row.source,row.container,row.resourceUri].join('|');" in html
            and "panel.dataset.runtimeSurfaceCount=String(summary.dynamicSurfaces||rows.length||0);" in html
            and "panel.dataset.runtimeVisibleCount=String(visible);" in html
            and "panel.dataset.runtimeTotalCount=String(total);" in html
+           and "panel.dataset.runtimeLastAction=action.type||'inspect';" in html
+           and "panel.dataset.runtimeLastActionTarget=action.target||'';" in html
+           and "el.dataset.key=row.key||'';" in html
+           and "el.dataset.container=row.container||'';" in html
+           and "el.dataset.resourceUri=row.resourceUri||'';" in html
+           and "el.dataset.action=row.action&&row.action.type||'inspect';" in html
+           and "el.dataset.actionTarget=row.action&&row.action.target||'';" in html
+           and "el.dataset.openable=row.openable?'1':'0';" in html
            and "el.dataset.search=row.searchText||'';" in html
            and "el.setAttribute('aria-selected','false');" in html
            and "el.setAttribute('role','listitem');" in html
@@ -9781,6 +9800,9 @@ console.log("frontend word separator behavior ok");
            and ".extension-runtime-filter" in html
            and ".extension-runtime-chip.filterable" in html
            and ".extension-runtime-row.selected" in html
+           and ".extension-runtime-action" in html
+           and "action.onclick=e=>{e.preventDefault();e.stopPropagation();selectExtensionRuntimeRow(el);void openExtensionRuntimeSurface(row)};" in html
+           and "el.addEventListener('dblclick',e=>{e.preventDefault();void openExtensionRuntimeSurface(row)});" in html
            and "['Runtime',rows.filter(row=>row.ready).length]" in html
            and "['Manifest',rows.filter(row=>!row.ready).length]" in html
            and "(data.terminalProfiles||[]).slice(0,8).forEach(item=>push('TerminalProfile'" in html
@@ -11515,6 +11537,13 @@ console.log("extension setting schema helpers ok");
            and "showCustomEditorPlaceholder(customHost" in html
            and "renderNotebookOutputs(notebookOutputHost" in html
            and "renderExtensionRuntimeSurfacePanel(runtimeData);" in html
+           and "viewContainers:[fixtureItem]" in html
+           and "runtimeOpenableRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(item=>item.dataset.openable==='1').length:0" in html
+           and "runtimeActionTypes:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.action||''):[]" in html
+           and "runtimeActionTargets:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.actionTarget||'').filter(Boolean):[]" in html
+           and "runtimeActionButtons:runtimeList?runtimeList.querySelectorAll('.extension-runtime-action').length:0" in html
+           and "runtimeRowKeys:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.key||'').filter(Boolean).length:0" in html
+           and "runtimeContainerRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(item=>item.dataset.container==='selftest.dynamic.container').length:0" in html
            and "showExtensionActionMenu(2,2" in html
            and "snapshot.pass=snapshot.containerRole==='group'" in html
            and "snapshot.treeGroup&&snapshot.treeRole==='tree'" in html
@@ -11523,6 +11552,14 @@ console.log("extension setting schema helpers ok");
            and "snapshot.notebookOutputItems===3" in html
            and "snapshot.runtimeRows>=11" in html
            and "snapshot.runtimeChips>=13" in html
+           and "snapshot.runtimeOpenableRows>=5" in html
+           and "snapshot.runtimeActionButtons===snapshot.runtimeRows" in html
+           and "snapshot.runtimeRowKeys===snapshot.runtimeRows" in html
+           and "snapshot.runtimeContainerRows>=2" in html
+           and "['open-view','open-webview','open-file','run-command'].every(kind=>snapshot.runtimeActionTypes.includes(kind))" in html
+           and "snapshot.runtimeActionTargets.includes('selftest.dynamic.tree')" in html
+           and "snapshot.runtimeActionTargets.includes('selftest.dynamic.webview')" in html
+           and "snapshot.runtimeActionTargets.includes('selftest.run')" in html
            and "runtimeListRole:runtimeList?runtimeList.getAttribute('role'):''" in html
            and "runtimeDatasetSources:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.source||''):[]" in html
            and "runtimePanelCount:(()=>{const panel=$('extension-runtime-panel');return panel?panel.dataset.runtimeSurfaceCount:''})()" in html

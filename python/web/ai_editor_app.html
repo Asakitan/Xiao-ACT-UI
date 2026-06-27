@@ -1569,7 +1569,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .extension-runtime-chip.filterable:hover,.extension-runtime-chip.filterable:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
 .extension-runtime-chip.active { color:var(--fg-accent); border-color:var(--fg-accent); background:color-mix(in srgb,var(--fg-accent) 7%,transparent); }
 .extension-runtime-list { display:grid; gap:1px; padding:4px; }
-.extension-runtime-row { display:grid; grid-template-columns:92px minmax(0,1fr) auto; gap:7px; align-items:center; min-height:26px; padding:4px 6px; border-radius:4px; color:var(--fg-dim); font-size:11px; }
+.extension-runtime-row { display:grid; grid-template-columns:92px minmax(0,1fr) auto auto; gap:7px; align-items:center; min-height:26px; padding:4px 6px; border-radius:4px; color:var(--fg-dim); font-size:11px; }
 .extension-runtime-row:hover,.extension-runtime-row:focus { background:var(--bg-hover); outline:1px solid color-mix(in srgb,var(--border-focus) 40%,transparent); outline-offset:-1px; }
 .extension-runtime-row.selected { background:color-mix(in srgb,var(--fg-accent) 8%,var(--bg-hover)); outline:1px solid color-mix(in srgb,var(--border-focus) 55%,transparent); outline-offset:-1px; }
 .extension-runtime-kind { color:var(--fg-accent); font:10px var(--mono); text-transform:uppercase; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -1583,6 +1583,9 @@ pre.code-block code .type { color:var(--fg-type); }
 .extension-runtime-state { border:1px solid var(--border); border-radius:999px; padding:1px 6px; font:10px var(--mono); color:var(--fg-dim); }
 .extension-runtime-state.ready { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 50%,var(--border)); }
 .extension-runtime-state.pending { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 50%,var(--border)); }
+.extension-runtime-action { width:22px; height:22px; border:1px solid transparent; border-radius:4px; background:transparent; color:var(--fg-dim); padding:0; cursor:pointer; }
+.extension-runtime-action:hover,.extension-runtime-action:focus { color:var(--fg); background:var(--bg-hover); border-color:var(--border-focus); outline:none; }
+.extension-runtime-action:disabled { opacity:.35; cursor:default; background:transparent; border-color:transparent; }
 .extension-runtime-empty { padding:8px; color:var(--fg-dim); font-size:11px; }
 .modal label.settings-danger { border:1px solid #f14c4c80; border-radius:var(--radius); padding:8px; background:#ff000012; }
 .modal input[type="checkbox"] { width:auto; }
@@ -27727,23 +27730,52 @@ async function refreshRuntimeSupport(){
   const r=await call('get_runtime_support_summary');
   if(r&&!r.error)renderRuntimeSupport(r);
 }
+function extensionRuntimeSurfaceResourceUri(item){
+  if(!item||typeof item!=='object')return '';
+  const direct=item.resourceUri||item.resource_uri||item.uri||item.path||item.filePath||item.file_path;
+  if(direct)return String(direct);
+  const states=Array.isArray(item.states)?item.states:[];
+  for(const state of states){
+    if(!state||typeof state!=='object')continue;
+    const value=state.resourceUri||state.resource_uri||state.uri||state.path||state.filePath||state.file_path;
+    if(value)return String(value);
+  }
+  return '';
+}
+function extensionRuntimeSurfaceAction(kind,item,row){
+  const command=String((item&&item.command)||row.command||'').trim();
+  const id=String(row.id||'').trim();
+  const container=String(row.container||'').trim();
+  const uri=String(row.resourceUri||'').trim();
+  if(kind==='TreeView'&&id)return {type:'open-view',label:'Open',title:'Open dynamic TreeView',target:id,container};
+  if(kind==='WebviewView'&&id)return {type:'open-webview',label:'Open',title:'Open dynamic WebviewView',target:id,container};
+  if((kind==='Command'||kind==='Menu')&&command)return {type:'run-command',label:'Run',title:'Run extension command',target:command};
+  if((kind==='CustomEditor'||kind==='Notebook')&&uri)return {type:'open-file',label:'Open',title:'Open contributed editor resource',target:uri};
+  return {type:'inspect',label:'Inspect',title:'Select runtime surface metadata',target:id||command||uri||row.label||''};
+}
 function extensionRuntimeSurfaceRows(data){
   data=data||{};
   const rows=[];
   const push=(kind,item,label,meta,ready)=>{
     const runtime=ready!==false;
     const extensionId=String(item.extensionId||item.extension_id||item._extensionId||'');
+    const resourceUri=extensionRuntimeSurfaceResourceUri(item);
     const row={
       kind,
       label:String(label||item.id||item.command||item.viewType||item.type||''),
       meta:String(meta||item.extensionId||item.container||''),
       extensionId,
+      container:String(item.container||item.viewContainer||item.view_container||''),
+      resourceUri,
       source:item.runtimeOnly?'runtime-only':(runtime?'runtime':'manifest'),
       ready:runtime,
       command:String(item.command||''),
       id:String(item.id||item.viewType||item.type||item.name||item.command||''),
     };
-    row.searchText=[row.kind,row.label,row.meta,row.extensionId,row.source,row.command,row.id].join(' ').toLowerCase();
+    row.action=extensionRuntimeSurfaceAction(kind,item,row);
+    row.openable=row.action&&row.action.type!=='inspect';
+    row.key=[row.kind,row.id,row.command,row.extensionId,row.source,row.container,row.resourceUri].join('|');
+    row.searchText=[row.kind,row.label,row.meta,row.extensionId,row.container,row.resourceUri,row.source,row.command,row.id,row.action&&row.action.type].join(' ').toLowerCase();
     rows.push(row);
   };
   (data.treeViews||[]).slice(0,8).forEach(item=>push('TreeView',item,item.name||item.id,item.id+' · '+(item.container||'runtime'),item.runtimeAvailable!==false));
@@ -27767,6 +27799,7 @@ function extensionRuntimeSurfaceRows(data){
 let extensionRuntimeSurfaceCache=null;
 let extensionRuntimeSurfaceInflight=null;
 let extensionRuntimeSurfaceRowsLast=[];
+let extensionRuntimeSurfaceDataLast=null;
 const EXTENSION_RUNTIME_SURFACE_CACHE_MS=900;
 function extensionRuntimeSurfaceCacheFresh(force){
   return !force&&extensionRuntimeSurfaceCache&&Date.now()-extensionRuntimeSurfaceCache.time<EXTENSION_RUNTIME_SURFACE_CACHE_MS;
@@ -27804,6 +27837,71 @@ function updateExtensionRuntimeFilterSummary(visible,total){
     const base='Runtime surfaces: '+visible+' visible of '+total+' rows';
     const cached=panel&&panel.dataset.cacheHit?(' · cached in '+panel.dataset.cacheHit):'';
     statusEl.textContent=base+cached+'.';
+  }
+}
+function extensionRuntimeSurfaceRowByKey(key){
+  return extensionRuntimeSurfaceRowsLast.find(row=>row&&row.key===key)||null;
+}
+function extensionRuntimeSurfaceContainerById(id){
+  const key=String(id||'').trim();
+  const data=extensionRuntimeSurfaceDataLast||{};
+  const containers=Array.isArray(data.viewContainers)?data.viewContainers:[];
+  return containers.find(item=>String(item&&item.id||'')===key)||null;
+}
+async function openExtensionRuntimeViewContainer(containerId){
+  const id=String(containerId||'').trim();
+  if(!id)return false;
+  if(['explorer','scm','debug','test'].includes(id)){switchSidebar(id==='scm'?'scm':'explorer');return true}
+  let item=extensionRuntimeSurfaceContainerById(id);
+  if(!item){
+    try{
+      const r=await call('list_extension_container_views',id);
+      item=(r&&r.item)||null;
+    }catch(_e){item=null}
+  }
+  if(item&&typeof activateExtensionActivityItem==='function'){
+    activateExtensionActivityItem(item);
+    return true;
+  }
+  switchSidebar('extensions');
+  return false;
+}
+async function openExtensionRuntimeSurface(rowOrKey){
+  const row=typeof rowOrKey==='string'?extensionRuntimeSurfaceRowByKey(rowOrKey):rowOrKey;
+  const panel=$('extension-runtime-panel'),status=$('extension-runtime-status');
+  if(!row||!row.action)return false;
+  const action=row.action;
+  if(panel){
+    panel.dataset.runtimeLastAction=action.type||'inspect';
+    panel.dataset.runtimeLastActionTarget=action.target||'';
+  }
+  try{
+    if(action.type==='open-view'){
+      await openExtensionRuntimeViewContainer(row.container);
+      if(status)status.textContent='Opened dynamic view '+row.label+'.';
+      return true;
+    }
+    if(action.type==='open-webview'){
+      revealExtensionWebviewPanel({view_id:action.target,title:row.label,preserveFocus:false});
+      if(row.container)await openExtensionRuntimeViewContainer(row.container);
+      if(status)status.textContent='Opened webview surface '+row.label+'.';
+      return true;
+    }
+    if(action.type==='run-command'){
+      const result=await call('execute_command',action.target);
+      if(status)status.textContent=callSucceededOrApplied(result)?'Ran extension command '+action.target+'.':'Command failed: '+callFailedMessage(result,'backend unavailable');
+      return callSucceededOrApplied(result);
+    }
+    if(action.type==='open-file'){
+      const opened=await openWorkspaceFile(action.target);
+      if(status)status.textContent=opened?'Opened runtime resource '+row.label+'.':'Unable to open runtime resource '+row.label+'.';
+      return !!opened;
+    }
+    if(status)status.textContent='Selected '+row.kind+': '+row.label+'.';
+    return false;
+  }catch(e){
+    if(status)status.textContent='Runtime surface action failed: '+String(e&&e.message||e);
+    return false;
   }
 }
 function selectExtensionRuntimeRow(rowEl){
@@ -27849,6 +27947,7 @@ function renderExtensionRuntimeSurfacePanel(data){
   const panel=$('extension-runtime-panel'),summaryEl=$('extension-runtime-summary'),listEl=$('extension-runtime-list'),statusEl=$('extension-runtime-status');
   if(!summaryEl||!listEl)return;
   data=data||{};
+  extensionRuntimeSurfaceDataLast=data;
   const summary=data.summary||{};
   const rows=extensionRuntimeSurfaceRows(data);
   extensionRuntimeSurfaceRowsLast=rows.slice();
@@ -27908,9 +28007,15 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.tabIndex=0;
       el.setAttribute('role','listitem');
       el.dataset.kind=row.kind;
+      el.dataset.key=row.key||'';
       el.dataset.source=row.source;
       el.dataset.extensionId=row.extensionId||'';
+      el.dataset.container=row.container||'';
+      el.dataset.resourceUri=row.resourceUri||'';
       el.dataset.ready=row.ready?'1':'0';
+      el.dataset.action=row.action&&row.action.type||'inspect';
+      el.dataset.actionTarget=row.action&&row.action.target||'';
+      el.dataset.openable=row.openable?'1':'0';
       el.dataset.search=row.searchText||'';
       el.dataset.label=row.label||'';
       el.setAttribute('aria-selected','false');
@@ -27927,7 +28032,18 @@ function renderExtensionRuntimeSurfacePanel(data){
       if(row.meta){const detail=document.createElement('span');detail.textContent=row.meta;meta.appendChild(detail)}
       mid.appendChild(main);mid.appendChild(meta);
       const state=document.createElement('div');state.className='extension-runtime-state '+(row.ready?'ready':'pending');state.textContent=row.ready?'ready':'pending';
-      el.appendChild(kind);el.appendChild(mid);el.appendChild(state);
+      const action=document.createElement('button');
+      action.type='button';
+      action.className='extension-runtime-action';
+      action.textContent=row.openable?'↗':'i';
+      action.title=row.action&&row.action.title||'Inspect runtime surface';
+      action.setAttribute('aria-label',(row.action&&row.action.label||'Inspect')+' '+row.kind+' '+row.label);
+      action.dataset.action=row.action&&row.action.type||'inspect';
+      action.disabled=!row.action;
+      action.onclick=e=>{e.preventDefault();e.stopPropagation();selectExtensionRuntimeRow(el);void openExtensionRuntimeSurface(row)};
+      action.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();action.click()}};
+      el.addEventListener('dblclick',e=>{e.preventDefault();void openExtensionRuntimeSurface(row)});
+      el.appendChild(kind);el.appendChild(mid);el.appendChild(state);el.appendChild(action);
       listEl.appendChild(el);
     });
   }
@@ -27969,6 +28085,7 @@ async function renderExtensionRuntimeSurfaces(force){
 window.renderExtensionRuntimeSurfaces=renderExtensionRuntimeSurfaces;
 window.applyExtensionRuntimeSurfaceFilter=applyExtensionRuntimeSurfaceFilter;
 window.extensionRuntimeSurfaceRows=extensionRuntimeSurfaceRows;
+window.openExtensionRuntimeSurface=openExtensionRuntimeSurface;
 
 async function searchExtensions(query,page){
   if(!query) query=$('ext-search')?$('ext-search').value.trim():'';
@@ -29274,10 +29391,11 @@ function extensionRuntimeDomSelfCheckSnapshot(){
 
     const runtimeData={
       summary:{treeViews:1,webviewViews:1,customEditors:1,notebooks:1,commands:1,menus:1,terminalProfiles:1,languageModelTools:1,languageModelProviders:1,chatParticipants:1,chatContextProviders:1,dynamicSurfaces:11},
+      viewContainers:[fixtureItem],
       treeViews:[{id:'selftest.dynamic.tree',name:'Runtime Tree',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true}],
       webviewViews:[{id:'selftest.dynamic.webview',name:'Runtime Webview',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true}],
-      customEditors:[{viewType:'selftest.customEditor',displayName:'Custom Fixture',extensionId:'selftest.extension',stateCount:1,runtimeAvailable:true}],
-      notebooks:[{type:'selftest-notebook',displayName:'Selftest Notebook',extensionId:'selftest.extension',serializerCount:1,controllerCount:1,runtimeAvailable:true}],
+      customEditors:[{viewType:'selftest.customEditor',displayName:'Custom Fixture',extensionId:'selftest.extension',stateCount:1,states:[{uri:'custom.fixture'}],runtimeAvailable:true}],
+      notebooks:[{type:'selftest-notebook',displayName:'Selftest Notebook',extensionId:'selftest.extension',serializerCount:1,controllerCount:1,uri:'selftest.notebook',runtimeAvailable:true}],
       commands:[{command:'selftest.run',title:'Run Fixture',source:'extension',extensionId:'selftest.extension',disabled:false}],
       menus:[{menu:'view/title',command:'selftest.run',when:'view == selftest.dynamic.tree',extensionId:'selftest.extension'}],
       terminalProfiles:[{id:'selftest.terminalProfile',extensionId:'selftest.extension',runtimeAvailable:true}],
@@ -29407,6 +29525,12 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeDatasetKinds:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.kind||''):[],
       runtimeDatasetSources:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.source||''):[],
       runtimeDatasetReady:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(item=>item.dataset.ready==='1').length:0,
+      runtimeOpenableRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(item=>item.dataset.openable==='1').length:0,
+      runtimeActionTypes:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.action||''):[],
+      runtimeActionTargets:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.actionTarget||'').filter(Boolean):[],
+      runtimeActionButtons:runtimeList?runtimeList.querySelectorAll('.extension-runtime-action').length:0,
+      runtimeRowKeys:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.key||'').filter(Boolean).length:0,
+      runtimeContainerRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(item=>item.dataset.container==='selftest.dynamic.container').length:0,
       runtimePanelCount:(()=>{const panel=$('extension-runtime-panel');return panel?panel.dataset.runtimeSurfaceCount:''})(),
       runtimePanelVisibleCount:(()=>{const panel=$('extension-runtime-panel');return panel?panel.dataset.runtimeVisibleCount:''})(),
       runtimePanelTotalCount:(()=>{const panel=$('extension-runtime-panel');return panel?panel.dataset.runtimeTotalCount:''})(),
@@ -29439,6 +29563,10 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeRows>=11&&snapshot.runtimeReadyRows>=10&&snapshot.runtimeChips>=13
       && snapshot.runtimeListRole==='list'&&snapshot.runtimeListItems===snapshot.runtimeRows
       && snapshot.runtimeDatasetReady===snapshot.runtimeReadyRows&&snapshot.runtimePanelCount==='11'
+      && snapshot.runtimeOpenableRows>=5&&snapshot.runtimeActionButtons===snapshot.runtimeRows
+      && snapshot.runtimeRowKeys===snapshot.runtimeRows&&snapshot.runtimeContainerRows>=2
+      && ['open-view','open-webview','open-file','run-command'].every(kind=>snapshot.runtimeActionTypes.includes(kind))
+      && snapshot.runtimeActionTargets.includes('selftest.dynamic.tree')&&snapshot.runtimeActionTargets.includes('selftest.dynamic.webview')&&snapshot.runtimeActionTargets.includes('selftest.run')
       && snapshot.runtimePanelVisibleCount==='11'&&snapshot.runtimePanelTotalCount==='11'
       && snapshot.runtimeDatasetSources.includes('runtime')&&snapshot.runtimeStatusText.includes('11 visible of 11 rows')
       && snapshot.runtimeFilterKinds.includes('LMTool')&&snapshot.runtimeFilterBefore.visible===11
