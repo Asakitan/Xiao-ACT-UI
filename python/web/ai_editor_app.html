@@ -3699,7 +3699,15 @@ function settingsCopyText(text,label){
 }
 function settingsOpenJsonView(){
   const snapshot=JSON.stringify(config||{},null,2);
-  if(typeof addTab==='function')addTab('settings.json',snapshot,'json',{runtimeMode:'settings-json'});
+  if(typeof addTab==='function'){
+    if(typeof saveCurrentTab==='function')saveCurrentTab();
+    const existing=(typeof tabs!=='undefined'?tabs:[]).find(tab=>isSettingsJsonTab(tab));
+    if(existing){
+      const dirty=isTextTabDirty(existing);
+      if(!dirty){existing.content=snapshot;existing.originalContent=snapshot}
+      switchTab(existing.id);
+    }else addTab('settings.json',snapshot,'json',{runtimeMode:'settings-json',originalContent:snapshot,settingsJson:true});
+  }
   else openInEditor(snapshot,'json');
   showToast('Settings JSON opened','info',1400);
 }
@@ -31415,6 +31423,21 @@ function isDiffEditorTab(tab){
   const mode=String((tab&&tab.runtimeMode)||(tab&&tab.runtime_mode)||'');
   return mode==='diff'&&!!(tab&&tab.diff);
 }
+function isSettingsJsonTab(tab){
+  const mode=String((tab&&tab.runtimeMode)||(tab&&tab.runtime_mode)||'');
+  return mode==='settings-json';
+}
+function textTabLiveContent(tab){
+  if(tab&&tab.id===activeTab&&$('editor-text')&&$('editor-container').style.display!=='none')return $('editor-text').value;
+  return String((tab&&tab.content)||'');
+}
+function isTextEditableTab(tab){
+  return !!(tab&&!isDiffEditorTab(tab)&&!isExtensionCustomEditorTab(tab)&&!isExtensionNotebookTab(tab));
+}
+function isTextTabDirty(tab){
+  if(!isTextEditableTab(tab))return false;
+  return String(textTabLiveContent(tab))!==String(tab.originalContent!==undefined?tab.originalContent:(tab.content||''));
+}
 
 function addTab(name,content,lang,meta){
   showEditorArea();
@@ -31553,7 +31576,8 @@ function renderTabs(){
     const el=document.createElement('div');
     const customDirty=isExtensionCustomEditorTab(t)&&t.customEditor&&t.customEditor.dirty;
     const notebookDirty=isExtensionNotebookTab(t)&&t.notebook&&t.notebook.dirty;
-    el.className='tab'+(t.id===activeTab?' active':'')+((customDirty||notebookDirty)?' dirty':'');
+    const textDirty=isTextTabDirty(t);
+    el.className='tab'+(t.id===activeTab?' active':'')+((customDirty||notebookDirty||textDirty)?' dirty':'');
     el.dataset.tabId=t.id;
     el.innerHTML=esc(t.name)+'<span class="dot"></span> <span class="close" onclick="closeTab('+t.id+',event)">×</span>';
     el.onclick=()=>switchTab(t.id);
@@ -31618,6 +31642,7 @@ async function _loadEditorTitleActions(){
 function _renderEditorTitleActions(){
   const c=$('editor-title-actions');if(!c)return;c.innerHTML='';
   const tab=tabs.find(t=>t.id===activeTab);
+  if(isSettingsJsonTab(tab))appendSettingsJsonTitleActions(c,tab);
   if(isExtensionCustomEditorTab(tab))appendCustomEditorTitleActions(c,tab);
   if(isExtensionNotebookTab(tab))appendNotebookTitleActions(c,tab);
   _editorTitleActions.forEach(a=>{
@@ -31638,6 +31663,11 @@ function makeEditorTitleButton(title,icon,onClick,disabled){
   btn.disabled=!!disabled;
   btn.onclick=ev=>{ev.preventDefault();ev.stopPropagation();if(!btn.disabled)onClick()};
   return btn;
+}
+function appendSettingsJsonTitleActions(container,tab){
+  container.appendChild(makeEditorTitleButton('Apply Settings JSON','<svg viewBox="0 0 16 16" width="14" height="14"><path d="M6.2 11.2 3.4 8.4 2.3 9.5l3.9 3.9 7.5-8.7-1.2-1z" fill="currentColor"/></svg>',()=>saveSettingsJsonTab(tab),false));
+  container.appendChild(makeEditorTitleButton('Format Settings JSON','<svg viewBox="0 0 16 16" width="14" height="14"><path d="M3 3h10v2H3zm0 4h7v2H3zm0 4h10v2H3z" fill="currentColor"/></svg>',()=>formatSettingsJsonTab(tab),false));
+  container.appendChild(makeEditorTitleButton('Revert Settings JSON','<svg viewBox="0 0 16 16" width="14" height="14"><path d="M7 3a5 5 0 1 1-4.5 7.2l1.3-.7A3.5 3.5 0 1 0 4 5.3V8H2V3h5v2H5.2A3.5 3.5 0 0 1 7 3z" fill="currentColor"/></svg>',()=>revertSettingsJsonTab(tab),false));
 }
 function appendCustomEditorTitleActions(container,tab){
   const ce=tab&&tab.customEditor||{};
@@ -33911,8 +33941,107 @@ async function revertFile(){
     await revertNotebookTab(tab);
     return;
   }
+  if(isSettingsJsonTab(tab)){
+    revertSettingsJsonTab(tab);
+    return;
+  }
   showToast('Revert is available for extension custom editors and notebooks','warning',2200);
 }
+function settingsJsonParseText(text){
+  try{
+    const parsed=JSON.parse(stripEditorJsoncForParse(String(text||'')));
+    if(!isPlainObject(parsed))return {ok:false,error:'Settings JSON must be an object'};
+    return {ok:true,value:parsed};
+  }catch(e){
+    return {ok:false,error:'Invalid Settings JSON: '+(e&&e.message?e.message:String(e))};
+  }
+}
+function settingsJsonReplaceEditorText(tab,text,markDirty){
+  const next=String(text||'');
+  if(tab){tab.content=next;if(markDirty===false)tab.originalContent=next}
+  if(tab&&tab.id===activeTab&&$('editor-text')){
+    _undoPush(true);
+    $('editor-text').value=next;
+    editorDirty=markDirty!==false;
+    updateLineNums();updateCursorPos();scheduleEditorSyntaxHighlight();
+    if(typeof renderEditorVisualDecorations==='function')renderEditorVisualDecorations();
+    if(typeof editorRefreshLanguageFeaturesAfterEdit==='function')editorRefreshLanguageFeaturesAfterEdit(120);
+  }
+  renderTabs();
+}
+function formatSettingsJsonTab(tab){
+  tab=tab||tabs.find(t=>t.id===activeTab);
+  if(!isSettingsJsonTab(tab))return false;
+  const parsed=settingsJsonParseText(textTabLiveContent(tab));
+  if(!parsed.ok){showToast(parsed.error,'error',3200);setStatus(parsed.error);return false}
+  settingsJsonReplaceEditorText(tab,JSON.stringify(parsed.value,null,2)+'\n',true);
+  showToast('Formatted settings.json','info',1400);
+  return true;
+}
+function revertSettingsJsonTab(tab){
+  tab=tab||tabs.find(t=>t.id===activeTab);
+  if(!isSettingsJsonTab(tab))return false;
+  settingsJsonReplaceEditorText(tab,tab.originalContent!==undefined?tab.originalContent:JSON.stringify(config||{},null,2),false);
+  showToast('Reverted settings.json','info',1400);
+  return true;
+}
+function settingsJsonRefreshUiAfterApply(){
+  syncUI();
+  updateModeUI();
+  renderPermissions();
+  if(typeof applyEditorMinimapSettings==='function')applyEditorMinimapSettings(false);
+  if(typeof scheduleEditorFoldingRanges==='function')scheduleEditorFoldingRanges(0);
+  if(typeof renderEditorVisualDecorations==='function')renderEditorVisualDecorations();
+  if($('settings-modal')&&$('settings-modal').classList.contains('open'))openSettings();
+  renderProviderTabs();
+}
+async function saveSettingsJsonTab(tab,options){
+  const opts=isPlainObject(options)?options:{};
+  tab=tab||tabs.find(t=>t.id===activeTab);
+  if(!isSettingsJsonTab(tab))return {ok:false,error:'not a settings json tab'};
+  if(opts.autoSave)return {ok:false,skipped:true};
+  saveCurrentTab();
+  const parsed=settingsJsonParseText(textTabLiveContent(tab));
+  if(!parsed.ok){
+    showToast(parsed.error,'error',3600);
+    setStatus(parsed.error);
+    return {ok:false,error:parsed.error};
+  }
+  const next=withSettingsDefaults(parsed.value);
+  next.mode=normalizeMode(next.mode||currentMode||'agent');
+  const saveResult=await call('save_config',next);
+  if(!callSucceeded(saveResult)){
+    const message='Save failed: '+callFailedMessage(saveResult,'backend unavailable');
+    showToast(message,'error',3600);
+    setStatus(message);
+    return saveResult||{ok:false,error:'backend unavailable'};
+  }
+  Object.keys(config).forEach(key=>delete config[key]);
+  Object.assign(config,next);
+  if(next.mode!==currentMode){
+    const modeResult=await call('set_mode',next.mode);
+    if(callSucceededOrApplied(modeResult))currentMode=next.mode;
+    else showToast('Mode update failed: '+callFailedMessage(modeResult,'backend unavailable'),'warning',3200);
+  }
+  const normalized=JSON.stringify(config,null,2)+'\n';
+  if(tab){tab.content=normalized;tab.originalContent=normalized;tab.language='json'}
+  if(tab&&tab.id===activeTab&&$('editor-text')){
+    $('editor-text').value=normalized;
+    editorDirty=false;
+    updateLineNums();updateCursorPos();scheduleEditorSyntaxHighlight();
+    if(typeof renderEditorVisualDecorations==='function')renderEditorVisualDecorations();
+  }
+  _editorDirtyDiffCache={key:'',decorations:[],summary:null};
+  settingsJsonRefreshUiAfterApply();
+  renderTabs();
+  showToast('Settings JSON applied','success',1600);
+  setStatus('Settings JSON applied');
+  return {ok:true,settingsJson:true};
+}
+window.settingsJsonParseText=settingsJsonParseText;
+window.saveSettingsJsonTab=saveSettingsJsonTab;
+window.formatSettingsJsonTab=formatSettingsJsonTab;
+window.revertSettingsJsonTab=revertSettingsJsonTab;
 async function saveFile(options){
   const opts=isPlainObject(options)?options:{};
   const tab=tabs.find(t=>t.id===activeTab);
@@ -33925,6 +34054,7 @@ async function saveFile(options){
     if(opts.autoSave&&!tab.filePath)return {ok:false,skipped:true};
     return await saveNotebookTab(tab,opts);
   }
+  if(isSettingsJsonTab(tab))return await saveSettingsJsonTab(tab,opts);
   if(opts.autoSave&&!(tab&&tab.filePath))return {ok:false,skipped:true};
   await runEditorSaveParticipants({autoSave:opts.autoSave===true,autoSaveMode:opts.autoSaveMode||''});
   const content=$('editor-text').value;

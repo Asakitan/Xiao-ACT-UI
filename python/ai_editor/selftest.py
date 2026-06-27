@@ -9584,9 +9584,26 @@ console.log("frontend word separator behavior ok");
              and "Setting: '+raw.slice(3)" in html
              and "@([A-Za-z][A-Za-z0-9_-]*)" in html
              and "SETTINGS_SCOPE_FILTERS[scope]" in html
-            and "visible of '+total+' settings groups" in html
-            and "use @error to filter invalid settings" in html
-            and "if(query.error&&!group.querySelector('[aria-invalid=\"true\"],.settings-field.invalid:not(.settings-target-hidden),.settings-input-invalid'))return false;" in html)
+             and "visible of '+total+' settings groups" in html
+             and "use @error to filter invalid settings" in html
+             and "if(query.error&&!group.querySelector('[aria-invalid=\"true\"],.settings-field.invalid:not(.settings-target-hidden),.settings-input-invalid'))return false;" in html)
+    _check("frontend settings json is editable and applyable",
+           "runtimeMode:'settings-json'" in html
+           and "function isSettingsJsonTab(tab)" in html
+           and "function isTextTabDirty(tab)" in html
+           and "function appendSettingsJsonTitleActions(container,tab)" in html
+           and "Apply Settings JSON" in html
+           and "Format Settings JSON" in html
+           and "Revert Settings JSON" in html
+           and "function settingsJsonParseText(text)" in html
+           and "stripEditorJsoncForParse(String(text||''))" in html
+           and "function saveSettingsJsonTab(tab,options)" in html
+           and "function formatSettingsJsonTab(tab)" in html
+           and "function revertSettingsJsonTab(tab)" in html
+           and "if(isSettingsJsonTab(tab))return await saveSettingsJsonTab(tab,opts);" in html
+           and "window.saveSettingsJsonTab=saveSettingsJsonTab;" in html
+           and "window.formatSettingsJsonTab=formatSettingsJsonTab;" in html
+           and "window.revertSettingsJsonTab=revertSettingsJsonTab;" in html)
     _check("frontend settings uses VS Code style settings layout",
            "class=\"modal settings-modal\"" in html
             and "class=\"settings-titlebar\"" in html
