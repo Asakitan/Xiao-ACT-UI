@@ -5825,6 +5825,9 @@ def test_phase1_ai_editor_regressions() -> None:
              and "id=\"editor-diagnostic-layer\"" in html
             and "function requestEditorDiagnostics(quiet)" in html
             and "editorProviderPayload('diagnostics'" in html
+            and "function editorDiagnosticSeveritySummary(diagnostics)" in html
+            and "layer.dataset.diagnosticCount=String(summary.count||0)" in html
+            and "updateEditorLanguageFeatureState('diagnostics'" in html
             and "function editorDiagnosticsForRange(range)" in html
             and "diagnostics:editorDiagnosticsForRange(actionRange)" in html
             and "function renderProblemsRows(rows)" in html
@@ -5837,6 +5840,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "async function resolveEditorCodeAction(action,quiet)" in html
            and "editorProviderPayload('codeActionResolve'" in html
            and "editorRequestLanguageProvider('codeActionResolve'" in html
+           and "updateEditorLanguageFeatureState('codeActions'" in html
            and "aria-disabled" in html
            and ".filter(action=>!!action)" in html
            and "function editorCodeActionEdits(action)" in html
@@ -6080,6 +6084,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "editorRequestLanguageProvider('onTypeFormatting'" in html
            and "editorRequestLanguageProvider('formatting'" in html
            and "editorRequestLanguageProvider('rangeFormatting'" in html
+           and "updateEditorLanguageFeatureState('formatting'" in html
            and "ed.addEventListener('beforeinput',captureEditorLinkedEditingBefore)" in html
            and "applyEditorLinkedEditingFromInput()" in html
            and "requestEditorOnTypeFormatting(ch,true)" in html
@@ -6187,6 +6192,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "sem-definition" in html
            and "sem-async" in html
            and "function scheduleEditorSemanticTokens(delay)" in html
+           and "updateEditorLanguageFeatureState('semanticTokens'" in html
            and "editorProviderPayload('semanticTokensRange'" in html
            and "editorProviderPayload('semanticTokensEdits'" in html
            and "editorProviderPayload('semanticTokens'" in html
@@ -7871,6 +7877,15 @@ console.log("frontend minimap settings behavior ok");
             "editorProviderResultCancelled",
             "editorLanguageProviderKindLabel",
             "editorProviderResultCount",
+            "editorFeatureCountText",
+            "editorDiagnosticSeverityValue",
+            "normalizeEditorDiagnostic",
+            "editorDiagnosticSeveritySummary",
+            "editorLanguageFeatureSummaryParts",
+            "editorLanguageFeatureDetail",
+            "renderEditorLanguageFeatureStatus",
+            "updateEditorLanguageFeatureState",
+            "editorLanguageFeatureStateSnapshot",
             "updateEditorLanguageProviderStatus",
             "editorLanguageProviderFailureMessage",
             "editorLanguageProviderErrorSummary",
@@ -7881,8 +7896,15 @@ console.log("frontend minimap settings behavior ok");
             for name in provider_status_functions)
         js = r"""
 function assert(ok,label){ if(!ok){ throw new Error(label); } }
-const languageStatus = { className:"", textContent:"", title:"" };
+const languageStatus = { className:"", textContent:"", title:"", dataset:{} };
 let _editorLanguageProviderStatus = { state:"ready" };
+let _editorLanguageFeatureState = {
+  diagnostics:{state:"empty",count:0,errors:0,warnings:0,infos:0,hints:0,message:"Diagnostics: 0"},
+  codeActions:{state:"empty",count:0,kind:"",diagnostics:0,message:"Code actions: 0"},
+  formatting:{state:"empty",kind:"",edits:0,applied:false,message:"Formatting: idle"},
+  semanticTokens:{state:"empty",source:"",count:0,resultId:"",message:"Semantic: idle"},
+  diff:{state:"empty",mode:"",added:0,modified:0,removed:0,total:0,message:"Diff: clean"}
+};
 let callResponses = [];
 function isPlainObject(value){ return !!value && typeof value === "object" && !Array.isArray(value); }
 function callFailedMessage(result,fallback){ return result && result.error ? String(result.error) : String(fallback || "failed"); }
@@ -7897,6 +7919,31 @@ async function call(method,payload){
   updateEditorLanguageProviderStatus("running", { kind:"completion", label:"Completions" });
   assert(languageStatus.className.includes("running") && languageStatus.textContent === "Completions...",
          "running status is visible");
+  assert(languageStatus.title.includes("Diagnostics: 0") && languageStatus.dataset.diagnostics === "0",
+         "feature summary is attached to language status");
+  const severity = editorDiagnosticSeveritySummary([
+    { message:"boom", severity:"error", range:{ start:{ line:0, character:0 } } },
+    { message:"warn", severity:"warning", range:{ start:{ line:1, character:0 } } },
+    { message:"info", severity:"information", range:{ start:{ line:2, character:0 } } },
+  ]);
+  assert(severity.count === 3 && severity.errors === 1 && severity.warnings === 1 && severity.infos === 1
+         && severity.message.includes("1 error") && severity.message.includes("1 warning"),
+         "diagnostic severity summary counts VS Code severities");
+  updateEditorLanguageFeatureState("diagnostics", "ready", severity);
+  updateEditorLanguageFeatureState("codeActions", "ready", { count:2, diagnostics:3, message:"Code actions: 2 quick fixes" });
+  updateEditorLanguageFeatureState("formatting", "ready", { kind:"document", edits:1, applied:true, message:"Formatting: document 1 edit" });
+  updateEditorLanguageFeatureState("semanticTokens", "ready", { source:"range", count:4, resultId:"sem-1", message:"Semantic: 4 range" });
+  updateEditorLanguageFeatureState("diff", "ready", { mode:"dirty", added:1, modified:1, removed:0, total:2, message:"Diff: +1 ~1 -0" });
+  const snapshot = editorLanguageFeatureStateSnapshot();
+  assert(snapshot.features.diagnostics.errors === 1
+         && snapshot.features.codeActions.count === 2
+         && snapshot.features.formatting.applied === true
+         && snapshot.features.semanticTokens.source === "range"
+         && snapshot.features.diff.total === 2
+         && snapshot.title.includes("Semantic: 4 range")
+         && languageStatus.dataset.semanticTokens === "4"
+         && languageStatus.dataset.diffTotal === "2",
+         "language feature state snapshot exposes diagnostics actions formatting semantic tokens and diff");
 
   callResponses = [{ ok:true, requestId:"r1", items:[{ label:"a" }, { label:"b" }] }];
   let res = await editorRequestLanguageProvider("completion", null, { countKey:"items", itemLabel:"suggestion" });
@@ -7933,14 +7980,14 @@ async function call(method,payload){
   await editorRequestLanguageProvider("completion", null, { countKey:"items", itemLabel:"suggestion" });
   assert(languageStatus.className.includes("warning")
          && languageStatus.textContent === "1 suggestion with provider warning"
-         && languageStatus.title === "Bad Hover: boom",
+         && languageStatus.title.includes("Bad Hover: boom"),
          "provider warning status is visible");
 
   callResponses = [{ ok:true, requestId:"r2c", hovers:[], providerErrors:[{ providerId:"bad.hover", error:"boom" }] }];
   await editorRequestLanguageProvider("hover", null, { countKey:"hovers", itemLabel:"hover" });
   assert(languageStatus.className.includes("error")
          && languageStatus.textContent === "Hover provider bad.hover failed: boom"
-         && languageStatus.title === "bad.hover: boom",
+         && languageStatus.title.includes("bad.hover: boom"),
          "empty provider error status is visible");
 
   callResponses = [{ ok:false, timeout:true, error:"too slow", requestId:"r3" }];
@@ -11987,8 +12034,11 @@ console.log("command palette quick access helpers ok");
            and "editor-dirty-diff-gutter" in html
            and "function computeEditorDirtyDiff(base,current)" in html
            and "function renderEditorDirtyDiffDecorations(layer,ta,metrics)" in html
+           and "updateEditorLanguageFeatureState('diff'" in html
            and "setActiveEditorBaselineContent" in html
-           and "window.editorDirtyDiffSelfCheckSnapshot=editorDirtyDiffSelfCheckSnapshot" in html)
+           and "featureDiffTotal" in html
+           and "window.editorDirtyDiffSelfCheckSnapshot=editorDirtyDiffSelfCheckSnapshot" in html
+           and "window.editorLanguageFeatureStateSnapshot=editorLanguageFeatureStateSnapshot" in html)
     _check("workspace auto root settings drive Explorer and Terminal cwd",
            "\"workspace\": {" in app_source
            and "\"recent_roots\": []" in app_source

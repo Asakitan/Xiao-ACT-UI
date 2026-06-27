@@ -9546,6 +9546,15 @@ function renderEditorDirtyDiffDecorations(layer,ta,metrics){
     }
   });
   const summary=state.summary||{};
+  if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('diff',summary.total?'ready':'empty',{
+    mode:'dirty',
+    added:summary.added||0,
+    modified:summary.modified||0,
+    removed:summary.removed||0,
+    total:summary.total||0,
+    decorations:decorations.length,
+    message:summary.total?('Diff: +'+(summary.added||0)+' ~'+(summary.modified||0)+' -'+(summary.removed||0)):'Diff: clean'
+  });
   if(summary.total){
     const badge=document.createElement('div');
     badge.className='editor-dirty-diff-summary';
@@ -11017,6 +11026,13 @@ let _editorSelectionRanges=[],_editorSelectionRangeIndex=-1,_editorSelectionRang
 let _editorPasteDropRequest=0,_editorDropPasteOptions=[],_editorDropPasteOptionIndex=0,_editorDropPasteSession=null;
 let _editorSnippetSession=null;
 let _editorLanguageProviderStatus={state:'ready',kind:'',message:'Lang: Ready',detail:'Language services are ready',requestId:'',updatedAt:0};
+let _editorLanguageFeatureState={
+  diagnostics:{state:'empty',count:0,errors:0,warnings:0,infos:0,hints:0,message:'Diagnostics: 0'},
+  codeActions:{state:'empty',count:0,kind:'',diagnostics:0,message:'Code actions: 0'},
+  formatting:{state:'empty',kind:'',edits:0,applied:false,message:'Formatting: idle'},
+  semanticTokens:{state:'empty',source:'',count:0,resultId:'',message:'Semantic: idle'},
+  diff:{state:'empty',mode:'',added:0,modified:0,removed:0,total:0,message:'Diff: clean'}
+};
 function activeEditorTab(){
   return (typeof tabs!=='undefined'&&Array.isArray(tabs)?tabs.find(t=>t.id===activeTab):null)||{};
 }
@@ -11084,6 +11100,84 @@ function editorProviderResultCount(res,key){
   }
   return value?1:0;
 }
+function editorFeatureCountText(count,singular,plural){
+  const n=Number(count)||0;
+  return n+' '+(n===1?singular:(plural||singular+'s'));
+}
+function editorDiagnosticSeveritySummary(diagnostics){
+  const out={count:0,errors:0,warnings:0,infos:0,hints:0};
+  (Array.isArray(diagnostics)?diagnostics:[]).forEach(item=>{
+    const diag=normalizeEditorDiagnostic(item);if(!diag)return;
+    out.count++;
+    if(diag.severity===0)out.errors++;
+    else if(diag.severity===1)out.warnings++;
+    else if(diag.severity===2)out.infos++;
+    else out.hints++;
+  });
+  out.message='Diagnostics: '+[
+    out.errors?editorFeatureCountText(out.errors,'error'):'',
+    out.warnings?editorFeatureCountText(out.warnings,'warning'):'',
+    out.infos?editorFeatureCountText(out.infos,'info'):'',
+    out.hints?editorFeatureCountText(out.hints,'hint'):''
+  ].filter(Boolean).join(', ');
+  if(!out.count)out.message='Diagnostics: 0';
+  return out;
+}
+function editorLanguageFeatureSummaryParts(){
+  const s=_editorLanguageFeatureState||{};
+  const parts=[];
+  ['diagnostics','codeActions','formatting','semanticTokens','diff'].forEach(key=>{
+    const item=s[key]||{};
+    if(item.message)parts.push(item.message);
+  });
+  return parts;
+}
+function editorLanguageFeatureDetail(baseDetail){
+  const parts=editorLanguageFeatureSummaryParts();
+  return String(baseDetail||'Language services are ready')+(parts.length?'\n'+parts.join('\n'):'');
+}
+function renderEditorLanguageFeatureStatus(){
+  const el=$('status-language-service');if(!el)return;
+  const s=_editorLanguageFeatureState||{};
+  const diag=s.diagnostics||{},actions=s.codeActions||{},fmt=s.formatting||{},semantic=s.semanticTokens||{},diff=s.diff||{};
+  el.dataset.diagnostics=String(diag.count||0);
+  el.dataset.diagnosticErrors=String(diag.errors||0);
+  el.dataset.diagnosticWarnings=String(diag.warnings||0);
+  el.dataset.codeActions=String(actions.count||0);
+  el.dataset.formatEdits=String(fmt.edits||0);
+  el.dataset.semanticTokens=String(semantic.count||0);
+  el.dataset.semanticSource=String(semantic.source||'');
+  el.dataset.diffTotal=String(diff.total||0);
+  el.dataset.diffAdded=String(diff.added||0);
+  el.dataset.diffModified=String(diff.modified||0);
+  el.dataset.diffRemoved=String(diff.removed||0);
+  el.title=editorLanguageFeatureDetail(_editorLanguageProviderStatus.detail);
+}
+function updateEditorLanguageFeatureState(kind,state,info){
+  const key=String(kind||'').trim();
+  if(!key)return null;
+  const prev=_editorLanguageFeatureState[key]||{};
+  const next=Object.assign({},prev,isPlainObject(info)?info:{});
+  next.state=state||next.state||'ready';
+  next.updatedAt=Date.now();
+  if(!next.message){
+    if(key==='codeActions')next.message='Code actions: '+(next.count||0);
+    else if(key==='formatting')next.message='Formatting: '+(next.applied?'applied':'idle');
+    else if(key==='semanticTokens')next.message='Semantic: '+(next.count||0);
+    else if(key==='diff')next.message='Diff: '+(next.total||0);
+  }
+  _editorLanguageFeatureState[key]=next;
+  renderEditorLanguageFeatureStatus();
+  return next;
+}
+function editorLanguageFeatureStateSnapshot(){
+  return JSON.parse(JSON.stringify({
+    status:_editorLanguageProviderStatus,
+    features:_editorLanguageFeatureState,
+    title:($('status-language-service')&&$('status-language-service').title)||'',
+    text:($('status-language-service')&&$('status-language-service').textContent)||''
+  }));
+}
 function updateEditorLanguageProviderStatus(state,info){
   const el=$('status-language-service');
   const opts=isPlainObject(info)?info:{};
@@ -11105,6 +11199,7 @@ function updateEditorLanguageProviderStatus(state,info){
   el.className='sb-item editor-language-status '+_editorLanguageProviderStatus.state;
   el.textContent=message;
   el.title=detail;
+  renderEditorLanguageFeatureStatus();
   return _editorLanguageProviderStatus;
 }
 function editorLanguageProviderFailureMessage(kind,res){
@@ -11404,6 +11499,7 @@ function clearEditorSemanticTokens(){
   _editorSemanticTokens=null;
   _editorSemanticTokensContentLength=-1;
   _editorSemanticTokensRangeActive=false;
+  if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('semanticTokens','empty',{source:'',count:0,resultId:'',message:'Semantic: idle'});
   scheduleEditorSyntaxHighlight();
 }
 async function requestEditorSemanticTokens(quiet){
@@ -11438,18 +11534,30 @@ async function requestEditorSemanticTokens(quiet){
     });
     if(requestId!==_editorSemanticTokensRequest||contentSnapshot!==String(ed.value||''))return;
     if(editorProviderResultCancelled(res))return;
-    if(res&&res.error){_editorSemanticTokens=null;_editorSemanticTokensContentLength=-1;_editorSemanticTokensRangeActive=false;scheduleEditorSyntaxHighlight();if(!quiet)setStatus('Semantic tokens failed: '+res.error);return}
+    if(res&&res.error){
+      _editorSemanticTokens=null;_editorSemanticTokensContentLength=-1;_editorSemanticTokensRangeActive=false;
+      if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('semanticTokens','error',{source:'',count:0,resultId:'',message:'Semantic: failed'});
+      scheduleEditorSyntaxHighlight();if(!quiet)setStatus('Semantic tokens failed: '+res.error);return
+    }
     payload=editorSemanticTokensPayloadFromResponse(res,'full',null);
   }
   _editorSemanticTokens=payload||null;
   _editorSemanticTokensContentLength=_editorSemanticTokens?contentLength:-1;
   _editorSemanticTokensRangeActive=!!(_editorSemanticTokens&&_editorSemanticTokens.source==='range');
+  const decodedSemantic=decodeEditorSemanticTokens(
+    editorSemanticTokensData(_editorSemanticTokens)||[],
+    editorSemanticTokensLegend(_editorSemanticTokens));
+  const semanticCount=decodedSemantic.length;
+  if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('semanticTokens',semanticCount?'ready':'empty',{
+    source:String(_editorSemanticTokens&&_editorSemanticTokens.source||''),
+    count:semanticCount,
+    resultId:editorSemanticTokensResultId(_editorSemanticTokens),
+    rangeActive:_editorSemanticTokensRangeActive,
+    message:semanticCount?'Semantic: '+semanticCount+' '+String(_editorSemanticTokens&&_editorSemanticTokens.source||'full'):'Semantic: 0'
+  });
   scheduleEditorSyntaxHighlight();
   if(!quiet){
-    const count=decodeEditorSemanticTokens(
-      editorSemanticTokensData(_editorSemanticTokens)||[],
-      editorSemanticTokensLegend(_editorSemanticTokens)).length;
-    setStatus(Math.floor(count)+' semantic token'+(count===1?'':'s'));
+    setStatus(Math.floor(semanticCount)+' semantic token'+(semanticCount===1?'':'s'));
   }
 }
 function scheduleEditorSemanticTokens(delay){
@@ -13535,11 +13643,18 @@ function clearEditorDiagnostics(){
   clearTimeout(_editorDiagnosticTimer);
   _editorDiagnostics=[];_editorDiagnosticContentLength=-1;
   const layer=$('editor-diagnostic-layer');if(layer)layer.innerHTML='';
+  if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('diagnostics','empty',Object.assign(editorDiagnosticSeveritySummary([]),{message:'Diagnostics: 0'}));
 }
 function renderEditorDiagnostics(diagnostics){
   const layer=$('editor-diagnostic-layer'),ta=$('editor-text'),wrap=$('editor-container');
   if(!layer||!ta||!wrap)return;
   layer.innerHTML='';
+  const summary=editorDiagnosticSeveritySummary(diagnostics);
+  layer.dataset.diagnosticCount=String(summary.count||0);
+  layer.dataset.diagnosticErrors=String(summary.errors||0);
+  layer.dataset.diagnosticWarnings=String(summary.warnings||0);
+  layer.dataset.diagnosticInfos=String(summary.infos||0);
+  layer.dataset.diagnosticHints=String(summary.hints||0);
   if(wrap.style.display==='none'||wrap.offsetParent===null||!Array.isArray(diagnostics)||!diagnostics.length)return;
   if(_editorDiagnosticContentLength!==String(ta.value||'').length)return;
   const style=getComputedStyle(ta),lineHeight=parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.5;
@@ -13561,6 +13676,8 @@ function renderEditorDiagnostics(diagnostics){
       if(top<-4||top>maxTop||left+width<0||left>maxLeft)return;
       const el=document.createElement('span');
       el.className='editor-diagnostic-marker severity-'+diag.severity;
+      el.dataset.severity=String(diag.severity);
+      el.dataset.message=diag.message;
       el.title=(diag.source?diag.source+': ':'')+diag.message;
       el.style.top=top+'px';el.style.left=Math.max(0,left)+'px';
       el.style.width=Math.min(width,maxLeft-Math.max(0,left))+'px';
@@ -13575,11 +13692,16 @@ async function requestEditorDiagnostics(quiet){
   const contentSnapshot=String(ed.value||''),contentLength=contentSnapshot.length;
   const res=await editorRequestLanguageProvider('diagnostics',editorProviderPayload('diagnostics'),{countKey:'diagnostics',itemLabel:'problem',isCurrent:()=>requestId===_editorDiagnosticRequest&&contentSnapshot===String(ed.value||'')});
   if(requestId!==_editorDiagnosticRequest||contentSnapshot!==String(ed.value||''))return;
-  if(res&&res.error){_editorDiagnostics=[];_editorDiagnosticContentLength=-1;renderEditorDiagnostics([]);if(!quiet)setStatus('Diagnostics failed: '+res.error);return}
+  if(res&&res.error){
+    _editorDiagnostics=[];_editorDiagnosticContentLength=-1;renderEditorDiagnostics([]);
+    if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('diagnostics','error',Object.assign(editorDiagnosticSeveritySummary([]),{message:'Diagnostics: failed'}));
+    if(!quiet)setStatus('Diagnostics failed: '+res.error);return
+  }
   _editorDiagnostics=(res&&res.ok&&Array.isArray(res.diagnostics)?res.diagnostics:[])
     .map(normalizeEditorDiagnostic).filter(Boolean);
   _editorDiagnosticContentLength=contentLength;
   renderEditorDiagnostics(_editorDiagnostics);
+  if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('diagnostics',_editorDiagnostics.length?'ready':'empty',editorDiagnosticSeveritySummary(_editorDiagnostics));
   if(!quiet)setStatus(_editorDiagnostics.length+' problem'+(_editorDiagnostics.length===1?'':'s'));
 }
 function scheduleEditorDiagnostics(delay){
@@ -14432,8 +14554,18 @@ async function formatEditorRange(range,options){
   });
   if(res&&res.ok&&Array.isArray(res.edits)&&res.edits.length){
     _undoPush(true);
-    if(editorApplyTextEdits(res.edits)){if(!opts.quiet)setStatus(opts.status||'Formatted selection via extension');return true}
+    if(editorApplyTextEdits(res.edits)){
+      if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('formatting','ready',{
+        kind:'range',edits:res.edits.length,applied:true,
+        message:'Formatting: range '+editorFeatureCountText(res.edits.length,'edit')
+      });
+      if(!opts.quiet)setStatus(opts.status||'Formatted selection via extension');return true
+    }
   }
+  if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('formatting',res&&res.error?'error':'empty',{
+    kind:'range',edits:0,applied:false,
+    message:res&&res.error?'Formatting: range failed':'Formatting: range unavailable'
+  });
   return false;
 }
 async function maybeFormatEditorPasteRange(range,label){
@@ -14570,8 +14702,14 @@ async function applyEditorCodeAction(action){
   const commandResult=action.command?await runEditorCodeActionCommand(action.command):null;
   closeEditorCodeActions();ed.focus();
   const title=codeActionTitle(action);
-  if(editResult.changed||editResult.tabApplied||editResult.workspaceApplied){setStatus('Applied code action: '+title);return}
-  if(callSucceeded(commandResult)){setStatus('Ran code action: '+title);return}
+  if(editResult.changed||editResult.tabApplied||editResult.workspaceApplied){
+    if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('codeActions','ready',{count:_editorCodeActions.length,applied:title,message:'Code actions: applied '+title});
+    setStatus('Applied code action: '+title);return
+  }
+  if(callSucceeded(commandResult)){
+    if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('codeActions','ready',{count:_editorCodeActions.length,applied:title,message:'Code actions: ran '+title});
+    setStatus('Ran code action: '+title);return
+  }
   if(editResult.skipped){setStatus('Code action edits outside the active editor were skipped');return}
   setStatus('Code action has no local edit');
 }
@@ -14601,8 +14739,20 @@ async function requestEditorCodeActionsForKind(quiet,only,label){
   const res=await fetchEditorCodeActionsForKind(only,range,()=>requestId===_editorCodeActionRequest);
   if(requestId!==_editorCodeActionRequest)return;
   if(res&&res.cancelled)return;
-  if(res&&res.error){closeEditorCodeActions();if(!quiet)setStatus(actionLabel+'s failed: '+res.error);return}
+  if(res&&res.error){
+    closeEditorCodeActions();
+    if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('codeActions','error',{count:0,kind:only||'',diagnostics:editorDiagnosticsForRange(range).length,message:'Code actions: failed'});
+    if(!quiet)setStatus(actionLabel+'s failed: '+res.error);return
+  }
   const actions=Array.isArray(res&&res.actions)?res.actions:[];
+  if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('codeActions',actions.length?'ready':'empty',{
+    count:actions.length,
+    kind:only||'',
+    diagnostics:editorDiagnosticsForRange(range).length,
+    preferred:actions.filter(action=>action&&action.isPreferred).length,
+    disabled:actions.filter(action=>codeActionDisabledText(action&&action.disabled)).length,
+    message:'Code actions: '+editorFeatureCountText(actions.length,actionLabel)
+  });
   if(actions.length){
     closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();
     showEditorCodeActions(actions,position);setStatus(actions.length+' '+actionLabel+(actions.length===1?'':'s'));return;
@@ -15646,11 +15796,18 @@ async function requestEditorOnTypeFormatting(ch,quiet){
   });
   if(requestId!==_editorFormatOnTypeRequest)return false;
   if(ed.value!==contentSnapshot||ed.selectionStart!==offsetSnapshot||ed.selectionEnd!==offsetSnapshot)return false;
-  if(res&&res.error){if(!quiet)setStatus('Format on type failed: '+res.error);return false}
+  if(res&&res.error){
+    if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('formatting','error',{kind:'onType',edits:0,applied:false,message:'Formatting: on-type failed'});
+    if(!quiet)setStatus('Format on type failed: '+res.error);return false
+  }
   if(res&&res.ok&&Array.isArray(res.edits)&&res.edits.length){
     _undoPush(true);
-    if(editorApplyTextEdits(res.edits)){if(!quiet)setStatus('Formatted on type');return true}
+    if(editorApplyTextEdits(res.edits)){
+      if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('formatting','ready',{kind:'onType',edits:res.edits.length,applied:true,message:'Formatting: on-type '+editorFeatureCountText(res.edits.length,'edit')});
+      if(!quiet)setStatus('Formatted on type');return true
+    }
   }
+  if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('formatting','empty',{kind:'onType',edits:0,applied:false,message:'Formatting: on-type unavailable'});
   return false;
 }
 async function formatDocument(options){
@@ -15663,12 +15820,25 @@ async function formatDocument(options){
   });
   if(res&&res.ok&&Array.isArray(res.edits)&&res.edits.length){
     _undoPush(true);
-    if(editorApplyTextEdits(res.edits)){if(!opts.quiet)setStatus('Formatted via extension');return true}
+    if(editorApplyTextEdits(res.edits)){
+      if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('formatting','ready',{kind:'document',edits:res.edits.length,applied:true,message:'Formatting: document '+editorFeatureCountText(res.edits.length,'edit')});
+      if(!opts.quiet)setStatus('Formatted via extension');return true
+    }
   }
   if(editorLang==='json'){
-    try{ed.value=JSON.stringify(JSON.parse(ed.value),null,2);editorDirty=true;updateLineNums();updateCursorPos();scheduleEditorSyntaxHighlight();if(!opts.quiet)setStatus('Formatted JSON');return true}
-    catch{if(!opts.quiet)setStatus('Invalid JSON')}
-  } else if(!opts.quiet)setStatus('Format not available for '+editorLang);
+    try{
+      ed.value=JSON.stringify(JSON.parse(ed.value),null,2);editorDirty=true;updateLineNums();updateCursorPos();scheduleEditorSyntaxHighlight();
+      if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('formatting','ready',{kind:'json',edits:1,applied:true,message:'Formatting: JSON'});
+      if(!opts.quiet)setStatus('Formatted JSON');return true
+    }
+    catch{
+      if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('formatting','error',{kind:'json',edits:0,applied:false,message:'Formatting: invalid JSON'});
+      if(!opts.quiet)setStatus('Invalid JSON')
+    }
+  } else {
+    if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('formatting',res&&res.error?'error':'empty',{kind:'document',edits:0,applied:false,message:'Formatting: unavailable'});
+    if(!opts.quiet)setStatus('Format not available for '+editorLang);
+  }
   return false;
 }
 async function formatSelection(){
@@ -20750,7 +20920,22 @@ function showDiffEditorSurface(tab){
   host.classList.add('active');
   const diff=tab&&tab.diff||{};
   const original=diff.original||{},modified=diff.modified||{};
+  const originalLines=String(original.content||'').split('\n').length;
+  const modifiedLines=String(modified.content||'').split('\n').length;
   host.innerHTML='';
+  host.dataset.diffTitle=String(diff.title||tab.name||'Diff');
+  host.dataset.originalLines=String(originalLines);
+  host.dataset.modifiedLines=String(modifiedLines);
+  if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('diff','ready',{
+    mode:'editor',
+    originalLines,
+    modifiedLines,
+    total:Math.abs(modifiedLines-originalLines),
+    added:Math.max(0,modifiedLines-originalLines),
+    modified:0,
+    removed:Math.max(0,originalLines-modifiedLines),
+    message:'Diff editor: '+originalLines+' ↔ '+modifiedLines+' lines'
+  });
   const header=document.createElement('div');
   header.className='editor-diff-header';
   const title=document.createElement('div');
@@ -20768,7 +20953,7 @@ function showDiffEditorSurface(tab){
 function hideDiffEditorSurface(){
   const container=$('editor-container'),host=$('editor-diff-host');
   if(container)container.classList.remove('diff-editor');
-  if(host){host.classList.remove('active');host.innerHTML=''}
+  if(host){host.classList.remove('active');host.innerHTML='';delete host.dataset.diffTitle;delete host.dataset.originalLines;delete host.dataset.modifiedLines}
 }
 function showCustomEditorSurface(tab){
   const container=$('editor-container'),host=$('editor-custom-webview-host');
@@ -31874,6 +32059,7 @@ function editorDirtyDiffSelfCheckSnapshot(){
     ed.value='alpha\nbeta changed\nnew\nomega';editorDirty=true;updateLineNums();renderEditorVisualDecorations();
     let dirty=editorDirtyDiffState();
     const markerCount=document.querySelectorAll('#editor-visual-layer .editor-dirty-diff-gutter').length;
+    const featureState=editorLanguageFeatureStateSnapshot();
     setActiveEditorBaselineContent(ed.value);
     let reset=editorDirtyDiffState();
     return {
@@ -31883,9 +32069,12 @@ function editorDirtyDiffSelfCheckSnapshot(){
       modified:dirty.summary&&dirty.summary.modified||0,
       removed:dirty.summary&&dirty.summary.removed||0,
       markerCount,
+      featureDiffTotal:featureState.features&&featureState.features.diff&&featureState.features.diff.total||0,
+      featureDiffMessage:featureState.features&&featureState.features.diff&&featureState.features.diff.message||'',
       resetTotal:reset.summary&&reset.summary.total||0,
       pass:(clean.summary&&clean.summary.total||0)===0&&
         (dirty.summary&&dirty.summary.total||0)>0&&markerCount>0&&
+        ((featureState.features&&featureState.features.diff&&featureState.features.diff.total)||0)>0&&
         (reset.summary&&reset.summary.total||0)===0
     };
   }finally{
@@ -31895,6 +32084,7 @@ function editorDirtyDiffSelfCheckSnapshot(){
   }
 }
 window.editorDirtyDiffSelfCheckSnapshot=editorDirtyDiffSelfCheckSnapshot;
+window.editorLanguageFeatureStateSnapshot=editorLanguageFeatureStateSnapshot;
 
 // ── chat-ux-4: Inline diff view for code changes ──
 function parseDiffText(text){
