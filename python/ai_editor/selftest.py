@@ -3924,6 +3924,25 @@ def test_phase1_ai_editor_regressions() -> None:
            and "sameRow:!!(controlRect&&actionRect&&Math.abs(controlRect.top-actionRect.top)<=1)" in html
            and "window.assistantComposerLayoutSnapshot=assistantComposerLayoutSnapshot;" in html
            and "'chat-provider-trigger','chat-model-inline','chat-agent-trigger','chat-mode-trigger','chat-workflow-trigger','chat-workflow-run','chat-input-status'" in html)
+    _check("frontend Assistant composer interactions match Copilot-style controls",
+           "const _CHAT_INPUT_HISTORY_KEY='sao-ai-chat-input-history';" in html
+           and "function rememberAssistantInputHistory(value)" in html
+           and "function chatInputCursorOnFirstLine(input)" in html
+           and "function chatInputCursorOnLastLine(input)" in html
+           and "function applyAssistantHistoryEntry(input,value)" in html
+           and "if(opts.fromInput!==false&&opts.recordHistory!==false)rememberAssistantInputHistory" in html
+           and ".msg.editing-source" in html
+           and "msgEl.classList.add('editing-source');" in html
+           and "delete el.dataset.editingSource;" in html
+           and ".chat-input-container.queued" in html
+           and ".chat-queue-badge" in html
+           and "attachments.total+' attached'" in html
+           and "function assistantComposerInteractionSnapshot()" in html
+           and "assistantUiSelfCheckRecord(checks,'composer-input-history-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'composer-edit-target-highlight-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'composer-attachment-summary-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'composer-queue-state-ready'" in html
+           and "window.assistantComposerInteractionSnapshot=assistantComposerInteractionSnapshot;" in html)
     _check("frontend Assistant model picker uses configured models",
            "let chatControlState={agents:[],workflows:[],providers:[],models:[]};" in html
            and "let chatProviderModelOptions=Object.create(null);" in html
@@ -4469,6 +4488,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function updateChatComposerState()" in html
            and "function setChatStreamingState(active)" in html
            and "const _assistantRequestQueue=[];" in html
+           and "const _CHAT_INPUT_HISTORY_KEY='sao-ai-chat-input-history';" in html
            and "function assistantQueuedRequestCount()" in html
            and "function assistantQueueTextRequest(rawText,opts)" in html
            and "function assistantRenderQueuedRequest(item)" in html
@@ -4484,7 +4504,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "panel.dataset.chatComposerStreaming=streaming?'true':'false';" in html
            and "panel.dataset.chatHasPendingRequests=queued>0?'true':'false';" in html
            and "panel.dataset.chatPendingRequestCount=String(queued);" in html
+           and "status.className='chat-head-status '+(queued?'queued'" in html
            and "status.textContent=queued?('QUEUED '+queued)" in html
+           and "badge.className='chat-queue-badge';" in html
            and "send.disabled=!sendable;" in html
            and "send.setAttribute('aria-label',streaming?'Queue request':t('send'));" in html
            and "panel.dataset.chatMode=normalizeMode" in html
@@ -4502,7 +4524,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "@keyframes assistantPendingPulse" in html
            and "renderAssistantPending(currentMsgBody,t('thinking'));" in html
            and "clearAssistantPending(currentMsgBody);" in html
-           and "syncAssistantSessionState();\n    }\n  }\n  if(e.key==='ArrowDown'" in html
+           and "if(e.key==='ArrowUp'&&_chatHistory.length)" in html
+           and "if(chatInputCursorOnFirstLine(this)&&_chatHistoryIdx<_chatHistory.length-1)" in html
+           and "if(e.key==='ArrowDown'&&_chatHistoryIdx>=0&&chatInputCursorOnLastLine(this))" in html
+           and "applyAssistantHistoryEntry(this,_chatDraft)" in html
            and "restoreAssistantSessionDraft();\nupdateChatComposerState();" in html)
     _check("frontend Assistant renders Copilot-style progress state parts",
            "chat-progress-stack" in html
@@ -5161,6 +5186,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'composer-grid-footer'" in html
            and "assistantUiSelfCheckRecord(checks,'composer-actions-same-row'" in html
            and "assistantUiSelfCheckRecord(checks,'composer-actions-visible'" in html
+           and "assistantUiSelfCheckRecord(checks,'composer-input-history-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'composer-edit-target-highlight-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'composer-attachment-summary-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'composer-queue-state-ready'" in html
            and "function assistantControlPopupSnapshot(kind)" in html
            and "assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'model-popup-configured-models-ready'" in html
@@ -5249,6 +5278,10 @@ def test_phase1_ai_editor_regressions() -> None:
            bool(smoke_source)
            and "window.runAssistantUiSelfCheck({ cleanup: true })" in smoke_source
            and "custom-endpoint-model" in smoke_source
+           and "composer-input-history-ready" in smoke_source
+           and "composer-edit-target-highlight-ready" in smoke_source
+           and "composer-attachment-summary-ready" in smoke_source
+           and "composer-queue-state-ready" in smoke_source
            and "model-popup-configured-models-ready" in smoke_source
            and "model-popup-custom-endpoint-models-ready" in smoke_source
            and "model-popup-custom-endpoint-selection-ready" in smoke_source

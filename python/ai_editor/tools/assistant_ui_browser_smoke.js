@@ -105,6 +105,10 @@ async function main() {
   }
   const required = [
     "composer-layout-present",
+    "composer-input-history-ready",
+    "composer-edit-target-highlight-ready",
+    "composer-attachment-summary-ready",
+    "composer-queue-state-ready",
     "model-popup-configured-models-ready",
     "model-popup-custom-endpoint-models-ready",
     "model-popup-custom-endpoint-selection-ready",

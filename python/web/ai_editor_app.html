@@ -956,6 +956,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-input-container.completion-open { border-color:color-mix(in srgb, var(--fg-accent) 65%, var(--border-focus));
   box-shadow:0 0 0 1px color-mix(in srgb, var(--fg-accent) 45%, transparent), 0 -8px 28px #00000026; }
 .chat-input-container.working { border-color:transparent; }
+.chat-input-container.queued { border-color:color-mix(in srgb, var(--fg-accent) 42%, var(--border));
+  background:color-mix(in srgb, var(--fg-accent) 4%, var(--bg3)); }
 .chat-input-container.working::before { content:''; position:absolute; inset:-1px; border-radius:9px;
   background:conic-gradient(from var(--beam-angle,135deg),
     transparent 0deg, color-mix(in srgb, var(--fg-accent) 60%, transparent) 20deg,
@@ -981,6 +983,10 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-response-pending .pending-dot:nth-child(2) { animation-delay:.14s; }
 .chat-response-pending .pending-dot:nth-child(3) { animation-delay:.28s; }
 .msg[data-chat-request-pending="true"] .msg-body { opacity:.72; }
+.msg.editing-source { outline:1px solid color-mix(in srgb,var(--fg-warning) 62%,var(--border));
+  outline-offset:-1px; background:color-mix(in srgb,var(--fg-warning) 4%,transparent); }
+.msg.editing-source .msg-header::after { content:'editing'; color:var(--fg-warning);
+  font:10px var(--mono); margin-left:auto; text-transform:uppercase; }
 .chat-queued-request-meta { display:inline-flex; align-items:center; gap:5px; margin-top:5px;
   color:var(--fg-dim); font:10px/16px var(--mono); }
 .chat-queued-request-meta::before { content:''; width:5px; height:5px; border-radius:50%;
@@ -1063,6 +1069,10 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-head-status { color:var(--fg-dim); font:10px/16px var(--mono); text-transform:uppercase; }
 .chat-head-status.running { color:var(--fg-accent); }
 .chat-head-status.ready { color:var(--fg-success); }
+.chat-head-status.queued { color:var(--fg-accent); }
+.chat-queue-badge { display:inline-flex; align-items:center; gap:4px; color:var(--fg-accent);
+  font:10px/16px var(--mono); border:1px solid color-mix(in srgb,var(--fg-accent) 45%,var(--border));
+  border-radius:999px; padding:0 6px; background:color-mix(in srgb,var(--fg-accent) 9%,transparent); }
 .chat-input-row { display:flex; gap:0; align-items:flex-end; }
 .chat-input { flex:1; background:transparent; color:var(--fg); border:none;
   padding:11px 13px 9px; font:13px/20px var(--sans); resize:none;
@@ -4337,9 +4347,20 @@ function renderChatComposerHeader(){
   appendChatHeadPill(head,'Agent: '+state.agent,!!state.agentId);
   if(state.workflowId)appendChatHeadPill(head,'Workflow: '+state.workflow,false);
   if(state.approval!=='default')appendChatHeadPill(head,state.approvalLabel,false);
+  if(typeof assistantAttachmentCounts==='function'){
+    const attachments=assistantAttachmentCounts();
+    if(attachments.total)appendChatHeadPill(head,attachments.total+' attached',false);
+  }
+  if(queued){
+    const badge=document.createElement('span');
+    badge.className='chat-queue-badge';
+    badge.textContent=queued+' queued';
+    badge.title=queued+' queued Assistant request'+(queued===1?'':'s');
+    head.appendChild(badge);
+  }
   const spacer=document.createElement('span');spacer.className='chat-head-spacer';head.appendChild(spacer);
   const status=document.createElement('span');
-  status.className='chat-head-status '+(streaming?'running':(chatComposerHasSendableValue()?'ready':''));
+  status.className='chat-head-status '+(queued?'queued':(streaming?'running':(chatComposerHasSendableValue()?'ready':'')));
   status.textContent=queued?('QUEUED '+queued):(streaming?t('thinking'):(chatComposerHasSendableValue()?t('send'):t('ready')));
   head.appendChild(status);
   head.classList.add('has-state');
@@ -8396,10 +8417,15 @@ async function runAssistantUiSelfCheck(opts){
   opts=opts||{};
   const checks=[];
   const layout=assistantComposerLayoutSnapshot();
+  const composerInteractions=assistantComposerInteractionSnapshot();
   assistantUiSelfCheckRecord(checks,'composer-layout-present',layout.ok,layout.display);
   assistantUiSelfCheckRecord(checks,'composer-grid-footer',layout.display==='grid',layout.gridTemplateColumns);
   assistantUiSelfCheckRecord(checks,'composer-actions-same-row',layout.sameRow,JSON.stringify({controlTop:layout.controlTop,actionTop:layout.actionTop}));
   assistantUiSelfCheckRecord(checks,'composer-actions-visible',layout.actions&&layout.actions.width>0,layout.actions&&layout.actions.width);
+  assistantUiSelfCheckRecord(checks,'composer-input-history-ready',composerInteractions.historyRecalled==='second selfcheck request'&&composerInteractions.historyRestored==='draft selfcheck',JSON.stringify(composerInteractions));
+  assistantUiSelfCheckRecord(checks,'composer-edit-target-highlight-ready',composerInteractions.editHighlighted&&composerInteractions.editCleared&&composerInteractions.editInput==='edit selfcheck request',JSON.stringify(composerInteractions));
+  assistantUiSelfCheckRecord(checks,'composer-attachment-summary-ready',composerInteractions.attachHeader&&composerInteractions.attachCounts.total===2&&composerInteractions.attachCounts.images===1&&composerInteractions.attachCounts.files===1,JSON.stringify(composerInteractions));
+  assistantUiSelfCheckRecord(checks,'composer-queue-state-ready',composerInteractions.queueClass&&composerInteractions.queueCount===1&&composerInteractions.queuedMessage,JSON.stringify(composerInteractions));
   const previousCustomModels=config.custom_models;
   config.custom_models={...(config.custom_models||{}),'custom-endpoint-model':{max_input:64000,max_output:4096,provider:config.provider||'openai'}};
   const providerPopup=assistantControlPopupSnapshot('provider');
@@ -8549,6 +8575,70 @@ function assistantComposerLayoutSnapshot(){
     items,
     nativeControls,
     nativeHidden:nativeControls.every(item=>item.exists&&item.display==='none'&&item.ariaHidden==='true')
+  };
+}
+function assistantComposerInteractionSnapshot(){
+  const input=$('chat-input'),container=$('chat-input-container'),head=$('chat-toolbar-head');
+  const previousHistory=_chatHistory.slice();
+  const previousHistoryIdx=_chatHistoryIdx;
+  const previousDraft=_chatDraft;
+  const previousAttachments=Array.isArray(attachments)?attachments.slice():[];
+  const previousInput=input?String(input.value||''):'';
+  const previousQueue=_assistantRequestQueue.slice();
+  const previousStreaming=streaming;
+  const beforeItems=chatConversationItems();
+  let historyRecalled='',historyRestored='',editHighlighted=false,editCleared=false,editInput='',queueClass=false,queueCount=0,queuedMessage=false,attachHeader=false,attachCounts={total:0,images:0,files:0};
+  try{
+    _chatHistory.length=0;
+    _chatHistory.push('first selfcheck request','second selfcheck request');
+    _chatHistoryIdx=-1;_chatDraft='';
+    if(input){
+      input.value='draft selfcheck';
+      input.selectionStart=input.selectionEnd=0;
+      input.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true,cancelable:true}));
+      historyRecalled=input.value;
+      input.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true}));
+      historyRestored=input.value;
+    }
+    attachments=[{name:'selfcheck.png',type:'image',data:''},{name:'notes.txt',type:'file',data:''}];
+    renderAttachments();
+    attachCounts=assistantAttachmentCounts();
+    attachHeader=!!(head&&String(head.textContent||'').includes('2 attached'));
+    const body=createMsg('user');
+    body.textContent='edit selfcheck request';
+    const msg=body.closest('.msg');
+    startAssistantUserMessageEdit(msg);
+    editHighlighted=!!(msg&&msg.classList.contains('editing-source')&&msg.dataset.editingSource==='true');
+    editInput=input?String(input.value||''):'';
+    cancelAssistantEdit('selfcheck');
+    editCleared=!!(msg&&!msg.classList.contains('editing-source')&&msg.dataset.editingSource!=='true');
+    assistantQueueTextRequest('queued selfcheck request',{fromInput:false,recordHistory:false,clearInput:false});
+    queueCount=assistantQueuedRequestCount();
+    queueClass=!!(container&&container.classList.contains('queued'));
+    queuedMessage=chatConversationItems().some(el=>el.dataset.chatRequestPending==='true');
+  }finally{
+    chatConversationItems().forEach(el=>{if(!beforeItems.includes(el))el.remove()});
+    _assistantRequestQueue.length=0;previousQueue.forEach(item=>_assistantRequestQueue.push(item));
+    _chatHistory.length=0;previousHistory.forEach(item=>_chatHistory.push(item));
+    _chatHistoryIdx=previousHistoryIdx;_chatDraft=previousDraft;
+    attachments=previousAttachments;renderAttachments();
+    if(input)setChatInputValue(previousInput,{focus:false,sync:false});
+    streaming=previousStreaming;
+    clearAssistantEditTarget({restore:false});
+    updateChatComposerState();
+    updateAssistantSurfaceState();
+  }
+  return {
+    historyRecalled,
+    historyRestored,
+    editHighlighted,
+    editCleared,
+    editInput,
+    attachHeader,
+    attachCounts,
+    queueClass,
+    queueCount,
+    queuedMessage
   };
 }
 function dedupeChatReferences(refs){
@@ -15959,7 +16049,40 @@ async function updateTokenCount(options){
 }
 
 // ── Chat input history (↑/↓) ──
-const _chatHistory=[];let _chatHistoryIdx=-1;let _chatDraft='';
+const _CHAT_INPUT_HISTORY_KEY='sao-ai-chat-input-history';
+const _chatHistory=(function(){try{const value=JSON.parse(localStorage.getItem(_CHAT_INPUT_HISTORY_KEY)||'[]');return Array.isArray(value)?value.map(v=>String(v||'')).filter(Boolean).slice(-80):[]}catch(_e){return []}})();
+let _chatHistoryIdx=-1;let _chatDraft='';
+function persistAssistantInputHistory(){
+  try{localStorage.setItem(_CHAT_INPUT_HISTORY_KEY,JSON.stringify(_chatHistory.slice(-80)))}catch(_e){}
+}
+function rememberAssistantInputHistory(value){
+  const text=String(value||'').trim();
+  if(!text)return false;
+  if(_chatHistory[_chatHistory.length-1]!==text){
+    _chatHistory.push(text);
+    while(_chatHistory.length>80)_chatHistory.shift();
+    persistAssistantInputHistory();
+  }
+  _chatHistoryIdx=-1;
+  _chatDraft='';
+  return true;
+}
+function chatInputCursorOnFirstLine(input){
+  const pos=Number(input&&input.selectionStart)||0;
+  return String(input&&input.value||'').lastIndexOf('\n',Math.max(0,pos-1))===-1;
+}
+function chatInputCursorOnLastLine(input){
+  const pos=Number(input&&input.selectionEnd)||0;
+  return String(input&&input.value||'').indexOf('\n',pos)===-1;
+}
+function applyAssistantHistoryEntry(input,value){
+  if(!input)return;
+  input.value=String(value||'');
+  input.selectionStart=input.selectionEnd=input.value.length;
+  resizeChatInput(input,200);
+  syncAssistantSessionState();
+  updateChatComposerState();
+}
 const _assistantRequestQueue=[];
 function assistantQueuedRequestCount(){return _assistantRequestQueue.length}
 function assistantQueuedRequestSelector(messageId){
@@ -15995,6 +16118,7 @@ function assistantQueueTextRequest(rawText,opts){
   let toolHint=String(opts.toolHint||'');
   const toolMatch=text.match(/^#([A-Za-z0-9_.:-]+)\s+/);
   if(!toolHint&&toolMatch){toolHint=toolMatch[1];text=text.slice(toolMatch[0].length).trim()}
+  if(opts.fromInput!==false&&opts.recordHistory!==false)rememberAssistantInputHistory(String(rawText||'').trim()||((toolHint?'#'+toolHint+' ':'')+text));
   if(opts.clearInput!==false)setChatInputValue('',{focus:true,sync:false});
   const popup=$('at-popup');if(popup)popup.classList.remove('open');
   if(typeof setChatCompletionState==='function')setChatCompletionState('',false);
@@ -16030,11 +16154,7 @@ async function doSend(){
   if(streaming){assistantQueueTextRequest(text,{fromInput:true,allowSlash:true,clearInput:true});return}
   if(!text)return;
   await assistantAutoSkipPendingQuestions('chat-submit');
-  // Push to history (cap 50)
-  if(!_chatHistory.length||_chatHistory[_chatHistory.length-1]!==text){
-    _chatHistory.push(text);if(_chatHistory.length>50)_chatHistory.shift();
-  }
-  _chatHistoryIdx=-1;
+  rememberAssistantInputHistory(text);
   inp.value='';inp.style.height='auto';
   const wm=$('chat-welcome-msg');if(wm)wm.remove();
 
@@ -16278,26 +16398,22 @@ chatInp.addEventListener('keydown',function(e){
   }
   // ── History navigation (↑/↓) ──
   if(e.key==='ArrowUp'&&_chatHistory.length){
-    const onFirstLine=this.value.lastIndexOf('\n',this.selectionStart-1)===-1;
-    if(onFirstLine&&_chatHistoryIdx<_chatHistory.length-1){
+    if(chatInputCursorOnFirstLine(this)&&_chatHistoryIdx<_chatHistory.length-1){
       e.preventDefault();
       if(_chatHistoryIdx===-1)_chatDraft=this.value;
       _chatHistoryIdx++;
-      this.value=_chatHistory[_chatHistory.length-1-_chatHistoryIdx];
-      this.selectionStart=this.selectionEnd=this.value.length;
-      syncAssistantSessionState();
+      applyAssistantHistoryEntry(this,_chatHistory[_chatHistory.length-1-_chatHistoryIdx]);
     }
   }
-  if(e.key==='ArrowDown'&&_chatHistoryIdx>=0){
+  if(e.key==='ArrowDown'&&_chatHistoryIdx>=0&&chatInputCursorOnLastLine(this)){
     e.preventDefault();
     _chatHistoryIdx--;
-    if(_chatHistoryIdx<0){this.value=_chatDraft;_chatHistoryIdx=-1}
-    else this.value=_chatHistory[_chatHistory.length-1-_chatHistoryIdx];
-    this.selectionStart=this.selectionEnd=this.value.length;
-    syncAssistantSessionState();
+    if(_chatHistoryIdx<0){applyAssistantHistoryEntry(this,_chatDraft);_chatHistoryIdx=-1}
+    else applyAssistantHistoryEntry(this,_chatHistory[_chatHistory.length-1-_chatHistoryIdx]);
   }
 });
 chatInp.addEventListener('input',function(){
+  if(_chatHistoryIdx>=0){_chatHistoryIdx=-1;_chatDraft=''}
   resizeChatInput(this,200);
   syncAssistantSessionState();
 });
@@ -28405,6 +28521,7 @@ async function sendAssistantTextRequest(rawText,opts){
   let toolHint=String(opts.toolHint||'');
   const toolMatch=text.match(/^#([A-Za-z0-9_.:-]+)\s+/);
   if(!toolHint&&toolMatch){toolHint=toolMatch[1];text=text.slice(toolMatch[0].length).trim()}
+  if(opts.fromInput!==false&&opts.recordHistory!==false)rememberAssistantInputHistory(String(rawText||'').trim()||((toolHint?'#'+toolHint+' ':'')+text));
   if(opts.fromInput!==false&&_assistantEditTargetMessage&&document.body.contains(_assistantEditTargetMessage)){
     removeChatMessagesFrom(_assistantEditTargetMessage);
     clearAssistantEditTarget({restore:false});
@@ -29317,6 +29434,10 @@ function clearAssistantEditTarget(options){
   const opts=options||{};
   const restore=!!opts.restore;
   const saved=_assistantEditRestoreState;
+  document.querySelectorAll('.msg.editing-source').forEach(el=>{
+    el.classList.remove('editing-source');
+    delete el.dataset.editingSource;
+  });
   _assistantEditTargetMessage=null;
   _assistantEditRestoreState=null;
   if(restore&&saved){
@@ -29502,7 +29623,13 @@ function startAssistantUserMessageEdit(msgEl){
   if(streaming){announceAssistantAction('Response in progress');showToast('Response in progress','warning',1800);return false}
   const req=chatUserRequestFromMessage(msgEl);
   if(!req.text){announceAssistantAction('No user request to edit');showToast('No user request to edit','warning',1800);return false}
+  document.querySelectorAll('.msg.editing-source').forEach(el=>{
+    el.classList.remove('editing-source');
+    delete el.dataset.editingSource;
+  });
   _assistantEditTargetMessage=msgEl;
+  msgEl.classList.add('editing-source');
+  msgEl.dataset.editingSource='true';
   const input=$('chat-input');
   _assistantEditRestoreState={draft:input?String(input.value||''):'',refs:assistantSessionNormalizeRefs(chatContextAttachments||[])};
   chatContextAttachments=req.refs.slice(0,20);
@@ -29940,6 +30067,7 @@ function renderAttachments(){
   }
   syncAssistantAttachmentState();
   syncAssistantSessionState();
+  if(typeof updateChatComposerState==='function')updateChatComposerState();
 }
 window.removeAttachment=removeAttachment;
 window.clearAttachments=clearAttachments;
@@ -30092,6 +30220,7 @@ window.assistantNativeResponseRenderSummary=assistantNativeResponseRenderSummary
 window.replayAssistantNativeResponseFixture=replayAssistantNativeResponseFixture;
 window.runAssistantUiSelfCheck=runAssistantUiSelfCheck;
 window.assistantComposerLayoutSnapshot=assistantComposerLayoutSnapshot;
+window.assistantComposerInteractionSnapshot=assistantComposerInteractionSnapshot;
 window.assistantSubmitResponsePartAction=assistantSubmitResponsePartAction;
 window.assistantActionTraySnapshot=assistantActionTraySnapshot;
 window.focusAssistantQuestionCarousel=()=>focusAssistantActionCarousel('questionCarousel');
