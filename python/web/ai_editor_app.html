@@ -176,6 +176,8 @@ body.window-resizing * { cursor:inherit !important; }
 .history-session-chip.response { color:var(--fg-accent); border-color:color-mix(in srgb,var(--border-focus) 45%,var(--border)); }
 .history-session-chip.reference,.history-session-chip.context-part,.history-session-chip.tree { color:var(--fg-success); }
 .history-session-chip.changes { color:var(--fg-warning); }
+.history-session-chip.action { color:var(--fg-tool); border-color:color-mix(in srgb,var(--fg-tool) 45%,var(--border)); }
+.history-session-chip.lineage { color:var(--fg-bright); border-color:color-mix(in srgb,var(--fg-bright) 45%,var(--border)); }
 .history-session-chip.tokens { color:var(--fg-dim); }
 .history-session-chip.error { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 45%,var(--border)); }
 .sb-group { padding:8px 16px 4px; font-size:11px; font-weight:600; color:var(--fg-dim);
@@ -8135,12 +8137,14 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped',[providerPopup,modelPopup,agentPopup,workflowPopup].every(s=>s.shown&&s.display==='block'&&s.rectReady&&s.opensAboveTrigger&&s.notToolbarClipped&&!s.className.includes('mode-popup')),JSON.stringify({providerPopup,modelPopup,agentPopup,workflowPopup}));
   assistantUiSelfCheckRecord(checks,'agent-popup-configured-agents-ready',agentPopup.shown&&agentPopup.optionCount>=1&&agentPopup.focusableCount===agentPopup.optionCount&&agentPopup.keyboardReady&&agentPopup.visibleText.includes('Agent'),JSON.stringify(agentPopup));
   assistantUiSelfCheckRecord(checks,'provider-session-state-smoke',providerSession.runningType==='provider'&&providerSession.runningStatus==='inProgress'&&providerSession.savedType==='provider'&&providerSession.savedProvider==='assistant-selfcheck-provider'&&providerSession.savedMessageCount===2&&providerSession.savedContextCount===1&&String(providerSession.resource||'').startsWith('sao-ai-chat://provider/')&&providerSession.panelResource===providerSession.resource&&providerSession.panelRequests==='1'&&providerSession.opened===true&&providerSession.restoredMessages===2&&providerSession.savedNativePayload===true&&providerSession.restoredNativeCards>=2&&providerSession.restoredReferenceCards>=1&&providerSession.restoredFollowups===1&&providerSession.activeProvider==='assistant-selfcheck-provider'&&providerSession.sessionType==='provider'&&providerSession.sessionProvider==='assistant-selfcheck-provider',JSON.stringify(providerSession));
-  assistantUiSelfCheckRecord(checks,'history-native-affordances-visible',historyAffordance.itemExists&&historyAffordance.nativeParts===2&&historyAffordance.nativeTodos===1&&historyAffordance.nativeChanges===1&&historyAffordance.nativeRefs===1&&historyAffordance.nativeUsedContext===1&&historyAffordance.nativeTrees===1&&historyAffordance.nativeFollowups===1&&historyAffordance.nativeTokens===24&&historyAffordance.chipLabels.includes('2 parts')&&historyAffordance.chipLabels.includes('1 edit')&&historyAffordance.chipLabels.includes('1 ref')&&historyAffordance.chipLabels.includes('1 used')&&historyAffordance.chipLabels.includes('1 tree')&&historyAffordance.chipLabels.includes('1 follow-up')&&historyAffordance.chipLabels.includes('24 tok')&&historyAffordance.searchMatches&&historyAffordance.aria.includes('2 parts')&&historyAffordance.title.includes('Modified files: 1'),JSON.stringify(historyAffordance));
-  assistantUiSelfCheckRecord(checks,'saved-history-native-affordances-visible',savedHistoryAffordance.itemExists&&savedHistoryAffordance.nativeParts===2&&savedHistoryAffordance.nativeChanges===1&&savedHistoryAffordance.nativeRefs===1&&savedHistoryAffordance.nativeUsedContext===1&&savedHistoryAffordance.nativeTrees===1&&savedHistoryAffordance.nativeFollowups===1&&savedHistoryAffordance.nativeTokens===24&&savedHistoryAffordance.chipLabels.includes('2 parts')&&savedHistoryAffordance.chipLabels.includes('1 edit')&&savedHistoryAffordance.chipLabels.includes('1 ref')&&savedHistoryAffordance.chipLabels.includes('1 used')&&savedHistoryAffordance.chipLabels.includes('1 tree')&&savedHistoryAffordance.chipLabels.includes('1 follow-up')&&savedHistoryAffordance.chipLabels.includes('24 tok')&&savedHistoryAffordance.actionKinds.includes('references')&&savedHistoryAffordance.actionKinds.includes('changes')&&savedHistoryAffordance.actionKinds.includes('tree')&&savedHistoryAffordance.actionKinds.includes('reference-item')&&savedHistoryAffordance.actionKinds.includes('change-item')&&savedHistoryAffordance.actionKinds.includes('tree-item')&&savedHistoryAffordance.actionTargets.includes('file:///workspace/history.ts')&&savedHistoryAffordance.disabledActions.length===0&&savedHistoryAffordance.searchMatches&&savedHistoryAffordance.aria.includes('2 parts')&&savedHistoryAffordance.title.includes('Modified files: 1'),JSON.stringify(savedHistoryAffordance));
+  assistantUiSelfCheckRecord(checks,'history-native-affordances-visible',historyAffordance.itemExists&&historyAffordance.nativeParts===2&&historyAffordance.nativeTodos===1&&historyAffordance.nativeChanges===1&&historyAffordance.nativeRefs===1&&historyAffordance.nativeUsedContext===1&&historyAffordance.nativeTrees===1&&historyAffordance.nativeFollowups===1&&historyAffordance.nativeActions===1&&historyAffordance.nativeActionErrors===0&&historyAffordance.nativeTokens===24&&historyAffordance.chipLabels.includes('2 parts')&&historyAffordance.chipLabels.includes('1 edit')&&historyAffordance.chipLabels.includes('1 ref')&&historyAffordance.chipLabels.includes('1 used')&&historyAffordance.chipLabels.includes('1 tree')&&historyAffordance.chipLabels.includes('1 follow-up')&&historyAffordance.chipLabels.includes('1 action')&&historyAffordance.chipLabels.includes('24 tok')&&historyAffordance.searchMatches&&historyAffordance.aria.includes('1 action')&&historyAffordance.title.includes('Submitted actions: 1'),JSON.stringify(historyAffordance));
+  assistantUiSelfCheckRecord(checks,'saved-history-native-affordances-visible',savedHistoryAffordance.itemExists&&savedHistoryAffordance.nativeParts===2&&savedHistoryAffordance.nativeChanges===1&&savedHistoryAffordance.nativeRefs===1&&savedHistoryAffordance.nativeUsedContext===1&&savedHistoryAffordance.nativeTrees===1&&savedHistoryAffordance.nativeFollowups===1&&savedHistoryAffordance.nativeActions===1&&savedHistoryAffordance.nativeActionErrors===0&&savedHistoryAffordance.nativeTokens===24&&savedHistoryAffordance.chipLabels.includes('2 parts')&&savedHistoryAffordance.chipLabels.includes('1 edit')&&savedHistoryAffordance.chipLabels.includes('1 ref')&&savedHistoryAffordance.chipLabels.includes('1 used')&&savedHistoryAffordance.chipLabels.includes('1 tree')&&savedHistoryAffordance.chipLabels.includes('1 follow-up')&&savedHistoryAffordance.chipLabels.includes('1 action')&&savedHistoryAffordance.chipLabels.includes('24 tok')&&savedHistoryAffordance.actionKinds.includes('references')&&savedHistoryAffordance.actionKinds.includes('changes')&&savedHistoryAffordance.actionKinds.includes('tree')&&savedHistoryAffordance.actionKinds.includes('reference-item')&&savedHistoryAffordance.actionKinds.includes('change-item')&&savedHistoryAffordance.actionKinds.includes('tree-item')&&savedHistoryAffordance.actionTargets.includes('file:///workspace/history.ts')&&savedHistoryAffordance.disabledActions.length===0&&savedHistoryAffordance.searchMatches&&savedHistoryAffordance.aria.includes('1 action')&&savedHistoryAffordance.title.includes('Submitted actions: 1'),JSON.stringify(savedHistoryAffordance));
+  assistantUiSelfCheckRecord(checks,'saved-history-action-result-markers-visible',savedHistoryAffordance.nativeActions===1&&savedHistoryAffordance.nativeActionErrors===0&&savedHistoryAffordance.chipLabels.includes('1 action')&&savedHistoryAffordance.searchMatches&&savedHistoryAffordance.aria.includes('1 action')&&savedHistoryAffordance.title.includes('Submitted actions: 1'),JSON.stringify(savedHistoryAffordance));
   assistantUiSelfCheckRecord(checks,'native-only-session-parts-persist',nativeOnlySession.normalizedCount===1&&nativeOnlySession.normalizedContent===''&&nativeOnlySession.hasNativePayload&&nativeOnlySession.serializedFollowups===1&&nativeOnlySession.renderedNativeParts>=1&&nativeOnlySession.renderedFollowups===1&&nativeOnlySession.nativeFollowups===1&&nativeOnlySession.summaryParts===1&&nativeOnlySession.summaryFollowups===1&&nativeOnlySession.searchMatches,JSON.stringify(nativeOnlySession));
   assistantUiSelfCheckRecord(checks,'change-set-state-restores-and-persists',changeSetRestore.before.state==='applied'&&changeSetRestore.before.appliedEdits===2&&changeSetRestore.before.statusText.includes('Applied 2')&&changeSetRestore.after.state==='previewed'&&changeSetRestore.after.previewedAt==='23456'&&changeSetRestore.patchedState==='previewed'&&changeSetRestore.storedState==='previewed'&&changeSetRestore.storedPreviewedDiffs===1,JSON.stringify(changeSetRestore));
   assistantUiSelfCheckRecord(checks,'action-result-state-restores-and-persists',actionResultRestore.restoredDisabled&&actionResultRestore.restoredState==='submitted'&&actionResultRestore.restoredFlag==='true'&&actionResultRestore.restoredText.includes('✓')&&actionResultRestore.restoredNativeCount===1&&actionResultRestore.trayPendingAfterRestore===0&&actionResultRestore.patchedOk&&actionResultRestore.storedOk&&actionResultRestore.storedAction==='apply'&&actionResultRestore.storedCount===1,JSON.stringify(actionResultRestore));
-  assistantUiSelfCheckRecord(checks,'fork-lineage-history-visible',forkLineage.itemExists&&forkLineage.parentResource==='sao-ai-chat://local/parent-lineage-selfcheck'&&forkLineage.parentTitle==='Parent Assistant Session'&&forkLineage.labelTitle.includes('Forked from: Parent Assistant Session')&&forkLineage.actionLabels.includes('fork')&&forkLineage.searchMatches,JSON.stringify(forkLineage));
+  assistantUiSelfCheckRecord(checks,'fork-lineage-history-visible',forkLineage.itemExists&&forkLineage.parentResource==='sao-ai-chat://local/parent-lineage-selfcheck'&&forkLineage.parentTitle==='Parent Assistant Session'&&forkLineage.labelTitle.includes('Forked from: Parent Assistant Session')&&forkLineage.chipLabels.includes('fork: Parent Assistant Session')&&forkLineage.chipKinds.some(kind=>kind.includes('lineage'))&&forkLineage.actionLabels.includes('fork')&&forkLineage.searchMatches,JSON.stringify(forkLineage));
+  assistantUiSelfCheckRecord(checks,'fork-lineage-chip-visible',forkLineage.chipLabels.includes('fork: Parent Assistant Session')&&forkLineage.chipKinds.some(kind=>kind.includes('lineage'))&&forkLineage.labelTitle.includes('Forked from: Parent Assistant Session'),JSON.stringify(forkLineage));
   assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready',workflowPopup.shown&&workflowPopup.workflowModeCount===3&&workflowPopup.workflowModeStrip&&workflowPopup.workflowModeToolbar&&workflowPopup.optionCount>=4&&workflowPopup.focusableCount===workflowPopup.optionCount&&workflowPopup.keyboardReady,JSON.stringify(workflowPopup));
   assistantUiSelfCheckRecord(checks,'workflow-popup-mode-smoke',workflowModeSmoke.states.length===3&&workflowModeSmoke.states.every(state=>state.strip&&state.toolbar&&state.active.includes(state.mode))&&workflowModeSmoke.selected.value==='assistant-selfcheck-flow'&&workflowModeSmoke.selected.mode==='on'&&workflowModeSmoke.selected.runDisabled===false&&workflowModeSmoke.custom.prompt==='selfcheck custom workflow prompt'&&workflowModeSmoke.custom.runDisabled===false,JSON.stringify(workflowModeSmoke));
   assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready',workflowEditor.modalExists&&workflowEditor.editorExists&&workflowEditor.rowCount===2&&workflowEditor.labelInputs===2&&workflowEditor.agentInputs===2&&workflowEditor.outputInputs===2&&workflowEditor.promptInputs===2&&workflowEditor.moveButtons===4&&workflowEditor.deleteButtons===2&&workflowEditor.addButtonExists&&workflowEditor.collectedCount===2&&workflowEditor.idReadOnly,JSON.stringify(workflowEditor));
@@ -16914,12 +16918,24 @@ function confirmDeleteAssistantSession(session){
   return window.confirm('Delete local chat session "'+title+'"?');
 }
 function assistantHistorySessionNativeSummary(session){
-  const summary={parts:0,todos:0,changes:0,refs:0,usedContext:0,trees:0,tokens:0,errors:0,followups:0,models:Object.create(null),keywords:[]};
+  const summary={parts:0,todos:0,changes:0,refs:0,usedContext:0,trees:0,tokens:0,errors:0,followups:0,actions:0,actionErrors:0,models:Object.create(null),keywords:[],actionItems:[]};
   (Array.isArray(session&&session.messages)?session.messages:[]).forEach(message=>{
     const payload=assistantSessionSerializableNativePayload(message&&message.nativePayload);
     if(!payload)return;
     if(payload.model)summary.models[String(payload.model)]=true;
     if(payload.error)summary.errors+=1;
+    if(Array.isArray(payload.actionResults)){
+      summary.actions+=payload.actionResults.length;
+      payload.actionResults.forEach(result=>{
+        if(result&&typeof result==='object'&&(result.ok===false||result.error))summary.actionErrors+=1;
+        if(summary.actionItems.length>=5||!result||typeof result!=='object')return;
+        const label=String(result.action||result.value||result.key||'action');
+        const item={label,status:result.ok?'ok':'error'};
+        if(result.key)item.key=String(result.key);
+        if(result.error)item.error=String(result.error);
+        summary.actionItems.push(item);
+      });
+    }
     if(Array.isArray(payload.responseParts)){
       summary.parts+=payload.responseParts.length;
       payload.responseParts.forEach(part=>{
@@ -16949,6 +16965,8 @@ function assistantHistorySessionNativeSummary(session){
     summary.followups?'follow up suggestions prompts':'',
     summary.tokens?'tokens usage':'',
     summary.errors?'error failed':'',
+    summary.actions?'submitted actions action results confirmations questions':'',
+    summary.actionErrors?'failed actions action errors':'',
     ...summary.modelLabels,
     ...summary.keywords
   ].filter(Boolean).join(' ');
@@ -16969,6 +16987,8 @@ function assistantHistoryEntryNativeSummary(entry){
     usedContext:Number(raw.usedContext||raw.used_context||0)||0,
     trees:Number(raw.trees||0)||0,
     followups:Number(raw.followups||raw.followUps||raw.suggestedFollowups||raw.suggested_followups||0)||0,
+    actions:Number(raw.actions||raw.actionResults||raw.action_results||0)||0,
+    actionErrors:Number(raw.actionErrors||raw.action_errors||0)||0,
     tokens:Number(raw.tokens||0)||0,
     errors:Number(raw.errors||0)||0,
     modelLabels:Array.isArray(raw.modelLabels)?raw.modelLabels:(Array.isArray(raw.models)?raw.models:[]),
@@ -16977,6 +16997,12 @@ function assistantHistoryEntryNativeSummary(entry){
     changeItems:normalizeItems(raw.changeItems||raw.change_items),
     treeItems:normalizeItems(raw.treeItems||raw.tree_items),
     followupItems:normalizeItems(raw.followupItems||raw.followup_items),
+    actionItems:Array.isArray(raw.actionItems||raw.action_items)?(raw.actionItems||raw.action_items).map(item=>({
+      label:String(item&&item.label||item&&item.action||item&&item.value||item&&item.key||'action'),
+      key:String(item&&item.key||''),
+      status:String(item&&item.status||''),
+      error:String(item&&item.error||'')
+    })).filter(item=>item.label||item.key).slice(0,5):[],
     searchText:String(raw.searchText||raw.search_text||'')
   };
   if(!summary.searchText){
@@ -16990,6 +17016,8 @@ function assistantHistoryEntryNativeSummary(entry){
       summary.followups?'follow up suggestions prompts':'',
       summary.tokens?'tokens usage':'',
       summary.errors?'error failed':'',
+      summary.actions?'submitted actions action results confirmations questions':'',
+      summary.actionErrors?'failed actions action errors':'',
       ...summary.modelLabels,
       ...summary.keywords
     ].filter(Boolean).join(' ');
@@ -17005,6 +17033,7 @@ function assistantHistoryNativeSummaryChips(summary){
   if(summary&&summary.usedContext)chips.push({label:summary.usedContext+' used',kind:'context-part'});
   if(summary&&summary.trees)chips.push({label:summary.trees+' tree'+(summary.trees===1?'':'s'),kind:'tree'});
   if(summary&&summary.followups)chips.push({label:summary.followups+' follow-up'+(summary.followups===1?'':'s'),kind:'response'});
+  if(summary&&summary.actions)chips.push({label:summary.actions+' action'+(summary.actions===1?'':'s'),kind:'action'});
   if(summary&&summary.tokens)chips.push({label:summary.tokens+' tok',kind:'tokens'});
   if(summary&&summary.errors)chips.push({label:'error',kind:'error'});
   return chips;
@@ -17033,7 +17062,7 @@ function assistantHistorySessionChips(session,current){
   if(current)chips.push({label:'current',kind:'current'});
   if(status==='inProgress'||session&&session.requestInProgress)chips.push({label:'running',kind:'running'});
   else if(session&&session.draft)chips.push({label:'draft',kind:'draft'});
-  if(session&&session.parentSessionResource)chips.push({label:'fork',kind:'fork'});
+  if(session&&session.parentSessionResource)chips.push({label:'fork: '+String(session.parentSessionTitle||'parent').slice(0,24),kind:'lineage'});
   chips.push({label:String(session&&session.requestCount||0)+' req',kind:'count'});
   if(contextCount)chips.push({label:contextCount+' ctx',kind:'context'});
   if(session&&session.provider)chips.push({label:providerLabel(session.provider),kind:'provider'});
@@ -17070,6 +17099,8 @@ function renderHistorySessionItem(list,session,index){
   item.dataset.sessionNativeUsedContext=String(nativeSummary.usedContext);
   item.dataset.sessionNativeTrees=String(nativeSummary.trees);
   item.dataset.sessionNativeFollowups=String(nativeSummary.followups);
+  item.dataset.sessionNativeActions=String(nativeSummary.actions);
+  item.dataset.sessionNativeActionErrors=String(nativeSummary.actionErrors);
   item.dataset.sessionNativeTokens=String(nativeSummary.tokens);
   item.dataset.sessionNativeErrors=String(nativeSummary.errors);
   item.setAttribute('aria-label','Assistant session '+String(session.title||session.id||'Chat session')+' '+chips.map(c=>c.label).join(' '));
@@ -17094,6 +17125,8 @@ function renderHistorySessionItem(list,session,index){
     nativeSummary.usedContext?'Used context: '+nativeSummary.usedContext:'',
     nativeSummary.trees?'File trees: '+nativeSummary.trees:'',
     nativeSummary.followups?'Follow-ups: '+nativeSummary.followups:'',
+    nativeSummary.actions?'Submitted actions: '+nativeSummary.actions:'',
+    nativeSummary.actionErrors?'Action errors: '+nativeSummary.actionErrors:'',
     nativeSummary.tokens?'Tokens: '+nativeSummary.tokens:'',
     nativeSummary.errors?'Errors: '+nativeSummary.errors:''
   ].filter(Boolean).join('\n');
@@ -17145,6 +17178,7 @@ function assistantHistoryAffordanceSmokeSnapshot(){
         usedContext:[{kind:'file',label:'context.ts',path:'file:///workspace/context.ts'}],
         fileTrees:[{label:'tree',items:[{name:'history.ts'}]}],
         followups:[{title:'Continue with native history',message:'Continue with native history',kind:'ask',source:'selfcheck'}],
+        actionResults:[{key:'history-action-apply',action:'apply',value:'apply',ok:true}],
         usage:{total_tokens:24}
       }
     }]
@@ -17162,11 +17196,14 @@ function assistantHistoryAffordanceSmokeSnapshot(){
     nativeUsedContext:item?Number(item.dataset.sessionNativeUsedContext||0):0,
     nativeTrees:item?Number(item.dataset.sessionNativeTrees||0):0,
     nativeFollowups:item?Number(item.dataset.sessionNativeFollowups||0):0,
+    nativeActions:item?Number(item.dataset.sessionNativeActions||0):0,
+    nativeActionErrors:item?Number(item.dataset.sessionNativeActionErrors||0):0,
     nativeTokens:item?Number(item.dataset.sessionNativeTokens||0):0,
     aria:item?String(item.getAttribute('aria-label')||''):'',
     title:item?String((item.querySelector('.history-session-title')||{}).title||''):'',
     searchMatches:historyMatchesQuery([session.title,assistantHistorySessionNativeSummary(session).searchText],'modified files')
       && historyMatchesQuery([session.title,assistantHistorySessionNativeSummary(session).searchText],'used context')
+      && historyMatchesQuery([session.title,assistantHistorySessionNativeSummary(session).searchText],'submitted actions')
   };
   list.remove();
   return snapshot;
@@ -17184,6 +17221,8 @@ function renderHistoryBackendItem(list,entry,index){
   item.dataset.savedNativeUsedContext=String(nativeSummary.usedContext);
   item.dataset.savedNativeTrees=String(nativeSummary.trees);
   item.dataset.savedNativeFollowups=String(nativeSummary.followups);
+  item.dataset.savedNativeActions=String(nativeSummary.actions);
+  item.dataset.savedNativeActionErrors=String(nativeSummary.actionErrors);
   item.dataset.savedNativeTokens=String(nativeSummary.tokens);
   item.dataset.savedNativeErrors=String(nativeSummary.errors);
   item.setAttribute('aria-label','Saved chat history '+String(entry.title||entry.id||'Untitled')+' '+assistantHistoryNativeSummaryChips(nativeSummary).map(chip=>chip.label).join(' '));
@@ -17203,6 +17242,8 @@ function renderHistoryBackendItem(list,entry,index){
     nativeSummary.usedContext?'Used context: '+nativeSummary.usedContext:'',
     nativeSummary.trees?'File trees: '+nativeSummary.trees:'',
     nativeSummary.followups?'Follow-ups: '+nativeSummary.followups:'',
+    nativeSummary.actions?'Submitted actions: '+nativeSummary.actions:'',
+    nativeSummary.actionErrors?'Action errors: '+nativeSummary.actionErrors:'',
     nativeSummary.tokens?'Tokens: '+nativeSummary.tokens:'',
     nativeSummary.errors?'Errors: '+nativeSummary.errors:''
   ].filter(Boolean).join('\n');
@@ -17238,14 +17279,15 @@ function assistantSavedHistoryAffordanceSmokeSnapshot(){
     message_count:2,
     model:'selfcheck-model',
     native_summary:{
-      parts:2,todos:1,changes:1,refs:1,usedContext:1,trees:1,followups:1,tokens:24,errors:0,
+      parts:2,todos:1,changes:1,refs:1,usedContext:1,trees:1,followups:1,actions:1,actionErrors:0,tokens:24,errors:0,
       modelLabels:['selfcheck-model'],
       keywords:['todoList','modifiedFilesConfirmation'],
       referenceItems:[{path:'file:///workspace/history.ts',label:'history.ts',kind:'anchor'}],
       changeItems:[{path:'file:///workspace/history.ts',label:'history.ts',kind:'modifiedFilesConfirmation'}],
       treeItems:[{path:'file:///workspace/history.ts',label:'history.ts'}],
       followupItems:[{label:'Continue with native history',kind:'ask'}],
-      searchText:'response parts todo list modified files changes edits references anchors used context file tree follow up suggestions prompts tokens usage selfcheck-model'
+      actionItems:[{label:'apply',key:'history-action-apply',status:'ok'}],
+      searchText:'response parts todo list modified files changes edits references anchors used context file tree follow up suggestions prompts submitted actions action results confirmations questions tokens usage selfcheck-model'
     }
   };
   const rendered=renderHistoryBackendItem(list,entry,0);
@@ -17259,6 +17301,8 @@ function assistantSavedHistoryAffordanceSmokeSnapshot(){
     nativeUsedContext:item?Number(item.dataset.savedNativeUsedContext||0):0,
     nativeTrees:item?Number(item.dataset.savedNativeTrees||0):0,
     nativeFollowups:item?Number(item.dataset.savedNativeFollowups||0):0,
+    nativeActions:item?Number(item.dataset.savedNativeActions||0):0,
+    nativeActionErrors:item?Number(item.dataset.savedNativeActionErrors||0):0,
     nativeTokens:item?Number(item.dataset.savedNativeTokens||0):0,
     actionKinds:item?Array.from(item.querySelectorAll('[data-history-action]')).map(el=>String(el.dataset.historyAction||'')):[],
     actionTargets:item?Array.from(item.querySelectorAll('[data-history-target]')).map(el=>String(el.dataset.historyTarget||'')):[],
@@ -17267,6 +17311,7 @@ function assistantSavedHistoryAffordanceSmokeSnapshot(){
     title:item?String((item.querySelector('.history-session-title')||{}).title||''):'',
     searchMatches:historyMatchesQuery([entry.title,entry.id,entry.message_count,entry.model,assistantHistoryEntryNativeSummary(entry).searchText],'modified files')
       && historyMatchesQuery([entry.title,entry.id,entry.message_count,entry.model,assistantHistoryEntryNativeSummary(entry).searchText],'file tree')
+      && historyMatchesQuery([entry.title,entry.id,entry.message_count,entry.model,assistantHistoryEntryNativeSummary(entry).searchText],'submitted actions')
   };
   list.remove();
   return snapshot;
@@ -17381,6 +17426,8 @@ function assistantForkLineageSmokeSnapshot(){
     labelTitle:title,
     aria:item?String(item.getAttribute('aria-label')||''):'',
     actionLabels:item?Array.from(item.querySelectorAll('.history-session-action')).map(el=>String(el.textContent||'')):[],
+    chipLabels:item?Array.from(item.querySelectorAll('.history-session-chip')).map(el=>String(el.textContent||'')):[],
+    chipKinds:item?Array.from(item.querySelectorAll('.history-session-chip')).map(el=>String(el.className||'')):[],
     searchMatches:historyMatchesQuery([session.title,session.sessionResource,session.id,session.provider,session.model,session.mode,session.agentId,session.parentSessionResource,session.parentSessionTitle],'parent assistant session')
   };
   list.remove();

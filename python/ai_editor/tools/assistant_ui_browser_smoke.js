@@ -115,6 +115,8 @@ async function main() {
     "change-set-state-restores-and-persists",
     "action-result-state-restores-and-persists",
     "fork-lineage-history-visible",
+    "saved-history-action-result-markers-visible",
+    "fork-lineage-chip-visible",
     "workflow-popup-modes-ready",
     "workflow-result-state-rendered",
     "workflow-run-button-active-state",

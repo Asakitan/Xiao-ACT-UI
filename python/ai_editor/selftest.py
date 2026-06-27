@@ -4118,6 +4118,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "item.dataset.sessionNativeUsedContext=String(nativeSummary.usedContext);" in html
            and "item.dataset.sessionNativeTrees=String(nativeSummary.trees);" in html
            and "item.dataset.sessionNativeFollowups=String(nativeSummary.followups);" in html
+           and "item.dataset.sessionNativeActions=String(nativeSummary.actions);" in html
+           and "item.dataset.sessionNativeActionErrors=String(nativeSummary.actionErrors);" in html
            and "item.dataset.sessionNativeTokens=String(nativeSummary.tokens);" in html
            and "item.dataset.savedNativeParts=String(nativeSummary.parts);" in html
            and "item.dataset.savedNativeChanges=String(nativeSummary.changes);" in html
@@ -4125,10 +4127,13 @@ def test_phase1_ai_editor_regressions() -> None:
            and "item.dataset.savedNativeUsedContext=String(nativeSummary.usedContext);" in html
            and "item.dataset.savedNativeTrees=String(nativeSummary.trees);" in html
            and "item.dataset.savedNativeFollowups=String(nativeSummary.followups);" in html
+           and "item.dataset.savedNativeActions=String(nativeSummary.actions);" in html
+           and "item.dataset.savedNativeActionErrors=String(nativeSummary.actionErrors);" in html
            and "item.dataset.savedNativeTokens=String(nativeSummary.tokens);" in html
            and "referenceItems:normalizeItems(raw.referenceItems||raw.reference_items)" in html
            and "changeItems:normalizeItems(raw.changeItems||raw.change_items)" in html
            and "treeItems:normalizeItems(raw.treeItems||raw.tree_items)" in html
+           and "actionItems:Array.isArray(raw.actionItems||raw.action_items)" in html
            and "main.className='history-session-main';" in html
            and "el.className='history-session-chip '+chip.kind;" in html
            and ".history-session-chip.running" in html
@@ -4136,6 +4141,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".history-session-chip.approval" in html
            and ".history-session-chip.response" in html
            and ".history-session-chip.changes" in html
+           and ".history-session-chip.action" in html
+           and ".history-session-chip.lineage" in html
            and ".history-session-chip.reference" in html
            and ".history-session-chip.tree" in html
            and ".history-session-chip.tokens" in html
@@ -5029,6 +5036,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'saved-history-native-affordances-visible'" in html
            and "assistantUiSelfCheckRecord(checks,'action-result-state-restores-and-persists'" in html
            and "assistantUiSelfCheckRecord(checks,'fork-lineage-history-visible'" in html
+           and "assistantUiSelfCheckRecord(checks,'saved-history-action-result-markers-visible'" in html
+           and "assistantUiSelfCheckRecord(checks,'fork-lineage-chip-visible'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready'" in html
            and "function assistantWorkflowEditorSnapshot()" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready'" in html
@@ -5066,6 +5075,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "panel.dataset.chatUiSelfCheckTotal=String(checks.length);" in html
            and "function assistantChangeSetRestoreStateSnapshot()" in html
            and "copyArray('actionResults','actionResults','action_results');" in html
+           and "summary.actions?'submitted actions action results confirmations questions'" in html
+           and "nativeSummary.actions?'Submitted actions: '+nativeSummary.actions:''" in html
+           and "fork: '+String(session.parentSessionTitle||'parent').slice(0,24)" in html
            and "parentSessionTitle:String(src.parentSessionTitle||'')" in html
            and "item.dataset.sessionParentTitle=String(session.parentSessionTitle||'');" in html
            and "function chatChangeSetStatePatch(card,state,detail)" in html
@@ -5091,6 +5103,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "change-set-state-restores-and-persists" in smoke_source
            and "action-result-state-restores-and-persists" in smoke_source
            and "fork-lineage-history-visible" in smoke_source
+           and "saved-history-action-result-markers-visible" in smoke_source
+           and "fork-lineage-chip-visible" in smoke_source
            and "workflow-result-state-rendered" in smoke_source
            and "workflow-run-button-active-state" in smoke_source
            and "channel: \"msedge\"" in smoke_source
@@ -12910,6 +12924,9 @@ def test_history() -> None:
             "followups": [
                 {"title": "Continue native history", "message": "Continue native history", "kind": "ask"}
             ],
+            "actionResults": [
+                {"key": "history-action-apply", "action": "apply", "value": "apply", "ok": True}
+            ],
             "usage": {"total_tokens": 24},
         }},
     ]
@@ -12928,12 +12945,16 @@ def test_history() -> None:
            and summary.get("usedContext") == 1
            and summary.get("trees") == 1
            and summary.get("followups") == 1
+           and summary.get("actions") == 1
+           and summary.get("actionErrors") == 0
            and summary.get("tokens") == 24
            and summary.get("referenceItems", [{}])[0].get("label") == "history.py"
            and summary.get("changeItems", [{}])[0].get("path") == "file:///tmp/history.py"
            and summary.get("treeItems", [{}])[0].get("path") == "file:///tmp/history.py"
            and summary.get("followupItems", [{}])[0].get("label") == "Continue native history"
+           and summary.get("actionItems", [{}])[0].get("label") == "apply"
            and "modified files" in summary.get("searchText", "")
+           and "submitted actions" in summary.get("searchText", "")
            and "follow up" in summary.get("searchText", ""))
     _check("history persists native payload and header summary",
            native_loaded is not None
@@ -12942,10 +12963,12 @@ def test_history() -> None:
            and native_list_summary.get("parts") == 2
            and native_list_summary.get("refs") == 1
            and native_list_summary.get("followups") == 1
+           and native_list_summary.get("actions") == 1
            and native_list_summary.get("referenceItems", [{}])[0].get("label") == "history.py"
            and native_list_summary.get("changeItems", [{}])[0].get("path") == "file:///tmp/history.py"
            and native_list_summary.get("treeItems", [{}])[0].get("path") == "file:///tmp/history.py"
            and native_list_summary.get("followupItems", [{}])[0].get("label") == "Continue native history"
+           and native_list_summary.get("actionItems", [{}])[0].get("key") == "history-action-apply"
            and "file tree" in native_list_summary.get("searchText", ""))
     delete_conversation(native_cid)
 

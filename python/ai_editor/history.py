@@ -40,6 +40,10 @@ def _native_summary_search_text(summary: Dict[str, Any]) -> str:
         terms.append("tokens usage")
     if summary.get("errors"):
         terms.append("error failed")
+    if summary.get("actions"):
+        terms.append("submitted actions action results confirmations questions")
+    if summary.get("actionErrors"):
+        terms.append("failed actions action errors")
     terms.extend(str(v) for v in summary.get("modelLabels", []) if v)
     terms.extend(str(v) for v in summary.get("keywords", []) if v)
     return " ".join(terms)
@@ -92,12 +96,15 @@ def native_summary_from_messages(messages: List[Dict[str, Any]]) -> Dict[str, An
         "tokens": 0,
         "errors": 0,
         "followups": 0,
+        "actions": 0,
+        "actionErrors": 0,
         "modelLabels": [],
         "keywords": [],
         "referenceItems": [],
         "changeItems": [],
         "treeItems": [],
         "followupItems": [],
+        "actionItems": [],
         "searchText": "",
     }
     models: Dict[str, bool] = {}
@@ -113,6 +120,32 @@ def native_summary_from_messages(messages: List[Dict[str, Any]]) -> Dict[str, An
             models[model] = True
         if payload.get("error"):
             summary["errors"] += 1
+        action_results = payload.get("actionResults") or payload.get("action_results") or []
+        if isinstance(action_results, list):
+            summary["actions"] += len(action_results)
+            for result in action_results:
+                if not isinstance(result, dict):
+                    continue
+                if result.get("ok") is False or result.get("error"):
+                    summary["actionErrors"] += 1
+                if len(summary["actionItems"]) >= 5:
+                    continue
+                label = str(
+                    result.get("action") or result.get("value")
+                    or result.get("key") or "action"
+                ).strip()
+                item: Dict[str, str] = {}
+                if label:
+                    item["label"] = label
+                key = str(result.get("key") or "").strip()
+                if key:
+                    item["key"] = key
+                item["status"] = "ok" if result.get("ok") else "error"
+                error = str(result.get("error") or "").strip()
+                if error:
+                    item["error"] = error
+                if item:
+                    summary["actionItems"].append(item)
         parts = payload.get("responseParts") or payload.get("response_parts") or []
         if isinstance(parts, list):
             summary["parts"] += len(parts)
