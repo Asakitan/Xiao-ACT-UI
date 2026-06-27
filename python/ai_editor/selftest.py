@@ -5825,12 +5825,20 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("frontend syncs dynamic WebviewView runtime chrome",
             "function webviewRuntimeProviderId(viewId,runtime)" in html
             and "function webviewRuntimeProviderRecord(viewId,runtime)" in html
+            and "function webviewRuntimeLifecycleState(runtime)" in html
+            and "function applyWebviewRuntimeDataset(el,viewId,runtime)" in html
+            and "function patchWebviewRuntimeLifecycle(viewId,patch)" in html
+            and "function syncWebviewRuntimeDomState(viewId,runtime)" in html
             and "function applyExtensionProviderElementState(tab,panel,p,viewId)" in html
             and "function applyWebviewRuntimeChrome(viewId,runtime)" in html
             and "panel.dataset.webviewViewType=" in html
             and "panel.dataset.webviewTitle=" in html
             and "panel.dataset.webviewDescription=" in html
             and "panel.dataset.webviewRetainContext=" in html
+            and "el.dataset.webviewLifecycleState=webviewRuntimeLifecycleState(data);" in html
+            and "el.dataset.webviewLifecycleSeq=String(Number(data.lifecycleSeq)||0);" in html
+            and "el.dataset.webviewMessageCount=String(Number(data.messageCount)||0);" in html
+            and "el.dataset.webviewViewStateCount=String(Number(data.viewStateCount)||0);" in html
             and "panel.dataset.webviewOptions=JSON.stringify" in html
             and "tab.hidden=!visible;" in html
             and "panel.hidden=!visible;" in html
@@ -11246,6 +11254,14 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeListRole==='list'" in html
            and "snapshot.runtimeStatusText.includes('11 dynamic entries')" in html
            and "['TerminalProfile','LMTool','LMProvider','ChatParticipant','ChatContext'].every(kind=>snapshot.runtimeKinds.includes(kind))" in html
+           and "window._onEditorEvent('render_webview_panel',{view_id:lifecycleViewId" in html
+           and "window._onEditorEvent('update_webview_panel_title',{view_id:lifecycleViewId" in html
+           and "window._onEditorEvent('update_webview_panel_icon',{view_id:lifecycleViewId" in html
+           and "window._onEditorEvent('update_webview_panel_options',{view_id:lifecycleViewId" in html
+           and "window._onEditorEvent('reveal_webview_panel',{view_id:lifecycleViewId" in html
+           and "window._onEditorEvent('dispose_webview_panel',{view_id:lifecycleViewId" in html
+           and "webviewLifecycle:lifecycleSnapshot" in html
+           and "snapshot.webviewLifecycle.disposed&&snapshot.webviewLifecycle.disposedSeq>snapshot.webviewLifecycle.seq" in html
            and "snapshot.menuRole==='menu'" in html)
     _check("frontend renders extension QuickInput dynamically",
            "id=\"quick-input-host\"" in html
@@ -12574,6 +12590,7 @@ console.log("command palette quick access helpers ok");
            and "const disposedDocuments = new Set()" in node_ext_host_source)
     _check("extension webview panel view state reaches Node",
            "function notifyWebviewPanelViewState(viewId,isActive,isVisible)" in html
+           and "patchWebviewRuntimeLifecycle(viewId,{viewState:{active:!!isActive,visible:visible,viewColumn:1}" in html
            and "webview_panel_view_state" in html
            and "def webview_panel_view_state(" in app_source
            and "def update_webview_panel_view_state(" in extension_host_source
