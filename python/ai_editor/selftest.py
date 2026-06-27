@@ -9764,6 +9764,8 @@ console.log("frontend word separator behavior ok");
            and "function extensionRuntimeSurfaceContainerById(id)" in html
            and "async function openExtensionRuntimeViewContainer(containerId)" in html
            and "async function openExtensionRuntimeSurface(rowOrKey)" in html
+           and "function extensionRuntimeSurfaceRowElement(rowOrKey)" in html
+           and "function markExtensionRuntimeSurfaceAction(rowEl,state)" in html
            and "function selectExtensionRuntimeRow(rowEl)" in html
            and "function applyExtensionRuntimeSurfaceFilter()" in html
            and "let extensionRuntimeSurfaceCache=null;" in html
@@ -9806,6 +9808,7 @@ console.log("frontend word separator behavior ok");
            and "panel.dataset.runtimeTotalCount=String(total);" in html
            and "panel.dataset.runtimeLastAction=action.type||'inspect';" in html
            and "panel.dataset.runtimeLastActionTarget=action.target||'';" in html
+           and "panel.dataset.runtimeLastActionOk=value==='success'?'1':value==='error'?'0':'';" in html
            and "el.dataset.key=row.key||'';" in html
            and "el.dataset.container=row.container||'';" in html
            and "el.dataset.resourceUri=row.resourceUri||'';" in html
@@ -9823,8 +9826,14 @@ console.log("frontend word separator behavior ok");
            and ".extension-runtime-filter" in html
            and ".extension-runtime-chip.filterable" in html
            and ".extension-runtime-row.selected" in html
+           and ".extension-runtime-row[data-action-state=\"success\"] .extension-runtime-action" in html
+           and ".extension-runtime-row[data-action-state=\"error\"] .extension-runtime-action" in html
            and ".extension-runtime-action" in html
            and "action.onclick=e=>{e.preventDefault();e.stopPropagation();selectExtensionRuntimeRow(el);void openExtensionRuntimeSurface(row)};" in html
+           and "if(e.key==='Enter'){e.preventDefault();selectExtensionRuntimeRow(el);if(row.openable)void openExtensionRuntimeSurface(row);return}" in html
+           and "if(e.key===' '){e.preventDefault();selectExtensionRuntimeRow(el)}" in html
+           and "action.textContent=row.action&&row.action.label?row.action.label:(row.openable?'Open':'Info');" in html
+           and "action.dataset.actionLabel=row.action&&row.action.label||'Inspect';" in html
            and "el.addEventListener('dblclick',e=>{e.preventDefault();void openExtensionRuntimeSurface(row)});" in html
            and "['Runtime',rows.filter(row=>row.ready).length]" in html
            and "['Manifest',rows.filter(row=>!row.ready).length]" in html
@@ -11565,8 +11574,15 @@ console.log("extension setting schema helpers ok");
            and "runtimeActionTypes:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.action||''):[]" in html
            and "runtimeActionTargets:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.actionTarget||'').filter(Boolean):[]" in html
            and "runtimeActionButtons:runtimeList?runtimeList.querySelectorAll('.extension-runtime-action').length:0" in html
+           and "runtimeActionButtonLabels:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-action')).map(item=>String(item.textContent||'')):[]" in html
+           and "runtimeActionStateRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row[data-action-state=\"success\"]').length:0" in html
            and "runtimeRowKeys:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.key||'').filter(Boolean).length:0" in html
            and "runtimeContainerRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(item=>item.dataset.container==='selftest.dynamic.container').length:0" in html
+           and "const runtimeActionRowByType=type=>runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).find(row=>row.dataset.action===type):null;" in html
+           and "lmToolRow.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));" in html
+           and "runtimeActionSmoke.terminalProfileOpened=_terminals.some(term=>term&&term.metadata&&term.metadata.profile==='selftest.terminalProfile');" in html
+           and "runtimeActionSmoke.contextAttached=chatContextAttachments.some(item=>item&&item.id==='runtime-context:selftest.context');" in html
+           and "_terminals.filter(term=>term&&!previousTerminalIds.has(term.id)).map(term=>term.id).slice().forEach(id=>_closeTerminal(id));" in html
            and "showExtensionActionMenu(2,2" in html
            and "snapshot.pass=snapshot.containerRole==='group'" in html
            and "snapshot.treeGroup&&snapshot.treeRole==='tree'" in html
@@ -11580,6 +11596,7 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeActionButtons===snapshot.runtimeRows" in html
            and "snapshot.runtimeRowKeys===snapshot.runtimeRows" in html
            and "snapshot.runtimeContainerRows>=2" in html
+           and "['Open','Run','Use','Chat','Attach'].every(label=>snapshot.runtimeActionButtonLabels.includes(label))" in html
            and "['open-view','open-webview','open-file','run-command','open-terminal-profile','prepare-lm-tool','prepare-lm-provider','open-chat-participant','attach-chat-context'].every(kind=>snapshot.runtimeActionTypes.includes(kind))" in html
            and "snapshot.runtimeActionTargets.includes('selftest.dynamic.tree')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.dynamic.webview')" in html
@@ -11603,6 +11620,14 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeTextFilterVisible===1" in html
            and "snapshot.runtimeSelectedRows===1" in html
            and "snapshot.runtimeChipFilterKind==='LMTool'" in html
+           and "snapshot.runtimeActionStateRows>=4" in html
+           and "snapshot.runtimeActionSmoke.keyboardEnterToolInput==='#selftest.lmTool '" in html
+           and "snapshot.runtimeActionSmoke.terminalProfileOpened===true" in html
+           and "snapshot.runtimeActionSmoke.providerPrompt.includes('selftest.vendor')" in html
+           and "snapshot.runtimeActionSmoke.participantPrompt==='@selftest.chat '" in html
+           and "snapshot.runtimeActionSmoke.contextAttached===true" in html
+           and "snapshot.runtimeActionSmoke.lastAction==='attach-chat-context'" in html
+           and "snapshot.runtimeActionSmoke.lastActionOk==='1'" in html
            and "['TerminalProfile','LMTool','LMProvider','ChatParticipant','ChatContext'].every(kind=>snapshot.runtimeKinds.includes(kind))" in html
            and "window._onEditorEvent('render_webview_panel',{view_id:lifecycleViewId" in html
            and "window._onEditorEvent('update_webview_panel_title',{view_id:lifecycleViewId" in html

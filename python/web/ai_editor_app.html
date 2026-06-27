@@ -1571,9 +1571,12 @@ pre.code-block code .type { color:var(--fg-type); }
 .extension-runtime-chip.filterable:hover,.extension-runtime-chip.filterable:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
 .extension-runtime-chip.active { color:var(--fg-accent); border-color:var(--fg-accent); background:color-mix(in srgb,var(--fg-accent) 7%,transparent); }
 .extension-runtime-list { display:grid; gap:1px; padding:4px; }
-.extension-runtime-row { display:grid; grid-template-columns:92px minmax(0,1fr) auto auto; gap:7px; align-items:center; min-height:26px; padding:4px 6px; border-radius:4px; color:var(--fg-dim); font-size:11px; }
+.extension-runtime-row { display:grid; grid-template-columns:92px minmax(0,1fr) auto auto; gap:7px; align-items:center; min-height:28px; padding:4px 6px; border-radius:4px; color:var(--fg-dim); font-size:11px; }
 .extension-runtime-row:hover,.extension-runtime-row:focus { background:var(--bg-hover); outline:1px solid color-mix(in srgb,var(--border-focus) 40%,transparent); outline-offset:-1px; }
 .extension-runtime-row.selected { background:color-mix(in srgb,var(--fg-accent) 8%,var(--bg-hover)); outline:1px solid color-mix(in srgb,var(--border-focus) 55%,transparent); outline-offset:-1px; }
+.extension-runtime-row[data-action-state="running"] { background:color-mix(in srgb,var(--fg-accent) 5%,transparent); }
+.extension-runtime-row[data-action-state="success"] .extension-runtime-action { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 48%,var(--border)); }
+.extension-runtime-row[data-action-state="error"] .extension-runtime-action { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 50%,var(--border)); }
 .extension-runtime-kind { color:var(--fg-accent); font:10px var(--mono); text-transform:uppercase; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .extension-runtime-mid { min-width:0; display:flex; flex-direction:column; gap:1px; }
 .extension-runtime-main { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg); }
@@ -1585,7 +1588,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .extension-runtime-state { border:1px solid var(--border); border-radius:999px; padding:1px 6px; font:10px var(--mono); color:var(--fg-dim); }
 .extension-runtime-state.ready { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 50%,var(--border)); }
 .extension-runtime-state.pending { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 50%,var(--border)); }
-.extension-runtime-action { width:22px; height:22px; border:1px solid transparent; border-radius:4px; background:transparent; color:var(--fg-dim); padding:0; cursor:pointer; }
+.extension-runtime-action { min-width:42px; height:22px; border:1px solid transparent; border-radius:4px; background:transparent; color:var(--fg-dim); padding:0 7px; cursor:pointer; font:10px var(--sans); }
 .extension-runtime-action:hover,.extension-runtime-action:focus { color:var(--fg); background:var(--bg-hover); border-color:var(--border-focus); outline:none; }
 .extension-runtime-action:disabled { opacity:.35; cursor:default; background:transparent; border-color:transparent; }
 .extension-runtime-empty { padding:8px; color:var(--fg-dim); font-size:11px; }
@@ -27929,53 +27932,70 @@ async function openExtensionRuntimeSurface(rowOrKey){
   const panel=$('extension-runtime-panel'),status=$('extension-runtime-status');
   if(!row||!row.action)return false;
   const action=row.action;
+  const rowEl=extensionRuntimeSurfaceRowElement(row);
   if(panel){
     panel.dataset.runtimeLastAction=action.type||'inspect';
     panel.dataset.runtimeLastActionTarget=action.target||'';
   }
+  markExtensionRuntimeSurfaceAction(rowEl,'running');
   try{
+    let ok=false;
     if(action.type==='open-view'){
       await openExtensionRuntimeViewContainer(row.container);
       if(status)status.textContent='Opened dynamic view '+row.label+'.';
-      return true;
+      ok=true;markExtensionRuntimeSurfaceAction(rowEl,'success');return ok;
     }
     if(action.type==='open-webview'){
       revealExtensionWebviewPanel({view_id:action.target,title:row.label,preserveFocus:false});
       if(row.container)await openExtensionRuntimeViewContainer(row.container);
       if(status)status.textContent='Opened webview surface '+row.label+'.';
-      return true;
+      ok=true;markExtensionRuntimeSurfaceAction(rowEl,'success');return ok;
     }
     if(action.type==='run-command'){
       const result=await call('execute_command',action.target);
       if(status)status.textContent=callSucceededOrApplied(result)?'Ran extension command '+action.target+'.':'Command failed: '+callFailedMessage(result,'backend unavailable');
-      return callSucceededOrApplied(result);
+      ok=callSucceededOrApplied(result);markExtensionRuntimeSurfaceAction(rowEl,ok?'success':'error');return ok;
     }
     if(action.type==='open-file'){
       const opened=await openWorkspaceFile(action.target);
       if(status)status.textContent=opened?'Opened runtime resource '+row.label+'.':'Unable to open runtime resource '+row.label+'.';
-      return !!opened;
+      ok=!!opened;markExtensionRuntimeSurfaceAction(rowEl,ok?'success':'error');return ok;
     }
     if(action.type==='open-terminal-profile'){
-      return openExtensionRuntimeTerminalProfile(row);
+      ok=openExtensionRuntimeTerminalProfile(row);markExtensionRuntimeSurfaceAction(rowEl,ok?'success':'error');return ok;
     }
     if(action.type==='prepare-lm-tool'){
-      return prepareExtensionRuntimeAssistantPrompt(row,'#'+action.target+' ','Prepared language-model tool '+action.target+' in Assistant.');
+      ok=prepareExtensionRuntimeAssistantPrompt(row,'#'+action.target+' ','Prepared language-model tool '+action.target+' in Assistant.');markExtensionRuntimeSurfaceAction(rowEl,ok?'success':'error');return ok;
     }
     if(action.type==='prepare-lm-provider'){
-      return prepareExtensionRuntimeAssistantPrompt(row,'Use language model provider '+action.target+' for this request: ','Prepared language-model provider '+action.target+' in Assistant.');
+      ok=prepareExtensionRuntimeAssistantPrompt(row,'Use language model provider '+action.target+' for this request: ','Prepared language-model provider '+action.target+' in Assistant.');markExtensionRuntimeSurfaceAction(rowEl,ok?'success':'error');return ok;
     }
     if(action.type==='open-chat-participant'){
-      return prepareExtensionRuntimeAssistantPrompt(row,'@'+action.target+' ','Prepared chat participant '+action.target+' in Assistant.');
+      ok=prepareExtensionRuntimeAssistantPrompt(row,'@'+action.target+' ','Prepared chat participant '+action.target+' in Assistant.');markExtensionRuntimeSurfaceAction(rowEl,ok?'success':'error');return ok;
     }
     if(action.type==='attach-chat-context'){
-      return attachExtensionRuntimeChatContext(row);
+      ok=attachExtensionRuntimeChatContext(row);markExtensionRuntimeSurfaceAction(rowEl,ok?'success':'error');return ok;
     }
     if(status)status.textContent='Selected '+row.kind+': '+row.label+'.';
+    markExtensionRuntimeSurfaceAction(rowEl,'');
     return false;
   }catch(e){
     if(status)status.textContent='Runtime surface action failed: '+String(e&&e.message||e);
+    markExtensionRuntimeSurfaceAction(rowEl,'error');
     return false;
   }
+}
+function extensionRuntimeSurfaceRowElement(rowOrKey){
+  const key=String((typeof rowOrKey==='string'?rowOrKey:(rowOrKey&&rowOrKey.key))||'');
+  const list=$('extension-runtime-list');if(!key||!list)return null;
+  return Array.from(list.querySelectorAll('.extension-runtime-row')).find(el=>el.dataset.key===key)||null;
+}
+function markExtensionRuntimeSurfaceAction(rowEl,state){
+  if(!rowEl)return;
+  const value=String(state||'');
+  if(value)rowEl.dataset.actionState=value;else delete rowEl.dataset.actionState;
+  const panel=$('extension-runtime-panel');
+  if(panel)panel.dataset.runtimeLastActionOk=value==='success'?'1':value==='error'?'0':'';
 }
 function selectExtensionRuntimeRow(rowEl){
   const list=$('extension-runtime-list');if(!rowEl||!list)return false;
@@ -28094,7 +28114,10 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.setAttribute('aria-selected','false');
       el.title=[row.kind,row.label,row.meta,row.extensionId,row.source].filter(Boolean).join(' · ');
       el.addEventListener('click',()=>selectExtensionRuntimeRow(el));
-      el.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();selectExtensionRuntimeRow(el)}});
+      el.addEventListener('keydown',e=>{
+        if(e.key==='Enter'){e.preventDefault();selectExtensionRuntimeRow(el);if(row.openable)void openExtensionRuntimeSurface(row);return}
+        if(e.key===' '){e.preventDefault();selectExtensionRuntimeRow(el)}
+      });
       const kind=document.createElement('div');kind.className='extension-runtime-kind';kind.textContent=row.kind;
       const mid=document.createElement('div');mid.className='extension-runtime-mid';
       const main=document.createElement('div');main.className='extension-runtime-main';main.textContent=row.label;
@@ -28107,11 +28130,12 @@ function renderExtensionRuntimeSurfacePanel(data){
       const state=document.createElement('div');state.className='extension-runtime-state '+(row.ready?'ready':'pending');state.textContent=row.ready?'ready':'pending';
       const action=document.createElement('button');
       action.type='button';
-      action.className='extension-runtime-action';
-      action.textContent=row.openable?'↗':'i';
+      action.className='extension-runtime-action action-'+String(row.action&&row.action.type||'inspect').replace(/[^a-z0-9_-]/gi,'-');
+      action.textContent=row.action&&row.action.label?row.action.label:(row.openable?'Open':'Info');
       action.title=row.action&&row.action.title||'Inspect runtime surface';
       action.setAttribute('aria-label',(row.action&&row.action.label||'Inspect')+' '+row.kind+' '+row.label);
       action.dataset.action=row.action&&row.action.type||'inspect';
+      action.dataset.actionLabel=row.action&&row.action.label||'Inspect';
       action.disabled=!row.action;
       action.onclick=e=>{e.preventDefault();e.stopPropagation();selectExtensionRuntimeRow(el);void openExtensionRuntimeSurface(row)};
       action.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();action.click()}};
@@ -29493,7 +29517,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     if(runtimeTextFilter)runtimeTextFilter.value='';
     const runtimeFirstRow=$('extension-runtime-list')&&$('extension-runtime-list').querySelector('.extension-runtime-row');
     if(runtimeFirstRow){
-      runtimeFirstRow.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+      runtimeFirstRow.dispatchEvent(new KeyboardEvent('keydown',{key:' ',bubbles:true}));
     }
     const runtimeSelectAfter=($('extension-runtime-status')||{}).textContent||'';
     const runtimeChip=($('extension-runtime-summary')||document).querySelector('.extension-runtime-chip.filterable[data-filter-label="LM Tool"]');
@@ -29503,6 +29527,44 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     if(runtimeSourceFilter)runtimeSourceFilter.value='';
     if(runtimeTextFilter)runtimeTextFilter.value='';
     applyExtensionRuntimeSurfaceFilter();
+    const runtimeActionRowByType=type=>runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).find(row=>row.dataset.action===type):null;
+    const runtimeActionButtonByType=type=>{const row=runtimeActionRowByType(type);return row?row.querySelector('.extension-runtime-action'):null};
+    const previousTerminalIds=new Set(_terminals.map(term=>term.id));
+    const previousActiveTermId=_activeTermId;
+    const previousNextTermId=_nextTermId;
+    const previousChatInput=$('chat-input')?$('chat-input').value:'';
+    const previousContextAttachments=chatContextAttachments.slice();
+    const runtimeActionSmoke={};
+    try{
+      const lmToolRow=runtimeActionRowByType('prepare-lm-tool');
+      if(lmToolRow){
+        setChatInputValue('',{focus:false});
+        lmToolRow.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));
+      }
+      runtimeActionSmoke.keyboardEnterToolInput=$('chat-input')?$('chat-input').value:'';
+      const terminalButton=runtimeActionButtonByType('open-terminal-profile');
+      if(terminalButton)terminalButton.click();
+      runtimeActionSmoke.terminalProfileOpened=_terminals.some(term=>term&&term.metadata&&term.metadata.profile==='selftest.terminalProfile');
+      const providerButton=runtimeActionButtonByType('prepare-lm-provider');
+      if(providerButton)providerButton.click();
+      runtimeActionSmoke.providerPrompt=$('chat-input')?$('chat-input').value:'';
+      const participantButton=runtimeActionButtonByType('open-chat-participant');
+      if(participantButton)participantButton.click();
+      runtimeActionSmoke.participantPrompt=$('chat-input')?$('chat-input').value:'';
+      const contextButton=runtimeActionButtonByType('attach-chat-context');
+      if(contextButton)contextButton.click();
+      runtimeActionSmoke.contextAttached=chatContextAttachments.some(item=>item&&item.id==='runtime-context:selftest.context');
+      runtimeActionSmoke.successRows=runtimeList?runtimeList.querySelectorAll('.extension-runtime-row[data-action-state="success"]').length:0;
+      runtimeActionSmoke.lastAction=(($('extension-runtime-panel')||{}).dataset||{}).runtimeLastAction||'';
+      runtimeActionSmoke.lastActionOk=(($('extension-runtime-panel')||{}).dataset||{}).runtimeLastActionOk||'';
+    }finally{
+      _terminals.filter(term=>term&&!previousTerminalIds.has(term.id)).map(term=>term.id).slice().forEach(id=>_closeTerminal(id));
+      if(previousActiveTermId!==null&&_terminals.some(term=>term.id===previousActiveTermId))_switchTerminal(previousActiveTermId);
+      _nextTermId=previousNextTermId;
+      if($('chat-input'))setChatInputValue(previousChatInput,{focus:false});
+      chatContextAttachments=previousContextAttachments.slice();
+      renderChatContextAttachments();
+    }
 
     showExtensionActionMenu(2,2,[
       {command:'selftest.menu.primary',title:'Primary',group:'navigation@1',extensionId:'selftest.extension'},
@@ -29602,6 +29664,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeActionTypes:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.action||''):[],
       runtimeActionTargets:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.actionTarget||'').filter(Boolean):[],
       runtimeActionButtons:runtimeList?runtimeList.querySelectorAll('.extension-runtime-action').length:0,
+      runtimeActionButtonLabels:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-action')).map(item=>String(item.textContent||'')):[],
+      runtimeActionStateRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row[data-action-state="success"]').length:0,
       runtimeRowKeys:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.key||'').filter(Boolean).length:0,
       runtimeContainerRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(item=>item.dataset.container==='selftest.dynamic.container').length:0,
       runtimePanelCount:(()=>{const panel=$('extension-runtime-panel');return panel?panel.dataset.runtimeSurfaceCount:''})(),
@@ -29616,6 +29680,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeSelectedRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row.selected[aria-selected="true"]').length:0,
       runtimeSelectStatus:runtimeSelectAfter,
       runtimeChipFilterKind,
+      runtimeActionSmoke,
       menuRole:menu?menu.getAttribute('role'):'',
       menuLabel:menu?menu.getAttribute('aria-label'):'',
       menuItems:menu?menu.querySelectorAll('.ctx-item[role="menuitem"]').length:0,
@@ -29638,6 +29703,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeDatasetReady===snapshot.runtimeReadyRows&&snapshot.runtimePanelCount==='11'
       && snapshot.runtimeOpenableRows===snapshot.runtimeRows&&snapshot.runtimeOpenableRows>=11&&snapshot.runtimeActionButtons===snapshot.runtimeRows
       && snapshot.runtimeRowKeys===snapshot.runtimeRows&&snapshot.runtimeContainerRows>=2
+      && ['Open','Run','Use','Chat','Attach'].every(label=>snapshot.runtimeActionButtonLabels.includes(label))
       && ['open-view','open-webview','open-file','run-command','open-terminal-profile','prepare-lm-tool','prepare-lm-provider','open-chat-participant','attach-chat-context'].every(kind=>snapshot.runtimeActionTypes.includes(kind))
       && snapshot.runtimeActionTargets.includes('selftest.dynamic.tree')&&snapshot.runtimeActionTargets.includes('selftest.dynamic.webview')&&snapshot.runtimeActionTargets.includes('selftest.run')
       && snapshot.runtimeActionTargets.includes('selftest.terminalProfile')&&snapshot.runtimeActionTargets.includes('selftest.lmTool')&&snapshot.runtimeActionTargets.includes('selftest.vendor')&&snapshot.runtimeActionTargets.includes('selftest.chat')&&snapshot.runtimeActionTargets.includes('selftest.context')
@@ -29647,6 +29713,14 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeKindFilterVisible===1&&snapshot.runtimeSourceFilterVisible===11&&snapshot.runtimeTextFilterVisible===1
       && snapshot.runtimeSelectedRows===1&&snapshot.runtimeSelectStatus.includes('Selected')
       && snapshot.runtimeChipFilterKind==='LMTool'
+      && snapshot.runtimeActionStateRows>=4
+      && snapshot.runtimeActionSmoke.keyboardEnterToolInput==='#selftest.lmTool '
+      && snapshot.runtimeActionSmoke.terminalProfileOpened===true
+      && snapshot.runtimeActionSmoke.providerPrompt.includes('selftest.vendor')
+      && snapshot.runtimeActionSmoke.participantPrompt==='@selftest.chat '
+      && snapshot.runtimeActionSmoke.contextAttached===true
+      && snapshot.runtimeActionSmoke.lastAction==='attach-chat-context'
+      && snapshot.runtimeActionSmoke.lastActionOk==='1'
       && ['TerminalProfile','LMTool','LMProvider','ChatParticipant','ChatContext'].every(kind=>snapshot.runtimeKinds.includes(kind))
       && snapshot.menuRole==='menu'&&snapshot.menuItems===2&&snapshot.menuDisabled===1&&snapshot.menuMetadata.includes('selftest.dynamic.tree')
       && snapshot.webviewLifecycle.rendered&&snapshot.webviewLifecycle.seq>=4
