@@ -9592,7 +9592,7 @@ console.log("frontend word separator behavior ok");
              and "add('{}','Copy JSON setting entry'" in html
              and "settingsAddRowActions(wrap,{key:meta.key||meta.path||inputId,searchable:false,meta,inputId,clearTarget:" in html
              and "settingsAddRowActions(row,{key:key,searchable:true});" in html
-              and "filters={modified:false,error:false,json:false,extensions:false,scopes:[],ids:[],tags:[],features:[],extensionIds:[],languages:[]}" in html
+              and "filters={modified:false,common:false,error:false,json:false,extensions:false,scopes:[],ids:[],tags:[],features:[],extensionIds:[],languages:[]}" in html
               and "Setting: '+raw.slice(3)" in html
               and "@([A-Za-z][A-Za-z0-9_-]*)" in html
               and "SETTINGS_SCOPE_FILTERS[scope]" in html
@@ -9716,11 +9716,24 @@ console.log("frontend word separator behavior ok");
             and "SETTINGS_FAVORITES_STORAGE_KEY='sao.aiEditor.settings.favorites.v1'" in html
             and "SETTINGS_RECENT_STORAGE_KEY='sao.aiEditor.settings.recent.v1'" in html
             and "SETTINGS_SEARCH_HISTORY_STORAGE_KEY='sao.aiEditor.settings.searchHistory.v1'" in html
+            and "const SETTINGS_COMMONLY_USED_KEYS=[" in html
             and "function settingsToggleFavorite(row)" in html
             and "function renderSettingsPersonalNav()" in html
+            and "function settingsCommonlyUsedItems()" in html
             and "id='settings-nav-personal'" in html
+            and "Commonly Used" in html
+            and "data-settings-filter-token=\"@common\"" in html
+            and "function settingsGroupMatchesCommonFilter(group)" in html
+            and "filters.common" in html
             and "function settingsRecordSearch(query,parsed)" in html
             and "id=\"settings-search-memory\"" in html
+            and "function updateSettingsTitleStatus(visible,total)" in html
+            and "settingsActiveSectionTitle()" in html
+            and "settingsConfigureRowInJson(row,opts.key)" in html
+            and "['f','l'].includes(String(ev.key||'').toLowerCase())" in html
+            and "selectSettingsTarget('workspace',{preserveSearch:true})" in html
+            and "settingsFocusVisibleRow(-1)" in html
+            and "resetVisibleModifiedSettings();" in html
             and "settingsRememberRecentSetting(row);" in html
             and "fav.dataset.settingsFavoriteKey=opts.key;" in html
             and "renderSettingsReviewBar(targetStats);" in html

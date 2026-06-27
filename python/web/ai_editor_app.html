@@ -2120,7 +2120,7 @@ pre.code-block { overflow:visible; }
 .settings-field.settings-target-hidden { display:none !important; }
 .settings-field.builtin-setting { padding:7px 28px 7px 8px; border-radius:4px; margin:3px 0 6px;
   border-left:2px solid transparent; background:transparent; }
-.settings-field.builtin-setting.has-row-actions { padding-right:212px; }
+.settings-field.builtin-setting.has-row-actions { padding-right:258px; }
 .settings-field.builtin-setting:hover,.settings-field.builtin-setting:focus-within { background:color-mix(in srgb,var(--bg-hover) 62%,transparent); }
 .settings-field.builtin-setting:focus { outline:1px solid color-mix(in srgb,var(--border-focus) 55%,transparent); outline-offset:-1px; }
 .settings-field.highlight { animation:settingsSectionFlash .65s ease-out; }
@@ -2130,7 +2130,7 @@ pre.code-block { overflow:visible; }
 .settings-field.builtin-setting.saved-flash { animation:settingsSavedFlash .7s ease-out; }
 @keyframes settingsSavedFlash { from{background:color-mix(in srgb,var(--fg-success) 13%,transparent)} to{background:transparent} }
 .settings-field.builtin-setting .s-reset { top:8px; transform:none; }
-.settings-field.has-row-actions .s-reset { right:206px; }
+.settings-field.has-row-actions .s-reset { right:252px; }
 .settings-field.builtin-setting > label:first-child,
 .settings-field.builtin-setting > .settings-check:first-child { margin-top:0; }
 .settings-built-meta { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin:5px 0 1px;
@@ -2176,7 +2176,7 @@ pre.code-block { overflow:visible; }
 .settings-filter-summary { color:var(--fg-dim); font:11px var(--mono); min-height:16px; margin:-4px 0 8px; }
 .ext-setting-row { position:relative; margin-bottom:8px; padding:6px 74px 6px 8px;
   border-left:2px solid transparent; border-radius:3px; }
-.ext-setting-row.has-row-actions { padding-right:104px; }
+.ext-setting-row.has-row-actions { padding-right:154px; }
 .ext-setting-row:hover,.ext-setting-row:focus-within,.ext-setting-row:focus { background:color-mix(in srgb,var(--bg-hover) 62%,transparent); }
 .ext-setting-row:focus { outline:1px solid color-mix(in srgb,var(--border-focus) 55%,transparent); outline-offset:-1px; }
 .ext-setting-row.highlight { animation:settingsSectionFlash .65s ease-out; }
@@ -2184,7 +2184,7 @@ pre.code-block { overflow:visible; }
 .ext-setting-row.hidden-setting { border-left-color:color-mix(in srgb,var(--fg-dim) 45%,transparent); opacity:.78; }
 .ext-setting-row.settings-field.modified { padding-left:8px; }
 .ext-setting-row .s-reset { top:8px; right:6px; transform:none; }
-.ext-setting-row.has-row-actions .s-reset { right:98px; }
+.ext-setting-row.has-row-actions .s-reset { right:148px; }
 .ext-setting-head { display:flex; align-items:center; gap:6px; margin-bottom:2px; }
 .ext-setting-title { font-size:12px; color:var(--fg); font-weight:600; }
 .ext-setting-badge { display:none; font-size:9px; color:var(--fg-accent); border:1px solid var(--fg-accent);
@@ -3010,6 +3010,7 @@ pre.code-block { overflow:visible; }
       <div id="settings-active-filters" class="settings-active-filters" aria-live="polite"></div>
       <div id="settings-quick-filters" class="settings-quick-filters" aria-label="Quick setting filters">
         <button type="button" data-settings-filter-token="@modified" onclick="settingsToggleFilterToken('@modified')">Modified</button>
+        <button type="button" data-settings-filter-token="@common" onclick="settingsToggleFilterToken('@common')">Common</button>
         <button type="button" data-settings-filter-token="@error" onclick="settingsToggleFilterToken('@error')">Errors</button>
         <button type="button" data-settings-filter-token="@json" onclick="settingsToggleFilterToken('@json')">JSON</button>
         <button type="button" data-settings-filter-token="@editor" onclick="settingsToggleFilterToken('@editor')">Editor</button>
@@ -3020,6 +3021,7 @@ pre.code-block { overflow:visible; }
       </div>
       <div id="settings-search-hints" class="settings-search-hints" aria-label="Settings search examples">
         <span>Try</span>
+        <code tabindex="0" onclick="settingsUseSearchHint('@common')" onkeydown="settingsSearchHintKeydown(event,'@common')">@common</code>
         <code tabindex="0" onclick="settingsUseSearchHint('@modified')" onkeydown="settingsSearchHintKeydown(event,'@modified')">@modified</code>
         <code tabindex="0" onclick="settingsUseSearchHint('@workspace')" onkeydown="settingsSearchHintKeydown(event,'@workspace')">@workspace</code>
         <code tabindex="0" onclick="settingsUseSearchHint('@extensions')" onkeydown="settingsSearchHintKeydown(event,'@extensions')">@extensions</code>
@@ -3720,6 +3722,14 @@ function settingsCopyText(text,label){
     showToast((label||'Setting')+' copied','success',1400);
   }catch(e){showToast('Copy failed','warning',1800)}
 }
+function settingsConfigureRowInJson(row,key){
+  key=String(key||settingsRowKey(row)||'').trim();
+  if(!key)return;
+  const valueLabel=JSON.stringify(key)+': ';
+  settingsOpenJsonView();
+  settingsCopyText(valueLabel,'Setting JSON pointer');
+  showToast('Opened settings.json and copied '+key,'info',1800);
+}
 function settingsOpenJsonView(){
   const snapshot=JSON.stringify(config||{},null,2);
   if(typeof addTab==='function'){
@@ -3788,6 +3798,7 @@ function settingsAddRowActions(row,opts){
     fav.classList.add('favorite');
     fav.dataset.settingsFavoriteKey=opts.key;
     fav.classList.toggle('active',settingsIsFavorite(opts.key));
+    add('JSON','Open settings.json and copy this setting id',()=>settingsConfigureRowInJson(row,opts.key));
   }
   if(opts.key&&opts.searchable)add('⌕','Filter to this setting',()=>settingsSearchForKey(opts.key));
   if(opts.meta&&opts.inputId)add('Default','Apply default value',()=>{const el=$(opts.inputId);if(el){setSettingsInputValue(el,opts.meta,settingDefaultValue(opts.meta));markSettingsModified();scheduleFilterSettings(0);showToast('Default applied: '+(opts.meta.key||opts.inputId),'info',1400)}});
@@ -24426,6 +24437,12 @@ const SETTINGS_VIEW_STORAGE_KEY='sao.aiEditor.settings.view.v1';
 const SETTINGS_FAVORITES_STORAGE_KEY='sao.aiEditor.settings.favorites.v1';
 const SETTINGS_RECENT_STORAGE_KEY='sao.aiEditor.settings.recent.v1';
 const SETTINGS_SEARCH_HISTORY_STORAGE_KEY='sao.aiEditor.settings.searchHistory.v1';
+const SETTINGS_COMMONLY_USED_KEYS=[
+  'aiEditor.provider','aiEditor.model','workbench.colorTheme','workbench.iconTheme',
+  'editor.defaultFormatter','editor.tabSize','editor.insertSpaces','editor.formatOnSave',
+  'editor.quickSuggestionsDelay','files.autoSave','files.autoSaveDelay',
+  'terminal.integrated.defaultProfile.windows','aiEditor.workspace.root','extensions.confirmInstall'
+];
 function settingsMainElement(){return $('settings-main')||$('settings-modal')}
 function settingsStorageList(key){
   try{const value=JSON.parse(localStorage.getItem(key)||'[]');return Array.isArray(value)?value:[]}catch(e){return []}
@@ -24538,9 +24555,22 @@ function settingsPersonalItemButton(item,kind){
   btn.onclick=()=>settingsJumpToSettingKey(item.key,item.target);
   return btn;
 }
+function settingsCommonlyUsedItems(){
+  const byKey=new Map(Object.entries(SETTING_INPUT_META).map(([inputId,meta])=>[meta.key||meta.path||inputId,{inputId,meta}]));
+  return SETTINGS_COMMONLY_USED_KEYS.map(key=>{
+    const found=byKey.get(key);
+    if(!found)return null;
+    return {
+      key,
+      label:settingFriendlyName(found.meta,found.inputId),
+      target:String(found.meta.scope||'User').toLowerCase().includes('workspace')?'workspace':'user'
+    };
+  }).filter(Boolean);
+}
 function renderSettingsPersonalNav(){
   const host=$('settings-nav-personal');if(!host)return;
   host.innerHTML='';
+  const common=settingsCommonlyUsedItems().slice(0,8);
   const favorites=settingsFavoriteList().slice(0,5);
   const recent=settingsStorageList(SETTINGS_RECENT_STORAGE_KEY).filter(item=>item&&item.key&&!settingsIsFavorite(item.key)).slice(0,5);
   const addBlock=(title,items,kind)=>{
@@ -24551,12 +24581,30 @@ function renderSettingsPersonalNav(){
     }
     items.forEach(item=>host.appendChild(settingsPersonalItemButton(item,kind)));
   };
+  addBlock('Commonly Used',common,'◆');
   addBlock('Favorites',favorites,'★');
   addBlock('Recent',recent,'↪');
 }
 function setActiveSettingsNav(id){
   const nav=$('settings-nav');if(!nav)return;
   nav.querySelectorAll('.settings-nav-item').forEach(btn=>btn.classList.toggle('active',btn.dataset.settingsNav===id));
+  updateSettingsTitleStatus();
+}
+function settingsActiveSectionTitle(){
+  const active=($('settings-nav')||document).querySelector('.settings-nav-item.active');
+  if(active&&active.dataset&&active.dataset.settingsNav){
+    const section=settingsCategorySections().find(item=>item.dataset.settingsId===active.dataset.settingsNav);
+    if(section)return settingsSectionTitle(section);
+  }
+  const visible=settingsCategorySections().find(section=>section.style.display!=='none');
+  return visible?settingsSectionTitle(visible):'Settings';
+}
+function updateSettingsTitleStatus(visible,total){
+  const sub=document.querySelector('.settings-title-sub');if(!sub)return;
+  const parts=[settingsTargetDisplayName(currentSettingsTarget),settingsActiveSectionTitle()];
+  if(Number.isFinite(Number(visible))&&Number.isFinite(Number(total)))parts.push(String(visible)+' / '+String(total)+' groups');
+  parts.push('Ctrl+F search');
+  sub.textContent=parts.join(' · ');
 }
 function scrollToSettingsSection(id){
   const section=settingsCategorySections().find(item=>item.dataset.settingsId===id);
@@ -24649,6 +24697,7 @@ function selectSettingsTarget(target,options){
   }
   applySettingsTargetValuesToInputs(currentSettingsTarget);
   if(opts.persist!==false)persistSettingsViewState({target:currentSettingsTarget,search:(input||{}).value||''});
+  updateSettingsTitleStatus();
   scheduleFilterSettings(0);
 }
 function installSettingsKeyboardHandlers(){
@@ -24660,7 +24709,7 @@ function installSettingsKeyboardHandlers(){
       closeSettings();
       return;
     }
-    if((ev.ctrlKey||ev.metaKey)&&String(ev.key||'').toLowerCase()==='f'){
+    if((ev.ctrlKey||ev.metaKey)&&['f','l'].includes(String(ev.key||'').toLowerCase())){
       ev.preventDefault();
       focusSettingsSearch();
       return;
@@ -24671,8 +24720,15 @@ function installSettingsKeyboardHandlers(){
       return;
     }
     if(ev.altKey&&String(ev.key||'').toLowerCase()==='m'){ev.preventDefault();settingsFocusFirstReviewRow('modified');return}
+    if(ev.altKey&&String(ev.key||'').toLowerCase()==='c'){ev.preventDefault();settingsUseSearchHint('@common');return}
     if(ev.altKey&&String(ev.key||'').toLowerCase()==='e'){ev.preventDefault();settingsFocusFirstReviewRow('error');return}
     if(ev.altKey&&String(ev.key||'').toLowerCase()==='o'){ev.preventDefault();settingsFocusFirstReviewRow('override');return}
+    if(ev.altKey&&String(ev.key||'').toLowerCase()==='u'){ev.preventDefault();selectSettingsTarget('user',{preserveSearch:true});return}
+    if(ev.altKey&&String(ev.key||'').toLowerCase()==='w'){ev.preventDefault();selectSettingsTarget('workspace',{preserveSearch:true});return}
+    if(ev.altKey&&String(ev.key||'').toLowerCase()==='x'){ev.preventDefault();selectSettingsTarget('extensions',{preserveSearch:true});return}
+    if(ev.altKey&&String(ev.key||'').toLowerCase()==='j'){ev.preventDefault();settingsFocusVisibleRow(1);return}
+    if(ev.altKey&&String(ev.key||'').toLowerCase()==='k'){ev.preventDefault();settingsFocusVisibleRow(-1);return}
+    if(ev.altKey&&String(ev.key||'').toLowerCase()==='r'){ev.preventDefault();resetVisibleModifiedSettings();return}
     if(ev.key==='ArrowDown'&&ev.target&&ev.target.id==='settings-search'){
       const first=settingsVisibleRows().find(Boolean);
       if(first){ev.preventDefault();settingsHighlightRow(first);}
@@ -24715,7 +24771,7 @@ const SETTINGS_SCOPE_FILTERS={
   extensions:['extension','publisher','contribution','marketplace','runtime','trust']
 };
 const SETTINGS_TOKEN_LABELS={
-  modified:'Modified',error:'Errors',json:'JSON',extensions:'Extensions',
+  modified:'Modified',common:'Commonly Used',error:'Errors',json:'JSON',extensions:'Extensions',
   editor:'Editor',files:'Files',language:'Language',terminal:'Terminal',
   workspace:'Workspace',assistant:'Assistant',mcp:'MCP'
 };
@@ -24835,9 +24891,14 @@ function settingsGroupMatchesLanguageFilters(group,languages){
       || settingsRowFilterText(row).includes('language '+lang)
       || settingsRowFilterText(row).includes('['+lang+']')));
 }
+function settingsGroupMatchesCommonFilter(group){
+  const keys=new Set(SETTINGS_COMMONLY_USED_KEYS.map(key=>String(key).toLowerCase()));
+  return Array.from((group||document).querySelectorAll('.settings-field.builtin-setting,.ext-setting-row'))
+    .some(row=>keys.has(settingsRowKey(row).toLowerCase()));
+}
 function settingsQueryFilters(raw){
   const query=String(raw||'');
-  const filters={modified:false,error:false,json:false,extensions:false,scopes:[],ids:[],tags:[],features:[],extensionIds:[],languages:[]};
+  const filters={modified:false,common:false,error:false,json:false,extensions:false,scopes:[],ids:[],tags:[],features:[],extensionIds:[],languages:[]};
   let text=query.replace(/(^|\s)@id:([^\s]+)/ig,(match,prefix,id)=>{
     const clean=String(id||'').trim().toLowerCase();
     if(clean)filters.ids.push(clean);
@@ -24860,7 +24921,7 @@ function settingsQueryFilters(raw){
     if(scope){
       filters[scope]=true;
       if(!filters.scopes.includes(scope))filters.scopes.push(scope);
-    }else if(key==='modified'||key==='error'||key==='json'){
+    }else if(key==='modified'||key==='common'||key==='error'||key==='json'){
       filters[key]=true;
     }else{
       return match;
@@ -24870,7 +24931,7 @@ function settingsQueryFilters(raw){
   text=text.replace(/\s+/g,' ');
   filters.text=text;
   filters.tokens=settingsFilterTokens(query).map(v=>v.trim()).filter(Boolean);
-  filters.active=!!(text||filters.modified||filters.error||filters.json||filters.scopes.length||filters.ids.length||filters.tags.length||filters.features.length||filters.extensionIds.length||filters.languages.length);
+  filters.active=!!(text||filters.modified||filters.common||filters.error||filters.json||filters.scopes.length||filters.ids.length||filters.tags.length||filters.features.length||filters.extensionIds.length||filters.languages.length);
   return filters;
 }
 function settingsGroupMatchesIdFilters(group,ids){
@@ -24891,6 +24952,7 @@ function settingsGroupMatchesFilter(group,query){
   if(query.extensionIds&&!settingsGroupMatchesExtensionFilters(group,query.extensionIds))return false;
   if(query.languages&&!settingsGroupMatchesLanguageFilters(group,query.languages))return false;
   if(query.modified&&!group.querySelector('.settings-field.modified:not(.settings-target-hidden),.ext-setting-row.modified:not(.settings-target-hidden)'))return false;
+  if(query.common&&!settingsGroupMatchesCommonFilter(group))return false;
   if(query.error&&!group.querySelector('[aria-invalid="true"],.settings-field.invalid:not(.settings-target-hidden),.settings-input-invalid'))return false;
   if(query.json&&!(text.includes('json')||group.querySelector('[id$="-json"],#s-xheaders,#s-xbody')))return false;
   if(query.scopes&&query.scopes.length){
@@ -25222,7 +25284,7 @@ function settingsBuiltinFilterSuggestions(query){
     return !current||normalized.startsWith(current)||current.startsWith(normalized);
   };
   const push=token=>{if(include(token))settingsPushSuggestion(suggestions,seen,query,token)};
-  ['@modified','@error','@json','@workspace','@extensions','@tag:','@feature:','@ext:','@lang:','@id:'].forEach(push);
+  ['@common','@modified','@error','@json','@workspace','@extensions','@tag:','@feature:','@ext:','@lang:','@id:'].forEach(push);
   Object.keys(SETTINGS_SCOPE_FILTERS).sort().forEach(scope=>push('@feature:'+scope));
   ['modified','error','json','extension','preview','advanced'].forEach(tag=>push('@tag:'+tag));
   ['javascript','typescript','python','json','markdown','html','css'].forEach(lang=>push('@lang:'+lang));
@@ -25297,6 +25359,7 @@ function filterSettings(){
   updateSettingsResultNav(settingsVisibleRows().length);
   renderSettingsFilterSuggestions();
   updateSettingsNavCounts();
+  updateSettingsTitleStatus(visible,total);
   persistSettingsViewState({target:currentSettingsTarget,search:q});
 }
 let _settingsFilterTimer=0;
