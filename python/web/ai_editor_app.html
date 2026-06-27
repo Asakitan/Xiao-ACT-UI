@@ -4789,6 +4789,42 @@ function assistantSessionSaveItems(items){
     localStorage.setItem(ASSISTANT_SESSION_ITEMS_KEY,JSON.stringify(normalized));
   }catch(e){}
 }
+function assistantSessionSerializableNativePayload(payload){
+  if(!payload||typeof payload!=='object')return null;
+  const out={};
+  const copyArray=(targetKey,...sourceKeys)=>{
+    for(const key of sourceKeys){
+      if(Array.isArray(payload[key])&&payload[key].length){out[targetKey]=payload[key].slice(0,40);return}
+    }
+  };
+  copyArray('responseParts','responseParts','response_parts','parts','response');
+  copyArray('contentReferences','contentReferences','content_references','responseReferences','response_references');
+  copyArray('usedContext','usedContext','used_context','used');
+  copyArray('fileTrees','fileTrees','file_trees');
+  if(payload.usage&&typeof payload.usage==='object')out.usage={...payload.usage};
+  if(payload.model)out.model=String(payload.model||'');
+  if(payload.error)out.error=String(payload.error||'');
+  try{
+    const encoded=JSON.stringify(out);
+    if(encoded.length>90000)return null;
+    return encoded==='{}'?null:out;
+  }catch(_e){return null}
+}
+function assistantBodyNativePayload(body){
+  if(!body)return null;
+  if(body._assistantNativePayload)return assistantSessionSerializableNativePayload(body._assistantNativePayload);
+  if(body.dataset&&body.dataset.assistantNativePayload){
+    try{return assistantSessionSerializableNativePayload(JSON.parse(body.dataset.assistantNativePayload))}catch(_e){}
+  }
+  return null;
+}
+function rememberAssistantNativePayload(body,payload){
+  const safe=assistantSessionSerializableNativePayload(payload);
+  if(!body||!safe)return null;
+  body._assistantNativePayload=safe;
+  try{body.dataset.assistantNativePayload=JSON.stringify(safe)}catch(_e){}
+  return safe;
+}
 function assistantSessionNormalizeMessages(messages){
   return (Array.isArray(messages)?messages:[]).map(m=>{
     const role=String(m&&m.role||'assistant');
@@ -4798,6 +4834,8 @@ function assistantSessionNormalizeMessages(messages){
       m&&Array.isArray(m.references)?m.references:[]);
     const out={role,model:String(m&&m.model||''),content};
     if(refs.length)out.references=refs;
+    const nativePayload=assistantSessionSerializableNativePayload(m&&m.nativePayload);
+    if(nativePayload)out.nativePayload=nativePayload;
     return out;
   }).filter(Boolean).slice(-80);
 }
@@ -4823,7 +4861,8 @@ function assistantSessionMessageSnapshot(){
       role,
       model:model?String(model.textContent||''):'',
       content:content.slice(0,80000),
-      references
+      references,
+      nativePayload:assistantBodyNativePayload(body)
     };
   }));
 }
@@ -4880,7 +4919,12 @@ function assistantSessionRenderMessages(messages){
     const content=normalizeChatMessageText(m&&m.content,role);
     if(!content&&role!=='user')return;
     const b=createMsg(role,m&&m.model);
-    if(role==='assistant')renderMd(b,content);
+    if(role==='assistant'){
+      rememberAssistantNativePayload(b,m&&m.nativePayload);
+      renderMd(b,content);
+      renderChatResponseNativeParts(b,m&&m.nativePayload,content);
+      renderChatResponseReferences(b,content,m&&m.nativePayload);
+    }
     else b.textContent=content;
     if(role==='user'&&Array.isArray(m&&m.references)&&m.references.length)renderChatReferences(b,m.references);
   });
@@ -7625,6 +7669,7 @@ async function replayAssistantNativeResponseFixture(nameOrPayload,opts){
   const payload=assistantMergeNativeResponsePayloads(chunks);
   const content=normalizeChatMessageText(payload.content||'','assistant');
   const body=createMsg('assistant',payload.model||config.model||'fixture');
+  rememberAssistantNativePayload(body,payload);
   if(content)renderMd(body,content);
   renderChatResponseNativeParts(body,payload,content);
   renderChatResponseReferences(body,content,payload);
@@ -7645,12 +7690,23 @@ function assistantControlPopupSnapshot(kind){
   toggleChatControlPopup(null,kind,{noFocus:true});
   const options=popup?Array.from(popup.querySelectorAll('.mode-popup-item[role="option"]')):[];
   const modeOptions=popup?Array.from(popup.querySelectorAll('.workflow-mode-option[role="option"]')):[];
+  const rectOf=el=>{if(!el)return null;const r=el.getBoundingClientRect();return {top:Math.round(r.top),left:Math.round(r.left),right:Math.round(r.right),bottom:Math.round(r.bottom),width:Math.round(r.width),height:Math.round(r.height)}};
+  const triggerRect=rectOf(trigger),popupRect=rectOf(popup),toolbarRect=rectOf(document.querySelector('.chat-toolbar'));
   const snapshot={
     kind,
     triggerExists:!!trigger,
     popupExists:!!popup,
     expanded:trigger?trigger.getAttribute('aria-expanded'):'',
     shown:!!(popup&&popup.classList.contains('show')),
+    display:popup?getComputedStyle(popup).display:'',
+    className:popup?String(popup.className||''):'',
+    triggerRect,
+    popupRect,
+    toolbarRect,
+    rectReady:!!(popupRect&&popupRect.width>=180&&popupRect.height>=20),
+    opensAboveTrigger:!!(popupRect&&triggerRect&&popupRect.bottom<=triggerRect.top+1),
+    notToolbarClipped:!!(popupRect&&toolbarRect&&popupRect.bottom<=toolbarRect.top+1),
+    visibleText:popup?String(popup.textContent||'').replace(/\s+/g,' ').trim().slice(0,240):'',
     optionCount:options.length,
     focusableCount:options.filter(option=>option.tabIndex===-1).length,
     activeCount:options.filter(option=>option.classList.contains('active')).length,
@@ -7804,6 +7860,21 @@ function assistantProviderSessionSmokeSnapshot(){
   const user=createProviderMessage(pid,'user','',"provider smoke");
   const assistant=createProviderMessage(pid,'assistant','selfcheck-model',"provider response");
   renderChatReferences(user,[{id:'provider:selfcheck',kind:'provider',label:'Selfcheck Provider'}]);
+  const nativePayload={
+    content:'provider response',
+    model:'selfcheck-model',
+    responseParts:[
+      {kind:'todoList',todoList:[{title:'Inspect provider session restore',status:'completed'}]},
+      {kind:'modifiedFilesConfirmation',files:[{uri:'file:///workspace/provider-session.ts',title:'provider-session.ts',insertions:2,deletions:1}],options:['Preview','Apply']}
+    ],
+    contentReferences:[{kind:'anchor',path:'file:///workspace/provider-session.ts',label:'provider-session.ts',openable:true}],
+    usedContext:[{kind:'file',path:'file:///workspace/context.ts',label:'context.ts',openable:true}],
+    fileTrees:[{label:'provider tree',items:[{name:'provider-session.ts',path:'file:///workspace/provider-session.ts'}]}],
+    usage:{total_tokens:12}
+  };
+  rememberAssistantNativePayload(assistant,nativePayload);
+  renderChatResponseNativeParts(assistant,nativePayload,nativePayload.content);
+  renderChatResponseReferences(assistant,nativePayload.content,nativePayload);
   syncAssistantProviderSessionState(pid,{requestCount:1,lastPromptSample:'provider smoke',context:[{id:'provider:selfcheck',kind:'provider',label:'Selfcheck Provider'}]});
   setProviderRunning(pid,true,t('provider_status_thinking'),'running');
   const runningItem=assistantProviderSessionItem(pid);
@@ -7811,6 +7882,9 @@ function assistantProviderSessionSmokeSnapshot(){
   const saved=assistantProviderPersistSession(pid,{status:'completed'});
   const opened=assistantProviderOpenSessionItem(saved,{});
   const restoredMessages=providerRefs(pid).messages?providerRefs(pid).messages.querySelectorAll('.msg').length:0;
+  const restoredNativeCards=providerRefs(pid).messages?providerRefs(pid).messages.querySelectorAll('.chat-response-native-parts > *').length:0;
+  const restoredReferenceCards=providerRefs(pid).messages?providerRefs(pid).messages.querySelectorAll('.chat-response-references').length:0;
+  const savedNativePayload=saved&&saved.messages&&saved.messages.find(m=>m.role==='assistant'&&m.nativePayload);
   const panel=$(providerElId('rp',pid));
   const snapshot={
     runningType:runningItem.type,
@@ -7824,6 +7898,9 @@ function assistantProviderSessionSmokeSnapshot(){
     panelRequests:panel?panel.dataset.providerRequestCount:'',
     opened,
     restoredMessages,
+    savedNativePayload:!!savedNativePayload,
+    restoredNativeCards,
+    restoredReferenceCards,
     activeProvider:activeProviderId,
     sessionType:assistantSessionState.type,
     sessionProvider:assistantSessionState.provider
@@ -7890,6 +7967,7 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'composer-actions-visible',layout.actions&&layout.actions.width>0,layout.actions&&layout.actions.width);
   const providerPopup=assistantControlPopupSnapshot('provider');
   const modelPopup=assistantControlPopupSnapshot('model');
+  const agentPopup=assistantControlPopupSnapshot('agent');
   const workflowPopup=assistantControlPopupSnapshot('workflow');
   const workflowModeSmoke=assistantWorkflowModeSmokeSnapshot();
   const workflowEditor=assistantWorkflowEditorSnapshot();
@@ -7906,7 +7984,9 @@ async function runAssistantUiSelfCheck(opts){
   const providerSession=assistantProviderSessionSmokeSnapshot();
   assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready',providerPopup.shown&&providerPopup.optionCount>=1&&providerPopup.focusableCount===providerPopup.optionCount&&providerPopup.keyboardReady,JSON.stringify(providerPopup));
   assistantUiSelfCheckRecord(checks,'model-popup-configured-models-ready',modelPopup.shown&&modelPopup.optionCount>=1&&modelPopup.focusableCount===modelPopup.optionCount&&modelPopup.keyboardReady,JSON.stringify(modelPopup));
-  assistantUiSelfCheckRecord(checks,'provider-session-state-smoke',providerSession.runningType==='provider'&&providerSession.runningStatus==='inProgress'&&providerSession.savedType==='provider'&&providerSession.savedProvider==='assistant-selfcheck-provider'&&providerSession.savedMessageCount===2&&providerSession.savedContextCount===1&&String(providerSession.resource||'').startsWith('sao-ai-chat://provider/')&&providerSession.panelResource===providerSession.resource&&providerSession.panelRequests==='1'&&providerSession.opened===true&&providerSession.restoredMessages===2&&providerSession.activeProvider==='assistant-selfcheck-provider'&&providerSession.sessionType==='provider'&&providerSession.sessionProvider==='assistant-selfcheck-provider',JSON.stringify(providerSession));
+  assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped',[providerPopup,modelPopup,agentPopup,workflowPopup].every(s=>s.shown&&s.display==='block'&&s.rectReady&&s.opensAboveTrigger&&s.notToolbarClipped&&!s.className.includes('mode-popup')),JSON.stringify({providerPopup,modelPopup,agentPopup,workflowPopup}));
+  assistantUiSelfCheckRecord(checks,'agent-popup-configured-agents-ready',agentPopup.shown&&agentPopup.optionCount>=1&&agentPopup.focusableCount===agentPopup.optionCount&&agentPopup.keyboardReady&&agentPopup.visibleText.includes('Agent'),JSON.stringify(agentPopup));
+  assistantUiSelfCheckRecord(checks,'provider-session-state-smoke',providerSession.runningType==='provider'&&providerSession.runningStatus==='inProgress'&&providerSession.savedType==='provider'&&providerSession.savedProvider==='assistant-selfcheck-provider'&&providerSession.savedMessageCount===2&&providerSession.savedContextCount===1&&String(providerSession.resource||'').startsWith('sao-ai-chat://provider/')&&providerSession.panelResource===providerSession.resource&&providerSession.panelRequests==='1'&&providerSession.opened===true&&providerSession.restoredMessages===2&&providerSession.savedNativePayload===true&&providerSession.restoredNativeCards>=2&&providerSession.restoredReferenceCards>=1&&providerSession.activeProvider==='assistant-selfcheck-provider'&&providerSession.sessionType==='provider'&&providerSession.sessionProvider==='assistant-selfcheck-provider',JSON.stringify(providerSession));
   assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready',workflowPopup.shown&&workflowPopup.workflowModeCount===3&&workflowPopup.workflowModeStrip&&workflowPopup.workflowModeToolbar&&workflowPopup.optionCount>=4&&workflowPopup.focusableCount===workflowPopup.optionCount&&workflowPopup.keyboardReady,JSON.stringify(workflowPopup));
   assistantUiSelfCheckRecord(checks,'workflow-popup-mode-smoke',workflowModeSmoke.states.length===3&&workflowModeSmoke.states.every(state=>state.strip&&state.toolbar&&state.active.includes(state.mode))&&workflowModeSmoke.selected.value==='assistant-selfcheck-flow'&&workflowModeSmoke.selected.mode==='on'&&workflowModeSmoke.selected.runDisabled===false&&workflowModeSmoke.custom.prompt==='selfcheck custom workflow prompt'&&workflowModeSmoke.custom.runDisabled===false,JSON.stringify(workflowModeSmoke));
   assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready',workflowEditor.modalExists&&workflowEditor.editorExists&&workflowEditor.rowCount===2&&workflowEditor.labelInputs===2&&workflowEditor.agentInputs===2&&workflowEditor.outputInputs===2&&workflowEditor.promptInputs===2&&workflowEditor.moveButtons===4&&workflowEditor.deleteButtons===2&&workflowEditor.addButtonExists&&workflowEditor.collectedCount===2&&workflowEditor.idReadOnly,JSON.stringify(workflowEditor));
@@ -15064,6 +15144,7 @@ function onStreamEnd(d){
     }
     const finalMarkdown=normalizeChatMessageText(streamBuf||d.content||'','assistant');
     currentMsgBody._rawMarkdown=finalMarkdown;
+    rememberAssistantNativePayload(currentMsgBody,d);
     if(finalMarkdown)renderMd(currentMsgBody,finalMarkdown);
     renderChatResponseNativeParts(currentMsgBody,d,finalMarkdown);
     if(d.tool_calls)d.tool_calls.forEach(tc=>{rememberMainTool(tc.id,tc.name);renderToolCallWithState(currentMsgBody,tc.name,tc.arguments,tc.id)});
@@ -19055,7 +19136,8 @@ function assistantProviderMessageSnapshot(pid){
       role,
       model:model?String(model.textContent||''):providerModelLabel(pid)||'',
       content:assistantSessionMessageBodyText(body).slice(0,80000),
-      references
+      references,
+      nativePayload:assistantBodyNativePayload(body)
     };
   }));
 }
@@ -19107,7 +19189,12 @@ function assistantProviderRenderMessages(pid,messages){
     if(!content&&role!=='user')return;
     const body=createProviderMessage(pid,role==='tool'?'tool':role,m&&m.model,role==='assistant'?undefined:content);
     if(!body)return;
-    if(role==='assistant')renderMd(body,content);
+    if(role==='assistant'){
+      rememberAssistantNativePayload(body,m&&m.nativePayload);
+      renderMd(body,content);
+      renderChatResponseNativeParts(body,m&&m.nativePayload,content);
+      renderChatResponseReferences(body,content,m&&m.nativePayload);
+    }
     if(role==='user'&&Array.isArray(m&&m.references)&&m.references.length)renderChatReferences(body,m.references);
   });
   updateProviderEmpty(pid);
@@ -19891,6 +19978,7 @@ window._onEditorEvent=function(event,data){
         const content=data.content!==undefined&&data.content!==''?data.content:streamed;
         const thinking=data.thinking||s._thinkingBuf||'';
         s.classList.remove('streaming');s.innerHTML='';s._streamContent=null;s._thinkingEl=null;s._thinkingBuf='';
+        rememberAssistantNativePayload(s,data);
         if(thinking)renderProviderThinkingBlock(s,thinking,false);
         if(content)renderMd(s,content);
         renderChatResponseNativeParts(s,data,content);

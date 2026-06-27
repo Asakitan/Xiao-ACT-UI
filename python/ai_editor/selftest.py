@@ -3904,7 +3904,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".chat-control-popup { position:absolute; bottom:calc(100% + 7px); left:0; display:none;" in html
            and ".chat-control-popup.show { display:block; }" in html
            and "@keyframes chatControlPopupIn" in html
-           and "mode-popup chat-control-popup" not in html)
+           and "mode-popup chat-control-popup" not in html
+           and "rectReady:!!(popupRect&&popupRect.width>=180&&popupRect.height>=20)" in html
+           and "opensAboveTrigger:!!(popupRect&&triggerRect&&popupRect.bottom<=triggerRect.top+1)" in html
+           and "notToolbarClipped:!!(popupRect&&toolbarRect&&popupRect.bottom<=toolbarRect.top+1)" in html)
     _check("frontend Assistant workflow launch has stateful on off custom modes",
            "const ASSISTANT_WORKFLOW_MODE_KEY='sao-ai-editor-workflow-mode';" in html
            and "function normalizeWorkflowMode(value)" in html
@@ -4049,6 +4052,8 @@ def test_phase1_ai_editor_regressions() -> None:
            "ASSISTANT_SESSION_ITEMS_KEY='sao-ai-editor-chat-session-items'"
            in html
            and "function assistantSessionLoadItems()" in html
+           and "function assistantSessionSerializableNativePayload(payload)" in html
+           and "function rememberAssistantNativePayload(body,payload)" in html
            and "function assistantSessionMessageSnapshot()" in html
            and "function assistantSessionMessageBodyText(body)" in html
            and "clone.querySelectorAll('.chat-queued-request-meta').forEach(el=>el.remove());" in html
@@ -4070,6 +4075,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "if(refs.length)out.references=refs;" in html
            and "body._chatReferences" in html
            and "renderChatReferences(b,m.references);" in html
+           and "renderChatResponseNativeParts(b,m&&m.nativePayload,content);" in html
+           and "renderChatResponseReferences(b,content,m&&m.nativePayload);" in html
            and "window.assistantSessionOpenItem=assistantSessionOpenItem"
            in html
            and "assistantSessionPersistCurrent({status:streaming?'inProgress':'completed'});"
@@ -4121,7 +4128,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantProviderRenderMessages(pid,messages)" in html
            and "function assistantProviderOpenSessionItem(item,opts)" in html
            and "function syncAssistantProviderSessionState(pid,patch)" in html
+           and "nativePayload:assistantBodyNativePayload(body)" in html
            and "assistantProviderRenderMessages(pid,item.messages||[]);" in html
+           and "renderChatResponseNativeParts(body,m&&m.nativePayload,content);" in html
+           and "renderChatResponseReferences(body,content,m&&m.nativePayload);" in html
            and "switchRightTab(pid);" in html
            and "const input=providerRefs(pid).input;if(input)input.focus();" in html
            and "refs.panel.dataset.providerSessionResource=assistantProviderSessionResource(key);" in html
@@ -4147,6 +4157,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "providerSession.savedMessageCount===2" in html
            and "providerSession.opened===true" in html
            and "providerSession.restoredMessages===2" in html
+           and "providerSession.savedNativePayload===true" in html
+           and "providerSession.restoredNativeCards>=2" in html
+           and "providerSession.restoredReferenceCards>=1" in html
            and "providerSession.activeProvider==='assistant-selfcheck-provider'" in html
            and "providerSession.panelResource===providerSession.resource" in html)
     _check("frontend Assistant supports Copilot-style attached context and references",
@@ -4953,6 +4966,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantControlPopupSnapshot(kind)" in html
            and "assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'model-popup-configured-models-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped'" in html
+           and "assistantUiSelfCheckRecord(checks,'agent-popup-configured-agents-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready'" in html
            and "function assistantWorkflowEditorSnapshot()" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready'" in html
@@ -4997,9 +5012,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "window.runAssistantUiSelfCheck({ cleanup: true })" in smoke_source
            and "custom-endpoint-model" in smoke_source
            and "model-popup-configured-models-ready" in smoke_source
+           and "control-popup-rects-unclipped" in smoke_source
+           and "agent-popup-configured-agents-ready" in smoke_source
            and "provider-session-state-smoke" in smoke_source
            and "workflow-result-state-rendered" in smoke_source
            and "workflow-run-button-active-state" in smoke_source
+           and "channel: \"msedge\"" in smoke_source
            and "PASS assistant-ui-browser-smoke" in smoke_source
            and "SKIP assistant-ui-browser-smoke playwright unavailable" in smoke_source)
     _check("backend workflow exposes run cancellation",

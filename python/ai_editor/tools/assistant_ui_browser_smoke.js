@@ -30,7 +30,16 @@ async function main() {
   }
 
   const playwright = loadPlaywright();
-  const browser = await playwright.chromium.launch({ headless: true });
+  let browser;
+  try {
+    browser = await playwright.chromium.launch({ headless: true });
+  } catch (firstLaunchError) {
+    try {
+      browser = await playwright.chromium.launch({ headless: true, channel: "msedge" });
+    } catch (_edgeLaunchError) {
+      throw firstLaunchError;
+    }
+  }
   const page = await browser.newPage({ viewport: { width: 1440, height: 920 } });
   page.on("pageerror", error => {
     throw error;
@@ -97,6 +106,8 @@ async function main() {
   const required = [
     "composer-layout-present",
     "model-popup-configured-models-ready",
+    "control-popup-rects-unclipped",
+    "agent-popup-configured-agents-ready",
     "provider-session-state-smoke",
     "workflow-popup-modes-ready",
     "workflow-result-state-rendered",
