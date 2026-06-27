@@ -3892,10 +3892,12 @@ def test_phase1_ai_editor_regressions() -> None:
             and "overflow:visible; max-width:100%; }" in html
             and ".chat-select-chip { width:142px; max-width:184px; padding:0 20px 0 9px; cursor:pointer; flex:0 1 142px; }" in html
             and ".chat-model-inline { width:190px; max-width:260px; justify-content:space-between; font-family:var(--mono); flex:0 1 190px; text-align:left; }" in html
+            and ".chat-control-trigger.provider { width:128px; max-width:176px; flex-basis:128px; }" in html
+            and ".chat-control-trigger.model { width:190px; max-width:280px; flex-basis:190px; }" in html
             and ".chat-control-trigger.agent { width:150px; max-width:194px; flex-basis:150px; }" in html
-            and ".chat-control-trigger.workflow { width:154px; max-width:210px; flex-basis:154px; }" in html
+            and ".chat-control-trigger.workflow { width:158px; max-width:220px; flex-basis:158px; }" in html
             and ".chat-control-menu { position:relative; display:inline-flex; align-items:center; flex:0 0 auto; min-width:0; }" in html
-            and ".chat-control-popup.model { min-width:380px; }" in html
+            and ".chat-control-popup.model { min-width:390px; }" in html
             and ".chat-control-popup.workflow { min-width:340px; }" in html
             and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px;" in html
             and "margin-left:auto; flex:0 0 auto; min-width:max-content; width:max-content; flex-wrap:nowrap; overflow:hidden; white-space:nowrap;" in html
@@ -3928,10 +3930,13 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function providerMatchesModelMeta(meta,provider)" in html
            and "function isCustomEndpointModelMeta(meta)" in html
            and "function providerDefaultModelFromControls(provider)" in html
+           and "function settingsModelListRows(provider)" in html
            and "function modelOptionRows()" in html
            and "if(meta.custom||isCustomEndpointModelMeta(meta))return true;" in html
-           and "if(item&&(item.custom||isCustomEndpointModelMeta(item)))return 'custom endpoint';" in html
+           and "if(item&&(item.custom||isCustomEndpointModelMeta(item)))return 'Custom Endpoint';" in html
            and "normalizeControlList(chatProviderModelOptions[provider],'models')" in html
+           and "settingsModelListRows(provider).forEach(model=>pushModel(model));" in html
+           and "function preferredModelForProvider(provider)" in html
            and "chatProviderModelOptions[String(provider||'')]=r.models.slice();" in html
            and "chatControlState.models=normalizeControlList(controls.models,'models');" in html
            and "if(controls.custom_models&&typeof controls.custom_models==='object')config.custom_models={...controls.custom_models};" in html
@@ -3953,6 +3958,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "min-width:0; overflow:visible; white-space:nowrap; min-height:29px;" in html
            and ".chat-control-strip { display:flex; align-items:center; gap:4px; flex:1 1 auto; flex-wrap:nowrap; min-width:0;" in html
            and "overflow:visible; max-width:100%;" in html
+           and ".chat-control-native { display:none!important; visibility:hidden!important;" in html
+           and ".chat-control-trigger.model { width:190px; max-width:280px; flex-basis:190px; }" in html
            and ".chat-control-popup { position:absolute; bottom:calc(100% + 7px); left:0; display:none;" in html
            and ".chat-control-popup.show { display:block; }" in html
            and ".chat-control-popup.align-right { left:auto; right:0; }" in html
@@ -5158,6 +5165,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'model-popup-configured-models-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'model-popup-custom-endpoint-models-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'model-popup-custom-endpoint-selection-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'composer-native-selects-hidden'" in html
            and "assistantUiSelfCheckRecord(checks,'mode-popup-custom-control-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped'" in html
            and "assistantUiSelfCheckRecord(checks,'agent-popup-configured-agents-ready'" in html
@@ -5242,6 +5251,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "custom-endpoint-model" in smoke_source
            and "model-popup-configured-models-ready" in smoke_source
            and "model-popup-custom-endpoint-models-ready" in smoke_source
+           and "model-popup-custom-endpoint-selection-ready" in smoke_source
+           and "composer-native-selects-hidden" in smoke_source
            and "mode-popup-custom-control-ready" in smoke_source
            and "control-popup-rects-unclipped" in smoke_source
            and "agent-popup-configured-agents-ready" in smoke_source

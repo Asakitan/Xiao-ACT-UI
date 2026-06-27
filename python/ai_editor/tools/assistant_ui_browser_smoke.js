@@ -107,6 +107,8 @@ async function main() {
     "composer-layout-present",
     "model-popup-configured-models-ready",
     "model-popup-custom-endpoint-models-ready",
+    "model-popup-custom-endpoint-selection-ready",
+    "composer-native-selects-hidden",
     "mode-popup-custom-control-ready",
     "control-popup-rects-unclipped",
     "agent-popup-configured-agents-ready",
