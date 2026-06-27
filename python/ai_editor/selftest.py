@@ -4592,6 +4592,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function chatMessageCodeBlocks(msgEl)" in html
            and "function chatFirstMessageCodeBlock(msgEl)" in html
            and "function chatAllMessageCodeBlocksText(msgEl)" in html
+           and "const ASSISTANT_MESSAGE_TARGETS={" in html
+           and "function assistantMessageTargetElements(msgEl,target)" in html
+           and "function assistantMessageTargetCounts(msgEl)" in html
+           and "function focusAssistantMessageTarget(msgEl,target)" in html
            and "function applyFirstMessageCodeBlock(msgEl)" in html
            and "function assistantEnsureTextEditorForCodeAction()" in html
            and "function assistantInsertCodeIntoEditor(code,opts)" in html
@@ -4620,11 +4624,16 @@ def test_phase1_ai_editor_regressions() -> None:
            and "b.dataset.action=spec.action||'action';" in html
            and "if(spec.requires)b.dataset.requires=spec.requires;" in html
            and "if(spec.disableWhileStreaming)b.dataset.disableWhileStreaming='true';" in html
+           and "if(spec.focusTarget)b.dataset.focusTarget=spec.focusTarget;" in html
            and "btn.setAttribute('aria-disabled',disabled?'true':'false');" in html
            and "btn.dataset.ready=disabled?'false':'true';" in html
+           and "if(btn.dataset.focusTarget){" in html
+           and "btn.dataset.targetCount=String(count);" in html
+           and "btn.dataset.targetReady=count?'true':'false';" in html
            and "footer.dataset.hasCode=hasCode?'true':'false';" in html
            and "footer.dataset.codeBlockCount=String(codeBlocks.length);" in html
            and "footer.dataset.hasMultipleCodeBlocks=hasMultipleCode?'true':'false';" in html
+           and "Object.keys(targetCounts).forEach(key=>{footer.dataset[key+'Count']=String(targetCounts[key])});" in html
            and "footer.dataset.streaming=streaming?'true':'false';" in html
            and "updateMessageFootersState();" in html
            and "b.addEventListener('keydown',ev=>{if(ev.key===' '||ev.key==='Enter'){ev.preventDefault();b.click()}});" in html
@@ -4639,6 +4648,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "action:'copy-all-code'" in html
            and "action:'insert-response'" in html
            and "action:'apply-code'" in html
+           and "action:'focus-references'" in html
+           and "action:'focus-changes'" in html
+           and "action:'focus-file-tree'" in html
+           and "action:'focus-followups'" in html
+           and "action:'focus-actions'" in html
            and "requires:'code'" in html
            and "openInEditor(text,'markdown')" in html
            and "assistantInsertCodeIntoEditor(block.code,{lang:block.lang,replaceSelection:true})" in html
@@ -4701,6 +4715,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "addMessageFooter(body.closest('.msg'),'assistant');" in html
            and "function deleteChatMessage(msgEl)" in html
            and "e.key==='Enter'&&(e.ctrlKey||e.metaKey)" in html)
+    _check("frontend Assistant message footer can focus response target cards",
+           "function assistantMessageTargetFooterSmokeSnapshot()" in html
+           and "assistantUiSelfCheckRecord(checks,'message-footer-target-actions-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'message-footer-target-focus-ready'" in html
+           and "messageTargetFooter.focusButtonCount===5" in html
+           and "messageTargetFooter.clickedTargets.length===5" in html
+           and "messageTargetFooter.lastFocusedTarget==='actions'" in html
+           and "messageTargetFooter.highlighted" in html
+           and ".assistant-target-flash" in html)
     _check("frontend Assistant code block toolbar is keyboard accessible and can apply to editor",
            "const toolbar=document.createElement('div');toolbar.className='cb-toolbar';" in html
            and "{t:t('insert_code'),icon:'📥',fn:()=>assistantInsertCodeIntoEditor(_code,{lang:_lang,replaceSelection:false})}" in html

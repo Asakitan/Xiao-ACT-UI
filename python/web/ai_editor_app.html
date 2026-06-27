@@ -1698,7 +1698,10 @@ pre.code-block { overflow:visible; }
 .msg-footer .mf-btn.active { color:var(--fg-accent); }
 .msg-footer .mf-btn:disabled { opacity:.36; cursor:default; background:transparent; }
 .msg-footer .mf-btn[data-ready="true"] { color:color-mix(in srgb, var(--fg) 72%, var(--fg-dim)); }
+.msg-footer .mf-btn[data-target-ready="true"] { color:var(--fg-accent); }
 .msg-footer .mf-separator { width:1px; height:14px; background:var(--border); opacity:.7; }
+.assistant-target-flash { outline:1px solid var(--border-focus); outline-offset:2px;
+  background:color-mix(in srgb,var(--fg-accent) 8%,transparent); transition:background .18s, outline-color .18s; }
 
 /* ── Follow-up suggestions ── */
 .followups { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; align-items:center;
@@ -8218,6 +8221,52 @@ async function assistantWorkflowBackendExecutionSnapshot(){
   else delete window.pywebview.api;
   return snapshot;
 }
+function assistantMessageTargetFooterSmokeSnapshot(){
+  const before=chatConversationItems().length;
+  const body=createMsg('assistant','selfcheck-targets');
+  body._rawMarkdown='Here is a target footer selfcheck.\n\n```js\nconsole.log("target");\n```';
+  renderMd(body,body._rawMarkdown);
+  const refs=document.createElement('div');refs.className='chat-response-references';
+  const ref=document.createElement('button');ref.type='button';ref.className='chat-response-ref';ref.textContent='target.ts:1';refs.appendChild(ref);body.appendChild(refs);
+  const change=document.createElement('button');change.type='button';change.className='chat-change-card';change.textContent='target change';body.appendChild(change);
+  const tree=document.createElement('div');tree.className='chat-file-tree';tree.textContent='target tree';body.appendChild(tree);
+  const followups=document.createElement('div');followups.className='followups';
+  const follow=document.createElement('button');follow.type='button';follow.className='followup-btn';follow.textContent='continue';followups.appendChild(follow);body.appendChild(followups);
+  const action=document.createElement('div');action.className='chat-response-confirmation';action.dataset.assistantActionKey='target-action';action.textContent='target action';body.appendChild(action);
+  const msg=body.closest('.msg');
+  addMessageFooter(msg,'assistant');
+  updateMessageFooterState(msg);
+  const footer=msg.querySelector('.msg-footer');
+  const focusButtons=footer?Array.from(footer.querySelectorAll('.mf-btn[data-focus-target]')):[];
+  const clickResults={};
+  focusButtons.forEach(btn=>{
+    const target=btn.dataset.focusTarget;
+    btn.click();
+    clickResults[target]=msg.dataset.lastFocusedTarget===target;
+  });
+  const snapshot={
+    before,
+    footerExists:!!footer,
+    toolbarRole:footer?footer.getAttribute('role'):'',
+    toolbarLabel:footer?footer.getAttribute('aria-label'):'',
+    focusButtonCount:focusButtons.length,
+    focusActions:focusButtons.map(btn=>btn.dataset.action),
+    targetCounts:focusButtons.reduce((acc,btn)=>{acc[btn.dataset.focusTarget]=Number(btn.dataset.targetCount||0);return acc},{}),
+    disabledFocusButtons:focusButtons.filter(btn=>btn.disabled).length,
+    targetReadyCount:focusButtons.filter(btn=>btn.dataset.targetReady==='true').length,
+    clickedTargets:Object.keys(clickResults).filter(key=>clickResults[key]),
+    lastFocusedTarget:msg.dataset.lastFocusedTarget||'',
+    footerReferences:footer?footer.dataset.referencesCount:'',
+    footerChanges:footer?footer.dataset.changesCount:'',
+    footerTrees:footer?footer.dataset.treesCount:'',
+    footerFollowups:footer?footer.dataset.followupsCount:'',
+    footerActions:footer?footer.dataset.actionsCount:'',
+    highlighted:!!msg.querySelector('.assistant-target-flash')
+  };
+  msg.remove();
+  showChatWelcomeIfEmpty();
+  return snapshot;
+}
 async function runAssistantUiSelfCheck(opts){
   opts=opts||{};
   const checks=[];
@@ -8256,6 +8305,7 @@ async function runAssistantUiSelfCheck(opts){
   const restoredHistoryBanner=assistantRestoredHistoryBannerSmokeSnapshot();
   const nativeCardKeyboard=assistantNativeCardKeyboardSmokeSnapshot();
   const forkLineage=assistantForkLineageSmokeSnapshot();
+  const messageTargetFooter=assistantMessageTargetFooterSmokeSnapshot();
   assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready',providerPopup.shown&&providerPopup.optionCount>=1&&providerPopup.focusableCount===providerPopup.optionCount&&providerPopup.keyboardReady,JSON.stringify(providerPopup));
   assistantUiSelfCheckRecord(checks,'model-popup-configured-models-ready',modelPopup.shown&&modelPopup.optionCount>=1&&modelPopup.focusableCount===modelPopup.optionCount&&modelPopup.keyboardReady,JSON.stringify(modelPopup));
   assistantUiSelfCheckRecord(checks,'model-popup-custom-endpoint-models-ready',modelPopup.shown&&modelPopup.customModelCount>=1&&modelPopup.visibleText.includes('custom-endpoint-model')&&modelPopup.visibleText.includes('custom endpoint'),JSON.stringify(modelPopup));
@@ -8277,6 +8327,8 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'restored-history-banner-keyboard-aria-ready',restoredHistoryBanner.toolbarRole==='toolbar'&&restoredHistoryBanner.toolbarLabel==='Restored history actions'&&restoredHistoryBanner.keyboardItems>=8&&restoredHistoryBanner.keyboardMoved&&restoredHistoryBanner.keyboardFocusedAction,JSON.stringify(restoredHistoryBanner));
   assistantUiSelfCheckRecord(checks,'native-response-card-navigation-ready',nativeCardKeyboard.cardCount>=8&&nativeCardKeyboard.bodyCount===nativeCardKeyboard.cardCount&&nativeCardKeyboard.refs>=1&&nativeCardKeyboard.edits>=1&&nativeCardKeyboard.trees>=1&&nativeCardKeyboard.actions>=2&&nativeCardKeyboard.kinds.includes('reference')&&nativeCardKeyboard.kinds.includes('edit')&&nativeCardKeyboard.kinds.includes('tree')&&nativeCardKeyboard.kinds.includes('action'),JSON.stringify(nativeCardKeyboard));
   assistantUiSelfCheckRecord(checks,'native-response-card-keyboard-ready',nativeCardKeyboard.moved&&nativeCardKeyboard.endMoved&&nativeCardKeyboard.rovingZero===1&&nativeCardKeyboard.panelFocusedKind&&nativeCardKeyboard.labels.every(label=>label.includes('Assistant ')),JSON.stringify(nativeCardKeyboard));
+  assistantUiSelfCheckRecord(checks,'message-footer-target-actions-ready',messageTargetFooter.footerExists&&messageTargetFooter.toolbarRole==='toolbar'&&messageTargetFooter.toolbarLabel==='Assistant message actions'&&messageTargetFooter.focusButtonCount===5&&messageTargetFooter.focusActions.includes('focus-references')&&messageTargetFooter.focusActions.includes('focus-changes')&&messageTargetFooter.focusActions.includes('focus-file-tree')&&messageTargetFooter.focusActions.includes('focus-followups')&&messageTargetFooter.focusActions.includes('focus-actions')&&messageTargetFooter.disabledFocusButtons===0&&messageTargetFooter.targetReadyCount===5,JSON.stringify(messageTargetFooter));
+  assistantUiSelfCheckRecord(checks,'message-footer-target-focus-ready',messageTargetFooter.clickedTargets.length===5&&messageTargetFooter.clickedTargets.includes('references')&&messageTargetFooter.clickedTargets.includes('changes')&&messageTargetFooter.clickedTargets.includes('trees')&&messageTargetFooter.clickedTargets.includes('followups')&&messageTargetFooter.clickedTargets.includes('actions')&&messageTargetFooter.lastFocusedTarget==='actions'&&messageTargetFooter.highlighted,JSON.stringify(messageTargetFooter));
   assistantUiSelfCheckRecord(checks,'fork-lineage-history-visible',forkLineage.itemExists&&forkLineage.parentResource==='sao-ai-chat://local/parent-lineage-selfcheck'&&forkLineage.parentTitle==='Parent Assistant Session'&&forkLineage.parentId==='parent-lineage-selfcheck'&&forkLineage.branchChildren===1&&forkLineage.labelTitle.includes('Forked from: Parent Assistant Session')&&forkLineage.labelTitle.includes('Branches: 1')&&forkLineage.chipLabels.includes('fork: Parent Assistant Session')&&forkLineage.chipLabels.includes('1 branch')&&forkLineage.chipKinds.some(kind=>kind.includes('lineage'))&&forkLineage.actionLabels.includes('parent')&&forkLineage.actionLabels.includes('branches')&&forkLineage.actionLabels.includes('fork')&&forkLineage.actionKinds.includes('parent-session')&&forkLineage.actionKinds.includes('branch-sessions')&&forkLineage.parentButtonEnabled&&forkLineage.branchesButtonEnabled&&forkLineage.disabledActions.length===0&&forkLineage.searchMatches,JSON.stringify(forkLineage));
   assistantUiSelfCheckRecord(checks,'fork-lineage-chip-visible',forkLineage.chipLabels.includes('fork: Parent Assistant Session')&&forkLineage.chipLabels.includes('1 branch')&&forkLineage.chipKinds.some(kind=>kind.includes('lineage'))&&forkLineage.labelTitle.includes('Forked from: Parent Assistant Session')&&forkLineage.labelTitle.includes('Branches: 1'),JSON.stringify(forkLineage));
   assistantUiSelfCheckRecord(checks,'fork-branch-navigation-visible',forkLineage.parentId==='parent-lineage-selfcheck'&&forkLineage.branchChildren===1&&forkLineage.actionKinds.includes('parent-session')&&forkLineage.actionKinds.includes('branch-sessions')&&forkLineage.parentButtonEnabled&&forkLineage.branchesButtonEnabled&&forkLineage.disabledActions.length===0&&forkLineage.searchMatches,JSON.stringify(forkLineage));
@@ -29013,6 +29065,43 @@ function chatFirstMessageCodeBlock(msgEl){
 function chatAllMessageCodeBlocksText(msgEl){
   return chatMessageCodeBlocks(msgEl).map(block=>block.code).filter(Boolean).join('\n\n');
 }
+const ASSISTANT_MESSAGE_TARGETS={
+  references:{label:'References',selector:'.chat-response-reference-card,.chat-response-ref,.chat-response-references'},
+  changes:{label:'Changes',selector:'.chat-change-card,.chat-response-modified-files,.chat-response-edit-row,.chat-response-diff-row,.chat-response-multidiff'},
+  trees:{label:'File tree',selector:'.chat-file-tree,.chat-response-file-tree'},
+  followups:{label:'Follow-ups',selector:'.followups .followup-btn,.followups'},
+  actions:{label:'Actions',selector:'.chat-action-tray.active,.chat-action-carousel,[data-assistant-action-key],.chat-response-confirmation,.chat-response-questions'}
+};
+function assistantMessageTargetElements(msgEl,target){
+  const spec=ASSISTANT_MESSAGE_TARGETS[target];
+  if(!msgEl||!spec)return [];
+  return Array.from(msgEl.querySelectorAll(spec.selector));
+}
+function assistantMessageTargetCounts(msgEl){
+  const counts={};
+  Object.keys(ASSISTANT_MESSAGE_TARGETS).forEach(key=>{counts[key]=assistantMessageTargetElements(msgEl,key).length});
+  return counts;
+}
+function focusAssistantMessageTarget(msgEl,target){
+  const items=assistantMessageTargetElements(msgEl,target);
+  const spec=ASSISTANT_MESSAGE_TARGETS[target];
+  if(!items.length){
+    const label=(spec&&spec.label)||target;
+    setMessageFooterStatus(msgEl,label+' unavailable');
+    announceAssistantAction(label+' unavailable');
+    return false;
+  }
+  const el=items[0];
+  if(!el.hasAttribute('tabindex')&&!/^(BUTTON|A|INPUT|TEXTAREA|SELECT)$/i.test(el.tagName))el.setAttribute('tabindex','-1');
+  el.scrollIntoView({block:'nearest',inline:'nearest'});
+  try{el.focus({preventScroll:true})}catch(_e){try{el.focus()}catch(_e2){}}
+  el.classList.add('assistant-target-flash');
+  setTimeout(()=>{if(el&&el.classList)el.classList.remove('assistant-target-flash')},950);
+  msgEl.dataset.lastFocusedTarget=target;
+  setMessageFooterStatus(msgEl,'Focused '+((spec&&spec.label)||target));
+  announceAssistantAction('Focused '+((spec&&spec.label)||target));
+  return true;
+}
 function applyFirstMessageCodeBlock(msgEl){
   const block=chatFirstMessageCodeBlock(msgEl);
   if(!block)return false;
@@ -29031,12 +29120,19 @@ function updateMessageFooterState(msgEl){
   const codeBlocks=chatMessageCodeBlocks(msgEl);
   const hasCode=!!codeBlocks.length;
   const hasMultipleCode=codeBlocks.length>1;
+  const targetCounts=assistantMessageTargetCounts(msgEl);
   footer.querySelectorAll('.mf-btn').forEach(btn=>{
     const requires=String(btn.dataset.requires||'').split(/\s+/).filter(Boolean);
     let disabled=false;
     if(btn.dataset.disableWhileStreaming==='true'&&streaming)disabled=true;
     if(requires.includes('text')&&!hasText)disabled=true;
     if(requires.includes('code')&&!hasCode)disabled=true;
+    if(btn.dataset.focusTarget){
+      const count=targetCounts[btn.dataset.focusTarget]||0;
+      if(!count)disabled=true;
+      btn.dataset.targetCount=String(count);
+      btn.dataset.targetReady=count?'true':'false';
+    }
     btn.disabled=disabled;
     btn.setAttribute('aria-disabled',disabled?'true':'false');
     btn.dataset.ready=disabled?'false':'true';
@@ -29046,6 +29142,7 @@ function updateMessageFooterState(msgEl){
   footer.dataset.hasCode=hasCode?'true':'false';
   footer.dataset.codeBlockCount=String(codeBlocks.length);
   footer.dataset.hasMultipleCodeBlocks=hasMultipleCode?'true':'false';
+  Object.keys(targetCounts).forEach(key=>{footer.dataset[key+'Count']=String(targetCounts[key])});
   footer.dataset.streaming=streaming?'true':'false';
   setMessageFooterStatus(msgEl,streaming?t('response_in_progress'):(hasText?t('actions_ready'):t('action_unavailable')));
 }
@@ -29070,6 +29167,7 @@ function createMessageFooterButton(msgEl,footer,spec){
   if(spec.requires)b.dataset.requires=spec.requires;
   if(spec.disableWhileStreaming)b.dataset.disableWhileStreaming='true';
   if(spec.disabledTitle)b.dataset.disabledTitle=spec.disabledTitle;
+  if(spec.focusTarget)b.dataset.focusTarget=spec.focusTarget;
   if(spec.feedback){b.dataset.feedback=spec.feedback;b.setAttribute('aria-pressed','false')}
   b.addEventListener('keydown',ev=>{if(ev.key===' '||ev.key==='Enter'){ev.preventDefault();b.click()}});
   b.onclick=function(){return runMessageFooterAction(b,msgEl,spec.fn||function(){})};
@@ -29139,6 +29237,12 @@ function addMessageFooter(msgEl,role){
     {icon:'{}',title:t('copy_all_code'),action:'copy-all-code',requires:'code',fn:function(){const text=chatAllMessageCodeBlocksText(msgEl);if(text){navigator.clipboard.writeText(text);announceAssistantAction(t('all_code_copied'));setMessageFooterStatus(msgEl,t('all_code_copied'))}showToast(t('copied'),'success',1500)}},
     {icon:'↧',title:t('insert_response'),action:'insert-response',requires:'text',disableWhileStreaming:true,fn:function(){const text=chatMessageActionText(msgEl,true);if(text){openInEditor(text,'markdown');announceAssistantAction(t('response_inserted'));setMessageFooterStatus(msgEl,t('response_inserted'))}}},
     {icon:'⚒',title:t('apply_first_code'),action:'apply-code',requires:'code',disableWhileStreaming:true,disabledTitle:'No code block in response',fn:function(){applyFirstMessageCodeBlock(msgEl)}},
+    {separator:true},
+    {icon:'@',title:'Focus references',action:'focus-references',focusTarget:'references',disabledTitle:'No references in this response',fn:function(){focusAssistantMessageTarget(msgEl,'references')}},
+    {icon:'±',title:'Focus changes',action:'focus-changes',focusTarget:'changes',disabledTitle:'No changes in this response',fn:function(){focusAssistantMessageTarget(msgEl,'changes')}},
+    {icon:'▤',title:'Focus file tree',action:'focus-file-tree',focusTarget:'trees',disabledTitle:'No file tree in this response',fn:function(){focusAssistantMessageTarget(msgEl,'trees')}},
+    {icon:'↪',title:'Focus follow-ups',action:'focus-followups',focusTarget:'followups',disabledTitle:'No follow-ups in this response',fn:function(){focusAssistantMessageTarget(msgEl,'followups')}},
+    {icon:'◇',title:'Focus actions',action:'focus-actions',focusTarget:'actions',disabledTitle:'No pending actions in this response',fn:function(){focusAssistantMessageTarget(msgEl,'actions')}},
     {separator:true},
     {icon:'🔄',title:t('retry'),action:'regenerate',disableWhileStreaming:true,disabledTitle:t('response_in_progress'),fn:function(){retryAssistantMessage(msgEl)}},
   ];

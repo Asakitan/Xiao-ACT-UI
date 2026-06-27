@@ -128,6 +128,8 @@ async function main() {
     "restored-history-banner-keyboard-aria-ready",
     "native-response-card-navigation-ready",
     "native-response-card-keyboard-ready",
+    "message-footer-target-actions-ready",
+    "message-footer-target-focus-ready",
     "fork-branch-compare-visible",
     "fork-branch-compare-detail-ready",
     "fork-branch-compare-summary-ready",
