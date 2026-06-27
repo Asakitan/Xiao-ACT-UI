@@ -77,6 +77,9 @@ async function main() {
         workflow: "assistant-selfcheck-flow",
         workflowRunId: runId,
         workflowMode: metadata && metadata.workflowMode,
+        workflowMethod: metadata && metadata.workflowMethod,
+        sessionResource: metadata && metadata.sessionResource,
+        inputPreview: metadata && metadata.inputPreview,
         workflowAgents: metadata && metadata.workflowAgents,
         steps: [
           { step: 0, label: "Inspect", agent: "default", output_var: "inspection", output: "inspection ok" },
@@ -150,6 +153,7 @@ async function main() {
     "fork-branch-compare-delta-grid-ready",
     "workflow-popup-modes-ready",
     "workflow-run-card-status-summary",
+    "workflow-run-method-session-rendered",
     "workflow-result-state-rendered",
     "workflow-result-metadata-rendered",
     "workflow-run-button-active-state",

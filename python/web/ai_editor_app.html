@@ -4884,7 +4884,9 @@ function assistantSessionControlSnapshot(){
     workflowId,
     workflowLabel:assistantSelectedWorkflowLabel(),
     workflowRunId:String(assistantSessionState&&assistantSessionState.workflowRunId||''),
-    workflowMode:normalizeWorkflowMode(assistantWorkflowMode)
+    workflowMode:normalizeWorkflowMode(assistantWorkflowMode),
+    workflowMethod:String(assistantSessionState&&assistantSessionState.workflowMethod||''),
+    workflowInputPreview:String(assistantSessionState&&assistantSessionState.workflowInputPreview||'')
   };
 }
 function assistantSessionDefaults(seed){
@@ -4912,7 +4914,9 @@ function assistantSessionDefaults(seed){
     workflowId:String(src.workflowId||''),
     workflowLabel:String(src.workflowLabel||''),
     workflowRunId:String(src.workflowRunId||''),
-    workflowMode:normalizeWorkflowMode(src.workflowMode||assistantWorkflowMode)
+    workflowMode:normalizeWorkflowMode(src.workflowMode||assistantWorkflowMode),
+    workflowMethod:String(src.workflowMethod||''),
+    workflowInputPreview:String(src.workflowInputPreview||'')
   };
 }
 function loadAssistantSessionState(){
@@ -5317,6 +5321,8 @@ function renderAssistantSessionState(){
       +'\nAgent: '+(assistantSessionState.agentId||'Default')
       +'\nWorkflow Mode: '+(assistantSessionState.workflowMode||assistantWorkflowMode||'off')
       +'\nWorkflow: '+(assistantSessionState.workflowLabel||assistantSessionState.workflowId||'-')
+      +'\nWorkflow Method: '+(assistantSessionState.workflowMethod||'-')
+      +'\nWorkflow Input: '+(assistantSessionState.workflowInputPreview||'-')
       +'\nForked from: '+(assistantSessionState.parentSessionTitle||assistantSessionState.parentSessionResource||'-');
   }
   if(panel){
@@ -5334,6 +5340,8 @@ function renderAssistantSessionState(){
     panel.dataset.chatAgentId=assistantSessionState.agentId||'';
     panel.dataset.chatWorkflowId=assistantSessionState.workflowId||'';
     panel.dataset.chatWorkflowMode=assistantSessionState.workflowMode||assistantWorkflowMode||'off';
+    panel.dataset.chatWorkflowMethod=assistantSessionState.workflowMethod||'';
+    panel.dataset.chatWorkflowInputPreview=assistantSessionState.workflowInputPreview||'';
     panel.dataset.chatParentSessionResource=assistantSessionState.parentSessionResource||'';
     panel.dataset.chatParentSessionTitle=assistantSessionState.parentSessionTitle||'';
   }
@@ -5354,6 +5362,8 @@ function syncAssistantSessionState(patch){
   next.workflowLabel=String(controls.workflowLabel||next.workflowLabel||'');
   next.workflowRunId=String(hasPatch('workflowRunId')?patch.workflowRunId:(controls.workflowRunId||next.workflowRunId||''));
   next.workflowMode=normalizeWorkflowMode(hasPatch('workflowMode')?patch.workflowMode:(controls.workflowMode||next.workflowMode||assistantWorkflowMode));
+  next.workflowMethod=String(hasPatch('workflowMethod')?patch.workflowMethod:(controls.workflowMethod||next.workflowMethod||''));
+  next.workflowInputPreview=String(hasPatch('workflowInputPreview')?patch.workflowInputPreview:(controls.workflowInputPreview||next.workflowInputPreview||''));
   next.draft=input?String(input.value||''):String(next.draft||'');
   next.inputHasText=!!(next.draft&&next.draft.trim());
   next.context=patch&&Object.prototype.hasOwnProperty.call(patch,'context')
@@ -5403,6 +5413,8 @@ function noteAssistantChatRequest(text,refs,toolHint,meta){
   if(launch.workflowRunId)assistantSessionState.workflowRunId=String(launch.workflowRunId);
   if(launch.workflowId)assistantSessionState.workflowId=String(launch.workflowId);
   if(launch.workflowLabel)assistantSessionState.workflowLabel=String(launch.workflowLabel);
+  if(launch.workflowMethod)assistantSessionState.workflowMethod=String(launch.workflowMethod);
+  if(launch.inputPreview||launch.workflowInputPreview)assistantSessionState.workflowInputPreview=String(launch.inputPreview||launch.workflowInputPreview||'');
   const context=Array.isArray(refs)?refs.slice(0,20):assistantSessionContextSnapshot();
   assistantSessionState.context=context;
   syncAssistantSessionState({requestInProgress:true,context});
@@ -5418,7 +5430,9 @@ function noteAssistantChatRequest(text,refs,toolHint,meta){
     workflowAgents:Array.isArray(launch.workflowAgents)?launch.workflowAgents:[],
     workflowStepLabels:Array.isArray(launch.workflowStepLabels)?launch.workflowStepLabels:[],
     workflowStepOutputVars:Array.isArray(launch.workflowStepOutputVars)?launch.workflowStepOutputVars:[],
-    workflowMode:normalizeWorkflowMode(launch.workflowMode||assistantSessionState.workflowMode||assistantWorkflowMode)
+    workflowMode:normalizeWorkflowMode(launch.workflowMode||assistantSessionState.workflowMode||assistantWorkflowMode),
+    workflowMethod:String(launch.workflowMethod||assistantSessionState.workflowMethod||''),
+    workflowInputPreview:String(launch.inputPreview||launch.workflowInputPreview||assistantSessionState.workflowInputPreview||'')
   };
 }
 function chatContextTextSample(value,max){
@@ -5577,7 +5591,10 @@ function chatNativeRequestPayload(text,refs,toolHint,providerId,workflowLaunch){
     workflowStepCount:Number(workflow.workflowStepCount||0),
     workflowAgents:Array.isArray(workflow.workflowAgents)?workflow.workflowAgents.map(String):[],
     workflowStepLabels:Array.isArray(workflow.workflowStepLabels)?workflow.workflowStepLabels.map(String):[],
-    workflowStepOutputVars:Array.isArray(workflow.workflowStepOutputVars)?workflow.workflowStepOutputVars.map(String):[]
+    workflowStepOutputVars:Array.isArray(workflow.workflowStepOutputVars)?workflow.workflowStepOutputVars.map(String):[],
+    workflowMethod:String(workflow.workflowMethod||''),
+    sessionResource:String(workflow.sessionResource||assistantSessionResource()),
+    inputPreview:String(workflow.inputPreview||workflow.workflowInputPreview||'')
   }:null;
   return {
     text:String(text||''),toolHint:String(toolHint||''),providerId:String(providerId||config.provider||''),
@@ -8299,7 +8316,12 @@ function assistantWorkflowRunCardSnapshot(card){
     workflowRunId:String(el.dataset.workflowRunId||''),
     workflowStepCount:Number(el.dataset.workflowStepCount||0),
     workflowAgents:String(el.dataset.workflowAgents||''),
+    workflowMode:String(el.dataset.workflowMode||''),
+    workflowMethod:String(el.dataset.workflowMethod||''),
+    workflowSessionResource:String(el.dataset.workflowSessionResource||''),
+    workflowInputPreview:String(el.dataset.workflowInputPreview||''),
     workflowRunStatus:String(el.dataset.workflowRunStatus||''),
+    workflowRunStatusSummary:String(el.dataset.workflowRunStatusSummary||''),
     stateText:el.querySelector('.workflow-run-state')?String(el.querySelector('.workflow-run-state').textContent||''):'',
     renderedSteps:steps.length,
     statuses,
@@ -8310,8 +8332,8 @@ function assistantWorkflowRunCardSnapshot(card){
 }
 function assistantWorkflowResultStateSnapshot(){
   const body=document.createElement('div');
-  const ok=renderWorkflowResultSummary(body,{workflow:'ok-flow',workflowRunId:'wf-ok',workflowMode:'on',workflowAgents:['default'],steps:[{step:0,label:'Ok',agent:'default',output_var:'ok',output:'done'}],final_output:'done'},{workflowLabel:'Ok Flow',workflowMode:'on',workflowAgents:['default']});
-  const err=renderWorkflowResultSummary(body,{workflow:'err-flow',workflowRunId:'wf-err',error:'failed step',steps:[{step:0,label:'Err',agent:'default',output_var:'err',error:'failed step'}]},{workflowLabel:'Err Flow'});
+  const ok=renderWorkflowResultSummary(body,{workflow:'ok-flow',workflowRunId:'wf-ok',workflowMode:'on',workflowMethod:'backend',sessionResource:'sao-ai-chat://local/result-ok',inputPreview:'ok input',workflowAgents:['default'],steps:[{step:0,label:'Ok',agent:'default',output_var:'ok',output:'done'}],final_output:'done'},{workflowLabel:'Ok Flow',workflowMode:'on',workflowMethod:'backend',sessionResource:'sao-ai-chat://local/result-ok',inputPreview:'ok input',workflowAgents:['default']});
+  const err=renderWorkflowResultSummary(body,{workflow:'err-flow',workflowRunId:'wf-err',steps:[{step:0,label:'Err',agent:'default',output_var:'err',error:'failed step'}]},{workflowLabel:'Err Flow',workflowMethod:'backend',sessionResource:'sao-ai-chat://local/result-err'});
   const cancelled=renderWorkflowResultSummary(body,{workflow:'cancel-flow',workflowRunId:'wf-cancel',cancelled:true,message:'cancel requested',steps:[]},{workflowLabel:'Cancel Flow'});
   return {
     okStatus:ok?String(ok.dataset.workflowResultStatus||''):'',
@@ -8322,6 +8344,9 @@ function assistantWorkflowResultStateSnapshot(){
     errorClass:!!(err&&err.classList.contains('error')),
     cancelClass:!!(cancelled&&cancelled.classList.contains('cancelled')),
     okMode:ok?String(ok.dataset.workflowMode||''):'',
+    okMethod:ok?String(ok.dataset.workflowMethod||''):'',
+    okSession:ok?String(ok.dataset.workflowSessionResource||''):'',
+    okInputPreview:ok?String(ok.dataset.workflowInputPreview||''):'',
     okAgents:ok?String(ok.dataset.workflowAgents||''):''
   };
 }
@@ -8433,7 +8458,7 @@ async function assistantWorkflowBackendExecutionSnapshot(){
       calls.push({id,input,runId,metadata});
       onWorkflowStep({workflowRunId:runId,workflowId:id,step:0,total:2,label:'Inspect',agent:'default',output_var:'inspection',status:'running'});
       onWorkflowStep({workflowRunId:runId,workflowId:id,step:0,total:2,label:'Inspect',agent:'default',output_var:'inspection',status:'done',preview:'inspection ok'});
-      return {workflow:id,workflowRunId:runId,workflowMode:metadata&&metadata.workflowMode,workflowAgents:metadata&&metadata.workflowAgents,steps:[
+      return {workflow:id,workflowRunId:runId,workflowMode:metadata&&metadata.workflowMode,workflowMethod:metadata&&metadata.workflowMethod,sessionResource:metadata&&metadata.sessionResource,inputPreview:metadata&&metadata.inputPreview,workflowAgents:metadata&&metadata.workflowAgents,steps:[
         {step:0,label:'Inspect',agent:'default',output_var:'inspection',output:'inspection ok'},
         {step:1,label:'Review',agent:'reviewer',output_var:'review',output:'review ok'}
       ],final_output:'review ok'};
@@ -8454,14 +8479,22 @@ async function assistantWorkflowBackendExecutionSnapshot(){
     callCount:calls.length,
     runId:calls[0]?calls[0].runId:'',
     metadataMode:calls[0]&&calls[0].metadata?String(calls[0].metadata.workflowMode||''):'',
+    metadataMethod:calls[0]&&calls[0].metadata?String(calls[0].metadata.workflowMethod||''):'',
     metadataSession:calls[0]&&calls[0].metadata?String(calls[0].metadata.sessionResource||''):'',
+    metadataInputPreview:calls[0]&&calls[0].metadata?String(calls[0].metadata.inputPreview||''):'',
     metadataStepCount:calls[0]&&calls[0].metadata?Number(calls[0].metadata.workflowStepCount||0):0,
     createdCount:created.length,
     planExists:!!plan,
     planStatus:plan?String(plan.dataset.workflowRunStatus||''):'',
+    planMethod:plan?String(plan.dataset.workflowMethod||''):'',
+    planSession:plan?String(plan.dataset.workflowSessionResource||''):'',
+    planInputPreview:plan?String(plan.dataset.workflowInputPreview||''):'',
     resultExists:!!result,
     resultStatus:result?String(result.dataset.workflowResultStatus||''):'',
     resultMode:result?String(result.dataset.workflowMode||''):'',
+    resultMethod:result?String(result.dataset.workflowMethod||''):'',
+    resultSession:result?String(result.dataset.workflowSessionResource||''):'',
+    resultInputPreview:result?String(result.dataset.workflowInputPreview||''):'',
     resultAgents:result?String(result.dataset.workflowAgents||''):'',
     resultStepCount:result?result.querySelectorAll('.workflow-result-step').length:0,
     resultOutputs:result?Array.from(result.querySelectorAll('.workflow-result-step')).map(step=>String(step.dataset.workflowStepOutputVar||'')):[],
@@ -8548,7 +8581,7 @@ async function runAssistantUiSelfCheck(opts){
   const workflowBody=document.createElement('div');
   workflowBody.style.display='none';
   document.body.appendChild(workflowBody);
-  const workflowCard=renderWorkflowLaunchSummary(workflowBody,{workflowId:'selfcheck-flow',workflowLabel:'Selfcheck Flow',workflowRunId:'wf-selfcheck',workflowMode:'on',workflowStepCount:2,workflowAgents:['default','reviewer'],workflowStepLabels:['Inspect','Review'],workflowStepOutputVars:['inspection','review']});
+  const workflowCard=renderWorkflowLaunchSummary(workflowBody,{workflowId:'selfcheck-flow',workflowLabel:'Selfcheck Flow',workflowRunId:'wf-selfcheck',workflowMode:'on',workflowMethod:'backend',sessionResource:'sao-ai-chat://local/selfcheck',inputPreview:'selfcheck workflow input',workflowStepCount:2,workflowAgents:['default','reviewer'],workflowStepLabels:['Inspect','Review'],workflowStepOutputVars:['inspection','review']});
   const workflowStatusUpdated=updateWorkflowRunStepStatus('wf-selfcheck',{workflowRunId:'wf-selfcheck',step:0,status:'running',label:'Inspect',agent:'default',output_var:'inspection'})
     && updateWorkflowRunStepStatus('wf-selfcheck',{workflowRunId:'wf-selfcheck',step:1,status:'done',label:'Review',agent:'reviewer',output_var:'review',preview:'ok'});
   const workflowRunCard=assistantWorkflowRunCardSnapshot(workflowCard);
@@ -8608,14 +8641,15 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'workflow-popup-mode-smoke',workflowModeSmoke.states.length===3&&workflowModeSmoke.states.every(state=>state.strip&&state.toolbar&&state.active.includes(state.mode))&&workflowModeSmoke.selected.value==='assistant-selfcheck-flow'&&workflowModeSmoke.selected.mode==='on'&&workflowModeSmoke.selected.runDisabled===false&&workflowModeSmoke.custom.prompt==='selfcheck custom workflow prompt'&&workflowModeSmoke.custom.runDisabled===false,JSON.stringify(workflowModeSmoke));
   assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready',workflowEditor.modalExists&&workflowEditor.editorExists&&workflowEditor.rowCount===2&&workflowEditor.labelInputs===2&&workflowEditor.agentInputs===2&&workflowEditor.outputInputs===2&&workflowEditor.promptInputs===2&&workflowEditor.moveButtons===4&&workflowEditor.deleteButtons===2&&workflowEditor.addButtonExists&&workflowEditor.collectedCount===2&&workflowEditor.idReadOnly,JSON.stringify(workflowEditor));
   assistantUiSelfCheckRecord(checks,'workflow-run-card-rendered',workflowRunCard.exists&&workflowRunCard.workflowId==='selfcheck-flow'&&workflowRunCard.workflowRunId==='wf-selfcheck'&&workflowRunCard.workflowStepCount===2&&workflowRunCard.renderedSteps===2&&workflowRunCard.agentChipCount===2,JSON.stringify(workflowRunCard));
+  assistantUiSelfCheckRecord(checks,'workflow-run-method-session-rendered',workflowRunCard.workflowMode==='on'&&workflowRunCard.workflowMethod==='backend'&&workflowRunCard.workflowSessionResource==='sao-ai-chat://local/selfcheck'&&workflowRunCard.workflowInputPreview==='selfcheck workflow input'&&workflowRunCard.workflowRunStatusSummary.includes('backend'),JSON.stringify(workflowRunCard));
   assistantUiSelfCheckRecord(checks,'workflow-run-step-status-updates',workflowStatusUpdated&&workflowRunCard.statuses[0]==='running'&&workflowRunCard.statuses[1]==='done'&&workflowRunCard.outputs[0]==='inspection'&&workflowRunCard.outputs[1]==='review',JSON.stringify(workflowRunCard));
   assistantUiSelfCheckRecord(checks,'workflow-run-card-status-summary',workflowRunCard.workflowRunStatus==='running'&&workflowRunCard.stateText==='running',JSON.stringify(workflowRunCard));
   assistantUiSelfCheckRecord(checks,'workflow-result-state-rendered',workflowResultState.okStatus==='done'&&workflowResultState.errorStatus==='error'&&workflowResultState.cancelStatus==='cancelled'&&workflowResultState.badgeCount===3&&workflowResultState.messageCount===2&&workflowResultState.errorClass&&workflowResultState.cancelClass,JSON.stringify(workflowResultState));
-  assistantUiSelfCheckRecord(checks,'workflow-result-metadata-rendered',workflowResultState.okMode==='on'&&workflowResultState.okAgents==='default',JSON.stringify(workflowResultState));
+  assistantUiSelfCheckRecord(checks,'workflow-result-metadata-rendered',workflowResultState.okMode==='on'&&workflowResultState.okAgents==='default'&&workflowResultState.okMethod==='backend'&&workflowResultState.okSession==='sao-ai-chat://local/result-ok'&&workflowResultState.okInputPreview==='ok input',JSON.stringify(workflowResultState));
   assistantUiSelfCheckRecord(checks,'workflow-run-button-active-state',workflowButtonState.exists&&workflowButtonState.active.text==='■'&&workflowButtonState.active.running&&workflowButtonState.active.disabled===false&&workflowButtonState.cancelling.title==='Cancelling workflow run',JSON.stringify(workflowButtonState));
   const workflowBackend=await assistantWorkflowBackendExecutionSnapshot();
   assistantUiSelfCheckRecord(checks,'workflow-backend-execution-rendered',workflowBackend.ok&&workflowBackend.callCount===1&&workflowBackend.planExists&&workflowBackend.resultExists&&workflowBackend.resultStatus==='done'&&workflowBackend.resultStepCount===2&&workflowBackend.resultOutputs[0]==='inspection'&&workflowBackend.resultOutputs[1]==='review'&&workflowBackend.finalText.includes('review ok'),JSON.stringify(workflowBackend));
-  assistantUiSelfCheckRecord(checks,'workflow-backend-metadata-payload-ready',workflowBackend.metadataMode===assistantWorkflowMode&&workflowBackend.metadataSession.startsWith('sao-ai-chat://')&&workflowBackend.metadataStepCount===2&&workflowBackend.planStatus==='done'&&workflowBackend.resultMode===assistantWorkflowMode&&workflowBackend.resultAgents.includes('default'),JSON.stringify(workflowBackend));
+  assistantUiSelfCheckRecord(checks,'workflow-backend-metadata-payload-ready',workflowBackend.metadataMode===assistantWorkflowMode&&workflowBackend.metadataMethod==='backend'&&workflowBackend.metadataSession.startsWith('sao-ai-chat://')&&workflowBackend.metadataInputPreview==='backend smoke'&&workflowBackend.metadataStepCount===2&&workflowBackend.planStatus==='done'&&workflowBackend.planMethod==='backend'&&workflowBackend.planSession===workflowBackend.metadataSession&&workflowBackend.planInputPreview==='backend smoke'&&workflowBackend.resultMode===assistantWorkflowMode&&workflowBackend.resultMethod==='backend'&&workflowBackend.resultSession===workflowBackend.metadataSession&&workflowBackend.resultInputPreview==='backend smoke'&&workflowBackend.resultAgents.includes('default'),JSON.stringify(workflowBackend));
 
   const previousAttachments=attachments.slice();
   attachments=[];
@@ -19823,11 +19857,13 @@ function workflowStepPrompt(step,inputVar){
 function workflowRunSummary(workflow){
   const steps=workflowStepList(workflow);
   const agents=workflowAgentList(workflow);
+  const outputVars=steps.map(step=>String((step&&step.output_var)||'')).filter(Boolean);
   return {
     stepCount:steps.length,
     agents,
     labels:steps.map((step,index)=>String((step&&step.label)||('Step '+(index+1)))),
-    text:steps.length+' steps · '+(agents.join(' → ')||'default')
+    outputVars,
+    text:steps.length+' steps · '+(agents.join(' → ')||'default')+(outputVars.length?' · outputs '+outputVars.join(', '):'')
   };
 }
 function renderWorkflowLaunchSummary(body,launch){
@@ -19844,6 +19880,10 @@ function renderWorkflowLaunchSummary(body,launch){
   card.dataset.workflowRunId=String(launch.workflowRunId||'');
   card.dataset.workflowStepCount=String(stepCount);
   card.dataset.workflowAgents=agents.join(',');
+  card.dataset.workflowMode=String(launch.workflowMode||'');
+  card.dataset.workflowMethod=String(launch.workflowMethod||'');
+  card.dataset.workflowSessionResource=String(launch.sessionResource||'');
+  card.dataset.workflowInputPreview=String(launch.inputPreview||launch.workflowInputPreview||'');
   const head=document.createElement('div');
   head.className='workflow-run-head';
   const icon=document.createElement('span');
@@ -19854,7 +19894,13 @@ function renderWorkflowLaunchSummary(body,launch){
   title.textContent=String(launch.workflowLabel||launch.workflowId||'Workflow');
   const meta=document.createElement('span');
   meta.className='workflow-run-meta';
-  meta.textContent=[stepCount?stepCount+' steps':'workflow',launch.workflowRunId?String(launch.workflowRunId):''].filter(Boolean).join(' · ');
+  meta.textContent=[
+    stepCount?stepCount+' steps':'workflow',
+    launch.workflowMode?('mode '+String(launch.workflowMode)):'',
+    launch.workflowMethod?String(launch.workflowMethod):'',
+    launch.sessionResource?String(launch.sessionResource):'',
+    launch.workflowRunId?String(launch.workflowRunId):''
+  ].filter(Boolean).join(' · ');
   const state=document.createElement('span');
   state.className='workflow-run-state';
   state.textContent='pending';
@@ -19905,6 +19951,7 @@ function refreshWorkflowRunCardState(card,forcedStatus){
   card.classList.remove('running','done','error','cancelled');
   if(status!=='pending')card.classList.add(status);
   card.dataset.workflowRunStatus=status;
+  card.dataset.workflowRunStatusSummary=status+' · '+String(card.dataset.workflowMethod||'')+' · '+String(card.dataset.workflowMode||'');
   const badge=card.querySelector('.workflow-run-state');
   if(badge){
     badge.textContent=status;
@@ -19960,6 +20007,7 @@ function workflowResultSteps(result){
 function workflowResultStatus(result){
   if(result&&result.cancelled)return 'cancelled';
   if(result&&result.error)return 'error';
+  if(workflowResultSteps(result).some(step=>step&&step.error))return 'error';
   return 'done';
 }
 function renderWorkflowResultSummary(body,result,launch){
@@ -19975,12 +20023,21 @@ function renderWorkflowResultSummary(body,result,launch){
   card.dataset.workflowStepCount=String(steps.length);
   card.dataset.workflowResultStatus=status;
   card.dataset.workflowMode=String((launch&&launch.workflowMode)||result&&result.workflowMode||'');
+  card.dataset.workflowMethod=String((launch&&launch.workflowMethod)||result&&result.workflowMethod||result&&result.workflowLaunch&&result.workflowLaunch.workflowMethod||'');
+  card.dataset.workflowSessionResource=String((launch&&launch.sessionResource)||result&&result.sessionResource||result&&result.workflowLaunch&&result.workflowLaunch.sessionResource||'');
+  card.dataset.workflowInputPreview=String((launch&&launch.inputPreview)||result&&result.inputPreview||result&&result.workflowLaunch&&result.workflowLaunch.inputPreview||'');
   card.dataset.workflowAgents=(Array.isArray(result&&result.workflowAgents)?result.workflowAgents:(launch&&launch.workflowAgents)||[]).map(String).join(',');
   const head=document.createElement('div');head.className='workflow-result-head';
   const title=document.createElement('span');title.className='workflow-result-title';
   title.textContent=String((launch&&launch.workflowLabel)||result&&result.workflow||'Workflow result');
   const meta=document.createElement('span');meta.className='workflow-result-meta';
-  meta.textContent=[steps.length+' steps',card.dataset.workflowRunId].filter(Boolean).join(' · ');
+  meta.textContent=[
+    steps.length+' steps',
+    card.dataset.workflowMode?('mode '+card.dataset.workflowMode):'',
+    card.dataset.workflowMethod,
+    card.dataset.workflowSessionResource,
+    card.dataset.workflowRunId
+  ].filter(Boolean).join(' · ');
   const badge=document.createElement('span');badge.className='workflow-result-status';badge.textContent=status;
   head.appendChild(title);head.appendChild(meta);head.appendChild(badge);card.appendChild(head);
   if(result&&(result.error||result.cancelled)){
@@ -20007,19 +20064,27 @@ function renderWorkflowResultSummary(body,result,launch){
   body.appendChild(card);
   return card;
 }
-function workflowLaunchPrompt(workflow,inputText,runId){
+function workflowInputPreview(value){
+  return String(value||'').replace(/\s+/g,' ').trim().slice(0,220);
+}
+function workflowLaunchPrompt(workflow,inputText,runId,launch){
   const id=controlItemId(workflow),name=controlItemName(workflow)||id;
   const steps=workflowStepList(workflow);
   const agents=workflowAgentList(workflow);
+  const info=launch&&typeof launch==='object'?launch:{};
+  const method=String(info.workflowMethod||'prompt');
   const lines=[
     'Workflow launch',
     '',
-    'Session: '+assistantSessionResource(),
+    'Session: '+String(info.sessionResource||assistantSessionResource()),
     'Workflow run: '+runId,
     'Workflow: '+name+' ('+id+')',
+    'Workflow mode: '+normalizeWorkflowMode(info.workflowMode||assistantWorkflowMode),
+    'Execution method: '+method,
     'Provider: '+providerLabel(config.provider||'')+(config.model?' / '+config.model:''),
     'Mode: '+normalizeMode(currentMode||config.mode||'agent'),
     'Agents: '+(agents.join(', ')||'default'),
+    'Input preview: '+workflowInputPreview(inputText),
     '',
     'User input:',
     inputText,
@@ -20055,7 +20120,9 @@ function workflowLaunchNativeMetadata(launch){
     workflowAgents:Array.isArray(src.workflowAgents)?src.workflowAgents.map(String):[],
     workflowStepLabels:Array.isArray(src.workflowStepLabels)?src.workflowStepLabels.map(String):[],
     workflowStepOutputVars:Array.isArray(src.workflowStepOutputVars)?src.workflowStepOutputVars.map(String):[],
-    sessionResource:assistantSessionResource()
+    workflowMethod:String(src.workflowMethod||''),
+    sessionResource:String(src.sessionResource||assistantSessionResource()),
+    inputPreview:String(src.inputPreview||src.workflowInputPreview||'')
   };
 }
 function workflowDisplayText(workflow,inputText,runId){
@@ -20097,12 +20164,12 @@ async function runWorkflowEngineAsAssistant(workflow,inputText,launch,refs){
   const userBody=createMsg('user');
   renderMd(userBody,workflowDisplayText(workflow,inputText,launch.workflowRunId));
   renderWorkflowLaunchSummary(userBody,launch);
-  noteAssistantChatRequest(workflowLaunchPrompt(workflow,inputText,launch.workflowRunId),refs,'workflow',launch);
+  noteAssistantChatRequest(workflowLaunchPrompt(workflow,inputText,launch.workflowRunId,launch),refs,'workflow',launch);
   const body=createMsg('assistant',config.model||workflowName||'Workflow');
   const pending=document.createElement('div');pending.className='chat-response-progress-task';pending.textContent='Running workflow...';body.appendChild(pending);
   setStatus('Running workflow: '+workflowName);
   assistantSessionState.workflowRunId=launch.workflowRunId;
-  syncAssistantSessionState({workflowRunId:launch.workflowRunId,workflowMode:assistantWorkflowMode,requestInProgress:true});
+  syncAssistantSessionState({workflowRunId:launch.workflowRunId,workflowMode:assistantWorkflowMode,workflowMethod:launch.workflowMethod,workflowInputPreview:launch.inputPreview,requestInProgress:true});
   setAssistantWorkflowRunState(true,{runId:launch.workflowRunId,cancelRequested:false});
   let result=null;
   try{result=await call('run_workflow',id,inputText,launch.workflowRunId,workflowLaunchNativeMetadata(launch))}
@@ -20136,7 +20203,7 @@ async function runWorkflowEngineAsAssistant(workflow,inputText,launch,refs){
     if(finalText)renderMd(body,finalText);
   }
   setStatus(result.cancelled?'Workflow cancelled':result.error?'Workflow error':'Workflow complete');
-  syncAssistantSessionState({requestInProgress:false,workflowRunId:launch.workflowRunId});
+  syncAssistantSessionState({requestInProgress:false,workflowRunId:launch.workflowRunId,workflowMethod:launch.workflowMethod,workflowInputPreview:launch.inputPreview});
   setAssistantWorkflowRunState(false,{runId:launch.workflowRunId,keepRunId:true});
   assistantSessionPersistCurrent({status:result.cancelled?'cancelled':result.error?'error':'completed'});
   return !result.error&&!result.cancelled;
@@ -20145,23 +20212,27 @@ async function runWorkflowObjectAsAssistant(workflow,inputText,opts){
   opts=opts||{};
   const id=controlItemId(workflow),workflowName=controlItemName(workflow)||id;
   const runId=workflowRunNewId(id);
-  const prompt=workflowLaunchPrompt(workflow,inputText,runId);
   const refs=assistantSessionContextSnapshot();
+  const canUseBackend=!opts.forcePrompt&&id&&id!=='custom'&&api()&&api().run_workflow;
   const launch={
     workflowRunId:runId,
     workflowId:String(id||''),
     workflowLabel:workflowName,
     workflowMode:normalizeWorkflowMode(assistantWorkflowMode),
+    workflowMethod:canUseBackend?'backend':'prompt',
+    sessionResource:assistantSessionResource(),
+    inputPreview:workflowInputPreview(inputText),
     workflowStepCount:workflowStepList(workflow).length,
     workflowAgents:workflowAgentList(workflow),
     workflowStepLabels:workflowRunSummary(workflow).labels,
     workflowStepOutputVars:workflowStepList(workflow).map(step=>String((step&&step.output_var)||''))
   };
+  const prompt=workflowLaunchPrompt(workflow,inputText,runId,launch);
   const input=$('chat-input');
   if(input&&String(input.value||'').trim()===inputText)setChatInputValue('',{focus:false,sync:false});
   assistantSessionState.workflowRunId=runId;
-  syncAssistantSessionState({workflowRunId:runId,workflowMode:assistantWorkflowMode});
-  if(!opts.forcePrompt&&id&&id!=='custom'&&api()&&api().run_workflow){
+  syncAssistantSessionState({workflowRunId:runId,workflowMode:assistantWorkflowMode,workflowMethod:launch.workflowMethod,workflowInputPreview:launch.inputPreview});
+  if(canUseBackend){
     return runWorkflowEngineAsAssistant(workflow,inputText,launch,refs);
   }
   return sendAssistantTextRequest(prompt,{refs,workflowLaunch:launch,displayText:workflowDisplayText(workflow,inputText,runId),fromInput:false,appendUser:true,clearInput:false,allowSlash:false,toolHint:'workflow'});

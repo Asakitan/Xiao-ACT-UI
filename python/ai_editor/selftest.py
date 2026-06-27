@@ -4262,19 +4262,31 @@ def test_phase1_ai_editor_regressions() -> None:
            and "call('run_workflow',id,inputText,launch.workflowRunId,workflowLaunchNativeMetadata(launch))" in html
            and "call('cancel_workflow',assistantWorkflowActiveRunId)" in html
            and "call('provider_cancel',activeProviderId||'chat')" in html
-           and "if(!opts.forcePrompt&&id&&id!=='custom'&&api()&&api().run_workflow)" in html
+           and "const canUseBackend=!opts.forcePrompt&&id&&id!=='custom'&&api()&&api().run_workflow;" in html
+           and "if(canUseBackend)" in html
            and "workflowStepOutputVars:workflowStepList(workflow).map" in html
            and "function runCustomWorkflowAsAssistant(inputSeed)" in html
            and "function workflowLaunchNativeMetadata(launch)" in html
            and "workflowLaunch:workflowRow" in html
+           and "workflowMethod:String(workflow.workflowMethod||'')" in html
+           and "sessionResource:String(workflow.sessionResource||assistantSessionResource())" in html
+           and "inputPreview:String(workflow.inputPreview||workflow.workflowInputPreview||'')" in html
            and "session:{resource:assistantSessionResource(),id:assistantSessionState.id,type:assistantSessionState.type}" in html
            and "next.workflowRunId=String(hasPatch('workflowRunId')?patch.workflowRunId" in html
+           and "next.workflowMethod=String(hasPatch('workflowMethod')?patch.workflowMethod" in html
+           and "next.workflowInputPreview=String(hasPatch('workflowInputPreview')?patch.workflowInputPreview" in html
            and "Workflow launch" in html
            and "workflowRunId:String" in html
            and "workflowStepLabels:workflowRunSummary(workflow).labels" in html
            and "if(opts.workflowLaunch)renderWorkflowLaunchSummary(userBody,opts.workflowLaunch);" in html
            and "'\\nPlan: '+summary.text" in html
            and "workflowMode:normalizeWorkflowMode" in html
+           and "function workflowInputPreview(value)" in html
+           and "'Workflow mode: '+normalizeWorkflowMode(info.workflowMode||assistantWorkflowMode)" in html
+           and "'Execution method: '+method" in html
+           and "workflowMethod:canUseBackend?'backend':'prompt'" in html
+           and "sessionResource:assistantSessionResource()" in html
+           and "inputPreview:workflowInputPreview(inputText)" in html
            and "noteAssistantChatRequest(text,sendContext.refs,toolHint,opts.workflowLaunch)" in html)
     _check("frontend Assistant workflow popup exposes saved workflow edit actions",
            ".workflow-popup-actions" in html
@@ -5476,6 +5488,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantWorkflowRunButtonSnapshot()" in html
            and "async function assistantWorkflowBackendExecutionSnapshot()" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-run-card-rendered'" in html
+           and "assistantUiSelfCheckRecord(checks,'workflow-run-method-session-rendered'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-popup-mode-smoke'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-run-step-status-updates'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-run-card-status-summary'" in html
@@ -5572,6 +5585,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "fork-branch-compare-summary-ready" in smoke_source
            and "fork-branch-compare-delta-grid-ready" in smoke_source
            and "workflow-run-card-status-summary" in smoke_source
+           and "workflow-run-method-session-rendered" in smoke_source
            and "workflow-result-state-rendered" in smoke_source
            and "workflow-result-metadata-rendered" in smoke_source
            and "workflow-run-button-active-state" in smoke_source
@@ -5589,8 +5603,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "workflowAgents" in app_source
            and "workflowStepLabels" in app_source
            and "workflowStepOutputVars" in app_source
+           and "workflowMethod" in app_source
            and "workflowLaunch" in app_source
            and "workflowStatus" in app_source
+           and "step_errors = any(" in app_source
+           and "payload.setdefault(\"error\", \"Workflow step failed\")" in app_source
            and "return self._workflow_result_payload(wf, result, input_text, metadata)" in app_source
            and "return self._workflow_result_payload(wf, result, input_text, kw)" in app_source)
     _check("frontend Assistant response part actions submit callback metadata",

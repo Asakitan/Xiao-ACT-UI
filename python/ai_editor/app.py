@@ -8221,11 +8221,16 @@ class AIEditorAPI:
             for idx, step in enumerate(steps)])
         payload.setdefault("workflowStepOutputVars", [
             str(getattr(step, "output_var", "") or "") for step in steps])
+        step_errors = any(
+            bool(step.get("error")) for step in payload.get("steps", [])
+            if isinstance(step, dict))
         payload.setdefault(
             "workflowStatus",
             "cancelled" if payload.get("cancelled")
-            else "error" if payload.get("error")
+            else "error" if payload.get("error") or step_errors
             else "done")
+        if step_errors:
+            payload.setdefault("error", "Workflow step failed")
         payload.setdefault("inputPreview", str(input_text or "")[:300])
         if isinstance(metadata, dict):
             payload["workflowLaunch"] = {
@@ -8234,14 +8239,19 @@ class AIEditorAPI:
                     "workflowRunId", "workflowId", "workflowLabel",
                     "workflowMode", "workflowStepCount", "workflowAgents",
                     "workflowStepLabels", "workflowStepOutputVars",
-                    "sessionResource")
+                    "workflowMethod", "sessionResource", "inputPreview")
                 if key in metadata
             }
             if "workflowMode" in metadata:
                 payload.setdefault("workflowMode", metadata.get("workflowMode"))
+            if "workflowMethod" in metadata:
+                payload.setdefault(
+                    "workflowMethod", metadata.get("workflowMethod"))
             if "sessionResource" in metadata:
                 payload.setdefault(
                     "sessionResource", metadata.get("sessionResource"))
+            if "inputPreview" in metadata:
+                payload.setdefault("inputPreview", metadata.get("inputPreview"))
         return payload
 
     def run_workflow(self, wf_id: str, input_text: str,
