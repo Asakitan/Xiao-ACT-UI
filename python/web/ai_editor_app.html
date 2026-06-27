@@ -1169,6 +1169,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-trigger .control-caret { font-size:8px; opacity:.65; margin-left:4px; flex:0 0 auto; }
 .chat-control-trigger.provider { width:126px; max-width:160px; flex-basis:126px; }
 .chat-control-trigger.agent { width:142px; max-width:180px; flex-basis:142px; }
+.chat-control-trigger.mode { width:92px; max-width:120px; flex-basis:92px; color:var(--fg-accent);
+  border-color:color-mix(in srgb, var(--border-focus) 50%, var(--border)); }
 .chat-control-trigger.workflow { width:142px; max-width:190px; flex-basis:142px; }
 .chat-control-popup { position:absolute; bottom:calc(100% + 7px); left:0; display:none; min-width:250px;
   max-width:min(420px, calc(100vw - 24px)); max-height:min(360px, 55vh); overflow:auto;
@@ -1179,6 +1181,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-popup.agent { min-width:250px; }
 .chat-control-popup.provider { min-width:230px; }
 .chat-control-popup.model { min-width:330px; }
+.chat-control-popup.mode { min-width:260px; }
 .chat-control-popup.workflow { min-width:310px; }
 .chat-control-popup .mode-popup-item { padding:7px 10px; border-radius:5px; margin:1px 4px; }
 .chat-control-popup .mode-popup-item:hover,
@@ -2417,43 +2420,11 @@ pre.code-block { overflow:visible; }
                         <option value="">Agent: Default</option>
                       </select>
                     </div>
-                    <div class="mode-trigger" id="chat-mode-trigger" onclick="toggleModePopup()" title="Mode">
-                      <span class="mode-icon" id="mode-trigger-icon">⊕</span>
-                      <span id="mode-trigger-label">Agent</span>
-                      <span class="mode-arrow">▾</span>
-                      <div class="mode-popup" id="mode-popup">
-                        <div class="mode-popup-item" data-mode="agent" onclick="selectMode(event,'agent')">
-                          <span class="mp-icon">⊕</span>
-                          <div class="mp-body"><div class="mp-label" data-i18n="mode_agent">Agent</div><div class="mp-desc" data-i18n="mode_agent_desc">Full autonomous — reads, writes, runs commands</div></div>
-                          <span class="mp-kbd">Ctrl+Shift+I</span>
-                        </div>
-                        <div class="mode-popup-item" data-mode="ask" onclick="selectMode(event,'ask')">
-                          <span class="mp-icon">💬</span>
-                          <div class="mp-body"><div class="mp-label" data-i18n="mode_ask">Ask</div><div class="mp-desc" data-i18n="mode_ask_desc">Read-only Q&A — no file changes or commands</div></div>
-                        </div>
-                        <div class="mode-popup-item" data-mode="plan" onclick="selectMode(event,'plan')">
-                          <span class="mp-icon">☰</span>
-                          <div class="mp-body"><div class="mp-label" data-i18n="mode_plan">Plan</div><div class="mp-desc" data-i18n="mode_plan_desc">Reads files, confirms before writing</div></div>
-                        </div>
-                        <div class="mode-popup-sep"></div>
-                        <div class="mode-popup-item" data-approval="default" onclick="selectApproval(event,'default')">
-                          <span class="mp-icon">◎</span>
-                          <div class="mp-body"><div class="mp-label" data-i18n="approval_default">Default Approvals</div><div class="mp-desc" data-i18n="approval_default_desc">Uses your configured settings</div></div>
-                        </div>
-                        <div class="mode-popup-item" data-approval="bypass" onclick="selectApproval(event,'bypass')">
-                          <span class="mp-icon">⚡</span>
-                          <div class="mp-body"><div class="mp-label" data-i18n="approval_bypass">Bypass Approvals</div><div class="mp-desc" data-i18n="approval_bypass_desc">All tool calls are auto-approved</div></div>
-                        </div>
-                        <div class="mode-popup-item" data-approval="autopilot" onclick="selectApproval(event,'autopilot')">
-                          <span class="mp-icon">✦</span>
-                          <div class="mp-body"><div class="mp-label" data-i18n="approval_autopilot">Autopilot (Preview)</div><div class="mp-desc" data-i18n="approval_autopilot_desc">Autonomously iterates from start to finish</div></div>
-                        </div>
-                        <div class="mode-popup-sep"></div>
-                        <div class="mode-popup-item" onclick="switchSidebar('agents');closeModePopup()">
-                          <span class="mp-icon">⚙</span>
-                          <div class="mp-body"><div class="mp-label" data-i18n="configure_agents">Configure Custom Agents...</div></div>
-                        </div>
-                      </div>
+                    <div class="chat-control-menu" id="chat-mode-menu">
+                      <button type="button" class="chat-select-chip chat-control-trigger mode" id="chat-mode-trigger" onclick="toggleChatControlPopup(event,'mode')" title="Mode" aria-haspopup="listbox" aria-expanded="false">
+                        <span class="mode-icon" id="mode-trigger-icon">⊕</span><span class="control-label" id="mode-trigger-label">Agent</span><span class="control-caret">▾</span>
+                      </button>
+                      <div class="chat-control-popup mode" id="chat-mode-popup" role="listbox" aria-label="Mode and approvals"></div>
                     </div>
                     <div class="chat-control-menu" id="chat-workflow-menu">
                       <button type="button" class="chat-select-chip chat-control-trigger workflow muted" id="chat-workflow-trigger" onclick="toggleChatControlPopup(event,'workflow')" title="Workflow" aria-haspopup="listbox" aria-expanded="false">
@@ -7870,6 +7841,9 @@ function assistantControlPopupSnapshot(kind){
     focusableCount:options.filter(option=>option.tabIndex===-1).length,
     activeCount:options.filter(option=>option.classList.contains('active')).length,
     keyboardReady:!!(trigger&&typeof trigger.onkeydown==='function'&&popup&&typeof popup.onkeydown==='function'),
+    customModelCount:kind==='model'?options.filter(option=>String(option.textContent||'').includes('custom endpoint')).length:0,
+    oldModePopupPresent:kind==='mode'&&!!$('mode-popup'),
+    modeActionCount:kind==='mode'?options.filter(option=>option.dataset.mode||option.dataset.approval).length:0,
     workflowModeCount:kind==='workflow'?options.filter(option=>option.dataset.workflowMode).length:0,
     workflowModeStrip:kind==='workflow'&&!!(popup&&popup.querySelector('.workflow-mode-strip')),
     workflowModeToolbar:kind==='workflow'&&!!(popup&&popup.querySelector('.workflow-mode-toolbar')),
@@ -8127,10 +8101,15 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'composer-grid-footer',layout.display==='grid',layout.gridTemplateColumns);
   assistantUiSelfCheckRecord(checks,'composer-actions-same-row',layout.sameRow,JSON.stringify({controlTop:layout.controlTop,actionTop:layout.actionTop}));
   assistantUiSelfCheckRecord(checks,'composer-actions-visible',layout.actions&&layout.actions.width>0,layout.actions&&layout.actions.width);
+  const previousCustomModels=config.custom_models;
+  config.custom_models={...(config.custom_models||{}),'custom-endpoint-model':{max_input:64000,max_output:4096,provider:config.provider||'openai'}};
   const providerPopup=assistantControlPopupSnapshot('provider');
   const modelPopup=assistantControlPopupSnapshot('model');
   const agentPopup=assistantControlPopupSnapshot('agent');
+  const modePopup=assistantControlPopupSnapshot('mode');
   const workflowPopup=assistantControlPopupSnapshot('workflow');
+  config.custom_models=previousCustomModels;
+  renderChatControlPopups();
   const workflowModeSmoke=assistantWorkflowModeSmokeSnapshot();
   const workflowEditor=assistantWorkflowEditorSnapshot();
   const workflowBody=document.createElement('div');
@@ -8152,7 +8131,9 @@ async function runAssistantUiSelfCheck(opts){
   const forkLineage=assistantForkLineageSmokeSnapshot();
   assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready',providerPopup.shown&&providerPopup.optionCount>=1&&providerPopup.focusableCount===providerPopup.optionCount&&providerPopup.keyboardReady,JSON.stringify(providerPopup));
   assistantUiSelfCheckRecord(checks,'model-popup-configured-models-ready',modelPopup.shown&&modelPopup.optionCount>=1&&modelPopup.focusableCount===modelPopup.optionCount&&modelPopup.keyboardReady,JSON.stringify(modelPopup));
-  assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped',[providerPopup,modelPopup,agentPopup,workflowPopup].every(s=>s.shown&&s.display==='block'&&s.rectReady&&s.opensAboveTrigger&&s.notToolbarClipped&&!s.className.includes('mode-popup')),JSON.stringify({providerPopup,modelPopup,agentPopup,workflowPopup}));
+  assistantUiSelfCheckRecord(checks,'model-popup-custom-endpoint-models-ready',modelPopup.shown&&modelPopup.customModelCount>=1&&modelPopup.visibleText.includes('custom-endpoint-model')&&modelPopup.visibleText.includes('custom endpoint'),JSON.stringify(modelPopup));
+  assistantUiSelfCheckRecord(checks,'mode-popup-custom-control-ready',modePopup.shown&&modePopup.optionCount>=6&&modePopup.modeActionCount>=6&&modePopup.keyboardReady&&!modePopup.oldModePopupPresent&&modePopup.visibleText.includes('Agent')&&modePopup.visibleText.includes('Default Approvals'),JSON.stringify(modePopup));
+  assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped',[providerPopup,modelPopup,agentPopup,modePopup,workflowPopup].every(s=>s.shown&&s.display==='block'&&s.rectReady&&s.opensAboveTrigger&&s.notToolbarClipped&&!s.className.includes('mode-popup')),JSON.stringify({providerPopup,modelPopup,agentPopup,modePopup,workflowPopup}));
   assistantUiSelfCheckRecord(checks,'agent-popup-configured-agents-ready',agentPopup.shown&&agentPopup.optionCount>=1&&agentPopup.focusableCount===agentPopup.optionCount&&agentPopup.keyboardReady&&agentPopup.visibleText.includes('Agent'),JSON.stringify(agentPopup));
   assistantUiSelfCheckRecord(checks,'provider-session-state-smoke',providerSession.runningType==='provider'&&providerSession.runningStatus==='inProgress'&&providerSession.savedType==='provider'&&providerSession.savedProvider==='assistant-selfcheck-provider'&&providerSession.savedMessageCount===2&&providerSession.savedContextCount===1&&String(providerSession.resource||'').startsWith('sao-ai-chat://provider/')&&providerSession.panelResource===providerSession.resource&&providerSession.panelRequests==='1'&&providerSession.opened===true&&providerSession.restoredMessages===2&&providerSession.savedNativePayload===true&&providerSession.restoredNativeCards>=2&&providerSession.restoredReferenceCards>=1&&providerSession.restoredFollowups===1&&providerSession.activeProvider==='assistant-selfcheck-provider'&&providerSession.sessionType==='provider'&&providerSession.sessionProvider==='assistant-selfcheck-provider',JSON.stringify(providerSession));
   assistantUiSelfCheckRecord(checks,'history-native-affordances-visible',historyAffordance.itemExists&&historyAffordance.nativeParts===2&&historyAffordance.nativeTodos===1&&historyAffordance.nativeChanges===1&&historyAffordance.nativeRefs===1&&historyAffordance.nativeUsedContext===1&&historyAffordance.nativeTrees===1&&historyAffordance.nativeFollowups===1&&historyAffordance.nativeActions===1&&historyAffordance.nativeActionErrors===0&&historyAffordance.nativeTokens===24&&historyAffordance.chipLabels.includes('2 parts')&&historyAffordance.chipLabels.includes('1 edit')&&historyAffordance.chipLabels.includes('1 ref')&&historyAffordance.chipLabels.includes('1 used')&&historyAffordance.chipLabels.includes('1 tree')&&historyAffordance.chipLabels.includes('1 follow-up')&&historyAffordance.chipLabels.includes('1 action')&&historyAffordance.chipLabels.includes('24 tok')&&historyAffordance.searchMatches&&historyAffordance.aria.includes('1 action')&&historyAffordance.title.includes('Submitted actions: 1'),JSON.stringify(historyAffordance));
@@ -21838,20 +21819,20 @@ function modelOptionRows(){
     const id=controlItemId(model);
     if(id&&!out.some(item=>controlItemId(item)===id))out.push(model);
   };
+  Object.keys(config.custom_models||{}).sort().forEach(name=>{
+    const meta=config.custom_models[name]||{};
+    pushModel({
+      id:name,name,custom:true,provider:meta.provider||provider,description:'Custom endpoint model',
+      max_input:meta.max_input,max_output:meta.max_output,base_url:meta.base_url||meta.endpoint||meta.endpoint_url||''
+    });
+  });
   rows.forEach(model=>{
     const meta=model&&typeof model==='object'?model:{};
-    if(providerMatchesModelMeta(meta,provider))pushModel(model);
+    if((meta.custom||providerMatchesModelMeta(meta,provider)))pushModel(model);
   });
   normalizeControlList(chatProviderModelOptions[provider],'models').forEach(model=>pushModel({
     id:controlItemId(model),name:controlItemName(model)||controlItemId(model),provider,description:'Fetched from '+providerLabel(provider)
   }));
-  Object.keys(config.custom_models||{}).sort().forEach(name=>{
-    const meta=config.custom_models[name]||{};
-    if(providerMatchesModelMeta(meta,provider)&&!out.some(item=>controlItemId(item)===name))out.push({
-      id:name,name,custom:true,provider:meta.provider||provider,description:'Custom endpoint model',
-      max_input:meta.max_input,max_output:meta.max_output
-    });
-  });
   const defaultModel=providerDefaultModelFromControls(provider);
   if(defaultModel&&!out.some(item=>controlItemId(item)===defaultModel))out.push({id:defaultModel,name:defaultModel,provider,current:true,description:'Provider default'});
   if(config.model&&!out.some(item=>controlItemId(item)===config.model))out.unshift({id:config.model,name:config.model,current:true});
@@ -21866,10 +21847,11 @@ function renderProviderControlOptions(providers){
   });
 }
 function chatControlTriggerElement(kind){
-  return kind==='model'?$('chat-model-inline'):$('chat-'+kind+'-trigger');
+  if(kind==='model')return $('chat-model-inline');
+  return $('chat-'+kind+'-trigger');
 }
 function closeChatControlPopups(except){
-  ['provider','model','agent','workflow'].forEach(kind=>{
+  ['provider','model','agent','mode','workflow'].forEach(kind=>{
     if(kind===except)return;
     const popup=$('chat-'+kind+'-popup'),trigger=chatControlTriggerElement(kind);
     if(popup)popup.classList.remove('show');
@@ -21944,12 +21926,36 @@ function chatControlPopupItem(kind,item,active){
     if(kind==='provider')selectProviderFromPopup(id);
     else if(kind==='agent')selectAgentFromPopup(id);
     else if(kind==='model')selectModelFromPopup(id);
+    else if(kind==='mode')selectModeApprovalFromPopup(item);
     else selectWorkflowFromPopup(id);
   };
   row.onkeydown=e=>{
     if(e.key==='Enter'||e.key===' '){e.preventDefault();row.click()}
   };
   return row;
+}
+function modePopupItem(kind,id,label,desc,icon,active){
+  const row=document.createElement('div');
+  row.className='mode-popup-item'+(active?' active':'');
+  row.setAttribute('role','option');
+  row.setAttribute('aria-selected',active?'true':'false');
+  row.tabIndex=-1;
+  if(kind==='mode')row.dataset.mode=id;
+  if(kind==='approval')row.dataset.approval=id;
+  row.dataset.value=id;
+  row._modeAction={kind,id};
+  row.innerHTML='<span class="mp-icon">'+esc(icon||'')+'</span>'
+    +'<div class="mp-body"><div class="mp-label">'+esc(label||id)+'</div>'
+    +(desc?'<div class="mp-desc">'+esc(desc)+'</div>':'')+'</div>';
+  row.onclick=e=>{e.stopPropagation();selectModeApprovalFromPopup(row._modeAction)};
+  row.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();row.click()}};
+  return row;
+}
+function selectModeApprovalFromPopup(action){
+  action=action||{};
+  if(action.kind==='mode')selectMode(null,action.id);
+  else if(action.kind==='approval')selectApproval(null,action.id);
+  else if(action.kind==='configure'){closeChatControlPopups();switchSidebar('agents')}
 }
 function workflowModePopupItem(mode,label,desc,active){
   const row=document.createElement('div');
@@ -22034,6 +22040,24 @@ function renderChatControlPopups(){
       chatControlState.agents.forEach(a=>agentPopup.appendChild(chatControlPopupItem('agent',a,controlItemId(a)===activeAgentId)));
     }
     agentPopup.onkeydown=e=>handleChatControlPopupKeydown(e,'agent');
+  }
+  const modeTrigger=$('chat-mode-trigger'),modePopup=$('chat-mode-popup');
+  if(modeTrigger){
+    modeTrigger.onkeydown=e=>handleChatControlPopupKeydown(e,'mode');
+  }
+  if(modePopup){
+    modePopup.innerHTML='';
+    const activeMode=normalizeMode(currentMode);
+    modePopup.appendChild(modePopupItem('mode','agent',t('mode_agent')||'Agent',t('mode_agent_desc')||'',MODE_ICONS.agent,activeMode==='agent'));
+    modePopup.appendChild(modePopupItem('mode','ask',t('mode_ask')||'Ask',t('mode_ask_desc')||'',MODE_ICONS.ask,activeMode==='ask'));
+    modePopup.appendChild(modePopupItem('mode','plan',t('mode_plan')||'Plan',t('mode_plan_desc')||'',MODE_ICONS.plan,activeMode==='plan'));
+    modePopup.appendChild(Object.assign(document.createElement('div'),{className:'mode-popup-sep'}));
+    modePopup.appendChild(modePopupItem('approval','default',t('approval_default')||'Default Approvals',t('approval_default_desc')||'',APPROVAL_LABELS.default,currentApproval==='default'));
+    modePopup.appendChild(modePopupItem('approval','bypass',t('approval_bypass')||'Bypass Approvals',t('approval_bypass_desc')||'',APPROVAL_LABELS.bypass,currentApproval==='bypass'));
+    modePopup.appendChild(modePopupItem('approval','autopilot',t('approval_autopilot')||'Autopilot (Preview)',t('approval_autopilot_desc')||'',APPROVAL_LABELS.autopilot,currentApproval==='autopilot'));
+    modePopup.appendChild(Object.assign(document.createElement('div'),{className:'mode-popup-sep'}));
+    modePopup.appendChild(modePopupItem('configure','agents',t('configure_agents')||'Configure Custom Agents...','', '⚙',false));
+    modePopup.onkeydown=e=>handleChatControlPopupKeydown(e,'mode');
   }
   const modelTrigger=$('chat-model-inline'),modelLabelEl=$('chat-model-trigger-label'),modelPopup=$('chat-model-popup');
   if(modelTrigger&&modelLabelEl){
@@ -22480,17 +22504,17 @@ function updateModeUI(){
   if(typeof updateChatComposerState==='function')updateChatComposerState();
 }
 function toggleModePopup(){
-  const popup=$('mode-popup');if(!popup)return;
-  popup.classList.toggle('show');
-  if(popup.classList.contains('show')){
-    const close=e=>{if(!popup.contains(e.target)&&!e.target.closest('#chat-mode-trigger')){popup.classList.remove('show');document.removeEventListener('click',close)}};
-    setTimeout(()=>document.addEventListener('click',close),0);
-  }
+  toggleChatControlPopup(null,'mode');
 }
-function closeModePopup(){const p=$('mode-popup');if(p)p.classList.remove('show')}
+function closeModePopup(){
+  const p=$('chat-mode-popup')||$('mode-popup');
+  const trigger=$('chat-mode-trigger');
+  if(p)p.classList.remove('show');
+  if(trigger)trigger.setAttribute('aria-expanded','false');
+}
 window.toggleModePopup=toggleModePopup;window.closeModePopup=closeModePopup;
 async function selectMode(e,mode){
-  e.stopPropagation();closeModePopup();
+  if(e&&e.stopPropagation)e.stopPropagation();closeModePopup();
   if(!MODE_ORDER.includes(mode))return;
   let r=await call('set_chat_controls',{mode:mode});
   if(!callSucceededOrApplied(r))r=await call('set_active_mode',mode);
@@ -22502,7 +22526,7 @@ async function selectMode(e,mode){
 }
 window.selectMode=selectMode;
 async function selectApproval(e,level){
-  e.stopPropagation();closeModePopup();
+  if(e&&e.stopPropagation)e.stopPropagation();closeModePopup();
   if(!APPROVAL_ORDER.includes(level))return;
   currentApproval=normalizeApproval(level);config.approval=currentApproval;updateModeUI();
   if(level==='autopilot'&&currentMode!=='agent')await setToolbarMode('agent');

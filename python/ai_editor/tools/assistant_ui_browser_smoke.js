@@ -106,6 +106,8 @@ async function main() {
   const required = [
     "composer-layout-present",
     "model-popup-configured-models-ready",
+    "model-popup-custom-endpoint-models-ready",
+    "mode-popup-custom-control-ready",
     "control-popup-rects-unclipped",
     "agent-popup-configured-agents-ready",
     "provider-session-state-smoke",

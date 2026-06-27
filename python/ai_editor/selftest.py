@@ -3887,7 +3887,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function selectModelFromPopup(modelId)" in html
            and "else if(kind==='model')selectModelFromPopup(id);" in html
            and "window.selectModelFromPopup=selectModelFromPopup;" in html
-           and "return kind==='model'?$('chat-model-inline'):$('chat-'+kind+'-trigger');" in html)
+           and "if(kind==='model')return $('chat-model-inline');" in html
+           and "return $('chat-'+kind+'-trigger');" in html)
     _check("frontend Assistant agent picker uses custom popup",
            'id="chat-agent-trigger" onclick="toggleChatControlPopup(event,\'agent\')"' in html
            and 'id="chat-agent-popup" role="listbox" aria-label="Active agent"' in html
@@ -3905,6 +3906,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".chat-control-popup.show { display:block; }" in html
            and "@keyframes chatControlPopupIn" in html
            and "mode-popup chat-control-popup" not in html
+           and 'id="chat-mode-trigger" onclick="toggleChatControlPopup(event,\'mode\')"' in html
+           and 'id="chat-mode-popup" role="listbox" aria-label="Mode and approvals"' in html
+           and "function modePopupItem(kind,id,label,desc,icon,active)" in html
+           and "function selectModeApprovalFromPopup(action)" in html
+           and "['provider','model','agent','mode','workflow'].forEach(kind=>" in html
            and "rectReady:!!(popupRect&&popupRect.width>=180&&popupRect.height>=20)" in html
            and "opensAboveTrigger:!!(popupRect&&triggerRect&&popupRect.bottom<=triggerRect.top+1)" in html
            and "notToolbarClipped:!!(popupRect&&toolbarRect&&popupRect.bottom<=toolbarRect.top+1)" in html)
@@ -5038,6 +5044,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantControlPopupSnapshot(kind)" in html
            and "assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'model-popup-configured-models-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'model-popup-custom-endpoint-models-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'mode-popup-custom-control-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped'" in html
            and "assistantUiSelfCheckRecord(checks,'agent-popup-configured-agents-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'history-native-affordances-visible'" in html
@@ -5108,6 +5116,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "window.runAssistantUiSelfCheck({ cleanup: true })" in smoke_source
            and "custom-endpoint-model" in smoke_source
            and "model-popup-configured-models-ready" in smoke_source
+           and "model-popup-custom-endpoint-models-ready" in smoke_source
+           and "mode-popup-custom-control-ready" in smoke_source
            and "control-popup-rects-unclipped" in smoke_source
            and "agent-popup-configured-agents-ready" in smoke_source
            and "provider-session-state-smoke" in smoke_source
