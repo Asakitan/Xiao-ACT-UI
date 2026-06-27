@@ -1554,6 +1554,13 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-titlebar h2 { margin:0; font-size:15px; line-height:20px; }
 .settings-title-sub { margin-top:1px; color:var(--fg-dim); font-size:11px; }
 .settings-title-actions { display:flex; align-items:center; gap:6px; }
+.settings-status-pill { min-width:92px; height:24px; display:inline-flex; align-items:center; justify-content:center;
+  padding:0 8px; border:1px solid var(--border); border-radius:999px; background:var(--bg3);
+  color:var(--fg-dim); font:11px var(--mono); white-space:nowrap; }
+.settings-status-pill.modified { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border));
+  background:color-mix(in srgb,var(--fg-accent) 7%,var(--bg3)); }
+.settings-status-pill.error { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 55%,var(--border));
+  background:color-mix(in srgb,var(--fg-error) 7%,var(--bg3)); }
 .settings-top-action { height:26px; padding:0 10px; border:1px solid var(--border); border-radius:4px;
   background:var(--bg3); color:var(--fg-dim); font:12px var(--sans); cursor:pointer; }
 .settings-top-action:hover,.settings-top-action:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
@@ -1570,6 +1577,12 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-target-tabs button:first-child { border-left:0; }
 .settings-target-tabs button:hover,.settings-target-tabs button:focus { color:var(--fg); outline:none; background:var(--bg-hover); }
 .settings-target-tabs button.active { color:var(--fg); background:color-mix(in srgb,var(--fg-accent) 16%,var(--bg3)); }
+.settings-result-nav { display:inline-flex; align-items:center; gap:4px; justify-self:end; }
+.settings-result-nav button { height:28px; min-width:28px; padding:0 8px; border:1px solid var(--border);
+  border-radius:4px; background:var(--bg3); color:var(--fg-dim); font:12px var(--sans); cursor:pointer; }
+.settings-result-nav button:hover:not(:disabled),.settings-result-nav button:focus:not(:disabled) {
+  color:var(--fg); border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
+.settings-result-nav button:disabled { opacity:.45; cursor:default; }
 .settings-searchbar .settings-active-filters,.settings-searchbar .settings-filter-summary,
 .settings-searchbar .settings-validation-summary { grid-column:1 / -1; }
 .settings-searchbar .settings-quick-filters { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:5px;
@@ -1601,6 +1614,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-nav-item.active { color:var(--fg); background:color-mix(in srgb,var(--fg-accent) 14%,var(--bg-hover)); }
 .settings-nav-item .count { margin-left:auto; min-width:18px; text-align:right; color:var(--fg-dim); font:10px var(--mono); }
 .settings-nav-item .count.has-modified { color:var(--fg-accent); }
+.settings-nav-item .count::before { content:attr(data-label); color:var(--fg-dim); font:10px var(--mono); margin-right:4px; }
 .settings-main { min-width:0; overflow-y:auto; padding:8px 24px 18px; scroll-behavior:smooth; }
 .settings-empty-state { display:none; flex-direction:column; gap:8px; max-width:560px; margin:38px auto;
   padding:20px 22px; border:1px dashed var(--border); border-radius:6px; background:color-mix(in srgb,var(--bg2) 64%,transparent);
@@ -2052,6 +2066,8 @@ pre.code-block { overflow:visible; }
 .settings-field.builtin-setting:focus { outline:1px solid color-mix(in srgb,var(--border-focus) 55%,transparent); outline-offset:-1px; }
 .settings-field.highlight { animation:settingsSectionFlash .65s ease-out; }
 .settings-field.builtin-setting.modified { border-left-color:var(--fg-accent); background:color-mix(in srgb,var(--fg-accent) 6%,transparent); }
+.settings-field.builtin-setting.saved-flash { animation:settingsSavedFlash .7s ease-out; }
+@keyframes settingsSavedFlash { from{background:color-mix(in srgb,var(--fg-success) 13%,transparent)} to{background:transparent} }
 .settings-field.builtin-setting .s-reset { top:8px; transform:none; }
 .settings-field.has-row-actions .s-reset { right:76px; }
 .settings-field.builtin-setting > label:first-child,
@@ -2064,6 +2080,7 @@ pre.code-block { overflow:visible; }
   border:1px solid var(--border); border-radius:999px; color:var(--fg-dim); background:var(--bg3);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .settings-built-chip.modified { display:none; color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); }
+.settings-built-chip.current { max-width:340px; color:var(--fg); }
 .settings-field.modified .settings-built-chip.modified { display:inline-flex; }
 .settings-built-desc { margin:3px 0 0; color:var(--fg-dim); font-size:11px; line-height:1.35; }
 .settings-row-actions { position:absolute; top:6px; right:6px; display:flex; align-items:center; gap:3px;
@@ -2897,6 +2914,7 @@ pre.code-block { overflow:visible; }
         <div class="settings-title-sub">User · Workspace · Extensions</div>
       </div>
       <div class="settings-title-actions">
+        <span id="settings-dirty-summary" class="settings-status-pill" role="status" aria-live="polite">Clean</span>
         <button type="button" class="settings-top-action" onclick="focusSettingsSearch()">Search</button>
         <button type="button" class="settings-top-action" onclick="closeSettings();openKeybindings()">Keyboard Shortcuts</button>
       </div>
@@ -2909,6 +2927,10 @@ pre.code-block { overflow:visible; }
         <button type="button" class="active" data-settings-target="user" onclick="selectSettingsTarget('user')">User</button>
         <button type="button" data-settings-target="workspace" onclick="selectSettingsTarget('workspace')">Workspace</button>
         <button type="button" data-settings-target="extensions" onclick="selectSettingsTarget('extensions')">Extensions</button>
+      </div>
+      <div class="settings-result-nav" aria-label="Settings results navigation">
+        <button type="button" id="settings-prev-result" title="Previous visible setting" onclick="settingsFocusVisibleRow(-1)">Prev</button>
+        <button type="button" id="settings-next-result" title="Next visible setting" onclick="settingsFocusVisibleRow(1)">Next</button>
       </div>
       <div id="settings-active-filters" class="settings-active-filters" aria-live="polite"></div>
       <div id="settings-quick-filters" class="settings-quick-filters" aria-label="Quick setting filters">
@@ -3283,7 +3305,7 @@ pre.code-block { overflow:visible; }
       <button type="button" class="settings-top-action settings-reset-visible" onclick="resetVisibleModifiedSettings()">Reset Visible</button>
       <span class="toolbar-btn" onclick="testConn()" style="border:1px solid var(--border);padding:6px 14px;border-radius:var(--radius)">Test</span>
       <span class="toolbar-btn" onclick="closeSettings()" style="border:1px solid var(--border);padding:6px 14px;border-radius:var(--radius)">Cancel</span>
-      <button class="send-btn" onclick="saveSettings()">Save</button>
+      <button class="send-btn settings-save-button" onclick="saveSettings()">Save</button>
     </div>
   </div>
 </div>
@@ -3511,6 +3533,21 @@ function settingDisplayValue(value){
   if(isPlainObject(value))return Object.keys(value).length?JSON.stringify(value):'{}';
   return String(value);
 }
+function settingCompactDisplayValue(value,maxLen){
+  let text=settingDisplayValue(value);
+  text=text.replace(/\s+/g,' ').trim();
+  const limit=Number(maxLen)||72;
+  if(text.length>limit)text=text.slice(0,Math.max(0,limit-3))+'...';
+  return text||'empty';
+}
+function settingFriendlyName(meta,inputId){
+  const key=String((meta&&meta.key)||inputId||'Setting');
+  const last=key.split('.').filter(Boolean).pop()||key;
+  return last
+    .replace(/([a-z0-9])([A-Z])/g,'$1 $2')
+    .replace(/[-_]+/g,' ')
+    .replace(/\b\w/g,ch=>ch.toUpperCase());
+}
 function settingStableValue(value){
   if(value==null)return '';
   if(typeof value==='number'&&!Number.isFinite(value))return '';
@@ -3585,6 +3622,30 @@ function settingsAddRowActions(row,opts){
   add('◎','Focus setting row',()=>settingsHighlightRow(row));
   row.appendChild(actions);
 }
+function settingsVisibleRows(){
+  const root=settingsMainElement()||document;
+  return Array.from(root.querySelectorAll('.settings-field.builtin-setting:not(.settings-target-hidden),.ext-setting-row:not(.settings-target-hidden)'))
+    .filter(row=>{
+      if(row.style.display==='none')return false;
+      const group=row.closest('.settings-section,#ext-settings-container,details');
+      return !group||group.style.display!=='none';
+    });
+}
+function settingsFocusVisibleRow(direction){
+  const rows=settingsVisibleRows();
+  if(!rows.length)return;
+  const active=document.activeElement&&document.activeElement.closest
+    ? document.activeElement.closest('.settings-field.builtin-setting,.ext-setting-row')
+    : null;
+  let index=active?rows.indexOf(active):-1;
+  const step=Number(direction)<0?-1:1;
+  index=index<0?(step<0?rows.length-1:0):(index+step+rows.length)%rows.length;
+  settingsHighlightRow(rows[index]);
+}
+function updateSettingsResultNav(count){
+  const disabled=!Number(count);
+  ['settings-prev-result','settings-next-result'].forEach(id=>{const btn=$(id);if(btn)btn.disabled=disabled});
+}
 function settingsFieldWrapper(inputId){
   const el=$(inputId);if(!el)return null;
   const existing=el.closest('.settings-field.builtin-setting');if(existing)return existing;
@@ -3616,6 +3677,7 @@ function wrapSettingsField(inputId){
     const scope=document.createElement('span');scope.className='settings-built-chip scope';scope.textContent=meta.scope||'User';metaRow.appendChild(scope);
     const source=document.createElement('span');source.className='settings-built-chip source';source.textContent='Built-in';metaRow.appendChild(source);
     const def=document.createElement('span');def.className='settings-built-chip default';def.textContent='Default: '+settingDisplayValue(settingDefaultValue(meta));def.title=def.textContent;metaRow.appendChild(def);
+    const cur=document.createElement('span');cur.className='settings-built-chip current';cur.dataset.settingCurrentValue='1';cur.textContent='Current: '+settingCompactDisplayValue(settingsInputValue(el,meta));cur.title='Current value for '+settingFriendlyName(meta,inputId);metaRow.appendChild(cur);
     const mod=document.createElement('span');mod.className='settings-built-chip modified';mod.textContent='Modified';metaRow.appendChild(mod);
     wrap.appendChild(metaRow);
     if(meta.desc){
@@ -3624,6 +3686,8 @@ function wrapSettingsField(inputId){
   }
 }
 function markSettingsModified(){
+  let modifiedCount=0;
+  let errorCount=0;
   Object.keys(SETTING_INPUT_META).forEach(inputId=>{
     const el=$(inputId);if(!el)return;
     const wrap=el.closest('.settings-field');if(!wrap)return;
@@ -3633,8 +3697,34 @@ function markSettingsModified(){
     const modified=settingStableValue(cur)!==settingStableValue(defVal);
     wrap.classList.toggle('modified',modified);
     wrap.dataset.settingModified=modified?'1':'0';
+    if(modified)modifiedCount++;
+    if(wrap.classList.contains('invalid')||el.getAttribute('aria-invalid')==='true')errorCount++;
+    const currentChip=wrap.querySelector('[data-setting-current-value="1"]');
+    if(currentChip){
+      const text='Current: '+settingCompactDisplayValue(cur);
+      currentChip.textContent=text;
+      currentChip.title=text;
+    }
   });
+  const root=settingsMainElement()||document;
+  Array.from(root.querySelectorAll('.ext-setting-row.modified')).forEach(()=>modifiedCount++);
+  Array.from(root.querySelectorAll('.ext-setting-row.invalid,[aria-invalid="true"]')).forEach(row=>{
+    if(row.classList&&row.classList.contains('ext-setting-row'))errorCount++;
+  });
+  refreshSettingsDirtySummary(modifiedCount,errorCount);
   updateSettingsNavCounts();
+}
+function refreshSettingsDirtySummary(modifiedCount,errorCount){
+  const pill=$('settings-dirty-summary');
+  if(!pill)return;
+  modifiedCount=Number(modifiedCount)||0;
+  errorCount=Number(errorCount)||0;
+  pill.classList.toggle('modified',modifiedCount>0&&errorCount===0);
+  pill.classList.toggle('error',errorCount>0);
+  pill.textContent=errorCount?errorCount+' error'+(errorCount===1?'':'s')
+    : modifiedCount?modifiedCount+' modified':'Clean';
+  const save=document.querySelector('.settings-save-button');
+  if(save)save.dataset.modifiedCount=String(modifiedCount);
 }
 
 let streaming=false, totalTokens=0, streamBuf='', currentMsgBody=null;
@@ -23710,6 +23800,7 @@ function applySettingsValidation(errors,options){
   clearSettingsValidation();
   errors.forEach(err=>setSettingsFieldError(err.id,err.message));
   renderSettingsValidationSummary(errors);
+  markSettingsModified();
   if(options&&options.focusFirst&&errors.length){
     const first=$(errors[0].id);
     if(first&&typeof first.focus==='function')first.focus();
@@ -24128,6 +24219,7 @@ function renderSettingsNav(){
     const count=document.createElement('span');count.className='count';
     const visible=settingsSectionVisibleCount(section),modified=settingsSectionModifiedCount(section);
     count.textContent=modified?(visible+' / '+modified):(String(visible||''));
+    count.dataset.label=modified?'vis/mod':'';
     count.classList.toggle('has-modified',modified>0);
     btn.appendChild(label);btn.appendChild(count);
     btn.onclick=()=>scrollToSettingsSection(id);
@@ -24145,7 +24237,7 @@ function updateSettingsNavCounts(){
     const visible=section.style.display!=='none';
     btn.style.display=visible?'':'none';
     const visibleCount=settingsSectionVisibleCount(section),modified=settingsSectionModifiedCount(section);
-    const count=btn.querySelector('.count');if(count){count.textContent=modified?(visibleCount+' / '+modified):String(visibleCount||'');count.classList.toggle('has-modified',modified>0)}
+    const count=btn.querySelector('.count');if(count){count.textContent=modified?(visibleCount+' / '+modified):String(visibleCount||'');count.dataset.label=modified?'vis/mod':'';count.classList.toggle('has-modified',modified>0)}
   });
 }
 function focusSettingsSearch(){
@@ -24184,8 +24276,8 @@ function installSettingsKeyboardHandlers(){
       return;
     }
     if(ev.key==='ArrowDown'&&ev.target&&ev.target.id==='settings-search'){
-      const first=extensionSettingVisibleRows().find(Boolean);
-      if(first){ev.preventDefault();extensionSettingFocusRow(first,{block:'nearest'});}
+      const first=settingsVisibleRows().find(Boolean);
+      if(first){ev.preventDefault();settingsHighlightRow(first);}
       return;
     }
     const row=ev.target&&ev.target.closest?ev.target.closest('.settings-field.builtin-setting,.ext-setting-row'):null;
@@ -24204,6 +24296,7 @@ window.focusSettingsSearch=focusSettingsSearch;
 window.resetVisibleModifiedSettings=resetVisibleModifiedSettings;
 window.selectSettingsTarget=selectSettingsTarget;
 window.scrollToSettingsSection=scrollToSettingsSection;
+window.settingsFocusVisibleRow=settingsFocusVisibleRow;
 window.settingsToggleFilterToken=settingsToggleFilterToken;
 window.settingsClearFilters=settingsClearFilters;
 const SETTINGS_SCOPE_FILTERS={
@@ -24509,6 +24602,7 @@ function filterSettings(){
   const inp=$('settings-search');if(inp)inp.placeholder=parsed.active?visible+' matches':currentSettingsTarget==='extensions'?'Search extension settings...':currentSettingsTarget==='workspace'?'Search workspace settings...':'Search user settings...';
   renderSettingsActiveFilters(parsed,visible,total);
   renderSettingsTargetSummary(targetStats);
+  updateSettingsResultNav(settingsVisibleRows().length);
   renderSettingsFilterSuggestions();
   updateSettingsNavCounts();
   persistSettingsViewState({target:currentSettingsTarget,search:q});
@@ -24780,11 +24874,20 @@ async function saveSettings(){
     if(saveResult&&saveResult.applied)showToast('Current session updated, but settings were not persisted','warning',3600);
     return;
   }
+  const status=$('s-status');
+  if(status){status.textContent='Saved';status.style.color='var(--fg-success)';}
+  showToast('Settings saved','success',1500);
+  settingsVisibleRows().forEach(row=>{
+    row.classList.remove('saved-flash');
+    void row.offsetWidth;
+    row.classList.add('saved-flash');
+  });
+  markSettingsModified();
+  scheduleFilterSettings(0);
   const diagApply=await call('set_extension_host_diagnostics',config.extensions.diagnostics_enabled);
   if(!callSucceededOrApplied(diagApply)){
     showToast('Extension diagnostics update failed: '+callFailedMessage(diagApply,'backend unavailable'),'warning',3200);
   }
-  closeSettings();
   renderProviderTabs();
 }
 window.saveSettings=saveSettings;

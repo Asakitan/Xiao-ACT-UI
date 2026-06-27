@@ -9562,8 +9562,23 @@ console.log("frontend word separator behavior ok");
            and "restoreSettingsViewState();" in html
            and "Reset Visible" in html
            and "settingsSectionModifiedCount(section)" in html)
+    _check("frontend settings has humane VS Code style interaction polish",
+           "id=\"settings-dirty-summary\"" in html
+           and "class=\"settings-result-nav\"" in html
+           and "id=\"settings-prev-result\"" in html
+           and "id=\"settings-next-result\"" in html
+           and "function settingsVisibleRows()" in html
+           and "function settingsFocusVisibleRow(direction)" in html
+           and "function refreshSettingsDirtySummary(modifiedCount,errorCount)" in html
+           and "settings-built-chip current" in html
+           and "cur.dataset.settingCurrentValue='1'" in html
+           and "settings-save-button" in html
+           and "Settings saved" in html
+           and "closeSettings();" not in html[html.index("async function saveSettings()"):html.index("window.saveSettings=saveSettings;")]
+           and "const first=settingsVisibleRows().find(Boolean);" in html
+           and "updateSettingsResultNav(settingsVisibleRows().length);" in html)
     _check("frontend built-in settings expose VS Code style metadata",
-           "const SETTING_INPUT_META=" in html
+            "const SETTING_INPUT_META=" in html
            and "const SETTING_INPUT_MAP=Object.fromEntries" in html
            and "function settingsValueAtPath(root,path,fallback)" in html
            and "function settingDefaultValue(meta)" in html
