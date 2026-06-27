@@ -9481,6 +9481,10 @@ console.log("frontend word separator behavior ok");
            and "function settingsFilterTokens(raw)" in html
            and "function settingsFilterChipLabel(token)" in html
            and "function renderSettingsActiveFilters(parsed,visible,total)" in html
+           and "function settingsToggleFilterToken(token)" in html
+           and "function settingsClearFilters()" in html
+           and "function renderSettingsQuickFilters(parsed)" in html
+           and "function renderSettingsEmptyState(visible,total,parsed)" in html
            and "function renderSettingsFilterSuggestions()" in html
            and "function removeSettingsFilterToken(token)" in html
            and "function invalidateSettingsFilterCache()" in html
@@ -9490,6 +9494,9 @@ console.log("frontend word separator behavior ok");
             and "const cache=settingsFilterDomCache(modal);" in html
             and "invalidateSettingsFilterCache();" in html
             and "renderExtensionSettings();" in html
+            and "id=\"settings-quick-filters\"" in html
+            and "data-settings-filter-token=\"@modified\"" in html
+            and "id=\"settings-empty-state\"" in html
             and "@([A-Za-z][A-Za-z0-9_-]*)" in html
             and "SETTINGS_SCOPE_FILTERS[scope]" in html
             and "visible of '+total+' settings groups" in html
@@ -9517,6 +9524,10 @@ console.log("frontend word separator behavior ok");
            and "function settingsVisibleGroupText(group)" in html
            and "function renderSettingsTargetSummary(stats)" in html
            and "function resetVisibleModifiedSettings()" in html
+           and "function installSettingsKeyboardHandlers()" in html
+           and "installSettingsKeyboardHandlers();" in html
+           and "window.settingsToggleFilterToken=settingsToggleFilterToken;" in html
+           and "window.settingsClearFilters=settingsClearFilters;" in html
            and "window.resetVisibleModifiedSettings=resetVisibleModifiedSettings;" in html
            and "window.focusSettingsSearch=focusSettingsSearch;" in html
            and "renderSettingsNav();" in html
