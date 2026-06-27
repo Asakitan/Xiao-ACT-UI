@@ -4098,8 +4098,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantHistoryEntryNativeSummary(entry)" in html
            and "function assistantHistoryNativeSummaryChips(summary)" in html
            and "function assistantSavedHistoryActionButton(entry,kind,item)" in html
-           and "function assistantHistorySessionChips(session,current)" in html
-           and "function renderHistorySessionItem(list,session,index)" in html
+           and "function assistantSessionBranchMeta(session,sessions)" in html
+           and "function assistantSessionOpenResource(resource,opts)" in html
+           and "function assistantHistorySessionChips(session,current,branchMeta)" in html
+           and "function renderHistorySessionItem(list,session,index,branchMeta)" in html
            and "function renderHistoryBackendItem(list,entry,index)" in html
            and "function assistantSavedHistoryAffordanceSmokeSnapshot()" in html
            and "visibleSessions=localSessions.filter" in html
@@ -4112,6 +4114,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "item.dataset.sessionAgentId=String(session.agentId||'');" in html
            and "item.dataset.sessionWorkflowId=String(session.workflowId||'');" in html
            and "item.dataset.sessionApproval=String(session.approval||'');" in html
+           and "item.dataset.sessionBranchChildren=String(branchMeta.childCount||0);" in html
+           and "item.dataset.sessionBranchParentId=String(branchMeta.parentId||'');" in html
            and "item.dataset.sessionNativeParts=String(nativeSummary.parts);" in html
            and "item.dataset.sessionNativeChanges=String(nativeSummary.changes);" in html
            and "item.dataset.sessionNativeRefs=String(nativeSummary.refs);" in html
@@ -4147,6 +4151,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".history-session-chip.tree" in html
            and ".history-session-chip.tokens" in html
            and ".history-session-chip.error" in html
+           and "parent.dataset.historyAction='parent-session';" in html
+           and "branches.dataset.historyAction='branch-sessions';" in html
+           and "assistantSessionOpenResource(session.parentSessionResource)" in html
            and "list.setAttribute('aria-activedescendant',active.id);" in html
            and "if(e.key==='ArrowDown'||e.key==='ArrowUp')" in html
            and "if(e.key==='Delete')" in html
@@ -4157,6 +4164,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "if(confirmDeleteAssistantSession(session)){assistantSessionDeleteItem(session.id);announceAssistantAction('Deleted chat session');refreshHistory()}" in html
            and "['/sessions','Open chat sessions','chat']" in html
            and "else if(cmd==='/fork')assistantSessionForkCurrent();"
+           and "const branchMeta=assistantSessionBranchMeta(s,localSessions);" in html
            and "const nativeSummary=assistantHistorySessionNativeSummary(s);" in html
            and "assistantHistoryEntryNativeSummary(e).searchText" in html
            and "refs.onclick=ev=>{ev.stopPropagation();loadHistoryConv(entry.id,{focus:'references'})};" in html
@@ -5038,6 +5046,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'fork-lineage-history-visible'" in html
            and "assistantUiSelfCheckRecord(checks,'saved-history-action-result-markers-visible'" in html
            and "assistantUiSelfCheckRecord(checks,'fork-lineage-chip-visible'" in html
+           and "assistantUiSelfCheckRecord(checks,'fork-branch-navigation-visible'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready'" in html
            and "function assistantWorkflowEditorSnapshot()" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready'" in html
@@ -5055,6 +5064,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantWorkflowModeSmokeSnapshot()" in html
            and "function assistantActionResultRestoreSmokeSnapshot()" in html
            and "function assistantForkLineageSmokeSnapshot()" in html
+           and "function assistantSessionBranchMeta(session,sessions)" in html
+           and "function assistantSessionOpenResource(resource,opts)" in html
            and ".workflow-run-card" in html
            and ".workflow-run-step-agent" in html
            and ".workflow-result-card" in html
@@ -5078,6 +5089,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "summary.actions?'submitted actions action results confirmations questions'" in html
            and "nativeSummary.actions?'Submitted actions: '+nativeSummary.actions:''" in html
            and "fork: '+String(session.parentSessionTitle||'parent').slice(0,24)" in html
+           and "item.dataset.sessionBranchChildren=String(branchMeta.childCount||0);" in html
+           and "parent.dataset.historyAction='parent-session';" in html
+           and "branches.dataset.historyAction='branch-sessions';" in html
            and "parentSessionTitle:String(src.parentSessionTitle||'')" in html
            and "item.dataset.sessionParentTitle=String(session.parentSessionTitle||'');" in html
            and "function chatChangeSetStatePatch(card,state,detail)" in html
@@ -5105,6 +5119,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "fork-lineage-history-visible" in smoke_source
            and "saved-history-action-result-markers-visible" in smoke_source
            and "fork-lineage-chip-visible" in smoke_source
+           and "fork-branch-navigation-visible" in smoke_source
            and "workflow-result-state-rendered" in smoke_source
            and "workflow-run-button-active-state" in smoke_source
            and "channel: \"msedge\"" in smoke_source

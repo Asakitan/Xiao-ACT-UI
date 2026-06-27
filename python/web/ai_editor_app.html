@@ -4739,6 +4739,19 @@ let assistantLastLocalSessionState=assistantSessionState.type==='local'?assistan
 function assistantSessionResource(){
   return 'sao-ai-chat://'+assistantSessionState.type+'/'+assistantSessionState.id;
 }
+function assistantSessionItemResource(item){
+  if(!item)return '';
+  return String(item.sessionResource||('sao-ai-chat://'+(item.type||'local')+'/'+item.id));
+}
+function assistantSessionFindItemByResource(resource,items){
+  const target=String(resource||'');
+  if(!target)return null;
+  return (Array.isArray(items)?items:assistantSessionLoadItems()).find(item=>
+    String(item&&item.id||'')===target
+    || assistantSessionItemResource(item)===target
+    || String(item&&item.sessionResource||'')===target
+  )||null;
+}
 function assistantSessionNormalizeRefs(refs){
   return (refs||[]).filter(Boolean).slice(0,20).map(ref=>({
     id:String(ref.id||''),kind:String(ref.kind||'ctx'),label:String(ref.label||ref.id||'Context'),
@@ -4974,6 +4987,11 @@ function assistantSessionPersistCurrent(extra){
 function assistantSessionDeleteItem(sessionId){
   const id=String(sessionId||'');
   assistantSessionSaveItems(assistantSessionLoadItems().filter(s=>String(s.id)!==id));
+}
+function assistantSessionOpenResource(resource,opts){
+  const item=assistantSessionFindItemByResource(resource);
+  if(!item){showToast('Parent chat session not found','warning',2200);return false}
+  return assistantSessionOpenItem(item.id,opts||{});
 }
 function assistantSessionRenderMessages(messages){
   const host=$('chat-messages');if(host)host.innerHTML='';
@@ -8143,8 +8161,9 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'native-only-session-parts-persist',nativeOnlySession.normalizedCount===1&&nativeOnlySession.normalizedContent===''&&nativeOnlySession.hasNativePayload&&nativeOnlySession.serializedFollowups===1&&nativeOnlySession.renderedNativeParts>=1&&nativeOnlySession.renderedFollowups===1&&nativeOnlySession.nativeFollowups===1&&nativeOnlySession.summaryParts===1&&nativeOnlySession.summaryFollowups===1&&nativeOnlySession.searchMatches,JSON.stringify(nativeOnlySession));
   assistantUiSelfCheckRecord(checks,'change-set-state-restores-and-persists',changeSetRestore.before.state==='applied'&&changeSetRestore.before.appliedEdits===2&&changeSetRestore.before.statusText.includes('Applied 2')&&changeSetRestore.after.state==='previewed'&&changeSetRestore.after.previewedAt==='23456'&&changeSetRestore.patchedState==='previewed'&&changeSetRestore.storedState==='previewed'&&changeSetRestore.storedPreviewedDiffs===1,JSON.stringify(changeSetRestore));
   assistantUiSelfCheckRecord(checks,'action-result-state-restores-and-persists',actionResultRestore.restoredDisabled&&actionResultRestore.restoredState==='submitted'&&actionResultRestore.restoredFlag==='true'&&actionResultRestore.restoredText.includes('✓')&&actionResultRestore.restoredNativeCount===1&&actionResultRestore.trayPendingAfterRestore===0&&actionResultRestore.patchedOk&&actionResultRestore.storedOk&&actionResultRestore.storedAction==='apply'&&actionResultRestore.storedCount===1,JSON.stringify(actionResultRestore));
-  assistantUiSelfCheckRecord(checks,'fork-lineage-history-visible',forkLineage.itemExists&&forkLineage.parentResource==='sao-ai-chat://local/parent-lineage-selfcheck'&&forkLineage.parentTitle==='Parent Assistant Session'&&forkLineage.labelTitle.includes('Forked from: Parent Assistant Session')&&forkLineage.chipLabels.includes('fork: Parent Assistant Session')&&forkLineage.chipKinds.some(kind=>kind.includes('lineage'))&&forkLineage.actionLabels.includes('fork')&&forkLineage.searchMatches,JSON.stringify(forkLineage));
-  assistantUiSelfCheckRecord(checks,'fork-lineage-chip-visible',forkLineage.chipLabels.includes('fork: Parent Assistant Session')&&forkLineage.chipKinds.some(kind=>kind.includes('lineage'))&&forkLineage.labelTitle.includes('Forked from: Parent Assistant Session'),JSON.stringify(forkLineage));
+  assistantUiSelfCheckRecord(checks,'fork-lineage-history-visible',forkLineage.itemExists&&forkLineage.parentResource==='sao-ai-chat://local/parent-lineage-selfcheck'&&forkLineage.parentTitle==='Parent Assistant Session'&&forkLineage.parentId==='parent-lineage-selfcheck'&&forkLineage.branchChildren===1&&forkLineage.labelTitle.includes('Forked from: Parent Assistant Session')&&forkLineage.labelTitle.includes('Branches: 1')&&forkLineage.chipLabels.includes('fork: Parent Assistant Session')&&forkLineage.chipLabels.includes('1 branch')&&forkLineage.chipKinds.some(kind=>kind.includes('lineage'))&&forkLineage.actionLabels.includes('parent')&&forkLineage.actionLabels.includes('branches')&&forkLineage.actionLabels.includes('fork')&&forkLineage.actionKinds.includes('parent-session')&&forkLineage.actionKinds.includes('branch-sessions')&&forkLineage.parentButtonEnabled&&forkLineage.branchesButtonEnabled&&forkLineage.disabledActions.length===0&&forkLineage.searchMatches,JSON.stringify(forkLineage));
+  assistantUiSelfCheckRecord(checks,'fork-lineage-chip-visible',forkLineage.chipLabels.includes('fork: Parent Assistant Session')&&forkLineage.chipLabels.includes('1 branch')&&forkLineage.chipKinds.some(kind=>kind.includes('lineage'))&&forkLineage.labelTitle.includes('Forked from: Parent Assistant Session')&&forkLineage.labelTitle.includes('Branches: 1'),JSON.stringify(forkLineage));
+  assistantUiSelfCheckRecord(checks,'fork-branch-navigation-visible',forkLineage.parentId==='parent-lineage-selfcheck'&&forkLineage.branchChildren===1&&forkLineage.actionKinds.includes('parent-session')&&forkLineage.actionKinds.includes('branch-sessions')&&forkLineage.parentButtonEnabled&&forkLineage.branchesButtonEnabled&&forkLineage.disabledActions.length===0&&forkLineage.searchMatches,JSON.stringify(forkLineage));
   assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready',workflowPopup.shown&&workflowPopup.workflowModeCount===3&&workflowPopup.workflowModeStrip&&workflowPopup.workflowModeToolbar&&workflowPopup.optionCount>=4&&workflowPopup.focusableCount===workflowPopup.optionCount&&workflowPopup.keyboardReady,JSON.stringify(workflowPopup));
   assistantUiSelfCheckRecord(checks,'workflow-popup-mode-smoke',workflowModeSmoke.states.length===3&&workflowModeSmoke.states.every(state=>state.strip&&state.toolbar&&state.active.includes(state.mode))&&workflowModeSmoke.selected.value==='assistant-selfcheck-flow'&&workflowModeSmoke.selected.mode==='on'&&workflowModeSmoke.selected.runDisabled===false&&workflowModeSmoke.custom.prompt==='selfcheck custom workflow prompt'&&workflowModeSmoke.custom.runDisabled===false,JSON.stringify(workflowModeSmoke));
   assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready',workflowEditor.modalExists&&workflowEditor.editorExists&&workflowEditor.rowCount===2&&workflowEditor.labelInputs===2&&workflowEditor.agentInputs===2&&workflowEditor.outputInputs===2&&workflowEditor.promptInputs===2&&workflowEditor.moveButtons===4&&workflowEditor.deleteButtons===2&&workflowEditor.addButtonExists&&workflowEditor.collectedCount===2&&workflowEditor.idReadOnly,JSON.stringify(workflowEditor));
@@ -17054,7 +17073,20 @@ function assistantSavedHistoryActionButton(entry,kind,item){
   button.onclick=ev=>{ev.stopPropagation();loadHistoryConv(entry.id,{focus:focusKind,target:path})};
   return button;
 }
-function assistantHistorySessionChips(session,current){
+function assistantSessionBranchMeta(session,sessions){
+  const all=Array.isArray(sessions)?sessions:[];
+  const resource=assistantSessionItemResource(session);
+  const children=all.filter(item=>String(item&&item.parentSessionResource||'')===resource);
+  const parent=assistantSessionFindItemByResource(session&&session.parentSessionResource,all);
+  return {
+    resource,
+    parentId:parent?String(parent.id||''):'',
+    parentTitle:parent?String(parent.title||''):String(session&&session.parentSessionTitle||''),
+    childCount:children.length,
+    childTitles:children.map(item=>String(item&&item.title||item&&item.id||'Chat session')).slice(0,5)
+  };
+}
+function assistantHistorySessionChips(session,current,branchMeta){
   const chips=[];
   const status=String(session&&session.status||'completed');
   const contextCount=Array.isArray(session&&session.context)?session.context.length:0;
@@ -17063,6 +17095,7 @@ function assistantHistorySessionChips(session,current){
   if(status==='inProgress'||session&&session.requestInProgress)chips.push({label:'running',kind:'running'});
   else if(session&&session.draft)chips.push({label:'draft',kind:'draft'});
   if(session&&session.parentSessionResource)chips.push({label:'fork: '+String(session.parentSessionTitle||'parent').slice(0,24),kind:'lineage'});
+  if(branchMeta&&branchMeta.childCount)chips.push({label:branchMeta.childCount+' branch'+(branchMeta.childCount===1?'':'es'),kind:'lineage'});
   chips.push({label:String(session&&session.requestCount||0)+' req',kind:'count'});
   if(contextCount)chips.push({label:contextCount+' ctx',kind:'context'});
   if(session&&session.provider)chips.push({label:providerLabel(session.provider),kind:'provider'});
@@ -17073,7 +17106,8 @@ function assistantHistorySessionChips(session,current){
   chips.push(...assistantHistoryNativeSummaryChips(nativeSummary));
   return chips.slice(0,16);
 }
-function renderHistorySessionItem(list,session,index){
+function renderHistorySessionItem(list,session,index,branchMeta){
+  branchMeta=branchMeta||assistantSessionBranchMeta(session,[]);
   const current=String(session.id||'')===String(assistantSessionState.id||'');
   const item=document.createElement('div');item.className='sb-item'+(current?' current':'');
   item.id='history-session-'+index;
@@ -17081,7 +17115,7 @@ function renderHistorySessionItem(list,session,index){
   item.setAttribute('tabindex','-1');
   item.dataset.sessionId=String(session.id||'');
   item.dataset.historyKind='session';
-  const chips=assistantHistorySessionChips(session,current);
+  const chips=assistantHistorySessionChips(session,current,branchMeta);
   item.dataset.sessionStatus=String(session.status||'completed');
   item.dataset.sessionContextCount=String(Array.isArray(session.context)?session.context.length:0);
   item.dataset.sessionProvider=String(session.provider||'');
@@ -17091,6 +17125,8 @@ function renderHistorySessionItem(list,session,index){
   item.dataset.sessionApproval=String(session.approval||'');
   item.dataset.sessionParentResource=String(session.parentSessionResource||'');
   item.dataset.sessionParentTitle=String(session.parentSessionTitle||'');
+  item.dataset.sessionBranchChildren=String(branchMeta.childCount||0);
+  item.dataset.sessionBranchParentId=String(branchMeta.parentId||'');
   const nativeSummary=assistantHistorySessionNativeSummary(session);
   item.dataset.sessionNativeParts=String(nativeSummary.parts);
   item.dataset.sessionNativeTodos=String(nativeSummary.todos);
@@ -17118,6 +17154,7 @@ function renderHistorySessionItem(list,session,index){
     'Agent: '+String(session.agentId||'Default'),
     'Workflow: '+String(session.workflowLabel||session.workflowId||'-'),
     session.parentSessionResource?'Forked from: '+String(session.parentSessionTitle||session.parentSessionResource):'',
+    branchMeta.childCount?'Branches: '+branchMeta.childCount+' - '+branchMeta.childTitles.join(', '):'',
     nativeSummary.parts?'Response parts: '+nativeSummary.parts:'',
     nativeSummary.todos?'Todo items: '+nativeSummary.todos:'',
     nativeSummary.changes?'Modified files: '+nativeSummary.changes:'',
@@ -17140,9 +17177,13 @@ function renderHistorySessionItem(list,session,index){
   main.appendChild(label);main.appendChild(meta);
   const fork=document.createElement('button');fork.type='button';fork.className='history-session-action fork';fork.textContent='fork';fork.title='Fork session';fork.setAttribute('aria-label','Fork session');
   fork.onclick=ev=>{ev.stopPropagation();assistantSessionOpenItem(session.id,{fork:true});announceAssistantAction('Forked chat session');refreshHistory()};
+  const parent=document.createElement('button');parent.type='button';parent.className='history-session-action parent';parent.textContent='parent';parent.title='Open parent session';parent.setAttribute('aria-label','Open parent session');parent.dataset.historyAction='parent-session';parent.disabled=!session.parentSessionResource;
+  parent.onclick=ev=>{ev.stopPropagation();assistantSessionOpenResource(session.parentSessionResource)};
+  const branches=document.createElement('button');branches.type='button';branches.className='history-session-action branches';branches.textContent='branches';branches.title='Show child branches';branches.setAttribute('aria-label','Show child branches');branches.dataset.historyAction='branch-sessions';branches.disabled=!branchMeta.childCount;
+  branches.onclick=ev=>{ev.stopPropagation();const search=$('history-search');if(search){search.value=String(session.title||session.id||'');_historySelectedIndex=0;refreshHistory();search.focus()}};
   const del=document.createElement('button');del.type='button';del.className='history-session-action delete';del.textContent='x';del.title='Delete local session';del.setAttribute('aria-label','Delete local session');
   del.onclick=ev=>{ev.stopPropagation();if(confirmDeleteAssistantSession(session)){assistantSessionDeleteItem(session.id);announceAssistantAction('Deleted chat session');refreshHistory()}};
-  item.appendChild(main);item.appendChild(fork);item.appendChild(del);
+  item.appendChild(main);item.appendChild(parent);item.appendChild(branches);item.appendChild(fork);item.appendChild(del);
   item.onclick=()=>assistantSessionOpenItem(session.id);
   list.appendChild(item);
   return {kind:'session',id:session.id,element:item,open:()=>assistantSessionOpenItem(session.id)};
@@ -17403,6 +17444,17 @@ function assistantForkLineageSmokeSnapshot(){
   const list=document.createElement('div');
   list.style.display='none';
   document.body.appendChild(list);
+  const parentSession={
+    id:'parent-lineage-selfcheck',
+    title:'Parent Assistant Session',
+    status:'completed',
+    sessionResource:'sao-ai-chat://local/parent-lineage-selfcheck',
+    provider:'openai',
+    model:'selfcheck-model',
+    mode:'agent',
+    agentId:'Default',
+    messages:[{role:'assistant',content:'parent response'}]
+  };
   const session={
     id:'fork-lineage-selfcheck',
     title:'Forked child session',
@@ -17416,19 +17468,42 @@ function assistantForkLineageSmokeSnapshot(){
     agentId:'Default',
     messages:[{role:'assistant',content:'fork lineage response'}]
   };
-  const rendered=renderHistorySessionItem(list,session,0);
+  const branchSession={
+    id:'branch-lineage-selfcheck',
+    title:'Alternative child branch',
+    status:'completed',
+    sessionResource:'sao-ai-chat://local/branch-lineage-selfcheck',
+    parentSessionResource:'sao-ai-chat://local/fork-lineage-selfcheck',
+    parentSessionTitle:'Forked child session',
+    provider:'openai',
+    model:'selfcheck-model',
+    mode:'agent',
+    agentId:'Default',
+    messages:[{role:'assistant',content:'branch response'}]
+  };
+  const sessions=[parentSession,session,branchSession];
+  const rendered=renderHistorySessionItem(list,session,0,assistantSessionBranchMeta(session,sessions));
   const item=rendered&&rendered.element;
   const title=item?String((item.querySelector('.history-session-title')||{}).title||''):'';
+  const parentButton=item?item.querySelector('[data-history-action="parent-session"]'):null;
+  const branchesButton=item?item.querySelector('[data-history-action="branch-sessions"]'):null;
   const snapshot={
     itemExists:!!item,
     parentResource:item?String(item.dataset.sessionParentResource||''):'',
     parentTitle:item?String(item.dataset.sessionParentTitle||''):'',
+    parentId:item?String(item.dataset.sessionBranchParentId||''):'',
+    branchChildren:item?Number(item.dataset.sessionBranchChildren||0):0,
     labelTitle:title,
     aria:item?String(item.getAttribute('aria-label')||''):'',
     actionLabels:item?Array.from(item.querySelectorAll('.history-session-action')).map(el=>String(el.textContent||'')):[],
+    actionKinds:item?Array.from(item.querySelectorAll('[data-history-action]')).map(el=>String(el.dataset.historyAction||'')):[],
+    disabledActions:item?Array.from(item.querySelectorAll('[data-history-action]:disabled')).map(el=>String(el.dataset.historyAction||'')):[],
     chipLabels:item?Array.from(item.querySelectorAll('.history-session-chip')).map(el=>String(el.textContent||'')):[],
     chipKinds:item?Array.from(item.querySelectorAll('.history-session-chip')).map(el=>String(el.className||'')):[],
-    searchMatches:historyMatchesQuery([session.title,session.sessionResource,session.id,session.provider,session.model,session.mode,session.agentId,session.parentSessionResource,session.parentSessionTitle],'parent assistant session')
+    parentButtonEnabled:!!(parentButton&&!parentButton.disabled),
+    branchesButtonEnabled:!!(branchesButton&&!branchesButton.disabled),
+    searchMatches:historyMatchesQuery([session.title,session.sessionResource,session.id,session.provider,session.model,session.mode,session.agentId,session.parentSessionResource,session.parentSessionTitle,assistantSessionBranchMeta(session,sessions).parentTitle,assistantSessionBranchMeta(session,sessions).childTitles.join(' '),'branches '+assistantSessionBranchMeta(session,sessions).childCount],'parent assistant session')
+      && historyMatchesQuery([session.title,assistantSessionBranchMeta(session,sessions).childTitles.join(' '),'branches '+assistantSessionBranchMeta(session,sessions).childCount],'alternative child branch')
   };
   list.remove();
   return snapshot;
@@ -17442,13 +17517,14 @@ async function refreshHistory(){
   const backendEntries=(r&&Array.isArray(r.entries))?r.entries:[];
   const visibleSessions=localSessions.filter(s=>{
     const nativeSummary=assistantHistorySessionNativeSummary(s);
-    return historyMatchesQuery([s.title,s.sessionResource,s.id,s.provider,s.model,s.mode,s.agentId,s.workflowId,s.workflowLabel,s.approval,s.parentSessionResource,s.parentSessionTitle,nativeSummary.searchText],query);
+    const branchMeta=assistantSessionBranchMeta(s,localSessions);
+    return historyMatchesQuery([s.title,s.sessionResource,s.id,s.provider,s.model,s.mode,s.agentId,s.workflowId,s.workflowLabel,s.approval,s.parentSessionResource,s.parentSessionTitle,branchMeta.parentTitle,branchMeta.childTitles.join(' '),branchMeta.childCount?'branches '+branchMeta.childCount:'',nativeSummary.searchText],query);
   });
   const visibleBackend=backendEntries.filter(e=>historyMatchesQuery([e.title,e.id,e.message_count,e.model,assistantHistoryEntryNativeSummary(e).searchText],query));
   if(!visibleSessions.length&&!visibleBackend.length){list.innerHTML='<div class="sb-item" style="color:var(--fg-dim)" role="note">'+esc(query?'No matching chat sessions':t('no_history'))+'</div>';list.removeAttribute('aria-activedescendant');return}
   if(visibleSessions.length){
     const group=document.createElement('div');group.className='sb-group';group.textContent='▸ Assistant Sessions';list.appendChild(group);
-    visibleSessions.forEach((s,i)=>_historyEntries.push(renderHistorySessionItem(list,s,i)));
+    visibleSessions.forEach((s,i)=>_historyEntries.push(renderHistorySessionItem(list,s,i,assistantSessionBranchMeta(s,localSessions))));
   }
   if(visibleBackend.length){
     const group=document.createElement('div');group.className='sb-group';group.textContent='▸ Saved History';list.appendChild(group);

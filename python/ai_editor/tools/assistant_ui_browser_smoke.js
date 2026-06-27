@@ -117,6 +117,7 @@ async function main() {
     "fork-lineage-history-visible",
     "saved-history-action-result-markers-visible",
     "fork-lineage-chip-visible",
+    "fork-branch-navigation-visible",
     "workflow-popup-modes-ready",
     "workflow-result-state-rendered",
     "workflow-run-button-active-state",
