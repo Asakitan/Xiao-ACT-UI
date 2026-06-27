@@ -2585,6 +2585,13 @@ def test_app_settings_parity() -> None:
                and isinstance(term_result.get("durationMs"), int)
                and term_result.get("terminal", {}).get("cwd")
                == term_result.get("cwd")
+               and term_result.get("terminal", {}).get("profile")
+               == "System Shell"
+               and term_result.get("terminal", {}).get("shellKind")
+               == "system"
+               and term_result.get("terminal", {}).get("workspaceCwd") is True
+               and term_result.get("startedAt")
+               and term_result.get("finishedAt")
                and term_result.get("stdoutTruncated") is False
                and term_result.get("stderrTruncated") is False,
                json.dumps(term_result, ensure_ascii=False))
@@ -12021,12 +12028,21 @@ console.log("command palette quick access helpers ok");
            and "mode:'stop'" in html
            and "terminalRunCancelled" in html
            and "function _terminalNormalizeResult(raw)" in html
-           and "function _terminalStateForResult(result)" in html
-           and "function _updateTerminalRecordForRun(cmd,state,result,durationMs)" in html
-           and "function currentWorkspaceRoot()" in html
-           and "payload.cwd=cwd" in html
-           and "stdoutTruncated" in html
-           and "async function terminalUiSelfCheckSnapshot()" in html
+            and "function _terminalStateForResult(result)" in html
+            and "function _terminalWorkspaceLabel(cwd)" in html
+            and "function _terminalProfileLabel(meta)" in html
+            and "function _updateTerminalRecordForRun(cmd,state,result,durationMs)" in html
+            and "function currentWorkspaceRoot()" in html
+            and "function syncTerminalWorkspaceState()" in html
+            and "data-terminal-status=\"workspace\"" in html
+            and "data-terminal-status=\"profile\"" in html
+            and "line.dataset.profile=profile" in html
+            and "line.dataset.shellKind=String(meta.shellKind||'')" in html
+            and "payload.cwd=cwd" in html
+            and "startedAt" in html
+            and "finishedAt" in html
+            and "stdoutTruncated" in html
+            and "async function terminalUiSelfCheckSnapshot()" in html
            and "window.terminalUiSelfCheckSnapshot=terminalUiSelfCheckSnapshot" in html)
     _check("terminal backend exposes cancellable job lifecycle without adding tool count",
            "mode\": {\"type\": \"string\"" in engine_tools_source

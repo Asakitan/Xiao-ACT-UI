@@ -630,20 +630,40 @@ def _build_explicit_shell_command(shell_path: str, shell_args: List[str], comman
     return [shell_path, *resolved_args, command]
 
 
+def _terminal_shell_kind(shell_path: str, explicit_shell: bool) -> str:
+    if not explicit_shell:
+        return "system"
+    shell_name = os.path.basename(shell_path).lower()
+    if shell_name in {"powershell.exe", "powershell", "pwsh.exe", "pwsh"}:
+        return "powershell"
+    if shell_name in {"cmd.exe", "cmd"}:
+        return "cmd"
+    if shell_name in {"bash.exe", "bash", "sh.exe", "sh", "zsh.exe", "zsh"}:
+        return "posix"
+    return shell_name or "custom"
+
+
+def _terminal_time_label(value: float) -> str:
+    if not value:
+        return ""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(value))
+
+
 def _terminal_metadata(terminal: Dict[str, Any], timeout: int, output_limit: int,
                        explicit_shell: bool, cwd: str = "") -> Dict[str, Any]:
+    shell_path = _terminal_shell_path(terminal.get("shell_path"))
+    profile = terminal.get("profile")
     metadata = {
         "configured": bool(terminal),
         "timeout": timeout,
         "outputLimit": output_limit,
         "explicitShell": explicit_shell,
+        "shellKind": _terminal_shell_kind(shell_path, explicit_shell),
+        "profile": str(profile or ("Configured Shell" if explicit_shell else "System Shell")),
+        "workspaceCwd": bool(cwd),
     }
     if cwd:
         metadata["cwd"] = cwd
-    profile = terminal.get("profile")
-    if profile:
-        metadata["profile"] = str(profile)
-    shell_path = _terminal_shell_path(terminal.get("shell_path"))
     if shell_path:
         metadata["shellPath"] = shell_path
     auto_approve = terminal.get("auto_approve")
@@ -745,6 +765,7 @@ def _terminal_finish_job(job_id: str, exit_code: Optional[int] = None,
         job["exitCode"] = code
         job["state"] = state if state != "done" or code == 0 else "error"
         job["durationMs"] = int((time.monotonic() - float(job.get("started") or time.monotonic())) * 1000)
+        job["finishedWall"] = time.time()
         if error:
             job["error"] = error
         _terminal_trim_job_output(job)
@@ -788,6 +809,7 @@ def _terminal_job_snapshot(job_id: str, since_seq: int = 0) -> Dict[str, Any]:
                 job["exitCode"] = polled
                 job["state"] = "done" if polled == 0 else "error"
                 job["durationMs"] = int((time.monotonic() - float(job.get("started") or time.monotonic())) * 1000)
+                job["finishedWall"] = time.time()
         chunks = [
             dict(chunk) for chunk in job.get("chunks", [])
             if int(chunk.get("seq") or 0) > since_seq
@@ -801,6 +823,8 @@ def _terminal_job_snapshot(job_id: str, since_seq: int = 0) -> Dict[str, Any]:
             "state": job.get("state", "running"),
             "exitCode": job.get("exitCode"),
             "durationMs": job.get("durationMs"),
+            "startedAt": _terminal_time_label(float(job.get("startedWall") or 0)),
+            "finishedAt": _terminal_time_label(float(job.get("finishedWall") or 0)),
             "stdout": job.get("stdout", ""),
             "stderr": job.get("stderr", ""),
             "error": job.get("error", ""),
@@ -849,6 +873,8 @@ def _start_terminal_job(command: str, cwd: str, gui_ref: Any,
         "sequence": 0,
         "chunks": [],
         "started": time.monotonic(),
+        "startedWall": time.time(),
+        "finishedWall": 0,
         "terminal": _terminal_metadata(
             terminal, timeout, output_limit, explicit_shell, effective_cwd),
     }
@@ -872,6 +898,7 @@ def _stop_terminal_job(job_id: str) -> Dict[str, Any]:
         job["state"] = "cancelled"
         job["durationMs"] = int((time.monotonic() - float(job.get("started") or time.monotonic())) * 1000)
         job["exitCode"] = None
+        job["finishedWall"] = time.time()
     if proc is not None:
         try:
             proc.terminate()
@@ -907,7 +934,9 @@ def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
         if effective_cwd:
             kwargs["cwd"] = effective_cwd
         started = time.monotonic()
+        started_wall = time.time()
         result = subprocess.run(run_command, **kwargs)
+        finished_wall = time.time()
         duration_ms = int((time.monotonic() - started) * 1000)
         stdout = result.stdout or ""
         stderr = result.stderr or ""
@@ -917,6 +946,8 @@ def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
             "cwd": effective_cwd,
             "exitCode": result.returncode,
             "durationMs": duration_ms,
+            "startedAt": _terminal_time_label(started_wall),
+            "finishedAt": _terminal_time_label(finished_wall),
             "stdout": stdout[:output_limit],
             "stderr": stderr[:stderr_limit],
             "stdoutTruncated": len(stdout) > output_limit,
@@ -935,6 +966,8 @@ def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
             "error": f"Command timed out ({timeout}s)",
             "exitCode": -1,
             "durationMs": timeout * 1000,
+            "startedAt": "",
+            "finishedAt": _terminal_time_label(time.time()),
             "terminal": _terminal_metadata(terminal, timeout, output_limit,
                                            bool(_terminal_shell_path(terminal.get("shell_path"))),
                                            effective_cwd),
