@@ -1045,8 +1045,10 @@ def test_app_settings_parity() -> None:
     missing = [name for name in js_methods if not callable(getattr(api, name, None))]
     _check("AIEditorAPI JS-callable methods", not missing, ", ".join(missing))
     from ai_editor import real_extension_probe
-    probe_source = _read_text(
-        os.path.join(os.path.dirname(__file__), "real_extension_probe.py"))
+    with open(
+            os.path.join(os.path.dirname(__file__), "real_extension_probe.py"),
+            "r", encoding="utf-8") as fh:
+        probe_source = fh.read()
     _check("real extension probe includes reproducible dynamic webview smoke",
            callable(getattr(real_extension_probe, "run_builtin_smoke_probe", None))
            and "_write_builtin_smoke_extension" in probe_source
