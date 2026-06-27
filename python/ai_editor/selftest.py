@@ -3919,10 +3919,14 @@ def test_phase1_ai_editor_regressions() -> None:
            and '</span>\n                  </div>\n                </div>' in html)
     _check("frontend Assistant exposes runtime composer layout snapshot",
            "function assistantComposerLayoutSnapshot()" in html
+           and "function assistantVisualLayoutSnapshot()" in html
            and "gridTemplateColumns:toolbar?getComputedStyle(toolbar).gridTemplateColumns:''" in html
            and "flexWrap:toolbar?getComputedStyle(toolbar).flexWrap:''" in html
            and "sameRow:!!(controlRect&&actionRect&&Math.abs(controlRect.top-actionRect.top)<=1)" in html
+           and "composerRightAligned:!!(containerRect&&Math.abs(containerRect.right-contentRight)<=2)" in html
+           and "noOldNativeBoxes:nativeBoxes.every" in html
            and "window.assistantComposerLayoutSnapshot=assistantComposerLayoutSnapshot;" in html
+           and "window.assistantVisualLayoutSnapshot=assistantVisualLayoutSnapshot;" in html
            and "'chat-provider-trigger','chat-model-inline','chat-agent-trigger','chat-mode-trigger','chat-workflow-trigger','chat-workflow-run','chat-input-status'" in html)
     _check("frontend Assistant composer interactions match Copilot-style controls",
            "const _CHAT_INPUT_HISTORY_KEY='sao-ai-chat-input-history';" in html
@@ -3981,9 +3985,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".chat-control-trigger.model { width:190px; max-width:280px; flex-basis:190px; }" in html
            and ".chat-control-popup { position:absolute; bottom:calc(100% + 7px); left:0; display:none;" in html
            and ".chat-control-popup.show { display:block; }" in html
+           and ".chat-control-popup.show { opacity:1; transform:translateY(0) scale(1); pointer-events:auto; }" in html
            and ".chat-control-popup.align-right { left:auto; right:0; }" in html
            and "@keyframes chatControlPopupIn" in html
            and "mode-popup chat-control-popup" not in html
+           and "customSurface:!!(popup&&popup.classList.contains('chat-control-popup')&&popup.getAttribute('role')==='listbox')" in html
+           and "motionReady:!!(popupStyle&&popupStyle.transitionProperty.includes('opacity')&&popupStyle.transitionProperty.includes('transform'))" in html
            and 'id="chat-mode-trigger" onclick="toggleChatControlPopup(event,\'mode\')"' in html
            and 'id="chat-mode-popup" role="listbox" aria-label="Mode and approvals"' in html
            and "function modePopupItem(kind,id,label,desc,icon,active)" in html
@@ -5205,6 +5212,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'mode-popup-custom-control-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped'" in html
            and "assistantUiSelfCheckRecord(checks,'agent-popup-configured-agents-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'visual-composer-fill-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'visual-controls-one-row-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'visual-no-old-control-boxes-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'visual-popup-surfaces-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'visual-model-custom-endpoint-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'visual-workflow-mode-control-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'history-native-affordances-visible'" in html
            and "assistantUiSelfCheckRecord(checks,'saved-history-native-affordances-visible'" in html
            and "assistantUiSelfCheckRecord(checks,'action-result-state-restores-and-persists'" in html
@@ -5264,6 +5277,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "panel.dataset.chatUiSelfCheckOk=result.ok?'true':'false';" in html
            and "panel.dataset.chatUiSelfCheckFailed=String(failed.length);" in html
            and "panel.dataset.chatUiSelfCheckTotal=String(checks.length);" in html
+           and "const result={ok:failed.length===0,total:checks.length,failed,checks,layout,visualLayout,attachmentSnapshot,changeSet};" in html
            and "function assistantChangeSetRestoreStateSnapshot()" in html
            and "copyArray('actionResults','actionResults','action_results');" in html
            and "summary.actions?'submitted actions action results confirmations questions'" in html
@@ -5298,6 +5312,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "mode-popup-custom-control-ready" in smoke_source
            and "control-popup-rects-unclipped" in smoke_source
            and "agent-popup-configured-agents-ready" in smoke_source
+           and "visual-composer-fill-ready" in smoke_source
+           and "visual-controls-one-row-ready" in smoke_source
+           and "visual-no-old-control-boxes-ready" in smoke_source
+           and "visual-popup-surfaces-ready" in smoke_source
+           and "visual-model-custom-endpoint-ready" in smoke_source
+           and "visual-workflow-mode-control-ready" in smoke_source
            and "provider-session-state-smoke" in smoke_source
            and "history-native-affordances-visible" in smoke_source
            and "saved-history-native-affordances-visible" in smoke_source

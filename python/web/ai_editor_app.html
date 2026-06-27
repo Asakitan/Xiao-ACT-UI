@@ -1055,6 +1055,7 @@ pre.code-block code .type { color:var(--fg-type); }
 @media (prefers-reduced-motion: reduce){
   .chat-action-carousel { animation:none; }
   .chat-action-carousel-preview { transition:none; }
+  .chat-control-trigger,.chat-control-popup,.workflow-run-card { transition:none; animation:none; }
 }
 .chat-action-tray-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center; }
 .chat-action-tray-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg-dim); font-size:12px; }
@@ -1230,7 +1231,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
   border-radius:999px; background:var(--bg3); color:var(--fg); font:11px var(--sans);
   outline:none; min-width:0; }
-.chat-chip,.chat-model-inline,.chat-run-chip { display:inline-flex; align-items:center; gap:4px; padding:0 8px; cursor:pointer; }
+.chat-chip,.chat-model-inline,.chat-run-chip { display:inline-flex; align-items:center; gap:4px; padding:0 8px; cursor:pointer;
+  transition:border-color .14s ease, background .14s ease, color .14s ease, box-shadow .14s ease; }
 .chat-select-chip { width:142px; max-width:184px; padding:0 20px 0 9px; cursor:pointer; flex:0 1 142px; }
 .chat-model-inline { width:190px; max-width:260px; justify-content:space-between; font-family:var(--mono); flex:0 1 190px; text-align:left; }
 .chat-model-inline .control-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -1243,7 +1245,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-select-chip.agent.active { color:var(--fg); border-color:color-mix(in srgb, var(--fg-success) 45%, var(--border)); }
 .chat-control-menu { position:relative; display:inline-flex; align-items:center; flex:0 0 auto; min-width:0; }
 .chat-control-native { display:none!important; visibility:hidden!important; position:absolute!important; width:0!important; height:0!important; opacity:0!important; pointer-events:none!important; appearance:none; -webkit-appearance:none; }
-.chat-control-trigger { justify-content:space-between; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.chat-control-trigger { justify-content:space-between; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  transition:border-color .14s ease, background .14s ease, color .14s ease, box-shadow .14s ease; }
 .chat-control-trigger .control-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-control-trigger .control-caret { font-size:8px; opacity:.65; margin-left:4px; flex:0 0 auto; }
 .chat-control-trigger.provider { width:128px; max-width:176px; flex-basis:128px; }
@@ -1256,8 +1259,10 @@ pre.code-block code .type { color:var(--fg-type); }
   max-width:min(420px, calc(100vw - 24px)); max-height:min(360px, 55vh); overflow:auto;
   background:var(--bg2); border:1px solid color-mix(in srgb,var(--border-focus) 32%,var(--border));
   border-radius:9px; box-shadow:0 14px 36px #00000078,0 0 0 1px #ffffff08; z-index:10050; padding:5px;
-  animation:chatControlPopupIn .12s ease-out; }
+  opacity:0; transform:translateY(5px) scale(.985); transform-origin:bottom left; pointer-events:none;
+  transition:opacity .12s ease, transform .12s ease; animation:chatControlPopupIn .12s ease-out; }
 .chat-control-popup.show { display:block; }
+.chat-control-popup.show { opacity:1; transform:translateY(0) scale(1); pointer-events:auto; }
 .chat-control-popup.align-right { left:auto; right:0; }
 .chat-control-popup.agent { min-width:250px; }
 .chat-control-popup.provider { min-width:260px; }
@@ -1298,7 +1303,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .workflow-step-action { width:24px; height:24px; border:1px solid var(--border); border-radius:4px; background:var(--bg3); color:var(--fg); cursor:pointer; }
 .workflow-step-action:hover,.workflow-step-action:focus { border-color:var(--border-focus); background:var(--bg-hover); outline:none; }
 .workflow-step-add { align-self:flex-start; height:24px; border:1px solid var(--border); border-radius:4px; background:var(--bg3); color:var(--fg); cursor:pointer; padding:0 8px; }
-.workflow-run-card { margin-top:8px; border:1px solid var(--border); border-radius:6px; background:var(--bg2); padding:8px; display:flex; flex-direction:column; gap:6px; }
+.workflow-run-card { margin-top:8px; border:1px solid var(--border); border-radius:6px; background:var(--bg2); padding:8px; display:flex; flex-direction:column; gap:6px;
+  transition:border-color .16s ease, background .16s ease, transform .16s ease; }
 .workflow-run-head { display:flex; align-items:center; gap:8px; min-width:0; }
 .workflow-run-icon { color:var(--fg-accent); font-size:14px; }
 .workflow-run-title { font-weight:600; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -8095,6 +8101,7 @@ function assistantControlPopupSnapshot(kind){
   const modeOptions=popup?Array.from(popup.querySelectorAll('.workflow-mode-option[role="option"]')):[];
   const rectOf=el=>{if(!el)return null;const r=el.getBoundingClientRect();return {top:Math.round(r.top),left:Math.round(r.left),right:Math.round(r.right),bottom:Math.round(r.bottom),width:Math.round(r.width),height:Math.round(r.height)}};
   const triggerRect=rectOf(trigger),popupRect=rectOf(popup),toolbarRect=rectOf(document.querySelector('.chat-toolbar'));
+  const popupStyle=popup?getComputedStyle(popup):null;
   const snapshot={
     kind,
     triggerExists:!!trigger,
@@ -8102,6 +8109,10 @@ function assistantControlPopupSnapshot(kind){
     expanded:trigger?trigger.getAttribute('aria-expanded'):'',
     shown:!!(popup&&popup.classList.contains('show')),
     display:popup?getComputedStyle(popup).display:'',
+    opacity:popupStyle?popupStyle.opacity:'',
+    pointerEvents:popupStyle?popupStyle.pointerEvents:'',
+    transitionProperty:popupStyle?popupStyle.transitionProperty:'',
+    animationName:popupStyle?popupStyle.animationName:'',
     className:popup?String(popup.className||''):'',
     triggerRect,
     popupRect,
@@ -8114,6 +8125,8 @@ function assistantControlPopupSnapshot(kind){
     focusableCount:options.filter(option=>option.tabIndex===-1).length,
     activeCount:options.filter(option=>option.classList.contains('active')).length,
     keyboardReady:!!(trigger&&typeof trigger.onkeydown==='function'&&popup&&typeof popup.onkeydown==='function'),
+    customSurface:!!(popup&&popup.classList.contains('chat-control-popup')&&popup.getAttribute('role')==='listbox'),
+    motionReady:!!(popupStyle&&popupStyle.transitionProperty.includes('opacity')&&popupStyle.transitionProperty.includes('transform')),
     customModelCount:kind==='model'?options.filter(option=>String(option.textContent||'').toLowerCase().includes('custom endpoint')).length:0,
     oldModePopupPresent:kind==='mode'&&!!$('mode-popup'),
     modeActionCount:kind==='mode'?options.filter(option=>option.dataset.mode||option.dataset.approval).length:0,
@@ -8469,6 +8482,7 @@ async function runAssistantUiSelfCheck(opts){
   const agentPopup=assistantControlPopupSnapshot('agent');
   const modePopup=assistantControlPopupSnapshot('mode');
   const workflowPopup=assistantControlPopupSnapshot('workflow');
+  const visualLayout=assistantVisualLayoutSnapshot();
   config.custom_models=previousCustomModels;
   renderChatControlPopups();
   const workflowModeSmoke=assistantWorkflowModeSmokeSnapshot();
@@ -8501,6 +8515,12 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'mode-popup-custom-control-ready',modePopup.shown&&modePopup.optionCount>=6&&modePopup.modeActionCount>=6&&modePopup.keyboardReady&&!modePopup.oldModePopupPresent&&modePopup.visibleText.includes('Agent')&&modePopup.visibleText.includes('Default Approvals'),JSON.stringify(modePopup));
   assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped',[providerPopup,modelPopup,agentPopup,modePopup,workflowPopup].every(s=>s.shown&&s.display==='block'&&s.rectReady&&s.opensAboveTrigger&&s.notToolbarClipped&&!s.className.includes('mode-popup')),JSON.stringify({providerPopup,modelPopup,agentPopup,modePopup,workflowPopup}));
   assistantUiSelfCheckRecord(checks,'agent-popup-configured-agents-ready',agentPopup.shown&&agentPopup.optionCount>=1&&agentPopup.focusableCount===agentPopup.optionCount&&agentPopup.keyboardReady&&agentPopup.visibleText.includes('Agent'),JSON.stringify(agentPopup));
+  assistantUiSelfCheckRecord(checks,'visual-composer-fill-ready',visualLayout.ok&&visualLayout.composerLeftAligned&&visualLayout.composerRightAligned&&visualLayout.composerFillsArea&&visualLayout.composerBottomFilled,JSON.stringify(visualLayout));
+  assistantUiSelfCheckRecord(checks,'visual-controls-one-row-ready',visualLayout.toolbarOneLine&&visualLayout.metaInsideTrailing&&visualLayout.buttonSurfaceReady&&visualLayout.triggerMotionReady,JSON.stringify(visualLayout));
+  assistantUiSelfCheckRecord(checks,'visual-no-old-control-boxes-ready',visualLayout.noOldNativeBoxes===true,JSON.stringify(visualLayout.nativeBoxes));
+  assistantUiSelfCheckRecord(checks,'visual-popup-surfaces-ready',visualLayout.popupsCustomSurface&&visualLayout.popupsOpenAbove&&visualLayout.popupMotionReady,JSON.stringify(visualLayout.popups));
+  assistantUiSelfCheckRecord(checks,'visual-model-custom-endpoint-ready',visualLayout.modelEndpointReady===true,JSON.stringify(visualLayout));
+  assistantUiSelfCheckRecord(checks,'visual-workflow-mode-control-ready',visualLayout.workflowModesReady===true,JSON.stringify(visualLayout));
   assistantUiSelfCheckRecord(checks,'provider-session-state-smoke',providerSession.runningType==='provider'&&providerSession.runningStatus==='inProgress'&&providerSession.savedType==='provider'&&providerSession.savedProvider==='assistant-selfcheck-provider'&&providerSession.savedMessageCount===2&&providerSession.savedContextCount===1&&String(providerSession.resource||'').startsWith('sao-ai-chat://provider/')&&providerSession.panelResource===providerSession.resource&&providerSession.panelRequests==='1'&&providerSession.opened===true&&providerSession.restoredMessages===2&&providerSession.savedNativePayload===true&&providerSession.restoredNativeCards>=2&&providerSession.restoredReferenceCards>=1&&providerSession.restoredFollowups===1&&providerSession.activeProvider==='assistant-selfcheck-provider'&&providerSession.sessionType==='provider'&&providerSession.sessionProvider==='assistant-selfcheck-provider',JSON.stringify(providerSession));
   assistantUiSelfCheckRecord(checks,'history-native-affordances-visible',historyAffordance.itemExists&&historyAffordance.nativeParts===2&&historyAffordance.nativeTodos===1&&historyAffordance.nativeChanges===1&&historyAffordance.nativeRefs===1&&historyAffordance.nativeUsedContext===1&&historyAffordance.nativeTrees===1&&historyAffordance.nativeFollowups===1&&historyAffordance.nativeActions===1&&historyAffordance.nativeActionErrors===0&&historyAffordance.nativeTokens===24&&historyAffordance.chipLabels.includes('2 parts')&&historyAffordance.chipLabels.includes('1 edit')&&historyAffordance.chipLabels.includes('1 ref')&&historyAffordance.chipLabels.includes('1 used')&&historyAffordance.chipLabels.includes('1 tree')&&historyAffordance.chipLabels.includes('1 follow-up')&&historyAffordance.chipLabels.includes('1 action')&&historyAffordance.chipLabels.includes('24 tok')&&historyAffordance.searchMatches&&historyAffordance.aria.includes('1 action')&&historyAffordance.title.includes('Submitted actions: 1'),JSON.stringify(historyAffordance));
   assistantUiSelfCheckRecord(checks,'saved-history-native-affordances-visible',savedHistoryAffordance.itemExists&&savedHistoryAffordance.nativeParts===2&&savedHistoryAffordance.nativeChanges===1&&savedHistoryAffordance.nativeRefs===1&&savedHistoryAffordance.nativeUsedContext===1&&savedHistoryAffordance.nativeTrees===1&&savedHistoryAffordance.nativeFollowups===1&&savedHistoryAffordance.nativeActions===1&&savedHistoryAffordance.nativeActionErrors===0&&savedHistoryAffordance.nativeTokens===24&&savedHistoryAffordance.chipLabels.includes('2 parts')&&savedHistoryAffordance.chipLabels.includes('1 edit')&&savedHistoryAffordance.chipLabels.includes('1 ref')&&savedHistoryAffordance.chipLabels.includes('1 used')&&savedHistoryAffordance.chipLabels.includes('1 tree')&&savedHistoryAffordance.chipLabels.includes('1 follow-up')&&savedHistoryAffordance.chipLabels.includes('1 action')&&savedHistoryAffordance.chipLabels.includes('24 tok')&&savedHistoryAffordance.actionKinds.includes('references')&&savedHistoryAffordance.actionKinds.includes('changes')&&savedHistoryAffordance.actionKinds.includes('tree')&&savedHistoryAffordance.actionKinds.includes('reference-item')&&savedHistoryAffordance.actionKinds.includes('change-item')&&savedHistoryAffordance.actionKinds.includes('tree-item')&&savedHistoryAffordance.actionTargets.includes('file:///workspace/history.ts')&&savedHistoryAffordance.disabledActions.length===0&&savedHistoryAffordance.searchMatches&&savedHistoryAffordance.aria.includes('1 action')&&savedHistoryAffordance.title.includes('Submitted actions: 1'),JSON.stringify(savedHistoryAffordance));
@@ -8576,7 +8596,7 @@ async function runAssistantUiSelfCheck(opts){
   }
   assistantUiSelfCheckRecord(checks,'selfcheck-cleanup',opts.cleanup===false||document.querySelectorAll('.msg').length===beforeCount,document.querySelectorAll('.msg').length);
   const failed=checks.filter(check=>!check.pass);
-  const result={ok:failed.length===0,total:checks.length,failed,checks,layout,attachmentSnapshot,changeSet};
+  const result={ok:failed.length===0,total:checks.length,failed,checks,layout,visualLayout,attachmentSnapshot,changeSet};
   const panel=$('chat-panel');
   if(panel){
     panel.dataset.chatUiSelfCheckOk=result.ok?'true':'false';
@@ -8613,6 +8633,76 @@ function assistantComposerLayoutSnapshot(){
     items,
     nativeControls,
     nativeHidden:nativeControls.every(item=>item.exists&&item.display==='none'&&item.ariaHidden==='true')
+  };
+}
+function assistantVisualLayoutSnapshot(){
+  renderChatControlPopups();
+  const panel=$('chat-panel');
+  const area=document.querySelector('.chat-input-area');
+  const container=$('chat-input-container');
+  const toolbar=document.querySelector('.chat-toolbar');
+  const controls=document.querySelector('.chat-control-strip');
+  const trailing=document.querySelector('.chat-composer-trailing');
+  const meta=document.querySelector('.chat-composer-meta');
+  const rect=el=>{if(!el)return null;const r=el.getBoundingClientRect();return {top:Math.round(r.top),left:Math.round(r.left),right:Math.round(r.right),bottom:Math.round(r.bottom),width:Math.round(r.width),height:Math.round(r.height)}};
+  const cssPx=value=>{const n=parseFloat(String(value||'0'));return Number.isFinite(n)?n:0};
+  const panelRect=rect(panel),areaRect=rect(area),containerRect=rect(container),toolbarRect=rect(toolbar),controlsRect=rect(controls),trailingRect=rect(trailing),metaRect=rect(meta);
+  const areaStyle=area?getComputedStyle(area):null;
+  const contentLeft=areaRect?areaRect.left+cssPx(areaStyle&&areaStyle.paddingLeft):0;
+  const contentRight=areaRect?areaRect.right-cssPx(areaStyle&&areaStyle.paddingRight):0;
+  const contentWidth=Math.max(0,contentRight-contentLeft);
+  const contentBottom=areaRect?areaRect.bottom-cssPx(areaStyle&&areaStyle.paddingBottom):0;
+  const popupKinds=['provider','model','agent','mode','workflow'];
+  const popupSnapshots=popupKinds.map(kind=>assistantControlPopupSnapshot(kind));
+  const triggers=['chat-provider-trigger','chat-model-inline','chat-agent-trigger','chat-mode-trigger','chat-workflow-trigger','chat-workflow-run'].map(id=>{
+    const el=$(id),style=el?getComputedStyle(el):null;
+    return {
+      id,
+      exists:!!el,
+      tag:el?String(el.tagName||'').toLowerCase():'',
+      role:el?String(el.getAttribute('role')||''):'',
+      radius:style?cssPx(style.borderTopLeftRadius):0,
+      display:style?style.display:'',
+      transition:style?style.transitionProperty:'',
+      width:el?Math.round(el.getBoundingClientRect().width):0,
+      height:el?Math.round(el.getBoundingClientRect().height):0
+    };
+  });
+  const nativeBoxes=['chat-provider-sel','chat-agent-sel','chat-workflow-sel'].map(id=>{
+    const el=$(id),style=el?getComputedStyle(el):null;
+    const r=rect(el);
+    return {id,exists:!!el,display:style?style.display:'',visibility:style?style.visibility:'',pointerEvents:style?style.pointerEvents:'',width:r?r.width:0,height:r?r.height:0,ariaHidden:el?String(el.getAttribute('aria-hidden')||''):''};
+  });
+  const modelPopup=popupSnapshots.find(item=>item.kind==='model')||{};
+  const workflowPopup=popupSnapshots.find(item=>item.kind==='workflow')||{};
+  const toolbarOverlap=!!(controlsRect&&trailingRect&&controlsRect.right>trailingRect.left+1&&Math.abs(controlsRect.top-trailingRect.top)<=1);
+  return {
+    ok:!!(panel&&area&&container&&toolbar&&controls&&trailing),
+    panel:panelRect,
+    area:areaRect,
+    container:containerRect,
+    toolbar:toolbarRect,
+    controls:controlsRect,
+    trailing:trailingRect,
+    meta:metaRect,
+    contentWidth:Math.round(contentWidth),
+    composerLeftAligned:!!(containerRect&&Math.abs(containerRect.left-contentLeft)<=2),
+    composerRightAligned:!!(containerRect&&Math.abs(containerRect.right-contentRight)<=2),
+    composerFillsArea:!!(containerRect&&contentWidth>0&&containerRect.width>=contentWidth-2),
+    composerBottomFilled:!!(panelRect&&areaRect&&Math.abs(panelRect.bottom-areaRect.bottom)<=2),
+    toolbarOneLine:!!(controlsRect&&trailingRect&&Math.abs(controlsRect.top-trailingRect.top)<=1&&!toolbarOverlap),
+    metaInsideTrailing:!!(metaRect&&trailingRect&&metaRect.left>=trailingRect.left-1&&metaRect.right<=trailingRect.right+1),
+    triggers,
+    buttonSurfaceReady:triggers.every(item=>item.exists&&item.tag==='button'&&item.radius>=10&&item.width>18&&item.height>=20),
+    triggerMotionReady:triggers.every(item=>item.transition.includes('border-color')&&item.transition.includes('background')),
+    nativeBoxes,
+    noOldNativeBoxes:nativeBoxes.every(item=>item.exists&&item.display==='none'&&item.ariaHidden==='true'&&item.width===0&&item.height===0),
+    popups:popupSnapshots,
+    popupsCustomSurface:popupSnapshots.every(item=>item.customSurface&&item.shown&&item.display==='block'&&item.pointerEvents==='auto'),
+    popupsOpenAbove:popupSnapshots.every(item=>item.rectReady&&item.opensAboveTrigger&&item.notToolbarClipped),
+    popupMotionReady:popupSnapshots.every(item=>item.motionReady&&item.pointerEvents==='auto'),
+    modelEndpointReady:!!(modelPopup.shown&&modelPopup.customModelCount>=1&&String(modelPopup.visibleText||'').includes('custom-endpoint-model')&&String(modelPopup.visibleText||'').toLowerCase().includes('custom endpoint')),
+    workflowModesReady:!!(workflowPopup.workflowModeStrip&&workflowPopup.workflowModeToolbar&&workflowPopup.workflowModeCount===3&&workflowPopup.workflowModeActive.length===1)
   };
 }
 function assistantComposerInteractionSnapshot(){
@@ -30302,6 +30392,7 @@ window.assistantNativeResponseRenderSummary=assistantNativeResponseRenderSummary
 window.replayAssistantNativeResponseFixture=replayAssistantNativeResponseFixture;
 window.runAssistantUiSelfCheck=runAssistantUiSelfCheck;
 window.assistantComposerLayoutSnapshot=assistantComposerLayoutSnapshot;
+window.assistantVisualLayoutSnapshot=assistantVisualLayoutSnapshot;
 window.assistantComposerInteractionSnapshot=assistantComposerInteractionSnapshot;
 window.assistantSubmitResponsePartAction=assistantSubmitResponsePartAction;
 window.assistantActionTraySnapshot=assistantActionTraySnapshot;
