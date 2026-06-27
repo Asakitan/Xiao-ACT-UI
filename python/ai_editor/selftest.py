@@ -4181,6 +4181,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantRestoredHistoryGroups(data)" in html
            and "function renderAssistantRestoreGroups(main,groups)" in html
            and "function wireAssistantRestoreBannerKeyboard(banner)" in html
+           and "function assistantBranchSummaryStrip(session,branchMeta,summaries)" in html
+           and "function assistantBranchDeltaGrid(summaries)" in html
+           and "modal.dataset.branchDeltaRows=String(deltaGrid.dataset.branchDeltaRows||'');" in html
            and "btn.dataset.restoreGroup=kind;" in html
            and "actions.setAttribute('role','toolbar');" in html
            and "banner.dataset.restoreGroupReferences=String((groups.references||[]).length);" in html
@@ -5098,6 +5101,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'native-response-card-keyboard-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'fork-branch-compare-visible'" in html
            and "assistantUiSelfCheckRecord(checks,'fork-branch-compare-detail-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'fork-branch-compare-summary-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'fork-branch-compare-delta-grid-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready'" in html
            and "function assistantWorkflowEditorSnapshot()" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready'" in html
@@ -5183,6 +5188,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "native-response-card-keyboard-ready" in smoke_source
            and "fork-branch-compare-visible" in smoke_source
            and "fork-branch-compare-detail-ready" in smoke_source
+           and "fork-branch-compare-summary-ready" in smoke_source
+           and "fork-branch-compare-delta-grid-ready" in smoke_source
            and "workflow-result-state-rendered" in smoke_source
            and "workflow-run-button-active-state" in smoke_source
            and "channel: \"msedge\"" in smoke_source

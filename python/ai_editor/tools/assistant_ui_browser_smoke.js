@@ -130,6 +130,8 @@ async function main() {
     "native-response-card-keyboard-ready",
     "fork-branch-compare-visible",
     "fork-branch-compare-detail-ready",
+    "fork-branch-compare-summary-ready",
+    "fork-branch-compare-delta-grid-ready",
     "workflow-popup-modes-ready",
     "workflow-result-state-rendered",
     "workflow-run-button-active-state",

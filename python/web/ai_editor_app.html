@@ -186,6 +186,18 @@ body.window-resizing * { cursor:inherit !important; }
 .assistant-history-preview-row { display:flex; justify-content:space-between; gap:10px; color:var(--fg-dim); font:11px/1.5 var(--mono); }
 .assistant-history-preview-row b { color:var(--fg); font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .assistant-history-preview-list { margin:6px 0 0; padding:0; list-style:none; display:flex; flex-direction:column; gap:3px; color:var(--fg-dim); font:11px/1.4 var(--mono); }
+.assistant-branch-summary { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 2px; }
+.assistant-branch-summary-chip { border:1px solid var(--border); border-radius:999px; background:var(--bg3); color:var(--fg-dim);
+  padding:2px 7px; font:10px var(--mono); }
+.assistant-branch-delta-grid { display:grid; grid-template-columns:1.2fr repeat(3,minmax(54px,1fr)); gap:1px;
+  margin-top:8px; border:1px solid var(--border); border-radius:6px; overflow:hidden; background:var(--border); }
+.assistant-branch-delta-cell { min-height:23px; padding:4px 6px; background:var(--bg3); color:var(--fg-dim); font:10px var(--mono);
+  display:flex; align-items:center; justify-content:flex-end; }
+.assistant-branch-delta-cell.metric { justify-content:flex-start; color:var(--fg); font-weight:600; }
+.assistant-branch-delta-cell.head { color:var(--fg); background:var(--bg2); font-weight:600; }
+.assistant-branch-delta-cell.positive { color:var(--fg-success); }
+.assistant-branch-delta-cell.negative { color:var(--fg-warning); }
+.assistant-branch-delta-cell:focus { outline:1px solid var(--border-focus); outline-offset:-2px; }
 .sb-group { padding:8px 16px 4px; font-size:11px; font-weight:600; color:var(--fg-dim);
   text-transform:uppercase; letter-spacing:0.5px; }
 .tree-root { padding:4px 0 10px; }
@@ -8269,6 +8281,8 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'fork-branch-navigation-visible',forkLineage.parentId==='parent-lineage-selfcheck'&&forkLineage.branchChildren===1&&forkLineage.actionKinds.includes('parent-session')&&forkLineage.actionKinds.includes('branch-sessions')&&forkLineage.parentButtonEnabled&&forkLineage.branchesButtonEnabled&&forkLineage.disabledActions.length===0&&forkLineage.searchMatches,JSON.stringify(forkLineage));
   assistantUiSelfCheckRecord(checks,'fork-branch-compare-visible',forkLineage.actionKinds.includes('branch-compare')&&forkLineage.compareButtonEnabled&&forkLineage.compareModalExists&&forkLineage.compareModalKind==='branch-compare'&&forkLineage.compareModalParentId==='parent-lineage-selfcheck'&&forkLineage.compareModalChildCount===1&&forkLineage.compareModalCards===3&&forkLineage.compareModalFocusTrap==='true'&&forkLineage.compareModalText.includes('Compare Assistant Branches')&&forkLineage.compareModalText.includes('Parent Assistant Session')&&forkLineage.compareModalText.includes('Alternative child branch'),JSON.stringify(forkLineage));
   assistantUiSelfCheckRecord(checks,'fork-branch-compare-detail-ready',forkLineage.compareModalDetailItems>=15&&forkLineage.compareModalText.includes('parent.ts')&&forkLineage.compareModalText.includes('current.ts')&&forkLineage.compareModalText.includes('branch.ts')&&forkLineage.compareModalText.includes('delta parent tokens')&&forkLineage.compareModalText.includes('delta current tokens'),JSON.stringify(forkLineage));
+  assistantUiSelfCheckRecord(checks,'fork-branch-compare-summary-ready',forkLineage.compareSummaryExists&&forkLineage.compareSummaryChips.includes('parent: 1')&&forkLineage.compareSummaryChips.includes('children: 1')&&forkLineage.compareSummaryChips.some(text=>text.includes('current tokens'))&&forkLineage.compareSummaryChips.some(text=>text.includes('branch tokens')),JSON.stringify(forkLineage));
+  assistantUiSelfCheckRecord(checks,'fork-branch-compare-delta-grid-ready',forkLineage.compareDeltaGridExists&&forkLineage.compareDeltaRows===6&&forkLineage.compareDeltaCells===18&&forkLineage.compareDeltaMetrics.includes('changes')&&forkLineage.compareDeltaMetrics.includes('refs')&&forkLineage.compareDeltaMetrics.includes('tokens')&&forkLineage.compareDeltaValues.includes('+3')&&forkLineage.compareModalText.includes('current-parent')&&forkLineage.compareModalText.includes('child-total-current'),JSON.stringify(forkLineage));
   assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready',workflowPopup.shown&&workflowPopup.workflowModeCount===3&&workflowPopup.workflowModeStrip&&workflowPopup.workflowModeToolbar&&workflowPopup.optionCount>=4&&workflowPopup.focusableCount===workflowPopup.optionCount&&workflowPopup.keyboardReady,JSON.stringify(workflowPopup));
   assistantUiSelfCheckRecord(checks,'workflow-popup-mode-smoke',workflowModeSmoke.states.length===3&&workflowModeSmoke.states.every(state=>state.strip&&state.toolbar&&state.active.includes(state.mode))&&workflowModeSmoke.selected.value==='assistant-selfcheck-flow'&&workflowModeSmoke.selected.mode==='on'&&workflowModeSmoke.selected.runDisabled===false&&workflowModeSmoke.custom.prompt==='selfcheck custom workflow prompt'&&workflowModeSmoke.custom.runDisabled===false,JSON.stringify(workflowModeSmoke));
   assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready',workflowEditor.modalExists&&workflowEditor.editorExists&&workflowEditor.rowCount===2&&workflowEditor.labelInputs===2&&workflowEditor.agentInputs===2&&workflowEditor.outputInputs===2&&workflowEditor.promptInputs===2&&workflowEditor.moveButtons===4&&workflowEditor.deleteButtons===2&&workflowEditor.addButtonExists&&workflowEditor.collectedCount===2&&workflowEditor.idReadOnly,JSON.stringify(workflowEditor));
@@ -17235,6 +17249,87 @@ function assistantHistoryPreviewDeltaRows(summary,base,label){
     return ['delta '+label+' '+key,shown];
   });
 }
+function assistantBranchDeltaValue(summary,base,key){
+  const delta=Number((summary||{})[key]||0)-Number((base||{})[key]||0);
+  return {delta,label:delta>0?'+'+delta:String(delta)};
+}
+function assistantBranchCompareSummaries(session,branchMeta){
+  const parent=branchMeta&&branchMeta.parentSession?assistantHistorySessionNativeSummary(branchMeta.parentSession):null;
+  const current=assistantHistorySessionNativeSummary(session);
+  const children=(branchMeta&&branchMeta.childSessions||[]).map(child=>({session:child,summary:assistantHistorySessionNativeSummary(child)}));
+  return {parent,current,children};
+}
+function assistantBranchSummaryStrip(session,branchMeta,summaries){
+  const strip=document.createElement('div');
+  strip.className='assistant-branch-summary';
+  strip.setAttribute('role','list');
+  strip.setAttribute('aria-label','Assistant branch comparison summary');
+  const add=(label,value)=>{
+    const chip=document.createElement('span');
+    chip.className='assistant-branch-summary-chip';
+    chip.setAttribute('role','listitem');
+    chip.textContent=label+': '+value;
+    strip.appendChild(chip);
+  };
+  add('parent',summaries&&summaries.parent?'1':'0');
+  add('children',String(branchMeta&&branchMeta.childCount||0));
+  add('current tokens',String((summaries&&summaries.current&&summaries.current.tokens)||0));
+  add('branch tokens',String((summaries&&summaries.children||[]).reduce((n,item)=>n+Number(item.summary.tokens||0),0)));
+  add('total edits',String(Number((summaries&&summaries.current&&summaries.current.changes)||0)+(summaries&&summaries.children||[]).reduce((n,item)=>n+Number(item.summary.changes||0),0)));
+  strip.dataset.branchSummary='true';
+  strip.dataset.parentCount=summaries&&summaries.parent?'1':'0';
+  strip.dataset.childCount=String(branchMeta&&branchMeta.childCount||0);
+  return strip;
+}
+function assistantBranchDeltaGrid(summaries){
+  const grid=document.createElement('div');
+  grid.className='assistant-branch-delta-grid';
+  grid.dataset.branchDeltaGrid='true';
+  grid.setAttribute('role','grid');
+  grid.setAttribute('aria-label','Assistant branch delta matrix');
+  const header=['metric','current-parent','first-child-current','child-total-current'];
+  header.forEach(text=>{
+    const cell=document.createElement('div');
+    cell.className='assistant-branch-delta-cell head'+(text==='metric'?' metric':'');
+    cell.setAttribute('role','columnheader');
+    cell.textContent=text;
+    grid.appendChild(cell);
+  });
+  const parent=summaries&&summaries.parent;
+  const current=summaries&&summaries.current||{};
+  const firstChild=(summaries&&summaries.children&&summaries.children[0]&&summaries.children[0].summary)||{};
+  const childTotal={};
+  (summaries&&summaries.children||[]).forEach(item=>{
+    ['changes','refs','usedContext','trees','followups','actions','tokens'].forEach(key=>{
+      childTotal[key]=Number(childTotal[key]||0)+Number(item.summary[key]||0);
+    });
+  });
+  const metrics=[['edits','changes'],['refs','refs'],['used','usedContext'],['trees','trees'],['actions','actions'],['tokens','tokens']];
+  metrics.forEach(([label,key])=>{
+    const rowHead=document.createElement('div');
+    rowHead.className='assistant-branch-delta-cell metric';
+    rowHead.setAttribute('role','rowheader');
+    rowHead.textContent=label;
+    grid.appendChild(rowHead);
+    [
+      parent?assistantBranchDeltaValue(current,parent,key):{delta:0,label:'-'},
+      assistantBranchDeltaValue(firstChild,current,key),
+      assistantBranchDeltaValue(childTotal,current,key)
+    ].forEach(value=>{
+      const cell=document.createElement('button');
+      cell.type='button';
+      cell.className='assistant-branch-delta-cell'+(value.delta>0?' positive':value.delta<0?' negative':'');
+      cell.setAttribute('role','gridcell');
+      cell.dataset.branchDeltaMetric=key;
+      cell.dataset.branchDeltaValue=String(value.delta);
+      cell.textContent=value.label;
+      grid.appendChild(cell);
+    });
+  });
+  grid.dataset.branchDeltaRows=String(metrics.length);
+  grid.dataset.branchDeltaCells=String(grid.querySelectorAll('[role="gridcell"]').length);
+  return grid;
+}
 function assistantHistoryPreviewCard(title,summary,extra){
   const card=document.createElement('div');
   card.className='assistant-history-preview-card';
@@ -17330,8 +17425,9 @@ function assistantSessionBranchMeta(session,sessions){
 function assistantShowSessionBranchCompare(session,branchMeta,sessions){
   branchMeta=branchMeta||assistantSessionBranchMeta(session,sessions||assistantSessionLoadItems());
   const cards=[];
-  const parentSummary=branchMeta.parentSession?assistantHistorySessionNativeSummary(branchMeta.parentSession):null;
-  const currentSummary=assistantHistorySessionNativeSummary(session);
+  const summaries=assistantBranchCompareSummaries(session,branchMeta);
+  const parentSummary=summaries.parent;
+  const currentSummary=summaries.current;
   if(branchMeta.parentSession){
     cards.push(assistantHistoryPreviewCard('Parent: '+String(branchMeta.parentTitle||branchMeta.parentId||'Session'),parentSummary,[
       ['requests',String(branchMeta.parentSession.requestCount||0)],
@@ -17352,9 +17448,20 @@ function assistantShowSessionBranchCompare(session,branchMeta,sessions){
     ]));
   });
   const modal=assistantShowHistoryPreviewModal('Compare Assistant Branches',cards,{kind:'branch-compare',invoker:document.activeElement,description:'Compare lineage, referenced context, edits, file trees, follow-ups, and submitted actions across related Assistant sessions.'});
+  const panel=modal&&modal.querySelector?modal.querySelector('.modal'):null;
+  const grid=modal&&modal.querySelector?modal.querySelector('.assistant-history-preview'):null;
+  const summaryStrip=assistantBranchSummaryStrip(session,branchMeta,summaries);
+  const deltaGrid=assistantBranchDeltaGrid(summaries);
+  if(panel){
+    panel.insertBefore(summaryStrip,grid||panel.firstChild);
+    panel.insertBefore(deltaGrid,grid||panel.firstChild);
+  }
   modal.dataset.parentId=String(branchMeta.parentId||'');
   modal.dataset.childCount=String(branchMeta.childCount||0);
   modal.dataset.currentId=String(session&&session.id||'');
+  modal.dataset.branchSummary='true';
+  modal.dataset.branchDeltaRows=String(deltaGrid.dataset.branchDeltaRows||'');
+  modal.dataset.branchDeltaCells=String(deltaGrid.dataset.branchDeltaCells||'');
   return modal;
 }
 function assistantShowSavedHistoryPreview(entry,nativeSummary){
@@ -17962,6 +18069,13 @@ function assistantForkLineageSmokeSnapshot(){
     compareModalFocusTrap:compareModal?String(compareModal.dataset.focusTrap||''):'',
     compareModalCards:compareModal?compareModal.querySelectorAll('.assistant-history-preview-card').length:0,
     compareModalDetailItems:compareModal?compareModal.querySelectorAll('.assistant-history-preview-list li').length:0,
+    compareSummaryExists:!!(compareModal&&compareModal.querySelector('[data-branch-summary="true"]')),
+    compareSummaryChips:compareModal?Array.from(compareModal.querySelectorAll('.assistant-branch-summary-chip')).map(el=>String(el.textContent||'')):[],
+    compareDeltaGridExists:!!(compareModal&&compareModal.querySelector('[data-branch-delta-grid="true"]')),
+    compareDeltaRows:compareModal?Number(compareModal.dataset.branchDeltaRows||0):0,
+    compareDeltaCells:compareModal?Number(compareModal.dataset.branchDeltaCells||0):0,
+    compareDeltaMetrics:compareModal?Array.from(compareModal.querySelectorAll('[data-branch-delta-metric]')).map(el=>String(el.dataset.branchDeltaMetric||'')):[],
+    compareDeltaValues:compareModal?Array.from(compareModal.querySelectorAll('[data-branch-delta-value]')).map(el=>String(el.textContent||'')):[],
     compareModalText:compareModal?String(compareModal.textContent||'').replace(/\s+/g,' ').trim().slice(0,1400):'',
     searchMatches:historyMatchesQuery([session.title,session.sessionResource,session.id,session.provider,session.model,session.mode,session.agentId,session.parentSessionResource,session.parentSessionTitle,assistantSessionBranchMeta(session,sessions).parentTitle,assistantSessionBranchMeta(session,sessions).childTitles.join(' '),'branches '+assistantSessionBranchMeta(session,sessions).childCount],'parent assistant session')
       && historyMatchesQuery([session.title,assistantSessionBranchMeta(session,sessions).childTitles.join(' '),'branches '+assistantSessionBranchMeta(session,sessions).childCount],'alternative child branch')
