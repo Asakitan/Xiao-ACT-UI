@@ -353,6 +353,16 @@ body.window-resizing * { cursor:inherit !important; }
   border-color:color-mix(in srgb,var(--fg-success) 45%,transparent); }
 .editor-document-highlight.kind-2 { background:color-mix(in srgb,var(--fg-warning) 18%,transparent);
   border-color:color-mix(in srgb,var(--fg-warning) 55%,transparent); }
+.editor-dirty-diff-line { position:absolute; left:0; right:0; pointer-events:none; opacity:.72; }
+.editor-dirty-diff-line.modified { background:color-mix(in srgb,var(--fg-accent) 8%,transparent); }
+.editor-dirty-diff-line.added { background:color-mix(in srgb,var(--fg-success) 8%,transparent); }
+.editor-dirty-diff-gutter { position:absolute; left:-47px; width:4px; border-radius:2px; pointer-events:none; }
+.editor-dirty-diff-gutter.modified { background:var(--fg-accent); }
+.editor-dirty-diff-gutter.added { background:var(--fg-success); }
+.editor-dirty-diff-gutter.removed { height:2px !important; background:var(--fg-error); }
+.editor-dirty-diff-summary { position:absolute; right:8px; top:6px; padding:1px 6px; border:1px solid var(--border);
+  border-radius:999px; background:color-mix(in srgb,var(--bg-editor) 92%,transparent); color:var(--fg-dim);
+  font:10px var(--mono); pointer-events:none; }
 .editor-diagnostic-layer { position:absolute; inset:0 0 0 50px; z-index:4; pointer-events:none;
   font:13px/1.5 var(--mono); padding:8px 12px; overflow:hidden; white-space:pre; tab-size:4; }
 .editor-diagnostic-marker { position:absolute; height:0; min-width:7px; border-bottom:2px dotted var(--fg-error);
@@ -9142,6 +9152,7 @@ const COMPLETION_ITEM_TAG_DEPRECATED=1;
 const EDITOR_SUGGEST_MEMORY_KEY='sao.aiEditor.suggestMemory.v1';
 
 let _prevLineCount=1;
+let _editorDirtyDiffCache={key:'',decorations:[],summary:null};
 function updateLineNums(){
   scheduleEditorSyntaxHighlight();
   const lines=$('editor-text').value.split('\n').length;
@@ -9184,6 +9195,82 @@ function _updateLineHighlight(ta,lineNum){
 }
 function editorEscapeHtml(text){
   return String(text==null?'':text).replace(/[&<>]/g,ch=>ch==='&'?'&amp;':ch==='<'?'&lt;':'&gt;');
+}
+function activeEditorBaselineContent(){
+  const tab=activeEditorTab();
+  if(!tab)return '';
+  if(tab.originalContent===undefined)tab.originalContent=tab.content||'';
+  return String(tab.originalContent||'');
+}
+function setActiveEditorBaselineContent(content){
+  const tab=activeEditorTab();
+  if(tab)tab.originalContent=String(content||'');
+  _editorDirtyDiffCache={key:'',decorations:[],summary:null};
+  if(typeof renderEditorVisualDecorations==='function')renderEditorVisualDecorations();
+}
+function computeEditorDirtyDiff(base,current){
+  base=String(base||'');current=String(current||'');
+  if(base===current)return {decorations:[],summary:{added:0,modified:0,removed:0,total:0}};
+  const oldLines=base.split('\n'),newLines=current.split('\n');
+  let start=0;
+  while(start<oldLines.length&&start<newLines.length&&oldLines[start]===newLines[start])start++;
+  let oldEnd=oldLines.length-1,newEnd=newLines.length-1;
+  while(oldEnd>=start&&newEnd>=start&&oldLines[oldEnd]===newLines[newEnd]){oldEnd--;newEnd--}
+  const oldSpan=Math.max(0,oldEnd-start+1),newSpan=Math.max(0,newEnd-start+1);
+  const decorations=[];
+  if(newSpan){
+    for(let i=start;i<=newEnd;i++){
+      decorations.push({line:i,type:i-start<oldSpan?'modified':'added'});
+    }
+  }else{
+    decorations.push({line:Math.max(0,Math.min(start,newLines.length-1)),type:'removed'});
+  }
+  const added=Math.max(0,newSpan-oldSpan);
+  const removed=Math.max(0,oldSpan-newSpan);
+  const modified=Math.min(oldSpan,newSpan);
+  return {decorations,summary:{added,modified,removed,total:added+modified+removed}};
+}
+function editorDirtyDiffState(){
+  const tab=activeEditorTab();
+  if(isDiffEditorTab(tab)||isExtensionCustomEditorTab(tab)||isExtensionNotebookTab(tab))return {decorations:[],summary:{added:0,modified:0,removed:0,total:0}};
+  const value=$('editor-text')?$('editor-text').value:'';
+  const base=activeEditorBaselineContent();
+  const key=String(tab.id)+':'+base.length+':'+value.length+':'+base.slice(0,80)+':'+value.slice(0,80)+':'+base.slice(-80)+':'+value.slice(-80);
+  if(_editorDirtyDiffCache.key===key)return _editorDirtyDiffCache;
+  const computed=computeEditorDirtyDiff(base,value);
+  _editorDirtyDiffCache={key,decorations:computed.decorations,summary:computed.summary};
+  return _editorDirtyDiffCache;
+}
+function renderEditorDirtyDiffDecorations(layer,ta,metrics){
+  const state=editorDirtyDiffState();
+  const decorations=state.decorations||[];
+  const visibleHeight=ta.clientHeight||($('editor-container')&&$('editor-container').clientHeight)||100000;
+  decorations.forEach(dec=>{
+    const line=Math.max(0,Number(dec.line)||0);
+    const top=metrics.paddingTop+line*metrics.lineHeight-ta.scrollTop;
+    if(top<-metrics.lineHeight||top>visibleHeight+metrics.lineHeight)return;
+    const gutter=document.createElement('div');
+    gutter.className='editor-dirty-diff-gutter '+dec.type;
+    gutter.style.top=(top+(dec.type==='removed'?Math.max(1,metrics.lineHeight/2):0))+'px';
+    gutter.style.height=metrics.lineHeight+'px';
+    layer.appendChild(gutter);
+    if(dec.type!=='removed'){
+      const row=document.createElement('div');
+      row.className='editor-dirty-diff-line '+dec.type;
+      row.style.top=top+'px';
+      row.style.height=metrics.lineHeight+'px';
+      row.style.left=(-ta.scrollLeft)+'px';
+      layer.appendChild(row);
+    }
+  });
+  const summary=state.summary||{};
+  if(summary.total){
+    const badge=document.createElement('div');
+    badge.className='editor-dirty-diff-summary';
+    badge.textContent='+'+(summary.added||0)+' ~'+(summary.modified||0)+' -'+(summary.removed||0);
+    badge.title='Unsaved diff: '+(summary.added||0)+' added, '+(summary.modified||0)+' modified, '+(summary.removed||0)+' removed';
+    layer.appendChild(badge);
+  }
 }
 const _editorTextMetricCache=new Map();
 function editorTextMetrics(ta){
@@ -9419,6 +9506,7 @@ function renderEditorVisualDecorations(){
   layer.scrollTop=ta.scrollTop;layer.scrollLeft=ta.scrollLeft;
   const metrics={...editorTextMetrics(ta),scrollTop:ta.scrollTop,scrollLeft:ta.scrollLeft},visual=editorVisualOptions(),lines=(ta.value||'').split('\n');
   _updateLineHighlight(ta,(ta.value.substring(0,ta.selectionStart||0).split('\n').length)||1);
+  if(typeof renderEditorDirtyDiffDecorations==='function')renderEditorDirtyDiffDecorations(layer,ta,metrics);
   renderEditorBracketPairs(layer,ta,metrics,visual);
   renderEditorFoldingDecorations(layer,ta,metrics);
   visual.rulers.forEach(ruler=>{
@@ -27770,7 +27858,7 @@ setTimeout(renderRecommendedExts,200);
 // (switchSidebar already handles extensions auto-search in its single definition above)
 
 // ── Multi-tab editor ──
-let tabs=[{id:0,name:'untitled',content:'',language:'plaintext',cursor:0,filePath:'',workspacePath:'',runtimeMode:'text',customEditor:null,webview:null}];
+let tabs=[{id:0,name:'untitled',content:'',originalContent:'',language:'plaintext',cursor:0,filePath:'',workspacePath:'',runtimeMode:'text',customEditor:null,webview:null}];
 let activeTab=0, nextTabId=1;
 
 function isExtensionNotebookTab(tab){
@@ -27786,6 +27874,7 @@ function addTab(name,content,lang,meta){
   showEditorArea();
   const tabMeta=isPlainObject(meta)?meta:{};
   const tab={id:nextTabId++,name:name||'untitled',content:content||'',language:lang||'plaintext',cursor:0,
+    originalContent:tabMeta.originalContent!==undefined?String(tabMeta.originalContent||''):String(content||''),
     filePath:tabMeta.filePath||'',workspacePath:tabMeta.workspacePath||'',
     runtimeMode:tabMeta.runtimeMode||tabMeta.runtime_mode||'text',
     diff:tabMeta.diff||null,
@@ -27870,6 +27959,8 @@ function switchTab(id){
     hideCustomEditorSurface();
     hideNotebookSurface();
     $('editor-text').value=tab.content;
+    if(tab.originalContent===undefined)tab.originalContent=tab.content||'';
+    _editorDirtyDiffCache={key:'',decorations:[],summary:null};
     setEditorLanguage(tab.language);
     $('editor-text').selectionStart=$('editor-text').selectionEnd=tab.cursor;
     _undoStack.length=0;_redoStack.length=0;_undoPush(true);
@@ -27907,7 +27998,7 @@ function saveCurrentTab(){
   if(isDiffEditorTab(tab))return;
   if(isExtensionCustomEditorTab(tab))return;
   if(isExtensionNotebookTab(tab)){tab.notebook=readNotebookFromSurface(tab);return}
-  if(tab){tab.content=$('editor-text').value;tab.language=editorLang;tab.cursor=$('editor-text').selectionStart}
+  if(tab){tab.content=$('editor-text').value;tab.language=editorLang;tab.cursor=$('editor-text').selectionStart;if(tab.originalContent===undefined)tab.originalContent=tab.content||''}
 }
 
 function renderTabs(){
@@ -30216,8 +30307,10 @@ async function saveTextTabAs(tab,options){
   const content=$('editor-text').value;
   const r=await call('save_file_as',content,saveAsSuggestedName(tab));
   if(r&&r.ok){
-    if(tab){tab.filePath=r.path;tab.name=r.name;tab.language=r.language||editorLang}
+    if(tab){tab.filePath=r.path;tab.name=r.name;tab.language=r.language||editorLang;tab.originalContent=content;tab.content=content}
     editorDirty=false;
+    _editorDirtyDiffCache={key:'',decorations:[],summary:null};
+    renderEditorVisualDecorations();
     const tabEl=document.querySelector('.tab[data-tab-id="'+activeTab+'"]');
     if(tabEl){tabEl.classList.remove('dirty');const lbl=tabEl.querySelector('.tab-label');if(lbl)lbl.textContent=r.name||r.path}
     renderTabs();
@@ -30273,7 +30366,11 @@ async function saveFile(options){
     const r=await call('execute_tool','editFile',JSON.stringify({path:tab.filePath,content:content}),true);
     if(r==null){if(!opts.autoSave)showToast('Save failed: backend unavailable','error');return {ok:false,error:'backend unavailable'}}
     if(r){try{const d=JSON.parse(r);if(d.error){if(!opts.autoSave)showToast('Save failed: '+d.error,'error');return {ok:false,error:d.error}}}catch(e){}}
-    editorDirty=false;const tabEl=document.querySelector('.tab[data-tab-id="'+activeTab+'"]');if(tabEl)tabEl.classList.remove('dirty');
+    editorDirty=false;
+    if(tab){tab.originalContent=content;tab.content=content}
+    _editorDirtyDiffCache={key:'',decorations:[],summary:null};
+    renderEditorVisualDecorations();
+    const tabEl=document.querySelector('.tab[data-tab-id="'+activeTab+'"]');if(tabEl)tabEl.classList.remove('dirty');
     if(opts.autoSave)setStatus('Auto saved: '+tab.filePath);
     else showToast('Saved: '+tab.filePath,'success',1500);
     return {ok:true,path:tab.filePath,autoSave:opts.autoSave===true};
@@ -30621,6 +30718,9 @@ function _terminalNormalizeResult(raw){
   return {stdout,stderr,error,exitCode,durationMs,cwd,terminal,stdoutTruncated,stderrTruncated,raw:data};
 }
 function _terminalStateForResult(result){
+  const raw=result&&result.raw&&typeof result.raw==='object'?result.raw:{};
+  const state=String(result&&result.state||raw.state||'').toLowerCase();
+  if(state==='cancelled'||state==='timeout')return state;
   return result.error||result.stderr||Number(result.exitCode)!==0?'error':'done';
 }
 function _formatTerminalDuration(ms){
@@ -30691,17 +30791,21 @@ function _activeTerminalRunOutput(){
 }
 function _terminalCurrentRun(out){
   if(!out||!out.dataset.terminalRunId)return null;
-  return {id:out.dataset.terminalRunId,command:out.dataset.runningCommand||'',cwd:out.dataset.runningCwd||'',cancelled:out.dataset.terminalRunCancelled==='1'};
+  return {id:out.dataset.terminalRunId,jobId:out.dataset.terminalJobId||'',seq:Number(out.dataset.terminalJobSeq||0)||0,command:out.dataset.runningCommand||'',cwd:out.dataset.runningCwd||'',cancelled:out.dataset.terminalRunCancelled==='1'};
 }
 function _setTerminalRun(out,run){
   if(!out)return;
   if(run){
     out.dataset.terminalRunId=run.id;
+    out.dataset.terminalJobId=run.jobId||'';
+    out.dataset.terminalJobSeq=String(run.seq||0);
     out.dataset.runningCommand=run.command||'';
     out.dataset.runningCwd=run.cwd||'';
     out.dataset.terminalRunCancelled=run.cancelled?'1':'0';
   }else{
     delete out.dataset.terminalRunId;
+    delete out.dataset.terminalJobId;
+    delete out.dataset.terminalJobSeq;
     delete out.dataset.runningCommand;
     delete out.dataset.runningCwd;
     delete out.dataset.terminalRunCancelled;
@@ -30717,11 +30821,16 @@ function _updateTerminalActionButtons(){
   if(stop)stop.classList.toggle('disabled',!(run&&!run.cancelled));
   if(restart)restart.classList.toggle('disabled',!hasCommand);
 }
-function stopTerminalCommand(){
+async function stopTerminalCommand(){
   const out=_activeTerminalRunOutput();
   const run=_terminalCurrentRun(out);
   if(!run||run.cancelled)return {cancelled:false};
   _setTerminalRun(out,{...run,cancelled:true});
+  if(run.jobId){
+    try{
+      await call('execute_tool','runTerminal',JSON.stringify({command:run.command||'',mode:'stop',jobId:run.jobId}),true);
+    }catch(ex){}
+  }
   const block=out?out.querySelector('.terminal-command-block.running:last-of-type'):null;
   if(block){
     block.className='terminal-command-block cancelled';
@@ -30738,6 +30847,47 @@ function restartTerminalCommand(){
   const cwd=(term&&term.lastCwd)||(out&&out.dataset.lastCwd)||currentWorkspaceRoot()||'';
   if(!cmd){showToast('No terminal command to restart.','info',1800);return null}
   return runTerminalCommand(cmd,{skipConfirm:true,out,cwd});
+}
+function _appendTerminalJobChunks(view,status){
+  const chunks=Array.isArray(status&&status.chunks)?status.chunks:[];
+  chunks.forEach(chunk=>{
+    const text=String(chunk&&chunk.text||'');
+    if(text)_appendTerminalHtml(view.body,ansiToHtml(text));
+  });
+}
+async function _pollTerminalJob(runId,jobId,out,view,started,cmd,cwd){
+  let seq=0;
+  for(;;){
+    await new Promise(resolve=>setTimeout(resolve,120));
+    const activeRun=_terminalCurrentRun(out);
+    if(!activeRun||activeRun.id!==runId||activeRun.cancelled){
+      if(activeRun&&activeRun.id===runId)_setTerminalRun(out,null);
+      view.block.className='terminal-command-block cancelled';
+      view.status.textContent='cancelled';
+      return {cancelled:true,ignored:true,runId,jobId};
+    }
+    const rawStatus=await call('execute_tool','runTerminal',JSON.stringify({command:cmd,mode:'status',jobId,sinceSeq:seq}),true);
+    const status=_terminalResultValue(rawStatus);
+    if(status.error&&!status.jobId)throw new Error(status.error);
+    _appendTerminalJobChunks(view,status);
+    seq=Number(status.sequence||seq)||seq;
+    _setTerminalRun(out,{...activeRun,seq});
+    const state=String(status.state||'running').toLowerCase();
+    if(state&&state!=='running'){
+      _setTerminalRun(out,null);
+      const result=_terminalNormalizeResult(status);
+      const elapsed=result.durationMs!==null?result.durationMs:Math.round(performance.now()-started);
+      if(result.error)_appendTerminalHtml(view.body,ansiToHtml(result.error)+'\n');
+      if(result.stdoutTruncated||result.stderrTruncated)_appendTerminalHtml(view.body,ansiToHtml('\n[output truncated]\n'));
+      const finalState=_terminalStateForResult({...result,state});
+      view.block.className='terminal-command-block '+finalState;
+      view.status.textContent=[finalState==='cancelled'?'cancelled':'exit '+result.exitCode,_formatTerminalDuration(elapsed),result.cwd?('cwd '+result.cwd):cwd?('cwd '+cwd):''].filter(Boolean).join('  ');
+      _updateTerminalRecordForRun(cmd,finalState,{...result,cwd:result.cwd||cwd},elapsed);
+      out.scrollTop=out.scrollHeight;
+      return {...result,durationMs:elapsed,state:finalState,jobId};
+    }
+    out.scrollTop=out.scrollHeight;
+  }
 }
 async function runTerminalCommand(cmd,options){
   const opts=options||{};
@@ -30765,7 +30915,7 @@ async function runTerminalCommand(cmd,options){
   _setTerminalRun(out,{id:runId,command:cmd,cwd,cancelled:false});
   _updateTerminalRecordForRun(cmd,'running',{exitCode:null,cwd},null);
   try{
-    const payload={command:cmd};
+    const payload={command:cmd,mode:'start'};
     if(cwd)payload.cwd=cwd;
     const raw=await call('execute_tool','runTerminal',JSON.stringify(payload),true);
     const activeRun=_terminalCurrentRun(out);
@@ -30774,6 +30924,11 @@ async function runTerminalCommand(cmd,options){
       view.block.className='terminal-command-block cancelled';
       view.status.textContent='cancelled';
       return {cancelled:true,ignored:true,runId};
+    }
+    const startStatus=_terminalResultValue(raw);
+    if(startStatus&&startStatus.jobId&&String(startStatus.state||'')==='running'){
+      _setTerminalRun(out,{id:runId,jobId:String(startStatus.jobId),seq:Number(startStatus.sequence||0)||0,command:cmd,cwd,cancelled:false});
+      return await _pollTerminalJob(runId,String(startStatus.jobId),out,view,started,cmd,cwd);
     }
     _setTerminalRun(out,null);
     const result=_terminalNormalizeResult(raw);
@@ -30865,20 +31020,27 @@ async function terminalUiSelfCheckSnapshot(){
     config.workspace={root:'E:/VC/SAO-UI/sao_auto',root_name:'sao_auto',source:'selfcheck'};
     if(defaultOut){defaultOut.style.display='';defaultOut.innerHTML='';defaultOut.dataset.terminalState='idle';defaultOut.dataset.lastCommand='';defaultOut.dataset.lastExitCode='';defaultOut.dataset.lastCwd=''}
     let n=0;
-    const payloads=[];
+    const payloads=[],stoppedJobs=new Set();
     call=async function(method,tool,payload){
       n++;
-      try{payloads.push(JSON.parse(payload||'{}'))}catch(e){payloads.push({})}
-      if(n===1)return JSON.stringify({stdout:'ok\n',stderr:'',exitCode:0,durationMs:12,cwd:'E:/VC/SAO-UI/sao_auto'});
-      if(n===2)return JSON.stringify({stdout:'',stderr:'bad\n',exitCode:7,durationMs:9,cwd:'E:/VC/SAO-UI/sao_auto',stderrTruncated:true});
-      return await new Promise(resolve=>{slowResolve=()=>resolve(JSON.stringify({stdout:'late\n',stderr:'',exitCode:0,durationMs:20,cwd:'E:/VC/SAO-UI/sao_auto'}))});
+      let data={};
+      try{data=JSON.parse(payload||'{}')}catch(e){}
+      payloads.push(data);
+      const cmd=String(data.command||''),jobId=cmd.includes('bad')?'job-bad':cmd.includes('slow')?'job-slow':'job-ok';
+      if(data.mode==='start')return JSON.stringify({jobId,state:'running',sequence:0,cwd:'E:/VC/SAO-UI/sao_auto'});
+      if(data.mode==='stop'){stoppedJobs.add(String(data.jobId||''));return JSON.stringify({jobId:data.jobId,state:'cancelled',exitCode:null,durationMs:7,cwd:'E:/VC/SAO-UI/sao_auto'})}
+      if(data.mode==='status'){
+        if(stoppedJobs.has(String(data.jobId||'')))return JSON.stringify({jobId:data.jobId,state:'cancelled',exitCode:null,durationMs:20,cwd:'E:/VC/SAO-UI/sao_auto',sequence:3,chunks:[]});
+        if(String(data.jobId||'')==='job-bad')return JSON.stringify({jobId,state:'error',stderr:'bad\n',exitCode:7,durationMs:9,cwd:'E:/VC/SAO-UI/sao_auto',stderrTruncated:true,sequence:2,chunks:[{seq:2,stream:'stderr',text:'bad\n'}]});
+        return JSON.stringify({jobId,state:'done',stdout:'ok\n',exitCode:0,durationMs:12,cwd:'E:/VC/SAO-UI/sao_auto',sequence:1,chunks:[{seq:1,stream:'stdout',text:'ok\n'}]});
+      }
+      return JSON.stringify({stdout:'legacy\n',exitCode:0,durationMs:1,cwd:'E:/VC/SAO-UI/sao_auto'});
     };
     const ok=await runTerminalCommand('echo terminal-ok',{skipConfirm:true,out:defaultOut});
     const bad=await runTerminalCommand('bad-command',{skipConfirm:true,out:defaultOut});
-    let slowResolve=null;
     const slowPromise=runTerminalCommand('slow-command',{skipConfirm:true,out:defaultOut});
-    const stopped=stopTerminalCommand();
-    if(slowResolve)slowResolve();
+    await new Promise(resolve=>setTimeout(resolve,20));
+    const stopped=await stopTerminalCommand();
     const slow=await slowPromise;
     const blocks=defaultOut?Array.from(defaultOut.querySelectorAll('.terminal-command-block')):[];
     const snapshot={
@@ -30916,6 +31078,38 @@ async function terminalUiSelfCheckSnapshot(){
   }
 }
 window.terminalUiSelfCheckSnapshot=terminalUiSelfCheckSnapshot;
+function editorDirtyDiffSelfCheckSnapshot(){
+  const oldActive=activeTab,oldTabs=tabs.map(t=>({...t})),oldValue=ed.value,oldDirty=editorDirty,oldLang=editorLang;
+  try{
+    const id=900000+Math.floor(Math.random()*1000);
+    const tab={id,name:'diff-selfcheck.txt',content:'alpha\nbeta\nold\nomega',originalContent:'alpha\nbeta\nold\nomega',language:'plaintext',cursor:0,filePath:'',workspacePath:'',runtimeMode:'text',customEditor:null,webview:null};
+    showEditorArea();
+    tabs=[tab];activeTab=id;ed.value=tab.content;editorDirty=false;setEditorLanguage('plaintext');updateLineNums();
+    let clean=editorDirtyDiffState();
+    ed.value='alpha\nbeta changed\nnew\nomega';editorDirty=true;updateLineNums();renderEditorVisualDecorations();
+    let dirty=editorDirtyDiffState();
+    const markerCount=document.querySelectorAll('#editor-visual-layer .editor-dirty-diff-gutter').length;
+    setActiveEditorBaselineContent(ed.value);
+    let reset=editorDirtyDiffState();
+    return {
+      cleanTotal:clean.summary&&clean.summary.total||0,
+      dirtyTotal:dirty.summary&&dirty.summary.total||0,
+      added:dirty.summary&&dirty.summary.added||0,
+      modified:dirty.summary&&dirty.summary.modified||0,
+      removed:dirty.summary&&dirty.summary.removed||0,
+      markerCount,
+      resetTotal:reset.summary&&reset.summary.total||0,
+      pass:(clean.summary&&clean.summary.total||0)===0&&
+        (dirty.summary&&dirty.summary.total||0)>0&&markerCount>0&&
+        (reset.summary&&reset.summary.total||0)===0
+    };
+  }finally{
+    tabs=oldTabs;activeTab=oldActive;ed.value=oldValue;editorDirty=oldDirty;editorLang=oldLang;
+    _editorDirtyDiffCache={key:'',decorations:[],summary:null};
+    renderTabs();updateLineNums();renderEditorVisualDecorations();
+  }
+}
+window.editorDirtyDiffSelfCheckSnapshot=editorDirtyDiffSelfCheckSnapshot;
 
 // ── chat-ux-4: Inline diff view for code changes ──
 function parseDiffText(text){

@@ -11693,8 +11693,12 @@ console.log("command palette quick access helpers ok");
            and "async function runTerminalCommand(cmd,options)" in html
            and "function stopTerminalCommand()" in html
            and "function restartTerminalCommand()" in html
+           and "async function _pollTerminalJob(" in html
            and "data-terminal-action=\"stop\"" in html
            and "data-terminal-action=\"restart\"" in html
+           and "mode:'start'" in html
+           and "mode:'status'" in html
+           and "mode:'stop'" in html
            and "terminalRunCancelled" in html
            and "function _terminalNormalizeResult(raw)" in html
            and "function _terminalStateForResult(result)" in html
@@ -11704,6 +11708,23 @@ console.log("command palette quick access helpers ok");
            and "stdoutTruncated" in html
            and "async function terminalUiSelfCheckSnapshot()" in html
            and "window.terminalUiSelfCheckSnapshot=terminalUiSelfCheckSnapshot" in html)
+    _check("terminal backend exposes cancellable job lifecycle without adding tool count",
+           "mode\": {\"type\": \"string\"" in engine_tools_source
+           and "jobId\": {\"type\": \"string\"" in engine_tools_source
+           and "sinceSeq\": {\"type\": \"integer\"" in engine_tools_source
+           and "_TERMINAL_JOBS" in engine_tools_source
+           and "def _start_terminal_job(" in engine_tools_source
+           and "def _stop_terminal_job(" in engine_tools_source
+           and "def _terminal_job_snapshot(" in engine_tools_source
+           and "subprocess.Popen" in engine_tools_source
+           and "proc.terminate()" in engine_tools_source)
+    _check("editor dirty diff decorations render while editing",
+           "editor-dirty-diff-line" in html
+           and "editor-dirty-diff-gutter" in html
+           and "function computeEditorDirtyDiff(base,current)" in html
+           and "function renderEditorDirtyDiffDecorations(layer,ta,metrics)" in html
+           and "setActiveEditorBaselineContent" in html
+           and "window.editorDirtyDiffSelfCheckSnapshot=editorDirtyDiffSelfCheckSnapshot" in html)
     _check("workspace auto root settings drive Explorer and Terminal cwd",
            "\"workspace\": {" in app_source
            and "\"recent_roots\": []" in app_source

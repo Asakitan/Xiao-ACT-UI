@@ -15,8 +15,10 @@ import json
 import os
 import shlex
 import subprocess
+import threading
 import time
-from typing import Any, Dict, List, Optional
+import uuid
+from typing import Any, Dict, List, Optional, Tuple
 
 from ai_editor.tool_registry import ToolRegistry
 
@@ -138,10 +140,14 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any, api_ref: Any = N
             "properties": {
                 "command": {"type": "string", "description": "Shell command to execute"},
                 "cwd": {"type": "string", "description": "Working directory (optional)", "default": ""},
+                "mode": {"type": "string", "description": "run (default), start, status, or stop", "default": "run"},
+                "jobId": {"type": "string", "description": "Terminal job id for status/stop", "default": ""},
+                "sinceSeq": {"type": "integer", "description": "Return job chunks after this sequence", "default": 0},
             },
             "required": ["command"],
         },
-        handler=lambda command, cwd="": _run_terminal(command, cwd, gui_ref, api_ref),
+        handler=lambda command="", cwd="", mode="run", jobId="", sinceSeq=0: _run_terminal(
+            command, cwd, gui_ref, api_ref, mode, jobId, int(sinceSeq or 0)),
         category="terminal",
         requires_confirm=True,
         tags={"destructive": True},
@@ -658,16 +664,239 @@ def _default_terminal_cwd(api_ref: Any = None) -> str:
     return ""
 
 
-def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
-                  api_ref: Any = None) -> Dict[str, Any]:
+_TERMINAL_JOB_LOCK = threading.Lock()
+_TERMINAL_JOBS: Dict[str, Dict[str, Any]] = {}
+_TERMINAL_JOB_MAX_OUTPUT = 256_000
+
+
+def _terminal_command_context(command: str, cwd: str, gui_ref: Any,
+                              api_ref: Any) -> Tuple[Dict[str, Any], int, int, bool, str, Any]:
+    terminal = _get_terminal_settings(gui_ref)
+    timeout = _terminal_int(terminal.get("timeout"), _DEFAULT_TERMINAL_TIMEOUT)
+    output_limit = _terminal_int(terminal.get("output_limit"), _DEFAULT_STDOUT_LIMIT)
+    shell_path = _terminal_shell_path(terminal.get("shell_path"))
+    shell_args = _terminal_args(terminal.get("shell_args"))
+    explicit_shell = bool(shell_path)
+    effective_cwd = os.path.abspath(cwd) if cwd else _default_terminal_cwd(api_ref)
+    run_command: Any = command
+    if explicit_shell:
+        run_command = _build_explicit_shell_command(shell_path, shell_args, command)
+    return terminal, timeout, output_limit, explicit_shell, effective_cwd, run_command
+
+
+def _terminal_trim_job_output(job: Dict[str, Any]) -> None:
+    for key in ("stdout", "stderr"):
+        value = str(job.get(key) or "")
+        if len(value) > _TERMINAL_JOB_MAX_OUTPUT:
+            job[key] = value[-_TERMINAL_JOB_MAX_OUTPUT:]
+            job[f"{key}Truncated"] = True
+
+
+def _terminal_append_job_output(job_id: str, stream_name: str, text: str) -> None:
+    if not text:
+        return
+    with _TERMINAL_JOB_LOCK:
+        job = _TERMINAL_JOBS.get(job_id)
+        if not job:
+            return
+        seq = int(job.get("sequence") or 0) + 1
+        job["sequence"] = seq
+        job[stream_name] = str(job.get(stream_name) or "") + text
+        chunks = job.setdefault("chunks", [])
+        chunks.append({"seq": seq, "stream": stream_name, "text": text})
+        if len(chunks) > 200:
+            del chunks[:len(chunks) - 200]
+        _terminal_trim_job_output(job)
+
+
+def _terminal_reader(job_id: str, stream_name: str, pipe: Any) -> None:
     try:
-        terminal = _get_terminal_settings(gui_ref)
-        timeout = _terminal_int(terminal.get("timeout"), _DEFAULT_TERMINAL_TIMEOUT)
-        output_limit = _terminal_int(terminal.get("output_limit"), _DEFAULT_STDOUT_LIMIT)
-        shell_path = _terminal_shell_path(terminal.get("shell_path"))
-        shell_args = _terminal_args(terminal.get("shell_args"))
-        explicit_shell = bool(shell_path)
-        effective_cwd = os.path.abspath(cwd) if cwd else _default_terminal_cwd(api_ref)
+        while True:
+            chunk = pipe.readline()
+            if not chunk:
+                break
+            _terminal_append_job_output(job_id, stream_name, chunk)
+    except Exception as exc:
+        _terminal_append_job_output(job_id, "stderr", f"\n[terminal stream error: {exc}]\n")
+    finally:
+        try:
+            pipe.close()
+        except Exception:
+            pass
+
+
+def _terminal_finish_job(job_id: str, exit_code: Optional[int] = None,
+                         state: str = "done", error: str = "") -> None:
+    with _TERMINAL_JOB_LOCK:
+        job = _TERMINAL_JOBS.get(job_id)
+        if not job:
+            return
+        if job.get("state") in {"done", "error", "cancelled", "timeout"}:
+            return
+        code = exit_code
+        proc = job.get("process")
+        if code is None and proc is not None:
+            try:
+                code = proc.poll()
+            except Exception:
+                code = None
+        if code is None:
+            code = -1
+        job["exitCode"] = code
+        job["state"] = state if state != "done" or code == 0 else "error"
+        job["durationMs"] = int((time.monotonic() - float(job.get("started") or time.monotonic())) * 1000)
+        if error:
+            job["error"] = error
+        _terminal_trim_job_output(job)
+
+
+def _terminal_waiter(job_id: str, timeout: int) -> None:
+    with _TERMINAL_JOB_LOCK:
+        job = _TERMINAL_JOBS.get(job_id)
+        proc = job.get("process") if job else None
+    if proc is None:
+        return
+    try:
+        exit_code = proc.wait(timeout=timeout)
+        _terminal_finish_job(job_id, exit_code, "done")
+    except subprocess.TimeoutExpired:
+        try:
+            proc.terminate()
+            proc.wait(timeout=2)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        _terminal_finish_job(job_id, -1, "timeout", f"Command timed out ({timeout}s)")
+    except Exception as exc:
+        _terminal_finish_job(job_id, -1, "error", str(exc))
+
+
+def _terminal_job_snapshot(job_id: str, since_seq: int = 0) -> Dict[str, Any]:
+    with _TERMINAL_JOB_LOCK:
+        job = _TERMINAL_JOBS.get(job_id)
+        if not job:
+            return {"error": f"Unknown terminal job: {job_id}", "jobId": job_id}
+        proc = job.get("process")
+        if job.get("state") == "running" and proc is not None:
+            try:
+                polled = proc.poll()
+            except Exception:
+                polled = None
+            if polled is not None:
+                job["exitCode"] = polled
+                job["state"] = "done" if polled == 0 else "error"
+                job["durationMs"] = int((time.monotonic() - float(job.get("started") or time.monotonic())) * 1000)
+        chunks = [
+            dict(chunk) for chunk in job.get("chunks", [])
+            if int(chunk.get("seq") or 0) > since_seq
+        ]
+        terminal = dict(job.get("terminal") or {})
+        snapshot = {
+            "jobId": job_id,
+            "pid": job.get("pid"),
+            "command": job.get("command", ""),
+            "cwd": job.get("cwd", ""),
+            "state": job.get("state", "running"),
+            "exitCode": job.get("exitCode"),
+            "durationMs": job.get("durationMs"),
+            "stdout": job.get("stdout", ""),
+            "stderr": job.get("stderr", ""),
+            "error": job.get("error", ""),
+            "sequence": int(job.get("sequence") or 0),
+            "chunks": chunks,
+            "stdoutTruncated": bool(job.get("stdoutTruncated")),
+            "stderrTruncated": bool(job.get("stderrTruncated")),
+            "terminal": terminal,
+        }
+    return snapshot
+
+
+def _start_terminal_job(command: str, cwd: str, gui_ref: Any,
+                        api_ref: Any) -> Dict[str, Any]:
+    terminal, timeout, output_limit, explicit_shell, effective_cwd, run_command = (
+        _terminal_command_context(command, cwd, gui_ref, api_ref))
+    kwargs: Dict[str, Any] = {
+        "shell": not explicit_shell,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "stdin": subprocess.PIPE,
+        "text": True,
+        "bufsize": 1,
+    }
+    if effective_cwd:
+        kwargs["cwd"] = effective_cwd
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    job_id = uuid.uuid4().hex
+    try:
+        proc = subprocess.Popen(run_command, **kwargs)
+    except Exception as exc:
+        return {"error": str(exc), "command": command, "cwd": effective_cwd, "exitCode": 1}
+    job = {
+        "jobId": job_id,
+        "process": proc,
+        "pid": proc.pid,
+        "command": command,
+        "cwd": effective_cwd,
+        "state": "running",
+        "exitCode": None,
+        "durationMs": None,
+        "stdout": "",
+        "stderr": "",
+        "error": "",
+        "sequence": 0,
+        "chunks": [],
+        "started": time.monotonic(),
+        "terminal": _terminal_metadata(
+            terminal, timeout, output_limit, explicit_shell, effective_cwd),
+    }
+    with _TERMINAL_JOB_LOCK:
+        _TERMINAL_JOBS[job_id] = job
+    threading.Thread(target=_terminal_reader, args=(job_id, "stdout", proc.stdout),
+                     daemon=True).start()
+    threading.Thread(target=_terminal_reader, args=(job_id, "stderr", proc.stderr),
+                     daemon=True).start()
+    threading.Thread(target=_terminal_waiter, args=(job_id, timeout),
+                     daemon=True).start()
+    return _terminal_job_snapshot(job_id)
+
+
+def _stop_terminal_job(job_id: str) -> Dict[str, Any]:
+    with _TERMINAL_JOB_LOCK:
+        job = _TERMINAL_JOBS.get(job_id)
+        proc = job.get("process") if job else None
+        if not job:
+            return {"error": f"Unknown terminal job: {job_id}", "jobId": job_id}
+        job["state"] = "cancelled"
+        job["durationMs"] = int((time.monotonic() - float(job.get("started") or time.monotonic())) * 1000)
+        job["exitCode"] = None
+    if proc is not None:
+        try:
+            proc.terminate()
+            proc.wait(timeout=2)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    return _terminal_job_snapshot(job_id)
+
+
+def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
+                  api_ref: Any = None, mode: str = "run",
+                  jobId: str = "", sinceSeq: int = 0) -> Dict[str, Any]:
+    mode = str(mode or "run").strip().lower()
+    if mode == "start":
+        return _start_terminal_job(command, cwd, gui_ref, api_ref)
+    if mode == "status":
+        return _terminal_job_snapshot(str(jobId or ""), sinceSeq)
+    if mode == "stop":
+        return _stop_terminal_job(str(jobId or ""))
+    try:
+        terminal, timeout, output_limit, explicit_shell, effective_cwd, run_command = (
+            _terminal_command_context(command, cwd, gui_ref, api_ref))
 
         kwargs: Dict[str, Any] = {
             "shell": not explicit_shell,
@@ -677,9 +906,6 @@ def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
         }
         if effective_cwd:
             kwargs["cwd"] = effective_cwd
-        run_command: Any = command
-        if explicit_shell:
-            run_command = _build_explicit_shell_command(shell_path, shell_args, command)
         started = time.monotonic()
         result = subprocess.run(run_command, **kwargs)
         duration_ms = int((time.monotonic() - started) * 1000)
