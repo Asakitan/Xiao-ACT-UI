@@ -9556,35 +9556,45 @@ console.log("frontend word separator behavior ok");
            and "function renderSettingsEmptyState(visible,total,parsed)" in html
            and "function settingsAddRowActions(row,opts)" in html
            and "function settingsCopyText(text,label)" in html
-           and "function settingsSearchForKey(key)" in html
-           and "function settingsHighlightRow(row)" in html
-           and "function renderSettingsFilterSuggestions()" in html
-           and "function removeSettingsFilterToken(token)" in html
-           and "function invalidateSettingsFilterCache()" in html
-            and "function settingsFilterDomCache(modal)" in html
-            and "function settingsGroupMatchesFilter(group,query)" in html
-            and "group._settingsFilterText" in html
-            and "const cache=settingsFilterDomCache(modal);" in html
+            and "function settingsSearchForKey(key)" in html
+            and "function settingsHighlightRow(row)" in html
+            and "function settingsOpenJsonView()" in html
+            and "function settingsUseSearchHint(text)" in html
+            and "function settingsSearchHintKeydown(ev,text)" in html
+            and "function renderSettingsFilterSuggestions()" in html
+            and "function removeSettingsFilterToken(token)" in html
+            and "function invalidateSettingsFilterCache()" in html
+             and "function settingsFilterDomCache(modal)" in html
+             and "function settingsGroupMatchesIdFilters(group,ids)" in html
+             and "function settingsGroupMatchesFilter(group,query)" in html
+             and "group._settingsFilterText" in html
+             and "const cache=settingsFilterDomCache(modal);" in html
             and "invalidateSettingsFilterCache();" in html
             and "renderExtensionSettings();" in html
-            and "id=\"settings-quick-filters\"" in html
-            and "data-settings-filter-token=\"@modified\"" in html
-            and "id=\"settings-empty-state\"" in html
-            and "className='settings-row-actions'" in html
-            and "settingsAddRowActions(wrap,{key:meta.key||meta.path||inputId,searchable:false,meta,inputId,clearTarget:" in html
-            and "settingsAddRowActions(row,{key:key,searchable:true});" in html
-            and "@([A-Za-z][A-Za-z0-9_-]*)" in html
-            and "SETTINGS_SCOPE_FILTERS[scope]" in html
+             and "id=\"settings-quick-filters\"" in html
+             and "id=\"settings-search-hints\"" in html
+             and "data-settings-filter-token=\"@modified\"" in html
+             and "id=\"settings-empty-state\"" in html
+             and "className='settings-row-actions'" in html
+             and "add('Default','Apply default value'" in html
+             and "add('{}','Copy JSON setting entry'" in html
+             and "settingsAddRowActions(wrap,{key:meta.key||meta.path||inputId,searchable:false,meta,inputId,clearTarget:" in html
+             and "settingsAddRowActions(row,{key:key,searchable:true});" in html
+             and "filters={modified:false,error:false,json:false,extensions:false,scopes:[],ids:[]}" in html
+             and "Setting: '+raw.slice(3)" in html
+             and "@([A-Za-z][A-Za-z0-9_-]*)" in html
+             and "SETTINGS_SCOPE_FILTERS[scope]" in html
             and "visible of '+total+' settings groups" in html
             and "use @error to filter invalid settings" in html
             and "if(query.error&&!group.querySelector('[aria-invalid=\"true\"],.settings-field.invalid:not(.settings-target-hidden),.settings-input-invalid'))return false;" in html)
     _check("frontend settings uses VS Code style settings layout",
            "class=\"modal settings-modal\"" in html
-           and "class=\"settings-titlebar\"" in html
-           and "class=\"settings-searchbar\"" in html
-           and "class=\"settings-target-tabs\"" in html
-           and "class=\"settings-shell\"" in html
-           and "class=\"settings-nav\" id=\"settings-nav\"" in html
+            and "class=\"settings-titlebar\"" in html
+            and "settings-top-action primary" in html
+            and "class=\"settings-searchbar\"" in html
+            and "class=\"settings-target-tabs\"" in html
+            and "class=\"settings-shell\"" in html
+            and "class=\"settings-nav\" id=\"settings-nav\"" in html
            and "class=\"settings-main\" id=\"settings-main\"" in html
            and "data-settings-title=\"AI / Endpoint\"" in html
            and "data-settings-title=\"Editor / Files\"" in html
@@ -9607,8 +9617,13 @@ console.log("frontend word separator behavior ok");
             and "function resetVisibleModifiedSettings()" in html
             and "function installSettingsKeyboardHandlers()" in html
             and "installSettingsKeyboardHandlers();" in html
-           and "row.dataset.extSettingKey||row.dataset.settingKey" in html
-           and "if(row&&ev.key==='Enter'&&ev.target===row)" in html
+            and "settings-nav-summary" in html
+            and "settings-nav-badge" in html
+            and "id=\"settings-nav-visible-count\"" in html
+            and "id=\"settings-nav-modified-count\"" in html
+            and "id=\"settings-nav-error-count\"" in html
+            and "row.dataset.extSettingKey||row.dataset.settingKey" in html
+            and "if(row&&ev.key==='Enter'&&ev.target===row)" in html
            and "showToast(resets.length?'Reset '+resets.length+' visible modified setting'" in html
             and "window.settingsToggleFilterToken=settingsToggleFilterToken;" in html
             and "window.settingsClearFilters=settingsClearFilters;" in html
@@ -9636,6 +9651,8 @@ console.log("frontend word separator behavior ok");
            and "function settingsFocusVisibleRow(direction)" in html
            and "function refreshSettingsDirtySummary(modifiedCount,errorCount)" in html
            and "settings-built-chip current" in html
+           and "settings-built-foot" in html
+           and "target.dataset.settingFootTarget='1'" in html
            and "cur.dataset.settingCurrentValue='1'" in html
            and "settings-save-button" in html
             and "Settings saved" in html
@@ -12905,6 +12922,8 @@ console.log("command palette quick access helpers ok");
             in app_source)
     _check("terminal command UI reports state, exit code, and selfcheck",
            "terminal-status-line" in html
+           and "terminal-recent-bar" in html
+           and "terminal-command-actions" in html
            and "terminal-command-block" in html
            and "async function runTerminalCommand(cmd,options)" in html
            and "function stopTerminalCommand()" in html
@@ -12932,8 +12951,12 @@ console.log("command palette quick access helpers ok");
            and "function _terminalNormalizeResult(raw)" in html
             and "function _terminalStateForResult(result)" in html
            and "function _terminalWorkspaceLabel(cwd)" in html
-            and "function _terminalProfileLabel(meta)" in html
-            and "function _terminalStateLabel(state)" in html
+             and "function _terminalProfileLabel(meta)" in html
+             and "function _terminalCwdMatchesWorkspace(cwd)" in html
+             and "function renderTerminalRecentCommands()" in html
+             and "function _terminalRememberCommand(cmd)" in html
+             and "function _updateTerminalPrompt(meta)" in html
+             and "function _terminalStateLabel(state)" in html
             and "function _terminalTruncationLabel(stdoutTruncated,stderrTruncated)" in html
             and "function _updateTerminalRecordForRun(cmd,state,result,durationMs)" in html
             and "function currentWorkspaceRoot()" in html
@@ -12946,6 +12969,8 @@ console.log("command palette quick access helpers ok");
             and "line.dataset.durationMs=durationMs;" in html
             and "line.dataset.stdoutTruncated=stdoutTruncated?'1':'0';" in html
             and "line.dataset.lastCommand=String(meta.lastCommand||'');" in html
+            and "line.dataset.workspaceCwd=_terminalCwdMatchesWorkspace(cwd)?'1':'0';" in html
+            and "wsEl.className='term-status-pill '+(_terminalCwdMatchesWorkspace(cwd)?'ok':'warn')" in html
             and "data-terminal-status=\"exit\"" in html
             and "data-terminal-status=\"duration\"" in html
             and "data-terminal-status=\"flags\"" in html
@@ -12966,6 +12991,14 @@ console.log("command palette quick access helpers ok");
             and "[stdin closed]" in html
             and "closeStdinPayload" in html
             and "closeStdinResult" in html
+            and "window.renderTerminalRecentCommands=renderTerminalRecentCommands" in html
+            and "window._terminalCwdMatchesWorkspace=_terminalCwdMatchesWorkspace" in html
+            and "block.dataset.command=cmd;" in html
+            and "addAction('▶','Run command again'" in html
+            and "recentLabels.includes('slow-command')" in html
+            and "promptText.includes('sao_auto')" in html
+            and "statusWorkspaceCwd==='1'" in html
+            and "commandActionCount>=9" in html
             and "selectorValue" in html
             and "statusAfterBad" in html
             and "statusAfterBad.stderrTruncated==='1'" in html

@@ -1495,6 +1495,13 @@ pre.code-block code .type { color:var(--fg-type); }
   border:0; outline:none; font:12px var(--mono); padding:0; }
 .terminal-input::placeholder { color:var(--fg-dim); }
 .terminal-input-row:focus-within { background:color-mix(in srgb,var(--bg-panel) 82%,var(--bg-hover)); }
+.terminal-recent-bar { min-height:24px; display:flex; align-items:center; gap:5px; padding:3px 12px;
+  border-top:1px solid color-mix(in srgb,var(--border) 55%,transparent); background:color-mix(in srgb,var(--bg-panel) 88%,var(--bg2)); flex-shrink:0; }
+.terminal-recent-label { color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; letter-spacing:.02em; }
+.terminal-recent-command { max-width:180px; height:18px; padding:0 6px; border:1px solid var(--border);
+  border-radius:999px; background:var(--bg3); color:var(--fg-dim); font:10px var(--mono);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; }
+.terminal-recent-command:hover,.terminal-recent-command:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
 .terminal-status-line { display:flex; align-items:center; gap:8px; min-height:24px; padding:0 12px;
   border-top:1px solid var(--border); background:var(--bg-panel); color:var(--fg-dim);
   font:11px var(--mono); flex-shrink:0; }
@@ -1564,6 +1571,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-top-action { height:26px; padding:0 10px; border:1px solid var(--border); border-radius:4px;
   background:var(--bg3); color:var(--fg-dim); font:12px var(--sans); cursor:pointer; }
 .settings-top-action:hover,.settings-top-action:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
+.settings-top-action.primary { color:var(--fg); border-color:color-mix(in srgb,var(--fg-accent) 52%,var(--border));
+  background:color-mix(in srgb,var(--fg-accent) 12%,var(--bg3)); }
 .settings-searchbar { position:sticky; top:0; z-index:3; display:grid;
   grid-template-columns:minmax(220px,1fr) auto; gap:8px; align-items:start; padding:10px 18px 8px;
   border-bottom:1px solid var(--border); background:color-mix(in srgb,var(--bg) 92%,var(--bg2)); flex-shrink:0; }
@@ -1601,6 +1610,11 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-target-summary code { color:var(--fg-accent); font:11px var(--mono); }
 .settings-target-summary .settings-target-count { padding:1px 6px; border:1px solid var(--border);
   border-radius:999px; background:var(--bg3); color:var(--fg-dim); font:10px var(--mono); }
+.settings-search-hints { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:5px; min-height:20px;
+  align-items:center; color:var(--fg-dim); font-size:11px; }
+.settings-search-hints code { font:10px var(--mono); color:var(--fg); background:var(--bg3);
+  border:1px solid var(--border); border-radius:3px; padding:1px 5px; cursor:pointer; }
+.settings-search-hints code:hover,.settings-search-hints code:focus { color:var(--fg-accent); border-color:var(--border-focus); outline:none; }
 .settings-review-bar { display:flex; flex-wrap:wrap; align-items:center; gap:6px; min-height:28px;
   padding:5px 6px; border:1px solid var(--border); border-radius:5px; background:color-mix(in srgb,var(--bg2) 78%,transparent); }
 .settings-review-bar .review-pill { height:20px; display:inline-flex; align-items:center; gap:4px; padding:0 7px;
@@ -1628,14 +1642,23 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-shell { flex:1; min-height:0; display:grid; grid-template-columns:214px minmax(0,1fr); }
 .settings-nav { overflow-y:auto; border-right:1px solid var(--border); background:var(--bg2); padding:8px 8px 12px; }
 .settings-nav-empty { color:var(--fg-dim); font-size:12px; padding:7px 8px; }
+.settings-nav-summary { margin:0 0 8px; padding:8px; border:1px solid var(--border); border-radius:5px;
+  background:color-mix(in srgb,var(--bg3) 68%,transparent); color:var(--fg-dim); font-size:11px; line-height:1.35; }
+.settings-nav-summary strong { display:block; color:var(--fg); font-size:12px; margin-bottom:2px; }
+.settings-nav-summary .settings-nav-summary-line { display:flex; justify-content:space-between; gap:8px; font:10px var(--mono); }
 .settings-nav-item { width:100%; min-height:28px; display:flex; align-items:center; gap:7px;
   border:0; border-radius:4px; background:transparent; color:var(--fg-dim); padding:5px 8px;
   text-align:left; font:12px var(--sans); cursor:pointer; }
+.settings-nav-item .settings-nav-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .settings-nav-item:hover,.settings-nav-item:focus { color:var(--fg); background:var(--bg-hover); outline:none; }
 .settings-nav-item.active { color:var(--fg); background:color-mix(in srgb,var(--fg-accent) 14%,var(--bg-hover)); }
+.settings-nav-item.has-errors { color:var(--fg-error); }
 .settings-nav-item .count { margin-left:auto; min-width:18px; text-align:right; color:var(--fg-dim); font:10px var(--mono); }
 .settings-nav-item .count.has-modified { color:var(--fg-accent); }
 .settings-nav-item .count::before { content:attr(data-label); color:var(--fg-dim); font:10px var(--mono); margin-right:4px; }
+.settings-nav-item .settings-nav-badge { flex:0 0 auto; width:6px; height:6px; border-radius:999px; background:transparent; }
+.settings-nav-item.modified .settings-nav-badge { background:var(--fg-accent); }
+.settings-nav-item.has-errors .settings-nav-badge { background:var(--fg-error); }
 .settings-main { min-width:0; overflow-y:auto; padding:8px 24px 18px; scroll-behavior:smooth; }
 .settings-empty-state { display:none; flex-direction:column; gap:8px; max-width:560px; margin:38px auto;
   padding:20px 22px; border:1px dashed var(--border); border-radius:6px; background:color-mix(in srgb,var(--bg2) 64%,transparent);
@@ -2082,7 +2105,7 @@ pre.code-block { overflow:visible; }
 .settings-field.settings-target-hidden { display:none !important; }
 .settings-field.builtin-setting { padding:7px 28px 7px 8px; border-radius:4px; margin:3px 0 6px;
   border-left:2px solid transparent; background:transparent; }
-.settings-field.builtin-setting.has-row-actions { padding-right:122px; }
+.settings-field.builtin-setting.has-row-actions { padding-right:184px; }
 .settings-field.builtin-setting:hover,.settings-field.builtin-setting:focus-within { background:color-mix(in srgb,var(--bg-hover) 62%,transparent); }
 .settings-field.builtin-setting:focus { outline:1px solid color-mix(in srgb,var(--border-focus) 55%,transparent); outline-offset:-1px; }
 .settings-field.highlight { animation:settingsSectionFlash .65s ease-out; }
@@ -2090,7 +2113,7 @@ pre.code-block { overflow:visible; }
 .settings-field.builtin-setting.saved-flash { animation:settingsSavedFlash .7s ease-out; }
 @keyframes settingsSavedFlash { from{background:color-mix(in srgb,var(--fg-success) 13%,transparent)} to{background:transparent} }
 .settings-field.builtin-setting .s-reset { top:8px; transform:none; }
-.settings-field.has-row-actions .s-reset { right:116px; }
+.settings-field.has-row-actions .s-reset { right:178px; }
 .settings-field.builtin-setting > label:first-child,
 .settings-field.builtin-setting > .settings-check:first-child { margin-top:0; }
 .settings-built-meta { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin:5px 0 1px;
@@ -2106,6 +2129,9 @@ pre.code-block { overflow:visible; }
 .settings-built-chip.inherited { max-width:340px; }
 .settings-field.modified .settings-built-chip.modified { display:inline-flex; }
 .settings-built-desc { margin:3px 0 0; color:var(--fg-dim); font-size:11px; line-height:1.35; }
+.settings-built-foot { display:flex; flex-wrap:wrap; gap:5px; margin-top:5px; color:var(--fg-dim); font:10px var(--mono); }
+.settings-built-foot span { padding:1px 5px; border:1px solid color-mix(in srgb,var(--border) 75%,transparent);
+  border-radius:999px; background:color-mix(in srgb,var(--bg3) 72%,transparent); }
 .settings-row-actions { position:absolute; top:6px; right:6px; display:flex; align-items:center; gap:3px;
   opacity:0; transform:translateY(-1px); transition:opacity .12s ease, transform .12s ease; z-index:2; }
 .settings-field:hover > .settings-row-actions,.settings-field:focus-within > .settings-row-actions,
@@ -2309,6 +2335,11 @@ pre.code-block { overflow:visible; }
 .terminal-command-head { display:flex; align-items:center; gap:8px; color:var(--fg-success); }
 .terminal-command-head .terminal-command-line { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .terminal-command-status { margin-left:auto; color:var(--fg-dim); font-size:11px; white-space:nowrap; }
+.terminal-command-actions { display:inline-flex; gap:3px; margin-left:4px; opacity:.62; }
+.terminal-command-block:hover .terminal-command-actions,.terminal-command-actions:focus-within { opacity:1; }
+.terminal-command-actions button { width:20px; height:18px; border:1px solid var(--border); border-radius:4px;
+  background:var(--bg3); color:var(--fg-dim); font:10px var(--mono); cursor:pointer; padding:0; }
+.terminal-command-actions button:hover,.terminal-command-actions button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
 .terminal-command-block.running .terminal-command-status { color:var(--fg-accent); }
 .terminal-command-block.error .terminal-command-status { color:var(--fg-error); }
 .terminal-command-body { color:var(--fg); white-space:pre-wrap; }
@@ -2939,6 +2970,7 @@ pre.code-block { overflow:visible; }
       </div>
       <div class="settings-title-actions">
         <span id="settings-dirty-summary" class="settings-status-pill" role="status" aria-live="polite">Clean</span>
+        <button type="button" class="settings-top-action primary" onclick="settingsOpenJsonView()">Open JSON</button>
         <button type="button" class="settings-top-action" onclick="focusSettingsSearch()">Search</button>
         <button type="button" class="settings-top-action" onclick="closeSettings();openKeybindings()">Keyboard Shortcuts</button>
       </div>
@@ -2966,6 +2998,13 @@ pre.code-block { overflow:visible; }
         <button type="button" data-settings-filter-token="@language" onclick="settingsToggleFilterToken('@language')">Language</button>
         <button type="button" data-settings-filter-token="@terminal" onclick="settingsToggleFilterToken('@terminal')">Terminal</button>
         <button type="button" class="clear" onclick="settingsClearFilters()">Clear</button>
+      </div>
+      <div id="settings-search-hints" class="settings-search-hints" aria-label="Settings search examples">
+        <span>Try</span>
+        <code tabindex="0" onclick="settingsUseSearchHint('@modified')" onkeydown="settingsSearchHintKeydown(event,'@modified')">@modified</code>
+        <code tabindex="0" onclick="settingsUseSearchHint('@workspace')" onkeydown="settingsSearchHintKeydown(event,'@workspace')">@workspace</code>
+        <code tabindex="0" onclick="settingsUseSearchHint('@extensions')" onkeydown="settingsSearchHintKeydown(event,'@extensions')">@extensions</code>
+        <code tabindex="0" onclick="settingsUseSearchHint('@id:editor.')" onkeydown="settingsSearchHintKeydown(event,'@id:editor.')">@id:editor.</code>
       </div>
       <div id="settings-target-summary" class="settings-target-summary" role="status" aria-live="polite"></div>
       <div id="settings-review-bar" class="settings-review-bar" role="status" aria-live="polite"></div>
@@ -3658,6 +3697,27 @@ function settingsCopyText(text,label){
     showToast((label||'Setting')+' copied','success',1400);
   }catch(e){showToast('Copy failed','warning',1800)}
 }
+function settingsOpenJsonView(){
+  const snapshot=JSON.stringify(config||{},null,2);
+  if(typeof addTab==='function')addTab('settings.json',snapshot,'json',{runtimeMode:'settings-json'});
+  else openInEditor(snapshot,'json');
+  showToast('Settings JSON opened','info',1400);
+}
+function settingsUseSearchHint(text){
+  const input=$('settings-search');if(!input)return;
+  input.value=String(text||'').trim();
+  input.focus&&input.focus();
+  if(/^@workspace\b/i.test(input.value))selectSettingsTarget('workspace',{preserveSearch:true});
+  else if(/^@extensions\b/i.test(input.value))selectSettingsTarget('extensions',{preserveSearch:true});
+  else scheduleFilterSettings(0);
+}
+function settingsSearchHintKeydown(ev,text){
+  if(!ev)return;
+  if(ev.key==='Enter'||ev.key===' '){
+    ev.preventDefault();
+    settingsUseSearchHint(text);
+  }
+}
 function settingsSearchForKey(key){
   const input=$('settings-search');if(!input)return;
   const value='@id:'+String(key||'').trim();
@@ -3689,6 +3749,12 @@ function settingsAddRowActions(row,opts){
   };
   if(opts.key)add('⧉','Copy setting ID',()=>settingsCopyText(opts.key,'Setting ID'));
   if(opts.key&&opts.searchable)add('⌕','Filter to this setting',()=>settingsSearchForKey(opts.key));
+  if(opts.meta&&opts.inputId)add('Default','Apply default value',()=>{const el=$(opts.inputId);if(el){setSettingsInputValue(el,opts.meta,settingDefaultValue(opts.meta));markSettingsModified();scheduleFilterSettings(0);showToast('Default applied: '+(opts.meta.key||opts.inputId),'info',1400)}});
+  if(opts.meta&&opts.inputId)add('{}','Copy JSON setting entry',()=>{
+    const el=$(opts.inputId);
+    const value=el?settingsInputValue(el,opts.meta):settingDefaultValue(opts.meta);
+    settingsCopyText(JSON.stringify({[opts.meta.key||opts.meta.path||opts.inputId]:value},null,2),'Setting JSON');
+  });
   if(opts.clearTarget){
     const clearBtn=add('Clear','Clear this target override',()=>settingsClearRowTargetOverride(row,opts.meta,opts.inputId),!opts.clearTarget());
     clearBtn.dataset.settingsClearTarget='1';
@@ -3820,6 +3886,11 @@ function wrapSettingsField(inputId){
     if(meta.desc){
       const desc=document.createElement('div');desc.className='settings-built-desc';desc.textContent=meta.desc;wrap.appendChild(desc);
     }
+    const foot=document.createElement('div');foot.className='settings-built-foot';
+    const target=document.createElement('span');target.dataset.settingFootTarget='1';target.textContent='Target: '+settingsTargetDisplayName(currentSettingsTarget);foot.appendChild(target);
+    const footSource=document.createElement('span');footSource.textContent='Source: Built-in';foot.appendChild(footSource);
+    const path=document.createElement('span');path.textContent='Path: '+(meta.path||inputId);foot.appendChild(path);
+    wrap.appendChild(foot);
   }
 }
 function markSettingsModified(){
@@ -3866,6 +3937,8 @@ function markSettingsModified(){
       clearButton.disabled=!scoped;
       clearButton.title=scoped?'Clear this target override':'No target override to clear';
     }
+    const footTarget=wrap.querySelector('[data-setting-foot-target="1"]');
+    if(footTarget)footTarget.textContent='Target: '+settingsTargetDisplayName(currentSettingsTarget);
   });
   const root=settingsMainElement()||document;
   Array.from(root.querySelectorAll('.ext-setting-row.modified')).forEach(()=>modifiedCount++);
@@ -24369,6 +24442,13 @@ function renderSettingsNav(){
   const nav=$('settings-nav');if(!nav)return;
   const sections=settingsCategorySections();
   nav.innerHTML='';
+  const summary=document.createElement('div');
+  summary.className='settings-nav-summary';
+  summary.innerHTML='<strong id="settings-nav-target-title">'+settingsTargetDisplayName(currentSettingsTarget)+' Settings</strong>'
+    +'<div class="settings-nav-summary-line"><span>Visible</span><span id="settings-nav-visible-count">0</span></div>'
+    +'<div class="settings-nav-summary-line"><span>Modified</span><span id="settings-nav-modified-count">0</span></div>'
+    +'<div class="settings-nav-summary-line"><span>Errors</span><span id="settings-nav-error-count">0</span></div>';
+  nav.appendChild(summary);
   if(!sections.length){
     const empty=document.createElement('div');empty.className='settings-nav-empty';empty.textContent='No settings loaded';
     nav.appendChild(empty);return;
@@ -24377,12 +24457,14 @@ function renderSettingsNav(){
     const id=section.dataset.settingsId;
     const btn=document.createElement('button');
     btn.type='button';btn.className='settings-nav-item';btn.dataset.settingsNav=id;
-    const label=document.createElement('span');label.textContent=settingsSectionTitle(section);
+    const badge=document.createElement('span');badge.className='settings-nav-badge';btn.appendChild(badge);
+    const label=document.createElement('span');label.className='settings-nav-label';label.textContent=settingsSectionTitle(section);
     const count=document.createElement('span');count.className='count';
     const visible=settingsSectionVisibleCount(section),modified=settingsSectionModifiedCount(section);
     count.textContent=modified?(visible+' / '+modified):(String(visible||''));
     count.dataset.label=modified?'vis/mod':'';
     count.classList.toggle('has-modified',modified>0);
+    btn.classList.toggle('modified',modified>0);
     btn.appendChild(label);btn.appendChild(count);
     btn.onclick=()=>scrollToSettingsSection(id);
     nav.appendChild(btn);
@@ -24392,6 +24474,8 @@ function renderSettingsNav(){
 }
 function updateSettingsNavCounts(){
   const nav=$('settings-nav');if(!nav)return;
+  let totalVisible=0,totalModified=0,totalErrors=0;
+  const title=$('settings-nav-target-title');if(title)title.textContent=settingsTargetDisplayName(currentSettingsTarget)+' Settings';
   settingsCategorySections().forEach(section=>{
     const btn=Array.from(nav.querySelectorAll('.settings-nav-item'))
       .find(item=>item.dataset.settingsNav===section.dataset.settingsId);
@@ -24399,8 +24483,16 @@ function updateSettingsNavCounts(){
     const visible=section.style.display!=='none';
     btn.style.display=visible?'':'none';
     const visibleCount=settingsSectionVisibleCount(section),modified=settingsSectionModifiedCount(section);
+    const errors=visible?Array.from(section.querySelectorAll('.settings-field.invalid:not(.settings-target-hidden),.ext-setting-row.invalid:not(.settings-target-hidden),[aria-invalid="true"]')).filter(row=>row.style.display!=='none').length:0;
+    if(visible){totalVisible+=visibleCount;totalModified+=modified;totalErrors+=errors}
     const count=btn.querySelector('.count');if(count){count.textContent=modified?(visibleCount+' / '+modified):String(visibleCount||'');count.dataset.label=modified?'vis/mod':'';count.classList.toggle('has-modified',modified>0)}
+    btn.classList.toggle('modified',modified>0);
+    btn.classList.toggle('has-errors',errors>0);
   });
+  const visibleEl=$('settings-nav-visible-count'),modifiedEl=$('settings-nav-modified-count'),errorEl=$('settings-nav-error-count');
+  if(visibleEl)visibleEl.textContent=String(totalVisible);
+  if(modifiedEl)modifiedEl.textContent=String(totalModified);
+  if(errorEl)errorEl.textContent=String(totalErrors);
 }
 function focusSettingsSearch(){
   const input=$('settings-search');if(input){input.focus();input.select&&input.select();}
@@ -24464,6 +24556,9 @@ function installSettingsKeyboardHandlers(){
   });
 }
 window.focusSettingsSearch=focusSettingsSearch;
+window.settingsOpenJsonView=settingsOpenJsonView;
+window.settingsUseSearchHint=settingsUseSearchHint;
+window.settingsSearchHintKeydown=settingsSearchHintKeydown;
 window.resetVisibleModifiedSettings=resetVisibleModifiedSettings;
 window.selectSettingsTarget=selectSettingsTarget;
 window.scrollToSettingsSection=scrollToSettingsSection;
@@ -24496,7 +24591,7 @@ function settingsScopeTokenKey(token){
   return '';
 }
 function settingsFilterTokens(raw){
-  return String(raw||'').match(/(?:^|\s)@[A-Za-z][A-Za-z0-9_-]*/g)||[];
+  return String(raw||'').match(/(?:^|\s)@id:[^\s]+|(?:^|\s)@[A-Za-z][A-Za-z0-9_-]*/g)||[];
 }
 function settingsRowScope(row){
   if(!row)return 'user';
@@ -24544,8 +24639,12 @@ function settingsVisibleGroupText(group){
 }
 function settingsQueryFilters(raw){
   const query=String(raw||'');
-  const filters={modified:false,error:false,json:false,extensions:false,scopes:[]};
-  let text=query.replace(/(^|\s)@([A-Za-z][A-Za-z0-9_-]*)(?=\s|$)/g,(match,prefix,token)=>{
+  const filters={modified:false,error:false,json:false,extensions:false,scopes:[],ids:[]};
+  let text=query.replace(/(^|\s)@id:([^\s]+)/ig,(match,prefix,id)=>{
+    const clean=String(id||'').trim().toLowerCase();
+    if(clean)filters.ids.push(clean);
+    return ' ';
+  }).replace(/(^|\s)@([A-Za-z][A-Za-z0-9_-]*)(?=\s|$)/g,(match,prefix,token)=>{
     const key=String(token||'').toLowerCase();
     const scope=settingsScopeTokenKey(key);
     if(scope){
@@ -24561,13 +24660,22 @@ function settingsQueryFilters(raw){
   text=text.replace(/\s+/g,' ');
   filters.text=text;
   filters.tokens=settingsFilterTokens(query).map(v=>v.trim()).filter(Boolean);
-  filters.active=!!(text||filters.modified||filters.error||filters.json||filters.scopes.length);
+  filters.active=!!(text||filters.modified||filters.error||filters.json||filters.scopes.length||filters.ids.length);
   return filters;
+}
+function settingsGroupMatchesIdFilters(group,ids){
+  if(!ids||!ids.length)return true;
+  const rows=Array.from((group||document).querySelectorAll('.settings-field.builtin-setting,.ext-setting-row'));
+  return rows.some(row=>{
+    const key=String((row.dataset&&row.dataset.settingKey)||(row.dataset&&row.dataset.extSettingKey)||'').toLowerCase();
+    return ids.some(id=>id.endsWith('*')?key.startsWith(id.slice(0,-1)):key.includes(id));
+  });
 }
 function settingsGroupMatchesFilter(group,query){
   if(!group)return false;
   const text=settingsVisibleGroupText(group);
   if(query.text&&!text.includes(query.text))return false;
+  if(query.ids&&!settingsGroupMatchesIdFilters(group,query.ids))return false;
   if(query.modified&&!group.querySelector('.settings-field.modified:not(.settings-target-hidden),.ext-setting-row.modified:not(.settings-target-hidden)'))return false;
   if(query.error&&!group.querySelector('[aria-invalid="true"],.settings-field.invalid:not(.settings-target-hidden),.settings-input-invalid'))return false;
   if(query.json&&!(text.includes('json')||group.querySelector('[id$="-json"],#s-xheaders,#s-xbody')))return false;
@@ -24583,6 +24691,7 @@ function settingsGroupMatchesFilter(group,query){
 }
 function settingsFilterChipLabel(token){
   const raw=String(token||'').replace(/^@/,'');
+  if(raw.toLowerCase().startsWith('id:'))return 'Setting: '+raw.slice(3);
   const key=raw.toLowerCase();
   const scope=settingsScopeTokenKey(key);
   const label=SETTINGS_TOKEN_LABELS[scope||key]||raw;
@@ -31577,6 +31686,10 @@ async function execTerminalCmd(cmd,skipConfirm){
 const termOut=$('terminal-output');
 termOut.setAttribute('contenteditable','false');
 termOut.insertAdjacentHTML('afterend',
+  '<div class="terminal-recent-bar" id="terminal-recent-bar" aria-label="Recent terminal commands">'+
+  '<span class="terminal-recent-label">Recent</span>'+
+  '<span class="terminal-recent-empty">No commands yet</span>'+
+  '</div>'+
   '<div class="terminal-input-row">'+
   '<span class="terminal-input-prompt">$</span>'+
   '<input id="term-input" class="terminal-input" placeholder="Enter command...">'+
@@ -33987,6 +34100,7 @@ async function selectTerminalProfile(profile,opts){
   setInputValue('s-term-shell','');
   setInputValue('s-term-args','');
   renderTerminalProfileSelector();
+  renderTerminalRecentCommands();
   const term=typeof _getActiveTerminalRecord==='function'?_getActiveTerminalRecord():null;
   if(term){
     term.metadata={...terminalProfileMetadata(def.id),...(term.metadata||{}),profile:def.id,shellKind:def.shellKind,shellPath:def.shellPath,shellArgs:def.shellArgs.slice()};
@@ -34043,6 +34157,7 @@ function _switchTerminal(id){
   }
   _renderTermTabs();
   _updateTerminalStatusLine();
+  renderTerminalRecentCommands();
 }
 function _closeTerminal(id,ev){
   if(ev)ev.stopPropagation();
@@ -34270,6 +34385,15 @@ function _terminalTruncationLabel(stdoutTruncated,stderrTruncated){
   if(stderrTruncated)return 'stderr truncated';
   return '';
 }
+function _terminalNormalizePath(value){
+  return String(value||'').replace(/\\/g,'/').replace(/\/+$/,'').toLowerCase();
+}
+function _terminalCwdMatchesWorkspace(cwd){
+  const root=_terminalNormalizePath(currentWorkspaceRoot());
+  const path=_terminalNormalizePath(cwd);
+  if(!root||!path)return true;
+  return path===root||path.startsWith(root+'/');
+}
 function _terminalWorkspaceLabel(cwd){
   const root=String(cwd||currentWorkspaceRoot()||'').replace(/[\\/]+$/,'');
   return root?pathBaseName(root):'workspace';
@@ -34277,6 +34401,52 @@ function _terminalWorkspaceLabel(cwd){
 function _terminalProfileLabel(meta){
   meta=meta&&typeof meta==='object'?meta:{};
   return String(meta.profile||meta.shellKind||meta.shellPath||'System Shell');
+}
+function _terminalActiveHistory(){
+  const term=_getActiveTermHistory&&_getActiveTermHistory();
+  return term?term.history:_termHistory;
+}
+function _terminalRememberCommand(cmd){
+  cmd=String(cmd||'').trim();
+  if(!cmd)return;
+  const hist=_terminalActiveHistory();
+  if(hist[hist.length-1]!==cmd){
+    hist.push(cmd);
+    if(hist.length>100)hist.shift();
+  }
+  const term=_getActiveTermHistory&&_getActiveTermHistory();
+  if(!term){try{localStorage.setItem('sao-term-history',JSON.stringify(_termHistory))}catch(ex){}}
+  renderTerminalRecentCommands();
+}
+function _terminalUseRecentCommand(cmd,runNow){
+  const input=$('term-input');
+  if(input){input.value=String(cmd||'');input.focus&&input.focus();}
+  if(runNow)runTerminalCommand(cmd,{skipConfirm:true,out:_getActiveTermOutput()});
+}
+function renderTerminalRecentCommands(){
+  const bar=$('terminal-recent-bar');if(!bar)return;
+  const hist=_terminalActiveHistory().filter(Boolean).slice(-5).reverse();
+  bar.innerHTML='<span class="terminal-recent-label">Recent</span>';
+  if(!hist.length){
+    const empty=document.createElement('span');empty.className='terminal-recent-empty';empty.textContent='No commands yet';bar.appendChild(empty);return;
+  }
+  hist.forEach(cmd=>{
+    const btn=document.createElement('button');
+    btn.type='button';btn.className='terminal-recent-command';btn.textContent=cmd;btn.title='Use recent command: '+cmd;
+    btn.onclick=ev=>{ev.preventDefault();_terminalUseRecentCommand(cmd,ev.ctrlKey||ev.metaKey)};
+    bar.appendChild(btn);
+  });
+}
+function _updateTerminalPrompt(meta){
+  const prompt=document.querySelector('.terminal-input-prompt');if(!prompt)return;
+  meta=meta&&typeof meta==='object'?meta:{};
+  const cwd=String(meta.cwd||currentWorkspaceRoot()||'');
+  const profile=_terminalProfileLabel(meta);
+  const def=terminalProfileDefinition(profile);
+  const icon=_terminalIconText({iconPath:{id:def.icon||meta.shellKind||''}})||'$';
+  const label=_terminalWorkspaceLabel(cwd);
+  prompt.textContent=label+' '+icon;
+  prompt.title=[profile,cwd?('cwd: '+cwd):'',_terminalCwdMatchesWorkspace(cwd)?'workspace cwd':'outside workspace'].filter(Boolean).join('\n');
 }
 function _setTerminalStatus(state,text,detail,meta){
   const line=$('terminal-status-line');if(!line)return;
@@ -34301,6 +34471,7 @@ function _setTerminalStatus(state,text,detail,meta){
   line.dataset.lastCommand=String(meta.lastCommand||'');
   line.dataset.startedAt=String(meta.startedAt||'');
   line.dataset.finishedAt=String(meta.finishedAt||'');
+  line.dataset.workspaceCwd=_terminalCwdMatchesWorkspace(cwd)?'1':'0';
   const textEl=line.querySelector('.term-status-text');
   const detailEl=line.querySelector('.term-status-detail');
   const wsEl=line.querySelector('[data-terminal-status="workspace"]');
@@ -34309,8 +34480,8 @@ function _setTerminalStatus(state,text,detail,meta){
   const durationEl=line.querySelector('[data-terminal-status="duration"]');
   const flagsEl=line.querySelector('[data-terminal-status="flags"]');
   if(textEl)textEl.textContent=text||'Ready';
-  if(wsEl){wsEl.textContent=_terminalWorkspaceLabel(cwd);wsEl.title=cwd||currentWorkspaceRoot()||''}
-  if(profileEl){profileEl.textContent=profile;profileEl.title=profile}
+  if(wsEl){wsEl.textContent=_terminalWorkspaceLabel(cwd);wsEl.title=cwd||currentWorkspaceRoot()||'';wsEl.className='term-status-pill '+(_terminalCwdMatchesWorkspace(cwd)?'ok':'warn')}
+  if(profileEl){profileEl.textContent=profile;profileEl.title=profile;profileEl.className='term-status-pill ok'}
   if(exitEl){
     exitEl.textContent=exitCode===''?'exit -':'exit '+exitCode;
     exitEl.className='term-status-pill '+(exitCode===''?'':Number(exitCode)===0?'ok':'error');
@@ -34324,7 +34495,8 @@ function _setTerminalStatus(state,text,detail,meta){
     flagsEl.className='term-status-pill '+(flags?'warn':'');
     flagsEl.title=flags||'No terminal warnings';
   }
-  if(detailEl)detailEl.textContent=detail||'';
+  if(detailEl){detailEl.textContent=detail||'';detailEl.title=[meta.lastCommand?('$ '+meta.lastCommand):'',meta.startedAt?('Started: '+meta.startedAt):'',meta.finishedAt?('Finished: '+meta.finishedAt):''].filter(Boolean).join('\n')}
+  _updateTerminalPrompt({...meta,cwd,profile});
 }
 function _updateTerminalStatusLine(){
   const term=_getActiveTerminalRecord();
@@ -34352,11 +34524,23 @@ function _updateTerminalStatusLine(){
 }
 function _appendTerminalCommandBlock(out,cmd){
   const block=document.createElement('div');block.className='terminal-command-block running';
+  block.dataset.command=cmd;
+  block.title='Terminal command: '+cmd;
   const head=document.createElement('div');head.className='terminal-command-head';
   const line=document.createElement('span');line.className='terminal-command-line';line.innerHTML=ansiToHtml('$ '+cmd);
+  line.title=cmd;
   const status=document.createElement('span');status.className='terminal-command-status';status.textContent='running';
+  const actions=document.createElement('span');actions.className='terminal-command-actions';
+  const addAction=(label,title,handler)=>{
+    const btn=document.createElement('button');btn.type='button';btn.textContent=label;btn.title=title;
+    btn.onclick=ev=>{ev.preventDefault();ev.stopPropagation();handler&&handler()};
+    actions.appendChild(btn);
+  };
+  addAction('⧉','Copy command',()=>settingsCopyText(cmd,'Terminal command'));
+  addAction('↩','Use command in input',()=>_terminalUseRecentCommand(cmd,false));
+  addAction('▶','Run command again',()=>runTerminalCommand(cmd,{skipConfirm:true,out:_getActiveTermOutput()}));
   const body=document.createElement('div');body.className='terminal-command-body';
-  head.appendChild(line);head.appendChild(status);block.appendChild(head);block.appendChild(body);
+  head.appendChild(line);head.appendChild(status);head.appendChild(actions);block.appendChild(head);block.appendChild(body);
   out.appendChild(block);_trimTerminalScrollback(out);out.scrollTop=out.scrollHeight;
   return {block,status,body};
 }
@@ -34396,6 +34580,7 @@ function _updateTerminalRecordForRun(cmd,state,result,durationMs){
   }
   _renderTermTabs();
   _updateTerminalStatusLine();
+  renderTerminalRecentCommands();
 }
 function _activeTerminalRunOutput(){
   return _getActiveTermOutput();
@@ -34557,6 +34742,7 @@ async function runTerminalCommand(cmd,options){
   cmd=String(cmd||'').trim();
   if(!cmd)return null;
   const out=opts.out||_getActiveTermOutput();
+  _terminalRememberCommand(cmd);
   if(cmd==='clear'||cmd==='cls'){
     if(out)out.innerHTML='';
     _updateTerminalRecordForRun(cmd,'done',{exitCode:0},0);
@@ -34632,6 +34818,9 @@ window.runTerminalCommand=runTerminalCommand;
 window.stopTerminalCommand=stopTerminalCommand;
 window.restartTerminalCommand=restartTerminalCommand;
 window.sendTerminalInput=sendTerminalInput;
+window.renderTerminalRecentCommands=renderTerminalRecentCommands;
+window._terminalRememberCommand=_terminalRememberCommand;
+window._terminalCwdMatchesWorkspace=_terminalCwdMatchesWorkspace;
 window.selectTerminalProfile=selectTerminalProfile;
 window.renderTerminalProfileSelector=renderTerminalProfileSelector;
 window.openWorkspaceSwitcher=openWorkspaceSwitcher;
@@ -34664,9 +34853,8 @@ window._createTerminal=_createTerminal;window._closeTerminal=_closeTerminal;wind
         e.preventDefault();e.stopImmediatePropagation();return;
       }
       const cmd=raw.trim();this.value='';if(cmd){
-        if(hist[hist.length-1]!==cmd){hist.push(cmd);if(hist.length>100)hist.shift()}
         setIdx(-1);
-        if(!term){try{localStorage.setItem('sao-term-history',JSON.stringify(_termHistory))}catch(ex){}}
+        _terminalRememberCommand(cmd);
         runTerminalCommand(cmd,{skipConfirm:true,out:_getActiveTermOutput()});
       }
       e.stopImmediatePropagation();return;
@@ -34681,11 +34869,13 @@ window._createTerminal=_createTerminal;window._closeTerminal=_closeTerminal;wind
     }
   },true);
 })();
+renderTerminalRecentCommands();
 const _origFocusTerminal=focusTerminal;
 focusTerminal=function(){
   _origFocusTerminal();
   renderTerminalProfileSelector();
   if(_terminals.length===0)_createTerminal(null,terminalProfileMetadata(),true);
+  renderTerminalRecentCommands();
 };
 async function terminalUiSelfCheckSnapshot(){
   const oldCall=call;
@@ -34696,6 +34886,7 @@ async function terminalUiSelfCheckSnapshot(){
   const oldDefaultDataset=defaultOut?{...defaultOut.dataset}:{};
   const oldStatusClass=status?status.className:'';
   const oldStatusState=status?status.dataset.state:'';
+  const oldTermInputValue=$('term-input')?$('term-input').value:'';
   const oldWorkspace=config.workspace;
   const oldTerminal=config.terminal;
   try{
@@ -34740,6 +34931,11 @@ async function terminalUiSelfCheckSnapshot(){
     const stopped=await stopTerminalCommand();
     const slow=await slowPromise;
     const blocks=defaultOut?Array.from(defaultOut.querySelectorAll('.terminal-command-block')):[];
+    const recentButtons=Array.from(document.querySelectorAll('#terminal-recent-bar .terminal-recent-command'));
+    _terminalUseRecentCommand('echo terminal-ok',false);
+    const recentInputValue=$('term-input')?$('term-input').value:'';
+    const prompt=document.querySelector('.terminal-input-prompt');
+    const actionButtons=blocks.flatMap(block=>Array.from(block.querySelectorAll('.terminal-command-actions button')).map(btn=>btn.textContent));
     const snapshot={
       okExit:ok&&ok.exitCode,
       badExit:bad&&bad.exitCode,
@@ -34760,8 +34956,17 @@ async function terminalUiSelfCheckSnapshot(){
       statusStdoutTruncated:status?status.dataset.stdoutTruncated:'',
       statusStderrTruncated:status?status.dataset.stderrTruncated:'',
       statusFinishedAt:status?status.dataset.finishedAt:'',
+      statusWorkspaceCwd:status?status.dataset.workspaceCwd:'',
       statusText:status?status.textContent.trim():'',
+      promptText:prompt?prompt.textContent:'',
+      promptTitle:prompt?prompt.title:'',
       statusAfterBad,
+      recentCount:recentButtons.length,
+      recentLabels:recentButtons.map(btn=>btn.textContent),
+      recentInputValue,
+      commandActionCount:actionButtons.length,
+      commandActionLabels:actionButtons,
+      commandDataset:blocks.map(block=>block.dataset.command||''),
       selectorValue:$('terminal-profile-select')?$('terminal-profile-select').value:'',
       createdTermProfile:selfTerm&&selfTerm.metadata?selfTerm.metadata.profile:'',
       lastCommand:defaultOut?defaultOut.dataset.lastCommand:'',
@@ -34779,7 +34984,7 @@ async function terminalUiSelfCheckSnapshot(){
       closeStdinEcho:defaultOut?defaultOut.textContent.includes('[stdin closed]'):false,
       closeStdinResult:closed&&closed.stdinClosed
     };
-    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.hasInputEcho&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusExitCode===''&&snapshot.statusDurationMs==='7'&&snapshot.statusStdoutTruncated==='0'&&snapshot.statusStderrTruncated==='0'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.statusAfterBad.state==='error'&&snapshot.statusAfterBad.exitCode==='7'&&snapshot.statusAfterBad.durationMs==='9'&&snapshot.statusAfterBad.stderrTruncated==='1'&&String(snapshot.statusAfterBad.flags||'').includes('stderr truncated')&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.lastDurationMs==='7'&&snapshot.lastStdoutTruncated==='0'&&snapshot.lastStderrTruncated==='0'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell'&&snapshot.writePayloadData==='hello stdin\n'&&snapshot.writeBytes===12&&snapshot.closeStdinPayload===true&&snapshot.closeStdinEcho&&snapshot.closeStdinResult===true;
+    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.hasInputEcho&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusWorkspaceCwd==='1'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusExitCode===''&&snapshot.statusDurationMs==='7'&&snapshot.statusStdoutTruncated==='0'&&snapshot.statusStderrTruncated==='0'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.promptText.includes('sao_auto')&&snapshot.promptTitle.includes('Windows PowerShell')&&snapshot.statusAfterBad.state==='error'&&snapshot.statusAfterBad.exitCode==='7'&&snapshot.statusAfterBad.durationMs==='9'&&snapshot.statusAfterBad.stderrTruncated==='1'&&String(snapshot.statusAfterBad.flags||'').includes('stderr truncated')&&snapshot.recentCount>=3&&snapshot.recentLabels.includes('slow-command')&&snapshot.recentInputValue==='echo terminal-ok'&&snapshot.commandActionCount>=9&&snapshot.commandActionLabels.includes('▶')&&snapshot.commandDataset.includes('bad-command')&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.lastDurationMs==='7'&&snapshot.lastStdoutTruncated==='0'&&snapshot.lastStderrTruncated==='0'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell'&&snapshot.writePayloadData==='hello stdin\n'&&snapshot.writeBytes===12&&snapshot.closeStdinPayload===true&&snapshot.closeStdinEcho&&snapshot.closeStdinResult===true;
     return snapshot;
   }finally{
     call=oldCall;
@@ -34793,6 +34998,7 @@ async function terminalUiSelfCheckSnapshot(){
       Object.assign(defaultOut.dataset,oldDefaultDataset);
     }
     if(status){status.className=oldStatusClass;status.dataset.state=oldStatusState}
+    if($('term-input'))$('term-input').value=oldTermInputValue;
     _terminals.forEach(t=>{t.outputEl.style.display=t.id===_activeTermId?'':'none'});
     if(defaultOut)defaultOut.style.display=_activeTermId!==null?'none':'';
     _renderTermTabs();
