@@ -784,15 +784,11 @@ def get_unified_overlay_mode() -> bool:
 
 def _get_unified_overlay(root: Any = None):
     global _unified_overlay_instance
-    with _unified_overlay_lock:
-        if _unified_overlay_instance is None:
-            from render.overlay_compositor import UnifiedOverlay
-            _unified_overlay_instance = UnifiedOverlay(root)
-        uo = _unified_overlay_instance
+    from render.overlay_compositor import get_unified_overlay
+    uo = get_unified_overlay(root)
+    _unified_overlay_instance = uo  # keep in sync for direct readers
     if not uo._running:
         uo.start()
-    # Non-blocking: if not ready yet, layers queue up and render
-    # once the host is created. Never block the Tk main thread.
     return uo
 
 

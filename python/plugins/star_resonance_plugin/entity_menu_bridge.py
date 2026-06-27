@@ -485,10 +485,7 @@ class StarResonanceEntityMenuBridge:
             menu.add_command(label='◈ 隐藏 HP 面板', command=self._hp_overlay_hide)
             menu.add_separator()
             menu.add_command(label='✕ 退出', command=getattr(owner, '_on_close', lambda: None))
-            try:
-                menu.tk_popup(x_root, max(0, y_root - 90))
-            finally:
-                menu.grab_release()
+            menu.tk_popup(x_root, max(0, y_root - 90))
         except Exception as exc:
             print(f'[SR] HP overlay context menu failed: {exc}')
 

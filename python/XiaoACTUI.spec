@@ -131,6 +131,13 @@ a = Analysis(
         ('assets', 'assets'),
         # ACT 插件树 — 用 collect_plugins() 排除开发产物 (il2cpp/out 1.8GB+)
         *collect_plugins(),
+        # Roslyn in-process C# compiler (allows .cs plugins without .NET SDK)
+        *([
+            (os.path.join(HERE, 'act_platform', 'scripting', 'roslyn', f),
+             os.path.join('act_platform', 'scripting', 'roslyn'))
+            for f in os.listdir(os.path.join(HERE, 'act_platform', 'scripting', 'roslyn'))
+            if f.endswith('.dll')
+        ] if os.path.isdir(os.path.join(HERE, 'act_platform', 'scripting', 'roslyn')) else []),
         # AI Editor Node.js extension host (JS file, not collected by collect_submodules)
         ('ai_editor/node_ext_host.js', 'ai_editor'),
         # Bundled Node.js runtime (single binary, optional — skip if not present)

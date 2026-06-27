@@ -1216,6 +1216,128 @@ class PluginContext:
     def clear_overlay(self, surface: Optional[str] = None) -> None:
         self._manager._clear_overlay(self._record.plugin_id, surface)
 
+    # -- direct compositor layer API (bypass base64 rgba_frame path) --------
+
+    def _get_compositor_overlay(self) -> Any:
+        """Get the singleton compositor overlay instance."""
+        try:
+            from render.overlay_compositor import get_unified_overlay
+            return get_unified_overlay()
+        except ImportError:
+            return None
+
+    def create_compositor_layer(
+        self, name: str, width: int, height: int,
+        x: int = 0, y: int = 0, z: int = 140,
+        click_through: bool = False,
+    ) -> dict[str, Any]:
+        """Create a compositor layer owned by this plugin for direct BGRA frame upload."""
+        import sys
+        overlay = self._get_compositor_overlay()
+        if overlay is None:
+            print("[CuteGirl-PY] compositor overlay unavailable", file=sys.stderr)
+            return {"ok": False, "reason": "overlay_unavailable"}
+        full_name = f"{self._record.plugin_id}_{name}"
+        print(f"[CuteGirl-PY] creating layer '{full_name}' {width}x{height} at ({x},{y}) z={z} "
+              f"overlay_id={id(overlay)} existing_layers={list(overlay._layers.keys())}", file=sys.stderr)
+        layer = overlay.create_layer(
+            full_name, int(width), int(height),
+            x=int(x), y=int(y), z=int(z),
+            click_through=bool(click_through),
+        )
+        print(f"[CuteGirl-PY] layer created: {layer} visible={getattr(layer, 'visible', '?')}", file=sys.stderr)
+        if not hasattr(self, "_compositor_layers"):
+            self._compositor_layers: dict[str, Any] = {}
+        self._compositor_layers[str(name)] = layer
+        return {"ok": True, "name": full_name}
+
+    _upload_log_count: int = 0
+
+    def upload_compositor_frame(
+        self, name: str, bgra_bytes: Any, width: int, height: int,
+        x: Any = None, y: Any = None,
+    ) -> None:
+        """Upload premultiplied BGRA frame bytes directly to a compositor layer."""
+        import sys
+        layers = getattr(self, "_compositor_layers", None)
+        if not layers:
+            if self._upload_log_count < 3:
+                print(f"[CuteGirl-PY] upload: no _compositor_layers dict", file=sys.stderr)
+                self._upload_log_count += 1
+            return
+        layer = layers.get(str(name))
+        if layer is None:
+            if self._upload_log_count < 3:
+                print(f"[CuteGirl-PY] upload: layer '{name}' not found in {list(layers.keys())}", file=sys.stderr)
+                self._upload_log_count += 1
+            return
+        if x is not None and y is not None:
+            layer.set_position(int(x), int(y))
+        raw = bytes(bgra_bytes) if not isinstance(bgra_bytes, bytes) else bgra_bytes
+        layer.upload_bgra(raw, int(width), int(height))
+        if not layer.visible:
+            layer.show()
+        if self._upload_log_count < 3:
+            print(f"[CuteGirl-PY] upload OK: layer={layer.name} {width}x{height} visible={layer.visible} bytes={len(raw)}", file=sys.stderr)
+            self._upload_log_count += 1
+
+    def destroy_compositor_layer(self, name: str) -> None:
+        """Destroy a compositor layer owned by this plugin."""
+        layers = getattr(self, "_compositor_layers", None)
+        if not layers:
+            return
+        layer = layers.pop(str(name), None)
+        if layer is None:
+            return
+        try:
+            overlay = self._get_compositor_overlay()
+            if overlay is not None:
+                overlay.destroy_layer(layer.name)
+        except Exception:
+            pass
+
+    def set_compositor_layer_visible(self, name: str, visible: bool) -> None:
+        layers = getattr(self, "_compositor_layers", None)
+        if not layers:
+            return
+        layer = layers.get(str(name))
+        if layer is None:
+            return
+        if visible:
+            layer.show()
+        else:
+            layer.hide()
+
+    def set_compositor_layer_input(
+        self, name: str,
+        cursor_pos_fn: Any = None, mouse_button_fn: Any = None,
+        cursor_leave_fn: Any = None, scroll_fn: Any = None,
+    ) -> None:
+        """Register mouse callbacks on a compositor layer."""
+        layers = getattr(self, "_compositor_layers", None)
+        if not layers:
+            return
+        layer = layers.get(str(name))
+        if layer is None:
+            return
+        layer.set_input_callbacks(
+            cursor_pos_fn, cursor_leave_fn, mouse_button_fn, scroll_fn,
+        )
+
+    def _cleanup_compositor_layers(self) -> None:
+        """Destroy all compositor layers owned by this plugin."""
+        layers = getattr(self, "_compositor_layers", None)
+        if not layers:
+            return
+        overlay = self._get_compositor_overlay()
+        for _name, layer in list(layers.items()):
+            try:
+                if overlay is not None:
+                    overlay.destroy_layer(layer.name)
+            except Exception:
+                pass
+        layers.clear()
+
     def register_hotkey(self, hotkey_id: str, callback: Callable[[], Any],
                         default_key: str = "", label: str = "") -> str:
         """Register a customizable global hotkey for this plugin.
@@ -1979,6 +2101,11 @@ class PluginManager:
         for token in list(record.subscriptions):
             self.event_bus.unsubscribe(token)
         record.subscriptions.clear()
+        if record.context is not None:
+            try:
+                record.context._cleanup_compositor_layers()
+            except Exception:
+                pass
         self._unregister_plugin_extensions(record.plugin_id)
         record.module = None
         record.context = None
@@ -1996,6 +2123,7 @@ class PluginManager:
             return False
         self.unload_plugin(plugin_id)
         self._records.pop(plugin_id, None)
+        self._settings_cache.pop(plugin_id, None)
         self._publish_plugin_lifecycle(record, "forgotten")
         try:
             self._discovery_signature_cache = self._discovery_signature()
@@ -2925,6 +3053,17 @@ class PluginManager:
                 except Exception:
                     pass
         if record is not None:
+            # Remove the plugin's main module AND all submodules from
+            # sys.modules so .pyd/.dll handles are released and the plugin
+            # directory can be deleted or replaced on Windows.
+            main_mod = f"act_plugin_{record.plugin_id.replace('-', '_').replace('.', '_')}"
+            prefix_dot = main_mod + "."
+            stale_mods = [
+                name for name in list(sys.modules)
+                if name == main_mod or name.startswith(prefix_dot)
+            ]
+            for mod_name in stale_mods:
+                sys.modules.pop(mod_name, None)
             # Remove modules the plugin loaded via ctx.load_local (no sys.modules leak).
             for mod_name in list(record.loaded_local_modules):
                 sys.modules.pop(mod_name, None)

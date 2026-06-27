@@ -27,10 +27,7 @@ from render.overlay_compositor import (
     UnifiedOverlay,
 )
 
-try:
-    from render.gpu_overlay_window import _get_unified_overlay as get_unified_overlay
-except Exception:  # pragma: no cover - fallback for isolated imports/tests
-    from render.overlay_compositor import get_unified_overlay
+from render.overlay_compositor import get_unified_overlay
 
 
 _next_layer_id = 0

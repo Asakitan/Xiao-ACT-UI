@@ -35,6 +35,9 @@ dist/
 build/
 *.exe
 
+# ── Roslyn C# compiler (downloaded, rebuilt by fetch_roslyn) ──
+python/act_platform/scripting/roslyn/
+
 # ── .NET build artifacts ──────────────────────────
 **/bin/
 **/obj/

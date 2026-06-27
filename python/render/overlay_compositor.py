@@ -328,6 +328,8 @@ class CompositorLayer:
         """Check if screen point (sx, sy) is inside this layer."""
         if not self.visible or self.click_through:
             return False
+        if self._input_proxy is not None:
+            return False
         return (self.x <= sx < self.x + self.width
                 and self.y <= sy < self.y + self.height)
 
@@ -454,6 +456,7 @@ class UnifiedOverlay:
 
         # Mouse state
         self._hover_layer: Optional[str] = None
+        self._capture_layer: Optional[str] = None
 
         # Performance
         self._target_fps = 60
@@ -478,6 +481,12 @@ class UnifiedOverlay:
             layer = self._layers.pop(name, None)
             if layer:
                 self._rebuild_z_order()
+
+        if layer:
+            try:
+                layer.destroy_input_proxy()
+            except Exception:
+                pass
 
         def _release():
             if layer:
@@ -571,6 +580,7 @@ class UnifiedOverlay:
         with self._lock:
             return any(
                 layer.visible and not layer.click_through
+                and layer._input_proxy is None
                 for layer in self._z_sorted
             )
 
@@ -590,14 +600,18 @@ class UnifiedOverlay:
         self._cmd_q.put(_set)
 
     def force_host_input_passthrough(self) -> None:
-        """Compatibility alias for older callers.
+        """Force the host window to WS_EX_TRANSPARENT regardless of layer state.
 
-        The compositor now prefers host hit-testing for interactive layers, so
-        this keeps the host pass-through only when no visible interactive layer
-        needs it.
+        Plugin layers use Tk input proxies for mouse events and never need
+        the host HWND to capture input.  Callers that manage their own input
+        routing (e.g. UnifiedOverlayCanvasManager) use this to keep the host
+        click-through even when ``click_through=False`` layers exist.
         """
 
-        self.sync_host_input_mode()
+        def _set():
+            if self._host:
+                self._host.set_input_passthrough(True)
+        self._cmd_q.put(_set)
 
     # ── Tk callback bridge ───────────────────────────────────
 
@@ -621,15 +635,17 @@ class UnifiedOverlay:
 
     def _hit_test(self, sx: int, sy: int) -> bool:
         """Screen-space hit test. Returns True if any interactive
-        layer covers (sx, sy)."""
+        layer covers (sx, sy) and uses host HWND input (no Tk proxy)."""
         for layer in reversed(self._z_sorted):
             if layer.hit_test(sx, sy):
+                if layer._input_proxy is not None:
+                    return False
                 return True
         return False
 
     def _find_layer_at(self, sx: int, sy: int) -> Optional[CompositorLayer]:
         for layer in reversed(self._z_sorted):
-            if layer.hit_test(sx, sy):
+            if layer.hit_test(sx, sy) and layer._input_proxy is None:
                 return layer
         return None
 
@@ -641,10 +657,15 @@ class UnifiedOverlay:
 
         Called on the overlay thread (from WndProc via DispatchMessage).
         Layer callbacks are posted to Tk main thread via post_to_tk().
+
+        Mouse capture: after a button-down on a layer, all subsequent
+        move and button-up events route to that same layer regardless
+        of cursor position, preventing lost releases during drag.
         """
         if msg == WM_MOUSELEAVE:
             prev = self._hover_layer
             self._hover_layer = None
+            self._capture_layer = None
             if prev:
                 layer = self._layers.get(prev)
                 if layer and layer._on_cursor_leave:
@@ -652,11 +673,19 @@ class UnifiedOverlay:
                     self.post_to_tk(fn)
             return
 
-        target = self._find_layer_at(sx, sy)
+        # During mouse capture, route to the captured layer
+        captured = None
+        if self._capture_layer is not None:
+            captured = self._layers.get(self._capture_layer)
+            if captured is None or not captured.visible:
+                self._capture_layer = None
+                captured = None
+
+        target = captured if captured is not None else self._find_layer_at(sx, sy)
 
         if msg == WM_MOUSEMOVE:
             tgt_name = target.name if target else None
-            if tgt_name != self._hover_layer:
+            if captured is None and tgt_name != self._hover_layer:
                 if self._hover_layer:
                     old = self._layers.get(self._hover_layer)
                     if old and old._on_cursor_leave:
@@ -680,8 +709,13 @@ class UnifiedOverlay:
 
         if msg in (WM_LBUTTONDOWN, WM_LBUTTONUP,
                    WM_RBUTTONDOWN, WM_RBUTTONUP):
+            is_down = msg in (WM_LBUTTONDOWN, WM_RBUTTONDOWN)
+            if is_down and target is not None:
+                self._capture_layer = target.name
+            elif not is_down:
+                self._capture_layer = None
             if target and target._on_mouse_button:
-                action = 1 if msg in (WM_LBUTTONDOWN, WM_RBUTTONDOWN) else 0
+                action = 1 if is_down else 0
                 lx = float(sx - target.x)
                 ly = float(sy - target.y)
                 fn = target._on_mouse_button
@@ -756,8 +790,21 @@ class UnifiedOverlay:
                 try:
                     self._render_frame(now - t0)
                     self._host.swap_buffers()
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    import traceback; traceback.print_exc()
+
+            # Periodic compositor diagnostic
+            if not hasattr(self, '_diag_tick'):
+                self._diag_tick = 0
+            self._diag_tick += 1
+            if self._diag_tick <= 3 or self._diag_tick % 600 == 0:
+                layers_info = [(l.name, l.visible, l._dirty, l._frame_seq, l.alpha, l.z_order)
+                               for l in self._z_sorted]
+                import sys
+                print(f"[Compositor-DIAG] tick={self._diag_tick} id={id(self)} layers={len(self._z_sorted)} "
+                      f"any_dirty={any_dirty} host={self._host is not None} "
+                      f"all_keys={list(self._layers.keys())} "
+                      f"z_sorted={layers_info[:5]}", file=sys.stderr, flush=True)
 
             # Adaptive sleep — idle longer when no layers are visible.
             # CRITICAL: must pump Win32 messages even while sleeping,

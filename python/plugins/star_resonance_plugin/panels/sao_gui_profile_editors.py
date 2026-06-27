@@ -451,11 +451,8 @@ class AutoKeyDetailPanel(_DetailEditorBase):
             menu.add_separator()
             menu.add_command(label='删除 Delete',
                              command=lambda: self._delete_profile(pid))
-            try:
-                menu.tk_popup(btn.winfo_rootx(),
-                              btn.winfo_rooty() + btn.winfo_height())
-            finally:
-                menu.grab_release()
+            menu.tk_popup(btn.winfo_rootx(),
+                          btn.winfo_rooty() + btn.winfo_height())
 
         btn = make_action_button(parent, '更多 ▾', _post, width=6)
         holder['btn'] = btn

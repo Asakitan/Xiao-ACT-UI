@@ -259,15 +259,9 @@ class SAOPlayerGUIPanelsMixin:
                                 command=lambda p=pid: self._open_plugin_detached_panel(p))
             prefix = ('★ ' if pinned else '') + ('● ' if it.get('active') else ('◐ ' if enabled else '○ '))
             menu.add_cascade(label=prefix + name, menu=sub)
-        try:
-            x = self.root.winfo_pointerx()
-            y = self.root.winfo_pointery()
-            menu.tk_popup(x, y)
-        finally:
-            try:
-                menu.grab_release()
-            except Exception:
-                pass
+        x = self.root.winfo_pointerx()
+        y = self.root.winfo_pointery()
+        menu.tk_popup(x, y)
 
     def _toggle_hide_all_panels(self):
         """一键隐藏/显示所有浮动面板 (不销毁, 只是 withdraw/deiconify)"""

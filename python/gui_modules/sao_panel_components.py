@@ -339,15 +339,9 @@ def dropdown_button(parent: tk.Misc, text: str, items: Iterable[Any], *, kind: s
         menu.add_command(label=str(label), command=command)
 
     def _pop() -> None:
-        try:
-            x = btn.winfo_rootx()
-            y = btn.winfo_rooty() + btn.winfo_height()
-            menu.tk_popup(x, y)
-        finally:
-            try:
-                menu.grab_release()
-            except Exception:
-                pass
+        x = btn.winfo_rootx()
+        y = btn.winfo_rooty() + btn.winfo_height()
+        menu.tk_popup(x, y)
 
     btn.configure(command=_pop, cursor='hand2')
     btn._sao_dropdown_menu = menu  # type: ignore[attr-defined]  # keep a live ref

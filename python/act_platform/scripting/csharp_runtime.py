@@ -3,9 +3,12 @@
 
 Supports two modes:
 
-1. **Source mode** (``.cs``): auto-compiles a ``.cs`` file to a temporary
-   assembly using ``csc.exe`` / ``dotnet`` from the installed .NET SDK,
-   then loads it via pythonnet.
+1. **Source mode** (``.cs``): auto-compiles a ``.cs`` file using one of:
+   - ``csc.exe`` / ``dotnet`` from .NET SDK (if installed)
+   - Windows built-in .NET Framework ``csc.exe`` (Win10/11, always present)
+   - Bundled Roslyn in-process compiler (``scripting/roslyn/`` DLLs,
+     fetch via ``python -m act_platform.scripting.fetch_roslyn``)
+   Users do NOT need a .NET SDK installed.
 
 2. **Assembly mode** (``.dll``): directly loads a pre-compiled .NET
    assembly. The manifest ``entry`` should point at the ``.dll``.
@@ -51,8 +54,7 @@ declared namespace. Lifecycle hooks map to static or instance methods::
         }
     }
 
-Requires: ``pip install pythonnet`` and .NET 6.0+ runtime.
-For source compilation: .NET SDK (``dotnet`` or ``csc.exe`` on PATH).
+Requires: ``pip install pythonnet`` and .NET 6.0+ runtime (or .NET Framework on Windows).
 """
 
 from __future__ import annotations
@@ -171,7 +173,12 @@ def _ensure_reference_assemblies(references: list[str]) -> None:
 
 
 def _find_csc() -> str | None:
-    """Locate csc.exe or dotnet for source compilation."""
+    """Locate csc.exe or dotnet for source compilation.
+
+    Search order: PATH → dotnet SDK → Windows built-in .NET Framework csc.exe.
+    The Framework csc.exe ships with every Windows 10/11 installation so it
+    serves as a reliable fallback even when no SDK is installed.
+    """
     csc = shutil.which("csc") or shutil.which("csc.exe")
     if csc:
         return csc
@@ -186,6 +193,13 @@ def _find_csc() -> str | None:
             path = os.path.join(base, "dotnet.exe")
             if os.path.isfile(path):
                 return path
+        windir = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+        for arch_dir in ("Framework64", "Framework"):
+            candidate = os.path.join(
+                windir, "Microsoft.NET", arch_dir, "v4.0.30319", "csc.exe",
+            )
+            if os.path.isfile(candidate):
+                return candidate
     return None
 
 
@@ -243,6 +257,168 @@ def _default_target_framework() -> str:
         except Exception:
             pass
     return "netstandard2.0"
+
+
+_ROSLYN_LOADED = False
+_ROSLYN_AVAILABLE: bool | None = None
+
+
+def _roslyn_dir() -> str | None:
+    """Locate bundled Roslyn DLLs (Microsoft.CodeAnalysis.CSharp + deps)."""
+    candidates = [
+        os.path.join(os.path.dirname(__file__), "roslyn"),
+        os.path.join(os.path.dirname(__file__), "..", "..", "vendor", "roslyn"),
+    ]
+    try:
+        from config import BUNDLE_DIR
+        candidates.append(
+            os.path.join(BUNDLE_DIR, "act_platform", "scripting", "roslyn"))
+    except Exception:
+        pass
+    required = ("Microsoft.CodeAnalysis.CSharp.dll", "Microsoft.CodeAnalysis.dll")
+    for d in candidates:
+        if os.path.isdir(d) and all(os.path.isfile(os.path.join(d, f)) for f in required):
+            return os.path.abspath(d)
+    return None
+
+
+def _load_roslyn_assemblies() -> bool:
+    """Load Roslyn DLLs into the CLR. Returns True on success."""
+    global _ROSLYN_LOADED, _ROSLYN_AVAILABLE
+    if _ROSLYN_LOADED:
+        return True
+    if _ROSLYN_AVAILABLE is False:
+        return False
+    _ensure_pythonnet()
+    rdir = _roslyn_dir()
+    if rdir is None:
+        _ROSLYN_AVAILABLE = False
+        return False
+    for dll in sorted(os.listdir(rdir)):
+        if dll.endswith(".dll"):
+            full = os.path.join(rdir, dll)
+            try:
+                _clr.AddReference(full)
+            except Exception:
+                try:
+                    _System.Reflection.Assembly.LoadFrom(full)
+                except Exception:
+                    pass
+    try:
+        from Microsoft.CodeAnalysis import MetadataReference  # noqa: F401
+        from Microsoft.CodeAnalysis.CSharp import CSharpSyntaxTree  # noqa: F401
+    except ImportError:
+        _ROSLYN_AVAILABLE = False
+        return False
+    _ROSLYN_LOADED = True
+    _ROSLYN_AVAILABLE = True
+    return True
+
+
+def _collect_bcl_reference_paths() -> list[str]:
+    """Discover .NET BCL assembly paths for Roslyn compilation references."""
+    paths: dict[str, str] = {}
+    probe_names = [
+        "System.Private.CoreLib", "System.Runtime", "System.Console",
+        "System.Collections", "System.Linq", "System.Threading",
+        "netstandard", "mscorlib", "System",
+    ]
+    for name in probe_names:
+        try:
+            asm = _System.Reflection.Assembly.Load(name)
+            loc = str(asm.Location or "")
+            if loc and os.path.isfile(loc):
+                paths[os.path.basename(loc).lower()] = loc
+        except Exception:
+            pass
+    try:
+        core_loc = str(_System.Type.GetType("System.Object").Assembly.Location or "")
+        if core_loc and os.path.isfile(core_loc):
+            paths[os.path.basename(core_loc).lower()] = core_loc
+            asm_dir = os.path.dirname(core_loc)
+            for f in os.listdir(asm_dir):
+                fl = f.lower()
+                if fl.endswith(".dll") and fl.startswith("system.") and fl not in paths:
+                    paths[fl] = os.path.join(asm_dir, f)
+    except Exception:
+        pass
+    return list(paths.values())
+
+
+def _compile_cs_roslyn(source_path: str,
+                       references: list[str] | None = None) -> Any | None:
+    """Compile .cs source to an in-memory Assembly via Roslyn.
+
+    Returns the loaded Assembly on success, None if Roslyn is unavailable,
+    or raises RuntimeError on compilation failure.
+    """
+    if not _load_roslyn_assemblies():
+        return None
+
+    import clr as _clr_mod  # noqa: F811
+    from Microsoft.CodeAnalysis import MetadataReference, OutputKind  # type: ignore[import]
+    from Microsoft.CodeAnalysis.CSharp import (  # type: ignore[import]
+        CSharpCompilation,
+        CSharpCompilationOptions,
+        CSharpSyntaxTree,
+    )
+
+    with open(source_path, "r", encoding="utf-8") as fp:
+        source_code = fp.read()
+
+    trees = _System.Collections.Generic.List[object]()
+    trees.Add(CSharpSyntaxTree.ParseText(source_code))
+    source_dir = os.path.dirname(os.path.abspath(source_path))
+    try:
+        for fname in sorted(os.listdir(source_dir)):
+            if (
+                fname.endswith(".cs")
+                and fname != os.path.basename(source_path)
+                and not fname.startswith(".")
+            ):
+                with open(os.path.join(source_dir, fname), "r", encoding="utf-8") as fp:
+                    trees.Add(CSharpSyntaxTree.ParseText(fp.read()))
+    except OSError:
+        pass
+
+    refs = _System.Collections.Generic.List[MetadataReference]()
+    for bcl_path in _collect_bcl_reference_paths():
+        try:
+            refs.Add(MetadataReference.CreateFromFile(bcl_path))
+        except Exception:
+            pass
+    for ref_path in (references or []):
+        if os.path.isfile(ref_path):
+            try:
+                refs.Add(MetadataReference.CreateFromFile(os.path.abspath(ref_path)))
+            except Exception:
+                pass
+    runtime_ref = _python_runtime_reference()
+    if runtime_ref:
+        try:
+            refs.Add(MetadataReference.CreateFromFile(runtime_ref))
+        except Exception:
+            pass
+
+    stem = os.path.splitext(os.path.basename(source_path))[0]
+    options = CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+    compilation = CSharpCompilation.Create(stem, trees, refs, options)
+
+    ms = _System.IO.MemoryStream()
+    emit_result = compilation.Emit(ms)
+
+    if not emit_result.Success:
+        errors = []
+        for diag in emit_result.Diagnostics:
+            sev = str(diag.Severity)
+            if "Error" in sev:
+                errors.append(str(diag))
+        raise RuntimeError(
+            "Roslyn compilation failed:\n" + "\n".join(errors[:30])
+        )
+
+    ms.Seek(0, _System.IO.SeekOrigin.Begin)
+    return _System.Reflection.Assembly.Load(ms.ToArray())
 
 
 def _compile_cs(source_path: str, output_dir: str, references: list[str] | None = None) -> str:
@@ -482,6 +658,37 @@ class _CSharpProxy:
     def clear_overlay(self, surface=None) -> None:
         self._ctx.clear_overlay(str(surface) if surface else None)
 
+    def create_compositor_layer(self, name, width, height,
+                                x=0, y=0, z=140, click_through=False):
+        return self._ctx.create_compositor_layer(
+            str(name), int(width), int(height),
+            x=int(x), y=int(y), z=int(z),
+            click_through=bool(click_through))
+
+    def upload_compositor_frame(self, name, bgra_bytes, width, height,
+                                x=None, y=None):
+        raw = bytes(bgra_bytes) if not isinstance(bgra_bytes, bytes) else bgra_bytes
+        self._ctx.upload_compositor_frame(
+            str(name), raw, int(width), int(height),
+            int(x) if x is not None else None,
+            int(y) if y is not None else None)
+
+    def destroy_compositor_layer(self, name):
+        self._ctx.destroy_compositor_layer(str(name))
+
+    def set_compositor_layer_visible(self, name, visible):
+        self._ctx.set_compositor_layer_visible(str(name), bool(visible))
+
+    def set_compositor_layer_input(self, name, cursor_pos_fn=None,
+                                   mouse_button_fn=None, cursor_leave_fn=None,
+                                   scroll_fn=None):
+        self._ctx.set_compositor_layer_input(
+            str(name),
+            self._wrap_cs_callback(cursor_pos_fn) if callable(cursor_pos_fn) else None,
+            self._wrap_cs_callback(mouse_button_fn) if callable(mouse_button_fn) else None,
+            self._wrap_cs_callback(cursor_leave_fn) if callable(cursor_leave_fn) else None,
+            self._wrap_cs_callback(scroll_fn) if callable(scroll_fn) else None)
+
     def register_hotkey(self, hotkey_id, callback,
                         default_key="", label="") -> str:
         return self._ctx.register_hotkey(
@@ -673,15 +880,31 @@ class CSharpRuntime(ScriptRuntime):
             if cached is not None:
                 assembly = cached.get("assembly")
             if assembly is None:
-                build_dir = tempfile.mkdtemp(prefix=f"sao_cs_{record.plugin_id}_")
-                try:
-                    dll_path = _compile_cs(entry_path, build_dir, references or None)
-                    _ensure_reference_assemblies(references)
-                    assembly = _load_compiled_source_assembly(dll_path)
-                    _remember_source_assembly(source_key, assembly, build_dir, dll_path)
-                except Exception:
-                    shutil.rmtree(build_dir, ignore_errors=True)
-                    raise
+                compiler = _find_csc()
+                if compiler is not None:
+                    build_dir = tempfile.mkdtemp(prefix=f"sao_cs_{record.plugin_id}_")
+                    try:
+                        dll_path = _compile_cs(entry_path, build_dir, references or None)
+                        _ensure_reference_assemblies(references)
+                        assembly = _load_compiled_source_assembly(dll_path)
+                        _remember_source_assembly(source_key, assembly, build_dir, dll_path)
+                    except Exception:
+                        shutil.rmtree(build_dir, ignore_errors=True)
+                        raise
+                else:
+                    assembly = _compile_cs_roslyn(entry_path, references or None)
+                    if assembly is not None:
+                        _ensure_reference_assemblies(references)
+                        _remember_source_assembly(source_key, assembly, "", "")
+                    else:
+                        raise RuntimeError(
+                            "无法编译 .cs 插件：未找到 C# 编译器且 Roslyn 未就绪。\n"
+                            "解决方案：\n"
+                            "  1. 将插件打包为预编译 .dll（推荐）\n"
+                            "  2. 安装 .NET SDK: https://dotnet.microsoft.com/download\n"
+                            "  3. 运行 python -m act_platform.scripting.fetch_roslyn "
+                            "下载 Roslyn 编译器到 scripting/roslyn/"
+                        )
         elif ext == ".dll":
             dll_path = entry_path
         else:
@@ -769,3 +992,43 @@ class CSharpRuntime(ScriptRuntime):
                 shutil.rmtree(build_dir, ignore_errors=True)
             except Exception:
                 pass
+        self._evict_source_cache_for(record)
+
+    @staticmethod
+    def _evict_source_cache_for(record: "PluginRecord") -> None:
+        """Remove any _SOURCE_ASSEMBLY_CACHE entries whose source lives
+        under this plugin's directory so a reinstall picks up fresh code."""
+        plugin_dir = os.path.abspath(str(getattr(record, "path", "") or ""))
+        if not plugin_dir:
+            return
+        stale_keys = []
+        for key, entry in _SOURCE_ASSEMBLY_CACHE.items():
+            dll_path = str(entry.get("dll_path") or "")
+            if not dll_path:
+                source_sig = key[0] if key else ()
+                dll_path = str(source_sig[0]) if source_sig else ""
+            try:
+                if dll_path and os.path.abspath(dll_path).startswith(plugin_dir + os.sep):
+                    stale_keys.append(key)
+                    continue
+            except Exception:
+                pass
+            source_sig = key[0] if key else ()
+            source_path = str(source_sig[0]) if source_sig else ""
+            try:
+                if source_path and os.path.abspath(source_path).startswith(plugin_dir + os.sep):
+                    stale_keys.append(key)
+            except Exception:
+                pass
+        for key in stale_keys:
+            entry = _SOURCE_ASSEMBLY_CACHE.pop(key, None)
+            try:
+                _SOURCE_ASSEMBLY_CACHE_ORDER.remove(key)
+            except ValueError:
+                pass
+            stale_dir = str((entry or {}).get("build_dir") or "")
+            if stale_dir and os.path.isdir(stale_dir):
+                try:
+                    shutil.rmtree(stale_dir, ignore_errors=True)
+                except Exception:
+                    pass

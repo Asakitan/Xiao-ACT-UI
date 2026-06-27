@@ -1044,6 +1044,18 @@ def test_app_settings_parity() -> None:
     )
     missing = [name for name in js_methods if not callable(getattr(api, name, None))]
     _check("AIEditorAPI JS-callable methods", not missing, ", ".join(missing))
+    from ai_editor import real_extension_probe
+    probe_source = _read_text(
+        os.path.join(os.path.dirname(__file__), "real_extension_probe.py"))
+    _check("real extension probe includes reproducible dynamic webview smoke",
+           callable(getattr(real_extension_probe, "run_builtin_smoke_probe", None))
+           and "_write_builtin_smoke_extension" in probe_source
+           and "registerWebviewViewProvider" in probe_source
+           and "registerCustomEditorProvider" in probe_source
+           and "saoProbe.dynamicView" in probe_source
+           and "saoProbe.customEditor" in probe_source
+           and "enableCommandUris" in probe_source
+           and "portMapping" in probe_source)
     fixture_list = api.assistant_native_response_fixture("list")
     native_fixture = api.assistant_native_response_fixture("split-native-response-parts")
     actionable_fixture = api.assistant_native_response_fixture("actionable-response-parts")

@@ -84,6 +84,8 @@ class SAOPlayerGUIFisheyeMixin:
         gpu_win = getattr(ov, 'gpu_win', None) if ov is not None else None
         if gpu_win is None:
             return
+        if getattr(gpu_win, '_unified', False):
+            return
         try:
             import ctypes as _ct
             _u32 = _ct.windll.user32
@@ -122,6 +124,8 @@ class SAOPlayerGUIFisheyeMixin:
             ov = getattr(self, '_fisheye_ov', None)
         gpu_win = getattr(ov, 'gpu_win', None) if ov is not None else None
         if gpu_win is None:
+            return
+        if getattr(gpu_win, '_unified', False):
             return
         try:
             set_click_through = getattr(gpu_win, 'set_click_through', None)
@@ -223,7 +227,7 @@ class SAOPlayerGUIFisheyeMixin:
             self._raise_entity_surfaces_above_fisheye()
 
     def _raise_entity_surfaces_above_fisheye(self) -> None:
-        """Keep the GPU menu/trigger above the transparent fisheye hit layer."""
+        """Keep the GPU menu/trigger/compositor above the transparent fisheye hit layer."""
         menu = getattr(self, '_sao_menu', None)
         try:
             if menu is not None and getattr(menu, 'visible', False):
@@ -236,6 +240,36 @@ class SAOPlayerGUIFisheyeMixin:
             sync_btn = getattr(self, '_sync_float_button_geometry', None)
             if callable(sync_btn):
                 sync_btn(show=True)
+        except Exception:
+            pass
+        self._raise_compositor_above_fisheye_hit_layer()
+
+    def _raise_compositor_above_fisheye_hit_layer(self) -> None:
+        """Ensure the compositor host HWND sits above the fisheye hit layer.
+
+        The compositor's WM_NCHITTEST returns HTCLIENT only for interactive
+        layers (plugin windows etc.) and HTTRANSPARENT everywhere else, so
+        backdrop clicks still reach the hit layer below.
+        """
+        hit_layer = getattr(self, '_fisheye_hit_layer', None)
+        if hit_layer is None:
+            return
+        try:
+            from render.overlay_compositor import get_unified_overlay
+            uo = get_unified_overlay()
+            host_hwnd = uo.hwnd
+            if not host_hwnd:
+                return
+        except Exception:
+            return
+        try:
+            import ctypes as _ct
+            _u32 = _ct.windll.user32
+            _SWP = 0x0002 | 0x0001 | 0x0010  # NOMOVE | NOSIZE | NOACTIVATE
+            _u32.SetWindowPos(
+                _ct.wintypes.HWND(host_hwnd), _ct.wintypes.HWND(-1),
+                0, 0, 0, 0, _SWP,
+            )
         except Exception:
             pass
 
@@ -874,32 +908,35 @@ class SAOPlayerGUIFisheyeMixin:
                 title='sao_fisheye_gpu',
             )
             gpu_win.show()
-            try:
-                import ctypes as _ct0
-                _u32a = _ct0.windll.user32
-                _GWL_EXSTYLE = -20
-                _WS_EX_LAYERED = 0x00080000
-                _WS_EX_TOOLWINDOW = 0x00000080
-                _WS_EX_NOACTIVATE = 0x08000000
-                _WS_EX_TRANSPARENT = 0x00000020
-                _LWA_ALPHA = 0x00000002
-                _SWP_NOMOVE = 0x0002
-                _SWP_NOSIZE = 0x0001
-                _SWP_NOACTIVATE = 0x0010
-                _hwnd_i = int(getattr(gpu_win, '_hwnd', 0) or 0)
-                if _hwnd_i:
-                    _cur = _u32a.GetWindowLongPtrW(_ct0.c_void_p(_hwnd_i), _GWL_EXSTYLE)
-                    _new = (_cur | _WS_EX_LAYERED | _WS_EX_TOOLWINDOW
-                        | _WS_EX_NOACTIVATE | _WS_EX_TRANSPARENT)
-                    _u32a.SetWindowLongPtrW(_ct0.c_void_p(_hwnd_i), _GWL_EXSTYLE, _new)
-                    _u32a.SetLayeredWindowAttributes(_ct0.c_void_p(_hwnd_i), 0, 255, _LWA_ALPHA)
-                    _u32a.SetWindowPos(
-                        _ct0.c_void_p(_hwnd_i), _ct0.c_void_p(-2),
-                        0, 0, 0, 0,
-                        _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE,
-                    )
-            except Exception:
-                pass
+            # In unified mode _hwnd is the shared compositor host — do
+            # not touch its extended style or demote it.
+            if not getattr(gpu_win, '_unified', False):
+                try:
+                    import ctypes as _ct0
+                    _u32a = _ct0.windll.user32
+                    _GWL_EXSTYLE = -20
+                    _WS_EX_LAYERED = 0x00080000
+                    _WS_EX_TOOLWINDOW = 0x00000080
+                    _WS_EX_NOACTIVATE = 0x08000000
+                    _WS_EX_TRANSPARENT = 0x00000020
+                    _LWA_ALPHA = 0x00000002
+                    _SWP_NOMOVE = 0x0002
+                    _SWP_NOSIZE = 0x0001
+                    _SWP_NOACTIVATE = 0x0010
+                    _hwnd_i = int(getattr(gpu_win, '_hwnd', 0) or 0)
+                    if _hwnd_i:
+                        _cur = _u32a.GetWindowLongPtrW(_ct0.c_void_p(_hwnd_i), _GWL_EXSTYLE)
+                        _new = (_cur | _WS_EX_LAYERED | _WS_EX_TOOLWINDOW
+                            | _WS_EX_NOACTIVATE | _WS_EX_TRANSPARENT)
+                        _u32a.SetWindowLongPtrW(_ct0.c_void_p(_hwnd_i), _GWL_EXSTYLE, _new)
+                        _u32a.SetLayeredWindowAttributes(_ct0.c_void_p(_hwnd_i), 0, 255, _LWA_ALPHA)
+                        _u32a.SetWindowPos(
+                            _ct0.c_void_p(_hwnd_i), _ct0.c_void_p(-2),
+                            0, 0, 0, 0,
+                            _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE,
+                        )
+                except Exception:
+                    pass
         except Exception:
             return
 
@@ -945,46 +982,51 @@ class SAOPlayerGUIFisheyeMixin:
         # topmost 栈，会盖住 SAO overlay 或导致点击穿透。
         # v2.3.10: 改为有限 8 次 (~2s) demote，避免无限 after(250)
         # 回调堆积导致主线程阻塞和鱼眼启用时间变长。
-        try:
-            import ctypes as _ct2
-            _u32b = _ct2.windll.user32
-            _HWND_NOTOPMOST = -2
-            _SWP_NOMOVE = 0x0002
-            _SWP_NOSIZE = 0x0001
-            _SWP_NOACTIVATE = 0x0010
-            _SWP_NOOWNERZORDER = 0x0200
-            _demote_count = [12]  # finite demotions across slow first-frame drivers
+        #
+        # Unified mode: _hwnd is the shared compositor host — demoting
+        # it would pull ALL overlay layers out of the topmost band.
+        # The compositor handles inter-layer z-order internally (fisheye
+        # is z=10, below plugins/panels), so no Win32 demotion needed.
+        if not getattr(gpu_win, '_unified', False):
+            try:
+                import ctypes as _ct2
+                _u32b = _ct2.windll.user32
+                _HWND_NOTOPMOST = -2
+                _SWP_NOMOVE = 0x0002
+                _SWP_NOSIZE = 0x0001
+                _SWP_NOACTIVATE = 0x0010
+                _SWP_NOOWNERZORDER = 0x0200
+                _demote_count = [12]
 
-            def _demote_fisheye():
-                if self._fisheye_ov is None or _demote_count[0] <= 0:
-                    return
-                try:
-                    _hwnd_d = int(getattr(gpu_win, '_hwnd', 0) or 0)
-                    if _hwnd_d:
-                        _u32b.SetWindowPos(
-                            _ct2.c_void_p(_hwnd_d),
-                            _ct2.c_void_p(_HWND_NOTOPMOST),
-                            0, 0, 0, 0,
-                            _SWP_NOMOVE | _SWP_NOSIZE
-                            | _SWP_NOACTIVATE | _SWP_NOOWNERZORDER,
-                        )
-                except Exception:
-                    pass
-                _demote_count[0] -= 1
-                if _demote_count[0] > 0:
+                def _demote_fisheye():
+                    if self._fisheye_ov is None or _demote_count[0] <= 0:
+                        return
                     try:
-                        self.root.after(250, _demote_fisheye)
+                        _hwnd_d = int(getattr(gpu_win, '_hwnd', 0) or 0)
+                        if _hwnd_d:
+                            _u32b.SetWindowPos(
+                                _ct2.c_void_p(_hwnd_d),
+                                _ct2.c_void_p(_HWND_NOTOPMOST),
+                                0, 0, 0, 0,
+                                _SWP_NOMOVE | _SWP_NOSIZE
+                                | _SWP_NOACTIVATE | _SWP_NOOWNERZORDER,
+                            )
                     except Exception:
                         pass
-                try:
-                    self._raise_entity_surfaces_above_fisheye()
-                except Exception:
-                    pass
+                    _demote_count[0] -= 1
+                    if _demote_count[0] > 0:
+                        try:
+                            self.root.after(250, _demote_fisheye)
+                        except Exception:
+                            pass
+                    try:
+                        self._raise_entity_surfaces_above_fisheye()
+                    except Exception:
+                        pass
 
-            # 第一次延迟 50ms,等 GLFW 完成首次 _show_no_activate 之后再降级。
-            self.root.after(50, _demote_fisheye)
-        except Exception:
-            pass
+                self.root.after(50, _demote_fisheye)
+            except Exception:
+                pass
 
         # ── Pump-driven fade + low-rate state monitor ──
         # v2.3.13: fade alpha is now driven by BgraPresenter.start_fade()

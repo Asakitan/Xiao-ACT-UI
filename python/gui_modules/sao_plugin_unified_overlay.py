@@ -592,10 +592,18 @@ class PluginUnifiedOverlayHost:
     def _force_real_host_passthrough(overlay: Any) -> bool:
         """Keep plugin draggable layers local to their Tk input proxies.
 
-        ``UnifiedOverlay.sync_host_input_mode()`` may make the full overlay HWND
-        input-capable for legacy compositor users. Plugin positioned layers use
-        local Tk proxies instead, so the real host must stay WS_EX_TRANSPARENT.
+        Plugin positioned layers use Tk input proxies, so the overlay host
+        HWND must stay WS_EX_TRANSPARENT.  We call ``force_host_input_passthrough``
+        which queues the change on the compositor cmd_q, avoiding races with
+        ``sync_host_input_mode`` calls from overlay adapters.
         """
+        fn = getattr(overlay, "force_host_input_passthrough", None)
+        if callable(fn):
+            try:
+                fn()
+                return True
+            except Exception:
+                pass
         host = getattr(overlay, "host", None)
         if host is None:
             host = getattr(overlay, "_host", None)
@@ -603,13 +611,6 @@ class PluginUnifiedOverlayHost:
         if callable(setter):
             try:
                 setter(True)
-                return True
-            except Exception:
-                pass
-        fn = getattr(overlay, "force_host_input_passthrough", None)
-        if callable(fn):
-            try:
-                fn()
                 return True
             except Exception:
                 pass

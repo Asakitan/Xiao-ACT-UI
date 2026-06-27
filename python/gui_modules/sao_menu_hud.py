@@ -1039,6 +1039,43 @@ class MenuCircleButtonRenderer:
             draw.line((cx - span, cy - gap, cx + span, cy - gap), fill=color, width=bar)
             draw.line((cx - span, cy + gap, cx + span, cy + gap), fill=color, width=bar)
             return True
+        # Script CuteGirl desktop pet: cat-ear character silhouette.
+        if icon_text == '🐾':
+            head_r = canvas * 0.14
+            head_y = cy - canvas * 0.04
+            draw.ellipse((cx - head_r, head_y - head_r, cx + head_r, head_y + head_r),
+                         fill=color)
+            ear_h = canvas * 0.13
+            ear_w = canvas * 0.09
+            draw.polygon([
+                (cx - head_r * 0.85, head_y - head_r * 0.55),
+                (cx - head_r * 0.45, head_y - head_r - ear_h),
+                (cx - head_r * 0.05, head_y - head_r * 0.30),
+            ], fill=color)
+            draw.polygon([
+                (cx + head_r * 0.05, head_y - head_r * 0.30),
+                (cx + head_r * 0.45, head_y - head_r - ear_h),
+                (cx + head_r * 0.85, head_y - head_r * 0.55),
+            ], fill=color)
+            body_top = head_y + head_r * 0.6
+            body_bot = cy + canvas * 0.25
+            body_w = canvas * 0.12
+            draw.rounded_rectangle(
+                (cx - body_w, body_top, cx + body_w, body_bot),
+                radius=max(scale * 2, 3), fill=color)
+            leg_w = max(stroke, scale * 2)
+            draw.line((cx - body_w * 0.6, body_bot, cx - body_w * 0.6, body_bot + canvas * 0.07),
+                      fill=color, width=leg_w)
+            draw.line((cx + body_w * 0.6, body_bot, cx + body_w * 0.6, body_bot + canvas * 0.07),
+                      fill=color, width=leg_w)
+            eye_r = max(scale * 0.9, 1.5)
+            draw.ellipse((cx - head_r * 0.45 - eye_r, head_y - eye_r,
+                          cx - head_r * 0.45 + eye_r, head_y + eye_r),
+                         fill=(0, 0, 0, 0))
+            draw.ellipse((cx + head_r * 0.45 - eye_r, head_y - eye_r,
+                          cx + head_r * 0.45 + eye_r, head_y + eye_r),
+                         fill=(0, 0, 0, 0))
+            return True
         return False
 
     def _icon_font(self, size: int):
