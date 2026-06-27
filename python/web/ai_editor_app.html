@@ -25467,30 +25467,35 @@ function extensionSettingQueryTokens(raw){
   return tokens;
 }
 function extensionSettingIsFilterToken(token){
-  return /^@(modified|hidden|stable|restricted|sync|experiment|agentswindow)(?=$|\s)/i.test(token)
-    || /^@policy(?=$|\s|:)/i.test(token)
-    || /^@(tag|ext|feature|id|lang|scope|target|type|sync|value|default|experiment|agentswindow):/i.test(token);
+  return /^-?@(modified|hidden|stable|restricted|readonly|writable|configured|unconfigured|defaultlocked|online|sync|experiment|agentswindow)(?=$|\s)/i.test(token)
+    || /^-?@policy(?=$|\s|:)/i.test(token)
+    || /^-?@(tag|ext|feature|id|lang|scope|target|type|sync|value|default|experiment|agentswindow):/i.test(token);
 }
 function extensionSettingFilterTokenLabel(token){
   token=String(token||'').trim();
   if(!token)return '';
-  const lower=token.toLowerCase();
-  const map={'@modified':'Modified','@hidden':'Hidden','@stable':'Stable','@policy':'Policy','@restricted':'Restricted','@sync':'Sync','@experiment':'Experiment','@agentswindow':'Agents Window'};
-  if(map[lower])return map[lower];
-  if(lower.startsWith('@policy:'))return 'Policy: '+(token.slice(8)||'...');
-  if(lower.startsWith('@experiment:'))return 'Experiment: '+(token.slice(12)||'...');
-  if(lower.startsWith('@agentswindow:'))return 'Agents Window: '+(token.slice(14)||'...');
-  if(token.startsWith('@tag:'))return 'Tag: '+token.slice(5);
-  if(token.startsWith('@ext:'))return 'Extension: '+(token.slice(5)||'...');
-  if(token.startsWith('@feature:'))return 'Feature: '+(token.slice(9)||'...');
-  if(token.startsWith('@lang:'))return 'Language: '+(token.slice(6)||'...');
-  if(token.startsWith('@id:'))return 'Setting: '+(token.slice(4)||'...');
-  if(token.startsWith('@scope:'))return 'Scope: '+token.slice(7);
-  if(token.startsWith('@target:'))return 'Target: '+token.slice(8);
-  if(token.startsWith('@type:'))return 'Type: '+token.slice(6);
-  if(token.startsWith('@sync:'))return 'Sync: '+token.slice(6);
-  if(token.startsWith('@value:'))return 'Value: '+(token.slice(7)||'...');
-  if(token.startsWith('@default:'))return 'Default: '+(token.slice(9)||'...');
+  const negative=token.startsWith('-');
+  const body=negative?token.slice(1):token;
+  const lower=body.toLowerCase();
+  const prefix=negative?'Not ':'';
+  const map={'@modified':'Modified','@hidden':'Hidden','@stable':'Stable','@policy':'Policy','@restricted':'Restricted',
+    '@readonly':'Read-only','@writable':'Writable','@configured':'Configured','@unconfigured':'Unconfigured',
+    '@defaultlocked':'Default Locked','@online':'Online Services','@sync':'Sync','@experiment':'Experiment','@agentswindow':'Agents Window'};
+  if(map[lower])return prefix+map[lower];
+  if(lower.startsWith('@policy:'))return prefix+'Policy: '+(body.slice(8)||'...');
+  if(lower.startsWith('@experiment:'))return prefix+'Experiment: '+(body.slice(12)||'...');
+  if(lower.startsWith('@agentswindow:'))return prefix+'Agents Window: '+(body.slice(14)||'...');
+  if(body.startsWith('@tag:'))return prefix+'Tag: '+body.slice(5);
+  if(body.startsWith('@ext:'))return prefix+'Extension: '+(body.slice(5)||'...');
+  if(body.startsWith('@feature:'))return prefix+'Feature: '+(body.slice(9)||'...');
+  if(body.startsWith('@lang:'))return prefix+'Language: '+(body.slice(6)||'...');
+  if(body.startsWith('@id:'))return prefix+'Setting: '+(body.slice(4)||'...');
+  if(body.startsWith('@scope:'))return prefix+'Scope: '+body.slice(7);
+  if(body.startsWith('@target:'))return prefix+'Target: '+body.slice(8);
+  if(body.startsWith('@type:'))return prefix+'Type: '+body.slice(6);
+  if(body.startsWith('@sync:'))return prefix+'Sync: '+body.slice(6);
+  if(body.startsWith('@value:'))return prefix+'Value: '+(body.slice(7)||'...');
+  if(body.startsWith('@default:'))return prefix+'Default: '+(body.slice(9)||'...');
   return token;
 }
 function extensionSettingFilterMenuTokenActive(tokens,token){
@@ -25635,7 +25640,8 @@ function extensionSettingFilterSuggestions(container,query){
   const rows=Array.from((container&&container.querySelectorAll)?container.querySelectorAll('.ext-setting-row'):[]);
   const suggestions=[],seen=new Set();
   const push=token=>extensionSettingPushSuggestion(suggestions,seen,query,token);
-  ['@modified','@hidden','@stable','@restricted','@policy','@experiment','@agentsWindow','@sync',
+  ['@modified','@hidden','@stable','@restricted','@readonly','@writable','@configured','@unconfigured','@defaultLocked','@online',
+   '@policy','@experiment','@agentsWindow','@sync','-@tag:','-@ext:','-@type:','-@scope:','-@target:',
    '@ext:','@lang:','@id:','@tag:','@scope:','@target:','@type:','@value:','@default:'].forEach(push);
   const dynamic={ext:new Set(),lang:new Set(),id:new Set(),tag:new Set(),scope:new Set(),target:new Set(),type:new Set(),policy:new Set(),experiment:new Set(),agentsWindow:new Set()};
   rows.forEach(row=>{
@@ -25846,13 +25852,31 @@ function extensionSettingsQuery(){
 function extensionSettingParseQuery(raw,modifiedChecked,hiddenChecked){
   raw=String(raw||'').trim();
   const tags=[],scopes=[],targets=[],extensions=[],types=[],policies=[],experiments=[],agentsWindows=[],syncs=[],ids=[],features=[],languages=[],values=[],defaults=[];
+  const excludedTags=[],excludedScopes=[],excludedTargets=[],excludedExtensions=[],excludedTypes=[],excludedIds=[],excludedFeatures=[],excludedLanguages=[],excludedValues=[],excludedDefaults=[];
   let restrictedOnly=false,stableOnly=false,experimentOnly=false,agentsWindowOnly=false;
+  let readonlyOnly=false,writableOnly=false,configuredOnly=false,unconfiguredOnly=false,defaultLockedOnly=false,onlineOnly=false;
   const modifiedOnly=modifiedChecked===true||/(^|\s)@modified(?=\s|$)/i.test(raw);
   const hiddenOnly=hiddenChecked===true||/(^|\s)@hidden(?=\s|$)/i.test(raw);
   const text=raw
+    .replace(new RegExp('(^|\\s)-@scope:("[^"]*"|[^\\s]+)','ig'),(match,prefix,scope)=>{extensionSettingPushFilterValues(excludedScopes,scope);return ' ';})
+    .replace(new RegExp('(^|\\s)-@target:("[^"]*"|[^\\s]+)','ig'),(match,prefix,target)=>{extensionSettingSplitFilterValues(target).forEach(item=>excludedTargets.push(extensionSettingTargetName(item)));return ' ';})
+    .replace(new RegExp('(^|\\s)-@ext:("[^"]*"|[^\\s]+)','ig'),(match,prefix,ext)=>{extensionSettingPushFilterValues(excludedExtensions,ext);return ' ';})
+    .replace(new RegExp('(^|\\s)-@type:("[^"]*"|[^\\s]+)','ig'),(match,prefix,type)=>{extensionSettingPushFilterValues(excludedTypes,type);return ' ';})
+    .replace(new RegExp('(^|\\s)-@id:("[^"]*"|[^\\s]+)','ig'),(match,prefix,id)=>{extensionSettingPushFilterValues(excludedIds,id);return ' ';})
+    .replace(new RegExp('(^|\\s)-@feature:("[^"]*"|[^\\s]+)','ig'),(match,prefix,feature)=>{extensionSettingPushFilterValues(excludedFeatures,feature);return ' ';})
+    .replace(new RegExp('(^|\\s)-@lang:("[^"]*"|[^\\s]+)','ig'),(match,prefix,lang)=>{extensionSettingPushFilterValues(excludedLanguages,lang);return ' ';})
+    .replace(new RegExp('(^|\\s)-@value:("[^"]*"|[^\\s]+)','ig'),(match,prefix,value)=>{extensionSettingPushFilterValues(excludedValues,value);return ' ';})
+    .replace(new RegExp('(^|\\s)-@default:("[^"]*"|[^\\s]+)','ig'),(match,prefix,value)=>{extensionSettingPushFilterValues(excludedDefaults,value);return ' ';})
+    .replace(new RegExp('(^|\\s)-@tag:("[^"]*"|[^\\s]+)','ig'),(match,prefix,tag)=>{extensionSettingPushFilterValues(excludedTags,tag);return ' ';})
     .replace(/(^|\s)@modified(?=\s|$)/ig,' ')
     .replace(/(^|\s)@hidden(?=\s|$)/ig,' ')
     .replace(/(^|\s)@stable(?=\s|$)/ig,()=>{stableOnly=true;return ' ';})
+    .replace(/(^|\s)@readonly(?=\s|$)/ig,()=>{readonlyOnly=true;return ' ';})
+    .replace(/(^|\s)@writable(?=\s|$)/ig,()=>{writableOnly=true;return ' ';})
+    .replace(/(^|\s)@configured(?=\s|$)/ig,()=>{configuredOnly=true;return ' ';})
+    .replace(/(^|\s)@unconfigured(?=\s|$)/ig,()=>{unconfiguredOnly=true;return ' ';})
+    .replace(/(^|\s)@defaultLocked(?=\s|$)/ig,()=>{defaultLockedOnly=true;return ' ';})
+    .replace(/(^|\s)@online(?=\s|$)/ig,()=>{onlineOnly=true;return ' ';})
     .replace(new RegExp('(^|\\s)@scope:("[^"]*"|[^\\s]+)','ig'),(match,prefix,scope)=>{extensionSettingPushFilterValues(scopes,scope);return ' ';})
     .replace(new RegExp('(^|\\s)@target:("[^"]*"|[^\\s]+)','ig'),(match,prefix,target)=>{extensionSettingSplitFilterValues(target).forEach(item=>targets.push(extensionSettingTargetName(item)));return ' ';})
     .replace(new RegExp('(^|\\s)@ext:("[^"]*"|[^\\s]+)','ig'),(match,prefix,ext)=>{extensionSettingPushFilterValues(extensions,ext);return ' ';})
@@ -25873,7 +25897,9 @@ function extensionSettingParseQuery(raw,modifiedChecked,hiddenChecked){
     })
     .replace(new RegExp('(^|\\s)@tag:("[^"]*"|[^\\s]+)','ig'),(match,prefix,tag)=>{extensionSettingPushFilterValues(tags,tag);return ' ';})
     .trim().toLowerCase();
-  return {modifiedOnly,hiddenOnly,tags,scopes,targets,extensions,types,policies,experiments,agentsWindows,syncs,ids,features,languages,values,defaults,restrictedOnly,stableOnly,experimentOnly,agentsWindowOnly,text};
+  return {modifiedOnly,hiddenOnly,tags,scopes,targets,extensions,types,policies,experiments,agentsWindows,syncs,ids,features,languages,values,defaults,
+    excludedTags,excludedScopes,excludedTargets,excludedExtensions,excludedTypes,excludedIds,excludedFeatures,excludedLanguages,excludedValues,excludedDefaults,
+    restrictedOnly,stableOnly,experimentOnly,agentsWindowOnly,readonlyOnly,writableOnly,configuredOnly,unconfiguredOnly,defaultLockedOnly,onlineOnly,text};
 }
 function applyExtensionSettingsFilter(){
   const container=$('ext-settings-container');if(!container)return;
@@ -25915,7 +25941,24 @@ function applyExtensionSettingsFilter(){
       const defaultOk=!query.defaults.length||query.defaults.some(value=>(row.dataset.extSettingDefault||'').includes(value));
       const stableOk=!query.stableOnly||(!rowTags.includes('experimental')&&!rowTags.includes('preview'));
       const modifiedOk=!query.modifiedOnly||row.dataset.extSettingModified==='1';
-      const show=categoryOk&&scopeOk&&targetOk&&textOk&&tagOk&&hiddenOk&&extOk&&typeOk&&policyOk&&experimentOk&&agentsWindowOk&&restrictedOk&&syncOk&&idOk&&featureOk&&langOk&&valueOk&&defaultOk&&stableOk&&modifiedOk;
+      const configuredAny=row.dataset.extSettingModified==='1'||rowTags.some(tag=>tag.startsWith('configured-target:'));
+      const readonlyOk=!query.readonlyOnly||row.classList.contains('scope-readonly')||rowTags.includes('scope-readonly');
+      const writableOk=!query.writableOnly||(!row.classList.contains('scope-readonly')&&!rowTags.includes('scope-readonly'));
+      const configuredOk=!query.configuredOnly||configuredAny;
+      const unconfiguredOk=!query.unconfiguredOnly||!configuredAny;
+      const defaultLockedOk=!query.defaultLockedOnly||rowTags.includes('default-locked');
+      const onlineOk=!query.onlineOnly||rowTags.includes('usesonlineservices');
+      const excludedOk=(!query.excludedTags.length||!query.excludedTags.some(tag=>rowTags.includes(tag)))
+        &&(!query.excludedScopes.length||!query.excludedScopes.includes(row.dataset.extSettingScope||''))
+        &&(!query.excludedTargets.length||!query.excludedTargets.some(target=>(row.dataset.extSettingTarget||'')===target||rowTags.includes('target:'+target)))
+        &&(!query.excludedExtensions.length||!query.excludedExtensions.some(ext=>(row.dataset.extSettingExtension||'').includes(ext)))
+        &&(!query.excludedTypes.length||!query.excludedTypes.includes(row.dataset.extSettingType||''))
+        &&(!query.excludedIds.length||!query.excludedIds.some(id=>id.endsWith('*')?(row.dataset.extSettingKey||'').toLowerCase().startsWith(id.slice(0,-1)):(row.dataset.extSettingKey||'').toLowerCase()===id))
+        &&(!query.excludedFeatures.length||!query.excludedFeatures.some(feature=>(row.dataset.extSettingFeature||'').includes(feature)))
+        &&(!query.excludedLanguages.length||!query.excludedLanguages.some(lang=>extensionSettingLanguageFilterMatches(row,rowTags,lang)))
+        &&(!query.excludedValues.length||!query.excludedValues.some(value=>(row.dataset.extSettingValue||'').includes(value)))
+        &&(!query.excludedDefaults.length||!query.excludedDefaults.some(value=>(row.dataset.extSettingDefault||'').includes(value)));
+      const show=categoryOk&&scopeOk&&targetOk&&textOk&&tagOk&&hiddenOk&&extOk&&typeOk&&policyOk&&experimentOk&&agentsWindowOk&&restrictedOk&&syncOk&&idOk&&featureOk&&langOk&&valueOk&&defaultOk&&stableOk&&modifiedOk&&readonlyOk&&writableOk&&configuredOk&&unconfiguredOk&&defaultLockedOk&&onlineOk&&excludedOk;
       row.dataset.extSettingMatchRank=show?String(extensionSettingTextMatchRank(row,query.text)):'0';
       row.style.display=show?'':'none';
       if(show){
@@ -25927,7 +25970,7 @@ function applyExtensionSettingsFilter(){
     });
     extensionSettingSortSectionRows(section,query.text);
     section.style.display=sectionRows?'':'none';
-    if(sectionRows){visibleSections++;if(query.text||query.tags.length||query.scopes.length||query.targets.length||query.extensions.length||query.types.length||query.policies.length||query.experiments.length||query.agentsWindows.length||query.syncs.length||query.ids.length||query.features.length||query.languages.length||query.values.length||query.defaults.length||query.restrictedOnly||query.experimentOnly||query.agentsWindowOnly||query.stableOnly||query.modifiedOnly||query.hiddenOnly||category||scopeFilter||targetFilter)section.open=true}
+    if(sectionRows){visibleSections++;if(query.text||query.tags.length||query.scopes.length||query.targets.length||query.extensions.length||query.types.length||query.policies.length||query.experiments.length||query.agentsWindows.length||query.syncs.length||query.ids.length||query.features.length||query.languages.length||query.values.length||query.defaults.length||query.excludedTags.length||query.excludedScopes.length||query.excludedTargets.length||query.excludedExtensions.length||query.excludedTypes.length||query.excludedIds.length||query.excludedFeatures.length||query.excludedLanguages.length||query.excludedValues.length||query.excludedDefaults.length||query.restrictedOnly||query.experimentOnly||query.agentsWindowOnly||query.stableOnly||query.readonlyOnly||query.writableOnly||query.configuredOnly||query.unconfiguredOnly||query.defaultLockedOnly||query.onlineOnly||query.modifiedOnly||query.hiddenOnly||category||scopeFilter||targetFilter)section.open=true}
   });
   const count=$('ext-settings-filter-count');
   if(count)count.textContent=visibleRows+' / '+totalRows;
@@ -26261,8 +26304,13 @@ async function renderExtensionSettings(){
   addFilterAction('Configured Globally','@target:global');
   addFilterAction('Configured in Workspace','@target:workspace');
   addFilterAction('Configured in Folder','@target:workspaceFolder');
+  addFilterAction('Configured Anywhere','@configured',{exclude:['@unconfigured']});
+  addFilterAction('Unconfigured','@unconfigured',{exclude:['@configured']});
   const sepTarget=document.createElement('div');sepTarget.className='sep';filterMenu.appendChild(sepTarget);
-  addFilterAction('Online services','@tag:usesOnlineServices');
+  addFilterAction('Writable','@writable',{exclude:['@readonly']});
+  addFilterAction('Read-only','@readonly',{exclude:['@writable']});
+  addFilterAction('Default Locked','@defaultLocked');
+  addFilterAction('Online services','@online');
   addFilterAction('Policy','@policy');
   addFilterAction('Experiment','@experiment');
   addFilterAction('Agents Window','@agentsWindow');
@@ -26271,6 +26319,8 @@ async function renderExtensionSettings(){
   addFilterAction('Stable','@stable',{exclude:['@tag:preview','@tag:experimental']});
   addFilterAction('Preview','@tag:preview',{exclude:['@stable','@tag:experimental']});
   addFilterAction('Experimental','@tag:experimental',{exclude:['@stable','@tag:preview']});
+  addFilterAction('Exclude Preview','-@tag:preview');
+  addFilterAction('Exclude Experimental','-@tag:experimental');
   addFilterAction('Advanced','@tag:advanced');
   const sep3=document.createElement('div');sep3.className='sep';filterMenu.appendChild(sep3);
   addFilterAction('Conditional Schema','@tag:conditional');

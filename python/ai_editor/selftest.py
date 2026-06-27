@@ -9081,6 +9081,21 @@ console.log("frontend word separator behavior ok");
             and "const langOk=!query.languages.length||query.languages.some(lang=>extensionSettingLanguageFilterMatches(row,rowTags,lang))" in html
             and "const valueOk=!query.values.length||query.values.some" in html
             and "const defaultOk=!query.defaults.length||query.defaults.some" in html
+            and "excludedTags,excludedScopes,excludedTargets,excludedExtensions,excludedTypes,excludedIds,excludedFeatures,excludedLanguages,excludedValues,excludedDefaults" in html
+            and "@readonly" in html
+            and "@writable" in html
+            and "@configured" in html
+            and "@unconfigured" in html
+            and "@defaultLocked" in html
+            and "@online" in html
+            and "-@tag:" in html
+            and "const readonlyOk=!query.readonlyOnly" in html
+            and "const writableOk=!query.writableOnly" in html
+            and "const configuredOk=!query.configuredOnly" in html
+            and "const unconfiguredOk=!query.unconfiguredOnly" in html
+            and "const defaultLockedOk=!query.defaultLockedOnly" in html
+            and "const onlineOk=!query.onlineOnly" in html
+            and "const excludedOk=(!query.excludedTags.length" in html
             and "const stableOk=!query.stableOnly" in html
             and "ext-settings-clear-filters" in html
             and "categorySelect.value='';scopeSelect.value='';targetSelect.value='';modifiedBox.checked=false;hiddenBox.checked=false" in html
@@ -9113,6 +9128,14 @@ console.log("frontend word separator behavior ok");
             and "function extensionSettingAgentsWindowMetadata(schema,type)" in html
             and "appendExtensionSettingAgentsWindowBadge(head,agentsMeta)" in html
             and "addFilterAction('Agents Window','@agentsWindow')" in html
+            and "addFilterAction('Writable','@writable',{exclude:['@readonly']})" in html
+            and "addFilterAction('Read-only','@readonly',{exclude:['@writable']})" in html
+            and "addFilterAction('Configured Anywhere','@configured',{exclude:['@unconfigured']})" in html
+            and "addFilterAction('Unconfigured','@unconfigured',{exclude:['@configured']})" in html
+            and "addFilterAction('Default Locked','@defaultLocked')" in html
+            and "addFilterAction('Online services','@online')" in html
+            and "addFilterAction('Exclude Preview','-@tag:preview')" in html
+            and "addFilterAction('Exclude Experimental','-@tag:experimental')" in html
             and "const agentsWindowOk=(!query.agentsWindowOnly||rowTags.includes('agents-window'))" in html
             and "Default Locked" in html
             and "default-locked" in html
@@ -9969,6 +9992,25 @@ assert(extensionSettingParseQuery("@experiment render", false).experimentOnly ==
 assert(extensionSettingParseQuery("@agentsWindow render", false).agentsWindowOnly === true
        && extensionSettingParseQuery("@agentsWindow render", false).text === "render",
        "settings query parses agents window filter");
+const accessibilityQuery = extensionSettingParseQuery(
+  '@readonly @configured @defaultLocked @online -@tag:preview -@ext:selftest.bad -@type:object render',
+  false);
+assert(accessibilityQuery.readonlyOnly === true
+       && accessibilityQuery.configuredOnly === true
+       && accessibilityQuery.defaultLockedOnly === true
+       && accessibilityQuery.onlineOnly === true
+       && accessibilityQuery.excludedTags[0] === "preview"
+       && accessibilityQuery.excludedExtensions[0] === "selftest.bad"
+       && accessibilityQuery.excludedTypes[0] === "object"
+       && accessibilityQuery.text === "render",
+       "settings query parses readonly configured default locked online and negative filters");
+const writableQuery = extensionSettingParseQuery('@writable @unconfigured -@scope:machine -@target:global -@id:selftest.*', false);
+assert(writableQuery.writableOnly === true
+       && writableQuery.unconfiguredOnly === true
+       && writableQuery.excludedScopes[0] === "machine"
+       && writableQuery.excludedTargets[0] === "global"
+       && writableQuery.excludedIds[0] === "selftest.*",
+       "settings query parses writable unconfigured and negative scope target id filters");
 const vscodeStyleQuery = extensionSettingParseQuery(
   '@id:selftest.* @feature:"Selftest Settings" @lang:selflang @tag:preview,experimental @ext:"selftest.settings-pack" @stable render',
   false);
@@ -10077,6 +10119,14 @@ globalThis.$ = originalDollar;
 assert(extensionSettingIsFilterToken("@feature:terminal")
        && extensionSettingIsFilterToken("@stable")
        && extensionSettingIsFilterToken("@hidden")
+       && extensionSettingIsFilterToken("@readonly")
+       && extensionSettingIsFilterToken("@writable")
+       && extensionSettingIsFilterToken("@configured")
+       && extensionSettingIsFilterToken("@unconfigured")
+       && extensionSettingIsFilterToken("@defaultLocked")
+       && extensionSettingIsFilterToken("@online")
+       && extensionSettingIsFilterToken("-@tag:preview")
+       && extensionSettingIsFilterToken("-@ext:selftest.bad")
        && extensionSettingIsFilterToken("@policy:SelftestPolicy")
        && extensionSettingIsFilterToken("@sync")
        && extensionSettingIsFilterToken("@value:auto")
@@ -10089,6 +10139,13 @@ assert(extensionSettingFilterTokenLabel("@ext:selftest.settings-pack") === "Exte
        && extensionSettingFilterTokenLabel("@sync") === "Sync"
        && extensionSettingFilterTokenLabel("@value:auto") === "Value: auto"
        && extensionSettingFilterTokenLabel("@default:false") === "Default: false"
+       && extensionSettingFilterTokenLabel("@readonly") === "Read-only"
+       && extensionSettingFilterTokenLabel("@writable") === "Writable"
+       && extensionSettingFilterTokenLabel("@configured") === "Configured"
+       && extensionSettingFilterTokenLabel("@unconfigured") === "Unconfigured"
+       && extensionSettingFilterTokenLabel("@defaultLocked") === "Default Locked"
+       && extensionSettingFilterTokenLabel("@online") === "Online Services"
+       && extensionSettingFilterTokenLabel("-@tag:preview") === "Not Tag: preview"
        && extensionSettingFilterTokenLabel("@hidden") === "Hidden",
        "settings filter chips label tokens");
 assert(extensionSettingFilterMenuTokenActive(["@ext:selftest.settings-pack"], "@ext:")
