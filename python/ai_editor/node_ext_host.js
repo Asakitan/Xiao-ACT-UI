@@ -1738,6 +1738,21 @@ class Webview {
         const options = this._options || {};
         const payload = {};
         if ('enableScripts' in options) payload.enableScripts = !!options.enableScripts;
+        if ('enableForms' in options) payload.enableForms = !!options.enableForms;
+        if ('enableCommandUris' in options) {
+            payload.enableCommandUris = Array.isArray(options.enableCommandUris)
+                ? options.enableCommandUris.map(item => String(item || '')).filter(Boolean)
+                : !!options.enableCommandUris;
+        }
+        if (Array.isArray(options.portMapping)) {
+            payload.portMapping = options.portMapping
+                .map((item) => ({
+                    webviewPort: Number(item && item.webviewPort),
+                    extensionHostPort: Number(item && item.extensionHostPort),
+                }))
+                .filter((item) => Number.isFinite(item.webviewPort)
+                    && Number.isFinite(item.extensionHostPort));
+        }
         if ('retainContextWhenHidden' in options) {
             payload.retainContextWhenHidden = !!options.retainContextWhenHidden;
         }

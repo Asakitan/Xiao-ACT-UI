@@ -1617,6 +1617,8 @@ class _AIEditorUIBridge:
             "state": state_to_render,
             "title": str(title or ""),
             "options": _json_safe(option_payload),
+            "local_resource_roots": _json_safe(local_resource_roots),
+            "localResourceRoots": _json_safe(local_resource_roots),
             "retainContextWhenHidden": bool(
                 option_payload.get(
                     "retainContextWhenHidden",
@@ -1694,6 +1696,14 @@ class _AIEditorUIBridge:
             "badge": _json_safe(payload.get("badge")),
             "visible": bool(payload.get("visible", True)),
             "options": _json_safe(option_payload),
+            "local_resource_roots": _json_safe(
+                payload.get("local_resource_roots")
+                if payload.get("local_resource_roots") is not None
+                else payload.get("localResourceRoots")),
+            "localResourceRoots": _json_safe(
+                payload.get("localResourceRoots")
+                if payload.get("localResourceRoots") is not None
+                else payload.get("local_resource_roots")),
             "retainContextWhenHidden": bool(
                 payload.get(
                     "retainContextWhenHidden",

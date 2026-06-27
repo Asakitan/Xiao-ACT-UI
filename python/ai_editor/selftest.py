@@ -13109,9 +13109,14 @@ console.log("command palette quick access helpers ok");
     _check("extension webview panel options updates reach frontend",
            "type: 'webview_options'" in node_ext_host_source
            and "set options(value)" in node_ext_host_source
+           and "payload.enableForms = !!options.enableForms;" in node_ext_host_source
+           and "payload.enableCommandUris = Array.isArray(options.enableCommandUris)" in node_ext_host_source
+           and "payload.portMapping = options.portMapping" in node_ext_host_source
            and "elif msg_type == \"webview_options\"" in extension_host_source
+           and "\"localResourceRoots\": _node_json_safe(" in extension_host_source
            and "def update_webview_panel_options(" in app_source
            and "\"update_webview_panel_options\"" in app_source
+           and "\"localResourceRoots\": _json_safe(local_resource_roots)" in app_source
            and "function updateWebviewPanelOptions(viewId,data)" in html
            and "event==='update_webview_panel_options'" in html
            and "retainContextWhenHidden" in html)
@@ -13122,6 +13127,8 @@ console.log("command palette quick access helpers ok");
            and "webviewRuntimeOptionEnabled(runtime,'enableScripts',true)" in html
            and "webviewRuntimeOptionEnabled(runtime,'enableForms',true)" in html
            and "webviewRuntimeOption(runtime,'enableCommandUris',false)" in html
+           and "el.dataset.webviewLocalResourceRoots=String(roots.length);" in html
+           and "el.dataset.webviewPortMappings=String(portMapping.length);" in html
            and "function webviewCommandUriAllowed(viewId,command)" in html
            and "function executeWebviewCommandUri(viewId,data)" in html
            and "type==='webview-command-uri'" in html
@@ -25314,6 +25321,9 @@ async function activate(context) {
     panel.webview.html = '<main data-view="options-probe"></main>';
     panel.webview.options = {
       enableScripts: true,
+      enableForms: false,
+      enableCommandUris: ['selftest.node.openItem'],
+      portMapping: [{ webviewPort: 3000, extensionHostPort: 13000 }],
       retainContextWhenHidden: true,
       localResourceRoots: [context.extensionUri],
     };
@@ -29101,9 +29111,26 @@ process.stdin.resume();
                        and node_webview_options_probe.get(
                            "options", {}).get("enableScripts") is True
                        and node_webview_options_probe.get(
+                           "options", {}).get("enableForms") is False
+                       and node_webview_options_probe.get(
+                           "options", {}).get("enableCommandUris") == [
+                               "selftest.node.openItem"]
+                       and node_webview_options_probe.get(
+                           "options", {}).get("portMapping") == [{
+                               "webviewPort": 3000,
+                               "extensionHostPort": 13000,
+                           }]
+                       and node_webview_options_probe.get(
                            "options", {}).get(
                                "retainContextWhenHidden") is True
                        and node_options_payload.get("enableScripts") is True
+                       and node_options_payload.get("enableForms") is False
+                       and node_options_payload.get("enableCommandUris") == [
+                           "selftest.node.openItem"]
+                       and node_options_payload.get("portMapping") == [{
+                           "webviewPort": 3000,
+                           "extensionHostPort": 13000,
+                       }]
                        and node_options_payload.get(
                            "retainContextWhenHidden") is True
                        and node_options_roots

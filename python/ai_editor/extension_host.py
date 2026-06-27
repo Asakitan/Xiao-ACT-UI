@@ -2446,6 +2446,10 @@ class NodeExtensionHost:
                     "badge": _node_json_safe(msg.get("badge", None)),
                     "visible": bool(msg.get("visible", True)),
                     "options": _node_json_safe(msg.get("options", {})),
+                    "localResourceRoots": _node_json_safe(
+                        msg.get("localResourceRoots", None)),
+                    "local_resource_roots": _node_json_safe(
+                        msg.get("localResourceRoots", None)),
                     "retainContextWhenHidden": bool(
                         msg.get("retainContextWhenHidden", False)),
                     "runtimeAvailable": True,
@@ -2467,6 +2471,10 @@ class NodeExtensionHost:
                                 "badge": msg.get("badge", None),
                                 "visible": bool(msg.get("visible", True)),
                                 "options": msg.get("options", {}),
+                                "localResourceRoots": msg.get(
+                                    "localResourceRoots", None),
+                                "local_resource_roots": msg.get(
+                                    "localResourceRoots", None),
                                 "retainContextWhenHidden": bool(
                                     msg.get("retainContextWhenHidden", False)),
                                 "source": msg_type,

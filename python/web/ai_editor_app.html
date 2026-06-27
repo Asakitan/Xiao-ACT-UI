@@ -21177,7 +21177,10 @@ function webviewRuntimeOptions(runtime){
   const data=runtime&&typeof runtime==='object'?runtime:{};
   const raw=data.options&&typeof data.options==='object'?data.options:{};
   const nested=raw.webviewOptions&&typeof raw.webviewOptions==='object'?raw.webviewOptions:{};
-  return {...nested,...raw};
+  const opts={...nested,...raw};
+  const roots=data.localResourceRoots||data.local_resource_roots;
+  if(roots!==undefined&&!Object.prototype.hasOwnProperty.call(opts,'localResourceRoots'))opts.localResourceRoots=roots;
+  return opts;
 }
 function webviewRuntimeOption(runtime,key,fallback){
   const opts=webviewRuntimeOptions(runtime);
@@ -21233,9 +21236,17 @@ function webviewRuntimeLifecycleState(runtime){
 function applyWebviewRuntimeDataset(el,viewId,runtime){
   if(!el||!viewId)return;
   const data=runtime||{};
+  const opts=webviewRuntimeOptions(data);
+  const roots=Array.isArray(opts.localResourceRoots)?opts.localResourceRoots:(Array.isArray(data.localResourceRoots)?data.localResourceRoots:[]);
+  const portMapping=Array.isArray(opts.portMapping)?opts.portMapping:[];
   el.dataset.viewId=String(viewId);
   el.dataset.webviewLifecycleState=webviewRuntimeLifecycleState(data);
   el.dataset.webviewDisposed=data.disposed?'true':'false';
+  el.dataset.webviewEnableScripts=webviewRuntimeOptionEnabled(data,'enableScripts',true)?'true':'false';
+  el.dataset.webviewEnableForms=webviewRuntimeOptionEnabled(data,'enableForms',true)?'true':'false';
+  el.dataset.webviewEnableCommandUris=webviewRuntimeOption(data,'enableCommandUris',false)?'true':'false';
+  el.dataset.webviewLocalResourceRoots=String(roots.length);
+  el.dataset.webviewPortMappings=String(portMapping.length);
   el.dataset.webviewLifecycleSeq=String(Number(data.lifecycleSeq)||0);
   el.dataset.webviewRenderedAt=String(Number(data.renderedAt)||0);
   el.dataset.webviewUpdatedAt=String(Number(data.updatedAt)||0);
@@ -21247,7 +21258,7 @@ function applyWebviewRuntimeDataset(el,viewId,runtime){
   if(data.viewType||data.view_type)el.dataset.webviewViewType=String(data.viewType||data.view_type);
   if(data.description)el.dataset.webviewDescription=String(data.description);
   if(data.retainContextWhenHidden)el.dataset.webviewRetainContext='true';
-  try{el.dataset.webviewOptions=JSON.stringify(data.options||{})}catch(e){delete el.dataset.webviewOptions}
+  try{el.dataset.webviewOptions=JSON.stringify(opts||{})}catch(e){delete el.dataset.webviewOptions}
 }
 function syncWebviewRuntimeDomState(viewId,runtime){
   const id=String(viewId||'').trim();if(!id)return;
