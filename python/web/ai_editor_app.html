@@ -4806,6 +4806,7 @@ function assistantSessionSerializableNativePayload(payload){
   copyArray('contentReferences','contentReferences','content_references','responseReferences','response_references');
   copyArray('usedContext','usedContext','used_context','used');
   copyArray('fileTrees','fileTrees','file_trees');
+  copyArray('followups','followups','followUps','suggestedFollowups','suggested_followups');
   if(payload.usage&&typeof payload.usage==='object')out.usage={...payload.usage};
   if(payload.model)out.model=String(payload.model||'');
   if(payload.error)out.error=String(payload.error||'');
@@ -4834,12 +4835,12 @@ function assistantSessionNormalizeMessages(messages){
   return (Array.isArray(messages)?messages:[]).map(m=>{
     const role=String(m&&m.role||'assistant');
     const content=normalizeChatMessageText(m&&m.content,role);
-    if(!content&&role!=='user')return null;
     const refs=assistantSessionNormalizeRefs(
       m&&Array.isArray(m.references)?m.references:[]);
     const out={role,model:String(m&&m.model||''),content};
     if(refs.length)out.references=refs;
     const nativePayload=assistantSessionSerializableNativePayload(m&&m.nativePayload);
+    if(!content&&role!=='user'&&!nativePayload)return null;
     if(nativePayload)out.nativePayload=nativePayload;
     return out;
   }).filter(Boolean).slice(-80);
@@ -4922,13 +4923,14 @@ function assistantSessionRenderMessages(messages){
   assistantSessionNormalizeMessages(messages).forEach(m=>{
     const role=String(m&&m.role||'assistant');
     const content=normalizeChatMessageText(m&&m.content,role);
-    if(!content&&role!=='user')return;
+    if(!content&&role!=='user'&&!(m&&m.nativePayload))return;
     const b=createMsg(role,m&&m.model);
     if(role==='assistant'){
       rememberAssistantNativePayload(b,m&&m.nativePayload);
-      renderMd(b,content);
+      if(content)renderMd(b,content);
       renderChatResponseNativeParts(b,m&&m.nativePayload,content);
       renderChatResponseReferences(b,content,m&&m.nativePayload);
+      showFollowups(b,chatFollowupsFromPayload(m&&m.nativePayload,content));
     }
     else b.textContent=content;
     if(role==='user'&&Array.isArray(m&&m.references)&&m.references.length)renderChatReferences(b,m.references);
@@ -7881,6 +7883,7 @@ function assistantProviderSessionSmokeSnapshot(){
     contentReferences:[{kind:'anchor',path:'file:///workspace/provider-session.ts',label:'provider-session.ts',openable:true}],
     usedContext:[{kind:'file',path:'file:///workspace/context.ts',label:'context.ts',openable:true}],
     fileTrees:[{label:'provider tree',items:[{name:'provider-session.ts',path:'file:///workspace/provider-session.ts'}]}],
+    followups:[{title:'Continue provider session',message:'Continue provider session',kind:'ask',source:'selfcheck'}],
     usage:{total_tokens:12}
   };
   rememberAssistantNativePayload(assistant,nativePayload);
@@ -7895,6 +7898,7 @@ function assistantProviderSessionSmokeSnapshot(){
   const restoredMessages=providerRefs(pid).messages?providerRefs(pid).messages.querySelectorAll('.msg').length:0;
   const restoredNativeCards=providerRefs(pid).messages?providerRefs(pid).messages.querySelectorAll('.chat-response-native-parts > *').length:0;
   const restoredReferenceCards=providerRefs(pid).messages?providerRefs(pid).messages.querySelectorAll('.chat-response-references').length:0;
+  const restoredFollowups=providerRefs(pid).messages?providerRefs(pid).messages.querySelectorAll('.followup-btn').length:0;
   const savedNativePayload=saved&&saved.messages&&saved.messages.find(m=>m.role==='assistant'&&m.nativePayload);
   const panel=$(providerElId('rp',pid));
   const snapshot={
@@ -7912,6 +7916,7 @@ function assistantProviderSessionSmokeSnapshot(){
     savedNativePayload:!!savedNativePayload,
     restoredNativeCards,
     restoredReferenceCards,
+    restoredFollowups,
     activeProvider:activeProviderId,
     sessionType:assistantSessionState.type,
     sessionProvider:assistantSessionState.provider
@@ -7995,13 +8000,15 @@ async function runAssistantUiSelfCheck(opts){
   const providerSession=assistantProviderSessionSmokeSnapshot();
   const historyAffordance=assistantHistoryAffordanceSmokeSnapshot();
   const savedHistoryAffordance=assistantSavedHistoryAffordanceSmokeSnapshot();
+  const nativeOnlySession=assistantNativeOnlySessionSmokeSnapshot();
   assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready',providerPopup.shown&&providerPopup.optionCount>=1&&providerPopup.focusableCount===providerPopup.optionCount&&providerPopup.keyboardReady,JSON.stringify(providerPopup));
   assistantUiSelfCheckRecord(checks,'model-popup-configured-models-ready',modelPopup.shown&&modelPopup.optionCount>=1&&modelPopup.focusableCount===modelPopup.optionCount&&modelPopup.keyboardReady,JSON.stringify(modelPopup));
   assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped',[providerPopup,modelPopup,agentPopup,workflowPopup].every(s=>s.shown&&s.display==='block'&&s.rectReady&&s.opensAboveTrigger&&s.notToolbarClipped&&!s.className.includes('mode-popup')),JSON.stringify({providerPopup,modelPopup,agentPopup,workflowPopup}));
   assistantUiSelfCheckRecord(checks,'agent-popup-configured-agents-ready',agentPopup.shown&&agentPopup.optionCount>=1&&agentPopup.focusableCount===agentPopup.optionCount&&agentPopup.keyboardReady&&agentPopup.visibleText.includes('Agent'),JSON.stringify(agentPopup));
-  assistantUiSelfCheckRecord(checks,'provider-session-state-smoke',providerSession.runningType==='provider'&&providerSession.runningStatus==='inProgress'&&providerSession.savedType==='provider'&&providerSession.savedProvider==='assistant-selfcheck-provider'&&providerSession.savedMessageCount===2&&providerSession.savedContextCount===1&&String(providerSession.resource||'').startsWith('sao-ai-chat://provider/')&&providerSession.panelResource===providerSession.resource&&providerSession.panelRequests==='1'&&providerSession.opened===true&&providerSession.restoredMessages===2&&providerSession.savedNativePayload===true&&providerSession.restoredNativeCards>=2&&providerSession.restoredReferenceCards>=1&&providerSession.activeProvider==='assistant-selfcheck-provider'&&providerSession.sessionType==='provider'&&providerSession.sessionProvider==='assistant-selfcheck-provider',JSON.stringify(providerSession));
-  assistantUiSelfCheckRecord(checks,'history-native-affordances-visible',historyAffordance.itemExists&&historyAffordance.nativeParts===2&&historyAffordance.nativeTodos===1&&historyAffordance.nativeChanges===1&&historyAffordance.nativeRefs===1&&historyAffordance.nativeUsedContext===1&&historyAffordance.nativeTrees===1&&historyAffordance.nativeTokens===24&&historyAffordance.chipLabels.includes('2 parts')&&historyAffordance.chipLabels.includes('1 edit')&&historyAffordance.chipLabels.includes('1 ref')&&historyAffordance.chipLabels.includes('1 used')&&historyAffordance.chipLabels.includes('1 tree')&&historyAffordance.chipLabels.includes('24 tok')&&historyAffordance.searchMatches&&historyAffordance.aria.includes('2 parts')&&historyAffordance.title.includes('Modified files: 1'),JSON.stringify(historyAffordance));
-  assistantUiSelfCheckRecord(checks,'saved-history-native-affordances-visible',savedHistoryAffordance.itemExists&&savedHistoryAffordance.nativeParts===2&&savedHistoryAffordance.nativeChanges===1&&savedHistoryAffordance.nativeRefs===1&&savedHistoryAffordance.nativeUsedContext===1&&savedHistoryAffordance.nativeTrees===1&&savedHistoryAffordance.nativeTokens===24&&savedHistoryAffordance.chipLabels.includes('2 parts')&&savedHistoryAffordance.chipLabels.includes('1 edit')&&savedHistoryAffordance.chipLabels.includes('1 ref')&&savedHistoryAffordance.chipLabels.includes('1 used')&&savedHistoryAffordance.chipLabels.includes('1 tree')&&savedHistoryAffordance.chipLabels.includes('24 tok')&&savedHistoryAffordance.actionKinds.includes('references')&&savedHistoryAffordance.actionKinds.includes('changes')&&savedHistoryAffordance.actionKinds.includes('tree')&&savedHistoryAffordance.actionKinds.includes('reference-item')&&savedHistoryAffordance.actionKinds.includes('change-item')&&savedHistoryAffordance.actionKinds.includes('tree-item')&&savedHistoryAffordance.actionTargets.includes('file:///workspace/history.ts')&&savedHistoryAffordance.disabledActions.length===0&&savedHistoryAffordance.searchMatches&&savedHistoryAffordance.aria.includes('2 parts')&&savedHistoryAffordance.title.includes('Modified files: 1'),JSON.stringify(savedHistoryAffordance));
+  assistantUiSelfCheckRecord(checks,'provider-session-state-smoke',providerSession.runningType==='provider'&&providerSession.runningStatus==='inProgress'&&providerSession.savedType==='provider'&&providerSession.savedProvider==='assistant-selfcheck-provider'&&providerSession.savedMessageCount===2&&providerSession.savedContextCount===1&&String(providerSession.resource||'').startsWith('sao-ai-chat://provider/')&&providerSession.panelResource===providerSession.resource&&providerSession.panelRequests==='1'&&providerSession.opened===true&&providerSession.restoredMessages===2&&providerSession.savedNativePayload===true&&providerSession.restoredNativeCards>=2&&providerSession.restoredReferenceCards>=1&&providerSession.restoredFollowups===1&&providerSession.activeProvider==='assistant-selfcheck-provider'&&providerSession.sessionType==='provider'&&providerSession.sessionProvider==='assistant-selfcheck-provider',JSON.stringify(providerSession));
+  assistantUiSelfCheckRecord(checks,'history-native-affordances-visible',historyAffordance.itemExists&&historyAffordance.nativeParts===2&&historyAffordance.nativeTodos===1&&historyAffordance.nativeChanges===1&&historyAffordance.nativeRefs===1&&historyAffordance.nativeUsedContext===1&&historyAffordance.nativeTrees===1&&historyAffordance.nativeFollowups===1&&historyAffordance.nativeTokens===24&&historyAffordance.chipLabels.includes('2 parts')&&historyAffordance.chipLabels.includes('1 edit')&&historyAffordance.chipLabels.includes('1 ref')&&historyAffordance.chipLabels.includes('1 used')&&historyAffordance.chipLabels.includes('1 tree')&&historyAffordance.chipLabels.includes('1 follow-up')&&historyAffordance.chipLabels.includes('24 tok')&&historyAffordance.searchMatches&&historyAffordance.aria.includes('2 parts')&&historyAffordance.title.includes('Modified files: 1'),JSON.stringify(historyAffordance));
+  assistantUiSelfCheckRecord(checks,'saved-history-native-affordances-visible',savedHistoryAffordance.itemExists&&savedHistoryAffordance.nativeParts===2&&savedHistoryAffordance.nativeChanges===1&&savedHistoryAffordance.nativeRefs===1&&savedHistoryAffordance.nativeUsedContext===1&&savedHistoryAffordance.nativeTrees===1&&savedHistoryAffordance.nativeFollowups===1&&savedHistoryAffordance.nativeTokens===24&&savedHistoryAffordance.chipLabels.includes('2 parts')&&savedHistoryAffordance.chipLabels.includes('1 edit')&&savedHistoryAffordance.chipLabels.includes('1 ref')&&savedHistoryAffordance.chipLabels.includes('1 used')&&savedHistoryAffordance.chipLabels.includes('1 tree')&&savedHistoryAffordance.chipLabels.includes('1 follow-up')&&savedHistoryAffordance.chipLabels.includes('24 tok')&&savedHistoryAffordance.actionKinds.includes('references')&&savedHistoryAffordance.actionKinds.includes('changes')&&savedHistoryAffordance.actionKinds.includes('tree')&&savedHistoryAffordance.actionKinds.includes('reference-item')&&savedHistoryAffordance.actionKinds.includes('change-item')&&savedHistoryAffordance.actionKinds.includes('tree-item')&&savedHistoryAffordance.actionTargets.includes('file:///workspace/history.ts')&&savedHistoryAffordance.disabledActions.length===0&&savedHistoryAffordance.searchMatches&&savedHistoryAffordance.aria.includes('2 parts')&&savedHistoryAffordance.title.includes('Modified files: 1'),JSON.stringify(savedHistoryAffordance));
+  assistantUiSelfCheckRecord(checks,'native-only-session-parts-persist',nativeOnlySession.normalizedCount===1&&nativeOnlySession.normalizedContent===''&&nativeOnlySession.hasNativePayload&&nativeOnlySession.serializedFollowups===1&&nativeOnlySession.renderedNativeParts>=1&&nativeOnlySession.renderedFollowups===1&&nativeOnlySession.nativeFollowups===1&&nativeOnlySession.summaryParts===1&&nativeOnlySession.summaryFollowups===1&&nativeOnlySession.searchMatches,JSON.stringify(nativeOnlySession));
   assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready',workflowPopup.shown&&workflowPopup.workflowModeCount===3&&workflowPopup.workflowModeStrip&&workflowPopup.workflowModeToolbar&&workflowPopup.optionCount>=4&&workflowPopup.focusableCount===workflowPopup.optionCount&&workflowPopup.keyboardReady,JSON.stringify(workflowPopup));
   assistantUiSelfCheckRecord(checks,'workflow-popup-mode-smoke',workflowModeSmoke.states.length===3&&workflowModeSmoke.states.every(state=>state.strip&&state.toolbar&&state.active.includes(state.mode))&&workflowModeSmoke.selected.value==='assistant-selfcheck-flow'&&workflowModeSmoke.selected.mode==='on'&&workflowModeSmoke.selected.runDisabled===false&&workflowModeSmoke.custom.prompt==='selfcheck custom workflow prompt'&&workflowModeSmoke.custom.runDisabled===false,JSON.stringify(workflowModeSmoke));
   assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready',workflowEditor.modalExists&&workflowEditor.editorExists&&workflowEditor.rowCount===2&&workflowEditor.labelInputs===2&&workflowEditor.agentInputs===2&&workflowEditor.outputInputs===2&&workflowEditor.promptInputs===2&&workflowEditor.moveButtons===4&&workflowEditor.deleteButtons===2&&workflowEditor.addButtonExists&&workflowEditor.collectedCount===2&&workflowEditor.idReadOnly,JSON.stringify(workflowEditor));
@@ -16775,7 +16782,7 @@ function confirmDeleteAssistantSession(session){
   return window.confirm('Delete local chat session "'+title+'"?');
 }
 function assistantHistorySessionNativeSummary(session){
-  const summary={parts:0,todos:0,changes:0,refs:0,usedContext:0,trees:0,tokens:0,errors:0,models:Object.create(null),keywords:[]};
+  const summary={parts:0,todos:0,changes:0,refs:0,usedContext:0,trees:0,tokens:0,errors:0,followups:0,models:Object.create(null),keywords:[]};
   (Array.isArray(session&&session.messages)?session.messages:[]).forEach(message=>{
     const payload=assistantSessionSerializableNativePayload(message&&message.nativePayload);
     if(!payload)return;
@@ -16793,12 +16800,13 @@ function assistantHistorySessionNativeSummary(session){
     if(Array.isArray(payload.contentReferences))summary.refs+=payload.contentReferences.length;
     if(Array.isArray(payload.usedContext))summary.usedContext+=payload.usedContext.length;
     if(Array.isArray(payload.fileTrees))summary.trees+=payload.fileTrees.length;
+    if(Array.isArray(payload.followups))summary.followups+=payload.followups.length;
     const usage=payload.usage||{};
     const total=Number(usage.total_tokens||usage.totalTokens||usage.total||0);
     if(Number.isFinite(total)&&total>0)summary.tokens+=total;
   });
   summary.modelLabels=Object.keys(summary.models);
-  summary.hasNative=!!(summary.parts||summary.refs||summary.usedContext||summary.trees||summary.tokens||summary.errors||summary.modelLabels.length);
+  summary.hasNative=!!(summary.parts||summary.refs||summary.usedContext||summary.trees||summary.followups||summary.tokens||summary.errors||summary.modelLabels.length);
   summary.searchText=[
     summary.parts?'response parts':'',
     summary.todos?'todo list':'',
@@ -16806,6 +16814,7 @@ function assistantHistorySessionNativeSummary(session){
     summary.refs?'references anchors':'',
     summary.usedContext?'used context':'',
     summary.trees?'file tree':'',
+    summary.followups?'follow up suggestions prompts':'',
     summary.tokens?'tokens usage':'',
     summary.errors?'error failed':'',
     ...summary.modelLabels,
@@ -16827,6 +16836,7 @@ function assistantHistoryEntryNativeSummary(entry){
     refs:Number(raw.refs||0)||0,
     usedContext:Number(raw.usedContext||raw.used_context||0)||0,
     trees:Number(raw.trees||0)||0,
+    followups:Number(raw.followups||raw.followUps||raw.suggestedFollowups||raw.suggested_followups||0)||0,
     tokens:Number(raw.tokens||0)||0,
     errors:Number(raw.errors||0)||0,
     modelLabels:Array.isArray(raw.modelLabels)?raw.modelLabels:(Array.isArray(raw.models)?raw.models:[]),
@@ -16834,6 +16844,7 @@ function assistantHistoryEntryNativeSummary(entry){
     referenceItems:normalizeItems(raw.referenceItems||raw.reference_items),
     changeItems:normalizeItems(raw.changeItems||raw.change_items),
     treeItems:normalizeItems(raw.treeItems||raw.tree_items),
+    followupItems:normalizeItems(raw.followupItems||raw.followup_items),
     searchText:String(raw.searchText||raw.search_text||'')
   };
   if(!summary.searchText){
@@ -16844,6 +16855,7 @@ function assistantHistoryEntryNativeSummary(entry){
       summary.refs?'references anchors':'',
       summary.usedContext?'used context':'',
       summary.trees?'file tree':'',
+      summary.followups?'follow up suggestions prompts':'',
       summary.tokens?'tokens usage':'',
       summary.errors?'error failed':'',
       ...summary.modelLabels,
@@ -16860,6 +16872,7 @@ function assistantHistoryNativeSummaryChips(summary){
   if(summary&&summary.refs)chips.push({label:summary.refs+' ref'+(summary.refs===1?'':'s'),kind:'reference'});
   if(summary&&summary.usedContext)chips.push({label:summary.usedContext+' used',kind:'context-part'});
   if(summary&&summary.trees)chips.push({label:summary.trees+' tree'+(summary.trees===1?'':'s'),kind:'tree'});
+  if(summary&&summary.followups)chips.push({label:summary.followups+' follow-up'+(summary.followups===1?'':'s'),kind:'response'});
   if(summary&&summary.tokens)chips.push({label:summary.tokens+' tok',kind:'tokens'});
   if(summary&&summary.errors)chips.push({label:'error',kind:'error'});
   return chips;
@@ -16897,7 +16910,7 @@ function assistantHistorySessionChips(session,current){
   if(session&&session.workflowLabel)chips.push({label:assistantWorkflowDisplayLabel(session.workflowLabel),kind:'workflow'});
   if(session&&session.approval&&String(session.approval)!=='default')chips.push({label:t('approval_'+session.approval)||String(session.approval),kind:'approval'});
   chips.push(...assistantHistoryNativeSummaryChips(nativeSummary));
-  return chips.slice(0,13);
+  return chips.slice(0,16);
 }
 function renderHistorySessionItem(list,session,index){
   const current=String(session.id||'')===String(assistantSessionState.id||'');
@@ -16922,6 +16935,7 @@ function renderHistorySessionItem(list,session,index){
   item.dataset.sessionNativeRefs=String(nativeSummary.refs);
   item.dataset.sessionNativeUsedContext=String(nativeSummary.usedContext);
   item.dataset.sessionNativeTrees=String(nativeSummary.trees);
+  item.dataset.sessionNativeFollowups=String(nativeSummary.followups);
   item.dataset.sessionNativeTokens=String(nativeSummary.tokens);
   item.dataset.sessionNativeErrors=String(nativeSummary.errors);
   item.setAttribute('aria-label','Assistant session '+String(session.title||session.id||'Chat session')+' '+chips.map(c=>c.label).join(' '));
@@ -16944,6 +16958,7 @@ function renderHistorySessionItem(list,session,index){
     nativeSummary.refs?'References: '+nativeSummary.refs:'',
     nativeSummary.usedContext?'Used context: '+nativeSummary.usedContext:'',
     nativeSummary.trees?'File trees: '+nativeSummary.trees:'',
+    nativeSummary.followups?'Follow-ups: '+nativeSummary.followups:'',
     nativeSummary.tokens?'Tokens: '+nativeSummary.tokens:'',
     nativeSummary.errors?'Errors: '+nativeSummary.errors:''
   ].filter(Boolean).join('\n');
@@ -16994,6 +17009,7 @@ function assistantHistoryAffordanceSmokeSnapshot(){
         contentReferences:[{kind:'anchor',label:'history.ts',path:'file:///workspace/history.ts'}],
         usedContext:[{kind:'file',label:'context.ts',path:'file:///workspace/context.ts'}],
         fileTrees:[{label:'tree',items:[{name:'history.ts'}]}],
+        followups:[{title:'Continue with native history',message:'Continue with native history',kind:'ask',source:'selfcheck'}],
         usage:{total_tokens:24}
       }
     }]
@@ -17010,6 +17026,7 @@ function assistantHistoryAffordanceSmokeSnapshot(){
     nativeRefs:item?Number(item.dataset.sessionNativeRefs||0):0,
     nativeUsedContext:item?Number(item.dataset.sessionNativeUsedContext||0):0,
     nativeTrees:item?Number(item.dataset.sessionNativeTrees||0):0,
+    nativeFollowups:item?Number(item.dataset.sessionNativeFollowups||0):0,
     nativeTokens:item?Number(item.dataset.sessionNativeTokens||0):0,
     aria:item?String(item.getAttribute('aria-label')||''):'',
     title:item?String((item.querySelector('.history-session-title')||{}).title||''):'',
@@ -17031,6 +17048,7 @@ function renderHistoryBackendItem(list,entry,index){
   item.dataset.savedNativeRefs=String(nativeSummary.refs);
   item.dataset.savedNativeUsedContext=String(nativeSummary.usedContext);
   item.dataset.savedNativeTrees=String(nativeSummary.trees);
+  item.dataset.savedNativeFollowups=String(nativeSummary.followups);
   item.dataset.savedNativeTokens=String(nativeSummary.tokens);
   item.dataset.savedNativeErrors=String(nativeSummary.errors);
   item.setAttribute('aria-label','Saved chat history '+String(entry.title||entry.id||'Untitled')+' '+assistantHistoryNativeSummaryChips(nativeSummary).map(chip=>chip.label).join(' '));
@@ -17049,6 +17067,7 @@ function renderHistoryBackendItem(list,entry,index){
     nativeSummary.refs?'References: '+nativeSummary.refs:'',
     nativeSummary.usedContext?'Used context: '+nativeSummary.usedContext:'',
     nativeSummary.trees?'File trees: '+nativeSummary.trees:'',
+    nativeSummary.followups?'Follow-ups: '+nativeSummary.followups:'',
     nativeSummary.tokens?'Tokens: '+nativeSummary.tokens:'',
     nativeSummary.errors?'Errors: '+nativeSummary.errors:''
   ].filter(Boolean).join('\n');
@@ -17084,13 +17103,14 @@ function assistantSavedHistoryAffordanceSmokeSnapshot(){
     message_count:2,
     model:'selfcheck-model',
     native_summary:{
-      parts:2,todos:1,changes:1,refs:1,usedContext:1,trees:1,tokens:24,errors:0,
+      parts:2,todos:1,changes:1,refs:1,usedContext:1,trees:1,followups:1,tokens:24,errors:0,
       modelLabels:['selfcheck-model'],
       keywords:['todoList','modifiedFilesConfirmation'],
       referenceItems:[{path:'file:///workspace/history.ts',label:'history.ts',kind:'anchor'}],
       changeItems:[{path:'file:///workspace/history.ts',label:'history.ts',kind:'modifiedFilesConfirmation'}],
       treeItems:[{path:'file:///workspace/history.ts',label:'history.ts'}],
-      searchText:'response parts todo list modified files changes edits references anchors used context file tree tokens usage selfcheck-model'
+      followupItems:[{label:'Continue with native history',kind:'ask'}],
+      searchText:'response parts todo list modified files changes edits references anchors used context file tree follow up suggestions prompts tokens usage selfcheck-model'
     }
   };
   const rendered=renderHistoryBackendItem(list,entry,0);
@@ -17103,6 +17123,7 @@ function assistantSavedHistoryAffordanceSmokeSnapshot(){
     nativeRefs:item?Number(item.dataset.savedNativeRefs||0):0,
     nativeUsedContext:item?Number(item.dataset.savedNativeUsedContext||0):0,
     nativeTrees:item?Number(item.dataset.savedNativeTrees||0):0,
+    nativeFollowups:item?Number(item.dataset.savedNativeFollowups||0):0,
     nativeTokens:item?Number(item.dataset.savedNativeTokens||0):0,
     actionKinds:item?Array.from(item.querySelectorAll('[data-history-action]')).map(el=>String(el.dataset.historyAction||'')):[],
     actionTargets:item?Array.from(item.querySelectorAll('[data-history-target]')).map(el=>String(el.dataset.historyTarget||'')):[],
@@ -17114,6 +17135,37 @@ function assistantSavedHistoryAffordanceSmokeSnapshot(){
   };
   list.remove();
   return snapshot;
+}
+function assistantNativeOnlySessionSmokeSnapshot(){
+  const payload={
+    model:'selfcheck-model',
+    responseParts:[{kind:'todoList',todoList:[{title:'Native-only todo',status:'completed'}]}],
+    followups:[{title:'Continue native-only',message:'Continue native-only',kind:'ask',source:'selfcheck'}],
+    usage:{total_tokens:7}
+  };
+  const normalized=assistantSessionNormalizeMessages([{role:'assistant',content:'',nativePayload:payload}]);
+  const saved=assistantSessionSerializableNativePayload(payload);
+  const body=document.createElement('div');
+  body.className='msg-body';
+  if(saved){
+    rememberAssistantNativePayload(body,saved);
+    renderChatResponseNativeParts(body,saved,'');
+    showFollowups(body,chatFollowupsFromPayload(saved,''));
+  }
+  const summary=assistantHistorySessionNativeSummary({messages:normalized});
+  const followups=body.querySelector('.followups');
+  return {
+    normalizedCount:normalized.length,
+    normalizedContent:normalized[0]?String(normalized[0].content||''):'',
+    hasNativePayload:!!(normalized[0]&&normalized[0].nativePayload),
+    serializedFollowups:saved&&Array.isArray(saved.followups)?saved.followups.length:0,
+    renderedNativeParts:body.querySelectorAll('.chat-response-native-parts > *').length,
+    renderedFollowups:followups?followups.querySelectorAll('.followup-btn').length:0,
+    nativeFollowups:followups?Number(followups.dataset.nativeFollowupCount||0):0,
+    summaryParts:summary.parts,
+    summaryFollowups:summary.followups,
+    searchMatches:historyMatchesQuery([summary.searchText],'follow up')
+  };
 }
 async function refreshHistory(){
   assistantSessionPersistCurrent({status:streaming?'inProgress':'completed'});
@@ -19504,14 +19556,15 @@ function assistantProviderRenderMessages(pid,messages){
   assistantSessionNormalizeMessages(messages).forEach(m=>{
     const role=String(m&&m.role||'assistant');
     const content=normalizeChatMessageText(m&&m.content,role);
-    if(!content&&role!=='user')return;
+    if(!content&&role!=='user'&&!(m&&m.nativePayload))return;
     const body=createProviderMessage(pid,role==='tool'?'tool':role,m&&m.model,role==='assistant'?undefined:content);
     if(!body)return;
     if(role==='assistant'){
       rememberAssistantNativePayload(body,m&&m.nativePayload);
-      renderMd(body,content);
+      if(content)renderMd(body,content);
       renderChatResponseNativeParts(body,m&&m.nativePayload,content);
       renderChatResponseReferences(body,content,m&&m.nativePayload);
+      showFollowups(body,chatFollowupsFromPayload(m&&m.nativePayload,content));
     }
     if(role==='user'&&Array.isArray(m&&m.references)&&m.references.length)renderChatReferences(body,m.references);
   });

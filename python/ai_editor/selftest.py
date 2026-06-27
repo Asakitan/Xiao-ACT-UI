@@ -3986,7 +3986,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function chatMessageBodyHasContent(body)" in html
            and "function removeChatMessageBody(body)" in html
            and "function pruneEmptyChatMessages()" in html
-           and "if(!content&&role!=='user')return;" in html
+           and "if(!content&&role!=='user'&&!(m&&m.nativePayload))return;" in html
            and "const finalMarkdown=normalizeChatMessageText(streamBuf||d.content||'','assistant');" in html
            and "if(!chatMessageBodyHasContent(currentMsgBody))removeChatMessageBody(currentMsgBody);" in html
            and "pruneEmptyChatMessages();" in html
@@ -4000,6 +4000,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "const out={role,model:String(m&&m.model||''),content};"
            in html
            and "if(refs.length)out.references=refs;" in html
+           and "const nativePayload=assistantSessionSerializableNativePayload(m&&m.nativePayload);" in html
+           and "if(!content&&role!=='user'&&!nativePayload)return null;" in html
+           and "copyArray('followups','followups','followUps','suggestedFollowups','suggested_followups');" in html
+           and "if(content)renderMd(b,content);" in html
            and "return assistantSessionNormalizeMessages(chatConversationItems().map(msg=>" in html
            and "assistantSessionNormalizeMessages(messages).forEach(m=>" in html)
     _check("frontend Assistant exposes stable Copilot Chat surface state",
@@ -4113,12 +4117,14 @@ def test_phase1_ai_editor_regressions() -> None:
            and "item.dataset.sessionNativeRefs=String(nativeSummary.refs);" in html
            and "item.dataset.sessionNativeUsedContext=String(nativeSummary.usedContext);" in html
            and "item.dataset.sessionNativeTrees=String(nativeSummary.trees);" in html
+           and "item.dataset.sessionNativeFollowups=String(nativeSummary.followups);" in html
            and "item.dataset.sessionNativeTokens=String(nativeSummary.tokens);" in html
            and "item.dataset.savedNativeParts=String(nativeSummary.parts);" in html
            and "item.dataset.savedNativeChanges=String(nativeSummary.changes);" in html
            and "item.dataset.savedNativeRefs=String(nativeSummary.refs);" in html
            and "item.dataset.savedNativeUsedContext=String(nativeSummary.usedContext);" in html
            and "item.dataset.savedNativeTrees=String(nativeSummary.trees);" in html
+           and "item.dataset.savedNativeFollowups=String(nativeSummary.followups);" in html
            and "item.dataset.savedNativeTokens=String(nativeSummary.tokens);" in html
            and "referenceItems:normalizeItems(raw.referenceItems||raw.reference_items)" in html
            and "changeItems:normalizeItems(raw.changeItems||raw.change_items)" in html
@@ -4163,6 +4169,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "nativeSummary.searchText" in html
            and "assistantUiSelfCheckRecord(checks,'history-native-affordances-visible'" in html
            and "assistantUiSelfCheckRecord(checks,'saved-history-native-affordances-visible'" in html
+           and "function assistantNativeOnlySessionSmokeSnapshot()" in html
+           and "const nativeOnlySession=assistantNativeOnlySessionSmokeSnapshot();" in html
+           and "assistantUiSelfCheckRecord(checks,'native-only-session-parts-persist'" in html
            in html)
     _check("frontend Assistant provider surfaces persist Copilot-style sessions",
            "function assistantProviderSessionId(pid)" in html
@@ -4177,6 +4186,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantProviderRenderMessages(pid,item.messages||[]);" in html
            and "renderChatResponseNativeParts(body,m&&m.nativePayload,content);" in html
            and "renderChatResponseReferences(body,content,m&&m.nativePayload);" in html
+           and "showFollowups(body,chatFollowupsFromPayload(m&&m.nativePayload,content));" in html
            and "switchRightTab(pid);" in html
            and "const input=providerRefs(pid).input;if(input)input.focus();" in html
            and "refs.panel.dataset.providerSessionResource=assistantProviderSessionResource(key);" in html
@@ -4205,6 +4215,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "providerSession.savedNativePayload===true" in html
            and "providerSession.restoredNativeCards>=2" in html
            and "providerSession.restoredReferenceCards>=1" in html
+           and "providerSession.restoredFollowups===1" in html
            and "providerSession.activeProvider==='assistant-selfcheck-provider'" in html
            and "providerSession.panelResource===providerSession.resource" in html)
     _check("frontend Assistant supports Copilot-style attached context and references",
@@ -12880,6 +12891,9 @@ def test_history() -> None:
             "usedContext": [{"kind": "file", "label": "context.py"}],
             "fileTrees": [{"label": "tree", "items": [
                 {"name": "history.py", "path": "file:///tmp/history.py"}]}],
+            "followups": [
+                {"title": "Continue native history", "message": "Continue native history", "kind": "ask"}
+            ],
             "usage": {"total_tokens": 24},
         }},
     ]
@@ -12897,20 +12911,25 @@ def test_history() -> None:
            and summary.get("refs") == 1
            and summary.get("usedContext") == 1
            and summary.get("trees") == 1
+           and summary.get("followups") == 1
            and summary.get("tokens") == 24
            and summary.get("referenceItems", [{}])[0].get("label") == "history.py"
            and summary.get("changeItems", [{}])[0].get("path") == "file:///tmp/history.py"
            and summary.get("treeItems", [{}])[0].get("path") == "file:///tmp/history.py"
-           and "modified files" in summary.get("searchText", ""))
+           and summary.get("followupItems", [{}])[0].get("label") == "Continue native history"
+           and "modified files" in summary.get("searchText", "")
+           and "follow up" in summary.get("searchText", ""))
     _check("history persists native payload and header summary",
            native_loaded is not None
            and native_loaded["messages"][1].get("nativePayload", {}).get("model") == "selftest-model"
            and native_loaded.get("native_summary", {}).get("changes") == 1
            and native_list_summary.get("parts") == 2
            and native_list_summary.get("refs") == 1
+           and native_list_summary.get("followups") == 1
            and native_list_summary.get("referenceItems", [{}])[0].get("label") == "history.py"
            and native_list_summary.get("changeItems", [{}])[0].get("path") == "file:///tmp/history.py"
            and native_list_summary.get("treeItems", [{}])[0].get("path") == "file:///tmp/history.py"
+           and native_list_summary.get("followupItems", [{}])[0].get("label") == "Continue native history"
            and "file tree" in native_list_summary.get("searchText", ""))
     delete_conversation(native_cid)
 

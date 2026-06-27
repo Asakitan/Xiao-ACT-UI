@@ -34,6 +34,8 @@ def _native_summary_search_text(summary: Dict[str, Any]) -> str:
         terms.append("used context")
     if summary.get("trees"):
         terms.append("file tree")
+    if summary.get("followups"):
+        terms.append("follow up suggestions prompts")
     if summary.get("tokens"):
         terms.append("tokens usage")
     if summary.get("errors"):
@@ -89,11 +91,13 @@ def native_summary_from_messages(messages: List[Dict[str, Any]]) -> Dict[str, An
         "trees": 0,
         "tokens": 0,
         "errors": 0,
+        "followups": 0,
         "modelLabels": [],
         "keywords": [],
         "referenceItems": [],
         "changeItems": [],
         "treeItems": [],
+        "followupItems": [],
         "searchText": "",
     }
     models: Dict[str, bool] = {}
@@ -157,6 +161,31 @@ def native_summary_from_messages(messages: List[Dict[str, Any]]) -> Dict[str, An
             for item in tree_items[:5]:
                 if item and len(summary["treeItems"]) < 5:
                     summary["treeItems"].append(item)
+        for key in ("followups", "followUps", "suggestedFollowups", "suggested_followups"):
+            followups = payload.get(key)
+            if isinstance(followups, list):
+                summary["followups"] += len(followups)
+                for followup in followups[:5]:
+                    if len(summary["followupItems"]) >= 5:
+                        break
+                    if isinstance(followup, str):
+                        label = followup.strip()
+                        if label:
+                            summary["followupItems"].append({"label": label})
+                    elif isinstance(followup, dict):
+                        label = str(
+                            followup.get("title") or followup.get("message")
+                            or followup.get("prompt") or followup.get("value") or ""
+                        ).strip()
+                        kind = str(followup.get("kind") or followup.get("type") or "").strip()
+                        item: Dict[str, str] = {}
+                        if label:
+                            item["label"] = label
+                        if kind:
+                            item["kind"] = kind
+                        if item:
+                            summary["followupItems"].append(item)
+                break
         usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
         total = usage.get("total_tokens") or usage.get("totalTokens") or usage.get("total") or 0
         try:
