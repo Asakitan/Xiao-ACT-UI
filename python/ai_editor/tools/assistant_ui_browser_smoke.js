@@ -154,11 +154,13 @@ async function main() {
     "workflow-popup-modes-ready",
     "workflow-run-card-status-summary",
     "workflow-run-method-session-rendered",
+    "workflow-run-step-duration-updates",
     "workflow-result-state-rendered",
     "workflow-result-metadata-rendered",
     "workflow-run-button-active-state",
     "workflow-backend-execution-rendered",
-    "workflow-backend-metadata-payload-ready"
+    "workflow-backend-metadata-payload-ready",
+    "workflow-backend-duration-payload-ready"
   ];
   const checks = Array.isArray(result.checks) ? result.checks : [];
   const byName = new Map(checks.map(check => [check.name, check]));

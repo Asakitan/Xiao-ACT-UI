@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass, field, asdict
 from typing import Any, Callable, Dict, List, Optional
 
@@ -321,6 +322,7 @@ class WorkflowEngine:
         run_id = str(run_id or "").strip()
         context: Dict[str, str] = {"input": input_text}
         results: List[Dict[str, Any]] = []
+        run_started_at = int(time.time() * 1000)
 
         def _cancelled() -> bool:
             if cancel_requested is None:
@@ -332,16 +334,21 @@ class WorkflowEngine:
 
         for i, step in enumerate(workflow.steps):
             if _cancelled():
+                ended_at = int(time.time() * 1000)
                 return {
                     "workflow": workflow.id,
                     "steps": results,
                     "final_output": results[-1]["output"] if results else "",
                     "workflowRunId": run_id,
+                    "startedAt": run_started_at,
+                    "endedAt": ended_at,
+                    "workflowDurationMs": max(0, ended_at - run_started_at),
                     "cancelled": True,
                     "message": "Workflow cancelled",
                 }
             if on_step_start:
                 on_step_start(i, len(workflow.steps), step)
+            step_started_at = int(time.time() * 1000)
 
             prompt = step.prompt
             for var, val in context.items():
@@ -386,12 +393,18 @@ class WorkflowEngine:
             if step.output_var:
                 context[step.output_var] = output
 
+            step_ended_at = int(time.time() * 1000)
             entry: Dict[str, Any] = {
                 "step": i,
                 "agent": step.agent,
                 "label": step.label or f"Step {i + 1}",
                 "output_var": step.output_var,
                 "output": output,
+                "status": "cancelled" if error == "Workflow cancelled"
+                else "error" if error else "done",
+                "startedAt": step_started_at,
+                "endedAt": step_ended_at,
+                "durationMs": max(0, step_ended_at - step_started_at),
             }
             if error:
                 entry["error"] = error
@@ -403,11 +416,15 @@ class WorkflowEngine:
                 on_step_end(i, len(workflow.steps), step, output, error)
 
             if error == "Workflow cancelled":
+                ended_at = int(time.time() * 1000)
                 return {
                     "workflow": workflow.id,
                     "steps": results,
                     "final_output": output,
                     "workflowRunId": run_id,
+                    "startedAt": run_started_at,
+                    "endedAt": ended_at,
+                    "workflowDurationMs": max(0, ended_at - run_started_at),
                     "cancelled": True,
                     "message": "Workflow cancelled",
                 }
@@ -415,5 +432,8 @@ class WorkflowEngine:
                 break
 
         final = results[-1]["output"] if results else ""
+        ended_at = int(time.time() * 1000)
         return {"workflow": workflow.id, "steps": results,
-                "final_output": final, "workflowRunId": run_id}
+                "final_output": final, "workflowRunId": run_id,
+                "startedAt": run_started_at, "endedAt": ended_at,
+                "workflowDurationMs": max(0, ended_at - run_started_at)}

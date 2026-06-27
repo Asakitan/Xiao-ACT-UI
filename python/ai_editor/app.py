@@ -8264,22 +8264,36 @@ class AIEditorAPI:
             return {"error": f"Workflow not found: {wf_id}"}
         run_id = str(run_id or "").strip()
         cancel_event = self._workflow_cancel_event(run_id)
+        run_started_at = int(time.time() * 1000)
+        step_started_at: Dict[int, int] = {}
 
         def _on_start(i, total, step):
+            started_at = int(time.time() * 1000)
+            step_started_at[i] = started_at
             self._emit("workflow_step", {
                 "workflowRunId": run_id, "workflowId": wf.id,
                 "step": i, "total": total,
                 "label": step.label, "agent": step.agent,
-                "output_var": step.output_var, "status": "running"})
+                "output_var": step.output_var, "status": "running",
+                "startedAt": started_at,
+                "workflowStartedAt": run_started_at,
+                "elapsedMs": max(0, started_at - run_started_at)})
 
         def _on_end(i, total, step, output, error):
+            ended_at = int(time.time() * 1000)
+            started_at = step_started_at.get(i, ended_at)
             self._emit("workflow_step", {
                 "workflowRunId": run_id, "workflowId": wf.id,
                 "step": i, "total": total,
                 "label": step.label, "agent": step.agent,
                 "output_var": step.output_var,
                 "status": "error" if error else "done",
-                "preview": (output or "")[:300], "error": error})
+                "preview": (output or "")[:300], "error": error,
+                "startedAt": started_at,
+                "endedAt": ended_at,
+                "durationMs": max(0, ended_at - started_at),
+                "workflowStartedAt": run_started_at,
+                "elapsedMs": max(0, ended_at - run_started_at)})
 
         try:
             result = self._wf_engine.run(

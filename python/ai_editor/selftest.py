@@ -4282,6 +4282,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "'\\nPlan: '+summary.text" in html
            and "workflowMode:normalizeWorkflowMode" in html
            and "function workflowInputPreview(value)" in html
+           and "function workflowDurationLabel(ms)" in html
+           and ".workflow-run-step-duration,.workflow-result-step-duration" in html
+           and "card.dataset.workflowElapsedMs=String(elapsed);" in html
+           and "row.dataset.workflowStepDurationMs=String(Math.max(0,Number(data.durationMs||0)));" in html
+           and "card.dataset.workflowDurationMs=String(Number((result&&result.workflowDurationMs)||result&&result.durationMs||0)||0);" in html
            and "'Workflow mode: '+normalizeWorkflowMode(info.workflowMode||assistantWorkflowMode)" in html
            and "'Execution method: '+method" in html
            and "workflowMethod:canUseBackend?'backend':'prompt'" in html
@@ -5489,6 +5494,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "async function assistantWorkflowBackendExecutionSnapshot()" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-run-card-rendered'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-run-method-session-rendered'" in html
+           and "assistantUiSelfCheckRecord(checks,'workflow-run-step-duration-updates'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-popup-mode-smoke'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-run-step-status-updates'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-run-card-status-summary'" in html
@@ -5497,6 +5503,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'workflow-run-button-active-state'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-backend-execution-rendered'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-backend-metadata-payload-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'workflow-backend-duration-payload-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'provider-session-state-smoke'" in html
            and "function assistantWorkflowModeSmokeSnapshot()" in html
            and "function assistantActionResultRestoreSmokeSnapshot()" in html
@@ -5584,13 +5591,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "fork-branch-compare-detail-ready" in smoke_source
            and "fork-branch-compare-summary-ready" in smoke_source
            and "fork-branch-compare-delta-grid-ready" in smoke_source
-           and "workflow-run-card-status-summary" in smoke_source
-           and "workflow-run-method-session-rendered" in smoke_source
-           and "workflow-result-state-rendered" in smoke_source
+            and "workflow-run-card-status-summary" in smoke_source
+            and "workflow-run-method-session-rendered" in smoke_source
+            and "workflow-run-step-duration-updates" in smoke_source
+            and "workflow-result-state-rendered" in smoke_source
            and "workflow-result-metadata-rendered" in smoke_source
-           and "workflow-run-button-active-state" in smoke_source
-           and "workflow-backend-metadata-payload-ready" in smoke_source
-           and "channel: \"msedge\"" in smoke_source
+            and "workflow-run-button-active-state" in smoke_source
+            and "workflow-backend-metadata-payload-ready" in smoke_source
+            and "workflow-backend-duration-payload-ready" in smoke_source
+            and "channel: \"msedge\"" in smoke_source
            and "PASS assistant-ui-browser-smoke" in smoke_source
            and "SKIP assistant-ui-browser-smoke playwright unavailable" in smoke_source)
     _check("backend workflow exposes run cancellation",
@@ -5608,6 +5617,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "workflowStatus" in app_source
            and "step_errors = any(" in app_source
            and "payload.setdefault(\"error\", \"Workflow step failed\")" in app_source
+           and "\"durationMs\": max(0, ended_at - started_at)" in app_source
+           and "\"elapsedMs\": max(0, ended_at - run_started_at)" in app_source
            and "return self._workflow_result_payload(wf, result, input_text, metadata)" in app_source
            and "return self._workflow_result_payload(wf, result, input_text, kw)" in app_source)
     _check("frontend Assistant response part actions submit callback metadata",
@@ -32445,6 +32456,14 @@ def test_workflows() -> None:
                and result.get("steps", [{}])[0].get("output_var") == "first"
                and result.get("steps", [{}, {}])[1].get("agent") == "reviewer"
                and result.get("final_output") == "out-2")
+        _check("workflow engine records run and step timing",
+               isinstance(result.get("startedAt"), int)
+               and isinstance(result.get("endedAt"), int)
+               and isinstance(result.get("workflowDurationMs"), int)
+               and result.get("workflowDurationMs") >= 0
+               and result.get("steps", [{}])[0].get("status") == "done"
+               and isinstance(result.get("steps", [{}])[0].get("durationMs"), int)
+               and result.get("steps", [{}])[0].get("durationMs") >= 0)
         _check("workflow engine interpolates previous step output",
                llm.prompts == ["First seed", "Second out-1"])
         _check("workflow engine step callbacks expose output vars",
@@ -32467,6 +32486,7 @@ def test_workflows() -> None:
         _check("workflow engine cancels before next step",
                cancel_result.get("cancelled") is True
                and cancel_result.get("workflowRunId") == "wf-cancel-selftest"
+               and isinstance(cancel_result.get("workflowDurationMs"), int)
                and len(cancel_result.get("steps", [])) == 1
                and cancel_llm.prompts == ["First seed"]
                and cancel_events == [("start", 0), ("end", 0, None)],
