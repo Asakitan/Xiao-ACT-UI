@@ -1058,6 +1058,17 @@ def test_app_settings_parity() -> None:
            and "saoProbe.customEditor" in probe_source
            and "enableCommandUris" in probe_source
            and "portMapping" in probe_source)
+    _check("real extension probe writes frontend visual fixture evidence",
+           "_surface_visual_checks" in probe_source
+           and "_write_frontend_visual_fixture" in probe_source
+           and "visual-webview-smoke.html" in probe_source
+           and "visual-webview-smoke.json" in probe_source
+           and "frontendVisualWebviewSurface" in probe_source
+           and "frontendVisualCustomEditorSurface" in probe_source
+           and "frontendVisualFixtureWritten" in probe_source
+           and "--visual-fixture-dir" in probe_source
+           and "data-surface=\"webview-view\"" in probe_source
+           and "data-surface=\"custom-editor\"" in probe_source)
     fixture_list = api.assistant_native_response_fixture("list")
     native_fixture = api.assistant_native_response_fixture("split-native-response-parts")
     actionable_fixture = api.assistant_native_response_fixture("actionable-response-parts")

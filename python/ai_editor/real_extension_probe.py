@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import html as html_lib
 import json
 import os
 import shutil
@@ -23,6 +24,13 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from ai_editor.app import AIEditorAPI
+
+
+def _safe_json(data: Any) -> Any:
+    try:
+        return json.loads(json.dumps(data, ensure_ascii=False, default=str))
+    except Exception:
+        return str(data)
 
 
 class _ProbeSettings:
@@ -102,6 +110,21 @@ def _wait_for_render_matching(
         if marker in str(payload.get("html", "")):
             return payload
     return None
+
+
+def _matching_render_payloads(
+        rendered: Dict[str, Dict[str, Any]], marker: str) -> List[Dict[str, Any]]:
+    return [
+        dict(payload)
+        for payload in rendered.values()
+        if marker in str(payload.get("html", ""))
+    ]
+
+
+def _latest_render_matching(
+        rendered: Dict[str, Dict[str, Any]], marker: str) -> Optional[Dict[str, Any]]:
+    matches = _matching_render_payloads(rendered, marker)
+    return matches[-1] if matches else None
 
 
 def _find_event_payload(
@@ -287,6 +310,114 @@ function deactivate() {}
 module.exports = { activate, deactivate };
 """.lstrip())
     return ext_dir
+
+
+def _surface_visual_checks(
+        prepared_html: str, kind: str, options: Dict[str, Any],
+        metadata: Optional[Dict[str, Any]] = None) -> Dict[str, bool]:
+    text = str(prepared_html or "")
+    opts = options if isinstance(options, dict) else {}
+    meta = metadata if isinstance(metadata, dict) else {}
+    is_custom = kind == "custom-editor"
+    return {
+        "hasProbeBody": f'data-probe="{kind}"' in text,
+        "hasMainKind": f'data-kind="{kind}"' in text,
+        "hasIframeSafeScriptBridge": (
+            "acquireVsCodeApi" in text
+            and "postMessage" in text
+            and "setState" in text),
+        "hasFormWhenEnabled": (
+            opts.get("enableForms") is True
+            and "data-probe-form" in text
+            and "<input" in text),
+        "hasCommandUriWhenAllowed": (
+            "command:saoProbe.activate" in text
+            and (
+                opts.get("enableCommandUris") is True
+                or opts.get("enableCommandUris") == ["saoProbe.activate"])),
+        "hasRewrittenLocalResource": (
+            "data-probe-asset" in text
+            and ".vscode-resource.webview.local" in text),
+        "hasResourceEndpointMetadata": (
+            "sao-webview-resource-endpoint" in text
+            and "sao-webview-resource-map" in text),
+        "hasCspSource": "https://*.vscode-resource.webview.local" in text,
+        "hasExpectedTitleOrState": (
+            "custom editor body" in text if is_custom
+            else meta.get("title") == "SAO Probe Dynamic"),
+    }
+
+
+def _write_frontend_visual_fixture(
+        fixture_dir: str,
+        webview_html: str,
+        custom_html: str,
+        webview_id: str,
+        custom_id: str,
+        webview_options: Dict[str, Any],
+        custom_options: Dict[str, Any],
+        webview_metadata: Dict[str, Any]) -> Dict[str, Any]:
+    os.makedirs(fixture_dir, exist_ok=True)
+    fixture_path = os.path.join(fixture_dir, "visual-webview-smoke.html")
+    data_path = os.path.join(fixture_dir, "visual-webview-smoke.json")
+    payload = {
+        "webviewId": webview_id,
+        "customEditorId": custom_id,
+        "webviewOptions": _safe_json(webview_options),
+        "customEditorOptions": _safe_json(custom_options),
+        "webviewMetadata": _safe_json(webview_metadata),
+        "checks": {
+            "webview": _surface_visual_checks(
+                webview_html, "webview-view", webview_options,
+                webview_metadata),
+            "customEditor": _surface_visual_checks(
+                custom_html, "custom-editor", custom_options, {}),
+        },
+    }
+    webview_srcdoc = html_lib.escape(str(webview_html or ""), quote=True)
+    custom_srcdoc = html_lib.escape(str(custom_html or ""), quote=True)
+    fixture = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>AI Editor Webview Visual Smoke</title>
+  <style>
+    body {{ margin:0; background:#1e1e1e; color:#cccccc; font:12px Segoe UI, sans-serif; }}
+    header {{ padding:10px 14px; border-bottom:1px solid #3c3c3c; background:#252526; }}
+    main {{ display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:10px; }}
+    section {{ min-width:0; border:1px solid #3c3c3c; background:#181818; }}
+    h2 {{ margin:0; padding:7px 9px; font-size:12px; border-bottom:1px solid #3c3c3c; }}
+    iframe {{ width:100%; height:360px; border:0; background:white; }}
+    .meta {{ padding:6px 9px; color:#8f8f8f; font-family:Consolas, monospace; white-space:pre-wrap; }}
+  </style>
+</head>
+<body>
+  <header>
+    <strong>AI Editor Webview Visual Smoke</strong>
+    <span> dynamic WebviewView + custom editor iframe surfaces</span>
+  </header>
+  <main>
+    <section data-surface="webview-view" data-view-id="{html_lib.escape(webview_id)}">
+      <h2>WebviewView: {html_lib.escape(webview_id)}</h2>
+      <iframe title="Dynamic WebviewView" srcdoc="{webview_srcdoc}"></iframe>
+      <div class="meta">{html_lib.escape(json.dumps(webview_options, ensure_ascii=False, indent=2, default=str))}</div>
+    </section>
+    <section data-surface="custom-editor" data-view-id="{html_lib.escape(custom_id)}">
+      <h2>Custom Editor: {html_lib.escape(custom_id)}</h2>
+      <iframe title="Custom Editor" srcdoc="{custom_srcdoc}"></iframe>
+      <div class="meta">{html_lib.escape(json.dumps(custom_options, ensure_ascii=False, indent=2, default=str))}</div>
+    </section>
+  </main>
+</body>
+</html>
+"""
+    _write_text(fixture_path, fixture)
+    _write_json(data_path, payload)
+    payload["fixturePath"] = fixture_path
+    payload["dataPath"] = data_path
+    payload["fixtureBytes"] = os.path.getsize(fixture_path)
+    payload["dataBytes"] = os.path.getsize(data_path)
+    return payload
 
 
 def _install_capture_bridge(
@@ -645,10 +776,15 @@ def run_probe(extension_dir: str, keep_copy: bool = False) -> Dict[str, Any]:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def run_builtin_smoke_probe(keep_copy: bool = False) -> Dict[str, Any]:
+def run_builtin_smoke_probe(
+        keep_copy: bool = False,
+        visual_fixture_dir: str = "") -> Dict[str, Any]:
     """Run a reproducible dynamic WebviewView/custom editor smoke probe."""
     rendered: Dict[str, Dict[str, Any]] = {}
     events: List[Dict[str, Any]] = []
+    requested_fixture_dir = (
+        os.path.abspath(visual_fixture_dir)
+        if str(visual_fixture_dir or "").strip() else "")
     tmpdir = tempfile.mkdtemp(prefix="sao_builtin_ext_probe_")
     try:
         workspace_dir = os.path.join(tmpdir, "workspace")
@@ -684,6 +820,10 @@ def run_builtin_smoke_probe(keep_copy: bool = False) -> Dict[str, Any]:
 
             webview_render = _wait_for_render_matching(
                 rendered, 'data-probe="webview-view"')
+            time.sleep(0.1)
+            webview_render = (
+                _latest_render_matching(rendered, 'data-probe="webview-view"')
+                or webview_render)
             webview_view_id = str(
                 webview_render.get("view_id", "")
                 if isinstance(webview_render, dict) else "")
@@ -720,6 +860,25 @@ def run_builtin_smoke_probe(keep_copy: bool = False) -> Dict[str, Any]:
                         and command_state.get("custom", {}).get("messages")):
                     break
                 time.sleep(0.05)
+            if not command_state.get("webview", {}).get("messages"):
+                for payload in _matching_render_payloads(
+                        rendered, 'data-probe="webview-view"'):
+                    candidate_id = str(payload.get("view_id", ""))
+                    if not candidate_id or candidate_id == webview_view_id:
+                        continue
+                    webview_message_result = api.webview_post_message(
+                        candidate_id, {
+                            "type": "ping",
+                            "target": "webview-view",
+                        })
+                    raw_state = api.execute_command("saoProbe.state")
+                    command_state = (
+                        raw_state.get("result", raw_state)
+                        if isinstance(raw_state, dict) else {})
+                    if command_state.get("webview", {}).get("messages"):
+                        webview_view_id = candidate_id
+                        webview_render = payload
+                        break
 
             runtime_surfaces = api.list_extension_runtime_surfaces()
             custom_state = (
@@ -747,6 +906,21 @@ def run_builtin_smoke_probe(keep_copy: bool = False) -> Dict[str, Any]:
             custom_option_payload = (
                 custom_options.get("options", {})
                 if isinstance(custom_options, dict) else {})
+            fixture_dir = requested_fixture_dir or os.path.join(
+                tmpdir, "visual-fixture")
+            visual_fixture = _write_frontend_visual_fixture(
+                fixture_dir,
+                webview_html,
+                custom_html,
+                webview_view_id,
+                custom_view_id,
+                webview_option_payload,
+                custom_option_payload,
+                webview_metadata_payload)
+            visual_webview_checks = visual_fixture.get(
+                "checks", {}).get("webview", {})
+            visual_custom_checks = visual_fixture.get(
+                "checks", {}).get("customEditor", {})
 
             checks = {
                 "extensionInstalled": install_result.get("ok") is True,
@@ -813,6 +987,13 @@ def run_builtin_smoke_probe(keep_copy: bool = False) -> Dict[str, Any]:
                         item.get("viewType") == "saoProbe.customEditor"
                         for item in runtime_surfaces.get(
                             "customEditors", []))),
+                "frontendVisualWebviewSurface": bool(visual_webview_checks)
+                and all(bool(value) for value in visual_webview_checks.values()),
+                "frontendVisualCustomEditorSurface": bool(visual_custom_checks)
+                and all(bool(value) for value in visual_custom_checks.values()),
+                "frontendVisualFixtureWritten": (
+                    bool(visual_fixture.get("fixtureBytes"))
+                    and bool(visual_fixture.get("dataBytes"))),
             }
             result = {
                 "ok": all(checks.values()),
@@ -843,6 +1024,7 @@ def run_builtin_smoke_probe(keep_copy: bool = False) -> Dict[str, Any]:
                     "webviewViews": runtime_surfaces.get("webviewViews", []),
                     "customEditors": runtime_surfaces.get("customEditors", []),
                 },
+                "frontendVisual": visual_fixture,
                 "commandState": command_state,
                 "checks": checks,
                 "capturedEvents": len(events),
@@ -885,12 +1067,22 @@ def main() -> int:
         action="store_true",
         help="Keep the copied extension directory path in the JSON output",
     )
+    parser.add_argument(
+        "--visual-fixture-dir",
+        default="",
+        help=(
+            "Directory where the built-in smoke writes a browser-openable "
+            "visual-webview-smoke.html fixture and JSON evidence."
+        ),
+    )
     args = parser.parse_args()
 
     if args.extension_dir:
         result = run_probe(args.extension_dir, keep_copy=args.keep_copy)
     else:
-        result = run_builtin_smoke_probe(keep_copy=args.keep_copy)
+        result = run_builtin_smoke_probe(
+            keep_copy=args.keep_copy,
+            visual_fixture_dir=args.visual_fixture_dir)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result.get("ok") else 1
 
