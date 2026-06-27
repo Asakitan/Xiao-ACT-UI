@@ -9571,7 +9571,7 @@ console.log("frontend word separator behavior ok");
             and "data-settings-filter-token=\"@modified\"" in html
             and "id=\"settings-empty-state\"" in html
             and "className='settings-row-actions'" in html
-            and "settingsAddRowActions(wrap,{key:meta.key||meta.path||inputId,searchable:false});" in html
+            and "settingsAddRowActions(wrap,{key:meta.key||meta.path||inputId,searchable:false,meta,inputId,clearTarget:" in html
             and "settingsAddRowActions(row,{key:key,searchable:true});" in html
             and "@([A-Za-z][A-Za-z0-9_-]*)" in html
             and "SETTINGS_SCOPE_FILTERS[scope]" in html
@@ -9638,14 +9638,21 @@ console.log("frontend word separator behavior ok");
     _check("frontend settings saves scoped target updates",
            "function settingsBackendTargetName(target)" in html
            and "function settingTargetEntry(meta)" in html
+           and "function settingInheritedValueForTarget(meta,target)" in html
+           and "function settingIsTargetModified(meta,value,target)" in html
            and "function applySettingsTargetValuesToInputs(target)" in html
            and "function settingsTargetUpdateRows()" in html
            and "function settingsApplyTargetUpdateResults(updates)" in html
+           and "function settingsClearRowTargetOverride(row,meta,inputId)" in html
            and "settings-built-chip target" in html
+           and "settings-built-chip inherited" in html
+           and "clearBtn.dataset.settingsClearTarget='1';" in html
            and "config._settings_target=settingsBackendTargetName(currentSettingsTarget);" in html
            and "config._configuration_target_updates=targetUpdates;" in html
            and "settingsApplyTargetUpdateResults(targetUpdates);" in html
-           and "applySettingsTargetValuesToInputs(currentSettingsTarget);" in html)
+           and "applySettingsTargetValuesToInputs(currentSettingsTarget);" in html
+           and "settingStableValue(value)===settingStableValue(settingInheritedValueForTarget(meta,currentSettingsTarget))" in html
+           and "safeStats.overrides" in html)
     _check("frontend built-in settings expose VS Code style metadata",
             "const SETTING_INPUT_META=" in html
            and "const SETTING_INPUT_MAP=Object.fromEntries" in html
