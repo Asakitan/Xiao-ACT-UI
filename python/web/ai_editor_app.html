@@ -180,6 +180,12 @@ body.window-resizing * { cursor:inherit !important; }
 .history-session-chip.lineage { color:var(--fg-bright); border-color:color-mix(in srgb,var(--fg-bright) 45%,var(--border)); }
 .history-session-chip.tokens { color:var(--fg-dim); }
 .history-session-chip.error { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 45%,var(--border)); }
+.assistant-history-preview { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:8px; margin-top:8px; }
+.assistant-history-preview-card { border:1px solid var(--border); border-radius:6px; background:var(--bg3); padding:8px; min-width:0; }
+.assistant-history-preview-card h3 { margin:0 0 6px; font-size:12px; color:var(--fg); font-weight:600; }
+.assistant-history-preview-row { display:flex; justify-content:space-between; gap:10px; color:var(--fg-dim); font:11px/1.5 var(--mono); }
+.assistant-history-preview-row b { color:var(--fg); font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.assistant-history-preview-list { margin:6px 0 0; padding:0; list-style:none; display:flex; flex-direction:column; gap:3px; color:var(--fg-dim); font:11px/1.4 var(--mono); }
 .sb-group { padding:8px 16px 4px; font-size:11px; font-weight:600; color:var(--fg-dim);
   text-transform:uppercase; letter-spacing:0.5px; }
 .tree-root { padding:4px 0 10px; }
@@ -8139,12 +8145,14 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'history-native-affordances-visible',historyAffordance.itemExists&&historyAffordance.nativeParts===2&&historyAffordance.nativeTodos===1&&historyAffordance.nativeChanges===1&&historyAffordance.nativeRefs===1&&historyAffordance.nativeUsedContext===1&&historyAffordance.nativeTrees===1&&historyAffordance.nativeFollowups===1&&historyAffordance.nativeActions===1&&historyAffordance.nativeActionErrors===0&&historyAffordance.nativeTokens===24&&historyAffordance.chipLabels.includes('2 parts')&&historyAffordance.chipLabels.includes('1 edit')&&historyAffordance.chipLabels.includes('1 ref')&&historyAffordance.chipLabels.includes('1 used')&&historyAffordance.chipLabels.includes('1 tree')&&historyAffordance.chipLabels.includes('1 follow-up')&&historyAffordance.chipLabels.includes('1 action')&&historyAffordance.chipLabels.includes('24 tok')&&historyAffordance.searchMatches&&historyAffordance.aria.includes('1 action')&&historyAffordance.title.includes('Submitted actions: 1'),JSON.stringify(historyAffordance));
   assistantUiSelfCheckRecord(checks,'saved-history-native-affordances-visible',savedHistoryAffordance.itemExists&&savedHistoryAffordance.nativeParts===2&&savedHistoryAffordance.nativeChanges===1&&savedHistoryAffordance.nativeRefs===1&&savedHistoryAffordance.nativeUsedContext===1&&savedHistoryAffordance.nativeTrees===1&&savedHistoryAffordance.nativeFollowups===1&&savedHistoryAffordance.nativeActions===1&&savedHistoryAffordance.nativeActionErrors===0&&savedHistoryAffordance.nativeTokens===24&&savedHistoryAffordance.chipLabels.includes('2 parts')&&savedHistoryAffordance.chipLabels.includes('1 edit')&&savedHistoryAffordance.chipLabels.includes('1 ref')&&savedHistoryAffordance.chipLabels.includes('1 used')&&savedHistoryAffordance.chipLabels.includes('1 tree')&&savedHistoryAffordance.chipLabels.includes('1 follow-up')&&savedHistoryAffordance.chipLabels.includes('1 action')&&savedHistoryAffordance.chipLabels.includes('24 tok')&&savedHistoryAffordance.actionKinds.includes('references')&&savedHistoryAffordance.actionKinds.includes('changes')&&savedHistoryAffordance.actionKinds.includes('tree')&&savedHistoryAffordance.actionKinds.includes('reference-item')&&savedHistoryAffordance.actionKinds.includes('change-item')&&savedHistoryAffordance.actionKinds.includes('tree-item')&&savedHistoryAffordance.actionTargets.includes('file:///workspace/history.ts')&&savedHistoryAffordance.disabledActions.length===0&&savedHistoryAffordance.searchMatches&&savedHistoryAffordance.aria.includes('1 action')&&savedHistoryAffordance.title.includes('Submitted actions: 1'),JSON.stringify(savedHistoryAffordance));
   assistantUiSelfCheckRecord(checks,'saved-history-action-result-markers-visible',savedHistoryAffordance.nativeActions===1&&savedHistoryAffordance.nativeActionErrors===0&&savedHistoryAffordance.chipLabels.includes('1 action')&&savedHistoryAffordance.searchMatches&&savedHistoryAffordance.aria.includes('1 action')&&savedHistoryAffordance.title.includes('Submitted actions: 1'),JSON.stringify(savedHistoryAffordance));
+  assistantUiSelfCheckRecord(checks,'saved-history-preview-ready',savedHistoryAffordance.actionKinds.includes('saved-history-preview')&&savedHistoryAffordance.previewButtonEnabled&&savedHistoryAffordance.previewModalExists&&savedHistoryAffordance.previewModalId==='saved-native-selfcheck'&&savedHistoryAffordance.previewTargets===3&&savedHistoryAffordance.previewActions===1&&savedHistoryAffordance.previewText.includes('Saved History Preview')&&savedHistoryAffordance.previewText.includes('history.ts'),JSON.stringify(savedHistoryAffordance));
   assistantUiSelfCheckRecord(checks,'native-only-session-parts-persist',nativeOnlySession.normalizedCount===1&&nativeOnlySession.normalizedContent===''&&nativeOnlySession.hasNativePayload&&nativeOnlySession.serializedFollowups===1&&nativeOnlySession.renderedNativeParts>=1&&nativeOnlySession.renderedFollowups===1&&nativeOnlySession.nativeFollowups===1&&nativeOnlySession.summaryParts===1&&nativeOnlySession.summaryFollowups===1&&nativeOnlySession.searchMatches,JSON.stringify(nativeOnlySession));
   assistantUiSelfCheckRecord(checks,'change-set-state-restores-and-persists',changeSetRestore.before.state==='applied'&&changeSetRestore.before.appliedEdits===2&&changeSetRestore.before.statusText.includes('Applied 2')&&changeSetRestore.after.state==='previewed'&&changeSetRestore.after.previewedAt==='23456'&&changeSetRestore.patchedState==='previewed'&&changeSetRestore.storedState==='previewed'&&changeSetRestore.storedPreviewedDiffs===1,JSON.stringify(changeSetRestore));
   assistantUiSelfCheckRecord(checks,'action-result-state-restores-and-persists',actionResultRestore.restoredDisabled&&actionResultRestore.restoredState==='submitted'&&actionResultRestore.restoredFlag==='true'&&actionResultRestore.restoredText.includes('✓')&&actionResultRestore.restoredNativeCount===1&&actionResultRestore.trayPendingAfterRestore===0&&actionResultRestore.patchedOk&&actionResultRestore.storedOk&&actionResultRestore.storedAction==='apply'&&actionResultRestore.storedCount===1,JSON.stringify(actionResultRestore));
   assistantUiSelfCheckRecord(checks,'fork-lineage-history-visible',forkLineage.itemExists&&forkLineage.parentResource==='sao-ai-chat://local/parent-lineage-selfcheck'&&forkLineage.parentTitle==='Parent Assistant Session'&&forkLineage.parentId==='parent-lineage-selfcheck'&&forkLineage.branchChildren===1&&forkLineage.labelTitle.includes('Forked from: Parent Assistant Session')&&forkLineage.labelTitle.includes('Branches: 1')&&forkLineage.chipLabels.includes('fork: Parent Assistant Session')&&forkLineage.chipLabels.includes('1 branch')&&forkLineage.chipKinds.some(kind=>kind.includes('lineage'))&&forkLineage.actionLabels.includes('parent')&&forkLineage.actionLabels.includes('branches')&&forkLineage.actionLabels.includes('fork')&&forkLineage.actionKinds.includes('parent-session')&&forkLineage.actionKinds.includes('branch-sessions')&&forkLineage.parentButtonEnabled&&forkLineage.branchesButtonEnabled&&forkLineage.disabledActions.length===0&&forkLineage.searchMatches,JSON.stringify(forkLineage));
   assistantUiSelfCheckRecord(checks,'fork-lineage-chip-visible',forkLineage.chipLabels.includes('fork: Parent Assistant Session')&&forkLineage.chipLabels.includes('1 branch')&&forkLineage.chipKinds.some(kind=>kind.includes('lineage'))&&forkLineage.labelTitle.includes('Forked from: Parent Assistant Session')&&forkLineage.labelTitle.includes('Branches: 1'),JSON.stringify(forkLineage));
   assistantUiSelfCheckRecord(checks,'fork-branch-navigation-visible',forkLineage.parentId==='parent-lineage-selfcheck'&&forkLineage.branchChildren===1&&forkLineage.actionKinds.includes('parent-session')&&forkLineage.actionKinds.includes('branch-sessions')&&forkLineage.parentButtonEnabled&&forkLineage.branchesButtonEnabled&&forkLineage.disabledActions.length===0&&forkLineage.searchMatches,JSON.stringify(forkLineage));
+  assistantUiSelfCheckRecord(checks,'fork-branch-compare-visible',forkLineage.actionKinds.includes('branch-compare')&&forkLineage.compareButtonEnabled&&forkLineage.compareModalExists&&forkLineage.compareModalKind==='branch-compare'&&forkLineage.compareModalParentId==='parent-lineage-selfcheck'&&forkLineage.compareModalChildCount===1&&forkLineage.compareModalCards===3&&forkLineage.compareModalText.includes('Compare Assistant Branches')&&forkLineage.compareModalText.includes('Parent Assistant Session')&&forkLineage.compareModalText.includes('Alternative child branch'),JSON.stringify(forkLineage));
   assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready',workflowPopup.shown&&workflowPopup.workflowModeCount===3&&workflowPopup.workflowModeStrip&&workflowPopup.workflowModeToolbar&&workflowPopup.optionCount>=4&&workflowPopup.focusableCount===workflowPopup.optionCount&&workflowPopup.keyboardReady,JSON.stringify(workflowPopup));
   assistantUiSelfCheckRecord(checks,'workflow-popup-mode-smoke',workflowModeSmoke.states.length===3&&workflowModeSmoke.states.every(state=>state.strip&&state.toolbar&&state.active.includes(state.mode))&&workflowModeSmoke.selected.value==='assistant-selfcheck-flow'&&workflowModeSmoke.selected.mode==='on'&&workflowModeSmoke.selected.runDisabled===false&&workflowModeSmoke.custom.prompt==='selfcheck custom workflow prompt'&&workflowModeSmoke.custom.runDisabled===false,JSON.stringify(workflowModeSmoke));
   assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready',workflowEditor.modalExists&&workflowEditor.editorExists&&workflowEditor.rowCount===2&&workflowEditor.labelInputs===2&&workflowEditor.agentInputs===2&&workflowEditor.outputInputs===2&&workflowEditor.promptInputs===2&&workflowEditor.moveButtons===4&&workflowEditor.deleteButtons===2&&workflowEditor.addButtonExists&&workflowEditor.collectedCount===2&&workflowEditor.idReadOnly,JSON.stringify(workflowEditor));
@@ -17054,6 +17062,64 @@ function assistantSavedHistoryActionButton(entry,kind,item){
   button.onclick=ev=>{ev.stopPropagation();loadHistoryConv(entry.id,{focus:focusKind,target:path})};
   return button;
 }
+function assistantHistoryPreviewRows(summary){
+  summary=summary||{};
+  return [
+    ['parts',summary.parts||0],['edits',summary.changes||0],['refs',summary.refs||0],
+    ['used',summary.usedContext||0],['trees',summary.trees||0],['actions',summary.actions||0],
+    ['tokens',summary.tokens||0],['errors',summary.errors||0]
+  ];
+}
+function assistantHistoryPreviewCard(title,summary,extra){
+  const card=document.createElement('div');
+  card.className='assistant-history-preview-card';
+  card.dataset.previewTitle=String(title||'');
+  const h=document.createElement('h3');h.textContent=title||'Session';card.appendChild(h);
+  (extra||[]).forEach(row=>{
+    const el=document.createElement('div');el.className='assistant-history-preview-row';
+    el.innerHTML='<span>'+esc(row[0])+'</span><b>'+esc(row[1])+'</b>';
+    card.appendChild(el);
+  });
+  assistantHistoryPreviewRows(summary).forEach(row=>{
+    const el=document.createElement('div');el.className='assistant-history-preview-row';
+    el.innerHTML='<span>'+esc(row[0])+'</span><b>'+esc(row[1])+'</b>';
+    card.appendChild(el);
+  });
+  const actions=Array.isArray(summary&&summary.actionItems)?summary.actionItems:[];
+  const refs=Array.isArray(summary&&summary.referenceItems)?summary.referenceItems:[];
+  const changes=Array.isArray(summary&&summary.changeItems)?summary.changeItems:[];
+  const items=[...actions.map(item=>'action: '+(item.label||item.key||'')),...refs.map(item=>'ref: '+(item.label||item.path||'')),...changes.map(item=>'edit: '+(item.label||item.path||''))].filter(Boolean).slice(0,5);
+  if(items.length){
+    const list=document.createElement('ul');list.className='assistant-history-preview-list';
+    items.forEach(text=>{const li=document.createElement('li');li.textContent=text;list.appendChild(li)});
+    card.appendChild(list);
+  }
+  return card;
+}
+function assistantShowHistoryPreviewModal(title,cards,opts){
+  const modal=document.createElement('div');
+  modal.className='modal-bg open';
+  modal.dataset.assistantHistoryPreview='true';
+  modal.dataset.previewKind=String(opts&&opts.kind||'history-preview');
+  const panel=document.createElement('div');
+  panel.className='modal';
+  panel.style.width='640px';
+  panel.setAttribute('role','dialog');
+  panel.setAttribute('aria-label',title||'Assistant history preview');
+  const h=document.createElement('h2');h.textContent=title||'Assistant history preview';panel.appendChild(h);
+  const grid=document.createElement('div');grid.className='assistant-history-preview';
+  (cards||[]).forEach(card=>grid.appendChild(card));
+  panel.appendChild(grid);
+  const buttons=document.createElement('div');buttons.className='modal-btns';
+  const close=document.createElement('button');close.type='button';close.textContent='Close';
+  close.onclick=()=>modal.remove();
+  buttons.appendChild(close);panel.appendChild(buttons);
+  modal.appendChild(panel);document.body.appendChild(modal);
+  modal.onclick=e=>{if(e.target===modal)modal.remove()};
+  modal.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();modal.remove()}};
+  setTimeout(()=>close.focus(),0);
+  return modal;
+}
 function assistantSessionBranchMeta(session,sessions){
   const all=Array.isArray(sessions)?sessions:[];
   const resource=assistantSessionItemResource(session);
@@ -17064,8 +17130,48 @@ function assistantSessionBranchMeta(session,sessions){
     parentId:parent?String(parent.id||''):'',
     parentTitle:parent?String(parent.title||''):String(session&&session.parentSessionTitle||''),
     childCount:children.length,
-    childTitles:children.map(item=>String(item&&item.title||item&&item.id||'Chat session')).slice(0,5)
+    childTitles:children.map(item=>String(item&&item.title||item&&item.id||'Chat session')).slice(0,5),
+    parentSession:parent||null,
+    childSessions:children.slice(0,5)
   };
+}
+function assistantShowSessionBranchCompare(session,branchMeta,sessions){
+  branchMeta=branchMeta||assistantSessionBranchMeta(session,sessions||assistantSessionLoadItems());
+  const cards=[];
+  if(branchMeta.parentSession){
+    cards.push(assistantHistoryPreviewCard('Parent: '+String(branchMeta.parentTitle||branchMeta.parentId||'Session'),assistantHistorySessionNativeSummary(branchMeta.parentSession),[
+      ['requests',String(branchMeta.parentSession.requestCount||0)],
+      ['messages',String((branchMeta.parentSession.messages||[]).length)]
+    ]));
+  }
+  cards.push(assistantHistoryPreviewCard('Current: '+String(session&&session.title||session&&session.id||'Session'),assistantHistorySessionNativeSummary(session),[
+    ['requests',String(session&&session.requestCount||0)],
+    ['messages',String(((session&&session.messages)||[]).length)]
+  ]));
+  (branchMeta.childSessions||[]).forEach(child=>{
+    cards.push(assistantHistoryPreviewCard('Branch: '+String(child.title||child.id||'Session'),assistantHistorySessionNativeSummary(child),[
+      ['requests',String(child.requestCount||0)],
+      ['messages',String((child.messages||[]).length)]
+    ]));
+  });
+  const modal=assistantShowHistoryPreviewModal('Compare Assistant Branches',cards,{kind:'branch-compare'});
+  modal.dataset.parentId=String(branchMeta.parentId||'');
+  modal.dataset.childCount=String(branchMeta.childCount||0);
+  modal.dataset.currentId=String(session&&session.id||'');
+  return modal;
+}
+function assistantShowSavedHistoryPreview(entry,nativeSummary){
+  nativeSummary=nativeSummary||assistantHistoryEntryNativeSummary(entry);
+  const modal=assistantShowHistoryPreviewModal('Saved History Preview',[
+    assistantHistoryPreviewCard(String(entry&&entry.title||entry&&entry.id||'Saved history'),nativeSummary,[
+      ['messages',String(entry&&entry.message_count||0)],
+      ['model',String(entry&&entry.model||'-')]
+    ])
+  ],{kind:'saved-history-preview'});
+  modal.dataset.savedHistoryId=String(entry&&entry.id||'');
+  modal.dataset.previewActions=String(nativeSummary.actions||0);
+  modal.dataset.previewTargets=String((nativeSummary.referenceItems||[]).length+(nativeSummary.changeItems||[]).length+(nativeSummary.treeItems||[]).length);
+  return modal;
 }
 function assistantHistorySessionChips(session,current,branchMeta){
   const chips=[];
@@ -17162,9 +17268,11 @@ function renderHistorySessionItem(list,session,index,branchMeta){
   parent.onclick=ev=>{ev.stopPropagation();assistantSessionOpenResource(session.parentSessionResource)};
   const branches=document.createElement('button');branches.type='button';branches.className='history-session-action branches';branches.textContent='branches';branches.title='Show child branches';branches.setAttribute('aria-label','Show child branches');branches.dataset.historyAction='branch-sessions';branches.disabled=!branchMeta.childCount;
   branches.onclick=ev=>{ev.stopPropagation();const search=$('history-search');if(search){search.value=String(session.title||session.id||'');_historySelectedIndex=0;refreshHistory();search.focus()}};
+  const compare=document.createElement('button');compare.type='button';compare.className='history-session-action compare';compare.textContent='compare';compare.title='Compare parent and branch sessions';compare.setAttribute('aria-label','Compare parent and branch sessions');compare.dataset.historyAction='branch-compare';compare.disabled=!(session.parentSessionResource||branchMeta.childCount);
+  compare.onclick=ev=>{ev.stopPropagation();assistantShowSessionBranchCompare(session,branchMeta,assistantSessionLoadItems())};
   const del=document.createElement('button');del.type='button';del.className='history-session-action delete';del.textContent='x';del.title='Delete local session';del.setAttribute('aria-label','Delete local session');
   del.onclick=ev=>{ev.stopPropagation();if(confirmDeleteAssistantSession(session)){assistantSessionDeleteItem(session.id);announceAssistantAction('Deleted chat session');refreshHistory()}};
-  item.appendChild(main);item.appendChild(parent);item.appendChild(branches);item.appendChild(fork);item.appendChild(del);
+  item.appendChild(main);item.appendChild(parent);item.appendChild(branches);item.appendChild(compare);item.appendChild(fork);item.appendChild(del);
   item.onclick=()=>assistantSessionOpenItem(session.id);
   list.appendChild(item);
   return {kind:'session',id:session.id,element:item,open:()=>assistantSessionOpenItem(session.id)};
@@ -17281,12 +17389,14 @@ function renderHistoryBackendItem(list,entry,index){
   edits.onclick=ev=>{ev.stopPropagation();loadHistoryConv(entry.id,{focus:'changes'})};
   const tree=document.createElement('button');tree.type='button';tree.className='history-session-action tree';tree.textContent='tree';tree.title='Open saved history file tree';tree.setAttribute('aria-label','Open saved history file tree');tree.disabled=!nativeSummary.trees;tree.dataset.historyAction='tree';
   tree.onclick=ev=>{ev.stopPropagation();loadHistoryConv(entry.id,{focus:'tree'})};
+  const preview=document.createElement('button');preview.type='button';preview.className='history-session-action preview';preview.textContent='preview';preview.title='Preview saved history restore details';preview.setAttribute('aria-label','Preview saved history restore details');preview.dataset.historyAction='saved-history-preview';
+  preview.onclick=ev=>{ev.stopPropagation();assistantShowSavedHistoryPreview(entry,nativeSummary)};
   const refItem=assistantSavedHistoryActionButton(entry,'reference-item',nativeSummary.referenceItems[0]);
   const editItem=assistantSavedHistoryActionButton(entry,'change-item',nativeSummary.changeItems[0]);
   const treeItem=assistantSavedHistoryActionButton(entry,'tree-item',nativeSummary.treeItems[0]);
   const del=document.createElement('button');del.type='button';del.className='history-session-action delete';del.textContent='x';del.title='Delete';del.setAttribute('aria-label','Delete saved history');
   del.onclick=ev=>{ev.stopPropagation();if(!window.confirm('Delete saved chat history?'))return;call('delete_history',entry.id).then(res=>{if(callSucceeded(res))refreshHistory();else showToast('Delete failed: '+callFailedMessage(res,'backend unavailable'),'error',2500)})};
-  item.appendChild(main);item.appendChild(refs);item.appendChild(edits);item.appendChild(tree);item.appendChild(refItem);item.appendChild(editItem);item.appendChild(treeItem);item.appendChild(del);
+  item.appendChild(main);item.appendChild(preview);item.appendChild(refs);item.appendChild(edits);item.appendChild(tree);item.appendChild(refItem);item.appendChild(editItem);item.appendChild(treeItem);item.appendChild(del);
   item.onclick=()=>loadHistoryConv(entry.id);
   list.appendChild(item);
   return {kind:'saved',id:entry.id,element:item,open:()=>loadHistoryConv(entry.id)};
@@ -17335,6 +17445,16 @@ function assistantSavedHistoryAffordanceSmokeSnapshot(){
       && historyMatchesQuery([entry.title,entry.id,entry.message_count,entry.model,assistantHistoryEntryNativeSummary(entry).searchText],'file tree')
       && historyMatchesQuery([entry.title,entry.id,entry.message_count,entry.model,assistantHistoryEntryNativeSummary(entry).searchText],'submitted actions')
   };
+  const previewButton=item?item.querySelector('[data-history-action="saved-history-preview"]'):null;
+  if(previewButton)previewButton.click();
+  const modal=document.querySelector('[data-assistant-history-preview="true"][data-preview-kind="saved-history-preview"]');
+  snapshot.previewButtonEnabled=!!(previewButton&&!previewButton.disabled);
+  snapshot.previewModalExists=!!modal;
+  snapshot.previewModalId=modal?String(modal.dataset.savedHistoryId||''):'';
+  snapshot.previewTargets=modal?Number(modal.dataset.previewTargets||0):0;
+  snapshot.previewActions=modal?Number(modal.dataset.previewActions||0):0;
+  snapshot.previewText=modal?String(modal.textContent||'').replace(/\s+/g,' ').trim().slice(0,240):'';
+  if(modal)modal.remove();
   list.remove();
   return snapshot;
 }
@@ -17468,6 +17588,8 @@ function assistantForkLineageSmokeSnapshot(){
   const title=item?String((item.querySelector('.history-session-title')||{}).title||''):'';
   const parentButton=item?item.querySelector('[data-history-action="parent-session"]'):null;
   const branchesButton=item?item.querySelector('[data-history-action="branch-sessions"]'):null;
+  const compareButton=item?item.querySelector('[data-history-action="branch-compare"]'):null;
+  const compareModal=assistantShowSessionBranchCompare(session,assistantSessionBranchMeta(session,sessions),sessions);
   const snapshot={
     itemExists:!!item,
     parentResource:item?String(item.dataset.sessionParentResource||''):'',
@@ -17483,9 +17605,17 @@ function assistantForkLineageSmokeSnapshot(){
     chipKinds:item?Array.from(item.querySelectorAll('.history-session-chip')).map(el=>String(el.className||'')):[],
     parentButtonEnabled:!!(parentButton&&!parentButton.disabled),
     branchesButtonEnabled:!!(branchesButton&&!branchesButton.disabled),
+    compareButtonEnabled:!!(compareButton&&!compareButton.disabled),
+    compareModalExists:!!compareModal,
+    compareModalKind:compareModal?String(compareModal.dataset.previewKind||''):'',
+    compareModalParentId:compareModal?String(compareModal.dataset.parentId||''):'',
+    compareModalChildCount:compareModal?Number(compareModal.dataset.childCount||0):0,
+    compareModalCards:compareModal?compareModal.querySelectorAll('.assistant-history-preview-card').length:0,
+    compareModalText:compareModal?String(compareModal.textContent||'').replace(/\s+/g,' ').trim().slice(0,260):'',
     searchMatches:historyMatchesQuery([session.title,session.sessionResource,session.id,session.provider,session.model,session.mode,session.agentId,session.parentSessionResource,session.parentSessionTitle,assistantSessionBranchMeta(session,sessions).parentTitle,assistantSessionBranchMeta(session,sessions).childTitles.join(' '),'branches '+assistantSessionBranchMeta(session,sessions).childCount],'parent assistant session')
       && historyMatchesQuery([session.title,assistantSessionBranchMeta(session,sessions).childTitles.join(' '),'branches '+assistantSessionBranchMeta(session,sessions).childCount],'alternative child branch')
   };
+  if(compareModal)compareModal.remove();
   list.remove();
   return snapshot;
 }

@@ -120,6 +120,8 @@ async function main() {
     "saved-history-action-result-markers-visible",
     "fork-lineage-chip-visible",
     "fork-branch-navigation-visible",
+    "saved-history-preview-ready",
+    "fork-branch-compare-visible",
     "workflow-popup-modes-ready",
     "workflow-result-state-rendered",
     "workflow-run-button-active-state",
