@@ -9598,18 +9598,25 @@ console.log("frontend word separator behavior ok");
            and "function applySettingsTargetVisibility(root)" in html
            and "function settingsGroupMatchesTarget(group,target)" in html
            and "function settingsVisibleGroupText(group)" in html
-           and "function renderSettingsTargetSummary(stats)" in html
-           and "function resetVisibleModifiedSettings()" in html
-           and "function installSettingsKeyboardHandlers()" in html
-           and "installSettingsKeyboardHandlers();" in html
+            and "function renderSettingsTargetSummary(stats)" in html
+            and "id=\"settings-review-bar\"" in html
+            and "id=\"settings-save-preview\"" in html
+            and "function settingsComputeReviewState(stats)" in html
+            and "function renderSettingsReviewBar(stats)" in html
+            and "function settingsToggleSavePreview()" in html
+            and "function resetVisibleModifiedSettings()" in html
+            and "function installSettingsKeyboardHandlers()" in html
+            and "installSettingsKeyboardHandlers();" in html
            and "row.dataset.extSettingKey||row.dataset.settingKey" in html
            and "if(row&&ev.key==='Enter'&&ev.target===row)" in html
            and "showToast(resets.length?'Reset '+resets.length+' visible modified setting'" in html
-           and "window.settingsToggleFilterToken=settingsToggleFilterToken;" in html
-           and "window.settingsClearFilters=settingsClearFilters;" in html
-           and "window.resetVisibleModifiedSettings=resetVisibleModifiedSettings;" in html
-           and "window.focusSettingsSearch=focusSettingsSearch;" in html
-           and "renderSettingsNav();" in html
+            and "window.settingsToggleFilterToken=settingsToggleFilterToken;" in html
+            and "window.settingsClearFilters=settingsClearFilters;" in html
+            and "window.settingsComputeReviewState=settingsComputeReviewState;" in html
+            and "window.settingsToggleSavePreview=settingsToggleSavePreview;" in html
+            and "window.resetVisibleModifiedSettings=resetVisibleModifiedSettings;" in html
+            and "window.focusSettingsSearch=focusSettingsSearch;" in html
+            and "renderSettingsNav();" in html
            and "updateSettingsNavCounts();" in html)
     _check("frontend settings target tabs filter by scope without mutating search",
            "input.value=(input.value+' @workspace').trim();" not in html
@@ -9631,10 +9638,17 @@ console.log("frontend word separator behavior ok");
            and "settings-built-chip current" in html
            and "cur.dataset.settingCurrentValue='1'" in html
            and "settings-save-button" in html
-           and "Settings saved" in html
-           and "closeSettings();" not in html[html.index("async function saveSettings()"):html.index("window.saveSettings=saveSettings;")]
-           and "const first=settingsVisibleRows().find(Boolean);" in html
-           and "updateSettingsResultNav(settingsVisibleRows().length);" in html)
+            and "Settings saved" in html
+            and "closeSettings();" not in html[html.index("async function saveSettings()"):html.index("window.saveSettings=saveSettings;")]
+            and "const first=settingsVisibleRows().find(Boolean);" in html
+            and "updateSettingsResultNav(settingsVisibleRows().length);" in html
+            and "settingsFocusFirstReviewRow('modified')" in html
+            and "settingsFocusFirstReviewRow('override')" in html
+            and "settingsFocusFirstReviewRow('error')" in html
+            and "Review','Preview visible setting changes before saving" in html
+            and "More changes are included in the save payload." in html
+            and "renderSettingsReviewBar(targetStats);" in html
+            and "renderSettingsReviewBar();" in html)
     _check("frontend settings saves scoped target updates",
            "function settingsBackendTargetName(target)" in html
            and "function settingTargetEntry(meta)" in html

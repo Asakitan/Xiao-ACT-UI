@@ -1584,7 +1584,8 @@ pre.code-block code .type { color:var(--fg-type); }
   color:var(--fg); border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
 .settings-result-nav button:disabled { opacity:.45; cursor:default; }
 .settings-searchbar .settings-active-filters,.settings-searchbar .settings-filter-summary,
-.settings-searchbar .settings-validation-summary { grid-column:1 / -1; }
+.settings-searchbar .settings-validation-summary,.settings-searchbar .settings-review-bar,
+.settings-searchbar .settings-save-preview { grid-column:1 / -1; }
 .settings-searchbar .settings-quick-filters { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:5px;
   margin:-1px 0 0; }
 .settings-quick-filters button { height:22px; max-width:160px; padding:1px 7px; border:1px solid var(--border);
@@ -1600,6 +1601,26 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-target-summary code { color:var(--fg-accent); font:11px var(--mono); }
 .settings-target-summary .settings-target-count { padding:1px 6px; border:1px solid var(--border);
   border-radius:999px; background:var(--bg3); color:var(--fg-dim); font:10px var(--mono); }
+.settings-review-bar { display:flex; flex-wrap:wrap; align-items:center; gap:6px; min-height:28px;
+  padding:5px 6px; border:1px solid var(--border); border-radius:5px; background:color-mix(in srgb,var(--bg2) 78%,transparent); }
+.settings-review-bar .review-pill { height:20px; display:inline-flex; align-items:center; gap:4px; padding:0 7px;
+  border:1px solid var(--border); border-radius:999px; color:var(--fg-dim); background:var(--bg3); font:10px var(--mono); }
+.settings-review-bar .review-pill.active { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); }
+.settings-review-bar .review-pill.error { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 55%,var(--border)); }
+.settings-review-bar .review-actions { margin-left:auto; display:inline-flex; flex-wrap:wrap; gap:4px; }
+.settings-review-bar button,.settings-save-preview button { height:22px; padding:1px 8px; border:1px solid var(--border);
+  border-radius:4px; background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
+.settings-review-bar button:hover:not(:disabled),.settings-review-bar button:focus:not(:disabled),
+.settings-save-preview button:hover,.settings-save-preview button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
+.settings-review-bar button.primary { color:var(--fg); border-color:color-mix(in srgb,var(--fg-accent) 55%,var(--border)); background:color-mix(in srgb,var(--fg-accent) 14%,var(--bg3)); }
+.settings-review-bar button:disabled { opacity:.45; cursor:default; }
+.settings-save-preview { display:none; max-height:168px; overflow:auto; padding:7px 8px; border:1px solid var(--border);
+  border-radius:5px; background:var(--bg2); color:var(--fg-dim); font-size:11px; }
+.settings-save-preview.open { display:block; }
+.settings-save-preview-row { display:flex; align-items:center; gap:8px; min-height:22px; border-top:1px solid color-mix(in srgb,var(--border) 55%,transparent); }
+.settings-save-preview-row:first-child { border-top:0; }
+.settings-save-preview-row code { color:var(--fg); font:11px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-save-preview-row span { margin-left:auto; font:10px var(--mono); color:var(--fg-dim); }
 .settings-reset-visible { width:auto; height:22px; padding:0 8px; border:1px solid var(--border);
   border-radius:4px; background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
 .settings-reset-visible:hover,.settings-reset-visible:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
@@ -2947,6 +2968,8 @@ pre.code-block { overflow:visible; }
         <button type="button" class="clear" onclick="settingsClearFilters()">Clear</button>
       </div>
       <div id="settings-target-summary" class="settings-target-summary" role="status" aria-live="polite"></div>
+      <div id="settings-review-bar" class="settings-review-bar" role="status" aria-live="polite"></div>
+      <div id="settings-save-preview" class="settings-save-preview" aria-live="polite"></div>
       <div id="settings-filter-summary" class="settings-filter-summary" role="status" aria-live="polite"></div>
       <div id="settings-validation-summary" class="settings-validation-summary" role="status" aria-live="polite"></div>
     </div>
@@ -3851,6 +3874,7 @@ function markSettingsModified(){
   });
   refreshSettingsDirtySummary(modifiedCount,errorCount);
   updateSettingsNavCounts();
+  renderSettingsReviewBar();
 }
 function refreshSettingsDirtySummary(modifiedCount,errorCount){
   const pill=$('settings-dirty-summary');
@@ -24414,6 +24438,14 @@ function installSettingsKeyboardHandlers(){
       focusSettingsSearch();
       return;
     }
+    if((ev.ctrlKey||ev.metaKey)&&String(ev.key||'').toLowerCase()==='s'){
+      ev.preventDefault();
+      saveSettings();
+      return;
+    }
+    if(ev.altKey&&String(ev.key||'').toLowerCase()==='m'){ev.preventDefault();settingsFocusFirstReviewRow('modified');return}
+    if(ev.altKey&&String(ev.key||'').toLowerCase()==='e'){ev.preventDefault();settingsFocusFirstReviewRow('error');return}
+    if(ev.altKey&&String(ev.key||'').toLowerCase()==='o'){ev.preventDefault();settingsFocusFirstReviewRow('override');return}
     if(ev.key==='ArrowDown'&&ev.target&&ev.target.id==='settings-search'){
       const first=settingsVisibleRows().find(Boolean);
       if(first){ev.preventDefault();settingsHighlightRow(first);}
@@ -24438,6 +24470,10 @@ window.scrollToSettingsSection=scrollToSettingsSection;
 window.settingsFocusVisibleRow=settingsFocusVisibleRow;
 window.settingsToggleFilterToken=settingsToggleFilterToken;
 window.settingsClearFilters=settingsClearFilters;
+window.settingsComputeReviewState=settingsComputeReviewState;
+window.renderSettingsReviewBar=renderSettingsReviewBar;
+window.settingsToggleSavePreview=settingsToggleSavePreview;
+window.settingsFocusFirstReviewRow=settingsFocusFirstReviewRow;
 const SETTINGS_SCOPE_FILTERS={
   editor:['editor','format','formatter','suggest','hover','minimap','folding','sticky scroll','diff','diagnostic','language override'],
   files:['files','save','auto save','trim trailing','final newline'],
@@ -24639,6 +24675,111 @@ function renderSettingsActiveFilters(parsed,visible,total){
   renderSettingsQuickFilters(parsed);
   renderSettingsEmptyState(visible,total,parsed);
 }
+function settingsTargetDisplayName(target){
+  return target==='workspace'?'Workspace':target==='extensions'?'Extensions':'User';
+}
+function settingsReviewRowLabel(row){
+  if(!row)return '';
+  return row.dataset.extSettingKey||row.dataset.settingKey||((row.querySelector('code')||{}).textContent)||((row.querySelector('label')||{}).textContent)||'Setting';
+}
+function settingsReviewRows(kind){
+  const rows=settingsVisibleRows();
+  if(kind==='modified')return rows.filter(row=>row.classList&&row.classList.contains('modified'));
+  if(kind==='error')return rows.filter(row=>(row.querySelector&&row.querySelector('[aria-invalid="true"],.settings-input-invalid'))||(row.classList&&row.classList.contains('invalid')));
+  if(kind==='override')return rows.filter(row=>row.dataset&&row.dataset.settingTargetOverride==='1');
+  return rows;
+}
+function settingsFocusFirstReviewRow(kind){
+  const row=settingsReviewRows(kind)[0];
+  if(row){settingsHighlightRow(row);return true}
+  showToast('No visible '+kind+' settings','info',1400);
+  return false;
+}
+function settingsSavePreviewItems(state){
+  const items=[];
+  (state&&state.errors||[]).slice(0,8).forEach(row=>items.push({kind:'Error',label:settingsReviewRowLabel(row)}));
+  (state&&state.modified||[]).slice(0,12).forEach(row=>items.push({kind:'Modified',label:settingsReviewRowLabel(row)}));
+  if(currentSettingsTarget!=='extensions'){
+    const modifiedKeys=new Set((state&&state.modified||[]).map(settingsReviewRowLabel));
+    const updates=(state&&state.targetUpdates)||settingsTargetUpdateRows();
+    updates.filter(update=>update&&update.target&&(update.remove||modifiedKeys.has(update.key)||modifiedKeys.has(update.path))).slice(0,12).forEach(update=>{
+      items.push({kind:update.remove?'Clear '+update.target:'Write '+update.target,label:update.key||update.path||'Setting'});
+    });
+  }
+  return items;
+}
+function settingsComputeReviewState(stats){
+  const modified=settingsReviewRows('modified');
+  const errors=settingsReviewRows('error');
+  const overrides=settingsReviewRows('override');
+  const targetUpdates=currentSettingsTarget==='extensions'?[]:settingsTargetUpdateRows().filter(Boolean);
+  return {
+    target:settingsTargetDisplayName(currentSettingsTarget),
+    visible:stats&&Number.isFinite(Number(stats.visible))?Number(stats.visible):settingsVisibleRows().length,
+    modified,
+    errors,
+    overrides,
+    targetUpdates
+  };
+}
+function renderSettingsSavePreview(state,forceOpen){
+  const host=$('settings-save-preview');if(!host)return;
+  const items=settingsSavePreviewItems(state);
+  host.innerHTML='';
+  host.classList.toggle('open',!!forceOpen&&items.length>0);
+  if(!items.length)return;
+  items.forEach(item=>{
+    const row=document.createElement('div');row.className='settings-save-preview-row';
+    const code=document.createElement('code');code.textContent=item.label;row.appendChild(code);
+    const kind=document.createElement('span');kind.textContent=item.kind;row.appendChild(kind);
+    row.onclick=()=>{
+      const match=settingsVisibleRows().find(visible=>settingsReviewRowLabel(visible)===item.label);
+      if(match)settingsHighlightRow(match);
+    };
+    host.appendChild(row);
+  });
+  if(items.length>=12){
+    const more=document.createElement('div');more.className='settings-save-preview-row';more.textContent='More changes are included in the save payload.';host.appendChild(more);
+  }
+}
+function settingsToggleSavePreview(){
+  const barState=settingsComputeReviewState();
+  const host=$('settings-save-preview');
+  const nextOpen=!(host&&host.classList&&host.classList.contains('open'));
+  renderSettingsSavePreview(barState,nextOpen);
+}
+function renderSettingsReviewBar(stats){
+  const host=$('settings-review-bar');if(!host)return;
+  const state=settingsComputeReviewState(stats);
+  const dirty=state.modified.length||state.errors.length||state.overrides.length;
+  host.innerHTML='';
+  const addPill=(label,count,cls)=>{
+    const pill=document.createElement('span');
+    pill.className='review-pill'+(count?' active':'')+(cls?' '+cls:'');
+    pill.textContent=label+': '+count;
+    host.appendChild(pill);
+    return pill;
+  };
+  addPill(state.target,state.visible,'');
+  addPill('Modified',state.modified.length,'');
+  addPill('Overrides',state.overrides.length,'');
+  addPill('Errors',state.errors.length,state.errors.length?'error':'');
+  const actions=document.createElement('span');actions.className='review-actions';
+  const addButton=(label,title,handler,disabled,primary)=>{
+    const btn=document.createElement('button');btn.type='button';btn.textContent=label;btn.title=title;btn.disabled=!!disabled;
+    if(primary)btn.classList.add('primary');
+    btn.onclick=ev=>{ev.preventDefault();handler&&handler()};
+    actions.appendChild(btn);
+    return btn;
+  };
+  addButton('Review','Preview visible setting changes before saving',settingsToggleSavePreview,!dirty,false);
+  addButton('Modified','Focus first visible modified setting',()=>settingsFocusFirstReviewRow('modified'),!state.modified.length,false);
+  addButton('Override','Focus first visible target override',()=>settingsFocusFirstReviewRow('override'),!state.overrides.length,false);
+  addButton('Error','Focus first visible invalid setting',()=>settingsFocusFirstReviewRow('error'),!state.errors.length,false);
+  addButton('Save','Save Settings',saveSettings,state.errors.length>0,true);
+  host.appendChild(actions);
+  renderSettingsSavePreview(state,($('settings-save-preview')||{}).classList&&$('settings-save-preview').classList.contains('open'));
+}
 function renderSettingsTargetSummary(stats){
   const host=$('settings-target-summary');
   const resetBtn=document.querySelector('.settings-reset-visible');
@@ -24647,7 +24788,7 @@ function renderSettingsTargetSummary(stats){
   if(!host)return;
   host.innerHTML='';
   const label=document.createElement('strong');
-  label.textContent=currentSettingsTarget==='workspace'?'Workspace':currentSettingsTarget==='extensions'?'Extensions':'User';
+  label.textContent=settingsTargetDisplayName(currentSettingsTarget);
   host.appendChild(label);
   const text=document.createElement('span');
   if(currentSettingsTarget==='workspace'){
@@ -24749,6 +24890,7 @@ function filterSettings(){
   const inp=$('settings-search');if(inp)inp.placeholder=parsed.active?visible+' matches':currentSettingsTarget==='extensions'?'Search extension settings...':currentSettingsTarget==='workspace'?'Search workspace settings...':'Search user settings...';
   renderSettingsActiveFilters(parsed,visible,total);
   renderSettingsTargetSummary(targetStats);
+  renderSettingsReviewBar(targetStats);
   updateSettingsResultNav(settingsVisibleRows().length);
   renderSettingsFilterSuggestions();
   updateSettingsNavCounts();
@@ -28052,6 +28194,7 @@ function applyExtensionSettingsFilter(){
   renderExtensionSettingSuggestions();
   extensionSettingWriteFilterStateDeferred(extensionSettingCaptureFilterState());
   updateSettingsNavCounts();
+  renderSettingsReviewBar();
 }
 function renderExtensionLanguageDefaults(languageDefaults,container,categorySelect,seenCategories){
   (Array.isArray(languageDefaults)?languageDefaults:[]).forEach(item=>{
