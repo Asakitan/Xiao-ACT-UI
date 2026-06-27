@@ -1151,6 +1151,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-chip:hover,.chat-select-chip:hover,.chat-model-inline:hover,.chat-run-chip:hover,
 .chat-select-chip:focus,.chat-model-inline:focus,.chat-run-chip:focus { border-color:var(--border-focus); }
 .chat-chip.muted,.chat-select-chip.muted { color:var(--fg-dim); }
+.chat-run-chip.running { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 55%,var(--border)); background:color-mix(in srgb,var(--fg-warning) 11%,var(--bg3)); }
 .chat-select-chip.mode { color:var(--fg-accent); border-color:color-mix(in srgb, var(--border-focus) 50%, var(--border)); }
 .chat-select-chip.agent.active { color:var(--fg); border-color:color-mix(in srgb, var(--fg-success) 45%, var(--border)); }
 .chat-control-menu { position:relative; display:inline-flex; align-items:center; flex:0 0 auto; min-width:0; }
@@ -1206,11 +1207,21 @@ pre.code-block code .type { color:var(--fg-type); }
 .workflow-run-step.done .workflow-run-step-status { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 55%,var(--border)); }
 .workflow-run-step.error .workflow-run-step-status { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 55%,var(--border)); }
 .workflow-result-card { margin-top:8px; border:1px solid var(--border); border-radius:6px; background:var(--bg2); padding:8px; display:flex; flex-direction:column; gap:6px; }
+.workflow-result-card.done { border-color:color-mix(in srgb,var(--fg-success) 40%,var(--border)); }
+.workflow-result-card.error { border-color:color-mix(in srgb,var(--fg-error) 50%,var(--border)); background:color-mix(in srgb,var(--fg-error) 8%,var(--bg2)); }
+.workflow-result-card.cancelled { border-color:color-mix(in srgb,var(--fg-warning) 50%,var(--border)); background:color-mix(in srgb,var(--fg-warning) 8%,var(--bg2)); }
 .workflow-result-head { display:flex; align-items:center; gap:8px; min-width:0; }
 .workflow-result-title { font-weight:600; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .workflow-result-meta { color:var(--fg-dim); font:10px var(--mono); }
+.workflow-result-status { margin-left:auto; color:var(--fg-dim); border:1px solid var(--border); border-radius:999px; padding:0 6px; font:10px var(--mono); }
+.workflow-result-card.done .workflow-result-status { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 55%,var(--border)); }
+.workflow-result-card.error .workflow-result-status { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 55%,var(--border)); }
+.workflow-result-card.cancelled .workflow-result-status { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 55%,var(--border)); }
 .workflow-result-step { border-top:1px solid var(--border); padding-top:5px; display:flex; flex-direction:column; gap:3px; }
 .workflow-result-step:first-child { border-top:0; padding-top:0; }
+.workflow-result-message { color:var(--fg-dim); font:11px/1.4 var(--mono); white-space:pre-wrap; }
+.workflow-result-card.error .workflow-result-message { color:var(--fg-error); }
+.workflow-result-card.cancelled .workflow-result-message { color:var(--fg-warning); }
 .workflow-result-step-title { display:flex; align-items:center; gap:6px; font-size:11px; }
 .workflow-result-step-title .idx { color:var(--fg-dim); font:10px var(--mono); }
 .workflow-result-step-title .agent { color:var(--fg-dim); font:10px var(--mono); border:1px solid var(--border); border-radius:999px; padding:0 6px; }
@@ -4599,6 +4610,19 @@ function normalizeWorkflowMode(value){
 }
 let assistantWorkflowMode=normalizeWorkflowMode((()=>{try{return localStorage.getItem(ASSISTANT_WORKFLOW_MODE_KEY)}catch(_e){return 'off'}})());
 let assistantWorkflowCustomPrompt=(()=>{try{return String(localStorage.getItem(ASSISTANT_WORKFLOW_CUSTOM_PROMPT_KEY)||'')}catch(_e){return ''}})();
+let assistantWorkflowRunActive=false;
+let assistantWorkflowCancelRequested=false;
+let assistantWorkflowActiveRunId='';
+function setAssistantWorkflowRunState(active,opts){
+  opts=opts||{};
+  assistantWorkflowRunActive=!!active;
+  if(opts.runId!==undefined)assistantWorkflowActiveRunId=String(opts.runId||'');
+  if(opts.cancelRequested!==undefined)assistantWorkflowCancelRequested=!!opts.cancelRequested;
+  if(!assistantWorkflowRunActive&&!opts.keepRunId)assistantWorkflowActiveRunId='';
+  if(!assistantWorkflowRunActive&&!opts.keepCancel)assistantWorkflowCancelRequested=false;
+  if(typeof syncAssistantSessionState==='function')syncAssistantSessionState({requestInProgress:assistantWorkflowRunActive,workflowRunId:assistantWorkflowActiveRunId||assistantSessionState.workflowRunId||''});
+  if(typeof updateToolbarWorkflowButton==='function')updateToolbarWorkflowButton();
+}
 function setAssistantWorkflowMode(mode,opts){
   assistantWorkflowMode=normalizeWorkflowMode(mode);
   try{localStorage.setItem(ASSISTANT_WORKFLOW_MODE_KEY,assistantWorkflowMode)}catch(_e){}
@@ -7692,6 +7716,38 @@ function assistantWorkflowRunCardSnapshot(card){
     agentChipCount:steps.filter(step=>step.querySelector('.workflow-run-step-agent')).length
   };
 }
+function assistantWorkflowResultStateSnapshot(){
+  const body=document.createElement('div');
+  const ok=renderWorkflowResultSummary(body,{workflow:'ok-flow',workflowRunId:'wf-ok',steps:[{step:0,label:'Ok',agent:'default',output_var:'ok',output:'done'}],final_output:'done'},{workflowLabel:'Ok Flow'});
+  const err=renderWorkflowResultSummary(body,{workflow:'err-flow',workflowRunId:'wf-err',error:'failed step',steps:[{step:0,label:'Err',agent:'default',output_var:'err',error:'failed step'}]},{workflowLabel:'Err Flow'});
+  const cancelled=renderWorkflowResultSummary(body,{workflow:'cancel-flow',workflowRunId:'wf-cancel',cancelled:true,message:'cancel requested',steps:[]},{workflowLabel:'Cancel Flow'});
+  return {
+    okStatus:ok?String(ok.dataset.workflowResultStatus||''):'',
+    errorStatus:err?String(err.dataset.workflowResultStatus||''):'',
+    cancelStatus:cancelled?String(cancelled.dataset.workflowResultStatus||''):'',
+    badgeCount:body.querySelectorAll('.workflow-result-status').length,
+    messageCount:body.querySelectorAll('.workflow-result-message').length,
+    errorClass:!!(err&&err.classList.contains('error')),
+    cancelClass:!!(cancelled&&cancelled.classList.contains('cancelled'))
+  };
+}
+function assistantWorkflowRunButtonSnapshot(){
+  const run=$('chat-workflow-run');
+  if(!run)return {exists:false};
+  const previousActive=assistantWorkflowRunActive;
+  const previousCancel=assistantWorkflowCancelRequested;
+  const previousRunId=assistantWorkflowActiveRunId;
+  setAssistantWorkflowRunState(true,{runId:'wf-button-selfcheck',cancelRequested:false});
+  const active={text:String(run.textContent||''),disabled:!!run.disabled,running:run.classList.contains('running'),title:String(run.title||'')};
+  setAssistantWorkflowRunState(true,{runId:'wf-button-selfcheck',cancelRequested:true});
+  const cancelling={text:String(run.textContent||''),disabled:!!run.disabled,running:run.classList.contains('running'),title:String(run.title||'')};
+  assistantWorkflowRunActive=previousActive;
+  assistantWorkflowCancelRequested=previousCancel;
+  assistantWorkflowActiveRunId=previousRunId;
+  syncAssistantSessionState({requestInProgress:previousActive,workflowRunId:previousRunId||assistantSessionState.workflowRunId||''});
+  updateToolbarWorkflowButton();
+  return {exists:true,active,cancelling,restoredActive:assistantWorkflowRunActive};
+}
 async function assistantWorkflowBackendExecutionSnapshot(){
   const previousApi=window.pywebview&&window.pywebview.api;
   const calls=[];
@@ -7724,6 +7780,7 @@ async function assistantWorkflowBackendExecutionSnapshot(){
     createdCount:created.length,
     planExists:!!plan,
     resultExists:!!result,
+    resultStatus:result?String(result.dataset.workflowResultStatus||''):'',
     resultStepCount:result?result.querySelectorAll('.workflow-result-step').length:0,
     resultOutputs:result?Array.from(result.querySelectorAll('.workflow-result-step')).map(step=>String(step.dataset.workflowStepOutputVar||'')):[],
     finalText:created.length?String(created[created.length-1].textContent||''):''
@@ -7751,14 +7808,18 @@ async function runAssistantUiSelfCheck(opts){
   const workflowStatusUpdated=updateWorkflowRunStepStatus('wf-selfcheck',{workflowRunId:'wf-selfcheck',step:0,status:'running',label:'Inspect',agent:'default',output_var:'inspection'})
     && updateWorkflowRunStepStatus('wf-selfcheck',{workflowRunId:'wf-selfcheck',step:1,status:'done',label:'Review',agent:'reviewer',output_var:'review',preview:'ok'});
   const workflowRunCard=assistantWorkflowRunCardSnapshot(workflowCard);
+  const workflowResultState=assistantWorkflowResultStateSnapshot();
+  const workflowButtonState=assistantWorkflowRunButtonSnapshot();
   assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready',providerPopup.shown&&providerPopup.optionCount>=1&&providerPopup.focusableCount===providerPopup.optionCount&&providerPopup.keyboardReady,JSON.stringify(providerPopup));
   assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready',workflowPopup.shown&&workflowPopup.workflowModeCount===3&&workflowPopup.workflowModeStrip&&workflowPopup.workflowModeToolbar&&workflowPopup.optionCount>=4&&workflowPopup.focusableCount===workflowPopup.optionCount&&workflowPopup.keyboardReady,JSON.stringify(workflowPopup));
   assistantUiSelfCheckRecord(checks,'workflow-popup-mode-smoke',workflowModeSmoke.states.length===3&&workflowModeSmoke.states.every(state=>state.strip&&state.toolbar&&state.active.includes(state.mode))&&workflowModeSmoke.selected.value==='assistant-selfcheck-flow'&&workflowModeSmoke.selected.mode==='on'&&workflowModeSmoke.selected.runDisabled===false&&workflowModeSmoke.custom.prompt==='selfcheck custom workflow prompt'&&workflowModeSmoke.custom.runDisabled===false,JSON.stringify(workflowModeSmoke));
   assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready',workflowEditor.modalExists&&workflowEditor.editorExists&&workflowEditor.rowCount===2&&workflowEditor.labelInputs===2&&workflowEditor.agentInputs===2&&workflowEditor.outputInputs===2&&workflowEditor.promptInputs===2&&workflowEditor.moveButtons===4&&workflowEditor.deleteButtons===2&&workflowEditor.addButtonExists&&workflowEditor.collectedCount===2&&workflowEditor.idReadOnly,JSON.stringify(workflowEditor));
   assistantUiSelfCheckRecord(checks,'workflow-run-card-rendered',workflowRunCard.exists&&workflowRunCard.workflowId==='selfcheck-flow'&&workflowRunCard.workflowRunId==='wf-selfcheck'&&workflowRunCard.workflowStepCount===2&&workflowRunCard.renderedSteps===2&&workflowRunCard.agentChipCount===2,JSON.stringify(workflowRunCard));
   assistantUiSelfCheckRecord(checks,'workflow-run-step-status-updates',workflowStatusUpdated&&workflowRunCard.statuses[0]==='running'&&workflowRunCard.statuses[1]==='done'&&workflowRunCard.outputs[0]==='inspection'&&workflowRunCard.outputs[1]==='review',JSON.stringify(workflowRunCard));
+  assistantUiSelfCheckRecord(checks,'workflow-result-state-rendered',workflowResultState.okStatus==='done'&&workflowResultState.errorStatus==='error'&&workflowResultState.cancelStatus==='cancelled'&&workflowResultState.badgeCount===3&&workflowResultState.messageCount===2&&workflowResultState.errorClass&&workflowResultState.cancelClass,JSON.stringify(workflowResultState));
+  assistantUiSelfCheckRecord(checks,'workflow-run-button-active-state',workflowButtonState.exists&&workflowButtonState.active.text==='■'&&workflowButtonState.active.running&&workflowButtonState.active.disabled===false&&workflowButtonState.cancelling.title==='Cancelling workflow run',JSON.stringify(workflowButtonState));
   const workflowBackend=await assistantWorkflowBackendExecutionSnapshot();
-  assistantUiSelfCheckRecord(checks,'workflow-backend-execution-rendered',workflowBackend.ok&&workflowBackend.callCount===1&&workflowBackend.planExists&&workflowBackend.resultExists&&workflowBackend.resultStepCount===2&&workflowBackend.resultOutputs[0]==='inspection'&&workflowBackend.resultOutputs[1]==='review'&&workflowBackend.finalText.includes('review ok'),JSON.stringify(workflowBackend));
+  assistantUiSelfCheckRecord(checks,'workflow-backend-execution-rendered',workflowBackend.ok&&workflowBackend.callCount===1&&workflowBackend.planExists&&workflowBackend.resultExists&&workflowBackend.resultStatus==='done'&&workflowBackend.resultStepCount===2&&workflowBackend.resultOutputs[0]==='inspection'&&workflowBackend.resultOutputs[1]==='review'&&workflowBackend.finalText.includes('review ok'),JSON.stringify(workflowBackend));
 
   const previousAttachments=attachments.slice();
   attachments=[];
@@ -17501,22 +17562,35 @@ function updateWorkflowRunStepStatus(runId,data){
 function workflowResultSteps(result){
   return Array.isArray(result&&result.steps)?result.steps.filter(step=>step&&typeof step==='object'):[];
 }
+function workflowResultStatus(result){
+  if(result&&result.cancelled)return 'cancelled';
+  if(result&&result.error)return 'error';
+  return 'done';
+}
 function renderWorkflowResultSummary(body,result,launch){
   if(!body)return null;
   const steps=workflowResultSteps(result);
+  const status=workflowResultStatus(result);
   const card=document.createElement('div');
-  card.className='workflow-result-card';
+  card.className='workflow-result-card '+status;
   card.setAttribute('role','group');
   card.setAttribute('aria-label','Workflow result');
   card.dataset.workflowId=String((launch&&launch.workflowId)||result&&result.workflow||'');
   card.dataset.workflowRunId=String((launch&&launch.workflowRunId)||result&&result.workflowRunId||'');
   card.dataset.workflowStepCount=String(steps.length);
+  card.dataset.workflowResultStatus=status;
   const head=document.createElement('div');head.className='workflow-result-head';
   const title=document.createElement('span');title.className='workflow-result-title';
   title.textContent=String((launch&&launch.workflowLabel)||result&&result.workflow||'Workflow result');
   const meta=document.createElement('span');meta.className='workflow-result-meta';
   meta.textContent=[steps.length+' steps',card.dataset.workflowRunId].filter(Boolean).join(' · ');
-  head.appendChild(title);head.appendChild(meta);card.appendChild(head);
+  const badge=document.createElement('span');badge.className='workflow-result-status';badge.textContent=status;
+  head.appendChild(title);head.appendChild(meta);head.appendChild(badge);card.appendChild(head);
+  if(result&&(result.error||result.cancelled)){
+    const msg=document.createElement('div');msg.className='workflow-result-message';
+    msg.textContent=String(result.error||result.message||'Workflow cancelled');
+    card.appendChild(msg);
+  }
   steps.forEach((step,index)=>{
     const row=document.createElement('div');row.className='workflow-result-step';
     row.dataset.stepIndex=String(Number(step.step)||index);
@@ -17618,37 +17692,43 @@ async function runWorkflowEngineAsAssistant(workflow,inputText,launch,refs){
   setStatus('Running workflow: '+workflowName);
   assistantSessionState.workflowRunId=launch.workflowRunId;
   syncAssistantSessionState({workflowRunId:launch.workflowRunId,workflowMode:assistantWorkflowMode,requestInProgress:true});
+  setAssistantWorkflowRunState(true,{runId:launch.workflowRunId,cancelRequested:false});
   let result=null;
   try{result=await call('run_workflow',id,inputText,launch.workflowRunId)}
   catch(e){result={error:String(e&&e.message||e)}}
   pending.remove();
+  const wasCancelled=assistantWorkflowCancelRequested&&assistantWorkflowActiveRunId===String(launch.workflowRunId||'');
   if(!result){
-    const err=document.createElement('div');err.className='error-text';err.textContent='Workflow backend unavailable';body.appendChild(err);
+    result={error:'Workflow backend unavailable'};
+    renderWorkflowResultSummary(body,result,launch);
     setStatus('Workflow backend unavailable');
     syncAssistantSessionState({requestInProgress:false});
+    setAssistantWorkflowRunState(false,{runId:launch.workflowRunId,keepRunId:true});
     return false;
   }
+  if(wasCancelled)result={...result,cancelled:true,message:'Workflow cancellation requested'};
   workflowResultSteps(result).forEach(step=>updateWorkflowRunStepStatus(launch.workflowRunId,{
     workflowRunId:launch.workflowRunId,
     step:step.step,
-    status:step.error?'error':'done',
+    status:result.cancelled?'error':step.error?'error':'done',
     label:step.label,
     agent:step.agent,
     output_var:step.output_var,
     preview:step.output,
     error:step.error
   }));
+  renderWorkflowResultSummary(body,result,launch);
   if(result.error){
     const err=document.createElement('div');err.className='error-text';err.textContent='Workflow error: '+result.error;body.appendChild(err);
-  }else{
-    renderWorkflowResultSummary(body,result,launch);
+  }else if(!result.cancelled){
     const finalText=normalizeChatMessageText(result.final_output||'','assistant');
     if(finalText)renderMd(body,finalText);
   }
-  setStatus(result.error?'Workflow error':'Workflow complete');
+  setStatus(result.cancelled?'Workflow cancelled':result.error?'Workflow error':'Workflow complete');
   syncAssistantSessionState({requestInProgress:false,workflowRunId:launch.workflowRunId});
-  assistantSessionPersistCurrent({status:result.error?'error':'completed'});
-  return !result.error;
+  setAssistantWorkflowRunState(false,{runId:launch.workflowRunId,keepRunId:true});
+  assistantSessionPersistCurrent({status:result.cancelled?'cancelled':result.error?'error':'completed'});
+  return !result.error&&!result.cancelled;
 }
 async function runWorkflowObjectAsAssistant(workflow,inputText,opts){
   opts=opts||{};
@@ -20975,6 +21055,19 @@ async function setToolbarMode(mode){
 function updateToolbarWorkflowButton(){
   const wfSel=$('chat-workflow-sel'),run=$('chat-workflow-run');
   if(!wfSel||!run)return;
+  if(assistantWorkflowRunActive){
+    run.disabled=false;
+    run.textContent='■';
+    run.title=assistantWorkflowCancelRequested?'Cancelling workflow run':'Cancel workflow run';
+    run.classList.add('running');
+    wfSel.classList.toggle('muted',!wfSel.value);
+    const activeTrigger=$('chat-workflow-trigger');
+    if(activeTrigger)activeTrigger.classList.remove('muted');
+    if(typeof renderChatControlPopups==='function')renderChatControlPopups();
+    return;
+  }
+  run.textContent='▶';
+  run.classList.remove('running');
   const selected=wfSel.selectedIndex>=0&&wfSel.options?wfSel.options[wfSel.selectedIndex]:null;
   const workflowMode=normalizeWorkflowMode(assistantWorkflowMode);
   run.disabled=workflowMode==='off'||(workflowMode==='on'&&(!wfSel.value||!!(selected&&selected.disabled)))||(workflowMode==='custom'&&!String(assistantWorkflowCustomPrompt||'').trim());
@@ -20984,7 +21077,16 @@ function updateToolbarWorkflowButton(){
   if(trigger)trigger.classList.toggle('muted',workflowMode==='off');
   if(typeof renderChatControlPopups==='function')renderChatControlPopups();
 }
+async function cancelAssistantWorkflowRun(){
+  if(!assistantWorkflowRunActive)return false;
+  assistantWorkflowCancelRequested=true;
+  setAssistantWorkflowRunState(true,{runId:assistantWorkflowActiveRunId,cancelRequested:true});
+  setStatus('Cancelling workflow run');
+  try{await call('provider_cancel',activeProviderId||'chat')}catch(_e){}
+  return true;
+}
 function runToolbarWorkflow(){
+  if(assistantWorkflowRunActive){cancelAssistantWorkflowRun();return}
   const wfSel=$('chat-workflow-sel');
   const workflowMode=normalizeWorkflowMode(assistantWorkflowMode);
   if(workflowMode==='off'){toggleChatControlPopup(null,'workflow');return}
