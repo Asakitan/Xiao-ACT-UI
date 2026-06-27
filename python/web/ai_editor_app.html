@@ -4708,6 +4708,7 @@ function loadAssistantSessionState(){
   return assistantSessionDefaults({});
 }
 let assistantSessionState=loadAssistantSessionState();
+let assistantLastLocalSessionState=assistantSessionState.type==='local'?assistantSessionDefaults(assistantSessionState):null;
 function assistantSessionResource(){
   return 'sao-ai-chat://'+assistantSessionState.type+'/'+assistantSessionState.id;
 }
@@ -5033,6 +5034,7 @@ function restoreAssistantSessionDraft(){
 }
 function resetAssistantSessionState(){
   assistantSessionState=assistantSessionDefaults(Object.assign({provider:config.provider,model:config.model,mode:currentMode},assistantSessionControlSnapshot()));
+  assistantLastLocalSessionState=assistantSessionDefaults(assistantSessionState);
   saveAssistantSessionState({immediate:true});
   renderAssistantSessionState();
 }
@@ -7755,6 +7757,59 @@ function assistantWorkflowRunButtonSnapshot(){
   updateToolbarWorkflowButton();
   return {exists:true,active,cancelling,restoredActive:assistantWorkflowRunActive};
 }
+function assistantProviderSessionSmokeSnapshot(){
+  const pid='assistant-selfcheck-provider';
+  const prevProvider=providerDefs[pid];
+  const prevState=providerUiState[pid];
+  const prevActive=activeProviderId;
+  const prevSession=assistantSessionDefaults(assistantSessionState);
+  const previousItems=assistantSessionLoadItems();
+  const root=document.createElement('div');
+  root.style.display='none';
+  root.innerHTML='<div id="'+providerElId('rp',pid)+'" class="right-panel" data-provider-id="'+pid+'">'
+    +'<div id="'+providerElId('pm',pid)+'"></div>'
+    +'<textarea id="'+providerElId('pi',pid)+'"></textarea>'
+    +'<button id="'+providerElId('psend',pid)+'"></button>'
+    +'<button id="'+providerElId('pstop',pid)+'"></button>'
+    +'<span id="'+providerElId('pstatus',pid)+'"></span>'
+    +'<span id="'+providerElId('ptokens',pid)+'"></span>'
+    +'<span id="'+providerElId('pctx',pid)+'"></span>'
+    +'</div>';
+  document.body.appendChild(root);
+  providerDefs[pid]={id:pid,name:'Assistant Selfcheck Provider',model:'selfcheck-model',transport:'native-chat'};
+  providerUiState[pid]={requestCount:0};
+  activeProviderId=pid;
+  const user=createProviderMessage(pid,'user','',"provider smoke");
+  const assistant=createProviderMessage(pid,'assistant','selfcheck-model',"provider response");
+  renderChatReferences(user,[{id:'provider:selfcheck',kind:'provider',label:'Selfcheck Provider'}]);
+  syncAssistantProviderSessionState(pid,{requestCount:1,lastPromptSample:'provider smoke',context:[{id:'provider:selfcheck',kind:'provider',label:'Selfcheck Provider'}]});
+  setProviderRunning(pid,true,t('provider_status_thinking'),'running');
+  const runningItem=assistantProviderSessionItem(pid);
+  setProviderRunning(pid,false,t('provider_status_ready'),'');
+  const saved=assistantProviderPersistSession(pid,{status:'completed'});
+  const panel=$(providerElId('rp',pid));
+  const snapshot={
+    runningType:runningItem.type,
+    runningStatus:runningItem.status,
+    savedType:saved&&saved.type,
+    savedProvider:saved&&saved.provider,
+    savedMessageCount:saved&&saved.messageCount,
+    savedContextCount:saved&&Array.isArray(saved.context)?saved.context.length:0,
+    resource:saved&&saved.sessionResource,
+    panelResource:panel?panel.dataset.providerSessionResource:'',
+    panelRequests:panel?panel.dataset.providerRequestCount:'',
+    sessionType:assistantSessionState.type,
+    sessionProvider:assistantSessionState.provider
+  };
+  assistantSessionSaveItems(previousItems);
+  if(prevProvider)providerDefs[pid]=prevProvider;else delete providerDefs[pid];
+  if(prevState)providerUiState[pid]=prevState;else delete providerUiState[pid];
+  activeProviderId=prevActive;
+  assistantSessionState=prevSession;
+  saveAssistantSessionState({immediate:true});
+  root.remove();
+  return snapshot;
+}
 async function assistantWorkflowBackendExecutionSnapshot(){
   const previousApi=window.pywebview&&window.pywebview.api;
   const calls=[];
@@ -7821,8 +7876,10 @@ async function runAssistantUiSelfCheck(opts){
   workflowBody.remove();
   const workflowResultState=assistantWorkflowResultStateSnapshot();
   const workflowButtonState=assistantWorkflowRunButtonSnapshot();
+  const providerSession=assistantProviderSessionSmokeSnapshot();
   assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready',providerPopup.shown&&providerPopup.optionCount>=1&&providerPopup.focusableCount===providerPopup.optionCount&&providerPopup.keyboardReady,JSON.stringify(providerPopup));
   assistantUiSelfCheckRecord(checks,'model-popup-configured-models-ready',modelPopup.shown&&modelPopup.optionCount>=1&&modelPopup.focusableCount===modelPopup.optionCount&&modelPopup.keyboardReady,JSON.stringify(modelPopup));
+  assistantUiSelfCheckRecord(checks,'provider-session-state-smoke',providerSession.runningType==='provider'&&providerSession.runningStatus==='inProgress'&&providerSession.savedType==='provider'&&providerSession.savedProvider==='assistant-selfcheck-provider'&&providerSession.savedMessageCount===2&&providerSession.savedContextCount===1&&String(providerSession.resource||'').startsWith('sao-ai-chat://provider/')&&providerSession.panelResource===providerSession.resource&&providerSession.panelRequests==='1'&&providerSession.sessionType==='provider'&&providerSession.sessionProvider==='assistant-selfcheck-provider',JSON.stringify(providerSession));
   assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready',workflowPopup.shown&&workflowPopup.workflowModeCount===3&&workflowPopup.workflowModeStrip&&workflowPopup.workflowModeToolbar&&workflowPopup.optionCount>=4&&workflowPopup.focusableCount===workflowPopup.optionCount&&workflowPopup.keyboardReady,JSON.stringify(workflowPopup));
   assistantUiSelfCheckRecord(checks,'workflow-popup-mode-smoke',workflowModeSmoke.states.length===3&&workflowModeSmoke.states.every(state=>state.strip&&state.toolbar&&state.active.includes(state.mode))&&workflowModeSmoke.selected.value==='assistant-selfcheck-flow'&&workflowModeSmoke.selected.mode==='on'&&workflowModeSmoke.selected.runDisabled===false&&workflowModeSmoke.custom.prompt==='selfcheck custom workflow prompt'&&workflowModeSmoke.custom.runDisabled===false,JSON.stringify(workflowModeSmoke));
   assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready',workflowEditor.modalExists&&workflowEditor.editorExists&&workflowEditor.rowCount===2&&workflowEditor.labelInputs===2&&workflowEditor.agentInputs===2&&workflowEditor.outputInputs===2&&workflowEditor.promptInputs===2&&workflowEditor.moveButtons===4&&workflowEditor.deleteButtons===2&&workflowEditor.addButtonExists&&workflowEditor.collectedCount===2&&workflowEditor.idReadOnly,JSON.stringify(workflowEditor));
@@ -18942,6 +18999,106 @@ function updateProviderStatus(pid,text,kind){
   const p=providerDefs[pid];status.title=p&&p.available===false?providerUnavailableText(p):state.status;
 }
 function providerTokenLabel(n){return n>=1000?(Math.round(n/100)/10)+'K':String(n)}
+function assistantProviderSessionId(pid){
+  const key=String(pid||'provider');
+  const state=providerUiState[key]||(providerUiState[key]={});
+  if(!state.sessionId)state.sessionId='provider-'+providerDomKey(key)+'-'+assistantSessionNewId();
+  return state.sessionId;
+}
+function assistantProviderSessionResource(pid){
+  return 'sao-ai-chat://provider/'+providerDomKey(pid)+'/'+assistantProviderSessionId(pid);
+}
+function assistantProviderMessageSnapshot(pid){
+  const mc=providerRefs(pid).messages;
+  if(!mc)return [];
+  return assistantSessionNormalizeMessages(Array.from(mc.querySelectorAll('.msg')).map(msg=>{
+    const body=msg.querySelector('.msg-body');
+    const roleEl=msg.querySelector('.msg-role');
+    const model=msg.querySelector('.msg-model');
+    let role='assistant';
+    if(roleEl&&roleEl.classList.contains('user'))role='user';
+    else if(roleEl&&roleEl.classList.contains('tool'))role='tool';
+    else if(roleEl&&roleEl.classList.contains('error'))role='assistant';
+    let references=[];
+    if(body&&Array.isArray(body._chatReferences))references=body._chatReferences;
+    else if(body&&body.dataset&&body.dataset.chatReferences){
+      try{references=JSON.parse(body.dataset.chatReferences)}catch(_e){references=[]}
+    }
+    return {
+      role,
+      model:model?String(model.textContent||''):providerModelLabel(pid)||'',
+      content:assistantSessionMessageBodyText(body).slice(0,80000),
+      references
+    };
+  }));
+}
+function assistantProviderSessionItem(pid,extra){
+  const p=providerDefs[pid]||{},state=providerUiState[pid]||(providerUiState[pid]={});
+  const messages=assistantProviderMessageSnapshot(pid);
+  const now=Date.now();
+  return Object.assign({
+    id:assistantProviderSessionId(pid),
+    type:'provider',
+    providerId:String(pid||''),
+    sessionResource:assistantProviderSessionResource(pid),
+    title:assistantSessionTitleFromSnapshot(messages,state.draft||state.lastPromptSample||providerDisplayName(pid)),
+    status:state.running?'inProgress':'completed',
+    createdAt:Number(state.createdAt||now),
+    updatedAt:now,
+    requestCount:Math.max(0,Number(state.requestCount||0)),
+    messageCount:messages.length,
+    provider:String(pid||''),
+    model:providerModelLabel(pid)||String(p.model||''),
+    mode:String(p.runtime_mode||p.transport||'provider'),
+    approval:String(currentApproval||config.approval||'default'),
+    agentId:String(activeAgentId||''),
+    workflowId:'',
+    workflowLabel:'',
+    parentSessionResource:String(state.parentSessionResource||''),
+    draft:String(state.draft||''),
+    context:assistantSessionNormalizeRefs(state.context||[]),
+    state:Object.assign({},state,{provider:String(pid||''),model:providerModelLabel(pid)||'',mode:String(p.runtime_mode||p.transport||'provider')}),
+    messages
+  },extra||{});
+}
+function assistantProviderPersistSession(pid,extra){
+  const item=assistantProviderSessionItem(pid,extra);
+  if(!item.messageCount&&!item.draft&&!(item.context&&item.context.length))return null;
+  const items=assistantSessionLoadItems().filter(s=>s&&String(s.id)!==String(item.id));
+  items.unshift(item);
+  assistantSessionSaveItems(items);
+  return item;
+}
+function syncAssistantProviderSessionState(pid,patch){
+  const key=String(pid||'');
+  if(!key)return;
+  const state=providerUiState[key]||(providerUiState[key]={});
+  Object.assign(state,patch||{});
+  state.updatedAt=Date.now();
+  state.sessionId=assistantProviderSessionId(key);
+  if(!state.createdAt)state.createdAt=state.updatedAt;
+  const refs=providerRefs(key);
+  if(refs.panel){
+    refs.panel.dataset.providerSessionResource=assistantProviderSessionResource(key);
+    refs.panel.dataset.providerRequestCount=String(Math.max(0,Number(state.requestCount||0)));
+    refs.panel.dataset.providerRequestInProgress=state.running?'true':'false';
+    refs.panel.dataset.providerSessionStatus=state.running?'inProgress':(state.kind==='error'?'error':'completed');
+    refs.panel.dataset.providerLastPromptSample=String(state.lastPromptSample||'');
+  }
+  if(activeProviderId===key){
+    assistantSessionState.type='provider';
+    assistantSessionState.id=state.sessionId;
+    assistantSessionState.provider=key;
+    assistantSessionState.model=providerModelLabel(key)||assistantSessionState.model||'';
+    assistantSessionState.requestCount=Math.max(0,Number(state.requestCount||0));
+    assistantSessionState.requestInProgress=!!state.running;
+    assistantSessionState.lastPromptSample=String(state.lastPromptSample||'');
+    assistantSessionState.context=assistantSessionNormalizeRefs(state.context||[]);
+    renderAssistantSessionState();
+    saveAssistantSessionState();
+  }
+  return state;
+}
 function updateProviderContext(pid,usage){
   let used=0;
   if(typeof usage==='number')used=usage;
@@ -18961,6 +19118,7 @@ function setProviderRunning(pid,running,status,kind){
   if(refs.send)refs.send.disabled=running||p.available===false;
   if(refs.stop)refs.stop.style.display=running?'inline-flex':'none';
   updateProviderStatus(pid,status||(running?t('provider_status_thinking'):t('provider_status_ready')),kind||(running?'running':''));
+  syncAssistantProviderSessionState(pid,{running:!!running,kind:kind||(running?'running':'')});
 }
 function notifyWebviewPanelViewState(viewId,isActive,isVisible){
   if(!viewId||!window.pywebview||!window.pywebview.api||!window.pywebview.api.webview_panel_view_state)return;
@@ -19035,6 +19193,11 @@ function disposeExtensionWebviewPanel(viewId,providerId){
   return clearDisposedWebviewPanel(id,providerId);
 }
 function switchRightTab(pid){
+  if(activeProviderId==='chat'){
+    assistantSessionPersistCurrent({status:streaming?'inProgress':'completed'});
+    assistantLastLocalSessionState=assistantSessionDefaults(assistantSessionState);
+  }
+  else if(activeProviderId)assistantProviderPersistSession(activeProviderId,{status:'completed'});
   activeProviderId=pid;
   config.active_chat_provider=pid;
   document.querySelectorAll('.rtab').forEach(r=>r.classList.toggle('active',r.dataset.rtab===pid));
@@ -19051,6 +19214,15 @@ function switchRightTab(pid){
       notifyWebviewPanelViewState(p.dataset.viewId,isActive);
     }
   });
+  if(pid==='chat'){
+    if(assistantSessionState.type==='provider'&&assistantLastLocalSessionState)assistantSessionState=assistantSessionDefaults(assistantLastLocalSessionState);
+    assistantSessionState.type='local';
+    if(!assistantSessionState.id||String(assistantSessionState.id).startsWith('provider-'))assistantSessionState.id=assistantSessionNewId();
+    syncAssistantSessionState();
+  }else{
+    syncAssistantProviderSessionState(pid,{running:!!(providerUiState[pid]&&providerUiState[pid].running)});
+    assistantProviderPersistSession(pid);
+  }
   call('switch_provider',pid).then(r=>{
     if(r&&r.persist_error)showToast('Chat provider updated only for current session: '+r.persist_error,'warning',3600);
     if(pid==='chat'){setStatus(t('tab_chat'));return}
@@ -19385,13 +19557,20 @@ async function providerSend(pid){
   if(!text&&sendContext.refs.length)text='Review the attached context.';
   if(!text)return;
   inp.value='';
+  const sendState=providerUiState[pid]||(providerUiState[pid]={});
+  sendState.requestCount=Math.max(0,Number(sendState.requestCount||0))+1;
+  sendState.lastPromptSample=String(text||'').slice(0,500);
+  sendState.context=assistantSessionNormalizeRefs(sendContext.refs||[]);
+  sendState.draft='';
+  syncAssistantProviderSessionState(pid,{requestCount:sendState.requestCount,lastPromptSample:sendState.lastPromptSample,context:sendState.context});
   const userBody=createProviderMessage(pid,'user','',text);
   renderChatReferences(userBody,sendContext.refs);
   setProviderRunning(pid,true,t('provider_status_thinking'),'running');
+  assistantProviderPersistSession(pid,{status:'inProgress'});
   const nativeRequest=chatNativeRequestPayload(text,sendContext.refs,'',pid);
   const sendText=chatPromptWithReferences(text,sendContext.refs);
   let r;try{r=await call('provider_send',pid,sendText,nativeRequest)}catch(e){r={error:String(e)}}
-  if(r&&r.error){appendProviderError(pid,r.error);setProviderRunning(pid,false,r.available===false?t('provider_status_unavailable'):t('provider_status_error'),'error');setStatus(providerDisplayName(pid)+': '+(r.available===false?t('provider_status_unavailable'):t('provider_status_error')))}
+  if(r&&r.error){appendProviderError(pid,r.error);setProviderRunning(pid,false,r.available===false?t('provider_status_unavailable'):t('provider_status_error'),'error');assistantProviderPersistSession(pid,{status:'error'});setStatus(providerDisplayName(pid)+': '+(r.available===false?t('provider_status_unavailable'):t('provider_status_error')))}
 }
 async function providerCancel(pid){
   updateProviderStatus(pid,t('provider_status_stopping'),'running');
@@ -19400,10 +19579,11 @@ async function providerCancel(pid){
   setProviderRunning(pid,false,t('provider_status_ready'),'')
 }
 async function providerNewChat(pid){
+  assistantProviderPersistSession(pid,{status:'completed'});
   const r=await call('provider_new_chat',pid);const p=providerDefs[pid];
   if(!callSucceeded(r)){appendProviderError(pid,callFailedMessage(r,'New chat failed'));updateProviderStatus(pid,t('provider_status_error'),'error');return}
   if(r&&r.available===false&&p){p.available=false;p.unavailable_reason=r.unavailable_reason||p.unavailable_reason}
-  providerToolNames[String(pid)]=Object.create(null);const mc=providerRefs(pid).messages;if(mc)mc.innerHTML='';updateProviderContext(pid,0);const unavailable=p&&p.available===false;setProviderRunning(pid,false,unavailable?t('provider_status_unavailable'):t('provider_status_ready'),unavailable?'error':'');updateProviderEmpty(pid);setStatus(providerDisplayName(pid)+': '+(unavailable?t('provider_status_unavailable'):t('provider_status_new_chat')))
+  providerToolNames[String(pid)]=Object.create(null);const state=providerUiState[pid]||(providerUiState[pid]={});state.sessionId='provider-'+providerDomKey(pid)+'-'+assistantSessionNewId();state.createdAt=Date.now();state.updatedAt=state.createdAt;state.requestCount=0;state.lastPromptSample='';state.context=[];state.draft='';const mc=providerRefs(pid).messages;if(mc)mc.innerHTML='';updateProviderContext(pid,0);const unavailable=p&&p.available===false;setProviderRunning(pid,false,unavailable?t('provider_status_unavailable'):t('provider_status_ready'),unavailable?'error':'');updateProviderEmpty(pid);syncAssistantProviderSessionState(pid,{requestCount:0,lastPromptSample:'',context:[],running:false,kind:unavailable?'error':''});setStatus(providerDisplayName(pid)+': '+(unavailable?t('provider_status_unavailable'):t('provider_status_new_chat')))
 }
 window.providerSend=providerSend;window.providerCancel=providerCancel;window.providerNewChat=providerNewChat;
 
@@ -19639,6 +19819,7 @@ window._onEditorEvent=function(event,data){
         if(data.error&&!content){const e=document.createElement('div');e.className='error-text';e.textContent='⚠ '+data.error;s.appendChild(e)}
       }
       updateProviderContext(pid,data.usage);setProviderRunning(pid,false,data.error?t('provider_status_error'):t('provider_status_ready'),data.error?'error':'');
+      assistantProviderPersistSession(pid,{status:data.error?'error':'completed'});
       mc.scrollTop=mc.scrollHeight;
     }else if(event==='provider_tool_start'){
       setProviderRunning(pid,true,providerStatusLabel('provider_status_tool_running',data.name||'tool'),'running');renderProviderToolStart(pid,data);
@@ -19652,8 +19833,10 @@ window._onEditorEvent=function(event,data){
       onTokenWarning(data);
     }else if(event==='provider_error'){
       appendProviderError(pid,data.error||t('provider_status_error'));setProviderRunning(pid,false,t('provider_status_error'),'error');
+      assistantProviderPersistSession(pid,{status:'error'});
     }else if(event==='provider_idle'){
       setProviderRunning(pid,false,t('provider_status_ready'),'');updateProviderEmpty(pid);
+      assistantProviderPersistSession(pid,{status:'completed'});
     }
     return;
   }

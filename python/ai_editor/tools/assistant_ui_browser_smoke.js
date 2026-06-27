@@ -97,6 +97,7 @@ async function main() {
   const required = [
     "composer-layout-present",
     "model-popup-configured-models-ready",
+    "provider-session-state-smoke",
     "workflow-popup-modes-ready",
     "workflow-result-state-rendered",
     "workflow-run-button-active-state",

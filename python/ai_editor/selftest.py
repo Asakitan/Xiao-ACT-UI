@@ -4086,6 +4086,35 @@ def test_phase1_ai_editor_regressions() -> None:
            and "else if(cmd==='/fork')assistantSessionForkCurrent();"
            and "visibleSessions=localSessions.filter(s=>historyMatchesQuery([s.title,s.sessionResource,s.id,s.provider,s.model,s.mode,s.agentId,s.workflowId,s.workflowLabel,s.approval,s.parentSessionResource],query));"
            in html)
+    _check("frontend Assistant provider surfaces persist Copilot-style sessions",
+           "function assistantProviderSessionId(pid)" in html
+           and "function assistantProviderSessionResource(pid)" in html
+           and "function assistantProviderMessageSnapshot(pid)" in html
+           and "function assistantProviderSessionItem(pid,extra)" in html
+           and "function assistantProviderPersistSession(pid,extra)" in html
+           and "function syncAssistantProviderSessionState(pid,patch)" in html
+           and "refs.panel.dataset.providerSessionResource=assistantProviderSessionResource(key);" in html
+           and "refs.panel.dataset.providerRequestCount=String(Math.max(0,Number(state.requestCount||0)));" in html
+           and "assistantSessionState.type='provider';" in html
+           and "assistantSessionState.provider=key;" in html
+           and "let assistantLastLocalSessionState=assistantSessionState.type==='local'?assistantSessionDefaults(assistantSessionState):null;" in html
+           and "assistantLastLocalSessionState=assistantSessionDefaults(assistantSessionState);" in html
+           and "if(assistantSessionState.type==='provider'&&assistantLastLocalSessionState)assistantSessionState=assistantSessionDefaults(assistantLastLocalSessionState);" in html
+           and "assistantSessionPersistCurrent({status:streaming?'inProgress':'completed'});" in html
+           and "else if(activeProviderId)assistantProviderPersistSession(activeProviderId,{status:'completed'});" in html
+           and "assistantProviderPersistSession(pid,{status:'inProgress'});" in html
+           and "assistantProviderPersistSession(pid,{status:'error'});" in html
+           and "assistantProviderPersistSession(pid,{status:'completed'});" in html
+           and "sendState.requestCount=Math.max(0,Number(sendState.requestCount||0))+1;" in html
+           and "state.sessionId='provider-'+providerDomKey(pid)+'-'+assistantSessionNewId();" in html)
+    _check("frontend Assistant provider session DOM selfcheck exists",
+           "function assistantProviderSessionSmokeSnapshot()" in html
+           and "const providerSession=assistantProviderSessionSmokeSnapshot();" in html
+           and "assistantUiSelfCheckRecord(checks,'provider-session-state-smoke'" in html
+           and "providerSession.runningType==='provider'" in html
+           and "providerSession.savedProvider==='assistant-selfcheck-provider'" in html
+           and "providerSession.savedMessageCount===2" in html
+           and "providerSession.panelResource===providerSession.resource" in html)
     _check("frontend Assistant supports Copilot-style attached context and references",
            'id="chat-context-area" aria-label="Attached context"' in html
            and "chat-context-pill" in html
@@ -4903,6 +4932,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'workflow-result-state-rendered'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-run-button-active-state'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-backend-execution-rendered'" in html
+           and "assistantUiSelfCheckRecord(checks,'provider-session-state-smoke'" in html
            and "function assistantWorkflowModeSmokeSnapshot()" in html
            and ".workflow-run-card" in html
            and ".workflow-run-step-agent" in html
@@ -4933,6 +4963,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "window.runAssistantUiSelfCheck({ cleanup: true })" in smoke_source
            and "custom-endpoint-model" in smoke_source
            and "model-popup-configured-models-ready" in smoke_source
+           and "provider-session-state-smoke" in smoke_source
            and "workflow-result-state-rendered" in smoke_source
            and "workflow-run-button-active-state" in smoke_source
            and "PASS assistant-ui-browser-smoke" in smoke_source
