@@ -2560,6 +2560,34 @@ def test_app_settings_parity() -> None:
         "runTerminal", json.dumps({"command": "echo ok"})))
     _check("direct mutating tool requires confirmation",
            direct_result.get("requires_confirmation") is True)
+    with tempfile.TemporaryDirectory() as term_tmp:
+        os.makedirs(os.path.join(term_tmp, ".git"), exist_ok=True)
+        term_api = AIEditorAPI(_SettingsGui({
+            "ai_editor": {
+                "mode": "agent",
+                "workspace": {"root": term_tmp, "auto_detect": True},
+                "terminal": {"timeout": 10, "output_limit": 2000},
+            }
+        }))
+        term_result = json.loads(term_api.execute_tool(
+            "runTerminal",
+            json.dumps({
+                "command": f'"{sys.executable}" -c "import os;print(os.getcwd())"'
+            }),
+            confirmed=True,
+        ))
+        _check("runTerminal defaults cwd to active workspace and reports metadata",
+               term_result.get("exitCode") == 0
+               and os.path.normcase(term_result.get("stdout", "").strip())
+               == os.path.normcase(os.path.abspath(term_tmp))
+               and os.path.normcase(term_result.get("cwd", ""))
+               == os.path.normcase(os.path.abspath(term_tmp))
+               and isinstance(term_result.get("durationMs"), int)
+               and term_result.get("terminal", {}).get("cwd")
+               == term_result.get("cwd")
+               and term_result.get("stdoutTruncated") is False
+               and term_result.get("stderrTruncated") is False,
+               json.dumps(term_result, ensure_ascii=False))
 
     from ai_editor.mcp_client import load_mcp_configs
     mcp_payload = {"ai_editor": {"mcp": {"autostart": False, "servers": [
@@ -2990,6 +3018,23 @@ def test_app_settings_parity() -> None:
         with open(os.path.join(tmpdir, "long-badge.txt"), "w",
                   encoding="utf-8") as fh:
             fh.write("long\n")
+        workspace_api = AIEditorAPI(_SettingsGui({
+            "ai_editor": {
+                "workspace": {
+                    "root": tmpdir,
+                    "auto_detect": True,
+                    "roots": [os.path.join(tmpdir, "missing")],
+                }
+            }
+        }))
+        workspace_info = workspace_api._workspace_info()
+        workspace_config = workspace_api.load_config().get("workspace", {})
+        _check("workspace root resolves configured workspace and surfaces metadata",
+               os.path.normcase(workspace_info.get("root", ""))
+               == os.path.normcase(os.path.abspath(tmpdir))
+               and workspace_info.get("source") == "configured"
+               and workspace_config.get("root") == workspace_info.get("root")
+               and workspace_config.get("root_name") == workspace_info.get("root_name"))
         tree_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
         tree_api._workspace_root = lambda: tmpdir
         from ai_editor.extension_host import ExtensionHost, EventEmitter
@@ -3718,6 +3763,9 @@ def test_phase1_ai_editor_regressions() -> None:
     with open(os.path.join(os.path.dirname(__file__), "app.py"), "r",
               encoding="utf-8") as fh:
         app_source = fh.read()
+    with open(os.path.join(os.path.dirname(__file__), "engine_tools.py"), "r",
+              encoding="utf-8") as fh:
+        engine_tools_source = fh.read()
     _check("right-sidebar tabs use exact built-in labels",
            "tab_chat:'Assistant'" in html
            and "provider_copilot_label:'Copilot'" in html
@@ -11646,8 +11694,24 @@ console.log("command palette quick access helpers ok");
            and "function _terminalNormalizeResult(raw)" in html
            and "function _terminalStateForResult(result)" in html
            and "function _updateTerminalRecordForRun(cmd,state,result,durationMs)" in html
+           and "function currentWorkspaceRoot()" in html
+           and "payload.cwd=cwd" in html
+           and "stdoutTruncated" in html
            and "async function terminalUiSelfCheckSnapshot()" in html
            and "window.terminalUiSelfCheckSnapshot=terminalUiSelfCheckSnapshot" in html)
+    _check("workspace auto root settings drive Explorer and Terminal cwd",
+           "\"workspace\": {" in app_source
+           and "def _workspace_info(self) -> Dict[str, Any]:" in app_source
+           and "def _workspace_candidates(self) -> List[Tuple[str, str]]:" in app_source
+           and "\"workspace\": self._workspace_info()" in app_source
+           and "s-workspace-root" in html
+           and "s-workspace-auto" in html
+           and "s-workspace-remember" in html
+           and "currentWorkspaceRoot()" in html
+           and "def _default_terminal_cwd(api_ref: Any = None) -> str:" in engine_tools_source
+           and "\"durationMs\": duration_ms" in engine_tools_source
+           and "\"stdoutTruncated\"" in engine_tools_source
+           and "\"stderrTruncated\"" in engine_tools_source)
     _check("extension notebook serializers bridge through Node host",
            "class NotebookCellData" in node_ext_host_source
            and "class NotebookCellOutputItem" in node_ext_host_source

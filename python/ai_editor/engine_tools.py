@@ -141,7 +141,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any, api_ref: Any = N
             },
             "required": ["command"],
         },
-        handler=lambda command, cwd="": _run_terminal(command, cwd, gui_ref),
+        handler=lambda command, cwd="": _run_terminal(command, cwd, gui_ref, api_ref),
         category="terminal",
         requires_confirm=True,
         tags={"destructive": True},
@@ -625,13 +625,15 @@ def _build_explicit_shell_command(shell_path: str, shell_args: List[str], comman
 
 
 def _terminal_metadata(terminal: Dict[str, Any], timeout: int, output_limit: int,
-                       explicit_shell: bool) -> Dict[str, Any]:
+                       explicit_shell: bool, cwd: str = "") -> Dict[str, Any]:
     metadata = {
         "configured": bool(terminal),
         "timeout": timeout,
         "outputLimit": output_limit,
         "explicitShell": explicit_shell,
     }
+    if cwd:
+        metadata["cwd"] = cwd
     profile = terminal.get("profile")
     if profile:
         metadata["profile"] = str(profile)
@@ -644,7 +646,20 @@ def _terminal_metadata(terminal: Dict[str, Any], timeout: int, output_limit: int
     return metadata
 
 
-def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None) -> Dict[str, Any]:
+def _default_terminal_cwd(api_ref: Any = None) -> str:
+    fn = getattr(api_ref, "_workspace_root", None)
+    if callable(fn):
+        try:
+            root = fn()
+            if isinstance(root, str) and os.path.isdir(root):
+                return os.path.abspath(root)
+        except Exception:
+            pass
+    return ""
+
+
+def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
+                  api_ref: Any = None) -> Dict[str, Any]:
     try:
         terminal = _get_terminal_settings(gui_ref)
         timeout = _terminal_int(terminal.get("timeout"), _DEFAULT_TERMINAL_TIMEOUT)
@@ -652,6 +667,7 @@ def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None) -> Dict[str,
         shell_path = _terminal_shell_path(terminal.get("shell_path"))
         shell_args = _terminal_args(terminal.get("shell_args"))
         explicit_shell = bool(shell_path)
+        effective_cwd = os.path.abspath(cwd) if cwd else _default_terminal_cwd(api_ref)
 
         kwargs: Dict[str, Any] = {
             "shell": not explicit_shell,
@@ -659,27 +675,43 @@ def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None) -> Dict[str,
             "text": True,
             "timeout": timeout,
         }
-        if cwd:
-            kwargs["cwd"] = os.path.abspath(cwd)
+        if effective_cwd:
+            kwargs["cwd"] = effective_cwd
         run_command: Any = command
         if explicit_shell:
             run_command = _build_explicit_shell_command(shell_path, shell_args, command)
+        started = time.monotonic()
         result = subprocess.run(run_command, **kwargs)
+        duration_ms = int((time.monotonic() - started) * 1000)
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+        stderr_limit = output_limit if terminal else _DEFAULT_STDERR_LIMIT
         return {
+            "command": command,
+            "cwd": effective_cwd,
             "exitCode": result.returncode,
-            "stdout": result.stdout[:output_limit] if result.stdout else "",
-            "stderr": result.stderr[:output_limit if terminal else _DEFAULT_STDERR_LIMIT] if result.stderr else "",
-            "terminal": _terminal_metadata(terminal, timeout, output_limit, explicit_shell),
+            "durationMs": duration_ms,
+            "stdout": stdout[:output_limit],
+            "stderr": stderr[:stderr_limit],
+            "stdoutTruncated": len(stdout) > output_limit,
+            "stderrTruncated": len(stderr) > stderr_limit,
+            "terminal": _terminal_metadata(
+                terminal, timeout, output_limit, explicit_shell, effective_cwd),
         }
     except subprocess.TimeoutExpired:
         terminal = _get_terminal_settings(gui_ref)
         timeout = _terminal_int(terminal.get("timeout"), _DEFAULT_TERMINAL_TIMEOUT)
         output_limit = _terminal_int(terminal.get("output_limit"), _DEFAULT_STDOUT_LIMIT)
+        effective_cwd = os.path.abspath(cwd) if cwd else _default_terminal_cwd(api_ref)
         return {
+            "command": command,
+            "cwd": effective_cwd,
             "error": f"Command timed out ({timeout}s)",
             "exitCode": -1,
+            "durationMs": timeout * 1000,
             "terminal": _terminal_metadata(terminal, timeout, output_limit,
-                                           bool(_terminal_shell_path(terminal.get("shell_path")))),
+                                           bool(_terminal_shell_path(terminal.get("shell_path"))),
+                                           effective_cwd),
         }
     except Exception as exc:
         return {"error": str(exc)}

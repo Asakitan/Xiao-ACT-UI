@@ -463,6 +463,13 @@ _AI_EDITOR_SECTION_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "output_limit": 8000,
         "auto_approve": {},
     },
+    "workspace": {
+        "root": "",
+        "roots": [],
+        "auto_detect": True,
+        "remember_last": True,
+        "last_root": "",
+    },
     "extensions": {
         "confirm_install": True,
         "allowed_publishers": [],
@@ -585,6 +592,23 @@ def _normalize_cli_provider_section(section: str,
     if section == "codex":
         cfg["transport"] = _normalize_transport(
             cfg.get("transport"), "chat_completions", _CODEX_TRANSPORT_VALUES)
+    return cfg
+
+
+def _normalize_workspace_section(value: Dict[str, Any]) -> Dict[str, Any]:
+    cfg = dict(value)
+    cfg["root"] = str(cfg.get("root") or "").strip()
+    cfg["last_root"] = str(cfg.get("last_root") or "").strip()
+    roots = cfg.get("roots")
+    if isinstance(roots, str):
+        cfg["roots"] = [
+            item.strip() for item in re.split(r"[\r\n]+", roots) if item.strip()]
+    elif isinstance(roots, (list, tuple)):
+        cfg["roots"] = [str(item).strip() for item in roots if str(item).strip()]
+    else:
+        cfg["roots"] = []
+    cfg["auto_detect"] = _as_bool(cfg.get("auto_detect"), True)
+    cfg["remember_last"] = _as_bool(cfg.get("remember_last"), True)
     return cfg
 
 
@@ -753,6 +777,8 @@ def _normalize_ai_editor_config(raw: Any) -> Dict[str, Any]:
             merged.update(current)
             if section in {"claude_code", "codex"}:
                 merged = _normalize_cli_provider_section(section, merged)
+            if section == "workspace":
+                merged = _normalize_workspace_section(merged)
             cfg[section] = merged
     return cfg
 
@@ -1396,7 +1422,10 @@ class _AIEditorUIBridge:
 
     def run_terminal_command(self, name: str, text: str) -> Optional[str]:
         result = self._api.execute_tool(
-            "runTerminal", json.dumps({"command": text}), True)
+            "runTerminal", json.dumps({
+                "command": text,
+                "cwd": self._api._workspace_root(),
+            }), True)
         return result
 
     def insert_terminal_text(
@@ -2438,6 +2467,7 @@ class AIEditorAPI:
             "_provider_keys": pkeys,
             "provider_keys": pkeys,
             "custom_models": ai_cfg.get("custom_models", {}),
+            "workspace": self._workspace_info(),
             "mode": ai_cfg.get("mode", self._mode),
             "approval": ai_cfg.get("approval", "default"),
             "active_chat_provider": ai_cfg.get(
@@ -2446,6 +2476,10 @@ class AIEditorAPI:
             "context_window": ctx,
         }
         for section in _AI_EDITOR_SECTION_DEFAULTS:
+            if section == "workspace":
+                if isinstance(ai_cfg, dict) and isinstance(ai_cfg.get(section), dict):
+                    result[section] = {**ai_cfg[section], **self._workspace_info()}
+                continue
             if isinstance(ai_cfg, dict) and section in ai_cfg:
                 result[section] = ai_cfg[section]
         if isinstance(ai_cfg, dict):
@@ -3487,6 +3521,91 @@ class AIEditorAPI:
             return {"error": str(exc)}
 
     def _workspace_root(self) -> str:
+        root = self._resolve_workspace_root()
+        return root or self._repo_fallback_workspace_root()
+
+    def _workspace_info(self) -> Dict[str, Any]:
+        root = self._workspace_root()
+        return {
+            "root": root,
+            "root_name": os.path.basename(root.rstrip("\\/")) or root,
+            "source": getattr(self, "_workspace_root_source", "") or "fallback",
+            "auto_detected": getattr(
+                self, "_workspace_root_source", "") not in {"configured", "last_root"},
+        }
+
+    def _workspace_config(self) -> Dict[str, Any]:
+        try:
+            ai_cfg = _normalize_ai_editor_config(
+                self._settings_getter("ai_editor", {}) or {})
+        except Exception:
+            ai_cfg = {}
+        return _as_dict(ai_cfg.get("workspace"))
+
+    @staticmethod
+    def _usable_workspace_root(path: Any) -> str:
+        if not isinstance(path, str) or not path.strip():
+            return ""
+        expanded = os.path.abspath(os.path.expandvars(
+            os.path.expanduser(path.strip().strip('"').strip("'"))))
+        return expanded if os.path.isdir(expanded) else ""
+
+    @staticmethod
+    def _git_root_from(path: str) -> str:
+        current = os.path.abspath(path if os.path.isdir(path) else os.path.dirname(path))
+        while current:
+            if os.path.isdir(os.path.join(current, ".git")):
+                return current
+            parent = os.path.dirname(current)
+            if not parent or parent == current:
+                break
+            current = parent
+        return ""
+
+    def _workspace_candidates(self) -> List[Tuple[str, str]]:
+        cfg = self._workspace_config()
+        candidates: List[Tuple[str, str]] = []
+        for key, source in (("root", "configured"), ("last_root", "last_root")):
+            root = self._usable_workspace_root(cfg.get(key))
+            if root:
+                candidates.append((root, source))
+        roots = cfg.get("roots")
+        if isinstance(roots, (list, tuple)):
+            for item in roots:
+                root = self._usable_workspace_root(item)
+                if root:
+                    candidates.append((root, "configured"))
+        auto_detect = _as_bool(cfg.get("auto_detect"), True)
+        if auto_detect:
+            for attr in ("_last_opened_path", "editorFileName", "current_file"):
+                root = self._usable_workspace_root(str(getattr(self, attr, "") or ""))
+                if root:
+                    candidates.append((root, "active_file"))
+                git_root = self._git_root_from(str(getattr(self, attr, "") or ""))
+                if git_root:
+                    candidates.append((git_root, "active_file_git"))
+            for path, source in (
+                    (os.getcwd(), "process_cwd"),
+                    (self._repo_fallback_workspace_root(), "repo_git")):
+                root = self._git_root_from(path) or self._usable_workspace_root(path)
+                if root:
+                    candidates.append((root, source))
+        return candidates
+
+    def _resolve_workspace_root(self) -> str:
+        seen: Set[str] = set()
+        for root, source in self._workspace_candidates():
+            norm = os.path.normcase(os.path.realpath(root))
+            if norm in seen:
+                continue
+            seen.add(norm)
+            if os.path.isdir(root):
+                self._workspace_root_source = source
+                return root
+        return ""
+
+    @staticmethod
+    def _repo_fallback_workspace_root() -> str:
         try:
             from ai_editor.scopes import _base_dir
             base = os.path.abspath(_base_dir())
@@ -5059,6 +5178,7 @@ class AIEditorAPI:
         return {
             "root": root,
             "root_name": os.path.basename(root.rstrip("\\/")) or root,
+            "workspace": self._workspace_info(),
             "path": self._workspace_rel_path(root, current),
             "entries": entries,
         }

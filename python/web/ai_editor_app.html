@@ -2865,6 +2865,17 @@ pre.code-block { overflow:visible; }
     </div>
 
     <div class="settings-section">
+      <div class="sb-group" style="padding:0;margin-top:0">Workspace</div>
+      <div class="settings-grid">
+        <div class="full"><label>Workspace Root</label><input id="s-workspace-root" placeholder="Auto-detect when empty"></div>
+        <div class="full"><label>Additional Roots (one per line)</label><textarea id="s-workspace-roots" rows="2" placeholder="Optional fallback workspace roots"></textarea></div>
+      </div>
+      <label class="settings-check"><input id="s-workspace-auto" type="checkbox"><span><b>Auto-detect workspace</b><small>Use configured root first, then active file, process directory, and repository root.</small></span></label>
+      <label class="settings-check"><input id="s-workspace-remember" type="checkbox"><span><b>Remember last workspace</b><small>Keep the last resolved root available for Explorer and Terminal cwd.</small></span></label>
+      <div class="settings-help" id="s-workspace-current">Workspace not loaded.</div>
+    </div>
+
+    <div class="settings-section">
       <div class="sb-group" style="padding:0;margin-top:0">Extension Trust</div>
       <label class="settings-check"><input id="s-ext-confirm" type="checkbox"><span><b>Confirm extension installs</b><small>Recommended. Keep install/uninstall actions user-confirmed.</small></span></label>
       <label class="settings-check"><input id="s-ext-diagnostics" type="checkbox"><span><b>Extension host diagnostics</b><small>Off by default. Enable only while tracing Node-backed extension activation, webviews, or custom editors.</small></span></label>
@@ -3005,6 +3016,7 @@ const SETTINGS_SECTION_DEFAULTS={
   codex:{cli_path:'',cli_args:[],transport:'chat_completions',model:'codex-mini-latest'},
   mcp:{access:'prompt',autostart:false,discovery_enabled:true,collision_behavior:'first',server_sampling:false},
   terminal:{profile:'PowerShell 7 (No Profile)',shell_path:'',shell_args:[],timeout:30,output_limit:8000,auto_approve:{}},
+  workspace:{root:'',roots:[],auto_detect:true,remember_last:true,last_root:''},
   extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands','views','customEditors','notebooks','terminal','statusBarItems'],enabled_contributions_explicit:false,diagnostics_enabled:false},
   editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,formatOnPaste:false,linkedEditing:false,codeActionsOnSave:{},codeActions:{triggerOnFocusChange:false},pasteAs:{preferences:[]},tabSize:4,insertSpaces:true,wordSeparators:'`~!@#$%^&*()-=+[{]}\\|;:\'",.<>/?',quickSuggestions:{other:'offWhenInlineCompletions',comments:'off',strings:'off'},quickSuggestionsDelay:10,suggestOnTriggerCharacters:true,acceptSuggestionOnEnter:'on',acceptSuggestionOnCommitCharacter:true,hover:{enabled:'on',delay:300,hidingDelay:300,sticky:true,above:true},minimap:{enabled:true,size:'proportional',side:'right',showSlider:'mouseover',renderCharacters:true,maxColumn:120,scale:1},folding:true,foldingStrategy:'auto',showFoldingControls:'mouseover',foldingHighlight:true,unfoldOnClickAfterEndOfLine:false,stickyScroll:{enabled:true,maxLineCount:5,defaultModel:'outlineModel',scrollWithEditor:true},renderWhitespace:'selection',renderControlCharacters:true,renderLineHighlight:'line',rulers:[],bracketPairColorization:{enabled:true,independentColorPoolPerBracketType:false},guides:{bracketPairs:false,bracketPairsHorizontal:'active',highlightActiveBracketPair:true,indentation:true,highlightActiveIndentation:true}},
   files:{autoSave:'off',autoSaveDelay:1000,trimTrailingWhitespace:false,insertFinalNewline:false,trimFinalNewlines:false},
@@ -3058,6 +3070,10 @@ function withSettingsDefaults(raw){
   return merged;
 }
 let config=withSettingsDefaults({});
+function currentWorkspaceRoot(){
+  const ws=isPlainObject(config.workspace)?config.workspace:{};
+  return String(ws.root||ws.last_root||'').trim();
+}
 const quickInputViews=Object.create(null);
 let activeQuickInputId='';
 let quickInputPreviousFocus=null;
@@ -22252,6 +22268,13 @@ function openSettings(){
   const term=settingSection('terminal');
   setInputValue('s-term-profile',term.profile);setInputValue('s-term-shell',term.shell_path);setInputValue('s-term-args',listToText(term.shell_args));
   setInputValue('s-term-timeout',term.timeout??30);setInputValue('s-term-output',term.output_limit??8000);
+  const workspace=settingSection('workspace');
+  setInputValue('s-workspace-root',workspace.root||'');
+  setInputValue('s-workspace-roots',listToText(workspace.roots));
+  setCheckedValue('s-workspace-auto',workspace.auto_detect!==false);
+  setCheckedValue('s-workspace-remember',workspace.remember_last!==false);
+  const wsCurrent=$('s-workspace-current');
+  if(wsCurrent)wsCurrent.textContent='Current: '+(currentWorkspaceRoot()||'not resolved')+(workspace.source?' ('+workspace.source+')':'');
   const ext=settingSection('extensions');
   setCheckedValue('s-ext-confirm',ext.confirm_install!==false);setCheckedValue('s-ext-diagnostics',ext.diagnostics_enabled===true);setInputValue('s-ext-allow',listToText(ext.allowed_publishers));setInputValue('s-ext-block',listToText(ext.blocked_publishers));renderExtensionContributionOptions(ext.enabled_contributions,ext.enabled_contributions_explicit===true);
   renderExtensionTrustSummary(ext);
@@ -22497,6 +22520,7 @@ async function saveSettings(){
   config.codex={...settingSection('codex'),cli_path:readInputValue('s-codex-cli'),model:readInputValue('s-codex-model'),transport:readInputValue('s-codex-transport')||'chat_completions',cli_args:readListValue('s-codex-args',false)};
   config.mcp={...settingSection('mcp'),access:readInputValue('s-mcp-access')||'prompt',collision_behavior:readInputValue('s-mcp-collision')||'first',discovery_enabled:readCheckedValue('s-mcp-discovery'),autostart:readCheckedValue('s-mcp-autostart'),server_sampling:readCheckedValue('s-mcp-sampling')};
   config.terminal={...settingSection('terminal'),profile:readInputValue('s-term-profile')||'PowerShell 7 (No Profile)',shell_path:readInputValue('s-term-shell'),shell_args:readListValue('s-term-args',false),timeout:readNumberValue('s-term-timeout',30,true),output_limit:readNumberValue('s-term-output',8000,true)};
+  config.workspace={...settingSection('workspace'),root:readInputValue('s-workspace-root'),roots:readListValue('s-workspace-roots',false),auto_detect:readCheckedValue('s-workspace-auto'),remember_last:readCheckedValue('s-workspace-remember'),last_root:currentWorkspaceRoot()};
   config.extensions={...settingSection('extensions'),confirm_install:readCheckedValue('s-ext-confirm'),diagnostics_enabled:readCheckedValue('s-ext-diagnostics'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true),enabled_contributions:readExtensionContributionValues(),enabled_contributions_explicit:true};
   const editorSettings=settingSection('editor');
   const guidesSettings=editorGuidesOptions(editorSettings.guides);
@@ -30481,7 +30505,11 @@ function _terminalNormalizeResult(raw){
   const error=data.error!==undefined&&data.error!==null?String(data.error):'';
   const exitCode=_terminalExitCode(data);
   const durationMs=Number.isFinite(Number(data.durationMs??data.duration_ms??data.elapsed_ms))?Number(data.durationMs??data.duration_ms??data.elapsed_ms):null;
-  return {stdout,stderr,error,exitCode,durationMs,raw:data};
+  const terminal=data.terminal&&typeof data.terminal==='object'?data.terminal:{};
+  const cwd=String(data.cwd||terminal.cwd||'');
+  const stdoutTruncated=!!(data.stdoutTruncated||data.stdout_truncated);
+  const stderrTruncated=!!(data.stderrTruncated||data.stderr_truncated);
+  return {stdout,stderr,error,exitCode,durationMs,cwd,terminal,stdoutTruncated,stderrTruncated,raw:data};
 }
 function _terminalStateForResult(result){
   return result.error||result.stderr||Number(result.exitCode)!==0?'error':'done';
@@ -30505,7 +30533,8 @@ function _updateTerminalStatusLine(){
     const state=term.lastState||'idle';
     const exit=term.lastExitCode!==null&&term.lastExitCode!==undefined?('exit '+term.lastExitCode):'no exit';
     const dur=_formatTerminalDuration(term.lastDurationMs);
-    const detail=[term.name,term.lastCommand?('$ '+term.lastCommand):'',exit,dur].filter(Boolean).join('  ');
+    const cwd=term.lastCwd?('cwd '+term.lastCwd):'';
+    const detail=[term.name,term.lastCommand?('$ '+term.lastCommand):'',exit,dur,cwd].filter(Boolean).join('  ');
     _setTerminalStatus(state,state==='running'?'Running':(state==='error'?'Failed':(state==='done'?'Completed':'Ready')),detail);
     return;
   }
@@ -30513,7 +30542,8 @@ function _updateTerminalStatusLine(){
   const state=out&&out.dataset.terminalState?out.dataset.terminalState:'idle';
   const cmd=out&&out.dataset.lastCommand?('$ '+out.dataset.lastCommand):'No command has run yet';
   const exit=out&&out.dataset.lastExitCode!==undefined&&out.dataset.lastExitCode!==''?('exit '+out.dataset.lastExitCode):'';
-  _setTerminalStatus(state,state==='running'?'Running':(state==='error'?'Failed':(state==='done'?'Completed':'Ready')),[cmd,exit].filter(Boolean).join('  '));
+  const cwd=out&&out.dataset.lastCwd?('cwd '+out.dataset.lastCwd):'';
+  _setTerminalStatus(state,state==='running'?'Running':(state==='error'?'Failed':(state==='done'?'Completed':'Ready')),[cmd,exit,cwd].filter(Boolean).join('  '));
 }
 function _appendTerminalCommandBlock(out,cmd){
   const block=document.createElement('div');block.className='terminal-command-block running';
@@ -30528,8 +30558,10 @@ function _appendTerminalCommandBlock(out,cmd){
 function _updateTerminalRecordForRun(cmd,state,result,durationMs){
   const term=_getActiveTerminalRecord();
   const exitCode=result&&result.exitCode!==undefined?result.exitCode:null;
+  const cwd=result&&result.cwd?String(result.cwd):currentWorkspaceRoot();
   if(term){
     term.lastCommand=cmd;term.lastState=state;term.lastExitCode=exitCode;term.lastDurationMs=durationMs;
+    term.lastCwd=cwd||term.lastCwd||'';
     term.shellExecution={event:state==='running'?'start':'end',commandLine:cmd,exitCode:exitCode};
   }else{
     const out=$('terminal-output');
@@ -30537,6 +30569,7 @@ function _updateTerminalRecordForRun(cmd,state,result,durationMs){
       out.dataset.terminalState=state;
       out.dataset.lastCommand=cmd||'';
       out.dataset.lastExitCode=exitCode===null||exitCode===undefined?'':String(exitCode);
+      out.dataset.lastCwd=cwd||'';
     }
   }
   _renderTermTabs();
@@ -30563,17 +30596,21 @@ async function runTerminalCommand(cmd,options){
   }
   const view=_appendTerminalCommandBlock(out,cmd);
   const started=performance.now();
-  _updateTerminalRecordForRun(cmd,'running',{exitCode:null},null);
+  const cwd=String(opts.cwd||currentWorkspaceRoot()||'');
+  _updateTerminalRecordForRun(cmd,'running',{exitCode:null,cwd},null);
   try{
-    const raw=await call('execute_tool','runTerminal',JSON.stringify({command:cmd}),true);
+    const payload={command:cmd};
+    if(cwd)payload.cwd=cwd;
+    const raw=await call('execute_tool','runTerminal',JSON.stringify(payload),true);
     const result=_terminalNormalizeResult(raw);
     const elapsed=result.durationMs!==null?result.durationMs:Math.round(performance.now()-started);
     if(result.stdout)_appendTerminalHtml(view.body,ansiToHtml(result.stdout));
     if(result.stderr)_appendTerminalHtml(view.body,ansiToHtml(result.stderr));
     if(result.error)_appendTerminalHtml(view.body,ansiToHtml(result.error)+'\n');
+    if(result.stdoutTruncated||result.stderrTruncated)_appendTerminalHtml(view.body,ansiToHtml('\n[output truncated]\n'));
     const state=_terminalStateForResult(result);
     view.block.className='terminal-command-block '+state;
-    view.status.textContent='exit '+result.exitCode+'  '+_formatTerminalDuration(elapsed);
+    view.status.textContent=['exit '+result.exitCode,_formatTerminalDuration(elapsed),result.cwd?('cwd '+result.cwd):''].filter(Boolean).join('  ');
     _updateTerminalRecordForRun(cmd,state,result,elapsed);
     out.scrollTop=out.scrollHeight;
     return {...result,durationMs:elapsed,state};
@@ -30628,14 +30665,18 @@ async function terminalUiSelfCheckSnapshot(){
   const oldDefaultDataset=defaultOut?{...defaultOut.dataset}:{};
   const oldStatusClass=status?status.className:'';
   const oldStatusState=status?status.dataset.state:'';
+  const oldWorkspace=config.workspace;
   try{
     _activeTermId=null;
-    if(defaultOut){defaultOut.style.display='';defaultOut.innerHTML='';defaultOut.dataset.terminalState='idle';defaultOut.dataset.lastCommand='';defaultOut.dataset.lastExitCode=''}
+    config.workspace={root:'E:/VC/SAO-UI/sao_auto',root_name:'sao_auto',source:'selfcheck'};
+    if(defaultOut){defaultOut.style.display='';defaultOut.innerHTML='';defaultOut.dataset.terminalState='idle';defaultOut.dataset.lastCommand='';defaultOut.dataset.lastExitCode='';defaultOut.dataset.lastCwd=''}
     let n=0;
+    const payloads=[];
     call=async function(method,tool,payload){
       n++;
-      if(n===1)return JSON.stringify({stdout:'ok\n',stderr:'',exitCode:0,durationMs:12});
-      return JSON.stringify({stdout:'',stderr:'bad\n',exitCode:7,durationMs:9});
+      try{payloads.push(JSON.parse(payload||'{}'))}catch(e){payloads.push({})}
+      if(n===1)return JSON.stringify({stdout:'ok\n',stderr:'',exitCode:0,durationMs:12,cwd:'E:/VC/SAO-UI/sao_auto'});
+      return JSON.stringify({stdout:'',stderr:'bad\n',exitCode:7,durationMs:9,cwd:'E:/VC/SAO-UI/sao_auto',stderrTruncated:true});
     };
     const ok=await runTerminalCommand('echo terminal-ok',{skipConfirm:true,out:defaultOut});
     const bad=await runTerminalCommand('bad-command',{skipConfirm:true,out:defaultOut});
@@ -30646,14 +30687,18 @@ async function terminalUiSelfCheckSnapshot(){
       blockCount:blocks.length,
       hasDone:blocks.some(b=>b.classList.contains('done')),
       hasError:blocks.some(b=>b.classList.contains('error')),
+      hasTruncatedNote:defaultOut?defaultOut.textContent.includes('[output truncated]'):false,
       statusState:status?status.dataset.state:'',
       statusText:status?status.textContent.trim():'',
-      lastCommand:defaultOut?defaultOut.dataset.lastCommand:''
+      lastCommand:defaultOut?defaultOut.dataset.lastCommand:'',
+      lastCwd:defaultOut?defaultOut.dataset.lastCwd:'',
+      payloadCwd:payloads[0]&&payloads[0].cwd
     };
-    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.blockCount>=2&&snapshot.hasDone&&snapshot.hasError&&snapshot.statusState==='error'&&snapshot.lastCommand==='bad-command';
+    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.blockCount>=2&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasTruncatedNote&&snapshot.statusState==='error'&&snapshot.lastCommand==='bad-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto';
     return snapshot;
   }finally{
     call=oldCall;
+    config.workspace=oldWorkspace;
     _activeTermId=oldActive;
     if(defaultOut){
       defaultOut.innerHTML=oldDefaultHtml;
