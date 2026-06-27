@@ -18891,6 +18891,8 @@ window.openChatHistory=openChatHistory;
 let explorerRoot='';
 let explorerRootName='workspace';
 let explorerSelectedPath='';
+let explorerTreeRequestSeq=0;
+let explorerTreeInflight=Object.create(null);
 
 function pathBaseName(path){
   const parts=String(path||'').split(/[\\/]/).filter(Boolean);
@@ -18901,6 +18903,16 @@ function workspaceSettings(){
 }
 function normalizeWorkspaceRootPath(path){
   return String(path||'').trim().replace(/[\\/]+$/,'');
+}
+function explorerTreeRequestKey(relPath){
+  return normalizeExplorerPath(relPath||'');
+}
+function loadWorkspaceTree(relPath){
+  const key=explorerTreeRequestKey(relPath);
+  if(explorerTreeInflight[key])return explorerTreeInflight[key];
+  explorerTreeInflight[key]=call('list_workspace_tree',relPath||'')
+    .finally(()=>{delete explorerTreeInflight[key]});
+  return explorerTreeInflight[key];
 }
 function workspaceSourceLabel(source){
   const raw=String(source||'').replace(/_/g,' ').trim();
@@ -19158,9 +19170,11 @@ function explorerFolderIcon(name,expanded,isRoot){
 async function refreshExplorer(relPath=''){
   const tree=$('explorer-tree');
   if(!tree)return;
+  const seq=++explorerTreeRequestSeq;
   delete tree.dataset.loaded;
   tree.innerHTML='<div class="tree-note">'+esc(t('loading'))+'</div>';
-  const res=await call('list_workspace_tree',relPath||'');
+  const res=await loadWorkspaceTree(relPath||'');
+  if(seq!==explorerTreeRequestSeq)return;
   if(!res||res.error){
     tree.innerHTML='<div class="tree-note">'+esc(t('workspace_load_failed'))+(res&&res.error?': '+esc(res.error):'')+'</div>';
     return;
@@ -19240,7 +19254,16 @@ function applyExplorerDecoration(row,label,entry){
 let explorerDecorationRefreshTimer=0;
 let explorerDecorationRefreshAll=false;
 let explorerDecorationRefreshPaths=[];
+let explorerDecorationInflight=Object.create(null);
 function normalizeExplorerPath(value){return String(value||'').replace(/\\/g,'/').replace(/^\/+/,'').replace(/\/+$/,'')}
+function loadWorkspaceDecoration(path){
+  const key=normalizeExplorerPath(path);
+  if(!key)return Promise.resolve(null);
+  if(explorerDecorationInflight[key])return explorerDecorationInflight[key];
+  explorerDecorationInflight[key]=call('workspace_file_decorations',key)
+    .finally(()=>{delete explorerDecorationInflight[key]});
+  return explorerDecorationInflight[key];
+}
 function explorerDecorationPathMatches(rowPath,changedPath){
   const row=normalizeExplorerPath(rowPath),changed=normalizeExplorerPath(changedPath);
   if(!changed)return false;
@@ -19254,20 +19277,26 @@ async function refreshVisibleExplorerDecorations(paths){
   if(!tree||!tree.dataset.loaded)return;
   const targets=Array.isArray(paths)?paths.map(normalizeExplorerPath).filter(Boolean):[];
   const refreshAll=!targets.length;
-  const rows=[...tree.querySelectorAll('.tree-row[data-workspace-path]')]
+  const rowByPath=new Map();
+  [...tree.querySelectorAll('.tree-row[data-workspace-path]')]
     .filter(row=>row.dataset.workspacePath)
-    .filter(row=>refreshAll||targets.some(path=>explorerDecorationPathMatches(row.dataset.workspacePath,path)));
-  const limit=8;
+    .filter(row=>refreshAll||targets.some(path=>explorerDecorationPathMatches(row.dataset.workspacePath,path)))
+    .forEach(row=>{
+      const key=normalizeExplorerPath(row.dataset.workspacePath);
+      if(key&&!rowByPath.has(key))rowByPath.set(key,row);
+    });
+  const rows=Array.from(rowByPath.values());
+  const limit=4;
   let index=0;
   async function worker(){
     while(index<rows.length){
       const row=rows[index++];
       if(!row||!row.isConnected)continue;
-    const label=row.querySelector('.tree-label');
-    if(!label)continue;
-    const res=await call('workspace_file_decorations',row.dataset.workspacePath||'');
-    if(!res||res.error)continue;
-    applyExplorerDecoration(row,label,res);
+      const label=row.querySelector('.tree-label');
+      if(!label)continue;
+      const res=await loadWorkspaceDecoration(row.dataset.workspacePath||'');
+      if(!row.isConnected||!res||res.error)continue;
+      applyExplorerDecoration(row,label,res);
     }
   }
   await Promise.all(Array.from({length:Math.min(limit,rows.length)},worker));
@@ -19322,7 +19351,8 @@ function createExplorerNode(entry,depth,isRoot,activePath=''){
         entry.name,node.classList.contains('open'),isRoot));
       if(opening&&!node.dataset.loaded){
         children.innerHTML='<div class="tree-note">'+esc(t('loading'))+'</div>';
-        const res=await call('list_workspace_tree',entry.path||'');
+        const res=await loadWorkspaceTree(entry.path||'');
+        if(!node.isConnected||!node.classList.contains('open'))return;
         if(!res||res.error){
           children.innerHTML='<div class="tree-note">'+esc(t('workspace_load_failed'))+(res&&res.error?': '+esc(res.error):'')+'</div>';
           return;
@@ -23157,6 +23187,7 @@ function openSettings(){
   fetchProviderModels(config.provider,config.base_url,true);
   fetchCodexModels(true);
   renderMcpServers();
+  invalidateSettingsFilterCache();
   renderExtensionSettings();
   // SETTINGS-03: wrap inputs with reset buttons and mark modified
   Object.keys(SETTING_INPUT_MAP).forEach(id=>wrapSettingsField(id));markSettingsModified();
@@ -23169,6 +23200,8 @@ function openSettings(){
 }
 function closeSettings(){$('settings-modal').classList.remove('open')}
 // SETTINGS-01: Filter settings sections by search query
+let _settingsFilterDomCache=null;
+function invalidateSettingsFilterCache(){_settingsFilterDomCache=null}
 function settingsQueryFilters(raw){
   const query=String(raw||'');
   const filters={modified:false,error:false,json:false,extensions:false};
@@ -23185,30 +23218,39 @@ function settingsQueryFilters(raw){
 }
 function settingsGroupMatchesFilter(group,query){
   if(!group)return false;
-  const text=(group.textContent||'').toLowerCase();
+  const text=group._settingsFilterText||(group._settingsFilterText=(group.textContent||'').toLowerCase());
   if(query.text&&!text.includes(query.text))return false;
   if(query.modified&&!group.querySelector('.settings-field.modified,.ext-setting-row.modified'))return false;
   if(query.error&&!group.querySelector('[aria-invalid="true"],.settings-field.invalid,.settings-input-invalid'))return false;
-  if(query.json&&!(/json/i.test(group.textContent||'')||group.querySelector('[id$="-json"],#s-xheaders,#s-xbody')))return false;
-  if(query.extensions&&!(group.id==='ext-settings-container'||/extension|publisher|contribution|marketplace/i.test(group.textContent||'')))return false;
+  if(query.json&&!(text.includes('json')||group.querySelector('[id$="-json"],#s-xheaders,#s-xbody')))return false;
+  if(query.extensions&&!(group.id==='ext-settings-container'||/extension|publisher|contribution|marketplace/i.test(text)))return false;
   return true;
+}
+function settingsFilterDomCache(modal){
+  if(_settingsFilterDomCache&&_settingsFilterDomCache.modal===modal)return _settingsFilterDomCache;
+  const groups=Array.from(modal.querySelectorAll('.settings-section, details'));
+  groups.forEach(group=>{group._settingsFilterText=(group.textContent||'').toLowerCase()});
+  _settingsFilterDomCache={
+    modal,
+    groups,
+    topGroups:Array.from(modal.querySelectorAll(':scope > .sb-group')),
+  };
+  return _settingsFilterDomCache;
 }
 function filterSettings(){
   const q=($('settings-search')||{}).value||'';const parsed=settingsQueryFilters(q);const lq=parsed.text;
   const modal=$('settings-modal');if(!modal)return;
-  const sections=modal.querySelectorAll('.sb-group, .settings-section, details, label, .settings-grid, .settings-help');
   let visible=0;
   // Collect all filterable groups: sb-group, settings-section, details
-  const groups=modal.querySelectorAll('.settings-section, details');
-  groups.forEach(g=>{
+  const cache=settingsFilterDomCache(modal);
+  cache.groups.forEach(g=>{
     if(!parsed.active){g.style.display='';visible++;return}
     const match=settingsGroupMatchesFilter(g,parsed);
     g.style.display=match?'':'none';
     if(match)visible++;
   });
   // Also filter top-level sb-group + label pairs outside sections
-  const topGroups=modal.querySelectorAll(':scope > .sb-group');
-  topGroups.forEach(g=>{if(!parsed.active){g.style.display='';return}g.style.display=(!lq||g.textContent.toLowerCase().includes(lq))?'':'none'});
+  cache.topGroups.forEach(g=>{if(!parsed.active){g.style.display='';return}g.style.display=(!lq||(g._settingsFilterText||(g._settingsFilterText=(g.textContent||'').toLowerCase())).includes(lq))?'':'none'});
   // Hide/show extension settings divider based on matching sections
   const extContainer=$('ext-settings-container');
   if(extContainer){
@@ -25976,6 +26018,15 @@ function extensionSettingWriteFilterState(state){
 }
 let _extensionSettingFilterStateWriteTimer=0;
 let _extensionSettingPendingFilterState=null;
+let _extensionSettingFilterDomCache=null;
+function invalidateExtensionSettingFilterDomCache(){_extensionSettingFilterDomCache=null}
+function extensionSettingFilterDomCache(container){
+  if(_extensionSettingFilterDomCache&&_extensionSettingFilterDomCache.container===container)return _extensionSettingFilterDomCache;
+  const sections=Array.from((container&&container.querySelectorAll)?container.querySelectorAll('details[data-ext-settings-section]'):[])
+    .map(section=>({section,rows:Array.from(section.querySelectorAll('.ext-setting-row'))}));
+  _extensionSettingFilterDomCache={container,sections};
+  return _extensionSettingFilterDomCache;
+}
 function extensionSettingWriteFilterStateDeferred(state){
   if(typeof _extensionSettingPendingFilterState==='undefined'
       || typeof _extensionSettingFilterStateWriteTimer==='undefined'){
@@ -26192,6 +26243,16 @@ function extensionSettingRowTags(row){
   }
   return tags;
 }
+function extensionSettingRowSearchText(row){
+  const text=String(row&&row.dataset&&row.dataset.extSettingSearch||row&&row.textContent||'');
+  if(row&&row._extSettingSearchCacheText===text)return row._extSettingSearchCache;
+  const lowered=text.toLowerCase();
+  if(row){
+    row._extSettingSearchCacheText=text;
+    row._extSettingSearchCache=lowered;
+  }
+  return lowered;
+}
 function extensionSettingRowInvalid(row){
   return !!(row&&(row.classList.contains('invalid')||row.querySelector('[aria-invalid="true"],.ext-setting-error:not(:empty)')));
 }
@@ -26348,20 +26409,21 @@ function applyExtensionSettingsFilter(){
   const query=extensionSettingsQuery();
   const cb=$('ext-settings-modified');if(cb)cb.checked=query.modifiedOnly;
   const hiddenCb=$('ext-settings-hidden');if(hiddenCb)hiddenCb.checked=query.hiddenOnly;
-  const sections=container.querySelectorAll('details[data-ext-settings-section]');
+  const sections=extensionSettingFilterDomCache(container).sections;
   let visibleRows=0,totalRows=0,visibleSections=0,modifiedVisible=0,invalidVisible=0,resettableVisible=0;
   const visibleRowList=[];
-  sections.forEach(section=>{
+  sections.forEach(record=>{
+    const section=record.section;
     const categoryOk=!category||section.dataset.extSettingsCategory===category;
     let sectionRows=0;
-    section.querySelectorAll('.ext-setting-row').forEach(row=>{
+    record.rows.forEach(row=>{
       totalRows++;
       const rowTags=extensionSettingRowTags(row);
       const scopeOk=(!scopeFilter||row.dataset.extSettingScope===scopeFilter)
         &&(!query.scopes.length||query.scopes.includes(row.dataset.extSettingScope||''));
       const targetOk=(!targetFilter||row.dataset.extSettingTarget===targetFilter)
         &&(!query.targets.length||query.targets.some(target=>(row.dataset.extSettingTarget||'')===target||rowTags.includes('target:'+target)));
-      const textOk=!query.text||(row.dataset.extSettingSearch||row.textContent).toLowerCase().includes(query.text);
+      const textOk=!query.text||extensionSettingRowSearchText(row).includes(query.text);
       const tagOk=!query.tags.length||query.tags.every(tag=>rowTags.includes(tag));
       const hiddenOk=query.hiddenOnly?rowTags.includes('hidden'):!rowTags.includes('hidden');
       const extOk=!query.extensions.length||query.extensions.some(ext=>(row.dataset.extSettingExtension||'').includes(ext));
@@ -26690,6 +26752,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
 }
 async function renderExtensionSettings(){
   const container=$('ext-settings-container');if(!container)return;
+  invalidateExtensionSettingFilterDomCache();
   container.innerHTML='';
   let configs,languageDefaults;
   try{
@@ -27140,6 +27203,8 @@ async function renderExtensionSettings(){
   });
   renderExtensionLanguageDefaults(languageDefaults,fragment,categorySelect,seenCategories);
   container.appendChild(fragment);
+  invalidateSettingsFilterCache();
+  invalidateExtensionSettingFilterDomCache();
   extensionSettingRestoreFilterState();
   categorySelect.onchange=applyExtensionSettingsFilter;
   scopeSelect.onchange=applyExtensionSettingsFilter;

@@ -2412,6 +2412,8 @@ class AIEditorAPI:
         self._node_tree_disposables: Dict[str, Any] = {}
         self._node_lm_tool_disposables: Dict[str, Any] = {}
         self._node_chat_participant_disposables: Dict[str, Any] = {}
+        self._extension_runtime_surface_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+        self._extension_runtime_surface_cache_ttl = 0.35
         self._extensions_inited = False
         self._vscode_ns_ready = threading.Event()
 
@@ -5115,10 +5117,15 @@ class AIEditorAPI:
             return False
 
     def _workspace_direct_file_decorations(
-            self, full: str) -> List[Dict[str, Any]]:
+            self, full: str,
+            cache: Optional[Dict[str, List[Dict[str, Any]]]] = None
+            ) -> List[Dict[str, Any]]:
         vscode_ns = getattr(self, "_vscode_ns", None)
         if vscode_ns is None:
             return []
+        cache_key = os.path.normcase(os.path.abspath(full))
+        if cache is not None and cache_key in cache:
+            return list(cache[cache_key])
         try:
             raw = vscode_ns.provide_file_decorations(Uri.file(full))
         except Exception:
@@ -5128,10 +5135,15 @@ class AIEditorAPI:
             payload = self._safe_file_decoration_payload(item)
             if payload:
                 decorations.append(payload)
-        return self._dedupe_file_decorations(decorations)
+        result = self._dedupe_file_decorations(decorations)
+        if cache is not None:
+            cache[cache_key] = list(result)
+        return result
 
     def _workspace_propagated_file_decorations(
-            self, full: str) -> List[Dict[str, Any]]:
+            self, full: str,
+            cache: Optional[Dict[str, List[Dict[str, Any]]]] = None
+            ) -> List[Dict[str, Any]]:
         if not os.path.isdir(full):
             return []
         root = self._workspace_root()
@@ -5162,7 +5174,7 @@ class AIEditorAPI:
                         return []
                     decorations = [
                         item for item
-                        in self._workspace_direct_file_decorations(candidate)
+                        in self._workspace_direct_file_decorations(candidate, cache)
                         if item.get("propagate")
                     ]
                     if decorations:
@@ -5173,15 +5185,17 @@ class AIEditorAPI:
 
     def _workspace_file_decorations(
             self, full: str,
-            providers_available: Optional[bool] = None) -> List[Dict[str, Any]]:
+            providers_available: Optional[bool] = None,
+            cache: Optional[Dict[str, List[Dict[str, Any]]]] = None
+            ) -> List[Dict[str, Any]]:
         if providers_available is None:
             providers_available = self._workspace_has_file_decoration_providers()
         if not providers_available:
             return []
-        direct = self._workspace_direct_file_decorations(full)
+        direct = self._workspace_direct_file_decorations(full, cache)
         if direct:
             return direct
-        return self._workspace_propagated_file_decorations(full)
+        return self._workspace_propagated_file_decorations(full, cache)
 
     def _workspace_file_decorations_for_uri(
             self, uri: Any,
@@ -5203,7 +5217,7 @@ class AIEditorAPI:
             if cached is not None:
                 return list(cached)
         decorations = self._workspace_file_decorations(
-            full, providers_available)
+            full, providers_available, cache)
         if cache is not None:
             cache[cache_key] = list(decorations)
         return decorations
@@ -5222,6 +5236,7 @@ class AIEditorAPI:
             return {"error": str(exc), "entries": []}
         entries: List[Dict[str, Any]] = []
         decorate_entries = self._workspace_has_file_decoration_providers()
+        decoration_cache: Dict[str, List[Dict[str, Any]]] = {}
         for name in names:
             full = os.path.join(current, name)
             if not self._is_workspace_safe_path(root, full):
@@ -5235,7 +5250,8 @@ class AIEditorAPI:
                 "type": "directory" if is_dir else "file",
             }
             decorations = (
-                self._workspace_file_decorations(full, decorate_entries)
+                self._workspace_file_decorations(
+                    full, decorate_entries, decoration_cache)
                 if decorate_entries else [])
             if decorations:
                 primary = self._primary_file_decoration_payload(decorations)
@@ -11510,6 +11526,42 @@ class AIEditorAPI:
             })
         return result
 
+    def _extension_runtime_surface_cache_key(
+            self, context: Any, contributions: Dict[str, Any]) -> str:
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        host = getattr(self, "_node_ext_host", None)
+        host_running = bool(host is not None and getattr(host, "is_running", False))
+
+        def keys(value: Any) -> List[str]:
+            if isinstance(value, dict):
+                return sorted(str(item) for item in value.keys())
+            return []
+
+        payload = {
+            "context": context if isinstance(context, dict) else {},
+            "contributionKeys": {
+                name: len(value) if isinstance(value, (list, dict)) else 0
+                for name, value in sorted((contributions or {}).items())
+            },
+            "runtime": {
+                "treeDataProviders": keys(
+                    getattr(vscode_ns, "_tree_data_providers", {})),
+                "treeViews": keys(getattr(vscode_ns, "_tree_views", {})),
+                "webviewViewProviders": keys(
+                    getattr(vscode_ns, "_webview_view_providers", {})),
+                "webviewViews": keys(getattr(vscode_ns, "_webview_views", {})),
+                "lmProviders": keys(getattr(vscode_ns, "_lm_providers", {})),
+                "registeredTools": keys(getattr(vscode_ns, "registered_tools", {})),
+                "chatParticipants": keys(
+                    getattr(vscode_ns, "chat_participants", {})),
+                "nodeHostRunning": host_running,
+            },
+        }
+        try:
+            return json.dumps(payload, sort_keys=True, default=str)
+        except Exception:
+            return str(payload)
+
     def list_extension_runtime_surfaces(
             self, context: Any = None) -> Dict[str, Any]:
         """Return dynamic extension UI/runtime surfaces for smoke diagnostics."""
@@ -11530,6 +11582,18 @@ class AIEditorAPI:
             getattr(ext_points, "all_contributions", {}) if ext_points else {})
         if not isinstance(contributions, dict):
             contributions = {}
+        cache_key = self._extension_runtime_surface_cache_key(
+            context or {}, contributions)
+        now = time.perf_counter()
+        if not hasattr(self, "_extension_runtime_surface_cache"):
+            self._extension_runtime_surface_cache = {}
+        if not hasattr(self, "_extension_runtime_surface_cache_ttl"):
+            self._extension_runtime_surface_cache_ttl = 0.35
+        cached = self._extension_runtime_surface_cache.get(cache_key)
+        if cached and now - cached[0] <= self._extension_runtime_surface_cache_ttl:
+            payload = json.loads(json.dumps(cached[1], ensure_ascii=False, default=str))
+            payload.setdefault("summary", {})["cacheHit"] = True
+            return payload
         views_by_container = contributions.get("views", {})
         if not isinstance(views_by_container, dict):
             views_by_container = {}
@@ -11619,7 +11683,7 @@ class AIEditorAPI:
             item for item in views
             if str(item.get("kind") or "").lower() == "treeview"
         ]
-        return json.loads(json.dumps({
+        payload = json.loads(json.dumps({
             "ok": True,
             "views": views,
             "treeViews": tree_views,
@@ -11660,6 +11724,7 @@ class AIEditorAPI:
                 "languageModelProviders": len(language_model_providers),
                 "chatParticipants": len(chat_participants),
                 "chatContextProviders": len(chat_context_providers),
+                "cacheHit": False,
                 "dynamicSurfaces": (
                     len(tree_views) + len(webview_views)
                     + len(custom_editors) + len(notebooks)
@@ -11669,6 +11734,14 @@ class AIEditorAPI:
                     + len(chat_context_providers)),
             },
         }, ensure_ascii=False, default=str))
+        self._extension_runtime_surface_cache[cache_key] = (now, payload)
+        if len(self._extension_runtime_surface_cache) > 12:
+            stale_keys = sorted(
+                self._extension_runtime_surface_cache,
+                key=lambda key: self._extension_runtime_surface_cache[key][0])[:-8]
+            for key in stale_keys:
+                self._extension_runtime_surface_cache.pop(key, None)
+        return json.loads(json.dumps(payload, ensure_ascii=False, default=str))
 
     def get_extension_host_diagnostics(self, reset: bool = False) -> Dict:
         """Return lightweight Node extension host request diagnostics."""

@@ -2997,6 +2997,10 @@ def test_app_settings_parity() -> None:
             "view": "selftest.surface.tree",
             "editorTextFocus": True,
         })
+        fixture_surfaces_cached = fixture_api.list_extension_runtime_surfaces({
+            "view": "selftest.surface.tree",
+            "editorTextFocus": True,
+        })
         fixture_tree = {
             item.get("id"): item
             for item in fixture_surfaces.get("treeViews", [])
@@ -3077,6 +3081,17 @@ def test_app_settings_parity() -> None:
                and any(item.get("menu") == "view/title"
                        for item in fixture_menus),
                json.dumps(fixture_surfaces, ensure_ascii=False, default=str))
+        _check("extension runtime surface snapshot is cached within refresh frame",
+               fixture_surfaces.get("summary", {}).get("cacheHit") is False
+               and fixture_surfaces_cached.get("summary", {}).get(
+                   "cacheHit") is True
+               and fixture_surfaces_cached.get("summary", {}).get(
+                   "dynamicSurfaces")
+               == fixture_surfaces.get("summary", {}).get("dynamicSurfaces"),
+               json.dumps({
+                   "first": fixture_surfaces.get("summary", {}),
+                   "second": fixture_surfaces_cached.get("summary", {}),
+               }, ensure_ascii=False, default=str))
     finally:
         shutil.rmtree(fixture_ext_dir, ignore_errors=True)
 
@@ -3316,6 +3331,13 @@ def test_app_settings_parity() -> None:
         _check("workspace tree propagates child file decorations",
                src_entry.get("decoration", {}).get("badge") == "P"
                and src_entry.get("decoration", {}).get("propagate") is True)
+        sample_calls = [
+            item for item in decoration_provider.calls
+            if item.endswith("sample.py")
+        ]
+        _check("workspace tree decoration propagation uses per-snapshot cache",
+               len(sample_calls) == 1,
+               json.dumps(decoration_provider.calls, ensure_ascii=False))
         readme_decoration = tree_api.workspace_file_decorations("README.md")
         _check("workspace_file_decorations returns single path decorations",
                readme_decoration.get("decoration", {}).get("badge") == "M"
@@ -9072,7 +9094,12 @@ console.log("frontend word separator behavior ok");
            and "s-editor-code-actions-on-save-json" in html
            and "s-editor-lang-code-actions-on-save-json" in html
            and "function settingsQueryFilters(raw)" in html
+           and "function invalidateSettingsFilterCache()" in html
+           and "function settingsFilterDomCache(modal)" in html
            and "function settingsGroupMatchesFilter(group,query)" in html
+           and "group._settingsFilterText" in html
+           and "const cache=settingsFilterDomCache(modal);" in html
+           and "invalidateSettingsFilterCache();\n  renderExtensionSettings();" in html
            and "@(modified|error|json|ext|extensions)" in html
            and "use @error to filter invalid settings" in html
            and "if(query.error&&!group.querySelector('[aria-invalid=\"true\"],.settings-field.invalid,.settings-input-invalid'))return false;" in html)
@@ -9152,6 +9179,11 @@ console.log("frontend word separator behavior ok");
             and "function extensionSettingClearFilterTokens()" in html
             and "function extensionSettingVisibleRows(container)" in html
             and "function extensionSettingRowTags(row)" in html
+            and "function extensionSettingRowSearchText(row)" in html
+            and "function extensionSettingFilterDomCache(container)" in html
+            and "function invalidateExtensionSettingFilterDomCache()" in html
+            and "extensionSettingFilterDomCache(container).sections" in html
+            and "invalidateExtensionSettingFilterDomCache();\n  container.innerHTML='';" in html
             and "function extensionSettingRowInvalid(row)" in html
             and "function extensionSettingFocusRow(row,options)" in html
             and "function extensionSettingFocusVisibleRow(delta)" in html
@@ -9420,6 +9452,13 @@ console.log("frontend word separator behavior ok");
            and "LMProvider" in html
            and "ChatParticipant" in html
            and "ChatContext" in html)
+    _check("backend extension runtime surfaces use bounded refresh cache",
+           "self._extension_runtime_surface_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}" in app_source
+           and "self._extension_runtime_surface_cache_ttl = 0.35" in app_source
+           and "def _extension_runtime_surface_cache_key(" in app_source
+           and "payload.setdefault(\"summary\", {})[\"cacheHit\"] = True" in app_source
+           and "\"cacheHit\": False" in app_source
+           and "if len(self._extension_runtime_surface_cache) > 12:" in app_source)
     _check("frontend hidden deprecated settings stay editable until configured",
            "const hiddenEditable=hiddenReason==='deprecated'" in html
            and (
@@ -11644,8 +11683,12 @@ console.log("command palette quick access helpers ok");
            "const bridgeScript='<script>'" not in html
            and "const bridgeScript='<scr'+'ipt>'" in html)
     _check("frontend Explorer calls workspace tree and file APIs",
-           "call('list_workspace_tree',relPath||'')" in html
-           and "call('list_workspace_tree',entry.path||'')" in html
+           "function loadWorkspaceTree(relPath)" in html
+           and "explorerTreeInflight[key]" in html
+           and "const seq=++explorerTreeRequestSeq;" in html
+           and "if(seq!==explorerTreeRequestSeq)return;" in html
+           and "const res=await loadWorkspaceTree(relPath||'')" in html
+           and "const res=await loadWorkspaceTree(entry.path||'')" in html
            and "openWorkspaceFile(entry.path)" in html
            and "call('open_workspace_file',relPath||'')" in html
            and "tree-decoration-badge" in html
@@ -11655,9 +11698,12 @@ console.log("command palette quick access helpers ok");
            and "badge.dataset.decorationCount" in html
            and "themeColorToCss(decoration.color" in html
            and "function refreshVisibleExplorerDecorations(paths)" in html
-           and "const limit=8" in html
+           and "function loadWorkspaceDecoration(path)" in html
+           and "explorerDecorationInflight[key]" in html
+           and "const rowByPath=new Map();" in html
+           and "const limit=4" in html
            and "await Promise.all(Array.from({length:Math.min(limit,rows.length)},worker))" in html
-           and "call('workspace_file_decorations'" in html
+           and "const res=await loadWorkspaceDecoration(row.dataset.workspacePath||'')" in html
            and "event==='file_decorations_changed'" in html
            and "'gitDecoration.modifiedResourceForeground':'--fg-warning'"
            in html)
