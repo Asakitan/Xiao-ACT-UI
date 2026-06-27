@@ -1546,12 +1546,13 @@ pre.code-block code .type { color:var(--fg-type); }
 .extension-runtime-title { flex:1; min-width:0; color:var(--fg); font-size:12px; font-weight:600; }
 .extension-runtime-refresh { width:auto; height:24px; padding:2px 8px; border:1px solid var(--border); border-radius:4px; background:var(--bg2); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
 .extension-runtime-refresh:hover,.extension-runtime-refresh:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
+.extension-runtime-refresh:disabled { opacity:.55; cursor:default; }
 .extension-runtime-summary { display:flex; flex-wrap:wrap; gap:5px; padding:7px 8px; border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent); }
 .extension-runtime-chip { display:inline-flex; align-items:center; gap:4px; max-width:100%; padding:2px 6px; border:1px solid var(--border); border-radius:999px; color:var(--fg-dim); font:10px var(--mono); }
 .extension-runtime-chip strong { color:var(--fg); font-weight:600; }
 .extension-runtime-list { display:grid; gap:1px; padding:4px; }
 .extension-runtime-row { display:grid; grid-template-columns:92px minmax(0,1fr) auto; gap:7px; align-items:center; min-height:26px; padding:4px 6px; border-radius:4px; color:var(--fg-dim); font-size:11px; }
-.extension-runtime-row:hover { background:var(--bg-hover); }
+.extension-runtime-row:hover,.extension-runtime-row:focus { background:var(--bg-hover); outline:1px solid color-mix(in srgb,var(--border-focus) 40%,transparent); outline-offset:-1px; }
 .extension-runtime-kind { color:var(--fg-accent); font:10px var(--mono); text-transform:uppercase; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .extension-runtime-mid { min-width:0; display:flex; flex-direction:column; gap:1px; }
 .extension-runtime-main { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg); }
@@ -3007,7 +3008,7 @@ pre.code-block { overflow:visible; }
       <div class="extension-runtime-panel" id="extension-runtime-panel" aria-live="polite">
         <div class="extension-runtime-head">
           <div class="extension-runtime-title">Extension Runtime Surfaces</div>
-          <button class="extension-runtime-refresh" type="button" onclick="renderExtensionRuntimeSurfaces(true)">Refresh</button>
+          <button class="extension-runtime-refresh" id="extension-runtime-refresh" type="button" onclick="renderExtensionRuntimeSurfaces(true)">Refresh</button>
         </div>
         <div class="extension-runtime-summary" id="extension-runtime-summary"></div>
         <div class="extension-runtime-list" id="extension-runtime-list"></div>
@@ -27324,8 +27325,24 @@ function extensionRuntimeSurfaceRows(data){
   (data.chatContextProviders||[]).slice(0,8).forEach(item=>push('ChatContext',item,item.id||item.kind,item.kind+(item.selector?' · selector':''),item.runtimeAvailable!==false));
   return rows;
 }
+let extensionRuntimeSurfaceCache=null;
+let extensionRuntimeSurfaceInflight=null;
+const EXTENSION_RUNTIME_SURFACE_CACHE_MS=900;
+function extensionRuntimeSurfaceCacheFresh(force){
+  return !force&&extensionRuntimeSurfaceCache&&Date.now()-extensionRuntimeSurfaceCache.time<EXTENSION_RUNTIME_SURFACE_CACHE_MS;
+}
+function setExtensionRuntimeSurfaceLoading(loading){
+  const panel=$('extension-runtime-panel'),list=$('extension-runtime-list'),button=$('extension-runtime-refresh');
+  if(panel)panel.setAttribute('aria-busy',loading?'true':'false');
+  if(list)list.setAttribute('aria-busy',loading?'true':'false');
+  if(button){
+    button.disabled=!!loading;
+    button.textContent=loading?'Refreshing':'Refresh';
+    button.title=loading?'Refreshing extension runtime surfaces':'Refresh extension runtime surfaces';
+  }
+}
 function renderExtensionRuntimeSurfacePanel(data){
-  const summaryEl=$('extension-runtime-summary'),listEl=$('extension-runtime-list'),statusEl=$('extension-runtime-status');
+  const panel=$('extension-runtime-panel'),summaryEl=$('extension-runtime-summary'),listEl=$('extension-runtime-list'),statusEl=$('extension-runtime-status');
   if(!summaryEl||!listEl)return;
   data=data||{};
   const summary=data.summary||{};
@@ -27345,6 +27362,11 @@ function renderExtensionRuntimeSurfacePanel(data){
     ['Runtime',rows.filter(row=>row.ready).length],
     ['Manifest',rows.filter(row=>!row.ready).length],
   ];
+  if(summary.cacheHit||data._frontendCacheHit)chips.push(['Cache',summary.cacheHit?'backend':'frontend']);
+  if(panel){
+    panel.dataset.cacheHit=data._frontendCacheHit?'frontend':(summary.cacheHit?'backend':'');
+    panel.dataset.runtimeSurfaceCount=String(summary.dynamicSurfaces||rows.length||0);
+  }
   summaryEl.innerHTML='';
   chips.forEach(([label,value])=>{
     const chip=document.createElement('span');chip.className='extension-runtime-chip';
@@ -27359,6 +27381,13 @@ function renderExtensionRuntimeSurfacePanel(data){
   }else{
     rows.forEach(row=>{
       const el=document.createElement('div');el.className='extension-runtime-row';
+      el.tabIndex=0;
+      el.setAttribute('role','listitem');
+      el.dataset.kind=row.kind;
+      el.dataset.source=row.source;
+      el.dataset.extensionId=row.extensionId||'';
+      el.dataset.ready=row.ready?'1':'0';
+      el.title=[row.kind,row.label,row.meta,row.extensionId,row.source].filter(Boolean).join(' · ');
       const kind=document.createElement('div');kind.className='extension-runtime-kind';kind.textContent=row.kind;
       const mid=document.createElement('div');mid.className='extension-runtime-mid';
       const main=document.createElement('div');main.className='extension-runtime-main';main.textContent=row.label;
@@ -27373,19 +27402,39 @@ function renderExtensionRuntimeSurfacePanel(data){
       listEl.appendChild(el);
     });
   }
-  if(statusEl)statusEl.textContent='Runtime surfaces: '+String(summary.dynamicSurfaces||rows.length||0)+' dynamic entries.';
+  listEl.setAttribute('role','list');
+  if(statusEl)statusEl.textContent='Runtime surfaces: '+String(summary.dynamicSurfaces||rows.length||0)+' dynamic entries'+(data._frontendCacheHit?' · cached in frontend':summary.cacheHit?' · cached in backend':'')+'.';
 }
 async function renderExtensionRuntimeSurfaces(force){
   const statusEl=$('extension-runtime-status'),listEl=$('extension-runtime-list');
+  if(extensionRuntimeSurfaceCacheFresh(force)){
+    renderExtensionRuntimeSurfacePanel({...extensionRuntimeSurfaceCache.data,_frontendCacheHit:true});
+    return extensionRuntimeSurfaceCache.data;
+  }
+  if(extensionRuntimeSurfaceInflight&&!force){
+    const cached=await extensionRuntimeSurfaceInflight;
+    if(cached&&!cached.error)renderExtensionRuntimeSurfacePanel({...cached,_frontendCacheHit:true});
+    return cached;
+  }
+  setExtensionRuntimeSurfaceLoading(true);
   if(statusEl)statusEl.textContent='Loading extension runtime surfaces...';
   if(listEl&&!listEl.children.length)listEl.innerHTML='<div class="extension-runtime-empty">Loading...</div>';
-  const r=await call('list_extension_runtime_surfaces',typeof commandPaletteContext==='function'?commandPaletteContext():{});
-  if(!r||r.error){
-    if(statusEl)statusEl.textContent='Extension runtime surfaces unavailable: '+callFailedMessage(r,'backend unavailable');
-    if(listEl)listEl.innerHTML='<div class="extension-runtime-empty">Unable to load extension runtime surfaces.</div>';
-    return;
+  const request=call('list_extension_runtime_surfaces',typeof commandPaletteContext==='function'?commandPaletteContext():{});
+  extensionRuntimeSurfaceInflight=request;
+  try{
+    const r=await request;
+    if(!r||r.error){
+      if(statusEl)statusEl.textContent='Extension runtime surfaces unavailable: '+callFailedMessage(r,'backend unavailable');
+      if(listEl)listEl.innerHTML='<div class="extension-runtime-empty">Unable to load extension runtime surfaces.</div>';
+      return r;
+    }
+    extensionRuntimeSurfaceCache={time:Date.now(),data:r};
+    renderExtensionRuntimeSurfacePanel(r);
+    return r;
+  }finally{
+    if(extensionRuntimeSurfaceInflight===request)extensionRuntimeSurfaceInflight=null;
+    setExtensionRuntimeSurfaceLoading(false);
   }
-  renderExtensionRuntimeSurfacePanel(r);
 }
 window.renderExtensionRuntimeSurfaces=renderExtensionRuntimeSurfaces;
 
@@ -28760,6 +28809,13 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeTags:runtimeList?runtimeList.querySelectorAll('.extension-runtime-tag').length:0,
       runtimeChips:runtimeSummary?runtimeSummary.querySelectorAll('.extension-runtime-chip').length:0,
       runtimeKinds:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-kind')).map(item=>String(item.textContent||'')):[],
+      runtimeListRole:runtimeList?runtimeList.getAttribute('role'):'',
+      runtimeListItems:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row[role="listitem"]').length:0,
+      runtimeDatasetKinds:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.kind||''):[],
+      runtimeDatasetSources:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.source||''):[],
+      runtimeDatasetReady:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(item=>item.dataset.ready==='1').length:0,
+      runtimePanelCount:(()=>{const panel=$('extension-runtime-panel');return panel?panel.dataset.runtimeSurfaceCount:''})(),
+      runtimeStatusText:(()=>{const status=$('extension-runtime-status');return status?status.textContent:''})(),
       menuRole:menu?menu.getAttribute('role'):'',
       menuLabel:menu?menu.getAttribute('aria-label'):'',
       menuItems:menu?menu.querySelectorAll('.ctx-item[role="menuitem"]').length:0,
@@ -28777,6 +28833,9 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'&&snapshot.customCapabilities
       && snapshot.notebookOutputItems===3&&snapshot.notebookHtmlFrame&&snapshot.notebookImage&&snapshot.notebookText
       && snapshot.runtimeRows>=11&&snapshot.runtimeReadyRows>=10&&snapshot.runtimeChips>=13
+      && snapshot.runtimeListRole==='list'&&snapshot.runtimeListItems===snapshot.runtimeRows
+      && snapshot.runtimeDatasetReady===snapshot.runtimeReadyRows&&snapshot.runtimePanelCount==='11'
+      && snapshot.runtimeDatasetSources.includes('runtime')&&snapshot.runtimeStatusText.includes('11 dynamic entries')
       && ['TerminalProfile','LMTool','LMProvider','ChatParticipant','ChatContext'].every(kind=>snapshot.runtimeKinds.includes(kind))
       && snapshot.menuRole==='menu'&&snapshot.menuItems===2&&snapshot.menuDisabled===1&&snapshot.menuMetadata.includes('selftest.dynamic.tree');
     return snapshot;

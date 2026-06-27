@@ -9419,16 +9419,31 @@ console.log("frontend word separator behavior ok");
            "id=\"extension-runtime-panel\"" in html
            and "id=\"extension-runtime-summary\"" in html
            and "id=\"extension-runtime-list\"" in html
+           and "id=\"extension-runtime-refresh\"" in html
            and "function extensionRuntimeSurfaceRows(data)" in html
+           and "let extensionRuntimeSurfaceCache=null;" in html
+           and "let extensionRuntimeSurfaceInflight=null;" in html
+           and "const EXTENSION_RUNTIME_SURFACE_CACHE_MS=900;" in html
+           and "function extensionRuntimeSurfaceCacheFresh(force)" in html
+           and "function setExtensionRuntimeSurfaceLoading(loading)" in html
            and "function renderExtensionRuntimeSurfacePanel(data)" in html
            and "async function renderExtensionRuntimeSurfaces(force)" in html
            and "window.renderExtensionRuntimeSurfaces=renderExtensionRuntimeSurfaces;" in html
            and "call('list_extension_runtime_surfaces',typeof commandPaletteContext==='function'?commandPaletteContext():{})" in html
            and "refreshRuntimeSupport();\n  renderExtensionRuntimeSurfaces();" in html
+           and ".extension-runtime-refresh:disabled" in html
+           and ".extension-runtime-row:hover,.extension-runtime-row:focus" in html
            and ".extension-runtime-mid" in html
            and ".extension-runtime-tag" in html
            and "source:item.runtimeOnly?'runtime-only':(runtime?'runtime':'manifest')" in html
            and "row.extensionId" in html
+           and "panel.dataset.runtimeSurfaceCount=String(summary.dynamicSurfaces||rows.length||0);" in html
+           and "el.setAttribute('role','listitem');" in html
+           and "listEl.setAttribute('role','list');" in html
+           and "setExtensionRuntimeSurfaceLoading(true);" in html
+           and "extensionRuntimeSurfaceInflight=request;" in html
+           and "renderExtensionRuntimeSurfacePanel({...extensionRuntimeSurfaceCache.data,_frontendCacheHit:true});" in html
+           and "statusEl.textContent='Runtime surfaces: '+String(summary.dynamicSurfaces||rows.length||0)+' dynamic entries'" in html
            and "['Runtime',rows.filter(row=>row.ready).length]" in html
            and "['Manifest',rows.filter(row=>!row.ready).length]" in html
            and "(data.terminalProfiles||[]).slice(0,8).forEach(item=>push('TerminalProfile'" in html
@@ -11171,6 +11186,11 @@ console.log("extension setting schema helpers ok");
            and "snapshot.notebookOutputItems===3" in html
            and "snapshot.runtimeRows>=11" in html
            and "snapshot.runtimeChips>=13" in html
+           and "runtimeListRole:runtimeList?runtimeList.getAttribute('role'):''" in html
+           and "runtimeDatasetSources:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.source||''):[]" in html
+           and "runtimePanelCount:(()=>{const panel=$('extension-runtime-panel');return panel?panel.dataset.runtimeSurfaceCount:''})()" in html
+           and "snapshot.runtimeListRole==='list'" in html
+           and "snapshot.runtimeStatusText.includes('11 dynamic entries')" in html
            and "['TerminalProfile','LMTool','LMProvider','ChatParticipant','ChatContext'].every(kind=>snapshot.runtimeKinds.includes(kind))" in html
            and "snapshot.menuRole==='menu'" in html)
     _check("frontend renders extension QuickInput dynamically",
