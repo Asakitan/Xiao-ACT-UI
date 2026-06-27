@@ -16921,6 +16921,87 @@ def _find_ai_editor_window() -> int:
         return 0
 
 
+def _window_rect_for_handle(hwnd: int, user32: Any = None) -> Optional[tuple[int, int, int, int]]:
+    if sys.platform != "win32" or not hwnd:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        if user32 is None:
+            user32 = ctypes.windll.user32
+        rect = wintypes.RECT()
+        if not user32.GetWindowRect(ctypes.c_void_p(int(hwnd)), ctypes.byref(rect)):
+            return None
+        return int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)
+    except Exception:
+        return None
+
+
+def _window_rect_intersects_screen(rect: Optional[tuple[int, int, int, int]],
+                                   min_visible: int = 80) -> bool:
+    if not rect:
+        return False
+    left, top, right, bottom = rect
+    if right - left <= 0 or bottom - top <= 0:
+        return False
+    screen_x, screen_y, screen_w, screen_h = _virtual_screen_bounds()
+    screen_right = screen_x + screen_w
+    screen_bottom = screen_y + screen_h
+    return not (
+        right < screen_x + min_visible
+        or bottom < screen_y + min_visible
+        or left > screen_right - min_visible
+        or top > screen_bottom - min_visible
+    )
+
+
+def _move_window_handle_on_screen(hwnd: int, user32: Any = None) -> bool:
+    if sys.platform != "win32" or not hwnd:
+        return False
+    rect = _window_rect_for_handle(hwnd, user32)
+    if _window_rect_intersects_screen(rect):
+        return True
+    try:
+        import ctypes
+        if user32 is None:
+            user32 = ctypes.windll.user32
+        if rect:
+            left, top, right, bottom = rect
+            width = max(_AI_EDITOR_MIN_SIZE[0], right - left)
+            height = max(_AI_EDITOR_MIN_SIZE[1], bottom - top)
+        else:
+            width, height = 1000, 700
+        x, y, width, height = _normalize_window_geometry({
+            "x": None, "y": None, "w": width, "h": height,
+        })
+        flags = 0x0004 | 0x0040  # NOZORDER | SHOWWINDOW
+        user32.SetWindowPos(
+            ctypes.c_void_p(int(hwnd)), ctypes.c_void_p(0),
+            int(x), int(y), int(width), int(height), flags)
+        return _window_rect_intersects_screen(
+            _window_rect_for_handle(hwnd, user32))
+    except Exception:
+        return False
+
+
+def _window_handle_visible_after_activation(hwnd: int, user32: Any = None) -> bool:
+    if sys.platform != "win32" or not hwnd:
+        return False
+    try:
+        import ctypes
+        if user32 is None:
+            user32 = ctypes.windll.user32
+        hwnd_ptr = ctypes.c_void_p(int(hwnd))
+        visible = True
+        if hasattr(user32, "IsWindowVisible"):
+            visible = bool(user32.IsWindowVisible(hwnd_ptr))
+        rect_ok = _window_rect_intersects_screen(
+            _window_rect_for_handle(hwnd, user32))
+        return visible and rect_ok
+    except Exception:
+        return False
+
+
 def _activate_window_handle(hwnd: int, keep_topmost_seconds: float = 0.9) -> bool:
     if sys.platform != "win32" or not hwnd:
         return False
@@ -16930,8 +17011,13 @@ def _activate_window_handle(hwnd: int, keep_topmost_seconds: float = 0.9) -> boo
         hwnd_ptr = ctypes.c_void_p(int(hwnd))
         flags = 0x0001 | 0x0002 | 0x0040  # NOSIZE | NOMOVE | SHOWWINDOW
         user32.ShowWindow(hwnd_ptr, 9)  # SW_RESTORE
+        _move_window_handle_on_screen(hwnd, user32)
         user32.SetWindowPos(hwnd_ptr, ctypes.c_void_p(-1), 0, 0, 0, 0, flags)
         user32.SetForegroundWindow(hwnd_ptr)
+        if not _window_handle_visible_after_activation(hwnd, user32):
+            _append_ai_editor_log(
+                f"existing window activation failed visibility hwnd={hwnd}")
+            return False
         if keep_topmost_seconds > 0:
             def _release_topmost() -> None:
                 time.sleep(keep_topmost_seconds)

@@ -981,7 +981,13 @@ class _FakeNodeCustomEditorHost:
 
 def test_app_settings_parity() -> None:
     print("── App Settings Parity ──")
-    from ai_editor.app import AIEditorAPI, _activate_window_handle, _normalize_window_geometry
+    from ai_editor.app import (
+        AIEditorAPI,
+        _activate_window_handle,
+        _normalize_window_geometry,
+        _window_handle_visible_after_activation,
+        _window_rect_intersects_screen,
+    )
 
     api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     js_methods = (
@@ -2098,6 +2104,19 @@ def test_app_settings_parity() -> None:
            w >= 600 and h >= 400 and x < 999999 and y < 999999)
     _check("AI Editor foreground activation ignores missing HWND",
            _activate_window_handle(0) is False)
+    _check("AI Editor activation rejects offscreen existing window geometry",
+           _window_rect_intersects_screen((999999, 999999, 1000100, 1000100)) is False)
+    _check("AI Editor activation accepts visible existing window geometry",
+           _window_rect_intersects_screen((10, 10, 700, 500)) is True)
+    with patch("ai_editor.app.sys.platform", "win32"), \
+            patch("ai_editor.app._window_rect_for_handle",
+                  return_value=(999999, 999999, 1000100, 1000100)):
+        class _FakeUser32:
+            def IsWindowVisible(self, _hwnd):
+                return 1
+
+        _check("AI Editor activation verifies existing window visibility",
+               _window_handle_visible_after_activation(123, _FakeUser32()) is False)
     root_dir = os.path.dirname(os.path.dirname(__file__))
     panels_path = os.path.join(root_dir, "gui_modules", "sao_gui_panels_mixin.py")
     with open(panels_path, "r", encoding="utf-8") as fh:
@@ -2110,6 +2129,11 @@ def test_app_settings_parity() -> None:
     _check("AI Editor activation does not block webview.start",
            "threading.Thread(target=_activate_ai_editor_window_with_retry" in app_src
            and "webview.start(debug=False)" in app_src)
+    _check("AI Editor existing window activation verifies visibility before reuse",
+           "def _window_handle_visible_after_activation(" in app_src
+           and "existing window activation failed visibility" in app_src
+           and "_move_window_handle_on_screen(hwnd, user32)" in app_src
+           and "_window_rect_intersects_screen(" in app_src)
 
     data = {
         "ai_editor": {
