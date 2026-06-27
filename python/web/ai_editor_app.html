@@ -1205,6 +1205,16 @@ pre.code-block code .type { color:var(--fg-type); }
 .workflow-run-step.running .workflow-run-step-status { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 55%,var(--border)); }
 .workflow-run-step.done .workflow-run-step-status { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 55%,var(--border)); }
 .workflow-run-step.error .workflow-run-step-status { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 55%,var(--border)); }
+.workflow-result-card { margin-top:8px; border:1px solid var(--border); border-radius:6px; background:var(--bg2); padding:8px; display:flex; flex-direction:column; gap:6px; }
+.workflow-result-head { display:flex; align-items:center; gap:8px; min-width:0; }
+.workflow-result-title { font-weight:600; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.workflow-result-meta { color:var(--fg-dim); font:10px var(--mono); }
+.workflow-result-step { border-top:1px solid var(--border); padding-top:5px; display:flex; flex-direction:column; gap:3px; }
+.workflow-result-step:first-child { border-top:0; padding-top:0; }
+.workflow-result-step-title { display:flex; align-items:center; gap:6px; font-size:11px; }
+.workflow-result-step-title .idx { color:var(--fg-dim); font:10px var(--mono); }
+.workflow-result-step-title .agent { color:var(--fg-dim); font:10px var(--mono); border:1px solid var(--border); border-radius:999px; padding:0 6px; }
+.workflow-result-output { white-space:pre-wrap; color:var(--fg-dim); font:11px/1.4 var(--mono); max-height:120px; overflow:auto; }
 /* Mode popup menu (VSCode-style) */
 .mode-trigger { display:inline-flex; align-items:center; gap:4px; height:22px; padding:0 8px; flex:0 0 auto;
   border:1px solid var(--border); border-radius:999px; background:var(--bg3); color:var(--fg-accent);
@@ -7682,6 +7692,48 @@ function assistantWorkflowRunCardSnapshot(card){
     agentChipCount:steps.filter(step=>step.querySelector('.workflow-run-step-agent')).length
   };
 }
+async function assistantWorkflowBackendExecutionSnapshot(){
+  const previousApi=window.pywebview&&window.pywebview.api;
+  const calls=[];
+  window.pywebview=window.pywebview||{};
+  window.pywebview.api=Object.assign({},previousApi||{},{
+    run_workflow:async(id,input,runId)=>{
+      calls.push({id,input,runId});
+      onWorkflowStep({workflowRunId:runId,workflowId:id,step:0,total:2,label:'Inspect',agent:'default',output_var:'inspection',status:'running'});
+      onWorkflowStep({workflowRunId:runId,workflowId:id,step:0,total:2,label:'Inspect',agent:'default',output_var:'inspection',status:'done',preview:'inspection ok'});
+      return {workflow:id,workflowRunId:runId,steps:[
+        {step:0,label:'Inspect',agent:'default',output_var:'inspection',output:'inspection ok'},
+        {step:1,label:'Review',agent:'reviewer',output_var:'review',output:'review ok'}
+      ],final_output:'review ok'};
+    }
+  });
+  const before=chatConversationItems().length;
+  const workflow={id:'assistant-selfcheck-engine-flow',name:'Assistant Engine Flow',description:'Backend workflow smoke',steps:[
+    {agent:'default',label:'Inspect',prompt:'Inspect {{input}}',output_var:'inspection'},
+    {agent:'reviewer',label:'Review',prompt:'Review {{inspection}}',output_var:'review'}
+  ]};
+  const ok=await runWorkflowObjectAsAssistant(workflow,'backend smoke');
+  const afterItems=chatConversationItems();
+  const created=afterItems.slice(before);
+  const result=created.length?created[created.length-1].querySelector('.workflow-result-card'):null;
+  const plan=created.length?created[0].querySelector('.workflow-run-card'):null;
+  const snapshot={
+    ok:!!ok,
+    callCount:calls.length,
+    runId:calls[0]?calls[0].runId:'',
+    createdCount:created.length,
+    planExists:!!plan,
+    resultExists:!!result,
+    resultStepCount:result?result.querySelectorAll('.workflow-result-step').length:0,
+    resultOutputs:result?Array.from(result.querySelectorAll('.workflow-result-step')).map(step=>String(step.dataset.workflowStepOutputVar||'')):[],
+    finalText:created.length?String(created[created.length-1].textContent||''):''
+  };
+  created.forEach(item=>item.remove());
+  showChatWelcomeIfEmpty();
+  if(previousApi)window.pywebview.api=previousApi;
+  else delete window.pywebview.api;
+  return snapshot;
+}
 async function runAssistantUiSelfCheck(opts){
   opts=opts||{};
   const checks=[];
@@ -7705,6 +7757,8 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready',workflowEditor.modalExists&&workflowEditor.editorExists&&workflowEditor.rowCount===2&&workflowEditor.labelInputs===2&&workflowEditor.agentInputs===2&&workflowEditor.outputInputs===2&&workflowEditor.promptInputs===2&&workflowEditor.moveButtons===4&&workflowEditor.deleteButtons===2&&workflowEditor.addButtonExists&&workflowEditor.collectedCount===2&&workflowEditor.idReadOnly,JSON.stringify(workflowEditor));
   assistantUiSelfCheckRecord(checks,'workflow-run-card-rendered',workflowRunCard.exists&&workflowRunCard.workflowId==='selfcheck-flow'&&workflowRunCard.workflowRunId==='wf-selfcheck'&&workflowRunCard.workflowStepCount===2&&workflowRunCard.renderedSteps===2&&workflowRunCard.agentChipCount===2,JSON.stringify(workflowRunCard));
   assistantUiSelfCheckRecord(checks,'workflow-run-step-status-updates',workflowStatusUpdated&&workflowRunCard.statuses[0]==='running'&&workflowRunCard.statuses[1]==='done'&&workflowRunCard.outputs[0]==='inspection'&&workflowRunCard.outputs[1]==='review',JSON.stringify(workflowRunCard));
+  const workflowBackend=await assistantWorkflowBackendExecutionSnapshot();
+  assistantUiSelfCheckRecord(checks,'workflow-backend-execution-rendered',workflowBackend.ok&&workflowBackend.callCount===1&&workflowBackend.planExists&&workflowBackend.resultExists&&workflowBackend.resultStepCount===2&&workflowBackend.resultOutputs[0]==='inspection'&&workflowBackend.resultOutputs[1]==='review'&&workflowBackend.finalText.includes('review ok'),JSON.stringify(workflowBackend));
 
   const previousAttachments=attachments.slice();
   attachments=[];
@@ -17444,6 +17498,44 @@ function updateWorkflowRunStepStatus(runId,data){
   }
   return true;
 }
+function workflowResultSteps(result){
+  return Array.isArray(result&&result.steps)?result.steps.filter(step=>step&&typeof step==='object'):[];
+}
+function renderWorkflowResultSummary(body,result,launch){
+  if(!body)return null;
+  const steps=workflowResultSteps(result);
+  const card=document.createElement('div');
+  card.className='workflow-result-card';
+  card.setAttribute('role','group');
+  card.setAttribute('aria-label','Workflow result');
+  card.dataset.workflowId=String((launch&&launch.workflowId)||result&&result.workflow||'');
+  card.dataset.workflowRunId=String((launch&&launch.workflowRunId)||result&&result.workflowRunId||'');
+  card.dataset.workflowStepCount=String(steps.length);
+  const head=document.createElement('div');head.className='workflow-result-head';
+  const title=document.createElement('span');title.className='workflow-result-title';
+  title.textContent=String((launch&&launch.workflowLabel)||result&&result.workflow||'Workflow result');
+  const meta=document.createElement('span');meta.className='workflow-result-meta';
+  meta.textContent=[steps.length+' steps',card.dataset.workflowRunId].filter(Boolean).join(' · ');
+  head.appendChild(title);head.appendChild(meta);card.appendChild(head);
+  steps.forEach((step,index)=>{
+    const row=document.createElement('div');row.className='workflow-result-step';
+    row.dataset.stepIndex=String(Number(step.step)||index);
+    row.dataset.workflowStepStatus=step.error?'error':'done';
+    row.dataset.workflowStepOutputVar=String(step.output_var||'');
+    const stepTitle=document.createElement('div');stepTitle.className='workflow-result-step-title';
+    const idx=document.createElement('span');idx.className='idx';idx.textContent=String(index+1);
+    const label=document.createElement('span');label.textContent=String(step.label||('Step '+(index+1)));
+    const agent=document.createElement('span');agent.className='agent';agent.textContent=String(step.agent||'default');
+    stepTitle.appendChild(idx);stepTitle.appendChild(label);stepTitle.appendChild(agent);
+    row.appendChild(stepTitle);
+    const output=document.createElement('div');output.className='workflow-result-output';
+    output.textContent=String(step.error||step.output||'');
+    row.appendChild(output);
+    card.appendChild(row);
+  });
+  body.appendChild(card);
+  return card;
+}
 function workflowLaunchPrompt(workflow,inputText,runId){
   const id=controlItemId(workflow),name=controlItemName(workflow)||id;
   const steps=workflowStepList(workflow);
@@ -17515,7 +17607,51 @@ async function runCustomWorkflowAsAssistant(inputSeed){
   };
   return runWorkflowObjectAsAssistant(workflow,inputText);
 }
-async function runWorkflowObjectAsAssistant(workflow,inputText){
+async function runWorkflowEngineAsAssistant(workflow,inputText,launch,refs){
+  const id=controlItemId(workflow),workflowName=controlItemName(workflow)||id;
+  const userBody=createMsg('user');
+  renderMd(userBody,workflowDisplayText(workflow,inputText,launch.workflowRunId));
+  renderWorkflowLaunchSummary(userBody,launch);
+  noteAssistantChatRequest(workflowLaunchPrompt(workflow,inputText,launch.workflowRunId),refs,'workflow',launch);
+  const body=createMsg('assistant',config.model||workflowName||'Workflow');
+  const pending=document.createElement('div');pending.className='chat-response-progress-task';pending.textContent='Running workflow...';body.appendChild(pending);
+  setStatus('Running workflow: '+workflowName);
+  assistantSessionState.workflowRunId=launch.workflowRunId;
+  syncAssistantSessionState({workflowRunId:launch.workflowRunId,workflowMode:assistantWorkflowMode,requestInProgress:true});
+  let result=null;
+  try{result=await call('run_workflow',id,inputText,launch.workflowRunId)}
+  catch(e){result={error:String(e&&e.message||e)}}
+  pending.remove();
+  if(!result){
+    const err=document.createElement('div');err.className='error-text';err.textContent='Workflow backend unavailable';body.appendChild(err);
+    setStatus('Workflow backend unavailable');
+    syncAssistantSessionState({requestInProgress:false});
+    return false;
+  }
+  workflowResultSteps(result).forEach(step=>updateWorkflowRunStepStatus(launch.workflowRunId,{
+    workflowRunId:launch.workflowRunId,
+    step:step.step,
+    status:step.error?'error':'done',
+    label:step.label,
+    agent:step.agent,
+    output_var:step.output_var,
+    preview:step.output,
+    error:step.error
+  }));
+  if(result.error){
+    const err=document.createElement('div');err.className='error-text';err.textContent='Workflow error: '+result.error;body.appendChild(err);
+  }else{
+    renderWorkflowResultSummary(body,result,launch);
+    const finalText=normalizeChatMessageText(result.final_output||'','assistant');
+    if(finalText)renderMd(body,finalText);
+  }
+  setStatus(result.error?'Workflow error':'Workflow complete');
+  syncAssistantSessionState({requestInProgress:false,workflowRunId:launch.workflowRunId});
+  assistantSessionPersistCurrent({status:result.error?'error':'completed'});
+  return !result.error;
+}
+async function runWorkflowObjectAsAssistant(workflow,inputText,opts){
+  opts=opts||{};
   const id=controlItemId(workflow),workflowName=controlItemName(workflow)||id;
   const runId=workflowRunNewId(id);
   const prompt=workflowLaunchPrompt(workflow,inputText,runId);
@@ -17533,6 +17669,9 @@ async function runWorkflowObjectAsAssistant(workflow,inputText){
   if(input&&String(input.value||'').trim()===inputText)setChatInputValue('',{focus:false,sync:false});
   assistantSessionState.workflowRunId=runId;
   syncAssistantSessionState({workflowRunId:runId,workflowMode:assistantWorkflowMode});
+  if(!opts.forcePrompt&&id&&id!=='custom'&&api()&&api().run_workflow){
+    return runWorkflowEngineAsAssistant(workflow,inputText,launch,refs);
+  }
   return sendAssistantTextRequest(prompt,{refs,workflowLaunch:launch,displayText:workflowDisplayText(workflow,inputText,runId),fromInput:false,appendUser:true,clearInput:false,allowSlash:false,toolHint:'workflow'});
 }
 async function runWorkflowAsAssistant(id,name,inputSeed){

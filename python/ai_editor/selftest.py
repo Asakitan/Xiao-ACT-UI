@@ -3891,6 +3891,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function workflowRunSummary(workflow)" in html
            and "function renderWorkflowLaunchSummary(body,launch)" in html
            and "function updateWorkflowRunStepStatus(runId,data)" in html
+           and "function renderWorkflowResultSummary(body,result,launch)" in html
+           and "async function runWorkflowEngineAsAssistant(workflow,inputText,launch,refs)" in html
+           and "call('run_workflow',id,inputText,launch.workflowRunId)" in html
+           and "if(!opts.forcePrompt&&id&&id!=='custom'&&api()&&api().run_workflow)" in html
            and "workflowStepOutputVars:workflowStepList(workflow).map" in html
            and "function runCustomWorkflowAsAssistant(inputSeed)" in html
            and "Workflow launch" in html
@@ -4872,12 +4876,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantWorkflowEditorSnapshot()" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready'" in html
            and "function assistantWorkflowRunCardSnapshot(card)" in html
+           and "async function assistantWorkflowBackendExecutionSnapshot()" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-run-card-rendered'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-popup-mode-smoke'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-run-step-status-updates'" in html
+           and "assistantUiSelfCheckRecord(checks,'workflow-backend-execution-rendered'" in html
            and "function assistantWorkflowModeSmokeSnapshot()" in html
            and ".workflow-run-card" in html
            and ".workflow-run-step-agent" in html
+           and ".workflow-result-card" in html
            and "assistantUiSelfCheckRecord(checks,'attachments-list-semantics'" in html
            and "assistantUiSelfCheckRecord(checks,'attachments-counts-sync'" in html
            and "assistantUiSelfCheckRecord(checks,'attachments-keyboard-controls'" in html
