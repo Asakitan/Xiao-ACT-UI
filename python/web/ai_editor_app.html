@@ -1609,6 +1609,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-result-nav button:hover:not(:disabled),.settings-result-nav button:focus:not(:disabled) {
   color:var(--fg); border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
 .settings-result-nav button:disabled { opacity:.45; cursor:default; }
+.settings-result-count { min-width:46px; text-align:center; color:var(--fg-dim); font:10px var(--mono);
+  padding:0 4px; }
 .settings-searchbar .settings-active-filters,.settings-searchbar .settings-filter-summary,
 .settings-searchbar .settings-validation-summary,.settings-searchbar .settings-review-bar,
 .settings-searchbar .settings-save-preview,.settings-searchbar .settings-search-memory,
@@ -1634,6 +1636,10 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-section-context span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .settings-section-context .section-stat { flex:0 0 auto; padding:1px 6px; border:1px solid var(--border);
   border-radius:999px; background:var(--bg3); color:var(--fg-dim); font:10px var(--mono); }
+.settings-section-context .section-actions { margin-left:auto; display:inline-flex; align-items:center; gap:4px; }
+.settings-section-context button { height:21px; padding:1px 7px; border:1px solid var(--border); border-radius:4px;
+  background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
+.settings-section-context button:hover,.settings-section-context button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
 .settings-current-detail { display:none; align-items:center; gap:7px; min-height:28px; padding:5px 7px;
   border:1px solid var(--border); border-radius:5px; background:color-mix(in srgb,var(--bg2) 76%,transparent);
   color:var(--fg-dim); font-size:11px; }
@@ -3130,6 +3136,7 @@ pre.code-block { overflow:visible; }
       <div class="settings-result-nav" aria-label="Settings results navigation">
         <button type="button" id="settings-prev-result" title="Previous visible setting" onclick="settingsFocusVisibleRow(-1)">Prev</button>
         <button type="button" id="settings-next-result" title="Next visible setting" onclick="settingsFocusVisibleRow(1)">Next</button>
+        <span id="settings-result-count" class="settings-result-count" aria-live="polite">0/0</span>
       </div>
       <div id="settings-active-filters" class="settings-active-filters" aria-live="polite"></div>
       <div id="settings-quick-filters" class="settings-quick-filters" aria-label="Quick setting filters">
@@ -3176,6 +3183,7 @@ pre.code-block { overflow:visible; }
             <button type="button" onclick="selectSettingsTarget('workspace',{preserveSearch:true})">Workspace</button>
             <button type="button" onclick="selectSettingsTarget('extensions',{preserveSearch:true})">Extensions</button>
             <button type="button" onclick="settingsUseSearchHint('@common')">Common</button>
+            <button type="button" onclick="focusSettingsNavFilter()">Categories</button>
             <button type="button" onclick="settingsRemoveLastFilterToken()">Remove Last Filter</button>
           </div>
         </div>
@@ -3979,6 +3987,7 @@ function settingsShowRowDetails(row){
   addAction('Prev','Focus previous visible setting',()=>settingsFocusVisibleRow(-1));
   addAction('Next','Focus next visible setting',()=>settingsFocusVisibleRow(1));
   addAction('Section','Jump to the current settings section',()=>settingsFocusActiveSection());
+  addAction('Filter','Filter Settings to this setting ID',()=>settingsSearchForKey(key));
   addAction('Copy ID','Copy setting ID',()=>settingsCopyText(key,'Setting ID'));
   addAction('JSON','Open settings.json and copy this setting id',()=>settingsConfigureRowInJson(row,key));
   host.appendChild(actions);
@@ -3992,6 +4001,7 @@ function settingsHighlightRow(row){
   row.classList.add('settings-current');
   row.setAttribute('aria-current','true');
   settingsShowRowDetails(row);
+  updateSettingsResultNav(settingsVisibleRows().length);
   try{row.focus({preventScroll:true})}catch(e){try{row.focus()}catch(_e){}}
   setTimeout(()=>row.classList.remove('highlight'),900);
 }
@@ -4137,8 +4147,13 @@ function settingsFocusPagedRow(direction){
   return true;
 }
 function updateSettingsResultNav(count){
-  const disabled=!Number(count);
+  const rows=settingsVisibleRows();
+  const total=Number.isFinite(Number(count))?Number(count):rows.length;
+  const current=rows.findIndex(row=>row.classList&&row.classList.contains('settings-current'));
+  const disabled=!Number(total);
   ['settings-prev-result','settings-next-result'].forEach(id=>{const btn=$(id);if(btn)btn.disabled=disabled});
+  const label=$('settings-result-count');
+  if(label)label.textContent=total?(current>=0?String(current+1):'-')+'/'+String(total):'0/0';
 }
 function settingsFieldWrapper(inputId){
   const el=$(inputId);if(!el)return null;
@@ -25185,6 +25200,7 @@ function updateSettingsTitleStatus(visible,total){
   const parts=[settingsTargetDisplayName(currentSettingsTarget),settingsActiveSectionTitle()];
   if(Number.isFinite(Number(visible))&&Number.isFinite(Number(total)))parts.push(String(visible)+' / '+String(total)+' groups');
   parts.push('Ctrl+F search');
+  parts.push('Alt+N categories');
   sub.textContent=parts.join(' · ');
 }
 function renderSettingsSectionContext(visible,total){
@@ -25206,6 +25222,16 @@ function renderSettingsSectionContext(visible,total){
   add('Errors',stats.errors);
   add('Density',settingsReadDensity()==='compact'?'Compact':'Comfortable');
   if(Number.isFinite(Number(visible))&&Number.isFinite(Number(total)))add('Groups',String(visible)+'/'+String(total));
+  const actions=document.createElement('span');actions.className='section-actions';
+  const addButton=(label,title,handler)=>{
+    const btn=document.createElement('button');btn.type='button';btn.textContent=label;btn.title=title;
+    btn.onclick=ev=>{ev.preventDefault();handler&&handler()};
+    actions.appendChild(btn);
+  };
+  addButton('Prev Section','Jump to previous visible settings section',()=>settingsFocusSiblingSection(-1));
+  addButton('Next Section','Jump to next visible settings section',()=>settingsFocusSiblingSection(1));
+  addButton('Search','Focus Settings search',()=>focusSettingsSearch());
+  host.appendChild(actions);
 }
 let _settingsScrollSyncRaf=0;
 function syncSettingsActiveSectionFromScroll(){
@@ -25316,7 +25342,8 @@ function renderSettingsNav(){
   summary.innerHTML='<strong id="settings-nav-target-title">'+settingsTargetDisplayName(currentSettingsTarget)+' Settings</strong>'
     +'<div class="settings-nav-summary-line"><span>Visible</span><span id="settings-nav-visible-count">0</span></div>'
     +'<div class="settings-nav-summary-line"><span>Modified</span><span id="settings-nav-modified-count">0</span></div>'
-    +'<div class="settings-nav-summary-line"><span>Errors</span><span id="settings-nav-error-count">0</span></div>';
+    +'<div class="settings-nav-summary-line"><span>Errors</span><span id="settings-nav-error-count">0</span></div>'
+    +'<div class="settings-nav-summary-line"><span>Categories</span><span id="settings-nav-filter-count">0</span></div>';
   nav.appendChild(summary);
   const tools=document.createElement('div');
   tools.className='settings-nav-tools';
@@ -25503,8 +25530,11 @@ function settingsUiSelfCheckSnapshot(){
       &&typeof settingsFocusActiveSection==='function'),
     hasNavFilter:!!$('settings-nav-filter'),
     hasNavFilterEmptyState:!!$('settings-nav-filter-empty'),
+    hasNavFilterCount:!!$('settings-nav-filter-count'),
+    hasResultCount:!!$('settings-result-count'),
     hasDensityToggle:!!$('settings-density-toggle'),
     hasStickySectionOverview:!!overview&&String(getComputedStyle(overview).position)==='sticky',
+    hasSectionContextActions:!!document.querySelector('.settings-section-context .section-actions'),
     hasCurrentDetail:!!detail,
     hasDetailActions:!!(detail&&detail.querySelector('.detail-actions')),
     density:settingsReadDensity(),
