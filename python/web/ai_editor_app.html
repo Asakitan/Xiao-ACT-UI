@@ -1949,6 +1949,13 @@ pre.code-block { overflow:visible; }
   border-color:color-mix(in srgb,var(--fg-error) 55%,var(--border));
   background:color-mix(in srgb,var(--fg-error) 8%,var(--bg2)); }
 .settings-error-text { margin:3px 0 6px; color:var(--fg-error); font-size:11px; line-height:1.35; }
+.settings-active-filters { display:none; flex-wrap:wrap; gap:5px; margin:-2px 0 8px; }
+.settings-active-filters.open { display:flex; }
+.settings-filter-chip { height:22px; max-width:220px; border:1px solid var(--border); background:var(--bg3);
+  color:var(--fg-dim); border-radius:3px; padding:1px 7px; font-size:11px; cursor:pointer;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-filter-chip:hover { color:var(--fg); border-color:var(--fg-accent); }
+.settings-filter-summary { color:var(--fg-dim); font:11px var(--mono); min-height:16px; margin:-4px 0 8px; }
 .ext-setting-row { position:relative; margin-bottom:10px; padding:6px 28px 6px 8px;
   border-left:2px solid transparent; border-radius:3px; }
 .ext-setting-row.modified { border-left-color:var(--fg-accent); background:var(--bg-hover); }
@@ -2744,6 +2751,8 @@ pre.code-block { overflow:visible; }
     <!-- SETTINGS-01: Search/filter -->
     <input id="settings-search" list="settings-filter-suggestions" placeholder="Search settings..." oninput="scheduleFilterSettings()" style="width:100%;background:var(--bg-input);color:var(--fg);border:1px solid var(--border);border-radius:var(--radius);padding:7px 10px;font:13px var(--sans);outline:none;margin-bottom:8px">
     <datalist id="settings-filter-suggestions"></datalist>
+    <div id="settings-active-filters" class="settings-active-filters" aria-live="polite"></div>
+    <div id="settings-filter-summary" class="settings-filter-summary" role="status" aria-live="polite"></div>
     <div id="settings-validation-summary" class="settings-validation-summary" role="status" aria-live="polite"></div>
 
     <div class="sb-group" style="padding:0;margin-top:8px">Endpoint</div>
@@ -9582,14 +9591,18 @@ function setActiveEditorBaselineContent(content){
   _editorDirtyDiffCache={key:'',decorations:[],summary:null};
   if(typeof renderEditorVisualDecorations==='function')renderEditorVisualDecorations();
 }
-function computeEditorDirtyDiff(base,current){
-  base=String(base||'');current=String(current||'');
-  if(base===current)return {decorations:[],summary:{added:0,modified:0,removed:0,total:0}};
-  const oldLines=base.split('\n'),newLines=current.split('\n');
-  let start=0;
-  while(start<oldLines.length&&start<newLines.length&&oldLines[start]===newLines[start])start++;
-  let oldEnd=oldLines.length-1,newEnd=newLines.length-1;
-  while(oldEnd>=start&&newEnd>=start&&oldLines[oldEnd]===newLines[newEnd]){oldEnd--;newEnd--}
+function editorDiffContentSignature(value){
+  value=String(value||'');
+  let hash=2166136261>>>0;
+  const step=Math.max(1,Math.floor(value.length/4096));
+  for(let i=0;i<value.length;i+=step){
+    hash^=value.charCodeAt(i);
+    hash=Math.imul(hash,16777619)>>>0;
+  }
+  hash^=value.length;hash=Math.imul(hash,16777619)>>>0;
+  return value.length+':'+hash.toString(16);
+}
+function computeEditorDirtyDiffFallback(oldLines,newLines,start,oldEnd,newEnd){
   const oldSpan=Math.max(0,oldEnd-start+1),newSpan=Math.max(0,newEnd-start+1);
   const decorations=[];
   if(newSpan){
@@ -9602,14 +9615,61 @@ function computeEditorDirtyDiff(base,current){
   const added=Math.max(0,newSpan-oldSpan);
   const removed=Math.max(0,oldSpan-newSpan);
   const modified=Math.min(oldSpan,newSpan);
-  return {decorations,summary:{added,modified,removed,total:added+modified+removed}};
+  return {decorations,summary:{added,modified,removed,total:added+modified+removed,algorithm:'fallback'}};
+}
+function computeEditorDirtyDiffLcs(oldLines,newLines,start,oldEnd,newEnd){
+  const oldSeg=oldLines.slice(start,oldEnd+1),newSeg=newLines.slice(start,newEnd+1);
+  const oldLen=oldSeg.length,newLen=newSeg.length;
+  if(oldLen*newLen>12000)return null;
+  const dp=Array.from({length:oldLen+1},()=>new Uint16Array(newLen+1));
+  for(let i=oldLen-1;i>=0;i--){
+    for(let j=newLen-1;j>=0;j--){
+      dp[i][j]=oldSeg[i]===newSeg[j]?dp[i+1][j+1]+1:Math.max(dp[i+1][j],dp[i][j+1]);
+    }
+  }
+  const decorations=[],summary={added:0,modified:0,removed:0,total:0,algorithm:'lcs'};
+  let i=0,j=0;
+  const pushChange=(oldCount,newCount,line)=>{
+    if(!oldCount&&!newCount)return;
+    const modified=Math.min(oldCount,newCount),added=Math.max(0,newCount-oldCount),removed=Math.max(0,oldCount-newCount);
+    summary.modified+=modified;summary.added+=added;summary.removed+=removed;summary.total+=modified+added+removed;
+    if(newCount){
+      for(let k=0;k<newCount;k++)decorations.push({line:line+k,type:k<oldCount?'modified':'added'});
+    }else{
+      decorations.push({line:Math.max(0,Math.min(line,newLines.length-1)),type:'removed'});
+    }
+  };
+  while(i<oldLen||j<newLen){
+    if(i<oldLen&&j<newLen&&oldSeg[i]===newSeg[j]){i++;j++;continue}
+    const line=start+j;
+    let oi=i,nj=j;
+    while(oi<oldLen||nj<newLen){
+      if(oi<oldLen&&nj<newLen&&oldSeg[oi]===newSeg[nj])break;
+      if(nj>=newLen||(oi<oldLen&&dp[oi+1][nj]>=dp[oi][nj+1]))oi++;
+      else nj++;
+    }
+    pushChange(oi-i,nj-j,line);
+    i=oi;j=nj;
+  }
+  return {decorations,summary};
+}
+function computeEditorDirtyDiff(base,current){
+  base=String(base||'');current=String(current||'');
+  if(base===current)return {decorations:[],summary:{added:0,modified:0,removed:0,total:0}};
+  const oldLines=base.split('\n'),newLines=current.split('\n');
+  let start=0;
+  while(start<oldLines.length&&start<newLines.length&&oldLines[start]===newLines[start])start++;
+  let oldEnd=oldLines.length-1,newEnd=newLines.length-1;
+  while(oldEnd>=start&&newEnd>=start&&oldLines[oldEnd]===newLines[newEnd]){oldEnd--;newEnd--}
+  return computeEditorDirtyDiffLcs(oldLines,newLines,start,oldEnd,newEnd)
+    || computeEditorDirtyDiffFallback(oldLines,newLines,start,oldEnd,newEnd);
 }
 function editorDirtyDiffState(){
   const tab=activeEditorTab();
   if(isDiffEditorTab(tab)||isExtensionCustomEditorTab(tab)||isExtensionNotebookTab(tab))return {decorations:[],summary:{added:0,modified:0,removed:0,total:0}};
   const value=$('editor-text')?$('editor-text').value:'';
   const base=activeEditorBaselineContent();
-  const key=String(tab.id)+':'+base.length+':'+value.length+':'+base.slice(0,80)+':'+value.slice(0,80)+':'+base.slice(-80)+':'+value.slice(-80);
+  const key=String(tab.id)+':'+editorDiffContentSignature(base)+':'+editorDiffContentSignature(value);
   if(_editorDirtyDiffCache.key===key)return _editorDirtyDiffCache;
   const computed=computeEditorDirtyDiff(base,value);
   _editorDirtyDiffCache={key,decorations:computed.decorations,summary:computed.summary};
@@ -11232,6 +11292,7 @@ function renderEditorLanguageFeatureStatus(){
   const el=$('status-language-service');if(!el)return;
   const s=_editorLanguageFeatureState||{};
   const diag=s.diagnostics||{},actions=s.codeActions||{},fmt=s.formatting||{},semantic=s.semanticTokens||{},diff=s.diff||{};
+  const providerStatus=_editorLanguageProviderStatus||{};
   el.dataset.diagnostics=String(diag.count||0);
   el.dataset.diagnosticErrors=String(diag.errors||0);
   el.dataset.diagnosticWarnings=String(diag.warnings||0);
@@ -11243,6 +11304,8 @@ function renderEditorLanguageFeatureStatus(){
   el.dataset.diffAdded=String(diff.added||0);
   el.dataset.diffModified=String(diff.modified||0);
   el.dataset.diffRemoved=String(diff.removed||0);
+  el.dataset.providerWarnings=String(providerStatus.providerWarnings||0);
+  el.dataset.providerErrors=String(providerStatus.providerErrors||0);
   el.title=editorLanguageFeatureDetail(_editorLanguageProviderStatus.detail);
 }
 function updateEditorLanguageFeatureState(kind,state,info){
@@ -11285,7 +11348,10 @@ function updateEditorLanguageProviderStatus(state,info){
   const detail=String(opts.detail||message);
   _editorLanguageProviderStatus={
     state:state||'ready',kind,message,detail,
-    requestId:String(opts.requestId||''),updatedAt:Date.now()
+    requestId:String(opts.requestId||''),
+    providerWarnings:Number(opts.providerWarnings)||0,
+    providerErrors:Number(opts.providerErrors)||0,
+    updatedAt:Date.now()
   };
   if(!el)return _editorLanguageProviderStatus;
   el.className='sb-item editor-language-status '+_editorLanguageProviderStatus.state;
@@ -11335,6 +11401,10 @@ async function editorRequestLanguageProvider(kind,payload,options){
   }
   const countKey=opts.countKey||'';
   const providerErrorSummary=editorLanguageProviderErrorSummary(res);
+  const providerErrors=Array.isArray(res&&res.providerErrors)?res.providerErrors:[];
+  const providerErrorCount=providerErrors.length;
+  const providerWarningCount=providerErrors.filter(item=>String((item&&item.level)||'error').toLowerCase()!=='error').length;
+  const providerHardErrorCount=providerErrorCount-providerWarningCount;
   if(countKey){
     const count=editorProviderResultCount(res,countKey);
     if(count>0){
@@ -11343,18 +11413,22 @@ async function editorRequestLanguageProvider(kind,payload,options){
         kind,label,
         message:count+' '+itemLabel+(count===1?'':'s')+(providerErrorSummary?' with provider warning':''),
         detail:providerErrorSummary||label+' completed',
-        requestId:res.requestId
+        requestId:res.requestId,
+        providerWarnings:providerErrorCount,
+        providerErrors:providerHardErrorCount
       });
     }else{
       updateEditorLanguageProviderStatus(providerErrorSummary?'error':'empty',{
         kind,label,
         message:providerErrorSummary?editorLanguageProviderFailureMessage(kind,res):'No '+label.toLowerCase(),
         detail:providerErrorSummary||label+' returned no results',
-        requestId:res.requestId
+        requestId:res.requestId,
+        providerWarnings:providerErrorCount,
+        providerErrors:providerHardErrorCount
       });
     }
   }else{
-    updateEditorLanguageProviderStatus(providerErrorSummary?'warning':'ready',{kind,label,message:providerErrorSummary?label+' provider warning':label+' ready',detail:providerErrorSummary||label+' completed',requestId:res.requestId});
+    updateEditorLanguageProviderStatus(providerErrorSummary?'warning':'ready',{kind,label,message:providerErrorSummary?label+' provider warning':label+' ready',detail:providerErrorSummary||label+' completed',requestId:res.requestId,providerWarnings:providerErrorCount,providerErrors:providerHardErrorCount});
   }
   return res;
 }
@@ -23426,18 +23500,50 @@ function closeSettings(){$('settings-modal').classList.remove('open')}
 // SETTINGS-01: Filter settings sections by search query
 let _settingsFilterDomCache=null;
 function invalidateSettingsFilterCache(){_settingsFilterDomCache=null}
+const SETTINGS_SCOPE_FILTERS={
+  editor:['editor','format','formatter','suggest','hover','minimap','folding','sticky scroll','diff','diagnostic','language override'],
+  files:['files','save','auto save','trim trailing','final newline'],
+  language:['language override','current language','[language]','format on type','linked editing','diagnostics'],
+  terminal:['terminal','powershell','shell','profile','output limit'],
+  workspace:['workspace','root','auto-detect','remember last'],
+  assistant:['assistant','provider','model','system prompt','mode','permissions','customization','agent','workflow'],
+  mcp:['mcp','server','sampling','tool access'],
+  extensions:['extension','publisher','contribution','marketplace','runtime','trust']
+};
+const SETTINGS_TOKEN_LABELS={
+  modified:'Modified',error:'Errors',json:'JSON',extensions:'Extensions',
+  editor:'Editor',files:'Files',language:'Language',terminal:'Terminal',
+  workspace:'Workspace',assistant:'Assistant',mcp:'MCP'
+};
+function settingsScopeTokenKey(token){
+  const key=String(token||'').toLowerCase();
+  if(key==='ext')return 'extensions';
+  if(Object.prototype.hasOwnProperty.call(SETTINGS_SCOPE_FILTERS,key))return key;
+  return '';
+}
+function settingsFilterTokens(raw){
+  return String(raw||'').match(/(?:^|\s)@[A-Za-z][A-Za-z0-9_-]*/g)||[];
+}
 function settingsQueryFilters(raw){
   const query=String(raw||'');
-  const filters={modified:false,error:false,json:false,extensions:false};
-  let text=query.replace(/(^|\s)@(modified|error|json|ext|extensions)(?=\s|$)/ig,(match,prefix,token)=>{
+  const filters={modified:false,error:false,json:false,extensions:false,scopes:[]};
+  let text=query.replace(/(^|\s)@([A-Za-z][A-Za-z0-9_-]*)(?=\s|$)/g,(match,prefix,token)=>{
     const key=String(token||'').toLowerCase();
-    if(key==='ext'||key==='extensions')filters.extensions=true;
-    else filters[key]=true;
+    const scope=settingsScopeTokenKey(key);
+    if(scope){
+      filters[scope]=true;
+      if(!filters.scopes.includes(scope))filters.scopes.push(scope);
+    }else if(key==='modified'||key==='error'||key==='json'){
+      filters[key]=true;
+    }else{
+      return match;
+    }
     return ' ';
   }).trim().toLowerCase();
   text=text.replace(/\s+/g,' ');
   filters.text=text;
-  filters.active=!!(text||filters.modified||filters.error||filters.json||filters.extensions);
+  filters.tokens=settingsFilterTokens(query).map(v=>v.trim()).filter(Boolean);
+  filters.active=!!(text||filters.modified||filters.error||filters.json||filters.scopes.length);
   return filters;
 }
 function settingsGroupMatchesFilter(group,query){
@@ -23447,8 +23553,63 @@ function settingsGroupMatchesFilter(group,query){
   if(query.modified&&!group.querySelector('.settings-field.modified,.ext-setting-row.modified'))return false;
   if(query.error&&!group.querySelector('[aria-invalid="true"],.settings-field.invalid,.settings-input-invalid'))return false;
   if(query.json&&!(text.includes('json')||group.querySelector('[id$="-json"],#s-xheaders,#s-xbody')))return false;
-  if(query.extensions&&!(group.id==='ext-settings-container'||/extension|publisher|contribution|marketplace/i.test(text)))return false;
+  if(query.scopes&&query.scopes.length){
+    const matchScope=query.scopes.some(scope=>{
+      if(scope==='extensions'&&(group.id==='ext-settings-container'||/extension|publisher|contribution|marketplace/i.test(text)))return true;
+      const terms=SETTINGS_SCOPE_FILTERS[scope]||[];
+      return terms.some(term=>text.includes(term));
+    });
+    if(!matchScope)return false;
+  }
   return true;
+}
+function settingsFilterChipLabel(token){
+  const raw=String(token||'').replace(/^@/,'');
+  const key=raw.toLowerCase();
+  const scope=settingsScopeTokenKey(key);
+  const label=SETTINGS_TOKEN_LABELS[scope||key]||raw;
+  return '@'+label;
+}
+function removeSettingsFilterToken(token){
+  const input=$('settings-search');if(!input)return;
+  const raw=String(token||'').replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  input.value=String(input.value||'').replace(new RegExp('(^|\\s)'+raw+'(?=\\s|$)','i'),' ').replace(/\s+/g,' ').trim();
+  scheduleFilterSettings(0);
+}
+function renderSettingsActiveFilters(parsed,visible,total){
+  const host=$('settings-active-filters'),summary=$('settings-filter-summary');
+  if(host){
+    host.innerHTML='';
+    const tokens=[...new Set((parsed&&parsed.tokens)||[])];
+    host.classList.toggle('open',tokens.length>0);
+    tokens.forEach(token=>{
+      const btn=document.createElement('button');
+      btn.type='button';btn.className='settings-filter-chip';
+      btn.textContent=settingsFilterChipLabel(token);
+      btn.title='Remove '+token;
+      btn.onclick=()=>removeSettingsFilterToken(token);
+      host.appendChild(btn);
+    });
+  }
+  if(summary){
+    if(parsed&&parsed.active)summary.textContent=visible+' visible of '+total+' settings groups';
+    else summary.textContent='';
+  }
+}
+function renderSettingsFilterSuggestions(){
+  const list=$('settings-filter-suggestions'),input=$('settings-search');if(!list||!input)return;
+  const current=String(input.value||'');
+  const active=(current.match(/(^|\s)@([A-Za-z0-9_-]*)$/)||[])[2];
+  if(active===undefined){list.innerHTML='';return}
+  const prefix=current.replace(/(^|\s)@([A-Za-z0-9_-]*)$/,'$1');
+  const tokenPrefix=String(active||'').toLowerCase();
+  const options=['modified','error','json','editor','files','language','terminal','workspace','assistant','mcp','extensions'];
+  list.innerHTML='';
+  options.filter(token=>!tokenPrefix||token.startsWith(tokenPrefix)).slice(0,16).forEach(token=>{
+    const opt=document.createElement('option');
+    opt.value=(prefix+'@'+token+' ').replace(/^\s+/,'');
+    list.appendChild(opt);
+  });
 }
 function settingsFilterDomCache(modal){
   if(_settingsFilterDomCache&&_settingsFilterDomCache.modal===modal)return _settingsFilterDomCache;
@@ -23464,10 +23625,11 @@ function settingsFilterDomCache(modal){
 function filterSettings(){
   const q=($('settings-search')||{}).value||'';const parsed=settingsQueryFilters(q);const lq=parsed.text;
   const modal=$('settings-modal');if(!modal)return;
-  let visible=0;
+  let visible=0,total=0;
   // Collect all filterable groups: sb-group, settings-section, details
   const cache=settingsFilterDomCache(modal);
   cache.groups.forEach(g=>{
+    total++;
     if(!parsed.active){g.style.display='';visible++;return}
     const match=settingsGroupMatchesFilter(g,parsed);
     g.style.display=match?'':'none';
@@ -23486,6 +23648,8 @@ function filterSettings(){
     applyExtensionSettingsFilter();
   }
   const inp=$('settings-search');if(inp)inp.placeholder=parsed.active?visible+' matches':'Search settings...';
+  renderSettingsActiveFilters(parsed,visible,total);
+  renderSettingsFilterSuggestions();
 }
 let _settingsFilterTimer=0;
 function scheduleFilterSettings(delay){

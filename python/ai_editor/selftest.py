@@ -8323,7 +8323,9 @@ async function call(method,payload){
   await editorRequestLanguageProvider("completion", null, { countKey:"items", itemLabel:"suggestion" });
   assert(languageStatus.className.includes("warning")
          && languageStatus.textContent === "1 suggestion with provider warning"
-         && languageStatus.title.includes("Bad Hover: boom"),
+         && languageStatus.title.includes("Bad Hover: boom")
+         && languageStatus.dataset.providerWarnings === "1"
+         && languageStatus.dataset.providerErrors === "1",
          "provider warning status is visible");
 
   callResponses = [{ ok:true, requestId:"r2c", hovers:[], providerErrors:[{ providerId:"bad.hover", error:"boom" }] }];
@@ -8372,6 +8374,113 @@ async function call(method,payload){
             )
         except Exception as exc:
             _check("frontend language provider status", False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
+    if not node_path:
+        _check("frontend settings filters and dirty diff behavior skipped without Node.js", True)
+    else:
+        settings_diff_functions = [
+            "settingsScopeTokenKey",
+            "settingsFilterTokens",
+            "settingsQueryFilters",
+            "settingsFilterChipLabel",
+            "removeSettingsFilterToken",
+            "editorDiffContentSignature",
+            "computeEditorDirtyDiffFallback",
+            "computeEditorDirtyDiffLcs",
+            "computeEditorDirtyDiff",
+        ]
+        settings_diff_js_functions = "\n".join(
+            _extract_js_function(html, name)
+            for name in settings_diff_functions)
+        js = r"""
+function assert(ok,label){ if(!ok){ throw new Error(label); } }
+const SETTINGS_SCOPE_FILTERS={
+  editor:["editor","format","formatter","suggest","hover","minimap","folding","sticky scroll","diff","diagnostic","language override"],
+  files:["files","save","auto save","trim trailing","final newline"],
+  language:["language override","current language","[language]","format on type","linked editing","diagnostics"],
+  terminal:["terminal","powershell","shell","profile","output limit"],
+  workspace:["workspace","root","auto-detect","remember last"],
+  assistant:["assistant","provider","model","system prompt","mode","permissions","customization","agent","workflow"],
+  mcp:["mcp","server","sampling","tool access"],
+  extensions:["extension","publisher","contribution","marketplace","runtime","trust"]
+};
+const SETTINGS_TOKEN_LABELS={
+  modified:"Modified",error:"Errors",json:"JSON",extensions:"Extensions",
+  editor:"Editor",files:"Files",language:"Language",terminal:"Terminal",
+  workspace:"Workspace",assistant:"Assistant",mcp:"MCP"
+};
+let scheduled = 0;
+const fakeSearch = { value:"font @editor @modified" };
+function $(id){ return id === "settings-search" ? fakeSearch : null; }
+function scheduleFilterSettings(delay){ scheduled = delay; }
+""" + settings_diff_js_functions + r"""
+let q = settingsQueryFilters("font @editor @modified @json");
+assert(q.text === "font" && q.editor === true && q.modified === true
+       && q.json === true && q.scopes.includes("editor")
+       && q.tokens.join(",") === "@editor,@modified,@json",
+       "settings query extracts text scope and state tokens");
+q = settingsQueryFilters("@terminal @workspace shell");
+assert(q.terminal === true && q.workspace === true
+       && q.scopes.join(",") === "terminal,workspace"
+       && q.text === "shell",
+       "settings query supports multiple vscode-style scopes");
+assert(settingsScopeTokenKey("ext") === "extensions"
+       && settingsScopeTokenKey("assistant") === "assistant"
+       && settingsScopeTokenKey("unknown") === "",
+       "settings scope aliases normalize");
+assert(settingsFilterChipLabel("@mcp") === "@MCP"
+       && settingsFilterChipLabel("@error") === "@Errors",
+       "settings filter chip labels are readable");
+removeSettingsFilterToken("@editor");
+assert(fakeSearch.value === "font @modified" && scheduled === 0,
+       "settings filter token removal preserves text and schedules immediate filter");
+
+const multi = computeEditorDirtyDiff(
+  "a\nb\nc\nd\ne\nf",
+  "a\nB\nc\nd\nE\nf"
+);
+assert(multi.summary.total === 2
+       && multi.summary.modified === 2
+       && multi.summary.algorithm === "lcs"
+       && multi.decorations.length === 2
+       && multi.decorations[0].line === 1
+       && multi.decorations[1].line === 4,
+       "dirty diff keeps separate small hunks instead of one broad middle span");
+const addRemove = computeEditorDirtyDiff("a\nb\nc", "a\nb\nx\nc\ny");
+assert(addRemove.summary.added === 2
+       && addRemove.decorations.some(item => item.type === "added"),
+       "dirty diff reports inserted lines");
+const sigA = editorDiffContentSignature("prefix" + "A".repeat(96) + "suffix");
+const sigB = editorDiffContentSignature("prefix" + "B".repeat(96) + "suffix");
+assert(sigA !== sigB, "dirty diff cache signature catches same-length middle edits");
+console.log("frontend settings filters and dirty diff behavior ok");
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check_subprocess_result(
+                "frontend settings filters and dirty diff behavior",
+                result,
+                "frontend settings filters and dirty diff behavior ok",
+            )
+        except Exception as exc:
+            _check("frontend settings filters and dirty diff behavior", False, str(exc))
         finally:
             if js_path:
                 try:
@@ -9279,13 +9388,24 @@ console.log("frontend word separator behavior ok");
            and "s-editor-code-actions-on-save-json" in html
            and "s-editor-lang-code-actions-on-save-json" in html
            and "function settingsQueryFilters(raw)" in html
+           and "const SETTINGS_SCOPE_FILTERS=" in html
+           and "id=\"settings-active-filters\"" in html
+           and "id=\"settings-filter-summary\"" in html
+           and "function settingsScopeTokenKey(token)" in html
+           and "function settingsFilterTokens(raw)" in html
+           and "function settingsFilterChipLabel(token)" in html
+           and "function renderSettingsActiveFilters(parsed,visible,total)" in html
+           and "function renderSettingsFilterSuggestions()" in html
+           and "function removeSettingsFilterToken(token)" in html
            and "function invalidateSettingsFilterCache()" in html
            and "function settingsFilterDomCache(modal)" in html
            and "function settingsGroupMatchesFilter(group,query)" in html
            and "group._settingsFilterText" in html
            and "const cache=settingsFilterDomCache(modal);" in html
            and "invalidateSettingsFilterCache();\n  renderExtensionSettings();" in html
-           and "@(modified|error|json|ext|extensions)" in html
+           and "@([A-Za-z][A-Za-z0-9_-]*)" in html
+           and "SETTINGS_SCOPE_FILTERS[scope]" in html
+           and "visible of '+total+' settings groups" in html
            and "use @error to filter invalid settings" in html
            and "if(query.error&&!group.querySelector('[aria-invalid=\"true\"],.settings-field.invalid,.settings-input-invalid'))return false;" in html)
     _check("frontend renders extension settings modified reset controls",
@@ -12480,6 +12600,11 @@ console.log("command palette quick access helpers ok");
            "editor-dirty-diff-line" in html
            and "editor-dirty-diff-gutter" in html
            and "function computeEditorDirtyDiff(base,current)" in html
+           and "function editorDiffContentSignature(value)" in html
+           and "function computeEditorDirtyDiffLcs(oldLines,newLines,start,oldEnd,newEnd)" in html
+           and "function computeEditorDirtyDiffFallback(oldLines,newLines,start,oldEnd,newEnd)" in html
+           and "oldLen*newLen>12000" in html
+           and "algorithm:'lcs'" in html
            and "function renderEditorDirtyDiffDecorations(layer,ta,metrics)" in html
            and "updateEditorLanguageFeatureState('diff'" in html
            and "setActiveEditorBaselineContent" in html
