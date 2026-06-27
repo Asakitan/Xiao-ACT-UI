@@ -8540,6 +8540,8 @@ async function call(method,payload){
     else:
         settings_diff_functions = [
             "settingsScopeTokenKey",
+            "settingsFilterValueList",
+            "settingsPushFilterValues",
             "settingsFilterTokens",
             "settingsQueryFilters",
             "settingsFilterChipLabel",
@@ -8579,18 +8581,28 @@ assert(q.text === "font" && q.editor === true && q.modified === true
        && q.json === true && q.scopes.includes("editor")
        && q.tokens.join(",") === "@editor,@modified,@json",
        "settings query extracts text scope and state tokens");
-q = settingsQueryFilters("@terminal @workspace shell");
-assert(q.terminal === true && q.workspace === true
-       && q.scopes.join(",") === "terminal,workspace"
-       && q.text === "shell",
-       "settings query supports multiple vscode-style scopes");
-assert(settingsScopeTokenKey("ext") === "extensions"
-       && settingsScopeTokenKey("assistant") === "assistant"
-       && settingsScopeTokenKey("unknown") === "",
-       "settings scope aliases normalize");
-assert(settingsFilterChipLabel("@mcp") === "@MCP"
-       && settingsFilterChipLabel("@error") === "@Errors",
-       "settings filter chip labels are readable");
+        q = settingsQueryFilters("@terminal @workspace shell");
+        assert(q.terminal === true && q.workspace === true
+               && q.scopes.join(",") === "terminal,workspace"
+               && q.text === "shell",
+               "settings query supports multiple vscode-style scopes");
+        q = settingsQueryFilters("@feature:editor @tag:json @ext:ms-python @lang:python @id:editor.tabSize");
+        assert(q.features.join(",") === "editor"
+               && q.tags.join(",") === "json"
+               && q.extensionIds.join(",") === "ms-python"
+               && q.languages.join(",") === "python"
+               && q.ids.join(",") === "editor.tabsize"
+               && q.active === true,
+               "settings query supports VS Code-style parameter filters");
+        assert(settingsScopeTokenKey("ext") === "extensions"
+               && settingsScopeTokenKey("assistant") === "assistant"
+               && settingsScopeTokenKey("unknown") === "",
+               "settings scope aliases normalize");
+        assert(settingsFilterChipLabel("@mcp") === "@MCP"
+               && settingsFilterChipLabel("@error") === "@Errors"
+               && settingsFilterChipLabel("@feature:editor") === "Feature: editor"
+               && settingsFilterChipLabel("@lang:python") === "Language: python",
+               "settings filter chip labels are readable");
 removeSettingsFilterToken("@editor");
 assert(fakeSearch.value === "font @modified" && scheduled === 0,
        "settings filter token removal preserves text and schedules immediate filter");
@@ -9580,13 +9592,33 @@ console.log("frontend word separator behavior ok");
              and "add('{}','Copy JSON setting entry'" in html
              and "settingsAddRowActions(wrap,{key:meta.key||meta.path||inputId,searchable:false,meta,inputId,clearTarget:" in html
              and "settingsAddRowActions(row,{key:key,searchable:true});" in html
-             and "filters={modified:false,error:false,json:false,extensions:false,scopes:[],ids:[]}" in html
-             and "Setting: '+raw.slice(3)" in html
-             and "@([A-Za-z][A-Za-z0-9_-]*)" in html
-             and "SETTINGS_SCOPE_FILTERS[scope]" in html
+              and "filters={modified:false,error:false,json:false,extensions:false,scopes:[],ids:[],tags:[],features:[],extensionIds:[],languages:[]}" in html
+              and "Setting: '+raw.slice(3)" in html
+              and "@([A-Za-z][A-Za-z0-9_-]*)" in html
+              and "SETTINGS_SCOPE_FILTERS[scope]" in html
              and "visible of '+total+' settings groups" in html
              and "use @error to filter invalid settings" in html
              and "if(query.error&&!group.querySelector('[aria-invalid=\"true\"],.settings-field.invalid:not(.settings-target-hidden),.settings-input-invalid'))return false;" in html)
+    _check("frontend settings search supports VS Code style parameter filters",
+           "@feature:editor" in html
+           and "@tag:json" in html
+           and "@lang:python" in html
+           and "function settingsFilterValueList(raw)" in html
+           and "function settingsPushFilterValues(list,raw)" in html
+           and "function settingsGroupMatchesTagFilters(group,tags)" in html
+           and "function settingsGroupMatchesFeatureFilters(group,features)" in html
+           and "function settingsGroupMatchesExtensionFilters(group,extensions)" in html
+           and "function settingsGroupMatchesLanguageFilters(group,languages)" in html
+           and "function settingsBuiltinFilterSuggestions(query)" in html
+           and "settingsPushFilterValues(filters.tags,tag)" in html
+           and "settingsPushFilterValues(filters.features,feature)" in html
+           and "settingsPushFilterValues(filters.extensionIds,ext)" in html
+           and "settingsPushFilterValues(filters.languages,lang)" in html
+           and "Tag: '+raw.slice(4)" in html
+           and "Feature: '+raw.slice(8)" in html
+           and "Language: '+raw.slice(5)" in html
+           and "settings-current" in html
+           and "row.setAttribute('aria-current','true')" in html)
     _check("frontend settings json is editable and applyable",
            "runtimeMode:'settings-json'" in html
            and "function isSettingsJsonTab(tab)" in html

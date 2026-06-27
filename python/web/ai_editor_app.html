@@ -2109,6 +2109,8 @@ pre.code-block { overflow:visible; }
 .settings-field.builtin-setting:hover,.settings-field.builtin-setting:focus-within { background:color-mix(in srgb,var(--bg-hover) 62%,transparent); }
 .settings-field.builtin-setting:focus { outline:1px solid color-mix(in srgb,var(--border-focus) 55%,transparent); outline-offset:-1px; }
 .settings-field.highlight { animation:settingsSectionFlash .65s ease-out; }
+.settings-field.settings-current { outline:1px solid color-mix(in srgb,var(--border-focus) 70%,transparent); outline-offset:-1px;
+  background:color-mix(in srgb,var(--bg-hover) 72%,transparent); }
 .settings-field.builtin-setting.modified { border-left-color:var(--fg-accent); background:color-mix(in srgb,var(--fg-accent) 6%,transparent); }
 .settings-field.builtin-setting.saved-flash { animation:settingsSavedFlash .7s ease-out; }
 @keyframes settingsSavedFlash { from{background:color-mix(in srgb,var(--fg-success) 13%,transparent)} to{background:transparent} }
@@ -3004,6 +3006,9 @@ pre.code-block { overflow:visible; }
         <code tabindex="0" onclick="settingsUseSearchHint('@modified')" onkeydown="settingsSearchHintKeydown(event,'@modified')">@modified</code>
         <code tabindex="0" onclick="settingsUseSearchHint('@workspace')" onkeydown="settingsSearchHintKeydown(event,'@workspace')">@workspace</code>
         <code tabindex="0" onclick="settingsUseSearchHint('@extensions')" onkeydown="settingsSearchHintKeydown(event,'@extensions')">@extensions</code>
+        <code tabindex="0" onclick="settingsUseSearchHint('@feature:editor')" onkeydown="settingsSearchHintKeydown(event,'@feature:editor')">@feature:editor</code>
+        <code tabindex="0" onclick="settingsUseSearchHint('@tag:json')" onkeydown="settingsSearchHintKeydown(event,'@tag:json')">@tag:json</code>
+        <code tabindex="0" onclick="settingsUseSearchHint('@lang:python')" onkeydown="settingsSearchHintKeydown(event,'@lang:python')">@lang:python</code>
         <code tabindex="0" onclick="settingsUseSearchHint('@id:editor.')" onkeydown="settingsSearchHintKeydown(event,'@id:editor.')">@id:editor.</code>
       </div>
       <div id="settings-target-summary" class="settings-target-summary" role="status" aria-live="polite"></div>
@@ -3738,7 +3743,10 @@ function settingsSearchForKey(key){
 function settingsHighlightRow(row){
   if(!row)return;
   try{row.scrollIntoView({block:'center',behavior:'smooth'})}catch(e){try{row.scrollIntoView()}catch(_e){}}
+  settingsVisibleRows().forEach(item=>{item.classList.remove('settings-current');item.removeAttribute('aria-current')});
   row.classList.add('highlight');
+  row.classList.add('settings-current');
+  row.setAttribute('aria-current','true');
   try{row.focus({preventScroll:true})}catch(e){try{row.focus()}catch(_e){}}
   setTimeout(()=>row.classList.remove('highlight'),900);
 }
@@ -24598,8 +24606,17 @@ function settingsScopeTokenKey(token){
   if(Object.prototype.hasOwnProperty.call(SETTINGS_SCOPE_FILTERS,key))return key;
   return '';
 }
+function settingsFilterValueList(raw){
+  const value=String(raw||'').trim().replace(/^"|"$/g,'').toLowerCase();
+  if(!value)return [];
+  return value.split(',').map(item=>item.trim()).filter(Boolean);
+}
+function settingsPushFilterValues(list,raw){
+  settingsFilterValueList(raw).forEach(value=>{if(!list.includes(value))list.push(value)});
+}
 function settingsFilterTokens(raw){
-  return String(raw||'').match(/(?:^|\s)@id:[^\s]+|(?:^|\s)@[A-Za-z][A-Za-z0-9_-]*/g)||[];
+  const pattern=new RegExp('(?:^|\\s)-?@(?:id|tag|feature|ext|extension|lang|language):(?:"[^"]*"|[^\\s]+)|(?:^|\\s)@[A-Za-z][A-Za-z0-9_-]*','g');
+  return String(raw||'').match(pattern)||[];
 }
 function settingsRowScope(row){
   if(!row)return 'user';
@@ -24645,12 +24662,78 @@ function settingsVisibleGroupText(group){
   if(rows.length)return rows.map(row=>row.textContent||'').join(' ').toLowerCase();
   return ((group&&group.textContent)||'').toLowerCase();
 }
+function settingsGroupRows(group){
+  return Array.from((group||document).querySelectorAll('.settings-field.builtin-setting:not(.settings-target-hidden),.ext-setting-row:not(.settings-target-hidden)'))
+    .filter(row=>row.style.display!=='none');
+}
+function settingsRowFilterText(row){
+  const data=row&&row.dataset||{};
+  return [
+    data.settingKey,data.extSettingKey,data.extSettingTitle,data.extSettingFeature,data.extSettingExtension,
+    data.extSettingExtensionId,data.extSettingLanguage,data.extSettingTags,data.extSettingScope,data.extSettingType,
+    row&&row.textContent
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+function settingsGroupMatchesTagFilters(group,tags){
+  if(!tags||!tags.length)return true;
+  const text=settingsVisibleGroupText(group);
+  const rows=settingsGroupRows(group);
+  return tags.every(tag=>{
+    if(tag==='modified')return !!group.querySelector('.settings-field.modified:not(.settings-target-hidden),.ext-setting-row.modified:not(.settings-target-hidden),.ext-setting-row[data-ext-setting-modified="1"]');
+    if(tag==='error')return !!group.querySelector('[aria-invalid="true"],.settings-field.invalid:not(.settings-target-hidden),.settings-input-invalid');
+    if(tag==='json')return text.includes('json')||!!group.querySelector('[id$="-json"],#s-xheaders,#s-xbody');
+    if(tag==='extensions'||tag==='extension')return group.id==='ext-settings-container'||rows.some(row=>String((row.dataset||{}).extSettingExtension||'').trim());
+    return text.includes(tag)||rows.some(row=>settingsRowFilterText(row).includes(tag));
+  });
+}
+function settingsGroupMatchesFeatureFilters(group,features){
+  if(!features||!features.length)return true;
+  const text=settingsVisibleGroupText(group);
+  const rows=settingsGroupRows(group);
+  return features.every(feature=>{
+    const scope=settingsScopeTokenKey(feature);
+    const terms=scope?(SETTINGS_SCOPE_FILTERS[scope]||[]):[feature];
+    return terms.some(term=>text.includes(term))
+      || rows.some(row=>settingsRowFilterText(row).includes(feature));
+  });
+}
+function settingsGroupMatchesExtensionFilters(group,extensions){
+  if(!extensions||!extensions.length)return true;
+  const rows=settingsGroupRows(group);
+  if(group.id==='ext-settings-container'&&!rows.length)return true;
+  return rows.some(row=>{
+    const text=String(((row.dataset||{}).extSettingExtension)||'').toLowerCase();
+    const id=String(((row.dataset||{}).extSettingExtensionId)||'').toLowerCase();
+    return extensions.some(ext=>text.includes(ext)||id.includes(ext));
+  });
+}
+function settingsGroupMatchesLanguageFilters(group,languages){
+  if(!languages||!languages.length)return true;
+  const text=settingsVisibleGroupText(group);
+  const rows=settingsGroupRows(group);
+  return languages.some(lang=>text.includes(lang)||text.includes('['+lang+']')
+    || rows.some(row=>String(((row.dataset||{}).extSettingLanguage)||'').toLowerCase()===lang
+      || settingsRowFilterText(row).includes('language '+lang)
+      || settingsRowFilterText(row).includes('['+lang+']')));
+}
 function settingsQueryFilters(raw){
   const query=String(raw||'');
-  const filters={modified:false,error:false,json:false,extensions:false,scopes:[],ids:[]};
+  const filters={modified:false,error:false,json:false,extensions:false,scopes:[],ids:[],tags:[],features:[],extensionIds:[],languages:[]};
   let text=query.replace(/(^|\s)@id:([^\s]+)/ig,(match,prefix,id)=>{
     const clean=String(id||'').trim().toLowerCase();
     if(clean)filters.ids.push(clean);
+    return ' ';
+  }).replace(/(^|\s)@tag:("[^"]*"|[^\s]+)/ig,(match,prefix,tag)=>{
+    settingsPushFilterValues(filters.tags,tag);
+    return ' ';
+  }).replace(/(^|\s)@feature:("[^"]*"|[^\s]+)/ig,(match,prefix,feature)=>{
+    settingsPushFilterValues(filters.features,feature);
+    return ' ';
+  }).replace(/(^|\s)@(ext|extension):("[^"]*"|[^\s]+)/ig,(match,prefix,_name,ext)=>{
+    settingsPushFilterValues(filters.extensionIds,ext);
+    return ' ';
+  }).replace(/(^|\s)@(lang|language):("[^"]*"|[^\s]+)/ig,(match,prefix,_name,lang)=>{
+    settingsPushFilterValues(filters.languages,lang);
     return ' ';
   }).replace(/(^|\s)@([A-Za-z][A-Za-z0-9_-]*)(?=\s|$)/g,(match,prefix,token)=>{
     const key=String(token||'').toLowerCase();
@@ -24668,7 +24751,7 @@ function settingsQueryFilters(raw){
   text=text.replace(/\s+/g,' ');
   filters.text=text;
   filters.tokens=settingsFilterTokens(query).map(v=>v.trim()).filter(Boolean);
-  filters.active=!!(text||filters.modified||filters.error||filters.json||filters.scopes.length||filters.ids.length);
+  filters.active=!!(text||filters.modified||filters.error||filters.json||filters.scopes.length||filters.ids.length||filters.tags.length||filters.features.length||filters.extensionIds.length||filters.languages.length);
   return filters;
 }
 function settingsGroupMatchesIdFilters(group,ids){
@@ -24684,6 +24767,10 @@ function settingsGroupMatchesFilter(group,query){
   const text=settingsVisibleGroupText(group);
   if(query.text&&!text.includes(query.text))return false;
   if(query.ids&&!settingsGroupMatchesIdFilters(group,query.ids))return false;
+  if(query.tags&&!settingsGroupMatchesTagFilters(group,query.tags))return false;
+  if(query.features&&!settingsGroupMatchesFeatureFilters(group,query.features))return false;
+  if(query.extensionIds&&!settingsGroupMatchesExtensionFilters(group,query.extensionIds))return false;
+  if(query.languages&&!settingsGroupMatchesLanguageFilters(group,query.languages))return false;
   if(query.modified&&!group.querySelector('.settings-field.modified:not(.settings-target-hidden),.ext-setting-row.modified:not(.settings-target-hidden)'))return false;
   if(query.error&&!group.querySelector('[aria-invalid="true"],.settings-field.invalid:not(.settings-target-hidden),.settings-input-invalid'))return false;
   if(query.json&&!(text.includes('json')||group.querySelector('[id$="-json"],#s-xheaders,#s-xbody')))return false;
@@ -24700,6 +24787,12 @@ function settingsGroupMatchesFilter(group,query){
 function settingsFilterChipLabel(token){
   const raw=String(token||'').replace(/^@/,'');
   if(raw.toLowerCase().startsWith('id:'))return 'Setting: '+raw.slice(3);
+  if(raw.toLowerCase().startsWith('tag:'))return 'Tag: '+raw.slice(4);
+  if(raw.toLowerCase().startsWith('feature:'))return 'Feature: '+raw.slice(8);
+  if(raw.toLowerCase().startsWith('ext:'))return 'Extension: '+raw.slice(4);
+  if(raw.toLowerCase().startsWith('extension:'))return 'Extension: '+raw.slice(10);
+  if(raw.toLowerCase().startsWith('lang:'))return 'Language: '+raw.slice(5);
+  if(raw.toLowerCase().startsWith('language:'))return 'Language: '+raw.slice(9);
   const key=raw.toLowerCase();
   const scope=settingsScopeTokenKey(key);
   const label=SETTINGS_TOKEN_LABELS[scope||key]||raw;
@@ -24949,18 +25042,58 @@ function resetVisibleModifiedSettings(){
   scheduleFilterSettings(0);
   showToast(resets.length?'Reset '+resets.length+' visible modified setting'+(resets.length===1?'':'s'):'No visible modified settings','info',1600);
 }
+function settingsCompleteFilterToken(query,token){
+  if(typeof extensionSettingCompleteFilterToken==='function')return extensionSettingCompleteFilterToken(query,token);
+  query=String(query||'');token=String(token||'').trim();
+  const match=/\S+$/.exec(query);
+  const completion=token+(token.endsWith(':')?'':' ');
+  if(match&&match[0].startsWith('@'))return (query.slice(0,match.index)+completion).replace(/\s+$/,' ');
+  return (query.trim()?query.trim()+' ':'')+completion;
+}
+function settingsPushSuggestion(list,seen,query,token){
+  token=String(token||'').trim();
+  if(!token)return;
+  const value=settingsCompleteFilterToken(query,token);
+  const key=value.toLowerCase();
+  if(seen.has(key))return;
+  seen.add(key);list.push(value);
+}
+function settingsBuiltinFilterSuggestions(query){
+  query=String(query||'');
+  const current=(typeof extensionSettingCurrentFilterToken==='function'
+    ? extensionSettingCurrentFilterToken(query).token
+    : ((/\S+$/.exec(query)||[''])[0])
+  ).toLowerCase();
+  if(current&&!current.startsWith('@'))return [];
+  const suggestions=[],seen=new Set();
+  const include=token=>{
+    const normalized=String(token||'').toLowerCase();
+    return !current||normalized.startsWith(current)||current.startsWith(normalized);
+  };
+  const push=token=>{if(include(token))settingsPushSuggestion(suggestions,seen,query,token)};
+  ['@modified','@error','@json','@workspace','@extensions','@tag:','@feature:','@ext:','@lang:','@id:'].forEach(push);
+  Object.keys(SETTINGS_SCOPE_FILTERS).sort().forEach(scope=>push('@feature:'+scope));
+  ['modified','error','json','extension','preview','advanced'].forEach(tag=>push('@tag:'+tag));
+  ['javascript','typescript','python','json','markdown','html','css'].forEach(lang=>push('@lang:'+lang));
+  const metaMap=typeof SETTING_INPUT_META==='object'&&SETTING_INPUT_META?SETTING_INPUT_META:{};
+  Object.values(metaMap).map(meta=>meta&&String(meta.key||meta.path||'').trim()).filter(Boolean).sort().slice(0,32).forEach(key=>push('@id:'+key));
+  return suggestions;
+}
 function renderSettingsFilterSuggestions(){
   const list=$('settings-filter-suggestions'),input=$('settings-search');if(!list||!input)return;
   const current=String(input.value||'');
-  const active=(current.match(/(^|\s)@([A-Za-z0-9_-]*)$/)||[])[2];
+  const active=(current.match(/(^|\s)@([A-Za-z0-9_-]*(?::[^\s]*)?)$/)||[])[2];
   if(active===undefined){list.innerHTML='';return}
-  const prefix=current.replace(/(^|\s)@([A-Za-z0-9_-]*)$/,'$1');
-  const tokenPrefix=String(active||'').toLowerCase();
-  const options=['modified','error','json','editor','files','language','terminal','workspace','assistant','mcp','extensions'];
+  const suggestions=settingsBuiltinFilterSuggestions(current);
+  if(typeof extensionSettingFilterSuggestions==='function'){
+    extensionSettingFilterSuggestions($('ext-settings-container'),current).forEach(value=>{
+      if(!suggestions.some(item=>String(item).toLowerCase()===String(value).toLowerCase()))suggestions.push(value);
+    });
+  }
   list.innerHTML='';
-  options.filter(token=>!tokenPrefix||token.startsWith(tokenPrefix)).slice(0,16).forEach(token=>{
+  suggestions.slice(0,48).forEach(value=>{
     const opt=document.createElement('option');
-    opt.value=(prefix+'@'+token+' ').replace(/^\s+/,'');
+    opt.value=value;
     list.appendChild(opt);
   });
 }
