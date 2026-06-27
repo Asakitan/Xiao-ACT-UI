@@ -9946,8 +9946,15 @@ console.log("frontend word separator behavior ok");
             and "function extensionSettingCoerceObjectNumericValues(value,schema)" in html
             and "function extensionSettingStructuredInputValue(input,type)" in html
             and "function extensionSettingApplyStructuredInputValue(input,type,value)" in html
-            and "function appendExtensionSettingStructuredAssist(row,input,schema,type)" in html
+            and "function extensionSettingSortedObject(value)" in html
+            and "function extensionSettingStructuredStatus(input,type,schema)" in html
+            and "function appendExtensionSettingStructuredAssist(row,input,schema,type,defaultValue)" in html
             and "ext-setting-structured-assist" in html
+            and "ext-setting-structured-status" in html
+            and "Format JSON" in html
+            and "Sort Keys" in html
+            and "Add Property" in html
+            and "Use Default" in html
             and "ext-setting-enum-choices" in html
             and "ext-setting-default-badge" in html
             and "const targetScopedValues=cfg.targetScopedValues||{}" in html
@@ -9985,11 +9992,17 @@ console.log("frontend word separator behavior ok");
             and "function extensionSettingLanguageFilterMatches(row,rowTags,lang)" in html
             and "EXTENSION_SETTINGS_FILTER_STATE_KEY" in html
             and "function extensionSettingRestoreFilterState()" in html
-            and "function extensionSettingTextMatchRank(row,text)" in html
+            and "function extensionSettingTextTokens(text)" in html
+            and "function extensionSettingTextMatchRank(row,text,tokens)" in html
             and "function extensionSettingSortSectionRows(section,text)" in html
+            and "function updateExtensionSettingSectionSummary(section,stats)" in html
             and "list=\"settings-filter-suggestions\"" in html
             and "function extensionSettingFilterSuggestions(container,query)" in html
             and "function renderExtensionSettingSuggestions()" in html
+            and "function extensionSettingTopCounts(rows,readValue,limit)" in html
+            and "function renderExtensionSettingInsight(stats)" in html
+            and "ext-settings-insight" in html
+            and "ext-settings-insight-chip" in html
             and "extensionSettingWriteFilterStateDeferred(extensionSettingCaptureFilterState())" in html
             and "renderExtensionSettingSuggestions();" in html
             and "extensionSettingRestoreFilterState();" in html
@@ -10336,6 +10349,8 @@ console.log("frontend word separator behavior ok");
             "extensionSettingStructuredInputValue",
             "extensionSettingDispatchStructuredInput",
             "extensionSettingApplyStructuredInputValue",
+            "extensionSettingSortedObject",
+            "extensionSettingStructuredStatus",
             "appendExtensionSettingStructuredAssist",
             "extensionSettingSearchText",
             "extensionSettingSplitFilterValues",
@@ -10353,13 +10368,17 @@ console.log("frontend word separator behavior ok");
             "extensionSettingCaptureFilterState",
             "extensionSettingApplyFilterState",
             "extensionSettingRestoreFilterState",
+            "extensionSettingTextTokens",
             "extensionSettingTextMatchRank",
             "extensionSettingSortSectionRows",
+            "updateExtensionSettingSectionSummary",
             "extensionSettingCurrentFilterToken",
             "extensionSettingCompleteFilterToken",
             "extensionSettingPushSuggestion",
             "extensionSettingFilterSuggestions",
             "renderExtensionSettingSuggestions",
+            "extensionSettingTopCounts",
+            "renderExtensionSettingInsight",
             "extensionSettingSearchTokenValue",
             "extensionSettingSetSearchTokenValue",
             "extensionSettingAppendFilterToken",
@@ -10740,15 +10759,16 @@ const arrayAssist = appendExtensionSettingStructuredAssist(arrayAssistRow, array
 let arrayAssistButtons = nodeFindAll(arrayAssist, node => node.tagName === "BUTTON");
 assert(arrayAssistRow.children.includes(arrayAssist)
        && arrayAssist.className === "ext-setting-structured-assist"
-       && nodeTreeText(arrayAssist).indexOf("Add item") >= 0
-       && arrayAssistButtons.length === 1
-       && arrayAssistButtons[0].textContent === "Gamma",
-       "structured array assist renders unique enum add action");
-arrayAssistButtons[0].onclick({ preventDefault(){}, stopPropagation(){} });
+       && nodeTreeText(arrayAssist).indexOf("Array") >= 0
+       && arrayAssistButtons.some(btn => btn.textContent === "Format JSON")
+       && arrayAssistButtons.some(btn => btn.textContent === "Add Item")
+       && arrayAssistButtons.some(btn => btn.textContent === "Gamma"),
+       "structured array assist renders status utilities and unique enum add action");
+arrayAssistButtons.find(btn => btn.textContent === "Gamma").onclick({ preventDefault(){}, stopPropagation(){} });
 assert(JSON.parse(arrayAssistInput.value).join(",") === "alpha,beta,gamma"
        && arrayAssistChanges === 1
-       && arrayAssist.style.display === "none",
-       "structured array assist appends item and refreshes suggestions");
+       && arrayAssist.style.display !== "none",
+       "structured array assist appends item and keeps utility controls available");
 const objectAssistRow = makeNode("div");
 const objectAssistInput = makeNode("textarea");
 objectAssistInput.value = JSON.stringify({ enabled: true }, null, 2);
@@ -10757,11 +10777,13 @@ objectAssistInput.addEventListener("change", () => { objectAssistChanges++; });
 const objectAssist = appendExtensionSettingStructuredAssist(objectAssistRow, objectAssistInput, objectSuggestionSchema, "object");
 let objectAssistButtons = nodeFindAll(objectAssist, node => node.tagName === "BUTTON");
 assert(objectAssistRow.children.includes(objectAssist)
-       && nodeTreeText(objectAssist).indexOf("Add property") >= 0
+       && nodeTreeText(objectAssist).indexOf("Object") >= 0
+       && objectAssistButtons.some(btn => btn.textContent === "Sort Keys")
+       && objectAssistButtons.some(btn => btn.textContent === "Add Property")
        && objectAssistButtons.some(btn => btn.textContent === "level" && btn.title === "Level")
        && objectAssistButtons.some(btn => btn.textContent === "mode")
        && !objectAssistButtons.some(btn => btn.textContent === "enabled"),
-       "structured object assist renders missing property actions");
+       "structured object assist renders status utilities and missing property actions");
 objectAssistButtons.find(btn => btn.textContent === "level").onclick({ preventDefault(){}, stopPropagation(){} });
 let objectAssistValue = JSON.parse(objectAssistInput.value);
 assert(objectAssistValue.level === 2 && objectAssistChanges === 1,
@@ -10773,8 +10795,9 @@ assert(objectAssistValue.mode === "manual" && objectAssistChanges === 2,
        "structured object assist inserts enum default values");
 objectAssistInput.value = "{bad json";
 objectAssistInput.dispatchEvent({ type: "input" });
-assert(objectAssist.style.display === "none",
-       "structured object assist hides while JSON is invalid");
+assert(objectAssist.style.display !== "none"
+       && nodeTreeText(objectAssist).indexOf("Invalid JSON") >= 0,
+       "structured object assist shows JSON status while input is invalid");
 extensionSettingValidateSchemaValue(5, anyOfSchema, "value");
 extensionSettingValidateSchemaValue("auto", anyOfSchema, "value");
 let anyOfRejected = false;

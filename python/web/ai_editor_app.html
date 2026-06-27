@@ -2305,6 +2305,11 @@ pre.code-block { overflow:visible; }
 .ext-setting-enum-choice-desc { overflow:hidden; text-overflow:ellipsis; }
 .ext-setting-structured-assist { display:flex; flex-wrap:wrap; gap:4px; margin:4px 0 5px; align-items:center; }
 .ext-setting-structured-assist-label { color:var(--fg-dim); font-size:10px; margin-right:2px; }
+.ext-setting-structured-status { display:inline-flex; align-items:center; height:20px; padding:0 6px; border-radius:999px;
+  border:1px solid var(--border); color:var(--fg-dim); background:var(--bg3); font:10px var(--mono); }
+.ext-setting-structured-status.valid { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 44%,var(--border)); }
+.ext-setting-structured-status.invalid { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 50%,var(--border));
+  background:color-mix(in srgb,var(--fg-error) 7%,var(--bg3)); }
 .ext-setting-structured-assist button { height:22px; max-width:168px; padding:1px 7px; font:10px var(--sans);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border:1px solid var(--border); background:var(--bg3); color:var(--fg); border-radius:3px; }
 .ext-setting-structured-assist button:hover { border-color:var(--fg-accent); background:var(--bg-hover); }
@@ -2361,6 +2366,11 @@ pre.code-block { overflow:visible; }
 .ext-settings-active-filters button:hover { color:var(--fg); border-color:var(--fg-accent); }
 .ext-settings-empty { display:none; grid-column:1 / -1; color:var(--fg-dim); font-size:11px; padding:3px 0 1px; }
 .ext-settings-result-summary { grid-column:1 / -1; color:var(--fg-dim); font:11px var(--mono); min-height:16px; }
+.ext-settings-insight { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:5px; margin-top:-2px; }
+.ext-settings-insight-chip { display:inline-flex; align-items:center; min-height:20px; max-width:260px; padding:1px 7px;
+  border:1px solid var(--border); background:var(--bg3); color:var(--fg-dim); border-radius:999px;
+  font:10px/16px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ext-settings-insight-chip strong { color:var(--fg); font-family:var(--sans); font-weight:600; margin-right:4px; }
 .ext-settings-filter-actions { grid-column:1 / -1; display:flex; align-items:center; gap:5px; flex-wrap:wrap; }
 .ext-settings-filter-actions button { height:22px; padding:1px 7px; border:1px solid var(--border); background:var(--bg3); color:var(--fg-dim); border-radius:3px; }
 .ext-settings-filter-actions button:hover:not(:disabled) { color:var(--fg); border-color:var(--fg-accent); }
@@ -28149,14 +28159,68 @@ function extensionSettingApplyStructuredInputValue(input,type,value){
   if(typeof input._extensionSettingStructuredAssistRender==='function')input._extensionSettingStructuredAssistRender();
   extensionSettingDispatchStructuredInput(input);
 }
-function appendExtensionSettingStructuredAssist(row,input,schema,type){
+function extensionSettingSortedObject(value){
+  if(!value||typeof value!=='object'||Array.isArray(value))return value;
+  const next={};
+  Object.keys(value).sort((a,b)=>a.localeCompare(b)).forEach(key=>{next[key]=value[key]});
+  return next;
+}
+function extensionSettingStructuredStatus(input,type,schema){
+  const text=String((input&&input.value)||'').trim();
+  if(!text)return {valid:true,text:type==='array'?'JSON array':'JSON object'};
+  try{
+    const parsed=JSON.parse(text);
+    const typed=extensionSettingValidateJsonValue(parsed,type);
+    extensionSettingValidateSchemaValue(type==='object'?extensionSettingCoerceObjectNumericValues(typed,schema):typed,schema,'value');
+    const count=Array.isArray(typed)?typed.length:Object.keys(typed||{}).length;
+    return {valid:true,text:(type==='array'?'Array':'Object')+' · '+count};
+  }catch(e){return {valid:false,text:'Invalid JSON',title:e&&e.message?e.message:''}}
+}
+function appendExtensionSettingStructuredAssist(row,input,schema,type,defaultValue){
   if(!row||!input||(type!=='array'&&type!=='object'))return null;
   const wrap=document.createElement('div');
   wrap.className='ext-setting-structured-assist';
   const render=()=>{
     wrap.innerHTML='';
     const value=extensionSettingStructuredInputValue(input,type);
-    if(value==null){wrap.style.display='none';return}
+    const status=extensionSettingStructuredStatus(input,type,schema);
+    const statusEl=document.createElement('span');
+    statusEl.className='ext-setting-structured-status '+(status.valid?'valid':'invalid');
+    statusEl.textContent=status.text;
+    statusEl.title=status.title||'Structured setting JSON status';
+    wrap.appendChild(statusEl);
+    const utilityActions=[];
+    if(status.valid&&value!=null){
+      utilityActions.push({label:'Format JSON',title:'Format and resize this JSON value',apply:()=>extensionSettingApplyStructuredInputValue(input,type,value)});
+      if(type==='object'&&value&&typeof value==='object'&&!Array.isArray(value)){
+        utilityActions.push({label:'Sort Keys',title:'Sort object keys alphabetically',apply:()=>extensionSettingApplyStructuredInputValue(input,type,extensionSettingSortedObject(value))});
+        utilityActions.push({label:'Add Property',title:'Add a new empty property',apply:()=>{
+          const next=Object.assign({},value);
+          let idx=1,key='newProperty';
+          while(Object.prototype.hasOwnProperty.call(next,key)){idx++;key='newProperty'+idx}
+          next[key]='';
+          extensionSettingApplyStructuredInputValue(input,type,next);
+        }});
+      }
+      if(type==='array'&&Array.isArray(value)){
+        utilityActions.push({label:'Add Item',title:'Append an empty item',apply:()=>{
+          const next=value.slice();next.push('');extensionSettingApplyStructuredInputValue(input,type,next);
+        }});
+      }
+      if(defaultValue!==undefined){
+        utilityActions.push({label:'Use Default',title:'Set this target to the default value',apply:()=>extensionSettingApplyStructuredInputValue(input,type,defaultValue)});
+      }
+      utilityActions.push({label:'Clear',title:'Replace with an empty '+type,apply:()=>extensionSettingApplyStructuredInputValue(input,type,type==='array'?[]:{})});
+    }
+    utilityActions.forEach(action=>{
+      const btn=document.createElement('button');
+      btn.type='button';
+      btn.textContent=action.label;
+      btn.title=action.title||action.label;
+      btn.onclick=ev=>{if(ev){ev.preventDefault();ev.stopPropagation()}action.apply()};
+      wrap.appendChild(btn);
+    });
+    if(value==null){wrap.style.display='';return}
     const actions=[];
     if(type==='array'&&Array.isArray(value)){
       extensionSettingArrayEnumSuggestions(schema,value,undefined).slice(0,8).forEach(item=>{
@@ -28174,20 +28238,21 @@ function appendExtensionSettingStructuredAssist(row,input,schema,type){
         }});
       });
     }
-    if(!actions.length){wrap.style.display='none';return}
     wrap.style.display='';
-    const label=document.createElement('span');
-    label.className='ext-setting-structured-assist-label';
-    label.textContent=type==='array'?'Add item':'Add property';
-    wrap.appendChild(label);
-    actions.forEach(action=>{
-      const btn=document.createElement('button');
-      btn.type='button';
-      btn.textContent=action.label;
-      btn.title=action.title||action.label;
-      btn.onclick=ev=>{if(ev){ev.preventDefault();ev.stopPropagation()}action.apply()};
-      wrap.appendChild(btn);
-    });
+    if(actions.length){
+      const label=document.createElement('span');
+      label.className='ext-setting-structured-assist-label';
+      label.textContent=type==='array'?'Suggestions':'Properties';
+      wrap.appendChild(label);
+      actions.forEach(action=>{
+        const btn=document.createElement('button');
+        btn.type='button';
+        btn.textContent=action.label;
+        btn.title=action.title||action.label;
+        btn.onclick=ev=>{if(ev){ev.preventDefault();ev.stopPropagation()}action.apply()};
+        wrap.appendChild(btn);
+      });
+    }
   };
   input._extensionSettingStructuredAssistRender=render;
   if(typeof input.addEventListener==='function')input.addEventListener('input',render);
@@ -28814,24 +28879,52 @@ function extensionSettingApplyFilterState(state){
 function extensionSettingRestoreFilterState(){
   extensionSettingApplyFilterState(extensionSettingReadFilterState());
 }
-function extensionSettingTextMatchRank(row,text){
+function extensionSettingTextTokens(text){
+  return String(text||'').toLowerCase().split(/\s+/).map(item=>item.trim()).filter(Boolean);
+}
+function extensionSettingTextMatchRank(row,text,tokens){
   text=String(text||'').toLowerCase().trim();
-  if(!text)return 0;
+  const parts=Array.isArray(tokens)?tokens:extensionSettingTextTokens(text);
+  if(!text&&!parts.length)return 0;
   const key=String(row&&row.dataset&&row.dataset.extSettingKey||'').toLowerCase();
   const title=String(row&&row.dataset&&row.dataset.extSettingTitle||'').toLowerCase();
+  const extId=String(row&&row.dataset&&row.dataset.extSettingExtensionId||'').toLowerCase();
+  const ext=String(row&&row.dataset&&row.dataset.extSettingExtension||'').toLowerCase();
+  const scope=String(row&&row.dataset&&row.dataset.extSettingScope||'').toLowerCase();
+  const type=String(row&&row.dataset&&row.dataset.extSettingType||'').toLowerCase();
   const feature=String(row&&row.dataset&&row.dataset.extSettingFeature||'').toLowerCase();
   const value=String(row&&row.dataset&&row.dataset.extSettingValue||'').toLowerCase();
   const def=String(row&&row.dataset&&row.dataset.extSettingDefault||'').toLowerCase();
   const search=String(row&&row.dataset&&row.dataset.extSettingSearch||row&&row.textContent||'').toLowerCase();
-  if(key===text)return 1000;
-  if(key.startsWith(text))return 920;
-  if(title===text)return 880;
-  if(title.startsWith(text))return 820;
-  if(key.includes(text))return 760;
-  if(feature.includes(text))return 680;
-  if(value.includes(text))return 620;
-  if(def.includes(text))return 560;
-  return search.includes(text)?420:0;
+  let score=0;
+  if(text){
+    if(key===text)score+=1200;
+    else if(key.startsWith(text))score+=1060;
+    else if(title===text)score+=980;
+    else if(title.startsWith(text))score+=900;
+    else if(extId===text)score+=840;
+    else if(key.includes(text))score+=760;
+    else if(title.includes(text))score+=700;
+    else if(ext.includes(text))score+=620;
+    else if(feature.includes(text))score+=560;
+    else if(value.includes(text))score+=460;
+    else if(def.includes(text))score+=420;
+    else if(search.includes(text))score+=320;
+  }
+  parts.forEach(token=>{
+    if(key===token)score+=240;
+    else if(key.startsWith(token))score+=190;
+    else if(title.startsWith(token))score+=160;
+    else if(key.includes(token)||title.includes(token))score+=120;
+    else if(extId.includes(token)||ext.includes(token))score+=85;
+    else if(feature.includes(token)||scope===token||type===token)score+=65;
+    else if(value.includes(token)||def.includes(token))score+=45;
+    else if(search.includes(token))score+=25;
+  });
+  if(row&&row.dataset&&row.dataset.extSettingModified==='1')score+=18;
+  if(row&&row.classList&&row.classList.contains('invalid'))score+=14;
+  if(row&&row.classList&&row.classList.contains('scope-readonly'))score-=8;
+  return score;
 }
 function extensionSettingSortSectionRows(section,text){
   const inner=section&&section.querySelector?section.querySelector('div'):null;
@@ -28844,6 +28937,22 @@ function extensionSettingSortSectionRows(section,text){
       return ao-bo;
     })
     .forEach(row=>inner.appendChild(row));
+}
+function updateExtensionSettingSectionSummary(section,stats){
+  if(!section)return;
+  const summary=section.querySelector(':scope > summary');
+  if(!summary)return;
+  const base=summary.dataset.extSettingsSummaryBase||summary.textContent||'Extension Settings';
+  summary.dataset.extSettingsSummaryBase=base;
+  const data=stats&&typeof stats==='object'?stats:{};
+  const visible=Number(data.visible||0),total=Number(data.total||0);
+  const modified=Number(data.modified||0),invalid=Number(data.invalid||0);
+  const hidden=Number(data.hidden||0);
+  const extras=[];
+  if(modified)extras.push(modified+' modified');
+  if(invalid)extras.push(invalid+' invalid');
+  if(hidden)extras.push(hidden+' hidden');
+  summary.textContent=base+(total?' · '+visible+'/'+total:'')+(extras.length?' · '+extras.join(' · '):'');
 }
 function extensionSettingCurrentFilterToken(query){
   const raw=String(query||'');
@@ -29047,6 +29156,39 @@ function extensionSettingResultSummary(visibleRows,totalRows,stats){
     +(modified?' · '+modified+' modified':'')
     +(invalid?' · '+invalid+' invalid':'');
 }
+function extensionSettingTopCounts(rows,readValue,limit){
+  const counts=new Map();
+  (rows||[]).forEach(row=>{
+    const value=String(readValue(row)||'').trim();
+    if(!value)return;
+    counts.set(value,(counts.get(value)||0)+1);
+  });
+  return Array.from(counts.entries()).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,limit||3);
+}
+function renderExtensionSettingInsight(stats){
+  const el=$('ext-settings-insight');if(!el)return;
+  const rows=stats&&Array.isArray(stats.visibleRows)?stats.visibleRows:[];
+  el.innerHTML='';
+  if(!rows.length){el.style.display='none';return}
+  const add=(label,value,title)=>{
+    if(value==null||String(value).trim()==='')return;
+    const chip=document.createElement('span');chip.className='ext-settings-insight-chip';
+    const strong=document.createElement('strong');strong.textContent=label;
+    chip.appendChild(strong);
+    chip.appendChild(document.createTextNode(String(value)));
+    if(title)chip.title=title;
+    el.appendChild(chip);
+  };
+  add('Sections',String(Number(stats.visibleSections||0)||new Set(rows.map(row=>row.closest('details[data-ext-settings-section]')).filter(Boolean)).size));
+  const extensions=extensionSettingTopCounts(rows,row=>row.dataset.extSettingExtensionId||String(row.dataset.extSettingExtension||'').split(/\s+/)[0],2);
+  if(extensions.length)add('Extension',extensions.map(item=>item[0]+' '+item[1]).join(', '));
+  const types=extensionSettingTopCounts(rows,row=>row.dataset.extSettingType,4);
+  if(types.length)add('Types',types.map(item=>item[0]+' '+item[1]).join(', '));
+  const scopes=extensionSettingTopCounts(rows,row=>row.dataset.extSettingScope,3);
+  if(scopes.length)add('Scopes',scopes.map(item=>item[0]+' '+item[1]).join(', '));
+  if(Number(stats.hiddenVisible||0))add('Hidden',String(stats.hiddenVisible));
+  el.style.display=el.children.length?'':'none';
+}
 function renderExtensionSettingFilterState(visibleRows,totalRows,stats){
   stats=stats&&typeof stats==='object'?stats:{};
   if(!Array.isArray(stats.visibleRows)){
@@ -29086,6 +29228,7 @@ function renderExtensionSettingFilterState(visibleRows,totalRows,stats){
   }
   const summary=$('ext-settings-result-summary');
   if(summary)summary.textContent=extensionSettingResultSummary(visibleRows,totalRows,stats);
+  renderExtensionSettingInsight(stats);
   ['ext-settings-prev-result','ext-settings-next-result'].forEach(id=>{const btn=$(id);if(btn)btn.disabled=!visibleRows});
   const modifiedBtn=$('ext-settings-first-modified');if(modifiedBtn)modifiedBtn.disabled=!(Number(stats.modifiedVisible)||0);
   const errorBtn=$('ext-settings-first-error');if(errorBtn)errorBtn.disabled=!(Number(stats.invalidVisible)||0);
@@ -29153,15 +29296,16 @@ function applyExtensionSettingsFilter(){
   const scopeFilter=(($('ext-settings-scope')||{}).value)||'';
   const targetFilter=(($('ext-settings-target')||{}).value)||'';
   const query=extensionSettingsQuery();
+  const textTokens=extensionSettingTextTokens(query.text);
   const cb=$('ext-settings-modified');if(cb)cb.checked=query.modifiedOnly;
   const hiddenCb=$('ext-settings-hidden');if(hiddenCb)hiddenCb.checked=query.hiddenOnly;
   const sections=extensionSettingFilterDomCache(container).sections;
-  let visibleRows=0,totalRows=0,visibleSections=0,modifiedVisible=0,invalidVisible=0,resettableVisible=0;
+  let visibleRows=0,totalRows=0,visibleSections=0,modifiedVisible=0,invalidVisible=0,resettableVisible=0,hiddenVisible=0;
   const visibleRowList=[];
   sections.forEach(record=>{
     const section=record.section;
     const categoryOk=!category||section.dataset.extSettingsCategory===category;
-    let sectionRows=0;
+    let sectionRows=0,sectionModified=0,sectionInvalid=0,sectionHidden=0;
     record.rows.forEach(row=>{
       totalRows++;
       const rowTags=extensionSettingRowTags(row);
@@ -29169,7 +29313,8 @@ function applyExtensionSettingsFilter(){
         &&(!query.scopes.length||query.scopes.includes(row.dataset.extSettingScope||''));
       const targetOk=(!targetFilter||row.dataset.extSettingTarget===targetFilter)
         &&(!query.targets.length||query.targets.some(target=>(row.dataset.extSettingTarget||'')===target||rowTags.includes('target:'+target)));
-      const textOk=!query.text||extensionSettingRowSearchText(row).includes(query.text);
+      const searchText=extensionSettingRowSearchText(row);
+      const textOk=!textTokens.length||textTokens.every(token=>searchText.includes(token));
       const tagOk=!query.tags.length||query.tags.every(tag=>rowTags.includes(tag));
       const hiddenOk=query.hiddenOnly?rowTags.includes('hidden'):!rowTags.includes('hidden');
       const extOk=!query.extensions.length||query.extensions.some(ext=>(row.dataset.extSettingExtension||'').includes(ext));
@@ -29206,16 +29351,18 @@ function applyExtensionSettingsFilter(){
         &&(!query.excludedValues.length||!query.excludedValues.some(value=>(row.dataset.extSettingValue||'').includes(value)))
         &&(!query.excludedDefaults.length||!query.excludedDefaults.some(value=>(row.dataset.extSettingDefault||'').includes(value)));
       const show=categoryOk&&scopeOk&&targetOk&&textOk&&tagOk&&hiddenOk&&extOk&&typeOk&&policyOk&&experimentOk&&agentsWindowOk&&restrictedOk&&syncOk&&idOk&&featureOk&&langOk&&valueOk&&defaultOk&&stableOk&&modifiedOk&&readonlyOk&&writableOk&&configuredOk&&unconfiguredOk&&defaultLockedOk&&onlineOk&&excludedOk;
-      row.dataset.extSettingMatchRank=show?String(extensionSettingTextMatchRank(row,query.text)):'0';
+      row.dataset.extSettingMatchRank=show?String(extensionSettingTextMatchRank(row,query.text,textTokens)):'0';
       row.style.display=show?'':'none';
       if(show){
         visibleRows++;sectionRows++;visibleRowList.push(row);
-        if(row.dataset.extSettingModified==='1')modifiedVisible++;
-        if(extensionSettingRowInvalid(row))invalidVisible++;
+        if(row.dataset.extSettingModified==='1'){modifiedVisible++;sectionModified++}
+        if(extensionSettingRowInvalid(row)){invalidVisible++;sectionInvalid++}
+        if(rowTags.includes('hidden')){hiddenVisible++;sectionHidden++}
         if(row.dataset.extSettingModified==='1'&&!row.classList.contains('scope-readonly'))resettableVisible++;
       }
     });
     extensionSettingSortSectionRows(section,query.text);
+    updateExtensionSettingSectionSummary(section,{visible:sectionRows,total:record.rows.length,modified:sectionModified,invalid:sectionInvalid,hidden:sectionHidden});
     section.style.display=sectionRows?'':'none';
     if(sectionRows){visibleSections++;if(query.text||query.tags.length||query.scopes.length||query.targets.length||query.extensions.length||query.types.length||query.policies.length||query.experiments.length||query.agentsWindows.length||query.syncs.length||query.ids.length||query.features.length||query.languages.length||query.values.length||query.defaults.length||query.excludedTags.length||query.excludedScopes.length||query.excludedTargets.length||query.excludedExtensions.length||query.excludedTypes.length||query.excludedIds.length||query.excludedFeatures.length||query.excludedLanguages.length||query.excludedValues.length||query.excludedDefaults.length||query.restrictedOnly||query.experimentOnly||query.agentsWindowOnly||query.stableOnly||query.readonlyOnly||query.writableOnly||query.configuredOnly||query.unconfiguredOnly||query.defaultLockedOnly||query.onlineOnly||query.modifiedOnly||query.hiddenOnly||category||scopeFilter||targetFilter)section.open=true}
   });
@@ -29225,7 +29372,7 @@ function applyExtensionSettingsFilter(){
   if(divider)divider.style.display=visibleSections?'':'none';
   const toolbar=container.querySelector('[data-ext-settings-filter="1"]');
   if(toolbar)toolbar.style.display=totalRows?'':'none';
-  renderExtensionSettingFilterState(visibleRows,totalRows,{visibleRows:visibleRowList,modifiedVisible,invalidVisible,resettableVisible});
+  renderExtensionSettingFilterState(visibleRows,totalRows,{visibleRows:visibleRowList,modifiedVisible,invalidVisible,resettableVisible,hiddenVisible,visibleSections});
   renderExtensionSettingSuggestions();
   extensionSettingWriteFilterStateDeferred(extensionSettingCaptureFilterState());
   updateSettingsNavCounts();
@@ -29428,7 +29575,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       }
       applyExtensionSettingInputConstraints(input,schema,type);
       setExtensionSettingInputValue(input,schema,type,value);
-      if(type==='array'||type==='object')appendExtensionSettingStructuredAssist(row,input,schema,type);
+      if(type==='array'||type==='object')appendExtensionSettingStructuredAssist(row,input,schema,type,defaultValue);
       if(enumHelp)renderExtensionSettingEnumDescription(enumHelp,schema,input);
       if(type!=='array'&&type!=='object')input.placeholder=defaultValue!=null?String(defaultValue):'';
       const err=document.createElement('div');err.className='ext-setting-error';row.appendChild(err);
@@ -29606,6 +29753,7 @@ async function renderExtensionSettings(){
   const count=document.createElement('span');count.className='ext-settings-count';count.id='ext-settings-filter-count';count.textContent='0 / 0';
   const activeFilters=document.createElement('div');activeFilters.className='ext-settings-active-filters';activeFilters.id='ext-settings-active-filters';
   const resultSummary=document.createElement('div');resultSummary.className='ext-settings-result-summary';resultSummary.id='ext-settings-result-summary';
+  const resultInsight=document.createElement('div');resultInsight.className='ext-settings-insight';resultInsight.id='ext-settings-insight';
   const resultActions=document.createElement('div');resultActions.className='ext-settings-filter-actions';resultActions.id='ext-settings-filter-actions';
   const addResultAction=(id,label,title,handler)=>{
     const btn=document.createElement('button');btn.type='button';btn.id=id;btn.textContent=label;btn.title=title;btn.onclick=handler;resultActions.appendChild(btn);return btn;
@@ -29619,7 +29767,7 @@ async function renderExtensionSettings(){
     if(count)showToast('Reset '+count+' visible modified extension setting'+(count===1?'':'s'),'info');
   });
   const emptyState=document.createElement('div');emptyState.className='ext-settings-empty';emptyState.id='ext-settings-empty';
-  filter.appendChild(categorySelect);filter.appendChild(scopeSelect);filter.appendChild(targetSelect);filter.appendChild(modifiedLabel);filter.appendChild(hiddenLabel);filter.appendChild(filterButton);filter.appendChild(clearButton);filter.appendChild(count);filter.appendChild(filterMenu);filter.appendChild(activeFilters);filter.appendChild(resultSummary);filter.appendChild(resultActions);filter.appendChild(emptyState);
+  filter.appendChild(categorySelect);filter.appendChild(scopeSelect);filter.appendChild(targetSelect);filter.appendChild(modifiedLabel);filter.appendChild(hiddenLabel);filter.appendChild(filterButton);filter.appendChild(clearButton);filter.appendChild(count);filter.appendChild(filterMenu);filter.appendChild(activeFilters);filter.appendChild(resultSummary);filter.appendChild(resultInsight);filter.appendChild(resultActions);filter.appendChild(emptyState);
   fragment.appendChild(filter);
   const seenCategories=new Set();
   const orderedConfigs=configs.slice().sort((a,b)=>{
@@ -29875,7 +30023,7 @@ async function renderExtensionSettings(){
       }
       applyExtensionSettingInputConstraints(input,schema,type);
       setExtensionSettingInputValue(input,schema,type,currentVal);
-      if(type==='array'||type==='object')appendExtensionSettingStructuredAssist(row,input,schema,type);
+      if(type==='array'||type==='object')appendExtensionSettingStructuredAssist(row,input,schema,type,defaultVal);
       if(enumHelp)renderExtensionSettingEnumDescription(enumHelp,schema,input);
       if(type!=='array'&&type!=='object')input.placeholder=defaultVal!=null?String(defaultVal):'';
       const err=document.createElement('div');err.className='ext-setting-error';row.appendChild(err);
