@@ -1233,7 +1233,7 @@ pre.code-block code .type { color:var(--fg-type); }
   outline:none; min-width:0; }
 .chat-chip,.chat-model-inline,.chat-run-chip { display:inline-flex; align-items:center; gap:4px; padding:0 8px; cursor:pointer;
   transition:border-color .14s ease, background .14s ease, color .14s ease, box-shadow .14s ease; }
-.chat-select-chip { width:142px; max-width:184px; padding:0 20px 0 9px; cursor:pointer; flex:0 1 142px; }
+.chat-select-chip { width:150px; max-width:208px; padding:0 9px; cursor:pointer; flex:0 1 150px; }
 .chat-model-inline { width:190px; max-width:260px; justify-content:space-between; font-family:var(--mono); flex:0 1 190px; text-align:left; }
 .chat-model-inline .control-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-model-inline .control-caret { font-size:8px; opacity:.65; margin-left:4px; flex:0 0 auto; }
@@ -1245,16 +1245,16 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-select-chip.agent.active { color:var(--fg); border-color:color-mix(in srgb, var(--fg-success) 45%, var(--border)); }
 .chat-control-menu { position:relative; display:inline-flex; align-items:center; flex:0 0 auto; min-width:0; }
 .chat-control-native { display:none!important; visibility:hidden!important; position:absolute!important; width:0!important; height:0!important; opacity:0!important; pointer-events:none!important; appearance:none; -webkit-appearance:none; }
-.chat-control-trigger { justify-content:space-between; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+.chat-control-trigger { display:inline-flex; align-items:center; gap:4px; justify-content:space-between; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   transition:border-color .14s ease, background .14s ease, color .14s ease, box-shadow .14s ease; }
 .chat-control-trigger .control-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-control-trigger .control-caret { font-size:8px; opacity:.65; margin-left:4px; flex:0 0 auto; }
-.chat-control-trigger.provider { width:128px; max-width:176px; flex-basis:128px; }
-.chat-control-trigger.model { width:190px; max-width:280px; flex-basis:190px; }
-.chat-control-trigger.agent { width:150px; max-width:194px; flex-basis:150px; }
+.chat-control-trigger.provider { width:132px; max-width:188px; flex-basis:132px; }
+.chat-control-trigger.model { width:230px; max-width:320px; flex-basis:230px; }
+.chat-control-trigger.agent { width:168px; max-width:220px; flex-basis:168px; }
 .chat-control-trigger.mode { width:92px; max-width:120px; flex-basis:92px; color:var(--fg-accent);
   border-color:color-mix(in srgb, var(--border-focus) 50%, var(--border)); }
-.chat-control-trigger.workflow { width:158px; max-width:220px; flex-basis:158px; }
+.chat-control-trigger.workflow { width:178px; max-width:240px; flex-basis:178px; }
 .chat-control-popup { position:absolute; bottom:calc(100% + 7px); left:0; display:none; min-width:250px;
   max-width:min(420px, calc(100vw - 24px)); max-height:min(360px, 55vh); overflow:auto;
   background:var(--bg2); border:1px solid color-mix(in srgb,var(--border-focus) 32%,var(--border));
@@ -1374,8 +1374,8 @@ pre.code-block code .type { color:var(--fg-type); }
   background:var(--fg-dim); position:absolute; top:1px; left:1px; transition:all .2s; }
 .mode-popup-toggle.on .mp-switch { background:var(--fg-accent); border-color:var(--fg-accent); }
 .mode-popup-toggle.on .mp-switch::after { left:13px; background:#fff; }
-.chat-select-chip.agent { width:150px; max-width:194px; flex-basis:150px; }
-.chat-select-chip.workflow { width:158px; max-width:220px; flex-basis:158px; }
+.chat-select-chip.agent { width:168px; max-width:220px; flex-basis:168px; }
+.chat-select-chip.workflow { width:178px; max-width:240px; flex-basis:178px; }
 .chat-run-chip { color:var(--fg-accent); background:color-mix(in srgb, var(--border-focus) 12%, var(--bg3)); }
 .chat-run-chip:disabled { opacity:0.45; cursor:default; color:var(--fg-dim); }
 .chat-composer-action { width:22px; height:22px; border:1px solid transparent; border-radius:4px;
@@ -2355,10 +2355,10 @@ pre.code-block { overflow:visible; }
       </div>
     </div>
     <!-- Extension view container sidebar (dynamic, populated by extensions) -->
-    <div class="sb-view" id="sb-ext-viewcontainer" style="display:none">
+    <div class="sb-view" id="sb-ext-viewcontainer" style="display:none" role="region" aria-labelledby="ext-vc-title">
       <div class="sb-header"><span id="ext-vc-title">Extension</span></div>
-      <div class="sb-section" id="ext-vc-content" style="padding:8px 12px">
-        <div style="color:var(--fg-dim);font-size:12px">No views registered.</div>
+      <div class="sb-section" id="ext-vc-content" style="padding:8px 12px" role="group" aria-label="Extension views">
+        <div style="color:var(--fg-dim);font-size:12px" role="status">No views registered.</div>
       </div>
     </div>
     <!-- Instructions sidebar -->
@@ -8141,15 +8141,22 @@ function assistantControlPopupSnapshot(kind){
 function assistantCustomEndpointModelPickerSnapshot(){
   const previousConfig={provider:config.provider,base_url:config.base_url,model:config.model};
   const previousFetched=chatProviderModelOptions.custom;
+  const modelInput=$('s-model'),baseInput=$('s-baseurl');
+  const previousSettingModel=modelInput?modelInput.value:'';
+  const previousSettingBase=baseInput?baseInput.value:'';
   config.provider='custom';
   config.base_url='https://custom.endpoint.example/v1';
   config.model='';
-  chatProviderModelOptions.custom=[{id:'custom-endpoint-picked-model',name:'custom-endpoint-picked-model'}];
+  if(modelInput)modelInput.value='custom-endpoint-setting-model';
+  if(baseInput)baseInput.value='https://custom.endpoint.example/v1';
+  chatProviderModelOptions.custom=[{id:'custom-endpoint-fetched-model',name:'custom-endpoint-fetched-model'}];
   renderChatControlPopups();
   const rows=modelOptionRows();
   const popup=assistantControlPopupSnapshot('model');
   const preferred=preferredModelForProvider('custom');
   chatProviderModelOptions.custom=previousFetched;
+  if(modelInput)modelInput.value=previousSettingModel;
+  if(baseInput)baseInput.value=previousSettingBase;
   config.provider=previousConfig.provider;
   config.base_url=previousConfig.base_url;
   config.model=previousConfig.model;
@@ -8158,6 +8165,7 @@ function assistantCustomEndpointModelPickerSnapshot(){
     rowIds:rows.map(controlItemId),
     rowCount:rows.length,
     preferred,
+    settingValue:'custom-endpoint-setting-model',
     popupText:popup.visibleText,
     optionCount:popup.optionCount,
     customModelCount:popup.customModelCount,
@@ -8510,7 +8518,7 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready',providerPopup.shown&&providerPopup.optionCount>=1&&providerPopup.focusableCount===providerPopup.optionCount&&providerPopup.keyboardReady,JSON.stringify(providerPopup));
   assistantUiSelfCheckRecord(checks,'model-popup-configured-models-ready',modelPopup.shown&&modelPopup.optionCount>=1&&modelPopup.focusableCount===modelPopup.optionCount&&modelPopup.keyboardReady,JSON.stringify(modelPopup));
   assistantUiSelfCheckRecord(checks,'model-popup-custom-endpoint-models-ready',modelPopup.shown&&modelPopup.customModelCount>=1&&modelPopup.visibleText.includes('custom-endpoint-model')&&modelPopup.visibleText.toLowerCase().includes('custom endpoint'),JSON.stringify(modelPopup));
-  assistantUiSelfCheckRecord(checks,'model-popup-custom-endpoint-selection-ready',customEndpointModelPicker.rowIds.includes('custom-endpoint-picked-model')&&customEndpointModelPicker.preferred==='custom-endpoint-picked-model'&&customEndpointModelPicker.optionCount>=1&&customEndpointModelPicker.customModelCount>=1&&customEndpointModelPicker.keyboardReady,JSON.stringify(customEndpointModelPicker));
+  assistantUiSelfCheckRecord(checks,'model-popup-custom-endpoint-selection-ready',customEndpointModelPicker.rowIds.includes('custom-endpoint-setting-model')&&customEndpointModelPicker.rowIds.includes('custom-endpoint-fetched-model')&&customEndpointModelPicker.preferred==='custom-endpoint-setting-model'&&customEndpointModelPicker.optionCount>=2&&customEndpointModelPicker.customModelCount>=2&&customEndpointModelPicker.keyboardReady,JSON.stringify(customEndpointModelPicker));
   assistantUiSelfCheckRecord(checks,'composer-native-selects-hidden',layout.nativeHidden===true,JSON.stringify(layout.nativeControls));
   assistantUiSelfCheckRecord(checks,'mode-popup-custom-control-ready',modePopup.shown&&modePopup.optionCount>=6&&modePopup.modeActionCount>=6&&modePopup.keyboardReady&&!modePopup.oldModePopupPresent&&modePopup.visibleText.includes('Agent')&&modePopup.visibleText.includes('Default Approvals'),JSON.stringify(modePopup));
   assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped',[providerPopup,modelPopup,agentPopup,modePopup,workflowPopup].every(s=>s.shown&&s.display==='block'&&s.rectReady&&s.opensAboveTrigger&&s.notToolbarClipped&&!s.className.includes('mode-popup')),JSON.stringify({providerPopup,modelPopup,agentPopup,modePopup,workflowPopup}));
@@ -21025,6 +21033,8 @@ function showNotebookSurface(tab){
   container.style.display='flex';
   container.classList.add('notebook-editor');
   host.classList.add('active');
+  host.setAttribute('role','document');
+  host.setAttribute('aria-label','Extension notebook');
   host.dataset.tabId=String(tab.id);
   const nb=tab.notebook||{};
   const cells=Array.isArray(nb.cells)?nb.cells:[];
@@ -21077,7 +21087,7 @@ function showNotebookSurface(tab){
 function hideNotebookSurface(){
   const container=$('editor-container'),host=$('editor-notebook-host');
   if(container)container.classList.remove('notebook-editor');
-  if(host){host.classList.remove('active');host.innerHTML='';host.dataset.tabId=''}
+  if(host){host.classList.remove('active');host.innerHTML='';host.dataset.tabId='';host.removeAttribute('role');host.removeAttribute('aria-label')}
 }
 function cachedWebviewForProvider(p){
   const ids=providerCandidateViewIds(p);ids.push('provider.'+String(p&&p.id||''));
@@ -21654,6 +21664,7 @@ function _injectWebviewHtml(container,viewId,html,initialState){
   const iframe=document.createElement('iframe');
   iframe.className='provider-webview-frame';
   iframe.id='webview-frame-'+providerDomKey(viewId);
+  iframe.title='Extension webview '+String(viewId||'');
   iframe.style.cssText='border:none;width:100%;height:100%;flex:1;background:var(--bg)';
   iframe.setAttribute('sandbox','allow-scripts');
   container.appendChild(iframe);
@@ -23262,6 +23273,22 @@ function settingsModelListRows(provider){
     return {id,name:String(option.textContent||id),provider:pid,custom:pid==='custom',description:pid==='custom'?'Custom endpoint model':'Fetched from '+providerLabel(pid),base_url:config.base_url||''};
   }).filter(Boolean);
 }
+function customEndpointSettingModelRows(provider){
+  const pid=String(provider||config.provider||'').trim();
+  if(pid!=='custom')return [];
+  const modelInput=$('s-model');
+  const baseInput=$('s-baseurl');
+  const model=String((modelInput&&modelInput.value)||config.model||'').trim();
+  if(!model)return [];
+  return [{
+    id:model,
+    name:model,
+    provider:'custom',
+    custom:true,
+    description:'Custom endpoint model',
+    base_url:String((baseInput&&baseInput.value)||config.base_url||'').trim()
+  }];
+}
 function modelOptionRows(){
   const provider=String(config.provider||'openai').trim();
   const rows=normalizeControlList(chatControlState.models,'models');
@@ -23281,6 +23308,7 @@ function modelOptionRows(){
     const meta=model&&typeof model==='object'?model:{};
     if((meta.custom||providerMatchesModelMeta(meta,provider)))pushModel(model);
   });
+  customEndpointSettingModelRows(provider).forEach(model=>pushModel(model));
   normalizeControlList(chatProviderModelOptions[provider],'models').forEach(model=>pushModel({
     id:controlItemId(model),name:controlItemName(model)||controlItemId(model),provider,custom:provider==='custom',description:provider==='custom'?'Custom endpoint model':'Fetched from '+providerLabel(provider),base_url:config.base_url||''
   }));
@@ -23294,6 +23322,8 @@ function preferredModelForProvider(provider){
   const pid=String(provider||config.provider||'').trim();
   const defaultModel=providerDefaultModelFromControls(pid);
   if(defaultModel)return defaultModel;
+  const endpointSetting=customEndpointSettingModelRows(pid).map(controlItemId).find(Boolean);
+  if(endpointSetting)return endpointSetting;
   const fetched=normalizeControlList(chatProviderModelOptions[pid],'models').map(controlItemId).find(Boolean);
   if(fetched)return fetched;
   const settings=settingsModelListRows(pid).map(controlItemId).find(Boolean);
@@ -27466,6 +27496,8 @@ function appendExtensionTitleActions(title,view,state){
 function renderExtensionTreeView(view){
   const card=document.createElement('div');card.className='tool-call';card.style.margin='0 0 8px 0';
   const state=view.runtimeState||{};
+  card.setAttribute('role','group');
+  card.setAttribute('aria-label','Extension TreeView '+(state.title||extensionViewTitle(view)));
   const welcomeEntries=extensionWelcomeEntries(view,state);
   const dnd=extensionTreeDndState(view,state);
   const title=document.createElement('div');title.className='tool-header open';
@@ -27494,6 +27526,7 @@ function renderExtensionTreeView(view){
     :(Array.isArray(state.children)?state.children.map(label=>({label:String(label),children:[]})):[]);
   if(nodes.length){
     const tree=document.createElement('div');tree.setAttribute('role','tree');
+    tree.setAttribute('aria-label',state.title||extensionViewTitle(view));
     tree.dataset.viewId=view.id||state.view_id||state.viewId||'';
     const viewVersion=Number(state.refreshVersion)||0;
     tree.dataset.refreshVersion=String(viewVersion);
@@ -27636,6 +27669,8 @@ function renderExtensionTreeNode(viewId,node,depth,viewVersion,dnd,posInSet,setS
 function renderExtensionManifestView(view){
   const card=document.createElement('div');card.className='tool-call';card.style.margin='0 0 8px 0';
   const state=view.runtimeState||{};
+  card.setAttribute('role','group');
+  card.setAttribute('aria-label','Extension view '+(state.title||extensionViewTitle(view)));
   applyExtensionRuntimeViewMetadata(card,view,state,state.kind||view.runtimeKind||view.type||'view');
   const welcomeEntries=extensionWelcomeEntries(view,state);
   appendExtensionRuntimeViewHeader(card,view,state,state.kind||view.runtimeKind||view.type||'view');
@@ -27694,6 +27729,8 @@ function appendExtensionRuntimeViewHeader(card,view,state,kind){
 function renderExtensionWebviewView(view){
   const state=view.runtimeState||{};
   const host=document.createElement('div');host.className='tool-call';host.style.margin='0 0 8px 0';
+  host.setAttribute('role','group');
+  host.setAttribute('aria-label','Extension WebviewView '+(state.title||extensionViewTitle(view)));
   applyExtensionRuntimeViewMetadata(host,view,state,'webviewView');
   const welcomeEntries=extensionWelcomeEntries(view,state);
   appendExtensionRuntimeViewHeader(host,view,state,'webviewView');
@@ -27733,6 +27770,10 @@ function renderExtensionViewsInto(contentEl,item,options){
   if(!contentEl)return;
   options=options||{};
   const views=Array.isArray(item.views)?item.views:[];
+  contentEl.dataset.extensionContainerId=String(item.id||'');
+  contentEl.dataset.extensionContainerLocation=String(item.location||'');
+  contentEl.setAttribute('role','group');
+  contentEl.setAttribute('aria-label',(item.title||item.id||'Extension')+' views');
   contentEl.innerHTML='';
   if(options.showContainerActions!==false&&Array.isArray(item.titleActions)&&item.titleActions.length){
     const toolbar=document.createElement('div');
@@ -27754,6 +27795,7 @@ function renderExtensionViewsInto(contentEl,item,options){
   if(!views.length){
     const empty=document.createElement('div');empty.style.cssText='color:var(--fg-dim);font-size:12px;padding:4px 0';
     empty.textContent=options.emptyText||'No views registered for this container.';
+    empty.setAttribute('role','status');
     if(empty.textContent)contentEl.appendChild(empty);
     return;
   }
@@ -27884,6 +27926,46 @@ async function renderExtensionPanelContainers(){
     }
   });
 }
+function activateExtensionActivityItem(item){
+  const panel='ext-vc-'+item.id;
+  if(panel===_activeSidebarPanel&&_sidebarVis){toggleSidebarVis();return}
+  reportActiveExtensionActivityVisibility(false);
+  if(!_sidebarVis){_sidebarVis=true;$('sidebar').style.display='';$('tb-toggle-sidebar').classList.add('active')}
+  _activeSidebarPanel=panel;
+  reportExtensionActivityVisibilityForPanel(panel,true);
+  document.querySelectorAll('.ab-icon').forEach(i=>{i.classList.toggle('active',i.dataset.panel===panel)});
+  document.querySelectorAll('.sb-view').forEach(v=>v.style.display='none');
+  const view=$('sb-ext-viewcontainer');
+  if(view){
+    view.style.display='flex';
+    const titleEl=$('ext-vc-title');
+    if(titleEl)titleEl.textContent=item.title;
+    const header=titleEl&&titleEl.parentElement;
+    if(header){
+      header.querySelectorAll('.ext-container-title-actions,.spacer').forEach(node=>node.remove());
+      const spacer=document.createElement('span');spacer.className='spacer';
+      header.appendChild(spacer);
+      appendExtensionContainerTitleActions(header,item);
+    }
+    renderExtensionContainerContent(item);
+  }
+  $('sidebar').classList.remove('hidden');
+}
+function createExtensionActivityButton(item){
+  const btn=document.createElement('div');
+  btn.className='ab-icon';
+  btn.dataset.panel='ext-vc-'+item.id;
+  btn.title=item.title;
+  btn.tabIndex=0;
+  btn.setAttribute('role','button');
+  btn.setAttribute('aria-label','Open '+(item.title||item.id||'extension view'));
+  renderExtensionContainerIcon(btn,item);
+  btn.addEventListener('click',()=>activateExtensionActivityItem(item));
+  btn.addEventListener('keydown',function(e){
+    if(e.key==='Enter'||e.key===' '){e.preventDefault();activateExtensionActivityItem(item)}
+  });
+  return btn;
+}
 async function renderExtensionActivityBar(){
   try{
     const r=await call('list_extension_activity_bar_items');
@@ -27894,41 +27976,239 @@ async function renderExtensionActivityBar(){
   if(!container)return;
   container.innerHTML='';
   _extActBarItems.forEach(item=>{
-    const btn=document.createElement('div');
-    btn.className='ab-icon';
-    btn.dataset.panel='ext-vc-'+item.id;
-    btn.title=item.title;
-    renderExtensionContainerIcon(btn,item);
-    btn.addEventListener('click',function(){
-      const panel='ext-vc-'+item.id;
-      if(panel===_activeSidebarPanel&&_sidebarVis){toggleSidebarVis();return}
-      reportActiveExtensionActivityVisibility(false);
-      if(!_sidebarVis){_sidebarVis=true;$('sidebar').style.display='';$('tb-toggle-sidebar').classList.add('active')}
-      _activeSidebarPanel=panel;
-      reportExtensionActivityVisibilityForPanel(panel,true);
-      // Activate the icon
-      document.querySelectorAll('.ab-icon').forEach(i=>{i.classList.toggle('active',i.dataset.panel===panel)});
-      // Show the extension view container sidebar
-      document.querySelectorAll('.sb-view').forEach(v=>v.style.display='none');
-      const view=$('sb-ext-viewcontainer');
-      if(view){
-        view.style.display='flex';
-        const titleEl=$('ext-vc-title');
-        if(titleEl)titleEl.textContent=item.title;
-        const header=titleEl&&titleEl.parentElement;
-        if(header){
-          header.querySelectorAll('.ext-container-title-actions,.spacer').forEach(node=>node.remove());
-          const spacer=document.createElement('span');spacer.className='spacer';
-          header.appendChild(spacer);
-          appendExtensionContainerTitleActions(header,item);
-        }
-        renderExtensionContainerContent(item);
-      }
-      $('sidebar').classList.remove('hidden');
-    });
-    container.appendChild(btn);
+    container.appendChild(createExtensionActivityButton(item));
   });
 }
+function extensionRuntimeDomSelfCheckSnapshot(){
+  const root=document.createElement('div');
+  root.style.cssText='position:absolute;left:-10000px;top:-10000px;width:760px;height:auto;visibility:hidden';
+  document.body.appendChild(root);
+  const runtimeIds=['extension-runtime-summary','extension-runtime-list','extension-runtime-status'];
+  const savedRuntime=runtimeIds.map(id=>{
+    const el=$(id);
+    return {id,el,html:el?el.innerHTML:'',text:el?el.textContent:'',attrs:el?Array.from(el.attributes).map(attr=>[attr.name,attr.value]):[]};
+  });
+  const menu=$('ctx-menu');
+  const savedMenu=menu?{html:menu.innerHTML,display:menu.style.display,left:menu.style.left,top:menu.style.top,role:menu.getAttribute('role'),label:menu.getAttribute('aria-label')}:null;
+  try{
+    const fixtureItem={
+      id:'selftest.dynamic.container',
+      title:'Selftest Extensions',
+      location:'activitybar',
+      extension_id:'selftest.extension',
+      icon:'$(extensions)',
+      titleActions:[
+        {command:'selftest.container.refresh',title:'Refresh',icon:'$(refresh)',group:'navigation@1'},
+        {command:'selftest.container.more',title:'More',group:'inline@2'}
+      ],
+      views:[
+        {
+          id:'selftest.dynamic.tree',
+          name:'Runtime Tree',
+          runtimeKind:'treeView',
+          runtimeAvailable:true,
+          titleActions:[{command:'selftest.tree.refresh',title:'Refresh Tree',icon:'$(refresh)',group:'navigation@1'}],
+          runtimeState:{
+            kind:'treeView',
+            title:'Runtime Tree',
+            description:'Dynamic nodes',
+            message:'Tree provider message',
+            refreshVersion:4,
+            badge:{value:2,tooltip:'two items'},
+            dragAndDrop:{canDrag:true,canDrop:true},
+            nodes:[{
+              label:'src',
+              handle:'src',
+              contextValue:'folder',
+              resourceUri:'file:///workspace/src',
+              collapsibleState:2,
+              themeIcon:{id:'folder'},
+              checkbox:{isChecked:true,tooltip:'enabled'},
+              actions:[
+                {command:'selftest.tree.open',title:'Open',inline:true,group:'inline@1'},
+                {command:'selftest.tree.context',title:'Context Action',group:'navigation@1'}
+              ],
+              children:[{
+                label:'index.ts',
+                handle:'file-1',
+                contextValue:'file',
+                resourceUri:'file:///workspace/src/index.ts',
+                description:'entry',
+                themeIcon:{id:'file'},
+                actions:[{command:'selftest.tree.file',title:'File Action',group:'inline@1'}]
+              }]
+            }]
+          }
+        },
+        {
+          id:'selftest.dynamic.webview',
+          name:'Runtime Webview',
+          runtimeKind:'webviewView',
+          runtimeAvailable:true,
+          runtimeState:{
+            kind:'webviewView',
+            title:'Runtime Webview',
+            description:'Dynamic HTML',
+            visible:true,
+            retainContextWhenHidden:true,
+            options:{retainContextWhenHidden:true},
+            badge:{value:1,tooltip:'one'},
+            html:'<html><body><button id="inside">inside</button></body></html>',
+            state:{ready:true},
+            welcome:[{contents:'[Run](command:selftest.run?[1])'}],
+            titleActions:[{command:'selftest.webview.refresh',title:'Refresh Webview',icon:'$(refresh)',group:'navigation@1'}]
+          }
+        },
+        {
+          id:'selftest.dynamic.manifest',
+          name:'Manifest View',
+          runtimeKind:'view',
+          runtimeAvailable:false,
+          runtimeState:{
+            kind:'view',
+            title:'Manifest View',
+            visible:false,
+            message:'Manifest-only fallback',
+            welcome:[{contents:'Read [docs](https://example.com/docs)'}]
+          }
+        }
+      ]
+    };
+    renderExtensionViewsInto(root,fixtureItem,{showMeta:true});
+    const activityButton=createExtensionActivityButton(fixtureItem);
+    root.appendChild(activityButton);
+
+    const customHost=document.createElement('div');
+    root.appendChild(customHost);
+    showCustomEditorPlaceholder(customHost,{
+      id:'custom-selfcheck',
+      name:'Custom Fixture',
+      webview:{view_id:'custom-selfcheck-webview',uri:'file:///workspace/custom.fixture'},
+      customEditor:{
+        display_name:'Custom Fixture',
+        view_type:'selftest.customEditor',
+        uri:'file:///workspace/custom.fixture',
+        supportsSave:true,
+        supportsRevert:true,
+        supportsBackup:true,
+        supportsMultipleEditorsPerDocument:true
+      }
+    });
+
+    const notebookOutputHost=document.createElement('div');
+    notebookOutputHost.className='editor-notebook-output';
+    renderNotebookOutputs(notebookOutputHost,[{items:[
+      {mime:'text/plain',dataText:'plain output'},
+      {mime:'text/html',dataText:'<b>html output</b>'},
+      {mime:'image/png',dataText:'image text'}
+    ]}]);
+    root.appendChild(notebookOutputHost);
+
+    const runtimeData={
+      summary:{treeViews:1,webviewViews:1,customEditors:1,notebooks:1,commands:1,menus:1,dynamicSurfaces:6},
+      treeViews:[{id:'selftest.dynamic.tree',name:'Runtime Tree',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true}],
+      webviewViews:[{id:'selftest.dynamic.webview',name:'Runtime Webview',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true}],
+      customEditors:[{viewType:'selftest.customEditor',displayName:'Custom Fixture',extensionId:'selftest.extension',stateCount:1,runtimeAvailable:true}],
+      notebooks:[{type:'selftest-notebook',displayName:'Selftest Notebook',extensionId:'selftest.extension',serializerCount:1,controllerCount:1,runtimeAvailable:true}],
+      commands:[{command:'selftest.run',title:'Run Fixture',source:'extension',extensionId:'selftest.extension',disabled:false}],
+      menus:[{menu:'view/title',command:'selftest.run',when:'view == selftest.dynamic.tree',extensionId:'selftest.extension'}]
+    };
+    if(runtimeIds.every(id=>!!$(id)))renderExtensionRuntimeSurfacePanel(runtimeData);
+
+    showExtensionActionMenu(2,2,[
+      {command:'selftest.menu.primary',title:'Primary',group:'navigation@1',extensionId:'selftest.extension'},
+      {command:'selftest.menu.secondary',title:'Secondary',group:'inline@2',extensionId:'selftest.extension',disabledReason:'not active',disabled:true}
+    ],()=>{}, {view:'selftest.dynamic.tree',treeViewId:'selftest.dynamic.tree',treeItemHandle:'src'});
+
+    const runtimeList=$('extension-runtime-list');
+    const runtimeSummary=$('extension-runtime-summary');
+    const tree=root.querySelector('[role="tree"][data-view-id="selftest.dynamic.tree"]');
+    const treeNodes=Array.from(root.querySelectorAll('.ext-tree-node'));
+    const webviewFrame=root.querySelector('.extension-webview-view-host iframe.provider-webview-frame');
+    const manifest=root.querySelector('[data-view-id="selftest.dynamic.manifest"]');
+    const customPlaceholder=customHost.querySelector('.custom-editor-placeholder');
+    const snapshot={
+      containerRole:root.getAttribute('role'),
+      containerLabel:root.getAttribute('aria-label'),
+      containerDataset:root.dataset.extensionContainerId,
+      containerToolbarActions:root.querySelectorAll('.ext-container-title-actions button').length,
+      treeGroup:!!root.querySelector('[aria-label="Extension TreeView Runtime Tree"]'),
+      treeRole:tree?tree.getAttribute('role'):'',
+      treeLabel:tree?tree.getAttribute('aria-label'):'',
+      treeNodeCount:treeNodes.length,
+      treeAriaLevels:treeNodes.map(node=>node.getAttribute('aria-level')).filter(Boolean),
+      treeInlineActions:root.querySelectorAll('.ext-tree-inline-action').length,
+      treeCheckboxCount:root.querySelectorAll('[role="checkbox"]').length,
+      treeDndReady:!!root.querySelector('.ext-tree-node .sb-item[draggable="true"]'),
+      treeResourceRows:root.querySelectorAll('.ext-tree-node[data-resource-uri]').length,
+      webviewGroup:!!root.querySelector('[aria-label="Extension WebviewView Runtime Webview"]'),
+      webviewFrame:!!webviewFrame,
+      webviewTitle:webviewFrame?webviewFrame.title:'',
+      webviewSandbox:webviewFrame?webviewFrame.getAttribute('sandbox'):'',
+      webviewRetain:!!root.querySelector('[data-webview-retain-context="true"]'),
+      manifestGroup:!!manifest,
+      manifestHidden:manifest?manifest.dataset.runtimeVisible:'',
+      welcomeRegions:root.querySelectorAll('.ext-view-welcome[role="region"]').length,
+      welcomeCommands:root.querySelectorAll('.ext-view-welcome button.link-btn[data-command]').length,
+      welcomeExternalLinks:root.querySelectorAll('.ext-view-welcome a[rel="noopener noreferrer"]').length,
+      activityRole:activityButton.getAttribute('role'),
+      activityTabIndex:activityButton.tabIndex,
+      activityLabel:activityButton.getAttribute('aria-label')||'',
+      activityPanel:activityButton.dataset.panel||'',
+      customDataset:{
+        viewId:customHost.dataset.viewId||'',
+        viewType:customHost.dataset.viewType||'',
+        resourceUri:customHost.dataset.resourceUri||''
+      },
+      customPlaceholder:!!customPlaceholder,
+      customCapabilities:String(customHost.textContent||'').includes('save')&&String(customHost.textContent||'').includes('multi'),
+      notebookOutputItems:notebookOutputHost.querySelectorAll('.editor-notebook-output-item').length,
+      notebookHtmlFrame:!!notebookOutputHost.querySelector('iframe'),
+      notebookImage:!!notebookOutputHost.querySelector('img'),
+      notebookText:!!notebookOutputHost.querySelector('pre'),
+      runtimeRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row').length:0,
+      runtimeReadyRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-state.ready').length:0,
+      runtimeTags:runtimeList?runtimeList.querySelectorAll('.extension-runtime-tag').length:0,
+      runtimeChips:runtimeSummary?runtimeSummary.querySelectorAll('.extension-runtime-chip').length:0,
+      menuRole:menu?menu.getAttribute('role'):'',
+      menuLabel:menu?menu.getAttribute('aria-label'):'',
+      menuItems:menu?menu.querySelectorAll('.ctx-item[role="menuitem"]').length:0,
+      menuDisabled:menu?menu.querySelectorAll('.ctx-item.disabled[aria-disabled="true"]').length:0,
+      menuMetadata:menu?Array.from(menu.querySelectorAll('.ctx-item')).map(item=>item.dataset.treeViewId||item.dataset.view||'').filter(Boolean):[]
+    };
+    snapshot.pass=snapshot.containerRole==='group'
+      && snapshot.containerDataset==='selftest.dynamic.container'
+      && snapshot.containerToolbarActions>=1
+      && snapshot.treeGroup&&snapshot.treeRole==='tree'&&snapshot.treeNodeCount>=2
+      && snapshot.treeInlineActions>=1&&snapshot.treeCheckboxCount>=1&&snapshot.treeDndReady&&snapshot.treeResourceRows>=2
+      && snapshot.webviewGroup&&snapshot.webviewFrame&&snapshot.webviewTitle.includes('selftest.dynamic.webview')&&snapshot.webviewSandbox==='allow-scripts'&&snapshot.webviewRetain
+      && snapshot.manifestGroup&&snapshot.manifestHidden==='false'&&snapshot.welcomeRegions>=1&&snapshot.welcomeCommands>=1&&snapshot.welcomeExternalLinks>=1
+      && snapshot.activityRole==='button'&&snapshot.activityTabIndex===0&&snapshot.activityLabel.includes('Selftest Extensions')&&snapshot.activityPanel==='ext-vc-selftest.dynamic.container'
+      && snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'&&snapshot.customCapabilities
+      && snapshot.notebookOutputItems===3&&snapshot.notebookHtmlFrame&&snapshot.notebookImage&&snapshot.notebookText
+      && snapshot.runtimeRows>=6&&snapshot.runtimeReadyRows>=5&&snapshot.runtimeChips>=8
+      && snapshot.menuRole==='menu'&&snapshot.menuItems===2&&snapshot.menuDisabled===1&&snapshot.menuMetadata.includes('selftest.dynamic.tree');
+    return snapshot;
+  }finally{
+    savedRuntime.forEach(saved=>{
+      if(!saved.el)return;
+      saved.el.innerHTML=saved.html;
+      Array.from(saved.el.attributes).forEach(attr=>saved.el.removeAttribute(attr.name));
+      saved.attrs.forEach(([name,value])=>saved.el.setAttribute(name,value));
+    });
+    if(menu&&savedMenu){
+      menu.innerHTML=savedMenu.html;
+      menu.style.display=savedMenu.display;
+      menu.style.left=savedMenu.left;
+      menu.style.top=savedMenu.top;
+      if(savedMenu.role===null)menu.removeAttribute('role');else menu.setAttribute('role',savedMenu.role);
+      if(savedMenu.label===null)menu.removeAttribute('aria-label');else menu.setAttribute('aria-label',savedMenu.label);
+    }
+    document.querySelectorAll('.ctx-submenu').forEach(sub=>sub.remove());
+    root.remove();
+  }
+}
+window.extensionRuntimeDomSelfCheckSnapshot=extensionRuntimeDomSelfCheckSnapshot;
 
 function renderExtList(container,exts){
   container.innerHTML='';
