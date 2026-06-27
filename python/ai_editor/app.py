@@ -62,7 +62,12 @@ _PROVIDER_CONFIG_KEYS = {
     "max_input_tokens", "max_output_tokens", "timeout", "extra_headers", "extra_body",
 }
 
-_TRANSIENT_CONFIG_KEYS = {"_provider_keys", "context_window"}
+_TRANSIENT_CONFIG_KEYS = {
+    "_provider_keys",
+    "context_window",
+    "_settings_target",
+    "_configuration_target_updates",
+}
 _AI_EDITOR_MIN_SIZE = (600, 400)
 _AI_EDITOR_WINDOW_TITLE = "SAO AI Editor"
 
@@ -823,6 +828,39 @@ def _merge_ai_editor_config(existing: Any, incoming: Any) -> Dict[str, Any]:
                 continue
             merged[key] = value
     return _normalize_ai_editor_config(merged)
+
+
+def _config_path_parts(path: Any) -> List[str]:
+    return [
+        item for item in str(path or "").replace("/", ".").split(".")
+        if item
+    ]
+
+
+def _set_config_path(target: Dict[str, Any], path: List[str],
+                     value: Any) -> None:
+    if not path:
+        return
+    current = target
+    for part in path[:-1]:
+        child = current.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            current[part] = child
+        current = child
+    current[path[-1]] = value
+
+
+def _delete_config_path(target: Dict[str, Any], path: List[str]) -> None:
+    if not path:
+        return
+    current = target
+    for part in path[:-1]:
+        child = current.get(part)
+        if not isinstance(child, dict):
+            return
+        current = child
+    current.pop(path[-1], None)
 
 
 _STANDALONE_SETTINGS = None
@@ -2547,6 +2585,9 @@ class AIEditorAPI:
                     result[key] = value
         if isinstance(ai_cfg, dict) and "layout" in ai_cfg:
             result["layout"] = ai_cfg["layout"]
+        if isinstance(ai_cfg, dict):
+            result["configuration_targets"] = _as_dict(
+                ai_cfg.get("configuration_targets"))
         return result
 
     def list_editor_languages(self) -> Dict:
@@ -2833,12 +2874,31 @@ class AIEditorAPI:
 
     def save_config(self, data: Dict) -> Dict:
         settings = _resolve_settings(self._gui_ref)
-        merged = _merge_ai_editor_config({}, data)
-        if settings:
-            merged = _merge_ai_editor_config(settings.get("ai_editor", {}) or {}, data)
+        target_name = self._extension_setting_target_name(
+            data.get("_settings_target") if isinstance(data, dict) else "")
+        target_updates = (
+            data.get("_configuration_target_updates")
+            if isinstance(data, dict) else None)
+        target_updates = target_updates if isinstance(target_updates, list) else []
+        target_only = target_name in {"workspace", "workspaceFolder"} and bool(target_updates)
+        if target_only and settings:
+            merged = _normalize_ai_editor_config(
+                settings.get("ai_editor", {}) or {})
+            self._apply_configuration_target_updates(
+                merged, target_updates, target_name)
+        else:
+            merged = _merge_ai_editor_config({}, data)
+            if settings:
+                merged = _merge_ai_editor_config(
+                    settings.get("ai_editor", {}) or {}, data)
+            if target_updates:
+                self._apply_configuration_target_updates(
+                    merged, target_updates, target_name)
         persist_error = self._persist_ai_editor_config(merged)
         if self._engine:
-            self._apply_config_to_engine(merged)
+            effective = self._config_with_target_overrides(
+                merged, target_name)
+            self._apply_config_to_engine(effective)
         self._invalidate_provider_controllers(data)
         if isinstance(merged.get("mode"), str):
             from ai_editor.scopes import normalize_mode
@@ -2848,7 +2908,100 @@ class AIEditorAPI:
         self._apply_mode_permissions()
         if persist_error:
             return {"error": persist_error, "applied": True}
-        return {"ok": True}
+        return {"ok": True, "target": target_name, "targetOnly": target_only}
+
+    @staticmethod
+    def _configuration_target_scoped_values(entry: Any) -> Dict[str, Any]:
+        if not isinstance(entry, dict):
+            return {}
+        values: Dict[str, Any] = {}
+        raw_values = entry.get("values")
+        if isinstance(raw_values, dict):
+            for target, value in raw_values.items():
+                target_name = str(target or "").strip()
+                if target_name in {"global", "workspace", "workspaceFolder"}:
+                    values[target_name] = value
+        if "value" in entry:
+            target_name = str(entry.get("target") or "workspace").strip()
+            if target_name in {"global", "workspace", "workspaceFolder"}:
+                values.setdefault(target_name, entry.get("value"))
+        return values
+
+    def _configuration_target_key_for_update(
+            self, update: Dict[str, Any]) -> str:
+        raw = str(update.get("path") or update.get("key") or "").strip()
+        if not raw:
+            return ""
+        if raw.startswith("aiEditor."):
+            raw = "ai_editor." + raw[len("aiEditor."):]
+        if raw.startswith("ai_editor."):
+            raw = raw[len("ai_editor."):]
+        return ".".join(_config_path_parts(raw))
+
+    def _apply_configuration_target_updates(
+            self, config: Dict[str, Any], updates: List[Any],
+            fallback_target: str = "") -> None:
+        if not isinstance(config, dict):
+            return
+        targets = config.get("configuration_targets", {})
+        if not isinstance(targets, dict):
+            targets = {}
+        for raw_update in updates:
+            if not isinstance(raw_update, dict):
+                continue
+            target_key = self._configuration_target_key_for_update(raw_update)
+            if not target_key:
+                continue
+            target_name = self._extension_setting_target_name(
+                raw_update.get("target") or fallback_target)
+            current = targets.get(target_key)
+            scoped_values = self._configuration_target_scoped_values(current)
+            if raw_update.get("remove") is True:
+                scoped_values.pop(target_name, None)
+            else:
+                scoped_values[target_name] = raw_update.get("value")
+            if scoped_values:
+                active_target = (
+                    target_name if target_name in scoped_values
+                    else self._extension_setting_pick_target(scoped_values))
+                targets[target_key] = {
+                    "target": active_target,
+                    "value": scoped_values[active_target],
+                    "values": scoped_values,
+                    "source": "settings-ui",
+                }
+            else:
+                targets.pop(target_key, None)
+        if targets:
+            config["configuration_targets"] = targets
+        else:
+            config.pop("configuration_targets", None)
+
+    def _config_with_target_overrides(
+            self, config: Dict[str, Any], target: str = "") -> Dict[str, Any]:
+        merged = _normalize_ai_editor_config(config)
+        targets = merged.get("configuration_targets", {})
+        if not isinstance(targets, dict):
+            return merged
+        target_name = self._extension_setting_target_name(target)
+        precedence = ["global"]
+        if target_name in {"workspace", "workspaceFolder"}:
+            precedence.append("workspace")
+        if target_name == "workspaceFolder":
+            precedence.append("workspaceFolder")
+        for key, entry in targets.items():
+            if not isinstance(key, str) or key.startswith("["):
+                continue
+            scoped_values = self._configuration_target_scoped_values(entry)
+            selected = None
+            found = False
+            for candidate in precedence:
+                if candidate in scoped_values:
+                    selected = scoped_values[candidate]
+                    found = True
+            if found:
+                _set_config_path(merged, _config_path_parts(key), selected)
+        return _normalize_ai_editor_config(merged)
 
     def _apply_config_to_engine(self, config: Dict[str, Any]) -> None:
         if not self._engine:

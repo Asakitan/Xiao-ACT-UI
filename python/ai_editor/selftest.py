@@ -2309,6 +2309,64 @@ def test_app_settings_parity() -> None:
            and loaded.get("files", {}).get("autoSaveDelay") == 1500
            and loaded.get("files", {}).get("insertFinalNewline") is False
            and loaded.get("files", {}).get("trimFinalNewlines") is True)
+    target_gui = _SettingsGui({"ai_editor": {
+        "workspace": {"root": "user-root", "auto_detect": True},
+        "editor": {"formatOnSave": False},
+    }})
+    target_api = AIEditorAPI(target_gui)
+    target_result = target_api.save_config({
+        "_settings_target": "workspace",
+        "_configuration_target_updates": [
+            {
+                "key": "aiEditor.workspace.root",
+                "path": "workspace.root",
+                "target": "workspace",
+                "value": "workspace-root",
+            },
+            {
+                "key": "editor.formatOnSave",
+                "path": "editor.formatOnSave",
+                "target": "workspace",
+                "value": True,
+            },
+        ],
+        "workspace": {"root": "should-not-clobber-user-root"},
+        "editor": {"formatOnSave": True},
+    })
+    target_stored = target_gui.settings.data["ai_editor"]
+    target_loaded = target_api.load_config()
+    target_entries = json.loads(json.dumps(
+        target_stored.get("configuration_targets", {})))
+    target_reset = target_api.save_config({
+        "_settings_target": "workspace",
+        "_configuration_target_updates": [
+            {
+                "path": "editor.formatOnSave",
+                "target": "workspace",
+                "remove": True,
+            },
+        ],
+    })
+    target_after_reset = (
+        target_gui.settings.data["ai_editor"]
+        .get("configuration_targets", {})
+        .get("editor.formatOnSave", {})
+        .get("values", {}))
+    _check("save_config workspace target preserves user settings",
+           target_result.get("ok") is True
+           and target_result.get("targetOnly") is True
+           and target_stored.get("workspace", {}).get("root") == "user-root"
+           and target_stored.get("editor", {}).get("formatOnSave") is False)
+    _check("save_config workspace target records scoped overrides",
+           target_entries.get("workspace.root", {}).get(
+               "values", {}).get("workspace") == "workspace-root"
+           and target_entries.get("editor.formatOnSave", {}).get(
+               "values", {}).get("workspace") is True
+           and target_loaded.get("configuration_targets", {}).get(
+               "workspace.root", {}).get("target") == "workspace")
+    _check("save_config workspace target reset clears scoped override",
+           target_reset.get("ok") is True
+           and "workspace" not in target_after_reset)
 
     from ai_editor import app as app_mod
     from config import SettingsManager
@@ -9577,6 +9635,17 @@ console.log("frontend word separator behavior ok");
            and "closeSettings();" not in html[html.index("async function saveSettings()"):html.index("window.saveSettings=saveSettings;")]
            and "const first=settingsVisibleRows().find(Boolean);" in html
            and "updateSettingsResultNav(settingsVisibleRows().length);" in html)
+    _check("frontend settings saves scoped target updates",
+           "function settingsBackendTargetName(target)" in html
+           and "function settingTargetEntry(meta)" in html
+           and "function applySettingsTargetValuesToInputs(target)" in html
+           and "function settingsTargetUpdateRows()" in html
+           and "function settingsApplyTargetUpdateResults(updates)" in html
+           and "settings-built-chip target" in html
+           and "config._settings_target=settingsBackendTargetName(currentSettingsTarget);" in html
+           and "config._configuration_target_updates=targetUpdates;" in html
+           and "settingsApplyTargetUpdateResults(targetUpdates);" in html
+           and "applySettingsTargetValuesToInputs(currentSettingsTarget);" in html)
     _check("frontend built-in settings expose VS Code style metadata",
             "const SETTING_INPUT_META=" in html
            and "const SETTING_INPUT_MAP=Object.fromEntries" in html

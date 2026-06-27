@@ -3391,7 +3391,7 @@ const EXTENSION_CONTRIBUTION_OPTIONS=[
 const SETTINGS_DEFAULTS={
   provider:'openai',api_key:'',base_url:'',model:'',temperature:0.7,max_tokens:4096,system_prompt:'',
   top_p:1.0,frequency_penalty:0,presence_penalty:0,stop:[],max_input_tokens:0,max_output_tokens:0,timeout:180,
-  extra_headers:{},extra_body:{},_provider_keys:{},provider_keys:{},custom_models:{},permissions:{},mode:'agent',language:'en',approval:'default',active_chat_provider:'chat',theme:'dark',color_theme:'',file_icon_theme:'',
+  extra_headers:{},extra_body:{},_provider_keys:{},provider_keys:{},custom_models:{},permissions:{},configuration_targets:{},mode:'agent',language:'en',approval:'default',active_chat_provider:'chat',theme:'dark',color_theme:'',file_icon_theme:'',
   ...SETTINGS_SECTION_DEFAULTS
 };
 function clonePlain(value){return JSON.parse(JSON.stringify(value))}
@@ -3415,6 +3415,7 @@ function withSettingsDefaults(raw){
   merged.extra_body=isPlainObject(src.extra_body)?Object.assign({},src.extra_body):{};
   merged.custom_models=isPlainObject(src.custom_models)?Object.assign({},src.custom_models):{};
   merged.permissions=isPlainObject(src.permissions)?Object.assign({},src.permissions):{};
+  merged.configuration_targets=isPlainObject(src.configuration_targets)?Object.assign({},src.configuration_targets):{};
   merged.stop=toList(src.stop);
   return merged;
 }
@@ -3527,6 +3528,36 @@ function settingDefaultValue(meta){
   if(Object.prototype.hasOwnProperty.call(meta,'fallback'))return meta.fallback;
   return settingsValueAtPath(SETTINGS_DEFAULTS,meta.path,'');
 }
+function settingsBackendTargetName(target){
+  const raw=String(target||currentSettingsTarget||'user').trim().toLowerCase();
+  if(raw==='workspace')return 'workspace';
+  if(raw==='workspacefolder'||raw==='workspace_folder'||raw==='folder')return 'workspaceFolder';
+  return 'global';
+}
+function settingConfigTargetKey(meta){
+  return String((meta&&meta.path)||'').replace(/^ai_editor\./,'');
+}
+function settingTargetEntry(meta){
+  const targets=isPlainObject(config.configuration_targets)?config.configuration_targets:{};
+  const key=settingConfigTargetKey(meta);
+  return isPlainObject(targets[key])?targets[key]:null;
+}
+function settingTargetValues(meta){
+  const entry=settingTargetEntry(meta);
+  return entry&&isPlainObject(entry.values)?entry.values:{};
+}
+function settingHasTargetValue(meta,target){
+  const values=settingTargetValues(meta);
+  const targetName=settingsBackendTargetName(target);
+  return Object.prototype.hasOwnProperty.call(values,targetName);
+}
+function settingValueForTarget(meta,target){
+  const targetName=settingsBackendTargetName(target);
+  const values=settingTargetValues(meta);
+  if(Object.prototype.hasOwnProperty.call(values,targetName))return values[targetName];
+  if(targetName!=='global'&&Object.prototype.hasOwnProperty.call(values,'global'))return values.global;
+  return settingsValueAtPath(config,meta.path,settingDefaultValue(meta));
+}
 function settingDisplayValue(value){
   if(value==null)return '';
   if(Array.isArray(value))return value.length?'['+value.join(', ')+']':'[]';
@@ -3622,6 +3653,56 @@ function settingsAddRowActions(row,opts){
   add('◎','Focus setting row',()=>settingsHighlightRow(row));
   row.appendChild(actions);
 }
+function applySettingsTargetValuesToInputs(target){
+  const targetName=settingsBackendTargetName(target);
+  Object.entries(SETTING_INPUT_META).forEach(([inputId,meta])=>{
+    const el=$(inputId);if(!el||el.hidden||el.type==='hidden')return;
+    const row=el.closest('.settings-field.builtin-setting');
+    if(!row)return;
+    const rowTarget=settingsRowMatchesTarget(row,target||currentSettingsTarget);
+    if(!rowTarget)return;
+    setSettingsInputValue(el,meta,settingValueForTarget(meta,target));
+    row.dataset.settingEffectiveTarget=targetName;
+  });
+  markSettingsModified();
+}
+function settingsTargetUpdateRows(){
+  if(currentSettingsTarget==='extensions')return [];
+  const targetName=settingsBackendTargetName(currentSettingsTarget);
+  return Object.entries(SETTING_INPUT_META).map(([inputId,meta])=>{
+    const el=$(inputId);if(!el||el.hidden||el.type==='hidden')return null;
+    const row=el.closest('.settings-field.builtin-setting');
+    if(!row||!settingsRowMatchesTarget(row,currentSettingsTarget))return null;
+    const value=settingsInputValue(el,meta);
+    const hasScoped=settingHasTargetValue(meta,targetName);
+    const remove=hasScoped&&settingStableValue(value)===settingStableValue(settingDefaultValue(meta));
+    return {
+      key:meta.key||meta.path||inputId,
+      path:settingConfigTargetKey(meta),
+      target:targetName,
+      value,
+      remove
+    };
+  }).filter(Boolean);
+}
+function settingsApplyTargetUpdateResults(updates){
+  if(!Array.isArray(updates)||!updates.length)return;
+  const targets=isPlainObject(config.configuration_targets)?{...config.configuration_targets}:{};
+  updates.forEach(update=>{
+    const key=String(update.path||'').trim();
+    if(!key)return;
+    const targetName=settingsBackendTargetName(update.target);
+    const existing=isPlainObject(targets[key])?targets[key]:{};
+    const values=isPlainObject(existing.values)?{...existing.values}:{};
+    if(update.remove)delete values[targetName];
+    else values[targetName]=update.value;
+    if(Object.keys(values).length){
+      const active=Object.prototype.hasOwnProperty.call(values,targetName)?targetName:Object.keys(values)[0];
+      targets[key]={target:active,value:values[active],values,source:'settings-ui'};
+    }else delete targets[key];
+  });
+  config.configuration_targets=targets;
+}
 function settingsVisibleRows(){
   const root=settingsMainElement()||document;
   return Array.from(root.querySelectorAll('.settings-field.builtin-setting:not(.settings-target-hidden),.ext-setting-row:not(.settings-target-hidden)'))
@@ -3677,6 +3758,7 @@ function wrapSettingsField(inputId){
     const scope=document.createElement('span');scope.className='settings-built-chip scope';scope.textContent=meta.scope||'User';metaRow.appendChild(scope);
     const source=document.createElement('span');source.className='settings-built-chip source';source.textContent='Built-in';metaRow.appendChild(source);
     const def=document.createElement('span');def.className='settings-built-chip default';def.textContent='Default: '+settingDisplayValue(settingDefaultValue(meta));def.title=def.textContent;metaRow.appendChild(def);
+    const targetChip=document.createElement('span');targetChip.className='settings-built-chip target';targetChip.dataset.settingTargetValue='1';targetChip.textContent='Target: inherited';metaRow.appendChild(targetChip);
     const cur=document.createElement('span');cur.className='settings-built-chip current';cur.dataset.settingCurrentValue='1';cur.textContent='Current: '+settingCompactDisplayValue(settingsInputValue(el,meta));cur.title='Current value for '+settingFriendlyName(meta,inputId);metaRow.appendChild(cur);
     const mod=document.createElement('span');mod.className='settings-built-chip modified';mod.textContent='Modified';metaRow.appendChild(mod);
     wrap.appendChild(metaRow);
@@ -3704,6 +3786,16 @@ function markSettingsModified(){
       const text='Current: '+settingCompactDisplayValue(cur);
       currentChip.textContent=text;
       currentChip.title=text;
+    }
+    const targetChip=wrap.querySelector('[data-setting-target-value="1"]');
+    if(targetChip){
+      const targetName=settingsBackendTargetName(currentSettingsTarget);
+      const scoped=settingHasTargetValue(meta,currentSettingsTarget);
+      const label=targetName==='global'?'User':targetName==='workspaceFolder'?'Folder':'Workspace';
+      targetChip.textContent=scoped?(label+' override'):(label+' inherited');
+      targetChip.title=scoped
+        ? label+' target has its own value'
+        : label+' target inherits the base user value';
     }
   });
   const root=settingsMainElement()||document;
@@ -24258,6 +24350,7 @@ function selectSettingsTarget(target,options){
         .replace(/\s+/g,' ').trim();
     }
   }
+  applySettingsTargetValuesToInputs(currentSettingsTarget);
   if(opts.persist!==false)persistSettingsViewState({target:currentSettingsTarget,search:(input||{}).value||''});
   scheduleFilterSettings(0);
 }
@@ -24853,11 +24946,16 @@ async function saveSettings(){
   config.customization={...settingSection('customization'),use_agent_md:readCheckedValue('s-cust-agent-md'),use_claude_md:readCheckedValue('s-cust-claude-md'),instructions_locations:readListValue('s-cust-instructions',true),agent_locations:readListValue('s-cust-agents',true),workflow_locations:readListValue('s-cust-workflows',true),skill_locations:readListValue('s-cust-skills',true)};
   await applyEditorColorTheme(readInputValue('s-color-theme')||config.color_theme||config.theme||'dark');
   await applyEditorIconTheme(readInputValue('s-file-icon-theme')||config.file_icon_theme||defaultFileIconThemeValue());
+  const targetUpdates=settingsTargetUpdateRows();
+  config._settings_target=settingsBackendTargetName(currentSettingsTarget);
+  config._configuration_target_updates=targetUpdates;
   const newMode=normalizeMode($('s-mode').value);
   config.mode=newMode;
   if(newMode!==currentMode){
     const modeResult=await call('set_mode',newMode);
     if(!callSucceededOrApplied(modeResult)){
+      delete config._settings_target;
+      delete config._configuration_target_updates;
       showToast('Mode update failed: '+callFailedMessage(modeResult,'backend unavailable'),'error',3000);
       return;
     }
@@ -24870,12 +24968,17 @@ async function saveSettings(){
   if(typeof renderEditorVisualDecorations==='function')renderEditorVisualDecorations();
   const saveResult=await call('save_config',config);
   if(!(saveResult&&saveResult.ok)){
+    delete config._settings_target;
+    delete config._configuration_target_updates;
     showToast('Save failed: '+callFailedMessage(saveResult,'backend unavailable'),'error',3200);
     if(saveResult&&saveResult.applied)showToast('Current session updated, but settings were not persisted','warning',3600);
     return;
   }
   const status=$('s-status');
   if(status){status.textContent='Saved';status.style.color='var(--fg-success)';}
+  settingsApplyTargetUpdateResults(targetUpdates);
+  delete config._settings_target;
+  delete config._configuration_target_updates;
   showToast('Settings saved','success',1500);
   settingsVisibleRows().forEach(row=>{
     row.classList.remove('saved-flash');
