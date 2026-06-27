@@ -4060,11 +4060,12 @@ def test_phase1_ai_editor_regressions() -> None:
             and ".chat-toolbar .spacer { display:none; }" in html
              and ".chat-control-strip { display:flex; align-items:center; gap:5px; flex:1 1 auto; flex-wrap:nowrap; min-width:0;" in html
              and "overflow:visible; max-width:100%;" in html
-             and "--chat-model-width:300px;" in html
+             and "--chat-model-width:320px;" in html
              and "appearance:none; -webkit-appearance:none; line-height:20px;" in html
              and ".chat-select-chip { width:150px; max-width:208px; padding:0 9px; cursor:pointer; flex:0 1 150px; }" in html
              and ".chat-model-inline { width:190px; max-width:260px; justify-content:space-between; font-family:var(--mono); flex:0 1 190px; text-align:left; }" in html
              and ".chat-control-trigger { display:inline-flex; align-items:center; gap:4px; justify-content:space-between;" in html
+             and "border-radius:999px!important; background:var(--bg3); appearance:none!important; -webkit-appearance:none!important;" in html
              and "#chat-model-menu { flex:1 1 var(--chat-model-width); min-width:var(--chat-model-width); }" in html
              and ".chat-control-trigger.provider { width:var(--chat-provider-width); min-width:var(--chat-provider-width); max-width:var(--chat-provider-width); flex:0 0 var(--chat-provider-width); }" in html
              and ".chat-control-trigger.model { width:100%; min-width:var(--chat-model-width); max-width:none; flex:1 1 var(--chat-model-width); }" in html
@@ -4143,19 +4144,24 @@ def test_phase1_ai_editor_regressions() -> None:
             and "normalizeControlList(chatProviderModelOptions[provider],'models')" in html
             and "customEndpointSettingModelRows(provider).forEach(model=>pushModel(model));" in html
             and "settingsModelListRows(provider).forEach(model=>pushModel(model));" in html
-            and "customEndpointSettingModelRows(provider).forEach(model=>pushModel(model));\n  settingsModelListRows(provider).forEach(model=>pushModel(model));\n  normalizeControlList(chatProviderModelOptions[provider],'models').forEach(model=>pushModel" in html
+            and "customEndpointSettingModelRows(provider).forEach(model=>pushModel(model));\n  Object.keys(config.custom_models||{}).sort().forEach(name=>" in html
+            and "settingsModelListRows(provider).forEach(model=>pushModel(model));\n  normalizeControlList(chatProviderModelOptions[provider],'models').forEach(model=>pushModel" in html
             and "custom:isCustomEndpointConfigured(provider,config.base_url)" in html
             and "const activeModel=ensureToolbarModelSelection({persist:false});" in html
            and "function preferredModelForProvider(provider)" in html
            and "const endpointSetting=customEndpointSettingModelRows(pid).map(controlItemId).find(Boolean);" in html
            and "if(endpointSetting)return endpointSetting;" in html
+           and "if(custom)return custom;" in html
            and "let chatProviderModelFetchKeys=Object.create(null);" in html
            and "function providerApiKeyForChat(provider)" in html
            and "function refreshChatModelOptionsForProvider(provider,opts)" in html
+           and "function modelFetchPending(provider)" in html
            and "function syncEndpointDraftToChatControls(opts)" in html
            and "el.addEventListener('change',()=>syncEndpointDraftToChatControls({fetch:true}));" in html
            and "call('list_provider_models',pid,base,providerApiKeyForChat(pid))" in html
-           and "if(kind==='model')refreshChatModelOptionsForProvider(config.provider,{force:false}).catch(()=>{});" in html
+           and "refreshChatModelOptionsForProvider(config.provider,{force:true}).catch(()=>{});" in html
+           and "empty.textContent=modelFetchPending(config.provider)?'Loading Custom Endpoint models...':'No models configured for this provider';" in html
+           and "const model=preferredModelForProvider(id)||readProviderModelDefaults(id);" in html
            and "chatProviderModelOptions[String(provider||'')]=r.models.slice();" in html
            and "chatControlState.models=normalizeControlList(controls.models,'models');" in html
            and "if(controls.custom_models&&typeof controls.custom_models==='object')config.custom_models={...controls.custom_models};" in html
