@@ -47,6 +47,13 @@ async function main() {
         active_chat_provider: "chat",
         active_agent_id: "",
         agents: [{ id: "default", name: "Default" }, { id: "reviewer", name: "Reviewer" }],
+        models: [
+          { id: "gpt-4o-mini", name: "gpt-4o-mini", provider: "OpenAI", max_input: 128000 },
+          { id: "custom-endpoint-model", name: "custom-endpoint-model", custom: true, max_input: 64000 }
+        ],
+        custom_models: {
+          "custom-endpoint-model": { max_input: 64000, max_output: 4096 }
+        },
         workflows: [{
           id: "assistant-selfcheck-flow",
           name: "Assistant Selfcheck Flow",
@@ -89,6 +96,7 @@ async function main() {
   }
   const required = [
     "composer-layout-present",
+    "model-popup-configured-models-ready",
     "workflow-popup-modes-ready",
     "workflow-result-state-rendered",
     "workflow-run-button-active-state",

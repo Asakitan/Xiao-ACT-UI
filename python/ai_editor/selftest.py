@@ -3842,11 +3842,12 @@ def test_phase1_ai_editor_regressions() -> None:
             and ".chat-toolbar .spacer { display:none; }" in html
             and ".chat-control-strip { display:flex; align-items:center; gap:4px; flex:1 1 auto; flex-wrap:nowrap; min-width:0;" in html
             and "overflow:hidden; max-width:100%; }" in html
-            and ".chat-select-chip { width:112px; max-width:112px; padding:0 20px 0 8px; cursor:pointer; flex:0 1 112px; }" in html
-            and ".chat-model-inline { width:112px; max-width:112px; padding:0 8px; font-family:var(--mono); flex:0 1 112px; }" in html
-            and ".chat-select-chip.agent { width:122px; max-width:122px; flex-basis:122px; }" in html
-            and ".chat-select-chip.workflow { width:118px; max-width:118px; flex-basis:118px; }" in html
+            and ".chat-select-chip { width:136px; max-width:170px; padding:0 20px 0 8px; cursor:pointer; flex:0 1 136px; }" in html
+            and ".chat-model-inline { width:164px; max-width:220px; justify-content:space-between; font-family:var(--mono); flex:0 1 164px; text-align:left; }" in html
+            and ".chat-select-chip.agent { width:142px; max-width:180px; flex-basis:142px; }" in html
+            and ".chat-select-chip.workflow { width:142px; max-width:190px; flex-basis:142px; }" in html
             and ".chat-control-menu { position:relative; display:inline-flex; align-items:center; flex:0 0 auto; min-width:0; }" in html
+            and ".chat-control-popup.model { min-width:330px; }" in html
             and ".chat-control-popup.workflow { min-width:310px; }" in html
             and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px;" in html
             and "margin-left:auto; flex:0 0 auto; min-width:max-content; width:max-content; flex-wrap:nowrap; overflow:hidden; white-space:nowrap;" in html
@@ -3857,6 +3858,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and '<div class="chat-toolbar" role="toolbar" aria-label="Assistant composer">' in html
            and '<div class="chat-control-strip" role="group" aria-label="Chat controls">' in html
            and '<div class="chat-composer-trailing" role="group" aria-label="Chat actions and status">' in html
+           and 'id="chat-model-inline" onclick="toggleChatControlPopup(event,\'model\')"' in html
+           and 'id="chat-model-popup" role="listbox" aria-label="Chat model"' in html
            and 'id="chat-workflow-trigger" onclick="toggleChatControlPopup(event,\'workflow\')"' in html
            and '<select class="chat-select-chip workflow muted chat-control-native" id="chat-workflow-sel" title="Workflow" aria-hidden="true" tabindex="-1">' in html
            and '<button class="chat-run-chip" id="chat-workflow-run" onclick="runToolbarWorkflow()" title="Run selected workflow">▶</button>\n                  </div>\n                  <div class="chat-composer-trailing" role="group"' in html
@@ -3869,6 +3872,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "sameRow:!!(controlRect&&actionRect&&Math.abs(controlRect.top-actionRect.top)<=1)" in html
            and "window.assistantComposerLayoutSnapshot=assistantComposerLayoutSnapshot;" in html
            and "'chat-provider-trigger','chat-model-inline','chat-agent-sel','chat-mode-trigger','chat-workflow-trigger','chat-workflow-run','chat-input-status'" in html)
+    _check("frontend Assistant model picker uses configured models",
+           "let chatControlState={agents:[],workflows:[],providers:[],models:[]};" in html
+           and "function modelOptionRows()" in html
+           and "chatControlState.models=normalizeControlList(controls.models,'models');" in html
+           and "if(controls.custom_models&&typeof controls.custom_models==='object')config.custom_models={...controls.custom_models};" in html
+           and "function selectModelFromPopup(modelId)" in html
+           and "else if(kind==='model')selectModelFromPopup(id);" in html
+           and "window.selectModelFromPopup=selectModelFromPopup;" in html
+           and "return kind==='model'?$('chat-model-inline'):$('chat-'+kind+'-trigger');" in html)
     _check("frontend Assistant workflow launch has stateful on off custom modes",
            "const ASSISTANT_WORKFLOW_MODE_KEY='sao-ai-editor-workflow-mode';" in html
            and "function normalizeWorkflowMode(value)" in html
@@ -4877,6 +4889,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'composer-actions-visible'" in html
            and "function assistantControlPopupSnapshot(kind)" in html
            and "assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'model-popup-configured-models-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready'" in html
            and "function assistantWorkflowEditorSnapshot()" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready'" in html
@@ -4918,6 +4931,8 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("frontend Assistant browser smoke script exists",
            bool(smoke_source)
            and "window.runAssistantUiSelfCheck({ cleanup: true })" in smoke_source
+           and "custom-endpoint-model" in smoke_source
+           and "model-popup-configured-models-ready" in smoke_source
            and "workflow-result-state-rendered" in smoke_source
            and "workflow-run-button-active-state" in smoke_source
            and "PASS assistant-ui-browser-smoke" in smoke_source

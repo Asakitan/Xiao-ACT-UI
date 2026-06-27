@@ -1144,10 +1144,11 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
   border-radius:999px; background:var(--bg3); color:var(--fg); font:11px var(--sans);
   outline:none; min-width:0; }
-.chat-chip,.chat-run-chip { display:inline-flex; align-items:center; gap:4px; padding:0 8px; cursor:pointer; }
-.chat-select-chip { width:112px; max-width:112px; padding:0 20px 0 8px; cursor:pointer; flex:0 1 112px; }
-.chat-model-inline { width:112px; max-width:112px; padding:0 8px; font-family:var(--mono); flex:0 1 112px; }
-.chat-model-inline::placeholder { color:var(--fg-dim); }
+.chat-chip,.chat-model-inline,.chat-run-chip { display:inline-flex; align-items:center; gap:4px; padding:0 8px; cursor:pointer; }
+.chat-select-chip { width:136px; max-width:170px; padding:0 20px 0 8px; cursor:pointer; flex:0 1 136px; }
+.chat-model-inline { width:164px; max-width:220px; justify-content:space-between; font-family:var(--mono); flex:0 1 164px; text-align:left; }
+.chat-model-inline .control-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chat-model-inline .control-caret { font-size:8px; opacity:.65; margin-left:4px; flex:0 0 auto; }
 .chat-chip:hover,.chat-select-chip:hover,.chat-model-inline:hover,.chat-run-chip:hover,
 .chat-select-chip:focus,.chat-model-inline:focus,.chat-run-chip:focus { border-color:var(--border-focus); }
 .chat-chip.muted,.chat-select-chip.muted { color:var(--fg-dim); }
@@ -1159,10 +1160,11 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-trigger { justify-content:space-between; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .chat-control-trigger .control-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-control-trigger .control-caret { font-size:8px; opacity:.65; margin-left:4px; flex:0 0 auto; }
-.chat-control-trigger.provider { width:112px; max-width:112px; flex-basis:112px; }
-.chat-control-trigger.workflow { width:118px; max-width:118px; flex-basis:118px; }
+.chat-control-trigger.provider { width:126px; max-width:160px; flex-basis:126px; }
+.chat-control-trigger.workflow { width:142px; max-width:190px; flex-basis:142px; }
 .chat-control-popup { min-width:250px; max-width:min(360px, calc(100vw - 24px)); max-height:300px; overflow:auto; }
 .chat-control-popup.provider { min-width:230px; }
+.chat-control-popup.model { min-width:330px; }
 .chat-control-popup.workflow { min-width:310px; }
 .chat-control-popup .mp-meta { display:flex; align-items:center; gap:6px; margin-top:2px; color:var(--fg-dim); font:10px var(--mono); }
 .chat-control-popup .mp-tag { border:1px solid var(--border); border-radius:999px; padding:0 5px; line-height:15px; }
@@ -1257,8 +1259,8 @@ pre.code-block code .type { color:var(--fg-type); }
   background:var(--fg-dim); position:absolute; top:1px; left:1px; transition:all .2s; }
 .mode-popup-toggle.on .mp-switch { background:var(--fg-accent); border-color:var(--fg-accent); }
 .mode-popup-toggle.on .mp-switch::after { left:13px; background:#fff; }
-.chat-select-chip.agent { width:122px; max-width:122px; flex-basis:122px; }
-.chat-select-chip.workflow { width:118px; max-width:118px; flex-basis:118px; }
+.chat-select-chip.agent { width:142px; max-width:180px; flex-basis:142px; }
+.chat-select-chip.workflow { width:142px; max-width:190px; flex-basis:142px; }
 .chat-run-chip { color:var(--fg-accent); background:color-mix(in srgb, var(--border-focus) 12%, var(--bg3)); }
 .chat-run-chip:disabled { opacity:0.45; cursor:default; color:var(--fg-dim); }
 .chat-composer-action { width:22px; height:22px; border:1px solid transparent; border-radius:4px;
@@ -1287,7 +1289,7 @@ pre.code-block code .type { color:var(--fg-type); }
   .chat-messages-inner { padding:12px 12px 16px; }
   .welcome-prompts { grid-template-columns:1fr; }
   .chat-select-chip { max-width:118px; }
-  .chat-model-inline { width:96px; }
+  .chat-model-inline { width:128px; }
   .chat-composer-meta { justify-content:flex-end; }
 }
 
@@ -2380,7 +2382,12 @@ pre.code-block { overflow:visible; }
                         <option value="custom">Custom</option>
                       </select>
                     </div>
-                    <input class="chat-model-inline" id="chat-model-inline" placeholder="model" title="Chat model">
+                    <div class="chat-control-menu" id="chat-model-menu">
+                      <button type="button" class="chat-model-inline chat-control-trigger model" id="chat-model-inline" onclick="toggleChatControlPopup(event,'model')" title="Chat model" aria-haspopup="listbox" aria-expanded="false" value="">
+                        <span class="control-label" id="chat-model-trigger-label">Model</span><span class="control-caret">▾</span>
+                      </button>
+                      <div class="mode-popup chat-control-popup model" id="chat-model-popup" role="listbox" aria-label="Chat model"></div>
+                    </div>
                     <select class="chat-select-chip agent muted" id="chat-agent-sel" title="Active agent">
                       <option value="">Agent: Default</option>
                     </select>
@@ -7609,7 +7616,7 @@ function assistantUiSelfCheckRecord(checks,name,pass,detail){
 function assistantControlPopupSnapshot(kind){
   renderChatControlPopups();
   closeChatControlPopups();
-  const trigger=$('chat-'+kind+'-trigger');
+  const trigger=chatControlTriggerElement(kind);
   const popup=$('chat-'+kind+'-popup');
   toggleChatControlPopup(null,kind,{noFocus:true});
   const options=popup?Array.from(popup.querySelectorAll('.mode-popup-item[role="option"]')):[];
@@ -7800,6 +7807,7 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'composer-actions-same-row',layout.sameRow,JSON.stringify({controlTop:layout.controlTop,actionTop:layout.actionTop}));
   assistantUiSelfCheckRecord(checks,'composer-actions-visible',layout.actions&&layout.actions.width>0,layout.actions&&layout.actions.width);
   const providerPopup=assistantControlPopupSnapshot('provider');
+  const modelPopup=assistantControlPopupSnapshot('model');
   const workflowPopup=assistantControlPopupSnapshot('workflow');
   const workflowModeSmoke=assistantWorkflowModeSmokeSnapshot();
   const workflowEditor=assistantWorkflowEditorSnapshot();
@@ -7814,6 +7822,7 @@ async function runAssistantUiSelfCheck(opts){
   const workflowResultState=assistantWorkflowResultStateSnapshot();
   const workflowButtonState=assistantWorkflowRunButtonSnapshot();
   assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready',providerPopup.shown&&providerPopup.optionCount>=1&&providerPopup.focusableCount===providerPopup.optionCount&&providerPopup.keyboardReady,JSON.stringify(providerPopup));
+  assistantUiSelfCheckRecord(checks,'model-popup-configured-models-ready',modelPopup.shown&&modelPopup.optionCount>=1&&modelPopup.focusableCount===modelPopup.optionCount&&modelPopup.keyboardReady,JSON.stringify(modelPopup));
   assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready',workflowPopup.shown&&workflowPopup.workflowModeCount===3&&workflowPopup.workflowModeStrip&&workflowPopup.workflowModeToolbar&&workflowPopup.optionCount>=4&&workflowPopup.focusableCount===workflowPopup.optionCount&&workflowPopup.keyboardReady,JSON.stringify(workflowPopup));
   assistantUiSelfCheckRecord(checks,'workflow-popup-mode-smoke',workflowModeSmoke.states.length===3&&workflowModeSmoke.states.every(state=>state.strip&&state.toolbar&&state.active.includes(state.mode))&&workflowModeSmoke.selected.value==='assistant-selfcheck-flow'&&workflowModeSmoke.selected.mode==='on'&&workflowModeSmoke.selected.runDisabled===false&&workflowModeSmoke.custom.prompt==='selfcheck custom workflow prompt'&&workflowModeSmoke.custom.runDisabled===false,JSON.stringify(workflowModeSmoke));
   assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready',workflowEditor.modalExists&&workflowEditor.editorExists&&workflowEditor.rowCount===2&&workflowEditor.labelInputs===2&&workflowEditor.agentInputs===2&&workflowEditor.outputInputs===2&&workflowEditor.promptInputs===2&&workflowEditor.moveButtons===4&&workflowEditor.deleteButtons===2&&workflowEditor.addButtonExists&&workflowEditor.collectedCount===2&&workflowEditor.idReadOnly,JSON.stringify(workflowEditor));
@@ -20636,7 +20645,13 @@ function syncUI(){
   ensureSelectOption($('chat-provider-sel'),config.provider,providerLabel(config.provider));
   $('provider-sel').value=config.provider;$('model-inp').value=config.model;
   const chatProvider=$('chat-provider-sel');if(chatProvider)chatProvider.value=config.provider;
-  const chatModel=$('chat-model-inline');if(chatModel)chatModel.value=config.model||'';
+  const chatModel=$('chat-model-inline');if(chatModel){
+    chatModel.value=config.model||'';
+    const label=$('chat-model-trigger-label');
+    if(label)label.textContent=config.model||'Model';
+    chatModel.classList.toggle('muted',!config.model);
+    chatModel.title=config.model?'Chat model: '+config.model:'Chat model';
+  }
   const mname=config.model||config.provider;
   $('status-model').textContent=mname;
   if($('model-chip'))$('model-chip').textContent=mname;
@@ -20695,7 +20710,7 @@ $('provider-sel').onchange=e=>{
 $('model-inp').onchange=e=>updateProviderModel(config.provider,e.target.value,true);
 
 // ── Inline CHAT controls ──
-let chatControlState={agents:[],workflows:[],providers:[]};
+let chatControlState={agents:[],workflows:[],providers:[],models:[]};
 function normalizeControlList(value,key){
   const raw=Array.isArray(value)?value:(value&&Array.isArray(value[key])?value[key]:[]);
   return raw.filter(Boolean);
@@ -20721,6 +20736,19 @@ function providerOptionRows(){
   ];
   return rows.filter(Boolean);
 }
+function modelOptionRows(){
+  const rows=normalizeControlList(chatControlState.models,'models');
+  const out=[];
+  rows.forEach(model=>{
+    const id=controlItemId(model);
+    if(id&&!out.some(item=>controlItemId(item)===id))out.push(model);
+  });
+  Object.keys(config.custom_models||{}).sort().forEach(name=>{
+    if(!out.some(item=>controlItemId(item)===name))out.push({id:name,name,custom:true,description:'Custom endpoint model'});
+  });
+  if(config.model&&!out.some(item=>controlItemId(item)===config.model))out.unshift({id:config.model,name:config.model,current:true});
+  return out;
+}
 function renderProviderControlOptions(providers){
   const rows=normalizeControlList(providers,'providers');
   if(!rows.length)return;
@@ -20729,10 +20757,13 @@ function renderProviderControlOptions(providers){
     rows.forEach(p=>ensureSelectOption(sel,controlItemId(p),controlItemName(p)));
   });
 }
+function chatControlTriggerElement(kind){
+  return kind==='model'?$('chat-model-inline'):$('chat-'+kind+'-trigger');
+}
 function closeChatControlPopups(except){
-  ['provider','workflow'].forEach(kind=>{
+  ['provider','model','workflow'].forEach(kind=>{
     if(kind===except)return;
-    const popup=$('chat-'+kind+'-popup'),trigger=$('chat-'+kind+'-trigger');
+    const popup=$('chat-'+kind+'-popup'),trigger=chatControlTriggerElement(kind);
     if(popup)popup.classList.remove('show');
     if(trigger)trigger.setAttribute('aria-expanded','false');
   });
@@ -20747,7 +20778,7 @@ function chatControlPopupItem(kind,item,active){
   row.dataset.value=id;
   const icon=document.createElement('span');
   icon.className='mp-icon';
-  icon.textContent=kind==='workflow'?(item.icon||'▶'):'◉';
+  icon.textContent=kind==='workflow'?(item.icon||'▶'):(kind==='model'?(item.custom?'◆':'◇'):'◉');
   const body=document.createElement('div');
   body.className='mp-body';
   const label=document.createElement('div');
@@ -20760,6 +20791,13 @@ function chatControlPopupItem(kind,item,active){
     d.className='mp-desc';
     d.textContent=desc;
     body.appendChild(d);
+  }
+  if(kind==='model'){
+    const meta=document.createElement('div');
+    meta.className='mp-meta';
+    if(item.custom)meta.appendChild(Object.assign(document.createElement('span'),{className:'mp-tag',textContent:'custom'}));
+    if(item.max_input)meta.appendChild(Object.assign(document.createElement('span'),{className:'mp-tag',textContent:String(Math.round(Number(item.max_input)/1000))+'K ctx'}));
+    if(meta.children.length)body.appendChild(meta);
   }
   if(kind==='workflow'){
     const meta=document.createElement('div');
@@ -20795,6 +20833,7 @@ function chatControlPopupItem(kind,item,active){
   row.onclick=e=>{
     e.stopPropagation();
     if(kind==='provider')selectProviderFromPopup(id);
+    else if(kind==='model')selectModelFromPopup(id);
     else selectWorkflowFromPopup(id);
   };
   row.onkeydown=e=>{
@@ -20853,7 +20892,7 @@ function handleChatControlPopupKeydown(e,kind){
     }
     e.preventDefault();toggleChatControlPopup(e,kind);return true;
   }
-  if(e.key==='Escape'){e.preventDefault();closeChatControlPopups();const trigger=$('chat-'+kind+'-trigger');if(trigger)trigger.focus();return true}
+  if(e.key==='Escape'){e.preventDefault();closeChatControlPopups();const trigger=chatControlTriggerElement(kind);if(trigger)trigger.focus();return true}
   return false;
 }
 function renderChatControlPopups(){
@@ -20867,6 +20906,27 @@ function renderChatControlPopups(){
     providerPopup.innerHTML='';
     providerOptionRows().forEach(p=>providerPopup.appendChild(chatControlPopupItem('provider',p,controlItemId(p)===(config.provider||'openai'))));
     providerPopup.onkeydown=e=>handleChatControlPopupKeydown(e,'provider');
+  }
+  const modelTrigger=$('chat-model-inline'),modelLabelEl=$('chat-model-trigger-label'),modelPopup=$('chat-model-popup');
+  if(modelTrigger&&modelLabelEl){
+    modelTrigger.value=config.model||'';
+    modelLabelEl.textContent=config.model||'Model';
+    modelTrigger.title=config.model?'Chat model: '+config.model:'Chat model';
+    modelTrigger.classList.toggle('muted',!config.model);
+    modelTrigger.onkeydown=e=>handleChatControlPopupKeydown(e,'model');
+  }
+  if(modelPopup){
+    modelPopup.innerHTML='';
+    const rows=modelOptionRows();
+    if(rows.length){
+      rows.forEach(model=>modelPopup.appendChild(chatControlPopupItem('model',model,controlItemId(model)===(config.model||''))));
+    }else{
+      const empty=document.createElement('div');
+      empty.className='chat-control-popup-empty';
+      empty.textContent='No models configured. Add models in Custom Models settings.';
+      modelPopup.appendChild(empty);
+    }
+    modelPopup.onkeydown=e=>handleChatControlPopupKeydown(e,'model');
   }
   const wfSel=$('chat-workflow-sel'),workflowTrigger=$('chat-workflow-trigger'),workflowLabelEl=$('chat-workflow-trigger-label'),workflowPopup=$('chat-workflow-popup');
   const workflowId=wfSel?String(wfSel.value||''):'';
@@ -20902,7 +20962,7 @@ function renderChatControlPopups(){
 }
 function toggleChatControlPopup(e,kind,opts){
   if(e)e.stopPropagation();
-  const popup=$('chat-'+kind+'-popup'),trigger=$('chat-'+kind+'-trigger');
+  const popup=$('chat-'+kind+'-popup'),trigger=chatControlTriggerElement(kind);
   if(!popup||!trigger)return;
   const willOpen=!popup.classList.contains('show');
   closeModePopup();
@@ -20920,6 +20980,13 @@ function selectProviderFromPopup(providerId){
   closeChatControlPopups();
   const model=config.model||readProviderModelDefaults(id);
   updateProviderModel(id,model,true);
+  renderChatControlPopups();
+}
+function selectModelFromPopup(modelId){
+  const id=String(modelId||'').trim();
+  if(!id)return;
+  closeChatControlPopups();
+  updateProviderModel(config.provider,id,true);
   renderChatControlPopups();
 }
 function selectWorkflowFromPopup(workflowId){
@@ -20955,6 +21022,7 @@ async function selectWorkflowModeFromPopup(mode){
 }
 window.toggleChatControlPopup=toggleChatControlPopup;
 window.selectProviderFromPopup=selectProviderFromPopup;
+window.selectModelFromPopup=selectModelFromPopup;
 window.selectWorkflowFromPopup=selectWorkflowFromPopup;
 window.selectWorkflowModeFromPopup=selectWorkflowModeFromPopup;
 document.addEventListener('click',e=>{
@@ -21008,6 +21076,8 @@ async function loadChatControls(){
     chatControlState.agents=normalizeControlList(controls.agents,'agents');
     chatControlState.workflows=normalizeControlList(controls.workflows,'workflows');
     chatControlState.providers=normalizeControlList(controls.providers,'providers');
+    chatControlState.models=normalizeControlList(controls.models,'models');
+    if(controls.custom_models&&typeof controls.custom_models==='object')config.custom_models={...controls.custom_models};
     renderProviderControlOptions(chatControlState.providers);
   }else{
     const c=await call('load_config');if(c)Object.assign(config,withSettingsDefaults({...config,...c}));
@@ -21016,6 +21086,7 @@ async function loadChatControls(){
     const ar=await call('list_agents');const wr=await call('list_workflows');const aa=await call('get_active_agent');
     chatControlState.agents=normalizeControlList(ar,'agents');
     chatControlState.workflows=normalizeControlList(wr,'workflows');
+    chatControlState.models=modelOptionRows();
     activeAgentId=(aa&&aa.agent_id)||activeAgentId||'';
   }
   renderChatControlOptions();syncUI();updateModeUI();bindChatToolbarControls();
@@ -21030,8 +21101,7 @@ function bindChatToolbarControls(){
     renderChatControlPopups();
   };
   const model=$('chat-model-inline');if(model){
-    model.onchange=e=>updateProviderModel(config.provider,e.target.value,true);
-    model.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();model.blur()}else if(e.key==='Escape'){model.value=config.model||'';model.blur()}};
+    model.onkeydown=e=>handleChatControlPopupKeydown(e,'model');
   }
   const agent=$('chat-agent-sel');if(agent)agent.onchange=e=>setToolbarAgent(e.target.value);
   const workflow=$('chat-workflow-sel');if(workflow)workflow.onchange=()=>{updateToolbarWorkflowButton();renderChatControlPopups()};
