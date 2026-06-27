@@ -3270,6 +3270,17 @@ class AIEditorAPI:
             if result.get("error"):
                 return result
 
+        if "base_url" in payload:
+            try:
+                self._save_config_patch(
+                    {"base_url": str(payload.get("base_url") or "").strip()})
+            except RuntimeError as exc:
+                return {
+                    "error": str(exc),
+                    "applied": True,
+                    "controls": self.get_chat_controls(),
+                }
+
         if "mode" in payload:
             result = self.set_mode(str(payload.get("mode") or ""))
             if result.get("error"):

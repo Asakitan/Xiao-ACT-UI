@@ -3136,6 +3136,23 @@ def test_app_settings_parity() -> None:
            and stored_controls.get("provider_keys", {}).get("anthropic") == "old-claude"
            and stored_controls.get("future_section") == {"enabled": True})
 
+    endpoint_result = controls_api.set_chat_controls({
+        "provider": "openai",
+        "model": "toolbar-model",
+        "base_url": "https://custom.endpoint.example/v1",
+    })
+    endpoint_controls = controls_gui.settings.data["ai_editor"]
+    _check("set_chat_controls persists custom endpoint base url",
+           endpoint_result.get("ok") is True
+           and controls_api._engine.config.provider == "openai"
+           and controls_api._engine.config.model == "toolbar-model"
+           and controls_api._engine.config.effective_base_url
+           == "https://custom.endpoint.example/v1"
+           and endpoint_controls.get("provider") == "openai"
+           and endpoint_controls.get("model") == "toolbar-model"
+           and endpoint_controls.get("base_url")
+           == "https://custom.endpoint.example/v1")
+
     no_key_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     missing_key_models = no_key_api.list_provider_models(
         "anthropic", "https://api.anthropic.com/v1", "")
@@ -4082,10 +4099,10 @@ def test_phase1_ai_editor_regressions() -> None:
             and ".chat-toolbar .spacer { display:none; }" in html
              and ".chat-control-strip { display:flex; align-items:center; gap:5px; flex:1 1 auto; flex-wrap:nowrap; min-width:0;" in html
              and "overflow:visible; max-width:100%;" in html
-             and "--chat-model-width:320px;" in html
+             and "--chat-model-width:260px;" in html
              and "appearance:none; -webkit-appearance:none; line-height:20px;" in html
              and ".chat-select-chip { width:150px; max-width:208px; padding:0 9px; cursor:pointer; flex:0 1 150px; }" in html
-             and ".chat-model-inline { width:190px; max-width:260px; justify-content:space-between; font-family:var(--mono); flex:0 1 190px; text-align:left; }" in html
+             and ".chat-model-inline { width:100%; max-width:none; justify-content:space-between; font-family:var(--mono); flex:1 1 var(--chat-model-width); text-align:left; }" in html
              and ".chat-control-trigger { display:inline-flex; align-items:center; gap:4px; justify-content:space-between;" in html
              and "border-radius:999px!important; background:var(--bg3); appearance:none!important; -webkit-appearance:none!important;" in html
              and "#chat-model-menu { flex:1 1 var(--chat-model-width); min-width:var(--chat-model-width); }" in html
@@ -4188,6 +4205,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "chatControlState.models=normalizeControlList(controls.models,'models');" in html
            and "if(controls.custom_models&&typeof controls.custom_models==='object')config.custom_models={...controls.custom_models};" in html
            and "function selectModelFromPopup(modelId)" in html
+           and "const row=modelOptionRows().find(item=>controlItemId(item)===id)||null;" in html
+           and "const baseUrl=String((row&&(row.base_url||row.endpoint||row.endpoint_url))||config.base_url||'').trim();" in html
+           and "updateProviderModel(config.provider,id,true);" in html
+           and "const payload={provider:config.provider,model:config.model,base_url:config.base_url||''};" in html
            and "else if(kind==='model')selectModelFromPopup(id);" in html
            and "window.selectModelFromPopup=selectModelFromPopup;" in html
            and "if(kind==='model')return $('chat-model-inline');" in html
@@ -4212,6 +4233,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".chat-control-trigger.model { width:100%; min-width:var(--chat-model-width); max-width:none; flex:1 1 var(--chat-model-width); }" in html
            and ".chat-control-trigger.workflow { width:var(--chat-workflow-width); min-width:var(--chat-workflow-width); max-width:var(--chat-workflow-width); flex:0 0 var(--chat-workflow-width); }" in html
            and ".chat-control-popup { position:absolute; bottom:calc(100% + 7px); left:0; display:none;" in html
+           and "border-radius:10px; box-shadow:0 14px 36px #00000078,0 0 0 1px #ffffff08;" in html
+           and ".chat-composer-action { width:22px; height:22px; border:1px solid transparent; border-radius:999px;" in html
+           and ".model-chip { display:inline-flex; align-items:center; gap:3px; padding:2px 6px; background:var(--bg3);" in html
+           and "border:1px solid var(--border); border-radius:999px; font-size:11px; color:var(--fg-dim);" in html
+           and ".workflow-popup-action { width:20px; height:20px; border:1px solid transparent; border-radius:999px;" in html
            and ".chat-control-popup.show { display:block; }" in html
            and ".chat-control-popup.show { opacity:1; transform:translateY(0) scale(1); pointer-events:auto; }" in html
            and ".chat-control-popup.align-right { left:auto; right:0; }" in html
