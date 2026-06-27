@@ -1594,7 +1594,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-result-nav button:disabled { opacity:.45; cursor:default; }
 .settings-searchbar .settings-active-filters,.settings-searchbar .settings-filter-summary,
 .settings-searchbar .settings-validation-summary,.settings-searchbar .settings-review-bar,
-.settings-searchbar .settings-save-preview { grid-column:1 / -1; }
+.settings-searchbar .settings-save-preview,.settings-searchbar .settings-search-memory { grid-column:1 / -1; }
 .settings-searchbar .settings-quick-filters { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:5px;
   margin:-1px 0 0; }
 .settings-quick-filters button { height:22px; max-width:160px; padding:1px 7px; border:1px solid var(--border);
@@ -1615,6 +1615,12 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-search-hints code { font:10px var(--mono); color:var(--fg); background:var(--bg3);
   border:1px solid var(--border); border-radius:3px; padding:1px 5px; cursor:pointer; }
 .settings-search-hints code:hover,.settings-search-hints code:focus { color:var(--fg-accent); border-color:var(--border-focus); outline:none; }
+.settings-search-memory { display:none; align-items:center; gap:5px; min-height:22px; color:var(--fg-dim); font-size:11px; }
+.settings-search-memory.open { display:flex; flex-wrap:wrap; }
+.settings-search-memory button { height:21px; max-width:220px; padding:1px 7px; border:1px solid var(--border);
+  border-radius:999px; background:var(--bg3); color:var(--fg-dim); font:10px var(--mono); cursor:pointer;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-search-memory button:hover,.settings-search-memory button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
 .settings-review-bar { display:flex; flex-wrap:wrap; align-items:center; gap:6px; min-height:28px;
   padding:5px 6px; border:1px solid var(--border); border-radius:5px; background:color-mix(in srgb,var(--bg2) 78%,transparent); }
 .settings-review-bar .review-pill { height:20px; display:inline-flex; align-items:center; gap:4px; padding:0 7px;
@@ -1646,6 +1652,15 @@ pre.code-block code .type { color:var(--fg-type); }
   background:color-mix(in srgb,var(--bg3) 68%,transparent); color:var(--fg-dim); font-size:11px; line-height:1.35; }
 .settings-nav-summary strong { display:block; color:var(--fg); font-size:12px; margin-bottom:2px; }
 .settings-nav-summary .settings-nav-summary-line { display:flex; justify-content:space-between; gap:8px; font:10px var(--mono); }
+.settings-nav-memory { margin:0 0 8px; padding:6px 0; border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent); }
+.settings-nav-memory-title { padding:1px 8px 5px; color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; }
+.settings-nav-memory-empty { padding:2px 8px 6px; color:var(--fg-dim); font-size:11px; }
+.settings-nav-memory-item { width:100%; min-height:24px; display:flex; align-items:center; gap:6px;
+  border:0; border-radius:4px; background:transparent; color:var(--fg-dim); padding:4px 8px;
+  text-align:left; font:11px var(--sans); cursor:pointer; }
+.settings-nav-memory-item:hover,.settings-nav-memory-item:focus { color:var(--fg); background:var(--bg-hover); outline:none; }
+.settings-nav-memory-item .kind { flex:0 0 auto; color:var(--fg-accent); font:10px var(--mono); }
+.settings-nav-memory-item .label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .settings-nav-item { width:100%; min-height:28px; display:flex; align-items:center; gap:7px;
   border:0; border-radius:4px; background:transparent; color:var(--fg-dim); padding:5px 8px;
   text-align:left; font:12px var(--sans); cursor:pointer; }
@@ -2105,7 +2120,7 @@ pre.code-block { overflow:visible; }
 .settings-field.settings-target-hidden { display:none !important; }
 .settings-field.builtin-setting { padding:7px 28px 7px 8px; border-radius:4px; margin:3px 0 6px;
   border-left:2px solid transparent; background:transparent; }
-.settings-field.builtin-setting.has-row-actions { padding-right:184px; }
+.settings-field.builtin-setting.has-row-actions { padding-right:212px; }
 .settings-field.builtin-setting:hover,.settings-field.builtin-setting:focus-within { background:color-mix(in srgb,var(--bg-hover) 62%,transparent); }
 .settings-field.builtin-setting:focus { outline:1px solid color-mix(in srgb,var(--border-focus) 55%,transparent); outline-offset:-1px; }
 .settings-field.highlight { animation:settingsSectionFlash .65s ease-out; }
@@ -2115,7 +2130,7 @@ pre.code-block { overflow:visible; }
 .settings-field.builtin-setting.saved-flash { animation:settingsSavedFlash .7s ease-out; }
 @keyframes settingsSavedFlash { from{background:color-mix(in srgb,var(--fg-success) 13%,transparent)} to{background:transparent} }
 .settings-field.builtin-setting .s-reset { top:8px; transform:none; }
-.settings-field.has-row-actions .s-reset { right:178px; }
+.settings-field.has-row-actions .s-reset { right:206px; }
 .settings-field.builtin-setting > label:first-child,
 .settings-field.builtin-setting > .settings-check:first-child { margin-top:0; }
 .settings-built-meta { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin:5px 0 1px;
@@ -2141,6 +2156,8 @@ pre.code-block { overflow:visible; }
 .settings-row-action { width:22px; height:22px; border:1px solid var(--border); border-radius:4px;
   background:var(--bg2); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; padding:0; }
 .settings-row-action.wide { width:auto; min-width:42px; padding:0 6px; }
+.settings-row-action.favorite.active { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 55%,var(--border));
+  background:color-mix(in srgb,var(--fg-accent) 8%,var(--bg3)); }
 .settings-row-action:hover,.settings-row-action:focus { color:var(--fg); border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
 .settings-row-action:disabled { opacity:.35; cursor:default; }
 .settings-validation-summary { display:none; margin:0 0 8px; padding:7px 9px;
@@ -3011,6 +3028,7 @@ pre.code-block { overflow:visible; }
         <code tabindex="0" onclick="settingsUseSearchHint('@lang:python')" onkeydown="settingsSearchHintKeydown(event,'@lang:python')">@lang:python</code>
         <code tabindex="0" onclick="settingsUseSearchHint('@id:editor.')" onkeydown="settingsSearchHintKeydown(event,'@id:editor.')">@id:editor.</code>
       </div>
+      <div id="settings-search-memory" class="settings-search-memory" aria-label="Recent settings searches"></div>
       <div id="settings-target-summary" class="settings-target-summary" role="status" aria-live="polite"></div>
       <div id="settings-review-bar" class="settings-review-bar" role="status" aria-live="polite"></div>
       <div id="settings-save-preview" class="settings-save-preview" aria-live="polite"></div>
@@ -3742,6 +3760,7 @@ function settingsSearchForKey(key){
 }
 function settingsHighlightRow(row){
   if(!row)return;
+  settingsRememberRecentSetting(row);
   try{row.scrollIntoView({block:'center',behavior:'smooth'})}catch(e){try{row.scrollIntoView()}catch(_e){}}
   settingsVisibleRows().forEach(item=>{item.classList.remove('settings-current');item.removeAttribute('aria-current')});
   row.classList.add('highlight');
@@ -3764,6 +3783,12 @@ function settingsAddRowActions(row,opts){
     return btn;
   };
   if(opts.key)add('⧉','Copy setting ID',()=>settingsCopyText(opts.key,'Setting ID'));
+  if(opts.key){
+    const fav=add('★','Pin setting in Settings navigation',()=>settingsToggleFavorite(row));
+    fav.classList.add('favorite');
+    fav.dataset.settingsFavoriteKey=opts.key;
+    fav.classList.toggle('active',settingsIsFavorite(opts.key));
+  }
   if(opts.key&&opts.searchable)add('⌕','Filter to this setting',()=>settingsSearchForKey(opts.key));
   if(opts.meta&&opts.inputId)add('Default','Apply default value',()=>{const el=$(opts.inputId);if(el){setSettingsInputValue(el,opts.meta,settingDefaultValue(opts.meta));markSettingsModified();scheduleFilterSettings(0);showToast('Default applied: '+(opts.meta.key||opts.inputId),'info',1400)}});
   if(opts.meta&&opts.inputId)add('{}','Copy JSON setting entry',()=>{
@@ -24398,7 +24423,16 @@ function invalidateSettingsFilterCache(){_settingsFilterDomCache=null}
 let currentSettingsTarget='user';
 let _settingsRestoringView=false;
 const SETTINGS_VIEW_STORAGE_KEY='sao.aiEditor.settings.view.v1';
+const SETTINGS_FAVORITES_STORAGE_KEY='sao.aiEditor.settings.favorites.v1';
+const SETTINGS_RECENT_STORAGE_KEY='sao.aiEditor.settings.recent.v1';
+const SETTINGS_SEARCH_HISTORY_STORAGE_KEY='sao.aiEditor.settings.searchHistory.v1';
 function settingsMainElement(){return $('settings-main')||$('settings-modal')}
+function settingsStorageList(key){
+  try{const value=JSON.parse(localStorage.getItem(key)||'[]');return Array.isArray(value)?value:[]}catch(e){return []}
+}
+function settingsStoreList(key,list,limit){
+  try{localStorage.setItem(key,JSON.stringify((Array.isArray(list)?list:[]).slice(0,Number(limit)||24)))}catch(e){}
+}
 function settingsViewState(){
   try{return JSON.parse(localStorage.getItem(SETTINGS_VIEW_STORAGE_KEY)||'{}')||{}}catch(e){return {}}
 }
@@ -24440,6 +24474,86 @@ function settingsSectionModifiedCount(section){
   return Array.from(section.querySelectorAll('.settings-field.modified,.ext-setting-row.modified'))
     .filter(row=>row.style.display!=='none'&&!row.classList.contains('settings-target-hidden')).length;
 }
+function settingsRowKey(row){
+  if(!row||!row.dataset)return '';
+  return row.dataset.extSettingKey||row.dataset.settingKey||'';
+}
+function settingsRowTitle(row){
+  if(!row)return 'Setting';
+  const title=(row.querySelector('.ext-setting-title')||{}).textContent
+    || (row.querySelector('label b')||{}).textContent
+    || (row.querySelector('label')||{}).textContent
+    || settingsRowKey(row);
+  return String(title||'Setting').replace(/\s+/g,' ').trim();
+}
+function settingsRememberRecentSetting(row){
+  const key=settingsRowKey(row);if(!key)return;
+  const label=settingsRowTitle(row);
+  const next=[{key,label,target:currentSettingsTarget,at:Date.now()}]
+    .concat(settingsStorageList(SETTINGS_RECENT_STORAGE_KEY).filter(item=>item&&item.key!==key));
+  settingsStoreList(SETTINGS_RECENT_STORAGE_KEY,next,8);
+  renderSettingsPersonalNav();
+}
+function settingsFavoriteList(){return settingsStorageList(SETTINGS_FAVORITES_STORAGE_KEY).filter(item=>item&&item.key)}
+function settingsFavoriteKeys(){return new Set(settingsFavoriteList().map(item=>String(item.key)))}
+function settingsIsFavorite(key){return settingsFavoriteKeys().has(String(key||''))}
+function settingsToggleFavorite(row){
+  const key=settingsRowKey(row);if(!key)return;
+  const label=settingsRowTitle(row);
+  let list=settingsFavoriteList();
+  if(settingsIsFavorite(key))list=list.filter(item=>String(item.key)!==key);
+  else list=[{key,label,target:currentSettingsTarget,at:Date.now()}].concat(list);
+  settingsStoreList(SETTINGS_FAVORITES_STORAGE_KEY,list,16);
+  document.querySelectorAll('[data-settings-favorite-key]').forEach(btn=>{
+    if(btn.dataset.settingsFavoriteKey===key)btn.classList.toggle('active',settingsIsFavorite(key));
+  });
+  renderSettingsPersonalNav();
+}
+function settingsFindRowByKey(key){
+  key=String(key||'');
+  return settingsVisibleRows().find(row=>settingsRowKey(row)===key)
+    || Array.from((settingsMainElement()||document).querySelectorAll('.settings-field.builtin-setting,.ext-setting-row'))
+      .find(row=>settingsRowKey(row)===key);
+}
+function settingsJumpToSettingKey(key,target){
+  if(target&&target!==currentSettingsTarget)selectSettingsTarget(target,{preserveSearch:true});
+  const row=settingsFindRowByKey(key);
+  if(row){
+    const section=row.closest('.settings-section,#ext-settings-container,details');
+    if(section&&section.style.display==='none')settingsClearFilters();
+    settingsHighlightRow(row);
+  }else if(key){
+    const input=$('settings-search');
+    if(input)input.value='@id:'+key;
+    scheduleFilterSettings(0);
+  }
+}
+function settingsPersonalItemButton(item,kind){
+  const btn=document.createElement('button');
+  btn.type='button';btn.className='settings-nav-memory-item';
+  const tag=document.createElement('span');tag.className='kind';tag.textContent=kind;
+  const label=document.createElement('span');label.className='label';label.textContent=item.label||item.key;
+  btn.title=item.key||label.textContent;
+  btn.appendChild(tag);btn.appendChild(label);
+  btn.onclick=()=>settingsJumpToSettingKey(item.key,item.target);
+  return btn;
+}
+function renderSettingsPersonalNav(){
+  const host=$('settings-nav-personal');if(!host)return;
+  host.innerHTML='';
+  const favorites=settingsFavoriteList().slice(0,5);
+  const recent=settingsStorageList(SETTINGS_RECENT_STORAGE_KEY).filter(item=>item&&item.key&&!settingsIsFavorite(item.key)).slice(0,5);
+  const addBlock=(title,items,kind)=>{
+    const titleEl=document.createElement('div');titleEl.className='settings-nav-memory-title';titleEl.textContent=title;host.appendChild(titleEl);
+    if(!items.length){
+      const empty=document.createElement('div');empty.className='settings-nav-memory-empty';empty.textContent='None';
+      host.appendChild(empty);return;
+    }
+    items.forEach(item=>host.appendChild(settingsPersonalItemButton(item,kind)));
+  };
+  addBlock('Favorites',favorites,'★');
+  addBlock('Recent',recent,'↪');
+}
 function setActiveSettingsNav(id){
   const nav=$('settings-nav');if(!nav)return;
   nav.querySelectorAll('.settings-nav-item').forEach(btn=>btn.classList.toggle('active',btn.dataset.settingsNav===id));
@@ -24465,6 +24579,11 @@ function renderSettingsNav(){
     +'<div class="settings-nav-summary-line"><span>Modified</span><span id="settings-nav-modified-count">0</span></div>'
     +'<div class="settings-nav-summary-line"><span>Errors</span><span id="settings-nav-error-count">0</span></div>';
   nav.appendChild(summary);
+  const personal=document.createElement('div');
+  personal.className='settings-nav-memory';
+  personal.id='settings-nav-personal';
+  nav.appendChild(personal);
+  renderSettingsPersonalNav();
   if(!sections.length){
     const empty=document.createElement('div');empty.className='settings-nav-empty';empty.textContent='No settings loaded';
     nav.appendChild(empty);return;
@@ -24851,6 +24970,38 @@ function renderSettingsQuickFilters(parsed){
     clear.disabled=!active;
   }
 }
+function settingsRecordSearch(query,parsed){
+  query=String(query||'').replace(/\s+/g,' ').trim();
+  if(_settingsRestoringView||!query||query.length<2||!(parsed&&parsed.active))return;
+  const next=[{query,target:currentSettingsTarget,at:Date.now()}]
+    .concat(settingsStorageList(SETTINGS_SEARCH_HISTORY_STORAGE_KEY).filter(item=>item&&String(item.query||'')!==query));
+  settingsStoreList(SETTINGS_SEARCH_HISTORY_STORAGE_KEY,next,8);
+}
+function settingsApplySearchHistory(item){
+  if(!item)return;
+  if(item.target&&item.target!==currentSettingsTarget)selectSettingsTarget(item.target,{preserveSearch:true});
+  const input=$('settings-search');
+  if(input){
+    input.value=String(item.query||'');
+    input.focus&&input.focus();
+  }
+  scheduleFilterSettings(0);
+}
+function renderSettingsSearchMemory(parsed){
+  const host=$('settings-search-memory');if(!host)return;
+  const history=settingsStorageList(SETTINGS_SEARCH_HISTORY_STORAGE_KEY).filter(item=>item&&item.query).slice(0,5);
+  host.innerHTML='';
+  host.classList.toggle('open',history.length>0&&!(parsed&&parsed.active));
+  if(!history.length||host.classList.contains('open')===false)return;
+  const label=document.createElement('span');label.textContent='Recent';
+  host.appendChild(label);
+  history.forEach(item=>{
+    const btn=document.createElement('button');
+    btn.type='button';btn.textContent=item.query;btn.title=settingsTargetDisplayName(item.target)+' · '+item.query;
+    btn.onclick=()=>settingsApplySearchHistory(item);
+    host.appendChild(btn);
+  });
+}
 function renderSettingsEmptyState(visible,total,parsed){
   const empty=$('settings-empty-state');if(!empty)return;
   const show=Number(total)>0&&Number(visible)===0;
@@ -25138,7 +25289,9 @@ function filterSettings(){
     applyExtensionSettingsFilter();
   }
   const inp=$('settings-search');if(inp)inp.placeholder=parsed.active?visible+' matches':currentSettingsTarget==='extensions'?'Search extension settings...':currentSettingsTarget==='workspace'?'Search workspace settings...':'Search user settings...';
+  settingsRecordSearch(q,parsed);
   renderSettingsActiveFilters(parsed,visible,total);
+  renderSettingsSearchMemory(parsed);
   renderSettingsTargetSummary(targetStats);
   renderSettingsReviewBar(targetStats);
   updateSettingsResultNav(settingsVisibleRows().length);

@@ -9713,6 +9713,16 @@ console.log("frontend word separator behavior ok");
             and "settingsFocusFirstReviewRow('error')" in html
             and "Review','Preview visible setting changes before saving" in html
             and "More changes are included in the save payload." in html
+            and "SETTINGS_FAVORITES_STORAGE_KEY='sao.aiEditor.settings.favorites.v1'" in html
+            and "SETTINGS_RECENT_STORAGE_KEY='sao.aiEditor.settings.recent.v1'" in html
+            and "SETTINGS_SEARCH_HISTORY_STORAGE_KEY='sao.aiEditor.settings.searchHistory.v1'" in html
+            and "function settingsToggleFavorite(row)" in html
+            and "function renderSettingsPersonalNav()" in html
+            and "id='settings-nav-personal'" in html
+            and "function settingsRecordSearch(query,parsed)" in html
+            and "id=\"settings-search-memory\"" in html
+            and "settingsRememberRecentSetting(row);" in html
+            and "fav.dataset.settingsFavoriteKey=opts.key;" in html
             and "renderSettingsReviewBar(targetStats);" in html
             and "renderSettingsReviewBar();" in html)
     _check("frontend settings saves scoped target updates",
