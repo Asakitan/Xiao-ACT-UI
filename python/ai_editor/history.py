@@ -43,6 +43,42 @@ def _native_summary_search_text(summary: Dict[str, Any]) -> str:
     return " ".join(terms)
 
 
+def _native_summary_item(value: Any, fallback: str = "") -> Dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    path = str(
+        value.get("path") or value.get("uri") or value.get("modifiedUri")
+        or value.get("modifiedContentUri") or value.get("originalUri")
+        or value.get("originalContentUri") or ""
+    ).strip()
+    label = str(value.get("label") or value.get("title") or value.get("name")
+                or os.path.basename(path) or fallback or path).strip()
+    item: Dict[str, str] = {}
+    if path:
+        item["path"] = path
+    if label:
+        item["label"] = label
+    kind = str(value.get("kind") or "").strip()
+    if kind:
+        item["kind"] = kind
+    return item
+
+
+def _collect_tree_file_items(nodes: Any, out: List[Dict[str, str]]) -> None:
+    if not isinstance(nodes, list):
+        return
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        if not node.get("directory"):
+            item = _native_summary_item(node)
+            if item.get("path"):
+                out.append(item)
+        children = node.get("children")
+        if isinstance(children, list):
+            _collect_tree_file_items(children, out)
+
+
 def native_summary_from_messages(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
     summary: Dict[str, Any] = {
         "parts": 0,
@@ -55,6 +91,9 @@ def native_summary_from_messages(messages: List[Dict[str, Any]]) -> Dict[str, An
         "errors": 0,
         "modelLabels": [],
         "keywords": [],
+        "referenceItems": [],
+        "changeItems": [],
+        "treeItems": [],
         "searchText": "",
     }
     models: Dict[str, bool] = {}
@@ -85,12 +124,22 @@ def native_summary_from_messages(messages: List[Dict[str, Any]]) -> Dict[str, An
                     modified = part.get("modifiedFiles") if isinstance(part.get("modifiedFiles"), dict) else {}
                     files = modified.get("files") or part.get("files") or []
                     summary["changes"] += len(files) if isinstance(files, list) else 1
+                    if isinstance(files, list):
+                        for file_info in files[:5]:
+                            item = _native_summary_item(
+                                file_info, "Modified file")
+                            if item and len(summary["changeItems"]) < 5:
+                                summary["changeItems"].append(item)
                 elif kind:
                     keywords[kind] = True
         for key in ("contentReferences", "content_references", "responseReferences", "response_references"):
             refs = payload.get(key)
             if isinstance(refs, list):
                 summary["refs"] += len(refs)
+                for ref in refs[:5]:
+                    item = _native_summary_item(ref, "Reference")
+                    if item and len(summary["referenceItems"]) < 5:
+                        summary["referenceItems"].append(item)
                 break
         used_context = payload.get("usedContext") or payload.get("used_context") or []
         if isinstance(used_context, list):
@@ -98,6 +147,16 @@ def native_summary_from_messages(messages: List[Dict[str, Any]]) -> Dict[str, An
         trees = payload.get("fileTrees") or payload.get("file_trees") or []
         if isinstance(trees, list):
             summary["trees"] += len(trees)
+            tree_items: List[Dict[str, str]] = []
+            for tree in trees:
+                if isinstance(tree, dict):
+                    _collect_tree_file_items(
+                        tree.get("nodes") or tree.get("items"), tree_items)
+                elif isinstance(tree, list):
+                    _collect_tree_file_items(tree, tree_items)
+            for item in tree_items[:5]:
+                if item and len(summary["treeItems"]) < 5:
+                    summary["treeItems"].append(item)
         usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
         total = usage.get("total_tokens") or usage.get("totalTokens") or usage.get("total") or 0
         try:

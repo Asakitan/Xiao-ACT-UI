@@ -4093,6 +4093,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function confirmDeleteAssistantSession(session)" in html
            and "function assistantHistoryEntryNativeSummary(entry)" in html
            and "function assistantHistoryNativeSummaryChips(summary)" in html
+           and "function assistantSavedHistoryActionButton(entry,kind,item)" in html
            and "function assistantHistorySessionChips(session,current)" in html
            and "function renderHistorySessionItem(list,session,index)" in html
            and "function renderHistoryBackendItem(list,entry,index)" in html
@@ -4119,6 +4120,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "item.dataset.savedNativeUsedContext=String(nativeSummary.usedContext);" in html
            and "item.dataset.savedNativeTrees=String(nativeSummary.trees);" in html
            and "item.dataset.savedNativeTokens=String(nativeSummary.tokens);" in html
+           and "referenceItems:normalizeItems(raw.referenceItems||raw.reference_items)" in html
+           and "changeItems:normalizeItems(raw.changeItems||raw.change_items)" in html
+           and "treeItems:normalizeItems(raw.treeItems||raw.tree_items)" in html
            and "main.className='history-session-main';" in html
            and "el.className='history-session-chip '+chip.kind;" in html
            and ".history-session-chip.running" in html
@@ -4145,7 +4149,14 @@ def test_phase1_ai_editor_regressions() -> None:
            and "refs.onclick=ev=>{ev.stopPropagation();loadHistoryConv(entry.id,{focus:'references'})};" in html
            and "edits.onclick=ev=>{ev.stopPropagation();loadHistoryConv(entry.id,{focus:'changes'})};" in html
            and "tree.onclick=ev=>{ev.stopPropagation();loadHistoryConv(entry.id,{focus:'tree'})};" in html
-           and "function focusLoadedHistoryNativeSection(kind)" in html
+           and "assistantSavedHistoryActionButton(entry,'reference-item',nativeSummary.referenceItems[0])" in html
+           and "assistantSavedHistoryActionButton(entry,'change-item',nativeSummary.changeItems[0])" in html
+           and "assistantSavedHistoryActionButton(entry,'tree-item',nativeSummary.treeItems[0])" in html
+           and "function focusLoadedHistoryNativeSection(kind,target)" in html
+           and "function findLoadedHistoryNativeTarget(kind,target)" in html
+           and "data-chat-ref-path" in html
+           and "data-chat-change-path" in html
+           and "data-chat-tree-path" in html
            and "async function loadHistoryConv(id,opts)" in html
            and "const nativePayload=assistantSessionSerializableNativePayload(m&&m.nativePayload);" in html
            and "rememberAssistantNativePayload(b,nativePayload);" in html
@@ -4945,7 +4956,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "openChatResponseReference(chatMultiDiffRef(entry))" in html
            and "openChatResponseReference(chatWorkspaceEditRef(edit))" in html
            and "openChatResponseReference(chatExternalEditRef(edit))" in html
-           and "openChatResponseReference(chatModifiedFileRef(file))" in html
+           and "const modifiedRef=chatModifiedFileRef(file)" in html
+           and "openChatResponseReference(modifiedRef)" in html
            and "chatToolPartSummary(data.resultDetails||data.toolSpecificData)" in html
            and "const renderedSpecific=renderChatToolSpecificData(card,data.toolSpecificData)" in html
            and "data.kind==='todoList'" in html
@@ -12866,7 +12878,8 @@ def test_history() -> None:
             ],
             "contentReferences": [{"kind": "anchor", "label": "history.py"}],
             "usedContext": [{"kind": "file", "label": "context.py"}],
-            "fileTrees": [{"label": "tree", "items": [{"name": "history.py"}]}],
+            "fileTrees": [{"label": "tree", "items": [
+                {"name": "history.py", "path": "file:///tmp/history.py"}]}],
             "usage": {"total_tokens": 24},
         }},
     ]
@@ -12885,6 +12898,9 @@ def test_history() -> None:
            and summary.get("usedContext") == 1
            and summary.get("trees") == 1
            and summary.get("tokens") == 24
+           and summary.get("referenceItems", [{}])[0].get("label") == "history.py"
+           and summary.get("changeItems", [{}])[0].get("path") == "file:///tmp/history.py"
+           and summary.get("treeItems", [{}])[0].get("path") == "file:///tmp/history.py"
            and "modified files" in summary.get("searchText", ""))
     _check("history persists native payload and header summary",
            native_loaded is not None
@@ -12892,6 +12908,9 @@ def test_history() -> None:
            and native_loaded.get("native_summary", {}).get("changes") == 1
            and native_list_summary.get("parts") == 2
            and native_list_summary.get("refs") == 1
+           and native_list_summary.get("referenceItems", [{}])[0].get("label") == "history.py"
+           and native_list_summary.get("changeItems", [{}])[0].get("path") == "file:///tmp/history.py"
+           and native_list_summary.get("treeItems", [{}])[0].get("path") == "file:///tmp/history.py"
            and "file tree" in native_list_summary.get("searchText", ""))
     delete_conversation(native_cid)
 

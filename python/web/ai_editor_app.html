@@ -6485,6 +6485,9 @@ async function openChatFileTreePath(path){
   if(!path)return;
   await openWorkspaceFile(path);
 }
+function chatHistoryTargetKey(value){
+  return String(value||'').replace(/\\/g,'/').toLowerCase();
+}
 function flattenChatFileTreeNodes(nodes,out){
   out=out||[];
   (nodes||[]).forEach(node=>{
@@ -6507,6 +6510,7 @@ function renderChatFileTreeNodes(parent,nodes){
     row.setAttribute('role','treeitem');
     row.setAttribute('aria-label',node.path||node.name);
     row.title=node.path||node.name;
+    if(node.path)row.dataset.chatTreePath=String(node.path);
     if(node.directory)row.setAttribute('aria-expanded','true');
     else{row.type='button';row.onclick=()=>openChatFileTreePath(node.path)}
     row.innerHTML='<span class="tree-icon">'+(node.directory?'▾':'·')+'</span><span class="tree-name">'+esc(node.name)+'</span>';
@@ -7468,8 +7472,10 @@ function renderChatModifiedFilesConfirmationPart(wrap,part){
   const list=document.createElement('div');list.className='chat-response-multidiff-list';
   (data.files||[]).forEach(file=>{
     const row=document.createElement('button');row.type='button';row.className='chat-response-edit-row';
+    const modifiedRef=chatModifiedFileRef(file);
+    row.dataset.chatChangePath=String(modifiedRef.path||file.uri||file.originalUri||'');
     row.innerHTML='<span class="change-kind">review</span><span class="change-path">'+esc(file.title||file.uri||file.originalUri)+'</span><span class="diff-stat">+'+esc(file.insertions||0)+' -'+esc(file.deletions||0)+'</span>';
-    row.onclick=()=>openChatResponseReference(chatModifiedFileRef(file));list.appendChild(row);
+    row.onclick=()=>openChatResponseReference(modifiedRef);list.appendChild(row);
   });
   card.appendChild(list);
   if(data.options&&data.options.length){
@@ -7500,7 +7506,7 @@ function renderChatToolSpecificData(card,data){
     const modifiedFiles=normalizeChatModifiedFilesConfirmationPart(data);
     const title=document.createElement('div');title.className='chat-response-part-title';title.textContent='Modified files';section.appendChild(title);
     const list=document.createElement('div');list.className='chat-response-multidiff-list';
-    modifiedFiles.files.forEach(file=>{const row=document.createElement('button');row.type='button';row.className='chat-response-edit-row';row.innerHTML='<span class="change-kind">review</span><span class="change-path">'+esc(file.title||file.uri||file.originalUri)+'</span><span class="diff-stat">+'+esc(file.insertions||0)+' -'+esc(file.deletions||0)+'</span>';row.onclick=()=>openChatResponseReference(chatModifiedFileRef(file));list.appendChild(row)});
+    modifiedFiles.files.forEach(file=>{const row=document.createElement('button');row.type='button';row.className='chat-response-edit-row';const modifiedRef=chatModifiedFileRef(file);row.dataset.chatChangePath=String(modifiedRef.path||file.uri||file.originalUri||'');row.innerHTML='<span class="change-kind">review</span><span class="change-path">'+esc(file.title||file.uri||file.originalUri)+'</span><span class="diff-stat">+'+esc(file.insertions||0)+' -'+esc(file.deletions||0)+'</span>';row.onclick=()=>openChatResponseReference(modifiedRef);list.appendChild(row)});
     section.appendChild(list);card.appendChild(section);return true;
   }
   return false;
@@ -7995,7 +8001,7 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'agent-popup-configured-agents-ready',agentPopup.shown&&agentPopup.optionCount>=1&&agentPopup.focusableCount===agentPopup.optionCount&&agentPopup.keyboardReady&&agentPopup.visibleText.includes('Agent'),JSON.stringify(agentPopup));
   assistantUiSelfCheckRecord(checks,'provider-session-state-smoke',providerSession.runningType==='provider'&&providerSession.runningStatus==='inProgress'&&providerSession.savedType==='provider'&&providerSession.savedProvider==='assistant-selfcheck-provider'&&providerSession.savedMessageCount===2&&providerSession.savedContextCount===1&&String(providerSession.resource||'').startsWith('sao-ai-chat://provider/')&&providerSession.panelResource===providerSession.resource&&providerSession.panelRequests==='1'&&providerSession.opened===true&&providerSession.restoredMessages===2&&providerSession.savedNativePayload===true&&providerSession.restoredNativeCards>=2&&providerSession.restoredReferenceCards>=1&&providerSession.activeProvider==='assistant-selfcheck-provider'&&providerSession.sessionType==='provider'&&providerSession.sessionProvider==='assistant-selfcheck-provider',JSON.stringify(providerSession));
   assistantUiSelfCheckRecord(checks,'history-native-affordances-visible',historyAffordance.itemExists&&historyAffordance.nativeParts===2&&historyAffordance.nativeTodos===1&&historyAffordance.nativeChanges===1&&historyAffordance.nativeRefs===1&&historyAffordance.nativeUsedContext===1&&historyAffordance.nativeTrees===1&&historyAffordance.nativeTokens===24&&historyAffordance.chipLabels.includes('2 parts')&&historyAffordance.chipLabels.includes('1 edit')&&historyAffordance.chipLabels.includes('1 ref')&&historyAffordance.chipLabels.includes('1 used')&&historyAffordance.chipLabels.includes('1 tree')&&historyAffordance.chipLabels.includes('24 tok')&&historyAffordance.searchMatches&&historyAffordance.aria.includes('2 parts')&&historyAffordance.title.includes('Modified files: 1'),JSON.stringify(historyAffordance));
-  assistantUiSelfCheckRecord(checks,'saved-history-native-affordances-visible',savedHistoryAffordance.itemExists&&savedHistoryAffordance.nativeParts===2&&savedHistoryAffordance.nativeChanges===1&&savedHistoryAffordance.nativeRefs===1&&savedHistoryAffordance.nativeUsedContext===1&&savedHistoryAffordance.nativeTrees===1&&savedHistoryAffordance.nativeTokens===24&&savedHistoryAffordance.chipLabels.includes('2 parts')&&savedHistoryAffordance.chipLabels.includes('1 edit')&&savedHistoryAffordance.chipLabels.includes('1 ref')&&savedHistoryAffordance.chipLabels.includes('1 used')&&savedHistoryAffordance.chipLabels.includes('1 tree')&&savedHistoryAffordance.chipLabels.includes('24 tok')&&savedHistoryAffordance.actionKinds.includes('references')&&savedHistoryAffordance.actionKinds.includes('changes')&&savedHistoryAffordance.actionKinds.includes('tree')&&savedHistoryAffordance.disabledActions.length===0&&savedHistoryAffordance.searchMatches&&savedHistoryAffordance.aria.includes('2 parts')&&savedHistoryAffordance.title.includes('Modified files: 1'),JSON.stringify(savedHistoryAffordance));
+  assistantUiSelfCheckRecord(checks,'saved-history-native-affordances-visible',savedHistoryAffordance.itemExists&&savedHistoryAffordance.nativeParts===2&&savedHistoryAffordance.nativeChanges===1&&savedHistoryAffordance.nativeRefs===1&&savedHistoryAffordance.nativeUsedContext===1&&savedHistoryAffordance.nativeTrees===1&&savedHistoryAffordance.nativeTokens===24&&savedHistoryAffordance.chipLabels.includes('2 parts')&&savedHistoryAffordance.chipLabels.includes('1 edit')&&savedHistoryAffordance.chipLabels.includes('1 ref')&&savedHistoryAffordance.chipLabels.includes('1 used')&&savedHistoryAffordance.chipLabels.includes('1 tree')&&savedHistoryAffordance.chipLabels.includes('24 tok')&&savedHistoryAffordance.actionKinds.includes('references')&&savedHistoryAffordance.actionKinds.includes('changes')&&savedHistoryAffordance.actionKinds.includes('tree')&&savedHistoryAffordance.actionKinds.includes('reference-item')&&savedHistoryAffordance.actionKinds.includes('change-item')&&savedHistoryAffordance.actionKinds.includes('tree-item')&&savedHistoryAffordance.actionTargets.includes('file:///workspace/history.ts')&&savedHistoryAffordance.disabledActions.length===0&&savedHistoryAffordance.searchMatches&&savedHistoryAffordance.aria.includes('2 parts')&&savedHistoryAffordance.title.includes('Modified files: 1'),JSON.stringify(savedHistoryAffordance));
   assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready',workflowPopup.shown&&workflowPopup.workflowModeCount===3&&workflowPopup.workflowModeStrip&&workflowPopup.workflowModeToolbar&&workflowPopup.optionCount>=4&&workflowPopup.focusableCount===workflowPopup.optionCount&&workflowPopup.keyboardReady,JSON.stringify(workflowPopup));
   assistantUiSelfCheckRecord(checks,'workflow-popup-mode-smoke',workflowModeSmoke.states.length===3&&workflowModeSmoke.states.every(state=>state.strip&&state.toolbar&&state.active.includes(state.mode))&&workflowModeSmoke.selected.value==='assistant-selfcheck-flow'&&workflowModeSmoke.selected.mode==='on'&&workflowModeSmoke.selected.runDisabled===false&&workflowModeSmoke.custom.prompt==='selfcheck custom workflow prompt'&&workflowModeSmoke.custom.runDisabled===false,JSON.stringify(workflowModeSmoke));
   assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready',workflowEditor.modalExists&&workflowEditor.editorExists&&workflowEditor.rowCount===2&&workflowEditor.labelInputs===2&&workflowEditor.agentInputs===2&&workflowEditor.outputInputs===2&&workflowEditor.promptInputs===2&&workflowEditor.moveButtons===4&&workflowEditor.deleteButtons===2&&workflowEditor.addButtonExists&&workflowEditor.collectedCount===2&&workflowEditor.idReadOnly,JSON.stringify(workflowEditor));
@@ -8114,6 +8120,7 @@ function renderChatResponseReferences(body,content,payload){
     usedRefs.slice(0,8).forEach(ref=>{
       const btn=document.createElement(ref.openable?'button':'span');
       btn.className='chat-response-ref';if(ref.openable)btn.type='button';
+      if(ref.path)btn.dataset.chatRefPath=String(ref.path);
       btn.innerHTML='<span class="ref-kind">📎</span><span class="ref-path">'+esc(ref.label||ref.path)+'</span>';
       btn.title=ref.path||ref.label||'Used context';
       if(ref.openable)btn.onclick=()=>openChatResponseReference(ref);
@@ -8125,6 +8132,7 @@ function renderChatResponseReferences(body,content,payload){
     const list=document.createElement('div');list.className='chat-response-reference-list';
     refs.slice(0,10).forEach(ref=>{
       const btn=document.createElement('button');btn.type='button';btn.className='chat-response-ref';
+      if(ref.path)btn.dataset.chatRefPath=String(ref.path);
       if(ref.kind==='anchor')btn.classList.add('anchor');
       if(!ref.openable)btn.disabled=true;
       const editCount=chatTextEditCount(ref);
@@ -8150,6 +8158,7 @@ function renderChatResponseReferences(body,content,payload){
     const set=document.createElement('div');set.className='chat-change-set';
     changes.forEach(change=>{
       const btn=document.createElement('button');btn.type='button';btn.className='chat-change-card';
+      if(change.path)btn.dataset.chatChangePath=String(change.path);
       if(chatReferenceHasDiff(change))btn.classList.add('has-diff');
       const editCount=chatTextEditCount(change);
       const diff=change.diffMeta?' <span class="ref-diff">+'+esc(change.diffMeta.added||0)+' -'+esc(change.diffMeta.removed||0)+'</span>':(editCount?' <span class="ref-diff">'+editCount+' edit'+(editCount===1?'':'s')+'</span>':'');
@@ -16806,6 +16815,11 @@ function assistantHistorySessionNativeSummary(session){
 }
 function assistantHistoryEntryNativeSummary(entry){
   const raw=(entry&&entry.native_summary)||(entry&&entry.nativeSummary)||{};
+  const normalizeItems=value=>Array.isArray(value)?value.map(item=>({
+    path:String(item&&item.path||''),
+    label:String(item&&item.label||item&&item.title||item&&item.name||item&&item.path||''),
+    kind:String(item&&item.kind||'')
+  })).filter(item=>item.path||item.label).slice(0,5):[];
   const summary={
     parts:Number(raw.parts||0)||0,
     todos:Number(raw.todos||0)||0,
@@ -16817,6 +16831,9 @@ function assistantHistoryEntryNativeSummary(entry){
     errors:Number(raw.errors||0)||0,
     modelLabels:Array.isArray(raw.modelLabels)?raw.modelLabels:(Array.isArray(raw.models)?raw.models:[]),
     keywords:Array.isArray(raw.keywords)?raw.keywords:[],
+    referenceItems:normalizeItems(raw.referenceItems||raw.reference_items),
+    changeItems:normalizeItems(raw.changeItems||raw.change_items),
+    treeItems:normalizeItems(raw.treeItems||raw.tree_items),
     searchText:String(raw.searchText||raw.search_text||'')
   };
   if(!summary.searchText){
@@ -16846,6 +16863,22 @@ function assistantHistoryNativeSummaryChips(summary){
   if(summary&&summary.tokens)chips.push({label:summary.tokens+' tok',kind:'tokens'});
   if(summary&&summary.errors)chips.push({label:'error',kind:'error'});
   return chips;
+}
+function assistantSavedHistoryActionButton(entry,kind,item){
+  const button=document.createElement('button');
+  button.type='button';
+  button.className='history-session-action '+kind;
+  const label=String(item&&item.label||item&&item.path||kind);
+  const path=String(item&&item.path||'');
+  const focusKind=kind==='reference-item'?'references':(kind==='change-item'?'changes':'tree');
+  button.textContent=kind==='reference-item'?'ref':(kind==='change-item'?'edit':'file');
+  button.title='Open saved history '+button.textContent+': '+(label||path);
+  button.setAttribute('aria-label',button.title);
+  button.dataset.historyAction=kind;
+  if(path)button.dataset.historyTarget=path;
+  button.disabled=!path;
+  button.onclick=ev=>{ev.stopPropagation();loadHistoryConv(entry.id,{focus:focusKind,target:path})};
+  return button;
 }
 function assistantHistorySessionChips(session,current){
   const chips=[];
@@ -17031,9 +17064,12 @@ function renderHistoryBackendItem(list,entry,index){
   edits.onclick=ev=>{ev.stopPropagation();loadHistoryConv(entry.id,{focus:'changes'})};
   const tree=document.createElement('button');tree.type='button';tree.className='history-session-action tree';tree.textContent='tree';tree.title='Open saved history file tree';tree.setAttribute('aria-label','Open saved history file tree');tree.disabled=!nativeSummary.trees;tree.dataset.historyAction='tree';
   tree.onclick=ev=>{ev.stopPropagation();loadHistoryConv(entry.id,{focus:'tree'})};
+  const refItem=assistantSavedHistoryActionButton(entry,'reference-item',nativeSummary.referenceItems[0]);
+  const editItem=assistantSavedHistoryActionButton(entry,'change-item',nativeSummary.changeItems[0]);
+  const treeItem=assistantSavedHistoryActionButton(entry,'tree-item',nativeSummary.treeItems[0]);
   const del=document.createElement('button');del.type='button';del.className='history-session-action delete';del.textContent='x';del.title='Delete';del.setAttribute('aria-label','Delete saved history');
   del.onclick=ev=>{ev.stopPropagation();if(!window.confirm('Delete saved chat history?'))return;call('delete_history',entry.id).then(res=>{if(callSucceeded(res))refreshHistory();else showToast('Delete failed: '+callFailedMessage(res,'backend unavailable'),'error',2500)})};
-  item.appendChild(main);item.appendChild(refs);item.appendChild(edits);item.appendChild(tree);item.appendChild(del);
+  item.appendChild(main);item.appendChild(refs);item.appendChild(edits);item.appendChild(tree);item.appendChild(refItem);item.appendChild(editItem);item.appendChild(treeItem);item.appendChild(del);
   item.onclick=()=>loadHistoryConv(entry.id);
   list.appendChild(item);
   return {kind:'saved',id:entry.id,element:item,open:()=>loadHistoryConv(entry.id)};
@@ -17051,6 +17087,9 @@ function assistantSavedHistoryAffordanceSmokeSnapshot(){
       parts:2,todos:1,changes:1,refs:1,usedContext:1,trees:1,tokens:24,errors:0,
       modelLabels:['selfcheck-model'],
       keywords:['todoList','modifiedFilesConfirmation'],
+      referenceItems:[{path:'file:///workspace/history.ts',label:'history.ts',kind:'anchor'}],
+      changeItems:[{path:'file:///workspace/history.ts',label:'history.ts',kind:'modifiedFilesConfirmation'}],
+      treeItems:[{path:'file:///workspace/history.ts',label:'history.ts'}],
       searchText:'response parts todo list modified files changes edits references anchors used context file tree tokens usage selfcheck-model'
     }
   };
@@ -17066,6 +17105,7 @@ function assistantSavedHistoryAffordanceSmokeSnapshot(){
     nativeTrees:item?Number(item.dataset.savedNativeTrees||0):0,
     nativeTokens:item?Number(item.dataset.savedNativeTokens||0):0,
     actionKinds:item?Array.from(item.querySelectorAll('[data-history-action]')).map(el=>String(el.dataset.historyAction||'')):[],
+    actionTargets:item?Array.from(item.querySelectorAll('[data-history-target]')).map(el=>String(el.dataset.historyTarget||'')):[],
     disabledActions:item?Array.from(item.querySelectorAll('[data-history-action]:disabled')).map(el=>String(el.dataset.historyAction||'')):[],
     aria:item?String(item.getAttribute('aria-label')||''):'',
     title:item?String((item.querySelector('.history-session-title')||{}).title||''):'',
@@ -18259,7 +18299,27 @@ function createWorkflow(existing){
 }
 window.refreshAgents=refreshAgents;window.createAgent=createAgent;window.createWorkflow=createWorkflow;
 
-function focusLoadedHistoryNativeSection(kind){
+function focusLoadedHistoryElement(el){
+  if(!el)return false;
+  el.scrollIntoView({block:'center'});
+  if(!el.hasAttribute('tabindex'))el.setAttribute('tabindex','-1');
+  try{el.focus({preventScroll:true})}catch(_e){}
+  return true;
+}
+function findLoadedHistoryNativeTarget(kind,target){
+  const key=chatHistoryTargetKey(target);
+  if(!key)return null;
+  const selector=kind==='changes'
+    ? '[data-chat-change-path]'
+    : kind==='tree'
+      ? '[data-chat-tree-path]'
+      : '[data-chat-ref-path]';
+  return Array.from(document.querySelectorAll(selector)).find(el=>
+    chatHistoryTargetKey(el.dataset.chatChangePath||el.dataset.chatTreePath||el.dataset.chatRefPath)===key) || null;
+}
+function focusLoadedHistoryNativeSection(kind,target){
+  const exact=findLoadedHistoryNativeTarget(kind,target);
+  if(exact)return focusLoadedHistoryElement(exact);
   const selector=kind==='changes'
     ? '.chat-response-modified-files,.chat-change-card,.chat-response-reference-card[data-reference-kind="textEdit"]'
     : kind==='tree'
@@ -18268,12 +18328,8 @@ function focusLoadedHistoryNativeSection(kind){
         ? '.chat-response-references,.chat-response-reference-card'
         : '';
   if(!selector)return false;
-  const target=document.querySelector(selector);
-  if(!target)return false;
-  target.scrollIntoView({block:'center'});
-  if(!target.hasAttribute('tabindex'))target.setAttribute('tabindex','-1');
-  try{target.focus({preventScroll:true})}catch(_e){}
-  return true;
+  const fallbackTarget=document.querySelector(selector);
+  return focusLoadedHistoryElement(fallbackTarget);
 }
 async function loadHistoryConv(id,opts){
   opts=opts||{};
@@ -18301,7 +18357,7 @@ async function loadHistoryConv(id,opts){
   });
   saveAssistantSessionState();renderAssistantSessionState();assistantSessionPersistCurrent({title:data.title||'Saved history'});
   showChatWelcomeIfEmpty();
-  if(opts.focus&&!focusLoadedHistoryNativeSection(opts.focus))showToast('No saved '+opts.focus+' section found','info',1600);
+  if(opts.focus&&!focusLoadedHistoryNativeSection(opts.focus,opts.target))showToast('No saved '+opts.focus+' section found','info',1600);
   setStatus('Loaded: '+(data.title||''));
 }
 
