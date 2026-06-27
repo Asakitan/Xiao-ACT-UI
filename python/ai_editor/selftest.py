@@ -5051,6 +5051,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'change-set-summary-rendered'" in html
            and "assistantUiSelfCheckRecord(checks,'change-set-actions-stateful'" in html
            and "assistantUiSelfCheckRecord(checks,'change-set-panel-datasets'" in html
+           and "assistantUiSelfCheckRecord(checks,'change-set-state-restores-and-persists'" in html
            and "assistantUiSelfCheckRecord(checks,'native-replay-summary-includes-changes'" in html
            and "assistantUiSelfCheckRecord(checks,'selfcheck-cleanup'" in html
            and "attachments=previousAttachments;\n  renderAttachments();" in html
@@ -5059,6 +5060,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "panel.dataset.chatUiSelfCheckOk=result.ok?'true':'false';" in html
            and "panel.dataset.chatUiSelfCheckFailed=String(failed.length);" in html
            and "panel.dataset.chatUiSelfCheckTotal=String(checks.length);" in html
+           and "function assistantChangeSetRestoreStateSnapshot()" in html
+           and "function chatChangeSetStatePatch(card,state,detail)" in html
+           and "applyChatChangeSetRestoredState(card,payload);" in html
            and "window.runAssistantUiSelfCheck=runAssistantUiSelfCheck;" in html)
     smoke_path = os.path.join(
         os.path.dirname(__file__), "tools", "assistant_ui_browser_smoke.js")
@@ -5076,6 +5080,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "provider-session-state-smoke" in smoke_source
            and "history-native-affordances-visible" in smoke_source
            and "saved-history-native-affordances-visible" in smoke_source
+           and "native-only-session-parts-persist" in smoke_source
+           and "change-set-state-restores-and-persists" in smoke_source
            and "workflow-result-state-rendered" in smoke_source
            and "workflow-run-button-active-state" in smoke_source
            and "channel: \"msedge\"" in smoke_source
@@ -5210,7 +5216,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function chatChangeSetStats(refs,changes)" in html
            and "async function previewChatChangeSet(refs,status,card)" in html
            and "async function applyChatChangeSet(refs,status,card)" in html
-           and "function renderChatChangeSetSummary(wrap,refs,changes)" in html
+           and "function renderChatChangeSetSummary(wrap,refs,changes,payload)" in html
            and "async function applyChatTextEditReference(ref)" in html
            and "editorApplyWorkspaceEdit(null,summary)" in html
            and "confirmEditorWorkspaceEditApply('Apply Assistant Changes',summary" in html
@@ -5222,9 +5228,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "panel.dataset.chatChangeSetEdits=String(stats.edits);" in html
            and "panel.dataset.chatChangeSetDiffs=String(stats.diffs);" in html
            and "panel.dataset.chatChangeSetState='ready';" in html
-           and "panel.dataset.chatChangeSetState='previewing';" in html
-           and "panel.dataset.chatChangeSetState=total?'applied':'ready';" in html
-           and "renderChatChangeSetSummary(wrap,refs,changes);" in html
+           and "chatChangeSetStatePatch(card,'previewing');" in html
+           and "chatChangeSetStatePatch(card,total?'applied':'ready'" in html
+           and "renderChatChangeSetSummary(wrap,refs,changes,payload);" in html
+           and "assistantNativePayloadPatch(body,{changeSet:next});" in html
            and "chatTextEditCount(ref)" in html
            and "modifiedOpened=chatInlineDiffResource(" in html
            and "function flattenChatFileTreeNodes(nodes,out)" in html
@@ -12864,7 +12871,7 @@ def test_history() -> None:
     print("── History ──")
     from ai_editor.history import (
         save_conversation, load_conversation, list_conversations,
-        delete_conversation, native_summary_from_messages,
+        delete_conversation, native_summary_from_messages, _history_dir,
     )
 
     cid = "_selftest_temp"
@@ -12932,6 +12939,34 @@ def test_history() -> None:
            and native_list_summary.get("followupItems", [{}])[0].get("label") == "Continue native history"
            and "file tree" in native_list_summary.get("searchText", ""))
     delete_conversation(native_cid)
+
+    legacy_cid = "_selftest_legacy_native_history"
+    legacy_path = os.path.join(_history_dir("workspace"), legacy_cid + ".json")
+    legacy_messages = [{
+        "role": "assistant",
+        "content": "",
+        "nativePayload": {
+            "responseParts": [{"kind": "todoList", "todoList": [{"title": "Legacy todo"}]}],
+            "followups": [{"title": "Legacy followup", "message": "Legacy followup"}],
+        },
+    }]
+    with open(legacy_path, "w", encoding="utf-8") as f:
+        json.dump({
+            "id": legacy_cid,
+            "title": "Legacy Native History",
+            "saved_at": time.time(),
+            "message_count": len(legacy_messages),
+            "model": "legacy-model",
+            "messages": legacy_messages,
+        }, f, ensure_ascii=False, indent=1)
+    legacy_entry = next((e for e in list_conversations() if e["id"] == legacy_cid), {})
+    legacy_loaded = load_conversation(legacy_cid)
+    _check("history lazily backfills missing native summary",
+           legacy_entry.get("native_summary", {}).get("parts") == 1
+           and legacy_entry.get("native_summary", {}).get("followups") == 1
+           and legacy_loaded is not None
+           and legacy_loaded.get("native_summary", {}).get("followups") == 1)
+    delete_conversation(legacy_cid)
 
     delete_conversation(cid)
     _check("Deleted", load_conversation(cid) is None)

@@ -4807,6 +4807,7 @@ function assistantSessionSerializableNativePayload(payload){
   copyArray('usedContext','usedContext','used_context','used');
   copyArray('fileTrees','fileTrees','file_trees');
   copyArray('followups','followups','followUps','suggestedFollowups','suggested_followups');
+  if(payload.changeSet&&typeof payload.changeSet==='object')out.changeSet={...payload.changeSet};
   if(payload.usage&&typeof payload.usage==='object')out.usage={...payload.usage};
   if(payload.model)out.model=String(payload.model||'');
   if(payload.error)out.error=String(payload.error||'');
@@ -4830,6 +4831,12 @@ function rememberAssistantNativePayload(body,payload){
   body._assistantNativePayload=safe;
   try{body.dataset.assistantNativePayload=JSON.stringify(safe)}catch(_e){}
   return safe;
+}
+function assistantNativePayloadPatch(body,patch){
+  if(!body||!patch||typeof patch!=='object')return null;
+  const base=assistantBodyNativePayload(body)||{};
+  const next=Object.assign({},base,patch);
+  return rememberAssistantNativePayload(body,next);
 }
 function assistantSessionNormalizeMessages(messages){
   return (Array.isArray(messages)?messages:[]).map(m=>{
@@ -6391,20 +6398,55 @@ function chatChangeSetStats(refs,changes){
   const deleteCount=changeRefs.filter(ref=>ref&&ref.isDeletion).length;
   return {changeRefs,editRefs,files:changeRefs.length,edits:editCount,diffs:diffCount,deletions:deleteCount};
 }
+function chatChangeSetMessageBody(card){
+  return card&&card.closest?card.closest('.msg-body'):null;
+}
+function chatChangeSetStatePatch(card,state,detail){
+  const body=chatChangeSetMessageBody(card);
+  const payload=assistantBodyNativePayload(body)||{};
+  const current=(payload.changeSet&&typeof payload.changeSet==='object')?payload.changeSet:{};
+  const next=Object.assign({},current,{state:String(state||'ready'),updatedAt:Date.now()});
+  if(detail&&typeof detail==='object')Object.assign(next,detail);
+  if(card){
+    card.dataset.changeState=next.state;
+    if(next.previewedAt)card.dataset.changePreviewedAt=String(next.previewedAt);
+    if(next.appliedAt)card.dataset.changeAppliedAt=String(next.appliedAt);
+    if(next.appliedEdits!==undefined)card.dataset.changeAppliedEdits=String(next.appliedEdits);
+  }
+  const panel=$('chat-panel');
+  if(panel)panel.dataset.chatChangeSetState=next.state;
+  if(body)assistantNativePayloadPatch(body,{changeSet:next});
+  if(typeof syncAssistantSessionState==='function')syncAssistantSessionState();
+  if(typeof assistantSessionPersistCurrent==='function')assistantSessionPersistCurrent({status:streaming?'inProgress':'completed'});
+  return next;
+}
+function applyChatChangeSetRestoredState(card,payload){
+  const state=payload&&payload.changeSet&&typeof payload.changeSet==='object'?payload.changeSet:null;
+  if(!card||!state)return;
+  const next=String(state.state||'ready');
+  card.dataset.changeState=next;
+  if(state.previewedAt)card.dataset.changePreviewedAt=String(state.previewedAt);
+  if(state.appliedAt)card.dataset.changeAppliedAt=String(state.appliedAt);
+  if(state.appliedEdits!==undefined)card.dataset.changeAppliedEdits=String(state.appliedEdits);
+  const status=card.querySelector('.chat-change-summary-status');
+  if(status){
+    if(next==='applied')status.textContent='Applied '+(state.appliedEdits||0)+' assistant edit'+(Number(state.appliedEdits||0)===1?'':'s');
+    else if(next==='previewed')status.textContent='Previewed '+(state.previewedDiffs||0)+' diff'+(Number(state.previewedDiffs||0)===1?'':'s');
+  }
+  const panel=$('chat-panel');if(panel)panel.dataset.chatChangeSetState=next;
+}
 async function previewChatChangeSet(refs,status,card){
   const changeRefs=chatChangeSetRefs(refs,[]);
   const diffRefs=changeRefs.filter(ref=>chatReferenceHasDiff(ref));
   if(!diffRefs.length){if(status)status.textContent='No diffs to preview';return false}
   if(status)status.textContent='Opening '+diffRefs.length+' diff'+(diffRefs.length===1?'':'s')+'...';
   const panel=$('chat-panel');
-  if(card)card.dataset.changeState='previewing';
-  if(panel)panel.dataset.chatChangeSetState='previewing';
+  chatChangeSetStatePatch(card,'previewing');
   let opened=0;
   for(const ref of diffRefs.slice(0,12)){
     try{if(await openChatReferenceDiff(ref))opened++}catch(e){}
   }
-  if(card)card.dataset.changeState=opened?'previewed':'ready';
-  if(panel)panel.dataset.chatChangeSetState=opened?'previewed':'ready';
+  chatChangeSetStatePatch(card,opened?'previewed':'ready',opened?{previewedAt:Date.now(),previewedDiffs:opened}:{});
   if(status)status.textContent=opened?'Opened '+opened+' diff'+(opened===1?'':'s'):(diffRefs.length>12?'Preview limited to 12 diffs':'No diffs opened');
   setStatus(status?status.textContent:'Previewed assistant changes');
   return !!opened;
@@ -6416,20 +6458,18 @@ async function applyChatChangeSet(refs,status,card){
   if(!count){if(status)status.textContent='No editable changes to apply';setStatus('No editable assistant changes');return false}
   if(!await confirmEditorWorkspaceEditApply('Apply Assistant Changes',summary,'Apply '+count+' assistant edit'+(count===1?'':'s')+' from this response.'))return false;
   const panel=$('chat-panel');
-  if(card)card.dataset.changeState='applying';
-  if(panel)panel.dataset.chatChangeSetState='applying';
+  chatChangeSetStatePatch(card,'applying');
   if(status)status.textContent='Applying '+count+' edit'+(count===1?'':'s')+'...';
   _undoPush(true);
   const applied=await editorApplyWorkspaceEdit(null,summary);
   const total=(applied.changed?summary.edits.length:0)+(applied.tabApplied||0)+(applied.workspaceApplied||0);
   const message=total?'Applied '+total+' assistant edit'+(total===1?'':'s')+(applied.skipped?' · '+applied.skipped+' skipped':''):'No assistant edits applied'+(applied.skipped?' · '+applied.skipped+' skipped':'');
-  if(card)card.dataset.changeState=total?'applied':'ready';
-  if(panel)panel.dataset.chatChangeSetState=total?'applied':'ready';
+  chatChangeSetStatePatch(card,total?'applied':'ready',total?{appliedAt:Date.now(),appliedEdits:total,skippedEdits:applied.skipped||0}:{});
   if(status)status.textContent=message;
   setStatus(message);
   return !!total;
 }
-function renderChatChangeSetSummary(wrap,refs,changes){
+function renderChatChangeSetSummary(wrap,refs,changes,payload){
   const stats=chatChangeSetStats(refs,changes);
   if(!stats.files)return null;
   const card=document.createElement('div');card.className='chat-change-summary';
@@ -6464,6 +6504,7 @@ function renderChatChangeSetSummary(wrap,refs,changes){
     panel.dataset.chatChangeSetDiffs=String(stats.diffs);
     panel.dataset.chatChangeSetState='ready';
   }
+  applyChatChangeSetRestoredState(card,payload);
   wrap.appendChild(card);
   return card;
 }
@@ -7620,6 +7661,9 @@ function assistantChangeSetDomSnapshot(body){
     edits:card?Number(card.dataset.changeEdits||0):0,
     diffs:card?Number(card.dataset.changeDiffs||0):0,
     state:card?String(card.dataset.changeState||''):'',
+    previewedAt:card?String(card.dataset.changePreviewedAt||''):'',
+    appliedAt:card?String(card.dataset.changeAppliedAt||''):'',
+    appliedEdits:card?Number(card.dataset.changeAppliedEdits||0):0,
     statusText:card?String((card.querySelector('.chat-change-summary-status')||{}).textContent||''):'',
     actionCount:buttons.length,
     previewDisabled:buttons[0]?!!buttons[0].disabled:null,
@@ -7628,6 +7672,33 @@ function assistantChangeSetDomSnapshot(body){
     panelEdits:panel?Number(panel.dataset.chatChangeSetEdits||0):0,
     panelDiffs:panel?Number(panel.dataset.chatChangeSetDiffs||0):0,
     panelState:panel?String(panel.dataset.chatChangeSetState||''):''
+  };
+}
+function assistantChangeSetRestoreStateSnapshot(){
+  const body=document.createElement('div');
+  body.className='msg-body';
+  const payload={
+    changeSet:{state:'applied',appliedAt:12345,appliedEdits:2},
+    contentReferences:[{
+      kind:'textEdit',
+      uri:'assistant-restore-state.txt',
+      label:'assistant-restore-state.txt',
+      edit:{range:{start:{line:0,character:0},end:{line:0,character:0}},newText:'restored'}
+    }]
+  };
+  rememberAssistantNativePayload(body,payload);
+  renderChatResponseReferences(body,'',payload);
+  const before=assistantChangeSetDomSnapshot(body);
+  const card=body.querySelector('.chat-change-summary');
+  const patched=chatChangeSetStatePatch(card,'previewed',{previewedAt:23456,previewedDiffs:1});
+  const after=assistantChangeSetDomSnapshot(body);
+  const stored=assistantBodyNativePayload(body)||{};
+  return {
+    before,
+    after,
+    patchedState:patched&&patched.state,
+    storedState:stored.changeSet&&stored.changeSet.state,
+    storedPreviewedDiffs:stored.changeSet&&stored.changeSet.previewedDiffs
   };
 }
 function assistantAttachmentDomSnapshot(){
@@ -8001,6 +8072,7 @@ async function runAssistantUiSelfCheck(opts){
   const historyAffordance=assistantHistoryAffordanceSmokeSnapshot();
   const savedHistoryAffordance=assistantSavedHistoryAffordanceSmokeSnapshot();
   const nativeOnlySession=assistantNativeOnlySessionSmokeSnapshot();
+  const changeSetRestore=assistantChangeSetRestoreStateSnapshot();
   assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready',providerPopup.shown&&providerPopup.optionCount>=1&&providerPopup.focusableCount===providerPopup.optionCount&&providerPopup.keyboardReady,JSON.stringify(providerPopup));
   assistantUiSelfCheckRecord(checks,'model-popup-configured-models-ready',modelPopup.shown&&modelPopup.optionCount>=1&&modelPopup.focusableCount===modelPopup.optionCount&&modelPopup.keyboardReady,JSON.stringify(modelPopup));
   assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped',[providerPopup,modelPopup,agentPopup,workflowPopup].every(s=>s.shown&&s.display==='block'&&s.rectReady&&s.opensAboveTrigger&&s.notToolbarClipped&&!s.className.includes('mode-popup')),JSON.stringify({providerPopup,modelPopup,agentPopup,workflowPopup}));
@@ -8009,6 +8081,7 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'history-native-affordances-visible',historyAffordance.itemExists&&historyAffordance.nativeParts===2&&historyAffordance.nativeTodos===1&&historyAffordance.nativeChanges===1&&historyAffordance.nativeRefs===1&&historyAffordance.nativeUsedContext===1&&historyAffordance.nativeTrees===1&&historyAffordance.nativeFollowups===1&&historyAffordance.nativeTokens===24&&historyAffordance.chipLabels.includes('2 parts')&&historyAffordance.chipLabels.includes('1 edit')&&historyAffordance.chipLabels.includes('1 ref')&&historyAffordance.chipLabels.includes('1 used')&&historyAffordance.chipLabels.includes('1 tree')&&historyAffordance.chipLabels.includes('1 follow-up')&&historyAffordance.chipLabels.includes('24 tok')&&historyAffordance.searchMatches&&historyAffordance.aria.includes('2 parts')&&historyAffordance.title.includes('Modified files: 1'),JSON.stringify(historyAffordance));
   assistantUiSelfCheckRecord(checks,'saved-history-native-affordances-visible',savedHistoryAffordance.itemExists&&savedHistoryAffordance.nativeParts===2&&savedHistoryAffordance.nativeChanges===1&&savedHistoryAffordance.nativeRefs===1&&savedHistoryAffordance.nativeUsedContext===1&&savedHistoryAffordance.nativeTrees===1&&savedHistoryAffordance.nativeFollowups===1&&savedHistoryAffordance.nativeTokens===24&&savedHistoryAffordance.chipLabels.includes('2 parts')&&savedHistoryAffordance.chipLabels.includes('1 edit')&&savedHistoryAffordance.chipLabels.includes('1 ref')&&savedHistoryAffordance.chipLabels.includes('1 used')&&savedHistoryAffordance.chipLabels.includes('1 tree')&&savedHistoryAffordance.chipLabels.includes('1 follow-up')&&savedHistoryAffordance.chipLabels.includes('24 tok')&&savedHistoryAffordance.actionKinds.includes('references')&&savedHistoryAffordance.actionKinds.includes('changes')&&savedHistoryAffordance.actionKinds.includes('tree')&&savedHistoryAffordance.actionKinds.includes('reference-item')&&savedHistoryAffordance.actionKinds.includes('change-item')&&savedHistoryAffordance.actionKinds.includes('tree-item')&&savedHistoryAffordance.actionTargets.includes('file:///workspace/history.ts')&&savedHistoryAffordance.disabledActions.length===0&&savedHistoryAffordance.searchMatches&&savedHistoryAffordance.aria.includes('2 parts')&&savedHistoryAffordance.title.includes('Modified files: 1'),JSON.stringify(savedHistoryAffordance));
   assistantUiSelfCheckRecord(checks,'native-only-session-parts-persist',nativeOnlySession.normalizedCount===1&&nativeOnlySession.normalizedContent===''&&nativeOnlySession.hasNativePayload&&nativeOnlySession.serializedFollowups===1&&nativeOnlySession.renderedNativeParts>=1&&nativeOnlySession.renderedFollowups===1&&nativeOnlySession.nativeFollowups===1&&nativeOnlySession.summaryParts===1&&nativeOnlySession.summaryFollowups===1&&nativeOnlySession.searchMatches,JSON.stringify(nativeOnlySession));
+  assistantUiSelfCheckRecord(checks,'change-set-state-restores-and-persists',changeSetRestore.before.state==='applied'&&changeSetRestore.before.appliedEdits===2&&changeSetRestore.before.statusText.includes('Applied 2')&&changeSetRestore.after.state==='previewed'&&changeSetRestore.after.previewedAt==='23456'&&changeSetRestore.patchedState==='previewed'&&changeSetRestore.storedState==='previewed'&&changeSetRestore.storedPreviewedDiffs===1,JSON.stringify(changeSetRestore));
   assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready',workflowPopup.shown&&workflowPopup.workflowModeCount===3&&workflowPopup.workflowModeStrip&&workflowPopup.workflowModeToolbar&&workflowPopup.optionCount>=4&&workflowPopup.focusableCount===workflowPopup.optionCount&&workflowPopup.keyboardReady,JSON.stringify(workflowPopup));
   assistantUiSelfCheckRecord(checks,'workflow-popup-mode-smoke',workflowModeSmoke.states.length===3&&workflowModeSmoke.states.every(state=>state.strip&&state.toolbar&&state.active.includes(state.mode))&&workflowModeSmoke.selected.value==='assistant-selfcheck-flow'&&workflowModeSmoke.selected.mode==='on'&&workflowModeSmoke.selected.runDisabled===false&&workflowModeSmoke.custom.prompt==='selfcheck custom workflow prompt'&&workflowModeSmoke.custom.runDisabled===false,JSON.stringify(workflowModeSmoke));
   assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready',workflowEditor.modalExists&&workflowEditor.editorExists&&workflowEditor.rowCount===2&&workflowEditor.labelInputs===2&&workflowEditor.agentInputs===2&&workflowEditor.outputInputs===2&&workflowEditor.promptInputs===2&&workflowEditor.moveButtons===4&&workflowEditor.deleteButtons===2&&workflowEditor.addButtonExists&&workflowEditor.collectedCount===2&&workflowEditor.idReadOnly,JSON.stringify(workflowEditor));
@@ -8118,7 +8191,7 @@ function renderChatResponseReferences(body,content,payload){
   ].filter(Boolean).join(' · ');
   if(summary.textContent)wrap.appendChild(summary);
   renderChatResponseMetadata(wrap,metadata);
-  renderChatChangeSetSummary(wrap,refs,changes);
+  renderChatChangeSetSummary(wrap,refs,changes,payload);
   if(usedRefs.length){
     const used=document.createElement('div');used.className='chat-used-context';
     const title=document.createElement('div');title.className='chat-used-context-title';title.textContent='Used context';

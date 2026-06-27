@@ -278,6 +278,34 @@ def save_conversation(conv_id: str, title: str, messages: List[Dict[str, Any]],
     return path
 
 
+def _rewrite_conversation_file(path: str, data: Dict[str, Any]) -> None:
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=1)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def _ensure_native_summary(data: Dict[str, Any], path: str = "") -> Dict[str, Any]:
+    if not isinstance(data, dict):
+        return data
+    summary = data.get("native_summary")
+    if isinstance(summary, dict) and "searchText" in summary:
+        return data
+    messages = data.get("messages")
+    if not isinstance(messages, list):
+        return data
+    next_summary = native_summary_from_messages(messages)
+    data["native_summary"] = next_summary
+    if path:
+        try:
+            _rewrite_conversation_file(path, data)
+        except OSError as exc:
+            logger.debug("Failed to backfill native summary for %s: %s", path, exc)
+    return data
+
+
 def load_conversation(conv_id: str) -> Optional[Dict[str, Any]]:
     conv_id = _validate_conversation_id(conv_id)
     for d in _all_history_dirs():
@@ -286,7 +314,7 @@ def load_conversation(conv_id: str) -> Optional[Dict[str, Any]]:
             continue
         try:
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                return _ensure_native_summary(json.load(f), path)
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("Failed to load conversation %s from %s: %s",
                            conv_id, path, exc)
@@ -330,6 +358,14 @@ def _parse_header_fast(fpath: str, cid: str) -> Optional[Dict[str, Any]]:
                     entry["native_summary"] = json.JSONDecoder().raw_decode(text[brace:])[0]
                 except (json.JSONDecodeError, TypeError, ValueError):
                     entry["native_summary"] = {}
+        if not entry["native_summary"]:
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    data = _ensure_native_summary(json.load(f), fpath)
+                entry["native_summary"] = data.get("native_summary") if isinstance(data, dict) else {}
+                entry["message_count"] = int(data.get("message_count", entry["message_count"])) if isinstance(data, dict) else entry["message_count"]
+            except (json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
+                logger.debug("Native summary backfill failed for %s: %s", fpath, exc)
         return entry
     except (OSError, ValueError) as exc:
         logger.debug("Fast header parse failed for %s: %s", fpath, exc)

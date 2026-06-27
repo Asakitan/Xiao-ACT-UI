@@ -111,6 +111,8 @@ async function main() {
     "provider-session-state-smoke",
     "history-native-affordances-visible",
     "saved-history-native-affordances-visible",
+    "native-only-session-parts-persist",
+    "change-set-state-restores-and-persists",
     "workflow-popup-modes-ready",
     "workflow-result-state-rendered",
     "workflow-run-button-active-state",
