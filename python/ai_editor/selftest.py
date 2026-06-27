@@ -9752,6 +9752,9 @@ console.log("frontend word separator behavior ok");
            and "id=\"extension-runtime-filter-source\"" in html
            and "function extensionRuntimeSurfaceResourceUri(item)" in html
            and "function extensionRuntimeSurfaceAction(kind,item,row)" in html
+           and "function prepareExtensionRuntimeAssistantPrompt(row,prompt,statusText)" in html
+           and "function openExtensionRuntimeTerminalProfile(row)" in html
+           and "function attachExtensionRuntimeChatContext(row)" in html
            and "function extensionRuntimeSurfaceRows(data)" in html
            and "function extensionRuntimeFilterState()" in html
            and "function extensionRuntimeRowMatchesFilter(row,filter)" in html
@@ -9787,6 +9790,17 @@ console.log("frontend word separator behavior ok");
            and "row.action=extensionRuntimeSurfaceAction(kind,item,row);" in html
            and "row.openable=row.action&&row.action.type!=='inspect';" in html
            and "row.key=[row.kind,row.id,row.command,row.extensionId,row.source,row.container,row.resourceUri].join('|');" in html
+           and "id:String(item.id||item.profileId||item.profile_id||item.viewType||item.type||item.vendor||item.kind||item.name||item.command||'')," in html
+           and "if(kind==='TerminalProfile'&&id)return {type:'open-terminal-profile'" in html
+           and "if(kind==='LMTool'&&id)return {type:'prepare-lm-tool'" in html
+           and "if(kind==='LMProvider'&&id)return {type:'prepare-lm-provider'" in html
+           and "if(kind==='ChatParticipant'&&id)return {type:'open-chat-participant'" in html
+           and "if(kind==='ChatContext'&&id)return {type:'attach-chat-context'" in html
+           and "if(action.type==='open-terminal-profile')" in html
+           and "if(action.type==='prepare-lm-tool')" in html
+           and "if(action.type==='prepare-lm-provider')" in html
+           and "if(action.type==='open-chat-participant')" in html
+           and "if(action.type==='attach-chat-context')" in html
            and "panel.dataset.runtimeSurfaceCount=String(summary.dynamicSurfaces||rows.length||0);" in html
            and "panel.dataset.runtimeVisibleCount=String(visible);" in html
            and "panel.dataset.runtimeTotalCount=String(total);" in html
@@ -11561,14 +11575,20 @@ console.log("extension setting schema helpers ok");
            and "snapshot.notebookOutputItems===3" in html
            and "snapshot.runtimeRows>=11" in html
            and "snapshot.runtimeChips>=13" in html
-           and "snapshot.runtimeOpenableRows>=5" in html
+           and "snapshot.runtimeOpenableRows===snapshot.runtimeRows" in html
+           and "snapshot.runtimeOpenableRows>=11" in html
            and "snapshot.runtimeActionButtons===snapshot.runtimeRows" in html
            and "snapshot.runtimeRowKeys===snapshot.runtimeRows" in html
            and "snapshot.runtimeContainerRows>=2" in html
-           and "['open-view','open-webview','open-file','run-command'].every(kind=>snapshot.runtimeActionTypes.includes(kind))" in html
+           and "['open-view','open-webview','open-file','run-command','open-terminal-profile','prepare-lm-tool','prepare-lm-provider','open-chat-participant','attach-chat-context'].every(kind=>snapshot.runtimeActionTypes.includes(kind))" in html
            and "snapshot.runtimeActionTargets.includes('selftest.dynamic.tree')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.dynamic.webview')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.run')" in html
+           and "snapshot.runtimeActionTargets.includes('selftest.terminalProfile')" in html
+           and "snapshot.runtimeActionTargets.includes('selftest.lmTool')" in html
+           and "snapshot.runtimeActionTargets.includes('selftest.vendor')" in html
+           and "snapshot.runtimeActionTargets.includes('selftest.chat')" in html
+           and "snapshot.runtimeActionTargets.includes('selftest.context')" in html
            and "runtimeListRole:runtimeList?runtimeList.getAttribute('role'):''" in html
            and "runtimeDatasetSources:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.source||''):[]" in html
            and "runtimePanelCount:(()=>{const panel=$('extension-runtime-panel');return panel?panel.dataset.runtimeSurfaceCount:''})()" in html

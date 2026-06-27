@@ -27770,7 +27770,46 @@ function extensionRuntimeSurfaceAction(kind,item,row){
   if(kind==='WebviewView'&&id)return {type:'open-webview',label:'Open',title:'Open dynamic WebviewView',target:id,container};
   if((kind==='Command'||kind==='Menu')&&command)return {type:'run-command',label:'Run',title:'Run extension command',target:command};
   if((kind==='CustomEditor'||kind==='Notebook')&&uri)return {type:'open-file',label:'Open',title:'Open contributed editor resource',target:uri};
+  if(kind==='TerminalProfile'&&id)return {type:'open-terminal-profile',label:'Open',title:'Open extension terminal profile',target:id};
+  if(kind==='LMTool'&&id)return {type:'prepare-lm-tool',label:'Use',title:'Prepare this language-model tool in Assistant',target:id};
+  if(kind==='LMProvider'&&id)return {type:'prepare-lm-provider',label:'Use',title:'Prepare this language-model provider in Assistant',target:id};
+  if(kind==='ChatParticipant'&&id)return {type:'open-chat-participant',label:'Chat',title:'Open this chat participant in Assistant',target:id};
+  if(kind==='ChatContext'&&id)return {type:'attach-chat-context',label:'Attach',title:'Attach this chat context provider',target:id};
   return {type:'inspect',label:'Inspect',title:'Select runtime surface metadata',target:id||command||uri||row.label||''};
+}
+function prepareExtensionRuntimeAssistantPrompt(row,prompt,statusText){
+  const input=setChatInputValue(prompt||'',{focus:true});
+  switchRightTab('chat');
+  if(input)input.selectionStart=input.selectionEnd=input.value.length;
+  const status=$('extension-runtime-status');
+  if(status)status.textContent=statusText||('Prepared Assistant input for '+(row&&row.label||'runtime surface')+'.');
+  return !!input;
+}
+function openExtensionRuntimeTerminalProfile(row){
+  const profile=String(row&&row.id||row&&row.action&&row.action.target||'').trim();
+  if(!profile)return false;
+  const meta={profile,name:row.label||profile,extensionId:row.extensionId||'',runtimeSurfaceKind:'TerminalProfile'};
+  _createTerminal(row.label||profile,meta,true);
+  activateBottomPanelTab(document.querySelector('.ptab[data-ptab="terminal"]'));
+  const status=$('extension-runtime-status');
+  if(status)status.textContent='Opened terminal profile '+(row.label||profile)+'.';
+  return true;
+}
+function attachExtensionRuntimeChatContext(row){
+  const id=String(row&&row.id||row&&row.action&&row.action.target||'').trim();
+  if(!id)return false;
+  const label=row.label||id;
+  const attached=addChatContextAttachment({
+    id:'runtime-context:'+id,
+    kind:'context',
+    label,
+    preview:row.meta||row.extensionId||'',
+    prompt:'Use chat context provider '+id+(row.extensionId?' from '+row.extensionId:'')+'.'
+  });
+  switchRightTab('chat');
+  const status=$('extension-runtime-status');
+  if(status)status.textContent=attached?'Attached chat context '+label+'.':'Unable to attach chat context '+label+'.';
+  return !!attached;
 }
 function extensionRuntimeSurfaceRows(data){
   data=data||{};
@@ -27789,7 +27828,7 @@ function extensionRuntimeSurfaceRows(data){
       source:item.runtimeOnly?'runtime-only':(runtime?'runtime':'manifest'),
       ready:runtime,
       command:String(item.command||''),
-      id:String(item.id||item.viewType||item.type||item.name||item.command||''),
+      id:String(item.id||item.profileId||item.profile_id||item.viewType||item.type||item.vendor||item.kind||item.name||item.command||''),
     };
     row.action=extensionRuntimeSurfaceAction(kind,item,row);
     row.openable=row.action&&row.action.type!=='inspect';
@@ -27915,6 +27954,21 @@ async function openExtensionRuntimeSurface(rowOrKey){
       const opened=await openWorkspaceFile(action.target);
       if(status)status.textContent=opened?'Opened runtime resource '+row.label+'.':'Unable to open runtime resource '+row.label+'.';
       return !!opened;
+    }
+    if(action.type==='open-terminal-profile'){
+      return openExtensionRuntimeTerminalProfile(row);
+    }
+    if(action.type==='prepare-lm-tool'){
+      return prepareExtensionRuntimeAssistantPrompt(row,'#'+action.target+' ','Prepared language-model tool '+action.target+' in Assistant.');
+    }
+    if(action.type==='prepare-lm-provider'){
+      return prepareExtensionRuntimeAssistantPrompt(row,'Use language model provider '+action.target+' for this request: ','Prepared language-model provider '+action.target+' in Assistant.');
+    }
+    if(action.type==='open-chat-participant'){
+      return prepareExtensionRuntimeAssistantPrompt(row,'@'+action.target+' ','Prepared chat participant '+action.target+' in Assistant.');
+    }
+    if(action.type==='attach-chat-context'){
+      return attachExtensionRuntimeChatContext(row);
     }
     if(status)status.textContent='Selected '+row.kind+': '+row.label+'.';
     return false;
@@ -29582,10 +29636,11 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeRows>=11&&snapshot.runtimeReadyRows>=10&&snapshot.runtimeChips>=13
       && snapshot.runtimeListRole==='list'&&snapshot.runtimeListItems===snapshot.runtimeRows
       && snapshot.runtimeDatasetReady===snapshot.runtimeReadyRows&&snapshot.runtimePanelCount==='11'
-      && snapshot.runtimeOpenableRows>=5&&snapshot.runtimeActionButtons===snapshot.runtimeRows
+      && snapshot.runtimeOpenableRows===snapshot.runtimeRows&&snapshot.runtimeOpenableRows>=11&&snapshot.runtimeActionButtons===snapshot.runtimeRows
       && snapshot.runtimeRowKeys===snapshot.runtimeRows&&snapshot.runtimeContainerRows>=2
-      && ['open-view','open-webview','open-file','run-command'].every(kind=>snapshot.runtimeActionTypes.includes(kind))
+      && ['open-view','open-webview','open-file','run-command','open-terminal-profile','prepare-lm-tool','prepare-lm-provider','open-chat-participant','attach-chat-context'].every(kind=>snapshot.runtimeActionTypes.includes(kind))
       && snapshot.runtimeActionTargets.includes('selftest.dynamic.tree')&&snapshot.runtimeActionTargets.includes('selftest.dynamic.webview')&&snapshot.runtimeActionTargets.includes('selftest.run')
+      && snapshot.runtimeActionTargets.includes('selftest.terminalProfile')&&snapshot.runtimeActionTargets.includes('selftest.lmTool')&&snapshot.runtimeActionTargets.includes('selftest.vendor')&&snapshot.runtimeActionTargets.includes('selftest.chat')&&snapshot.runtimeActionTargets.includes('selftest.context')
       && snapshot.runtimePanelVisibleCount==='11'&&snapshot.runtimePanelTotalCount==='11'
       && snapshot.runtimeDatasetSources.includes('runtime')&&snapshot.runtimeStatusText.includes('11 visible of 11 rows')
       && snapshot.runtimeFilterKinds.includes('LMTool')&&snapshot.runtimeFilterBefore.visible===11
