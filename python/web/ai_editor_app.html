@@ -1253,15 +1253,16 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-run-chip.running { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 55%,var(--border)); background:color-mix(in srgb,var(--fg-warning) 11%,var(--bg3)); }
 .chat-select-chip.mode { color:var(--fg-accent); border-color:color-mix(in srgb, var(--border-focus) 50%, var(--border)); }
 .chat-select-chip.agent.active { color:var(--fg); border-color:color-mix(in srgb, var(--fg-success) 45%, var(--border)); }
-.chat-control-menu { position:relative; display:inline-flex; align-items:center; flex:0 0 auto; min-width:0; align-self:stretch; }
+.chat-control-menu { position:relative; display:inline-flex; align-items:center; flex:0 0 auto; min-width:0; align-self:stretch; z-index:3; }
 #chat-provider-menu { width:var(--chat-provider-width); flex-basis:var(--chat-provider-width); }
 #chat-model-menu { flex:1 1 var(--chat-model-width); min-width:var(--chat-model-width); }
 .chat-control-native { display:none!important; visibility:hidden!important; position:absolute!important; inset:0 auto auto 0!important; width:0!important; height:0!important; opacity:0!important; pointer-events:none!important; appearance:none; -webkit-appearance:none; }
 .chat-control-trigger { display:inline-flex; align-items:center; gap:4px; justify-content:space-between; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   width:100%; min-height:22px; border-radius:999px!important; background:color-mix(in srgb,var(--bg3) 88%,#000); appearance:none!important; -webkit-appearance:none!important;
-  transition:border-color .14s ease, background .14s ease, color .14s ease, box-shadow .14s ease; }
+  transition:border-color .14s ease, background .14s ease, color .14s ease, box-shadow .14s ease; position:relative; user-select:none; }
+.chat-control-trigger::before { content:''; position:absolute; inset:-3px; border-radius:999px; }
 .chat-control-trigger .control-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.chat-control-trigger .control-caret { font-size:8px; opacity:.65; margin-left:4px; flex:0 0 auto; }
+.chat-control-trigger .control-caret { font-size:8px; opacity:.82; margin-left:4px; flex:0 0 auto; color:var(--fg-dim); }
 .chat-control-trigger.provider { width:var(--chat-provider-width); min-width:var(--chat-provider-width); max-width:var(--chat-provider-width); flex:0 0 var(--chat-provider-width); }
 .chat-control-trigger.model { width:100%; min-width:var(--chat-model-width); max-width:none; flex:1 1 var(--chat-model-width); }
 .chat-control-trigger.agent { width:var(--chat-agent-width); min-width:var(--chat-agent-width); max-width:var(--chat-agent-width); flex:0 0 var(--chat-agent-width); }
@@ -1284,6 +1285,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-popup.model { min-width:460px; }
 .chat-control-popup.mode { min-width:260px; }
 .chat-control-popup.workflow { min-width:340px; }
+.chat-control-popup .mode-popup-item { width:100%; box-sizing:border-box; }
 .chat-control-popup .mode-popup-item { padding:7px 9px; border-radius:8px; margin:1px 0; border:1px solid transparent; }
 .chat-control-popup .mode-popup-item:hover,
 .chat-control-popup .mode-popup-item.active { background:color-mix(in srgb,var(--fg-accent) 11%,var(--bg-hover)); border-color:color-mix(in srgb,var(--border-focus) 32%,transparent); }
@@ -8239,12 +8241,14 @@ function assistantCustomEndpointModelPickerSnapshot(){
   const previousConfig={provider:config.provider,base_url:config.base_url,model:config.model};
   const previousFetched=chatProviderModelOptions.custom;
   const previousOpenAI=chatProviderModelOptions.openai;
+  const previousCustomModels=config.custom_models;
   const modelInput=$('s-model'),baseInput=$('s-baseurl');
   const previousSettingModel=modelInput?modelInput.value:'';
   const previousSettingBase=baseInput?baseInput.value:'';
   config.provider='openai';
   config.base_url='https://custom.endpoint.example/v1';
   config.model='';
+  config.custom_models={'custom-endpoint-configured-model':{max_input:96000,max_output:4096,provider:'openai',base_url:'https://custom.endpoint.example/v1'}};
   if(modelInput)modelInput.value='custom-endpoint-setting-model';
   if(baseInput)baseInput.value='https://custom.endpoint.example/v1';
   chatProviderModelOptions.openai=[{id:'custom-endpoint-fetched-model',name:'custom-endpoint-fetched-model'}];
@@ -8252,8 +8256,14 @@ function assistantCustomEndpointModelPickerSnapshot(){
   const rows=modelOptionRows();
   const popup=assistantControlPopupSnapshot('model');
   const preferred=preferredModelForProvider('openai');
+  if(modelInput)modelInput.value='';
+  config.model='';
+  renderChatControlPopups();
+  const rowsWithoutSetting=modelOptionRows();
+  const preferredWithoutSetting=preferredModelForProvider('openai');
   chatProviderModelOptions.custom=previousFetched;
   chatProviderModelOptions.openai=previousOpenAI;
+  config.custom_models=previousCustomModels;
   if(modelInput)modelInput.value=previousSettingModel;
   if(baseInput)baseInput.value=previousSettingBase;
   config.provider=previousConfig.provider;
@@ -8262,10 +8272,14 @@ function assistantCustomEndpointModelPickerSnapshot(){
   renderChatControlPopups();
   return {
     rowIds:rows.map(controlItemId),
+    rowIdsWithoutSetting:rowsWithoutSetting.map(controlItemId),
     rowCount:rows.length,
     firstRow:rows.length?controlItemId(rows[0]):'',
+    firstRowWithoutSetting:rowsWithoutSetting.length?controlItemId(rowsWithoutSetting[0]):'',
     endpointBeforeFetched:rows.map(controlItemId).indexOf('custom-endpoint-setting-model')>-1&&rows.map(controlItemId).indexOf('custom-endpoint-setting-model')<rows.map(controlItemId).indexOf('custom-endpoint-fetched-model'),
+    configuredBeforeFetched:rowsWithoutSetting.map(controlItemId).indexOf('custom-endpoint-configured-model')>-1&&rowsWithoutSetting.map(controlItemId).indexOf('custom-endpoint-configured-model')<rowsWithoutSetting.map(controlItemId).indexOf('custom-endpoint-fetched-model'),
     preferred,
+    preferredWithoutSetting,
     provider:'openai',
     baseUrl:'https://custom.endpoint.example/v1',
     settingValue:'custom-endpoint-setting-model',
@@ -8647,7 +8661,7 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready',providerPopup.shown&&providerPopup.optionCount>=1&&providerPopup.focusableCount===providerPopup.optionCount&&providerPopup.keyboardReady,JSON.stringify(providerPopup));
   assistantUiSelfCheckRecord(checks,'model-popup-configured-models-ready',modelPopup.shown&&modelPopup.optionCount>=1&&modelPopup.focusableCount===modelPopup.optionCount&&modelPopup.keyboardReady,JSON.stringify(modelPopup));
   assistantUiSelfCheckRecord(checks,'model-popup-custom-endpoint-models-ready',modelPopup.shown&&modelPopup.customModelCount>=1&&modelPopup.visibleText.includes('custom-endpoint-model')&&modelPopup.visibleText.toLowerCase().includes('custom endpoint'),JSON.stringify(modelPopup));
-  assistantUiSelfCheckRecord(checks,'model-popup-custom-endpoint-selection-ready',customEndpointModelPicker.provider==='openai'&&customEndpointModelPicker.rowIds.includes('custom-endpoint-setting-model')&&customEndpointModelPicker.rowIds.includes('custom-endpoint-fetched-model')&&customEndpointModelPicker.firstRow==='custom-endpoint-setting-model'&&customEndpointModelPicker.endpointBeforeFetched&&customEndpointModelPicker.preferred==='custom-endpoint-setting-model'&&customEndpointModelPicker.optionCount>=2&&customEndpointModelPicker.customModelCount>=2&&customEndpointModelPicker.keyboardReady,JSON.stringify(customEndpointModelPicker));
+  assistantUiSelfCheckRecord(checks,'model-popup-custom-endpoint-selection-ready',customEndpointModelPicker.provider==='openai'&&customEndpointModelPicker.rowIds.includes('custom-endpoint-setting-model')&&customEndpointModelPicker.rowIds.includes('custom-endpoint-configured-model')&&customEndpointModelPicker.rowIds.includes('custom-endpoint-fetched-model')&&customEndpointModelPicker.firstRow==='custom-endpoint-setting-model'&&customEndpointModelPicker.endpointBeforeFetched&&customEndpointModelPicker.configuredBeforeFetched&&customEndpointModelPicker.preferred==='custom-endpoint-setting-model'&&customEndpointModelPicker.firstRowWithoutSetting==='custom-endpoint-configured-model'&&customEndpointModelPicker.preferredWithoutSetting==='custom-endpoint-configured-model'&&customEndpointModelPicker.optionCount>=3&&customEndpointModelPicker.customModelCount>=3&&customEndpointModelPicker.keyboardReady,JSON.stringify(customEndpointModelPicker));
   assistantUiSelfCheckRecord(checks,'composer-native-selects-hidden',layout.nativeHidden===true,JSON.stringify(layout.nativeControls));
   assistantUiSelfCheckRecord(checks,'mode-popup-custom-control-ready',modePopup.shown&&modePopup.optionCount>=6&&modePopup.modeActionCount>=6&&modePopup.keyboardReady&&!modePopup.oldModePopupPresent&&modePopup.visibleText.includes('Agent')&&modePopup.visibleText.includes('Default Approvals'),JSON.stringify(modePopup));
   assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped',[providerPopup,modelPopup,agentPopup,modePopup,workflowPopup].every(s=>s.shown&&s.display==='block'&&s.rectReady&&s.opensAboveTrigger&&s.notToolbarClipped&&!s.className.includes('mode-popup')),JSON.stringify({providerPopup,modelPopup,agentPopup,modePopup,workflowPopup}));
@@ -24147,6 +24161,21 @@ function customEndpointSettingModelRows(provider){
     base_url:base
   }];
 }
+function customEndpointConfiguredModelRows(provider){
+  const pid=String(provider||config.provider||'').trim();
+  return Object.keys(config.custom_models||{}).sort().map(name=>{
+    const meta=config.custom_models[name]||{};
+    const providerId=String(meta.provider||meta.provider_id||meta.providerId||'').trim();
+    const baseUrl=String(meta.base_url||meta.endpoint||meta.endpoint_url||'').trim();
+    const endpointModel=isCustomEndpointModelMeta(meta)||isCustomEndpointConfigured(providerId||pid,baseUrl);
+    const providerMatch=!providerId||providerId===pid||providerId==='custom'||endpointModel;
+    if(!providerMatch&&!providerMatchesModelMeta(meta,pid))return null;
+    return {
+      id:name,name,custom:true,provider:providerId||pid||'custom',description:'Custom endpoint model',
+      max_input:meta.max_input,max_output:meta.max_output,base_url:baseUrl
+    };
+  }).filter(Boolean);
+}
 function modelOptionRows(){
   const provider=String(config.provider||'openai').trim();
   const rows=normalizeControlList(chatControlState.models,'models');
@@ -24156,18 +24185,11 @@ function modelOptionRows(){
     if(id&&!out.some(item=>controlItemId(item)===id))out.push(model);
   };
   customEndpointSettingModelRows(provider).forEach(model=>pushModel(model));
+  customEndpointConfiguredModelRows(provider).forEach(model=>pushModel(model));
   settingsModelListRows(provider).forEach(model=>pushModel(model));
   normalizeControlList(chatProviderModelOptions[provider],'models').forEach(model=>pushModel({
     id:controlItemId(model),name:controlItemName(model)||controlItemId(model),provider,custom:isCustomEndpointConfigured(provider,config.base_url),description:isCustomEndpointConfigured(provider,config.base_url)?'Custom endpoint model':'Fetched from '+providerLabel(provider),base_url:config.base_url||''
   }));
-  Object.keys(config.custom_models||{}).sort().forEach(name=>{
-    const meta=config.custom_models[name]||{};
-    if(!providerMatchesModelMeta(meta,provider)&&!isCustomEndpointModelMeta(meta))return;
-    pushModel({
-      id:name,name,custom:true,provider:meta.provider||provider,description:'Custom endpoint model',
-      max_input:meta.max_input,max_output:meta.max_output,base_url:meta.base_url||meta.endpoint||meta.endpoint_url||''
-    });
-  });
   rows.forEach(model=>{
     const meta=model&&typeof model==='object'?model:{};
     if((meta.custom||providerMatchesModelMeta(meta,provider)))pushModel(model);
@@ -24182,15 +24204,12 @@ function preferredModelForProvider(provider){
   const pid=String(provider||config.provider||'').trim();
   const endpointSetting=customEndpointSettingModelRows(pid).map(controlItemId).find(Boolean);
   if(endpointSetting)return endpointSetting;
+  const customConfigured=customEndpointConfiguredModelRows(pid).map(controlItemId).find(Boolean);
+  if(customConfigured)return customConfigured;
   const settings=settingsModelListRows(pid).map(controlItemId).find(Boolean);
   if(settings)return settings;
   const fetched=normalizeControlList(chatProviderModelOptions[pid],'models').map(controlItemId).find(Boolean);
   if(fetched)return fetched;
-  const custom=Object.keys(config.custom_models||{}).sort().find(name=>{
-    const meta=config.custom_models[name]||{};
-    return isCustomEndpointModelMeta(meta)||String(meta.provider||meta.provider_id||meta.providerId||'')===pid;
-  });
-  if(custom)return custom;
   const defaultModel=providerDefaultModelFromControls(pid);
   if(defaultModel)return defaultModel;
   return readProviderModelDefaults(pid)||'';
