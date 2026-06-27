@@ -12680,8 +12680,10 @@ console.log("command palette quick access helpers ok");
            and "terminalRunCancelled" in html
            and "function _terminalNormalizeResult(raw)" in html
             and "function _terminalStateForResult(result)" in html
-            and "function _terminalWorkspaceLabel(cwd)" in html
+           and "function _terminalWorkspaceLabel(cwd)" in html
             and "function _terminalProfileLabel(meta)" in html
+            and "function _terminalStateLabel(state)" in html
+            and "function _terminalTruncationLabel(stdoutTruncated,stderrTruncated)" in html
             and "function _updateTerminalRecordForRun(cmd,state,result,durationMs)" in html
             and "function currentWorkspaceRoot()" in html
             and "function syncTerminalWorkspaceState()" in html
@@ -12689,10 +12691,21 @@ console.log("command palette quick access helpers ok");
             and "data-terminal-status=\"profile\"" in html
             and "line.dataset.profile=profile" in html
             and "line.dataset.shellKind=String(meta.shellKind||'')" in html
+            and "line.dataset.exitCode=exitCode;" in html
+            and "line.dataset.durationMs=durationMs;" in html
+            and "line.dataset.stdoutTruncated=stdoutTruncated?'1':'0';" in html
+            and "line.dataset.lastCommand=String(meta.lastCommand||'');" in html
+            and "data-terminal-status=\"exit\"" in html
+            and "data-terminal-status=\"duration\"" in html
+            and "data-terminal-status=\"flags\"" in html
             and "payload.cwd=cwd" in html
             and "startedAt" in html
             and "finishedAt" in html
             and "stdoutTruncated" in html
+            and "lastStdoutTruncated" in html
+            and "tab.dataset.terminalState=String(t.lastState||'idle');" in html
+            and "tab.dataset.durationMs=t.lastDurationMs===null||t.lastDurationMs===undefined?'':String(t.lastDurationMs);" in html
+            and "const flagBadge=(t.lastStdoutTruncated||t.lastStderrTruncated)?'<span class=\"term-flag\">TRUNC</span> ':'';" in html
             and "payloadProfile" in html
            and "writePayloadData" in html
             and "writeBytes" in html
@@ -12703,6 +12716,9 @@ console.log("command palette quick access helpers ok");
             and "closeStdinPayload" in html
             and "closeStdinResult" in html
             and "selectorValue" in html
+            and "statusAfterBad" in html
+            and "statusAfterBad.stderrTruncated==='1'" in html
+            and "snapshot.statusDurationMs==='7'" in html
             and "async function terminalUiSelfCheckSnapshot()" in html
            and "window.terminalUiSelfCheckSnapshot=terminalUiSelfCheckSnapshot" in html)
     _check("terminal backend exposes cancellable job lifecycle without adding tool count",

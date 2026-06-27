@@ -1503,13 +1503,20 @@ pre.code-block code .type { color:var(--fg-type); }
 .terminal-status-line .term-status-context { display:inline-flex; align-items:center; gap:5px; min-width:0; color:var(--fg-dim); }
 .terminal-status-line .term-status-pill { max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   border:1px solid var(--border); border-radius:999px; padding:0 6px; line-height:16px; background:color-mix(in srgb,var(--bg3) 70%,transparent); }
+.terminal-status-line .term-status-pill.warn { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 45%,var(--border)); }
+.terminal-status-line .term-status-pill.error { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 45%,var(--border)); }
+.terminal-status-line .term-status-pill.ok { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 45%,var(--border)); }
 .terminal-status-line .term-status-detail { margin-left:auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .terminal-status-line.running .term-status-dot { background:var(--fg-accent); animation:terminalStatusPulse 1s ease-in-out infinite; }
 .terminal-status-line.running .term-status-text { color:var(--fg-accent); }
 .terminal-status-line.done .term-status-dot { background:var(--fg-success); }
+.terminal-status-line.done .term-status-text { color:var(--fg-success); }
 .terminal-status-line.error .term-status-dot { background:var(--fg-error); }
 .terminal-status-line.error .term-status-text { color:var(--fg-error); }
 .terminal-status-line.cancelled .term-status-dot { background:var(--fg-warning); }
+.terminal-status-line.timeout .term-status-dot { background:var(--fg-warning); animation:terminalStatusPulse 1s ease-in-out infinite; }
+.terminal-status-line.timeout .term-status-text,
+.terminal-status-line.cancelled .term-status-text { color:var(--fg-warning); }
 @keyframes terminalStatusPulse { 0%,100%{opacity:.45} 50%{opacity:1} }
 
 /* ── Status bar ── */
@@ -2131,11 +2138,14 @@ pre.code-block { overflow:visible; }
 .term-tab.running { color:var(--fg-accent); }
 .term-tab.error { color:var(--fg-error); }
 .term-tab.done:not(.active) { color:var(--fg-success); }
+.term-tab.cancelled,.term-tab.timeout { color:var(--fg-warning); }
 .term-tab .term-shell { font-size:9px; letter-spacing:0; color:var(--fg-accent);
   border:1px solid color-mix(in srgb, var(--fg-accent) 45%, transparent);
   border-radius:3px; padding:0 3px; line-height:13px; }
 .term-tab .term-running { color:var(--fg-warning); }
 .term-tab .term-exit { font-size:9px; opacity:.8; color:inherit; }
+.term-tab .term-flag { font-size:9px; color:var(--fg-warning); border:1px solid color-mix(in srgb,var(--fg-warning) 45%,transparent);
+  border-radius:3px; padding:0 3px; line-height:13px; }
 .term-tab .term-close { font-size:12px; opacity:0; cursor:pointer; margin-left:2px; }
 .term-tab:hover .term-close { opacity:0.6; }
 .term-tab .term-close:hover { opacity:1; color:var(--fg-error); }
@@ -2148,6 +2158,7 @@ pre.code-block { overflow:visible; }
 .terminal-command-block.done { border-left-color:var(--fg-success); }
 .terminal-command-block.error { border-left-color:var(--fg-error); }
 .terminal-command-block.cancelled { border-left-color:var(--fg-warning); }
+.terminal-command-block.timeout { border-left-color:var(--fg-warning); }
 .terminal-command-head { display:flex; align-items:center; gap:8px; color:var(--fg-success); }
 .terminal-command-head .terminal-command-line { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .terminal-command-status { margin-left:auto; color:var(--fg-dim); font-size:11px; white-space:nowrap; }
@@ -2582,6 +2593,9 @@ pre.code-block { overflow:visible; }
           <span class="term-status-context">
             <span class="term-status-pill" data-terminal-status="workspace">workspace</span>
             <span class="term-status-pill" data-terminal-status="profile">System Shell</span>
+            <span class="term-status-pill" data-terminal-status="exit">exit -</span>
+            <span class="term-status-pill" data-terminal-status="duration">0ms</span>
+            <span class="term-status-pill" data-terminal-status="flags">ready</span>
           </span>
           <span class="term-status-detail">No command has run yet</span>
         </div>
@@ -32789,7 +32803,7 @@ function _createTerminal(name,metadata,activate=true){
   outputEl.className='terminal-output';outputEl.id='term-out-'+id;
   outputEl.style.display='none';
   $('terminal-panel').appendChild(outputEl);
-  const term={id:id,hostId:_terminalHostId(meta),name:name||meta.name||('Terminal '+id),metadata:meta,dimensions:null,shellIntegration:!!meta.shellIntegration,shellCwd:null,shellEnv:null,shellExecution:null,outputEl:outputEl,history:[],historyIdx:-1,inputText:'',lastCommand:'',lastExitCode:null,lastDurationMs:null,lastState:'idle'};
+  const term={id:id,hostId:_terminalHostId(meta),name:name||meta.name||('Terminal '+id),metadata:meta,dimensions:null,shellIntegration:!!meta.shellIntegration,shellCwd:null,shellEnv:null,shellExecution:null,outputEl:outputEl,history:[],historyIdx:-1,inputText:'',lastCommand:'',lastExitCode:null,lastDurationMs:null,lastState:'idle',lastCwd:'',lastStartedAt:'',lastFinishedAt:'',lastStdoutTruncated:false,lastStderrTruncated:false,lastTerminalMeta:null};
   _terminals.push(term);
   _renderTermTabs();
   if(activate!==false)_switchTerminal(id);
@@ -32862,6 +32876,16 @@ function _renderTermTabs(){
     const meta=t.metadata||{};
     const state=t.lastState&&t.lastState!=='idle'?String(t.lastState):'';
     const tab=document.createElement('div');tab.className='term-tab'+(t.id===_activeTermId?' active':'')+(state?' '+state:'');
+    tab.dataset.terminalState=String(t.lastState||'idle');
+    tab.dataset.profile=_terminalProfileLabel(meta);
+    tab.dataset.cwd=String(t.lastCwd||meta.cwd||'');
+    tab.dataset.lastCommand=String(t.lastCommand||'');
+    tab.dataset.exitCode=t.lastExitCode===null||t.lastExitCode===undefined?'':String(t.lastExitCode);
+    tab.dataset.durationMs=t.lastDurationMs===null||t.lastDurationMs===undefined?'':String(t.lastDurationMs);
+    tab.dataset.stdoutTruncated=t.lastStdoutTruncated?'1':'0';
+    tab.dataset.stderrTruncated=t.lastStderrTruncated?'1':'0';
+    tab.dataset.startedAt=String(t.lastStartedAt||'');
+    tab.dataset.finishedAt=String(t.lastFinishedAt||'');
     const icon=_terminalIconText(meta);
     const dims=t.dimensions&&t.dimensions.columns&&t.dimensions.rows?(' • '+t.dimensions.columns+'x'+t.dimensions.rows):'';
     const shell=t.shellIntegration?'<span class="term-shell'+(t.shellExecution&&t.shellExecution.event==='start'?' term-running':'')+'">SI</span> ':'';
@@ -32873,7 +32897,9 @@ function _renderTermTabs(){
       meta.state&&meta.state.isInteractedWith?'I':''
     ].filter(Boolean).map(b=>'<span class="term-shell">'+esc(b)+'</span> ').join('');
     const exitBadge=t.lastExitCode!==null&&t.lastExitCode!==undefined?'<span class="term-exit">'+esc(String(t.lastExitCode))+'</span> ':'';
-    tab.innerHTML=(icon?'<span class="term-icon">'+esc(icon)+'</span> ':'')+shell+badges+exitBadge+esc(t.name)+'<span class="term-close" onclick="_closeTerminal('+t.id+',event)">&#x2715;</span>';
+    const flagBadge=(t.lastStdoutTruncated||t.lastStderrTruncated)?'<span class="term-flag">TRUNC</span> ':'';
+    const durationBadge=t.lastDurationMs!==null&&t.lastDurationMs!==undefined?'<span class="term-shell">'+esc(_formatTerminalDuration(t.lastDurationMs))+'</span> ':'';
+    tab.innerHTML=(icon?'<span class="term-icon">'+esc(icon)+'</span> ':'')+shell+badges+exitBadge+flagBadge+durationBadge+esc(t.name)+'<span class="term-close" onclick="_closeTerminal('+t.id+',event)">&#x2715;</span>';
     const command=t.shellExecution&&t.shellExecution.commandLine?t.shellExecution.commandLine:'';
     const envCount=meta.env&&typeof meta.env==='object'?Object.keys(meta.env).length:0;
     const cwd=meta.cwd?String(meta.cwd):'';
@@ -32889,7 +32915,10 @@ function _renderTermTabs(){
       t.shellIntegration?'Shell Integration':'',
       command?('Command: '+command):'',
       t.lastExitCode!==null&&t.lastExitCode!==undefined?('Exit: '+t.lastExitCode):'',
-      t.lastDurationMs!==null&&t.lastDurationMs!==undefined?('Duration: '+t.lastDurationMs+'ms'):''
+      t.lastDurationMs!==null&&t.lastDurationMs!==undefined?('Duration: '+t.lastDurationMs+'ms'):'',
+      _terminalTruncationLabel(t.lastStdoutTruncated,t.lastStderrTruncated),
+      t.lastStartedAt?('Started: '+t.lastStartedAt):'',
+      t.lastFinishedAt?('Finished: '+t.lastFinishedAt):''
     ].filter(Boolean).join('\n');
     const colorId=_terminalThemeColor(meta);
     if(colorId)tab.dataset.themeColor=colorId;else delete tab.dataset.themeColor;
@@ -32981,11 +33010,13 @@ function _terminalResultValue(raw){
 }
 function _terminalExitCode(data){
   const candidates=[data&&data.exitCode,data&&data.exit_code,data&&data.returncode,data&&data.code];
+  const rawState=String(data&&data.state||'').toLowerCase();
   for(const value of candidates){
     if(value===null||value===undefined||value==='')continue;
     const n=Number(value);
     if(Number.isFinite(n))return n;
   }
+  if(rawState==='cancelled')return null;
   if(data&&data.success===false)return 1;
   return 0;
 }
@@ -33014,6 +33045,16 @@ function _formatTerminalDuration(ms){
   if(ms===null||ms===undefined)return '';
   return ms<1000?Math.round(ms)+'ms':(ms/1000).toFixed(1)+'s';
 }
+function _terminalStateLabel(state){
+  state=String(state||'idle').toLowerCase();
+  return state==='running'?'Running':(state==='error'?'Failed':(state==='done'?'Completed':(state==='cancelled'?'Cancelled':(state==='timeout'?'Timed out':'Ready'))));
+}
+function _terminalTruncationLabel(stdoutTruncated,stderrTruncated){
+  if(stdoutTruncated&&stderrTruncated)return 'stdout/stderr truncated';
+  if(stdoutTruncated)return 'stdout truncated';
+  if(stderrTruncated)return 'stderr truncated';
+  return '';
+}
 function _terminalWorkspaceLabel(cwd){
   const root=String(cwd||currentWorkspaceRoot()||'').replace(/[\\/]+$/,'');
   return root?pathBaseName(root):'workspace';
@@ -33027,33 +33068,60 @@ function _setTerminalStatus(state,text,detail,meta){
   meta=meta&&typeof meta==='object'?meta:{};
   const cwd=String(meta.cwd||'');
   const profile=_terminalProfileLabel(meta);
+  const exitCode=meta.exitCode===null||meta.exitCode===undefined?'':String(meta.exitCode);
+  const durationMs=meta.durationMs===null||meta.durationMs===undefined?'':String(meta.durationMs);
+  const stdoutTruncated=!!meta.stdoutTruncated;
+  const stderrTruncated=!!meta.stderrTruncated;
+  const flags=_terminalTruncationLabel(stdoutTruncated,stderrTruncated)||String(meta.flags||'');
   line.className='terminal-status-line '+(state||'idle');
   line.dataset.state=state||'idle';
   line.dataset.cwd=cwd;
   line.dataset.workspace=_terminalWorkspaceLabel(cwd);
   line.dataset.profile=profile;
   line.dataset.shellKind=String(meta.shellKind||'');
+  line.dataset.exitCode=exitCode;
+  line.dataset.durationMs=durationMs;
+  line.dataset.stdoutTruncated=stdoutTruncated?'1':'0';
+  line.dataset.stderrTruncated=stderrTruncated?'1':'0';
+  line.dataset.lastCommand=String(meta.lastCommand||'');
   line.dataset.startedAt=String(meta.startedAt||'');
   line.dataset.finishedAt=String(meta.finishedAt||'');
   const textEl=line.querySelector('.term-status-text');
   const detailEl=line.querySelector('.term-status-detail');
   const wsEl=line.querySelector('[data-terminal-status="workspace"]');
   const profileEl=line.querySelector('[data-terminal-status="profile"]');
+  const exitEl=line.querySelector('[data-terminal-status="exit"]');
+  const durationEl=line.querySelector('[data-terminal-status="duration"]');
+  const flagsEl=line.querySelector('[data-terminal-status="flags"]');
   if(textEl)textEl.textContent=text||'Ready';
   if(wsEl){wsEl.textContent=_terminalWorkspaceLabel(cwd);wsEl.title=cwd||currentWorkspaceRoot()||''}
   if(profileEl){profileEl.textContent=profile;profileEl.title=profile}
+  if(exitEl){
+    exitEl.textContent=exitCode===''?'exit -':'exit '+exitCode;
+    exitEl.className='term-status-pill '+(exitCode===''?'':Number(exitCode)===0?'ok':'error');
+  }
+  if(durationEl){
+    durationEl.textContent=durationMs===''?'0ms':_formatTerminalDuration(Number(durationMs));
+    durationEl.title=durationMs===''?'No completed command duration':durationMs+'ms';
+  }
+  if(flagsEl){
+    flagsEl.textContent=flags||'ready';
+    flagsEl.className='term-status-pill '+(flags?'warn':'');
+    flagsEl.title=flags||'No terminal warnings';
+  }
   if(detailEl)detailEl.textContent=detail||'';
 }
 function _updateTerminalStatusLine(){
   const term=_getActiveTerminalRecord();
   if(term){
     const state=term.lastState||'idle';
-    const exit=term.lastExitCode!==null&&term.lastExitCode!==undefined?('exit '+term.lastExitCode):'no exit';
+    const exit=term.lastExitCode!==null&&term.lastExitCode!==undefined?('exit '+term.lastExitCode):(state==='cancelled'?'cancelled':'no exit');
     const dur=_formatTerminalDuration(term.lastDurationMs);
     const cwd=term.lastCwd?('cwd '+term.lastCwd):'';
-    const meta={...(term.metadata||{}),...(term.lastTerminalMeta||{}),cwd:term.lastCwd||term.metadata&&term.metadata.cwd||currentWorkspaceRoot(),startedAt:term.lastStartedAt||'',finishedAt:term.lastFinishedAt||''};
-    const detail=[term.name,term.lastCommand?('$ '+term.lastCommand):'',exit,dur,cwd].filter(Boolean).join('  ');
-    _setTerminalStatus(state,state==='running'?'Running':(state==='error'?'Failed':(state==='done'?'Completed':(state==='cancelled'?'Cancelled':'Ready'))),detail,meta);
+    const flags=_terminalTruncationLabel(term.lastStdoutTruncated,term.lastStderrTruncated);
+    const meta={...(term.metadata||{}),...(term.lastTerminalMeta||{}),cwd:term.lastCwd||term.metadata&&term.metadata.cwd||currentWorkspaceRoot(),exitCode:term.lastExitCode,durationMs:term.lastDurationMs,stdoutTruncated:term.lastStdoutTruncated,stderrTruncated:term.lastStderrTruncated,lastCommand:term.lastCommand||'',startedAt:term.lastStartedAt||'',finishedAt:term.lastFinishedAt||''};
+    const detail=[term.name,term.lastCommand?('$ '+term.lastCommand):'',exit,dur,cwd,flags].filter(Boolean).join('  ');
+    _setTerminalStatus(state,_terminalStateLabel(state),detail,meta);
     _updateTerminalActionButtons();
     return;
   }
@@ -33062,8 +33130,9 @@ function _updateTerminalStatusLine(){
   const cmd=out&&out.dataset.lastCommand?('$ '+out.dataset.lastCommand):'No command has run yet';
   const exit=out&&out.dataset.lastExitCode!==undefined&&out.dataset.lastExitCode!==''?('exit '+out.dataset.lastExitCode):'';
   const cwd=out&&out.dataset.lastCwd?('cwd '+out.dataset.lastCwd):'';
-  const meta={cwd:out&&out.dataset.lastCwd?out.dataset.lastCwd:currentWorkspaceRoot(),profile:out&&out.dataset.lastProfile?out.dataset.lastProfile:'System Shell',shellKind:out&&out.dataset.lastShellKind?out.dataset.lastShellKind:'',startedAt:out&&out.dataset.lastStartedAt?out.dataset.lastStartedAt:'',finishedAt:out&&out.dataset.lastFinishedAt?out.dataset.lastFinishedAt:''};
-  _setTerminalStatus(state,state==='running'?'Running':(state==='error'?'Failed':(state==='done'?'Completed':(state==='cancelled'?'Cancelled':'Ready'))),[cmd,exit,cwd].filter(Boolean).join('  '),meta);
+  const flags=_terminalTruncationLabel(out&&out.dataset.lastStdoutTruncated==='1',out&&out.dataset.lastStderrTruncated==='1');
+  const meta={cwd:out&&out.dataset.lastCwd?out.dataset.lastCwd:currentWorkspaceRoot(),profile:out&&out.dataset.lastProfile?out.dataset.lastProfile:'System Shell',shellKind:out&&out.dataset.lastShellKind?out.dataset.lastShellKind:'',exitCode:out&&out.dataset.lastExitCode?out.dataset.lastExitCode:null,durationMs:out&&out.dataset.lastDurationMs?Number(out.dataset.lastDurationMs):null,stdoutTruncated:out&&out.dataset.lastStdoutTruncated==='1',stderrTruncated:out&&out.dataset.lastStderrTruncated==='1',lastCommand:out&&out.dataset.lastCommand?out.dataset.lastCommand:'',startedAt:out&&out.dataset.lastStartedAt?out.dataset.lastStartedAt:'',finishedAt:out&&out.dataset.lastFinishedAt?out.dataset.lastFinishedAt:''};
+  _setTerminalStatus(state,_terminalStateLabel(state),[cmd,exit,cwd,flags].filter(Boolean).join('  '),meta);
   _updateTerminalActionButtons();
 }
 function _appendTerminalCommandBlock(out,cmd){
@@ -33083,12 +33152,16 @@ function _updateTerminalRecordForRun(cmd,state,result,durationMs){
   const terminalMeta=result&&result.terminal&&typeof result.terminal==='object'?result.terminal:{};
   const startedAt=result&&result.startedAt?String(result.startedAt):'';
   const finishedAt=result&&result.finishedAt?String(result.finishedAt):'';
+  const stdoutTruncated=!!(result&&result.stdoutTruncated);
+  const stderrTruncated=!!(result&&result.stderrTruncated);
   if(term){
     term.lastCommand=cmd;term.lastState=state;term.lastExitCode=exitCode;term.lastDurationMs=durationMs;
     term.lastCwd=cwd||term.lastCwd||'';
-    term.lastTerminalMeta={...terminalMeta,cwd:cwd||terminalMeta.cwd||term.lastCwd||''};
+    term.lastTerminalMeta={...terminalMeta,cwd:cwd||terminalMeta.cwd||term.lastCwd||'',stdoutTruncated,stderrTruncated};
     term.lastStartedAt=startedAt;
     term.lastFinishedAt=finishedAt;
+    term.lastStdoutTruncated=stdoutTruncated;
+    term.lastStderrTruncated=stderrTruncated;
     term.shellExecution={event:state==='running'?'start':'end',commandLine:cmd,exitCode:exitCode};
   }else{
     const out=$('terminal-output');
@@ -33096,9 +33169,12 @@ function _updateTerminalRecordForRun(cmd,state,result,durationMs){
       out.dataset.terminalState=state;
       out.dataset.lastCommand=cmd||'';
       out.dataset.lastExitCode=exitCode===null||exitCode===undefined?'':String(exitCode);
+      out.dataset.lastDurationMs=durationMs===null||durationMs===undefined?'':String(durationMs);
       out.dataset.lastCwd=cwd||'';
       out.dataset.lastProfile=_terminalProfileLabel(terminalMeta);
       out.dataset.lastShellKind=String(terminalMeta.shellKind||'');
+      out.dataset.lastStdoutTruncated=stdoutTruncated?'1':'0';
+      out.dataset.lastStderrTruncated=stderrTruncated?'1':'0';
       out.dataset.lastStartedAt=startedAt;
       out.dataset.lastFinishedAt=finishedAt;
     }
@@ -33253,7 +33329,7 @@ async function _pollTerminalJob(runId,jobId,out,view,started,cmd,cwd){
       if(result.stdoutTruncated||result.stderrTruncated)_appendTerminalHtml(view.body,ansiToHtml('\n[output truncated]\n'));
       const finalState=_terminalStateForResult({...result,state});
       view.block.className='terminal-command-block '+finalState;
-      view.status.textContent=[finalState==='cancelled'?'cancelled':'exit '+result.exitCode,_formatTerminalDuration(elapsed),result.cwd?('cwd '+result.cwd):cwd?('cwd '+cwd):''].filter(Boolean).join('  ');
+      view.status.textContent=[finalState==='cancelled'?'cancelled':(finalState==='timeout'?'timeout':'exit '+result.exitCode),_formatTerminalDuration(elapsed),result.cwd?('cwd '+result.cwd):cwd?('cwd '+cwd):'',_terminalTruncationLabel(result.stdoutTruncated,result.stderrTruncated)].filter(Boolean).join('  ');
       _updateTerminalRecordForRun(cmd,finalState,{...result,cwd:result.cwd||cwd},elapsed);
       out.scrollTop=out.scrollHeight;
       return {...result,durationMs:elapsed,state:finalState,jobId};
@@ -33312,7 +33388,7 @@ async function runTerminalCommand(cmd,options){
     if(result.stdoutTruncated||result.stderrTruncated)_appendTerminalHtml(view.body,ansiToHtml('\n[output truncated]\n'));
     const state=_terminalStateForResult(result);
     view.block.className='terminal-command-block '+state;
-    view.status.textContent=['exit '+result.exitCode,_formatTerminalDuration(elapsed),result.cwd?('cwd '+result.cwd):''].filter(Boolean).join('  ');
+    view.status.textContent=[state==='timeout'?'timeout':'exit '+result.exitCode,_formatTerminalDuration(elapsed),result.cwd?('cwd '+result.cwd):'',_terminalTruncationLabel(result.stdoutTruncated,result.stderrTruncated)].filter(Boolean).join('  ');
     _updateTerminalRecordForRun(cmd,state,result,elapsed);
     out.scrollTop=out.scrollHeight;
     return {...result,durationMs:elapsed,state};
@@ -33435,6 +33511,13 @@ async function terminalUiSelfCheckSnapshot(){
     };
     const ok=await runTerminalCommand('echo terminal-ok',{skipConfirm:true,out:defaultOut});
     const bad=await runTerminalCommand('bad-command',{skipConfirm:true,out:defaultOut});
+    const statusAfterBad={
+      state:status?status.dataset.state:'',
+      exitCode:status?status.dataset.exitCode:'',
+      durationMs:status?status.dataset.durationMs:'',
+      stderrTruncated:status?status.dataset.stderrTruncated:'',
+      flags:status&&status.querySelector('[data-terminal-status="flags"]')?status.querySelector('[data-terminal-status="flags"]').textContent:''
+    };
     const slowPromise=runTerminalCommand('slow-command',{skipConfirm:true,out:defaultOut});
     await new Promise(resolve=>setTimeout(resolve,20));
     const wrote=await sendTerminalInput('hello stdin\n',{out:defaultOut});
@@ -33457,14 +33540,22 @@ async function terminalUiSelfCheckSnapshot(){
       statusWorkspace:status?status.dataset.workspace:'',
       statusProfile:status?status.dataset.profile:'',
       statusShellKind:status?status.dataset.shellKind:'',
+      statusExitCode:status?status.dataset.exitCode:'',
+      statusDurationMs:status?status.dataset.durationMs:'',
+      statusStdoutTruncated:status?status.dataset.stdoutTruncated:'',
+      statusStderrTruncated:status?status.dataset.stderrTruncated:'',
       statusFinishedAt:status?status.dataset.finishedAt:'',
       statusText:status?status.textContent.trim():'',
+      statusAfterBad,
       selectorValue:$('terminal-profile-select')?$('terminal-profile-select').value:'',
       createdTermProfile:selfTerm&&selfTerm.metadata?selfTerm.metadata.profile:'',
       lastCommand:defaultOut?defaultOut.dataset.lastCommand:'',
       lastCwd:defaultOut?defaultOut.dataset.lastCwd:'',
       lastProfile:defaultOut?defaultOut.dataset.lastProfile:'',
       lastShellKind:defaultOut?defaultOut.dataset.lastShellKind:'',
+      lastDurationMs:defaultOut?defaultOut.dataset.lastDurationMs:'',
+      lastStdoutTruncated:defaultOut?defaultOut.dataset.lastStdoutTruncated:'',
+      lastStderrTruncated:defaultOut?defaultOut.dataset.lastStderrTruncated:'',
       payloadCwd:payloads[0]&&payloads[0].cwd,
       payloadProfile:payloads[0]&&payloads[0].profile,
       writePayloadData:(payloads.find(p=>p&&p.mode==='write')||{}).data,
@@ -33473,7 +33564,7 @@ async function terminalUiSelfCheckSnapshot(){
       closeStdinEcho:defaultOut?defaultOut.textContent.includes('[stdin closed]'):false,
       closeStdinResult:closed&&closed.stdinClosed
     };
-    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.hasInputEcho&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell'&&snapshot.writePayloadData==='hello stdin\n'&&snapshot.writeBytes===12&&snapshot.closeStdinPayload===true&&snapshot.closeStdinEcho&&snapshot.closeStdinResult===true;
+    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.hasInputEcho&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusExitCode===''&&snapshot.statusDurationMs==='7'&&snapshot.statusStdoutTruncated==='0'&&snapshot.statusStderrTruncated==='0'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.statusAfterBad.state==='error'&&snapshot.statusAfterBad.exitCode==='7'&&snapshot.statusAfterBad.durationMs==='9'&&snapshot.statusAfterBad.stderrTruncated==='1'&&String(snapshot.statusAfterBad.flags||'').includes('stderr truncated')&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.lastDurationMs==='7'&&snapshot.lastStdoutTruncated==='0'&&snapshot.lastStderrTruncated==='0'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell'&&snapshot.writePayloadData==='hello stdin\n'&&snapshot.writeBytes===12&&snapshot.closeStdinPayload===true&&snapshot.closeStdinEcho&&snapshot.closeStdinResult===true;
     return snapshot;
   }finally{
     call=oldCall;
