@@ -1663,6 +1663,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-current-detail button { height:21px; padding:1px 7px; border:1px solid var(--border); border-radius:4px;
   background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
 .settings-current-detail button:hover,.settings-current-detail button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
+.settings-current-detail button:disabled { opacity:.42; cursor:default; }
 .settings-search-hints { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:5px; min-height:20px;
   align-items:center; color:var(--fg-dim); font-size:11px; }
 .settings-search-hints code { font:10px var(--mono); color:var(--fg); background:var(--bg3);
@@ -3914,6 +3915,33 @@ function settingsConfigureRowInJson(row,key){
   settingsCopyText(valueLabel,'Setting JSON pointer');
   showToast('Opened settings.json and copied '+key,'info',1800);
 }
+function settingsRowCurrentValue(row){
+  const info=settingsMetaForRow(row);
+  if(info&&info.input)return settingsInputValue(info.input,info.meta);
+  const current=row&&row.querySelector?row.querySelector('[data-setting-current-value]'):null;
+  if(current)return String(current.textContent||'').replace(/^Current:\s*/,'');
+  return '';
+}
+function settingsCopyRowValue(row){
+  const value=settingsRowCurrentValue(row);
+  settingsCopyText(settingDisplayValue(value),'Setting value');
+}
+function settingsCopyRowJson(row){
+  const key=settingsRowKey(row)||settingsReviewRowLabel(row);
+  if(!key)return;
+  settingsCopyText(JSON.stringify({[key]:settingsRowCurrentValue(row)},null,2),'Setting JSON');
+}
+function settingsApplyRowValue(row,mode){
+  const info=settingsMetaForRow(row);
+  if(!(info&&info.input&&info.meta))return false;
+  const value=mode==='default'?settingDefaultValue(info.meta):settingInheritedValueForTarget(info.meta,currentSettingsTarget);
+  setSettingsInputValue(info.input,info.meta,value);
+  markSettingsModified();
+  scheduleFilterSettings(0);
+  settingsShowRowDetails(row);
+  showToast((mode==='default'?'Default':'Inherited')+' applied: '+(info.meta.key||info.inputId),'info',1400);
+  return true;
+}
 function settingsOpenJsonView(){
   const snapshot=JSON.stringify(config||{},null,2);
   if(typeof addTab==='function'){
@@ -3994,9 +4022,10 @@ function settingsShowRowDetails(row){
     const defaultChip=document.createElement('span');defaultChip.className='detail-chip';defaultChip.textContent='Default: '+settingCompactDisplayValue(def,44);host.appendChild(defaultChip);
   }
   const actions=document.createElement('span');actions.className='detail-actions';
-  const addAction=(label,title,handler)=>{
+  const addAction=(label,title,handler,disabled)=>{
     const btn=document.createElement('button');btn.type='button';btn.textContent=label;btn.title=title;
-    btn.onclick=ev=>{ev.preventDefault();handler&&handler()};
+    btn.disabled=!!disabled;
+    btn.onclick=ev=>{ev.preventDefault();if(!btn.disabled)handler&&handler()};
     actions.appendChild(btn);
     return btn;
   };
@@ -4005,6 +4034,11 @@ function settingsShowRowDetails(row){
   addAction('Section','Jump to the current settings section',()=>settingsFocusActiveSection());
   addAction('Filter','Filter Settings to this setting ID',()=>settingsSearchForKey(key,currentSettingsTarget));
   addAction('Copy ID','Copy setting ID',()=>settingsCopyText(key,'Setting ID'));
+  addAction('Copy Value','Copy the current setting value',()=>settingsCopyRowValue(row));
+  addAction('Copy JSON','Copy this setting and current value as JSON',()=>settingsCopyRowJson(row));
+  addAction('Use Default','Apply the default value to this setting',()=>settingsApplyRowValue(row,'default'),!(info&&info.input&&info.meta));
+  addAction('Use Inherited','Apply the inherited value for the active target',()=>settingsApplyRowValue(row,'inherited'),!(info&&info.input&&info.meta));
+  addAction('Clear Override','Clear this target override',()=>settingsClearRowTargetOverride(row,info.meta,info.inputId),!(info&&info.meta&&info.inputId&&settingHasTargetValue(info.meta,currentSettingsTarget)));
   addAction('JSON','Open settings.json and copy this setting id',()=>settingsConfigureRowInJson(row,key));
   host.appendChild(actions);
 }
@@ -4070,6 +4104,7 @@ function settingsClearRowTargetOverride(row,meta,inputId){
   setTimeout(()=>row.classList.remove('highlight'),720);
   markSettingsModified();
   scheduleFilterSettings(0);
+  settingsShowRowDetails(row);
   showToast('Cleared '+(meta.key||inputId)+' for '+settingsBackendTargetName(currentSettingsTarget),'info',1600);
 }
 function applySettingsTargetValuesToInputs(target){
@@ -25542,6 +25577,7 @@ function settingsUiSelfCheckSnapshot(){
   const overview=document.querySelector('.settings-section-overview');
   const navItems=nav?Array.from(nav.querySelectorAll('.settings-nav-item')):[];
   const detail=$('settings-current-detail');
+  const detailActionLabels=detail?Array.from(detail.querySelectorAll('.detail-actions button')).map(btn=>String(btn.textContent||'')):[];
   return {
     pass:!!(modal&&nav&&main&&$('settings-nav-filter')&&$('settings-density-toggle')&&detail
       &&typeof settingsFilterNavCategories==='function'
@@ -25562,6 +25598,7 @@ function settingsUiSelfCheckSnapshot(){
     hasSectionContextActions:!!document.querySelector('.settings-section-context .section-actions'),
     hasCurrentDetail:!!detail,
     hasDetailActions:!!(detail&&detail.querySelector('.detail-actions')),
+    hasDetailValueActions:['Copy Value','Copy JSON','Use Default','Use Inherited','Clear Override'].every(label=>detailActionLabels.includes(label)),
     density:settingsReadDensity(),
     currentTarget:currentSettingsTarget,
     navItems:navItems.length,
@@ -25579,6 +25616,9 @@ window.selectSettingsTarget=selectSettingsTarget;
 window.scrollToSettingsSection=scrollToSettingsSection;
 window.settingsVisibleRows=settingsVisibleRows;
 window.settingsHighlightRow=settingsHighlightRow;
+window.settingsCopyRowValue=settingsCopyRowValue;
+window.settingsCopyRowJson=settingsCopyRowJson;
+window.settingsApplyRowValue=settingsApplyRowValue;
 window.settingsFocusVisibleRow=settingsFocusVisibleRow;
 window.settingsFocusBoundaryRow=settingsFocusBoundaryRow;
 window.settingsFocusPagedRow=settingsFocusPagedRow;

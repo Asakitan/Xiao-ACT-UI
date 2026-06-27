@@ -9687,6 +9687,9 @@ console.log("frontend word separator behavior ok");
             and "window.settingsClearFilters=settingsClearFilters;" in html
             and "window.settingsVisibleRows=settingsVisibleRows;" in html
             and "window.settingsHighlightRow=settingsHighlightRow;" in html
+            and "window.settingsCopyRowValue=settingsCopyRowValue;" in html
+            and "window.settingsCopyRowJson=settingsCopyRowJson;" in html
+            and "window.settingsApplyRowValue=settingsApplyRowValue;" in html
             and "window.settingsFocusActiveSection=settingsFocusActiveSection;" in html
             and "window.settingsFocusSiblingSection=settingsFocusSiblingSection;" in html
             and "window.settingsComputeReviewState=settingsComputeReviewState;" in html
@@ -9774,6 +9777,15 @@ console.log("frontend word separator behavior ok");
             and "Focus next visible setting" in html
             and "Jump to the current settings section" in html
             and "Filter Settings to this setting ID" in html
+            and "function settingsRowCurrentValue(row)" in html
+            and "function settingsCopyRowValue(row)" in html
+            and "function settingsCopyRowJson(row)" in html
+            and "function settingsApplyRowValue(row,mode)" in html
+            and "Copy Value','Copy the current setting value" in html
+            and "Copy JSON','Copy this setting and current value as JSON" in html
+            and "Use Default','Apply the default value to this setting" in html
+            and "Use Inherited','Apply the inherited value for the active target" in html
+            and "Clear Override','Clear this target override" in html
             and "settingsSearchForKey(key,currentSettingsTarget)" in html
             and "settingsSearchForKey(opts.key,opts.target||currentSettingsTarget)" in html
             and "detail-chip position" in html
@@ -9823,6 +9835,7 @@ console.log("frontend word separator behavior ok");
             and "hasNavHeading" in html
             and "hasNavCountPills" in html
             and "hasActiveNavRail" in html
+            and "hasDetailValueActions" in html
             and "window.settingsSearchForKey=settingsSearchForKey;" in html
             and "window.settingsFilterNavCategories=settingsFilterNavCategories;" in html
             and "window.settingsUiSelfCheckSnapshot=settingsUiSelfCheckSnapshot;" in html
@@ -9847,6 +9860,9 @@ console.log("frontend word separator behavior ok");
            and "result.snapshot.hasQueryBox" in settings_smoke_source
            and "result.snapshot.hasScopeControl" in settings_smoke_source
            and "result.snapshot.hasActiveNavRail" in settings_smoke_source
+           and "result.snapshot.hasDetailValueActions" in settings_smoke_source
+           and "\"Copy Value\"" in settings_smoke_source
+           and "\"Use Inherited\"" in settings_smoke_source
            and "settings.png" in settings_smoke_source
            and "channel: \"msedge\"" in settings_smoke_source
            and "PASS settings-ui-browser-smoke" in settings_smoke_source

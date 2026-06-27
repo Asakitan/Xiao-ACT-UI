@@ -150,7 +150,7 @@ async function main() {
   await page.screenshot({ path: shotPath, fullPage: false });
   await browser.close();
 
-  const requiredActions = ["Prev", "Next", "Section", "Filter", "Copy ID", "JSON"];
+  const requiredActions = ["Prev", "Next", "Section", "Filter", "Copy ID", "Copy Value", "Copy JSON", "Use Default", "Use Inherited", "Clear Override", "JSON"];
   const missingDetail = requiredActions.filter(action => !result.detailActions.includes(action));
   const requiredSection = ["Prev Section", "Next Section", "Search"];
   const missingSection = requiredSection.filter(action => !result.sectionActions.includes(action));
@@ -162,6 +162,9 @@ async function main() {
   }
   if (!result.snapshot.hasQueryBox || !result.snapshot.hasScopeControl || !result.snapshot.hasNavHeading || !result.snapshot.hasNavCountPills || !result.snapshot.hasActiveNavRail) {
     throw new Error("Settings selfcheck missing UI affordances: " + JSON.stringify(result.snapshot));
+  }
+  if (!result.snapshot.hasDetailValueActions) {
+    throw new Error("Settings selfcheck missing row value actions: " + JSON.stringify(result.snapshot));
   }
   if (!result.navFiltered || result.navFiltered.visible < 1 || !result.navCleared || result.navCleared.visible < result.navFiltered.visible) {
     throw new Error("Settings category filter did not behave as expected: " + JSON.stringify(result));
