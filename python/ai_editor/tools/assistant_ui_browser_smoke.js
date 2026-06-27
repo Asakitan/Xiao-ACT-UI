@@ -73,9 +73,11 @@ async function main() {
         }],
         providers: [{ id: "chat", name: "Chat" }]
       }),
-      run_workflow: (_id, _input, runId) => ok({
+      run_workflow: (_id, _input, runId, metadata) => ok({
         workflow: "assistant-selfcheck-flow",
         workflowRunId: runId,
+        workflowMode: metadata && metadata.workflowMode,
+        workflowAgents: metadata && metadata.workflowAgents,
         steps: [
           { step: 0, label: "Inspect", agent: "default", output_var: "inspection", output: "inspection ok" },
           { step: 1, label: "Review", agent: "reviewer", output_var: "review", output: "review ok" }
@@ -141,9 +143,12 @@ async function main() {
     "fork-branch-compare-summary-ready",
     "fork-branch-compare-delta-grid-ready",
     "workflow-popup-modes-ready",
+    "workflow-run-card-status-summary",
     "workflow-result-state-rendered",
+    "workflow-result-metadata-rendered",
     "workflow-run-button-active-state",
-    "workflow-backend-execution-rendered"
+    "workflow-backend-execution-rendered",
+    "workflow-backend-metadata-payload-ready"
   ];
   const checks = Array.isArray(result.checks) ? result.checks : [];
   const byName = new Map(checks.map(check => [check.name, check]));

@@ -8125,8 +8125,51 @@ class AIEditorAPI:
             "count": count,
         }
 
+    @staticmethod
+    def _workflow_result_payload(
+            wf: Any,
+            result: Dict,
+            input_text: str = "",
+            metadata: Optional[Dict] = None) -> Dict:
+        payload = dict(result or {})
+        steps = list(getattr(wf, "steps", []) or [])
+        payload.setdefault("workflow", getattr(wf, "id", ""))
+        payload.setdefault("workflowName", getattr(wf, "name", ""))
+        payload.setdefault("workflowDescription", getattr(wf, "description", ""))
+        payload.setdefault("workflowStepCount", len(steps))
+        payload.setdefault("workflowAgents", [
+            str(getattr(step, "agent", "") or "default") for step in steps])
+        payload.setdefault("workflowStepLabels", [
+            str(getattr(step, "label", "") or f"Step {idx + 1}")
+            for idx, step in enumerate(steps)])
+        payload.setdefault("workflowStepOutputVars", [
+            str(getattr(step, "output_var", "") or "") for step in steps])
+        payload.setdefault(
+            "workflowStatus",
+            "cancelled" if payload.get("cancelled")
+            else "error" if payload.get("error")
+            else "done")
+        payload.setdefault("inputPreview", str(input_text or "")[:300])
+        if isinstance(metadata, dict):
+            payload["workflowLaunch"] = {
+                key: metadata.get(key)
+                for key in (
+                    "workflowRunId", "workflowId", "workflowLabel",
+                    "workflowMode", "workflowStepCount", "workflowAgents",
+                    "workflowStepLabels", "workflowStepOutputVars",
+                    "sessionResource")
+                if key in metadata
+            }
+            if "workflowMode" in metadata:
+                payload.setdefault("workflowMode", metadata.get("workflowMode"))
+            if "sessionResource" in metadata:
+                payload.setdefault(
+                    "sessionResource", metadata.get("sessionResource"))
+        return payload
+
     def run_workflow(self, wf_id: str, input_text: str,
-                     run_id: str = "") -> Dict:
+                     run_id: str = "",
+                     metadata: Optional[Dict] = None) -> Dict:
         """Run a workflow from the UI. Executes in the calling thread."""
         self._ensure_engine()
         wf = self._wf_registry.get(wf_id)
@@ -8152,10 +8195,11 @@ class AIEditorAPI:
                 "preview": (output or "")[:300], "error": error})
 
         try:
-            return self._wf_engine.run(
+            result = self._wf_engine.run(
                 wf, input_text, _on_start, _on_end, run_id,
                 cancel_requested=(
                     cancel_event.is_set if cancel_event is not None else None))
+            return self._workflow_result_payload(wf, result, input_text, metadata)
         finally:
             self._forget_workflow_cancel_event(run_id)
 
@@ -8247,10 +8291,11 @@ class AIEditorAPI:
                     "available": [w.id for w in self._wf_registry.list_all()]}
         cancel_event = self._workflow_cancel_event(run_id)
         try:
-            return self._wf_engine.run(
+            result = self._wf_engine.run(
                 wf, input_text, run_id=run_id,
                 cancel_requested=(
                     cancel_event.is_set if cancel_event is not None else None))
+            return self._workflow_result_payload(wf, result, input_text, kw)
         finally:
             self._forget_workflow_cancel_event(run_id)
 

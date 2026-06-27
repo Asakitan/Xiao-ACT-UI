@@ -4015,18 +4015,23 @@ def test_phase1_ai_editor_regressions() -> None:
            and "async function deleteWorkflowFromPopup(id)" in html
            and "function workflowRunSummary(workflow)" in html
            and "function renderWorkflowLaunchSummary(body,launch)" in html
+           and "function refreshWorkflowRunCardState(card,forcedStatus)" in html
            and "function updateWorkflowRunStepStatus(runId,data)" in html
            and "function setAssistantWorkflowRunState(active,opts)" in html
            and "async function cancelAssistantWorkflowRun()" in html
            and "function workflowResultStatus(result)" in html
            and "function renderWorkflowResultSummary(body,result,launch)" in html
            and "async function runWorkflowEngineAsAssistant(workflow,inputText,launch,refs)" in html
-           and "call('run_workflow',id,inputText,launch.workflowRunId)" in html
+           and "call('run_workflow',id,inputText,launch.workflowRunId,workflowLaunchNativeMetadata(launch))" in html
            and "call('cancel_workflow',assistantWorkflowActiveRunId)" in html
            and "call('provider_cancel',activeProviderId||'chat')" in html
            and "if(!opts.forcePrompt&&id&&id!=='custom'&&api()&&api().run_workflow)" in html
            and "workflowStepOutputVars:workflowStepList(workflow).map" in html
            and "function runCustomWorkflowAsAssistant(inputSeed)" in html
+           and "function workflowLaunchNativeMetadata(launch)" in html
+           and "workflowLaunch:workflowRow" in html
+           and "session:{resource:assistantSessionResource(),id:assistantSessionState.id,type:assistantSessionState.type}" in html
+           and "next.workflowRunId=String(hasPatch('workflowRunId')?patch.workflowRunId" in html
            and "Workflow launch" in html
            and "workflowRunId:String" in html
            and "workflowStepLabels:workflowRunSummary(workflow).labels" in html
@@ -4368,7 +4373,8 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function normalizeChatAttachment(a)" in html
             and "function chatContextRefFromAttachment(a)" in html
             and "function drainPendingAttachmentsAsContext()" in html
-            and "function chatNativeRequestPayload(text,refs,toolHint,providerId)" in html
+            and "function chatNativeRequestPayload(text,refs,toolHint,providerId,workflowLaunch)" in html
+            and "session:{resource:assistantSessionResource(),id:assistantSessionState.id,type:assistantSessionState.type}" in html
             and "attachments:attachmentRefs" in html
             and "contentReferences:referenceRows" in html
             and "content_references:referenceRows" in html
@@ -5228,9 +5234,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'workflow-run-card-rendered'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-popup-mode-smoke'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-run-step-status-updates'" in html
+           and "assistantUiSelfCheckRecord(checks,'workflow-run-card-status-summary'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-result-state-rendered'" in html
+           and "assistantUiSelfCheckRecord(checks,'workflow-result-metadata-rendered'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-run-button-active-state'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-backend-execution-rendered'" in html
+           and "assistantUiSelfCheckRecord(checks,'workflow-backend-metadata-payload-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'provider-session-state-smoke'" in html
            and "function assistantWorkflowModeSmokeSnapshot()" in html
            and "function assistantActionResultRestoreSmokeSnapshot()" in html
@@ -5311,8 +5320,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "fork-branch-compare-detail-ready" in smoke_source
            and "fork-branch-compare-summary-ready" in smoke_source
            and "fork-branch-compare-delta-grid-ready" in smoke_source
+           and "workflow-run-card-status-summary" in smoke_source
            and "workflow-result-state-rendered" in smoke_source
+           and "workflow-result-metadata-rendered" in smoke_source
            and "workflow-run-button-active-state" in smoke_source
+           and "workflow-backend-metadata-payload-ready" in smoke_source
            and "channel: \"msedge\"" in smoke_source
            and "PASS assistant-ui-browser-smoke" in smoke_source
            and "SKIP assistant-ui-browser-smoke playwright unavailable" in smoke_source)
@@ -5320,6 +5332,16 @@ def test_phase1_ai_editor_regressions() -> None:
            "def cancel_workflow(self, run_id: str = \"\") -> Dict:" in app_source
            and "self._workflow_cancel_events" in app_source
            and "cancel_requested=(" in app_source)
+    _check("backend workflow returns run metadata",
+           "def _workflow_result_payload(" in app_source
+           and "workflowStepCount" in app_source
+           and "workflowAgents" in app_source
+           and "workflowStepLabels" in app_source
+           and "workflowStepOutputVars" in app_source
+           and "workflowLaunch" in app_source
+           and "workflowStatus" in app_source
+           and "return self._workflow_result_payload(wf, result, input_text, metadata)" in app_source
+           and "return self._workflow_result_payload(wf, result, input_text, kw)" in app_source)
     _check("frontend Assistant response part actions submit callback metadata",
            "function assistantSubmitResponsePartAction(part,action,value,button,opts)" in html
            and "call('assistant_response_part_action',payload)" in html

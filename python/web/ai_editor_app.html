@@ -1303,6 +1303,11 @@ pre.code-block code .type { color:var(--fg-type); }
 .workflow-run-icon { color:var(--fg-accent); font-size:14px; }
 .workflow-run-title { font-weight:600; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .workflow-run-meta { color:var(--fg-dim); font:10px var(--mono); }
+.workflow-run-state { margin-left:auto; color:var(--fg-dim); border:1px solid var(--border); border-radius:999px; padding:0 6px; font:10px var(--mono); }
+.workflow-run-card.running .workflow-run-state { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 55%,var(--border)); }
+.workflow-run-card.done .workflow-run-state { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 55%,var(--border)); }
+.workflow-run-card.error .workflow-run-state { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 55%,var(--border)); }
+.workflow-run-card.cancelled .workflow-run-state { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 55%,var(--border)); }
 .workflow-run-steps { display:flex; flex-direction:column; gap:4px; }
 .workflow-run-step { display:grid; grid-template-columns:18px minmax(0,1fr) auto auto; gap:6px; align-items:center; color:var(--fg); font-size:11px; }
 .workflow-run-step-index { color:var(--fg-dim); font:10px var(--mono); text-align:right; }
@@ -5288,6 +5293,7 @@ function syncAssistantSessionState(patch){
   const input=$('chat-input');
   const next=Object.assign({},assistantSessionState,patch||{});
   const controls=assistantSessionControlSnapshot();
+  const hasPatch=key=>!!(patch&&Object.prototype.hasOwnProperty.call(patch,key));
   next.updatedAt=Date.now();
   next.provider=String(controls.provider||next.provider||'');
   next.model=String(controls.model||next.model||'');
@@ -5296,8 +5302,8 @@ function syncAssistantSessionState(patch){
   next.agentId=String(controls.agentId||next.agentId||'');
   next.workflowId=String(controls.workflowId||next.workflowId||'');
   next.workflowLabel=String(controls.workflowLabel||next.workflowLabel||'');
-  next.workflowRunId=String(controls.workflowRunId||next.workflowRunId||'');
-  next.workflowMode=normalizeWorkflowMode(controls.workflowMode||next.workflowMode||assistantWorkflowMode);
+  next.workflowRunId=String(hasPatch('workflowRunId')?patch.workflowRunId:(controls.workflowRunId||next.workflowRunId||''));
+  next.workflowMode=normalizeWorkflowMode(hasPatch('workflowMode')?patch.workflowMode:(controls.workflowMode||next.workflowMode||assistantWorkflowMode));
   next.draft=input?String(input.value||''):String(next.draft||'');
   next.inputHasText=!!(next.draft&&next.draft.trim());
   next.context=patch&&Object.prototype.hasOwnProperty.call(patch,'context')
@@ -5359,7 +5365,10 @@ function noteAssistantChatRequest(text,refs,toolHint,meta){
     workflowId:String(launch.workflowId||assistantSessionState.workflowId||''),
     workflowLabel:String(launch.workflowLabel||assistantSessionState.workflowLabel||''),
     workflowStepCount:Number(launch.workflowStepCount||0),
-    workflowAgents:Array.isArray(launch.workflowAgents)?launch.workflowAgents:[]
+    workflowAgents:Array.isArray(launch.workflowAgents)?launch.workflowAgents:[],
+    workflowStepLabels:Array.isArray(launch.workflowStepLabels)?launch.workflowStepLabels:[],
+    workflowStepOutputVars:Array.isArray(launch.workflowStepOutputVars)?launch.workflowStepOutputVars:[],
+    workflowMode:normalizeWorkflowMode(launch.workflowMode||assistantSessionState.workflowMode||assistantWorkflowMode)
   };
 }
 function chatContextTextSample(value,max){
@@ -5504,20 +5513,36 @@ function drainPendingAttachmentsAsContext(){
   attachments=[];renderAttachments();
   return refs;
 }
-function chatNativeRequestPayload(text,refs,toolHint,providerId){
+function chatNativeRequestPayload(text,refs,toolHint,providerId,workflowLaunch){
   const normalizedRefs=(refs||[]).filter(Boolean);
   const attachmentRefs=normalizedRefs.filter(ref=>ref&&ref.attachment).map(ref=>ref.attachment);
   const referenceRows=normalizedRefs.map(ref=>({id:ref.id||'',kind:ref.kind||'ctx',label:ref.label||ref.id||'',preview:ref.preview||'',prompt:ref.prompt||''}));
   const usedRows=normalizedRefs.map(ref=>({id:ref.id||'',kind:ref.kind||'ctx',label:ref.label||ref.id||'',uri:ref.path||ref.uri||'',preview:ref.preview||''}));
+  const workflow=workflowLaunch&&typeof workflowLaunch==='object'?workflowLaunch:null;
+  const workflowRow=workflow?{
+    workflowRunId:String(workflow.workflowRunId||''),
+    workflowId:String(workflow.workflowId||''),
+    workflowLabel:String(workflow.workflowLabel||''),
+    workflowMode:normalizeWorkflowMode(workflow.workflowMode||assistantWorkflowMode),
+    workflowStepCount:Number(workflow.workflowStepCount||0),
+    workflowAgents:Array.isArray(workflow.workflowAgents)?workflow.workflowAgents.map(String):[],
+    workflowStepLabels:Array.isArray(workflow.workflowStepLabels)?workflow.workflowStepLabels.map(String):[],
+    workflowStepOutputVars:Array.isArray(workflow.workflowStepOutputVars)?workflow.workflowStepOutputVars.map(String):[]
+  }:null;
   return {
     text:String(text||''),toolHint:String(toolHint||''),providerId:String(providerId||config.provider||''),
+    session:{resource:assistantSessionResource(),id:assistantSessionState.id,type:assistantSessionState.type},
+    workflow:workflowRow,
+    workflowLaunch:workflowRow,
+    workflow_launch:workflowRow,
     references:referenceRows,
     contentReferences:referenceRows,
     content_references:referenceRows,
     attachments:attachmentRefs,
     usedContext:usedRows,
     used_context:usedRows,
-    contextSummary:usedRows.length?usedRows.length+' attached context item'+(usedRows.length===1?'':'s'):''
+    contextSummary:usedRows.length?usedRows.length+' attached context item'+(usedRows.length===1?'':'s'):'',
+    workflowSummary:workflowRow&&workflowRow.workflowId?(workflowRow.workflowLabel||workflowRow.workflowId)+' · '+workflowRow.workflowStepCount+' steps':''
   };
 }
 function renderChatReferences(body,refs){
@@ -8203,6 +8228,8 @@ function assistantWorkflowRunCardSnapshot(card){
     workflowRunId:String(el.dataset.workflowRunId||''),
     workflowStepCount:Number(el.dataset.workflowStepCount||0),
     workflowAgents:String(el.dataset.workflowAgents||''),
+    workflowRunStatus:String(el.dataset.workflowRunStatus||''),
+    stateText:el.querySelector('.workflow-run-state')?String(el.querySelector('.workflow-run-state').textContent||''):'',
     renderedSteps:steps.length,
     statuses,
     outputs,
@@ -8212,7 +8239,7 @@ function assistantWorkflowRunCardSnapshot(card){
 }
 function assistantWorkflowResultStateSnapshot(){
   const body=document.createElement('div');
-  const ok=renderWorkflowResultSummary(body,{workflow:'ok-flow',workflowRunId:'wf-ok',steps:[{step:0,label:'Ok',agent:'default',output_var:'ok',output:'done'}],final_output:'done'},{workflowLabel:'Ok Flow'});
+  const ok=renderWorkflowResultSummary(body,{workflow:'ok-flow',workflowRunId:'wf-ok',workflowMode:'on',workflowAgents:['default'],steps:[{step:0,label:'Ok',agent:'default',output_var:'ok',output:'done'}],final_output:'done'},{workflowLabel:'Ok Flow',workflowMode:'on',workflowAgents:['default']});
   const err=renderWorkflowResultSummary(body,{workflow:'err-flow',workflowRunId:'wf-err',error:'failed step',steps:[{step:0,label:'Err',agent:'default',output_var:'err',error:'failed step'}]},{workflowLabel:'Err Flow'});
   const cancelled=renderWorkflowResultSummary(body,{workflow:'cancel-flow',workflowRunId:'wf-cancel',cancelled:true,message:'cancel requested',steps:[]},{workflowLabel:'Cancel Flow'});
   return {
@@ -8222,7 +8249,9 @@ function assistantWorkflowResultStateSnapshot(){
     badgeCount:body.querySelectorAll('.workflow-result-status').length,
     messageCount:body.querySelectorAll('.workflow-result-message').length,
     errorClass:!!(err&&err.classList.contains('error')),
-    cancelClass:!!(cancelled&&cancelled.classList.contains('cancelled'))
+    cancelClass:!!(cancelled&&cancelled.classList.contains('cancelled')),
+    okMode:ok?String(ok.dataset.workflowMode||''):'',
+    okAgents:ok?String(ok.dataset.workflowAgents||''):''
   };
 }
 function assistantWorkflowRunButtonSnapshot(){
@@ -8329,11 +8358,11 @@ async function assistantWorkflowBackendExecutionSnapshot(){
   const calls=[];
   window.pywebview=window.pywebview||{};
   window.pywebview.api=Object.assign({},previousApi||{},{
-    run_workflow:async(id,input,runId)=>{
-      calls.push({id,input,runId});
+    run_workflow:async(id,input,runId,metadata)=>{
+      calls.push({id,input,runId,metadata});
       onWorkflowStep({workflowRunId:runId,workflowId:id,step:0,total:2,label:'Inspect',agent:'default',output_var:'inspection',status:'running'});
       onWorkflowStep({workflowRunId:runId,workflowId:id,step:0,total:2,label:'Inspect',agent:'default',output_var:'inspection',status:'done',preview:'inspection ok'});
-      return {workflow:id,workflowRunId:runId,steps:[
+      return {workflow:id,workflowRunId:runId,workflowMode:metadata&&metadata.workflowMode,workflowAgents:metadata&&metadata.workflowAgents,steps:[
         {step:0,label:'Inspect',agent:'default',output_var:'inspection',output:'inspection ok'},
         {step:1,label:'Review',agent:'reviewer',output_var:'review',output:'review ok'}
       ],final_output:'review ok'};
@@ -8353,10 +8382,16 @@ async function assistantWorkflowBackendExecutionSnapshot(){
     ok:!!ok,
     callCount:calls.length,
     runId:calls[0]?calls[0].runId:'',
+    metadataMode:calls[0]&&calls[0].metadata?String(calls[0].metadata.workflowMode||''):'',
+    metadataSession:calls[0]&&calls[0].metadata?String(calls[0].metadata.sessionResource||''):'',
+    metadataStepCount:calls[0]&&calls[0].metadata?Number(calls[0].metadata.workflowStepCount||0):0,
     createdCount:created.length,
     planExists:!!plan,
+    planStatus:plan?String(plan.dataset.workflowRunStatus||''):'',
     resultExists:!!result,
     resultStatus:result?String(result.dataset.workflowResultStatus||''):'',
+    resultMode:result?String(result.dataset.workflowMode||''):'',
+    resultAgents:result?String(result.dataset.workflowAgents||''):'',
     resultStepCount:result?result.querySelectorAll('.workflow-result-step').length:0,
     resultOutputs:result?Array.from(result.querySelectorAll('.workflow-result-step')).map(step=>String(step.dataset.workflowStepOutputVar||'')):[],
     finalText:created.length?String(created[created.length-1].textContent||''):''
@@ -8441,7 +8476,7 @@ async function runAssistantUiSelfCheck(opts){
   const workflowBody=document.createElement('div');
   workflowBody.style.display='none';
   document.body.appendChild(workflowBody);
-  const workflowCard=renderWorkflowLaunchSummary(workflowBody,{workflowId:'selfcheck-flow',workflowLabel:'Selfcheck Flow',workflowRunId:'wf-selfcheck',workflowStepCount:2,workflowAgents:['default','reviewer'],workflowStepLabels:['Inspect','Review'],workflowStepOutputVars:['inspection','review']});
+  const workflowCard=renderWorkflowLaunchSummary(workflowBody,{workflowId:'selfcheck-flow',workflowLabel:'Selfcheck Flow',workflowRunId:'wf-selfcheck',workflowMode:'on',workflowStepCount:2,workflowAgents:['default','reviewer'],workflowStepLabels:['Inspect','Review'],workflowStepOutputVars:['inspection','review']});
   const workflowStatusUpdated=updateWorkflowRunStepStatus('wf-selfcheck',{workflowRunId:'wf-selfcheck',step:0,status:'running',label:'Inspect',agent:'default',output_var:'inspection'})
     && updateWorkflowRunStepStatus('wf-selfcheck',{workflowRunId:'wf-selfcheck',step:1,status:'done',label:'Review',agent:'reviewer',output_var:'review',preview:'ok'});
   const workflowRunCard=assistantWorkflowRunCardSnapshot(workflowCard);
@@ -8495,10 +8530,13 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready',workflowEditor.modalExists&&workflowEditor.editorExists&&workflowEditor.rowCount===2&&workflowEditor.labelInputs===2&&workflowEditor.agentInputs===2&&workflowEditor.outputInputs===2&&workflowEditor.promptInputs===2&&workflowEditor.moveButtons===4&&workflowEditor.deleteButtons===2&&workflowEditor.addButtonExists&&workflowEditor.collectedCount===2&&workflowEditor.idReadOnly,JSON.stringify(workflowEditor));
   assistantUiSelfCheckRecord(checks,'workflow-run-card-rendered',workflowRunCard.exists&&workflowRunCard.workflowId==='selfcheck-flow'&&workflowRunCard.workflowRunId==='wf-selfcheck'&&workflowRunCard.workflowStepCount===2&&workflowRunCard.renderedSteps===2&&workflowRunCard.agentChipCount===2,JSON.stringify(workflowRunCard));
   assistantUiSelfCheckRecord(checks,'workflow-run-step-status-updates',workflowStatusUpdated&&workflowRunCard.statuses[0]==='running'&&workflowRunCard.statuses[1]==='done'&&workflowRunCard.outputs[0]==='inspection'&&workflowRunCard.outputs[1]==='review',JSON.stringify(workflowRunCard));
+  assistantUiSelfCheckRecord(checks,'workflow-run-card-status-summary',workflowRunCard.workflowRunStatus==='running'&&workflowRunCard.stateText==='running',JSON.stringify(workflowRunCard));
   assistantUiSelfCheckRecord(checks,'workflow-result-state-rendered',workflowResultState.okStatus==='done'&&workflowResultState.errorStatus==='error'&&workflowResultState.cancelStatus==='cancelled'&&workflowResultState.badgeCount===3&&workflowResultState.messageCount===2&&workflowResultState.errorClass&&workflowResultState.cancelClass,JSON.stringify(workflowResultState));
+  assistantUiSelfCheckRecord(checks,'workflow-result-metadata-rendered',workflowResultState.okMode==='on'&&workflowResultState.okAgents==='default',JSON.stringify(workflowResultState));
   assistantUiSelfCheckRecord(checks,'workflow-run-button-active-state',workflowButtonState.exists&&workflowButtonState.active.text==='■'&&workflowButtonState.active.running&&workflowButtonState.active.disabled===false&&workflowButtonState.cancelling.title==='Cancelling workflow run',JSON.stringify(workflowButtonState));
   const workflowBackend=await assistantWorkflowBackendExecutionSnapshot();
   assistantUiSelfCheckRecord(checks,'workflow-backend-execution-rendered',workflowBackend.ok&&workflowBackend.callCount===1&&workflowBackend.planExists&&workflowBackend.resultExists&&workflowBackend.resultStatus==='done'&&workflowBackend.resultStepCount===2&&workflowBackend.resultOutputs[0]==='inspection'&&workflowBackend.resultOutputs[1]==='review'&&workflowBackend.finalText.includes('review ok'),JSON.stringify(workflowBackend));
+  assistantUiSelfCheckRecord(checks,'workflow-backend-metadata-payload-ready',workflowBackend.metadataMode===assistantWorkflowMode&&workflowBackend.metadataSession.startsWith('sao-ai-chat://')&&workflowBackend.metadataStepCount===2&&workflowBackend.planStatus==='done'&&workflowBackend.resultMode===assistantWorkflowMode&&workflowBackend.resultAgents.includes('default'),JSON.stringify(workflowBackend));
 
   const previousAttachments=attachments.slice();
   attachments=[];
@@ -19366,7 +19404,11 @@ function renderWorkflowLaunchSummary(body,launch){
   const meta=document.createElement('span');
   meta.className='workflow-run-meta';
   meta.textContent=[stepCount?stepCount+' steps':'workflow',launch.workflowRunId?String(launch.workflowRunId):''].filter(Boolean).join(' · ');
-  head.appendChild(icon);head.appendChild(title);head.appendChild(meta);
+  const state=document.createElement('span');
+  state.className='workflow-run-state';
+  state.textContent='pending';
+  state.title='Workflow run status';
+  head.appendChild(icon);head.appendChild(title);head.appendChild(meta);head.appendChild(state);
   card.appendChild(head);
   const list=document.createElement('div');
   list.className='workflow-run-steps';
@@ -19394,8 +19436,30 @@ function renderWorkflowLaunchSummary(body,launch){
     list.appendChild(row);
   }
   if(count)card.appendChild(list);
+  refreshWorkflowRunCardState(card);
   body.appendChild(card);
   return card;
+}
+function refreshWorkflowRunCardState(card,forcedStatus){
+  if(!card)return '';
+  const rows=Array.from(card.querySelectorAll('.workflow-run-step'));
+  const statuses=rows.map(row=>String(row.dataset.workflowStepStatus||'pending'));
+  let status=String(forcedStatus||'').toLowerCase();
+  if(!status){
+    if(statuses.includes('error'))status='error';
+    else if(statuses.includes('running'))status='running';
+    else if(statuses.length&&statuses.every(value=>value==='done'))status='done';
+    else status='pending';
+  }
+  card.classList.remove('running','done','error','cancelled');
+  if(status!=='pending')card.classList.add(status);
+  card.dataset.workflowRunStatus=status;
+  const badge=card.querySelector('.workflow-run-state');
+  if(badge){
+    badge.textContent=status;
+    badge.title='Workflow run status: '+status;
+  }
+  return status;
 }
 function workflowRunStepStatusText(status){
   const value=String(status||'pending').toLowerCase();
@@ -19436,6 +19500,7 @@ function updateWorkflowRunStepStatus(runId,data){
     else if(data&&data.preview)bits.push(String(data.preview));
     badge.title=bits.join(' · ')||status;
   }
+  refreshWorkflowRunCardState(card,data&&data.cancelled?'cancelled':'');
   return true;
 }
 function workflowResultSteps(result){
@@ -19458,6 +19523,8 @@ function renderWorkflowResultSummary(body,result,launch){
   card.dataset.workflowRunId=String((launch&&launch.workflowRunId)||result&&result.workflowRunId||'');
   card.dataset.workflowStepCount=String(steps.length);
   card.dataset.workflowResultStatus=status;
+  card.dataset.workflowMode=String((launch&&launch.workflowMode)||result&&result.workflowMode||'');
+  card.dataset.workflowAgents=(Array.isArray(result&&result.workflowAgents)?result.workflowAgents:(launch&&launch.workflowAgents)||[]).map(String).join(',');
   const head=document.createElement('div');head.className='workflow-result-head';
   const title=document.createElement('span');title.className='workflow-result-title';
   title.textContent=String((launch&&launch.workflowLabel)||result&&result.workflow||'Workflow result');
@@ -19526,6 +19593,20 @@ function workflowLaunchPrompt(workflow,inputText,runId){
   }
   return lines.join('\n');
 }
+function workflowLaunchNativeMetadata(launch){
+  const src=launch&&typeof launch==='object'?launch:{};
+  return {
+    workflowRunId:String(src.workflowRunId||''),
+    workflowId:String(src.workflowId||''),
+    workflowLabel:String(src.workflowLabel||''),
+    workflowMode:normalizeWorkflowMode(src.workflowMode||assistantWorkflowMode),
+    workflowStepCount:Number(src.workflowStepCount||0),
+    workflowAgents:Array.isArray(src.workflowAgents)?src.workflowAgents.map(String):[],
+    workflowStepLabels:Array.isArray(src.workflowStepLabels)?src.workflowStepLabels.map(String):[],
+    workflowStepOutputVars:Array.isArray(src.workflowStepOutputVars)?src.workflowStepOutputVars.map(String):[],
+    sessionResource:assistantSessionResource()
+  };
+}
 function workflowDisplayText(workflow,inputText,runId){
   const name=controlItemName(workflow)||controlItemId(workflow)||'Workflow';
   const summary=workflowRunSummary(workflow);
@@ -19573,7 +19654,7 @@ async function runWorkflowEngineAsAssistant(workflow,inputText,launch,refs){
   syncAssistantSessionState({workflowRunId:launch.workflowRunId,workflowMode:assistantWorkflowMode,requestInProgress:true});
   setAssistantWorkflowRunState(true,{runId:launch.workflowRunId,cancelRequested:false});
   let result=null;
-  try{result=await call('run_workflow',id,inputText,launch.workflowRunId)}
+  try{result=await call('run_workflow',id,inputText,launch.workflowRunId,workflowLaunchNativeMetadata(launch))}
   catch(e){result={error:String(e&&e.message||e)}}
   pending.remove();
   const wasCancelled=assistantWorkflowCancelRequested&&assistantWorkflowActiveRunId===String(launch.workflowRunId||'');
@@ -19619,6 +19700,7 @@ async function runWorkflowObjectAsAssistant(workflow,inputText,opts){
     workflowRunId:runId,
     workflowId:String(id||''),
     workflowLabel:workflowName,
+    workflowMode:normalizeWorkflowMode(assistantWorkflowMode),
     workflowStepCount:workflowStepList(workflow).length,
     workflowAgents:workflowAgentList(workflow),
     workflowStepLabels:workflowRunSummary(workflow).labels,
@@ -28539,7 +28621,7 @@ async function sendAssistantTextRequest(rawText,opts){
   const agentMode=currentMode==='agent'||currentApproval==='autopilot'||currentApproval==='bypass';
   const baseSendText=toolHint?'Use the '+toolHint+' tool: '+text:text;
   const sendText=chatPromptWithReferences(baseSendText,sendContext.refs);
-  const nativeRequest=chatNativeRequestPayload(text,sendContext.refs,toolHint,config.provider);
+  const nativeRequest=chatNativeRequestPayload(text,sendContext.refs,toolHint,config.provider,opts.workflowLaunch);
   await call('send_message',sendText,{provider:config.provider,model:config.model,chat_session:requestMeta,native_request:nativeRequest,attachments:nativeRequest.attachments,usedContext:nativeRequest.usedContext},agentMode);
   return true;
 }
