@@ -1586,6 +1586,9 @@ class _AIEditorUIBridge:
         elif str(view_id or "").strip():
             self._api.webview_set_state(view_id, state_to_render)
         option_payload = options if isinstance(options, dict) else {}
+        nested_webview_options = option_payload.get("webviewOptions")
+        if not isinstance(nested_webview_options, dict):
+            nested_webview_options = {}
         prepared = self._api._prepare_extension_webview_html(
             html, local_resource_roots, view_id=view_id)
         self._api._emit("render_webview_panel", {
@@ -1595,7 +1598,10 @@ class _AIEditorUIBridge:
             "title": str(title or ""),
             "options": _json_safe(option_payload),
             "retainContextWhenHidden": bool(
-                option_payload.get("retainContextWhenHidden", False)),
+                option_payload.get(
+                    "retainContextWhenHidden",
+                    nested_webview_options.get(
+                        "retainContextWhenHidden", False))),
         })
 
     def get_webview_state(self, view_id: str) -> Any:
@@ -1650,6 +1656,12 @@ class _AIEditorUIBridge:
             return
         payload = dict(metadata or {})
         title = str(payload.get("title") or normalized_view_id)
+        option_payload = (
+            payload.get("options") if isinstance(
+                payload.get("options"), dict) else {})
+        nested_webview_options = (
+            option_payload.get("webviewOptions")
+            if isinstance(option_payload.get("webviewOptions"), dict) else {})
         record = {
             "id": normalized_view_id,
             "provider_id": normalized_view_id,
@@ -1661,11 +1673,14 @@ class _AIEditorUIBridge:
             "description": str(payload.get("description") or ""),
             "badge": _json_safe(payload.get("badge")),
             "visible": bool(payload.get("visible", True)),
-            "options": _json_safe(
-                payload.get("options") if isinstance(
-                    payload.get("options"), dict) else {}),
+            "options": _json_safe(option_payload),
             "retainContextWhenHidden": bool(
-                payload.get("retainContextWhenHidden", False)),
+                payload.get(
+                    "retainContextWhenHidden",
+                    option_payload.get(
+                        "retainContextWhenHidden",
+                        nested_webview_options.get(
+                            "retainContextWhenHidden", False)))),
             "runtime_mode": "extension-webview",
             "requested_transport": "webviewView",
             "source": str(payload.get("source") or "runtime_webview"),
@@ -9283,6 +9298,7 @@ class AIEditorAPI:
             return
         if event != "chat_participant_registered":
             return
+        ext_id = str(payload.get("extensionId") or "")
         existing = self._node_chat_participant_disposables.pop(pid, None)
         if existing is not None and hasattr(existing, "dispose"):
             existing.dispose()
@@ -9290,6 +9306,7 @@ class AIEditorAPI:
             pid,
             lambda req, ctx, stream, token, _pid=pid:
             self._invoke_node_chat_participant(_pid, req, ctx, stream, token),
+            extension_id=ext_id,
         )
         self._node_chat_participant_disposables[pid] = cp
         registry = getattr(self, "_provider_registry", None)
@@ -9297,7 +9314,6 @@ class AIEditorAPI:
             return
         manifest = self._manifest_chat_participant(pid)
         from ai_editor.chat_providers import ChatProviderDef
-        ext_id = str(payload.get("extensionId") or "")
         registry.register(ChatProviderDef(
             id=provider_id,
             name=str(
@@ -13397,10 +13413,20 @@ class AIEditorAPI:
             if errors:
                 state["treeError"] = errors[-1]
             return state
+        node_webview_state: Dict[str, Any] = {}
+        node_host = getattr(self, "_node_ext_host", None)
+        node_state_getter = (
+            getattr(node_host, "webview_view_provider_state", None)
+            if node_host is not None else None)
+        if callable(node_state_getter):
+            try:
+                node_webview_state = _as_dict(node_state_getter(view_id))
+            except Exception:
+                node_webview_state = {}
         webview_provider = self._vscode_ns._webview_view_providers.get(view_id, {})
         webview_view = self._vscode_ns._webview_views.get(view_id)
-        if webview_provider or webview_view:
-            if webview_view is None:
+        if webview_provider or webview_view or node_webview_state:
+            if webview_view is None and webview_provider:
                 provider = webview_provider.get("provider")
                 self._vscode_ns._register_webview_view_provider(view_id, provider)
                 webview_view = self._vscode_ns._webview_views.get(view_id)
@@ -13411,23 +13437,35 @@ class AIEditorAPI:
                 if webview is not None else {})
             if not isinstance(webview_options, dict):
                 webview_options = {}
+            if not webview_options:
+                webview_options = _as_dict(node_webview_state.get("options"))
             return {
                 "ok": True,
                 "kind": "webviewView",
                 "runtimeAvailable": True,
                 "runtimeMessage": "Runtime webview provider registered.",
                 "message": getattr(webview_view, "message", ""),
-                "title": getattr(webview_view, "title", view_id),
-                "description": getattr(webview_view, "description", ""),
-                "badge": getattr(webview_view, "badge", None),
+                "title": (
+                    node_webview_state.get("title")
+                    or getattr(webview_view, "title", view_id)),
+                "description": (
+                    node_webview_state.get("description")
+                    or getattr(webview_view, "description", "")),
+                "badge": (
+                    node_webview_state.get("badge")
+                    if "badge" in node_webview_state
+                    else getattr(webview_view, "badge", None)),
                 "titleActions": self._view_title_actions(view_id),
                 "welcome": welcome,
                 "html": getattr(webview, "html", ""),
                 "state": getattr(webview, "state", None),
                 "options": dict(webview_options),
                 "retainContextWhenHidden": bool(
-                    webview_options.get("retainContextWhenHidden")),
-                "visible": bool(getattr(webview_view, "visible", False)),
+                    webview_options.get("retainContextWhenHidden")
+                    or node_webview_state.get("retainContextWhenHidden")),
+                "visible": bool(
+                    node_webview_state.get(
+                        "visible", getattr(webview_view, "visible", False))),
             }
         manifest_view = self._manifest_view(view_id)
         if manifest_view:

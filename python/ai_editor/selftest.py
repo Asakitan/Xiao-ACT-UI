@@ -20262,6 +20262,238 @@ async function activate(context) {
 }
 module.exports = { activate };
 """)
+            node_combined_surface_desc = _node_surface_desc(
+                "combined-surface",
+                {
+                    "name": "node-combined-surface",
+                    "publisher": "selftest",
+                    "version": "0.0.1",
+                    "displayName": "Node Combined Surface",
+                    "main": "./extension.js",
+                    "activationEvents": [
+                        "onCommand:selftest.combinedSurface.probe",
+                    ],
+                    "contributes": {
+                        "viewsContainers": {
+                            "activitybar": [{
+                                "id": "combined.surface.container",
+                                "title": "Combined Surface",
+                            }],
+                        },
+                        "views": {
+                            "combined.surface.container": [{
+                                "id": "combined.surface.tree",
+                                "name": "Combined Tree",
+                            }, {
+                                "id": "combined.surface.webview",
+                                "name": "Combined Webview",
+                                "type": "webview",
+                            }],
+                        },
+                        "customEditors": [{
+                            "viewType": "combined.surface.custom",
+                            "displayName": "Combined Custom",
+                            "selector": [{"filenamePattern": "*.combined"}],
+                        }],
+                        "notebooks": [{
+                            "type": "combined-surface-notebook",
+                            "displayName": "Combined Notebook",
+                            "selector": [{
+                                "filenamePattern": "*.combinednb",
+                            }],
+                        }],
+                        "terminal": [{
+                            "id": "combined.surface.profile",
+                            "title": "Combined Terminal",
+                        }],
+                        "commands": [{
+                            "command": "selftest.combinedSurface.probe",
+                            "title": "Combined Surface Probe",
+                        }],
+                        "menus": {
+                            "view/title": [{
+                                "command": "selftest.combinedSurface.probe",
+                                "when": "view == combined.surface.tree",
+                                "group": "navigation@1",
+                            }],
+                            "view/item/context": [{
+                                "command": "selftest.combinedSurface.probe",
+                                "when": (
+                                    "view == combined.surface.tree "
+                                    "&& viewItem == combinedRoot"),
+                                "group": "inline@1",
+                            }],
+                        },
+                    },
+                },
+                r"""
+const vscode = require('vscode');
+class CombinedTreeProvider {
+  constructor() {
+    this._onDidChangeTreeData = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this._onDidChangeTreeData.event;
+  }
+  getChildren() {
+    return [{ id: 'combinedRoot', label: 'Combined Root' }];
+  }
+  getTreeItem(element) {
+    const item = new vscode.TreeItem(
+      element.label,
+      vscode.TreeItemCollapsibleState.None
+    );
+    item.id = element.id;
+    item.contextValue = 'combinedRoot';
+    item.description = 'dynamic';
+    item.tooltip = 'Combined runtime root';
+    item.command = {
+      command: 'selftest.combinedSurface.probe',
+      title: 'Probe Combined Surface',
+      arguments: ['tree'],
+    };
+    return item;
+  }
+}
+async function activate(context) {
+  const treeProvider = new CombinedTreeProvider();
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider(
+      'combined.surface.tree',
+      treeProvider
+    )
+  );
+  const tree = vscode.window.createTreeView('combined.surface.tree', {
+    treeDataProvider: treeProvider,
+  });
+  tree.title = 'Combined Runtime Tree';
+  tree.description = 'combined subtitle';
+  tree.message = 'combined tree ready';
+  tree.badge = { value: 3, tooltip: 'combined badge' };
+  context.subscriptions.push(tree);
+  context.subscriptions.push(vscode.window.registerWebviewViewProvider(
+    'combined.surface.webview',
+    {
+      resolveWebviewView(view) {
+        view.title = 'Combined Runtime Webview';
+        view.description = 'combined webview';
+        view.badge = { value: 2, tooltip: 'combined webview' };
+        view.webview.html = '<main data-combined="webview"></main>';
+      },
+    },
+    { webviewOptions: { retainContextWhenHidden: true } }
+  ));
+  context.subscriptions.push(vscode.window.registerCustomEditorProvider(
+    'combined.surface.custom',
+    {
+      resolveCustomTextEditor(document, panel) {
+        panel.webview.html = '<main data-combined="custom">' +
+          document.uri.toString() + '</main>';
+      },
+    }
+  ));
+  context.subscriptions.push(vscode.workspace.registerNotebookSerializer(
+    'combined-surface-notebook',
+    {
+      deserializeNotebook(data) {
+        return new vscode.NotebookData([
+          new vscode.NotebookCellData(
+            vscode.NotebookCellKind.Code,
+            '1 + 1',
+            'javascript'
+          ),
+        ]);
+      },
+      serializeNotebook(data) {
+        return new TextEncoder().encode(JSON.stringify({
+          cells: data.cells.length,
+        }));
+      },
+    }
+  ));
+  const controller = vscode.window.createNotebookController(
+    'combined.surface.controller',
+    'combined-surface-notebook',
+    'Combined Controller',
+    async () => {}
+  );
+  context.subscriptions.push(controller);
+  context.subscriptions.push(vscode.window.registerTerminalProfileProvider(
+    'combined.surface.profile',
+    {
+      provideTerminalProfile() {
+        return new vscode.TerminalProfile({
+          name: 'Combined Surface Terminal',
+          env: { COMBINED_SURFACE: '1' },
+          isTransient: true,
+        });
+      },
+    }
+  ));
+  context.subscriptions.push(vscode.lm.registerTool(
+    'combined_surface_tool',
+    {
+      description: 'Combined surface tool',
+      inputSchema: {
+        type: 'object',
+        properties: { value: { type: 'string' } },
+      },
+      invoke(options) {
+        const value = options && options.input && options.input.value || '';
+        return new vscode.LanguageModelToolResult([
+          new vscode.LanguageModelTextPart('combined-tool:' + value),
+        ]);
+      },
+    }
+  ));
+  context.subscriptions.push(vscode.lm.registerLanguageModelChatProvider(
+    'combined.surface.vendor',
+    {
+      provideLanguageModelChatInformation() {
+        return [{
+          id: 'combined-surface-model',
+          name: 'Combined Surface Model',
+          vendor: 'combined.surface.vendor',
+          family: 'combined',
+          version: '1',
+        }];
+      },
+      provideTokenCount(model, text) {
+        return String(text || '').length;
+      },
+      async provideLanguageModelChatResponse(model, messages, options, progress) {
+        progress.report(new vscode.LanguageModelTextPart(
+          'combined-model:' + messages.length
+        ));
+      },
+    }
+  ));
+  context.subscriptions.push(vscode.chat.createChatParticipant(
+    'combined.surface.chat',
+    (request, chatContext, response) => {
+      response.markdown('combined-chat:' + request.prompt);
+    }
+  ));
+  context.subscriptions.push(vscode.chat.registerChatExplicitContextProvider(
+    'combined.surface.context',
+    {
+      provideExplicitChatContext() {
+        return [{
+          label: 'Combined Context',
+          value: 'combined-context',
+          modelDescription: 'combined context provider',
+        }];
+      },
+    }
+  ));
+  context.subscriptions.push(vscode.commands.registerCommand(
+    'selftest.combinedSurface.probe',
+    (source) => ({
+      source: source || 'command',
+      extensionId: context.extension && context.extension.id,
+    })
+  ));
+}
+module.exports = { activate };
+""")
             node_extension_js = r"""
 const vscode = require('vscode');
 const fs = require('node:fs');
@@ -24808,6 +25040,7 @@ process.stdin.resume();
             api._ext_host.registry.register(node_surface_lm_provider_desc)
             api._ext_host.registry.register(node_surface_chat_desc)
             api._ext_host.registry.register(node_surface_context_desc)
+            api._ext_host.registry.register(node_combined_surface_desc)
             class _NodeUiBridge:
                 def __init__(self) -> None:
                     self.webviews = {}
@@ -25219,6 +25452,7 @@ process.stdin.resume();
                         node_surface_lm_provider_desc,
                         node_surface_chat_desc,
                         node_surface_context_desc,
+                        node_combined_surface_desc,
                     ])
                     api._install_node_activation_event_bridge()
                     node_host.send_settings_sync({
@@ -25332,6 +25566,11 @@ process.stdin.resume();
                     "context": node_surface_context_desc.id
                     not in node_host._activated_ids,
                 }
+                combined_surface_before = (
+                    node_combined_surface_desc.id
+                    not in node_host._activated_ids)
+                combined_surface_custom_file = os.path.join(
+                    node_tree_tmp, "combined-surface.combined")
                 if node_started:
                     node_host._send({
                         "type": "resolve_webview_view",
@@ -30792,6 +31031,86 @@ process.stdin.resume();
                             == "included"),
                        json.dumps(node_dynamic_chat_result,
                                   ensure_ascii=False, default=str))
+                if node_started:
+                    try:
+                        combined_surface_probe = (
+                            api._ext_host.commands.execute(
+                                "selftest.combinedSurface.probe"))
+                    except Exception as exc:
+                        combined_surface_probe = {"_error": str(exc)}
+                    combined_surface_after = _wait_until(
+                        lambda: (
+                            node_combined_surface_desc.id
+                            in node_host._activated_ids),
+                        timeout=3.0)
+                    node_host._send({
+                        "type": "resolve_webview_view",
+                        "viewType": "combined.surface.webview",
+                        "state": {"from": "combined"},
+                    })
+                    combined_surface_webview_ready = _wait_until(
+                        lambda: any(
+                            item.get("view_type")
+                            == "combined.surface.webview"
+                            and item.get("metadata", {}).get("title")
+                            == "Combined Runtime Webview"
+                            for item in
+                            node_ui_bridge.webview_view_metadata.values()),
+                        timeout=3.0)
+                    with open(combined_surface_custom_file, "w",
+                              encoding="utf-8") as fh:
+                        fh.write("combined custom")
+                    combined_surface_custom_result = (
+                        node_host.request_custom_editor_result(
+                            "combined.surface.custom",
+                            Uri.file(combined_surface_custom_file).to_string(),
+                            title="Combined Surface Custom",
+                            timeout=3.0))
+                    combined_terminal_event_start = len(
+                        node_ui_bridge.terminal_events)
+                    combined_terminal_shell_start = len(
+                        node_host._terminal_shell_integrations)
+                    combined_surface_terminal_result = (
+                        node_host.request_terminal_profile_result(
+                            "combined.surface.profile", timeout=3.0))
+                    combined_surface_terminal_id = (
+                        (combined_surface_terminal_result.get("terminal") or {})
+                        .get("id"))
+                    if combined_surface_terminal_id is not None:
+                        node_host._send({
+                            "type": "terminal_dispose_request",
+                            "id": combined_surface_terminal_id,
+                        })
+                        _wait_until(
+                            lambda: not node_host.active_terminal(),
+                            timeout=3.0)
+                    del node_ui_bridge.terminal_events[
+                        combined_terminal_event_start:]
+                    del node_host._terminal_shell_integrations[
+                        combined_terminal_shell_start:]
+                    combined_surface_lm_tool_result = (
+                        node_host.request_lm_tool_result(
+                            "combined_surface_tool",
+                            {"value": "from-combined"},
+                            timeout=3.0))
+                    combined_surface_chat_result = (
+                        node_host.request_chat_participant_result(
+                            "combined.surface.chat",
+                            "from-combined", timeout=3.0))
+                    combined_surface_context_result = (
+                        node_host.request_chat_context_result(
+                            "explicit",
+                            "combined.surface.context",
+                            timeout=3.0))
+                else:
+                    combined_surface_probe = {"_error": "not started"}
+                    combined_surface_after = False
+                    combined_surface_webview_ready = False
+                    combined_surface_custom_result = {"ok": False}
+                    combined_surface_terminal_result = {"ok": False}
+                    combined_surface_lm_tool_result = {"ok": False}
+                    combined_surface_chat_result = {"ok": False}
+                    combined_surface_context_result = {"ok": False}
                 node_runtime_surfaces = api.list_extension_runtime_surfaces({
                     "resourceUri": str(Uri.file(custom_editor_file)),
                     "resourceLangId": "plaintext",
@@ -30823,6 +31142,40 @@ process.stdin.resume();
                     item for item in node_runtime_surfaces.get("menus", [])
                     if item.get("command") == "selftest.node.openItem"
                 ]
+                combined_runtime_surfaces = (
+                    api.list_extension_runtime_surfaces({
+                        "resourceUri": str(
+                            Uri.file(combined_surface_custom_file)),
+                        "resourceLangId": "plaintext",
+                        "editorTextFocus": True,
+                        "view": "combined.surface.tree",
+                        "viewItem": "combinedRoot",
+                    }))
+                combined_ext_id = node_combined_surface_desc.id
+                combined_runtime_tree_surfaces = list(
+                    combined_runtime_surfaces.get("treeViews", []))
+                combined_runtime_webview_surfaces = list(
+                    combined_runtime_surfaces.get("webviewViews", []))
+                combined_runtime_custom_surfaces = list(
+                    combined_runtime_surfaces.get("customEditors", []))
+                combined_runtime_notebook_surfaces = list(
+                    combined_runtime_surfaces.get("notebooks", []))
+                combined_runtime_command_surfaces = list(
+                    combined_runtime_surfaces.get("commands", []))
+                combined_runtime_menu_surfaces = [
+                    item for item in combined_runtime_surfaces.get("menus", [])
+                    if item.get("command") == "selftest.combinedSurface.probe"
+                ]
+                combined_runtime_terminal_profiles = list(
+                    combined_runtime_surfaces.get("terminalProfiles", []))
+                combined_runtime_lm_tools = list(
+                    combined_runtime_surfaces.get("languageModelTools", []))
+                combined_runtime_lm_providers = list(
+                    combined_runtime_surfaces.get("languageModelProviders", []))
+                combined_runtime_chat_participants = list(
+                    combined_runtime_surfaces.get("chatParticipants", []))
+                combined_runtime_chat_context_providers = list(
+                    combined_runtime_surfaces.get("chatContextProviders", []))
                 _check("node-backed extension surfaces register dynamically end to end",
                        node_started is True
                        and node_runtime_surfaces.get("ok") is True
@@ -30909,6 +31262,129 @@ process.stdin.resume();
                            "chatContextProviders":
                                node_runtime_chat_context_providers,
                            "summary": node_runtime_surfaces.get("summary", {}),
+                       }, ensure_ascii=False, default=str))
+                _check("local Node extension registers combined runtime surfaces end to end",
+                       node_started is True
+                       and combined_surface_before is True
+                       and combined_surface_after is True
+                       and isinstance(combined_surface_probe, dict)
+                       and combined_surface_probe.get("extensionId")
+                       == combined_ext_id
+                       and combined_surface_webview_ready is True
+                       and combined_surface_custom_result.get("ok") is True
+                       and combined_surface_terminal_result.get("ok") is True
+                       and combined_surface_lm_tool_result.get("ok") is True
+                       and any(
+                           item.get("text") == "combined-tool:from-combined"
+                           for item in (
+                               combined_surface_lm_tool_result.get(
+                                   "value", {}).get("content", [])
+                               if isinstance(
+                                   combined_surface_lm_tool_result.get(
+                                       "value", {}), dict)
+                               else []))
+                       and combined_surface_chat_result.get("ok") is True
+                       and "combined-chat:from-combined" in str(
+                           combined_surface_chat_result.get("value", ""))
+                       and combined_surface_context_result.get("ok") is True
+                       and combined_runtime_surfaces.get("ok") is True
+                       and any(
+                           item.get("extensionId") == combined_ext_id
+                           and item.get("id") == "combined.surface.tree"
+                           and item.get("runtimeAvailable") is True
+                           and item.get("runtimeState", {}).get(
+                               "badge", {}).get("value") == 3
+                           for item in combined_runtime_tree_surfaces)
+                       and any(
+                           item.get("extensionId") == combined_ext_id
+                           and item.get("id") == "combined.surface.webview"
+                           and item.get("runtimeAvailable") is True
+                           and item.get("runtimeState", {}).get(
+                               "retainContextWhenHidden") is True
+                           for item in combined_runtime_webview_surfaces)
+                       and any(
+                           item.get("extensionId") == combined_ext_id
+                           and item.get("viewType") == "combined.surface.custom"
+                           and item.get("runtimeAvailable") is True
+                           and item.get("stateCount", 0) >= 1
+                           for item in combined_runtime_custom_surfaces)
+                       and any(
+                           item.get("extensionId") == combined_ext_id
+                           and item.get("type") == "combined-surface-notebook"
+                           and item.get("runtimeAvailable") is True
+                           and item.get("serializerCount", 0) >= 1
+                           and item.get("controllerCount", 0) >= 1
+                           for item in combined_runtime_notebook_surfaces)
+                       and any(
+                           item.get("extensionId") == combined_ext_id
+                           and item.get("command")
+                           == "selftest.combinedSurface.probe"
+                           and item.get("source") in ("extension", "runtime")
+                           for item in combined_runtime_command_surfaces)
+                       and any(
+                           item.get("extensionId") == combined_ext_id
+                           and item.get("menu") == "view/title"
+                           for item in combined_runtime_menu_surfaces)
+                       and any(
+                           item.get("extensionId") == combined_ext_id
+                           and item.get("menu") == "view/item/context"
+                           for item in combined_runtime_menu_surfaces)
+                       and any(
+                           item.get("extensionId") == combined_ext_id
+                           and item.get("id") == "combined.surface.profile"
+                           and item.get("runtimeAvailable") is True
+                           for item in combined_runtime_terminal_profiles)
+                       and any(
+                           item.get("extensionId") == combined_ext_id
+                           and item.get("name") == "combined_surface_tool"
+                           and item.get("runtimeAvailable") is True
+                           for item in combined_runtime_lm_tools)
+                       and any(
+                           item.get("extensionId") == combined_ext_id
+                           and item.get("vendor") == "combined.surface.vendor"
+                           and item.get("runtimeAvailable") is True
+                           and item.get("modelCount", 0) >= 1
+                           for item in combined_runtime_lm_providers)
+                       and any(
+                           item.get("extensionId") == combined_ext_id
+                           and item.get("id") == "combined.surface.chat"
+                           and item.get("runtimeAvailable") is True
+                           for item in combined_runtime_chat_participants)
+                       and any(
+                           item.get("extensionId") == combined_ext_id
+                           and item.get("id") == "combined.surface.context"
+                           and item.get("kind") == "explicit"
+                           and item.get("runtimeAvailable") is True
+                           for item in combined_runtime_chat_context_providers)
+                       and combined_runtime_surfaces.get(
+                           "summary", {}).get("dynamicSurfaces", 0) >= 10,
+                       json.dumps({
+                           "before": combined_surface_before,
+                           "after": combined_surface_after,
+                           "probe": combined_surface_probe,
+                           "webviewReady": combined_surface_webview_ready,
+                           "customResult": combined_surface_custom_result,
+                           "terminalResult": combined_surface_terminal_result,
+                           "toolResult": combined_surface_lm_tool_result,
+                           "chatResult": combined_surface_chat_result,
+                           "contextResult": combined_surface_context_result,
+                           "treeViews": combined_runtime_tree_surfaces,
+                           "webviewViews": combined_runtime_webview_surfaces,
+                           "customEditors": combined_runtime_custom_surfaces,
+                           "notebooks": combined_runtime_notebook_surfaces,
+                           "commands": combined_runtime_command_surfaces,
+                           "menus": combined_runtime_menu_surfaces,
+                           "terminalProfiles":
+                               combined_runtime_terminal_profiles,
+                           "languageModelTools": combined_runtime_lm_tools,
+                           "languageModelProviders":
+                               combined_runtime_lm_providers,
+                           "chatParticipants":
+                               combined_runtime_chat_participants,
+                           "chatContextProviders":
+                               combined_runtime_chat_context_providers,
+                           "summary": combined_runtime_surfaces.get(
+                               "summary", {}),
                        }, ensure_ascii=False, default=str))
                 _check("node host tree provider registers dynamic activity view",
                        node_started is True

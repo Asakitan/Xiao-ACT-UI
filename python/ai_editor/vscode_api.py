@@ -703,8 +703,10 @@ class ChatResult:
 class ChatParticipant:
     def __init__(self, participant_id: str,
                  handler: Callable,
-                 on_dispose: Optional[Callable[[], None]] = None) -> None:
+                 on_dispose: Optional[Callable[[], None]] = None,
+                 extension_id: str = "") -> None:
         self.id = participant_id
+        self.extension_id = str(extension_id or "")
         self.request_handler = handler
         self._on_dispose = on_dispose
         self.icon_path: Any = None
@@ -4757,12 +4759,25 @@ class VscodeNamespace:
         # Risk 2: generate per-webview nonce token
         token = self._generate_view_token(view_id)
 
+        registration_options = dict(options or {})
+        raw_webview_options = registration_options.get("webviewOptions")
+        webview_options = (
+            dict(raw_webview_options)
+            if isinstance(raw_webview_options, dict) else {})
+        for key in (
+                "enableScripts",
+                "localResourceRoots",
+                "retainContextWhenHidden"):
+            if key in registration_options and key not in webview_options:
+                webview_options[key] = registration_options[key]
+
         self._webview_view_providers[view_id] = {
             "provider": provider,
-            "options": dict(options or {}),
+            "options": registration_options,
             "_extensionId": _extension_id or "",
         }
         view = _WebviewView(view_id, bridge=self._ui_bridge, token=token)
+        view.webview.options.update(webview_options)
         self._webview_views[view_id] = view
         if hasattr(provider, "resolveWebviewView"):
             try:
@@ -4770,7 +4785,7 @@ class VscodeNamespace:
             except TypeError:
                 provider.resolveWebviewView(view)
         self._notify_webview_view_changed(
-            "registered", view_id, _extension_id or "", dict(options or {}))
+            "registered", view_id, _extension_id or "", registration_options)
 
         # Risk 4: disposable cleans up view, dicts, and token
         def _dispose_registration() -> None:
@@ -4780,7 +4795,7 @@ class VscodeNamespace:
             self._webview_view_providers.pop(view_id, None)
             self._webview_tokens.pop(view_id, None)
             self._notify_webview_view_changed(
-                "disposed", view_id, _extension_id or "", dict(options or {}))
+                "disposed", view_id, _extension_id or "", registration_options)
 
         return Disposable(_dispose_registration)
 
@@ -6697,11 +6712,13 @@ class VscodeNamespace:
         }
 
     def _create_chat_participant(self, participant_id: str,
-                                  handler: Callable) -> ChatParticipant:
+                                  handler: Callable,
+                                  extension_id: str = "") -> ChatParticipant:
         cp = ChatParticipant(
             participant_id,
             handler,
             on_dispose=lambda pid=participant_id: self._chat_participants.pop(pid, None),
+            extension_id=extension_id,
         )
         self._chat_participants[participant_id] = cp
         return cp
@@ -7408,6 +7425,7 @@ class _WebviewView:
             try:
                 self._bridge.render_webview_panel(
                     self.viewType, html,
+                    options=dict(self.webview.options),
                 )
             except Exception:
                 pass

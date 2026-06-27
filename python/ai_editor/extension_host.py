@@ -29,6 +29,13 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set
 
 
+def _node_json_safe(value: Any) -> Any:
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+    except Exception:
+        return str(value)
+
+
 # ---------------------------------------------------------------------------
 # ExtensionDescription — parsed from package.json
 # ---------------------------------------------------------------------------
@@ -1918,6 +1925,7 @@ class NodeExtensionHost:
         self._scm_history_requests: Dict[str, Dict[str, Any]] = {}
         self._webview_serializer_request_lock = threading.Lock()
         self._webview_serializer_requests: Dict[str, Dict[str, Any]] = {}
+        self._webview_view_provider_states: Dict[str, Dict[str, Any]] = {}
         self._shutting_down = False
 
     # -- Lifecycle -----------------------------------------------------------
@@ -2409,8 +2417,42 @@ class NodeExtensionHost:
                         "[NodeExtHost] update_webview_panel_options failed "
                         "for %s", view_id)
 
+        elif msg_type == "webview_view_provider_registered":
+            view_type = str(msg.get("viewType", ""))
+            if view_type:
+                self._webview_view_provider_states[view_type] = {
+                    "viewType": view_type,
+                    "extensionId": str(msg.get("extensionId", "")),
+                    "options": _node_json_safe(msg.get("options", {})),
+                    "runtimeAvailable": True,
+                }
+
+        elif msg_type == "webview_view_provider_disposed":
+            view_type = str(msg.get("viewType", ""))
+            if view_type:
+                self._webview_view_provider_states.pop(view_type, None)
+
         elif msg_type in {"webview_view_metadata", "webview_view_visibility"}:
             view_id = str(msg.get("viewId", ""))
+            view_type = str(msg.get("viewType", ""))
+            if view_type:
+                state = dict(
+                    self._webview_view_provider_states.get(view_type, {}))
+                state.update({
+                    "viewId": view_id,
+                    "viewType": view_type,
+                    "title": str(msg.get("title", "")),
+                    "description": str(msg.get("description", "")),
+                    "badge": _node_json_safe(msg.get("badge", None)),
+                    "visible": bool(msg.get("visible", True)),
+                    "options": _node_json_safe(msg.get("options", {})),
+                    "retainContextWhenHidden": bool(
+                        msg.get("retainContextWhenHidden", False)),
+                    "runtimeAvailable": True,
+                })
+                if not state.get("extensionId"):
+                    state["extensionId"] = str(msg.get("extensionId", ""))
+                self._webview_view_provider_states[view_type] = state
             if self._ui_bridge and view_id:
                 try:
                     updater = getattr(
@@ -5744,6 +5786,13 @@ class NodeExtensionHost:
         """Return one custom editor state snapshot when known."""
         state = self._find_custom_editor_state(view_id, view_type, uri)
         return dict(state or {})
+
+    def webview_view_provider_state(self, view_type: str) -> Dict[str, Any]:
+        """Return Node WebviewView provider/runtime metadata when known."""
+        normalized = str(view_type or "")
+        if not normalized:
+            return {}
+        return dict(self._webview_view_provider_states.get(normalized, {}))
 
     # -- Webview message relay -----------------------------------------------
 

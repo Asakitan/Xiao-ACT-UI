@@ -9481,6 +9481,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     type: 'webview_view_provider_registered',
                     viewType,
                     extensionId: extDesc.extensionId || '',
+                    options: _plainBridgeValue(options || {}),
                 });
                 if (!_webviewViewActivationResolving.has(String(viewType || ''))) {
                     setImmediate(() => { void resolveWebviewView(viewType); });
@@ -9492,6 +9493,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                         type: 'webview_view_provider_disposed',
                         viewType,
                         extensionId: extDesc.extensionId || '',
+                        options: _plainBridgeValue(options || {}),
                     });
                 });
             },
