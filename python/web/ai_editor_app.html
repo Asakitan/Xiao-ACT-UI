@@ -143,6 +143,26 @@ body.window-resizing * { cursor:inherit !important; }
 .sb-header .sb-action { cursor:pointer; font-size:14px; padding:2px 4px; color:var(--fg-dim); }
 .sb-header .sb-action:hover { color:var(--fg); }
 .sb-section { flex:1; overflow-y:auto; padding:0 0 8px; }
+.workspace-root-bar { margin:2px 10px 4px; padding:6px 8px; border:1px solid var(--border);
+  border-radius:6px; background:var(--bg2); display:flex; align-items:center; gap:8px; min-width:0; }
+.workspace-root-main { min-width:0; flex:1; display:flex; flex-direction:column; gap:2px; }
+.workspace-root-name { color:var(--fg); font:12px var(--sans); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.workspace-root-path { color:var(--fg-dim); font:10px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.workspace-root-button { height:22px; border:1px solid var(--border); border-radius:4px; background:var(--bg3);
+  color:var(--fg-dim); padding:0 7px; font:11px var(--sans); cursor:pointer; flex-shrink:0; }
+.workspace-root-button:hover,.workspace-root-button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
+.workspace-switcher { margin:0 10px 8px; border:1px solid var(--border-focus); border-radius:6px;
+  background:var(--bg2); padding:8px; display:none; flex-direction:column; gap:7px; }
+.workspace-switcher.open { display:flex; }
+.workspace-switcher-row { display:flex; gap:6px; min-width:0; }
+.workspace-switcher-input { flex:1; min-width:0; height:24px; border:1px solid var(--border); border-radius:4px;
+  background:var(--bg3); color:var(--fg); padding:0 7px; font:11px var(--mono); outline:none; }
+.workspace-switcher-input:focus { border-color:var(--border-focus); }
+.workspace-switcher-list { display:flex; flex-direction:column; gap:2px; max-height:154px; overflow:auto; }
+.workspace-switcher-item { width:100%; border:0; background:transparent; color:var(--fg-dim); text-align:left;
+  padding:5px 6px; border-radius:4px; cursor:pointer; font:11px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.workspace-switcher-item:hover,.workspace-switcher-item:focus { background:var(--bg-hover); color:var(--fg); outline:none; }
+.workspace-switcher-empty { color:var(--fg-dim); font:11px var(--sans); padding:2px 0; }
 .sb-item { padding:4px 16px; cursor:pointer; display:flex; align-items:center; gap:6px;
   font-size:13px; color:var(--fg-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   min-height:22px; }
@@ -641,6 +661,7 @@ body.window-resizing * { cursor:inherit !important; }
 .panel-tabs .spacer { flex:1; }
 .panel-btn { color:var(--fg-dim); cursor:pointer; padding:2px 6px; font-size:13px; }
 .panel-btn:hover { color:var(--fg); }
+.panel-btn.disabled { opacity:0.35; pointer-events:none; }
 
 /* ── Chat panel ── */
 .chat-panel { flex:1; display:flex; flex-direction:column; overflow:hidden; background:var(--bg); }
@@ -2195,10 +2216,25 @@ pre.code-block { overflow:visible; }
   <div class="sidebar" id="sidebar">
     <div class="sb-view" id="sb-explorer" style="display:none">
       <div class="sb-header"><span data-i18n="explorer">Explorer</span> <span class="spacer"></span>
+        <span class="sb-action" onclick="openWorkspaceSwitcher()" data-i18n-title="switch_workspace" title="Switch Workspace">&#x21c4;</span>
         <span class="sb-action" onclick="refreshExplorer()" data-i18n-title="refresh" title="Refresh">↻</span>
       </div>
       <div class="sb-section">
         <div class="sb-group" data-i18n="workspace_files">Workspace Files</div>
+        <div class="workspace-root-bar" id="workspace-root-bar">
+          <div class="workspace-root-main">
+            <span class="workspace-root-name" id="workspace-root-name">workspace</span>
+            <span class="workspace-root-path" id="workspace-root-path"></span>
+          </div>
+          <button class="workspace-root-button" type="button" onclick="openWorkspaceSwitcher()" title="Switch Workspace">Switch</button>
+        </div>
+        <div class="workspace-switcher" id="workspace-switcher" aria-label="Switch Workspace">
+          <div class="workspace-switcher-row">
+            <input class="workspace-switcher-input" id="workspace-switcher-input" placeholder="Workspace folder path" aria-label="Workspace folder path">
+            <button class="workspace-root-button" type="button" onclick="applyWorkspaceSwitcherInput()">Apply</button>
+          </div>
+          <div class="workspace-switcher-list" id="workspace-switcher-list"></div>
+        </div>
         <div id="explorer-tree" class="tree-root"></div>
         <div id="explorer-extension-views-block" style="display:none;margin-top:10px">
           <div class="sb-group">Extension Views</div>
@@ -2419,6 +2455,8 @@ pre.code-block { overflow:visible; }
         <div class="ptab" data-ptab="output">Output</div>
         <div class="ptab" data-ptab="problems">Problems</div>
         <span class="spacer"></span>
+        <span class="panel-btn disabled" data-terminal-action="stop" onclick="stopTerminalCommand()" title="Stop Running Command">&#9632;</span>
+        <span class="panel-btn disabled" data-terminal-action="restart" onclick="restartTerminalCommand()" title="Restart Last Command">&#x21bb;</span>
         <span class="panel-btn" onclick="clearTerminal()" title="Clear Terminal (Ctrl+K)">&#x2715;</span>
       </div>
       <!-- TERM-03: Terminal instance tabs -->
@@ -3016,7 +3054,7 @@ const SETTINGS_SECTION_DEFAULTS={
   codex:{cli_path:'',cli_args:[],transport:'chat_completions',model:'codex-mini-latest'},
   mcp:{access:'prompt',autostart:false,discovery_enabled:true,collision_behavior:'first',server_sampling:false},
   terminal:{profile:'PowerShell 7 (No Profile)',shell_path:'',shell_args:[],timeout:30,output_limit:8000,auto_approve:{}},
-  workspace:{root:'',roots:[],auto_detect:true,remember_last:true,last_root:''},
+  workspace:{root:'',roots:[],recent_roots:[],auto_detect:true,remember_last:true,last_root:''},
   extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands','views','customEditors','notebooks','terminal','statusBarItems'],enabled_contributions_explicit:false,diagnostics_enabled:false},
   editor:{defaultFormatter:'',formatOnType:false,formatOnSave:false,formatOnPaste:false,linkedEditing:false,codeActionsOnSave:{},codeActions:{triggerOnFocusChange:false},pasteAs:{preferences:[]},tabSize:4,insertSpaces:true,wordSeparators:'`~!@#$%^&*()-=+[{]}\\|;:\'",.<>/?',quickSuggestions:{other:'offWhenInlineCompletions',comments:'off',strings:'off'},quickSuggestionsDelay:10,suggestOnTriggerCharacters:true,acceptSuggestionOnEnter:'on',acceptSuggestionOnCommitCharacter:true,hover:{enabled:'on',delay:300,hidingDelay:300,sticky:true,above:true},minimap:{enabled:true,size:'proportional',side:'right',showSlider:'mouseover',renderCharacters:true,maxColumn:120,scale:1},folding:true,foldingStrategy:'auto',showFoldingControls:'mouseover',foldingHighlight:true,unfoldOnClickAfterEndOfLine:false,stickyScroll:{enabled:true,maxLineCount:5,defaultModel:'outlineModel',scrollWithEditor:true},renderWhitespace:'selection',renderControlCharacters:true,renderLineHighlight:'line',rulers:[],bracketPairColorization:{enabled:true,independentColorPoolPerBracketType:false},guides:{bracketPairs:false,bracketPairsHorizontal:'active',highlightActiveBracketPair:true,indentation:true,highlightActiveIndentation:true}},
   files:{autoSave:'off',autoSaveDelay:1000,trimTrailingWhitespace:false,insertFinalNewline:false,trimFinalNewlines:false},
@@ -18257,6 +18295,75 @@ function pathBaseName(path){
   const parts=String(path||'').split(/[\\/]/).filter(Boolean);
   return parts.length?parts[parts.length-1]:'workspace';
 }
+function workspaceSettings(){
+  return isPlainObject(config.workspace)?mergeSectionDefaults('workspace',config.workspace):mergeSectionDefaults('workspace',{});
+}
+function normalizeWorkspaceRootPath(path){
+  return String(path||'').trim().replace(/[\\/]+$/,'');
+}
+function workspaceRecentRoots(){
+  const ws=workspaceSettings();
+  const seen=new Set(),items=[];
+  [ws.root,ws.last_root,...(Array.isArray(ws.recent_roots)?ws.recent_roots:[]),...(Array.isArray(ws.roots)?ws.roots:[])]
+    .forEach(root=>{
+      const value=normalizeWorkspaceRootPath(root);
+      const key=value.toLowerCase();
+      if(value&&!seen.has(key)){seen.add(key);items.push(value)}
+    });
+  return items.slice(0,10);
+}
+function updateWorkspaceChrome(info){
+  const root=normalizeWorkspaceRootPath(info&&info.root?info.root:currentWorkspaceRoot());
+  const name=String(info&&info.root_name?info.root_name:pathBaseName(root));
+  explorerRoot=root||explorerRoot;
+  explorerRootName=name||pathBaseName(explorerRoot);
+  const nameEl=$('workspace-root-name'),pathEl=$('workspace-root-path'),input=$('workspace-switcher-input');
+  if(nameEl)nameEl.textContent=explorerRootName||'workspace';
+  if(pathEl)pathEl.textContent=root||'Auto-detect workspace';
+  if(input&&!input.value)input.value=root||'';
+  renderWorkspaceSwitcherList();
+}
+function renderWorkspaceSwitcherList(){
+  const list=$('workspace-switcher-list');if(!list)return;
+  const roots=workspaceRecentRoots();
+  list.innerHTML='';
+  if(!roots.length){
+    list.innerHTML='<div class="workspace-switcher-empty">No recent workspace roots.</div>';
+    return;
+  }
+  roots.forEach(root=>{
+    const btn=document.createElement('button');
+    btn.type='button';btn.className='workspace-switcher-item';btn.textContent=root;btn.title=root;
+    btn.onclick=()=>setWorkspaceRoot(root);
+    list.appendChild(btn);
+  });
+}
+function openWorkspaceSwitcher(){
+  const box=$('workspace-switcher');if(!box)return;
+  box.classList.toggle('open');
+  renderWorkspaceSwitcherList();
+  const input=$('workspace-switcher-input');
+  if(input){
+    if(!input.value)input.value=currentWorkspaceRoot()||'';
+    requestAnimationFrame(()=>{input.focus();input.select()});
+  }
+}
+async function setWorkspaceRoot(root){
+  root=normalizeWorkspaceRootPath(root);
+  if(!root)return;
+  const ws=workspaceSettings();
+  const recent=[root,...workspaceRecentRoots().filter(item=>item.toLowerCase()!==root.toLowerCase())].slice(0,10);
+  config.workspace={...ws,root,roots:recent,recent_roots:recent,last_root:root,auto_detect:true,remember_last:true};
+  updateWorkspaceChrome({root,root_name:pathBaseName(root)});
+  const switcher=$('workspace-switcher');if(switcher)switcher.classList.remove('open');
+  await persistConfigPatch({workspace:config.workspace},{errorPrefix:'Workspace save failed: ',partialPrefix:'Workspace updated only for current session: '});
+  explorerRoot=root;explorerRootName=pathBaseName(root);explorerSelectedPath='';
+  await refreshExplorer('');
+}
+function applyWorkspaceSwitcherInput(){
+  const input=$('workspace-switcher-input');
+  return setWorkspaceRoot(input?input.value:'');
+}
 
 function iconText(value){
   if(value&&typeof value==='object')return String(value.text||value.glyph||'');
@@ -18362,6 +18469,7 @@ async function refreshExplorer(relPath=''){
   }
   explorerRoot=res.root||explorerRoot;
   explorerRootName=res.root_name||pathBaseName(explorerRoot);
+  updateWorkspaceChrome(res);
   const currentPath=res.path||'';
   tree.innerHTML='';
   const rootNode=createExplorerNode({name:explorerRootName,path:'',type:'directory'},0,true);
@@ -30278,6 +30386,7 @@ function _minimapScrollTo(e){
 let _terminals=[];
 let _activeTermId=null;
 let _nextTermId=1;
+let _terminalRunSeq=0;
 function _terminalHostId(meta){
   if(!meta||typeof meta!=='object')return '';
   const raw=meta.id??meta.hostId??meta.terminalId;
@@ -30535,7 +30644,8 @@ function _updateTerminalStatusLine(){
     const dur=_formatTerminalDuration(term.lastDurationMs);
     const cwd=term.lastCwd?('cwd '+term.lastCwd):'';
     const detail=[term.name,term.lastCommand?('$ '+term.lastCommand):'',exit,dur,cwd].filter(Boolean).join('  ');
-    _setTerminalStatus(state,state==='running'?'Running':(state==='error'?'Failed':(state==='done'?'Completed':'Ready')),detail);
+    _setTerminalStatus(state,state==='running'?'Running':(state==='error'?'Failed':(state==='done'?'Completed':(state==='cancelled'?'Cancelled':'Ready'))),detail);
+    _updateTerminalActionButtons();
     return;
   }
   const out=$('terminal-output');
@@ -30543,7 +30653,8 @@ function _updateTerminalStatusLine(){
   const cmd=out&&out.dataset.lastCommand?('$ '+out.dataset.lastCommand):'No command has run yet';
   const exit=out&&out.dataset.lastExitCode!==undefined&&out.dataset.lastExitCode!==''?('exit '+out.dataset.lastExitCode):'';
   const cwd=out&&out.dataset.lastCwd?('cwd '+out.dataset.lastCwd):'';
-  _setTerminalStatus(state,state==='running'?'Running':(state==='error'?'Failed':(state==='done'?'Completed':'Ready')),[cmd,exit,cwd].filter(Boolean).join('  '));
+  _setTerminalStatus(state,state==='running'?'Running':(state==='error'?'Failed':(state==='done'?'Completed':(state==='cancelled'?'Cancelled':'Ready'))),[cmd,exit,cwd].filter(Boolean).join('  '));
+  _updateTerminalActionButtons();
 }
 function _appendTerminalCommandBlock(out,cmd){
   const block=document.createElement('div');block.className='terminal-command-block running';
@@ -30575,6 +30686,59 @@ function _updateTerminalRecordForRun(cmd,state,result,durationMs){
   _renderTermTabs();
   _updateTerminalStatusLine();
 }
+function _activeTerminalRunOutput(){
+  return _getActiveTermOutput();
+}
+function _terminalCurrentRun(out){
+  if(!out||!out.dataset.terminalRunId)return null;
+  return {id:out.dataset.terminalRunId,command:out.dataset.runningCommand||'',cwd:out.dataset.runningCwd||'',cancelled:out.dataset.terminalRunCancelled==='1'};
+}
+function _setTerminalRun(out,run){
+  if(!out)return;
+  if(run){
+    out.dataset.terminalRunId=run.id;
+    out.dataset.runningCommand=run.command||'';
+    out.dataset.runningCwd=run.cwd||'';
+    out.dataset.terminalRunCancelled=run.cancelled?'1':'0';
+  }else{
+    delete out.dataset.terminalRunId;
+    delete out.dataset.runningCommand;
+    delete out.dataset.runningCwd;
+    delete out.dataset.terminalRunCancelled;
+  }
+  _updateTerminalActionButtons();
+}
+function _updateTerminalActionButtons(){
+  const out=_activeTerminalRunOutput();
+  const run=_terminalCurrentRun(out);
+  const hasCommand=!!((_getActiveTerminalRecord()&&_getActiveTerminalRecord().lastCommand)||(out&&out.dataset.lastCommand));
+  const stop=document.querySelector('[data-terminal-action="stop"]');
+  const restart=document.querySelector('[data-terminal-action="restart"]');
+  if(stop)stop.classList.toggle('disabled',!(run&&!run.cancelled));
+  if(restart)restart.classList.toggle('disabled',!hasCommand);
+}
+function stopTerminalCommand(){
+  const out=_activeTerminalRunOutput();
+  const run=_terminalCurrentRun(out);
+  if(!run||run.cancelled)return {cancelled:false};
+  _setTerminalRun(out,{...run,cancelled:true});
+  const block=out?out.querySelector('.terminal-command-block.running:last-of-type'):null;
+  if(block){
+    block.className='terminal-command-block cancelled';
+    const status=block.querySelector('.terminal-command-status');
+    if(status)status.textContent='cancelled';
+  }
+  _updateTerminalRecordForRun(run.command,'cancelled',{exitCode:null,cwd:run.cwd},null);
+  return {cancelled:true,runId:run.id};
+}
+function restartTerminalCommand(){
+  const term=_getActiveTerminalRecord();
+  const out=_getActiveTermOutput();
+  const cmd=(term&&term.lastCommand)||(out&&out.dataset.lastCommand)||'';
+  const cwd=(term&&term.lastCwd)||(out&&out.dataset.lastCwd)||currentWorkspaceRoot()||'';
+  if(!cmd){showToast('No terminal command to restart.','info',1800);return null}
+  return runTerminalCommand(cmd,{skipConfirm:true,out,cwd});
+}
 async function runTerminalCommand(cmd,options){
   const opts=options||{};
   cmd=String(cmd||'').trim();
@@ -30597,11 +30761,21 @@ async function runTerminalCommand(cmd,options){
   const view=_appendTerminalCommandBlock(out,cmd);
   const started=performance.now();
   const cwd=String(opts.cwd||currentWorkspaceRoot()||'');
+  const runId='term-run-'+(++_terminalRunSeq);
+  _setTerminalRun(out,{id:runId,command:cmd,cwd,cancelled:false});
   _updateTerminalRecordForRun(cmd,'running',{exitCode:null,cwd},null);
   try{
     const payload={command:cmd};
     if(cwd)payload.cwd=cwd;
     const raw=await call('execute_tool','runTerminal',JSON.stringify(payload),true);
+    const activeRun=_terminalCurrentRun(out);
+    if(!activeRun||activeRun.id!==runId||activeRun.cancelled){
+      if(activeRun&&activeRun.id===runId)_setTerminalRun(out,null);
+      view.block.className='terminal-command-block cancelled';
+      view.status.textContent='cancelled';
+      return {cancelled:true,ignored:true,runId};
+    }
+    _setTerminalRun(out,null);
     const result=_terminalNormalizeResult(raw);
     const elapsed=result.durationMs!==null?result.durationMs:Math.round(performance.now()-started);
     if(result.stdout)_appendTerminalHtml(view.body,ansiToHtml(result.stdout));
@@ -30616,6 +30790,14 @@ async function runTerminalCommand(cmd,options){
     return {...result,durationMs:elapsed,state};
   }catch(ex){
     const elapsed=Math.round(performance.now()-started);
+    const activeRun=_terminalCurrentRun(out);
+    if(!activeRun||activeRun.id!==runId||activeRun.cancelled){
+      if(activeRun&&activeRun.id===runId)_setTerminalRun(out,null);
+      view.block.className='terminal-command-block cancelled';
+      view.status.textContent='cancelled';
+      return {cancelled:true,ignored:true,runId};
+    }
+    _setTerminalRun(out,null);
     const msg=ex&&ex.message?ex.message:String(ex);
     _appendTerminalHtml(view.body,ansiToHtml(msg)+'\n');
     view.block.className='terminal-command-block error';
@@ -30628,7 +30810,19 @@ async function runTerminalCommand(cmd,options){
 clearTerminal=function(){const el=_getActiveTermOutput();if(el)el.innerHTML=''};
 window.clearTerminal=clearTerminal;
 window.runTerminalCommand=runTerminalCommand;
+window.stopTerminalCommand=stopTerminalCommand;
+window.restartTerminalCommand=restartTerminalCommand;
+window.openWorkspaceSwitcher=openWorkspaceSwitcher;
+window.setWorkspaceRoot=setWorkspaceRoot;
+window.applyWorkspaceSwitcherInput=applyWorkspaceSwitcherInput;
 window._createTerminal=_createTerminal;window._closeTerminal=_closeTerminal;window._disposeTerminalFromHost=_disposeTerminalFromHost;window._insertTerminalTextFromHost=_insertTerminalTextFromHost;window._renameTerminal=_renameTerminal;window._updateTerminalDimensions=_updateTerminalDimensions;window._setActiveTerminalFromHost=_setActiveTerminalFromHost;window._updateTerminalState=_updateTerminalState;window._updateTerminalShellIntegration=_updateTerminalShellIntegration;window._updateTerminalShellExecution=_updateTerminalShellExecution;
+(function(){
+  const input=$('workspace-switcher-input');if(!input)return;
+  input.addEventListener('keydown',e=>{
+    if(e.key==='Enter'){e.preventDefault();applyWorkspaceSwitcherInput()}
+    if(e.key==='Escape'){const box=$('workspace-switcher');if(box)box.classList.remove('open')}
+  });
+})();
 // Re-wire terminal input for per-tab history and output
 (function(){
   const termInput=$('term-input');if(!termInput)return;
@@ -30676,17 +30870,26 @@ async function terminalUiSelfCheckSnapshot(){
       n++;
       try{payloads.push(JSON.parse(payload||'{}'))}catch(e){payloads.push({})}
       if(n===1)return JSON.stringify({stdout:'ok\n',stderr:'',exitCode:0,durationMs:12,cwd:'E:/VC/SAO-UI/sao_auto'});
-      return JSON.stringify({stdout:'',stderr:'bad\n',exitCode:7,durationMs:9,cwd:'E:/VC/SAO-UI/sao_auto',stderrTruncated:true});
+      if(n===2)return JSON.stringify({stdout:'',stderr:'bad\n',exitCode:7,durationMs:9,cwd:'E:/VC/SAO-UI/sao_auto',stderrTruncated:true});
+      return await new Promise(resolve=>{slowResolve=()=>resolve(JSON.stringify({stdout:'late\n',stderr:'',exitCode:0,durationMs:20,cwd:'E:/VC/SAO-UI/sao_auto'}))});
     };
     const ok=await runTerminalCommand('echo terminal-ok',{skipConfirm:true,out:defaultOut});
     const bad=await runTerminalCommand('bad-command',{skipConfirm:true,out:defaultOut});
+    let slowResolve=null;
+    const slowPromise=runTerminalCommand('slow-command',{skipConfirm:true,out:defaultOut});
+    const stopped=stopTerminalCommand();
+    if(slowResolve)slowResolve();
+    const slow=await slowPromise;
     const blocks=defaultOut?Array.from(defaultOut.querySelectorAll('.terminal-command-block')):[];
     const snapshot={
       okExit:ok&&ok.exitCode,
       badExit:bad&&bad.exitCode,
+      stopped:!!(stopped&&stopped.cancelled),
+      slowIgnored:!!(slow&&slow.ignored),
       blockCount:blocks.length,
       hasDone:blocks.some(b=>b.classList.contains('done')),
       hasError:blocks.some(b=>b.classList.contains('error')),
+      hasCancelled:blocks.some(b=>b.classList.contains('cancelled')),
       hasTruncatedNote:defaultOut?defaultOut.textContent.includes('[output truncated]'):false,
       statusState:status?status.dataset.state:'',
       statusText:status?status.textContent.trim():'',
@@ -30694,7 +30897,7 @@ async function terminalUiSelfCheckSnapshot(){
       lastCwd:defaultOut?defaultOut.dataset.lastCwd:'',
       payloadCwd:payloads[0]&&payloads[0].cwd
     };
-    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.blockCount>=2&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasTruncatedNote&&snapshot.statusState==='error'&&snapshot.lastCommand==='bad-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto';
+    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.statusState==='cancelled'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto';
     return snapshot;
   }finally{
     call=oldCall;

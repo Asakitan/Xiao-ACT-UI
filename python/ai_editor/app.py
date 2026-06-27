@@ -466,6 +466,7 @@ _AI_EDITOR_SECTION_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "workspace": {
         "root": "",
         "roots": [],
+        "recent_roots": [],
         "auto_detect": True,
         "remember_last": True,
         "last_root": "",
@@ -607,6 +608,15 @@ def _normalize_workspace_section(value: Dict[str, Any]) -> Dict[str, Any]:
         cfg["roots"] = [str(item).strip() for item in roots if str(item).strip()]
     else:
         cfg["roots"] = []
+    recent_roots = cfg.get("recent_roots")
+    if isinstance(recent_roots, str):
+        cfg["recent_roots"] = [
+            item.strip() for item in re.split(r"[\r\n]+", recent_roots) if item.strip()]
+    elif isinstance(recent_roots, (list, tuple)):
+        cfg["recent_roots"] = [
+            str(item).strip() for item in recent_roots if str(item).strip()]
+    else:
+        cfg["recent_roots"] = []
     cfg["auto_detect"] = _as_bool(cfg.get("auto_detect"), True)
     cfg["remember_last"] = _as_bool(cfg.get("remember_last"), True)
     return cfg

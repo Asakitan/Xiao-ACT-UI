@@ -11691,6 +11691,11 @@ console.log("command palette quick access helpers ok");
            "terminal-status-line" in html
            and "terminal-command-block" in html
            and "async function runTerminalCommand(cmd,options)" in html
+           and "function stopTerminalCommand()" in html
+           and "function restartTerminalCommand()" in html
+           and "data-terminal-action=\"stop\"" in html
+           and "data-terminal-action=\"restart\"" in html
+           and "terminalRunCancelled" in html
            and "function _terminalNormalizeResult(raw)" in html
            and "function _terminalStateForResult(result)" in html
            and "function _updateTerminalRecordForRun(cmd,state,result,durationMs)" in html
@@ -11701,9 +11706,15 @@ console.log("command palette quick access helpers ok");
            and "window.terminalUiSelfCheckSnapshot=terminalUiSelfCheckSnapshot" in html)
     _check("workspace auto root settings drive Explorer and Terminal cwd",
            "\"workspace\": {" in app_source
+           and "\"recent_roots\": []" in app_source
            and "def _workspace_info(self) -> Dict[str, Any]:" in app_source
            and "def _workspace_candidates(self) -> List[Tuple[str, str]]:" in app_source
            and "\"workspace\": self._workspace_info()" in app_source
+           and "workspace-root-bar" in html
+           and "workspace-switcher" in html
+           and "function setWorkspaceRoot(root)" in html
+           and "window.openWorkspaceSwitcher=openWorkspaceSwitcher" in html
+           and "recent_roots" in html
            and "s-workspace-root" in html
            and "s-workspace-auto" in html
            and "s-workspace-remember" in html
