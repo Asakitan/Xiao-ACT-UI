@@ -4713,6 +4713,7 @@ function assistantSessionDefaults(seed){
     lastRequestId:String(src.lastRequestId||''),
     lastPromptSample:String(src.lastPromptSample||''),
     parentSessionResource:String(src.parentSessionResource||''),
+    parentSessionTitle:String(src.parentSessionTitle||''),
     provider:String(src.provider||config.provider||''),
     model:String(src.model||config.model||''),
     mode:String(src.mode||config.mode||'agent'),
@@ -4807,6 +4808,7 @@ function assistantSessionSerializableNativePayload(payload){
   copyArray('usedContext','usedContext','used_context','used');
   copyArray('fileTrees','fileTrees','file_trees');
   copyArray('followups','followups','followUps','suggestedFollowups','suggested_followups');
+  copyArray('actionResults','actionResults','action_results');
   if(payload.changeSet&&typeof payload.changeSet==='object')out.changeSet={...payload.changeSet};
   if(payload.usage&&typeof payload.usage==='object')out.usage={...payload.usage};
   if(payload.model)out.model=String(payload.model||'');
@@ -4837,6 +4839,52 @@ function assistantNativePayloadPatch(body,patch){
   const base=assistantBodyNativePayload(body)||{};
   const next=Object.assign({},base,patch);
   return rememberAssistantNativePayload(body,next);
+}
+function assistantResponseActionResultPatch(button,payload,result,opts){
+  opts=opts||{};
+  const actionKey=String((opts&&opts.actionKey)||(button&&button.dataset&&button.dataset.assistantActionKey)||payload&&payload.callbackId||payload&&payload.requestId||payload&&payload.partId||'');
+  const trayItem=actionKey?_assistantActionTrayItems.get(actionKey):null;
+  const body=(button&&button.closest?button.closest('.msg-body'):null)||(trayItem&&trayItem.card&&trayItem.card.closest?trayItem.card.closest('.msg-body'):null);
+  if(!body||!payload)return null;
+  const native=assistantBodyNativePayload(body)||{};
+  const previous=Array.isArray(native.actionResults)?native.actionResults:[];
+  const entry={
+    key:actionKey,
+    action:String(payload.action||''),
+    value:payload.value!==undefined?String(payload.value):'',
+    ok:!!(result&&result.ok),
+    error:result&&result.error?String(result.error):'',
+    submittedAt:Date.now()
+  };
+  const next=previous.filter(item=>String(item&&item.key||'')!==entry.key);
+  next.push(entry);
+  assistantNativePayloadPatch(body,{actionResults:next.slice(-20)});
+  if(typeof syncAssistantSessionState==='function')syncAssistantSessionState();
+  if(typeof assistantSessionPersistCurrent==='function')assistantSessionPersistCurrent({status:streaming?'inProgress':'completed'});
+  return entry;
+}
+function applyAssistantResponseActionResults(wrap,payload){
+  const results=Array.isArray(payload&&payload.actionResults)?payload.actionResults:[];
+  if(!wrap||!results.length)return;
+  const byKey=new Map(results.map(item=>[String(item&&item.key||''),item]));
+  wrap.querySelectorAll('[data-assistant-action-key]').forEach(button=>{
+    const item=byKey.get(String(button.dataset.assistantActionKey||''));
+    if(!item)return;
+    button.dataset.actionState=item.ok?'submitted':'error';
+    button.dataset.actionRestored='true';
+    if(item.ok){
+      button.disabled=true;
+      button.setAttribute('aria-disabled','true');
+      button.classList.add('submitted');
+      button.textContent=button.textContent.replace(/\s*✓$/,'')+' ✓';
+      button.title='Restored submitted Assistant action: '+String(item.action||'submit');
+      const trayItem=_assistantActionTrayItems.get(String(button.dataset.assistantActionKey||''));
+      if(trayItem)trayItem.state='submitted';
+    }else{
+      button.classList.add('error');
+      button.title=String(item.error||'Restored failed Assistant action');
+    }
+  });
 }
 function assistantSessionNormalizeMessages(messages){
   return (Array.isArray(messages)?messages:[]).map(m=>{
@@ -4906,6 +4954,7 @@ function assistantSessionCurrentItem(extra){
     workflowId:controls.workflowId,
     workflowLabel:controls.workflowLabel,
     parentSessionResource:state.parentSessionResource,
+    parentSessionTitle:state.parentSessionTitle,
     draft:state.draft,
     context:state.context,
     state:Object.assign({},state,controls),
@@ -5022,7 +5071,8 @@ function assistantSessionOpenItem(sessionId,opts){
   },fork?{
     id:assistantSessionNewId(),createdAt:now,updatedAt:now,
     requestInProgress:false,draft:'',lastRequestId:'',
-    parentSessionResource:item.sessionResource||('sao-ai-chat://'+(item.type||'local')+'/'+item.id)
+    parentSessionResource:item.sessionResource||('sao-ai-chat://'+(item.type||'local')+'/'+item.id),
+    parentSessionTitle:String(item.title||'')
   }:{requestInProgress:false}));
   assistantSessionState=nextState;
   assistantApplySessionControls(nextState);
@@ -5031,7 +5081,7 @@ function assistantSessionOpenItem(sessionId,opts){
   renderChatContextAttachments();
   setChatInputValue(nextState.draft||'',{focus:false,sync:false});
   renderAssistantSessionState();saveAssistantSessionState({immediate:true});
-  assistantSessionPersistCurrent({title:fork?String(item.title||'Chat')+' (fork)':item.title,parentSessionResource:nextState.parentSessionResource||''});
+  assistantSessionPersistCurrent({title:fork?String(item.title||'Chat')+' (fork)':item.title,parentSessionResource:nextState.parentSessionResource||'',parentSessionTitle:nextState.parentSessionTitle||''});
   setStatus((fork?'Forked chat session: ':'Opened chat session: ')+(item.title||item.id));
   return true;
 }
@@ -5058,7 +5108,8 @@ function renderAssistantSessionState(){
       +'\nApproval: '+(assistantSessionState.approval||'-')
       +'\nAgent: '+(assistantSessionState.agentId||'Default')
       +'\nWorkflow Mode: '+(assistantSessionState.workflowMode||assistantWorkflowMode||'off')
-      +'\nWorkflow: '+(assistantSessionState.workflowLabel||assistantSessionState.workflowId||'-');
+      +'\nWorkflow: '+(assistantSessionState.workflowLabel||assistantSessionState.workflowId||'-')
+      +'\nForked from: '+(assistantSessionState.parentSessionTitle||assistantSessionState.parentSessionResource||'-');
   }
   if(panel){
     panel.dataset.chatSessionResource=assistantSessionResource();
@@ -5075,6 +5126,8 @@ function renderAssistantSessionState(){
     panel.dataset.chatAgentId=assistantSessionState.agentId||'';
     panel.dataset.chatWorkflowId=assistantSessionState.workflowId||'';
     panel.dataset.chatWorkflowMode=assistantSessionState.workflowMode||assistantWorkflowMode||'off';
+    panel.dataset.chatParentSessionResource=assistantSessionState.parentSessionResource||'';
+    panel.dataset.chatParentSessionTitle=assistantSessionState.parentSessionTitle||'';
   }
   if(typeof updateChatComposerState==='function')updateChatComposerState();
 }
@@ -6722,7 +6775,7 @@ async function assistantActionTrayAllowAll(button){
     const actionButton=assistantActionTrayPrimaryButton(item);
     if(button&&button.dataset)button.dataset.assistantActionKey=item.key;
     const label=String((actionButton&&actionButton.label)||actionButton||'Continue');
-    await assistantSubmitResponsePartAction(item.part,(actionButton&&actionButton.action)||'button',(actionButton&&actionButton.value)!==undefined?actionButton.value:label,actionButton,{buttonEl:button,fallbackTitle:item.source.title||'Confirmation',fallbackText:label});
+    await assistantSubmitResponsePartAction(item.part,(actionButton&&actionButton.action)||'button',(actionButton&&actionButton.value)!==undefined?actionButton.value:label,actionButton,{buttonEl:button,fallbackTitle:item.source.title||'Confirmation',fallbackText:label,actionKey:item.key});
   }
   if(button){button.removeAttribute('aria-busy');button.disabled=false}
   syncAssistantActionTray();
@@ -6735,13 +6788,13 @@ async function assistantActionTraySkipAll(button,kind){
     if(!_assistantActionTrayItems.has(item.key))continue;
     if(button&&button.dataset)button.dataset.assistantActionKey=item.key;
     if(item.kind==='questionCarousel'){
-      await assistantSubmitResponsePartAction(item.part,'skip','Skip',null,{buttonEl:button,fallbackTitle:'Answers',fallbackText:'Skip',answers:[]});
+      await assistantSubmitResponsePartAction(item.part,'skip','Skip',null,{buttonEl:button,fallbackTitle:'Answers',fallbackText:'Skip',answers:[],actionKey:item.key});
       continue;
     }
     const denyButton=(item.source.buttons||[]).find(btn=>String((btn&&btn.action)||btn||'').toLowerCase().includes('deny')||String((btn&&btn.label)||btn||'').toLowerCase().includes('deny'));
     const actionButton=denyButton||assistantActionTrayPrimaryButton(item);
     const label=String((actionButton&&actionButton.label)||actionButton||'Skip');
-    await assistantSubmitResponsePartAction(item.part,(actionButton&&actionButton.action)||'button',(actionButton&&actionButton.value)!==undefined?actionButton.value:label,actionButton,{buttonEl:button,fallbackTitle:item.source.title||'Confirmation',fallbackText:label});
+    await assistantSubmitResponsePartAction(item.part,(actionButton&&actionButton.action)||'button',(actionButton&&actionButton.value)!==undefined?actionButton.value:label,actionButton,{buttonEl:button,fallbackTitle:item.source.title||'Confirmation',fallbackText:label,actionKey:item.key});
   }
   if(button){button.removeAttribute('aria-busy');button.disabled=false}
   syncAssistantActionTray();
@@ -6896,17 +6949,17 @@ function assistantActionTrayRenderItem(item,content){
   if(item.kind==='confirmation'){
     (item.source.buttons||[]).forEach(button=>{
       const label=String((button&&button.label)||button||'Continue');
-      const btn=assistantActionTrayButton(label,'Submit '+label,'chat-inline-action primary',()=>assistantSubmitResponsePartAction(item.part,(button&&button.action)||'button',(button&&button.value)!==undefined?button.value:label,button,{buttonEl:btn,fallbackTitle:item.source.title||'Confirmation',fallbackText:label}));
+      const btn=assistantActionTrayButton(label,'Submit '+label,'chat-inline-action primary',()=>assistantSubmitResponsePartAction(item.part,(button&&button.action)||'button',(button&&button.value)!==undefined?button.value:label,button,{buttonEl:btn,fallbackTitle:item.source.title||'Confirmation',fallbackText:label,actionKey:item.key}));
       btn.dataset.assistantCallback='true';btn.dataset.assistantAction=String((button&&button.action)||label);btn.dataset.assistantActionKey=item.key;
       actions.appendChild(btn);
     });
   }else if(item.kind==='questionCarousel'){
     actions.appendChild(assistantActionTrayButton('Review','Review questions','chat-inline-action',()=>scrollAssistantActionSource(item.card)));
-    const answer=assistantActionTrayButton('Submit answers','Submit answers','chat-inline-action primary',()=>assistantSubmitResponsePartAction(item.part,'answers',chatQuestionCarouselAnswerText(item.card),null,{buttonEl:answer,fallbackTitle:'Answers',fallbackText:chatQuestionCarouselAnswerText(item.card),answers:chatQuestionCarouselAnswerPayload(item.card)}));
+    const answer=assistantActionTrayButton('Submit answers','Submit answers','chat-inline-action primary',()=>assistantSubmitResponsePartAction(item.part,'answers',chatQuestionCarouselAnswerText(item.card),null,{buttonEl:answer,fallbackTitle:'Answers',fallbackText:chatQuestionCarouselAnswerText(item.card),answers:chatQuestionCarouselAnswerPayload(item.card),actionKey:item.key}));
     answer.dataset.assistantCallback='true';answer.dataset.assistantAction='answers';answer.dataset.assistantActionKey=item.key;
     actions.appendChild(answer);
     if(item.source.allowSkip){
-      const skip=assistantActionTrayButton('Skip','Skip questions','chat-inline-action',()=>assistantSubmitResponsePartAction(item.part,'skip','Skip',null,{buttonEl:skip,fallbackTitle:'Answers',fallbackText:'Skip',answers:[]}));
+      const skip=assistantActionTrayButton('Skip','Skip questions','chat-inline-action',()=>assistantSubmitResponsePartAction(item.part,'skip','Skip',null,{buttonEl:skip,fallbackTitle:'Answers',fallbackText:'Skip',answers:[],actionKey:item.key}));
       skip.dataset.assistantCallback='true';skip.dataset.assistantAction='skip';skip.dataset.assistantActionKey=item.key;
       actions.appendChild(skip);
     }
@@ -7136,6 +7189,7 @@ async function assistantSubmitResponsePartAction(part,action,value,button,opts){
     surface:context.surface
   };
   const result=await call('assistant_response_part_action',payload);
+  assistantResponseActionResultPatch(buttonEl,payload,result,opts);
   if(result&&result.ok){
     finalizeAssistantResponsePartActionButton(buttonEl,result,payload);
     if(!buttonEl&&opts.actionKey)assistantSetTrayItemSubmitted(opts.actionKey);
@@ -7180,7 +7234,7 @@ function renderChatConfirmationPart(wrap,part){
     if(assistantResponsePartHasCallback(data,button))btn.dataset.assistantCallback='true';
     const buttonActionKey=assistantResponsePartActionKey(data,button)||actionKey;
     if(buttonActionKey)btn.dataset.assistantActionKey=buttonActionKey;
-    btn.onclick=()=>assistantSubmitResponsePartAction(part,(button&&button.action)||'button',(button&&button.value)!==undefined?button.value:label,button,{buttonEl:btn,fallbackTitle:data.title||'Confirmation',fallbackText:label});
+    btn.onclick=()=>assistantSubmitResponsePartAction(part,(button&&button.action)||'button',(button&&button.value)!==undefined?button.value:label,button,{buttonEl:btn,fallbackTitle:data.title||'Confirmation',fallbackText:label,actionKey:buttonActionKey});
     actions.appendChild(btn);
   });
   card.appendChild(actions);wrap.appendChild(card);registerAssistantActionTrayItem('confirmation',part,data,card);
@@ -7216,13 +7270,13 @@ function renderChatQuestionCarouselPart(wrap,part){
   insert.dataset.assistantAction='answers';
   if(assistantResponsePartHasCallback(carousel,null))insert.dataset.assistantCallback='true';
   if(actionKey)insert.dataset.assistantActionKey=actionKey;
-  insert.onclick=()=>assistantSubmitResponsePartAction(part,'answers',chatQuestionCarouselAnswerText(card),null,{buttonEl:insert,fallbackTitle:'Answers',fallbackText:chatQuestionCarouselAnswerText(card),answers:chatQuestionCarouselAnswerPayload(card)});
+  insert.onclick=()=>assistantSubmitResponsePartAction(part,'answers',chatQuestionCarouselAnswerText(card),null,{buttonEl:insert,fallbackTitle:'Answers',fallbackText:chatQuestionCarouselAnswerText(card),answers:chatQuestionCarouselAnswerPayload(card),actionKey});
   actions.appendChild(insert);
   if(carousel.allowSkip){
     const skip=document.createElement('button');skip.type='button';skip.className='chat-inline-action';skip.textContent='Skip';skip.dataset.assistantAction='skip';
     if(assistantResponsePartHasCallback(carousel,null))skip.dataset.assistantCallback='true';
     if(actionKey)skip.dataset.assistantActionKey=actionKey;
-    skip.onclick=()=>assistantSubmitResponsePartAction(part,'skip','Skip',null,{buttonEl:skip,fallbackTitle:'Answers',fallbackText:'Skip',answers:[]});actions.appendChild(skip);
+    skip.onclick=()=>assistantSubmitResponsePartAction(part,'skip','Skip',null,{buttonEl:skip,fallbackTitle:'Answers',fallbackText:'Skip',answers:[],actionKey});actions.appendChild(skip);
   }
   card.appendChild(actions);wrap.appendChild(card);registerAssistantActionTrayItem('questionCarousel',part,carousel,card);
 }
@@ -7599,6 +7653,7 @@ function renderChatResponseNativeParts(body,payload,content){
     const text=document.createElement('div');text.className='part-text';renderMd(text,part.text);
     callout.appendChild(icon);callout.appendChild(text);wrap.appendChild(callout);
   });
+  applyAssistantResponseActionResults(wrap,payload||{});
   body.appendChild(wrap);
   syncAssistantActionTray();
   return true;
@@ -8073,6 +8128,8 @@ async function runAssistantUiSelfCheck(opts){
   const savedHistoryAffordance=assistantSavedHistoryAffordanceSmokeSnapshot();
   const nativeOnlySession=assistantNativeOnlySessionSmokeSnapshot();
   const changeSetRestore=assistantChangeSetRestoreStateSnapshot();
+  const actionResultRestore=assistantActionResultRestoreSmokeSnapshot();
+  const forkLineage=assistantForkLineageSmokeSnapshot();
   assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready',providerPopup.shown&&providerPopup.optionCount>=1&&providerPopup.focusableCount===providerPopup.optionCount&&providerPopup.keyboardReady,JSON.stringify(providerPopup));
   assistantUiSelfCheckRecord(checks,'model-popup-configured-models-ready',modelPopup.shown&&modelPopup.optionCount>=1&&modelPopup.focusableCount===modelPopup.optionCount&&modelPopup.keyboardReady,JSON.stringify(modelPopup));
   assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped',[providerPopup,modelPopup,agentPopup,workflowPopup].every(s=>s.shown&&s.display==='block'&&s.rectReady&&s.opensAboveTrigger&&s.notToolbarClipped&&!s.className.includes('mode-popup')),JSON.stringify({providerPopup,modelPopup,agentPopup,workflowPopup}));
@@ -8082,6 +8139,8 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'saved-history-native-affordances-visible',savedHistoryAffordance.itemExists&&savedHistoryAffordance.nativeParts===2&&savedHistoryAffordance.nativeChanges===1&&savedHistoryAffordance.nativeRefs===1&&savedHistoryAffordance.nativeUsedContext===1&&savedHistoryAffordance.nativeTrees===1&&savedHistoryAffordance.nativeFollowups===1&&savedHistoryAffordance.nativeTokens===24&&savedHistoryAffordance.chipLabels.includes('2 parts')&&savedHistoryAffordance.chipLabels.includes('1 edit')&&savedHistoryAffordance.chipLabels.includes('1 ref')&&savedHistoryAffordance.chipLabels.includes('1 used')&&savedHistoryAffordance.chipLabels.includes('1 tree')&&savedHistoryAffordance.chipLabels.includes('1 follow-up')&&savedHistoryAffordance.chipLabels.includes('24 tok')&&savedHistoryAffordance.actionKinds.includes('references')&&savedHistoryAffordance.actionKinds.includes('changes')&&savedHistoryAffordance.actionKinds.includes('tree')&&savedHistoryAffordance.actionKinds.includes('reference-item')&&savedHistoryAffordance.actionKinds.includes('change-item')&&savedHistoryAffordance.actionKinds.includes('tree-item')&&savedHistoryAffordance.actionTargets.includes('file:///workspace/history.ts')&&savedHistoryAffordance.disabledActions.length===0&&savedHistoryAffordance.searchMatches&&savedHistoryAffordance.aria.includes('2 parts')&&savedHistoryAffordance.title.includes('Modified files: 1'),JSON.stringify(savedHistoryAffordance));
   assistantUiSelfCheckRecord(checks,'native-only-session-parts-persist',nativeOnlySession.normalizedCount===1&&nativeOnlySession.normalizedContent===''&&nativeOnlySession.hasNativePayload&&nativeOnlySession.serializedFollowups===1&&nativeOnlySession.renderedNativeParts>=1&&nativeOnlySession.renderedFollowups===1&&nativeOnlySession.nativeFollowups===1&&nativeOnlySession.summaryParts===1&&nativeOnlySession.summaryFollowups===1&&nativeOnlySession.searchMatches,JSON.stringify(nativeOnlySession));
   assistantUiSelfCheckRecord(checks,'change-set-state-restores-and-persists',changeSetRestore.before.state==='applied'&&changeSetRestore.before.appliedEdits===2&&changeSetRestore.before.statusText.includes('Applied 2')&&changeSetRestore.after.state==='previewed'&&changeSetRestore.after.previewedAt==='23456'&&changeSetRestore.patchedState==='previewed'&&changeSetRestore.storedState==='previewed'&&changeSetRestore.storedPreviewedDiffs===1,JSON.stringify(changeSetRestore));
+  assistantUiSelfCheckRecord(checks,'action-result-state-restores-and-persists',actionResultRestore.restoredDisabled&&actionResultRestore.restoredState==='submitted'&&actionResultRestore.restoredFlag==='true'&&actionResultRestore.restoredText.includes('✓')&&actionResultRestore.restoredNativeCount===1&&actionResultRestore.trayPendingAfterRestore===0&&actionResultRestore.patchedOk&&actionResultRestore.storedOk&&actionResultRestore.storedAction==='apply'&&actionResultRestore.storedCount===1,JSON.stringify(actionResultRestore));
+  assistantUiSelfCheckRecord(checks,'fork-lineage-history-visible',forkLineage.itemExists&&forkLineage.parentResource==='sao-ai-chat://local/parent-lineage-selfcheck'&&forkLineage.parentTitle==='Parent Assistant Session'&&forkLineage.labelTitle.includes('Forked from: Parent Assistant Session')&&forkLineage.actionLabels.includes('fork')&&forkLineage.searchMatches,JSON.stringify(forkLineage));
   assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready',workflowPopup.shown&&workflowPopup.workflowModeCount===3&&workflowPopup.workflowModeStrip&&workflowPopup.workflowModeToolbar&&workflowPopup.optionCount>=4&&workflowPopup.focusableCount===workflowPopup.optionCount&&workflowPopup.keyboardReady,JSON.stringify(workflowPopup));
   assistantUiSelfCheckRecord(checks,'workflow-popup-mode-smoke',workflowModeSmoke.states.length===3&&workflowModeSmoke.states.every(state=>state.strip&&state.toolbar&&state.active.includes(state.mode))&&workflowModeSmoke.selected.value==='assistant-selfcheck-flow'&&workflowModeSmoke.selected.mode==='on'&&workflowModeSmoke.selected.runDisabled===false&&workflowModeSmoke.custom.prompt==='selfcheck custom workflow prompt'&&workflowModeSmoke.custom.runDisabled===false,JSON.stringify(workflowModeSmoke));
   assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready',workflowEditor.modalExists&&workflowEditor.editorExists&&workflowEditor.rowCount===2&&workflowEditor.labelInputs===2&&workflowEditor.agentInputs===2&&workflowEditor.outputInputs===2&&workflowEditor.promptInputs===2&&workflowEditor.moveButtons===4&&workflowEditor.deleteButtons===2&&workflowEditor.addButtonExists&&workflowEditor.collectedCount===2&&workflowEditor.idReadOnly,JSON.stringify(workflowEditor));
@@ -17001,6 +17060,8 @@ function renderHistorySessionItem(list,session,index){
   item.dataset.sessionAgentId=String(session.agentId||'');
   item.dataset.sessionWorkflowId=String(session.workflowId||'');
   item.dataset.sessionApproval=String(session.approval||'');
+  item.dataset.sessionParentResource=String(session.parentSessionResource||'');
+  item.dataset.sessionParentTitle=String(session.parentSessionTitle||'');
   const nativeSummary=assistantHistorySessionNativeSummary(session);
   item.dataset.sessionNativeParts=String(nativeSummary.parts);
   item.dataset.sessionNativeTodos=String(nativeSummary.todos);
@@ -17025,6 +17086,7 @@ function renderHistorySessionItem(list,session,index){
     'Approval: '+String((session.approval?(t('approval_'+session.approval)||session.approval):'-')||'-'),
     'Agent: '+String(session.agentId||'Default'),
     'Workflow: '+String(session.workflowLabel||session.workflowId||'-'),
+    session.parentSessionResource?'Forked from: '+String(session.parentSessionTitle||session.parentSessionResource):'',
     nativeSummary.parts?'Response parts: '+nativeSummary.parts:'',
     nativeSummary.todos?'Todo items: '+nativeSummary.todos:'',
     nativeSummary.changes?'Modified files: '+nativeSummary.changes:'',
@@ -17240,6 +17302,90 @@ function assistantNativeOnlySessionSmokeSnapshot(){
     searchMatches:historyMatchesQuery([summary.searchText],'follow up')
   };
 }
+function assistantActionResultRestoreSmokeSnapshot(){
+  const body=document.createElement('div');
+  body.className='msg-body';
+  document.body.appendChild(body);
+  const part={
+    kind:'confirmation',
+    id:'action-result-selfcheck-part',
+    callbackId:'action-result-selfcheck-callback',
+    title:'Action result selfcheck',
+    message:'Persist Assistant action state',
+    buttons:[{label:'Apply',action:'apply',value:'apply'}]
+  };
+  const payload={
+    content:'',
+    responseParts:[part]
+  };
+  rememberAssistantNativePayload(body,payload);
+  renderChatResponseNativeParts(body,payload,'');
+  const firstButton=body.querySelector('[data-assistant-action-key]');
+  const actionKey=firstButton?String(firstButton.dataset.assistantActionKey||''):assistantResponsePartActionKey(part,part.buttons[0]);
+  body.replaceChildren();
+  payload.actionResults=[{key:actionKey,action:'apply',value:'apply',ok:true,submittedAt:12345}];
+  rememberAssistantNativePayload(body,payload);
+  renderChatResponseNativeParts(body,payload,'');
+  syncAssistantActionTray();
+  const restoredButton=body.querySelector('[data-assistant-action-key="'+actionKey+'"]');
+  const restoredPayload=assistantBodyNativePayload(body)||{};
+  const afterRestoreTray=assistantActionTraySnapshot();
+  const patchButton=document.createElement('button');
+  patchButton.type='button';
+  patchButton.dataset.assistantActionKey=actionKey;
+  body.appendChild(patchButton);
+  const patched=assistantResponseActionResultPatch(patchButton,{action:'apply',value:'apply',callbackId:'action-result-selfcheck-callback'},{ok:true},{actionKey});
+  const afterPatch=assistantBodyNativePayload(body)||{};
+  const stored=Array.isArray(afterPatch.actionResults)?afterPatch.actionResults.find(item=>String(item&&item.key||'')===actionKey):null;
+  const snapshot={
+    actionKey,
+    restoredDisabled:!!(restoredButton&&restoredButton.disabled),
+    restoredState:restoredButton?String(restoredButton.dataset.actionState||''):'',
+    restoredFlag:restoredButton?String(restoredButton.dataset.actionRestored||''):'',
+    restoredText:restoredButton?String(restoredButton.textContent||''):'',
+    restoredNativeCount:Array.isArray(restoredPayload.actionResults)?restoredPayload.actionResults.length:0,
+    trayPendingAfterRestore:afterRestoreTray.pendingCount,
+    patchedOk:!!(patched&&patched.ok),
+    storedOk:!!(stored&&stored.ok),
+    storedAction:stored?String(stored.action||''):'',
+    storedCount:Array.isArray(afterPatch.actionResults)?afterPatch.actionResults.length:0
+  };
+  body.remove();
+  syncAssistantActionTray();
+  return snapshot;
+}
+function assistantForkLineageSmokeSnapshot(){
+  const list=document.createElement('div');
+  list.style.display='none';
+  document.body.appendChild(list);
+  const session={
+    id:'fork-lineage-selfcheck',
+    title:'Forked child session',
+    status:'completed',
+    sessionResource:'sao-ai-chat://local/fork-lineage-selfcheck',
+    parentSessionResource:'sao-ai-chat://local/parent-lineage-selfcheck',
+    parentSessionTitle:'Parent Assistant Session',
+    provider:'openai',
+    model:'selfcheck-model',
+    mode:'agent',
+    agentId:'Default',
+    messages:[{role:'assistant',content:'fork lineage response'}]
+  };
+  const rendered=renderHistorySessionItem(list,session,0);
+  const item=rendered&&rendered.element;
+  const title=item?String((item.querySelector('.history-session-title')||{}).title||''):'';
+  const snapshot={
+    itemExists:!!item,
+    parentResource:item?String(item.dataset.sessionParentResource||''):'',
+    parentTitle:item?String(item.dataset.sessionParentTitle||''):'',
+    labelTitle:title,
+    aria:item?String(item.getAttribute('aria-label')||''):'',
+    actionLabels:item?Array.from(item.querySelectorAll('.history-session-action')).map(el=>String(el.textContent||'')):[],
+    searchMatches:historyMatchesQuery([session.title,session.sessionResource,session.id,session.provider,session.model,session.mode,session.agentId,session.parentSessionResource,session.parentSessionTitle],'parent assistant session')
+  };
+  list.remove();
+  return snapshot;
+}
 async function refreshHistory(){
   assistantSessionPersistCurrent({status:streaming?'inProgress':'completed'});
   const r=await call('list_history');const list=$('history-list');list.innerHTML='';
@@ -17249,7 +17395,7 @@ async function refreshHistory(){
   const backendEntries=(r&&Array.isArray(r.entries))?r.entries:[];
   const visibleSessions=localSessions.filter(s=>{
     const nativeSummary=assistantHistorySessionNativeSummary(s);
-    return historyMatchesQuery([s.title,s.sessionResource,s.id,s.provider,s.model,s.mode,s.agentId,s.workflowId,s.workflowLabel,s.approval,s.parentSessionResource,nativeSummary.searchText],query);
+    return historyMatchesQuery([s.title,s.sessionResource,s.id,s.provider,s.model,s.mode,s.agentId,s.workflowId,s.workflowLabel,s.approval,s.parentSessionResource,s.parentSessionTitle,nativeSummary.searchText],query);
   });
   const visibleBackend=backendEntries.filter(e=>historyMatchesQuery([e.title,e.id,e.message_count,e.model,assistantHistoryEntryNativeSummary(e).searchText],query));
   if(!visibleSessions.length&&!visibleBackend.length){list.innerHTML='<div class="sb-item" style="color:var(--fg-dim)" role="note">'+esc(query?'No matching chat sessions':t('no_history'))+'</div>';list.removeAttribute('aria-activedescendant');return}

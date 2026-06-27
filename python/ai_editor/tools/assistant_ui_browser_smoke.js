@@ -113,6 +113,8 @@ async function main() {
     "saved-history-native-affordances-visible",
     "native-only-session-parts-persist",
     "change-set-state-restores-and-persists",
+    "action-result-state-restores-and-persists",
+    "fork-lineage-history-visible",
     "workflow-popup-modes-ready",
     "workflow-result-state-rendered",
     "workflow-run-button-active-state",

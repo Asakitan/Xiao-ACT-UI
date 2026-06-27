@@ -5027,6 +5027,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'agent-popup-configured-agents-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'history-native-affordances-visible'" in html
            and "assistantUiSelfCheckRecord(checks,'saved-history-native-affordances-visible'" in html
+           and "assistantUiSelfCheckRecord(checks,'action-result-state-restores-and-persists'" in html
+           and "assistantUiSelfCheckRecord(checks,'fork-lineage-history-visible'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready'" in html
            and "function assistantWorkflowEditorSnapshot()" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready'" in html
@@ -5042,6 +5044,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'workflow-backend-execution-rendered'" in html
            and "assistantUiSelfCheckRecord(checks,'provider-session-state-smoke'" in html
            and "function assistantWorkflowModeSmokeSnapshot()" in html
+           and "function assistantActionResultRestoreSmokeSnapshot()" in html
+           and "function assistantForkLineageSmokeSnapshot()" in html
            and ".workflow-run-card" in html
            and ".workflow-run-step-agent" in html
            and ".workflow-result-card" in html
@@ -5061,6 +5065,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "panel.dataset.chatUiSelfCheckFailed=String(failed.length);" in html
            and "panel.dataset.chatUiSelfCheckTotal=String(checks.length);" in html
            and "function assistantChangeSetRestoreStateSnapshot()" in html
+           and "copyArray('actionResults','actionResults','action_results');" in html
+           and "parentSessionTitle:String(src.parentSessionTitle||'')" in html
+           and "item.dataset.sessionParentTitle=String(session.parentSessionTitle||'');" in html
            and "function chatChangeSetStatePatch(card,state,detail)" in html
            and "applyChatChangeSetRestoredState(card,payload);" in html
            and "window.runAssistantUiSelfCheck=runAssistantUiSelfCheck;" in html)
@@ -5082,6 +5089,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "saved-history-native-affordances-visible" in smoke_source
            and "native-only-session-parts-persist" in smoke_source
            and "change-set-state-restores-and-persists" in smoke_source
+           and "action-result-state-restores-and-persists" in smoke_source
+           and "fork-lineage-history-visible" in smoke_source
            and "workflow-result-state-rendered" in smoke_source
            and "workflow-run-button-active-state" in smoke_source
            and "channel: \"msedge\"" in smoke_source
