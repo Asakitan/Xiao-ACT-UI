@@ -9647,10 +9647,12 @@ console.log("frontend word separator behavior ok");
            and "class=\"settings-main\" id=\"settings-main\"" in html
            and "data-settings-title=\"AI / Endpoint\"" in html
            and "data-settings-title=\"Editor / Files\"" in html
-           and "function renderSettingsNav()" in html
-           and "function scrollToSettingsSection(id)" in html
-           and "function selectSettingsTarget(target,options)" in html
-           and "function updateSettingsNavCounts()" in html
+            and "function renderSettingsNav()" in html
+            and "function scrollToSettingsSection(id)" in html
+            and "function settingsFocusActiveSection()" in html
+            and "function settingsFocusSiblingSection(delta)" in html
+            and "function selectSettingsTarget(target,options)" in html
+            and "function updateSettingsNavCounts()" in html
            and "id=\"settings-target-summary\"" in html
            and "const SETTINGS_VIEW_STORAGE_KEY='sao.aiEditor.settings.view.v1';" in html
            and "function settingsRowMatchesTarget(row,target)" in html
@@ -9668,6 +9670,8 @@ console.log("frontend word separator behavior ok");
             and "installSettingsKeyboardHandlers();" in html
             and "settings-nav-summary" in html
             and "settings-nav-badge" in html
+            and "settings-nav-text" in html
+            and "settings-nav-meta" in html
             and "id=\"settings-nav-visible-count\"" in html
             and "id=\"settings-nav-modified-count\"" in html
             and "id=\"settings-nav-error-count\"" in html
@@ -9676,6 +9680,8 @@ console.log("frontend word separator behavior ok");
            and "showToast(resets.length?'Reset '+resets.length+' visible modified setting'" in html
             and "window.settingsToggleFilterToken=settingsToggleFilterToken;" in html
             and "window.settingsClearFilters=settingsClearFilters;" in html
+            and "window.settingsFocusActiveSection=settingsFocusActiveSection;" in html
+            and "window.settingsFocusSiblingSection=settingsFocusSiblingSection;" in html
             and "window.settingsComputeReviewState=settingsComputeReviewState;" in html
             and "window.settingsToggleSavePreview=settingsToggleSavePreview;" in html
             and "window.resetVisibleModifiedSettings=resetVisibleModifiedSettings;" in html
@@ -9732,6 +9738,9 @@ console.log("frontend word separator behavior ok");
             and "id=\"settings-current-detail\"" in html
             and "function settingsShowRowDetails(row)" in html
             and "function installSettingsScrollSync()" in html
+            and "function settingsVisibleSections()" in html
+            and "function settingsSectionPosition(section)" in html
+            and "function settingsRowPosition(row)" in html
             and "btn.setAttribute('aria-selected',active?'true':'false')" in html
             and "settingsUseSearchHint('@common')" in html
             and "id=\"settings-language-override-panel\"" in html
@@ -9751,6 +9760,15 @@ console.log("frontend word separator behavior ok");
             and "window.settingsRemoveLastFilterToken=settingsRemoveLastFilterToken;" in html
             and "function updateSettingsTitleStatus(visible,total)" in html
             and "settingsActiveSectionTitle()" in html
+            and "position:sticky; top:0; z-index:2" in html
+            and "detail-chip position" in html
+            and "SETTINGS_DENSITY_STORAGE_KEY='sao.aiEditor.settings.density.v1'" in html
+            and "function settingsReadDensity()" in html
+            and "function settingsApplyDensity(value)" in html
+            and "function settingsToggleDensity()" in html
+            and "id=\"settings-density-toggle\"" in html
+            and ".settings-modal.compact" in html
+            and "window.settingsToggleDensity=settingsToggleDensity;" in html
             and "settingsConfigureRowInJson(row,opts.key)" in html
             and "function settingValueState(meta,value,target)" in html
             and "dataset.settingValueState='1'" in html
@@ -9761,6 +9779,10 @@ console.log("frontend word separator behavior ok");
             and "className='before-after'" in html
             and "No visible matches. Remove a token or switch target." in html
             and "['f','l'].includes(String(ev.key||'').toLowerCase())" in html
+            and "String(ev.key||'')==='1'" in html
+            and "settingsFocusSiblingSection(1)" in html
+            and "settingsFocusBoundaryRow('first')" in html
+            and "settingsFocusPagedRow(1)" in html
             and "selectSettingsTarget('workspace',{preserveSearch:true})" in html
             and "settingsFocusVisibleRow(-1)" in html
             and "resetVisibleModifiedSettings();" in html
