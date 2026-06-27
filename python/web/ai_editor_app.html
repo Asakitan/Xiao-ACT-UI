@@ -1234,10 +1234,10 @@ pre.code-block code .type { color:var(--fg-type); }
 
 .chat-control-strip { display:flex; align-items:center; gap:5px; flex:1 1 auto; flex-wrap:nowrap; min-width:0;
   overflow:visible; max-width:100%;
-  --chat-provider-width:120px;
-  --chat-model-width:260px;
-  --chat-agent-width:154px;
-  --chat-workflow-width:150px; }
+  --chat-provider-width:126px;
+  --chat-model-width:280px;
+  --chat-agent-width:164px;
+  --chat-workflow-width:174px; }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
   border-radius:999px; background:var(--bg3); color:var(--fg); font:11px var(--sans);
   outline:none; min-width:0; box-sizing:border-box; appearance:none; -webkit-appearance:none; line-height:20px; }
@@ -1253,11 +1253,12 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-run-chip.running { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 55%,var(--border)); background:color-mix(in srgb,var(--fg-warning) 11%,var(--bg3)); }
 .chat-select-chip.mode { color:var(--fg-accent); border-color:color-mix(in srgb, var(--border-focus) 50%, var(--border)); }
 .chat-select-chip.agent.active { color:var(--fg); border-color:color-mix(in srgb, var(--fg-success) 45%, var(--border)); }
-.chat-control-menu { position:relative; display:inline-flex; align-items:center; flex:0 0 auto; min-width:0; }
+.chat-control-menu { position:relative; display:inline-flex; align-items:center; flex:0 0 auto; min-width:0; align-self:stretch; }
+#chat-provider-menu { width:var(--chat-provider-width); flex-basis:var(--chat-provider-width); }
 #chat-model-menu { flex:1 1 var(--chat-model-width); min-width:var(--chat-model-width); }
-.chat-control-native { display:none!important; visibility:hidden!important; position:absolute!important; width:0!important; height:0!important; opacity:0!important; pointer-events:none!important; appearance:none; -webkit-appearance:none; }
+.chat-control-native { display:none!important; visibility:hidden!important; position:absolute!important; inset:0 auto auto 0!important; width:0!important; height:0!important; opacity:0!important; pointer-events:none!important; appearance:none; -webkit-appearance:none; }
 .chat-control-trigger { display:inline-flex; align-items:center; gap:4px; justify-content:space-between; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-  border-radius:999px!important; background:var(--bg3); appearance:none!important; -webkit-appearance:none!important;
+  width:100%; min-height:22px; border-radius:999px!important; background:var(--bg3); appearance:none!important; -webkit-appearance:none!important;
   transition:border-color .14s ease, background .14s ease, color .14s ease, box-shadow .14s ease; }
 .chat-control-trigger .control-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-control-trigger .control-caret { font-size:8px; opacity:.65; margin-left:4px; flex:0 0 auto; }
@@ -1267,6 +1268,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-trigger.mode { width:92px; min-width:88px; max-width:120px; flex:0 0 92px; color:var(--fg-accent);
   border-color:color-mix(in srgb, var(--border-focus) 50%, var(--border)); }
 .chat-control-trigger.workflow { width:var(--chat-workflow-width); min-width:var(--chat-workflow-width); max-width:var(--chat-workflow-width); flex:0 0 var(--chat-workflow-width); }
+#chat-agent-menu { width:var(--chat-agent-width); flex-basis:var(--chat-agent-width); }
+#chat-workflow-menu { width:var(--chat-workflow-width); flex-basis:var(--chat-workflow-width); }
 .chat-control-popup { position:absolute; bottom:calc(100% + 7px); left:0; display:none; min-width:250px;
   max-width:min(420px, calc(100vw - 24px)); max-height:min(360px, 55vh); overflow:auto;
   background:color-mix(in srgb,var(--bg2) 92%,#000); border:1px solid color-mix(in srgb,var(--border-focus) 36%,var(--border));
@@ -2588,7 +2591,7 @@ pre.code-block { overflow:visible; }
                         <span class="control-label" id="chat-provider-trigger-label">OpenAI</span><span class="control-caret">▾</span>
                       </button>
                       <div class="chat-control-popup provider" id="chat-provider-popup" role="listbox" aria-label="Chat provider"></div>
-                      <select class="chat-select-chip chat-control-native" id="chat-provider-sel" title="Chat provider" aria-hidden="true" tabindex="-1">
+                      <select class="chat-select-chip chat-control-native" id="chat-provider-sel" title="Chat provider" aria-hidden="true" tabindex="-1" inert>
                         <option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
                         <option value="deepseek">DeepSeek</option><option value="ollama">Ollama</option>
                         <option value="custom">Custom</option>
@@ -2605,7 +2608,7 @@ pre.code-block { overflow:visible; }
                         <span class="control-label" id="chat-agent-trigger-label">Agent: Default</span><span class="control-caret">▾</span>
                       </button>
                       <div class="chat-control-popup agent" id="chat-agent-popup" role="listbox" aria-label="Active agent"></div>
-                      <select class="chat-select-chip agent muted chat-control-native" id="chat-agent-sel" title="Active agent" aria-hidden="true" tabindex="-1">
+                      <select class="chat-select-chip agent muted chat-control-native" id="chat-agent-sel" title="Active agent" aria-hidden="true" tabindex="-1" inert>
                         <option value="">Agent: Default</option>
                       </select>
                     </div>
@@ -2620,7 +2623,7 @@ pre.code-block { overflow:visible; }
                         <span class="control-label" id="chat-workflow-trigger-label">Workflow</span><span class="control-caret">▾</span>
                       </button>
                       <div class="chat-control-popup workflow" id="chat-workflow-popup" role="listbox" aria-label="Workflow"></div>
-                      <select class="chat-select-chip workflow muted chat-control-native" id="chat-workflow-sel" title="Workflow" aria-hidden="true" tabindex="-1">
+                      <select class="chat-select-chip workflow muted chat-control-native" id="chat-workflow-sel" title="Workflow" aria-hidden="true" tabindex="-1" inert>
                         <option value="">Workflow</option>
                       </select>
                     </div>
@@ -8720,7 +8723,7 @@ function assistantComposerLayoutSnapshot(){
   ids.forEach(id=>{items[id]=rect($(id))});
   const nativeControls=nativeIds.map(id=>{
     const el=$(id),style=el?getComputedStyle(el):null;
-    return {id,exists:!!el,display:style?style.display:'',visibility:style?style.visibility:'',width:el?Math.round(el.getBoundingClientRect().width):0,height:el?Math.round(el.getBoundingClientRect().height):0,ariaHidden:el?el.getAttribute('aria-hidden'):''};
+    return {id,exists:!!el,display:style?style.display:'',visibility:style?style.visibility:'',width:el?Math.round(el.getBoundingClientRect().width):0,height:el?Math.round(el.getBoundingClientRect().height):0,ariaHidden:el?el.getAttribute('aria-hidden'):'',inert:el?el.hasAttribute('inert'):false};
   });
   const controlRect=rect(controls),actionRect=rect(actions);
   return {
@@ -8736,7 +8739,7 @@ function assistantComposerLayoutSnapshot(){
     actions:actionRect,
     items,
     nativeControls,
-    nativeHidden:nativeControls.every(item=>item.exists&&item.display==='none'&&item.ariaHidden==='true')
+    nativeHidden:nativeControls.every(item=>item.exists&&item.display==='none'&&item.ariaHidden==='true'&&item.inert===true)
   };
 }
 function assistantVisualLayoutSnapshot(){
@@ -8775,7 +8778,7 @@ function assistantVisualLayoutSnapshot(){
   const nativeBoxes=['chat-provider-sel','chat-agent-sel','chat-workflow-sel'].map(id=>{
     const el=$(id),style=el?getComputedStyle(el):null;
     const r=rect(el);
-    return {id,exists:!!el,display:style?style.display:'',visibility:style?style.visibility:'',pointerEvents:style?style.pointerEvents:'',width:r?r.width:0,height:r?r.height:0,ariaHidden:el?String(el.getAttribute('aria-hidden')||''):''};
+    return {id,exists:!!el,display:style?style.display:'',visibility:style?style.visibility:'',pointerEvents:style?style.pointerEvents:'',width:r?r.width:0,height:r?r.height:0,ariaHidden:el?String(el.getAttribute('aria-hidden')||''):'',inert:el?el.hasAttribute('inert'):false};
   });
   const modelPopup=popupSnapshots.find(item=>item.kind==='model')||{};
   const workflowPopup=popupSnapshots.find(item=>item.kind==='workflow')||{};
@@ -8802,7 +8805,7 @@ function assistantVisualLayoutSnapshot(){
     buttonSurfaceReady:triggers.every(item=>item.exists&&item.tag==='button'&&item.radius>=10&&item.width>18&&item.height>=20),
     triggerMotionReady:triggers.every(item=>item.transition.includes('border-color')&&item.transition.includes('background')),
     nativeBoxes,
-    noOldNativeBoxes:nativeBoxes.every(item=>item.exists&&item.display==='none'&&item.ariaHidden==='true'&&item.width===0&&item.height===0),
+    noOldNativeBoxes:nativeBoxes.every(item=>item.exists&&item.display==='none'&&item.ariaHidden==='true'&&item.inert===true&&item.width===0&&item.height===0),
     triggerWidths:triggerWidthMap,
     controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=126&&triggerWidthMap['chat-model-inline']>=238&&triggerWidthMap['chat-agent-trigger']>=164&&triggerWidthMap['chat-workflow-trigger']>=174),
     popups:popupSnapshots,
@@ -23933,7 +23936,8 @@ function customEndpointSettingModelRows(provider){
   const pid=String(provider||config.provider||'').trim();
   const modelInput=$('s-model');
   const baseInput=$('s-baseurl');
-  const model=String((modelInput&&modelInput.value)||activeModelValue()||'').trim();
+  const quickModel=$('model-inp');
+  const model=String((modelInput&&modelInput.value)||(quickModel&&quickModel.value)||activeModelValue()||'').trim();
   const base=String((baseInput&&baseInput.value)||config.base_url||'').trim();
   if(!isCustomEndpointConfigured(pid,base))return [];
   if(isPlaceholderModelValue(model))return [];
@@ -24420,6 +24424,10 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Escape')closeChatControlPopups();
 });
 function renderChatControlOptions(){
+  ['chat-provider-sel','chat-agent-sel','chat-workflow-sel'].forEach(id=>{
+    const el=$(id);
+    if(el){el.setAttribute('aria-hidden','true');el.setAttribute('tabindex','-1');el.setAttribute('inert','');}
+  });
   const agentSel=$('chat-agent-sel');
   if(agentSel){
     agentSel.innerHTML='';

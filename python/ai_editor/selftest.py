@@ -4099,7 +4099,10 @@ def test_phase1_ai_editor_regressions() -> None:
             and ".chat-toolbar .spacer { display:none; }" in html
              and ".chat-control-strip { display:flex; align-items:center; gap:5px; flex:1 1 auto; flex-wrap:nowrap; min-width:0;" in html
              and "overflow:visible; max-width:100%;" in html
-             and "--chat-model-width:260px;" in html
+             and "--chat-provider-width:126px;" in html
+             and "--chat-model-width:280px;" in html
+             and "--chat-agent-width:164px;" in html
+             and "--chat-workflow-width:174px;" in html
              and "appearance:none; -webkit-appearance:none; line-height:20px;" in html
              and ".chat-select-chip { width:150px; max-width:208px; padding:0 9px; cursor:pointer; flex:0 1 150px; }" in html
              and ".chat-model-inline { width:100%; max-width:none; justify-content:space-between; font-family:var(--mono); flex:1 1 var(--chat-model-width); text-align:left; }" in html
@@ -4110,7 +4113,10 @@ def test_phase1_ai_editor_regressions() -> None:
              and ".chat-control-trigger.model { width:100%; min-width:var(--chat-model-width); max-width:none; flex:1 1 var(--chat-model-width); }" in html
              and ".chat-control-trigger.agent { width:var(--chat-agent-width); min-width:var(--chat-agent-width); max-width:var(--chat-agent-width); flex:0 0 var(--chat-agent-width); }" in html
              and ".chat-control-trigger.workflow { width:var(--chat-workflow-width); min-width:var(--chat-workflow-width); max-width:var(--chat-workflow-width); flex:0 0 var(--chat-workflow-width); }" in html
-            and ".chat-control-menu { position:relative; display:inline-flex; align-items:center; flex:0 0 auto; min-width:0; }" in html
+            and ".chat-control-menu { position:relative; display:inline-flex; align-items:center; flex:0 0 auto; min-width:0; align-self:stretch; }" in html
+            and "#chat-provider-menu { width:var(--chat-provider-width); flex-basis:var(--chat-provider-width); }" in html
+            and "#chat-agent-menu { width:var(--chat-agent-width); flex-basis:var(--chat-agent-width); }" in html
+            and "#chat-workflow-menu { width:var(--chat-workflow-width); flex-basis:var(--chat-workflow-width); }" in html
             and ".chat-control-popup.model { min-width:430px; }" in html
             and ".chat-control-popup.workflow { min-width:340px; }" in html
             and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px;" in html
@@ -4127,7 +4133,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and 'id="chat-agent-trigger" onclick="toggleChatControlPopup(event,\'agent\')"' in html
            and 'id="chat-agent-popup" role="listbox" aria-label="Active agent"' in html
            and 'id="chat-workflow-trigger" onclick="toggleChatControlPopup(event,\'workflow\')"' in html
-           and '<select class="chat-select-chip workflow muted chat-control-native" id="chat-workflow-sel" title="Workflow" aria-hidden="true" tabindex="-1">' in html
+           and '<select class="chat-select-chip workflow muted chat-control-native" id="chat-workflow-sel" title="Workflow" aria-hidden="true" tabindex="-1" inert>' in html
            and '<button class="chat-run-chip" id="chat-workflow-run" onclick="runToolbarWorkflow()" title="Run selected workflow">▶</button>\n                  </div>\n                  <div class="chat-composer-trailing" role="group"' in html
            and '<span class="spacer"></span>\n                  <div class="chat-composer-trailing" role="group"' not in html
            and '</span>\n                  </div>\n                </div>' in html)
@@ -4139,6 +4145,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "sameRow:!!(controlRect&&actionRect&&Math.abs(controlRect.top-actionRect.top)<=1)" in html
            and "composerRightAligned:!!(containerRect&&Math.abs(containerRect.right-contentRight)<=2)" in html
            and "noOldNativeBoxes:nativeBoxes.every" in html
+           and "item.inert===true" in html
            and "window.assistantComposerLayoutSnapshot=assistantComposerLayoutSnapshot;" in html
            and "window.assistantVisualLayoutSnapshot=assistantVisualLayoutSnapshot;" in html
            and "'chat-provider-trigger','chat-model-inline','chat-agent-trigger','chat-mode-trigger','chat-workflow-trigger','chat-workflow-run','chat-input-status'" in html)
@@ -4174,6 +4181,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function providerDefaultModelFromControls(provider)" in html
            and "function settingsModelListRows(provider)" in html
            and "function customEndpointSettingModelRows(provider)" in html
+           and "const quickModel=$('model-inp');" in html
+           and "const model=String((modelInput&&modelInput.value)||(quickModel&&quickModel.value)||activeModelValue()||'').trim();" in html
            and "function modelOptionRows()" in html
            and "if(!isCustomEndpointConfigured(pid,base))return [];" in html
            and "if(isPlaceholderModelValue(model))return [];" in html
@@ -4226,12 +4235,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "min-width:0; overflow:visible; white-space:nowrap; min-height:29px;" in html
            and ".chat-control-strip { display:flex; align-items:center; gap:5px; flex:1 1 auto; flex-wrap:nowrap; min-width:0;" in html
            and "overflow:visible; max-width:100%;" in html
-           and ".chat-control-native { display:none!important; visibility:hidden!important;" in html
+           and ".chat-control-native { display:none!important; visibility:hidden!important; position:absolute!important; inset:0 auto auto 0!important;" in html
            and "appearance:none; -webkit-appearance:none; line-height:20px;" in html
            and ".chat-control-trigger { display:inline-flex; align-items:center; gap:4px; justify-content:space-between;" in html
            and ".chat-control-trigger.provider { width:var(--chat-provider-width); min-width:var(--chat-provider-width); max-width:var(--chat-provider-width); flex:0 0 var(--chat-provider-width); }" in html
            and ".chat-control-trigger.model { width:100%; min-width:var(--chat-model-width); max-width:none; flex:1 1 var(--chat-model-width); }" in html
            and ".chat-control-trigger.workflow { width:var(--chat-workflow-width); min-width:var(--chat-workflow-width); max-width:var(--chat-workflow-width); flex:0 0 var(--chat-workflow-width); }" in html
+           and "#chat-provider-menu { width:var(--chat-provider-width); flex-basis:var(--chat-provider-width); }" in html
+           and "#chat-agent-menu { width:var(--chat-agent-width); flex-basis:var(--chat-agent-width); }" in html
+           and "#chat-workflow-menu { width:var(--chat-workflow-width); flex-basis:var(--chat-workflow-width); }" in html
            and ".chat-control-popup { position:absolute; bottom:calc(100% + 7px); left:0; display:none;" in html
            and "border-radius:10px; box-shadow:0 14px 36px #00000078,0 0 0 1px #ffffff08;" in html
            and ".chat-composer-action { width:22px; height:22px; border:1px solid transparent; border-radius:999px;" in html
