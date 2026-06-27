@@ -2047,9 +2047,13 @@ pre.code-block { overflow:visible; }
 .settings-field.settings-target-hidden { display:none !important; }
 .settings-field.builtin-setting { padding:7px 28px 7px 8px; border-radius:4px; margin:3px 0 6px;
   border-left:2px solid transparent; background:transparent; }
-.settings-field.builtin-setting:hover { background:color-mix(in srgb,var(--bg-hover) 62%,transparent); }
+.settings-field.builtin-setting.has-row-actions { padding-right:82px; }
+.settings-field.builtin-setting:hover,.settings-field.builtin-setting:focus-within { background:color-mix(in srgb,var(--bg-hover) 62%,transparent); }
+.settings-field.builtin-setting:focus { outline:1px solid color-mix(in srgb,var(--border-focus) 55%,transparent); outline-offset:-1px; }
+.settings-field.highlight { animation:settingsSectionFlash .65s ease-out; }
 .settings-field.builtin-setting.modified { border-left-color:var(--fg-accent); background:color-mix(in srgb,var(--fg-accent) 6%,transparent); }
 .settings-field.builtin-setting .s-reset { top:8px; transform:none; }
+.settings-field.has-row-actions .s-reset { right:76px; }
 .settings-field.builtin-setting > label:first-child,
 .settings-field.builtin-setting > .settings-check:first-child { margin-top:0; }
 .settings-built-meta { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin:5px 0 1px;
@@ -2062,6 +2066,14 @@ pre.code-block { overflow:visible; }
 .settings-built-chip.modified { display:none; color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); }
 .settings-field.modified .settings-built-chip.modified { display:inline-flex; }
 .settings-built-desc { margin:3px 0 0; color:var(--fg-dim); font-size:11px; line-height:1.35; }
+.settings-row-actions { position:absolute; top:6px; right:6px; display:flex; align-items:center; gap:3px;
+  opacity:0; transform:translateY(-1px); transition:opacity .12s ease, transform .12s ease; z-index:2; }
+.settings-field:hover > .settings-row-actions,.settings-field:focus-within > .settings-row-actions,
+.settings-field:focus > .settings-row-actions { opacity:1; transform:translateY(0); }
+.settings-row-action { width:22px; height:22px; border:1px solid var(--border); border-radius:4px;
+  background:var(--bg2); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; padding:0; }
+.settings-row-action:hover,.settings-row-action:focus { color:var(--fg); border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
+.settings-row-action:disabled { opacity:.35; cursor:default; }
 .settings-validation-summary { display:none; margin:0 0 8px; padding:7px 9px;
   border:1px solid var(--border); border-radius:var(--radius); background:var(--bg2);
   color:var(--fg-dim); font-size:12px; line-height:1.35; }
@@ -2076,12 +2088,17 @@ pre.code-block { overflow:visible; }
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .settings-filter-chip:hover { color:var(--fg); border-color:var(--fg-accent); }
 .settings-filter-summary { color:var(--fg-dim); font:11px var(--mono); min-height:16px; margin:-4px 0 8px; }
-.ext-setting-row { position:relative; margin-bottom:10px; padding:6px 28px 6px 8px;
+.ext-setting-row { position:relative; margin-bottom:8px; padding:6px 74px 6px 8px;
   border-left:2px solid transparent; border-radius:3px; }
+.ext-setting-row.has-row-actions { padding-right:104px; }
+.ext-setting-row:hover,.ext-setting-row:focus-within,.ext-setting-row:focus { background:color-mix(in srgb,var(--bg-hover) 62%,transparent); }
+.ext-setting-row:focus { outline:1px solid color-mix(in srgb,var(--border-focus) 55%,transparent); outline-offset:-1px; }
+.ext-setting-row.highlight { animation:settingsSectionFlash .65s ease-out; }
 .ext-setting-row.modified { border-left-color:var(--fg-accent); background:var(--bg-hover); }
 .ext-setting-row.hidden-setting { border-left-color:color-mix(in srgb,var(--fg-dim) 45%,transparent); opacity:.78; }
 .ext-setting-row.settings-field.modified { padding-left:8px; }
 .ext-setting-row .s-reset { top:8px; right:6px; transform:none; }
+.ext-setting-row.has-row-actions .s-reset { right:98px; }
 .ext-setting-head { display:flex; align-items:center; gap:6px; margin-bottom:2px; }
 .ext-setting-title { font-size:12px; color:var(--fg); font-weight:600; }
 .ext-setting-badge { display:none; font-size:9px; color:var(--fg-accent); border:1px solid var(--fg-accent);
@@ -3521,6 +3538,53 @@ function setSettingsInputValue(el,meta,value){
   else el.value=value!=null?String(value):'';
   try{el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}))}catch(e){}
 }
+function settingsCopyText(text,label){
+  text=String(text||'');
+  if(!text)return;
+  try{
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text);
+    }else{
+      const area=document.createElement('textarea');
+      area.value=text;area.style.position='fixed';area.style.opacity='0';
+      document.body.appendChild(area);area.select();document.execCommand('copy');area.remove();
+    }
+    showToast((label||'Setting')+' copied','success',1400);
+  }catch(e){showToast('Copy failed','warning',1800)}
+}
+function settingsSearchForKey(key){
+  const input=$('settings-search');if(!input)return;
+  const value='@id:'+String(key||'').trim();
+  if(!value.slice(4))return;
+  input.value=value;
+  input.focus&&input.focus();
+  if(currentSettingsTarget!=='extensions')selectSettingsTarget('extensions',{preserveSearch:true});
+  else scheduleFilterSettings(0);
+}
+function settingsHighlightRow(row){
+  if(!row)return;
+  try{row.scrollIntoView({block:'center',behavior:'smooth'})}catch(e){try{row.scrollIntoView()}catch(_e){}}
+  row.classList.add('highlight');
+  try{row.focus({preventScroll:true})}catch(e){try{row.focus()}catch(_e){}}
+  setTimeout(()=>row.classList.remove('highlight'),900);
+}
+function settingsAddRowActions(row,opts){
+  if(!row||row.querySelector('.settings-row-actions'))return;
+  opts=opts||{};
+  row.classList.add('has-row-actions');
+  const actions=document.createElement('div');actions.className='settings-row-actions';
+  const add=(label,title,handler,disabled)=>{
+    const btn=document.createElement('button');
+    btn.type='button';btn.className='settings-row-action';btn.textContent=label;btn.title=title;btn.disabled=!!disabled;
+    btn.onclick=ev=>{ev.preventDefault();ev.stopPropagation();if(!btn.disabled)handler&&handler(ev)};
+    actions.appendChild(btn);
+    return btn;
+  };
+  if(opts.key)add('⧉','Copy setting ID',()=>settingsCopyText(opts.key,'Setting ID'));
+  if(opts.key&&opts.searchable)add('⌕','Filter to this setting',()=>settingsSearchForKey(opts.key));
+  add('◎','Focus setting row',()=>settingsHighlightRow(row));
+  row.appendChild(actions);
+}
 function settingsFieldWrapper(inputId){
   const el=$(inputId);if(!el)return null;
   const existing=el.closest('.settings-field.builtin-setting');if(existing)return existing;
@@ -3537,11 +3601,15 @@ function wrapSettingsField(inputId){
   const wrap=settingsFieldWrapper(inputId);if(!wrap)return;
   wrap.dataset.settingKey=meta.key||meta.path||inputId;
   wrap.dataset.settingScope=meta.scope||'User';
+  wrap.tabIndex=0;
+  wrap.setAttribute('role','group');
+  wrap.setAttribute('aria-label',(meta.key||meta.path||inputId)+' setting');
   if(!wrap.querySelector('.s-reset')){
     const rst=document.createElement('span');rst.className='s-reset';rst.textContent='↻';rst.title='Reset to default';
-    rst.onclick=()=>{setSettingsInputValue(el,meta,settingDefaultValue(meta));markSettingsModified();scheduleFilterSettings(0)};
+    rst.onclick=()=>{setSettingsInputValue(el,meta,settingDefaultValue(meta));markSettingsModified();scheduleFilterSettings(0);showToast('Reset '+(meta.key||inputId),'info',1400)};
     wrap.appendChild(rst);
   }
+  settingsAddRowActions(wrap,{key:meta.key||meta.path||inputId,searchable:false});
   if(!wrap.querySelector('.settings-built-meta')){
     const metaRow=document.createElement('div');metaRow.className='settings-built-meta';
     const key=document.createElement('code');key.textContent=meta.key||meta.path||inputId;metaRow.appendChild(key);
@@ -24118,6 +24186,17 @@ function installSettingsKeyboardHandlers(){
     if(ev.key==='ArrowDown'&&ev.target&&ev.target.id==='settings-search'){
       const first=extensionSettingVisibleRows().find(Boolean);
       if(first){ev.preventDefault();extensionSettingFocusRow(first,{block:'nearest'});}
+      return;
+    }
+    const row=ev.target&&ev.target.closest?ev.target.closest('.settings-field.builtin-setting,.ext-setting-row'):null;
+    if(row&&(ev.ctrlKey||ev.metaKey)&&String(ev.key||'').toLowerCase()==='c'){
+      const key=row.dataset.extSettingKey||row.dataset.settingKey||'';
+      if(key){ev.preventDefault();settingsCopyText(key,'Setting ID');}
+      return;
+    }
+    if(row&&ev.key==='Enter'&&ev.target===row){
+      const input=row.querySelector('[data-ext-setting-input="1"],input,select,textarea,button');
+      if(input){ev.preventDefault();input.focus&&input.focus();}
     }
   });
 }
@@ -24370,6 +24449,7 @@ function resetVisibleModifiedSettings(){
   resets.forEach(btn=>{try{btn.click()}catch(e){}});
   markSettingsModified();
   scheduleFilterSettings(0);
+  showToast(resets.length?'Reset '+resets.length+' visible modified setting'+(resets.length===1?'':'s'):'No visible modified settings','info',1600);
 }
 function renderSettingsFilterSuggestions(){
   const list=$('settings-filter-suggestions'),input=$('settings-search');if(!list||!input)return;
@@ -27771,6 +27851,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       row.tabIndex=-1;
       row.setAttribute('role','group');
       row.setAttribute('aria-label',headerLabel+' '+key);
+      settingsAddRowActions(row,{key:key,searchable:true});
       if(!workspaceWritable)row.classList.add('scope-readonly');
       row.dataset.extSettingKey=key;
       row.dataset.extSettingOrder=String(inner.children.length);
@@ -28213,6 +28294,7 @@ async function renderExtensionSettings(){
       row.tabIndex=-1;
       row.setAttribute('role','group');
       row.setAttribute('aria-label',headerLabel+' '+key);
+      settingsAddRowActions(row,{key:key,searchable:true});
       if(isHiddenSetting)row.classList.add('hidden-setting');
       if(hiddenEditable)row.classList.add('hidden-editable');
       row.dataset.extSettingOrder=String(inner.children.length);

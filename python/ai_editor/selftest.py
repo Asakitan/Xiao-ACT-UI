@@ -9485,6 +9485,10 @@ console.log("frontend word separator behavior ok");
            and "function settingsClearFilters()" in html
            and "function renderSettingsQuickFilters(parsed)" in html
            and "function renderSettingsEmptyState(visible,total,parsed)" in html
+           and "function settingsAddRowActions(row,opts)" in html
+           and "function settingsCopyText(text,label)" in html
+           and "function settingsSearchForKey(key)" in html
+           and "function settingsHighlightRow(row)" in html
            and "function renderSettingsFilterSuggestions()" in html
            and "function removeSettingsFilterToken(token)" in html
            and "function invalidateSettingsFilterCache()" in html
@@ -9497,6 +9501,9 @@ console.log("frontend word separator behavior ok");
             and "id=\"settings-quick-filters\"" in html
             and "data-settings-filter-token=\"@modified\"" in html
             and "id=\"settings-empty-state\"" in html
+            and "className='settings-row-actions'" in html
+            and "settingsAddRowActions(wrap,{key:meta.key||meta.path||inputId,searchable:false});" in html
+            and "settingsAddRowActions(row,{key:key,searchable:true});" in html
             and "@([A-Za-z][A-Za-z0-9_-]*)" in html
             and "SETTINGS_SCOPE_FILTERS[scope]" in html
             and "visible of '+total+' settings groups" in html
@@ -9526,6 +9533,9 @@ console.log("frontend word separator behavior ok");
            and "function resetVisibleModifiedSettings()" in html
            and "function installSettingsKeyboardHandlers()" in html
            and "installSettingsKeyboardHandlers();" in html
+           and "row.dataset.extSettingKey||row.dataset.settingKey" in html
+           and "if(row&&ev.key==='Enter'&&ev.target===row)" in html
+           and "showToast(resets.length?'Reset '+resets.length+' visible modified setting'" in html
            and "window.settingsToggleFilterToken=settingsToggleFilterToken;" in html
            and "window.settingsClearFilters=settingsClearFilters;" in html
            and "window.resetVisibleModifiedSettings=resetVisibleModifiedSettings;" in html
