@@ -3945,10 +3945,10 @@ def test_phase1_ai_editor_regressions() -> None:
             and ".chat-select-chip { width:150px; max-width:208px; padding:0 9px; cursor:pointer; flex:0 1 150px; }" in html
             and ".chat-model-inline { width:190px; max-width:260px; justify-content:space-between; font-family:var(--mono); flex:0 1 190px; text-align:left; }" in html
             and ".chat-control-trigger { display:inline-flex; align-items:center; gap:4px; justify-content:space-between;" in html
-            and ".chat-control-trigger.provider { width:132px; max-width:188px; flex-basis:132px; }" in html
-            and ".chat-control-trigger.model { width:230px; max-width:320px; flex-basis:230px; }" in html
-            and ".chat-control-trigger.agent { width:168px; max-width:220px; flex-basis:168px; }" in html
-            and ".chat-control-trigger.workflow { width:178px; max-width:240px; flex-basis:178px; }" in html
+            and ".chat-control-trigger.provider { width:132px; min-width:124px; max-width:188px; flex:0 0 132px; }" in html
+            and ".chat-control-trigger.model { width:230px; min-width:210px; max-width:320px; flex:0 0 230px; }" in html
+            and ".chat-control-trigger.agent { width:168px; min-width:154px; max-width:220px; flex:0 0 168px; }" in html
+            and ".chat-control-trigger.workflow { width:178px; min-width:166px; max-width:240px; flex:0 0 178px; }" in html
             and ".chat-control-menu { position:relative; display:inline-flex; align-items:center; flex:0 0 auto; min-width:0; }" in html
             and ".chat-control-popup.model { min-width:390px; }" in html
             and ".chat-control-popup.workflow { min-width:340px; }" in html
@@ -4009,6 +4009,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function settingsModelListRows(provider)" in html
            and "function customEndpointSettingModelRows(provider)" in html
            and "function modelOptionRows()" in html
+           and "if(pid!=='custom'&&!base)return [];" in html
+           and "provider:pid||'custom'," in html
            and "if(meta.custom||isCustomEndpointModelMeta(meta))return true;" in html
            and "if(item&&(item.custom||isCustomEndpointModelMeta(item)))return 'Custom Endpoint';" in html
            and "normalizeControlList(chatProviderModelOptions[provider],'models')" in html
@@ -4016,6 +4018,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "settingsModelListRows(provider).forEach(model=>pushModel(model));" in html
            and "function preferredModelForProvider(provider)" in html
            and "const endpointSetting=customEndpointSettingModelRows(pid).map(controlItemId).find(Boolean);" in html
+           and "if(endpointSetting)return endpointSetting;" in html
            and "chatProviderModelOptions[String(provider||'')]=r.models.slice();" in html
            and "chatControlState.models=normalizeControlList(controls.models,'models');" in html
            and "if(controls.custom_models&&typeof controls.custom_models==='object')config.custom_models={...controls.custom_models};" in html
@@ -4039,11 +4042,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "overflow:visible; max-width:100%;" in html
            and ".chat-control-native { display:none!important; visibility:hidden!important;" in html
            and ".chat-control-trigger { display:inline-flex; align-items:center; gap:4px; justify-content:space-between;" in html
-           and ".chat-control-trigger.model { width:230px; max-width:320px; flex-basis:230px; }" in html
+           and ".chat-control-trigger.provider { width:132px; min-width:124px; max-width:188px; flex:0 0 132px; }" in html
+           and ".chat-control-trigger.model { width:230px; min-width:210px; max-width:320px; flex:0 0 230px; }" in html
+           and ".chat-control-trigger.workflow { width:178px; min-width:166px; max-width:240px; flex:0 0 178px; }" in html
            and ".chat-control-popup { position:absolute; bottom:calc(100% + 7px); left:0; display:none;" in html
            and ".chat-control-popup.show { display:block; }" in html
            and ".chat-control-popup.show { opacity:1; transform:translateY(0) scale(1); pointer-events:auto; }" in html
            and ".chat-control-popup.align-right { left:auto; right:0; }" in html
+           and ".chat-control-popup .mode-popup-item { display:flex; align-items:center; gap:8px; padding:7px 9px;" in html
+           and ".chat-control-popup .mode-popup-item .mp-label { font-weight:600; white-space:nowrap; min-width:0; overflow:hidden; text-overflow:ellipsis; }" in html
            and "@keyframes chatControlPopupIn" in html
            and "mode-popup chat-control-popup" not in html
            and "customSurface:!!(popup&&popup.classList.contains('chat-control-popup')&&popup.getAttribute('role')==='listbox')" in html

@@ -1249,12 +1249,12 @@ pre.code-block code .type { color:var(--fg-type); }
   transition:border-color .14s ease, background .14s ease, color .14s ease, box-shadow .14s ease; }
 .chat-control-trigger .control-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-control-trigger .control-caret { font-size:8px; opacity:.65; margin-left:4px; flex:0 0 auto; }
-.chat-control-trigger.provider { width:132px; max-width:188px; flex-basis:132px; }
-.chat-control-trigger.model { width:230px; max-width:320px; flex-basis:230px; }
-.chat-control-trigger.agent { width:168px; max-width:220px; flex-basis:168px; }
-.chat-control-trigger.mode { width:92px; max-width:120px; flex-basis:92px; color:var(--fg-accent);
+.chat-control-trigger.provider { width:132px; min-width:124px; max-width:188px; flex:0 0 132px; }
+.chat-control-trigger.model { width:230px; min-width:210px; max-width:320px; flex:0 0 230px; }
+.chat-control-trigger.agent { width:168px; min-width:154px; max-width:220px; flex:0 0 168px; }
+.chat-control-trigger.mode { width:92px; min-width:88px; max-width:120px; flex:0 0 92px; color:var(--fg-accent);
   border-color:color-mix(in srgb, var(--border-focus) 50%, var(--border)); }
-.chat-control-trigger.workflow { width:178px; max-width:240px; flex-basis:178px; }
+.chat-control-trigger.workflow { width:178px; min-width:166px; max-width:240px; flex:0 0 178px; }
 .chat-control-popup { position:absolute; bottom:calc(100% + 7px); left:0; display:none; min-width:250px;
   max-width:min(420px, calc(100vw - 24px)); max-height:min(360px, 55vh); overflow:auto;
   background:var(--bg2); border:1px solid color-mix(in srgb,var(--border-focus) 32%,var(--border));
@@ -1374,6 +1374,21 @@ pre.code-block code .type { color:var(--fg-type); }
   background:var(--fg-dim); position:absolute; top:1px; left:1px; transition:all .2s; }
 .mode-popup-toggle.on .mp-switch { background:var(--fg-accent); border-color:var(--fg-accent); }
 .mode-popup-toggle.on .mp-switch::after { left:13px; background:#fff; }
+.chat-control-popup .mode-popup-item { display:flex; align-items:center; gap:8px; padding:7px 9px;
+  cursor:pointer; font-size:12px; color:var(--fg); border-radius:7px; margin:1px 0; border:1px solid transparent;
+  background:transparent; min-height:30px; }
+.chat-control-popup .mode-popup-item:hover,
+.chat-control-popup .mode-popup-item.active { background:color-mix(in srgb,var(--fg-accent) 11%,var(--bg-hover));
+  border-color:color-mix(in srgb,var(--border-focus) 32%,transparent); }
+.chat-control-popup .mode-popup-item:focus { outline:1px solid var(--border-focus); outline-offset:-1px; background:var(--bg-hover); }
+.chat-control-popup .mode-popup-item .mp-icon { font-size:13px; width:18px; text-align:center; flex:0 0 18px; margin-top:0; color:var(--fg-accent); }
+.chat-control-popup .mode-popup-item .mp-body { flex:1 1 auto; min-width:0; }
+.chat-control-popup .mode-popup-item .mp-label { font-weight:600; white-space:nowrap; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.chat-control-popup .mode-popup-item .mp-desc { color:var(--fg-dim); font-size:11px; margin-top:2px; white-space:normal; line-height:1.35; }
+.chat-control-popup .workflow-mode-option { min-height:46px; align-items:center; justify-content:center; text-align:center; padding:7px 6px; }
+.chat-control-popup .workflow-mode-option .mp-icon { display:inline-flex; justify-content:center; }
+.chat-control-popup .workflow-mode-option .mp-label,
+.chat-control-popup .workflow-mode-option .mp-desc { text-align:center; }
 .chat-select-chip.agent { width:168px; max-width:220px; flex-basis:168px; }
 .chat-select-chip.workflow { width:178px; max-width:240px; flex-basis:178px; }
 .chat-run-chip { color:var(--fg-accent); background:color-mix(in srgb, var(--border-focus) 12%, var(--bg3)); }
@@ -8141,20 +8156,22 @@ function assistantControlPopupSnapshot(kind){
 function assistantCustomEndpointModelPickerSnapshot(){
   const previousConfig={provider:config.provider,base_url:config.base_url,model:config.model};
   const previousFetched=chatProviderModelOptions.custom;
+  const previousOpenAI=chatProviderModelOptions.openai;
   const modelInput=$('s-model'),baseInput=$('s-baseurl');
   const previousSettingModel=modelInput?modelInput.value:'';
   const previousSettingBase=baseInput?baseInput.value:'';
-  config.provider='custom';
+  config.provider='openai';
   config.base_url='https://custom.endpoint.example/v1';
   config.model='';
   if(modelInput)modelInput.value='custom-endpoint-setting-model';
   if(baseInput)baseInput.value='https://custom.endpoint.example/v1';
-  chatProviderModelOptions.custom=[{id:'custom-endpoint-fetched-model',name:'custom-endpoint-fetched-model'}];
+  chatProviderModelOptions.openai=[{id:'custom-endpoint-fetched-model',name:'custom-endpoint-fetched-model'}];
   renderChatControlPopups();
   const rows=modelOptionRows();
   const popup=assistantControlPopupSnapshot('model');
-  const preferred=preferredModelForProvider('custom');
+  const preferred=preferredModelForProvider('openai');
   chatProviderModelOptions.custom=previousFetched;
+  chatProviderModelOptions.openai=previousOpenAI;
   if(modelInput)modelInput.value=previousSettingModel;
   if(baseInput)baseInput.value=previousSettingBase;
   config.provider=previousConfig.provider;
@@ -8165,6 +8182,8 @@ function assistantCustomEndpointModelPickerSnapshot(){
     rowIds:rows.map(controlItemId),
     rowCount:rows.length,
     preferred,
+    provider:'openai',
+    baseUrl:'https://custom.endpoint.example/v1',
     settingValue:'custom-endpoint-setting-model',
     popupText:popup.visibleText,
     optionCount:popup.optionCount,
@@ -8518,7 +8537,7 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'provider-popup-keyboard-ready',providerPopup.shown&&providerPopup.optionCount>=1&&providerPopup.focusableCount===providerPopup.optionCount&&providerPopup.keyboardReady,JSON.stringify(providerPopup));
   assistantUiSelfCheckRecord(checks,'model-popup-configured-models-ready',modelPopup.shown&&modelPopup.optionCount>=1&&modelPopup.focusableCount===modelPopup.optionCount&&modelPopup.keyboardReady,JSON.stringify(modelPopup));
   assistantUiSelfCheckRecord(checks,'model-popup-custom-endpoint-models-ready',modelPopup.shown&&modelPopup.customModelCount>=1&&modelPopup.visibleText.includes('custom-endpoint-model')&&modelPopup.visibleText.toLowerCase().includes('custom endpoint'),JSON.stringify(modelPopup));
-  assistantUiSelfCheckRecord(checks,'model-popup-custom-endpoint-selection-ready',customEndpointModelPicker.rowIds.includes('custom-endpoint-setting-model')&&customEndpointModelPicker.rowIds.includes('custom-endpoint-fetched-model')&&customEndpointModelPicker.preferred==='custom-endpoint-setting-model'&&customEndpointModelPicker.optionCount>=2&&customEndpointModelPicker.customModelCount>=2&&customEndpointModelPicker.keyboardReady,JSON.stringify(customEndpointModelPicker));
+  assistantUiSelfCheckRecord(checks,'model-popup-custom-endpoint-selection-ready',customEndpointModelPicker.provider==='openai'&&customEndpointModelPicker.rowIds.includes('custom-endpoint-setting-model')&&customEndpointModelPicker.rowIds.includes('custom-endpoint-fetched-model')&&customEndpointModelPicker.preferred==='custom-endpoint-setting-model'&&customEndpointModelPicker.optionCount>=2&&customEndpointModelPicker.customModelCount>=2&&customEndpointModelPicker.keyboardReady,JSON.stringify(customEndpointModelPicker));
   assistantUiSelfCheckRecord(checks,'composer-native-selects-hidden',layout.nativeHidden===true,JSON.stringify(layout.nativeControls));
   assistantUiSelfCheckRecord(checks,'mode-popup-custom-control-ready',modePopup.shown&&modePopup.optionCount>=6&&modePopup.modeActionCount>=6&&modePopup.keyboardReady&&!modePopup.oldModePopupPresent&&modePopup.visibleText.includes('Agent')&&modePopup.visibleText.includes('Default Approvals'),JSON.stringify(modePopup));
   assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped',[providerPopup,modelPopup,agentPopup,modePopup,workflowPopup].every(s=>s.shown&&s.display==='block'&&s.rectReady&&s.opensAboveTrigger&&s.notToolbarClipped&&!s.className.includes('mode-popup')),JSON.stringify({providerPopup,modelPopup,agentPopup,modePopup,workflowPopup}));
@@ -23275,18 +23294,19 @@ function settingsModelListRows(provider){
 }
 function customEndpointSettingModelRows(provider){
   const pid=String(provider||config.provider||'').trim();
-  if(pid!=='custom')return [];
   const modelInput=$('s-model');
   const baseInput=$('s-baseurl');
   const model=String((modelInput&&modelInput.value)||config.model||'').trim();
+  const base=String((baseInput&&baseInput.value)||config.base_url||'').trim();
+  if(pid!=='custom'&&!base)return [];
   if(!model)return [];
   return [{
     id:model,
     name:model,
-    provider:'custom',
+    provider:pid||'custom',
     custom:true,
     description:'Custom endpoint model',
-    base_url:String((baseInput&&baseInput.value)||config.base_url||'').trim()
+    base_url:base
   }];
 }
 function modelOptionRows(){
@@ -23320,14 +23340,14 @@ function modelOptionRows(){
 }
 function preferredModelForProvider(provider){
   const pid=String(provider||config.provider||'').trim();
-  const defaultModel=providerDefaultModelFromControls(pid);
-  if(defaultModel)return defaultModel;
   const endpointSetting=customEndpointSettingModelRows(pid).map(controlItemId).find(Boolean);
   if(endpointSetting)return endpointSetting;
   const fetched=normalizeControlList(chatProviderModelOptions[pid],'models').map(controlItemId).find(Boolean);
   if(fetched)return fetched;
   const settings=settingsModelListRows(pid).map(controlItemId).find(Boolean);
   if(settings)return settings;
+  const defaultModel=providerDefaultModelFromControls(pid);
+  if(defaultModel)return defaultModel;
   const custom=Object.keys(config.custom_models||{}).sort().find(name=>{
     const meta=config.custom_models[name]||{};
     return isCustomEndpointModelMeta(meta)||String(meta.provider||meta.provider_id||meta.providerId||'')===pid;
