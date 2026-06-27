@@ -3842,13 +3842,13 @@ def test_phase1_ai_editor_regressions() -> None:
             and ".chat-toolbar .spacer { display:none; }" in html
             and ".chat-control-strip { display:flex; align-items:center; gap:4px; flex:1 1 auto; flex-wrap:nowrap; min-width:0;" in html
             and "overflow:visible; max-width:100%; }" in html
-            and ".chat-select-chip { width:136px; max-width:170px; padding:0 20px 0 8px; cursor:pointer; flex:0 1 136px; }" in html
-            and ".chat-model-inline { width:164px; max-width:220px; justify-content:space-between; font-family:var(--mono); flex:0 1 164px; text-align:left; }" in html
-            and ".chat-control-trigger.agent { width:142px; max-width:180px; flex-basis:142px; }" in html
-            and ".chat-select-chip.workflow { width:142px; max-width:190px; flex-basis:142px; }" in html
+            and ".chat-select-chip { width:142px; max-width:184px; padding:0 20px 0 9px; cursor:pointer; flex:0 1 142px; }" in html
+            and ".chat-model-inline { width:190px; max-width:260px; justify-content:space-between; font-family:var(--mono); flex:0 1 190px; text-align:left; }" in html
+            and ".chat-control-trigger.agent { width:150px; max-width:194px; flex-basis:150px; }" in html
+            and ".chat-control-trigger.workflow { width:154px; max-width:210px; flex-basis:154px; }" in html
             and ".chat-control-menu { position:relative; display:inline-flex; align-items:center; flex:0 0 auto; min-width:0; }" in html
-            and ".chat-control-popup.model { min-width:330px; }" in html
-            and ".chat-control-popup.workflow { min-width:310px; }" in html
+            and ".chat-control-popup.model { min-width:380px; }" in html
+            and ".chat-control-popup.workflow { min-width:340px; }" in html
             and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px;" in html
             and "margin-left:auto; flex:0 0 auto; min-width:max-content; width:max-content; flex-wrap:nowrap; overflow:hidden; white-space:nowrap;" in html
             and ".chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:5px; min-width:0; max-width:148px; flex:0 1 148px;" in html
@@ -3878,8 +3878,11 @@ def test_phase1_ai_editor_regressions() -> None:
            "let chatControlState={agents:[],workflows:[],providers:[],models:[]};" in html
            and "let chatProviderModelOptions=Object.create(null);" in html
            and "function providerMatchesModelMeta(meta,provider)" in html
+           and "function isCustomEndpointModelMeta(meta)" in html
            and "function providerDefaultModelFromControls(provider)" in html
            and "function modelOptionRows()" in html
+           and "if(meta.custom||isCustomEndpointModelMeta(meta))return true;" in html
+           and "if(item&&(item.custom||isCustomEndpointModelMeta(item)))return 'custom endpoint';" in html
            and "normalizeControlList(chatProviderModelOptions[provider],'models')" in html
            and "chatProviderModelOptions[String(provider||'')]=r.models.slice();" in html
            and "chatControlState.models=normalizeControlList(controls.models,'models');" in html
@@ -3904,12 +3907,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "overflow:visible; max-width:100%;" in html
            and ".chat-control-popup { position:absolute; bottom:calc(100% + 7px); left:0; display:none;" in html
            and ".chat-control-popup.show { display:block; }" in html
+           and ".chat-control-popup.align-right { left:auto; right:0; }" in html
            and "@keyframes chatControlPopupIn" in html
            and "mode-popup chat-control-popup" not in html
            and 'id="chat-mode-trigger" onclick="toggleChatControlPopup(event,\'mode\')"' in html
            and 'id="chat-mode-popup" role="listbox" aria-label="Mode and approvals"' in html
            and "function modePopupItem(kind,id,label,desc,icon,active)" in html
            and "function selectModeApprovalFromPopup(action)" in html
+           and "function positionChatControlPopup(kind)" in html
+           and "if(rect.right>window.innerWidth-8)popup.classList.add('align-right');" in html
            and "['provider','model','agent','mode','workflow'].forEach(kind=>" in html
            and "rectReady:!!(popupRect&&popupRect.width>=180&&popupRect.height>=20)" in html
            and "opensAboveTrigger:!!(popupRect&&triggerRect&&popupRect.bottom<=triggerRect.top+1)" in html
