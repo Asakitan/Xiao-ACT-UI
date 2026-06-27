@@ -8146,13 +8146,15 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'saved-history-native-affordances-visible',savedHistoryAffordance.itemExists&&savedHistoryAffordance.nativeParts===2&&savedHistoryAffordance.nativeChanges===1&&savedHistoryAffordance.nativeRefs===1&&savedHistoryAffordance.nativeUsedContext===1&&savedHistoryAffordance.nativeTrees===1&&savedHistoryAffordance.nativeFollowups===1&&savedHistoryAffordance.nativeActions===1&&savedHistoryAffordance.nativeActionErrors===0&&savedHistoryAffordance.nativeTokens===24&&savedHistoryAffordance.chipLabels.includes('2 parts')&&savedHistoryAffordance.chipLabels.includes('1 edit')&&savedHistoryAffordance.chipLabels.includes('1 ref')&&savedHistoryAffordance.chipLabels.includes('1 used')&&savedHistoryAffordance.chipLabels.includes('1 tree')&&savedHistoryAffordance.chipLabels.includes('1 follow-up')&&savedHistoryAffordance.chipLabels.includes('1 action')&&savedHistoryAffordance.chipLabels.includes('24 tok')&&savedHistoryAffordance.actionKinds.includes('references')&&savedHistoryAffordance.actionKinds.includes('changes')&&savedHistoryAffordance.actionKinds.includes('tree')&&savedHistoryAffordance.actionKinds.includes('reference-item')&&savedHistoryAffordance.actionKinds.includes('change-item')&&savedHistoryAffordance.actionKinds.includes('tree-item')&&savedHistoryAffordance.actionTargets.includes('file:///workspace/history.ts')&&savedHistoryAffordance.disabledActions.length===0&&savedHistoryAffordance.searchMatches&&savedHistoryAffordance.aria.includes('1 action')&&savedHistoryAffordance.title.includes('Submitted actions: 1'),JSON.stringify(savedHistoryAffordance));
   assistantUiSelfCheckRecord(checks,'saved-history-action-result-markers-visible',savedHistoryAffordance.nativeActions===1&&savedHistoryAffordance.nativeActionErrors===0&&savedHistoryAffordance.chipLabels.includes('1 action')&&savedHistoryAffordance.searchMatches&&savedHistoryAffordance.aria.includes('1 action')&&savedHistoryAffordance.title.includes('Submitted actions: 1'),JSON.stringify(savedHistoryAffordance));
   assistantUiSelfCheckRecord(checks,'saved-history-preview-ready',savedHistoryAffordance.actionKinds.includes('saved-history-preview')&&savedHistoryAffordance.previewButtonEnabled&&savedHistoryAffordance.previewModalExists&&savedHistoryAffordance.previewModalId==='saved-native-selfcheck'&&savedHistoryAffordance.previewTargets===3&&savedHistoryAffordance.previewActions===1&&savedHistoryAffordance.previewText.includes('Saved History Preview')&&savedHistoryAffordance.previewText.includes('history.ts'),JSON.stringify(savedHistoryAffordance));
+  assistantUiSelfCheckRecord(checks,'saved-history-preview-restore-modal-ready',savedHistoryAffordance.previewFocusTrap==='true'&&savedHistoryAffordance.previewPrimaryAction==='restore-history'&&savedHistoryAffordance.previewCloseAction==='close'&&savedHistoryAffordance.previewDetailItems>=5&&savedHistoryAffordance.previewText.includes('Restore')&&savedHistoryAffordance.previewText.includes('tree: history.ts')&&savedHistoryAffordance.previewText.includes('follow-up'),JSON.stringify(savedHistoryAffordance));
   assistantUiSelfCheckRecord(checks,'native-only-session-parts-persist',nativeOnlySession.normalizedCount===1&&nativeOnlySession.normalizedContent===''&&nativeOnlySession.hasNativePayload&&nativeOnlySession.serializedFollowups===1&&nativeOnlySession.renderedNativeParts>=1&&nativeOnlySession.renderedFollowups===1&&nativeOnlySession.nativeFollowups===1&&nativeOnlySession.summaryParts===1&&nativeOnlySession.summaryFollowups===1&&nativeOnlySession.searchMatches,JSON.stringify(nativeOnlySession));
   assistantUiSelfCheckRecord(checks,'change-set-state-restores-and-persists',changeSetRestore.before.state==='applied'&&changeSetRestore.before.appliedEdits===2&&changeSetRestore.before.statusText.includes('Applied 2')&&changeSetRestore.after.state==='previewed'&&changeSetRestore.after.previewedAt==='23456'&&changeSetRestore.patchedState==='previewed'&&changeSetRestore.storedState==='previewed'&&changeSetRestore.storedPreviewedDiffs===1,JSON.stringify(changeSetRestore));
   assistantUiSelfCheckRecord(checks,'action-result-state-restores-and-persists',actionResultRestore.restoredDisabled&&actionResultRestore.restoredState==='submitted'&&actionResultRestore.restoredFlag==='true'&&actionResultRestore.restoredText.includes('✓')&&actionResultRestore.restoredNativeCount===1&&actionResultRestore.trayPendingAfterRestore===0&&actionResultRestore.patchedOk&&actionResultRestore.storedOk&&actionResultRestore.storedAction==='apply'&&actionResultRestore.storedCount===1,JSON.stringify(actionResultRestore));
   assistantUiSelfCheckRecord(checks,'fork-lineage-history-visible',forkLineage.itemExists&&forkLineage.parentResource==='sao-ai-chat://local/parent-lineage-selfcheck'&&forkLineage.parentTitle==='Parent Assistant Session'&&forkLineage.parentId==='parent-lineage-selfcheck'&&forkLineage.branchChildren===1&&forkLineage.labelTitle.includes('Forked from: Parent Assistant Session')&&forkLineage.labelTitle.includes('Branches: 1')&&forkLineage.chipLabels.includes('fork: Parent Assistant Session')&&forkLineage.chipLabels.includes('1 branch')&&forkLineage.chipKinds.some(kind=>kind.includes('lineage'))&&forkLineage.actionLabels.includes('parent')&&forkLineage.actionLabels.includes('branches')&&forkLineage.actionLabels.includes('fork')&&forkLineage.actionKinds.includes('parent-session')&&forkLineage.actionKinds.includes('branch-sessions')&&forkLineage.parentButtonEnabled&&forkLineage.branchesButtonEnabled&&forkLineage.disabledActions.length===0&&forkLineage.searchMatches,JSON.stringify(forkLineage));
   assistantUiSelfCheckRecord(checks,'fork-lineage-chip-visible',forkLineage.chipLabels.includes('fork: Parent Assistant Session')&&forkLineage.chipLabels.includes('1 branch')&&forkLineage.chipKinds.some(kind=>kind.includes('lineage'))&&forkLineage.labelTitle.includes('Forked from: Parent Assistant Session')&&forkLineage.labelTitle.includes('Branches: 1'),JSON.stringify(forkLineage));
   assistantUiSelfCheckRecord(checks,'fork-branch-navigation-visible',forkLineage.parentId==='parent-lineage-selfcheck'&&forkLineage.branchChildren===1&&forkLineage.actionKinds.includes('parent-session')&&forkLineage.actionKinds.includes('branch-sessions')&&forkLineage.parentButtonEnabled&&forkLineage.branchesButtonEnabled&&forkLineage.disabledActions.length===0&&forkLineage.searchMatches,JSON.stringify(forkLineage));
-  assistantUiSelfCheckRecord(checks,'fork-branch-compare-visible',forkLineage.actionKinds.includes('branch-compare')&&forkLineage.compareButtonEnabled&&forkLineage.compareModalExists&&forkLineage.compareModalKind==='branch-compare'&&forkLineage.compareModalParentId==='parent-lineage-selfcheck'&&forkLineage.compareModalChildCount===1&&forkLineage.compareModalCards===3&&forkLineage.compareModalText.includes('Compare Assistant Branches')&&forkLineage.compareModalText.includes('Parent Assistant Session')&&forkLineage.compareModalText.includes('Alternative child branch'),JSON.stringify(forkLineage));
+  assistantUiSelfCheckRecord(checks,'fork-branch-compare-visible',forkLineage.actionKinds.includes('branch-compare')&&forkLineage.compareButtonEnabled&&forkLineage.compareModalExists&&forkLineage.compareModalKind==='branch-compare'&&forkLineage.compareModalParentId==='parent-lineage-selfcheck'&&forkLineage.compareModalChildCount===1&&forkLineage.compareModalCards===3&&forkLineage.compareModalFocusTrap==='true'&&forkLineage.compareModalText.includes('Compare Assistant Branches')&&forkLineage.compareModalText.includes('Parent Assistant Session')&&forkLineage.compareModalText.includes('Alternative child branch'),JSON.stringify(forkLineage));
+  assistantUiSelfCheckRecord(checks,'fork-branch-compare-detail-ready',forkLineage.compareModalDetailItems>=15&&forkLineage.compareModalText.includes('parent.ts')&&forkLineage.compareModalText.includes('current.ts')&&forkLineage.compareModalText.includes('branch.ts')&&forkLineage.compareModalText.includes('delta parent tokens')&&forkLineage.compareModalText.includes('delta current tokens'),JSON.stringify(forkLineage));
   assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready',workflowPopup.shown&&workflowPopup.workflowModeCount===3&&workflowPopup.workflowModeStrip&&workflowPopup.workflowModeToolbar&&workflowPopup.optionCount>=4&&workflowPopup.focusableCount===workflowPopup.optionCount&&workflowPopup.keyboardReady,JSON.stringify(workflowPopup));
   assistantUiSelfCheckRecord(checks,'workflow-popup-mode-smoke',workflowModeSmoke.states.length===3&&workflowModeSmoke.states.every(state=>state.strip&&state.toolbar&&state.active.includes(state.mode))&&workflowModeSmoke.selected.value==='assistant-selfcheck-flow'&&workflowModeSmoke.selected.mode==='on'&&workflowModeSmoke.selected.runDisabled===false&&workflowModeSmoke.custom.prompt==='selfcheck custom workflow prompt'&&workflowModeSmoke.custom.runDisabled===false,JSON.stringify(workflowModeSmoke));
   assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready',workflowEditor.modalExists&&workflowEditor.editorExists&&workflowEditor.rowCount===2&&workflowEditor.labelInputs===2&&workflowEditor.agentInputs===2&&workflowEditor.outputInputs===2&&workflowEditor.promptInputs===2&&workflowEditor.moveButtons===4&&workflowEditor.deleteButtons===2&&workflowEditor.addButtonExists&&workflowEditor.collectedCount===2&&workflowEditor.idReadOnly,JSON.stringify(workflowEditor));
@@ -16926,7 +16928,7 @@ function confirmDeleteAssistantSession(session){
   return window.confirm('Delete local chat session "'+title+'"?');
 }
 function assistantHistorySessionNativeSummary(session){
-  const summary={parts:0,todos:0,changes:0,refs:0,usedContext:0,trees:0,tokens:0,errors:0,followups:0,actions:0,actionErrors:0,models:Object.create(null),keywords:[],actionItems:[]};
+  const summary={parts:0,todos:0,changes:0,refs:0,usedContext:0,trees:0,tokens:0,errors:0,followups:0,actions:0,actionErrors:0,models:Object.create(null),keywords:[],actionItems:[],referenceItems:[],changeItems:[],treeItems:[],usedContextItems:[],followupItems:[]};
   (Array.isArray(session&&session.messages)?session.messages:[]).forEach(message=>{
     const payload=assistantSessionSerializableNativePayload(message&&message.nativePayload);
     if(!payload)return;
@@ -16949,14 +16951,32 @@ function assistantHistorySessionNativeSummary(session){
       payload.responseParts.forEach(part=>{
         if(!part)return;
         if(part.kind==='todoList')summary.todos+=(part.todo&&Array.isArray(part.todo.todoList))?part.todo.todoList.length:1;
-        else if(part.kind==='modifiedFilesConfirmation')summary.changes+=(part.modifiedFiles&&Array.isArray(part.modifiedFiles.files))?part.modifiedFiles.files.length:1;
+        else if(part.kind==='modifiedFilesConfirmation'){
+          const files=(part.modifiedFiles&&Array.isArray(part.modifiedFiles.files))?part.modifiedFiles.files:(Array.isArray(part.files)?part.files:[]);
+          summary.changes+=files.length||1;
+          files.slice(0,5-summary.changeItems.length).forEach(file=>{
+            if(summary.changeItems.length<5)summary.changeItems.push({label:String(file.title||file.name||file.path||file.uri||'edit'),path:String(file.path||file.uri||'')});
+          });
+        }
         else if(part.kind)summary.keywords.push(String(part.kind));
       });
     }
-    if(Array.isArray(payload.contentReferences))summary.refs+=payload.contentReferences.length;
-    if(Array.isArray(payload.usedContext))summary.usedContext+=payload.usedContext.length;
-    if(Array.isArray(payload.fileTrees))summary.trees+=payload.fileTrees.length;
-    if(Array.isArray(payload.followups))summary.followups+=payload.followups.length;
+    if(Array.isArray(payload.contentReferences)){
+      summary.refs+=payload.contentReferences.length;
+      payload.contentReferences.slice(0,5-summary.referenceItems.length).forEach(ref=>{if(summary.referenceItems.length<5)summary.referenceItems.push({label:String(ref.label||ref.title||ref.name||ref.path||ref.uri||'ref'),path:String(ref.path||ref.uri||'')})});
+    }
+    if(Array.isArray(payload.usedContext)){
+      summary.usedContext+=payload.usedContext.length;
+      payload.usedContext.slice(0,5-summary.usedContextItems.length).forEach(item=>{if(summary.usedContextItems.length<5)summary.usedContextItems.push({label:String(item.label||item.title||item.name||item.path||item.uri||'context'),path:String(item.path||item.uri||'')})});
+    }
+    if(Array.isArray(payload.fileTrees)){
+      summary.trees+=payload.fileTrees.length;
+      payload.fileTrees.slice(0,5-summary.treeItems.length).forEach(tree=>{if(summary.treeItems.length<5)summary.treeItems.push({label:String(tree.label||tree.title||tree.name||'tree'),path:String(tree.path||tree.uri||'')})});
+    }
+    if(Array.isArray(payload.followups)){
+      summary.followups+=payload.followups.length;
+      payload.followups.slice(0,5-summary.followupItems.length).forEach(item=>{if(summary.followupItems.length<5)summary.followupItems.push({label:String(item.title||item.label||item.message||'follow-up'),kind:String(item.kind||'')})});
+    }
     const usage=payload.usage||{};
     const total=Number(usage.total_tokens||usage.totalTokens||usage.total||0);
     if(Number.isFinite(total)&&total>0)summary.tokens+=total;
@@ -17070,6 +17090,36 @@ function assistantHistoryPreviewRows(summary){
     ['tokens',summary.tokens||0],['errors',summary.errors||0]
   ];
 }
+function assistantHistoryPreviewItemText(kind,item){
+  const label=String(item&&item.label||item&&item.title||item&&item.name||item&&item.key||item&&item.path||'');
+  const path=String(item&&item.path||item&&item.uri||'');
+  return (kind+': '+(label||path)).trim();
+}
+function assistantHistoryPreviewDetails(summary){
+  summary=summary||{};
+  const refs=Array.isArray(summary.referenceItems)?summary.referenceItems:[];
+  const changes=Array.isArray(summary.changeItems)?summary.changeItems:[];
+  const trees=Array.isArray(summary.treeItems)?summary.treeItems:[];
+  const used=Array.isArray(summary.usedContextItems)?summary.usedContextItems:[];
+  const followups=Array.isArray(summary.followupItems)?summary.followupItems:[];
+  const actions=Array.isArray(summary.actionItems)?summary.actionItems:[];
+  return [
+    ...changes.map(item=>assistantHistoryPreviewItemText('edit',item)),
+    ...refs.map(item=>assistantHistoryPreviewItemText('ref',item)),
+    ...trees.map(item=>assistantHistoryPreviewItemText('tree',item)),
+    ...used.map(item=>assistantHistoryPreviewItemText('used',item)),
+    ...followups.map(item=>assistantHistoryPreviewItemText('follow-up',item)),
+    ...actions.map(item=>assistantHistoryPreviewItemText('action',item))
+  ].filter(Boolean).slice(0,8);
+}
+function assistantHistoryPreviewDeltaRows(summary,base,label){
+  summary=summary||{};base=base||{};
+  return ['changes','refs','usedContext','trees','followups','actions','tokens'].map(key=>{
+    const delta=Number(summary[key]||0)-Number(base[key]||0);
+    const shown=delta>0?'+'+delta:String(delta);
+    return ['delta '+label+' '+key,shown];
+  });
+}
 function assistantHistoryPreviewCard(title,summary,extra){
   const card=document.createElement('div');
   card.className='assistant-history-preview-card';
@@ -17085,10 +17135,7 @@ function assistantHistoryPreviewCard(title,summary,extra){
     el.innerHTML='<span>'+esc(row[0])+'</span><b>'+esc(row[1])+'</b>';
     card.appendChild(el);
   });
-  const actions=Array.isArray(summary&&summary.actionItems)?summary.actionItems:[];
-  const refs=Array.isArray(summary&&summary.referenceItems)?summary.referenceItems:[];
-  const changes=Array.isArray(summary&&summary.changeItems)?summary.changeItems:[];
-  const items=[...actions.map(item=>'action: '+(item.label||item.key||'')),...refs.map(item=>'ref: '+(item.label||item.path||'')),...changes.map(item=>'edit: '+(item.label||item.path||''))].filter(Boolean).slice(0,5);
+  const items=assistantHistoryPreviewDetails(summary);
   if(items.length){
     const list=document.createElement('ul');list.className='assistant-history-preview-list';
     items.forEach(text=>{const li=document.createElement('li');li.textContent=text;list.appendChild(li)});
@@ -17096,28 +17143,58 @@ function assistantHistoryPreviewCard(title,summary,extra){
   }
   return card;
 }
+function assistantHistoryPreviewFocusable(panel){
+  return Array.from(panel.querySelectorAll('button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])')).filter(el=>!el.disabled&&el.offsetParent!==null);
+}
+function assistantCloseHistoryPreviewModal(modal,returnFocus){
+  if(!modal||!modal.parentNode)return;
+  modal.remove();
+  if(returnFocus&&typeof returnFocus.focus==='function')setTimeout(()=>returnFocus.focus(),0);
+}
 function assistantShowHistoryPreviewModal(title,cards,opts){
   const modal=document.createElement('div');
   modal.className='modal-bg open';
   modal.dataset.assistantHistoryPreview='true';
   modal.dataset.previewKind=String(opts&&opts.kind||'history-preview');
+  modal.dataset.focusTrap='true';
+  const returnFocus=opts&&opts.invoker&&typeof opts.invoker.focus==='function'?opts.invoker:document.activeElement;
   const panel=document.createElement('div');
   panel.className='modal';
   panel.style.width='640px';
   panel.setAttribute('role','dialog');
+  panel.setAttribute('aria-modal','true');
   panel.setAttribute('aria-label',title||'Assistant history preview');
   const h=document.createElement('h2');h.textContent=title||'Assistant history preview';panel.appendChild(h);
+  if(opts&&opts.description){
+    const desc=document.createElement('p');desc.className='muted';desc.textContent=String(opts.description);panel.appendChild(desc);
+  }
   const grid=document.createElement('div');grid.className='assistant-history-preview';
   (cards||[]).forEach(card=>grid.appendChild(card));
   panel.appendChild(grid);
   const buttons=document.createElement('div');buttons.className='modal-btns';
+  if(opts&&opts.primaryLabel){
+    const primary=document.createElement('button');primary.type='button';primary.className='primary';primary.textContent=String(opts.primaryLabel);
+    primary.dataset.previewAction=String(opts.primaryActionKind||'primary');
+    primary.onclick=()=>{if(typeof opts.primaryAction==='function')opts.primaryAction(modal);};
+    buttons.appendChild(primary);
+  }
   const close=document.createElement('button');close.type='button';close.textContent='Close';
-  close.onclick=()=>modal.remove();
+  close.dataset.previewAction='close';
+  close.onclick=()=>assistantCloseHistoryPreviewModal(modal,returnFocus);
   buttons.appendChild(close);panel.appendChild(buttons);
   modal.appendChild(panel);document.body.appendChild(modal);
-  modal.onclick=e=>{if(e.target===modal)modal.remove()};
-  modal.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();modal.remove()}};
-  setTimeout(()=>close.focus(),0);
+  modal.onclick=e=>{if(e.target===modal)assistantCloseHistoryPreviewModal(modal,returnFocus)};
+  modal.onkeydown=e=>{
+    if(e.key==='Escape'){e.preventDefault();assistantCloseHistoryPreviewModal(modal,returnFocus);return;}
+    if(e.key==='Tab'){
+      const focusable=assistantHistoryPreviewFocusable(panel);
+      if(!focusable.length)return;
+      const first=focusable[0],last=focusable[focusable.length-1];
+      if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+      else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+    }
+  };
+  setTimeout(()=>{const focusable=assistantHistoryPreviewFocusable(panel);(focusable[0]||close).focus();},0);
   return modal;
 }
 function assistantSessionBranchMeta(session,sessions){
@@ -17138,23 +17215,28 @@ function assistantSessionBranchMeta(session,sessions){
 function assistantShowSessionBranchCompare(session,branchMeta,sessions){
   branchMeta=branchMeta||assistantSessionBranchMeta(session,sessions||assistantSessionLoadItems());
   const cards=[];
+  const parentSummary=branchMeta.parentSession?assistantHistorySessionNativeSummary(branchMeta.parentSession):null;
+  const currentSummary=assistantHistorySessionNativeSummary(session);
   if(branchMeta.parentSession){
-    cards.push(assistantHistoryPreviewCard('Parent: '+String(branchMeta.parentTitle||branchMeta.parentId||'Session'),assistantHistorySessionNativeSummary(branchMeta.parentSession),[
+    cards.push(assistantHistoryPreviewCard('Parent: '+String(branchMeta.parentTitle||branchMeta.parentId||'Session'),parentSummary,[
       ['requests',String(branchMeta.parentSession.requestCount||0)],
       ['messages',String((branchMeta.parentSession.messages||[]).length)]
     ]));
   }
-  cards.push(assistantHistoryPreviewCard('Current: '+String(session&&session.title||session&&session.id||'Session'),assistantHistorySessionNativeSummary(session),[
+  cards.push(assistantHistoryPreviewCard('Current: '+String(session&&session.title||session&&session.id||'Session'),currentSummary,[
     ['requests',String(session&&session.requestCount||0)],
-    ['messages',String(((session&&session.messages)||[]).length)]
+    ['messages',String(((session&&session.messages)||[]).length)],
+    ...(parentSummary?assistantHistoryPreviewDeltaRows(currentSummary,parentSummary,'parent'):[])
   ]));
   (branchMeta.childSessions||[]).forEach(child=>{
-    cards.push(assistantHistoryPreviewCard('Branch: '+String(child.title||child.id||'Session'),assistantHistorySessionNativeSummary(child),[
+    const childSummary=assistantHistorySessionNativeSummary(child);
+    cards.push(assistantHistoryPreviewCard('Branch: '+String(child.title||child.id||'Session'),childSummary,[
       ['requests',String(child.requestCount||0)],
-      ['messages',String((child.messages||[]).length)]
+      ['messages',String((child.messages||[]).length)],
+      ...assistantHistoryPreviewDeltaRows(childSummary,currentSummary,'current')
     ]));
   });
-  const modal=assistantShowHistoryPreviewModal('Compare Assistant Branches',cards,{kind:'branch-compare'});
+  const modal=assistantShowHistoryPreviewModal('Compare Assistant Branches',cards,{kind:'branch-compare',invoker:document.activeElement,description:'Compare lineage, referenced context, edits, file trees, follow-ups, and submitted actions across related Assistant sessions.'});
   modal.dataset.parentId=String(branchMeta.parentId||'');
   modal.dataset.childCount=String(branchMeta.childCount||0);
   modal.dataset.currentId=String(session&&session.id||'');
@@ -17167,7 +17249,7 @@ function assistantShowSavedHistoryPreview(entry,nativeSummary){
       ['messages',String(entry&&entry.message_count||0)],
       ['model',String(entry&&entry.model||'-')]
     ])
-  ],{kind:'saved-history-preview'});
+  ],{kind:'saved-history-preview',invoker:document.activeElement,primaryLabel:'Restore',primaryActionKind:'restore-history',primaryAction:()=>loadHistoryConv(entry&&entry.id),description:'Preview the saved Assistant transcript metadata before restoring it into the chat.'});
   modal.dataset.savedHistoryId=String(entry&&entry.id||'');
   modal.dataset.previewActions=String(nativeSummary.actions||0);
   modal.dataset.previewTargets=String((nativeSummary.referenceItems||[]).length+(nativeSummary.changeItems||[]).length+(nativeSummary.treeItems||[]).length);
@@ -17417,6 +17499,7 @@ function assistantSavedHistoryAffordanceSmokeSnapshot(){
       referenceItems:[{path:'file:///workspace/history.ts',label:'history.ts',kind:'anchor'}],
       changeItems:[{path:'file:///workspace/history.ts',label:'history.ts',kind:'modifiedFilesConfirmation'}],
       treeItems:[{path:'file:///workspace/history.ts',label:'history.ts'}],
+      usedContextItems:[{path:'file:///workspace/context.ts',label:'context.ts'}],
       followupItems:[{label:'Continue with native history',kind:'ask'}],
       actionItems:[{label:'apply',key:'history-action-apply',status:'ok'}],
       searchText:'response parts todo list modified files changes edits references anchors used context file tree follow up suggestions prompts submitted actions action results confirmations questions tokens usage selfcheck-model'
@@ -17453,7 +17536,11 @@ function assistantSavedHistoryAffordanceSmokeSnapshot(){
   snapshot.previewModalId=modal?String(modal.dataset.savedHistoryId||''):'';
   snapshot.previewTargets=modal?Number(modal.dataset.previewTargets||0):0;
   snapshot.previewActions=modal?Number(modal.dataset.previewActions||0):0;
-  snapshot.previewText=modal?String(modal.textContent||'').replace(/\s+/g,' ').trim().slice(0,240):'';
+  snapshot.previewFocusTrap=modal?String(modal.dataset.focusTrap||''):'';
+  snapshot.previewPrimaryAction=modal?String(((modal.querySelector('[data-preview-action="restore-history"]')||{}).dataset||{}).previewAction||''):'';
+  snapshot.previewCloseAction=modal?String(((modal.querySelector('[data-preview-action="close"]')||{}).dataset||{}).previewAction||''):'';
+  snapshot.previewDetailItems=modal?modal.querySelectorAll('.assistant-history-preview-list li').length:0;
+  snapshot.previewText=modal?String(modal.textContent||'').replace(/\s+/g,' ').trim().slice(0,700):'';
   if(modal)modal.remove();
   list.remove();
   return snapshot;
@@ -17554,7 +17641,16 @@ function assistantForkLineageSmokeSnapshot(){
     model:'selfcheck-model',
     mode:'agent',
     agentId:'Default',
-    messages:[{role:'assistant',content:'parent response'}]
+    messages:[{role:'assistant',content:'parent response',nativePayload:{
+      model:'selfcheck-model',
+      responseParts:[{kind:'modifiedFilesConfirmation',files:[{uri:'file:///workspace/parent.ts',title:'parent.ts'}]}],
+      contentReferences:[{kind:'anchor',path:'file:///workspace/parent.ts',label:'parent.ts'}],
+      usedContext:[{kind:'file',path:'file:///workspace/shared-context.ts',label:'shared-context.ts'}],
+      fileTrees:[{label:'parent tree',items:[{name:'parent.ts',path:'file:///workspace/parent.ts'}]}],
+      followups:[{title:'Continue parent branch',message:'Continue parent branch',kind:'ask'}],
+      actionResults:[{key:'parent-action',action:'apply',ok:true}],
+      usage:{total_tokens:5}
+    }}]
   };
   const session={
     id:'fork-lineage-selfcheck',
@@ -17567,7 +17663,16 @@ function assistantForkLineageSmokeSnapshot(){
     model:'selfcheck-model',
     mode:'agent',
     agentId:'Default',
-    messages:[{role:'assistant',content:'fork lineage response'}]
+    messages:[{role:'assistant',content:'fork lineage response',nativePayload:{
+      model:'selfcheck-model',
+      responseParts:[{kind:'modifiedFilesConfirmation',files:[{uri:'file:///workspace/current.ts',title:'current.ts'}]}],
+      contentReferences:[{kind:'anchor',path:'file:///workspace/current.ts',label:'current.ts'}],
+      usedContext:[{kind:'file',path:'file:///workspace/current-context.ts',label:'current-context.ts'}],
+      fileTrees:[{label:'current tree',items:[{name:'current.ts',path:'file:///workspace/current.ts'}]}],
+      followups:[{title:'Continue current branch',message:'Continue current branch',kind:'ask'}],
+      actionResults:[{key:'current-action',action:'preview',ok:true}],
+      usage:{total_tokens:8}
+    }}]
   };
   const branchSession={
     id:'branch-lineage-selfcheck',
@@ -17580,7 +17685,16 @@ function assistantForkLineageSmokeSnapshot(){
     model:'selfcheck-model',
     mode:'agent',
     agentId:'Default',
-    messages:[{role:'assistant',content:'branch response'}]
+    messages:[{role:'assistant',content:'branch response',nativePayload:{
+      model:'selfcheck-model',
+      responseParts:[{kind:'modifiedFilesConfirmation',files:[{uri:'file:///workspace/branch.ts',title:'branch.ts'}]}],
+      contentReferences:[{kind:'anchor',path:'file:///workspace/branch.ts',label:'branch.ts'}],
+      usedContext:[{kind:'file',path:'file:///workspace/branch-context.ts',label:'branch-context.ts'}],
+      fileTrees:[{label:'branch tree',items:[{name:'branch.ts',path:'file:///workspace/branch.ts'}]}],
+      followups:[{title:'Continue alternative branch',message:'Continue alternative branch',kind:'ask'}],
+      actionResults:[{key:'branch-action',action:'apply',ok:true}],
+      usage:{total_tokens:13}
+    }}]
   };
   const sessions=[parentSession,session,branchSession];
   const rendered=renderHistorySessionItem(list,session,0,assistantSessionBranchMeta(session,sessions));
@@ -17610,8 +17724,10 @@ function assistantForkLineageSmokeSnapshot(){
     compareModalKind:compareModal?String(compareModal.dataset.previewKind||''):'',
     compareModalParentId:compareModal?String(compareModal.dataset.parentId||''):'',
     compareModalChildCount:compareModal?Number(compareModal.dataset.childCount||0):0,
+    compareModalFocusTrap:compareModal?String(compareModal.dataset.focusTrap||''):'',
     compareModalCards:compareModal?compareModal.querySelectorAll('.assistant-history-preview-card').length:0,
-    compareModalText:compareModal?String(compareModal.textContent||'').replace(/\s+/g,' ').trim().slice(0,260):'',
+    compareModalDetailItems:compareModal?compareModal.querySelectorAll('.assistant-history-preview-list li').length:0,
+    compareModalText:compareModal?String(compareModal.textContent||'').replace(/\s+/g,' ').trim().slice(0,1400):'',
     searchMatches:historyMatchesQuery([session.title,session.sessionResource,session.id,session.provider,session.model,session.mode,session.agentId,session.parentSessionResource,session.parentSessionTitle,assistantSessionBranchMeta(session,sessions).parentTitle,assistantSessionBranchMeta(session,sessions).childTitles.join(' '),'branches '+assistantSessionBranchMeta(session,sessions).childCount],'parent assistant session')
       && historyMatchesQuery([session.title,assistantSessionBranchMeta(session,sessions).childTitles.join(' '),'branches '+assistantSessionBranchMeta(session,sessions).childCount],'alternative child branch')
   };

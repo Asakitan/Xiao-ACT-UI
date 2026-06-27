@@ -4104,7 +4104,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantHistoryEntryNativeSummary(entry)" in html
            and "function assistantHistoryNativeSummaryChips(summary)" in html
            and "function assistantSavedHistoryActionButton(entry,kind,item)" in html
+           and "function assistantHistoryPreviewDetails(summary)" in html
+           and "function assistantHistoryPreviewDeltaRows(summary,base,label)" in html
            and "function assistantHistoryPreviewCard(title,summary,extra)" in html
+           and "function assistantHistoryPreviewFocusable(panel)" in html
+           and "function assistantCloseHistoryPreviewModal(modal,returnFocus)" in html
            and "function assistantShowSessionBranchCompare(session,branchMeta,sessions)" in html
            and "function assistantShowSavedHistoryPreview(entry,nativeSummary)" in html
            and "function assistantSessionBranchMeta(session,sessions)" in html
@@ -4166,6 +4170,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "preview.dataset.historyAction='saved-history-preview';" in html
            and "parentSession:parent||null" in html
            and "childSessions:children.slice(0,5)" in html
+           and "modal.dataset.focusTrap='true';" in html
+           and "primary.dataset.previewAction=String(opts.primaryActionKind||'primary');" in html
+           and "primaryActionKind:'restore-history'" in html
+           and "assistantHistoryPreviewDeltaRows(childSummary,currentSummary,'current')" in html
            and "assistantSessionOpenResource(session.parentSessionResource)" in html
            and "list.setAttribute('aria-activedescendant',active.id);" in html
            and "if(e.key==='ArrowDown'||e.key==='ArrowUp')" in html
@@ -5063,7 +5071,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'fork-lineage-chip-visible'" in html
            and "assistantUiSelfCheckRecord(checks,'fork-branch-navigation-visible'" in html
            and "assistantUiSelfCheckRecord(checks,'saved-history-preview-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'saved-history-preview-restore-modal-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'fork-branch-compare-visible'" in html
+           and "assistantUiSelfCheckRecord(checks,'fork-branch-compare-detail-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-popup-modes-ready'" in html
            and "function assistantWorkflowEditorSnapshot()" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-editor-step-cards-ready'" in html
@@ -5140,7 +5150,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "fork-lineage-chip-visible" in smoke_source
            and "fork-branch-navigation-visible" in smoke_source
            and "saved-history-preview-ready" in smoke_source
+           and "saved-history-preview-restore-modal-ready" in smoke_source
            and "fork-branch-compare-visible" in smoke_source
+           and "fork-branch-compare-detail-ready" in smoke_source
            and "workflow-result-state-rendered" in smoke_source
            and "workflow-run-button-active-state" in smoke_source
            and "channel: \"msedge\"" in smoke_source
