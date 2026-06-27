@@ -9725,6 +9725,15 @@ console.log("frontend word separator behavior ok");
             and "data-settings-filter-token=\"@common\"" in html
             and "function settingsGroupMatchesCommonFilter(group)" in html
             and "filters.common" in html
+            and "const SETTINGS_SECTION_DESCRIPTIONS={" in html
+            and "function renderSettingsSectionOverview(section)" in html
+            and "function renderSettingsSectionContext(visible,total)" in html
+            and "id=\"settings-section-context\"" in html
+            and "id=\"settings-current-detail\"" in html
+            and "function settingsShowRowDetails(row)" in html
+            and "function installSettingsScrollSync()" in html
+            and "btn.setAttribute('aria-selected',active?'true':'false')" in html
+            and "settingsUseSearchHint('@common')" in html
             and "function settingsRecordSearch(query,parsed)" in html
             and "id=\"settings-search-memory\"" in html
             and "function updateSettingsTitleStatus(visible,total)" in html
