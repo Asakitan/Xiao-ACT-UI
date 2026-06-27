@@ -3952,15 +3952,16 @@ def test_phase1_ai_editor_regressions() -> None:
             and ".chat-toolbar .spacer { display:none; }" in html
              and ".chat-control-strip { display:flex; align-items:center; gap:5px; flex:1 1 auto; flex-wrap:nowrap; min-width:0;" in html
              and "overflow:visible; max-width:100%;" in html
-             and "--chat-model-width:clamp(238px,28vw,360px);" in html
+             and "--chat-model-width:300px;" in html
              and "appearance:none; -webkit-appearance:none; line-height:20px;" in html
              and ".chat-select-chip { width:150px; max-width:208px; padding:0 9px; cursor:pointer; flex:0 1 150px; }" in html
              and ".chat-model-inline { width:190px; max-width:260px; justify-content:space-between; font-family:var(--mono); flex:0 1 190px; text-align:left; }" in html
              and ".chat-control-trigger { display:inline-flex; align-items:center; gap:4px; justify-content:space-between;" in html
-             and ".chat-control-trigger.provider { width:var(--chat-provider-width); min-width:126px; max-width:154px; flex:0 0 var(--chat-provider-width); }" in html
-             and ".chat-control-trigger.model { width:var(--chat-model-width); min-width:238px; max-width:360px; flex:0 0 var(--chat-model-width); }" in html
-             and ".chat-control-trigger.agent { width:var(--chat-agent-width); min-width:164px; max-width:228px; flex:0 0 var(--chat-agent-width); }" in html
-             and ".chat-control-trigger.workflow { width:var(--chat-workflow-width); min-width:174px; max-width:248px; flex:0 0 var(--chat-workflow-width); }" in html
+             and "#chat-model-menu { flex:1 1 var(--chat-model-width); min-width:var(--chat-model-width); }" in html
+             and ".chat-control-trigger.provider { width:var(--chat-provider-width); min-width:var(--chat-provider-width); max-width:var(--chat-provider-width); flex:0 0 var(--chat-provider-width); }" in html
+             and ".chat-control-trigger.model { width:100%; min-width:var(--chat-model-width); max-width:none; flex:1 1 var(--chat-model-width); }" in html
+             and ".chat-control-trigger.agent { width:var(--chat-agent-width); min-width:var(--chat-agent-width); max-width:var(--chat-agent-width); flex:0 0 var(--chat-agent-width); }" in html
+             and ".chat-control-trigger.workflow { width:var(--chat-workflow-width); min-width:var(--chat-workflow-width); max-width:var(--chat-workflow-width); flex:0 0 var(--chat-workflow-width); }" in html
             and ".chat-control-menu { position:relative; display:inline-flex; align-items:center; flex:0 0 auto; min-width:0; }" in html
             and ".chat-control-popup.model { min-width:430px; }" in html
             and ".chat-control-popup.workflow { min-width:340px; }" in html
@@ -4019,11 +4020,14 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function isCustomEndpointModelMeta(meta)" in html
            and "function isPlaceholderModelValue(value)" in html
            and "function activeModelValue()" in html
+           and "function normalizeEndpointUrl(value)" in html
+           and "function isCustomEndpointConfigured(provider,baseUrl)" in html
+           and "function ensureToolbarModelSelection(opts)" in html
            and "function providerDefaultModelFromControls(provider)" in html
            and "function settingsModelListRows(provider)" in html
            and "function customEndpointSettingModelRows(provider)" in html
            and "function modelOptionRows()" in html
-           and "if(pid!=='custom'&&!base)return [];" in html
+           and "if(!isCustomEndpointConfigured(pid,base))return [];" in html
            and "if(isPlaceholderModelValue(model))return [];" in html
             and "provider:pid||'custom'," in html
             and "if(meta.custom||isCustomEndpointModelMeta(meta))return true;" in html
@@ -4032,14 +4036,16 @@ def test_phase1_ai_editor_regressions() -> None:
             and "customEndpointSettingModelRows(provider).forEach(model=>pushModel(model));" in html
             and "settingsModelListRows(provider).forEach(model=>pushModel(model));" in html
             and "customEndpointSettingModelRows(provider).forEach(model=>pushModel(model));\n  settingsModelListRows(provider).forEach(model=>pushModel(model));\n  normalizeControlList(chatProviderModelOptions[provider],'models').forEach(model=>pushModel" in html
-            and "custom:provider==='custom'||!!String(config.base_url||'').trim()" in html
-            and "const activeModel=activeModelValue();" in html
+            and "custom:isCustomEndpointConfigured(provider,config.base_url)" in html
+            and "const activeModel=ensureToolbarModelSelection({persist:false});" in html
            and "function preferredModelForProvider(provider)" in html
            and "const endpointSetting=customEndpointSettingModelRows(pid).map(controlItemId).find(Boolean);" in html
            and "if(endpointSetting)return endpointSetting;" in html
            and "let chatProviderModelFetchKeys=Object.create(null);" in html
            and "function providerApiKeyForChat(provider)" in html
            and "function refreshChatModelOptionsForProvider(provider,opts)" in html
+           and "function syncEndpointDraftToChatControls(opts)" in html
+           and "el.addEventListener('change',()=>syncEndpointDraftToChatControls({fetch:true}));" in html
            and "call('list_provider_models',pid,base,providerApiKeyForChat(pid))" in html
            and "if(kind==='model')refreshChatModelOptionsForProvider(config.provider,{force:false}).catch(()=>{});" in html
            and "chatProviderModelOptions[String(provider||'')]=r.models.slice();" in html
@@ -4066,9 +4072,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".chat-control-native { display:none!important; visibility:hidden!important;" in html
            and "appearance:none; -webkit-appearance:none; line-height:20px;" in html
            and ".chat-control-trigger { display:inline-flex; align-items:center; gap:4px; justify-content:space-between;" in html
-           and ".chat-control-trigger.provider { width:var(--chat-provider-width); min-width:126px; max-width:154px; flex:0 0 var(--chat-provider-width); }" in html
-           and ".chat-control-trigger.model { width:var(--chat-model-width); min-width:238px; max-width:360px; flex:0 0 var(--chat-model-width); }" in html
-           and ".chat-control-trigger.workflow { width:var(--chat-workflow-width); min-width:174px; max-width:248px; flex:0 0 var(--chat-workflow-width); }" in html
+           and ".chat-control-trigger.provider { width:var(--chat-provider-width); min-width:var(--chat-provider-width); max-width:var(--chat-provider-width); flex:0 0 var(--chat-provider-width); }" in html
+           and ".chat-control-trigger.model { width:100%; min-width:var(--chat-model-width); max-width:none; flex:1 1 var(--chat-model-width); }" in html
+           and ".chat-control-trigger.workflow { width:var(--chat-workflow-width); min-width:var(--chat-workflow-width); max-width:var(--chat-workflow-width); flex:0 0 var(--chat-workflow-width); }" in html
            and ".chat-control-popup { position:absolute; bottom:calc(100% + 7px); left:0; display:none;" in html
            and ".chat-control-popup.show { display:block; }" in html
            and ".chat-control-popup.show { opacity:1; transform:translateY(0) scale(1); pointer-events:auto; }" in html
