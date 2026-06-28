@@ -11582,6 +11582,7 @@ console.log("frontend word separator behavior ok");
     _check("frontend renders dynamic extension runtime surfaces in settings",
            "id=\"extension-runtime-panel\"" in html
            and "id=\"extension-runtime-summary\"" in html
+           and "id=\"extension-runtime-health\"" in html
            and "id=\"extension-runtime-list\"" in html
            and "id=\"extension-runtime-refresh\"" in html
            and "id=\"extension-runtime-filter-text\"" in html
@@ -11620,6 +11621,8 @@ console.log("frontend word separator behavior ok");
            and "const EXTENSION_RUNTIME_SURFACE_CACHE_MS=900;" in html
            and "function extensionRuntimeSurfaceCacheFresh(force)" in html
            and "function setExtensionRuntimeSurfaceLoading(loading)" in html
+           and "function extensionRuntimeHealthDeckRows(rows,summary)" in html
+           and "function renderExtensionRuntimeHealthDeck(rows,summary)" in html
            and "function renderExtensionRuntimeSurfacePanel(data)" in html
            and "async function renderExtensionRuntimeSurfaces(force)" in html
            and "window.renderExtensionRuntimeSurfaces=renderExtensionRuntimeSurfaces;" in html
@@ -11658,6 +11661,10 @@ console.log("frontend word separator behavior ok");
            and "panel.dataset.runtimeSurfaceCount=String(summary.dynamicSurfaces||rows.length||0);" in html
            and "panel.dataset.runtimeOnlySurfaceCount=String(summary.runtimeOnlySurfaces||rows.filter(row=>row.source==='runtime-only').length);" in html
            and "panel.dataset.providerBackedWebviewCount=String(summary.providerBackedWebviews||rows.filter(row=>row.kind==='WebviewView'&&row.providerBacked).length);" in html
+           and "panel.dataset.runtimeHealthCardCount=String(healthCards.length);" in html
+           and "panel.dataset.runtimeHealthWarnings=String(cards.filter(card=>card.state==='warning').length);" in html
+           and "panel.dataset.runtimeHealthErrors=String(cards.filter(card=>card.state==='error').length);" in html
+           and "panel.dataset.runtimeHealthFilters=cards.map(card=>card.filter).join(',');" in html
            and "panel.dataset.runtimeVisibleCount=String(visible);" in html
            and "panel.dataset.runtimeTotalCount=String(total);" in html
            and "panel.dataset.runtimeLastAction=action.type||'inspect';" in html
@@ -11687,6 +11694,10 @@ console.log("frontend word separator behavior ok");
            and ".extension-runtime-evidence" in html
            and ".extension-runtime-mini-action" in html
            and ".extension-runtime-chip.filterable" in html
+           and ".extension-runtime-health" in html
+           and ".extension-runtime-health-card" in html
+           and ".extension-runtime-health-card[data-state=\"warning\"]" in html
+           and ".extension-runtime-health-card[data-state=\"error\"]" in html
            and ".extension-runtime-row.selected" in html
            and ".extension-runtime-row[data-action-state=\"success\"] .extension-runtime-action" in html
            and ".extension-runtime-row[data-action-state=\"error\"] .extension-runtime-action" in html
@@ -11740,6 +11751,14 @@ console.log("frontend word separator behavior ok");
            and "['Bridge Ready',summary.webviewBridgeReady||" in html
            and "['Message Stalled',summary.webviewMessageStalled||" in html
            and "['Webview Failures',summary.webviewFailureCount||" in html
+           and "{id:'ready',label:'Readiness'" in html
+           and "{id:'bridge',label:'Bridge'" in html
+           and "{id:'messages',label:'Messages'" in html
+           and "{id:'resources',label:'Resources'" in html
+           and "{id:'failures',label:'Failures'" in html
+           and "btn.className='extension-runtime-health-card';" in html
+           and "btn.dataset.runtimeHealthFilter=card.filter;" in html
+           and "evidenceSel.value=card.filter;" in html
            and "if(v==='bridge-ready')return ev.bridgeHealth==='ready';" in html
            and "runtimeWebviewReadyRows" in html
            and "runtimeWebviewWarningRows" in html
@@ -13990,6 +14009,7 @@ console.log("extension setting schema helpers ok");
            and "showCustomEditorPlaceholder(customHost" in html
            and "renderNotebookOutputs(notebookOutputHost" in html
            and "renderExtensionRuntimeSurfacePanel(runtimeData);" in html
+           and "'extension-runtime-summary','extension-runtime-health','extension-runtime-list','extension-runtime-status'" in html
            and "viewContainers:[fixtureItem]" in html
            and "runtimeOpenableRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(item=>item.dataset.openable==='1').length:0" in html
            and "runtimeActionTypes:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.action||''):[]" in html
@@ -14000,6 +14020,12 @@ console.log("extension setting schema helpers ok");
            and "runtimeMissingEvidenceRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewEvidenceStatus==='missing').length:0" in html
            and "runtimeEvidencePills:runtimeList?runtimeList.querySelectorAll('.extension-runtime-evidence').length:0" in html
            and "runtimeMiniActionButtons:runtimeList?runtimeList.querySelectorAll('.extension-runtime-mini-action').length:0" in html
+           and "runtimeHealthCards:runtimeHealth?runtimeHealth.querySelectorAll('.extension-runtime-health-card').length:0" in html
+           and "runtimeHealthStates:runtimeHealth?Array.from(runtimeHealth.querySelectorAll('.extension-runtime-health-card')).map(item=>item.dataset.runtimeHealthState||''):[]" in html
+           and "runtimeHealthFilters:runtimeHealth?Array.from(runtimeHealth.querySelectorAll('.extension-runtime-health-card')).map(item=>item.dataset.runtimeHealthFilter||''):[]" in html
+           and "runtimeHealthWarnings:(()=>{const panel=$('extension-runtime-panel');return panel?Number(panel.dataset.runtimeHealthWarnings)||0:0})()" in html
+           and "runtimeHealthErrors:(()=>{const panel=$('extension-runtime-panel');return panel?Number(panel.dataset.runtimeHealthErrors)||0:0})()" in html
+           and "runtimeHealthFilterVisible:(()=>{const card=runtimeHealth&&runtimeHealth.querySelector('[data-runtime-health-filter=\"bridge-warning\"]')" in html
            and "runtimeRowKeys:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.key||'').filter(Boolean).length:0" in html
            and "runtimeContainerRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(item=>item.dataset.container==='selftest.dynamic.container').length:0" in html
            and "const runtimeActionRowByType=type=>runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).find(row=>row.dataset.action===type):null;" in html
@@ -14047,6 +14073,12 @@ console.log("extension setting schema helpers ok");
            and "snapshot.notebookOutputItems===3" in html
            and "snapshot.runtimeRows>=12" in html
            and "snapshot.runtimeChips>=15" in html
+           and "snapshot.runtimeHealthCards===5" in html
+           and "snapshot.runtimeHealthWarnings>=2" in html
+           and "snapshot.runtimeHealthErrors>=1" in html
+           and "snapshot.runtimeHealthFilterVisible>=1" in html
+           and "['bridge-warning','resource-warning','failures'].every(filter=>snapshot.runtimeHealthFilters.includes(filter))" in html
+           and "['queued','dropped','message-stalled'].some(filter=>snapshot.runtimeHealthFilters.includes(filter))" in html
            and "snapshot.runtimeOpenableRows===snapshot.runtimeRows" in html
            and "snapshot.runtimeOpenableRows>=12" in html
            and "snapshot.runtimeActionButtons===snapshot.runtimeRows" in html

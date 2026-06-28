@@ -2245,6 +2245,17 @@ button.review-pill { cursor:pointer; }
 .extension-runtime-chip.filterable { cursor:pointer; }
 .extension-runtime-chip.filterable:hover,.extension-runtime-chip.filterable:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
 .extension-runtime-chip.active { color:var(--fg-accent); border-color:var(--fg-accent); background:color-mix(in srgb,var(--fg-accent) 7%,transparent); }
+.extension-runtime-health { display:grid; grid-template-columns:repeat(5,minmax(112px,1fr)); gap:5px;
+  padding:7px 8px; border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent); }
+.extension-runtime-health-card { min-width:0; min-height:48px; display:grid; gap:2px; align-content:center;
+  padding:6px 7px; border:1px solid var(--border); border-radius:5px; background:color-mix(in srgb,var(--bg2) 72%,transparent);
+  color:var(--fg-dim); text-align:left; font:10px var(--mono); cursor:pointer; }
+.extension-runtime-health-card strong { color:var(--fg); font:600 13px var(--sans); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.extension-runtime-health-card span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.extension-runtime-health-card:hover,.extension-runtime-health-card:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
+.extension-runtime-health-card[data-state="ready"] { border-color:color-mix(in srgb,var(--fg-success) 42%,var(--border)); }
+.extension-runtime-health-card[data-state="warning"] { border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
+.extension-runtime-health-card[data-state="error"] { border-color:color-mix(in srgb,var(--fg-error) 54%,var(--border)); }
 .extension-runtime-list { display:grid; gap:1px; padding:4px; }
 .extension-runtime-row { display:grid; grid-template-columns:92px minmax(0,1fr) auto auto auto; gap:7px; align-items:center; min-height:28px; padding:4px 6px; border-radius:4px; color:var(--fg-dim); font-size:11px; }
 .extension-runtime-row:hover,.extension-runtime-row:focus { background:var(--bg-hover); outline:1px solid color-mix(in srgb,var(--border-focus) 40%,transparent); outline-offset:-1px; }
@@ -4795,6 +4806,7 @@ pre.code-block { overflow:visible; }
           </div>
         </div>
         <div class="extension-runtime-summary" id="extension-runtime-summary"></div>
+        <div class="extension-runtime-health" id="extension-runtime-health"></div>
         <div class="extension-runtime-list" id="extension-runtime-list"></div>
       </div>
     </div>
@@ -38329,6 +38341,66 @@ function setExtensionRuntimeSurfaceLoading(loading){
     button.title=loading?'Refreshing extension runtime surfaces':'Refresh extension runtime surfaces';
   }
 }
+function extensionRuntimeHealthDeckRows(rows,summary){
+  rows=Array.isArray(rows)?rows:[];
+  summary=summary||{};
+  const webviews=rows.filter(row=>row.kind==='WebviewView');
+  const count=fn=>webviews.filter(fn).length;
+  const sum=fn=>webviews.reduce((n,row)=>n+(Number(fn(row))||0),0);
+  const ready=count(row=>row.webviewReadiness==='ready');
+  const warnings=count(row=>row.webviewReadiness&&row.webviewReadiness!=='ready');
+  const bridgeReady=count(row=>row.webviewEvidence&&row.webviewEvidence.bridgeHealth==='ready');
+  const bridgeWarnings=count(row=>['iframe-pending','api-pending','inactive','disposed'].includes(row.webviewEvidence&&row.webviewEvidence.bridgeHealth));
+  const messageTotal=sum(row=>row.webviewEvidence&&row.webviewEvidence.messageCount);
+  const queued=sum(row=>Number(row.webviewEvidence&&row.webviewEvidence.pendingMessageCount)||Number(row.webviewEvidence&&row.webviewEvidence.queuedMessageCount)||0);
+  const dropped=sum(row=>row.webviewEvidence&&row.webviewEvidence.droppedMessageCount);
+  const stalled=count(row=>row.webviewEvidence&&row.webviewEvidence.messageHealth==='stalled');
+  const resourceRewrites=sum(row=>row.webviewEvidence&&row.webviewEvidence.resourceRewriteCount);
+  const resourceWarnings=count(row=>['pending','rewrite-warning','unused-roots'].includes(row.webviewEvidence&&row.webviewEvidence.resourceHealth));
+  const roots=sum(row=>row.webviewEvidence&&row.webviewEvidence.localResourceRootCount);
+  const ports=sum(row=>row.webviewEvidence&&row.webviewEvidence.portMappingCount);
+  const failures=sum(row=>row.webviewEvidence&&row.webviewEvidence.failureCount);
+  return [
+    {id:'ready',label:'Readiness',value:ready+'/'+webviews.length,detail:warnings?warnings+' warning':'all ready',state:warnings?'warning':'ready',filter:warnings?'missing':'rendered'},
+    {id:'bridge',label:'Bridge',value:String(bridgeReady),detail:bridgeWarnings?bridgeWarnings+' warning':'API ready',state:bridgeWarnings?'warning':'ready',filter:bridgeWarnings?'bridge-warning':'bridge-ready'},
+    {id:'messages',label:'Messages',value:String(messageTotal),detail:(queued?queued+' queued · ':'')+(dropped?dropped+' dropped · ':'')+(stalled?stalled+' stalled':'flow ok'),state:(dropped||stalled)?'error':(queued?'warning':'ready'),filter:stalled?'message-stalled':(dropped?'dropped':(queued?'queued':'messages'))},
+    {id:'resources',label:'Resources',value:String(resourceRewrites),detail:roots+' roots · '+ports+' ports'+(resourceWarnings?' · '+resourceWarnings+' warning':''),state:resourceWarnings?'warning':'ready',filter:resourceWarnings?'resource-warning':'resources'},
+    {id:'failures',label:'Failures',value:String(failures),detail:failures?'runtime failures':'none',state:failures?'error':'ready',filter:failures?'failures':'rendered'}
+  ];
+}
+function renderExtensionRuntimeHealthDeck(rows,summary){
+  const host=$('extension-runtime-health'),panel=$('extension-runtime-panel');
+  if(!host)return [];
+  const cards=extensionRuntimeHealthDeckRows(rows,summary);
+  host.innerHTML='';
+  host.dataset.runtimeHealthCards=String(cards.length);
+  host.dataset.runtimeHealthStates=cards.map(card=>card.state).join(',');
+  host.dataset.runtimeHealthFilters=cards.map(card=>card.filter).join(',');
+  if(panel){
+    panel.dataset.runtimeHealthCards=String(cards.length);
+    panel.dataset.runtimeHealthWarnings=String(cards.filter(card=>card.state==='warning').length);
+    panel.dataset.runtimeHealthErrors=String(cards.filter(card=>card.state==='error').length);
+    panel.dataset.runtimeHealthFilters=cards.map(card=>card.filter).join(',');
+  }
+  cards.forEach(card=>{
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.className='extension-runtime-health-card';
+    btn.dataset.runtimeHealth=card.id;
+    btn.dataset.runtimeHealthState=card.state;
+    btn.dataset.runtimeHealthFilter=card.filter;
+    btn.title='Filter runtime surfaces by '+card.filter;
+    btn.innerHTML='<strong>'+esc(card.value+' '+card.label)+'</strong><span>'+esc(card.detail)+'</span>';
+    btn.onclick=ev=>{
+      if(ev){ev.preventDefault();ev.stopPropagation()}
+      const evidenceSel=$('extension-runtime-filter-evidence');
+      if(evidenceSel)evidenceSel.value=card.filter;
+      applyExtensionRuntimeSurfaceFilter();
+    };
+    host.appendChild(btn);
+  });
+  return cards;
+}
 function renderExtensionRuntimeSurfacePanel(data){
   const panel=$('extension-runtime-panel'),summaryEl=$('extension-runtime-summary'),listEl=$('extension-runtime-list'),statusEl=$('extension-runtime-status');
   if(!summaryEl||!listEl)return;
@@ -38338,6 +38410,7 @@ function renderExtensionRuntimeSurfacePanel(data){
   const rows=extensionRuntimeSurfaceRows(data);
   extensionRuntimeSurfaceRowsLast=rows.slice();
   populateExtensionRuntimeKindFilter(rows);
+  const healthCards=renderExtensionRuntimeHealthDeck(rows,summary);
   const chips=[
     ['TreeView',summary.treeViews||0],
     ['WebviewView',summary.webviewViews||0],
@@ -38387,6 +38460,7 @@ function renderExtensionRuntimeSurfacePanel(data){
     panel.dataset.runtimeSurfaceCount=String(summary.dynamicSurfaces||rows.length||0);
     panel.dataset.runtimeOnlySurfaceCount=String(summary.runtimeOnlySurfaces||rows.filter(row=>row.source==='runtime-only').length);
     panel.dataset.providerBackedWebviewCount=String(summary.providerBackedWebviews||rows.filter(row=>row.kind==='WebviewView'&&row.providerBacked).length);
+    panel.dataset.runtimeHealthCardCount=String(healthCards.length);
   }
   summaryEl.innerHTML='';
   chips.forEach(([label,value])=>{
@@ -40359,7 +40433,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
   root.style.cssText='position:absolute;left:-10000px;top:-10000px;width:760px;height:auto;visibility:hidden';
   document.body.appendChild(root);
   const runtimeIds=[
-    'extension-runtime-summary','extension-runtime-list','extension-runtime-status',
+    'extension-runtime-summary','extension-runtime-health','extension-runtime-list','extension-runtime-status',
     'extension-runtime-filter-text','extension-runtime-filter-kind','extension-runtime-filter-source','extension-runtime-filter-evidence'
   ];
   const savedRuntime=runtimeIds.map(id=>{
@@ -40699,6 +40773,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
 
     const runtimeList=$('extension-runtime-list');
     const runtimeSummary=$('extension-runtime-summary');
+    const runtimeHealth=$('extension-runtime-health');
     const tree=root.querySelector('[role="tree"][data-view-id="selftest.dynamic.tree"]');
     const treeNodes=Array.from(root.querySelectorAll('.ext-tree-node'));
     const webviewFrame=root.querySelector('.extension-webview-view-host iframe.provider-webview-frame');
@@ -40818,6 +40893,12 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeFocusableRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.focusable==='1').length:0,
       runtimeRefreshableRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.refreshable==='1').length:0,
       runtimeChips:runtimeSummary?runtimeSummary.querySelectorAll('.extension-runtime-chip').length:0,
+      runtimeHealthCards:runtimeHealth?runtimeHealth.querySelectorAll('.extension-runtime-health-card').length:0,
+      runtimeHealthStates:runtimeHealth?Array.from(runtimeHealth.querySelectorAll('.extension-runtime-health-card')).map(item=>item.dataset.runtimeHealthState||''):[],
+      runtimeHealthFilters:runtimeHealth?Array.from(runtimeHealth.querySelectorAll('.extension-runtime-health-card')).map(item=>item.dataset.runtimeHealthFilter||''):[],
+      runtimeHealthWarnings:(()=>{const panel=$('extension-runtime-panel');return panel?Number(panel.dataset.runtimeHealthWarnings)||0:0})(),
+      runtimeHealthErrors:(()=>{const panel=$('extension-runtime-panel');return panel?Number(panel.dataset.runtimeHealthErrors)||0:0})(),
+      runtimeHealthFilterVisible:(()=>{const card=runtimeHealth&&runtimeHealth.querySelector('[data-runtime-health-filter="bridge-warning"]');if(!card)return 0;card.click();const value=(($('extension-runtime-filter-evidence')||{}).value)||'';const result=applyExtensionRuntimeSurfaceFilter();if($('extension-runtime-filter-evidence'))$('extension-runtime-filter-evidence').value='';applyExtensionRuntimeSurfaceFilter();return value==='bridge-warning'&&result?result.visible:0})(),
       runtimeKinds:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-kind')).map(item=>String(item.textContent||'')):[],
       runtimeListRole:runtimeList?runtimeList.getAttribute('role'):'',
       runtimeListItems:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row[role="listitem"]').length:0,
@@ -40896,6 +40977,10 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeNotebookControllerRows>=1&&snapshot.runtimeNotebookStatusRows>=1
       && snapshot.runtimeEvidencePills===snapshot.runtimeRows&&snapshot.runtimeEvidenceStatuses.includes('rendered')&&snapshot.runtimeEvidenceStatuses.includes('missing')
       && snapshot.runtimeMiniActionButtons>=snapshot.runtimeRows*3&&snapshot.runtimeFocusableRows>=4&&snapshot.runtimeRefreshableRows>=4
+      && snapshot.runtimeHealthCards===5&&snapshot.runtimeHealthWarnings>=2&&snapshot.runtimeHealthErrors>=1&&snapshot.runtimeHealthFilterVisible>=1
+      && ['bridge-warning','resource-warning','failures'].every(filter=>snapshot.runtimeHealthFilters.includes(filter))
+      && ['queued','dropped','message-stalled'].some(filter=>snapshot.runtimeHealthFilters.includes(filter))
+      && snapshot.runtimeHealthStates.includes('warning')&&snapshot.runtimeHealthStates.includes('error')
       && snapshot.runtimeListRole==='list'&&snapshot.runtimeListItems===snapshot.runtimeRows
       && snapshot.runtimeDatasetReady===snapshot.runtimeReadyRows&&snapshot.runtimePanelCount==='12'
       && snapshot.runtimeOpenableRows===snapshot.runtimeRows&&snapshot.runtimeOpenableRows>=12&&snapshot.runtimeActionButtons===snapshot.runtimeRows
