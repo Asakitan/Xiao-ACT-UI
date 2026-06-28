@@ -289,7 +289,7 @@ async function main() {
   if (!result.snapshot.hasQuietDefaultSettingsToolbar || !result.snapshot.hasDetailsOnlyJumpbar || !result.snapshot.hasSidebarQuickSettingsActions || !result.snapshot.hasCompactSearchScopeStack || !result.snapshot.hasNoTopSettingsBands || !result.snapshot.hasSingleSearchTopBand) {
     throw new Error("Settings selfcheck missing quiet VS Code-like top layout refinements: " + JSON.stringify(result.snapshot));
   }
-  if (!result.snapshot.hasSearchOnlyTopWorkbench || !result.snapshot.hasHiddenTopSearchCaption || !result.snapshot.hasWideSingleSettingsSearch) {
+  if (!result.snapshot.hasSearchOnlyTopWorkbench || !result.snapshot.hasHiddenTopSearchCaption || !result.snapshot.hasWideSingleSettingsSearch || !result.snapshot.hasHiddenDefaultResultNav) {
     throw new Error("Settings selfcheck still has noisy top workbench bands: " + JSON.stringify(result.snapshot));
   }
   if (!result.snapshot.hasSidebarSettingsSearch || !result.snapshot.hasNoFullWidthSettingsSearchbar) {

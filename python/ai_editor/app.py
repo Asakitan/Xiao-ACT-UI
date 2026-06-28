@@ -71,6 +71,7 @@ _TRANSIENT_CONFIG_KEYS = {
 _AI_EDITOR_MIN_SIZE = (600, 400)
 _AI_EDITOR_WINDOW_TITLE = "SAO AI Editor"
 _AI_EDITOR_FORCE_NEW_ENV = "SAO_AI_EDITOR_FORCE_NEW"
+_AI_EDITOR_WORKSPACE_ROOT_ENV = "SAO_AI_EDITOR_WORKSPACE_ROOT"
 
 _MODE_VALUES = {"agent", "ask", "plan", "chat", "edit"}
 _APPROVAL_VALUES = {"default", "bypass", "autopilot"}
@@ -3812,18 +3813,22 @@ class AIEditorAPI:
     def _workspace_candidates(self) -> List[Tuple[str, str]]:
         cfg = self._workspace_config()
         candidates: List[Tuple[str, str]] = []
-        for key, source in (("root", "configured"), ("last_root", "last_root")):
-            root = self._usable_workspace_root(cfg.get(key))
-            if root:
-                candidates.append((root, source))
-        roots = cfg.get("roots")
-        if isinstance(roots, (list, tuple)):
-            for item in roots:
-                root = self._usable_workspace_root(item)
-                if root:
-                    candidates.append((root, "configured"))
+        configured_root = self._usable_workspace_root(cfg.get("root"))
+        if configured_root:
+            candidates.append((configured_root, "configured"))
         auto_detect = _as_bool(cfg.get("auto_detect"), True)
+        remember_last = _as_bool(cfg.get("remember_last"), True)
+        last_root = self._usable_workspace_root(cfg.get("last_root"))
+        roots = cfg.get("roots")
         if auto_detect:
+            for env_name in (
+                    _AI_EDITOR_WORKSPACE_ROOT_ENV,
+                    "SAO_WORKSPACE_ROOT",
+                    "WORKSPACE_ROOT",
+                    "VSCODE_CWD"):
+                env_root = self._usable_workspace_root(os.environ.get(env_name))
+                if env_root:
+                    candidates.append((env_root, "environment"))
             for attr in ("_last_opened_path", "editorFileName", "current_file"):
                 root = self._usable_workspace_root(str(getattr(self, attr, "") or ""))
                 if root:
@@ -3837,6 +3842,13 @@ class AIEditorAPI:
                 root = self._git_root_from(path) or self._usable_workspace_root(path)
                 if root:
                     candidates.append((root, source))
+        if remember_last and last_root:
+            candidates.append((last_root, "last_root"))
+        if isinstance(roots, (list, tuple)):
+            for item in roots:
+                root = self._usable_workspace_root(item)
+                if root:
+                    candidates.append((root, "configured"))
         return candidates
 
     def _resolve_workspace_root(self) -> str:
@@ -17102,6 +17114,9 @@ def _launch_subprocess() -> None:
     env = dict(os.environ)
     env.setdefault('PYTHONPATH', _ROOT)
     env.setdefault('PYTHONUNBUFFERED', '1')
+    host_workspace = os.getcwd()
+    if os.path.isdir(host_workspace):
+        env.setdefault(_AI_EDITOR_WORKSPACE_ROOT_ENV, os.path.abspath(host_workspace))
     if getattr(sys, 'frozen', False):
         env['PYWEBVIEW_GUI'] = 'edgechromium'
     cwd = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else _ROOT

@@ -732,8 +732,20 @@ def _terminal_time_label(value: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(value))
 
 
+def _terminal_path_in_workspace(path: str, workspace_root: str) -> bool:
+    if not path or not workspace_root:
+        return False
+    try:
+        path_norm = os.path.normcase(os.path.realpath(os.path.abspath(path)))
+        root_norm = os.path.normcase(os.path.realpath(os.path.abspath(workspace_root)))
+        return os.path.commonpath([root_norm, path_norm]) == root_norm
+    except (OSError, ValueError):
+        return False
+
+
 def _terminal_metadata(terminal: Dict[str, Any], timeout: int, output_limit: int,
-                       explicit_shell: bool, cwd: str = "") -> Dict[str, Any]:
+                       explicit_shell: bool, cwd: str = "",
+                       workspace_root: str = "") -> Dict[str, Any]:
     shell_path = _terminal_shell_path(terminal.get("shell_path"))
     profile = _terminal_profile_name(terminal.get("profile"))
     metadata = {
@@ -743,13 +755,15 @@ def _terminal_metadata(terminal: Dict[str, Any], timeout: int, output_limit: int
         "explicitShell": explicit_shell,
         "shellKind": _terminal_shell_kind(shell_path, explicit_shell),
         "profile": str(profile or ("Configured Shell" if explicit_shell else "System Shell")),
-        "workspaceCwd": bool(cwd),
+        "workspaceCwd": _terminal_path_in_workspace(cwd, workspace_root),
     }
     for key in ("profileResolved", "profileFallback", "profileShellMissing"):
         if key in terminal:
             metadata[key] = bool(terminal.get(key))
     if cwd:
         metadata["cwd"] = cwd
+    if workspace_root:
+        metadata["workspaceRoot"] = workspace_root
     if shell_path:
         metadata["shellPath"] = shell_path
     shell_args = _terminal_args(terminal.get("shell_args"))
@@ -781,7 +795,7 @@ _TERMINAL_JOB_MAX_HISTORY = 64
 
 
 def _terminal_command_context(command: str, cwd: str, gui_ref: Any,
-                              api_ref: Any, profile_override: str = "") -> Tuple[Dict[str, Any], int, int, bool, str, Any]:
+                              api_ref: Any, profile_override: str = "") -> Tuple[Dict[str, Any], int, int, bool, str, str, Any]:
     terminal = _get_terminal_settings(gui_ref)
     override_profile = _terminal_profile_name(profile_override)
     if override_profile:
@@ -800,11 +814,15 @@ def _terminal_command_context(command: str, cwd: str, gui_ref: Any,
             terminal["shell_path"] = resolved_shell
             terminal["shell_args"] = list(resolved_args)
     explicit_shell = bool(shell_path)
-    effective_cwd = os.path.abspath(cwd) if cwd else _default_terminal_cwd(api_ref)
+    workspace_root = _default_terminal_cwd(api_ref)
+    effective_cwd = os.path.abspath(cwd) if cwd else workspace_root
     run_command: Any = command
     if explicit_shell:
         run_command = _build_explicit_shell_command(shell_path, shell_args, command)
-    return terminal, timeout, output_limit, explicit_shell, effective_cwd, run_command
+    return (
+        terminal, timeout, output_limit, explicit_shell, effective_cwd,
+        workspace_root, run_command,
+    )
 
 
 def _terminal_subprocess_env(terminal: Dict[str, Any]) -> Dict[str, str]:
@@ -995,7 +1013,7 @@ def _terminal_job_snapshot(job_id: str, since_seq: int = 0) -> Dict[str, Any]:
 
 def _start_terminal_job(command: str, cwd: str, gui_ref: Any,
                         api_ref: Any, profile: str = "") -> Dict[str, Any]:
-    terminal, timeout, output_limit, explicit_shell, effective_cwd, run_command = (
+    terminal, timeout, output_limit, explicit_shell, effective_cwd, workspace_root, run_command = (
         _terminal_command_context(command, cwd, gui_ref, api_ref, profile))
     kwargs: Dict[str, Any] = {
         "shell": not explicit_shell,
@@ -1037,7 +1055,8 @@ def _start_terminal_job(command: str, cwd: str, gui_ref: Any,
         "startedWall": time.time(),
         "finishedWall": 0,
         "terminal": _terminal_metadata(
-            terminal, timeout, output_limit, explicit_shell, effective_cwd),
+            terminal, timeout, output_limit, explicit_shell, effective_cwd,
+            workspace_root),
     }
     with _TERMINAL_JOB_LOCK:
         _terminal_prune_jobs_locked()
@@ -1142,7 +1161,7 @@ def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
     if mode == "stop":
         return _stop_terminal_job(str(jobId or ""))
     try:
-        terminal, timeout, output_limit, explicit_shell, effective_cwd, run_command = (
+        terminal, timeout, output_limit, explicit_shell, effective_cwd, workspace_root, run_command = (
             _terminal_command_context(command, cwd, gui_ref, api_ref, profile))
 
         kwargs: Dict[str, Any] = {
@@ -1176,7 +1195,8 @@ def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
             "stdoutTruncated": len(stdout) > output_limit,
             "stderrTruncated": len(stderr) > stderr_limit,
             "terminal": _terminal_metadata(
-                terminal, timeout, output_limit, explicit_shell, effective_cwd),
+                terminal, timeout, output_limit, explicit_shell, effective_cwd,
+                workspace_root),
         }
     except subprocess.TimeoutExpired:
         terminal = _get_terminal_settings(gui_ref)
@@ -1185,7 +1205,8 @@ def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
             terminal["profile"] = override_profile
         timeout = _terminal_int(terminal.get("timeout"), _DEFAULT_TERMINAL_TIMEOUT)
         output_limit = _terminal_int(terminal.get("output_limit"), _DEFAULT_STDOUT_LIMIT)
-        effective_cwd = os.path.abspath(cwd) if cwd else _default_terminal_cwd(api_ref)
+        workspace_root = _default_terminal_cwd(api_ref)
+        effective_cwd = os.path.abspath(cwd) if cwd else workspace_root
         shell_path = _terminal_shell_path(terminal.get("shell_path"))
         if not shell_path:
             resolved_shell, resolved_args, profile_meta = _resolve_terminal_profile_shell(
@@ -1205,7 +1226,8 @@ def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
             "finishedAt": _terminal_time_label(time.time()),
             "terminal": _terminal_metadata(terminal, timeout, output_limit,
                                            bool(shell_path),
-                                           effective_cwd),
+                                           effective_cwd,
+                                           workspace_root),
         }
     except Exception as exc:
         return {"error": str(exc)}

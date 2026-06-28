@@ -3201,6 +3201,12 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-nav > .settings-searchbar .settings-query-box {
   min-height:30px; grid-template-columns:22px minmax(0,1fr) auto auto;
 }
+.settings-vscode-calm:not(.settings-details-open) .settings-nav > .settings-searchbar .settings-query-box {
+  grid-template-columns:22px minmax(0,1fr) auto;
+}
+.settings-vscode-calm:not(.settings-details-open) .settings-nav > .settings-searchbar .settings-result-nav {
+  display:none;
+}
 .settings-vscode-calm .settings-nav > .settings-searchbar input#settings-search {
   height:30px; font-size:12px; padding-left:4px;
 }
@@ -29456,6 +29462,7 @@ function settingsUiSelfCheckSnapshot(){
   const iconActions=Array.from(document.querySelectorAll('.settings-title-actions [data-settings-icon-action="1"]'));
   const toolbarButtons=Array.from(document.querySelectorAll('.settings-toolbar-strip .settings-top-action'));
   const hiddenToolbarButtons=toolbarButtons.filter(btn=>String(getComputedStyle(btn).display)==='none');
+  const resultNav=document.querySelector('.settings-result-nav');
   const resultNavButtons=Array.from(document.querySelectorAll('.settings-result-nav button'));
   const hiddenResultNavButtons=resultNavButtons.filter(btn=>String(getComputedStyle(btn).display)==='none');
   const rowHead=document.querySelector('[data-settings-row-head="1"]');
@@ -29541,9 +29548,9 @@ function settingsUiSelfCheckSnapshot(){
     hasSidebarSettingsSearch:sidebarSearchbar&&!!(settingsSearchbar.querySelector&&settingsSearchbar.querySelector('#settings-search')),
     hasNoFullWidthSettingsSearchbar:sidebarSearchbar&&!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')),
     hasHiddenTopSearchCaption:!!(searchCaption&&String(getComputedStyle(searchCaption).display)==='none'),
-    hasWideSingleSettingsSearch:!!(searchRow&&searchRowWidth>=700&&String(getComputedStyle(searchRow).gridTemplateColumns||'').split(' ').filter(Boolean).length<=1),
+    hasWideSingleSettingsSearch:!!(searchRow&&(sidebarSearchbar?searchRowWidth>=220:searchRowWidth>=700)&&String(getComputedStyle(searchRow).gridTemplateColumns||'').split(' ').filter(Boolean).length<=1),
     hasMinimalTopSearchControls:!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&hiddenResultNavButtons.length===resultNavButtons.length&&inlineDetailsToggle&&String(getComputedStyle(inlineDetailsToggle).display)==='none'),
-    hasSearchResultTextOnlyDefault:!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&$('settings-result-count')&&String(getComputedStyle($('settings-result-count')).display)!=='none'),
+    hasHiddenDefaultResultNav:!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&resultNav&&String(getComputedStyle(resultNav).display)==='none'),
     hasSidebarStatusPanel:!!(navStatus&&navStatus.dataset.settingsNavStatus==='1'&&navStatus.querySelector('.settings-nav-status-grid')&&navStatus.dataset.settingsNavTarget),
     hasSidebarActiveFiltersPanel:!!(navActiveFilters&&navActiveFilters.dataset.settingsNavActiveFilters!==undefined),
     hasSidebarReviewPanel:!!(navReview&&navReview.dataset.settingsNavReview==='1'&&navReviewButtons.some(btn=>btn.dataset.settingsNavReviewAction==='modified')&&navReviewButtons.some(btn=>btn.dataset.settingsNavReviewAction==='preview')),
@@ -42488,6 +42495,7 @@ function _terminalContextMeta(meta){
   const profile=_terminalProfileLabel(meta);
   const source=_terminalWorkspaceSource();
   const ws=workspaceSettings();
+  const workspaceCwd=meta.workspaceCwd===true?true:(meta.workspaceCwd===false?false:_terminalCwdMatchesWorkspace(cwd));
   return {
     cwd,
     workspace:_terminalWorkspaceLabel(cwd),
@@ -42496,7 +42504,8 @@ function _terminalContextMeta(meta){
     autoDetected:!!(ws.auto_detected||(!ws.configured_root&&ws.auto_detect!==false)),
     profile,
     shellKind:String(meta.shellKind||terminalProfileDefinition(profile).shellKind||''),
-    workspaceCwd:_terminalCwdMatchesWorkspace(cwd)
+    workspaceCwd,
+    workspaceRoot:String(meta.workspaceRoot||currentWorkspaceRoot()||'')
   };
 }
 function _updateTerminalContextBar(meta,state){
@@ -42561,7 +42570,7 @@ function _updateTerminalDiagnostics(meta,state){
   const profile=_terminalProfileLabel(meta);
   const exitCode=meta.exitCode===null||meta.exitCode===undefined?'':String(meta.exitCode);
   const historyCount=_terminalActiveHistory().filter(Boolean).length;
-  const workspaceCwd=_terminalCwdMatchesWorkspace(cwd);
+  const workspaceCwd=meta.workspaceCwd===true?true:(meta.workspaceCwd===false?false:_terminalCwdMatchesWorkspace(cwd));
   const finalState=String(state||meta.state||((run&&!run.cancelled)?'running':'idle')||'idle');
   const runningValue=run&&run.jobId?('job '+String(run.jobId).slice(0,8)):finalState;
   const outputValue=stats.lines+' lines · '+stats.bytes+' chars';
@@ -42703,7 +42712,7 @@ function _setTerminalStatus(state,text,detail,meta){
   line.dataset.lastCommand=String(meta.lastCommand||'');
   line.dataset.startedAt=String(meta.startedAt||'');
   line.dataset.finishedAt=String(meta.finishedAt||'');
-  line.dataset.workspaceCwd=_terminalCwdMatchesWorkspace(cwd)?'1':'0';
+  line.dataset.workspaceCwd=ctx.workspaceCwd?'1':'0';
   line.dataset.workspaceSource=ctx.workspaceSource;
   line.dataset.workspaceAutoDetected=ctx.autoDetected?'1':'0';
   const textEl=line.querySelector('.term-status-text');
@@ -42714,7 +42723,7 @@ function _setTerminalStatus(state,text,detail,meta){
   const durationEl=line.querySelector('[data-terminal-status="duration"]');
   const flagsEl=line.querySelector('[data-terminal-status="flags"]');
   if(textEl)textEl.textContent=text||'Ready';
-  if(wsEl){wsEl.textContent=_terminalWorkspaceLabel(cwd);wsEl.title=cwd||currentWorkspaceRoot()||'';wsEl.className='term-status-pill '+(_terminalCwdMatchesWorkspace(cwd)?'ok':'warn')}
+  if(wsEl){wsEl.textContent=_terminalWorkspaceLabel(cwd);wsEl.title=cwd||currentWorkspaceRoot()||'';wsEl.className='term-status-pill '+(ctx.workspaceCwd?'ok':'warn')}
   if(profileEl){profileEl.textContent=profile;profileEl.title=profile;profileEl.className='term-status-pill ok'}
   if(exitEl){
     exitEl.textContent=exitCode===''?'exit -':'exit '+exitCode;

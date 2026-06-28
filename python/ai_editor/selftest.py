@@ -984,6 +984,7 @@ def test_app_settings_parity() -> None:
     print("── App Settings Parity ──")
     from ai_editor.app import (
         AIEditorAPI,
+        _AI_EDITOR_WORKSPACE_ROOT_ENV,
         _activate_window_handle,
         _normalize_window_geometry,
         _window_client_area_ok,
@@ -2799,6 +2800,8 @@ def test_app_settings_parity() -> None:
                and term_result.get("terminal", {}).get("shellKind")
                == "system"
                and term_result.get("terminal", {}).get("workspaceCwd") is True
+               and term_result.get("terminal", {}).get("workspaceRoot")
+               == term_result.get("cwd")
                and term_result.get("startedAt")
                and term_result.get("finishedAt")
                and term_result.get("stdoutTruncated") is False
@@ -2821,6 +2824,25 @@ def test_app_settings_parity() -> None:
                == "system"
                and profile_result.get("terminal", {}).get("workspaceCwd") is True,
                json.dumps(profile_result, ensure_ascii=False))
+        with tempfile.TemporaryDirectory() as outside_tmp:
+            outside_result = json.loads(term_api.execute_tool(
+                "runTerminal",
+                json.dumps({
+                    "command": f'"{sys.executable}" -c "import os;print(os.getcwd())"',
+                    "cwd": outside_tmp,
+                    "profile": "System Shell",
+                }),
+                confirmed=True,
+            ))
+            _check("runTerminal reports non-workspace cwd accurately",
+                   outside_result.get("exitCode") == 0
+                   and os.path.normcase(outside_result.get("cwd", ""))
+                   == os.path.normcase(os.path.abspath(outside_tmp))
+                   and outside_result.get("terminal", {}).get("workspaceCwd") is False
+                   and os.path.normcase(
+                       outside_result.get("terminal", {}).get("workspaceRoot", ""))
+                   == os.path.normcase(os.path.abspath(term_tmp)),
+                   json.dumps(outside_result, ensure_ascii=False))
         interactive_cmd = (
             f'"{sys.executable}" -u -c '
             '"import sys;print(\'ready\');'
@@ -3557,6 +3579,27 @@ def test_app_settings_parity() -> None:
                    == auto_info.get("root"),
                    json.dumps({"info": auto_info, "opened": opened_auto},
                               ensure_ascii=False))
+        with tempfile.TemporaryDirectory() as env_tmp, tempfile.TemporaryDirectory() as stale_tmp:
+            os.makedirs(os.path.join(env_tmp, ".git"), exist_ok=True)
+            os.makedirs(os.path.join(stale_tmp, ".git"), exist_ok=True)
+            env_api = AIEditorAPI(_SettingsGui({
+                "ai_editor": {
+                    "workspace": {
+                        "root": "",
+                        "last_root": stale_tmp,
+                        "auto_detect": True,
+                        "remember_last": True,
+                    }
+                }
+            }))
+            with patch.dict(os.environ, {_AI_EDITOR_WORKSPACE_ROOT_ENV: env_tmp}):
+                env_info = env_api._workspace_info()
+            _check("workspace auto-detect prefers host workspace over stale last root",
+                   os.path.normcase(env_info.get("root", ""))
+                   == os.path.normcase(os.path.abspath(env_tmp))
+                   and env_info.get("source") == "environment"
+                   and env_info.get("last_root") == os.path.abspath(stale_tmp),
+                   json.dumps(env_info, ensure_ascii=False))
         tree_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
         tree_api._workspace_root = lambda: tmpdir
         from ai_editor.extension_host import ExtensionHost, EventEmitter
@@ -4482,7 +4525,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hasSidebarSettingsSearch" in html
            and "hasNoFullWidthSettingsSearchbar" in html
            and "hasMinimalTopSearchControls" in html
-           and "hasSearchResultTextOnlyDefault" in html
+           and "hasHiddenDefaultResultNav" in html
            and "hasHiddenTopSearchCaption" in html
            and "hasWideSingleSettingsSearch" in html
            and "visibleSearchbarChildren.length===1&&visibleSearchbarChildren[0]===searchRow" in html
@@ -14723,10 +14766,10 @@ console.log("command palette quick access helpers ok");
             and "line.dataset.durationMs=durationMs;" in html
             and "line.dataset.stdoutTruncated=stdoutTruncated?'1':'0';" in html
             and "line.dataset.lastCommand=String(meta.lastCommand||'');" in html
-            and "line.dataset.workspaceCwd=_terminalCwdMatchesWorkspace(cwd)?'1':'0';" in html
+            and "line.dataset.workspaceCwd=ctx.workspaceCwd?'1':'0';" in html
             and "line.dataset.workspaceSource=ctx.workspaceSource;" in html
             and "line.dataset.workspaceAutoDetected=ctx.autoDetected?'1':'0';" in html
-            and "wsEl.className='term-status-pill '+(_terminalCwdMatchesWorkspace(cwd)?'ok':'warn')" in html
+            and "wsEl.className='term-status-pill '+(ctx.workspaceCwd?'ok':'warn')" in html
             and "data-terminal-status=\"exit\"" in html
             and "data-terminal-status=\"duration\"" in html
             and "data-terminal-status=\"flags\"" in html
@@ -14797,9 +14840,11 @@ console.log("command palette quick access helpers ok");
            and "_TERMINAL_JOB_TTL_SEC" in engine_tools_source
            and "_TERMINAL_JOB_MAX_HISTORY" in engine_tools_source
            and "def _terminal_subprocess_env(" in engine_tools_source
+           and "def _terminal_path_in_workspace(" in engine_tools_source
            and "def _terminal_prune_jobs_locked(" in engine_tools_source
            and "PYTHONIOENCODING" in engine_tools_source
            and "SAO_AI_EDITOR_TERMINAL_PROFILE" in engine_tools_source
+           and "\"workspaceRoot\"" in engine_tools_source
            and "\"encoding\": \"utf-8\"" in engine_tools_source
            and "taskkill" in engine_tools_source
            and "jobCount" in engine_tools_source
@@ -15064,6 +15109,8 @@ console.log("frontend built-in language fallback behavior ok");
            and "def _dedupe_workspace_roots(" in app_source
            and "def _workspace_info(self) -> Dict[str, Any]:" in app_source
            and "def _workspace_candidates(self) -> List[Tuple[str, str]]:" in app_source
+           and "_AI_EDITOR_WORKSPACE_ROOT_ENV" in app_source
+           and "env.setdefault(_AI_EDITOR_WORKSPACE_ROOT_ENV" in app_source
            and "\"resolved_root\": root" in app_source
            and "\"configured_root\": configured_root" in app_source
            and "\"source_label\": source.replace" in app_source
