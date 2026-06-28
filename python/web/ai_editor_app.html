@@ -1868,10 +1868,17 @@ button.review-pill { cursor:pointer; }
 .settings-save-preview { display:none; max-height:168px; overflow:auto; padding:7px 8px; border:1px solid var(--border);
   border-radius:5px; background:var(--bg2); color:var(--fg-dim); font-size:11px; }
 .settings-save-preview.open { display:block; }
+.settings-save-preview-group { display:flex; align-items:center; gap:7px; min-height:22px; padding-top:3px;
+  color:var(--fg); font:10px var(--mono); text-transform:uppercase; }
+.settings-save-preview-group span { color:var(--fg-dim); text-transform:none; }
 .settings-save-preview-row { display:flex; align-items:center; gap:8px; min-height:22px; border-top:1px solid color-mix(in srgb,var(--border) 55%,transparent); }
 .settings-save-preview-row:first-child { border-top:0; }
+.settings-save-preview-row[role="button"] { cursor:pointer; }
+.settings-save-preview-row[role="button"]:hover,.settings-save-preview-row[role="button"]:focus {
+  color:var(--fg); background:var(--bg-hover); outline:1px solid color-mix(in srgb,var(--border-focus) 65%,transparent); outline-offset:-1px; }
 .settings-save-preview-row code { color:var(--fg); font:11px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .settings-save-preview-row span { margin-left:auto; font:10px var(--mono); color:var(--fg-dim); }
+.settings-save-preview-row .review-target { margin-left:0; padding:0 5px; border:1px solid var(--border); border-radius:999px; }
 .settings-save-preview-row .before-after { display:flex; align-items:center; gap:5px; min-width:0; margin-left:0;
   color:var(--fg-dim); overflow:hidden; }
 .settings-save-preview-row .before-after b { max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
@@ -27706,6 +27713,7 @@ function settingsUiSelfCheckSnapshot(){
   const detailActionLabels=detail?Array.from(detail.querySelectorAll('.detail-actions button')).map(btn=>String(btn.textContent||'')):[];
   const reviewActionLabels=Array.from(document.querySelectorAll('#settings-review-bar .review-actions button')).map(btn=>String(btn.textContent||''));
   const reviewBar=$('settings-review-bar');
+  const savePreview=$('settings-save-preview');
   const experienceBar=$('settings-experience-bar');
   const recommendations=$('settings-recommendations');
   const focusDeck=$('settings-focus-deck');
@@ -27782,6 +27790,11 @@ function settingsUiSelfCheckSnapshot(){
     hasSuggestedMatchesHost:!!$('settings-suggested-matches'),
     hasReviewFilterActions:['Show Modified','Show Overrides','Show Errors','Clear Review'].every(label=>reviewActionLabels.includes(label)),
     hasReviewPillActions:!!(reviewBar&&reviewBar.querySelector('button.review-pill')&&reviewBar.dataset.settingsReviewModified!==undefined&&reviewBar.dataset.settingsReviewVisible!==undefined),
+    hasReviewChangeNavigation:['Prev Change','Next Change'].every(label=>reviewActionLabels.includes(label)),
+    hasGroupedSavePreview:!!(savePreview&&savePreview.dataset.settingsPreviewGroups!==undefined),
+    hasSavePreviewGroupRows:!!(savePreview&&savePreview.querySelector('[data-settings-preview-group]')),
+    hasSavePreviewKeyboardRows:!!(savePreview&&savePreview.querySelector('.settings-save-preview-row[role="button"][tabindex]')),
+    hasSavePreviewTargetChips:!!(savePreview&&savePreview.querySelector('.settings-save-preview-row .review-target')),
     hasOverridesFilterToken:!!document.querySelector('[data-settings-filter-token="@overrides"]'),
     hasValidationSummaryHost:!!validationSummary,
     hasValidationSummaryRenderer:typeof renderSettingsValidationSummary==='function'
@@ -27870,6 +27883,8 @@ window.settingsComputeReviewState=settingsComputeReviewState;
 window.renderSettingsReviewBar=renderSettingsReviewBar;
 window.settingsToggleSavePreview=settingsToggleSavePreview;
 window.settingsFocusFirstReviewRow=settingsFocusFirstReviewRow;
+window.settingsFocusReviewRow=settingsFocusReviewRow;
+window.settingsGroupSavePreviewItems=settingsGroupSavePreviewItems;
 window.settingsApplyReviewFilter=settingsApplyReviewFilter;
 window.settingsClearReviewFilters=settingsClearReviewFilters;
 window.settingsHasReviewFilter=settingsHasReviewFilter;
@@ -28658,6 +28673,10 @@ function settingsReviewRowLabel(row){
   if(!row)return '';
   return row.dataset.extSettingKey||row.dataset.settingKey||((row.querySelector('code')||{}).textContent)||((row.querySelector('label')||{}).textContent)||'Setting';
 }
+function settingsReviewRowSection(row){
+  const section=row&&row.closest?row.closest('.settings-section,#ext-settings-container,details'):null;
+  return section?settingsSectionTitle(section):settingsActiveSectionTitle();
+}
 function settingsReviewRows(kind){
   const rows=settingsVisibleRows();
   if(kind==='modified')return rows.filter(row=>row.classList&&row.classList.contains('modified'));
@@ -28665,11 +28684,32 @@ function settingsReviewRows(kind){
   if(kind==='override')return rows.filter(row=>row.dataset&&row.dataset.settingTargetOverride==='1');
   return rows;
 }
+function settingsFindReviewItemRow(item){
+  if(!item)return null;
+  const label=String(item.label||'');
+  const section=String(item.section||'');
+  return settingsVisibleRows().find(visible=>
+    settingsReviewRowLabel(visible)===label
+    &&(!section||settingsReviewRowSection(visible)===section)
+  )||settingsVisibleRows().find(visible=>settingsReviewRowLabel(visible)===label)||null;
+}
 function settingsFocusFirstReviewRow(kind){
   const row=settingsReviewRows(kind)[0];
   if(row){settingsHighlightRow(row);return true}
   showToast('No visible '+kind+' settings','info',1400);
   return false;
+}
+function settingsFocusReviewRow(kind,direction){
+  const rows=settingsReviewRows(kind);
+  if(!rows.length){showToast('No visible '+kind+' settings','info',1400);return false}
+  const active=document.activeElement&&document.activeElement.closest
+    ? document.activeElement.closest('.settings-field.builtin-setting,.ext-setting-row')
+    : settingsCurrentRow();
+  let index=active?rows.indexOf(active):-1;
+  const step=Number(direction)<0?-1:1;
+  index=index<0?(step<0?rows.length-1:0):(index+step+rows.length)%rows.length;
+  settingsHighlightRow(rows[index]);
+  return true;
 }
 function settingsReviewTokenForKind(kind){
   kind=String(kind||'').toLowerCase();
@@ -28714,10 +28754,21 @@ function settingsReviewRowBeforeAfter(row){
     after:settingCompactDisplayValue(settingsInputValue(info.input,info.meta),42)
   };
 }
+function settingsReviewItem(kind,row,options){
+  const opts=options||{};
+  const label=opts.label||settingsReviewRowLabel(row);
+  return {
+    kind,
+    label,
+    section:opts.section||settingsReviewRowSection(row),
+    target:opts.target||settingsTargetDisplayName(currentSettingsTarget),
+    delta:opts.delta===undefined?settingsReviewRowBeforeAfter(row):opts.delta
+  };
+}
 function settingsSavePreviewItems(state){
   const items=[];
-  (state&&state.errors||[]).slice(0,8).forEach(row=>items.push({kind:'Error',label:settingsReviewRowLabel(row)}));
-  (state&&state.modified||[]).slice(0,12).forEach(row=>items.push({kind:'Modified',label:settingsReviewRowLabel(row),delta:settingsReviewRowBeforeAfter(row)}));
+  (state&&state.errors||[]).slice(0,8).forEach(row=>items.push(settingsReviewItem('Error',row,{delta:null})));
+  (state&&state.modified||[]).slice(0,12).forEach(row=>items.push(settingsReviewItem('Modified',row)));
   if(currentSettingsTarget!=='extensions'){
     const modifiedKeys=new Set((state&&state.modified||[]).map(settingsReviewRowLabel));
     const updates=(state&&state.targetUpdates)||settingsTargetUpdateRows();
@@ -28725,34 +28776,68 @@ function settingsSavePreviewItems(state){
       items.push({
         kind:update.remove?'Clear '+update.target:'Write '+update.target,
         label:update.key||update.path||'Setting',
+        section:'Target Overrides',
+        target:update.target||settingsTargetDisplayName(currentSettingsTarget),
         delta:{before:update.remove?settingCompactDisplayValue(update.value,42):'inherited',after:update.remove?'inherited':settingCompactDisplayValue(update.value,42)}
       });
     });
   }
   return items;
 }
+function settingsGroupSavePreviewItems(items){
+  const groups=[],bySection=new Map();
+  (items||[]).forEach(item=>{
+    const section=String(item.section||'Other');
+    if(!bySection.has(section)){
+      const group={section,items:[]};
+      bySection.set(section,group);
+      groups.push(group);
+    }
+    bySection.get(section).items.push(item);
+  });
+  return groups;
+}
 function settingsComputeReviewState(stats){
   const modified=settingsReviewRows('modified');
   const errors=settingsReviewRows('error');
   const overrides=settingsReviewRows('override');
   const targetUpdates=currentSettingsTarget==='extensions'?[]:settingsTargetUpdateRows().filter(Boolean);
+  const previewItems=settingsSavePreviewItems({modified,errors,overrides,targetUpdates});
   return {
     target:settingsTargetDisplayName(currentSettingsTarget),
     visible:stats&&Number.isFinite(Number(stats.visible))?Number(stats.visible):settingsVisibleRows().length,
     modified,
     errors,
     overrides,
-    targetUpdates
+    targetUpdates,
+    previewItems,
+    previewGroups:settingsGroupSavePreviewItems(previewItems)
   };
 }
 function renderSettingsSavePreview(state,forceOpen){
   const host=$('settings-save-preview');if(!host)return;
-  const items=settingsSavePreviewItems(state);
+  const items=(state&&state.previewItems)||settingsSavePreviewItems(state);
+  const groups=(state&&state.previewGroups)||settingsGroupSavePreviewItems(items);
   host.innerHTML='';
   host.classList.toggle('open',!!forceOpen&&items.length>0);
+  host.dataset.settingsPreviewItems=String(items.length);
+  host.dataset.settingsPreviewGroups=String(groups.length);
   if(!items.length)return;
-  items.forEach(item=>{
+  groups.forEach(group=>{
+    const groupRow=document.createElement('div');
+    groupRow.className='settings-save-preview-group';
+    groupRow.dataset.settingsPreviewGroup=group.section;
+    groupRow.textContent=group.section;
+    const count=document.createElement('span');
+    count.textContent=String(group.items.length)+' change'+(group.items.length===1?'':'s');
+    groupRow.appendChild(count);
+    host.appendChild(groupRow);
+    group.items.forEach(item=>{
     const row=document.createElement('div');row.className='settings-save-preview-row';
+    row.tabIndex=0;
+    row.setAttribute('role','button');
+    row.dataset.settingsPreviewItem=item.kind;
+    row.setAttribute('aria-label',item.kind+' '+item.label+' in '+(item.section||group.section));
     const code=document.createElement('code');code.textContent=item.label;row.appendChild(code);
     if(item.delta){
       const delta=document.createElement('span');delta.className='before-after';
@@ -28762,12 +28847,16 @@ function renderSettingsSavePreview(state,forceOpen){
       delta.appendChild(before);delta.appendChild(arrow);delta.appendChild(after);
       row.appendChild(delta);
     }
+    const target=document.createElement('span');target.className='review-target';target.textContent=item.target||settingsTargetDisplayName(currentSettingsTarget);row.appendChild(target);
     const kind=document.createElement('span');kind.textContent=item.kind;row.appendChild(kind);
-    row.onclick=()=>{
-      const match=settingsVisibleRows().find(visible=>settingsReviewRowLabel(visible)===item.label);
+    const reveal=()=>{
+      const match=settingsFindReviewItemRow(item);
       if(match)settingsHighlightRow(match);
     };
+    row.onclick=reveal;
+    row.onkeydown=ev=>{if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();reveal()}};
     host.appendChild(row);
+  });
   });
   if(items.length>=12){
     const more=document.createElement('div');more.className='settings-save-preview-row';more.textContent='More changes are included in the save payload.';host.appendChild(more);
@@ -28788,6 +28877,7 @@ function renderSettingsReviewBar(stats){
   host.dataset.settingsReviewOverrides=String(state.overrides.length);
   host.dataset.settingsReviewErrors=String(state.errors.length);
   host.dataset.settingsReviewVisible=String(state.visible);
+  host.dataset.settingsReviewPreviewGroups=String((state.previewGroups||[]).length);
   const addPill=(label,count,cls,handler)=>{
     const pill=document.createElement(handler?'button':'span');
     if(handler)pill.type='button';
@@ -28818,6 +28908,8 @@ function renderSettingsReviewBar(stats){
   addButton('Show Overrides','Filter the Settings list to visible target overrides',()=>settingsApplyReviewFilter('overrides'),!state.overrides.length,false);
   addButton('Show Errors','Filter the Settings list to visible invalid settings',()=>settingsApplyReviewFilter('error'),!state.errors.length,false);
   addButton('Clear Review','Remove modified override and error review filters',settingsClearReviewFilters,!settingsHasReviewFilter(),false);
+  addButton('Prev Change','Focus previous visible modified setting',()=>settingsFocusReviewRow('modified',-1),!state.modified.length,false);
+  addButton('Next Change','Focus next visible modified setting',()=>settingsFocusReviewRow('modified',1),!state.modified.length,false);
   addButton('Modified','Focus first visible modified setting',()=>settingsFocusFirstReviewRow('modified'),!state.modified.length,false);
   addButton('Override','Focus first visible target override',()=>settingsFocusFirstReviewRow('override'),!state.overrides.length,false);
   addButton('Error','Focus first visible invalid setting',()=>settingsFocusFirstReviewRow('error'),!state.errors.length,false);

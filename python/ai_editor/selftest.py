@@ -9967,7 +9967,16 @@ console.log("frontend word separator behavior ok");
             and "detail-chip value-state" in html
             and "Unsaved edit" in html
              and "function settingsReviewRowBeforeAfter(row)" in html
+             and "function settingsReviewRowSection(row)" in html
+             and "function settingsFindReviewItemRow(item)" in html
+             and "function settingsFocusReviewRow(kind,direction)" in html
+             and "function settingsReviewItem(kind,row,options)" in html
+             and "function settingsGroupSavePreviewItems(items)" in html
              and "className='before-after'" in html
+             and "className='settings-save-preview-group'" in html
+             and "row.setAttribute('role','button');" in html
+             and "row.onkeydown=ev=>{if(ev.key==='Enter'||ev.key===' ')" in html
+             and "target.className='review-target'" in html
              and "data-settings-filter-token=\"@overrides\"" in html
              and "overrides:'Overrides'" in html
              and "const SETTINGS_REVIEW_FILTER_TOKENS=[" in html
@@ -9979,6 +9988,7 @@ console.log("frontend word separator behavior ok");
              and "Show Errors','Filter the Settings list to visible invalid settings" in html
              and "Clear Review','Remove modified override and error review filters" in html
              and "host.dataset.settingsReviewModified=String(state.modified.length);" in html
+             and "host.dataset.settingsReviewPreviewGroups=String((state.previewGroups||[]).length);" in html
              and "button.review-pill" in html
              and "addPill('Modified',state.modified.length,'',()=>settingsApplyReviewFilter('modified'))" in html
              and "addPill('Overrides',state.overrides.length,'',()=>settingsApplyReviewFilter('overrides'))" in html
@@ -10006,7 +10016,9 @@ console.log("frontend word separator behavior ok");
             and "btn.setAttribute('role','treeitem');" in html
             and "item.setAttribute('aria-posinset',String(index+1));" in html
             and "settingsUpdateNavTreeMetadata();" in html
-            and "function settingsUiSelfCheckSnapshot()" in html
+             and "function settingsUiSelfCheckSnapshot()" in html
+            and "host.dataset.settingsPreviewGroups=String(groups.length);" in html
+            and "previewGroups:settingsGroupSavePreviewItems(previewItems)" in html
             and "id=\"settings-result-count\"" in html
             and "id='settings-nav-filter'" in html
             and "id='settings-nav-filter-empty'" in html
@@ -10119,6 +10131,11 @@ console.log("frontend word separator behavior ok");
             and "hasSuggestedMatchesHost" in html
              and "hasReviewFilterActions" in html
              and "hasReviewPillActions" in html
+             and "hasReviewChangeNavigation" in html
+             and "hasGroupedSavePreview" in html
+             and "hasSavePreviewGroupRows" in html
+             and "hasSavePreviewKeyboardRows" in html
+             and "hasSavePreviewTargetChips" in html
              and "hasOverridesFilterToken" in html
              and "function settingsAppendExtensionDetailPanel(host,row)" in html
              and "card.dataset.settingsExtensionDetail='1';" in html
@@ -10155,6 +10172,8 @@ console.log("frontend word separator behavior ok");
             and "window.settingsRecommendationApply=settingsRecommendationApply;" in html
             and "window.renderSettingsFocusDeck=renderSettingsFocusDeck;" in html
             and "window.settingsApplyReviewFilter=settingsApplyReviewFilter;" in html
+            and "window.settingsFocusReviewRow=settingsFocusReviewRow;" in html
+            and "window.settingsGroupSavePreviewItems=settingsGroupSavePreviewItems;" in html
              and "window.settingsClearReviewFilters=settingsClearReviewFilters;" in html
              and "window.settingsHasReviewFilter=settingsHasReviewFilter;" in html
              and "window.settingsSearchModifiedLanguageOverride=settingsSearchModifiedLanguageOverride;" in html
