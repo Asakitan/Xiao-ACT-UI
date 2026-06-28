@@ -2212,6 +2212,14 @@ def test_app_settings_parity() -> None:
            and "self._destroy_fisheye_hit_layer()" in panels_src
            and "self._release_fisheye_input_zorder(" in panels_src
            and "_fisheye_close_suppress_until" in panels_src)
+    _check("AI Editor menu launch defers pywebview after menu release",
+           "def _launch_ai_editor_after_menu() -> None:" in panels_src
+           and "self.root.after_idle(_launch_ai_editor_after_menu)" in panels_src
+           and "_ai_editor_open_pending_until" in panels_src
+           and "pending_until > now" in panels_src
+           and "launch(gui_ref=self)" in panels_src
+           and "finally:" in panels_src
+           and "self._ai_editor_open_pending_until = 0.0" in panels_src)
     app_path = os.path.join(root_dir, "ai_editor", "app.py")
     with open(app_path, "r", encoding="utf-8") as fh:
         app_src = fh.read()
@@ -4448,7 +4456,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "settings-vscode-calm:not(.settings-details-open) .settings-toolbar-strip { display:none; }" in html
            and 'id="settings-jumpbar" class="settings-jumpbar" role="toolbar"' in html
            and ".settings-vscode-calm .settings-jumpbar { display:none; }" in html
-           and ".settings-vscode-calm.settings-details-open .settings-jumpbar { display:flex; }" in html
+           and ".settings-vscode-calm.settings-details-open .settings-jumpbar," in html
+           and "hasNoTopSettingsBands" in html
+           and "hasSingleSearchTopBand" in html
            and "function settingsJumpbarAction(action)" in html
            and "function renderSettingsJumpbar(stats)" in html
            and "host.dataset.settingsJumpbarRendered='1'" in html
@@ -4480,7 +4490,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".settings-vscode-calm.settings-details-open .settings-search-row { grid-template-columns:minmax(520px,760px);" in html
            and ".drag-overlay:not(.active) { pointer-events:none; }" in html
            and "function clearTransientInteractionBlockers(reason)" in html
-           and "window.addEventListener('pageshow',()=>clearTransientInteractionBlockers('startup'))" in html)
+           and "window.addEventListener('pageshow',()=>clearTransientInteractionBlockers('startup'))" in html
+           and "window.addEventListener('load',()=>clearTransientInteractionBlockers('startup'))" in html
+           and "document.addEventListener('dragend',()=>clearTransientInteractionBlockers('dragend'),true)" in html
+           and "if(e&&e.key==='Escape')clearTransientInteractionBlockers('escape');" in html)
     _check("frontend Settings row actions are keyboard accessible",
            "btn.setAttribute('aria-label',title||label);" in html
            and "const more=addButton('⋯','More setting actions',null,false);" in html
@@ -10591,6 +10604,8 @@ console.log("frontend word separator behavior ok");
             and "result.snapshot.hasPrimaryJsonOnlyDefaultToolbar" in settings_smoke_source
             and "result.snapshot.hasQuietDefaultSettingsToolbar" in settings_smoke_source
             and "result.snapshot.hasDetailsOnlyJumpbar" in settings_smoke_source
+            and "result.snapshot.hasNoTopSettingsBands" in settings_smoke_source
+            and "result.snapshot.hasSingleSearchTopBand" in settings_smoke_source
             and "result.snapshot.hasSidebarQuickSettingsActions" in settings_smoke_source
             and "result.snapshot.hasCompactSearchScopeStack" in settings_smoke_source
             and "result.snapshot.hasCalmDefaultSettingsMode" in settings_smoke_source

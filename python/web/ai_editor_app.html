@@ -1434,8 +1434,18 @@ pre.code-block code .type { color:var(--fg-type); }
 .workflow-result-card.done .workflow-result-status { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 55%,var(--border)); }
 .workflow-result-card.error .workflow-result-status { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 55%,var(--border)); }
 .workflow-result-card.cancelled .workflow-result-status { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 55%,var(--border)); }
+.workflow-result-actions,.workflow-result-step-actions { display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
+.workflow-result-actions { padding-top:2px; }
+.workflow-result-step-actions { margin-left:auto; }
+.workflow-result-action { height:22px; border:1px solid transparent; border-radius:4px; padding:0 7px;
+  background:transparent; color:var(--fg-dim); cursor:pointer; font:10px var(--sans); }
+.workflow-result-action:hover,.workflow-result-action:focus { color:var(--fg); border-color:var(--border-focus);
+  background:var(--bg-hover); outline:none; }
+.workflow-result-action.primary { color:var(--fg-accent); border-color:color-mix(in srgb,var(--border-focus) 42%,var(--border)); }
 .workflow-result-step { border-top:1px solid var(--border); padding-top:5px; display:flex; flex-direction:column; gap:3px; }
 .workflow-result-step:first-child { border-top:0; padding-top:0; }
+.workflow-result-card.collapsed .workflow-result-step,
+.workflow-result-card.collapsed .workflow-result-message { display:none; }
 .workflow-result-message { color:var(--fg-dim); font:11px/1.4 var(--mono); white-space:pre-wrap; }
 .workflow-result-card.error .workflow-result-message { color:var(--fg-error); }
 .workflow-result-card.cancelled .workflow-result-message { color:var(--fg-warning); }
@@ -3014,8 +3024,25 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-review-bar,
 .settings-vscode-calm .settings-save-preview { display:none !important; }
 .settings-vscode-calm.settings-details-open .settings-active-filters.open,
-.settings-vscode-calm.settings-details-open .settings-review-bar.open { display:flex !important; }
-.settings-vscode-calm.settings-details-open .settings-save-preview.open { display:block !important; }
+.settings-vscode-calm.settings-details-open .settings-review-bar.open,
+.settings-vscode-calm.settings-details-open .settings-save-preview.open { display:none !important; }
+.settings-vscode-calm.settings-details-open .settings-search-caption,
+.settings-vscode-calm.settings-details-open .settings-target-summary,
+.settings-vscode-calm.settings-details-open .settings-search-memory.open,
+.settings-vscode-calm.settings-details-open .settings-search-inspector.open,
+.settings-vscode-calm.settings-details-open .settings-section-context,
+.settings-vscode-calm.settings-details-open .settings-filter-summary.open,
+.settings-vscode-calm.settings-details-open .settings-validation-summary.open,
+.settings-vscode-calm.settings-details-open .settings-experience-bar.open,
+.settings-vscode-calm.settings-details-open .settings-recommendations.open,
+.settings-vscode-calm.settings-details-open .settings-workbench-status,
+.settings-vscode-calm.settings-details-open .settings-workbench-status:not(.open),
+.settings-vscode-calm.settings-details-open .settings-jumpbar,
+.settings-vscode-calm.settings-details-open .settings-quick-filters { display:none !important; }
+.settings-vscode-calm .settings-searchbar { min-height:42px; }
+.settings-vscode-calm .settings-search-row,
+.settings-vscode-calm.settings-details-open .settings-search-row { grid-template-columns:minmax(520px,760px);
+  padding-bottom:7px; border-bottom:1px solid color-mix(in srgb,var(--border) 45%,transparent); }
 .settings-vscode-calm .settings-nav-status,
 .settings-vscode-calm .settings-nav-active-filters,
 .settings-vscode-calm .settings-nav-review { padding:0 8px 9px 0; margin:0 0 8px;
@@ -8337,6 +8364,7 @@ function renderAssistantWorkflowSessionStrip(){
     button.type='button';
     button.className='chat-workflow-session-action'+(primary?' primary':'');
     button.textContent=labelText;
+    button.setAttribute('aria-label',labelText+' workflow session');
     button.onclick=handler;
     actions.appendChild(button);
     return button;
@@ -8346,7 +8374,9 @@ function renderAssistantWorkflowSessionStrip(){
     addAction('Retry',()=>assistantWorkflowRetryLast(),true);
     addAction('Continue',()=>assistantWorkflowContinueLast(),false);
   }
+  if(runId)addAction('Open',()=>assistantWorkflowFocusRun(runId),false);
   addAction('Copy',()=>assistantWorkflowCopySessionSummary(),false);
+  strip.dataset.workflowActionCount=String(actions.querySelectorAll('button').length);
   strip.appendChild(actions);
   return strip;
 }
@@ -8387,6 +8417,19 @@ async function assistantWorkflowCopySessionSummary(){
   try{await navigator.clipboard.writeText(text);setStatus('Workflow summary copied')}
   catch(_e){setStatus(text)}
   return text;
+}
+function assistantWorkflowFocusRun(runId){
+  const id=String(runId||assistantSessionState.workflowRunId||assistantWorkflowActiveRunId||'');
+  if(!id)return false;
+  const selector='[data-workflow-run-id="'+workflowRunSelectorValue(id)+'"]';
+  const target=document.querySelector('.workflow-result-card'+selector+',.workflow-run-card'+selector);
+  if(!target){showToast('Workflow run card is not in the visible transcript','info',1600);return false}
+  target.scrollIntoView({block:'center',behavior:'smooth'});
+  if(!target.hasAttribute('tabindex'))target.setAttribute('tabindex','-1');
+  try{target.focus({preventScroll:true})}catch(_e){}
+  target.classList.add('assistant-target-highlight');
+  setTimeout(()=>target.classList.remove('assistant-target-highlight'),1200);
+  return true;
 }
 function syncAssistantSessionState(patch){
   const input=$('chat-input');
@@ -11399,6 +11442,10 @@ function assistantWorkflowResultStateSnapshot(){
   const ok=renderWorkflowResultSummary(body,{workflow:'ok-flow',workflowRunId:'wf-ok',workflowMode:'on',workflowMethod:'backend',sessionResource:'sao-ai-chat://local/result-ok',inputPreview:'ok input',workflowDurationMs:42,workflowAgents:['default'],steps:[{step:0,label:'Ok',agent:'default',output_var:'ok',output:'done',durationMs:42}],final_output:'done'},{workflowLabel:'Ok Flow',workflowMode:'on',workflowMethod:'backend',sessionResource:'sao-ai-chat://local/result-ok',inputPreview:'ok input',workflowAgents:['default']});
   const err=renderWorkflowResultSummary(body,{workflow:'err-flow',workflowRunId:'wf-err',steps:[{step:0,label:'Err',agent:'default',output_var:'err',error:'failed step'}]},{workflowLabel:'Err Flow',workflowMethod:'backend',sessionResource:'sao-ai-chat://local/result-err'});
   const cancelled=renderWorkflowResultSummary(body,{workflow:'cancel-flow',workflowRunId:'wf-cancel',cancelled:true,message:'cancel requested',steps:[]},{workflowLabel:'Cancel Flow'});
+  const toggle=ok?ok.querySelector('[data-workflow-result-action="collapse"]'):null;
+  if(toggle)toggle.click();
+  const summaryText=ok?workflowResultSummaryText(ok):'';
+  const firstStep=ok?ok.querySelector('.workflow-result-step'):null;
   return {
     okStatus:ok?String(ok.dataset.workflowResultStatus||''):'',
     errorStatus:err?String(err.dataset.workflowResultStatus||''):'',
@@ -11413,7 +11460,17 @@ function assistantWorkflowResultStateSnapshot(){
     okInputPreview:ok?String(ok.dataset.workflowInputPreview||''):'',
     okDurationMs:ok?Number(ok.dataset.workflowDurationMs||0):0,
     durationChipCount:body.querySelectorAll('.workflow-result-step-duration').length,
-    okAgents:ok?String(ok.dataset.workflowAgents||''):''
+    okAgents:ok?String(ok.dataset.workflowAgents||''):'',
+    actionCount:body.querySelectorAll('.workflow-result-action').length,
+    toolbarRole:ok&&ok.querySelector('.workflow-result-actions')?ok.querySelector('.workflow-result-actions').getAttribute('role'):'',
+    collapsed:!!(ok&&ok.classList.contains('collapsed')),
+    collapsedDataset:ok?String(ok.dataset.workflowResultCollapsed||''):'',
+    summaryTextIncludesRun:summaryText.includes('Run: wf-ok'),
+    summaryTextIncludesOutput:summaryText.includes('done'),
+    stepActionCount:body.querySelectorAll('[data-workflow-step-action]').length,
+    stepTextReady:workflowResultStepText(firstStep).includes('done'),
+    resultPreview:ok?String(ok.dataset.workflowResultPreview||''):'',
+    progress:ok?String(ok.dataset.workflowProgress||''):''
   };
 }
 function assistantWorkflowRunButtonSnapshot(){
@@ -11451,6 +11508,8 @@ function assistantWorkflowSessionStripSnapshot(){
     status:runningEl?String(runningEl.dataset.workflowStatus||''):'',
     progress:runningEl?String(runningEl.dataset.workflowProgress||''):'',
     hasCancel:runningActions.includes('Cancel'),
+    hasOpen:runningActions.includes('Open'),
+    actionCount:runningEl?Number(runningEl.dataset.workflowActionCount||0):0,
     text:runningEl?String(runningEl.textContent||''):''
   };
   setAssistantWorkflowRunState(false,{runId:'wf-strip-selfcheck',keepRunId:true});
@@ -11465,7 +11524,9 @@ function assistantWorkflowSessionStripSnapshot(){
     progress:doneEl?String(doneEl.dataset.workflowProgress||''):'',
     hasRetry:doneActions.includes('Retry'),
     hasContinue:doneActions.includes('Continue'),
+    hasOpen:doneActions.includes('Open'),
     hasCopy:doneActions.includes('Copy'),
+    actionCount:doneEl?Number(doneEl.dataset.workflowActionCount||0):0,
     datasetStatus:panel?String(panel.dataset.chatWorkflowRunStatus||''):'',
     datasetPreview:panel?String(panel.dataset.chatWorkflowResultPreview||''):'',
     text:doneEl?String(doneEl.textContent||''):''
@@ -22276,9 +22337,12 @@ function assistantHistorySessionChips(session,current,branchMeta){
   if(session&&session.mode)chips.push({label:t('mode_'+session.mode)||String(session.mode),kind:'mode'});
   if(session&&session.agentId)chips.push({label:String(session.agentId),kind:'agent'});
   if(session&&session.workflowLabel)chips.push({label:assistantWorkflowDisplayLabel(session.workflowLabel),kind:'workflow'});
+  if(session&&session.workflowRunStatus)chips.push({label:'workflow '+String(session.workflowRunStatus),kind:'workflow'});
+  if(session&&session.workflowRunProgress)chips.push({label:String(session.workflowRunProgress),kind:'workflow'});
+  if(session&&session.workflowMethod)chips.push({label:String(session.workflowMethod),kind:'workflow'});
   if(session&&session.approval&&String(session.approval)!=='default')chips.push({label:t('approval_'+session.approval)||String(session.approval),kind:'approval'});
   chips.push(...assistantHistoryNativeSummaryChips(nativeSummary));
-  return chips.slice(0,16);
+  return chips.slice(0,18);
 }
 function renderHistorySessionItem(list,session,index,branchMeta){
   branchMeta=branchMeta||assistantSessionBranchMeta(session,[]);
@@ -22296,6 +22360,11 @@ function renderHistorySessionItem(list,session,index,branchMeta){
   item.dataset.sessionMode=String(session.mode||'');
   item.dataset.sessionAgentId=String(session.agentId||'');
   item.dataset.sessionWorkflowId=String(session.workflowId||'');
+  item.dataset.sessionWorkflowRunId=String(session.workflowRunId||'');
+  item.dataset.sessionWorkflowRunStatus=String(session.workflowRunStatus||'');
+  item.dataset.sessionWorkflowRunProgress=String(session.workflowRunProgress||'');
+  item.dataset.sessionWorkflowMethod=String(session.workflowMethod||'');
+  item.dataset.sessionWorkflowResultPreview=String(session.workflowResultPreview||'');
   item.dataset.sessionApproval=String(session.approval||'');
   item.dataset.sessionParentResource=String(session.parentSessionResource||'');
   item.dataset.sessionParentTitle=String(session.parentSessionTitle||'');
@@ -22327,6 +22396,11 @@ function renderHistorySessionItem(list,session,index,branchMeta){
     'Approval: '+String((session.approval?(t('approval_'+session.approval)||session.approval):'-')||'-'),
     'Agent: '+String(session.agentId||'Default'),
     'Workflow: '+String(session.workflowLabel||session.workflowId||'-'),
+    session.workflowRunId?'Workflow run: '+String(session.workflowRunId):'',
+    session.workflowRunStatus?'Workflow status: '+String(session.workflowRunStatus):'',
+    session.workflowRunProgress?'Workflow progress: '+String(session.workflowRunProgress):'',
+    session.workflowMethod?'Workflow method: '+String(session.workflowMethod):'',
+    session.workflowResultPreview?'Workflow result: '+String(session.workflowResultPreview):'',
     session.parentSessionResource?'Forked from: '+String(session.parentSessionTitle||session.parentSessionResource):'',
     branchMeta.childCount?'Branches: '+branchMeta.childCount+' - '+branchMeta.childTitles.join(', '):'',
     nativeSummary.parts?'Response parts: '+nativeSummary.parts:'',
@@ -24096,6 +24170,79 @@ function assistantWorkflowPatchFromResultCard(card,result){
     workflowResultPreview:workflowResultPreview(result)
   });
 }
+function assistantWorkflowCopyText(text,label){
+  const value=String(text||'');
+  const name=String(label||'Workflow text');
+  if(!value){setStatus(name+' is empty');return Promise.resolve(false)}
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    return navigator.clipboard.writeText(value).then(()=>{
+      setStatus(name+' copied');
+      return true;
+    }).catch(()=>{
+      setStatus(value);
+      return false;
+    });
+  }
+  setStatus(value);
+  return Promise.resolve(false);
+}
+function workflowResultSummaryText(card){
+  if(!card)return '';
+  const title=String((card.querySelector('.workflow-result-title')||{}).textContent||'Workflow result');
+  const status=String(card.dataset.workflowResultStatus||'');
+  const run=String(card.dataset.workflowRunId||'');
+  const method=String(card.dataset.workflowMethod||'');
+  const progress=String(card.dataset.workflowProgress||'');
+  const preview=String(card.dataset.workflowResultPreview||'');
+  const lines=[
+    title,
+    run?'Run: '+run:'',
+    status?'Status: '+status:'',
+    method?'Method: '+method:'',
+    progress?'Progress: '+progress:'',
+    preview?'Result: '+preview:''
+  ].filter(Boolean);
+  const stepLines=Array.from(card.querySelectorAll('.workflow-result-step')).map(row=>workflowResultStepText(row)).filter(Boolean);
+  return lines.concat(stepLines.length?['', 'Steps:', ...stepLines]:[]).join('\n');
+}
+function workflowResultStepText(row){
+  if(!row)return '';
+  const idx=String((row.querySelector('.idx')||{}).textContent||'').trim();
+  const title=String((row.querySelector('.workflow-result-step-title')||{}).textContent||'').replace(/\s+/g,' ').trim();
+  const output=String((row.querySelector('.workflow-result-output')||{}).textContent||'').trim();
+  return [idx?idx+'. '+title:title,output].filter(Boolean).join('\n');
+}
+function workflowResultToggleCard(card,button){
+  if(!card)return false;
+  const collapsed=!card.classList.contains('collapsed');
+  card.classList.toggle('collapsed',collapsed);
+  card.dataset.workflowResultCollapsed=collapsed?'1':'0';
+  if(button){
+    button.textContent=collapsed?'Expand':'Collapse';
+    button.setAttribute('aria-expanded',collapsed?'false':'true');
+  }
+  return true;
+}
+function workflowResultContinueFromCard(card){
+  const text=workflowResultSummaryText(card);
+  if(!text)return false;
+  setChatInputValue('Continue from workflow result:\n'+text+'\n\nNext request:',{focus:true});
+  announceAssistantAction('Workflow result inserted into composer');
+  return true;
+}
+function workflowResultCopySummary(card){
+  return assistantWorkflowCopyText(workflowResultSummaryText(card),'Workflow result summary');
+}
+function workflowResultCopyStep(row){
+  return assistantWorkflowCopyText(workflowResultStepText(row),'Workflow step output');
+}
+function workflowResultInsertStep(row){
+  const text=workflowResultStepText(row);
+  if(!text)return false;
+  setChatInputValue(text,{focus:true});
+  announceAssistantAction('Workflow step output inserted');
+  return true;
+}
 function renderWorkflowResultSummary(body,result,launch){
   if(!body)return null;
   const steps=workflowResultSteps(result);
@@ -24114,6 +24261,7 @@ function renderWorkflowResultSummary(body,result,launch){
   card.dataset.workflowInputPreview=String((launch&&launch.inputPreview)||result&&result.inputPreview||result&&result.workflowLaunch&&result.workflowLaunch.inputPreview||'');
   card.dataset.workflowDurationMs=String(Number((result&&result.workflowDurationMs)||result&&result.durationMs||0)||0);
   card.dataset.workflowAgents=(Array.isArray(result&&result.workflowAgents)?result.workflowAgents:(launch&&launch.workflowAgents)||[]).map(String).join(',');
+  card.dataset.workflowResultPreview=workflowResultPreview(result);
   const head=document.createElement('div');head.className='workflow-result-head';
   const title=document.createElement('span');title.className='workflow-result-title';
   title.textContent=String((launch&&launch.workflowLabel)||result&&result.workflow||'Workflow result');
@@ -24128,6 +24276,25 @@ function renderWorkflowResultSummary(body,result,launch){
   ].filter(Boolean).join(' · ');
   const badge=document.createElement('span');badge.className='workflow-result-status';badge.textContent=status;
   head.appendChild(title);head.appendChild(meta);head.appendChild(badge);card.appendChild(head);
+  const actions=document.createElement('div');
+  actions.className='workflow-result-actions';
+  actions.setAttribute('role','toolbar');
+  actions.setAttribute('aria-label','Workflow result actions');
+  const addResultAction=(labelText,handler,primary)=>{
+    const button=document.createElement('button');
+    button.type='button';
+    button.className='workflow-result-action'+(primary?' primary':'');
+    button.dataset.workflowResultAction=labelText.toLowerCase().replace(/\s+/g,'-');
+    button.textContent=labelText;
+    button.setAttribute('aria-label',labelText+' workflow result');
+    button.onclick=ev=>{ev.preventDefault();handler(button)};
+    actions.appendChild(button);
+    return button;
+  };
+  addResultAction('Continue',()=>workflowResultContinueFromCard(card),true);
+  addResultAction('Copy summary',()=>workflowResultCopySummary(card),false);
+  addResultAction('Collapse',button=>workflowResultToggleCard(card,button),false).setAttribute('aria-expanded','true');
+  card.appendChild(actions);
   if(result&&(result.error||result.cancelled)){
     const msg=document.createElement('div');msg.className='workflow-result-message';
     msg.textContent=String(result.error||result.message||'Workflow cancelled');
@@ -24152,6 +24319,22 @@ function renderWorkflowResultSummary(body,result,launch){
       duration.title='Step duration: '+durationLabel;
       stepTitle.appendChild(duration);
     }
+    const stepActions=document.createElement('span');
+    stepActions.className='workflow-result-step-actions';
+    const addStepAction=(labelText,handler)=>{
+      const button=document.createElement('button');
+      button.type='button';
+      button.className='workflow-result-action';
+      button.dataset.workflowStepAction=labelText.toLowerCase();
+      button.textContent=labelText;
+      button.setAttribute('aria-label',labelText+' workflow step '+String(index+1));
+      button.onclick=ev=>{ev.preventDefault();handler(row)};
+      stepActions.appendChild(button);
+      return button;
+    };
+    addStepAction('Copy',workflowResultCopyStep);
+    addStepAction('Insert',workflowResultInsertStep);
+    stepTitle.appendChild(stepActions);
     row.appendChild(stepTitle);
     const output=document.createElement('div');output.className='workflow-result-output';
     output.textContent=String(step.error||step.output||'');
@@ -24159,6 +24342,8 @@ function renderWorkflowResultSummary(body,result,launch){
     card.appendChild(row);
   });
   body.appendChild(card);
+  card.dataset.workflowActionCount=String(card.querySelectorAll('.workflow-result-action').length);
+  card.dataset.workflowProgress=steps.length?String(steps.filter(step=>!(step&&step.error)).length)+'/'+String(steps.length):'';
   assistantWorkflowPatchFromResultCard(card,result);
   return card;
 }
@@ -29147,6 +29332,11 @@ function settingsUiSelfCheckSnapshot(){
   const navReviewButtons=navReview?Array.from(navReview.querySelectorAll('[data-settings-nav-review-action]')):[];
   const topReviewHidden=!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&reviewBar&&String(getComputedStyle(reviewBar).display)==='none');
   const topActiveFiltersHidden=!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&topActiveFilters&&String(getComputedStyle(topActiveFilters).display)==='none');
+  const topBands=['settings-jumpbar','settings-workbench-status','settings-active-filters','settings-review-bar','settings-save-preview','settings-quick-filters']
+    .map(id=>$(id)).filter(Boolean);
+  const topBandsHidden=topBands.every(el=>String(getComputedStyle(el).display)==='none'||String(getComputedStyle(el).maxHeight)==='0px');
+  const searchbarBandCount=Array.from(document.querySelectorAll('.settings-searchbar > *'))
+    .filter(el=>String(getComputedStyle(el).display)!=='none'&&String(getComputedStyle(el).maxHeight)!=='0px').length;
   const rowActionMenu=document.querySelector('.settings-row-action-menu');
   const rowActionButtons=Array.from(document.querySelectorAll('.settings-row-action'));
   const workbenchStatus=$('settings-workbench-status');
@@ -29189,6 +29379,8 @@ function settingsUiSelfCheckSnapshot(){
     hasSidebarScopeActiveState:navScopeButtons.some(btn=>btn.dataset.settingsTarget===currentSettingsTarget&&btn.classList.contains('active')&&btn.getAttribute('aria-selected')==='true'),
     hasDefaultHiddenTopReview:topReviewHidden,
     hasDefaultHiddenTopActiveFilters:topActiveFiltersHidden,
+    hasNoTopSettingsBands:topBandsHidden,
+    hasSingleSearchTopBand:searchbarBandCount<=1,
     hasSidebarStatusPanel:!!(navStatus&&navStatus.dataset.settingsNavStatus==='1'&&navStatus.querySelector('.settings-nav-status-grid')&&navStatus.dataset.settingsNavTarget),
     hasSidebarActiveFiltersPanel:!!(navActiveFilters&&navActiveFilters.dataset.settingsNavActiveFilters!==undefined),
     hasSidebarReviewPanel:!!(navReview&&navReview.dataset.settingsNavReview==='1'&&navReviewButtons.some(btn=>btn.dataset.settingsNavReviewAction==='modified')&&navReviewButtons.some(btn=>btn.dataset.settingsNavReviewAction==='preview')),
@@ -40644,7 +40836,7 @@ function clearTransientInteractionBlockers(reason){
     overlay.classList.remove('active');
     overlay.dataset.lastClearedReason=String(reason||'pointer');
   }
-  if(document.body.classList.contains('window-closing')&&reason==='startup'){
+  if(document.body.classList.contains('window-closing')&&['startup','focus','pointer','dragend','escape'].includes(String(reason||''))){
     document.body.classList.remove('window-closing');
   }
 }
@@ -40656,6 +40848,12 @@ document.addEventListener('pointerdown',e=>{
 },true);
 window.addEventListener('focus',()=>clearTransientInteractionBlockers('focus'));
 window.addEventListener('pageshow',()=>clearTransientInteractionBlockers('startup'));
+window.addEventListener('load',()=>clearTransientInteractionBlockers('startup'));
+document.addEventListener('DOMContentLoaded',()=>clearTransientInteractionBlockers('startup'));
+document.addEventListener('dragend',()=>clearTransientInteractionBlockers('dragend'),true);
+document.addEventListener('keydown',e=>{
+  if(e&&e.key==='Escape')clearTransientInteractionBlockers('escape');
+},true);
 
 document.addEventListener('dragenter',e=>{e.preventDefault();$('drag-overlay').classList.add('active')});
 document.addEventListener('dragleave',e=>{if(e.target.id==='drag-overlay')$('drag-overlay').classList.remove('active')});
