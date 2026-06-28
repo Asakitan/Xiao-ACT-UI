@@ -2483,6 +2483,15 @@ pre.code-block { overflow:visible; }
 .ext-settings-active-filters button { height:22px; max-width:220px; border:1px solid var(--border); background:var(--bg3);
   color:var(--fg-dim); border-radius:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .ext-settings-active-filters button:hover { color:var(--fg); border-color:var(--fg-accent); }
+.ext-settings-quick-filters,.ext-settings-query-history { grid-column:1 / -1; display:flex; align-items:center; flex-wrap:wrap; gap:5px; min-height:22px; }
+.ext-settings-query-history { display:none; }
+.ext-settings-query-history.open { display:flex; }
+.ext-settings-quick-filters button,.ext-settings-query-history button { height:22px; max-width:230px; padding:1px 7px;
+  border:1px solid var(--border); background:var(--bg3); color:var(--fg-dim); border-radius:999px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ext-settings-quick-filters button:hover,.ext-settings-query-history button:hover { color:var(--fg); border-color:var(--fg-accent); background:var(--bg-hover); }
+.ext-settings-quick-filters button.active { color:var(--fg-accent); border-color:var(--fg-accent); background:color-mix(in srgb,var(--fg-accent) 12%,var(--bg3)); }
+.ext-settings-sort { min-width:122px; }
 .ext-settings-empty { display:none; grid-column:1 / -1; color:var(--fg-dim); font-size:11px; padding:3px 0 1px; }
 .ext-settings-result-summary { grid-column:1 / -1; color:var(--fg-dim); font:11px var(--mono); min-height:16px; }
 .ext-settings-virtual-summary { grid-column:1 / -1; display:none; align-items:center; gap:6px; flex-wrap:wrap;
@@ -25771,6 +25780,10 @@ function settingsUiSelfCheckSnapshot(){
     hasExtensionPerformanceStatus:!!$('ext-settings-perf'),
     hasExtensionVirtualSummary:!!$('ext-settings-virtual-summary'),
     hasExtensionVirtualActions:!!($('ext-settings-load-visible')&&$('ext-settings-load-all')),
+    hasExtensionQuickFilters:!!document.querySelector('#ext-settings-quick-filters [data-ext-settings-quick-token="@modified"]'),
+    hasExtensionQueryHistory:!!$('ext-settings-query-history'),
+    hasExtensionSortControl:!!$('ext-settings-sort'),
+    hasExtensionSectionActions:!!($('ext-settings-collapse-visible')&&$('ext-settings-expand-visible')),
     extensionPerformance:typeof extensionSettingRenderStats==='function'?extensionSettingRenderStats():{},
     extensionVirtualization:typeof extensionSettingVirtualizationStats==='function'?extensionSettingVirtualizationStats($('ext-settings-container')):{},
     hasExtensionAutoVirtualization:!!(main&&main.dataset&&main.dataset.extSettingsVirtualScroll==='1'),
@@ -25827,6 +25840,10 @@ window.extensionSettingPreheatLazyRows=extensionSettingPreheatLazyRows;
 window.extensionSettingLoadVisiblePendingRows=extensionSettingLoadVisiblePendingRows;
 window.extensionSettingLoadAllPendingRows=extensionSettingLoadAllPendingRows;
 window.renderExtensionSettingVirtualSummary=renderExtensionSettingVirtualSummary;
+window.extensionSettingQueryHistory=extensionSettingQueryHistory;
+window.extensionSettingRememberQuery=extensionSettingRememberQuery;
+window.renderExtensionSettingQueryHistory=renderExtensionSettingQueryHistory;
+window.extensionSettingSetVisibleSectionsOpen=extensionSettingSetVisibleSectionsOpen;
 const SETTINGS_SCOPE_FILTERS={
   editor:['editor','format','formatter','suggest','hover','minimap','folding','sticky scroll','diff','diagnostic','language override'],
   files:['files','save','auto save','trim trailing','final newline'],
@@ -29775,6 +29792,7 @@ function extensionSettingLanguageFilterMatches(row,rowTags,lang){
     && !(rowTags||[]).includes('language-default');
 }
 const EXTENSION_SETTINGS_FILTER_STATE_KEY='sao-ai-ext-settings-filter-v1';
+const EXTENSION_SETTINGS_QUERY_HISTORY_KEY='sao-ai-ext-settings-query-history-v1';
 function extensionSettingStorage(){
   try{return typeof localStorage!=='undefined'?localStorage:null}catch(e){return null}
 }
@@ -29793,6 +29811,7 @@ function extensionSettingWriteFilterState(state){
     category:String(data.category||'').slice(0,240),
     scope:String(data.scope||'').slice(0,80),
     target:String(data.target||'').slice(0,80),
+    sort:String(data.sort||'relevance').slice(0,40),
     modified:data.modified===true,
     hidden:data.hidden===true,
   }))}catch(e){}
@@ -30075,6 +30094,7 @@ function extensionSettingCaptureFilterState(){
     category:(($('ext-settings-category')||{}).value)||'',
     scope:(($('ext-settings-scope')||{}).value)||'',
     target:(($('ext-settings-target')||{}).value)||'',
+    sort:(($('ext-settings-sort')||{}).value)||'relevance',
     modified:(($('ext-settings-modified')||{}).checked===true),
     hidden:(($('ext-settings-hidden')||{}).checked===true),
   };
@@ -30085,11 +30105,47 @@ function extensionSettingApplyFilterState(state){
   const category=$('ext-settings-category');if(category&&state.category)category.value=String(state.category||'');
   const scope=$('ext-settings-scope');if(scope)scope.value=String(state.scope||'');
   const target=$('ext-settings-target');if(target)target.value=String(state.target||'');
+  const sort=$('ext-settings-sort');if(sort)sort.value=String(state.sort||'relevance');
   const modified=$('ext-settings-modified');if(modified)modified.checked=state.modified===true;
   const hidden=$('ext-settings-hidden');if(hidden)hidden.checked=state.hidden===true;
 }
 function extensionSettingRestoreFilterState(){
   extensionSettingApplyFilterState(extensionSettingReadFilterState());
+}
+function extensionSettingQueryHistory(){
+  const storage=extensionSettingStorage();if(!storage)return [];
+  try{
+    const data=JSON.parse(storage.getItem(EXTENSION_SETTINGS_QUERY_HISTORY_KEY)||'[]');
+    return Array.isArray(data)?data.map(item=>String(item||'').trim()).filter(Boolean).slice(0,8):[];
+  }catch(e){return []}
+}
+function extensionSettingRememberQuery(query){
+  query=String(query||'').trim();
+  if(!query||query.length<2)return extensionSettingQueryHistory();
+  const storage=extensionSettingStorage();if(!storage)return [];
+  const next=[query].concat(extensionSettingQueryHistory().filter(item=>item.toLowerCase()!==query.toLowerCase())).slice(0,8);
+  try{storage.setItem(EXTENSION_SETTINGS_QUERY_HISTORY_KEY,JSON.stringify(next))}catch(e){}
+  return next;
+}
+function extensionSettingClearQueryHistory(){
+  const storage=extensionSettingStorage();if(storage){try{storage.removeItem(EXTENSION_SETTINGS_QUERY_HISTORY_KEY)}catch(e){}}
+  renderExtensionSettingQueryHistory();
+}
+function renderExtensionSettingQueryHistory(){
+  const host=$('ext-settings-query-history');if(!host)return;
+  host.innerHTML='';
+  const history=extensionSettingQueryHistory();
+  host.classList.toggle('open',history.length>0);
+  if(!history.length)return;
+  history.forEach(query=>{
+    const btn=document.createElement('button');btn.type='button';btn.dataset.extSettingsHistoryQuery=query;
+    btn.textContent=query;btn.title='Run previous Settings query';
+    btn.onclick=ev=>{ev.preventDefault();extensionSettingSetSearchTokenValue(query);scheduleExtensionSettingsFilter(0)};
+    host.appendChild(btn);
+  });
+  const clear=document.createElement('button');clear.type='button';clear.textContent='Clear Recent';clear.title='Clear recent Settings queries';
+  clear.onclick=ev=>{ev.preventDefault();extensionSettingClearQueryHistory()};
+  host.appendChild(clear);
 }
 function extensionSettingTextTokens(text){
   return String(text||'').toLowerCase().split(/\s+/).map(item=>item.trim()).filter(Boolean);
@@ -30140,15 +30196,46 @@ function extensionSettingTextMatchRank(row,text,tokens){
 }
 function extensionSettingSortSectionRows(section,text){
   const inner=section&&section.querySelector?section.querySelector('div'):null;
-  if(!inner||!text)return;
+  if(!inner)return;
+  const mode=(($('ext-settings-sort')||{}).value)||'relevance';
+  if(mode==='default'&&!text)return;
   Array.from(inner.querySelectorAll('.ext-setting-row'))
     .sort((a,b)=>{
-      const ar=Number(a.dataset.extSettingMatchRank||0),br=Number(b.dataset.extSettingMatchRank||0);
-      if(ar!==br)return br-ar;
+      if(mode==='modified'){
+        const am=a.dataset.extSettingModified==='1'?1:0,bm=b.dataset.extSettingModified==='1'?1:0;
+        if(am!==bm)return bm-am;
+      }else if(mode==='errors'){
+        const ai=extensionSettingRowInvalid(a)?1:0,bi=extensionSettingRowInvalid(b)?1:0;
+        if(ai!==bi)return bi-ai;
+      }else if(mode==='key'){
+        const ak=String(a.dataset.extSettingKey||''),bk=String(b.dataset.extSettingKey||'');
+        if(ak!==bk)return ak.localeCompare(bk);
+      }else if(mode==='extension'){
+        const ae=String(a.dataset.extSettingExtensionId||a.dataset.extSettingExtension||''),be=String(b.dataset.extSettingExtensionId||b.dataset.extSettingExtension||'');
+        if(ae!==be)return ae.localeCompare(be);
+      }else{
+        const ar=Number(a.dataset.extSettingMatchRank||0),br=Number(b.dataset.extSettingMatchRank||0);
+        if(ar!==br)return br-ar;
+      }
       const ao=Number(a.dataset.extSettingOrder||0),bo=Number(b.dataset.extSettingOrder||0);
       return ao-bo;
     })
     .forEach(row=>inner.appendChild(row));
+}
+function extensionSettingRenderQuickFilters(){
+  const host=$('ext-settings-quick-filters');if(!host)return;
+  const tokens=extensionSettingQueryTokens(extensionSettingSearchTokenValue()).map(item=>String(item||'').toLowerCase());
+  host.querySelectorAll('button[data-ext-settings-quick-token]').forEach(btn=>{
+    const token=String(btn.dataset.extSettingsQuickToken||'').toLowerCase();
+    btn.classList.toggle('active',tokens.includes(token));
+    btn.setAttribute('aria-pressed',tokens.includes(token)?'true':'false');
+  });
+}
+function extensionSettingSetVisibleSectionsOpen(open){
+  const sections=Array.from((($('ext-settings-container')||{}).querySelectorAll?$('ext-settings-container').querySelectorAll('details[data-ext-settings-section]'):[]))
+    .filter(section=>section.style.display!=='none');
+  sections.forEach(section=>{section.open=open===true});
+  return sections.length;
 }
 function updateExtensionSettingSectionSummary(section,stats){
   if(!section)return;
@@ -30451,6 +30538,8 @@ function renderExtensionSettingFilterState(visibleRows,totalRows,stats){
   }
   const summary=$('ext-settings-result-summary');
   if(summary)summary.textContent=extensionSettingResultSummary(visibleRows,totalRows,stats);
+  extensionSettingRenderQuickFilters();
+  renderExtensionSettingQueryHistory();
   renderExtensionSettingVirtualSummary();
   renderExtensionSettingInsight(stats);
   ['ext-settings-prev-result','ext-settings-next-result'].forEach(id=>{const btn=$(id);if(btn)btn.disabled=!visibleRows});
@@ -30462,6 +30551,8 @@ function renderExtensionSettingFilterState(visibleRows,totalRows,stats){
   const loadVisible=$('ext-settings-load-visible');if(loadVisible)loadVisible.disabled=!pending||!visiblePending;
   const loadAll=$('ext-settings-load-all');if(loadAll)loadAll.disabled=!pending;
   const resetBtn=$('ext-settings-reset-visible');if(resetBtn)resetBtn.disabled=!(Number(stats.resettableVisible)||0);
+  const collapseBtn=$('ext-settings-collapse-visible');if(collapseBtn)collapseBtn.disabled=!visibleRows;
+  const expandBtn=$('ext-settings-expand-visible');if(expandBtn)expandBtn.disabled=!visibleRows;
 }
 function extensionSettingsQuery(){
   const raw=(($('settings-search')||{}).value||'').trim();
@@ -30615,6 +30706,7 @@ function applyExtensionSettingsFilter(){
   if(divider)divider.style.display=visibleSections?'':'none';
   const toolbar=container.querySelector('[data-ext-settings-filter="1"]');
   if(toolbar)toolbar.style.display=totalRows?'':'none';
+  if(activeFilter)extensionSettingRememberQuery(extensionSettingSearchTokenValue());
   renderExtensionSettingFilterState(visibleRows,totalRows,{visibleRows:visibleRowList,modifiedVisible,invalidVisible,resettableVisible,hiddenVisible,visibleSections});
   renderExtensionSettingSuggestions();
   extensionSettingWriteFilterStateDeferred(extensionSettingCaptureFilterState());
@@ -30922,6 +31014,8 @@ async function renderExtensionSettings(){
   scopeSelect.innerHTML='<option value="">All Scopes</option><option value="application">Application</option><option value="machine">Machine</option><option value="application-machine">Application/Machine</option><option value="machine-overridable">Machine Overridable</option><option value="window">Window</option><option value="resource">Resource</option><option value="language-overridable">Language</option>';
   const targetSelect=document.createElement('select');targetSelect.id='ext-settings-target';targetSelect.title='Filter by configuration target';
   targetSelect.innerHTML='<option value="">All Targets</option><option value="global">Global</option><option value="workspace">Workspace</option><option value="workspaceFolder">Workspace Folder</option>';
+  const sortSelect=document.createElement('select');sortSelect.id='ext-settings-sort';sortSelect.className='ext-settings-sort';sortSelect.title='Sort visible extension settings';
+  sortSelect.innerHTML='<option value="relevance">Sort: Relevance</option><option value="default">Sort: Default</option><option value="modified">Sort: Modified First</option><option value="errors">Sort: Errors First</option><option value="key">Sort: Setting ID</option><option value="extension">Sort: Extension</option>';
   const modifiedLabel=document.createElement('label');
   const modifiedBox=document.createElement('input');modifiedBox.type='checkbox';modifiedBox.id='ext-settings-modified';
   modifiedLabel.appendChild(modifiedBox);modifiedLabel.appendChild(document.createTextNode('@modified'));
@@ -31005,6 +31099,18 @@ async function renderExtensionSettings(){
   const count=document.createElement('span');count.className='ext-settings-count';count.id='ext-settings-filter-count';count.textContent='0 / 0';
   const perf=document.createElement('span');perf.className='ext-settings-perf';perf.id='ext-settings-perf';
   const activeFilters=document.createElement('div');activeFilters.className='ext-settings-active-filters';activeFilters.id='ext-settings-active-filters';
+  const quickFilters=document.createElement('div');quickFilters.className='ext-settings-quick-filters';quickFilters.id='ext-settings-quick-filters';
+  const addQuickFilter=(label,token,exclude)=>{
+    const btn=document.createElement('button');btn.type='button';btn.textContent=label;btn.title='Toggle '+label;btn.dataset.extSettingsQuickToken=token;
+    btn.onclick=ev=>{ev.preventDefault();extensionSettingToggleFilterToken(token,exclude||[])};
+    quickFilters.appendChild(btn);return btn;
+  };
+  addQuickFilter('Modified','@modified');
+  addQuickFilter('Configured','@configured',['@unconfigured']);
+  addQuickFilter('Writable','@writable',['@readonly']);
+  addQuickFilter('Read-only','@readonly',['@writable']);
+  addQuickFilter('Online','@online');
+  const queryHistory=document.createElement('div');queryHistory.className='ext-settings-query-history';queryHistory.id='ext-settings-query-history';
   const resultSummary=document.createElement('div');resultSummary.className='ext-settings-result-summary';resultSummary.id='ext-settings-result-summary';
   const virtualSummary=document.createElement('div');virtualSummary.className='ext-settings-virtual-summary';virtualSummary.id='ext-settings-virtual-summary';
   const resultInsight=document.createElement('div');resultInsight.className='ext-settings-insight';resultInsight.id='ext-settings-insight';
@@ -31016,6 +31122,14 @@ async function renderExtensionSettings(){
   addResultAction('ext-settings-next-result','Next','Focus next visible extension setting',()=>extensionSettingFocusVisibleRow(1));
   addResultAction('ext-settings-first-modified','First Modified','Focus first visible modified extension setting',()=>extensionSettingFocusFirstModifiedSetting());
   addResultAction('ext-settings-first-error','First Error','Focus first visible invalid extension setting',()=>extensionSettingFocusFirstInvalidSetting());
+  addResultAction('ext-settings-collapse-visible','Collapse','Collapse visible extension Settings sections',()=>{
+    const count=extensionSettingSetVisibleSectionsOpen(false);
+    if(count)showToast('Collapsed '+count+' visible extension Settings section'+(count===1?'':'s'),'info',1200);
+  });
+  addResultAction('ext-settings-expand-visible','Expand','Expand visible extension Settings sections',()=>{
+    const count=extensionSettingSetVisibleSectionsOpen(true);
+    if(count)showToast('Expanded '+count+' visible extension Settings section'+(count===1?'':'s'),'info',1200);
+  });
   addResultAction('ext-settings-load-visible','Load More','Render the next batch in each visible virtualized Settings section',()=>{
     const added=extensionSettingLoadVisiblePendingRows();
     if(added)showToast('Loaded '+added+' extension setting row'+(added===1?'':'s'),'info',1400);
@@ -31029,7 +31143,7 @@ async function renderExtensionSettings(){
     if(count)showToast('Reset '+count+' visible modified extension setting'+(count===1?'':'s'),'info');
   });
   const emptyState=document.createElement('div');emptyState.className='ext-settings-empty';emptyState.id='ext-settings-empty';
-  filter.appendChild(categorySelect);filter.appendChild(scopeSelect);filter.appendChild(targetSelect);filter.appendChild(modifiedLabel);filter.appendChild(hiddenLabel);filter.appendChild(filterButton);filter.appendChild(clearButton);filter.appendChild(count);filter.appendChild(perf);filter.appendChild(filterMenu);filter.appendChild(activeFilters);filter.appendChild(resultSummary);filter.appendChild(virtualSummary);filter.appendChild(resultInsight);filter.appendChild(resultActions);filter.appendChild(emptyState);
+  filter.appendChild(categorySelect);filter.appendChild(scopeSelect);filter.appendChild(targetSelect);filter.appendChild(sortSelect);filter.appendChild(modifiedLabel);filter.appendChild(hiddenLabel);filter.appendChild(filterButton);filter.appendChild(clearButton);filter.appendChild(count);filter.appendChild(perf);filter.appendChild(filterMenu);filter.appendChild(activeFilters);filter.appendChild(quickFilters);filter.appendChild(queryHistory);filter.appendChild(resultSummary);filter.appendChild(virtualSummary);filter.appendChild(resultInsight);filter.appendChild(resultActions);filter.appendChild(emptyState);
   fragment.appendChild(filter);
   const seenCategories=new Set();
   const orderedConfigs=configs.slice().sort((a,b)=>{
@@ -31389,6 +31503,7 @@ async function renderExtensionSettings(){
   categorySelect.onchange=()=>scheduleExtensionSettingsFilter(0);
   scopeSelect.onchange=()=>scheduleExtensionSettingsFilter(0);
   targetSelect.onchange=()=>scheduleExtensionSettingsFilter(0);
+  sortSelect.onchange=()=>scheduleExtensionSettingsFilter(0);
   modifiedBox.onchange=()=>scheduleExtensionSettingsFilter(0);
   hiddenBox.onchange=()=>scheduleExtensionSettingsFilter(0);
   const settingsSearch=$('settings-search');

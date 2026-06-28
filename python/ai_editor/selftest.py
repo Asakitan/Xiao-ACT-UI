@@ -9899,6 +9899,10 @@ console.log("frontend word separator behavior ok");
             and "result.snapshot.hasOnDemandSettingValueDetails" in settings_smoke_source
             and "result.snapshot.hasExtensionVirtualSummary" in settings_smoke_source
             and "result.snapshot.hasExtensionVirtualActions" in settings_smoke_source
+            and "result.snapshot.hasExtensionQuickFilters" in settings_smoke_source
+            and "result.snapshot.hasExtensionQueryHistory" in settings_smoke_source
+            and "result.snapshot.hasExtensionSortControl" in settings_smoke_source
+            and "result.snapshot.hasExtensionSectionActions" in settings_smoke_source
             and "result.snapshot.hasDetailValueActions" in settings_smoke_source
             and "result.snapshot.hasReviewFilterActions" in settings_smoke_source
             and "result.snapshot.hasOverridesFilterToken" in settings_smoke_source
@@ -10130,6 +10134,11 @@ console.log("frontend word separator behavior ok");
             and "function extensionSettingLoadVisiblePendingRows()" in html
             and "function extensionSettingLoadAllPendingRows()" in html
             and "function renderExtensionSettingVirtualSummary()" in html
+            and "function extensionSettingQueryHistory()" in html
+            and "function extensionSettingRememberQuery(query)" in html
+            and "function renderExtensionSettingQueryHistory()" in html
+            and "function extensionSettingRenderQuickFilters()" in html
+            and "function extensionSettingSetVisibleSectionsOpen(open)" in html
             and "function extensionSettingAutoAppendPendingRows(container,reason)" in html
             and "function extensionSettingInstallAutoVirtualization(container)" in html
             and "function extensionSettingEnsureAllRowsRendered(container)" in html
@@ -10142,6 +10151,11 @@ console.log("frontend word separator behavior ok");
             and "ext-settings-load-visible" in html
             and "ext-settings-load-all" in html
             and "ext-settings-virtual-summary" in html
+            and "ext-settings-quick-filters" in html
+            and "ext-settings-query-history" in html
+            and "ext-settings-sort" in html
+            and "ext-settings-collapse-visible" in html
+            and "ext-settings-expand-visible" in html
             and "function appendExtensionSettingEnumChoiceItems(wrap,schema,type,defaultValue,input)" in html
             and "ext-settings-perf" in html
             and "ext-setting-lazy-details" in html
@@ -10153,6 +10167,8 @@ console.log("frontend word separator behavior ok");
             and "window.extensionSettingLoadVisiblePendingRows=extensionSettingLoadVisiblePendingRows;" in html
             and "window.extensionSettingLoadAllPendingRows=extensionSettingLoadAllPendingRows;" in html
             and "window.renderExtensionSettingVirtualSummary=renderExtensionSettingVirtualSummary;" in html
+            and "window.extensionSettingRememberQuery=extensionSettingRememberQuery;" in html
+            and "window.extensionSettingSetVisibleSectionsOpen=extensionSettingSetVisibleSectionsOpen;" in html
             and "window.appendExtensionSettingStructuredAssist=appendExtensionSettingStructuredAssist;" in html
             and "window.appendExtensionSettingSchemaDetails=appendExtensionSettingSchemaDetails;" in html
             and "window.appendExtensionSettingEnumChoices=appendExtensionSettingEnumChoices;" in html
@@ -10628,9 +10644,15 @@ console.log("frontend word separator behavior ok");
             "extensionSettingCaptureFilterState",
             "extensionSettingApplyFilterState",
             "extensionSettingRestoreFilterState",
+            "extensionSettingQueryHistory",
+            "extensionSettingRememberQuery",
+            "extensionSettingClearQueryHistory",
+            "renderExtensionSettingQueryHistory",
             "extensionSettingTextTokens",
             "extensionSettingTextMatchRank",
             "extensionSettingSortSectionRows",
+            "extensionSettingRenderQuickFilters",
+            "extensionSettingSetVisibleSectionsOpen",
             "updateExtensionSettingSectionSummary",
             "extensionSettingCurrentFilterToken",
             "extensionSettingCompleteFilterToken",
@@ -10690,6 +10712,7 @@ console.log("frontend word separator behavior ok");
         js = setting_js + r"""
 function assert(ok,label){ if(!ok){ throw new Error(label); } }
 const EXTENSION_SETTINGS_FILTER_STATE_KEY='sao-ai-ext-settings-filter-v1';
+const EXTENSION_SETTINGS_QUERY_HISTORY_KEY='sao-ai-ext-settings-query-history-v1';
 const EXTENSION_SETTINGS_INITIAL_SECTION_ROWS=80;
 const EXTENSION_SETTINGS_SECTION_ROW_BATCH=80;
 const EXTENSION_SETTINGS_AUTO_APPEND_THRESHOLD=420;
@@ -10722,7 +10745,12 @@ function makeNode(tag, text){
     type: "",
     value: "",
     rows: 0,
-    appendChild(child){ child.parentNode = this; this.children.push(child); return child; },
+    appendChild(child){
+      if(child.parentNode&&child.parentNode.children){
+        child.parentNode.children = child.parentNode.children.filter(item => item !== child);
+      }
+      child.parentNode = this; this.children.push(child); return child;
+    },
     insertBefore(child,before){
       child.parentNode = this;
       const index = this.children.indexOf(before);
@@ -10730,6 +10758,8 @@ function makeNode(tag, text){
       else this.children.splice(index,0,child);
       return child;
     },
+    setAttribute(name,value){ this[String(name)] = String(value); },
+    getAttribute(name){ return this[String(name)]; },
     querySelector(selector){ return this.querySelectorAll(selector)[0] || null; },
     querySelectorAll(selector){
       const raw = String(selector || "").replace(/^:scope\s*>\s*/, "").trim();
@@ -10737,7 +10767,9 @@ function makeNode(tag, text){
       const matches = child => {
         if(raw === ".ext-setting-row")return String(child.className || "").split(/\s+/).includes("ext-setting-row");
         if(raw === ".ext-settings-more")return String(child.className || "").split(/\s+/).includes("ext-settings-more");
+        if(raw === "button[data-ext-settings-quick-token]")return child.tagName === "BUTTON" && child.dataset.extSettingsQuickToken !== undefined;
         if(raw === "details[data-ext-settings-section]")return child.tagName === "DETAILS" && child.dataset.extSettingsSection !== undefined;
+        if(/^[a-z]+$/i.test(raw))return child.tagName === raw.toUpperCase();
         if(raw === "[data-ext-lazy-hydrate=\"1\"]")return child.dataset.extLazyHydrate === "1";
         if(raw === "[data-ext-lazy-hydrate='1']")return child.dataset.extLazyHydrate === "1";
         if(raw === "[data-ext-settings-more-label]")return child.dataset.extSettingsMoreLabel !== undefined;
@@ -10760,6 +10792,17 @@ function makeNode(tag, text){
     get(){ return this._innerHTML || ""; },
     set(value){ this._innerHTML = String(value || ""); this.children = []; },
   });
+  node.classList = {
+    contains(name){ return String(node.className || "").split(/\s+/).includes(name); },
+    add(name){ if(!this.contains(name))node.className = (String(node.className || "").trim() + " " + name).trim(); },
+    remove(name){ node.className = String(node.className || "").split(/\s+/).filter(item => item && item !== name).join(" "); },
+    toggle(name, force){
+      const has = this.contains(name);
+      const next = force === undefined ? !has : !!force;
+      if(next)this.add(name); else this.remove(name);
+      return next;
+    },
+  };
   return node;
 }
 function nodeTreeHas(node,predicate){
@@ -10785,8 +10828,13 @@ const fakeHidden = { checked: true };
 const fakeCategory = { value: "cat-a" };
 const fakeScope = { value: "window" };
 const fakeTarget = { value: "workspace" };
+const fakeSort = { value: "relevance" };
 const fakePerf = { textContent: "", title: "" };
 const fakeExtSettingsContainer = makeNode("div");
+const fakeQuickFilters = makeNode("div");
+const fakeHistoryHost = makeNode("div");
+const fakeCollapseBtn = { disabled: false };
+const fakeExpandBtn = { disabled: false };
 const fakeSettingsMain = {
   dataset: {},
   scrollHeight: 1000,
@@ -10796,14 +10844,22 @@ const fakeSettingsMain = {
   addEventListener(type,handler){ this.listeners[type] = handler; },
 };
 function settingsMainElement(){ return fakeSettingsMain; }
-globalThis.$ = id => id === "settings-search" ? fakeSearch : (
-  id === "ext-settings-modified" ? fakeModified : (
-  id === "ext-settings-hidden" ? fakeHidden : (
-  id === "ext-settings-category" ? fakeCategory : (
-  id === "ext-settings-scope" ? fakeScope : (
-  id === "ext-settings-target" ? fakeTarget : (
-  id === "ext-settings-perf" ? fakePerf : (
-  id === "ext-settings-container" ? fakeExtSettingsContainer : null)))))));
+const fakeById = {
+  "settings-search": fakeSearch,
+  "ext-settings-modified": fakeModified,
+  "ext-settings-hidden": fakeHidden,
+  "ext-settings-category": fakeCategory,
+  "ext-settings-scope": fakeScope,
+  "ext-settings-target": fakeTarget,
+  "ext-settings-sort": fakeSort,
+  "ext-settings-perf": fakePerf,
+  "ext-settings-container": fakeExtSettingsContainer,
+  "ext-settings-quick-filters": fakeQuickFilters,
+  "ext-settings-query-history": fakeHistoryHost,
+  "ext-settings-collapse-visible": fakeCollapseBtn,
+  "ext-settings-expand-visible": fakeExpandBtn,
+};
+globalThis.$ = id => fakeById[id] || null;
 let filterApplyCount = 0;
 globalThis.applyExtensionSettingsFilter = () => { filterApplyCount++; };
 const arraySchema = { type: "array", items: { type: "string" } };
@@ -11664,6 +11720,64 @@ assert(virtualSummaryA.summary.textContent.indexOf("4/6") >= 0
        && virtualSummaryA.summary.textContent.indexOf("1 modified") >= 0
        && virtualSummaryA.summary.textContent.indexOf("2 pending") >= 0,
        "settings section summary exposes pending virtual rows");
+fakeSearch.value = "@modified render";
+extensionSettingRememberQuery(fakeSearch.value);
+renderExtensionSettingQueryHistory();
+assert(extensionSettingQueryHistory()[0] === "@modified render"
+       && fakeHistoryHost.classList.contains("open")
+       && nodeTreeHas(fakeHistoryHost, node => node.tagName === "BUTTON" && node.dataset.extSettingsHistoryQuery === "@modified render"),
+       "settings extension query history stores and renders recent filters");
+const quickModified = makeNode("button");
+quickModified.dataset.extSettingsQuickToken = "@modified";
+fakeQuickFilters.appendChild(quickModified);
+extensionSettingRenderQuickFilters();
+assert(quickModified.classList.contains("active")
+       && quickModified.getAttribute("aria-pressed") === "true",
+       "settings extension quick filters reflect active query tokens");
+fakeSort.value = "modified";
+const capturedSortState = extensionSettingCaptureFilterState();
+fakeSort.value = "default";
+extensionSettingApplyFilterState(capturedSortState);
+assert(fakeSort.value === "modified",
+       "settings extension filter state preserves sort mode");
+const interactionSortSection = makeNode("details");
+interactionSortSection.dataset.extSettingsSection = "1";
+const interactionSortInner = makeNode("div");
+interactionSortSection.appendChild(interactionSortInner);
+["z.setting","a.setting","m.setting"].forEach((key,index) => {
+  const row = makeSettingRow(key, {});
+  row.className = "ext-setting-row";
+  row.dataset.extSettingKey = key;
+  row.dataset.extSettingOrder = String(index);
+  interactionSortInner.appendChild(row);
+});
+fakeSort.value = "key";
+extensionSettingSortSectionRows(interactionSortSection, "");
+assert(interactionSortInner.children[0].dataset.extSettingKey === "a.setting"
+       && interactionSortInner.children[2].dataset.extSettingKey === "z.setting",
+       "settings extension sort control can order rows by setting id");
+fakeExtSettingsContainer.children = [];
+const visibleSectionA = makeNode("details");
+visibleSectionA.dataset.extSettingsSection = "1";
+visibleSectionA.style.display = "";
+visibleSectionA.open = true;
+const visibleSectionB = makeNode("details");
+visibleSectionB.dataset.extSettingsSection = "1";
+visibleSectionB.style.display = "none";
+visibleSectionB.open = true;
+fakeExtSettingsContainer.appendChild(visibleSectionA);
+fakeExtSettingsContainer.appendChild(visibleSectionB);
+globalThis.$ = id => fakeById[id] || null;
+assert(fakeExtSettingsContainer.querySelectorAll("details[data-ext-settings-section]").length === 2,
+       "settings fake DOM finds extension sections: "+fakeExtSettingsContainer.querySelectorAll("details[data-ext-settings-section]").length);
+const collapsedVisibleSections = extensionSettingSetVisibleSectionsOpen(false);
+assert(collapsedVisibleSections === 1, "settings extension section actions count visible sections: "+collapsedVisibleSections);
+assert(visibleSectionA.open === false, "settings extension section actions collapse visible sections");
+assert(visibleSectionB.open === true, "settings extension section actions preserve hidden sections");
+const expandedVisibleSections = extensionSettingSetVisibleSectionsOpen(true);
+assert(expandedVisibleSections === 1 && visibleSectionA.open === true,
+       "settings extension section actions expand visible sections");
+globalThis.$ = id => id === "ext-settings-container" ? navContainer : originalDollar(id);
 assert(extensionSettingFocusFirstModifiedSetting() && focusedRow === "alpha.setting",
        "settings navigation focuses first visible modified row");
 assert(extensionSettingFocusFirstInvalidSetting() && focusedRow === "beta.setting",
@@ -11730,6 +11844,7 @@ extensionSettingWriteFilterState({
   category: "cat-b",
   scope: "resource",
   target: "workspaceFolder",
+  sort: "modified",
   modified: true,
   hidden: true,
 });
@@ -11738,6 +11853,7 @@ assert(storedFilterState.query === "font @modified"
        && storedFilterState.category === "cat-b"
        && storedFilterState.scope === "resource"
        && storedFilterState.target === "workspaceFolder"
+       && storedFilterState.sort === "modified"
        && storedFilterState.modified === true
        && storedFilterState.hidden === true,
        "settings filter state persists safely");
@@ -11747,6 +11863,7 @@ assert(fakeSearch.value === "font @modified"
        && fakeCategory.value === "cat-b"
        && fakeScope.value === "resource"
        && fakeTarget.value === "workspaceFolder"
+       && fakeSort.value === "modified"
        && fakeModified.checked === true
        && fakeHidden.checked === true
        && fakeSearch.focused === false,
@@ -11755,6 +11872,7 @@ fakeSearch.value = "rank";
 fakeCategory.value = "cat-c";
 fakeScope.value = "machine";
 fakeTarget.value = "global";
+fakeSort.value = "key";
 fakeModified.checked = false;
 fakeHidden.checked = true;
 const capturedFilterState = extensionSettingCaptureFilterState();
@@ -11762,9 +11880,11 @@ assert(capturedFilterState.query === "rank"
        && capturedFilterState.category === "cat-c"
        && capturedFilterState.scope === "machine"
        && capturedFilterState.target === "global"
+       && capturedFilterState.sort === "key"
        && capturedFilterState.modified === false
        && capturedFilterState.hidden === true,
        "settings filter state captures controls");
+extensionSettingClearQueryHistory();
 extensionSettingClearFilterState();
 assert(Object.keys(fakeStorageData).length === 0,
        "settings filter state clears from storage");
@@ -11784,6 +11904,7 @@ const sortRows = [
   { dataset: { extSettingMatchRank: "80", extSettingOrder: "2" } },
   { dataset: { extSettingMatchRank: "80", extSettingOrder: "0" } },
 ];
+fakeSort.value = "relevance";
 const sortInner = {
   children: sortRows.slice(),
   querySelectorAll(){ return this.children.slice(); },

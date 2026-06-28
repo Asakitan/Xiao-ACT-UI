@@ -267,6 +267,9 @@ async function main() {
   if (!result.snapshot.hasExtensionVirtualSummary || !result.snapshot.hasExtensionVirtualActions) {
     throw new Error("Settings selfcheck missing extension virtualization controls: " + JSON.stringify(result.snapshot));
   }
+  if (!result.snapshot.hasExtensionQuickFilters || !result.snapshot.hasExtensionQueryHistory || !result.snapshot.hasExtensionSortControl || !result.snapshot.hasExtensionSectionActions) {
+    throw new Error("Settings selfcheck missing extension interaction controls: " + JSON.stringify(result.snapshot));
+  }
   if (!result.snapshot.hasDetailValueActions) {
     throw new Error("Settings selfcheck missing row value actions: " + JSON.stringify(result.snapshot));
   }
