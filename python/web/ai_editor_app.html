@@ -3007,6 +3007,44 @@ pre.code-block { overflow:visible; }
   border:0; border-left:2px solid transparent; border-radius:2px; padding:0 8px 0 7px; background:transparent; }
 .settings-vscode-calm .settings-nav-scope-tabs button.active { border-left-color:var(--fg-accent); border-bottom-color:transparent;
   background:color-mix(in srgb,var(--bg-hover) 78%,transparent); }
+.settings-vscode-calm .settings-active-filters,
+.settings-vscode-calm .settings-review-bar,
+.settings-vscode-calm .settings-save-preview { display:none !important; }
+.settings-vscode-calm.settings-details-open .settings-active-filters.open,
+.settings-vscode-calm.settings-details-open .settings-review-bar.open { display:flex !important; }
+.settings-vscode-calm.settings-details-open .settings-save-preview.open { display:block !important; }
+.settings-vscode-calm .settings-nav-status,
+.settings-vscode-calm .settings-nav-active-filters,
+.settings-vscode-calm .settings-nav-review { padding:0 8px 9px 0; margin:0 0 8px;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 54%,transparent); }
+.settings-vscode-calm .settings-nav-status-title,
+.settings-vscode-calm .settings-nav-active-title,
+.settings-vscode-calm .settings-nav-review-title { padding:0 0 5px; color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; }
+.settings-vscode-calm .settings-nav-status-grid { display:grid; grid-template-columns:1fr 1fr; gap:3px; }
+.settings-vscode-calm .settings-nav-status-chip,
+.settings-vscode-calm .settings-nav-filter-chip,
+.settings-vscode-calm .settings-nav-review button { min-height:23px; border:1px solid transparent; border-radius:2px;
+  background:transparent; color:var(--fg-dim); font:11px var(--sans); }
+.settings-vscode-calm .settings-nav-status-chip { display:flex; align-items:center; justify-content:space-between; gap:6px;
+  padding:2px 6px; }
+.settings-vscode-calm .settings-nav-status-chip strong { color:var(--fg); font-weight:600; }
+.settings-vscode-calm .settings-nav-status-chip.modified strong,
+.settings-vscode-calm .settings-nav-status-chip.active strong { color:var(--fg-accent); }
+.settings-vscode-calm .settings-nav-status-chip.error strong { color:var(--fg-error); }
+.settings-vscode-calm .settings-nav-active-filters:not(.open) { display:none; }
+.settings-vscode-calm .settings-nav-active-list,
+.settings-vscode-calm .settings-nav-review-actions { display:grid; grid-template-columns:1fr; gap:2px; }
+.settings-vscode-calm .settings-nav-filter-chip,
+.settings-vscode-calm .settings-nav-review button { display:flex; align-items:center; justify-content:space-between; gap:6px;
+  width:100%; padding:2px 7px; cursor:pointer; text-align:left; }
+.settings-vscode-calm .settings-nav-filter-chip:hover,
+.settings-vscode-calm .settings-nav-filter-chip:focus,
+.settings-vscode-calm .settings-nav-review button:hover:not(:disabled),
+.settings-vscode-calm .settings-nav-review button:focus:not(:disabled) { color:var(--fg); border-color:var(--border-focus);
+  background:var(--bg-hover); outline:none; }
+.settings-vscode-calm .settings-nav-review button.active { color:var(--fg-accent); }
+.settings-vscode-calm .settings-nav-review button.error { color:var(--fg-error); }
+.settings-vscode-calm .settings-nav-review button:disabled { opacity:.45; cursor:default; }
 .settings-vscode-calm .settings-main { padding:15px 54px 40px; background:var(--bg); }
 .settings-vscode-calm .settings-main > .settings-section,
 .settings-vscode-calm .settings-main > details.settings-section,
@@ -28768,6 +28806,18 @@ function renderSettingsNav(){
   });
   scope.appendChild(scopeTitle);scope.appendChild(scopeTabs);
   nav.appendChild(scope);
+  const status=document.createElement('div');
+  status.className='settings-nav-status';
+  status.id='settings-nav-status';
+  nav.appendChild(status);
+  const navFilters=document.createElement('div');
+  navFilters.className='settings-nav-active-filters';
+  navFilters.id='settings-nav-active-filters';
+  nav.appendChild(navFilters);
+  const navReview=document.createElement('div');
+  navReview.className='settings-nav-review';
+  navReview.id='settings-nav-review';
+  nav.appendChild(navReview);
   const personal=document.createElement('div');
   personal.className='settings-nav-memory';
   personal.id='settings-nav-personal';
@@ -29087,6 +29137,13 @@ function settingsUiSelfCheckSnapshot(){
   const navScopeButtons=navScope?Array.from(navScope.querySelectorAll('[data-settings-target]')):[];
   const topScopeHidden=!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&scopeControl&&String(getComputedStyle(scopeControl).display)==='none');
   const topQuickFilters=$('settings-quick-filters');
+  const topActiveFilters=$('settings-active-filters');
+  const navStatus=$('settings-nav-status');
+  const navActiveFilters=$('settings-nav-active-filters');
+  const navReview=$('settings-nav-review');
+  const navReviewButtons=navReview?Array.from(navReview.querySelectorAll('[data-settings-nav-review-action]')):[];
+  const topReviewHidden=!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&reviewBar&&String(getComputedStyle(reviewBar).display)==='none');
+  const topActiveFiltersHidden=!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&topActiveFilters&&String(getComputedStyle(topActiveFilters).display)==='none');
   const rowActionMenu=document.querySelector('.settings-row-action-menu');
   const rowActionButtons=Array.from(document.querySelectorAll('.settings-row-action'));
   const workbenchStatus=$('settings-workbench-status');
@@ -29127,6 +29184,12 @@ function settingsUiSelfCheckSnapshot(){
     hasSidebarScopeControl:!!(navScope&&navScopeTabs&&navScopeButtons.length>=3&&String(getComputedStyle(navScope).display)!=='none'),
     hasSidebarScopeVerticalList:!!(navScopeTabs&&String(getComputedStyle(navScopeTabs).display)==='grid'&&String(getComputedStyle(navScopeTabs).gridTemplateColumns||'').split(' ').filter(Boolean).length===1),
     hasSidebarScopeActiveState:navScopeButtons.some(btn=>btn.dataset.settingsTarget===currentSettingsTarget&&btn.classList.contains('active')&&btn.getAttribute('aria-selected')==='true'),
+    hasDefaultHiddenTopReview:topReviewHidden,
+    hasDefaultHiddenTopActiveFilters:topActiveFiltersHidden,
+    hasSidebarStatusPanel:!!(navStatus&&navStatus.dataset.settingsNavStatus==='1'&&navStatus.querySelector('.settings-nav-status-grid')&&navStatus.dataset.settingsNavTarget),
+    hasSidebarActiveFiltersPanel:!!(navActiveFilters&&navActiveFilters.dataset.settingsNavActiveFilters!==undefined),
+    hasSidebarReviewPanel:!!(navReview&&navReview.dataset.settingsNavReview==='1'&&navReviewButtons.some(btn=>btn.dataset.settingsNavReviewAction==='modified')&&navReviewButtons.some(btn=>btn.dataset.settingsNavReviewAction==='preview')),
+    hasSidebarPreviewDetailsBridge:typeof renderSettingsNavStatus==='function'&&String(renderSettingsNavStatus).includes("settingsApplyDetails(true)")&&String(renderSettingsNavStatus).includes("settingsToggleSavePreview()"),
     hasCalmDefaultSettingsMode:!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')),
     hasSearchPrimaryCaption:!!(caption&&document.querySelector('.settings-search-primary .settings-query-box #settings-search')),
     hasSearchClearButton:!!($('settings-clear-search')&&document.querySelector('.settings-query-box .settings-query-clear')),
@@ -30207,7 +30270,100 @@ function renderSettingsActiveFilters(parsed,visible,total){
     else summary.textContent='';
   }
   renderSettingsQuickFilters(parsed);
+  renderSettingsNavStatus(parsed,visible,total);
   renderSettingsEmptyState(visible,total,parsed);
+}
+function renderSettingsNavStatus(parsed,visible,total){
+  const status=$('settings-nav-status');
+  const filters=$('settings-nav-active-filters');
+  const review=$('settings-nav-review');
+  const state=typeof settingsComputeReviewState==='function'?settingsComputeReviewState():{modified:[],overrides:[],errors:[],visible:Number(visible)||0,target:settingsTargetDisplayName(currentSettingsTarget)};
+  const tokens=[...new Set((parsed&&parsed.tokens)||[])];
+  if(status){
+    status.innerHTML='';
+    status.dataset.settingsNavStatus='1';
+    status.dataset.settingsNavTarget=currentSettingsTarget;
+    status.dataset.settingsNavVisible=String(Number(visible)||0);
+    status.dataset.settingsNavTotal=String(Number(total)||0);
+    status.dataset.settingsNavModified=String((state.modified||[]).length);
+    status.dataset.settingsNavOverrides=String((state.overrides||[]).length);
+    status.dataset.settingsNavErrors=String((state.errors||[]).length);
+    const title=document.createElement('div');title.className='settings-nav-status-title';title.textContent='Status';status.appendChild(title);
+    const grid=document.createElement('div');grid.className='settings-nav-status-grid';
+    const add=(label,value,cls)=>{
+      const chip=document.createElement('span');chip.className='settings-nav-status-chip'+(cls?' '+cls:'');
+      const name=document.createElement('span');name.textContent=label;
+      const strong=document.createElement('strong');strong.textContent=String(value);
+      chip.appendChild(name);chip.appendChild(strong);grid.appendChild(chip);
+    };
+    add('Target',settingsTargetDisplayName(currentSettingsTarget),currentSettingsTarget==='extensions'?'active':currentSettingsTarget==='workspace'?'modified':'');
+    add('Visible',String(Number(visible)||0)+'/'+String(Number(total)||0),'');
+    add('Modified',(state.modified||[]).length,(state.modified||[]).length?'modified':'');
+    add('Errors',(state.errors||[]).length,(state.errors||[]).length?'error':'');
+    status.appendChild(grid);
+  }
+  if(filters){
+    filters.innerHTML='';
+    filters.dataset.settingsNavActiveFilters=String(tokens.length);
+    filters.classList.toggle('open',tokens.length>0);
+    if(tokens.length){
+      const title=document.createElement('div');title.className='settings-nav-active-title';title.textContent='Active Filters';filters.appendChild(title);
+      const list=document.createElement('div');list.className='settings-nav-active-list';
+      tokens.forEach(token=>{
+        const btn=document.createElement('button');btn.type='button';btn.className='settings-nav-filter-chip';
+        btn.textContent=settingsFilterChipLabel(token);
+        btn.title='Remove '+token;
+        btn.dataset.settingsNavFilterToken=token;
+        btn.onclick=()=>removeSettingsFilterToken(token);
+        list.appendChild(btn);
+      });
+      filters.appendChild(list);
+    }
+  }
+  if(review){
+    const modified=(state.modified||[]).length,overrides=(state.overrides||[]).length,errors=(state.errors||[]).length;
+    const dirty=modified||overrides||errors;
+    review.innerHTML='';
+    review.dataset.settingsNavReview='1';
+    review.dataset.settingsNavReviewDirty=dirty?'1':'0';
+    review.dataset.settingsNavReviewModified=String(modified);
+    review.dataset.settingsNavReviewOverrides=String(overrides);
+    review.dataset.settingsNavReviewErrors=String(errors);
+    const title=document.createElement('div');title.className='settings-nav-review-title';title.textContent='Review';review.appendChild(title);
+    const actions=document.createElement('div');actions.className='settings-nav-review-actions';
+    const active=typeof settingsReviewActiveKind==='function'?settingsReviewActiveKind():'';
+    const addButton=(label,count,kind,cls)=>{
+      const btn=document.createElement('button');btn.type='button';btn.dataset.settingsNavReviewAction=kind;
+      btn.className=(count?'active ':'')+(cls||'');
+      btn.disabled=!count;
+      btn.setAttribute('aria-pressed',active===kind?'true':'false');
+      btn.title=count?('Show '+label.toLowerCase()+' settings'):'No '+label.toLowerCase()+' settings';
+      btn.onclick=ev=>{ev.preventDefault();settingsApplyReviewFilter(kind)};
+      const name=document.createElement('span');name.textContent=label;
+      const value=document.createElement('strong');value.textContent=String(count);
+      btn.appendChild(name);btn.appendChild(value);actions.appendChild(btn);
+    };
+    addButton('Modified',modified,'modified','');
+    addButton('Overrides',overrides,'overrides','');
+    addButton('Errors',errors,'error','error');
+    const preview=document.createElement('button');preview.type='button';preview.dataset.settingsNavReviewAction='preview';
+    preview.disabled=!dirty;preview.title=dirty?'Preview visible setting changes before saving':'No visible setting changes';
+    preview.onclick=ev=>{
+      ev.preventDefault();
+      const frame=document.querySelector('.modal.settings-modal');
+      if(frame&&frame.classList.contains('settings-vscode-calm')&&!frame.classList.contains('settings-details-open')&&typeof settingsApplyDetails==='function')settingsApplyDetails(true);
+      settingsToggleSavePreview();
+    };
+    preview.innerHTML='<span>Preview</span><strong>'+String(dirty)+'</strong>';
+    actions.appendChild(preview);
+    if(typeof settingsHasReviewFilter==='function'&&settingsHasReviewFilter()){
+      const clear=document.createElement('button');clear.type='button';clear.dataset.settingsNavReviewAction='clear';
+      clear.title='Clear review filters';clear.innerHTML='<span>Clear Review</span><strong>×</strong>';
+      clear.onclick=ev=>{ev.preventDefault();if(typeof settingsClearReviewFilters==='function')settingsClearReviewFilters()};
+      actions.appendChild(clear);
+    }
+    review.appendChild(actions);
+  }
 }
 function settingsTargetDisplayName(target){
   return target==='workspace'?'Workspace':target==='extensions'?'Extensions':'User';

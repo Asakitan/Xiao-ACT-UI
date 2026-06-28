@@ -4356,7 +4356,19 @@ def test_phase1_ai_editor_regressions() -> None:
             and ".settings-vscode-calm:not(.settings-details-open) .settings-scope-control { display:none; }" in html
             and ".settings-vscode-calm .settings-nav-scope" in html
             and ".settings-vscode-calm .settings-nav-scope-tabs" in html
+            and ".settings-vscode-calm .settings-active-filters," in html
+            and ".settings-vscode-calm .settings-review-bar," in html
+            and ".settings-vscode-calm .settings-nav-status" in html
+            and ".settings-vscode-calm .settings-nav-active-filters" in html
+            and ".settings-vscode-calm .settings-nav-review" in html
             and "scope.id='settings-nav-scope'" in html
+            and "status.id='settings-nav-status'" in html
+            and "navFilters.id='settings-nav-active-filters'" in html
+            and "navReview.id='settings-nav-review'" in html
+            and "function renderSettingsNavStatus(parsed,visible,total)" in html
+            and "settingsNavFilterToken" in html
+            and "settingsNavReviewAction='preview'" in html
+            and "settingsApplyDetails(true)" in html
             and "scopeTabs.className='settings-target-tabs settings-nav-scope-tabs'" in html
             and "settingsTargetDisplayName(target)" in html
             and "const visible=buttons.filter(btn=>btn.offsetParent!==null" in html
@@ -10323,6 +10335,12 @@ console.log("frontend word separator behavior ok");
             and "hasSidebarScopeControl" in html
             and "hasSidebarScopeVerticalList" in html
             and "hasSidebarScopeActiveState" in html
+            and "hasDefaultHiddenTopReview" in html
+            and "hasDefaultHiddenTopActiveFilters" in html
+            and "hasSidebarStatusPanel" in html
+            and "hasSidebarActiveFiltersPanel" in html
+            and "hasSidebarReviewPanel" in html
+            and "hasSidebarPreviewDetailsBridge" in html
              and "hasScopeControl" in html
              and "hasNavHeading" in html
              and "hasNavCountPills" in html
