@@ -9839,7 +9839,7 @@ console.log("frontend word separator behavior ok");
             and "Settings saved" in html
             and "closeSettings();" not in html[html.index("async function saveSettings()"):html.index("window.saveSettings=saveSettings;")]
             and "const first=settingsVisibleRows().find(Boolean);" in html
-            and "updateSettingsResultNav(settingsVisibleRows().length);" in html
+            and "updateSettingsResultNav(visibleRowCount);" in html
             and "settingsFocusFirstReviewRow('modified')" in html
             and "settingsFocusFirstReviewRow('override')" in html
             and "settingsFocusFirstReviewRow('error')" in html
@@ -9978,8 +9978,14 @@ console.log("frontend word separator behavior ok");
              and "Show Overrides','Filter the Settings list to visible target overrides" in html
              and "Show Errors','Filter the Settings list to visible invalid settings" in html
              and "Clear Review','Remove modified override and error review filters" in html
+             and "host.dataset.settingsReviewModified=String(state.modified.length);" in html
+             and "button.review-pill" in html
+             and "addPill('Modified',state.modified.length,'',()=>settingsApplyReviewFilter('modified'))" in html
+             and "addPill('Overrides',state.overrides.length,'',()=>settingsApplyReviewFilter('overrides'))" in html
+             and "addPill('Errors',state.errors.length,state.errors.length?'error':'',()=>settingsApplyReviewFilter('error'))" in html
              and "No visible matches. Remove a token or switch target." in html
              and "['f','l'].includes(String(ev.key||'').toLowerCase())" in html
+             and "ev.key==='Enter'&&ev.target&&ev.target.id==='settings-search'" in html
              and "String(ev.key||'')==='1'" in html
             and "settingsFocusSiblingSection(1)" in html
             and "settingsFocusBoundaryRow('first')" in html
@@ -9990,6 +9996,16 @@ console.log("frontend word separator behavior ok");
             and "function focusSettingsNavFilter()" in html
             and "function settingsFilterNavCategories(value,options)" in html
             and "function settingsClearNavFilter()" in html
+            and "function settingsNavVisibleItems()" in html
+            and "function settingsFocusNavItem(item,activate)" in html
+            and "function settingsMoveNavFocus(delta)" in html
+            and "function settingsFocusNavBoundary(which)" in html
+            and "function settingsUpdateNavTreeMetadata()" in html
+            and "function settingsNavKeydown(ev)" in html
+            and "nav.setAttribute('role','tree');" in html
+            and "btn.setAttribute('role','treeitem');" in html
+            and "item.setAttribute('aria-posinset',String(index+1));" in html
+            and "settingsUpdateNavTreeMetadata();" in html
             and "function settingsUiSelfCheckSnapshot()" in html
             and "id=\"settings-result-count\"" in html
             and "id='settings-nav-filter'" in html
@@ -10015,6 +10031,9 @@ console.log("frontend word separator behavior ok");
             and "grid-template-columns:minmax(120px,auto) minmax(0,1fr) auto" in html
             and "settingsTargetDisplayName(target)+': '+String(Number(safeStats[target]||0))" in html
             and "hasResultCount" in html
+            and "hasNavTreeRole" in html
+            and "hasNavTreeItems" in html
+            and "hasNavKeyboardActions" in html
             and "hasNavFilterCount" in html
             and "hasSectionContextActions" in html
             and "hasQueryBox" in html
@@ -10045,6 +10064,11 @@ console.log("frontend word separator behavior ok");
              and "hasDetailTargetNote" in html
              and "hasDetailSaveRevertActions" in html
              and "hasRowSaveRevertMenu" in html
+             and "function settingsRowAccessibleStatus(row)" in html
+             and "function settingsUpdateRowAccessibility(row,index,total)" in html
+             and "function settingsRefreshRowsAccessibility(rows)" in html
+             and "row.setAttribute('aria-posinset',String(Number(index)+1));" in html
+             and "row.dataset.settingsAccessibleStatus=settingsRowAccessibleStatus(row);" in html
             and "settings-experience-bar" in html
             and "experience-chip.dirty" in html
             and "function renderSettingsExperienceBar(parsed,visible,total,stats)" in html
@@ -10094,6 +10118,7 @@ console.log("frontend word separator behavior ok");
             and "renderSettingsFocusDeck(settingsQueryFilters((($('settings-search')||{}).value)||''),0,0" in html
             and "hasSuggestedMatchesHost" in html
              and "hasReviewFilterActions" in html
+             and "hasReviewPillActions" in html
              and "hasOverridesFilterToken" in html
              and "function settingsAppendExtensionDetailPanel(host,row)" in html
              and "card.dataset.settingsExtensionDetail='1';" in html
@@ -10115,6 +10140,9 @@ console.log("frontend word separator behavior ok");
              and "hasLanguageModifiedSearch" in html
              and "window.settingsSearchForKey=settingsSearchForKey;" in html
              and "window.settingsFilterNavCategories=settingsFilterNavCategories;" in html
+             and "window.settingsNavKeydown=settingsNavKeydown;" in html
+             and "window.settingsMoveNavFocus=settingsMoveNavFocus;" in html
+             and "window.settingsRefreshRowsAccessibility=settingsRefreshRowsAccessibility;" in html
              and "window.settingsUiSelfCheckSnapshot=settingsUiSelfCheckSnapshot;" in html
              and "window.settingsCopyRowUrl=settingsCopyRowUrl;" in html
              and "window.settingsRevertRowValue=settingsRevertRowValue;" in html
@@ -10132,6 +10160,8 @@ console.log("frontend word separator behavior ok");
              and "window.settingsSearchModifiedLanguageOverride=settingsSearchModifiedLanguageOverride;" in html
              and "window.settingsLanguageSuggestionIds=settingsLanguageSuggestionIds;" in html
              and "String(ev.key||'').toLowerCase()==='n'" in html
+             and "hasAccessibleSettingRows" in html
+             and "hasSearchEnterFocus" in html
              and "settingsRememberRecentSetting(row);" in html
              and "fav.dataset.settingsFavoriteKey=opts.key;" in html
             and "renderSettingsReviewBar(targetStats);" in html

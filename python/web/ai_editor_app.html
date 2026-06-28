@@ -1852,8 +1852,12 @@ pre.code-block code .type { color:var(--fg-type); }
   padding:5px 6px; border:1px solid var(--border); border-radius:5px; background:color-mix(in srgb,var(--bg2) 78%,transparent); }
 .settings-review-bar .review-pill { height:20px; display:inline-flex; align-items:center; gap:4px; padding:0 7px;
   border:1px solid var(--border); border-radius:999px; color:var(--fg-dim); background:var(--bg3); font:10px var(--mono); }
+button.review-pill { cursor:pointer; }
 .settings-review-bar .review-pill.active { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); }
 .settings-review-bar .review-pill.error { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 55%,var(--border)); }
+.settings-review-bar .review-pill:disabled { opacity:.5; cursor:default; }
+.settings-review-bar .review-pill:hover:not(:disabled),.settings-review-bar .review-pill:focus:not(:disabled) {
+  color:var(--fg); border-color:var(--border-focus); background:var(--bg-hover); outline:none; }
 .settings-review-bar .review-actions { margin-left:auto; display:inline-flex; flex-wrap:wrap; gap:4px; }
 .settings-review-bar button,.settings-save-preview button { height:22px; padding:1px 8px; border:1px solid var(--border);
   border-radius:4px; background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
@@ -4823,7 +4827,8 @@ function settingsHighlightRow(row){
   row.classList.add('settings-current');
   row.setAttribute('aria-current','true');
   settingsShowRowDetails(row);
-  updateSettingsResultNav(settingsVisibleRows().length);
+  const rowCount=settingsRefreshRowsAccessibility();
+  updateSettingsResultNav(rowCount);
   renderSettingsExperienceBar(settingsQueryFilters((($('settings-search')||{}).value)||''),0,0,{visible:settingsVisibleRows().length,modified:settingsReviewRows('modified').length,overrides:settingsReviewRows('override').length});
   renderSettingsFocusDeck(settingsQueryFilters((($('settings-search')||{}).value)||''),0,0,{visible:settingsVisibleRows().length,modified:settingsReviewRows('modified').length,overrides:settingsReviewRows('override').length,errors:settingsReviewRows('error').length});
   try{row.focus({preventScroll:true})}catch(e){try{row.focus()}catch(_e){}}
@@ -4977,6 +4982,35 @@ function settingsVisibleRows(){
       return !group||group.style.display!=='none';
     });
 }
+function settingsRowAccessibleStatus(row){
+  if(!row)return 'setting';
+  const parts=[];
+  if(row.classList&&row.classList.contains('modified'))parts.push('modified');
+  if((row.classList&&row.classList.contains('invalid'))||(row.querySelector&&row.querySelector('[aria-invalid="true"],.settings-input-invalid')))parts.push('invalid');
+  if(row.dataset&&row.dataset.settingTargetOverride==='1')parts.push('target override');
+  if(!parts.length)parts.push('inherited');
+  return parts.join(', ');
+}
+function settingsUpdateRowAccessibility(row,index,total){
+  if(!row)return;
+  const key=settingsRowKey(row)||settingsReviewRowLabel(row);
+  const title=settingsRowTitle(row)||settingsReviewRowLabel(row);
+  const section=row.closest?row.closest('.settings-section,#ext-settings-container,details'):null;
+  const sectionTitle=section?settingsSectionTitle(section):settingsActiveSectionTitle();
+  const pos=Number(index)>=0&&Number(total)>0?' '+String(Number(index)+1)+' of '+String(total):'';
+  row.tabIndex=0;
+  row.setAttribute('role','group');
+  row.setAttribute('aria-label',[title,key,settingsTargetDisplayName(currentSettingsTarget),sectionTitle,settingsRowAccessibleStatus(row)].filter(Boolean).join(' - ')+pos);
+  if(Number(index)>=0)row.setAttribute('aria-posinset',String(Number(index)+1));
+  if(Number(total)>0)row.setAttribute('aria-setsize',String(total));
+  row.dataset.settingsVisibleIndex=Number(index)>=0?String(Number(index)+1):'';
+  row.dataset.settingsAccessibleStatus=settingsRowAccessibleStatus(row);
+}
+function settingsRefreshRowsAccessibility(rows){
+  const visible=rows||settingsVisibleRows();
+  visible.forEach((row,index)=>settingsUpdateRowAccessibility(row,index,visible.length));
+  return visible.length;
+}
 function settingsFocusVisibleRow(direction){
   const rows=settingsVisibleRows();
   if(!rows.length)return;
@@ -4987,6 +5021,8 @@ function settingsFocusVisibleRow(direction){
   const step=Number(direction)<0?-1:1;
   index=index<0?(step<0?rows.length-1:0):(index+step+rows.length)%rows.length;
   settingsHighlightRow(rows[index]);
+  settingsRefreshRowsAccessibility(rows);
+  updateSettingsResultNav(rows.length);
 }
 function settingsFocusBoundaryRow(which){
   const rows=settingsVisibleRows();
@@ -5227,6 +5263,7 @@ function markSettingsModified(){
   Array.from(root.querySelectorAll('.ext-setting-row.invalid,[aria-invalid="true"]')).forEach(row=>{
     if(row.classList&&row.classList.contains('ext-setting-row'))errorCount++;
   });
+  settingsRefreshRowsAccessibility();
   refreshSettingsDirtySummary(modifiedCount,errorCount);
   updateSettingsNavCounts();
   renderSettingsReviewBar();
@@ -27196,7 +27233,13 @@ function renderSettingsPersonalNav(){
 }
 function setActiveSettingsNav(id){
   const nav=$('settings-nav');if(!nav)return;
-  nav.querySelectorAll('.settings-nav-item').forEach(btn=>btn.classList.toggle('active',btn.dataset.settingsNav===id));
+  nav.querySelectorAll('.settings-nav-item').forEach(btn=>{
+    const active=btn.dataset.settingsNav===id;
+    btn.classList.toggle('active',active);
+    btn.setAttribute('aria-selected',active?'true':'false');
+    btn.tabIndex=active?0:-1;
+  });
+  settingsUpdateNavTreeMetadata();
   updateSettingsTitleStatus();
   renderSettingsSectionContext();
 }
@@ -27345,6 +27388,7 @@ function settingsFilterNavCategories(value,options){
       if(first&&first.dataset&&first.dataset.settingsNav)setActiveSettingsNav(first.dataset.settingsNav);
     }
   }
+  settingsUpdateNavTreeMetadata();
   return {visible,total,query};
 }
 function settingsClearNavFilter(){
@@ -27354,10 +27398,62 @@ function settingsClearNavFilter(){
   if(input)input.focus();
   return state;
 }
+function settingsNavVisibleItems(){
+  const nav=$('settings-nav');if(!nav)return [];
+  return Array.from(nav.querySelectorAll('.settings-nav-item'))
+    .filter(item=>item.style.display!=='none'&&item.getAttribute('aria-hidden')!=='true');
+}
+function settingsFocusNavItem(item,activate){
+  if(!item)return false;
+  try{item.focus({preventScroll:true})}catch(e){try{item.focus()}catch(_e){}}
+  if(activate&&item.dataset&&item.dataset.settingsNav)scrollToSettingsSection(item.dataset.settingsNav);
+  return true;
+}
+function settingsMoveNavFocus(delta){
+  const items=settingsNavVisibleItems();
+  if(!items.length)return false;
+  const active=document.activeElement&&document.activeElement.closest
+    ? document.activeElement.closest('.settings-nav-item')
+    : null;
+  let index=active?items.indexOf(active):-1;
+  const step=Number(delta)<0?-1:1;
+  index=index<0?(step<0?items.length-1:0):(index+step+items.length)%items.length;
+  return settingsFocusNavItem(items[index],false);
+}
+function settingsFocusNavBoundary(which){
+  const items=settingsNavVisibleItems();
+  if(!items.length)return false;
+  return settingsFocusNavItem(which==='last'?items[items.length-1]:items[0],false);
+}
+function settingsUpdateNavTreeMetadata(){
+  const items=settingsNavVisibleItems();
+  items.forEach((item,index)=>{
+    item.setAttribute('role','treeitem');
+    item.setAttribute('aria-level','1');
+    item.setAttribute('aria-posinset',String(index+1));
+    item.setAttribute('aria-setsize',String(items.length));
+    item.tabIndex=item.classList.contains('active')?0:-1;
+  });
+  return items.length;
+}
+function settingsNavKeydown(ev){
+  const key=String(ev.key||'');
+  if(key==='ArrowDown'){ev.preventDefault();settingsMoveNavFocus(1);return}
+  if(key==='ArrowUp'){ev.preventDefault();settingsMoveNavFocus(-1);return}
+  if(key==='Home'){ev.preventDefault();settingsFocusNavBoundary('first');return}
+  if(key==='End'){ev.preventDefault();settingsFocusNavBoundary('last');return}
+  if(key==='Enter'||key===' '){
+    const item=ev.target&&ev.target.closest?ev.target.closest('.settings-nav-item'):null;
+    if(item){ev.preventDefault();settingsFocusNavItem(item,true);}
+  }
+}
 function renderSettingsNav(){
   const nav=$('settings-nav');if(!nav)return;
   const sections=settingsCategorySections();
   nav.innerHTML='';
+  nav.setAttribute('role','tree');
+  nav.setAttribute('aria-label','Settings categories');
+  nav.onkeydown=settingsNavKeydown;
   const summary=document.createElement('div');
   summary.className='settings-nav-summary';
   summary.innerHTML='<strong id="settings-nav-target-title">'+settingsTargetDisplayName(currentSettingsTarget)+' Settings</strong>'
@@ -27421,6 +27517,8 @@ function renderSettingsNav(){
     const id=section.dataset.settingsId;
     const btn=document.createElement('button');
     btn.type='button';btn.className='settings-nav-item';btn.dataset.settingsNav=id;
+    btn.setAttribute('role','treeitem');
+    btn.setAttribute('aria-selected','false');
     const badge=document.createElement('span');badge.className='settings-nav-badge';btn.appendChild(badge);
     const text=document.createElement('span');text.className='settings-nav-text';
     const label=document.createElement('span');label.className='settings-nav-label';label.textContent=settingsSectionTitle(section);
@@ -27440,6 +27538,7 @@ function renderSettingsNav(){
   const first=sections.find(section=>section.style.display!=='none')||sections[0];
   setActiveSettingsNav(first?first.dataset.settingsId:'');
   settingsFilterNavCategories(_settingsNavFilterValue,{preserveInput:true,preserveFocus:true});
+  settingsUpdateNavTreeMetadata();
 }
 function updateSettingsNavCounts(){
   const nav=$('settings-nav');if(!nav)return;
@@ -27557,6 +27656,11 @@ function installSettingsKeyboardHandlers(){
       if(first){ev.preventDefault();settingsHighlightRow(first);}
       return;
     }
+    if(ev.key==='Enter'&&ev.target&&ev.target.id==='settings-search'){
+      const first=settingsVisibleRows().find(Boolean);
+      if(first){ev.preventDefault();settingsHighlightRow(first);}
+      return;
+    }
     const targetTag=String((ev.target&&ev.target.tagName)||'').toLowerCase();
     const editingText=targetTag==='input'||targetTag==='textarea'||targetTag==='select'||(ev.target&&ev.target.isContentEditable);
     if(!editingText&&ev.key==='Home'){ev.preventDefault();settingsFocusBoundaryRow('first');return}
@@ -27601,6 +27705,7 @@ function settingsUiSelfCheckSnapshot(){
     .find(chip=>!(chip.closest&&chip.closest('.settings-current,.modified')));
   const detailActionLabels=detail?Array.from(detail.querySelectorAll('.detail-actions button')).map(btn=>String(btn.textContent||'')):[];
   const reviewActionLabels=Array.from(document.querySelectorAll('#settings-review-bar .review-actions button')).map(btn=>String(btn.textContent||''));
+  const reviewBar=$('settings-review-bar');
   const experienceBar=$('settings-experience-bar');
   const recommendations=$('settings-recommendations');
   const focusDeck=$('settings-focus-deck');
@@ -27625,6 +27730,9 @@ function settingsUiSelfCheckSnapshot(){
     hasLabelsInsideRows:!!originalLabel&&originalLabel.closest('.settings-field.builtin-setting'),
     hidesOriginalLabels:!!originalLabel&&String(getComputedStyle(originalLabel).display)==='none',
     hasNavFilter:!!$('settings-nav-filter'),
+    hasNavTreeRole:!!(nav&&nav.getAttribute('role')==='tree'&&nav.getAttribute('aria-label')==='Settings categories'),
+    hasNavTreeItems:navItems.some(item=>item.getAttribute('role')==='treeitem'&&item.hasAttribute('aria-posinset')&&item.hasAttribute('aria-setsize')),
+    hasNavKeyboardActions:typeof settingsNavKeydown==='function'&&typeof settingsMoveNavFocus==='function'&&typeof settingsFocusNavBoundary==='function',
     hasNavFilterEmptyState:!!$('settings-nav-filter-empty'),
     hasNavFilterCount:!!$('settings-nav-filter-count'),
     hasResultCount:!!$('settings-result-count'),
@@ -27673,6 +27781,7 @@ function settingsUiSelfCheckSnapshot(){
     hasRowSaveRevertMenu:!!Array.from(document.querySelectorAll('.settings-row-action-menu button')).find(btn=>String(btn.textContent||'')==='Save Setting')&&!!Array.from(document.querySelectorAll('.settings-row-action-menu button')).find(btn=>String(btn.textContent||'')==='Revert Setting'),
     hasSuggestedMatchesHost:!!$('settings-suggested-matches'),
     hasReviewFilterActions:['Show Modified','Show Overrides','Show Errors','Clear Review'].every(label=>reviewActionLabels.includes(label)),
+    hasReviewPillActions:!!(reviewBar&&reviewBar.querySelector('button.review-pill')&&reviewBar.dataset.settingsReviewModified!==undefined&&reviewBar.dataset.settingsReviewVisible!==undefined),
     hasOverridesFilterToken:!!document.querySelector('[data-settings-filter-token="@overrides"]'),
     hasValidationSummaryHost:!!validationSummary,
     hasValidationSummaryRenderer:typeof renderSettingsValidationSummary==='function'
@@ -27701,6 +27810,8 @@ function settingsUiSelfCheckSnapshot(){
     currentTarget:currentSettingsTarget,
     navItems:navItems.length,
     visibleNavItems:navItems.filter(item=>item.style.display!=='none').length,
+    hasAccessibleSettingRows:!!document.querySelector('.settings-field.builtin-setting[aria-posinset][aria-setsize][data-settings-accessible-status]'),
+    hasSearchEnterFocus:!!document.querySelector('#settings-search')&&String(installSettingsKeyboardHandlers).includes("ev.key==='Enter'&&ev.target&&ev.target.id==='settings-search'"),
     keyboardPaging:typeof settingsFocusBoundaryRow==='function'&&typeof settingsFocusPagedRow==='function'
   };
 }
@@ -27729,6 +27840,10 @@ window.settingsFocusSiblingSection=settingsFocusSiblingSection;
 window.settingsSearchForKey=settingsSearchForKey;
 window.settingsFilterNavCategories=settingsFilterNavCategories;
 window.settingsClearNavFilter=settingsClearNavFilter;
+window.settingsNavKeydown=settingsNavKeydown;
+window.settingsMoveNavFocus=settingsMoveNavFocus;
+window.settingsFocusNavBoundary=settingsFocusNavBoundary;
+window.settingsRefreshRowsAccessibility=settingsRefreshRowsAccessibility;
 window.settingsUiSelfCheckSnapshot=settingsUiSelfCheckSnapshot;
 window.settingsToggleDensity=settingsToggleDensity;
 window.settingsToggleQueryHelp=settingsToggleQueryHelp;
@@ -28669,17 +28784,27 @@ function renderSettingsReviewBar(stats){
   const state=settingsComputeReviewState(stats);
   const dirty=state.modified.length||state.errors.length||state.overrides.length;
   host.innerHTML='';
-  const addPill=(label,count,cls)=>{
-    const pill=document.createElement('span');
+  host.dataset.settingsReviewModified=String(state.modified.length);
+  host.dataset.settingsReviewOverrides=String(state.overrides.length);
+  host.dataset.settingsReviewErrors=String(state.errors.length);
+  host.dataset.settingsReviewVisible=String(state.visible);
+  const addPill=(label,count,cls,handler)=>{
+    const pill=document.createElement(handler?'button':'span');
+    if(handler)pill.type='button';
     pill.className='review-pill'+(count?' active':'')+(cls?' '+cls:'');
     pill.textContent=label+': '+count;
+    if(handler){
+      pill.disabled=!count;
+      pill.title=count?'Filter '+label.toLowerCase()+' settings':'No '+label.toLowerCase()+' settings';
+      pill.onclick=ev=>{ev.preventDefault();handler&&handler()};
+    }
     host.appendChild(pill);
     return pill;
   };
   addPill(state.target,state.visible,'');
-  addPill('Modified',state.modified.length,'');
-  addPill('Overrides',state.overrides.length,'');
-  addPill('Errors',state.errors.length,state.errors.length?'error':'');
+  addPill('Modified',state.modified.length,'',()=>settingsApplyReviewFilter('modified'));
+  addPill('Overrides',state.overrides.length,'',()=>settingsApplyReviewFilter('overrides'));
+  addPill('Errors',state.errors.length,state.errors.length?'error':'',()=>settingsApplyReviewFilter('error'));
   const actions=document.createElement('span');actions.className='review-actions';
   const addButton=(label,title,handler,disabled,primary)=>{
     const btn=document.createElement('button');btn.type='button';btn.textContent=label;btn.title=title;btn.disabled=!!disabled;
@@ -28886,7 +29011,8 @@ function filterSettings(){
   renderSettingsRecommendations();
   renderSettingsFocusDeck(parsed,visible,total,targetStats);
   renderSettingsReviewBar(targetStats);
-  updateSettingsResultNav(settingsVisibleRows().length);
+  const visibleRowCount=settingsRefreshRowsAccessibility();
+  updateSettingsResultNav(visibleRowCount);
   renderSettingsFilterSuggestions();
   updateSettingsNavCounts();
   updateSettingsTitleStatus(visible,total);
