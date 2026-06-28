@@ -11838,6 +11838,13 @@ class AIEditorAPI:
                     "container": str(container_id),
                     "extensionId": self._extension_surface_extension_id(
                         decorated),
+                    "dynamicSource": (
+                        "manifest+runtime"
+                        if decorated.get("runtimeAvailable") else "manifest"),
+                    "providerBacked": bool(
+                        webview_evidence.get("htmlAvailable")
+                        or view_id in getattr(
+                            self._vscode_ns, "_webview_view_providers", {})),
                     "kind": str(
                         decorated.get("runtimeKind")
                         or decorated.get("type")
@@ -11871,6 +11878,11 @@ class AIEditorAPI:
                 "name": str(snapshot.get("title") or view_id),
                 "container": "",
                 "extensionId": "",
+                "dynamicSource": "runtime-only",
+                "providerBacked": bool(
+                    webview_evidence.get("htmlAvailable")
+                    or view_id in getattr(
+                        self._vscode_ns, "_webview_view_providers", {})),
                 "kind": str(snapshot.get("kind") or "view"),
                 "type": "",
                 "runtimeAvailable": True,
@@ -11930,6 +11942,25 @@ class AIEditorAPI:
         webview_visible = sum(
             1 for item in webview_views
             if _as_dict(item.get("webviewEvidence")).get("visible"))
+        webview_pending_messages = sum(
+            int(_as_dict(item.get("webviewEvidence")).get(
+                "pendingMessageCount") or 0)
+            for item in webview_views)
+        webview_dropped_messages = sum(
+            int(_as_dict(item.get("webviewEvidence")).get(
+                "droppedMessageCount") or 0)
+            for item in webview_views)
+        runtime_only_surfaces = sum(
+            1 for item in views if item.get("runtimeOnly"))
+        manifest_backed_surfaces = sum(
+            1 for item in views if not item.get("runtimeOnly"))
+        manifest_runtime_surfaces = sum(
+            1 for item in views
+            if item.get("dynamicSource") == "manifest+runtime")
+        manifest_only_surfaces = sum(
+            1 for item in views if item.get("dynamicSource") == "manifest")
+        provider_backed_webviews = sum(
+            1 for item in webview_views if item.get("providerBacked"))
         tree_views = [
             item for item in views
             if str(item.get("kind") or "").lower() == "treeview"
@@ -11956,6 +11987,13 @@ class AIEditorAPI:
                 "webviewHtmlAvailable": webview_html_available,
                 "webviewRetained": webview_retained,
                 "webviewVisible": webview_visible,
+                "webviewPendingMessages": webview_pending_messages,
+                "webviewDroppedMessages": webview_dropped_messages,
+                "runtimeOnlySurfaces": runtime_only_surfaces,
+                "manifestBackedSurfaces": manifest_backed_surfaces,
+                "manifestRuntimeSurfaces": manifest_runtime_surfaces,
+                "manifestOnlySurfaces": manifest_only_surfaces,
+                "providerBackedWebviews": provider_backed_webviews,
                 "viewContainers": len(view_containers),
                 "customEditors": len(custom_editors),
                 "customEditorStates": sum(

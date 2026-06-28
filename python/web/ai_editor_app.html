@@ -1452,6 +1452,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .workflow-result-step-title { display:flex; align-items:center; gap:6px; font-size:11px; }
 .workflow-result-step-title .idx { color:var(--fg-dim); font:10px var(--mono); }
 .workflow-result-step-title .agent { color:var(--fg-dim); font:10px var(--mono); border:1px solid var(--border); border-radius:999px; padding:0 6px; }
+.workflow-result-output-var { color:var(--fg-accent); font:10px var(--mono); border:1px solid color-mix(in srgb,var(--border-focus) 45%,var(--border)); border-radius:999px; padding:0 6px; }
 .workflow-result-output { white-space:pre-wrap; color:var(--fg-dim); font:11px/1.4 var(--mono); max-height:120px; overflow:auto; }
 .chat-workflow-session-strip { display:none; align-items:center; gap:6px; min-height:28px; padding:5px 8px;
   border-top:1px solid color-mix(in srgb,var(--border) 72%,transparent);
@@ -4636,7 +4637,7 @@ pre.code-block { overflow:visible; }
           <div class="extension-runtime-filter">
             <input id="extension-runtime-filter-text" placeholder="Filter surfaces" aria-label="Filter extension runtime surfaces" oninput="applyExtensionRuntimeSurfaceFilter()">
             <select id="extension-runtime-filter-kind" aria-label="Filter extension runtime surface kind" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All kinds</option></select>
-            <select id="extension-runtime-filter-source" aria-label="Filter extension runtime source" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All sources</option><option value="runtime">Runtime</option><option value="manifest">Manifest</option><option value="runtime-only">Runtime only</option></select>
+            <select id="extension-runtime-filter-source" aria-label="Filter extension runtime source" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All sources</option><option value="manifest+runtime">Manifest + runtime</option><option value="manifest">Manifest</option><option value="runtime-only">Runtime only</option></select>
             <select id="extension-runtime-filter-evidence" aria-label="Filter webview render evidence" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All evidence</option><option value="rendered">Rendered HTML</option><option value="missing">Missing HTML</option><option value="retained">Retained</option><option value="scripts">Scripts enabled</option><option value="resources">Resource rewrites</option><option value="messages">Has messages</option><option value="queued">Queued messages</option><option value="dropped">Dropped messages</option></select>
           </div>
         </div>
@@ -7929,6 +7930,43 @@ let assistantWorkflowRunActive=false;
 let assistantWorkflowCancelRequested=false;
 let assistantWorkflowActiveRunId='';
 let assistantWorkflowLastLaunch=null;
+function assistantWorkflowNormalizeRun(item,index){
+  const src=item&&typeof item==='object'?item:{};
+  return {
+    workflowRunId:String(src.workflowRunId||src.runId||('workflow-run-'+String(index||0))),
+    workflowId:String(src.workflowId||''),
+    workflowLabel:String(src.workflowLabel||src.label||''),
+    workflowMode:normalizeWorkflowMode(src.workflowMode||assistantWorkflowMode),
+    workflowMethod:String(src.workflowMethod||''),
+    status:String(src.status||src.workflowRunStatus||''),
+    progress:String(src.progress||src.workflowRunProgress||''),
+    inputPreview:String(src.inputPreview||src.workflowInputPreview||'').slice(0,260),
+    resultPreview:String(src.resultPreview||src.workflowResultPreview||'').slice(0,260),
+    durationMs:Math.max(0,Number(src.durationMs||src.workflowDurationMs||0)),
+    stepCount:Math.max(0,Number(src.stepCount||src.workflowStepCount||0)),
+    completedSteps:Math.max(0,Number(src.completedSteps||src.workflowCompletedSteps||0)),
+    outputVars:Array.isArray(src.outputVars)?src.outputVars.map(String).filter(Boolean).slice(0,20):[],
+    updatedAt:Math.max(0,Number(src.updatedAt||Date.now()))
+  };
+}
+function assistantWorkflowNormalizeRuns(runs){
+  const seen=new Set();
+  return (Array.isArray(runs)?runs:[]).map(assistantWorkflowNormalizeRun).filter(run=>{
+    const id=String(run.workflowRunId||'');
+    if(!id||seen.has(id))return false;
+    seen.add(id);
+    return true;
+  }).sort((a,b)=>Number(b.updatedAt||0)-Number(a.updatedAt||0)).slice(0,12);
+}
+function assistantWorkflowUpsertRun(run){
+  const entry=assistantWorkflowNormalizeRun(Object.assign({updatedAt:Date.now()},run||{}),0);
+  if(!entry.workflowRunId)return null;
+  const previous=assistantWorkflowNormalizeRuns(assistantSessionState&&assistantSessionState.workflowRuns);
+  assistantSessionState.workflowRuns=[entry].concat(previous.filter(item=>item.workflowRunId!==entry.workflowRunId)).slice(0,12);
+  saveAssistantSessionState();
+  if(typeof renderAssistantWorkflowSessionStrip==='function')renderAssistantWorkflowSessionStrip();
+  return entry;
+}
 function setAssistantWorkflowRunState(active,opts){
   opts=opts||{};
   assistantWorkflowRunActive=!!active;
@@ -8024,7 +8062,8 @@ function assistantSessionDefaults(seed){
     workflowCompletedSteps:Math.max(0,Number(src.workflowCompletedSteps||0)),
     workflowStepCount:Math.max(0,Number(src.workflowStepCount||0)),
     workflowDurationMs:Math.max(0,Number(src.workflowDurationMs||0)),
-    workflowResultPreview:String(src.workflowResultPreview||'')
+    workflowResultPreview:String(src.workflowResultPreview||''),
+    workflowRuns:assistantWorkflowNormalizeRuns(src.workflowRuns)
   };
 }
 function loadAssistantSessionState(){
@@ -8494,6 +8533,8 @@ function renderAssistantWorkflowSessionStrip(){
   strip.dataset.workflowMethod=String(assistantSessionState.workflowMethod||'');
   strip.dataset.workflowInputPreview=String(assistantSessionState.workflowInputPreview||'');
   strip.dataset.workflowResultPreview=String(assistantSessionState.workflowResultPreview||'');
+  const workflowRuns=assistantWorkflowNormalizeRuns(assistantSessionState.workflowRuns);
+  strip.dataset.workflowHistoryCount=String(workflowRuns.length);
   strip.innerHTML='';
   if(!shouldShow)return strip;
   const title=document.createElement('span');
@@ -8518,6 +8559,13 @@ function renderAssistantWorkflowSessionStrip(){
     methodChip.textContent=assistantSessionState.workflowMethod;
     methodChip.title='Workflow execution method';
     strip.appendChild(methodChip);
+  }
+  if(workflowRuns.length){
+    const historyChip=document.createElement('span');
+    historyChip.className='chat-workflow-session-chip';
+    historyChip.textContent=String(workflowRuns.length)+' runs';
+    historyChip.title='Workflow runs in this Assistant session';
+    strip.appendChild(historyChip);
   }
   const text=document.createElement('span');
   text.className='chat-workflow-session-preview';
@@ -8622,6 +8670,7 @@ function syncAssistantSessionState(patch){
   next.workflowStepCount=Math.max(0,Number(hasPatch('workflowStepCount')?patch.workflowStepCount:(next.workflowStepCount||0)));
   next.workflowDurationMs=Math.max(0,Number(hasPatch('workflowDurationMs')?patch.workflowDurationMs:(next.workflowDurationMs||0)));
   next.workflowResultPreview=String(hasPatch('workflowResultPreview')?patch.workflowResultPreview:(next.workflowResultPreview||''));
+  next.workflowRuns=assistantWorkflowNormalizeRuns(hasPatch('workflowRuns')?patch.workflowRuns:(next.workflowRuns||[]));
   next.draft=input?String(input.value||''):String(next.draft||'');
   next.inputHasText=!!(next.draft&&next.draft.trim());
   next.context=patch&&Object.prototype.hasOwnProperty.call(patch,'context')
@@ -11635,6 +11684,10 @@ function assistantWorkflowResultStateSnapshot(){
     summaryTextIncludesRun:summaryText.includes('Run: wf-ok'),
     summaryTextIncludesOutput:summaryText.includes('done'),
     stepActionCount:body.querySelectorAll('[data-workflow-step-action]').length,
+    rerunActionCount:body.querySelectorAll('[data-workflow-result-action="rerun"]').length,
+    outputVarChipCount:body.querySelectorAll('.workflow-result-output-var').length,
+    resultOutputVars:ok?String(ok.dataset.workflowResultOutputVars||''):'',
+    resultStepStatuses:ok?String(ok.dataset.workflowResultStepStatuses||''):'',
     stepTextReady:workflowResultStepText(firstStep).includes('done'),
     resultPreview:ok?String(ok.dataset.workflowResultPreview||''):'',
     progress:ok?String(ok.dataset.workflowProgress||''):''
@@ -11666,7 +11719,7 @@ function assistantWorkflowSessionStripSnapshot(){
   const workflow={id:'strip-selfcheck-flow',name:'Strip Selfcheck Flow',steps:[{agent:'default',label:'Inspect',prompt:'Inspect {{input}}',output_var:'inspection'}]};
   assistantWorkflowLastLaunch={workflow,inputText:'strip input',launch:{workflowRunId:'wf-strip-selfcheck',workflowLabel:'Strip Selfcheck Flow'},refs:[],createdAt:Date.now()};
   setAssistantWorkflowRunState(true,{runId:'wf-strip-selfcheck',cancelRequested:false});
-  syncAssistantSessionState({requestInProgress:true,workflowId:'strip-selfcheck-flow',workflowLabel:'Strip Selfcheck Flow',workflowRunId:'wf-strip-selfcheck',workflowMode:'on',workflowMethod:'backend',workflowInputPreview:'strip input',workflowRunStatus:'running',workflowRunStatusSummary:'running · backend · on',workflowRunProgress:'0/1',workflowCompletedSteps:0,workflowStepCount:1,workflowResultPreview:''});
+  syncAssistantSessionState({requestInProgress:true,workflowId:'strip-selfcheck-flow',workflowLabel:'Strip Selfcheck Flow',workflowRunId:'wf-strip-selfcheck',workflowMode:'on',workflowMethod:'backend',workflowInputPreview:'strip input',workflowRunStatus:'running',workflowRunStatusSummary:'running · backend · on',workflowRunProgress:'0/1',workflowCompletedSteps:0,workflowStepCount:1,workflowResultPreview:'',workflowRuns:[{workflowRunId:'wf-strip-selfcheck',workflowId:'strip-selfcheck-flow',workflowLabel:'Strip Selfcheck Flow',workflowMode:'on',workflowMethod:'backend',status:'running',progress:'0/1',inputPreview:'strip input',stepCount:1,updatedAt:Date.now()}]});
   const runningEl=renderAssistantWorkflowSessionStrip();
   const runningActions=runningEl?Array.from(runningEl.querySelectorAll('.chat-workflow-session-action')).map(btn=>String(btn.textContent||'')):[];
   const running={
@@ -11677,6 +11730,7 @@ function assistantWorkflowSessionStripSnapshot(){
     hasCancel:runningActions.includes('Cancel'),
     hasOpen:runningActions.includes('Open'),
     actionCount:runningEl?Number(runningEl.dataset.workflowActionCount||0):0,
+    historyCount:runningEl?Number(runningEl.dataset.workflowHistoryCount||0):0,
     text:runningEl?String(runningEl.textContent||''):''
   };
   setAssistantWorkflowRunState(false,{runId:'wf-strip-selfcheck',keepRunId:true});
@@ -11694,6 +11748,7 @@ function assistantWorkflowSessionStripSnapshot(){
     hasOpen:doneActions.includes('Open'),
     hasCopy:doneActions.includes('Copy'),
     actionCount:doneEl?Number(doneEl.dataset.workflowActionCount||0):0,
+    historyCount:doneEl?Number(doneEl.dataset.workflowHistoryCount||0):0,
     datasetStatus:panel?String(panel.dataset.chatWorkflowRunStatus||''):'',
     datasetPreview:panel?String(panel.dataset.chatWorkflowResultPreview||''):'',
     text:doneEl?String(doneEl.textContent||''):''
@@ -11843,6 +11898,10 @@ async function assistantWorkflowBackendExecutionSnapshot(){
     resultAgents:result?String(result.dataset.workflowAgents||''):'',
     resultStepCount:result?result.querySelectorAll('.workflow-result-step').length:0,
     resultOutputs:result?Array.from(result.querySelectorAll('.workflow-result-step')).map(step=>String(step.dataset.workflowStepOutputVar||'')):[],
+    resultRerunActions:result?result.querySelectorAll('[data-workflow-result-action="rerun"]').length:0,
+    resultOutputVarChips:result?result.querySelectorAll('.workflow-result-output-var').length:0,
+    workflowHistoryCount:Array.isArray(assistantSessionState.workflowRuns)?assistantSessionState.workflowRuns.length:0,
+    workflowHistoryLatest:Array.isArray(assistantSessionState.workflowRuns)&&assistantSessionState.workflowRuns.length?assistantSessionState.workflowRuns[0]:null,
     finalText:created.length?String(created[created.length-1].textContent||''):''
   };
   created.forEach(item=>item.remove());
@@ -11994,14 +12053,17 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'workflow-run-card-status-summary',workflowRunCard.workflowRunStatus==='running'&&workflowRunCard.stateText.includes('running')&&workflowRunCard.workflowRunStatusSummary.includes('36ms'),JSON.stringify(workflowRunCard));
   assistantUiSelfCheckRecord(checks,'workflow-result-state-rendered',workflowResultState.okStatus==='done'&&workflowResultState.errorStatus==='error'&&workflowResultState.cancelStatus==='cancelled'&&workflowResultState.badgeCount===3&&workflowResultState.messageCount===2&&workflowResultState.errorClass&&workflowResultState.cancelClass,JSON.stringify(workflowResultState));
   assistantUiSelfCheckRecord(checks,'workflow-result-metadata-rendered',workflowResultState.okMode==='on'&&workflowResultState.okAgents==='default'&&workflowResultState.okMethod==='backend'&&workflowResultState.okSession==='sao-ai-chat://local/result-ok'&&workflowResultState.okInputPreview==='ok input'&&workflowResultState.okDurationMs===42&&workflowResultState.durationChipCount>=1,JSON.stringify(workflowResultState));
+  assistantUiSelfCheckRecord(checks,'workflow-result-actions-and-vars-ready',workflowResultState.rerunActionCount===3&&workflowResultState.outputVarChipCount===2&&workflowResultState.resultOutputVars==='ok'&&workflowResultState.resultStepStatuses==='done'&&workflowResultState.actionCount>=9,JSON.stringify(workflowResultState));
   assistantUiSelfCheckRecord(checks,'workflow-run-button-active-state',workflowButtonState.exists&&workflowButtonState.active.text==='■'&&workflowButtonState.active.running&&workflowButtonState.active.disabled===false&&workflowButtonState.cancelling.title==='Cancelling workflow run',JSON.stringify(workflowButtonState));
   assistantUiSelfCheckRecord(checks,'workflow-session-strip-running-ready',workflowSessionStrip.running.exists&&workflowSessionStrip.running.open&&workflowSessionStrip.running.status==='running'&&workflowSessionStrip.running.progress==='0/1'&&workflowSessionStrip.running.hasCancel&&workflowSessionStrip.running.text.includes('Strip Selfcheck Flow'),JSON.stringify(workflowSessionStrip.running));
   assistantUiSelfCheckRecord(checks,'workflow-session-strip-result-ready',workflowSessionStrip.done.exists&&workflowSessionStrip.done.open&&workflowSessionStrip.done.status==='done'&&workflowSessionStrip.done.progress==='1/1'&&workflowSessionStrip.done.hasRetry&&workflowSessionStrip.done.hasContinue&&workflowSessionStrip.done.hasCopy&&workflowSessionStrip.done.text.includes('strip result'),JSON.stringify(workflowSessionStrip.done));
+  assistantUiSelfCheckRecord(checks,'workflow-session-history-ready',workflowSessionStrip.running.historyCount>=1&&workflowSessionStrip.done.historyCount>=1&&workflowSessionStrip.done.text.includes('1 runs'),JSON.stringify(workflowSessionStrip));
   assistantUiSelfCheckRecord(checks,'workflow-session-state-dataset-ready',workflowSessionStrip.done.datasetStatus==='done'&&workflowSessionStrip.done.datasetPreview==='strip result'&&workflowSessionStrip.restoredStatus===workflowSessionStrip.previousStatus,JSON.stringify(workflowSessionStrip));
   const workflowBackend=await assistantWorkflowBackendExecutionSnapshot();
   assistantUiSelfCheckRecord(checks,'workflow-backend-execution-rendered',workflowBackend.ok&&workflowBackend.callCount===1&&workflowBackend.planExists&&workflowBackend.resultExists&&workflowBackend.resultStatus==='done'&&workflowBackend.resultStepCount===2&&workflowBackend.resultOutputs[0]==='inspection'&&workflowBackend.resultOutputs[1]==='review'&&workflowBackend.finalText.includes('review ok'),JSON.stringify(workflowBackend));
   assistantUiSelfCheckRecord(checks,'workflow-backend-metadata-payload-ready',workflowBackend.metadataMode===assistantWorkflowMode&&workflowBackend.metadataMethod==='backend'&&workflowBackend.metadataSession.startsWith('sao-ai-chat://')&&workflowBackend.metadataInputPreview==='backend smoke'&&workflowBackend.metadataStepCount===2&&workflowBackend.planStatus==='done'&&workflowBackend.planMethod==='backend'&&workflowBackend.planSession===workflowBackend.metadataSession&&workflowBackend.planInputPreview==='backend smoke'&&workflowBackend.resultMode===assistantWorkflowMode&&workflowBackend.resultMethod==='backend'&&workflowBackend.resultSession===workflowBackend.metadataSession&&workflowBackend.resultInputPreview==='backend smoke'&&workflowBackend.resultAgents.includes('default'),JSON.stringify(workflowBackend));
   assistantUiSelfCheckRecord(checks,'workflow-backend-duration-payload-ready',workflowBackend.planElapsedMs===87&&workflowBackend.planDurations[0]===33&&workflowBackend.planDurations[1]===54&&workflowBackend.resultDurationMs===88,JSON.stringify(workflowBackend));
+  assistantUiSelfCheckRecord(checks,'workflow-backend-history-ready',workflowBackend.resultRerunActions>=1&&workflowBackend.resultOutputVarChips===2&&workflowBackend.workflowHistoryCount>=1&&workflowBackend.workflowHistoryLatest&&workflowBackend.workflowHistoryLatest.workflowRunId===workflowBackend.runId&&workflowBackend.workflowHistoryLatest.status==='done',JSON.stringify(workflowBackend));
 
   const previousAttachments=attachments.slice();
   attachments=[];
@@ -24339,6 +24401,21 @@ function assistantWorkflowPatchFromResultCard(card,result){
     workflowDurationMs:Number(card.dataset.workflowDurationMs||0)||0,
     workflowResultPreview:workflowResultPreview(result)
   });
+  assistantWorkflowUpsertRun({
+    workflowRunId:runId,
+    workflowId:String(card.dataset.workflowId||''),
+    workflowLabel:String((card.querySelector('.workflow-result-title')||{}).textContent||assistantSessionState.workflowLabel||''),
+    workflowMode:String(card.dataset.workflowMode||assistantSessionState.workflowMode||''),
+    workflowMethod:String(card.dataset.workflowMethod||assistantSessionState.workflowMethod||''),
+    status,
+    progress:total?(completed+'/'+total):'',
+    inputPreview:String(card.dataset.workflowInputPreview||assistantSessionState.workflowInputPreview||''),
+    resultPreview:workflowResultPreview(result),
+    durationMs:Number(card.dataset.workflowDurationMs||0)||0,
+    stepCount:total,
+    completedSteps:completed,
+    outputVars:String(card.dataset.workflowResultOutputVars||'').split(',').filter(Boolean)
+  });
 }
 function assistantWorkflowCopyText(text,label){
   const value=String(text||'');
@@ -24400,6 +24477,19 @@ function workflowResultContinueFromCard(card){
   announceAssistantAction('Workflow result inserted into composer');
   return true;
 }
+function workflowResultRerunFromCard(card){
+  if(assistantWorkflowRunActive)return false;
+  const runId=String(card&&card.dataset&&card.dataset.workflowRunId||'');
+  const workflowId=String(card&&card.dataset&&card.dataset.workflowId||'');
+  const last=assistantWorkflowLastLaunch;
+  if(last&&last.workflow&&(!runId||runId===String(last.launch&&last.launch.workflowRunId||''))){
+    return runWorkflowObjectAsAssistant(last.workflow,last.inputText||'',{retryOf:runId});
+  }
+  const workflow=workflowById(workflowId);
+  if(!workflow){showToast('Workflow definition is not available for rerun','info',1800);return false}
+  const inputText=String(card&&card.dataset&&card.dataset.workflowInputPreview||'').trim();
+  return runWorkflowObjectAsAssistant(workflow,inputText,{retryOf:runId});
+}
 function workflowResultCopySummary(card){
   return assistantWorkflowCopyText(workflowResultSummaryText(card),'Workflow result summary');
 }
@@ -24432,6 +24522,8 @@ function renderWorkflowResultSummary(body,result,launch){
   card.dataset.workflowDurationMs=String(Number((result&&result.workflowDurationMs)||result&&result.durationMs||0)||0);
   card.dataset.workflowAgents=(Array.isArray(result&&result.workflowAgents)?result.workflowAgents:(launch&&launch.workflowAgents)||[]).map(String).join(',');
   card.dataset.workflowResultPreview=workflowResultPreview(result);
+  card.dataset.workflowResultStepStatuses=steps.map(step=>step&&step.error?'error':'done').join(',');
+  card.dataset.workflowResultOutputVars=steps.map(step=>String(step&&step.output_var||'')).filter(Boolean).join(',');
   const head=document.createElement('div');head.className='workflow-result-head';
   const title=document.createElement('span');title.className='workflow-result-title';
   title.textContent=String((launch&&launch.workflowLabel)||result&&result.workflow||'Workflow result');
@@ -24462,6 +24554,7 @@ function renderWorkflowResultSummary(body,result,launch){
     return button;
   };
   addResultAction('Continue',()=>workflowResultContinueFromCard(card),true);
+  addResultAction('Rerun',()=>workflowResultRerunFromCard(card),false);
   addResultAction('Copy summary',()=>workflowResultCopySummary(card),false);
   addResultAction('Collapse',button=>workflowResultToggleCard(card,button),false).setAttribute('aria-expanded','true');
   card.appendChild(actions);
@@ -24481,6 +24574,13 @@ function renderWorkflowResultSummary(body,result,launch){
     const label=document.createElement('span');label.textContent=String(step.label||('Step '+(index+1)));
     const agent=document.createElement('span');agent.className='agent';agent.textContent=String(step.agent||'default');
     stepTitle.appendChild(idx);stepTitle.appendChild(label);stepTitle.appendChild(agent);
+    if(step.output_var){
+      const outputVar=document.createElement('span');
+      outputVar.className='workflow-result-output-var';
+      outputVar.textContent=String(step.output_var);
+      outputVar.title='Workflow output variable';
+      stepTitle.appendChild(outputVar);
+    }
     const durationLabel=workflowDurationLabel(step.durationMs);
     if(durationLabel){
       const duration=document.createElement('span');
@@ -24687,6 +24787,18 @@ async function runWorkflowObjectAsAssistant(workflow,inputText,opts){
   if(input&&String(input.value||'').trim()===inputText)setChatInputValue('',{focus:false,sync:false});
   assistantSessionState.workflowRunId=runId;
   syncAssistantSessionState({workflowRunId:runId,workflowMode:assistantWorkflowMode,workflowMethod:launch.workflowMethod,workflowInputPreview:launch.inputPreview,workflowRunStatus:'running',workflowRunStatusSummary:'running · '+launch.workflowMethod+' · '+launch.workflowMode,workflowRunProgress:'0/'+String(launch.workflowStepCount||0),workflowCompletedSteps:0,workflowStepCount:launch.workflowStepCount,workflowDurationMs:0,workflowResultPreview:''});
+  assistantWorkflowUpsertRun({
+    workflowRunId:runId,
+    workflowId:launch.workflowId,
+    workflowLabel:launch.workflowLabel,
+    workflowMode:launch.workflowMode,
+    workflowMethod:launch.workflowMethod,
+    status:'running',
+    progress:'0/'+String(launch.workflowStepCount||0),
+    inputPreview:launch.inputPreview,
+    stepCount:launch.workflowStepCount,
+    outputVars:launch.workflowStepOutputVars
+  });
   if(canUseBackend){
     return runWorkflowEngineAsAssistant(workflow,inputText,launch,refs);
   }
@@ -36562,6 +36674,9 @@ function extensionRuntimeSurfaceRows(data){
       evidence.lastResourceRewriteKind=String(cachedRuntime.lastResourceRewriteKind||evidence.lastResourceRewriteKind||'');
     }
     const htmlLength=Number(evidence.htmlLength||item.htmlLength||0)||0;
+    const dynamicSource=String(item.dynamicSource||item.dynamic_source||item.source||'').trim()
+      || (item.runtimeOnly?'runtime-only':(runtime?'manifest+runtime':'manifest'));
+    const providerBacked=!!(item.providerBacked||item.provider_backed||evidence.htmlAvailable||htmlLength);
     const evidenceOptions=(evidence.options&&typeof evidence.options==='object'?evidence.options:(item.runtimeState&&item.runtimeState.options&&typeof item.runtimeState.options==='object'?item.runtimeState.options:{}))||{};
     const localResourceRoots=Array.isArray(evidence.localResourceRoots)?evidence.localResourceRoots:
       (Array.isArray(evidence.local_resource_roots)?evidence.local_resource_roots:
@@ -36605,7 +36720,9 @@ function extensionRuntimeSurfaceRows(data){
       extensionId,
       container:String(item.container||item.viewContainer||item.view_container||''),
       resourceUri,
-      source:item.runtimeOnly?'runtime-only':(runtime?'runtime':'manifest'),
+      source:dynamicSource,
+      dynamicSource,
+      providerBacked,
       ready:runtime,
       command:String(item.command||''),
       id:String(item.id||item.profileId||item.profile_id||item.viewType||item.type||item.vendor||item.kind||item.name||item.command||''),
@@ -36621,7 +36738,7 @@ function extensionRuntimeSurfaceRows(data){
     row.focusable=row.kind==='WebviewView'||row.kind==='TreeView'||row.kind==='CustomEditor'||row.kind==='Notebook';
     row.refreshable=row.kind==='WebviewView'||row.kind==='TreeView'||row.kind==='CustomEditor'||row.kind==='Notebook';
     row.key=[row.kind,row.id,row.command,row.extensionId,row.source,row.container,row.resourceUri].join('|');
-    row.searchText=[row.kind,row.label,row.meta,row.extensionId,row.container,row.resourceUri,row.source,row.command,row.id,row.action&&row.action.type,row.evidenceText,row.evidenceStatus].join(' ').toLowerCase();
+      row.searchText=[row.kind,row.label,row.meta,row.extensionId,row.container,row.resourceUri,row.source,row.dynamicSource,row.providerBacked?'provider-backed':'',row.command,row.id,row.action&&row.action.type,row.evidenceText,row.evidenceStatus].join(' ').toLowerCase();
     rows.push(row);
   };
   (data.treeViews||[]).slice(0,8).forEach(item=>push('TreeView',item,item.name||item.id,item.id+' · '+(item.container||'runtime'),item.runtimeAvailable!==false));
@@ -36905,6 +37022,9 @@ function renderExtensionRuntimeSurfacePanel(data){
     ['Webview Messages',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.messageCount)||0):0),0)],
     ['Queued Webview',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.pendingMessageCount)||0):0),0)],
     ['Dropped Webview',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.droppedMessageCount)||0):0),0)],
+    ['Provider Webview',summary.providerBackedWebviews||rows.filter(row=>row.kind==='WebviewView'&&row.providerBacked).length],
+    ['Manifest + Runtime',summary.manifestRuntimeSurfaces||rows.filter(row=>row.source==='manifest+runtime').length],
+    ['Runtime Only',summary.runtimeOnlySurfaces||rows.filter(row=>row.source==='runtime-only').length],
     ['Runtime',rows.filter(row=>row.ready).length],
     ['Manifest',rows.filter(row=>!row.ready).length],
   ];
@@ -36912,20 +37032,22 @@ function renderExtensionRuntimeSurfacePanel(data){
   if(panel){
     panel.dataset.cacheHit=data._frontendCacheHit?'frontend':(summary.cacheHit?'backend':'');
     panel.dataset.runtimeSurfaceCount=String(summary.dynamicSurfaces||rows.length||0);
+    panel.dataset.runtimeOnlySurfaceCount=String(summary.runtimeOnlySurfaces||rows.filter(row=>row.source==='runtime-only').length);
+    panel.dataset.providerBackedWebviewCount=String(summary.providerBackedWebviews||rows.filter(row=>row.kind==='WebviewView'&&row.providerBacked).length);
   }
   summaryEl.innerHTML='';
   chips.forEach(([label,value])=>{
     const chip=document.createElement('span');chip.className='extension-runtime-chip';
     chip.innerHTML='<strong>'+esc(String(value))+'</strong>'+esc(label);
-    if(['TreeView','WebviewView','CustomEditor','Notebook','Command','Menu','Terminal','LM Tool','LM Provider','Chat','Context','Runtime','Manifest','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Resource Rewrites','Resource Roots','Port Mappings','Webview Messages','Queued Webview','Dropped Webview'].includes(label)){
+    if(['TreeView','WebviewView','CustomEditor','Notebook','Command','Menu','Terminal','LM Tool','LM Provider','Chat','Context','Runtime','Manifest','Manifest + Runtime','Runtime Only','Provider Webview','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Resource Rewrites','Resource Roots','Port Mappings','Webview Messages','Queued Webview','Dropped Webview'].includes(label)){
       chip.classList.add('filterable');
       chip.tabIndex=0;
       chip.setAttribute('role','button');
       chip.dataset.filterLabel=label;
       chip.onclick=()=>{
         const kindMap={'Terminal':'TerminalProfile','LM Tool':'LMTool','LM Provider':'LMProvider','Chat':'ChatParticipant','Context':'ChatContext'};
-        const sourceMap={Runtime:'runtime',Manifest:'manifest'};
-        const evidenceMap={'Webview HTML':'rendered','Missing Webview HTML':'missing','Retained Webview':'retained','Evidence Ready':'rendered','Resource Rewrites':'resources','Resource Roots':'resources','Port Mappings':'resources','Webview Messages':'messages','Queued Webview':'queued','Dropped Webview':'dropped'};
+        const sourceMap={Runtime:'manifest+runtime',Manifest:'manifest','Manifest + Runtime':'manifest+runtime','Runtime Only':'runtime-only'};
+        const evidenceMap={'Webview HTML':'rendered','Missing Webview HTML':'missing','Retained Webview':'retained','Evidence Ready':'rendered','Resource Rewrites':'resources','Resource Roots':'resources','Port Mappings':'resources','Webview Messages':'messages','Queued Webview':'queued','Dropped Webview':'dropped','Provider Webview':'rendered'};
         const kindSel=$('extension-runtime-filter-kind'),sourceSel=$('extension-runtime-filter-source'),evidenceSel=$('extension-runtime-filter-evidence');
         if(sourceMap[label]&&sourceSel)sourceSel.value=sourceMap[label];
         else if(evidenceMap[label]&&evidenceSel)evidenceSel.value=evidenceMap[label];
@@ -36952,6 +37074,8 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.kind=row.kind;
       el.dataset.key=row.key||'';
       el.dataset.source=row.source;
+      el.dataset.dynamicSource=row.dynamicSource||row.source||'';
+      el.dataset.providerBacked=row.providerBacked?'1':'0';
       el.dataset.extensionId=row.extensionId||'';
       el.dataset.container=row.container||'';
       el.dataset.resourceUri=row.resourceUri||'';
@@ -36998,6 +37122,7 @@ function renderExtensionRuntimeSurfacePanel(data){
       const meta=document.createElement('div');meta.className='extension-runtime-meta';
       const source=document.createElement('span');source.className='extension-runtime-tag '+(row.ready?'runtime':'manifest');source.textContent=row.source;
       meta.appendChild(source);
+      if(row.providerBacked){const backed=document.createElement('span');backed.className='extension-runtime-tag webview-evidence';backed.textContent='provider-backed';meta.appendChild(backed)}
       if(row.extensionId){const ext=document.createElement('span');ext.className='extension-runtime-tag';ext.textContent=row.extensionId;meta.appendChild(ext)}
       if(row.meta){const detail=document.createElement('span');detail.textContent=row.meta;meta.appendChild(detail)}
       if(row.kind==='WebviewView'){

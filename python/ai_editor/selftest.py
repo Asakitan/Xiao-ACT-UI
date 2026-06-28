@@ -4949,8 +4949,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function refreshWorkflowRunCardState(card,forcedStatus)" in html
            and "function updateWorkflowRunStepStatus(runId,data)" in html
            and "function setAssistantWorkflowRunState(active,opts)" in html
+           and "function assistantWorkflowNormalizeRuns(runs)" in html
+           and "function assistantWorkflowUpsertRun(run)" in html
            and "async function cancelAssistantWorkflowRun()" in html
            and "function workflowResultStatus(result)" in html
+           and "function workflowResultRerunFromCard(card)" in html
            and "function renderWorkflowResultSummary(body,result,launch)" in html
            and "async function runWorkflowEngineAsAssistant(workflow,inputText,launch,refs)" in html
            and "call('run_workflow',id,inputText,launch.workflowRunId,workflowLaunchNativeMetadata(launch))" in html
@@ -4981,6 +4984,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "card.dataset.workflowElapsedMs=String(elapsed);" in html
            and "row.dataset.workflowStepDurationMs=String(Math.max(0,Number(data.durationMs||0)));" in html
            and "card.dataset.workflowDurationMs=String(Number((result&&result.workflowDurationMs)||result&&result.durationMs||0)||0);" in html
+           and "card.dataset.workflowResultOutputVars=steps.map" in html
+           and ".workflow-result-output-var" in html
+           and "strip.dataset.workflowHistoryCount=String(workflowRuns.length);" in html
+           and "workflowRuns:assistantWorkflowNormalizeRuns(src.workflowRuns)" in html
            and "'Workflow mode: '+normalizeWorkflowMode(info.workflowMode||assistantWorkflowMode)" in html
            and "'Execution method: '+method" in html
            and "workflowMethod:canUseBackend?'backend':'prompt'" in html
@@ -6217,13 +6224,16 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'workflow-run-card-status-summary'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-result-state-rendered'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-result-metadata-rendered'" in html
+           and "assistantUiSelfCheckRecord(checks,'workflow-result-actions-and-vars-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-run-button-active-state'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-session-strip-running-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-session-strip-result-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'workflow-session-history-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-session-state-dataset-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-backend-execution-rendered'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-backend-metadata-payload-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-backend-duration-payload-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'workflow-backend-history-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'provider-session-state-smoke'" in html
            and "function assistantWorkflowModeSmokeSnapshot()" in html
            and "function assistantActionResultRestoreSmokeSnapshot()" in html
@@ -11288,7 +11298,9 @@ console.log("frontend word separator behavior ok");
            and ".extension-runtime-row:hover,.extension-runtime-row:focus" in html
            and ".extension-runtime-mid" in html
            and ".extension-runtime-tag" in html
-           and "source:item.runtimeOnly?'runtime-only':(runtime?'runtime':'manifest')" in html
+           and "const dynamicSource=String(item.dynamicSource||item.dynamic_source||item.source||'').trim()" in html
+           and "source:dynamicSource" in html
+           and "providerBacked" in html
            and "row.extensionId" in html
            and "row.action=extensionRuntimeSurfaceAction(kind,item,row);" in html
            and "row.openable=row.action&&row.action.type!=='inspect';" in html
@@ -11307,6 +11319,8 @@ console.log("frontend word separator behavior ok");
            and "if(action.type==='open-chat-participant')" in html
            and "if(action.type==='attach-chat-context')" in html
            and "panel.dataset.runtimeSurfaceCount=String(summary.dynamicSurfaces||rows.length||0);" in html
+           and "panel.dataset.runtimeOnlySurfaceCount=String(summary.runtimeOnlySurfaces||rows.filter(row=>row.source==='runtime-only').length);" in html
+           and "panel.dataset.providerBackedWebviewCount=String(summary.providerBackedWebviews||rows.filter(row=>row.kind==='WebviewView'&&row.providerBacked).length);" in html
            and "panel.dataset.runtimeVisibleCount=String(visible);" in html
            and "panel.dataset.runtimeTotalCount=String(total);" in html
            and "panel.dataset.runtimeLastAction=action.type||'inspect';" in html
@@ -11314,6 +11328,8 @@ console.log("frontend word separator behavior ok");
            and "panel.dataset.runtimeLastActionOk=value==='success'?'1':value==='error'?'0':'';" in html
            and "panel.dataset.runtimeLastRefresh=row.key||row.id||''" in html
            and "el.dataset.key=row.key||'';" in html
+           and "el.dataset.dynamicSource=row.dynamicSource||row.source||'';" in html
+           and "el.dataset.providerBacked=row.providerBacked?'1':'0';" in html
            and "el.dataset.container=row.container||'';" in html
            and "el.dataset.resourceUri=row.resourceUri||'';" in html
            and "el.dataset.action=row.action&&row.action.type||'inspect';" in html
@@ -11345,6 +11361,9 @@ console.log("frontend word separator behavior ok");
            and "action.dataset.actionLabel=row.action&&row.action.label||'Inspect';" in html
            and "el.addEventListener('dblclick',e=>{e.preventDefault();void openExtensionRuntimeSurface(row)});" in html
            and "['Runtime',rows.filter(row=>row.ready).length]" in html
+           and "['Provider Webview',summary.providerBackedWebviews||rows.filter(row=>row.kind==='WebviewView'&&row.providerBacked).length]" in html
+           and "['Manifest + Runtime',summary.manifestRuntimeSurfaces||rows.filter(row=>row.source==='manifest+runtime').length]" in html
+           and "['Runtime Only',summary.runtimeOnlySurfaces||rows.filter(row=>row.source==='runtime-only').length]" in html
            and "['Webview HTML',summary.webviewHtmlAvailable||0]" in html
            and "webviewEvidence:evidence" in html
            and "el.dataset.webviewHtmlAvailable=row.htmlAvailable?'1':'0';" in html
@@ -11388,6 +11407,13 @@ console.log("frontend word separator behavior ok");
            and "def _webview_runtime_evidence(" in app_source
            and "view_record[\"webviewEvidence\"] = webview_evidence" in app_source
            and "\"webviewHtmlAvailable\": webview_html_available" in app_source
+           and "\"runtimeOnlySurfaces\": runtime_only_surfaces" in app_source
+           and "\"manifestBackedSurfaces\": manifest_backed_surfaces" in app_source
+           and "\"manifestRuntimeSurfaces\": manifest_runtime_surfaces" in app_source
+           and "\"manifestOnlySurfaces\": manifest_only_surfaces" in app_source
+           and "\"providerBackedWebviews\": provider_backed_webviews" in app_source
+           and "\"webviewPendingMessages\": webview_pending_messages" in app_source
+           and "\"webviewDroppedMessages\": webview_dropped_messages" in app_source
            and "payload.setdefault(\"summary\", {})[\"cacheHit\"] = True" in app_source
            and "\"cacheHit\": False" in app_source
            and "if len(self._extension_runtime_surface_cache) > 12:" in app_source)
