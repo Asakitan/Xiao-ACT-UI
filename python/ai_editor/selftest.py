@@ -6962,11 +6962,14 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function editorDiagnosticsForRange(range)" in html
             and "diagnostics:editorDiagnosticsForRange(actionRange)" in html
             and "function renderProblemsRows(rows)" in html
-            and "function editorDiagnosticCodeLabel(code)" in html
-            and "function editorDiagnosticTagLabel(tag)" in html
-            and "tags:Array.isArray(item.tags)?item.tags.slice(0,8):[]" in html
-            and "const code=editorDiagnosticCodeLabel(d.code);" in html
-            and "function showEditorCodeActions(actions,position)" in html
+             and "function editorDiagnosticCodeLabel(code)" in html
+             and "function editorDiagnosticTagLabel(tag)" in html
+             and "tags:Array.isArray(item.tags)?item.tags.slice(0,8):[]" in html
+             and "const code=editorDiagnosticCodeLabel(d.code);" in html
+             and "function editorProblemRowsFromDirtyDiff()" in html
+             and "function editorAllProblemRows(diagnostics)" in html
+             and "function updateProblemsTabState(rows)" in html
+             and "function showEditorCodeActions(actions,position)" in html
            and "function codeActionKindText(kind)" in html
            and "async function resolveEditorCodeAction(action,quiet)" in html
            and "editorProviderPayload('codeActionResolve'" in html
@@ -10976,15 +10979,24 @@ console.log("frontend word separator behavior ok");
     _check("frontend problems panel exposes VS Code style row interactions",
            ".problems-summary" in html
            and ".problem-row" in html
-           and "function editorProblemSeverityRank(severity)" in html
-           and "function sortEditorProblemRows(rows)" in html
-           and "function editorProblemSummary(rows)" in html
-           and "function focusEditorProblem(problem)" in html
-           and "function requestEditorQuickFixForProblem(problem,quiet)" in html
-           and "function updateProblemsPanelFromEditorDiagnostics(diagnostics)" in html
-           and "updateProblemsPanelFromEditorDiagnostics(diagnostics)" in html
-           and "requestEditorCodeActionsForKind(quiet===true,'quickfix','quick fix')" in html
-           and "Show quick fixes for this problem" in html
+            and "function editorProblemSeverityRank(severity)" in html
+            and "function sortEditorProblemRows(rows)" in html
+            and "function editorProblemSummary(rows)" in html
+            and "function editorProblemRowsFromDirtyDiff()" in html
+            and "function editorAllProblemRows(diagnostics)" in html
+            and "function updateProblemsTabState(rows)" in html
+            and "function editorScrollProblemIntoView(problem)" in html
+            and "function focusEditorProblem(problem)" in html
+            and "function requestEditorQuickFixForProblem(problem,quiet)" in html
+            and "function updateProblemsPanelFromEditorDiagnostics(diagnostics)" in html
+            and "updateProblemsPanelFromEditorDiagnostics(diagnostics)" in html
+            and "requestEditorCodeActionsForKind(quiet===true,'quickfix','quick fix')" in html
+            and "openActiveEditorDirtyDiff();return true" in html
+            and "row.dataset.problemKind=String(d.kind||'diagnostic');" in html
+            and "row.dataset.problemDiffType=String(d.diffType||'modified');" in html
+            and "fix.dataset.problemAction=d.kind==='diff'?'open-diff':'quick-fix';" in html
+            and "tab.dataset.problemDiff=String(summary.diff);" in html
+            and "Show quick fixes for this problem" in html
            and "Copy problem details" in html
            and "settingsCopyText([sev.toUpperCase(),location,d.message,meta+tagText]" in html)
     _check("frontend built-in settings expose VS Code style metadata",
@@ -15149,11 +15161,15 @@ console.log("command palette quick access helpers ok");
            and "function editorDiffLineClassMaps(originalContent,modifiedContent)" in html
            and "function renderDiffPane(parent,title,content,role,lineClasses)" in html
            and ".editor-diff-row.added" in html
-           and "host.dataset.diffAddedLines" in html
-           and "hasToolbar" in html
-           and "toolbarDatasetOk" in html
-           and "activeHunkRows" in html
-           and "rulerMarkers" in html
+            and "host.dataset.diffAddedLines" in html
+            and "hasToolbar" in html
+            and "toolbarDatasetOk" in html
+            and "activeHunkRows" in html
+            and "problemDiagnosticCount" in html
+            and "problemDiffCount" in html
+            and "problemRowDatasetOk" in html
+            and "diffActionCount" in html
+            and "rulerMarkers" in html
            and "diffDatasetsOk" in html
            and "featureDiffTotal" in html
            and "featureDiffHunks" in html

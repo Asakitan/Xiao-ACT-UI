@@ -401,14 +401,20 @@ body.window-resizing * { cursor:inherit !important; }
 .problems-chip.error { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 45%,var(--border)); }
 .problems-chip.warning { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 45%,var(--border)); }
 .problems-chip.info { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 45%,var(--border)); }
+.problems-chip.diff { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 45%,var(--border)); }
 .problem-row { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:8px; align-items:start;
   padding:5px 8px; border-bottom:1px solid color-mix(in srgb,var(--border) 65%,transparent); cursor:default; }
 .problem-row:hover,.problem-row.active { background:var(--bg-hover); }
+.problem-row.kind-diff { box-shadow:inset 2px 0 0 color-mix(in srgb,var(--fg-accent) 58%,transparent); }
+.problem-row.kind-diff.diff-added { box-shadow:inset 2px 0 0 color-mix(in srgb,var(--fg-success) 70%,transparent); }
+.problem-row.kind-diff.diff-removed { box-shadow:inset 2px 0 0 color-mix(in srgb,var(--fg-error) 70%,transparent); }
+.problem-row.kind-diff.diff-modified { box-shadow:inset 2px 0 0 color-mix(in srgb,var(--fg-accent) 70%,transparent); }
 .problem-severity { font:10px var(--mono); min-width:48px; text-transform:uppercase; }
 .problem-severity.error { color:var(--fg-error); }
 .problem-severity.warning { color:var(--fg-warning); }
 .problem-severity.info { color:var(--fg-accent); }
 .problem-severity.hint { color:var(--fg-dim); }
+.problem-severity.diff { color:var(--fg-accent); }
 .problem-main { min-width:0; }
 .problem-message { color:var(--fg); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .problem-meta { color:var(--fg-dim); font:10px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:2px; }
@@ -13355,6 +13361,7 @@ function renderEditorDirtyDiffDecorations(layer,ta,metrics){
     hunks:hunks.length,
     message:summary.total?('Diff: '+editorDirtyDiffSummaryLabel(summary)+' · '+hunks.length+' hunk'+(hunks.length===1?'':'s')):'Diff: clean'
   });
+  if(typeof updateProblemsTabState==='function')updateProblemsTabState(editorAllProblemRows(_editorDiagnostics));
   if(summary.total){
     const ruler=document.createElement('div');
     ruler.className='editor-dirty-diff-ruler';
@@ -25503,6 +25510,31 @@ function editorProblemRowsFromDiagnostics(diagnostics){
     });
   }).filter(Boolean);
 }
+function editorProblemRowsFromDirtyDiff(){
+  const tab=activeEditorTab(),state=editorDirtyDiffState(),decorations=(state&&state.decorations)||[];
+  const file=tab.filePath||tab.name||editorFileName||'untitled';
+  const hunkList=editorDirtyDiffHunks(decorations);
+  return decorations.map((dec,index)=>{
+    const line=Math.max(0,Number(dec&&dec.line)||0);
+    const type=String(dec&&dec.type||'modified');
+    const hunkIndex=Math.max(0,hunkList.findIndex(h=>line>=h.line&&line<=h.endLine));
+    const label=type==='added'?'Added line':type==='removed'?'Removed line':'Modified line';
+    return {
+      kind:'diff',
+      severity:'diff',
+      diffType:type,
+      source:'Dirty Diff',
+      code:'diff.'+type,
+      message:'Unsaved '+label.toLowerCase(),
+      file,
+      line:line+1,
+      character:1,
+      hunk:hunkIndex>=0?hunkIndex+1:0,
+      range:{start:{line,character:0},end:{line,character:0}},
+      index
+    };
+  });
+}
 function editorProblemSeverityRank(severity){
   const label=String(editorDiagnosticSeverityLabel(severity)||'').toLowerCase();
   if(label==='error')return 0;
@@ -25512,6 +25544,8 @@ function editorProblemSeverityRank(severity){
 }
 function sortEditorProblemRows(rows){
   return (Array.isArray(rows)?rows:[]).slice().sort((a,b)=>
+    (a.kind==='diff'?1:0)-(b.kind==='diff'?1:0)
+    ||
     editorProblemSeverityRank(a.severity)-editorProblemSeverityRank(b.severity)
     || String(a.file||'').localeCompare(String(b.file||''))
     || (Number(a.line)||0)-(Number(b.line)||0)
@@ -25519,9 +25553,11 @@ function sortEditorProblemRows(rows){
     || String(a.message||'').localeCompare(String(b.message||'')));
 }
 function editorProblemSummary(rows){
-  const summary={count:0,errors:0,warnings:0,infos:0,hints:0};
+  const summary={count:0,errors:0,warnings:0,infos:0,hints:0,diff:0,diagnostics:0};
   (Array.isArray(rows)?rows:[]).forEach(row=>{
     summary.count++;
+    if(row&&row.kind==='diff'){summary.diff++;return}
+    summary.diagnostics++;
     const rank=editorProblemSeverityRank(row.severity);
     if(rank===0)summary.errors++;
     else if(rank===1)summary.warnings++;
@@ -25530,31 +25566,74 @@ function editorProblemSummary(rows){
   });
   return summary;
 }
+function editorAllProblemRows(diagnostics){
+  return editorProblemRowsFromDiagnostics(diagnostics||_editorDiagnostics).concat(editorProblemRowsFromDirtyDiff());
+}
+function updateProblemsTabState(rows){
+  rows=sortEditorProblemRows(rows);
+  const tab=document.querySelector('.ptab[data-ptab="problems"]');
+  const badge=tab&&tab.querySelector?tab.querySelector('.count'):null;
+  const summary=editorProblemSummary(rows);
+  if(badge)badge.textContent=summary.count?String(summary.count):'';
+  if(tab){
+    tab.dataset.problemCount=String(summary.count);
+    tab.dataset.problemDiagnostics=String(summary.diagnostics);
+    tab.dataset.problemDiff=String(summary.diff);
+    tab.dataset.problemErrors=String(summary.errors);
+    tab.dataset.problemWarnings=String(summary.warnings);
+    tab.title=summary.count
+      ? 'Problems: '+summary.count+' total · '+summary.errors+' errors · '+summary.warnings+' warnings · '+summary.diff+' diff'
+      : 'Problems: none';
+  }
+  const panel=$('problems-panel');
+  if(panel){
+    panel.dataset.problemCount=String(summary.count);
+    panel.dataset.problemDiagnostics=String(summary.diagnostics);
+    panel.dataset.problemDiff=String(summary.diff);
+    panel.dataset.problemErrors=String(summary.errors);
+    panel.dataset.problemWarnings=String(summary.warnings);
+  }
+  return summary;
+}
+function editorScrollProblemIntoView(problem){
+  if(!(problem&&problem.range&&problem.range.start&&ed))return false;
+  const metrics=editorTextMetrics(ed);
+  const line=Math.max(0,Number(problem.range.start.line)||0);
+  const targetTop=Math.max(0,line*metrics.lineHeight-Math.max(metrics.lineHeight*4,24));
+  ed.scrollTop=targetTop;
+  if($('line-nums'))$('line-nums').scrollTop=ed.scrollTop;
+  renderEditorVisualDecorations();
+  return true;
+}
 function focusEditorProblem(problem){
   if(!(problem&&problem.range&&problem.range.start))return false;
   ed.focus();
   const off=editorOffsetFromPosition(ed.value,problem.range.start);
   const end=problem.range.end?editorOffsetFromPosition(ed.value,problem.range.end):off;
   ed.selectionStart=off;ed.selectionEnd=Math.max(off,end);
+  editorScrollProblemIntoView(problem);
   updateCursorPos();renderEditorDiagnostics(_editorDiagnostics);
+  setStatus((problem.kind==='diff'?'Diff':'Problem')+' at Ln '+String((Number(problem.line)||0)||((Number(problem.range.start.line)||0)+1)));
   return true;
 }
 async function requestEditorQuickFixForProblem(problem,quiet){
   if(!focusEditorProblem(problem))return false;
+  if(problem&&problem.kind==='diff'){openActiveEditorDirtyDiff();return true}
   await requestEditorCodeActionsForKind(quiet===true,'quickfix','quick fix');
   return true;
 }
 function updateProblemsPanelFromEditorDiagnostics(diagnostics){
   const panel=$('problems-panel');
+  const rows=editorAllProblemRows(diagnostics);
+  updateProblemsTabState(rows);
   if(!panel||panel.style.display==='none')return;
-  renderProblemsRows(editorProblemRowsFromDiagnostics(diagnostics));
+  renderProblemsRows(rows);
 }
 function renderProblemsRows(rows){
   const el=$('problems-content');if(!el)return;
-  const badge=document.querySelector('.ptab[data-ptab="problems"] .count');
   rows=sortEditorProblemRows(rows);
   const count=rows.length,summary=editorProblemSummary(rows);
-  if(badge)badge.textContent=count;
+  updateProblemsTabState(rows);
   if(!count){el.style.color='var(--fg-dim)';el.textContent='No problems detected.';return}
   el.innerHTML='';el.style.color='';
   const head=document.createElement('div');head.className='problems-summary';
@@ -25562,7 +25641,8 @@ function renderProblemsRows(rows){
     ['error',summary.errors,'Errors'],
     ['warning',summary.warnings,'Warnings'],
     ['info',summary.infos,'Info'],
-    ['hint',summary.hints,'Hints']
+    ['hint',summary.hints,'Hints'],
+    ['diff',summary.diff,'Diff']
   ].forEach(item=>{
     if(!item[1])return;
     const chip=document.createElement('span');chip.className='problems-chip '+item[0];chip.textContent=item[2]+': '+item[1];head.appendChild(chip);
@@ -25570,13 +25650,20 @@ function renderProblemsRows(rows){
   const total=document.createElement('span');total.className='problems-chip';total.textContent='Total: '+count;head.appendChild(total);
   el.appendChild(head);
   rows.forEach(d=>{
-    const sev=editorDiagnosticSeverityLabel(d.severity);
+    const sev=d.kind==='diff'?'diff':editorDiagnosticSeverityLabel(d.severity);
     const location=d.file?String(d.file)+(d.line?':'+d.line:''):'';
     const code=editorDiagnosticCodeLabel(d.code);
     const tags=(Array.isArray(d.tags)?d.tags:[]).map(editorDiagnosticTagLabel).filter(Boolean);
     const meta=[d.source,code].filter(Boolean).join(' ');
     const tagText=tags.length?' ['+tags.join(', ')+']':'';
-    const row=document.createElement('div');row.className='problem-row severity-'+sev;row.tabIndex=0;
+    const row=document.createElement('div');row.className='problem-row severity-'+sev+(d.kind==='diff'?' kind-diff diff-'+String(d.diffType||'modified'):'');row.tabIndex=0;
+    row.dataset.problemKind=String(d.kind||'diagnostic');
+    row.dataset.problemSeverity=sev;
+    row.dataset.problemLine=String(d.line||'');
+    row.dataset.problemColumn=String(d.character||'');
+    row.dataset.problemSource=String(d.source||'');
+    row.dataset.problemCode=String(code||'');
+    if(d.kind==='diff')row.dataset.problemDiffType=String(d.diffType||'modified');
     const severity=document.createElement('div');severity.className='problem-severity '+sev;severity.textContent=sev;
     const main=document.createElement('div');main.className='problem-main';
     const message=document.createElement('div');message.className='problem-message';message.textContent=String(d.message||'');
@@ -25584,9 +25671,11 @@ function renderProblemsRows(rows){
     detail.textContent=[location,meta+tagText].filter(Boolean).join(' · ');
     main.appendChild(message);main.appendChild(detail);
     const actions=document.createElement('div');actions.className='problem-actions';
-    const fix=document.createElement('button');fix.type='button';fix.textContent='Quick Fix';fix.title='Show quick fixes for this problem';
+    const fix=document.createElement('button');fix.type='button';fix.textContent=d.kind==='diff'?'Diff':'Quick Fix';fix.title=d.kind==='diff'?'Open side-by-side diff':'Show quick fixes for this problem';
+    fix.dataset.problemAction=d.kind==='diff'?'open-diff':'quick-fix';
     fix.onclick=ev=>{ev.preventDefault();ev.stopPropagation();requestEditorQuickFixForProblem(d,false)};
     const copy=document.createElement('button');copy.type='button';copy.textContent='Copy';copy.title='Copy problem details';
+    copy.dataset.problemAction='copy';
     copy.onclick=ev=>{ev.preventDefault();ev.stopPropagation();settingsCopyText([sev.toUpperCase(),location,d.message,meta+tagText].filter(Boolean).join(' '),'Problem')};
     actions.appendChild(fix);actions.appendChild(copy);
     row.appendChild(severity);row.appendChild(main);row.appendChild(actions);
@@ -25600,18 +25689,18 @@ function renderProblemsRows(rows){
 async function _refreshProblems(){
   const el=$('problems-content');if(!el)return;
   el.style.color='var(--fg-dim)';el.textContent='Checking...';
-  const currentRows=editorProblemRowsFromDiagnostics(_editorDiagnostics);
+  const currentRows=editorAllProblemRows(_editorDiagnostics);
   if(currentRows.length){renderProblemsRows(currentRows);return}
   const wrap=$('editor-container');
   if(wrap&&wrap.style.display!=='none'&&typeof requestEditorDiagnostics==='function'){
     await requestEditorDiagnostics(true);
-    const refreshedRows=editorProblemRowsFromDiagnostics(_editorDiagnostics);
+    const refreshedRows=editorAllProblemRows(_editorDiagnostics);
     if(refreshedRows.length){renderProblemsRows(refreshedRows);return}
   }
   try{
     const r=await call('get_diagnostics');
     if(r&&Array.isArray(r.diagnostics)&&r.diagnostics.length>0){
-      renderProblemsRows(r.diagnostics);
+      renderProblemsRows(editorAllProblemRows(r.diagnostics));
     }else{renderProblemsRows([])}
   }catch(e){renderProblemsRows([])}
 }
@@ -44239,6 +44328,7 @@ async function terminalUiSelfCheckSnapshot(){
 window.terminalUiSelfCheckSnapshot=terminalUiSelfCheckSnapshot;
 function editorDirtyDiffSelfCheckSnapshot(){
   const oldActive=activeTab,oldTabs=tabs.map(t=>({...t})),oldValue=ed.value,oldDirty=editorDirty,oldLang=editorLang;
+  const oldDiagnostics=Array.isArray(_editorDiagnostics)?_editorDiagnostics.slice():[],oldDiagnosticLength=_editorDiagnosticContentLength;
   try{
     const id=900000+Math.floor(Math.random()*1000);
     const tab={id,name:'diff-selfcheck.txt',content:'alpha\nbeta\nold\nomega',originalContent:'alpha\nbeta\nold\nomega',language:'plaintext',cursor:0,filePath:'',workspacePath:'',runtimeMode:'text',customEditor:null,webview:null};
@@ -44264,6 +44354,24 @@ function editorDirtyDiffSelfCheckSnapshot(){
     const diffDatasetsOk=!!(diffHost&&diffHost.classList.contains('active')&&diffHost.dataset.diffAddedLines!==undefined&&diffHost.dataset.diffModifiedLines!==undefined&&diffHost.dataset.diffRemovedLines!==undefined&&diffHost.dataset.diffHunks!==undefined);
     const featureState=editorLanguageFeatureStateSnapshot();
     const featureAggregate=editorLanguageFeatureAggregateSnapshot();
+    _editorDiagnostics=[normalizeEditorDiagnostic({
+      range:{start:{line:1,character:0},end:{line:1,character:12}},
+      message:'Selfcheck diagnostic problem.',
+      severity:'warning',
+      source:'Selfcheck',
+      code:'selfcheck.problem'
+    })].filter(Boolean);
+    _editorDiagnosticContentLength=String(ed.value||'').length;
+    renderEditorDiagnostics(_editorDiagnostics);
+    renderProblemsRows(editorAllProblemRows(_editorDiagnostics));
+    const problemsTab=document.querySelector('.ptab[data-ptab="problems"]');
+    const problemRows=Array.from(document.querySelectorAll('#problems-content .problem-row'));
+    const diagnosticRows=problemRows.filter(row=>row.dataset.problemKind==='diagnostic');
+    const diffRows=problemRows.filter(row=>row.dataset.problemKind==='diff');
+    const quickFixButtons=Array.from(document.querySelectorAll('#problems-content [data-problem-action="quick-fix"]'));
+    const diffButtons=Array.from(document.querySelectorAll('#problems-content [data-problem-action="open-diff"]'));
+    const summaryChips=Array.from(document.querySelectorAll('#problems-content .problems-chip')).map(chip=>chip.textContent);
+    const focusedDiff=diffRows.length?focusEditorProblem(editorAllProblemRows(_editorDiagnostics).find(row=>row.kind==='diff')):false;
     setActiveEditorBaselineContent(ed.value);
     let reset=editorDirtyDiffState();
     return {
@@ -44294,6 +44402,16 @@ function editorDirtyDiffSelfCheckSnapshot(){
       featureIssueCount:featureAggregate.issueCount,
       featureSummaryLabel:featureAggregate.label,
       featureSummaryText:featureAggregate.summary.join(' | '),
+      problemCount:problemRows.length,
+      problemDiagnosticCount:diagnosticRows.length,
+      problemDiffCount:diffRows.length,
+      problemTabCount:problemsTab?problemsTab.dataset.problemCount:'',
+      problemTabDiff:problemsTab?problemsTab.dataset.problemDiff:'',
+      problemRowDatasetOk:problemRows.every(row=>row.dataset.problemKind&&row.dataset.problemLine&&row.dataset.problemSource!==undefined&&row.dataset.problemCode!==undefined),
+      quickFixCount:quickFixButtons.length,
+      diffActionCount:diffButtons.length,
+      problemSummaryText:summaryChips.join(' | '),
+      focusedProblem:focusedDiff,
       resetTotal:reset.summary&&reset.summary.total||0,
       pass:(clean.summary&&clean.summary.total||0)===0&&
         (dirty.summary&&dirty.summary.total||0)>0&&markerCount>0&&
@@ -44304,12 +44422,17 @@ function editorDirtyDiffSelfCheckSnapshot(){
         ((featureState.features&&featureState.features.diff&&featureState.features.diff.hunks)||0)>0&&
         featureAggregate.activeFeatures.includes('diff')&&featureAggregate.diffTotal>0&&
         String(featureAggregate.label||'').includes('diff')&&
+        problemRows.length>=2&&diagnosticRows.length>=1&&diffRows.length>=1&&
+        quickFixButtons.length>=1&&diffButtons.length>=1&&
+        problemsTab&&Number(problemsTab.dataset.problemDiff)>0&&
+        problemRows.every(row=>row.dataset.problemKind&&row.dataset.problemLine)&&focusedDiff&&
         (reset.summary&&reset.summary.total||0)===0
     };
   }finally{
     tabs=oldTabs;activeTab=oldActive;ed.value=oldValue;editorDirty=oldDirty;editorLang=oldLang;
+    _editorDiagnostics=oldDiagnostics;_editorDiagnosticContentLength=oldDiagnosticLength;
     _editorDirtyDiffCache={key:'',decorations:[],summary:null};
-    renderTabs();updateLineNums();renderEditorVisualDecorations();
+    renderTabs();updateLineNums();renderEditorVisualDecorations();renderProblemsRows(editorAllProblemRows(_editorDiagnostics));
   }
 }
 window.editorDirtyDiffSelfCheckSnapshot=editorDirtyDiffSelfCheckSnapshot;
