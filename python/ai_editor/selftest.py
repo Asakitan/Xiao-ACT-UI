@@ -4353,6 +4353,13 @@ def test_phase1_ai_editor_regressions() -> None:
             and ".settings-vscode-calm .settings-control-frame { max-width:680px;" in html
             and ".settings-vscode-calm .settings-titlebar { display:none;" in html
             and ".settings-vscode-calm.settings-details-open .settings-titlebar { display:flex; }" in html
+            and ".settings-vscode-calm:not(.settings-details-open) .settings-scope-control { display:none; }" in html
+            and ".settings-vscode-calm .settings-nav-scope" in html
+            and ".settings-vscode-calm .settings-nav-scope-tabs" in html
+            and "scope.id='settings-nav-scope'" in html
+            and "scopeTabs.className='settings-target-tabs settings-nav-scope-tabs'" in html
+            and "settingsTargetDisplayName(target)" in html
+            and "const visible=buttons.filter(btn=>btn.offsetParent!==null" in html
             and ".settings-vscode-calm .settings-query-box #settings-details-toggle" in html
             and 'document.querySelector(\'.settings-query-box #settings-details-toggle\')' in html
             and 'onkeydown="settingsHandleTargetTabKeydown(event)"' in html
@@ -10312,6 +10319,10 @@ console.log("frontend word separator behavior ok");
             and "hasNavFilterCount" in html
             and "hasSectionContextActions" in html
             and "hasQueryBox" in html
+            and "hasDefaultHiddenTopScope" in html
+            and "hasSidebarScopeControl" in html
+            and "hasSidebarScopeVerticalList" in html
+            and "hasSidebarScopeActiveState" in html
              and "hasScopeControl" in html
              and "hasNavHeading" in html
              and "hasNavCountPills" in html

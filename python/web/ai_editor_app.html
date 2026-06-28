@@ -2993,6 +2993,20 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-nav-item { padding:4px 8px 4px 0; gap:8px; border-radius:2px; }
 .settings-vscode-calm .settings-nav-item.active { box-shadow:inset 2px 0 0 var(--fg-accent);
   background:color-mix(in srgb,var(--bg-hover) 78%,transparent); padding-left:8px; }
+.settings-vscode-calm:not(.settings-details-open) .settings-scope-control { display:none; }
+.settings-vscode-calm.settings-details-open .settings-scope-control { display:inline-flex; }
+.settings-vscode-calm:not(.settings-details-open) .settings-search-row { grid-template-columns:minmax(520px,760px);
+  padding-bottom:6px; border-bottom:0; }
+.settings-vscode-calm .settings-nav-scope { padding:0 8px 10px 0; margin:0 0 8px;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 54%,transparent); }
+.settings-vscode-calm .settings-nav-scope-title { padding:0 0 5px; color:var(--fg-dim); font:10px var(--mono);
+  text-transform:uppercase; }
+.settings-vscode-calm .settings-nav-scope-tabs { display:grid; grid-template-columns:1fr; gap:2px; border:0;
+  background:transparent; overflow:visible; }
+.settings-vscode-calm .settings-nav-scope-tabs button { justify-content:space-between; min-height:27px; height:27px;
+  border:0; border-left:2px solid transparent; border-radius:2px; padding:0 8px 0 7px; background:transparent; }
+.settings-vscode-calm .settings-nav-scope-tabs button.active { border-left-color:var(--fg-accent); border-bottom-color:transparent;
+  background:color-mix(in srgb,var(--bg-hover) 78%,transparent); }
 .settings-vscode-calm .settings-main { padding:15px 54px 40px; background:var(--bg); }
 .settings-vscode-calm .settings-main > .settings-section,
 .settings-vscode-calm .settings-main > details.settings-section,
@@ -28732,6 +28746,28 @@ function renderSettingsNav(){
   emptyFilter.id='settings-nav-filter-empty';
   emptyFilter.className='settings-nav-filter-empty';
   nav.appendChild(emptyFilter);
+  const scope=document.createElement('div');
+  scope.className='settings-nav-scope';
+  scope.id='settings-nav-scope';
+  const scopeTitle=document.createElement('div');
+  scopeTitle.className='settings-nav-scope-title';
+  scopeTitle.textContent='Scope';
+  const scopeTabs=document.createElement('div');
+  scopeTabs.className='settings-target-tabs settings-nav-scope-tabs';
+  scopeTabs.setAttribute('role','tablist');
+  scopeTabs.setAttribute('aria-label','Settings target in navigation');
+  scopeTabs.onkeydown=settingsHandleTargetTabKeydown;
+  ['user','workspace','extensions'].forEach(target=>{
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.dataset.settingsTarget=target;
+    btn.setAttribute('aria-controls','settings-main');
+    btn.textContent=settingsTargetDisplayName(target);
+    btn.onclick=()=>selectSettingsTarget(target,{preserveSearch:true,focusSearch:true});
+    scopeTabs.appendChild(btn);
+  });
+  scope.appendChild(scopeTitle);scope.appendChild(scopeTabs);
+  nav.appendChild(scope);
   const personal=document.createElement('div');
   personal.className='settings-nav-memory';
   personal.id='settings-nav-personal';
@@ -28835,7 +28871,9 @@ function focusSettingsSearch(){
   const input=$('settings-search');if(input){input.focus();input.select&&input.select();}
 }
 function settingsTargetButtons(){
-  return Array.from(document.querySelectorAll('.settings-target-tabs [data-settings-target]'));
+  const buttons=Array.from(document.querySelectorAll('.settings-target-tabs [data-settings-target]'));
+  const visible=buttons.filter(btn=>btn.offsetParent!==null&&String(getComputedStyle(btn).display)!=='none');
+  return visible.length?visible:buttons;
 }
 function settingsTargetIndex(target){
   const buttons=settingsTargetButtons();
@@ -29044,6 +29082,10 @@ function settingsUiSelfCheckSnapshot(){
   const quickLabels=quickNav?Array.from(quickNav.querySelectorAll('button')).map(btn=>String(btn.textContent||'').trim()):[];
   const searchRow=document.querySelector('.settings-search-row');
   const scopeControl=document.querySelector('.settings-scope-control');
+  const navScope=$('settings-nav-scope');
+  const navScopeTabs=navScope?navScope.querySelector('.settings-nav-scope-tabs'):null;
+  const navScopeButtons=navScope?Array.from(navScope.querySelectorAll('[data-settings-target]')):[];
+  const topScopeHidden=!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&scopeControl&&String(getComputedStyle(scopeControl).display)==='none');
   const topQuickFilters=$('settings-quick-filters');
   const rowActionMenu=document.querySelector('.settings-row-action-menu');
   const rowActionButtons=Array.from(document.querySelectorAll('.settings-row-action'));
@@ -29081,6 +29123,10 @@ function settingsUiSelfCheckSnapshot(){
     hasDetailsOnlyJumpbar:!!(jumpbar&&settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&String(getComputedStyle(jumpbar).display)==='none'),
     hasSidebarQuickSettingsActions:!!(quickNav&&String(getComputedStyle(quickNav).display)!=='none'&&quickLabels.includes('Commonly Used')&&quickLabels.includes('Extensions')&&quickLabels.includes('Settings JSON')),
     hasCompactSearchScopeStack:!!(searchRow&&scopeControl&&String(getComputedStyle(searchRow).gridTemplateColumns||'').split(' ').filter(Boolean).length<=1&&String(getComputedStyle(scopeControl).justifySelf||'')==='start'),
+    hasDefaultHiddenTopScope:topScopeHidden,
+    hasSidebarScopeControl:!!(navScope&&navScopeTabs&&navScopeButtons.length>=3&&String(getComputedStyle(navScope).display)!=='none'),
+    hasSidebarScopeVerticalList:!!(navScopeTabs&&String(getComputedStyle(navScopeTabs).display)==='grid'&&String(getComputedStyle(navScopeTabs).gridTemplateColumns||'').split(' ').filter(Boolean).length===1),
+    hasSidebarScopeActiveState:navScopeButtons.some(btn=>btn.dataset.settingsTarget===currentSettingsTarget&&btn.classList.contains('active')&&btn.getAttribute('aria-selected')==='true'),
     hasCalmDefaultSettingsMode:!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')),
     hasSearchPrimaryCaption:!!(caption&&document.querySelector('.settings-search-primary .settings-query-box #settings-search')),
     hasSearchClearButton:!!($('settings-clear-search')&&document.querySelector('.settings-query-box .settings-query-clear')),
