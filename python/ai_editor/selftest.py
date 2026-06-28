@@ -6865,6 +6865,9 @@ def test_phase1_ai_editor_regressions() -> None:
             and "meta.tokenizer==='textmate'||scopes" in html
             and "wrap.classList.toggle('syntax-on'" in html
             and "highlightCodeWithSemanticTokens(code,editorLang,_editorSemanticTokens)" in html
+            and "function editorSemanticTokenSummary(payload,code)" in html
+            and "layer.dataset.semanticTokenCount=String(semanticSummary.count);" in html
+            and "layer.dataset.semanticTokenTypes=semanticSummary.types.join(',');" in html
             and "highlightCode(code,editorLang)" in html
             and "syncEditorSyntaxScroll()" in html
             and "EXTENSION_ICON_THEME" in html
@@ -6971,10 +6974,13 @@ def test_phase1_ai_editor_regressions() -> None:
              and "function updateProblemsTabState(rows)" in html
              and "function showEditorCodeActions(actions,position)" in html
            and "function codeActionKindText(kind)" in html
+           and "function codeActionKindBucket(kind)" in html
            and "async function resolveEditorCodeAction(action,quiet)" in html
            and "editorProviderPayload('codeActionResolve'" in html
            and "editorRequestLanguageProvider('codeActionResolve'" in html
            and "updateEditorLanguageFeatureState('codeActions'" in html
+           and "row.dataset.codeActionBucket=bucket;" in html
+           and "box.dataset.codeActionPreferred=String(summary.preferred);" in html
            and "aria-disabled" in html
            and ".filter(action=>!!action)" in html
            and "function editorCodeActionEdits(action)" in html
@@ -7180,6 +7186,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "async function requestEditorFormattingProviders()" in html
            and "editorProviderPayload('formattingProviders',{matchedOnly:true})" in html
            and "editorRequestLanguageProvider('formattingProviders'" in html
+           and "function editorFormatterProviderIsDefault(provider)" in html
+           and "palette.dataset.formatterCount=String(providers.length);" in html
+           and "d.dataset.formatterProviderId=provider.providerId;" in html
            and "function showEditorFormatterPicker(providers)" in html
            and "async function formatDocumentWithProvider()" in html
            and "function editorFormatOnTypeEnabled()" in html
@@ -8681,6 +8690,7 @@ console.log("frontend suggest option behavior ok");
             "codeActionTitle",
             "codeActionDisabledText",
             "codeActionKindText",
+            "codeActionKindBucket",
             "codeActionDetail",
             "showEditorCodeActions",
         ]
@@ -8724,6 +8734,7 @@ function makeElement(tag,text){
     title: "",
     style: {},
     attrs: {},
+    dataset: {},
     children: [],
     appendChild(child){
       this.children.push(child);
@@ -8829,14 +8840,23 @@ assert(showEditorHover([], { line: 0, character: 0 }) === false
        "empty hover closes widget");
 showEditorCodeActions([
   { title: "disabled fix", disabled: { reason: "needs selection" }, kind: { value: "quickfix" } },
-  { title: "enabled refactor", kind: { value: "refactor.extract" } },
+  { title: "enabled refactor", kind: { value: "refactor.extract" }, isPreferred: true, source: "selftest.ext" },
 ], { line: 0, character: 0 });
 assert(actionsBox.children.length === 2
        && actionsBox.children[0].className.includes("disabled")
        && actionsBox.children[0].attrs["aria-disabled"] === "true"
+       && actionsBox.children[0].dataset.codeActionBucket === "quickfix"
+       && actionsBox.children[1].dataset.codeActionPreferred === "1"
+       && actionsBox.children[1].dataset.codeActionSource === "selftest.ext"
+       && actionsBox.dataset.codeActionPreferred === "1"
+       && actionsBox.dataset.codeActionDisabled === "1"
+       && actionsBox.dataset.codeActionQuickfix === "1"
+       && actionsBox.dataset.codeActionRefactor === "1"
        && nodeText(actionsBox.children[0]).includes("needs selection")
+       && nodeText(actionsBox.children[1]).includes("refactor")
+       && codeActionKindBucket({ value: "source.organizeImports" }) === "source"
        && codeActionDetail({ kind: { value: "refactor.extract" } }) === "refactor.extract",
-       "code actions render disabled reason and object kind");
+       "code actions render disabled reason preferred bucket and object kind");
 console.log("frontend hover and code action rendering ok");
 """
         js_path = ""
@@ -9066,7 +9086,7 @@ async function call(method,payload){
   updateEditorLanguageFeatureState("diagnostics", "ready", severity);
   updateEditorLanguageFeatureState("codeActions", "ready", { count:2, diagnostics:3, message:"Code actions: 2 quick fixes" });
   updateEditorLanguageFeatureState("formatting", "ready", { kind:"document", edits:1, applied:true, message:"Formatting: document 1 edit" });
-  updateEditorLanguageFeatureState("semanticTokens", "ready", { source:"range", count:4, resultId:"sem-1", message:"Semantic: 4 range" });
+  updateEditorLanguageFeatureState("semanticTokens", "ready", { source:"range", count:4, resultId:"sem-1", tokenTypes:["class","function"], tokenTypeCount:2, message:"Semantic: 4 range" });
   updateEditorLanguageFeatureState("diff", "ready", { mode:"dirty", added:1, modified:1, removed:0, total:2, message:"Diff: +1 ~1 -0" });
   const snapshot = editorLanguageFeatureStateSnapshot();
   assert(snapshot.features.diagnostics.errors === 1
@@ -9076,6 +9096,8 @@ async function call(method,payload){
          && snapshot.features.diff.total === 2
          && snapshot.title.includes("Semantic: 4 range")
          && languageStatus.dataset.semanticTokens === "4"
+         && languageStatus.dataset.semanticTokenTypeCount === "2"
+         && languageStatus.dataset.semanticTokenTypes === "class,function"
          && languageStatus.dataset.diffTotal === "2",
          "language feature state snapshot exposes diagnostics actions formatting semantic tokens and diff");
 
