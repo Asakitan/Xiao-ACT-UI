@@ -10092,11 +10092,22 @@ console.log("frontend word separator behavior ok");
              and "function settingsReviewRowSection(row)" in html
              and "function settingsFindReviewItemRow(item)" in html
              and "function settingsFocusReviewRow(kind,direction)" in html
+             and "function settingsReviewActiveKind()" in html
+             and "function settingsPreviewRows()" in html
+             and "function settingsMoveSavePreviewFocus(delta)" in html
+             and "function settingsCloseSavePreview()" in html
+             and "function settingsSavePreviewKeydown(ev)" in html
              and "function settingsReviewItem(kind,row,options)" in html
              and "function settingsGroupSavePreviewItems(items)" in html
+             and "className='settings-save-preview-summary'" in html
+             and "summary.dataset.settingsPreviewSummary='1'" in html
              and "className='before-after'" in html
              and "className='settings-save-preview-group'" in html
+             and "groupRow.setAttribute('role','heading');" in html
              and "row.setAttribute('role','button');" in html
+             and "row.dataset.settingsPreviewLabel=item.label||'';" in html
+             and "row.dataset.settingsPreviewSection=item.section||group.section||'';" in html
+             and "row.dataset.settingsPreviewTarget=item.target||settingsTargetDisplayName(currentSettingsTarget);" in html
              and "row.onkeydown=ev=>{if(ev.key==='Enter'||ev.key===' ')" in html
              and "target.className='review-target'" in html
              and "data-settings-filter-token=\"@overrides\"" in html
@@ -10105,12 +10116,21 @@ console.log("frontend word separator behavior ok");
              and "function settingsApplyReviewFilter(kind)" in html
              and "function settingsClearReviewFilters()" in html
              and "function settingsHasReviewFilter()" in html
+             and "host.dataset.settingsReviewActive=activeKind;" in html
+             and "host.dataset.settingsReviewDirty=dirty?'1':'0';" in html
+             and "host.dataset.settingsReviewPreviewItems=String((state.previewItems||[]).length);" in html
+             and "pill.dataset.settingsReviewPill=label.toLowerCase();" in html
+             and "pill.setAttribute('aria-pressed'" in html
+             and "btn.dataset.settingsReviewAction=label.toLowerCase().replace" in html
              and "Show Modified','Filter the Settings list to visible modified settings" in html
              and "Show Overrides','Filter the Settings list to visible target overrides" in html
              and "Show Errors','Filter the Settings list to visible invalid settings" in html
              and "Clear Review','Remove modified override and error review filters" in html
              and "host.dataset.settingsReviewModified=String(state.modified.length);" in html
              and "host.dataset.settingsReviewPreviewGroups=String((state.previewGroups||[]).length);" in html
+             and "host.dataset.settingsPreviewOpen=open?'1':'0';" in html
+             and "host.dataset.settingsPreviewTarget=(state&&state.target)||settingsTargetDisplayName(currentSettingsTarget);" in html
+             and "host.setAttribute('role','region');" in html
              and "button.review-pill" in html
              and "addPill('Modified',state.modified.length,'',()=>settingsApplyReviewFilter('modified'))" in html
              and "addPill('Overrides',state.overrides.length,'',()=>settingsApplyReviewFilter('overrides'))" in html
@@ -10281,9 +10301,17 @@ console.log("frontend word separator behavior ok");
              and "hasReviewFilterActions" in html
              and "hasReviewPillActions" in html
              and "hasReviewChangeNavigation" in html
+             and "hasReviewActiveState" in html
+             and "hasReviewActionMetadata" in html
+             and "hasReviewPillPressedState" in html
              and "hasGroupedSavePreview" in html
+             and "hasSavePreviewRegion" in html
+             and "hasSavePreviewSummary" in html
+             and "hasSavePreviewDatasets" in html
              and "hasSavePreviewGroupRows" in html
              and "hasSavePreviewKeyboardRows" in html
+             and "hasSavePreviewKeyboardNavigation" in html
+             and "hasSavePreviewRowDatasets" in html
              and "hasSavePreviewTargetChips" in html
              and "hasOverridesFilterToken" in html
              and "function settingsAppendExtensionDetailPanel(host,row)" in html
@@ -10326,6 +10354,11 @@ console.log("frontend word separator behavior ok");
             and "window.settingsGroupSavePreviewItems=settingsGroupSavePreviewItems;" in html
              and "window.settingsClearReviewFilters=settingsClearReviewFilters;" in html
              and "window.settingsHasReviewFilter=settingsHasReviewFilter;" in html
+             and "window.settingsReviewActiveKind=settingsReviewActiveKind;" in html
+             and "window.settingsPreviewRows=settingsPreviewRows;" in html
+             and "window.settingsMoveSavePreviewFocus=settingsMoveSavePreviewFocus;" in html
+             and "window.settingsCloseSavePreview=settingsCloseSavePreview;" in html
+             and "window.settingsSavePreviewKeydown=settingsSavePreviewKeydown;" in html
              and "window.settingsSearchModifiedLanguageOverride=settingsSearchModifiedLanguageOverride;" in html
              and "window.settingsLanguageSuggestionIds=settingsLanguageSuggestionIds;" in html
              and "String(ev.key||'').toLowerCase()==='n'" in html
