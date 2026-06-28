@@ -1579,6 +1579,21 @@ pre.code-block code .type { color:var(--fg-type); }
   border-radius:999px; background:var(--bg3); color:var(--fg-dim); font:10px var(--mono);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; }
 .terminal-recent-command:hover,.terminal-recent-command:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
+.terminal-context-bar { min-height:28px; display:flex; align-items:center; gap:6px; padding:3px 12px;
+  border-top:1px solid color-mix(in srgb,var(--border) 55%,transparent);
+  background:color-mix(in srgb,var(--bg-panel) 90%,var(--bg2)); color:var(--fg-dim);
+  font:11px var(--mono); flex-shrink:0; }
+.terminal-context-main { min-width:0; flex:1; display:flex; align-items:center; gap:6px; }
+.terminal-context-chip { max-width:260px; min-height:18px; display:inline-flex; align-items:center; gap:4px;
+  padding:0 6px; border:1px solid var(--border); border-radius:3px;
+  background:color-mix(in srgb,var(--bg3) 72%,transparent); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.terminal-context-chip.workspace { color:var(--fg); }
+.terminal-context-chip.auto { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 38%,var(--border)); }
+.terminal-context-chip.warn { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 42%,var(--border)); }
+.terminal-context-actions { display:inline-flex; align-items:center; gap:3px; }
+.terminal-context-actions button { height:20px; padding:0 7px; border:1px solid var(--border); border-radius:3px;
+  background:transparent; color:var(--fg-dim); font:10px var(--sans); cursor:pointer; }
+.terminal-context-actions button:hover,.terminal-context-actions button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
 .terminal-status-line { display:flex; align-items:center; gap:8px; min-height:24px; padding:0 12px;
   border-top:1px solid var(--border); background:var(--bg-panel); color:var(--fg-dim);
   font:11px var(--mono); flex-shrink:0; }
@@ -2919,22 +2934,39 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-searchbar,
 .settings-vscode-calm .settings-shell { width:100%; }
 .settings-vscode-calm .settings-titlebar { padding:7px 32px 3px; border-bottom:1px solid transparent; }
+.settings-vscode-calm .settings-title-actions { gap:3px; }
+.settings-vscode-calm:not(.settings-details-open) .settings-toolbar-strip { display:none; }
+.settings-vscode-calm.settings-details-open .settings-toolbar-strip { display:inline-flex; }
 .settings-vscode-calm .settings-searchbar { padding:4px 32px 0; }
-.settings-vscode-calm .settings-search-row { grid-template-columns:minmax(520px,760px) minmax(260px,auto);
-  justify-content:start; gap:18px; }
+.settings-vscode-calm .settings-search-row { grid-template-columns:minmax(520px,760px);
+  justify-content:start; gap:6px; align-items:start; }
+.settings-vscode-calm .settings-scope-control { justify-self:start; gap:8px; min-height:28px; }
+.settings-vscode-calm .settings-scope-label { color:color-mix(in srgb,var(--fg-dim) 88%,var(--fg)); }
+.settings-vscode-calm .settings-target-tabs { gap:0; border:0; border-bottom:1px solid var(--border);
+  border-radius:0; background:transparent; overflow:visible; }
+.settings-vscode-calm .settings-target-tabs button { height:26px; min-width:72px; padding:0 9px;
+  border:0; border-bottom:1px solid transparent; border-radius:0; background:transparent; }
+.settings-vscode-calm .settings-target-tabs button.active { color:var(--fg); background:transparent; border-bottom-color:var(--fg-accent); }
 .settings-vscode-calm .settings-query-box { border-color:color-mix(in srgb,var(--border) 78%,transparent);
   box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--bg-input) 60%,transparent); }
 .settings-vscode-calm .settings-query-box:focus-within { border-color:var(--border-focus);
   box-shadow:0 0 0 1px color-mix(in srgb,var(--border-focus) 50%,transparent); }
-.settings-vscode-calm .settings-workbench-status { display:flex; max-width:1040px; padding:5px 0 4px;
+.settings-vscode-calm .settings-jumpbar { display:none; }
+.settings-vscode-calm.settings-details-open .settings-jumpbar { display:flex; }
+.settings-vscode-calm .settings-workbench-status { display:none; max-width:1040px; padding:5px 0 4px;
   border-bottom:1px solid color-mix(in srgb,var(--border) 42%,transparent); }
-.settings-vscode-calm .settings-workbench-status:not(.open) { display:flex; opacity:.78; }
+.settings-vscode-calm .settings-workbench-status:not(.open) { display:none; opacity:.78; }
+.settings-vscode-calm.settings-details-open .settings-workbench-status,
+.settings-vscode-calm.settings-details-open .settings-workbench-status:not(.open) { display:flex; }
 .settings-vscode-calm .settings-shell { grid-template-columns:286px minmax(0,1fr); }
 .settings-vscode-calm .settings-shell.inspecting { grid-template-columns:286px minmax(0,1fr) minmax(312px,360px); }
 .settings-vscode-calm .settings-nav { padding:11px 10px 16px 18px; background:var(--bg);
   border-right:1px solid color-mix(in srgb,var(--border) 82%,transparent); }
 .settings-vscode-calm .settings-nav-tools { padding:0 8px 10px 0; border-bottom:0; }
 .settings-vscode-calm .settings-nav-tools input { background:var(--bg-input); border-color:color-mix(in srgb,var(--border) 78%,transparent); }
+.settings-vscode-calm .settings-nav-quick { display:grid; grid-template-columns:1fr 1fr; gap:4px;
+  padding:0 8px 10px 0; margin:0 0 8px; border-bottom:1px solid color-mix(in srgb,var(--border) 54%,transparent); }
+.settings-vscode-calm .settings-nav-quick button { min-height:25px; border-radius:2px; background:transparent; }
 .settings-vscode-calm .settings-nav-heading { padding-left:0; padding-right:0; }
 .settings-vscode-calm .settings-nav-item { padding:4px 8px 4px 0; gap:8px; border-radius:2px; }
 .settings-vscode-calm .settings-nav-item.active { box-shadow:inset 2px 0 0 var(--fg-accent);
@@ -3686,6 +3718,18 @@ pre.code-block { overflow:visible; }
       <div class="term-tab-bar" id="term-tab-bar" style="display:none"></div>
       <div class="terminal-panel" id="terminal-panel">
         <div class="terminal-output" id="terminal-output"></div>
+        <div class="terminal-context-bar" id="terminal-context-bar" role="status" aria-live="polite">
+          <span class="terminal-context-main">
+            <span class="terminal-context-chip workspace" data-terminal-context="workspace">workspace</span>
+            <span class="terminal-context-chip auto" data-terminal-context="source">Auto</span>
+            <span class="terminal-context-chip" data-terminal-context="profile">System Shell</span>
+          </span>
+          <span class="terminal-context-actions">
+            <button type="button" data-terminal-context-action="switch-workspace" onclick="openWorkspaceSwitcher()">Workspace</button>
+            <button type="button" data-terminal-context-action="copy-cwd" onclick="copyTerminalCwd()">Copy CWD</button>
+            <button type="button" data-terminal-context-action="reuse-cwd" onclick="useTerminalCwdAsWorkspace()">Use CWD</button>
+          </span>
+        </div>
         <div class="terminal-status-line" id="terminal-status-line" data-state="idle" role="status" aria-live="polite">
           <span class="term-status-dot"></span>
           <span class="term-status-text">Ready</span>
@@ -4504,7 +4548,7 @@ function withSettingsDefaults(raw){
 let config=withSettingsDefaults({});
 function currentWorkspaceRoot(){
   const ws=isPlainObject(config.workspace)?config.workspace:{};
-  return normalizeWorkspaceRootPath(ws.resolved_root||ws.root||ws.last_root||'');
+  return normalizeWorkspaceRootPath(ws.resolved_root||ws.root||ws.last_root||(typeof explorerRoot!=='undefined'?explorerRoot:'')||'');
 }
 const quickInputViews=Object.create(null);
 let activeQuickInputId='';
@@ -26357,7 +26401,7 @@ function _injectWebviewHtml(container,viewId,html,initialState){
     +'function _rewriteResourceUrl(v){if(typeof v!=="string")return v;var mapped=_portMappedUrl(v);if(mapped)return mapped;var m=_resourceMap();var hit=m[v]||m[v.replace(/\\\\\\//g,"/")]||"";if(hit){_recordResourceRewrite("map",v,hit);return hit;}return _endpointResourceUrl(v)||v;}'
     +'function _rewriteModuleResourceUrl(v){if(typeof v!=="string")return v;return _endpointResourceUrl(v)||_rewriteResourceUrl(v);}'
     +'function _rewriteSrcset(v){return String(v||"").split(",").map(function(part){var p=part.trim();if(!p)return p;var bits=p.split(/\\s+/);bits[0]=_rewriteResourceUrl(bits[0]);return bits.join(" ");}).join(", ");}'
-    +'function _rewriteCssText(v){return String(v||"").replace(/url\\(\\s*([\\\"\\']?)([^\\\"\\')]+)\\1\\s*\\)/g,function(all,q,url){var low=String(url||"").trim().toLowerCase();if(!url||low.indexOf("data:")===0||low.indexOf("http:")===0||low.indexOf("https:")===0||url.indexOf("//")===0||url.charAt(0)==="#")return all;var r=_rewriteResourceUrl(url);if(r!==url)_recordResourceRewrite("css",url,r);return "url("+q+r+q+")";});}'
+    +'function _rewriteCssText(v){return String(v||"").replace(/url\\(\\s*([\\\"\\x27]?)([^\\\"\\x27)]+)\\1\\s*\\)/g,function(all,q,url){var low=String(url||"").trim().toLowerCase();if(!url||low.indexOf("data:")===0||low.indexOf("http:")===0||low.indexOf("https:")===0||url.indexOf("//")===0||url.charAt(0)==="#")return all;var r=_rewriteResourceUrl(url);if(r!==url)_recordResourceRewrite("css",url,r);return "url("+q+r+q+")";});}'
     +'var _urlAttrs={src:1,href:1,poster:1,data:1,action:1,formaction:1,preload:1};'
     +'var _setAttr=Element.prototype.setAttribute;Element.prototype.setAttribute=function(name,value){var n=String(name||"").toLowerCase();if(_urlAttrs[n])value=_rewriteResourceUrl(String(value));else if(n==="srcset"||n==="imagesrcset")value=_rewriteSrcset(value);else if(n==="style")value=_rewriteCssText(value);return _setAttr.call(this,name,value);};'
     +'function _patchUrlProperty(proto,prop,rewriter){if(!proto)return;var d=Object.getOwnPropertyDescriptor(proto,prop);if(!d||!d.set||!d.get)return;try{Object.defineProperty(proto,prop,{configurable:true,enumerable:d.enumerable,get:d.get,set:function(v){d.set.call(this,rewriter(String(v)));}});}catch(e){}}'
@@ -28505,13 +28549,14 @@ function renderSettingsNav(){
   const quick=document.createElement('div');
   quick.className='settings-nav-quick';
   quick.id='settings-nav-quick';
-  const addQuick=(label,token,title)=>{
+  const addQuick=(label,token,title,handler)=>{
     const btn=document.createElement('button');
     btn.type='button';
     btn.textContent=label;
     btn.title=title||label;
     btn.dataset.settingsQuickToken=token||'';
-    btn.onclick=ev=>{ev.preventDefault();token?settingsUseSearchHint(token):settingsClearFilters()};
+    if(handler)btn.dataset.settingsQuickAction=label.toLowerCase().replace(/\s+/g,'-');
+    btn.onclick=ev=>{ev.preventDefault();handler?handler():token?settingsUseSearchHint(token):settingsClearFilters()};
     quick.appendChild(btn);
     return btn;
   };
@@ -28519,6 +28564,8 @@ function renderSettingsNav(){
   addQuick('Modified','@modified','Show changed settings');
   addQuick('Errors','@error','Show invalid settings');
   addQuick('Overrides','@overrides','Show target override settings');
+  addQuick('Extensions','@extensions','Open extension settings',()=>selectSettingsTarget('extensions',{preserveSearch:true,focusSearch:true}));
+  addQuick('Settings JSON','','Open Settings JSON',()=>settingsOpenJsonView());
   nav.appendChild(quick);
   const heading=document.createElement('div');
   heading.className='settings-nav-heading';
@@ -28801,6 +28848,10 @@ function settingsUiSelfCheckSnapshot(){
   const dirtySummary=$('settings-dirty-summary');
   const jumpbar=$('settings-jumpbar');
   const jumpButtons=jumpbar?Array.from(jumpbar.querySelectorAll('[data-settings-jump-action]')):[];
+  const quickLabels=quickNav?Array.from(quickNav.querySelectorAll('button')).map(btn=>String(btn.textContent||'').trim()):[];
+  const searchRow=document.querySelector('.settings-search-row');
+  const scopeControl=document.querySelector('.settings-scope-control');
+  const topQuickFilters=$('settings-quick-filters');
   const rowActionMenu=document.querySelector('.settings-row-action-menu');
   const rowActionButtons=Array.from(document.querySelectorAll('.settings-row-action'));
   const workbenchStatus=$('settings-workbench-status');
@@ -28831,6 +28882,10 @@ function settingsUiSelfCheckSnapshot(){
       &&String(settingsJumpbarAction).includes("selectSettingsTarget('workspace'")
       &&String(settingsJumpbarAction).includes("'@feature:editor'"),
     hasPrimaryJsonOnlyDefaultToolbar:toolbarButtons.length>=3&&hiddenToolbarButtons.length>=2&&!!document.querySelector('.settings-toolbar-strip .settings-top-action.primary[data-settings-icon-action="1"]'),
+    hasQuietDefaultSettingsToolbar:!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&document.querySelector('.settings-toolbar-strip')&&String(getComputedStyle(document.querySelector('.settings-toolbar-strip')).display)==='none'),
+    hasDetailsOnlyJumpbar:!!(jumpbar&&settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&String(getComputedStyle(jumpbar).display)==='none'),
+    hasSidebarQuickSettingsActions:!!(quickNav&&String(getComputedStyle(quickNav).display)!=='none'&&quickLabels.includes('Commonly Used')&&quickLabels.includes('Extensions')&&quickLabels.includes('Settings JSON')),
+    hasCompactSearchScopeStack:!!(searchRow&&scopeControl&&String(getComputedStyle(searchRow).gridTemplateColumns||'').split(' ').filter(Boolean).length<=1&&String(getComputedStyle(scopeControl).justifySelf||'')==='start'),
     hasCalmDefaultSettingsMode:!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')),
     hasSearchPrimaryCaption:!!(caption&&document.querySelector('.settings-search-primary .settings-query-box #settings-search')),
     hasSearchClearButton:!!($('settings-clear-search')&&document.querySelector('.settings-query-box .settings-query-clear')),
@@ -28966,7 +29021,7 @@ function settingsUiSelfCheckSnapshot(){
     hasDefaultVisiblePersonalNav:!!(personalNav&&String(getComputedStyle(personalNav).display)!=='none'),
     hasGroupedPersonalNav:personalBlocks.length>=1&&personalBlocks.some(block=>block.dataset.settingsPersonalKind==='commonly-used'),
     hasQuietPersonalNavHistory:hiddenPersonalBlocks.some(block=>['favorites','recent'].includes(block.dataset.settingsPersonalKind||'')),
-    hasDetailsOnlyNavQuickFilters:!!(quickNav&&String(getComputedStyle(quickNav).display)==='none'),
+    hasDetailsOnlyNavQuickFilters:!!(topQuickFilters&&String(getComputedStyle(topQuickFilters).pointerEvents)==='none'),
     hasDetailBreadcrumb:!!(detailBreadcrumb&&/>/.test(detailBreadcrumb.textContent||'')),
     hasFooterSaveSummary:!!(footerSummary&&footerSave&&footerSave.closest('.modal-btns')),
     hasRowImpactSummary:!!(rowImpact&&rowImpact.querySelector('.impact-chip')),
@@ -41381,11 +41436,83 @@ function _updateTerminalPrompt(meta){
   prompt.textContent=label+' '+icon;
   prompt.title=[profile,cwd?('cwd: '+cwd):'',_terminalCwdMatchesWorkspace(cwd)?'workspace cwd':'outside workspace'].filter(Boolean).join('\n');
 }
+function _terminalWorkspaceSource(){
+  const ws=workspaceSettings();
+  return String(ws.source||((ws.auto_detected||ws.auto_detect)?'auto':'configured')||'');
+}
+function _terminalWorkspaceSourceLabel(){
+  return workspaceSourceLabel(_terminalWorkspaceSource()||'workspace');
+}
+function _terminalContextMeta(meta){
+  meta=meta&&typeof meta==='object'?meta:{};
+  const cwd=String(meta.cwd||currentWorkspaceRoot()||'');
+  const profile=_terminalProfileLabel(meta);
+  const source=_terminalWorkspaceSource();
+  const ws=workspaceSettings();
+  return {
+    cwd,
+    workspace:_terminalWorkspaceLabel(cwd),
+    workspaceSource:source,
+    workspaceSourceLabel:workspaceSourceLabel(source||'workspace'),
+    autoDetected:!!(ws.auto_detected||(!ws.configured_root&&ws.auto_detect!==false)),
+    profile,
+    shellKind:String(meta.shellKind||terminalProfileDefinition(profile).shellKind||''),
+    workspaceCwd:_terminalCwdMatchesWorkspace(cwd)
+  };
+}
+function _updateTerminalContextBar(meta,state){
+  const bar=$('terminal-context-bar');if(!bar)return;
+  const ctx=_terminalContextMeta(meta);
+  bar.dataset.terminalContext='1';
+  bar.dataset.state=String(state||'idle');
+  bar.dataset.cwd=ctx.cwd;
+  bar.dataset.workspace=ctx.workspace;
+  bar.dataset.workspaceSource=ctx.workspaceSource;
+  bar.dataset.workspaceAutoDetected=ctx.autoDetected?'1':'0';
+  bar.dataset.workspaceCwd=ctx.workspaceCwd?'1':'0';
+  bar.dataset.profile=ctx.profile;
+  bar.dataset.shellKind=ctx.shellKind;
+  const workspaceEl=bar.querySelector('[data-terminal-context="workspace"]');
+  const sourceEl=bar.querySelector('[data-terminal-context="source"]');
+  const profileEl=bar.querySelector('[data-terminal-context="profile"]');
+  if(workspaceEl){
+    workspaceEl.textContent=ctx.workspace;
+    workspaceEl.title=ctx.cwd||'No workspace cwd';
+    workspaceEl.className='terminal-context-chip workspace '+(ctx.workspaceCwd?'':'warn');
+  }
+  if(sourceEl){
+    sourceEl.textContent=ctx.autoDetected?'Auto · '+ctx.workspaceSourceLabel:ctx.workspaceSourceLabel;
+    sourceEl.title='Workspace source: '+ctx.workspaceSourceLabel;
+    sourceEl.className='terminal-context-chip '+(ctx.autoDetected?'auto':'');
+  }
+  if(profileEl){
+    profileEl.textContent=ctx.profile;
+    profileEl.title=[ctx.profile,ctx.shellKind?('Shell: '+ctx.shellKind):''].filter(Boolean).join('\n');
+  }
+}
+function terminalCurrentCwd(){
+  const term=_getActiveTerminalRecord();
+  const out=$('terminal-output');
+  return String((term&&(term.lastCwd||(term.metadata&&term.metadata.cwd)))||(out&&out.dataset.lastCwd)||currentWorkspaceRoot()||'');
+}
+function copyTerminalCwd(){
+  const cwd=terminalCurrentCwd();
+  if(!cwd){showToast('No terminal cwd available.','info',1400);return false}
+  settingsCopyText(cwd,'Terminal cwd');
+  return true;
+}
+function useTerminalCwdAsWorkspace(){
+  const cwd=terminalCurrentCwd();
+  if(!cwd){showToast('No terminal cwd available.','info',1400);return false}
+  setWorkspaceRoot(cwd);
+  return true;
+}
 function _setTerminalStatus(state,text,detail,meta){
   const line=$('terminal-status-line');if(!line)return;
   meta=meta&&typeof meta==='object'?meta:{};
   const cwd=String(meta.cwd||'');
   const profile=_terminalProfileLabel(meta);
+  const ctx=_terminalContextMeta({...meta,cwd,profile});
   const exitCode=meta.exitCode===null||meta.exitCode===undefined?'':String(meta.exitCode);
   const durationMs=meta.durationMs===null||meta.durationMs===undefined?'':String(meta.durationMs);
   const stdoutTruncated=!!meta.stdoutTruncated;
@@ -41405,6 +41532,8 @@ function _setTerminalStatus(state,text,detail,meta){
   line.dataset.startedAt=String(meta.startedAt||'');
   line.dataset.finishedAt=String(meta.finishedAt||'');
   line.dataset.workspaceCwd=_terminalCwdMatchesWorkspace(cwd)?'1':'0';
+  line.dataset.workspaceSource=ctx.workspaceSource;
+  line.dataset.workspaceAutoDetected=ctx.autoDetected?'1':'0';
   const textEl=line.querySelector('.term-status-text');
   const detailEl=line.querySelector('.term-status-detail');
   const wsEl=line.querySelector('[data-terminal-status="workspace"]');
@@ -41430,6 +41559,7 @@ function _setTerminalStatus(state,text,detail,meta){
   }
   if(detailEl){detailEl.textContent=detail||'';detailEl.title=[meta.lastCommand?('$ '+meta.lastCommand):'',meta.startedAt?('Started: '+meta.startedAt):'',meta.finishedAt?('Finished: '+meta.finishedAt):''].filter(Boolean).join('\n')}
   _updateTerminalPrompt({...meta,cwd,profile});
+  _updateTerminalContextBar({...meta,cwd,profile},state);
 }
 function _updateTerminalStatusLine(){
   const term=_getActiveTerminalRecord();
@@ -41694,6 +41824,11 @@ async function runTerminalCommand(cmd,options){
   const started=performance.now();
   const cwd=String(opts.cwd||currentWorkspaceRoot()||'');
   const profile=String(opts.profile||currentTerminalProfile());
+  view.block.dataset.cwd=cwd;
+  view.block.dataset.profile=profile;
+  view.block.dataset.workspaceSource=_terminalWorkspaceSource();
+  view.block.dataset.workspaceCwd=_terminalCwdMatchesWorkspace(cwd)?'1':'0';
+  view.block.title=['Terminal command: '+cmd,cwd?('cwd: '+cwd):'',profile?('profile: '+profile):''].filter(Boolean).join('\n');
   const runId='term-run-'+(++_terminalRunSeq);
   _setTerminalRun(out,{id:runId,command:cmd,cwd,profile,cancelled:false});
   _updateTerminalRecordForRun(cmd,'running',{exitCode:null,cwd,terminal:terminalProfileMetadata(profile)},null);
@@ -41748,6 +41883,10 @@ async function runTerminalCommand(cmd,options){
 clearTerminal=function(){const el=_getActiveTermOutput();if(el)el.innerHTML=''};
 window.clearTerminal=clearTerminal;
 window.runTerminalCommand=runTerminalCommand;
+window.copyTerminalCwd=copyTerminalCwd;
+window.useTerminalCwdAsWorkspace=useTerminalCwdAsWorkspace;
+window.terminalCurrentCwd=terminalCurrentCwd;
+window._updateTerminalContextBar=_updateTerminalContextBar;
 window.stopTerminalCommand=stopTerminalCommand;
 window.restartTerminalCommand=restartTerminalCommand;
 window.sendTerminalInput=sendTerminalInput;
@@ -41815,10 +41954,12 @@ async function terminalUiSelfCheckSnapshot(){
   const oldActive=_activeTermId;
   const defaultOut=$('terminal-output');
   const status=$('terminal-status-line');
+  const contextBar=$('terminal-context-bar');
   const oldDefaultHtml=defaultOut?defaultOut.innerHTML:'';
   const oldDefaultDataset=defaultOut?{...defaultOut.dataset}:{};
   const oldStatusClass=status?status.className:'';
-  const oldStatusState=status?status.dataset.state:'';
+  const oldStatusDataset=status?{...status.dataset}:{};
+  const oldContextDataset=contextBar?{...contextBar.dataset}:{};
   const oldTermInputValue=$('term-input')?$('term-input').value:'';
   const oldWorkspace=config.workspace;
   const oldTerminal=config.terminal;
@@ -41869,6 +42010,7 @@ async function terminalUiSelfCheckSnapshot(){
     const recentInputValue=$('term-input')?$('term-input').value:'';
     const prompt=document.querySelector('.terminal-input-prompt');
     const actionButtons=blocks.flatMap(block=>Array.from(block.querySelectorAll('.terminal-command-actions button')).map(btn=>btn.textContent));
+    const contextActions=Array.from(document.querySelectorAll('#terminal-context-bar [data-terminal-context-action]')).map(btn=>btn.dataset.terminalContextAction||'');
     const snapshot={
       okExit:ok&&ok.exitCode,
       badExit:bad&&bad.exitCode,
@@ -41890,7 +42032,19 @@ async function terminalUiSelfCheckSnapshot(){
       statusStderrTruncated:status?status.dataset.stderrTruncated:'',
       statusFinishedAt:status?status.dataset.finishedAt:'',
       statusWorkspaceCwd:status?status.dataset.workspaceCwd:'',
+      statusWorkspaceSource:status?status.dataset.workspaceSource:'',
+      statusWorkspaceAutoDetected:status?status.dataset.workspaceAutoDetected:'',
       statusText:status?status.textContent.trim():'',
+      contextReady:!!(contextBar&&contextBar.dataset.terminalContext==='1'),
+      contextWorkspace:contextBar?contextBar.dataset.workspace:'',
+      contextCwd:contextBar?contextBar.dataset.cwd:'',
+      contextSource:contextBar?contextBar.dataset.workspaceSource:'',
+      contextAutoDetected:contextBar?contextBar.dataset.workspaceAutoDetected:'',
+      contextWorkspaceCwd:contextBar?contextBar.dataset.workspaceCwd:'',
+      contextProfile:contextBar?contextBar.dataset.profile:'',
+      contextShellKind:contextBar?contextBar.dataset.shellKind:'',
+      contextText:contextBar?contextBar.textContent.trim():'',
+      contextActions,
       promptText:prompt?prompt.textContent:'',
       promptTitle:prompt?prompt.title:'',
       statusAfterBad,
@@ -41900,6 +42054,9 @@ async function terminalUiSelfCheckSnapshot(){
       commandActionCount:actionButtons.length,
       commandActionLabels:actionButtons,
       commandDataset:blocks.map(block=>block.dataset.command||''),
+      commandCwdDataset:blocks.map(block=>block.dataset.cwd||''),
+      commandProfileDataset:blocks.map(block=>block.dataset.profile||''),
+      commandWorkspaceSourceDataset:blocks.map(block=>block.dataset.workspaceSource||''),
       selectorValue:$('terminal-profile-select')?$('terminal-profile-select').value:'',
       createdTermProfile:selfTerm&&selfTerm.metadata?selfTerm.metadata.profile:'',
       lastCommand:defaultOut?defaultOut.dataset.lastCommand:'',
@@ -41917,7 +42074,7 @@ async function terminalUiSelfCheckSnapshot(){
       closeStdinEcho:defaultOut?defaultOut.textContent.includes('[stdin closed]'):false,
       closeStdinResult:closed&&closed.stdinClosed
     };
-    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.hasInputEcho&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusWorkspaceCwd==='1'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusExitCode===''&&snapshot.statusDurationMs==='7'&&snapshot.statusStdoutTruncated==='0'&&snapshot.statusStderrTruncated==='0'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.promptText.includes('sao_auto')&&snapshot.promptTitle.includes('Windows PowerShell')&&snapshot.statusAfterBad.state==='error'&&snapshot.statusAfterBad.exitCode==='7'&&snapshot.statusAfterBad.durationMs==='9'&&snapshot.statusAfterBad.stderrTruncated==='1'&&String(snapshot.statusAfterBad.flags||'').includes('stderr truncated')&&snapshot.recentCount>=3&&snapshot.recentLabels.includes('slow-command')&&snapshot.recentInputValue==='echo terminal-ok'&&snapshot.commandActionCount>=9&&snapshot.commandActionLabels.includes('▶')&&snapshot.commandDataset.includes('bad-command')&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.lastDurationMs==='7'&&snapshot.lastStdoutTruncated==='0'&&snapshot.lastStderrTruncated==='0'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell'&&snapshot.writePayloadData==='hello stdin\n'&&snapshot.writeBytes===12&&snapshot.closeStdinPayload===true&&snapshot.closeStdinEcho&&snapshot.closeStdinResult===true;
+    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.hasInputEcho&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusWorkspaceCwd==='1'&&snapshot.statusWorkspaceSource==='selfcheck'&&snapshot.statusWorkspaceAutoDetected==='1'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusExitCode===''&&snapshot.statusDurationMs==='7'&&snapshot.statusStdoutTruncated==='0'&&snapshot.statusStderrTruncated==='0'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.contextReady&&snapshot.contextWorkspace==='sao_auto'&&snapshot.contextCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.contextSource==='selfcheck'&&snapshot.contextAutoDetected==='1'&&snapshot.contextWorkspaceCwd==='1'&&snapshot.contextProfile==='Windows PowerShell'&&snapshot.contextShellKind==='powershell'&&snapshot.contextText.includes('Selfcheck')&&snapshot.contextActions.includes('switch-workspace')&&snapshot.contextActions.includes('copy-cwd')&&snapshot.contextActions.includes('reuse-cwd')&&snapshot.promptText.includes('sao_auto')&&snapshot.promptTitle.includes('Windows PowerShell')&&snapshot.statusAfterBad.state==='error'&&snapshot.statusAfterBad.exitCode==='7'&&snapshot.statusAfterBad.durationMs==='9'&&snapshot.statusAfterBad.stderrTruncated==='1'&&String(snapshot.statusAfterBad.flags||'').includes('stderr truncated')&&snapshot.recentCount>=3&&snapshot.recentLabels.includes('slow-command')&&snapshot.recentInputValue==='echo terminal-ok'&&snapshot.commandActionCount>=9&&snapshot.commandActionLabels.includes('▶')&&snapshot.commandDataset.includes('bad-command')&&snapshot.commandCwdDataset.includes('E:/VC/SAO-UI/sao_auto')&&snapshot.commandProfileDataset.includes('Windows PowerShell')&&snapshot.commandWorkspaceSourceDataset.includes('selfcheck')&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.lastDurationMs==='7'&&snapshot.lastStdoutTruncated==='0'&&snapshot.lastStderrTruncated==='0'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell'&&snapshot.writePayloadData==='hello stdin\n'&&snapshot.writeBytes===12&&snapshot.closeStdinPayload===true&&snapshot.closeStdinEcho&&snapshot.closeStdinResult===true;
     return snapshot;
   }finally{
     call=oldCall;
@@ -41930,7 +42087,8 @@ async function terminalUiSelfCheckSnapshot(){
       Object.keys(defaultOut.dataset).forEach(k=>delete defaultOut.dataset[k]);
       Object.assign(defaultOut.dataset,oldDefaultDataset);
     }
-    if(status){status.className=oldStatusClass;status.dataset.state=oldStatusState}
+    if(status){status.className=oldStatusClass;Object.keys(status.dataset).forEach(k=>delete status.dataset[k]);Object.assign(status.dataset,oldStatusDataset)}
+    if(contextBar){Object.keys(contextBar.dataset).forEach(k=>delete contextBar.dataset[k]);Object.assign(contextBar.dataset,oldContextDataset)}
     if($('term-input'))$('term-input').value=oldTermInputValue;
     _terminals.forEach(t=>{t.outputEl.style.display=t.id===_activeTermId?'':'none'});
     if(defaultOut)defaultOut.style.display=_activeTermId!==null?'none':'';

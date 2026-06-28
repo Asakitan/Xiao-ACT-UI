@@ -4385,11 +4385,17 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hasVsCodePolishedSettingControls" in html
            and "hasIconOnlySettingsToolbar" in html
            and "hasPrimaryJsonOnlyDefaultToolbar" in html
+           and "hasQuietDefaultSettingsToolbar" in html
+           and "hasDetailsOnlyJumpbar" in html
+           and "hasSidebarQuickSettingsActions" in html
+           and "hasCompactSearchScopeStack" in html
            and "hasCalmDefaultSettingsMode" in html
            and "hasMoreComfortableSettingControls" in html
            and 'data-settings-icon-action="1"' in html
-           and "settings-vscode-calm:not(.settings-details-open) .settings-toolbar-strip .settings-top-action:not(.primary)" in html
+           and "settings-vscode-calm:not(.settings-details-open) .settings-toolbar-strip { display:none; }" in html
            and 'id="settings-jumpbar" class="settings-jumpbar" role="toolbar"' in html
+           and ".settings-vscode-calm .settings-jumpbar { display:none; }" in html
+           and ".settings-vscode-calm.settings-details-open .settings-jumpbar { display:flex; }" in html
            and "function settingsJumpbarAction(action)" in html
            and "function renderSettingsJumpbar(stats)" in html
            and "host.dataset.settingsJumpbarRendered='1'" in html
@@ -4404,8 +4410,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function renderSettingsWorkbenchStatus(visible,total,stats)" in html
            and "host.dataset.settingsWorkbenchStatus='1'" in html
            and "window.renderSettingsWorkbenchStatus=renderSettingsWorkbenchStatus;" in html
-           and ".settings-vscode-calm .settings-workbench-status { display:flex; max-width:1040px;" in html
-           and ".settings-vscode-calm .settings-search-row { grid-template-columns:minmax(520px,760px) minmax(260px,auto);" in html
+           and ".settings-vscode-calm .settings-workbench-status { display:none; max-width:1040px;" in html
+           and ".settings-vscode-calm.settings-details-open .settings-workbench-status," in html
+           and ".settings-vscode-calm .settings-search-row { grid-template-columns:minmax(520px,760px);" in html
+           and ".settings-vscode-calm .settings-scope-control { justify-self:start;" in html
+           and "addQuick('Settings JSON','','Open Settings JSON',()=>settingsOpenJsonView());" in html
            and ".settings-vscode-calm .settings-shell { grid-template-columns:286px minmax(0,1fr);" in html
            and ".settings-vscode-calm .settings-field.builtin-setting { padding:13px 96px 13px 0;" in html
            and ".settings-vscode-calm .settings-control-frame { max-width:720px; min-height:32px; }" in html
@@ -6366,6 +6375,8 @@ def test_phase1_ai_editor_regressions() -> None:
             and "_patchUrlProperty(window.HTMLObjectElement&&HTMLObjectElement.prototype,\"data\",_rewriteResourceUrl);" in html
             and "_patchUrlProperty(window.HTMLFormElement&&HTMLFormElement.prototype,\"action\",_rewriteResourceUrl);" in html
             and "_patchUrlProperty(window.CSSStyleDeclaration&&CSSStyleDeclaration.prototype,\"backgroundImage\",_rewriteCssText);" in html
+            and r"[\\\"\\x27]?" in html
+            and r"[^\\\"\\x27)]+" in html
             and "[src],[href],[poster],[data],[action],[formaction],[preload],[srcset],[imagesrcset],[style],style" in html
             and "attributeFilter:[\"src\",\"href\",\"poster\",\"data\",\"action\",\"formaction\",\"preload\",\"srcset\",\"imagesrcset\",\"style\"]" in html)
     _check("frontend custom editor placeholder exposes extension metadata",
@@ -10034,8 +10045,9 @@ console.log("frontend word separator behavior ok");
             and "block.dataset.settingsPersonalKind=title.toLowerCase().replace" in html
             and ".settings-vscode-calm .settings-nav-memory-block[data-settings-personal-kind=\"favorites\"]" in html
             and ".settings-vscode-calm.settings-details-open .settings-nav-memory-block[data-settings-personal-kind=\"favorites\"]" in html
-            and ".settings-vscode-calm .settings-nav-quick { display:none;" in html
-            and ".settings-vscode-calm.settings-details-open .settings-nav-quick { display:grid; }" in html
+            and ".settings-vscode-calm .settings-nav-quick { display:grid; grid-template-columns:1fr 1fr;" in html
+            and "addQuick('Extensions','@extensions','Open extension settings'" in html
+            and "addQuick('Settings JSON','','Open Settings JSON',()=>settingsOpenJsonView());" in html
             and ".settings-vscode-calm .settings-nav-memory { display:block;" in html
             and "data-settings-filter-token=\"@common\"" in html
             and "function settingsGroupMatchesCommonFilter(group)" in html
@@ -10279,6 +10291,10 @@ console.log("frontend word separator behavior ok");
              and "hasStatusbarFooter" in html
              and "hasIconOnlySettingsToolbar" in html
              and "hasPrimaryJsonOnlyDefaultToolbar" in html
+             and "hasQuietDefaultSettingsToolbar" in html
+             and "hasDetailsOnlyJumpbar" in html
+             and "hasSidebarQuickSettingsActions" in html
+             and "hasCompactSearchScopeStack" in html
              and "hasCalmDefaultSettingsMode" in html
              and "hasMoreComfortableSettingControls" in html
              and "hasLabelsInsideRows" in html
@@ -10479,6 +10495,10 @@ console.log("frontend word separator behavior ok");
             and "result.snapshot.hasStatusbarFooter" in settings_smoke_source
             and "result.snapshot.hasIconOnlySettingsToolbar" in settings_smoke_source
             and "result.snapshot.hasPrimaryJsonOnlyDefaultToolbar" in settings_smoke_source
+            and "result.snapshot.hasQuietDefaultSettingsToolbar" in settings_smoke_source
+            and "result.snapshot.hasDetailsOnlyJumpbar" in settings_smoke_source
+            and "result.snapshot.hasSidebarQuickSettingsActions" in settings_smoke_source
+            and "result.snapshot.hasCompactSearchScopeStack" in settings_smoke_source
             and "result.snapshot.hasCalmDefaultSettingsMode" in settings_smoke_source
             and "result.snapshot.hasVsCodeWideCategoryNav" in settings_smoke_source
             and "result.snapshot.hasMoreComfortableSettingControls" in settings_smoke_source
@@ -14179,6 +14199,8 @@ console.log("command palette quick access helpers ok");
                 and "XMLHttpRequest.prototype.open=function(method,url)" in html
                 and "Element.prototype.setAttribute=function(name,value)" in html
                 and "function _rewriteCssText(v)" in html
+                and r"[\\\"\\x27]?" in html
+                and r"[^\\\"\\x27)]+" in html
                 and 'n==="srcset"||n==="imagesrcset"' in html
                 and "_patchUrlProperty(window.HTMLImageElement&&HTMLImageElement.prototype,\"srcset\",_rewriteSrcset)" in html
                 and "_patchUrlProperty(window.HTMLLinkElement&&HTMLLinkElement.prototype,\"imageSrcset\",_rewriteSrcset)" in html
@@ -14466,8 +14488,19 @@ console.log("command palette quick access helpers ok");
             and "function _updateTerminalRecordForRun(cmd,state,result,durationMs)" in html
             and "function currentWorkspaceRoot()" in html
             and "function syncTerminalWorkspaceState()" in html
+            and "terminal-context-bar" in html
+            and "function _terminalWorkspaceSource()" in html
+            and "function _terminalContextMeta(meta)" in html
+            and "function _updateTerminalContextBar(meta,state)" in html
+            and "function terminalCurrentCwd()" in html
+            and "function copyTerminalCwd()" in html
+            and "function useTerminalCwdAsWorkspace()" in html
             and "data-terminal-status=\"workspace\"" in html
             and "data-terminal-status=\"profile\"" in html
+            and "data-terminal-context=\"workspace\"" in html
+            and "data-terminal-context-action=\"switch-workspace\"" in html
+            and "data-terminal-context-action=\"copy-cwd\"" in html
+            and "data-terminal-context-action=\"reuse-cwd\"" in html
             and "line.dataset.profile=profile" in html
             and "line.dataset.shellKind=String(meta.shellKind||'')" in html
             and "line.dataset.exitCode=exitCode;" in html
@@ -14475,6 +14508,8 @@ console.log("command palette quick access helpers ok");
             and "line.dataset.stdoutTruncated=stdoutTruncated?'1':'0';" in html
             and "line.dataset.lastCommand=String(meta.lastCommand||'');" in html
             and "line.dataset.workspaceCwd=_terminalCwdMatchesWorkspace(cwd)?'1':'0';" in html
+            and "line.dataset.workspaceSource=ctx.workspaceSource;" in html
+            and "line.dataset.workspaceAutoDetected=ctx.autoDetected?'1':'0';" in html
             and "wsEl.className='term-status-pill '+(_terminalCwdMatchesWorkspace(cwd)?'ok':'warn')" in html
             and "data-terminal-status=\"exit\"" in html
             and "data-terminal-status=\"duration\"" in html
@@ -14498,11 +14533,21 @@ console.log("command palette quick access helpers ok");
             and "closeStdinResult" in html
             and "window.renderTerminalRecentCommands=renderTerminalRecentCommands" in html
             and "window._terminalCwdMatchesWorkspace=_terminalCwdMatchesWorkspace" in html
+            and "window.copyTerminalCwd=copyTerminalCwd;" in html
+            and "window.useTerminalCwdAsWorkspace=useTerminalCwdAsWorkspace;" in html
+            and "window._updateTerminalContextBar=_updateTerminalContextBar;" in html
             and "block.dataset.command=cmd;" in html
+            and "view.block.dataset.cwd=cwd;" in html
+            and "view.block.dataset.profile=profile;" in html
+            and "view.block.dataset.workspaceSource=_terminalWorkspaceSource();" in html
             and "addAction('▶','Run command again'" in html
             and "recentLabels.includes('slow-command')" in html
             and "promptText.includes('sao_auto')" in html
             and "statusWorkspaceCwd==='1'" in html
+            and "statusWorkspaceSource==='selfcheck'" in html
+            and "contextReady" in html
+            and "contextActions.includes('copy-cwd')" in html
+            and "commandCwdDataset.includes('E:/VC/SAO-UI/sao_auto')" in html
             and "commandActionCount>=9" in html
             and "selectorValue" in html
             and "statusAfterBad" in html
