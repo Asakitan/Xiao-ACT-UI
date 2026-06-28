@@ -70,7 +70,11 @@ class SAOPlayerGUIPanelsMixin:
 
     def _toggle_ai_editor_panel(self):
         """启动独立 AI Editor GUI 窗口 (pywebview)."""
-        self._dismiss_sao_menu_for_panel()
+        close_external = getattr(self, '_close_sao_menu_for_external_command', None)
+        if callable(close_external):
+            close_external()
+        else:
+            self._dismiss_sao_menu_for_panel()
         try:
             self._fisheye_close_suppress_until = time.time() + 1.4
         except Exception:

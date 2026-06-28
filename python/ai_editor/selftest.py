@@ -2209,7 +2209,8 @@ def test_app_settings_parity() -> None:
     with open(panels_path, "r", encoding="utf-8") as fh:
         panels_src = fh.read()
     _check("AI Editor menu launch stops fisheye overlay",
-           "self._stop_fisheye_overlay()" in panels_src
+           "_close_sao_menu_for_external_command" in panels_src
+           and "self._stop_fisheye_overlay()" in panels_src
            and "self._destroy_fisheye_hit_layer()" in panels_src
            and "self._release_fisheye_input_zorder(" in panels_src
            and "_fisheye_close_suppress_until" in panels_src)
@@ -2252,6 +2253,9 @@ def test_app_settings_parity() -> None:
            "def _window_handle_visible_after_activation(" in app_src
            and "def _window_handle_responding(" in app_src
            and "def _window_client_area_ok(" in app_src
+           and "def _window_process_id(" in app_src
+           and "skip_current_process: bool = False" in app_src
+           and "_activate_existing_ai_editor_window(skip_current_process=True)" in app_src
            and "_AI_EDITOR_FORCE_NEW_ENV" in app_src
            and "existing window unavailable; launching subprocess" in app_src
            and "existing window activation failed visibility" in app_src
@@ -2262,6 +2266,12 @@ def test_app_settings_parity() -> None:
            and "_window_handle_cloaked(hwnd" in app_src
            and "_move_window_handle_on_screen(hwnd, user32)" in app_src
            and "_window_rect_intersects_screen(" in app_src)
+    tk_ai_path = os.path.join(root_dir, "gui_modules", "sao_gui_ai_editor.py")
+    with open(tk_ai_path, "r", encoding="utf-8") as fh:
+        tk_ai_src = fh.read()
+    _check("AI Editor classic Tk fallback does not collide with WebView title",
+           'win.title("SAO AI Editor (Classic)")' in tk_ai_src
+           and 'win.title("SAO AI Editor")' not in tk_ai_src)
 
     data = {
         "ai_editor": {
@@ -4516,11 +4526,19 @@ def test_phase1_ai_editor_regressions() -> None:
            and 'id="settings-jumpbar" class="settings-jumpbar" role="toolbar"' in html
            and ".settings-vscode-calm .settings-jumpbar { display:none; }" in html
            and ".settings-vscode-calm.settings-details-open .settings-jumpbar," in html
-           and "hasNoTopSettingsBands" in html
-           and "hasSingleSearchTopBand" in html
-           and "hasSearchOnlyTopWorkbench" in html
-           and 'id="settings-searchbar"' in html
-           and "searchbar.dataset.settingsPlacement='sidebar'" in html
+            and "hasNoTopSettingsBands" in html
+            and "hasSingleSearchTopBand" in html
+            and "hasSearchOnlyTopWorkbench" in html
+            and "hasSidebarSettingsCommandbar" in html
+            and "hasNoVisibleTopSettingsBar" in html
+            and "className='settings-nav-commandbar'" in html
+            and "commandbar.dataset.settingsCommandSurface='sidebar';" in html
+            and "addCommand('Settings JSON','{}','Open Settings JSON',()=>settingsOpenJsonView(),true);" in html
+            and ".settings-vscode-calm > .settings-titlebar," in html
+            and ".settings-vscode-calm > .settings-searchbar" in html
+            and ".settings-vscode-calm .settings-nav-commandbar" in html
+            and 'id="settings-searchbar"' in html
+            and "searchbar.dataset.settingsPlacement='sidebar'" in html
            and ".settings-vscode-calm .settings-nav > .settings-searchbar" in html
            and "hasSidebarSettingsSearch" in html
            and "hasNoFullWidthSettingsSearchbar" in html
@@ -10697,6 +10715,8 @@ console.log("frontend word separator behavior ok");
             and "result.snapshot.hasSingleSearchTopBand" in settings_smoke_source
             and "result.snapshot.hasSidebarSettingsSearch" in settings_smoke_source
             and "result.snapshot.hasNoFullWidthSettingsSearchbar" in settings_smoke_source
+            and "result.snapshot.hasSidebarSettingsCommandbar" in settings_smoke_source
+            and "result.snapshot.hasNoVisibleTopSettingsBar" in settings_smoke_source
             and "result.snapshot.hasSidebarQuickSettingsActions" in settings_smoke_source
             and "result.snapshot.hasCompactSearchScopeStack" in settings_smoke_source
             and "result.snapshot.hasCalmDefaultSettingsMode" in settings_smoke_source

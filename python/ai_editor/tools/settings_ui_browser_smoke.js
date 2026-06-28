@@ -295,6 +295,9 @@ async function main() {
   if (!result.snapshot.hasSidebarSettingsSearch || !result.snapshot.hasNoFullWidthSettingsSearchbar) {
     throw new Error("Settings selfcheck still uses a full-width top settings search bar: " + JSON.stringify(result.snapshot));
   }
+  if (!result.snapshot.hasSidebarSettingsCommandbar || !result.snapshot.hasNoVisibleTopSettingsBar) {
+    throw new Error("Settings selfcheck still exposes noisy top settings commands: " + JSON.stringify(result.snapshot));
+  }
   if (!result.snapshot.hasVsCodeListSettingFlow || !result.snapshot.hasSettingCategoryPrefix || !result.snapshot.hasRowHeadControlActivation || !result.snapshot.hasQuietCleanDirtyState) {
     throw new Error("Settings selfcheck missing VS Code-like setting row flow refinements: " + JSON.stringify(result.snapshot));
   }

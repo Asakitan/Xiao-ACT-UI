@@ -252,7 +252,7 @@ class AIEditorPanel:
 
         win = tk.Toplevel(self.root)
         self._win = win
-        win.title("SAO AI Editor")
+        win.title("SAO AI Editor (Classic)")
         win.geometry("960x700+200+100")
         win.minsize(680, 480)
         win.configure(bg=_C["bg"])

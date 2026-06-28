@@ -3220,6 +3220,35 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm:not(.settings-details-open) .settings-nav > .settings-searchbar #settings-details-toggle {
   display:none;
 }
+.settings-vscode-calm > .settings-titlebar,
+.settings-vscode-calm > .settings-searchbar {
+  display:none !important;
+}
+.settings-vscode-calm .settings-nav > .settings-searchbar,
+.settings-vscode-calm.settings-details-open .settings-nav > .settings-searchbar {
+  display:block !important;
+}
+.settings-vscode-calm .settings-nav-commandbar {
+  display:grid; grid-template-columns:1fr; gap:3px; padding:0 8px 9px 0; margin:0 0 8px;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 54%,transparent);
+}
+.settings-vscode-calm .settings-nav-commandbar .settings-status-pill {
+  width:100%; min-width:0; height:24px; justify-content:space-between; border-radius:2px;
+  background:transparent; font:11px var(--mono);
+}
+.settings-vscode-calm .settings-nav-commandbar button {
+  min-height:25px; display:flex; align-items:center; justify-content:space-between; gap:8px;
+  border:1px solid transparent; border-radius:2px; background:transparent; color:var(--fg-dim);
+  padding:3px 7px; font:11px var(--sans); text-align:left; cursor:pointer;
+}
+.settings-vscode-calm .settings-nav-commandbar button:hover,
+.settings-vscode-calm .settings-nav-commandbar button:focus {
+  color:var(--fg); border-color:var(--border-focus); background:var(--bg-hover); outline:none;
+}
+.settings-vscode-calm .settings-nav-commandbar button.primary {
+  color:var(--fg); border-color:color-mix(in srgb,var(--fg-accent) 42%,transparent);
+  background:color-mix(in srgb,var(--fg-accent) 7%,transparent);
+}
 .settings-row-action:disabled { opacity:.35; cursor:default; }
 .settings-row-action-menu { display:none; position:absolute; top:26px; right:0; min-width:174px; padding:4px;
   border:1px solid var(--border); border-radius:4px; background:var(--bg2); box-shadow:var(--shadow); }
@@ -29091,6 +29120,29 @@ function renderSettingsNav(){
     searchbar.dataset.settingsPlacement='sidebar';
     nav.appendChild(searchbar);
   }
+  const commandbar=document.createElement('div');
+  commandbar.className='settings-nav-commandbar';
+  commandbar.id='settings-nav-commandbar';
+  commandbar.dataset.settingsCommandSurface='sidebar';
+  const dirty=$('settings-dirty-summary');
+  if(dirty)commandbar.appendChild(dirty);
+  const addCommand=(label,icon,title,handler,primary)=>{
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.innerHTML='<span>'+label+'</span><span aria-hidden="true">'+icon+'</span>';
+    btn.title=title||label;
+    btn.setAttribute('aria-label',title||label);
+    btn.dataset.settingsNavCommand=label.toLowerCase().replace(/\s+/g,'-');
+    if(primary)btn.classList.add('primary');
+    btn.onclick=ev=>{ev.preventDefault();if(typeof handler==='function')handler()};
+    commandbar.appendChild(btn);
+    return btn;
+  };
+  addCommand('Settings JSON','{}','Open Settings JSON',()=>settingsOpenJsonView(),true);
+  addCommand('Keyboard Shortcuts','⌘','Open keyboard shortcuts',()=>settingsCloseThen(openKeybindings),false);
+  addCommand('Details','⋯','Toggle settings details',()=>settingsToggleDetails(),false);
+  addCommand('Compact','≡','Toggle compact settings density',()=>settingsToggleDensity(),false);
+  nav.appendChild(commandbar);
   const summary=document.createElement('div');
   summary.className='settings-nav-summary';
   summary.innerHTML='<strong id="settings-nav-target-title">'+settingsTargetDisplayName(currentSettingsTarget)+' Settings</strong>'
@@ -29473,6 +29525,9 @@ function settingsUiSelfCheckSnapshot(){
   const quickLabels=quickNav?Array.from(quickNav.querySelectorAll('button')).map(btn=>String(btn.textContent||'').trim()):[];
   const quickActions=quickNav?Array.from(quickNav.querySelectorAll('[data-settings-quick-action]')).map(btn=>String(btn.dataset.settingsQuickAction||'')): [];
   const searchRow=document.querySelector('.settings-search-row');
+  const commandbar=$('settings-nav-commandbar');
+  const commandLabels=commandbar?Array.from(commandbar.querySelectorAll('button')).map(btn=>String(btn.textContent||'').trim()):[];
+  const topSearchbar=settingsFrame?Array.from(settingsFrame.children).find(child=>child&&child.id==='settings-searchbar'):null;
   const scopeControl=document.querySelector('.settings-scope-control');
   const navScope=$('settings-nav-scope');
   const navScopeTabs=navScope?navScope.querySelector('.settings-nav-scope-tabs'):null;
@@ -29535,6 +29590,8 @@ function settingsUiSelfCheckSnapshot(){
     hasSidebarQuickSettingsActions:!!(quickNav&&String(getComputedStyle(quickNav).display)!=='none'&&quickLabels.includes('Commonly Used')&&quickLabels.includes('Extensions')&&quickLabels.includes('Settings JSON')),
     hasSidebarSettingsCommands:!!(quickNav&&quickNav.dataset.settingsCommandSurface==='sidebar'&&quickLabels.includes('Details')&&quickLabels.includes('Keyboard Shortcuts')&&quickLabels.includes('Settings JSON')),
     hasSidebarSettingsCommandActions:quickActions.includes('details')&&quickActions.includes('settings-json')&&quickActions.includes('keyboard-shortcuts'),
+    hasSidebarSettingsCommandbar:!!(commandbar&&commandbar.dataset.settingsCommandSurface==='sidebar'&&commandLabels.includes('Settings JSON{}')&&commandLabels.includes('Keyboard Shortcuts⌘')&&commandLabels.includes('Details⋯')),
+    hasNoVisibleTopSettingsBar:!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&(!settingsTitlebar||String(getComputedStyle(settingsTitlebar).display)==='none')&&(!topSearchbar||String(getComputedStyle(topSearchbar).display)==='none')),
     hasCompactSearchScopeStack:!!(searchRow&&scopeControl&&String(getComputedStyle(searchRow).gridTemplateColumns||'').split(' ').filter(Boolean).length<=1&&String(getComputedStyle(scopeControl).justifySelf||'')==='start'),
     hasDefaultHiddenTopScope:topScopeHidden,
     hasSidebarScopeControl:!!(navScope&&navScopeTabs&&navScopeButtons.length>=3&&String(getComputedStyle(navScope).display)!=='none'),

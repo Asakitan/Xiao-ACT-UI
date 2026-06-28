@@ -17100,7 +17100,7 @@ def _launch_subprocess() -> None:
     if not os.path.isfile(html_file):
         print(f"[AIEditor] HTML not found: {html_file}")
         return
-    if _activate_existing_ai_editor_window():
+    if _activate_existing_ai_editor_window(skip_current_process=True):
         print("[AIEditor] activated existing window")
         return
     if not os.environ.get(_AI_EDITOR_FORCE_NEW_ENV) and _recent_child_launch_alive():
@@ -17325,7 +17325,22 @@ def _window_title_for_handle(hwnd: int, user32: Any = None) -> str:
         return ""
 
 
-def _find_ai_editor_window() -> int:
+def _window_process_id(hwnd: int, user32: Any = None) -> int:
+    if sys.platform != "win32" or not hwnd:
+        return 0
+    try:
+        import ctypes
+        if user32 is None:
+            user32 = ctypes.windll.user32
+        pid = ctypes.c_ulong(0)
+        user32.GetWindowThreadProcessId(
+            ctypes.c_void_p(int(hwnd)), ctypes.byref(pid))
+        return int(pid.value or 0)
+    except Exception:
+        return 0
+
+
+def _find_ai_editor_window(skip_current_process: bool = False) -> int:
     if sys.platform != "win32":
         return 0
     try:
@@ -17337,6 +17352,8 @@ def _find_ai_editor_window() -> int:
         @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         def _enum(hwnd: Any, _lparam: Any) -> bool:
             handle = int(hwnd or 0)
+            if skip_current_process and _window_process_id(handle, user32) == os.getpid():
+                return True
             if _window_title_for_handle(handle, user32) == _AI_EDITOR_WINDOW_TITLE:
                 matches.append(handle)
             return True
@@ -17355,6 +17372,8 @@ def _find_ai_editor_window() -> int:
             user32 = ctypes.windll.user32
             user32.FindWindowW.restype = ctypes.c_void_p
             hwnd = int(user32.FindWindowW(None, _AI_EDITOR_WINDOW_TITLE) or 0)
+            if skip_current_process and _window_process_id(hwnd, user32) == os.getpid():
+                return 0
             return 0 if _window_handle_cloaked(hwnd) else hwnd
         except Exception:
             return 0
@@ -17522,12 +17541,12 @@ def _activate_window_handle(hwnd: int, keep_topmost_seconds: float = 0.9) -> boo
         return False
 
 
-def _activate_existing_ai_editor_window() -> bool:
+def _activate_existing_ai_editor_window(skip_current_process: bool = False) -> bool:
     if os.environ.get(_AI_EDITOR_FORCE_NEW_ENV):
         _append_ai_editor_log(
             f"existing window activation skipped by {_AI_EDITOR_FORCE_NEW_ENV}")
         return False
-    hwnd = _find_ai_editor_window()
+    hwnd = _find_ai_editor_window(skip_current_process=skip_current_process)
     if not hwnd:
         _append_ai_editor_log("no usable existing window found")
         return False
