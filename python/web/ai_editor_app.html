@@ -2418,11 +2418,13 @@ pre.code-block { overflow:visible; }
 .settings-field.modified .s-reset { display:inline-block; }
 .settings-field.invalid, .settings-input-invalid { border-color:var(--fg-error) !important; }
 .settings-field.settings-target-hidden { display:none !important; }
-.settings-field.builtin-setting { padding:8px 32px 8px 10px; border-radius:4px; margin:3px 0 7px;
+.settings-field.builtin-setting { position:relative; display:grid; grid-template-columns:minmax(250px,.72fr) minmax(280px,1fr);
+  gap:4px 18px; align-items:start; padding:9px 34px 9px 10px; border-radius:4px; margin:3px 0 7px;
   border-left:2px solid transparent; border-bottom:1px solid color-mix(in srgb,var(--border) 42%,transparent);
   background:transparent; transition:background .12s ease, border-color .12s ease, box-shadow .12s ease; }
 .settings-field.builtin-setting.has-row-actions { padding-right:118px; }
-.settings-field.builtin-setting:hover,.settings-field.builtin-setting:focus-within { background:color-mix(in srgb,var(--bg-hover) 62%,transparent); }
+.settings-field.builtin-setting:hover,.settings-field.builtin-setting:focus-within { background:color-mix(in srgb,var(--bg-hover) 62%,transparent);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--border) 45%,transparent); }
 .settings-field.builtin-setting:focus { outline:1px solid color-mix(in srgb,var(--border-focus) 55%,transparent); outline-offset:-1px; }
 .settings-field.highlight { animation:settingsSectionFlash .65s ease-out; }
 .settings-field.settings-current { outline:1px solid color-mix(in srgb,var(--border-focus) 70%,transparent); outline-offset:-1px;
@@ -2432,6 +2434,29 @@ pre.code-block { overflow:visible; }
 @keyframes settingsSavedFlash { from{background:color-mix(in srgb,var(--fg-success) 13%,transparent)} to{background:transparent} }
 .settings-field.builtin-setting .s-reset { top:8px; transform:none; }
 .settings-field.has-row-actions .s-reset { right:112px; }
+.settings-field.builtin-setting > .settings-built-head,
+.settings-field.builtin-setting > .settings-built-desc,
+.settings-field.builtin-setting > .settings-value-summary,
+.settings-field.builtin-setting > .settings-row-impact,
+.settings-field.builtin-setting > .settings-built-meta,
+.settings-field.builtin-setting > .settings-built-foot,
+.settings-field.builtin-setting > .settings-match-summary,
+.settings-field.builtin-setting > .settings-error-text {
+  grid-column:1;
+}
+.settings-field.builtin-setting > .settings-control-frame {
+  grid-column:2; grid-row:1 / span 7; align-self:start; margin-top:0;
+}
+.settings-field.builtin-setting[data-setting-control-kind="textarea"] > .settings-control-frame,
+.settings-field.builtin-setting[data-setting-control-kind="json"] > .settings-control-frame {
+  grid-column:1 / -1; grid-row:auto; margin-top:6px;
+}
+.settings-field.builtin-setting[data-setting-control-kind="checkbox"] > .settings-control-frame {
+  min-height:34px;
+}
+.settings-field.builtin-setting[data-setting-control-kind="secret"] .settings-control-status {
+  color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 42%,var(--border));
+}
 .settings-modal.compact .settings-searchbar { padding-top:7px; padding-bottom:6px; gap:6px; }
 .settings-modal.compact .settings-main { padding-top:5px; padding-bottom:12px; }
 .settings-modal.compact .settings-nav { padding-top:6px; }
@@ -2445,8 +2470,8 @@ pre.code-block { overflow:visible; }
 .settings-field.builtin-setting > label:first-child,
 .settings-field.builtin-setting > .settings-check:first-child { margin-top:0; }
 .settings-field.builtin-setting > label.settings-original-label { display:none; }
-.settings-built-head { display:grid; grid-template-columns:minmax(150px,260px) minmax(0,1fr) auto;
-  align-items:center; gap:8px; min-height:22px; margin:0 0 4px; }
+.settings-built-head { display:grid; grid-template-columns:minmax(120px,auto) minmax(0,1fr) auto;
+  align-items:center; gap:8px; min-height:22px; margin:0 0 2px; }
 .settings-built-head-title { min-width:0; color:var(--fg); font-weight:600; font-size:12px;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .settings-built-head code { user-select:all; color:var(--fg-dim); background:transparent;
@@ -2457,7 +2482,7 @@ pre.code-block { overflow:visible; }
 .settings-built-head-state.edited { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); }
 .settings-built-head-state.default { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 42%,var(--border)); }
 .settings-built-head-state.override { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
-.settings-built-meta { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin:5px 0 1px;
+.settings-built-meta { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin:3px 0 1px;
   color:var(--fg-dim); font:10px var(--mono); }
 .settings-built-meta code { user-select:all; color:var(--fg); background:var(--bg3);
   border:1px solid var(--border); border-radius:3px; padding:1px 4px; font:10px var(--mono); }
@@ -2487,7 +2512,7 @@ pre.code-block { overflow:visible; }
 .settings-field.settings-current .settings-built-chip.current,.settings-field.modified .settings-built-chip.current {
   display:inline-flex;
 }
-.settings-built-desc { margin:3px 0 0; color:var(--fg-dim); font-size:11px; line-height:1.35; }
+.settings-built-desc { margin:1px 0 0; color:var(--fg-dim); font-size:11px; line-height:1.38; max-width:620px; }
 .settings-value-summary { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin:4px 0 6px;
   color:var(--fg-dim); font:10px var(--mono); }
 .settings-value-summary span { display:inline-flex; min-height:17px; max-width:340px; align-items:center;
@@ -2512,8 +2537,8 @@ pre.code-block { overflow:visible; }
 .settings-search-hit > .settings-match-summary { display:block; }
 .settings-search-hit { box-shadow:inset 2px 0 0 color-mix(in srgb,var(--fg-accent) 55%,transparent); }
 .settings-control-frame { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:8px;
-  margin:6px 0 3px; padding:6px 8px; border:1px solid color-mix(in srgb,var(--border) 78%,transparent);
-  border-radius:5px; background:color-mix(in srgb,var(--bg-input) 72%,transparent);
+  min-height:32px; margin:6px 0 3px; padding:5px 7px; border:1px solid color-mix(in srgb,var(--border) 72%,transparent);
+  border-radius:4px; background:color-mix(in srgb,var(--bg-input) 62%,transparent);
   transition:border-color .12s ease, background .12s ease, box-shadow .12s ease; }
 .settings-control-frame:focus-within { border-color:var(--border-focus);
   box-shadow:0 0 0 1px color-mix(in srgb,var(--border-focus) 20%,transparent);
@@ -2536,6 +2561,9 @@ pre.code-block { overflow:visible; }
 .settings-control-status { justify-self:end; max-width:220px; min-height:18px; display:inline-flex; align-items:center;
   padding:0 6px; border:1px solid var(--border); border-radius:999px; background:var(--bg3);
   color:var(--fg-dim); font:10px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-control-frame[data-setting-control-focused="1"] .settings-control-status {
+  color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border));
+}
 .settings-control-frame.modified .settings-control-status { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); }
 .settings-control-frame.override .settings-control-status { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
 .settings-control-frame.default .settings-control-status { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 42%,var(--border)); }
@@ -2564,7 +2592,9 @@ pre.code-block { overflow:visible; }
 .settings-row-actions { position:absolute; top:6px; right:6px; display:flex; align-items:center; gap:3px;
   opacity:0; transform:translateY(-1px); transition:opacity .12s ease, transform .12s ease; z-index:2; }
 .settings-field:hover > .settings-row-actions,.settings-field:focus-within > .settings-row-actions,
-.settings-field:focus > .settings-row-actions { opacity:1; transform:translateY(0); }
+.settings-field:focus > .settings-row-actions,.settings-field.settings-current > .settings-row-actions {
+  opacity:1; transform:translateY(0);
+}
 .settings-row-action { width:22px; height:22px; border:1px solid var(--border); border-radius:4px;
   background:var(--bg2); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; padding:0; }
 .settings-row-action.wide { width:auto; min-width:42px; padding:0 6px; }
@@ -5011,6 +5041,7 @@ function settingsEnsureControlFrame(wrap,el,meta,inputId){
   frame.dataset.settingControlFrame='1';
   frame.dataset.controlKind=settingsControlKind(el,meta);
   frame.dataset.settingInputId=inputId||el.id||'';
+  wrap.dataset.settingControlKind=frame.dataset.controlKind;
   parent.insertBefore(frame,target);
   frame.appendChild(target);
   const status=document.createElement('span');
@@ -5018,12 +5049,19 @@ function settingsEnsureControlFrame(wrap,el,meta,inputId){
   status.dataset.settingControlStatus='1';
   status.textContent='Inherited';
   frame.appendChild(status);
+  frame.addEventListener('click',ev=>{
+    if(ev.target&&ev.target.closest&&ev.target.closest('input,select,textarea,button,a'))return;
+    try{el.focus({preventScroll:true})}catch(e){try{el.focus()}catch(_e){}}
+  });
+  el.addEventListener('focus',()=>{frame.dataset.settingControlFocused='1'});
+  el.addEventListener('blur',()=>{delete frame.dataset.settingControlFocused});
   return frame;
 }
 function settingsUpdateControlFrame(wrap,meta,value){
   if(!wrap||!meta)return;
   const frame=wrap.querySelector('[data-setting-control-frame="1"]');
   if(!frame)return;
+  wrap.dataset.settingControlKind=frame.dataset.controlKind||wrap.dataset.settingControlKind||'input';
   const state=settingValueState(meta,value,currentSettingsTarget);
   const scoped=settingHasTargetValue(meta,currentSettingsTarget);
   const invalid=wrap.classList.contains('invalid')||!!wrap.querySelector('[aria-invalid="true"]');
@@ -5036,7 +5074,9 @@ function settingsUpdateControlFrame(wrap,meta,value){
   const status=frame.querySelector('[data-setting-control-status="1"]');
   if(status){
     const targetLabel=settingsTargetDisplayName(currentSettingsTarget);
-    status.textContent=invalid?'Invalid':state.label+' · '+targetLabel;
+    const kind=String(frame.dataset.controlKind||'input');
+    const kindLabel=kind==='secret'?'Secret':kind==='json'?'JSON':kind==='select'?'Choice':kind==='checkbox'?'Toggle':kind==='number'?'Number':kind==='textarea'?'Text':'Value';
+    status.textContent=invalid?'Invalid':kindLabel+' · '+state.label+' · '+targetLabel;
     status.title=(meta.key||meta.path||'Setting')+' - '+status.textContent;
   }
 }
@@ -5088,6 +5128,7 @@ function wrapSettingsField(inputId){
   settingsEnsureControlFrame(wrap,el,meta,inputId);
   settingsUpdateBuiltInValueSummary(wrap,meta,settingsInputValue(el,meta));
   settingsUpdateControlFrame(wrap,meta,settingsInputValue(el,meta));
+  settingsRenderRowImpact(wrap);
 }
 function markSettingsModified(){
   let modifiedCount=0;
@@ -5099,6 +5140,7 @@ function markSettingsModified(){
     const cur=settingsInputValue(el,meta);
     settingsUpdateBuiltInValueSummary(wrap,meta,cur);
     settingsUpdateControlFrame(wrap,meta,cur);
+    settingsRenderRowImpact(wrap);
     const modified=settingIsTargetModified(meta,cur,currentSettingsTarget);
     wrap.classList.toggle('modified',modified);
     wrap.dataset.settingModified=modified?'1':'0';

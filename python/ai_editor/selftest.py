@@ -4295,6 +4295,18 @@ def test_phase1_ai_editor_regressions() -> None:
            and "entry['files.trimFinalNewlines']" in html
            and "saveEditorLanguageOverrideSettings();" in html
            and "saveFilesLanguageOverrideSettings();" in html)
+    _check("frontend Settings uses VS Code-style setting rows",
+           ".settings-field.builtin-setting { position:relative; display:grid; grid-template-columns:minmax(250px,.72fr) minmax(280px,1fr);" in html
+           and ".settings-field.builtin-setting > .settings-control-frame" in html
+           and "grid-column:2; grid-row:1 / span 7;" in html
+           and '.settings-field.builtin-setting[data-setting-control-kind="textarea"] > .settings-control-frame' in html
+           and '.settings-field.builtin-setting[data-setting-control-kind="json"] > .settings-control-frame' in html
+           and ".settings-field:focus > .settings-row-actions,.settings-field.settings-current > .settings-row-actions" in html
+           and "wrap.dataset.settingControlKind=frame.dataset.controlKind;" in html
+           and "frame.addEventListener('click',ev=>" in html
+           and "el.addEventListener('focus',()=>{frame.dataset.settingControlFocused='1'});" in html
+           and "kind==='secret'?'Secret':kind==='json'?'JSON':kind==='select'?'Choice':kind==='checkbox'?'Toggle':kind==='number'?'Number':kind==='textarea'?'Text':'Value';" in html
+           and "settingsRenderRowImpact(wrap);" in html)
     _check("provider webviews bridge persistent vscode state",
            'type:"webview-set-state"' in html
            and 'webview_set_state' in html
@@ -9692,7 +9704,7 @@ console.log("frontend word separator behavior ok");
              and "function settingsUpdateControlFrame(wrap,meta,value)" in html
              and "frame.dataset.controlKind=settingsControlKind(el,meta)" in html
              and "settingsUpdateControlFrame(wrap,meta,settingsInputValue(el,meta));" in html
-             and "status.textContent=invalid?'Invalid':state.label+' · '+targetLabel;" in html
+             and "status.textContent=invalid?'Invalid':kindLabel+' · '+state.label+' · '+targetLabel;" in html
               and "filters={modified:false,overrides:false,common:false,error:false,json:false,extensions:false,scopes:[],ids:[],tags:[],features:[],extensionIds:[],languages:[]}" in html
               and "Setting: '+raw.slice(3)" in html
               and "@([A-Za-z][A-Za-z0-9_-]*)" in html
@@ -10000,7 +10012,7 @@ console.log("frontend word separator behavior ok");
             and "function settingsOriginalLabelText(wrap)" in html
             and "originalLabel.classList.add('settings-original-label')" in html
             and "title.textContent=settingsOriginalLabelText(wrap)||settingFriendlyName(meta,inputId)" in html
-            and "grid-template-columns:minmax(150px,260px) minmax(0,1fr) auto" in html
+            and "grid-template-columns:minmax(120px,auto) minmax(0,1fr) auto" in html
             and "settingsTargetDisplayName(target)+': '+String(Number(safeStats[target]||0))" in html
             and "hasResultCount" in html
             and "hasNavFilterCount" in html
