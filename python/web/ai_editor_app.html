@@ -25696,6 +25696,7 @@ function settingsUiSelfCheckSnapshot(){
     hasExtensionPerformanceStatus:!!$('ext-settings-perf'),
     extensionPerformance:typeof extensionSettingRenderStats==='function'?extensionSettingRenderStats():{},
     extensionVirtualization:typeof extensionSettingVirtualizationStats==='function'?extensionSettingVirtualizationStats($('ext-settings-container')):{},
+    hasExtensionAutoVirtualization:!!(main&&main.dataset&&main.dataset.extSettingsVirtualScroll==='1'),
     density:settingsReadDensity(),
     currentTarget:currentSettingsTarget,
     navItems:navItems.length,
@@ -29656,7 +29657,9 @@ let _extensionSettingDynamicSuggestionCache=null;
 let _extensionSettingsFilterTimer=0;
 const EXTENSION_SETTINGS_INITIAL_SECTION_ROWS=80;
 const EXTENSION_SETTINGS_SECTION_ROW_BATCH=80;
+const EXTENSION_SETTINGS_AUTO_APPEND_THRESHOLD=420;
 let _extensionSettingRenderStats={rows:0,sections:0,renderMs:0,yields:0,filteredAt:0,filterMs:0};
+let _extensionSettingAutoAppendTimer=0;
 function invalidateExtensionSettingFilterDomCache(){_extensionSettingFilterDomCache=null;_extensionSettingDynamicSuggestionCache=null}
 function extensionSettingFilterDomCache(container){
   if(_extensionSettingFilterDomCache&&_extensionSettingFilterDomCache.container===container)return _extensionSettingFilterDomCache;
@@ -29740,7 +29743,7 @@ function extensionSettingAppendVirtualRows(section,count){
     more.dataset.pendingRows=String(pending);
     more.style.display=pending?'flex':'none';
     const label=more.querySelector('[data-ext-settings-more-label]');
-    if(label)label.textContent=pending?('Showing '+rendered+' of '+factories.length+' settings'):'All '+factories.length+' settings shown';
+    if(label)label.textContent=pending?('Showing '+rendered+' of '+factories.length+' settings · scroll to load more'):'All '+factories.length+' settings shown';
   }
   if(added){
     invalidateExtensionSettingFilterDomCache();
@@ -29748,6 +29751,53 @@ function extensionSettingAppendVirtualRows(section,count){
     extensionSettingPreheatLazyRows(section,8);
   }
   return added;
+}
+function extensionSettingVirtualSectionPending(section){
+  if(!section||!section.dataset)return 0;
+  const total=Number(section.dataset.extVirtualTotal||0);
+  const rendered=Number(section.dataset.extVirtualRendered||0);
+  return Math.max(0,total-rendered);
+}
+function extensionSettingVisibleVirtualSections(container){
+  const root=container||$('ext-settings-container');
+  return Array.from((root&&root.querySelectorAll)?root.querySelectorAll('details[data-ext-settings-section]'):[])
+    .filter(section=>section.style.display!=='none'&&extensionSettingVirtualSectionPending(section)>0);
+}
+function extensionSettingAppendPendingSectionRows(container,anchor,count){
+  const root=container||$('ext-settings-container');
+  let section=anchor&&anchor.closest?anchor.closest('details[data-ext-settings-section]'):null;
+  if(!section||extensionSettingVirtualSectionPending(section)<=0){
+    section=extensionSettingVisibleVirtualSections(root).find(Boolean);
+  }
+  if(!section)return 0;
+  return extensionSettingAppendVirtualRows(section,count||EXTENSION_SETTINGS_SECTION_ROW_BATCH);
+}
+function extensionSettingNearScrollEnd(scroller,threshold){
+  if(!scroller)return false;
+  const remaining=Number(scroller.scrollHeight||0)-Number(scroller.scrollTop||0)-Number(scroller.clientHeight||0);
+  return remaining<=Number(threshold||EXTENSION_SETTINGS_AUTO_APPEND_THRESHOLD);
+}
+function extensionSettingAutoAppendPendingRows(container,reason){
+  const scroller=typeof settingsMainElement==='function'?settingsMainElement():null;
+  if(reason==='scroll'&&scroller&&!extensionSettingNearScrollEnd(scroller))return 0;
+  const added=extensionSettingAppendPendingSectionRows(container,null,EXTENSION_SETTINGS_SECTION_ROW_BATCH);
+  if(added){
+    applyExtensionSettingsFilter();
+  }
+  return added;
+}
+function extensionSettingScheduleAutoAppend(container,reason){
+  clearTimeout(_extensionSettingAutoAppendTimer);
+  _extensionSettingAutoAppendTimer=setTimeout(()=>{
+    _extensionSettingAutoAppendTimer=0;
+    extensionSettingAutoAppendPendingRows(container,reason||'scroll');
+  },45);
+}
+function extensionSettingInstallAutoVirtualization(container){
+  const scroller=typeof settingsMainElement==='function'?settingsMainElement():null;
+  if(!scroller||scroller.dataset.extSettingsVirtualScroll==='1')return;
+  scroller.dataset.extSettingsVirtualScroll='1';
+  scroller.addEventListener('scroll',()=>extensionSettingScheduleAutoAppend(container,'scroll'),{passive:true});
 }
 function extensionSettingEnsureAllRowsRendered(container){
   const root=container||$('ext-settings-container');
@@ -30062,11 +30112,19 @@ function extensionSettingFocusRow(row,options){
   return true;
 }
 function extensionSettingFocusVisibleRow(delta){
-  const rows=extensionSettingVisibleRows();
+  let rows=extensionSettingVisibleRows();
   if(!rows.length)return false;
   const active=document.activeElement&&document.activeElement.closest?document.activeElement.closest('.ext-setting-row'):null;
   let index=active?rows.indexOf(active):-1;
-  index=(index+Number(delta||1)+rows.length)%rows.length;
+  const step=Number(delta||1);
+  const rawIndex=index+step;
+  if(step>0&&rawIndex>=rows.length-3&&extensionSettingAppendPendingSectionRows(null,rows[Math.max(0,index)],EXTENSION_SETTINGS_SECTION_ROW_BATCH)){
+    applyExtensionSettingsFilter();
+    rows=extensionSettingVisibleRows();
+    index=Math.min(rawIndex,rows.length-1);
+  }else{
+    index=(rawIndex+rows.length)%rows.length;
+  }
   return extensionSettingFocusRow(rows[index],{block:'nearest'});
 }
 function extensionSettingFocusFirstModifiedSetting(){
@@ -31107,6 +31165,7 @@ async function renderExtensionSettings(){
   const virtualStats=extensionSettingVirtualizationStats(container);
   extensionSettingSetRenderStats({rows:virtualStats.renderedRows||renderedRows,totalRows:virtualStats.totalRows||renderedRows,pendingRows:virtualStats.pendingRows||0,virtualSections:virtualStats.virtualSections||0,sections:renderCache.sections.length,renderMs:extensionSettingNow()-renderStarted,yields:yieldCount,filterMs:0});
   extensionSettingPreheatLazyRows(container,18);
+  extensionSettingInstallAutoVirtualization(container);
   extensionSettingRestoreFilterState();
   categorySelect.onchange=()=>scheduleExtensionSettingsFilter(0);
   scopeSelect.onchange=()=>scheduleExtensionSettingsFilter(0);

@@ -10102,10 +10102,15 @@ console.log("frontend word separator behavior ok");
             and "function extensionSettingInstallLazyHydration(host,hydrate)" in html
             and "function extensionSettingPreheatLazyRows(container,limit)" in html
             and "const EXTENSION_SETTINGS_INITIAL_SECTION_ROWS=80;" in html
+            and "const EXTENSION_SETTINGS_AUTO_APPEND_THRESHOLD=420;" in html
             and "function extensionSettingInstallSectionVirtualRows(section,inner,rowFactories)" in html
             and "function extensionSettingAppendVirtualRows(section,count)" in html
+            and "function extensionSettingAutoAppendPendingRows(container,reason)" in html
+            and "function extensionSettingInstallAutoVirtualization(container)" in html
             and "function extensionSettingEnsureAllRowsRendered(container)" in html
             and "extensionSettingEnsureAllRowsRendered(container)" in html
+            and "extensionSettingInstallAutoVirtualization(container);" in html
+            and "hasExtensionAutoVirtualization" in html
             and ".ext-settings-more" in html
             and "function appendExtensionSettingEnumChoiceItems(wrap,schema,type,defaultValue,input)" in html
             and "ext-settings-perf" in html
@@ -10557,6 +10562,13 @@ console.log("frontend word separator behavior ok");
             "extensionSettingUpdateVirtualStats",
             "extensionSettingInsertBeforeMore",
             "extensionSettingAppendVirtualRows",
+            "extensionSettingVirtualSectionPending",
+            "extensionSettingVisibleVirtualSections",
+            "extensionSettingAppendPendingSectionRows",
+            "extensionSettingNearScrollEnd",
+            "extensionSettingAutoAppendPendingRows",
+            "extensionSettingScheduleAutoAppend",
+            "extensionSettingInstallAutoVirtualization",
             "extensionSettingEnsureAllRowsRendered",
             "extensionSettingInstallSectionVirtualRows",
             "extensionSettingLazyHydrationStats",
@@ -10637,6 +10649,7 @@ function assert(ok,label){ if(!ok){ throw new Error(label); } }
 const EXTENSION_SETTINGS_FILTER_STATE_KEY='sao-ai-ext-settings-filter-v1';
 const EXTENSION_SETTINGS_INITIAL_SECTION_ROWS=80;
 const EXTENSION_SETTINGS_SECTION_ROW_BATCH=80;
+const EXTENSION_SETTINGS_AUTO_APPEND_THRESHOLD=420;
 globalThis.window = { location: { href: "https://example.invalid/settings" } };
 let _extensionSettingFilterDomCache = null;
 let _extensionSettingDynamicSuggestionCache = null;
@@ -10731,6 +10744,15 @@ const fakeScope = { value: "window" };
 const fakeTarget = { value: "workspace" };
 const fakePerf = { textContent: "", title: "" };
 const fakeExtSettingsContainer = makeNode("div");
+const fakeSettingsMain = {
+  dataset: {},
+  scrollHeight: 1000,
+  scrollTop: 0,
+  clientHeight: 100,
+  listeners: {},
+  addEventListener(type,handler){ this.listeners[type] = handler; },
+};
+function settingsMainElement(){ return fakeSettingsMain; }
 globalThis.$ = id => id === "settings-search" ? fakeSearch : (
   id === "ext-settings-modified" ? fakeModified : (
   id === "ext-settings-hidden" ? fakeHidden : (
@@ -11300,6 +11322,37 @@ assert(virtualInner.querySelectorAll(".ext-setting-row").length === 125
        && virtualStats.pendingRows === 0
        && fakePerf.textContent.indexOf("125 rows") >= 0,
        "extension settings virtual section can materialize all rows for accurate filtering");
+const autoContainer = makeNode("div");
+const autoSection = makeNode("details");
+autoSection.dataset.extSettingsSection = "1";
+const autoInner = makeNode("div");
+autoContainer.appendChild(autoSection);
+autoSection.appendChild(autoInner);
+const autoFactories = Array.from({ length: 125 }, (_, index) => () => {
+  const row = makeNode("div");
+  row.className = "ext-setting-row";
+  row.dataset.extSettingKey = "auto." + index;
+  return row;
+});
+extensionSettingInstallSectionVirtualRows(autoSection, autoInner, autoFactories);
+assert(extensionSettingVirtualSectionPending(autoSection) === 45
+       && extensionSettingVisibleVirtualSections(autoContainer).length === 1,
+       "extension settings virtualization exposes pending visible sections");
+fakeSettingsMain.scrollTop = 100;
+assert(extensionSettingAutoAppendPendingRows(autoContainer, "scroll") === 0
+       && autoSection.dataset.extVirtualRendered === "80",
+       "extension settings auto append waits until the scroller is near the end");
+fakeSettingsMain.scrollTop = 500;
+const beforeAutoFilterCount = filterApplyCount;
+assert(extensionSettingNearScrollEnd(fakeSettingsMain)
+       && extensionSettingAutoAppendPendingRows(autoContainer, "scroll") === 45
+       && autoSection.dataset.extVirtualRendered === "125"
+       && filterApplyCount > beforeAutoFilterCount,
+       "extension settings auto append materializes the next pending section near scroll end");
+extensionSettingInstallAutoVirtualization(autoContainer);
+assert(fakeSettingsMain.dataset.extSettingsVirtualScroll === "1"
+       && typeof fakeSettingsMain.listeners.scroll === "function",
+       "extension settings installs one scroll listener for automatic progressive loading");
 assert(extensionSettingQuotedFilterValue("auto mode") === '"auto mode"'
        && extensionSettingQuotedFilterValue("auto") === "auto",
        "settings filter token values quote whitespace only when needed");
