@@ -4999,7 +4999,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function workflowRunSummary(workflow)" in html
            and "function renderWorkflowLaunchSummary(body,launch)" in html
            and "function refreshWorkflowRunCardState(card,forcedStatus)" in html
+           and "function updateWorkflowRunStepStatusOnCard(card,data)" in html
            and "function updateWorkflowRunStepStatus(runId,data)" in html
+           and "querySelectorAll('.workflow-run-card[data-workflow-run-id=\"" in html
            and "function setAssistantWorkflowRunState(active,opts)" in html
            and "function assistantWorkflowNormalizeRuns(runs)" in html
            and "function assistantWorkflowUpsertRun(run)" in html
@@ -5009,6 +5011,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function renderWorkflowResultSummary(body,result,launch)" in html
            and "async function runWorkflowEngineAsAssistant(workflow,inputText,launch,refs)" in html
            and "call('run_workflow',id,inputText,launch.workflowRunId,workflowLaunchNativeMetadata(launch))" in html
+           and "liveCard.classList.add('workflow-run-live')" in html
+           and "liveCard.dataset.workflowTranscriptRole='assistant-live'" in html
            and "call('cancel_workflow',assistantWorkflowActiveRunId)" in html
            and "call('provider_cancel',activeProviderId||'chat')" in html
            and "const canUseBackend=!opts.forcePrompt&&id&&id!=='custom'&&api()&&api().run_workflow;" in html
@@ -5045,6 +5049,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "workflowMethod:canUseBackend?'backend':'prompt'" in html
            and "sessionResource:assistantSessionResource()" in html
            and "inputPreview:workflowInputPreview(inputText)" in html
+           and "workflow-run-transcript-cards-sync" in html
            and "noteAssistantChatRequest(text,sendContext.refs,toolHint,opts.workflowLaunch)" in html)
     _check("frontend Assistant workflow popup exposes saved workflow edit actions",
            ".workflow-popup-actions" in html
@@ -11424,7 +11429,10 @@ console.log("frontend word separator behavior ok");
            and "['Manifest + Runtime',summary.manifestRuntimeSurfaces||rows.filter(row=>row.source==='manifest+runtime').length]" in html
            and "['Runtime Only',summary.runtimeOnlySurfaces||rows.filter(row=>row.source==='runtime-only').length]" in html
            and "['Webview HTML',summary.webviewHtmlAvailable||0]" in html
+           and "['Webview Ready',rows.filter(row=>row.kind==='WebviewView'&&row.webviewReadiness==='ready').length]" in html
+           and "['Webview Warnings',rows.filter(row=>row.kind==='WebviewView'&&row.webviewReadiness&&row.webviewReadiness!=='ready').length]" in html
            and "webviewEvidence:evidence" in html
+           and "webviewReadiness:evidence.readiness||readiness.kind" in html
            and "el.dataset.webviewHtmlAvailable=row.htmlAvailable?'1':'0';" in html
            and "['Resource Roots',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.localResourceRootCount)||0):0),0)]" in html
            and "['Port Mappings',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.portMappingCount)||0):0),0)]" in html
@@ -11432,8 +11440,13 @@ console.log("frontend word separator behavior ok");
            and "el.dataset.webviewPortMappingCount=String(row.webviewEvidence&&row.webviewEvidence.portMappingCount||0);" in html
            and "el.dataset.webviewAsWebviewUriReady=row.webviewEvidence&&row.webviewEvidence.asWebviewUriReady?'1':'0';" in html
            and "el.dataset.webviewResourceEndpointReady=row.webviewEvidence&&row.webviewEvidence.resourceEndpointReady?'1':'0';" in html
+           and "el.dataset.webviewReadiness=row.webviewReadiness||row.webviewEvidence&&row.webviewEvidence.readiness||'';" in html
+           and "el.dataset.webviewReadinessIssues=(row.webviewReadinessIssues||row.webviewEvidence&&row.webviewEvidence.readinessIssues||[]).join(',');" in html
            and "evidence.asWebviewUriReady?'aswebviewuri-ready':''" in html
            and "ev.asWebviewUriReady?{text:'asWebviewUri ready'}:null" in html
+           and "row.webviewReadiness?{text:'readiness '+row.webviewReadiness" in html
+           and "runtimeWebviewReadyRows" in html
+           and "runtimeWebviewWarningRows" in html
            and "extension-runtime-tag webview-evidence" in html
            and "snapshot.runtimeWebviewEvidenceRows>=6" in html
            and "snapshot.runtimeMissingEvidenceRows>=1" in html
@@ -13586,6 +13599,7 @@ console.log("extension setting schema helpers ok");
             and "window.pywebview.api.execute_command(node.command.command" in html
            and "function renderExtensionWebviewView(view)" in html
            and "function extensionWebviewViewEvidence(view,state,html)" in html
+           and "function extensionWebviewViewReadiness(evidence)" in html
            and "function appendExtensionWebviewViewStatus(body,view,state,evidence)" in html
            and "function applyExtensionWebviewViewDataset(target,evidence)" in html
            and "extension-webview-view-status" in html
@@ -13599,6 +13613,11 @@ console.log("extension setting schema helpers ok");
            and "target.dataset.webviewResourceEndpointReady=evidence.resourceEndpointReady?'1':'0';" in html
            and "target.dataset.webviewResourceMapReady=evidence.resourceMapReady?'1':'0';" in html
            and "target.dataset.webviewResourceRewriteBreakdown=String(evidence.resourceRewriteBreakdown||'0/0/0/0/0');" in html
+           and "target.dataset.webviewReadiness=String(evidence.readiness||'');" in html
+           and "target.dataset.webviewReadinessScore=String(evidence.readinessScore||0);" in html
+           and "target.dataset.webviewReadinessIssues=Array.isArray(evidence.readinessIssues)?evidence.readinessIssues.join(','):'';" in html
+           and "Readiness: '+(evidence.readiness||'-')+' '+String(evidence.readinessScore||0)+'/100'" in html
+           and "addChip('readiness '+(evidence.readiness||'unknown')" in html
            and "addChip('roots '+evidence.localResourceRootCount,'accent')" in html
            and "addChip('asWebviewUri ready','accent')" in html
            and "addChip('endpoint ready','accent')" in html

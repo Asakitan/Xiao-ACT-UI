@@ -12041,9 +12041,12 @@ async function runAssistantUiSelfCheck(opts){
   workflowBody.style.display='none';
   document.body.appendChild(workflowBody);
   const workflowCard=renderWorkflowLaunchSummary(workflowBody,{workflowId:'selfcheck-flow',workflowLabel:'Selfcheck Flow',workflowRunId:'wf-selfcheck',workflowMode:'on',workflowMethod:'backend',sessionResource:'sao-ai-chat://local/selfcheck',inputPreview:'selfcheck workflow input',workflowStepCount:2,workflowAgents:['default','reviewer'],workflowStepLabels:['Inspect','Review'],workflowStepOutputVars:['inspection','review']});
+  const workflowLiveCard=renderWorkflowLaunchSummary(workflowBody,{workflowId:'selfcheck-flow',workflowLabel:'Selfcheck Flow Live',workflowRunId:'wf-selfcheck',workflowMode:'on',workflowMethod:'backend',sessionResource:'sao-ai-chat://local/selfcheck',inputPreview:'selfcheck workflow input',workflowStepCount:2,workflowAgents:['default','reviewer'],workflowStepLabels:['Inspect','Review'],workflowStepOutputVars:['inspection','review']});
+  if(workflowLiveCard)workflowLiveCard.classList.add('workflow-run-live');
   const workflowStatusUpdated=updateWorkflowRunStepStatus('wf-selfcheck',{workflowRunId:'wf-selfcheck',step:0,status:'running',label:'Inspect',agent:'default',output_var:'inspection',startedAt:1000,elapsedMs:12})
     && updateWorkflowRunStepStatus('wf-selfcheck',{workflowRunId:'wf-selfcheck',step:1,status:'done',label:'Review',agent:'reviewer',output_var:'review',preview:'ok',startedAt:1012,endedAt:1048,durationMs:36});
   const workflowRunCard=assistantWorkflowRunCardSnapshot(workflowCard);
+  const workflowLiveRunCard=assistantWorkflowRunCardSnapshot(workflowLiveCard);
   workflowBody.remove();
   const workflowResultState=assistantWorkflowResultStateSnapshot();
   const workflowButtonState=assistantWorkflowRunButtonSnapshot();
@@ -12105,6 +12108,7 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'workflow-run-step-status-updates',workflowStatusUpdated&&workflowRunCard.statuses[0]==='running'&&workflowRunCard.statuses[1]==='done'&&workflowRunCard.outputs[0]==='inspection'&&workflowRunCard.outputs[1]==='review',JSON.stringify(workflowRunCard));
   assistantUiSelfCheckRecord(checks,'workflow-run-step-duration-updates',workflowRunCard.durations[1]===36&&workflowRunCard.durationChipCount>=1&&workflowRunCard.workflowElapsedMs===36,JSON.stringify(workflowRunCard));
   assistantUiSelfCheckRecord(checks,'workflow-run-card-status-summary',workflowRunCard.workflowRunStatus==='running'&&workflowRunCard.stateText.includes('running')&&workflowRunCard.workflowRunStatusSummary.includes('36ms'),JSON.stringify(workflowRunCard));
+  assistantUiSelfCheckRecord(checks,'workflow-run-transcript-cards-sync',workflowLiveRunCard.exists&&workflowLiveRunCard.title==='Selfcheck Flow Live'&&workflowLiveRunCard.statuses[0]==='running'&&workflowLiveRunCard.statuses[1]==='done'&&workflowLiveRunCard.outputs[1]==='review'&&workflowBody.querySelectorAll('.workflow-run-card[data-workflow-run-id="wf-selfcheck"]').length===2,JSON.stringify(workflowLiveRunCard));
   assistantUiSelfCheckRecord(checks,'workflow-result-state-rendered',workflowResultState.okStatus==='done'&&workflowResultState.errorStatus==='error'&&workflowResultState.cancelStatus==='cancelled'&&workflowResultState.badgeCount===3&&workflowResultState.messageCount===2&&workflowResultState.errorClass&&workflowResultState.cancelClass,JSON.stringify(workflowResultState));
   assistantUiSelfCheckRecord(checks,'workflow-result-metadata-rendered',workflowResultState.okMode==='on'&&workflowResultState.okAgents==='default'&&workflowResultState.okMethod==='backend'&&workflowResultState.okSession==='sao-ai-chat://local/result-ok'&&workflowResultState.okInputPreview==='ok input'&&workflowResultState.okDurationMs===42&&workflowResultState.durationChipCount>=1,JSON.stringify(workflowResultState));
   assistantUiSelfCheckRecord(checks,'workflow-result-actions-and-vars-ready',workflowResultState.rerunActionCount===3&&workflowResultState.outputVarChipCount===2&&workflowResultState.resultOutputVars==='ok'&&workflowResultState.resultStepStatuses==='done'&&workflowResultState.actionCount>=9,JSON.stringify(workflowResultState));
@@ -24473,10 +24477,7 @@ function workflowRunSelectorValue(value){
   if(window.CSS&&typeof CSS.escape==='function')return CSS.escape(raw);
   return raw.replace(/["\\]/g,'\\$&');
 }
-function updateWorkflowRunStepStatus(runId,data){
-  const id=String(runId||data&&data.workflowRunId||'').trim();
-  if(!id)return false;
-  const card=document.querySelector('.workflow-run-card[data-workflow-run-id="'+workflowRunSelectorValue(id)+'"]');
+function updateWorkflowRunStepStatusOnCard(card,data){
   if(!card)return false;
   const index=Number(data&&data.step);
   const row=card.querySelector('.workflow-run-step[data-step-index="'+String(Number.isFinite(index)?index:0)+'"]');
@@ -24514,6 +24515,14 @@ function updateWorkflowRunStepStatus(runId,data){
   refreshWorkflowRunCardState(card,data&&data.cancelled?'cancelled':'');
   assistantWorkflowPatchFromRunCard(card);
   return true;
+}
+function updateWorkflowRunStepStatus(runId,data){
+  const id=String(runId||data&&data.workflowRunId||'').trim();
+  if(!id)return false;
+  const cards=Array.from(document.querySelectorAll('.workflow-run-card[data-workflow-run-id="'+workflowRunSelectorValue(id)+'"]'));
+  let updated=false;
+  cards.forEach(card=>{if(updateWorkflowRunStepStatusOnCard(card,data))updated=true});
+  return updated;
 }
 function workflowResultSteps(result){
   return Array.isArray(result&&result.steps)?result.steps.filter(step=>step&&typeof step==='object'):[];
@@ -24875,6 +24884,12 @@ async function runWorkflowEngineAsAssistant(workflow,inputText,launch,refs){
   noteAssistantChatRequest(workflowLaunchPrompt(workflow,inputText,launch.workflowRunId,launch),refs,'workflow',launch);
   const body=createMsg('assistant',config.model||workflowName||'Workflow');
   const pending=document.createElement('div');pending.className='chat-response-progress-task';pending.textContent='Running workflow...';body.appendChild(pending);
+  const liveCard=renderWorkflowLaunchSummary(body,launch);
+  if(liveCard){
+    liveCard.classList.add('workflow-run-live');
+    liveCard.dataset.workflowTranscriptRole='assistant-live';
+    liveCard.setAttribute('aria-label','Live workflow run progress');
+  }
   setStatus('Running workflow: '+workflowName);
   assistantSessionState.workflowRunId=launch.workflowRunId;
   syncAssistantSessionState({workflowRunId:launch.workflowRunId,workflowMode:assistantWorkflowMode,workflowMethod:launch.workflowMethod,workflowInputPreview:launch.inputPreview,requestInProgress:true,workflowRunStatus:'running',workflowRunStatusSummary:'running · '+launch.workflowMethod+' · '+launch.workflowMode,workflowRunProgress:'0/'+String(launch.workflowStepCount||0),workflowCompletedSteps:0,workflowStepCount:launch.workflowStepCount,workflowResultPreview:''});
@@ -24973,6 +24988,16 @@ function promptRunWorkflow(id,name){
 }
 function onWorkflowStep(d){
   updateWorkflowRunStepStatus(d&&d.workflowRunId,d||{});
+  const runId=String(d&&d.workflowRunId||'');
+  if(runId){
+    document.querySelectorAll('.workflow-run-card[data-workflow-run-id="'+workflowRunSelectorValue(runId)+'"]').forEach(card=>{
+      card.dataset.workflowLastStepLabel=String(d&&d.label||'');
+      card.dataset.workflowLastStepStatus=String(d&&d.status||'');
+    });
+    const live=document.querySelector('.workflow-run-card.workflow-run-live[data-workflow-run-id="'+workflowRunSelectorValue(runId)+'"]');
+    const pending=live&&live.parentElement?live.parentElement.querySelector('.chat-response-progress-task'):null;
+    if(pending)pending.textContent='Workflow '+String(d&&d.status||'running')+': '+String(d&&d.label||('Step '+((Number(d&&d.step)||0)+1)));
+  }
   setStatus('⚡ '+(d.label||'Step '+(d.step+1))+' ('+d.status+')');
 }
 function createAgent(){
@@ -36985,6 +37010,25 @@ function extensionRuntimeSurfaceRows(data){
     evidence.resourceEndpointReady=!!(evidence.resourceEndpointReady||evidence.resourceEndpointBaseAvailable||Number(evidence.resourceEndpointRewriteCount||0));
     evidence.asWebviewUriSupported=!!(evidence.asWebviewUriSupported||evidence.localResourceRootCount||evidence.resourceMapReady||evidence.resourceEndpointReady);
     evidence.asWebviewUriReady=!!(evidence.asWebviewUriReady||((Number(evidence.resourceRewriteCount||0)||evidence.resourceMapReady||evidence.resourceEndpointReady)&&evidence.asWebviewUriSupported));
+    const readiness=kind==='WebviewView'?extensionWebviewViewReadiness({
+      status:evidence.htmlAvailable||item.htmlAvailable?'rendered':(runtime?'partial':'missing'),
+      runtimeAvailable:runtime,
+      htmlAvailable:!!(evidence.htmlAvailable||item.htmlAvailable),
+      visible:evidence.visible!==false,
+      retainContextWhenHidden:!!evidence.retainContextWhenHidden,
+      queuedMessageCount:Number(evidence.queuedMessageCount||0)||0,
+      flushedMessageCount:Number(evidence.flushedMessageCount||0)||0,
+      pendingMessageCount:Number(evidence.pendingMessageCount||0)||0,
+      droppedMessageCount:Number(evidence.droppedMessageCount||0)||0,
+      asWebviewUriSupported:!!evidence.asWebviewUriSupported,
+      asWebviewUriReady:!!evidence.asWebviewUriReady,
+      resourceRewriteCount:Number(evidence.resourceRewriteCount||0)||0,
+      resourceEndpointReady:!!evidence.resourceEndpointReady,
+      resourceMapReady:!!evidence.resourceMapReady
+    }):{kind:'n/a',score:0,issues:[]};
+    evidence.readiness=evidence.readiness||readiness.kind;
+    evidence.readinessScore=Number(evidence.readinessScore||readiness.score)||0;
+    evidence.readinessIssues=Array.isArray(evidence.readinessIssues)?evidence.readinessIssues:readiness.issues;
     evidence.resourceRewriteBreakdown=[
       evidence.resourceMapHitCount,
       evidence.resourceEndpointRewriteCount,
@@ -37020,6 +37064,9 @@ function extensionRuntimeSurfaceRows(data){
       evidence.resourceCssRewriteCount?'css:'+evidence.resourceCssRewriteCount:'',
       evidence.resourceAttributeRewriteCount?'attr:'+evidence.resourceAttributeRewriteCount:'',
       evidence.lastResourceRewriteKind?'resource-kind:'+evidence.lastResourceRewriteKind:'',
+      evidence.readiness?'readiness:'+evidence.readiness:'',
+      evidence.readinessScore?'readiness-score:'+evidence.readinessScore:'',
+      Array.isArray(evidence.readinessIssues)?evidence.readinessIssues.join(' '):'',
     ].filter(Boolean).join(' ');
     const row={
       kind,
@@ -37035,6 +37082,9 @@ function extensionRuntimeSurfaceRows(data){
       command:String(item.command||''),
       id:String(item.id||item.profileId||item.profile_id||item.viewType||item.type||item.vendor||item.kind||item.name||item.command||''),
       webviewEvidence:evidence,
+      webviewReadiness:evidence.readiness||readiness.kind,
+      webviewReadinessScore:Number(evidence.readinessScore||readiness.score)||0,
+      webviewReadinessIssues:Array.isArray(evidence.readinessIssues)?evidence.readinessIssues.slice():[],
       htmlAvailable:!!(evidence.htmlAvailable||item.htmlAvailable),
       htmlLength,
       lifecycleState:String(item.lifecycleState||item.runtimeState&&item.runtimeState.lifecycleState||''),
@@ -37046,7 +37096,7 @@ function extensionRuntimeSurfaceRows(data){
     row.focusable=row.kind==='WebviewView'||row.kind==='TreeView'||row.kind==='CustomEditor'||row.kind==='Notebook';
     row.refreshable=row.kind==='WebviewView'||row.kind==='TreeView'||row.kind==='CustomEditor'||row.kind==='Notebook';
     row.key=[row.kind,row.id,row.command,row.extensionId,row.source,row.container,row.resourceUri].join('|');
-      row.searchText=[row.kind,row.label,row.meta,row.extensionId,row.container,row.resourceUri,row.source,row.dynamicSource,row.providerBacked?'provider-backed':'',row.command,row.id,row.action&&row.action.type,row.evidenceText,row.evidenceStatus].join(' ').toLowerCase();
+      row.searchText=[row.kind,row.label,row.meta,row.extensionId,row.container,row.resourceUri,row.source,row.dynamicSource,row.providerBacked?'provider-backed':'',row.command,row.id,row.action&&row.action.type,row.evidenceText,row.evidenceStatus,row.webviewReadiness,(row.webviewReadinessIssues||[]).join(' ')].join(' ').toLowerCase();
     rows.push(row);
   };
   (data.treeViews||[]).slice(0,8).forEach(item=>push('TreeView',item,item.name||item.id,item.id+' · '+(item.container||'runtime'),item.runtimeAvailable!==false));
@@ -37330,6 +37380,8 @@ function renderExtensionRuntimeSurfacePanel(data){
     ['Webview Messages',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.messageCount)||0):0),0)],
     ['Queued Webview',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.pendingMessageCount)||0):0),0)],
     ['Dropped Webview',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.droppedMessageCount)||0):0),0)],
+    ['Webview Ready',rows.filter(row=>row.kind==='WebviewView'&&row.webviewReadiness==='ready').length],
+    ['Webview Warnings',rows.filter(row=>row.kind==='WebviewView'&&row.webviewReadiness&&row.webviewReadiness!=='ready').length],
     ['Provider Webview',summary.providerBackedWebviews||rows.filter(row=>row.kind==='WebviewView'&&row.providerBacked).length],
     ['Manifest + Runtime',summary.manifestRuntimeSurfaces||rows.filter(row=>row.source==='manifest+runtime').length],
     ['Runtime Only',summary.runtimeOnlySurfaces||rows.filter(row=>row.source==='runtime-only').length],
@@ -37347,7 +37399,7 @@ function renderExtensionRuntimeSurfacePanel(data){
   chips.forEach(([label,value])=>{
     const chip=document.createElement('span');chip.className='extension-runtime-chip';
     chip.innerHTML='<strong>'+esc(String(value))+'</strong>'+esc(label);
-    if(['TreeView','WebviewView','CustomEditor','Notebook','Command','Menu','Terminal','LM Tool','LM Provider','Chat','Context','Runtime','Manifest','Manifest + Runtime','Runtime Only','Provider Webview','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Resource Rewrites','Resource Roots','Port Mappings','Webview Messages','Queued Webview','Dropped Webview'].includes(label)){
+    if(['TreeView','WebviewView','CustomEditor','Notebook','Command','Menu','Terminal','LM Tool','LM Provider','Chat','Context','Runtime','Manifest','Manifest + Runtime','Runtime Only','Provider Webview','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Resource Rewrites','Resource Roots','Port Mappings','Webview Messages','Queued Webview','Dropped Webview','Webview Ready','Webview Warnings'].includes(label)){
       chip.classList.add('filterable');
       chip.tabIndex=0;
       chip.setAttribute('role','button');
@@ -37416,6 +37468,9 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.webviewResourceEndpointReady=row.webviewEvidence&&row.webviewEvidence.resourceEndpointReady?'1':'0';
       el.dataset.webviewAsWebviewUriSupported=row.webviewEvidence&&row.webviewEvidence.asWebviewUriSupported?'1':'0';
       el.dataset.webviewAsWebviewUriReady=row.webviewEvidence&&row.webviewEvidence.asWebviewUriReady?'1':'0';
+      el.dataset.webviewReadiness=row.webviewReadiness||row.webviewEvidence&&row.webviewEvidence.readiness||'';
+      el.dataset.webviewReadinessScore=String(row.webviewReadinessScore||row.webviewEvidence&&row.webviewEvidence.readinessScore||0);
+      el.dataset.webviewReadinessIssues=(row.webviewReadinessIssues||row.webviewEvidence&&row.webviewEvidence.readinessIssues||[]).join(',');
       el.dataset.webviewResourceRewriteBreakdown=String(row.webviewEvidence&&row.webviewEvidence.resourceRewriteBreakdown||'0/0/0/0/0');
       el.dataset.webviewLastResourceRewriteKind=String(row.webviewEvidence&&row.webviewEvidence.lastResourceRewriteKind||'');
       el.dataset.focusable=row.focusable?'1':'0';
@@ -37441,6 +37496,8 @@ function renderExtensionRuntimeSurfacePanel(data){
       if(row.kind==='WebviewView'){
         const ev=row.webviewEvidence||{};
         const chips=[
+          row.webviewReadiness?{text:'readiness '+row.webviewReadiness+(row.webviewReadinessScore?(' '+row.webviewReadinessScore):''),missing:row.webviewReadiness!=='ready'}:null,
+          ...(row.webviewReadinessIssues||[]).slice(0,2).map(issue=>({text:issue,missing:true})),
           {text:(row.htmlAvailable?'HTML '+String(row.htmlLength||0):'No HTML'),missing:!row.htmlAvailable},
           ev.stateKind?{text:'state '+ev.stateKind}:null,
           ev.enableScripts!==undefined?{text:ev.enableScripts?'scripts':'no scripts',missing:!ev.enableScripts}:null,
@@ -38556,6 +38613,22 @@ function extensionWebviewViewEvidence(view,state,html){
   const resourceEndpointReady=!!(ev.resourceEndpointReady||ev.resourceEndpointBaseAvailable||resourceEndpointRewriteCount);
   const asWebviewUriSupported=!!(ev.asWebviewUriSupported||localResourceRootCount||resourceMapReady||resourceEndpointReady);
   const asWebviewUriReady=!!(ev.asWebviewUriReady||((resourceMapReady||resourceEndpointReady||resourceRewriteCount)&&asWebviewUriSupported));
+  const readiness=extensionWebviewViewReadiness({
+    status,
+    runtimeAvailable:view.runtimeAvailable!==false&&state.runtimeAvailable!==false&&ev.runtimeAvailable!==false,
+    htmlAvailable,
+    visible,
+    retainContextWhenHidden:retain,
+    queuedMessageCount:Number(ev.queuedMessageCount||0)||0,
+    flushedMessageCount:Number(ev.flushedMessageCount||0)||0,
+    pendingMessageCount:Number(ev.pendingMessageCount||0)||0,
+    droppedMessageCount:Number(ev.droppedMessageCount||0)||0,
+    asWebviewUriSupported,
+    asWebviewUriReady,
+    resourceRewriteCount,
+    resourceEndpointReady,
+    resourceMapReady
+  });
   return {
     viewId,
     status,
@@ -38591,9 +38664,34 @@ function extensionWebviewViewEvidence(view,state,html){
     resourceEndpointReady,
     asWebviewUriSupported,
     asWebviewUriReady,
+    readiness:readiness.kind,
+    readinessScore:readiness.score,
+    readinessIssues:readiness.issues,
     resourceRewriteBreakdown:[resourceMapHitCount,resourceEndpointRewriteCount,resourcePortMappingRewriteCount,resourceCssRewriteCount,resourceAttributeRewriteCount].map(n=>String(n||0)).join('/'),
     lastResourceRewriteKind:String(ev.lastResourceRewriteKind||'')
   };
+}
+function extensionWebviewViewReadiness(evidence){
+  const ev=evidence||{};
+  const issues=[];
+  let score=100;
+  if(ev.runtimeAvailable===false){issues.push('missing-runtime');score-=45}
+  if(!ev.htmlAvailable){issues.push('waiting-html');score-=30}
+  if(ev.visible===false&&!ev.retainContextWhenHidden){issues.push('hidden-disposable');score-=8}
+  const waitingMessages=(Number(ev.pendingMessageCount)||0)+(Number(ev.queuedMessageCount)||0);
+  const flushedMessages=Number(ev.flushedMessageCount)||0;
+  if(waitingMessages>0&&(!ev.htmlAvailable||flushedMessages<=0)){issues.push('queued-messages');score-=10}
+  if((Number(ev.droppedMessageCount)||0)>0){issues.push('dropped-messages');score-=20}
+  if(ev.asWebviewUriSupported&&!ev.asWebviewUriReady){issues.push('resource-uri-pending');score-=10}
+  if((Number(ev.resourceRewriteCount)||0)>0&&!ev.resourceEndpointReady&&!ev.resourceMapReady){issues.push('resource-warning');score-=12}
+  score=Math.max(0,Math.min(100,Math.round(score)));
+  let kind='ready';
+  if(issues.includes('missing-runtime'))kind='missing-runtime';
+  else if(issues.includes('waiting-html'))kind='waiting-html';
+  else if(issues.includes('dropped-messages')||issues.includes('queued-messages'))kind='message-warning';
+  else if(issues.includes('resource-warning')||issues.includes('resource-uri-pending'))kind='resource-warning';
+  else if(String(ev.status||'')==='partial')kind='partial';
+  return {kind,score,issues};
 }
 function extensionWebviewViewSummaryText(view,state,evidence){
   view=view||{};state=state||{};evidence=evidence||extensionWebviewViewEvidence(view,state,state.html||view.html||'');
@@ -38602,6 +38700,8 @@ function extensionWebviewViewSummaryText(view,state,evidence){
     'Title: '+(state.title||extensionViewTitle(view)||'-'),
     'Extension: '+(view.extensionId||view.extension_id||'-'),
     'Status: '+(evidence.status||'-'),
+    'Readiness: '+(evidence.readiness||'-')+' '+String(evidence.readinessScore||0)+'/100',
+    'Readiness issues: '+((evidence.readinessIssues||[]).join(', ')||'-'),
     'HTML: '+(evidence.htmlAvailable?String(evidence.htmlLength||0):'missing'),
     'Visible: '+String(evidence.visible),
     'Retain: '+String(evidence.retainContextWhenHidden),
@@ -38645,6 +38745,9 @@ function applyExtensionWebviewViewDataset(target,evidence){
   target.dataset.webviewResourceEndpointReady=evidence.resourceEndpointReady?'1':'0';
   target.dataset.webviewAsWebviewUriSupported=evidence.asWebviewUriSupported?'1':'0';
   target.dataset.webviewAsWebviewUriReady=evidence.asWebviewUriReady?'1':'0';
+  target.dataset.webviewReadiness=String(evidence.readiness||'');
+  target.dataset.webviewReadinessScore=String(evidence.readinessScore||0);
+  target.dataset.webviewReadinessIssues=Array.isArray(evidence.readinessIssues)?evidence.readinessIssues.join(','):'';
   target.dataset.webviewResourceRewriteBreakdown=String(evidence.resourceRewriteBreakdown||'0/0/0/0/0');
   target.dataset.webviewLastResourceRewriteKind=String(evidence.lastResourceRewriteKind||'');
 }
@@ -38666,6 +38769,8 @@ function appendExtensionWebviewViewStatus(body,view,state,evidence){
     chips.appendChild(chip);
     return chip;
   };
+  addChip('readiness '+(evidence.readiness||'unknown')+' '+String(evidence.readinessScore||0),evidence.readiness==='ready'?'ok':(evidence.readiness==='partial'?'':'warn'));
+  (Array.isArray(evidence.readinessIssues)?evidence.readinessIssues:[]).slice(0,3).forEach(issue=>addChip(issue,'warn'));
   addChip(evidence.htmlAvailable?'HTML '+String(evidence.htmlLength||0):'No HTML',evidence.htmlAvailable?'ok':'warn');
   addChip(evidence.visible?'visible':'hidden',evidence.visible?'ok':'warn');
   addChip(evidence.retainContextWhenHidden?'retain':'dispose when hidden',evidence.retainContextWhenHidden?'accent':'');
@@ -39353,6 +39458,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       webviewAsWebviewUriReadyDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-as-webview-uri-ready="1"]'),
       webviewResourceEndpointReadyDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-resource-endpoint-ready="1"]'),
       webviewResourceMapReadyDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-resource-map-ready="1"]'),
+      webviewReadinessDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-readiness="ready"]'),
+      webviewPendingReadinessDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview.pending"][data-webview-readiness="waiting-html"]'),
       webviewEmptyState:!!root.querySelector('.extension-webview-view-empty strong'),
       manifestGroup:!!manifest,
       manifestHidden:manifest?manifest.dataset.runtimeVisible:'',
@@ -39390,6 +39497,9 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeWebviewAsWebviewUriReadyRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewAsWebviewUriReady==='1').length:0,
       runtimeWebviewResourceEndpointReadyRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewResourceEndpointReady==='1').length:0,
       runtimeWebviewResourceMapReadyRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewResourceMapReady==='1').length:0,
+      runtimeWebviewReadyRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewReadiness==='ready').length:0,
+      runtimeWebviewWarningRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewReadiness&&row.dataset.webviewReadiness!=='ready').length:0,
+      runtimeWebviewReadinessIssues:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.webviewReadinessIssues||'').filter(Boolean):[],
       runtimeWebviewLastDropReasons:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.webviewLastDroppedReason||'').filter(Boolean):[],
       runtimeWebviewSeqRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewLastDeliveredMessageSeq)||0).length:0,
       runtimeEvidencePills:runtimeList?runtimeList.querySelectorAll('.extension-runtime-evidence').length:0,
@@ -39448,6 +39558,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.webviewViewActions>=6&&['Open','Refresh','Copy'].every(label=>snapshot.webviewActionLabels.includes(label))&&snapshot.webviewEmptyState
       && snapshot.webviewResourceRootDataset&&snapshot.webviewPortMappingDataset&&snapshot.webviewResourceMapDataset&&snapshot.webviewResourceEndpointDataset&&snapshot.webviewResourceCssDataset
       && snapshot.webviewAsWebviewUriReadyDataset&&snapshot.webviewResourceEndpointReadyDataset&&snapshot.webviewResourceMapReadyDataset
+      && snapshot.webviewReadinessDataset&&snapshot.webviewPendingReadinessDataset
       && snapshot.runtimeWebviewAsWebviewUriReadyRows>=1&&snapshot.runtimeWebviewResourceEndpointReadyRows>=1&&snapshot.runtimeWebviewResourceMapReadyRows>=1
       && snapshot.manifestGroup&&snapshot.manifestHidden==='false'&&snapshot.welcomeRegions>=1&&snapshot.welcomeCommands>=1&&snapshot.welcomeExternalLinks>=1
       && snapshot.activityRole==='button'&&snapshot.activityTabIndex===0&&snapshot.activityLabel.includes('Selftest Extensions')&&snapshot.activityPanel==='ext-vc-selftest.dynamic.container'
@@ -39457,6 +39568,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeWebviewEvidenceRows>=6&&snapshot.runtimeHtmlEvidenceRows>=1&&snapshot.runtimeMissingEvidenceRows>=1&&snapshot.runtimeWebviewRetainedRows>=1
       && snapshot.runtimeWebviewMessageRows>=1&&snapshot.runtimeWebviewQueuedRows>=2&&snapshot.runtimeWebviewDroppedRows>=1&&snapshot.runtimeWebviewSeqRows>=1&&snapshot.runtimeWebviewLastDropReasons.includes('disposed-queue')
       && snapshot.runtimeWebviewResourceRootRows>=1&&snapshot.runtimeWebviewPortMappingRows>=1&&snapshot.runtimeWebviewResourceMapRows>=1
+      && snapshot.runtimeWebviewReadyRows>=1&&snapshot.runtimeWebviewWarningRows>=1&&snapshot.runtimeWebviewReadinessIssues.some(value=>value.includes('waiting-html'))
       && snapshot.runtimeEvidencePills===snapshot.runtimeRows&&snapshot.runtimeEvidenceStatuses.includes('rendered')&&snapshot.runtimeEvidenceStatuses.includes('missing')
       && snapshot.runtimeMiniActionButtons>=snapshot.runtimeRows*3&&snapshot.runtimeFocusableRows>=4&&snapshot.runtimeRefreshableRows>=4
       && snapshot.runtimeListRole==='list'&&snapshot.runtimeListItems===snapshot.runtimeRows
