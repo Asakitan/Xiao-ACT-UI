@@ -4880,6 +4880,7 @@ function currentWorkspaceRoot(){
   const ws=isPlainObject(config.workspace)?config.workspace:{};
   return normalizeWorkspaceRootPath(ws.resolved_root||ws.root||ws.last_root||(typeof explorerRoot!=='undefined'?explorerRoot:'')||'');
 }
+let _lastTerminalWorkspaceRoot='';
 const quickInputViews=Object.create(null);
 let activeQuickInputId='';
 let quickInputPreviousFocus=null;
@@ -14870,11 +14871,46 @@ function editorLanguageFeatureDetail(baseDetail){
   const parts=editorLanguageFeatureSummaryParts();
   return String(baseDetail||'Language services are ready')+(parts.length?'\n'+parts.join('\n'):'');
 }
+function editorLanguageFeatureAggregateSnapshot(){
+  const s=_editorLanguageFeatureState||{};
+  const diag=s.diagnostics||{},actions=s.codeActions||{},fmt=s.formatting||{},save=s.saveParticipants||{},semantic=s.semanticTokens||{},diff=s.diff||{};
+  const readyFeatures=['diagnostics','codeActions','formatting','saveParticipants','semanticTokens','diff']
+    .filter(key=>['ready','warning'].includes(String((s[key]||{}).state||'')));
+  const activeFeatures=['diagnostics','codeActions','formatting','saveParticipants','semanticTokens','diff']
+    .filter(key=>String((s[key]||{}).state||'empty')!=='empty');
+  const issueCount=(Number(diag.errors)||0)+(Number(diag.warnings)||0);
+  const diffTotal=Number(diff.total)||0;
+  const summary=[
+    issueCount?editorFeatureCountText(issueCount,'problem'):'',
+    diffTotal?editorFeatureCountText(diffTotal,'diff'):'',
+    actions.count?editorFeatureCountText(actions.count,'action'):'',
+    save.changed?'save updated':'',
+    semantic.count?editorFeatureCountText(semantic.count,'semantic token'):'',
+    fmt.applied?'formatted':''
+  ].filter(Boolean);
+  return {
+    readyFeatures,
+    activeFeatures,
+    readyCount:readyFeatures.length,
+    activeCount:activeFeatures.length,
+    issueCount,
+    diffTotal,
+    codeActions:Number(actions.count)||0,
+    formattingApplied:!!fmt.applied,
+    saveChanged:!!save.changed,
+    semanticTokens:Number(semantic.count)||0,
+    summary,
+    label:summary.length?summary.slice(0,2).join(' · '):'ready'
+  };
+}
 function renderEditorLanguageFeatureStatus(){
   const el=$('status-language-service');if(!el)return;
   const s=_editorLanguageFeatureState||{};
   const diag=s.diagnostics||{},actions=s.codeActions||{},fmt=s.formatting||{},save=s.saveParticipants||{},semantic=s.semanticTokens||{},diff=s.diff||{};
   const providerStatus=_editorLanguageProviderStatus||{};
+  const aggregate=typeof editorLanguageFeatureAggregateSnapshot==='function'
+    ? editorLanguageFeatureAggregateSnapshot()
+    : {activeCount:0,readyCount:0,issueCount:0,summary:[],label:'ready'};
   el.dataset.diagnostics=String(diag.count||0);
   el.dataset.diagnosticErrors=String(diag.errors||0);
   el.dataset.diagnosticWarnings=String(diag.warnings||0);
@@ -14892,8 +14928,16 @@ function renderEditorLanguageFeatureStatus(){
   el.dataset.diffAdded=String(diff.added||0);
   el.dataset.diffModified=String(diff.modified||0);
   el.dataset.diffRemoved=String(diff.removed||0);
+  el.dataset.featureActiveCount=String(aggregate.activeCount);
+  el.dataset.featureReadyCount=String(aggregate.readyCount);
+  el.dataset.featureIssueCount=String(aggregate.issueCount);
+  el.dataset.featureSummary=aggregate.summary.join(' | ');
   el.dataset.providerWarnings=String(providerStatus.providerWarnings||0);
   el.dataset.providerErrors=String(providerStatus.providerErrors||0);
+  if(!['running','cancelled'].includes(String(providerStatus.state||''))){
+    const base=String(providerStatus.message||'Lang: Ready');
+    el.textContent=aggregate.summary.length?base+' · '+aggregate.label:base;
+  }
   el.title=editorLanguageFeatureDetail(_editorLanguageProviderStatus.detail);
 }
 function updateEditorLanguageFeatureState(kind,state,info){
@@ -23337,19 +23381,53 @@ function workspaceRootSourceFor(root){
   if((Array.isArray(ws.roots)?ws.roots:[]).some(item=>normalizeWorkspaceRootPath(item).toLowerCase()===target))return 'Root';
   return 'Recent';
 }
+function terminalCwdShouldFollowWorkspace(cwd,previousRoot){
+  const path=normalizeWorkspaceRootPath(cwd).toLowerCase();
+  const previous=normalizeWorkspaceRootPath(previousRoot).toLowerCase();
+  if(!path)return true;
+  if(previous&&(path===previous||path.startsWith(previous+'/')||path.startsWith(previous+'\\')))return true;
+  return false;
+}
 function syncTerminalWorkspaceState(){
   const root=currentWorkspaceRoot();
+  const previousRoot=_lastTerminalWorkspaceRoot||root;
   const out=$('terminal-output');
-  if(out&&!out.dataset.lastCwd&&root)out.dataset.lastCwd=root;
+  if(out&&root&&terminalCwdShouldFollowWorkspace(out.dataset.lastCwd,previousRoot))out.dataset.lastCwd=root;
   if(typeof renderTerminalProfileSelector==='function')renderTerminalProfileSelector();
   try{if(!Array.isArray(_terminals))return}catch(_e){return}
   _terminals.forEach(term=>{
     const profile=(term.metadata&&term.metadata.profile)||currentTerminalProfile();
-    term.metadata={...terminalProfileMetadata(profile),...(term.metadata||{}),cwd:term.lastCwd||term.metadata&&term.metadata.cwd||root};
-    if(!term.lastCwd&&root)term.lastCwd=root;
+    const currentCwd=term.lastCwd||term.metadata&&term.metadata.cwd||'';
+    const running=String(term.lastState||'').toLowerCase()==='running'||(term.outputEl&&term.outputEl.dataset&&term.outputEl.dataset.terminalRunId);
+    const nextCwd=!running&&root&&terminalCwdShouldFollowWorkspace(currentCwd,previousRoot)?root:currentCwd;
+    term.metadata={...terminalProfileMetadata(profile),...(term.metadata||{}),cwd:nextCwd||root};
+    if(nextCwd)term.lastCwd=nextCwd;
   });
+  _lastTerminalWorkspaceRoot=root;
   _renderTermTabs();
   _updateTerminalStatusLine();
+}
+function terminalWorkspaceSyncSnapshot(){
+  const root=currentWorkspaceRoot();
+  const out=$('terminal-output');
+  const term=typeof _getActiveTerminalRecord==='function'?_getActiveTerminalRecord():null;
+  const cwd=String((term&&(term.lastCwd||(term.metadata&&term.metadata.cwd)))||(out&&out.dataset.lastCwd)||'');
+  const status=$('terminal-status-line');
+  const context=$('terminal-context-bar');
+  const diagnostics=$('terminal-diagnostics-strip');
+  return {
+    workspaceRoot:root,
+    terminalCwd:cwd,
+    cwdMatchesWorkspace:typeof _terminalCwdMatchesWorkspace==='function'?_terminalCwdMatchesWorkspace(cwd):normalizeWorkspaceRootPath(cwd).toLowerCase()===normalizeWorkspaceRootPath(root).toLowerCase(),
+    lastSyncedRoot:_lastTerminalWorkspaceRoot,
+    statusWorkspace:status?status.dataset.workspace:'',
+    statusWorkspaceCwd:status?status.dataset.workspaceCwd:'',
+    contextWorkspace:context?context.dataset.workspace:'',
+    contextWorkspaceCwd:context?context.dataset.workspaceCwd:'',
+    diagnosticsWorkspaceCwd:diagnostics?diagnostics.dataset.workspaceCwd:'',
+    activeTerminalId:term?String(term.id||''):'',
+    activeTerminalState:term?String(term.lastState||'idle'):(out&&out.dataset.terminalState)||'idle'
+  };
 }
 function updateWorkspaceChrome(info){
   const payload=isPlainObject(info&&info.workspace)?info.workspace:(isPlainObject(info)?info:{});
@@ -23423,7 +23501,12 @@ function workspaceUiSelfCheckSnapshot(){
   const oldWorkspace=config.workspace;
   const oldExplorerRoot=explorerRoot,oldExplorerRootName=explorerRootName,oldExplorerSelectedPath=explorerSelectedPath;
   const input=$('workspace-switcher-input'),oldInput=input?input.value:'';
+  const oldLastTerminalWorkspaceRoot=_lastTerminalWorkspaceRoot;
+  const defaultOut=$('terminal-output');
+  const oldDefaultOutDataset=defaultOut?{...defaultOut.dataset}:null;
   try{
+    _lastTerminalWorkspaceRoot='E:/VC/SAO-UI';
+    if(defaultOut)defaultOut.dataset.lastCwd='E:/VC/SAO-UI';
     config.workspace={
       root:'',
       configured_root:'',
@@ -23443,6 +23526,7 @@ function workspaceUiSelfCheckSnapshot(){
     const roots=workspaceRecentRoots();
     const activeItem=document.querySelector('#workspace-switcher-list .workspace-switcher-item.active');
     const bar=$('workspace-root-bar'),pathEl=$('workspace-root-path');
+    const terminalSync=terminalWorkspaceSyncSnapshot();
     const snapshot={
       root:currentWorkspaceRoot(),
       rootCount:roots.length,
@@ -23452,7 +23536,13 @@ function workspaceUiSelfCheckSnapshot(){
       autoDetected:bar?bar.dataset.workspaceAutoDetected:'',
       pathText:pathEl?pathEl.textContent:'',
       settingsRoot:readInputValue('s-workspace-root'),
-      sourceLabel:workspaceSourceLabel('active_file_git')
+      sourceLabel:workspaceSourceLabel('active_file_git'),
+      terminalSyncRoot:terminalSync.workspaceRoot,
+      terminalSyncCwd:terminalSync.terminalCwd,
+      terminalSyncMatches:terminalSync.cwdMatchesWorkspace,
+      terminalSyncLastRoot:terminalSync.lastSyncedRoot,
+      terminalSyncStatusWorkspaceCwd:terminalSync.statusWorkspaceCwd,
+      terminalSyncContextWorkspaceCwd:terminalSync.contextWorkspaceCwd
     };
     snapshot.pass=snapshot.root==='E:/VC/SAO-UI/sao_auto'
       &&snapshot.rootCount===3
@@ -23462,16 +23552,28 @@ function workspaceUiSelfCheckSnapshot(){
       &&snapshot.autoDetected==='1'
       &&snapshot.pathText.includes('Active File Git')
       &&snapshot.settingsRoot===''
-      &&snapshot.sourceLabel==='Active File Git';
+      &&snapshot.sourceLabel==='Active File Git'
+      &&snapshot.terminalSyncRoot==='E:/VC/SAO-UI/sao_auto'
+      &&snapshot.terminalSyncCwd==='E:/VC/SAO-UI/sao_auto'
+      &&snapshot.terminalSyncMatches
+      &&snapshot.terminalSyncLastRoot==='E:/VC/SAO-UI/sao_auto'
+      &&snapshot.terminalSyncStatusWorkspaceCwd==='1'
+      &&snapshot.terminalSyncContextWorkspaceCwd==='1';
     return snapshot;
   }finally{
     config.workspace=oldWorkspace;
     explorerRoot=oldExplorerRoot;explorerRootName=oldExplorerRootName;explorerSelectedPath=oldExplorerSelectedPath;
     if(input)input.value=oldInput;
+    _lastTerminalWorkspaceRoot=oldLastTerminalWorkspaceRoot;
+    if(defaultOut&&oldDefaultOutDataset){
+      Object.keys(defaultOut.dataset).forEach(k=>delete defaultOut.dataset[k]);
+      Object.assign(defaultOut.dataset,oldDefaultOutDataset);
+    }
     updateWorkspaceChrome(oldWorkspace||{});
   }
 }
 window.workspaceUiSelfCheckSnapshot=workspaceUiSelfCheckSnapshot;
+window.terminalWorkspaceSyncSnapshot=terminalWorkspaceSyncSnapshot;
 
 function iconText(value){
   if(value&&typeof value==='object')return String(value.text||value.glyph||'');
@@ -43818,6 +43920,7 @@ function editorDirtyDiffSelfCheckSnapshot(){
     const diffSummary=diffHost?diffHost.querySelectorAll('.editor-diff-chip.added,.editor-diff-chip.modified,.editor-diff-chip.removed').length:0;
     const diffDatasetsOk=!!(diffHost&&diffHost.classList.contains('active')&&diffHost.dataset.diffAddedLines!==undefined&&diffHost.dataset.diffModifiedLines!==undefined&&diffHost.dataset.diffRemovedLines!==undefined&&diffHost.dataset.diffHunks!==undefined);
     const featureState=editorLanguageFeatureStateSnapshot();
+    const featureAggregate=editorLanguageFeatureAggregateSnapshot();
     setActiveEditorBaselineContent(ed.value);
     let reset=editorDirtyDiffState();
     return {
@@ -43843,6 +43946,11 @@ function editorDirtyDiffSelfCheckSnapshot(){
       featureDiffTotal:featureState.features&&featureState.features.diff&&featureState.features.diff.total||0,
       featureDiffHunks:featureState.features&&featureState.features.diff&&featureState.features.diff.hunks||0,
       featureDiffMessage:featureState.features&&featureState.features.diff&&featureState.features.diff.message||'',
+      featureActiveCount:featureAggregate.activeCount,
+      featureReadyCount:featureAggregate.readyCount,
+      featureIssueCount:featureAggregate.issueCount,
+      featureSummaryLabel:featureAggregate.label,
+      featureSummaryText:featureAggregate.summary.join(' | '),
       resetTotal:reset.summary&&reset.summary.total||0,
       pass:(clean.summary&&clean.summary.total||0)===0&&
         (dirty.summary&&dirty.summary.total||0)>0&&markerCount>0&&
@@ -43851,6 +43959,8 @@ function editorDirtyDiffSelfCheckSnapshot(){
         openedDiff&&diffRows>0&&diffSummary>=3&&diffDatasetsOk&&
         ((featureState.features&&featureState.features.diff&&featureState.features.diff.total)||0)>0&&
         ((featureState.features&&featureState.features.diff&&featureState.features.diff.hunks)||0)>0&&
+        featureAggregate.activeFeatures.includes('diff')&&featureAggregate.diffTotal>0&&
+        String(featureAggregate.label||'').includes('diff')&&
         (reset.summary&&reset.summary.total||0)===0
     };
   }finally{
@@ -43861,6 +43971,7 @@ function editorDirtyDiffSelfCheckSnapshot(){
 }
 window.editorDirtyDiffSelfCheckSnapshot=editorDirtyDiffSelfCheckSnapshot;
 window.editorLanguageFeatureStateSnapshot=editorLanguageFeatureStateSnapshot;
+window.editorLanguageFeatureAggregateSnapshot=editorLanguageFeatureAggregateSnapshot;
 
 // ── chat-ux-4: Inline diff view for code changes ──
 function parseDiffText(text){

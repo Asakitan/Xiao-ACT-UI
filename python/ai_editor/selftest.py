@@ -15005,8 +15005,15 @@ console.log("command palette quick access helpers ok");
            and "diffDatasetsOk" in html
            and "featureDiffTotal" in html
            and "featureDiffHunks" in html
+           and "function editorLanguageFeatureAggregateSnapshot()" in html
+           and "featureActiveCount" in html
+           and "featureReadyCount" in html
+           and "featureIssueCount" in html
+           and "featureSummaryLabel" in html
+           and "dataset.featureSummary" in html
            and "window.editorDirtyDiffSelfCheckSnapshot=editorDirtyDiffSelfCheckSnapshot" in html
-           and "window.editorLanguageFeatureStateSnapshot=editorLanguageFeatureStateSnapshot" in html)
+           and "window.editorLanguageFeatureStateSnapshot=editorLanguageFeatureStateSnapshot" in html
+           and "window.editorLanguageFeatureAggregateSnapshot=editorLanguageFeatureAggregateSnapshot" in html)
     _check("frontend refreshes language state after formatter and code-action edits",
            "function editorRefreshLanguageFeaturesAfterEdit(delayBase)" in html
            and "clearEditorDocumentHighlights();" in html
@@ -15238,11 +15245,18 @@ console.log("frontend built-in language fallback behavior ok");
            and "window.workspaceUiSelfCheckSnapshot=workspaceUiSelfCheckSnapshot" in html
            and "function workspaceSourceLabel(source)" in html
            and "function workspaceRootSourceFor(root)" in html
+           and "function terminalCwdShouldFollowWorkspace(cwd,previousRoot)" in html
+           and "function terminalWorkspaceSyncSnapshot()" in html
            and "function setWorkspaceRoot(root)" in html
            and "window.openWorkspaceSwitcher=openWorkspaceSwitcher" in html
+           and "window.terminalWorkspaceSyncSnapshot=terminalWorkspaceSyncSnapshot" in html
            and "ws.resolved_root||ws.root||ws.last_root" in html
            and "workspace-switcher-source" in html
            and "dataset.workspaceSource" in html
+           and "_lastTerminalWorkspaceRoot" in html
+           and "terminalSyncCwd" in html
+           and "terminalSyncStatusWorkspaceCwd" in html
+           and "terminalSyncContextWorkspaceCwd" in html
            and "recent_roots" in html
            and "s-workspace-root" in html
            and "s-workspace-auto" in html
