@@ -9590,8 +9590,8 @@ console.log("frontend word separator behavior ok");
              and "data-settings-filter-token=\"@modified\"" in html
              and "id=\"settings-empty-state\"" in html
              and "className='settings-row-actions'" in html
-             and "add('Default','Apply default value'" in html
-             and "add('{}','Copy JSON setting entry'" in html
+             and "addMenuItem('Use Default','Apply default value'" in html
+             and "addMenuItem('Copy JSON','Copy JSON setting entry'" in html
              and "settingsAddRowActions(wrap,{key:meta.key||meta.path||inputId,searchable:false,meta,inputId,clearTarget:" in html
              and "settingsAddRowActions(row,{key:key,searchable:true});" in html
               and "filters={modified:false,overrides:false,common:false,error:false,json:false,extensions:false,scopes:[],ids:[],tags:[],features:[],extensionIds:[],languages:[]}" in html
@@ -9808,6 +9808,30 @@ console.log("frontend word separator behavior ok");
             and "id=\"settings-density-toggle\"" in html
             and ".settings-modal.compact" in html
             and "window.settingsToggleDensity=settingsToggleDensity;" in html
+            and "id=\"settings-query-help-toggle\"" in html
+            and "id=\"settings-query-help\"" in html
+            and "function settingsToggleQueryHelp(force)" in html
+            and "settings-query-help-block" in html
+            and "function settingsEnsureValueSummary(row)" in html
+            and "function settingsUpdateBuiltInValueSummary(row,meta,value)" in html
+            and "function settingsUpdateExtensionValueSummary(row,value,defaultValue,type)" in html
+            and "dataset.settingsValueSummary='1'" in html
+            and "function settingsRowMatchReasons(row,parsed)" in html
+            and "function renderSettingsRowMatchSummaries(parsed)" in html
+            and "settings-search-hit" in html
+            and "settings-match-summary" in html
+            and "className='settings-row-action-menu'" in html
+            and "function closeSettingsRowActionMenus()" in html
+            and "More setting actions" in html
+            and "renderSettingsRowMatchSummaries(parsed);" in html
+            and "settingsUpdateExtensionValueSummary(row,value,defaultValue,type)" in html
+            and "hasQueryHelp" in html
+            and "hasValueSummary" in html
+            and "hasMatchSummary" in html
+            and "hasRowActionMenu" in html
+            and "window.settingsToggleQueryHelp=settingsToggleQueryHelp;" in html
+            and "window.renderSettingsRowMatchSummaries=renderSettingsRowMatchSummaries;" in html
+            and "window.closeSettingsRowActionMenus=closeSettingsRowActionMenus;" in html
              and "settingsConfigureRowInJson(row,opts.key)" in html
              and "function settingValueState(meta,value,target)" in html
              and "dataset.settingValueState='1'" in html
@@ -9948,6 +9972,20 @@ console.log("frontend word separator behavior ok");
            and "applySettingsTargetValuesToInputs(currentSettingsTarget);" in html
            and "settingStableValue(value)===settingStableValue(settingInheritedValueForTarget(meta,currentSettingsTarget))" in html
            and "safeStats.overrides" in html)
+    _check("frontend problems panel exposes VS Code style row interactions",
+           ".problems-summary" in html
+           and ".problem-row" in html
+           and "function editorProblemSeverityRank(severity)" in html
+           and "function sortEditorProblemRows(rows)" in html
+           and "function editorProblemSummary(rows)" in html
+           and "function focusEditorProblem(problem)" in html
+           and "function requestEditorQuickFixForProblem(problem,quiet)" in html
+           and "function updateProblemsPanelFromEditorDiagnostics(diagnostics)" in html
+           and "updateProblemsPanelFromEditorDiagnostics(diagnostics)" in html
+           and "requestEditorCodeActionsForKind(quiet===true,'quickfix','quick fix')" in html
+           and "Show quick fixes for this problem" in html
+           and "Copy problem details" in html
+           and "settingsCopyText([sev.toUpperCase(),location,d.message,meta+tagText]" in html)
     _check("frontend built-in settings expose VS Code style metadata",
             "const SETTING_INPUT_META=" in html
            and "const SETTING_INPUT_MAP=Object.fromEntries" in html

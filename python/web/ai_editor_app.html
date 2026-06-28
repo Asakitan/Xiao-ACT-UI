@@ -386,6 +386,28 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-diagnostic-marker.severity-1 { border-bottom-color:var(--fg-warning); }
 .editor-diagnostic-marker.severity-2 { border-bottom-color:var(--fg-accent); }
 .editor-diagnostic-marker.severity-3 { border-bottom-color:var(--fg-dim); opacity:.78; }
+.problems-summary { display:flex; align-items:center; gap:6px; flex-wrap:wrap; padding:5px 8px;
+  border-bottom:1px solid var(--border); color:var(--fg-dim); font:11px var(--mono); }
+.problems-chip { display:inline-flex; align-items:center; gap:4px; min-height:20px; padding:1px 6px;
+  border:1px solid var(--border); border-radius:999px; background:var(--bg3); }
+.problems-chip.error { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 45%,var(--border)); }
+.problems-chip.warning { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 45%,var(--border)); }
+.problems-chip.info { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 45%,var(--border)); }
+.problem-row { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:8px; align-items:start;
+  padding:5px 8px; border-bottom:1px solid color-mix(in srgb,var(--border) 65%,transparent); cursor:default; }
+.problem-row:hover,.problem-row.active { background:var(--bg-hover); }
+.problem-severity { font:10px var(--mono); min-width:48px; text-transform:uppercase; }
+.problem-severity.error { color:var(--fg-error); }
+.problem-severity.warning { color:var(--fg-warning); }
+.problem-severity.info { color:var(--fg-accent); }
+.problem-severity.hint { color:var(--fg-dim); }
+.problem-main { min-width:0; }
+.problem-message { color:var(--fg); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.problem-meta { color:var(--fg-dim); font:10px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:2px; }
+.problem-actions { display:flex; align-items:center; gap:4px; }
+.problem-actions button { height:21px; padding:1px 6px; border:1px solid var(--border); border-radius:3px;
+  background:var(--bg3); color:var(--fg-dim); font-size:10px; }
+.problem-actions button:hover { color:var(--fg); border-color:var(--fg-accent); background:var(--bg-hover); }
 .editor-inlay-layer { position:absolute; inset:0 0 0 50px; z-index:3; pointer-events:none;
   font:13px/1.5 var(--mono); padding:8px 12px; overflow:hidden; white-space:pre; tab-size:4; }
 .editor-inlay-hint { position:absolute; max-width:260px; overflow:hidden; text-overflow:ellipsis;
@@ -1676,6 +1698,17 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-search-hints code { font:10px var(--mono); color:var(--fg); background:var(--bg3);
   border:1px solid var(--border); border-radius:3px; padding:1px 5px; cursor:pointer; }
 .settings-search-hints code:hover,.settings-search-hints code:focus { color:var(--fg-accent); border-color:var(--border-focus); outline:none; }
+.settings-query-help { display:none; grid-column:1 / -1; gap:8px; padding:8px;
+  border:1px solid var(--border); border-radius:5px; background:var(--bg2);
+  color:var(--fg-dim); font-size:11px; line-height:1.4; }
+.settings-query-help.open { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); }
+.settings-query-help-block { min-width:0; }
+.settings-query-help-block strong { display:block; margin-bottom:3px; color:var(--fg); font-weight:600; }
+.settings-query-help-block button { display:inline-flex; max-width:100%; min-height:20px; margin:1px 3px 2px 0;
+  padding:1px 6px; border:1px solid var(--border); border-radius:999px; background:var(--bg3);
+  color:var(--fg-dim); font:10px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-query-help-block button:hover,.settings-query-help-block button:focus {
+  color:var(--fg-accent); border-color:var(--border-focus); outline:none; }
 .settings-search-inspector { grid-column:1 / -1; display:none; flex-wrap:wrap; align-items:center; gap:5px;
   min-height:24px; color:var(--fg-dim); font-size:11px; }
 .settings-search-inspector.open { display:flex; }
@@ -2240,7 +2273,7 @@ pre.code-block { overflow:visible; }
 .settings-field.settings-target-hidden { display:none !important; }
 .settings-field.builtin-setting { padding:7px 28px 7px 8px; border-radius:4px; margin:3px 0 6px;
   border-left:2px solid transparent; background:transparent; transition:background .12s ease, border-color .12s ease, box-shadow .12s ease; }
-.settings-field.builtin-setting.has-row-actions { padding-right:258px; }
+.settings-field.builtin-setting.has-row-actions { padding-right:118px; }
 .settings-field.builtin-setting:hover,.settings-field.builtin-setting:focus-within { background:color-mix(in srgb,var(--bg-hover) 62%,transparent); }
 .settings-field.builtin-setting:focus { outline:1px solid color-mix(in srgb,var(--border-focus) 55%,transparent); outline-offset:-1px; }
 .settings-field.highlight { animation:settingsSectionFlash .65s ease-out; }
@@ -2250,7 +2283,7 @@ pre.code-block { overflow:visible; }
 .settings-field.builtin-setting.saved-flash { animation:settingsSavedFlash .7s ease-out; }
 @keyframes settingsSavedFlash { from{background:color-mix(in srgb,var(--fg-success) 13%,transparent)} to{background:transparent} }
 .settings-field.builtin-setting .s-reset { top:8px; transform:none; }
-.settings-field.has-row-actions .s-reset { right:252px; }
+.settings-field.has-row-actions .s-reset { right:112px; }
 .settings-modal.compact .settings-searchbar { padding-top:7px; padding-bottom:6px; gap:6px; }
 .settings-modal.compact .settings-main { padding-top:5px; padding-bottom:12px; }
 .settings-modal.compact .settings-nav { padding-top:6px; }
@@ -2305,6 +2338,19 @@ pre.code-block { overflow:visible; }
   display:inline-flex;
 }
 .settings-built-desc { margin:3px 0 0; color:var(--fg-dim); font-size:11px; line-height:1.35; }
+.settings-value-summary { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin:4px 0 5px;
+  color:var(--fg-dim); font:10px var(--mono); }
+.settings-value-summary span { display:inline-flex; min-height:17px; max-width:340px; align-items:center;
+  padding:0 5px; border:1px solid var(--border); border-radius:999px; background:var(--bg3);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-value-summary .current { color:var(--fg); }
+.settings-value-summary .configured { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 45%,var(--border)); }
+.settings-value-summary .default { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 42%,var(--border)); }
+.settings-value-summary .override { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
+.settings-match-summary { display:none; margin:3px 0 4px; color:var(--fg-accent); font:10px var(--mono);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-search-hit > .settings-match-summary { display:block; }
+.settings-search-hit { box-shadow:inset 2px 0 0 color-mix(in srgb,var(--fg-accent) 55%,transparent); }
 .settings-built-foot { display:none; flex-wrap:wrap; gap:5px; margin-top:5px; color:var(--fg-dim); font:10px var(--mono); }
 .settings-field:hover .settings-built-foot,.settings-field:focus-within .settings-built-foot,.settings-field.settings-current .settings-built-foot {
   display:flex;
@@ -2322,6 +2368,14 @@ pre.code-block { overflow:visible; }
   background:color-mix(in srgb,var(--fg-accent) 8%,var(--bg3)); }
 .settings-row-action:hover,.settings-row-action:focus { color:var(--fg); border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
 .settings-row-action:disabled { opacity:.35; cursor:default; }
+.settings-row-action-menu { display:none; position:absolute; top:26px; right:0; min-width:174px; padding:4px;
+  border:1px solid var(--border); border-radius:4px; background:var(--bg2); box-shadow:var(--shadow); }
+.settings-row-action-menu.open { display:block; }
+.settings-row-action-menu button { display:flex; width:100%; min-height:24px; align-items:center; justify-content:space-between;
+  gap:8px; border:0; border-radius:3px; background:transparent; color:var(--fg); padding:3px 7px;
+  font-size:11px; text-align:left; }
+.settings-row-action-menu button:hover,.settings-row-action-menu button:focus { background:var(--bg-hover); outline:none; }
+.settings-row-action-menu button:disabled { color:var(--fg-dim); opacity:.55; }
 .settings-validation-summary { display:none; margin:0 0 8px; padding:7px 9px;
   border:1px solid var(--border); border-radius:var(--radius); background:var(--bg2);
   color:var(--fg-dim); font-size:12px; line-height:1.35; }
@@ -2338,7 +2392,7 @@ pre.code-block { overflow:visible; }
 .settings-filter-summary { color:var(--fg-dim); font:11px var(--mono); min-height:16px; margin:-4px 0 8px; }
 .ext-setting-row { position:relative; margin-bottom:8px; padding:6px 74px 6px 8px;
   border-left:2px solid transparent; border-radius:3px; transition:background .12s ease, border-color .12s ease, box-shadow .12s ease; }
-.ext-setting-row.has-row-actions { padding-right:154px; }
+.ext-setting-row.has-row-actions { padding-right:112px; }
 .ext-setting-row:hover,.ext-setting-row:focus-within,.ext-setting-row:focus { background:color-mix(in srgb,var(--bg-hover) 62%,transparent); }
 .ext-setting-row:focus { outline:1px solid color-mix(in srgb,var(--border-focus) 55%,transparent); outline-offset:-1px; }
 .ext-setting-row.highlight { animation:settingsSectionFlash .65s ease-out; }
@@ -2349,7 +2403,7 @@ pre.code-block { overflow:visible; }
 .ext-setting-row.hidden-setting { border-left-color:color-mix(in srgb,var(--fg-dim) 45%,transparent); opacity:.78; }
 .ext-setting-row.settings-field.modified { padding-left:8px; }
 .ext-setting-row .s-reset { top:8px; right:6px; transform:none; }
-.ext-setting-row.has-row-actions .s-reset { right:148px; }
+.ext-setting-row.has-row-actions .s-reset { right:106px; }
 .ext-setting-head { display:flex; align-items:center; gap:6px; margin-bottom:2px; }
 .ext-setting-title { font-size:12px; color:var(--fg); font-weight:600; }
 .ext-setting-badge { display:none; font-size:9px; color:var(--fg-accent); border:1px solid var(--fg-accent);
@@ -3222,6 +3276,7 @@ pre.code-block { overflow:visible; }
         <span class="settings-view-options" role="group" aria-label="Settings view">
           <button type="button" class="settings-top-action" id="settings-density-toggle" onclick="settingsToggleDensity()">Compact</button>
           <button type="button" class="settings-top-action" onclick="settingsFocusActiveSection()">Current</button>
+          <button type="button" class="settings-top-action" id="settings-query-help-toggle" onclick="settingsToggleQueryHelp()">Query Help</button>
         </span>
         <button type="button" class="settings-top-action primary" onclick="settingsOpenJsonView()">Open JSON</button>
         <button type="button" class="settings-top-action" onclick="focusSettingsSearch()">Search</button>
@@ -3272,6 +3327,26 @@ pre.code-block { overflow:visible; }
         <code tabindex="0" onclick="settingsUseSearchHint('@tag:json')" onkeydown="settingsSearchHintKeydown(event,'@tag:json')">@tag:json</code>
         <code tabindex="0" onclick="settingsUseSearchHint('@lang:python')" onkeydown="settingsSearchHintKeydown(event,'@lang:python')">@lang:python</code>
         <code tabindex="0" onclick="settingsUseSearchHint('@id:editor.')" onkeydown="settingsSearchHintKeydown(event,'@id:editor.')">@id:editor.</code>
+      </div>
+      <div id="settings-query-help" class="settings-query-help" aria-label="Settings query syntax">
+        <div class="settings-query-help-block">
+          <strong>Filter</strong>
+          <button type="button" onclick="settingsUseSearchHint('@modified')">@modified</button>
+          <button type="button" onclick="settingsUseSearchHint('@overrides')">@overrides</button>
+          <button type="button" onclick="settingsUseSearchHint('@error')">@error</button>
+        </div>
+        <div class="settings-query-help-block">
+          <strong>Target</strong>
+          <button type="button" onclick="settingsUseSearchHint('@workspace')">@workspace</button>
+          <button type="button" onclick="settingsUseSearchHint('@extensions')">@extensions</button>
+          <button type="button" onclick="settingsUseSearchHint('@feature:editor')">@feature:editor</button>
+        </div>
+        <div class="settings-query-help-block">
+          <strong>Exact</strong>
+          <button type="button" onclick="settingsUseSearchHint('@id:editor.')">@id:editor.</button>
+          <button type="button" onclick="settingsUseSearchHint('@tag:json')">@tag:json</button>
+          <button type="button" onclick="settingsUseSearchHint('@lang:python')">@lang:python</button>
+        </div>
       </div>
       <div id="settings-search-inspector" class="settings-search-inspector" aria-live="polite"></div>
       <div id="settings-search-memory" class="settings-search-memory" aria-label="Recent settings searches"></div>
@@ -4004,6 +4079,44 @@ function settingsCopyText(text,label){
     showToast((label||'Setting')+' copied','success',1400);
   }catch(e){showToast('Copy failed','warning',1800)}
 }
+function settingsEnsureValueSummary(row){
+  if(!row||!row.querySelector)return null;
+  let summary=row.querySelector('[data-settings-value-summary="1"]');
+  if(summary)return summary;
+  summary=document.createElement('div');
+  summary.className='settings-value-summary';
+  summary.dataset.settingsValueSummary='1';
+  const head=row.querySelector('.settings-built-head,.ext-setting-head');
+  if(head&&head.parentElement)head.parentElement.insertBefore(summary,head.nextSibling);
+  else row.insertBefore(summary,row.firstChild||null);
+  return summary;
+}
+function settingsAppendValueSummaryChip(host,cls,label,value){
+  if(!host)return null;
+  const chip=document.createElement('span');
+  chip.className=cls||'';
+  chip.textContent=label+(value!==undefined?': '+settingCompactDisplayValue(value,56):'');
+  chip.title=chip.textContent;
+  host.appendChild(chip);
+  return chip;
+}
+function settingsUpdateBuiltInValueSummary(row,meta,value){
+  const host=settingsEnsureValueSummary(row);if(!host||!meta)return;
+  host.innerHTML='';
+  const state=settingValueState(meta,value,currentSettingsTarget);
+  settingsAppendValueSummaryChip(host,'current','Current',value);
+  settingsAppendValueSummaryChip(host,state.state==='override'?'override':state.state==='default'?'default':state.state==='edited'?'configured':'',state.label);
+  if(settingsBackendTargetName(currentSettingsTarget)!=='global')settingsAppendValueSummaryChip(host,'','Inherited',settingInheritedValueForTarget(meta,currentSettingsTarget));
+  settingsAppendValueSummaryChip(host,'default','Default',settingDefaultValue(meta));
+}
+function settingsUpdateExtensionValueSummary(row,value,defaultValue,type){
+  const host=settingsEnsureValueSummary(row);if(!host)return;
+  host.innerHTML='';
+  const configured=row&&row.dataset&&row.dataset.extSettingModified==='1';
+  settingsAppendValueSummaryChip(host,'current','Current',extensionSettingCompactValue(value,type));
+  settingsAppendValueSummaryChip(host,configured?'configured':'default',configured?'Configured':'Default');
+  settingsAppendValueSummaryChip(host,'default','Default',extensionSettingCompactValue(defaultValue,type));
+}
 function settingsConfigureRowInJson(row,key){
   key=String(key||settingsRowKey(row)||'').trim();
   if(!key)return;
@@ -4067,6 +4180,17 @@ function settingsSearchHintKeydown(ev,text){
     ev.preventDefault();
     settingsUseSearchHint(text);
   }
+}
+function settingsToggleQueryHelp(force){
+  const panel=$('settings-query-help'),btn=$('settings-query-help-toggle');
+  if(!panel)return false;
+  const open=force===undefined?!panel.classList.contains('open'):force===true;
+  panel.classList.toggle('open',open);
+  if(btn){
+    btn.classList.toggle('active',open);
+    btn.setAttribute('aria-expanded',open?'true':'false');
+  }
+  return open;
 }
 function settingsSearchForKey(key,target){
   const input=$('settings-search');if(!input)return;
@@ -4163,7 +4287,7 @@ function settingsAddRowActions(row,opts){
   opts=opts||{};
   row.classList.add('has-row-actions');
   const actions=document.createElement('div');actions.className='settings-row-actions';
-  const add=(label,title,handler,disabled)=>{
+  const addButton=(label,title,handler,disabled)=>{
     const btn=document.createElement('button');
     btn.type='button';btn.className='settings-row-action';btn.textContent=label;btn.title=title;btn.disabled=!!disabled;
     if(String(label||'').length>2)btn.classList.add('wide');
@@ -4171,27 +4295,59 @@ function settingsAddRowActions(row,opts){
     actions.appendChild(btn);
     return btn;
   };
-  if(opts.key)add('⧉','Copy setting ID',()=>settingsCopyText(opts.key,'Setting ID'));
+  const menuItems=[];
+  const addMenuItem=(label,title,handler,disabled)=>menuItems.push({label,title,handler,disabled:!!disabled});
+  if(opts.key)addButton('⧉','Copy setting ID',()=>settingsCopyText(opts.key,'Setting ID'));
   if(opts.key){
-    const fav=add('★','Pin setting in Settings navigation',()=>settingsToggleFavorite(row));
+    const fav=addButton('★','Pin setting in Settings navigation',()=>settingsToggleFavorite(row));
     fav.classList.add('favorite');
     fav.dataset.settingsFavoriteKey=opts.key;
     fav.classList.toggle('active',settingsIsFavorite(opts.key));
-    add('JSON','Open settings.json and copy this setting id',()=>settingsConfigureRowInJson(row,opts.key));
+    addMenuItem('Open JSON','Open settings.json and copy this setting id',()=>settingsConfigureRowInJson(row,opts.key));
   }
-  if(opts.key&&opts.searchable)add('⌕','Filter to this setting',()=>settingsSearchForKey(opts.key,opts.target||currentSettingsTarget));
-  if(opts.meta&&opts.inputId)add('Default','Apply default value',()=>{const el=$(opts.inputId);if(el){setSettingsInputValue(el,opts.meta,settingDefaultValue(opts.meta));markSettingsModified();scheduleFilterSettings(0);showToast('Default applied: '+(opts.meta.key||opts.inputId),'info',1400)}});
-  if(opts.meta&&opts.inputId)add('{}','Copy JSON setting entry',()=>{
+  if(opts.key&&opts.searchable)addButton('⌕','Filter to this setting',()=>settingsSearchForKey(opts.key,opts.target||currentSettingsTarget));
+  if(opts.meta&&opts.inputId)addMenuItem('Use Default','Apply default value',()=>{const el=$(opts.inputId);if(el){setSettingsInputValue(el,opts.meta,settingDefaultValue(opts.meta));markSettingsModified();scheduleFilterSettings(0);showToast('Default applied: '+(opts.meta.key||opts.inputId),'info',1400)}});
+  if(opts.meta&&opts.inputId)addMenuItem('Copy JSON','Copy JSON setting entry',()=>{
     const el=$(opts.inputId);
     const value=el?settingsInputValue(el,opts.meta):settingDefaultValue(opts.meta);
     settingsCopyText(JSON.stringify({[opts.meta.key||opts.meta.path||opts.inputId]:value},null,2),'Setting JSON');
   });
   if(opts.clearTarget){
-    const clearBtn=add('Clear','Clear this target override',()=>settingsClearRowTargetOverride(row,opts.meta,opts.inputId),!opts.clearTarget());
-    clearBtn.dataset.settingsClearTarget='1';
+    addMenuItem('Clear Override','Clear this target override',()=>settingsClearRowTargetOverride(row,opts.meta,opts.inputId),!opts.clearTarget());
   }
-  add('◎','Focus setting row',()=>settingsHighlightRow(row));
+  addMenuItem('Focus Row','Focus setting row',()=>settingsHighlightRow(row));
+  if(menuItems.length){
+    const more=addButton('...','More setting actions',null,false);
+    more.setAttribute('aria-haspopup','menu');
+    more.setAttribute('aria-expanded','false');
+    const menu=document.createElement('div');menu.className='settings-row-action-menu';menu.setAttribute('role','menu');
+    menuItems.forEach(item=>{
+      const btn=document.createElement('button');
+      btn.type='button';btn.textContent=item.label;btn.title=item.title||item.label;btn.disabled=!!item.disabled;btn.setAttribute('role','menuitem');
+      btn.onclick=ev=>{ev.preventDefault();ev.stopPropagation();menu.classList.remove('open');more.setAttribute('aria-expanded','false');if(!btn.disabled)item.handler&&item.handler(ev)};
+      menu.appendChild(btn);
+      if(item.label==='Clear Override')btn.dataset.settingsClearTarget='1';
+    });
+    more.onclick=ev=>{
+      ev.preventDefault();ev.stopPropagation();
+      const open=!menu.classList.contains('open');
+      document.querySelectorAll('.settings-row-action-menu.open').forEach(item=>{if(item!==menu)item.classList.remove('open')});
+      menu.classList.toggle('open',open);
+      more.setAttribute('aria-expanded',open?'true':'false');
+    };
+    actions.appendChild(menu);
+    const clearBtn=menu.querySelector('[data-settings-clear-target="1"]');
+    if(clearBtn)clearBtn.dataset.settingsClearTarget='1';
+  }
   row.appendChild(actions);
+}
+function closeSettingsRowActionMenus(){
+  document.querySelectorAll('.settings-row-action-menu.open').forEach(menu=>{
+    menu.classList.remove('open');
+    const trigger=menu.parentElement&&Array.from(menu.parentElement.querySelectorAll('.settings-row-action'))
+      .find(btn=>btn.getAttribute('aria-haspopup')==='menu');
+    if(trigger)trigger.setAttribute('aria-expanded','false');
+  });
 }
 function settingsClearRowTargetOverride(row,meta,inputId){
   const el=$(inputId);if(!row||!meta||!el)return;
@@ -4358,6 +4514,7 @@ function wrapSettingsField(inputId){
     const path=document.createElement('span');path.textContent='Path: '+(meta.path||inputId);foot.appendChild(path);
     wrap.appendChild(foot);
   }
+  settingsUpdateBuiltInValueSummary(wrap,meta,settingsInputValue(el,meta));
 }
 function markSettingsModified(){
   let modifiedCount=0;
@@ -4367,6 +4524,7 @@ function markSettingsModified(){
     const wrap=el.closest('.settings-field');if(!wrap)return;
     const meta=SETTING_INPUT_META[inputId];
     const cur=settingsInputValue(el,meta);
+    settingsUpdateBuiltInValueSummary(wrap,meta,cur);
     const modified=settingIsTargetModified(meta,cur,currentSettingsTarget);
     wrap.classList.toggle('modified',modified);
     wrap.dataset.settingModified=modified?'1':'0';
@@ -15109,6 +15267,7 @@ function renderEditorDiagnostics(diagnostics){
   layer.dataset.diagnosticWarnings=String(summary.warnings||0);
   layer.dataset.diagnosticInfos=String(summary.infos||0);
   layer.dataset.diagnosticHints=String(summary.hints||0);
+  if(typeof updateProblemsPanelFromEditorDiagnostics==='function')updateProblemsPanelFromEditorDiagnostics(diagnostics);
   if(wrap.style.display==='none'||wrap.offsetParent===null||!Array.isArray(diagnostics)||!diagnostics.length)return;
   if(_editorDiagnosticContentLength!==String(ta.value||'').length)return;
   const style=getComputedStyle(ta),lineHeight=parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.5;
@@ -22290,28 +22449,96 @@ function editorProblemRowsFromDiagnostics(diagnostics){
     });
   }).filter(Boolean);
 }
+function editorProblemSeverityRank(severity){
+  const label=String(editorDiagnosticSeverityLabel(severity)||'').toLowerCase();
+  if(label==='error')return 0;
+  if(label==='warning')return 1;
+  if(label==='info')return 2;
+  return 3;
+}
+function sortEditorProblemRows(rows){
+  return (Array.isArray(rows)?rows:[]).slice().sort((a,b)=>
+    editorProblemSeverityRank(a.severity)-editorProblemSeverityRank(b.severity)
+    || String(a.file||'').localeCompare(String(b.file||''))
+    || (Number(a.line)||0)-(Number(b.line)||0)
+    || (Number(a.character)||0)-(Number(b.character)||0)
+    || String(a.message||'').localeCompare(String(b.message||'')));
+}
+function editorProblemSummary(rows){
+  const summary={count:0,errors:0,warnings:0,infos:0,hints:0};
+  (Array.isArray(rows)?rows:[]).forEach(row=>{
+    summary.count++;
+    const rank=editorProblemSeverityRank(row.severity);
+    if(rank===0)summary.errors++;
+    else if(rank===1)summary.warnings++;
+    else if(rank===2)summary.infos++;
+    else summary.hints++;
+  });
+  return summary;
+}
+function focusEditorProblem(problem){
+  if(!(problem&&problem.range&&problem.range.start))return false;
+  ed.focus();
+  const off=editorOffsetFromPosition(ed.value,problem.range.start);
+  const end=problem.range.end?editorOffsetFromPosition(ed.value,problem.range.end):off;
+  ed.selectionStart=off;ed.selectionEnd=Math.max(off,end);
+  updateCursorPos();renderEditorDiagnostics(_editorDiagnostics);
+  return true;
+}
+async function requestEditorQuickFixForProblem(problem,quiet){
+  if(!focusEditorProblem(problem))return false;
+  await requestEditorCodeActionsForKind(quiet===true,'quickfix','quick fix');
+  return true;
+}
+function updateProblemsPanelFromEditorDiagnostics(diagnostics){
+  const panel=$('problems-panel');
+  if(!panel||panel.style.display==='none')return;
+  renderProblemsRows(editorProblemRowsFromDiagnostics(diagnostics));
+}
 function renderProblemsRows(rows){
   const el=$('problems-content');if(!el)return;
   const badge=document.querySelector('.ptab[data-ptab="problems"] .count');
-  const count=Array.isArray(rows)?rows.length:0;
+  rows=sortEditorProblemRows(rows);
+  const count=rows.length,summary=editorProblemSummary(rows);
   if(badge)badge.textContent=count;
   if(!count){el.style.color='var(--fg-dim)';el.textContent='No problems detected.';return}
   el.innerHTML='';el.style.color='';
+  const head=document.createElement('div');head.className='problems-summary';
+  [
+    ['error',summary.errors,'Errors'],
+    ['warning',summary.warnings,'Warnings'],
+    ['info',summary.infos,'Info'],
+    ['hint',summary.hints,'Hints']
+  ].forEach(item=>{
+    if(!item[1])return;
+    const chip=document.createElement('span');chip.className='problems-chip '+item[0];chip.textContent=item[2]+': '+item[1];head.appendChild(chip);
+  });
+  const total=document.createElement('span');total.className='problems-chip';total.textContent='Total: '+count;head.appendChild(total);
+  el.appendChild(head);
   rows.forEach(d=>{
-    const row=document.createElement('div');row.style.padding='2px 8px';
     const sev=editorDiagnosticSeverityLabel(d.severity);
-    const color=sev==='error'?'var(--fg-error)':sev==='warning'?'var(--fg-warning)':sev==='info'?'var(--fg-accent)':'var(--fg-dim)';
     const location=d.file?String(d.file)+(d.line?':'+d.line:''):'';
     const code=editorDiagnosticCodeLabel(d.code);
     const tags=(Array.isArray(d.tags)?d.tags:[]).map(editorDiagnosticTagLabel).filter(Boolean);
     const meta=[d.source,code].filter(Boolean).join(' ');
     const tagText=tags.length?' ['+tags.join(', ')+']':'';
-    row.innerHTML='<span style="color:'+color+'">'+esc(sev.toUpperCase())+'</span> '
-      +(location?'<span style="color:var(--fg-accent)">'+esc(location)+'</span> ':'')
-      +esc(d.message||'')
-      +(meta||tagText?' <span style="color:var(--fg-dim);font-family:var(--mono)">('+esc(meta+tagText)+')</span>':'');
+    const row=document.createElement('div');row.className='problem-row severity-'+sev;row.tabIndex=0;
+    const severity=document.createElement('div');severity.className='problem-severity '+sev;severity.textContent=sev;
+    const main=document.createElement('div');main.className='problem-main';
+    const message=document.createElement('div');message.className='problem-message';message.textContent=String(d.message||'');
+    const detail=document.createElement('div');detail.className='problem-meta';
+    detail.textContent=[location,meta+tagText].filter(Boolean).join(' · ');
+    main.appendChild(message);main.appendChild(detail);
+    const actions=document.createElement('div');actions.className='problem-actions';
+    const fix=document.createElement('button');fix.type='button';fix.textContent='Quick Fix';fix.title='Show quick fixes for this problem';
+    fix.onclick=ev=>{ev.preventDefault();ev.stopPropagation();requestEditorQuickFixForProblem(d,false)};
+    const copy=document.createElement('button');copy.type='button';copy.textContent='Copy';copy.title='Copy problem details';
+    copy.onclick=ev=>{ev.preventDefault();ev.stopPropagation();settingsCopyText([sev.toUpperCase(),location,d.message,meta+tagText].filter(Boolean).join(' '),'Problem')};
+    actions.appendChild(fix);actions.appendChild(copy);
+    row.appendChild(severity);row.appendChild(main);row.appendChild(actions);
     row.title=[d.source,code,String(d.message||'')].filter(Boolean).join(': ')+(tagText?' '+tagText:'');
-    row.onmousedown=()=>{if(d.range&&d.range.start){ed.focus();const off=editorOffsetFromPosition(ed.value,d.range.start);ed.selectionStart=ed.selectionEnd=off;updateCursorPos();renderEditorDiagnostics(_editorDiagnostics)}};
+    row.onmousedown=()=>focusEditorProblem(d);
+    row.onkeydown=ev=>{if(ev.key==='Enter'){ev.preventDefault();focusEditorProblem(d)}else if(ev.key==='F2'||(ev.ctrlKey&&ev.key==='.')){ev.preventDefault();requestEditorQuickFixForProblem(d,false)}};
     el.appendChild(row);
   });
 }
@@ -25680,8 +25907,16 @@ function selectSettingsTarget(target,options){
 function installSettingsKeyboardHandlers(){
   const modal=$('settings-modal');if(!modal||modal.dataset.settingsKeyboardHandlers)return;
   modal.dataset.settingsKeyboardHandlers='1';
+  modal.addEventListener('click',ev=>{
+    if(!(ev.target&&ev.target.closest&&ev.target.closest('.settings-row-actions')))closeSettingsRowActionMenus();
+  });
   modal.addEventListener('keydown',ev=>{
     if(ev.key==='Escape'){
+      if(modal.querySelector('.settings-row-action-menu.open')){
+        ev.preventDefault();
+        closeSettingsRowActionMenus();
+        return;
+      }
       ev.preventDefault();
       closeSettings();
       return;
@@ -25757,6 +25992,10 @@ function settingsUiSelfCheckSnapshot(){
     hasNavFilterCount:!!$('settings-nav-filter-count'),
     hasResultCount:!!$('settings-result-count'),
     hasQueryBox:!!document.querySelector('.settings-search-row .settings-query-box #settings-search'),
+    hasQueryHelp:!!($('settings-query-help')&&$('settings-query-help-toggle')),
+    hasValueSummary:!!document.querySelector('[data-settings-value-summary="1"]'),
+    hasMatchSummary:!!document.querySelector('.settings-match-summary'),
+    hasRowActionMenu:!!document.querySelector('.settings-row-action-menu'),
     hasScopeControl:!!document.querySelector('.settings-scope-control .settings-target-tabs'),
     hasNavHeading:!!document.querySelector('.settings-nav-heading'),
     hasNavCountPills:!!document.querySelector('.settings-nav-item .count'),
@@ -25817,6 +26056,9 @@ window.settingsFilterNavCategories=settingsFilterNavCategories;
 window.settingsClearNavFilter=settingsClearNavFilter;
 window.settingsUiSelfCheckSnapshot=settingsUiSelfCheckSnapshot;
 window.settingsToggleDensity=settingsToggleDensity;
+window.settingsToggleQueryHelp=settingsToggleQueryHelp;
+window.renderSettingsRowMatchSummaries=renderSettingsRowMatchSummaries;
+window.closeSettingsRowActionMenus=closeSettingsRowActionMenus;
 window.settingsToggleFilterToken=settingsToggleFilterToken;
 window.settingsClearFilters=settingsClearFilters;
 window.settingsRemoveLastFilterToken=settingsRemoveLastFilterToken;
@@ -25933,6 +26175,51 @@ function settingsRowFilterText(row){
     data.extSettingExtensionId,data.extSettingLanguage,data.extSettingTags,data.extSettingScope,data.extSettingType,
     row&&row.textContent
   ].filter(Boolean).join(' ').toLowerCase();
+}
+function settingsEnsureMatchSummary(row){
+  if(!row||!row.querySelector)return null;
+  let summary=row.querySelector(':scope > .settings-match-summary');
+  if(summary)return summary;
+  summary=document.createElement('div');
+  summary.className='settings-match-summary';
+  const valueSummary=row.querySelector('[data-settings-value-summary="1"]');
+  if(valueSummary&&valueSummary.parentElement)valueSummary.parentElement.insertBefore(summary,valueSummary.nextSibling);
+  else row.insertBefore(summary,row.firstChild||null);
+  return summary;
+}
+function settingsRowMatchReasons(row,parsed){
+  const reasons=[];
+  const data=row&&row.dataset||{};
+  const key=String(data.settingKey||data.extSettingKey||'').toLowerCase();
+  const text=settingsRowFilterText(row);
+  const query=parsed||{};
+  if(query.text){
+    String(query.text).split(/\s+/).filter(Boolean).slice(0,3).forEach(token=>{
+      if(key.includes(token))reasons.push('id '+token);
+      else if(text.includes(token))reasons.push('text '+token);
+    });
+  }
+  (query.ids||[]).slice(0,2).forEach(id=>{if(key.includes(id))reasons.push('@id:'+id)});
+  (query.tags||[]).slice(0,2).forEach(tag=>{if(text.includes(tag))reasons.push('@tag:'+tag)});
+  (query.features||[]).slice(0,2).forEach(feature=>{if(text.includes(feature))reasons.push('@feature:'+feature)});
+  (query.extensionIds||[]).slice(0,2).forEach(ext=>{if(text.includes(ext))reasons.push('@ext:'+ext)});
+  (query.languages||[]).slice(0,2).forEach(lang=>{if(text.includes(lang))reasons.push('@lang:'+lang)});
+  if(query.modified&&row.classList&&row.classList.contains('modified'))reasons.push('@modified');
+  if(query.error&&(row.classList&&row.classList.contains('invalid')||row.querySelector('[aria-invalid="true"]')))reasons.push('@error');
+  if(query.overrides&&row.dataset&&row.dataset.settingTargetOverride==='1')reasons.push('@overrides');
+  return Array.from(new Set(reasons)).slice(0,4);
+}
+function renderSettingsRowMatchSummaries(parsed){
+  const active=parsed&&parsed.active;
+  const rows=Array.from((settingsMainElement()||document).querySelectorAll('.settings-field.builtin-setting,.ext-setting-row'));
+  rows.forEach(row=>{
+    const reasons=active&&row.style.display!=='none'&&!row.classList.contains('settings-target-hidden')
+      ? settingsRowMatchReasons(row,parsed)
+      : [];
+    row.classList.toggle('settings-search-hit',reasons.length>0);
+    const summary=settingsEnsureMatchSummary(row);
+    if(summary)summary.textContent=reasons.length?'Matched '+reasons.join(' · '):'';
+  });
 }
 function settingsGroupMatchesTagFilters(group,tags){
   if(!tags||!tags.length)return true;
@@ -26554,6 +26841,7 @@ function filterSettings(){
     if(extDivider)extDivider.style.display=(!lq||anyExtVisible)?'':'none';
     applyExtensionSettingsFilter();
   }
+  renderSettingsRowMatchSummaries(parsed);
   renderSettingsSectionOverviews();
   const inp=$('settings-search');if(inp)inp.placeholder=parsed.active?visible+' matches':currentSettingsTarget==='extensions'?'Search extension settings...':currentSettingsTarget==='workspace'?'Search workspace settings...':'Search user settings...';
   settingsRecordSearch(q,parsed);
@@ -29247,6 +29535,7 @@ function updateExtensionSettingRowValueMetadata(row,value,defaultValue,type){
   if(!row||!row.dataset)return;
   row.dataset.extSettingValue=extensionSettingCompactValue(value,type).toLowerCase();
   row.dataset.extSettingDefault=extensionSettingCompactValue(defaultValue,type).toLowerCase();
+  if(typeof settingsUpdateExtensionValueSummary==='function')settingsUpdateExtensionValueSummary(row,value,defaultValue,type);
 }
 function extensionSettingJsonRows(value,type){
   const lines=extensionSettingJson(value,type).split('\n').length;
