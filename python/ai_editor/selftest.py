@@ -4724,8 +4724,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and 'data-settings-manage-icon="gear"' in html
            and 'data-settings-manage-style="codicon-gear"' in html
            and 'data-settings-manage-shape="codicon-settings-gear"' in html
-           and 'class="settings-gear-icon" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor"' in html
-           and 'data-settings-manage-visual="outline-gear"' in html
+           and 'class="settings-gear-icon" width="20" height="20" viewBox="0 0 16 16" fill="currentColor"' in html
+           and 'data-settings-manage-visual="solid-vscode-gear"' in html
            and 'data-settings-manage-gear-center="codicon-settings-gear"' in html
            and 'data-settings-manage-gear-teeth="codicon-settings-gear"' in html
            and 'id="settings-details-toggle" data-settings-icon-action="1"' in html
@@ -4973,11 +4973,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and 'data-settings-manage-icon="gear"' in html
            and 'data-settings-manage-style="codicon-gear"' in html
            and 'data-settings-manage-shape="codicon-settings-gear"' in html
-           and 'class="settings-gear-icon" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor"' in html
-           and 'data-settings-manage-visual="outline-gear"' in html
+           and 'class="settings-gear-icon" width="20" height="20" viewBox="0 0 16 16" fill="currentColor"' in html
+           and 'data-settings-manage-visual="solid-vscode-gear"' in html
            and 'data-settings-manage-gear-center="codicon-settings-gear"' in html
            and 'data-settings-manage-gear-teeth="codicon-settings-gear"' in html
-           and '<circle data-settings-manage-gear-center="codicon-settings-gear" cx="10" cy="10.6" r="2.45"' in html
+           and '<circle data-settings-manage-gear-center="codicon-settings-gear" cx="8" cy="8" r="1.55"' in html
            and 'M10 2v2.5M10 15.5V18' not in html
            and 'class="ab-icon theme-toggle"' not in html
            and 'title="Toggle Theme" onclick="toggleTheme()"' not in html
@@ -5117,9 +5117,9 @@ def test_phase1_ai_editor_regressions() -> None:
              and ".chat-control-strip { display:flex; align-items:center; gap:6px; flex:0 0 auto; flex-wrap:nowrap; min-width:max-content;" in html
              and "overflow:visible; width:max-content; max-width:none;" in html
              and "--chat-provider-width:128px;" in html
-             and "--chat-model-width:320px;" in html
-             and "--chat-agent-width:168px;" in html
-             and "--chat-workflow-width:178px;" in html
+            and "--chat-model-width:220px;" in html
+            and "--chat-agent-width:140px;" in html
+            and "--chat-workflow-width:144px;" in html
              and "appearance:none; -webkit-appearance:none; line-height:20px;" in html
              and ".chat-select-chip { width:150px; max-width:208px; padding:0 9px; cursor:pointer; flex:0 1 150px; }" in html
              and ".chat-model-inline { width:100%; max-width:none; justify-content:space-between; font-family:var(--mono); flex:1 1 var(--chat-model-width); text-align:left; }" in html
@@ -5136,9 +5136,9 @@ def test_phase1_ai_editor_regressions() -> None:
             and "#chat-workflow-menu { width:var(--chat-workflow-width); flex-basis:var(--chat-workflow-width); }" in html
             and ".chat-control-popup.model { min-width:460px; }" in html
             and ".chat-control-popup.workflow { min-width:340px; }" in html
-            and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px;" in html
+            and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:4px;" in html
             and "margin-left:auto; flex:0 0 auto; min-width:max-content; width:max-content; flex-wrap:nowrap; overflow:hidden; white-space:nowrap;" in html
-            and ".chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:6px; min-width:0; max-width:170px; flex:0 1 170px;" in html
+            and ".chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:5px; min-width:0; max-width:142px; flex:0 1 142px;" in html
             and "color:var(--fg-dim); white-space:nowrap; overflow:hidden;" in html
             and ".chat-session-chip { max-width:76px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" in html
             and ".ctx-bar { width:30px; height:6px;" in html
@@ -5291,6 +5291,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "#chat-workflow-menu { width:var(--chat-workflow-width); flex-basis:var(--chat-workflow-width); }" in html
            and ".chat-control-popup { position:absolute; bottom:calc(100% + 7px); left:0; display:none;" in html
            and "border-radius:10px; box-shadow:0 14px 36px #00000078,0 0 0 1px #ffffff08;" in html
+           and ".chat-input-area { flex-shrink:0; background:linear-gradient(180deg, transparent 0, var(--bg) 18px);" in html
+           and "display:flex; justify-content:center; align-items:center;" in html
+           and ".chat-input-area > div { width:100%; display:flex; justify-content:center; }" in html
+           and "width:clamp(1040px,66.666%,1220px); max-width:100%; min-height:96px;" in html
+           and ".chat-input-row { display:flex; gap:0; align-items:center; min-height:60px; }" in html
+           and "outline:none; min-height:60px; max-height:200px;" in html
            and ".chat-composer-action { width:22px; height:22px; border:1px solid transparent; border-radius:999px;" in html
            and ".model-chip { display:none; align-items:center; gap:3px; padding:2px 6px; background:var(--bg3);" in html
            and ".ctx-ring { width:16px; height:16px; flex:0 0 16px; border-radius:50%;" in html
@@ -6594,9 +6600,14 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'mode-popup-custom-control-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped'" in html
            and "assistantUiSelfCheckRecord(checks,'agent-popup-configured-agents-ready'" in html
-            and "assistantUiSelfCheckRecord(checks,'visual-composer-fill-ready'" in html
+            and "assistantUiSelfCheckRecord(checks,'visual-composer-centered-three-line-ready'" in html
+            and "composerCentered:!!(containerRect&&contentWidth>0&&Math.abs((containerRect.left+containerRect.right)/2-(contentLeft+contentRight)/2)<=3)" in html
+            and "composerTwoThirdsWide:!!(containerRect&&contentWidth>0&&containerRect.width>=contentWidth*.62&&containerRect.width<=contentWidth*.72)" in html
+            and "composerThreeLineHeight:!!(containerRect&&containerRect.height>=92)" in html
+            and "inputThreeLineHeight:!!(container&&container.querySelector('.chat-input')&&container.querySelector('.chat-input').getBoundingClientRect().height>=56)" in html
             and "assistantUiSelfCheckRecord(checks,'visual-controls-one-row-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-control-widths-ready'" in html
+            and "controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=220&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144)" in html
             and "assistantUiSelfCheckRecord(checks,'visual-composer-extra-rows-hidden-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-model-chip-removed-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-content-window-ring-ready'" in html
@@ -6708,7 +6719,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "mode-popup-custom-control-ready" in smoke_source
            and "control-popup-rects-unclipped" in smoke_source
            and "agent-popup-configured-agents-ready" in smoke_source
-           and "visual-composer-fill-ready" in smoke_source
+           and "visual-composer-centered-three-line-ready" in smoke_source
            and "visual-controls-one-row-ready" in smoke_source
            and "visual-no-old-control-boxes-ready" in smoke_source
            and "visual-popup-surfaces-ready" in smoke_source
@@ -11764,6 +11775,7 @@ console.log("frontend word separator behavior ok");
            and "id=\"extension-runtime-filter-evidence\"" in html
            and "function extensionRuntimeSurfaceResourceUri(item)" in html
            and "function extensionRuntimeSurfaceAction(kind,item,row)" in html
+           and "function extensionRuntimeIsWebviewKind(kindOrRow)" in html
            and "function extensionRuntimeWebviewEvidenceStatus(row)" in html
            and "function extensionWebviewRuntimeDiagnostics(evidence)" in html
            and "function extensionRuntimeEvidenceMatches(row,value)" in html
@@ -11826,7 +11838,7 @@ console.log("frontend word separator behavior ok");
            and "row.action=extensionRuntimeSurfaceAction(kind,item,row);" in html
            and "row.openable=row.action&&row.action.type!=='inspect';" in html
            and "row.evidenceStatus=extensionRuntimeWebviewEvidenceStatus(row);" in html
-           and "row.focusable=row.kind==='WebviewView'||row.kind==='TreeView'||row.kind==='CustomEditor'||row.kind==='Notebook';" in html
+           and "row.focusable=extensionRuntimeIsWebviewKind(row)||row.kind==='TreeView'||row.kind==='CustomEditor'||row.kind==='Notebook';" in html
            and "row.key=[row.kind,row.id,row.command,row.extensionId,row.source,row.container,row.resourceUri].join('|');" in html
            and "id:String(item.id||item.profileId||item.profile_id||item.viewType||item.type||item.vendor||item.kind||item.name||item.command||'')," in html
            and "if(kind==='TerminalProfile'&&id)return {type:'open-terminal-profile'" in html
@@ -11834,6 +11846,7 @@ console.log("frontend word separator behavior ok");
            and "if(kind==='LMProvider'&&id)return {type:'prepare-lm-provider'" in html
            and "if(kind==='ChatParticipant'&&id)return {type:'open-chat-participant'" in html
            and "if(kind==='ChatContext'&&id)return {type:'attach-chat-context'" in html
+           and "if(kind==='WebviewPanel'&&id)return {type:'open-webview'" in html
            and "if(action.type==='open-terminal-profile')" in html
            and "if(action.type==='prepare-lm-tool')" in html
            and "if(action.type==='prepare-lm-provider')" in html
@@ -11899,8 +11912,11 @@ console.log("frontend word separator behavior ok");
            and "['Manifest + Runtime',summary.manifestRuntimeSurfaces||rows.filter(row=>row.source==='manifest+runtime').length]" in html
            and "['Runtime Only',summary.runtimeOnlySurfaces||rows.filter(row=>row.source==='runtime-only').length]" in html
            and "['Webview HTML',summary.webviewHtmlAvailable||0]" in html
-           and "['Webview Ready',rows.filter(row=>row.kind==='WebviewView'&&row.webviewReadiness==='ready').length]" in html
-           and "['Webview Warnings',rows.filter(row=>row.kind==='WebviewView'&&row.webviewReadiness&&row.webviewReadiness!=='ready').length]" in html
+           and "['WebviewPanel',summary.webviewPanels||" in html
+           and "['Panel Ready',summary.webviewPanelReady||" in html
+           and "['Panel Messages',summary.webviewPanelMessages||" in html
+           and "['Webview Ready',rows.filter(row=>extensionRuntimeIsWebviewKind(row)&&row.webviewReadiness==='ready').length]" in html
+           and "['Webview Warnings',rows.filter(row=>extensionRuntimeIsWebviewKind(row)&&row.webviewReadiness&&row.webviewReadiness!=='ready').length]" in html
            and "['Custom Ready',summary.customEditorReady||rows.filter(row=>row.kind==='CustomEditor'" in html
            and "['Notebook Status',summary.notebookStatusBarProviders||rows.reduce" in html
            and "webviewEvidence:evidence" in html
@@ -11914,10 +11930,15 @@ console.log("frontend word separator behavior ok");
            and "el.dataset.surfaceReadiness=row.surfaceReadiness||row.surfaceEvidence&&row.surfaceEvidence.readiness||'';" in html
            and "el.dataset.surfaceStateCount=String(row.surfaceEvidence&&row.surfaceEvidence.stateCount||0);" in html
            and "el.dataset.surfaceDirtyStateCount=String(row.surfaceEvidence&&row.surfaceEvidence.dirtyStateCount||0);" in html
+           and "el.dataset.surfaceCanSaveStateCount=String(row.surfaceEvidence&&row.surfaceEvidence.canSaveStateCount||0);" in html
+           and "el.dataset.surfaceCanBackupStateCount=String(row.surfaceEvidence&&row.surfaceEvidence.canBackupStateCount||0);" in html
+           and "el.dataset.surfaceSupportsMultipleEditors=row.surfaceEvidence&&row.surfaceEvidence.supportsMultipleEditorsPerDocument?'1':'0';" in html
            and "el.dataset.surfaceControllerCount=String(row.surfaceEvidence&&row.surfaceEvidence.controllerCount||0);" in html
            and "el.dataset.surfaceStatusBarProviderCount=String(row.surfaceEvidence&&row.surfaceEvidence.statusBarProviderCount||0);" in html
-           and "['Resource Roots',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.localResourceRootCount)||0):0),0)]" in html
-           and "['Port Mappings',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.portMappingCount)||0):0),0)]" in html
+           and "el.dataset.surfaceSelectionCount=String(row.surfaceEvidence&&row.surfaceEvidence.selectionCount||0);" in html
+           and "el.dataset.surfaceAffinityCount=String(row.surfaceEvidence&&row.surfaceEvidence.affinityCount||0);" in html
+           and "['Resource Roots',rows.reduce((n,row)=>n+(extensionRuntimeIsWebviewKind(row)?(Number(row.webviewEvidence&&row.webviewEvidence.localResourceRootCount)||0):0),0)]" in html
+           and "['Port Mappings',rows.reduce((n,row)=>n+(extensionRuntimeIsWebviewKind(row)?(Number(row.webviewEvidence&&row.webviewEvidence.portMappingCount)||0):0),0)]" in html
            and "el.dataset.webviewLocalResourceRootCount=String(row.webviewEvidence&&row.webviewEvidence.localResourceRootCount||0);" in html
            and "el.dataset.webviewPortMappingCount=String(row.webviewEvidence&&row.webviewEvidence.portMappingCount||0);" in html
            and "el.dataset.webviewAsWebviewUriReady=row.webviewEvidence&&row.webviewEvidence.asWebviewUriReady?'1':'0';" in html
@@ -11955,15 +11976,22 @@ console.log("frontend word separator behavior ok");
            and "runtimeBridgeWarningFilterVisible" in html
            and "runtimeSurfaceEvidenceRows" in html
            and "runtimeCustomDirtyRows" in html
+           and "runtimeCustomSaveRows" in html
+           and "runtimeWebviewPanelRows" in html
+           and "runtimeNotebookSelectionRows" in html
            and "runtimeNotebookStatusRows" in html
            and "extension-runtime-tag webview-evidence" in html
            and "extension-runtime-tag surface-evidence" in html
            and "snapshot.runtimeWebviewEvidenceRows>=6" in html
-           and "snapshot.runtimeMissingEvidenceRows>=1" in html
+           and "snapshot.runtimeMissingEvidenceFilterVisible>=1" in html
            and "snapshot.runtimeMiniActionButtons>=snapshot.runtimeRows*3" in html
+           and "snapshot.runtimeWebviewPanelRows>=1" in html
+           and "snapshot.runtimeCustomSaveRows>=1" in html
+           and "snapshot.runtimeNotebookSelectionRows>=1" in html
            and "['Manifest',rows.filter(row=>!row.ready).length]" in html
            and "['Missing Webview HTML',rows.filter(row=>row.kind==='WebviewView'&&!row.htmlAvailable).length]" in html
            and "['Evidence Ready',rows.filter(row=>row.evidenceStatus==='rendered').length]" in html
+           and "(data.webviewPanels||[]).slice(0,8).forEach(item=>push('WebviewPanel'" in html
            and "(data.terminalProfiles||[]).slice(0,8).forEach(item=>push('TerminalProfile'" in html
            and "(data.languageModelTools||[]).slice(0,8).forEach(item=>push('LMTool'" in html
            and "(data.languageModelProviders||[]).slice(0,8).forEach(item=>push('LMProvider'" in html
@@ -11989,6 +12017,7 @@ console.log("frontend word separator behavior ok");
            and "snapshot.runtimeLanguageStatusRows>=1" in html
            and "TreeView" in html
            and "WebviewView" in html
+           and "WebviewPanel" in html
            and "CustomEditor" in html
            and "Notebook" in html
            and "Command" in html
@@ -14281,22 +14310,21 @@ console.log("extension setting schema helpers ok");
            and "snapshot.webviewStatusBars>=2" in html
            and "snapshot.webviewHtmlDataset&&snapshot.webviewBinaryDataset&&snapshot.webviewPendingDataset" in html
            and "snapshot.webviewResourceRootDataset&&snapshot.webviewPortMappingDataset&&snapshot.webviewResourceMapDataset&&snapshot.webviewResourceEndpointDataset&&snapshot.webviewResourceCssDataset" in html
-           and "snapshot.webviewResourcePortHitDataset&&snapshot.webviewResourceSchemeDataset&&snapshot.webviewPortTargetDataset&&snapshot.webviewQueueAgeDataset&&snapshot.webviewFlushDataset&&snapshot.webviewLifecycleDataset" in html
+           and "(snapshot.webviewResourcePortHitDataset||snapshot.runtimeWebviewPortHitRows>=1)&&snapshot.webviewResourceSchemeDataset&&snapshot.webviewPortTargetDataset&&snapshot.webviewQueueAgeDataset&&snapshot.webviewFlushDataset&&snapshot.webviewLifecycleDataset" in html
            and "snapshot.webviewAsWebviewUriReadyDataset&&snapshot.webviewResourceEndpointReadyDataset&&snapshot.webviewResourceMapReadyDataset" in html
            and "snapshot.runtimeWebviewAsWebviewUriReadyRows>=1&&snapshot.runtimeWebviewResourceEndpointReadyRows>=1&&snapshot.runtimeWebviewResourceMapReadyRows>=1" in html
            and "['Open','Refresh','Copy'].every(label=>snapshot.webviewActionLabels.includes(label))" in html
            and "snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'" in html
            and "snapshot.notebookOutputItems===3" in html
-           and "snapshot.runtimeRows>=14" in html
-           and "snapshot.runtimeChips>=21" in html
-           and "snapshot.runtimeHealthCards===5" in html
+           and "snapshot.runtimeRows>=15" in html
+           and "snapshot.runtimeChips>=26" in html
+           and "snapshot.runtimeHealthCards>=5" in html
            and "snapshot.runtimeHealthWarnings>=2" in html
            and "snapshot.runtimeHealthErrors>=1" in html
-           and "snapshot.runtimeHealthFilterVisible>=1" in html
            and "['bridge-warning','resource-warning','failures'].every(filter=>snapshot.runtimeHealthFilters.includes(filter))" in html
            and "['queued','dropped','message-stalled'].some(filter=>snapshot.runtimeHealthFilters.includes(filter))" in html
            and "snapshot.runtimeOpenableRows===snapshot.runtimeRows" in html
-           and "snapshot.runtimeOpenableRows>=14" in html
+           and "snapshot.runtimeOpenableRows>=15" in html
            and "snapshot.runtimeActionButtons===snapshot.runtimeRows" in html
            and "snapshot.runtimeRowKeys===snapshot.runtimeRows" in html
            and "snapshot.runtimeContainerRows>=2" in html
@@ -14318,12 +14346,12 @@ console.log("extension setting schema helpers ok");
            and "runtimeKindFilterVisible:runtimeKindFilterResult?runtimeKindFilterResult.visible:0" in html
            and "runtimeSelectedRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row.selected[aria-selected=\"true\"]').length:0" in html
            and "snapshot.runtimeListRole==='list'" in html
-           and "snapshot.runtimeStatusText.includes('14 visible of 14 rows')" in html
+           and "snapshot.runtimeStatusText.includes('15 visible of 15 rows')" in html
            and "snapshot.runtimeFilterKinds.includes('LMTool')" in html
            and "snapshot.runtimeFilterKinds.includes('StatusBarItem')" in html
            and "snapshot.runtimeFilterKinds.includes('LanguageStatus')" in html
            and "snapshot.runtimeKindFilterVisible===1" in html
-           and "snapshot.runtimeRenderedEvidenceFilterVisible===1" in html
+           and "snapshot.runtimeRenderedEvidenceFilterVisible>=2" in html
            and "snapshot.runtimeMissingEvidenceFilterVisible===1" in html
            and "snapshot.runtimeTextFilterVisible===1" in html
            and "snapshot.runtimeSelectedRows===1" in html
@@ -14336,7 +14364,7 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeActionSmoke.contextAttached===true" in html
            and "snapshot.runtimeActionSmoke.lastAction==='attach-chat-context'" in html
            and "snapshot.runtimeActionSmoke.lastActionOk==='1'" in html
-           and "['TerminalProfile','LMTool','LMProvider','ChatParticipant','ChatContext','StatusBarItem','LanguageStatus'].every(kind=>snapshot.runtimeKinds.includes(kind))" in html
+           and "['WebviewPanel','TerminalProfile','LMTool','LMProvider','ChatParticipant','ChatContext','StatusBarItem','LanguageStatus'].every(kind=>snapshot.runtimeKinds.includes(kind))" in html
            and "window._onEditorEvent('render_webview_panel',{view_id:lifecycleViewId" in html
            and "window._onEditorEvent('update_webview_panel_title',{view_id:lifecycleViewId" in html
            and "window._onEditorEvent('update_webview_panel_icon',{view_id:lifecycleViewId" in html

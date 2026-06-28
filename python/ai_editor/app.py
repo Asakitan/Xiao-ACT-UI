@@ -11709,6 +11709,15 @@ class AIEditorAPI:
                 "dirtyStateCount": int(evidence.get("dirtyStateCount") or 0),
                 "canUndoStateCount": int(evidence.get("canUndoStateCount") or 0),
                 "canRedoStateCount": int(evidence.get("canRedoStateCount") or 0),
+                "canSaveStateCount": int(evidence.get("canSaveStateCount") or 0),
+                "canSaveAsStateCount": int(
+                    evidence.get("canSaveAsStateCount") or 0),
+                "canRevertStateCount": int(
+                    evidence.get("canRevertStateCount") or 0),
+                "canBackupStateCount": int(
+                    evidence.get("canBackupStateCount") or 0),
+                "supportsMultipleEditorsPerDocument": bool(
+                    evidence.get("supportsMultipleEditorsPerDocument")),
                 "resourceUris": evidence.get("resourceUris", []),
                 "capabilities": evidence.get("capabilities", {}),
                 "surfaceEvidence": evidence,
@@ -11775,6 +11784,18 @@ class AIEditorAPI:
         dirty_count = sum(1 for state in states if state.get("dirty"))
         can_undo_count = sum(1 for state in states if state.get("canUndo"))
         can_redo_count = sum(1 for state in states if state.get("canRedo"))
+        can_save_count = sum(
+            1 for state in states
+            if state.get("canSave") or state.get("supportsSave"))
+        can_save_as_count = sum(
+            1 for state in states
+            if state.get("canSaveAs") or state.get("supportsSaveAs"))
+        can_revert_count = sum(
+            1 for state in states
+            if state.get("canRevert") or state.get("supportsRevert"))
+        can_backup_count = sum(
+            1 for state in states
+            if state.get("canBackup") or state.get("supportsBackup"))
         view_ids = [
             str(state.get("viewId") or state.get("view_id") or "").strip()
             for state in states
@@ -11817,14 +11838,19 @@ class AIEditorAPI:
             "dirtyStateCount": dirty_count,
             "canUndoStateCount": can_undo_count,
             "canRedoStateCount": can_redo_count,
+            "canSaveStateCount": can_save_count,
+            "canSaveAsStateCount": can_save_as_count,
+            "canRevertStateCount": can_revert_count,
+            "canBackupStateCount": can_backup_count,
             "resourceUris": resource_uris,
             "viewIds": view_ids,
+            "supportsMultipleEditorsPerDocument": multiple,
             "capabilities": {
                 "supportsMultipleEditorsPerDocument": multiple,
-                "hasSave": bool(states),
-                "hasSaveAs": bool(states),
-                "hasRevert": bool(states),
-                "hasBackup": bool(states),
+                "hasSave": bool(can_save_count or states),
+                "hasSaveAs": bool(can_save_as_count or states),
+                "hasRevert": bool(can_revert_count or states),
+                "hasBackup": bool(can_backup_count or states),
                 **capabilities,
             },
             "readiness": readiness,
@@ -11945,6 +11971,11 @@ class AIEditorAPI:
                 "controllerIds": evidence.get("controllerIds", []),
                 "selectedControllerIds": evidence.get(
                     "selectedControllerIds", []),
+                "affinityControllerIds": evidence.get(
+                    "affinityControllerIds", []),
+                "serializerHandles": evidence.get("serializerHandles", []),
+                "statusBarProviderHandles": evidence.get(
+                    "statusBarProviderHandles", []),
                 "surfaceEvidence": evidence,
                 "readiness": evidence.get("readiness", ""),
                 "readinessScore": evidence.get("readinessScore", 0),
@@ -11984,6 +12015,29 @@ class AIEditorAPI:
                 or selection.get("id")
                 or selection.get("handle")
                 or "").strip()
+        ][:12]
+        affinity_ids = [
+            str(
+                affinity.get("controllerId")
+                or affinity.get("id")
+                or affinity.get("handle")
+                or "").strip()
+            for affinity in affinities
+            if str(
+                affinity.get("controllerId")
+                or affinity.get("id")
+                or affinity.get("handle")
+                or "").strip()
+        ][:12]
+        serializer_handles = [
+            str(serializer.get("handle") or serializer.get("id") or "").strip()
+            for serializer in serializers
+            if str(serializer.get("handle") or serializer.get("id") or "").strip()
+        ][:12]
+        status_handles = [
+            str(provider.get("handle") or provider.get("id") or "").strip()
+            for provider in status_bar_providers
+            if str(provider.get("handle") or provider.get("id") or "").strip()
         ][:12]
         supported_languages = sorted({
             str(language)
@@ -12038,6 +12092,9 @@ class AIEditorAPI:
             "affinityCount": len(affinities),
             "controllerIds": controller_ids,
             "selectedControllerIds": selected_ids,
+            "affinityControllerIds": affinity_ids,
+            "serializerHandles": serializer_handles,
+            "statusBarProviderHandles": status_handles,
             "supportedLanguages": supported_languages,
             "readiness": readiness,
             "readinessScore": score,
@@ -12439,11 +12496,72 @@ class AIEditorAPI:
             record.setdefault("kind", "webviewPanel")
             record.setdefault("source", "webviewPanel")
             record["runtimeAvailable"] = True
-            record["readiness"] = (
+            readiness = (
                 "disposed" if record.get("disposed")
                 else "ready" if record.get("htmlAvailable")
                 else "pending")
+            readiness_issues: List[str] = []
+            readiness_score = 100
+            if record.get("disposed"):
+                readiness_issues.append("disposed")
+                readiness_score = 20
+            elif not record.get("htmlAvailable"):
+                readiness_issues.append("waiting-html")
+                readiness_score = 65
+            if int(record.get("pendingMessageCount") or 0):
+                readiness_issues.append("queued-messages")
+                readiness_score -= 8
+            if int(record.get("droppedMessageCount") or 0):
+                readiness_issues.append("dropped-messages")
+                readiness_score -= 18
+            readiness_score = max(0, min(100, int(readiness_score)))
+            record["readiness"] = readiness
+            record["readinessScore"] = readiness_score
+            record["readinessIssues"] = readiness_issues[:8]
             record["providerBacked"] = bool(record.get("htmlAvailable"))
+            evidence = {
+                "kind": "webviewPanel",
+                "viewId": view_id,
+                "viewType": str(record.get("viewType") or ""),
+                "providerId": str(record.get("providerId") or ""),
+                "htmlAvailable": bool(record.get("htmlAvailable")),
+                "htmlLength": int(record.get("htmlLength") or 0),
+                "visible": bool(record.get("visible")),
+                "active": bool(record.get("active")),
+                "disposed": bool(record.get("disposed")),
+                "retainContextWhenHidden": bool(
+                    record.get("retainContextWhenHidden")),
+                "messageCount": int(record.get("messageCount") or 0),
+                "pendingMessageCount": int(
+                    record.get("pendingMessageCount") or 0),
+                "droppedMessageCount": int(
+                    record.get("droppedMessageCount") or 0),
+                "localResourceRootCount": int(
+                    record.get("localResourceRootCount") or 0),
+                "portMappingCount": int(record.get("portMappingCount") or 0),
+                "renderCount": int(record.get("renderCount") or 0),
+                "revealCount": int(record.get("revealCount") or 0),
+                "disposeCount": int(record.get("disposeCount") or 0),
+                "lifecycleState": str(record.get("lifecycleState") or ""),
+                "readiness": readiness,
+                "readinessScore": readiness_score,
+                "readinessIssues": readiness_issues[:8],
+            }
+            record["webviewEvidence"] = {
+                **evidence,
+                **_as_dict(record.get("webviewEvidence")),
+            }
+            record["surfaceEvidence"] = {
+                "kind": "webviewPanel",
+                "readiness": readiness,
+                "readinessScore": readiness_score,
+                "readinessIssues": readiness_issues[:8],
+                "visible": bool(record.get("visible")),
+                "disposed": bool(record.get("disposed")),
+                "messageCount": int(record.get("messageCount") or 0),
+                "resourceRootCount": int(
+                    record.get("localResourceRootCount") or 0),
+            }
             result.append(record)
         return result
 

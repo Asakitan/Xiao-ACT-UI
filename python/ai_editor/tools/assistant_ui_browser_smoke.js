@@ -122,7 +122,7 @@ async function main() {
     "mode-popup-custom-control-ready",
     "control-popup-rects-unclipped",
     "agent-popup-configured-agents-ready",
-    "visual-composer-fill-ready",
+    "visual-composer-centered-three-line-ready",
     "visual-controls-one-row-ready",
     "visual-no-old-control-boxes-ready",
     "visual-popup-surfaces-ready",
