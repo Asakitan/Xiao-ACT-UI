@@ -2697,10 +2697,13 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-shell { grid-template-columns:240px minmax(0,1fr); background:var(--bg); border-top:0; }
 .settings-vscode-calm .settings-shell.inspecting { grid-template-columns:240px minmax(0,1fr) minmax(286px,330px); background:var(--bg); }
 .settings-vscode-calm .settings-nav { padding:10px 8px 12px 0; border-right:1px solid var(--border); background:var(--bg); }
-.settings-vscode-calm .settings-nav-summary,
-.settings-vscode-calm .settings-nav-memory { display:none; }
-.settings-vscode-calm.settings-details-open .settings-nav-summary,
-.settings-vscode-calm.settings-details-open .settings-nav-memory { display:block; }
+.settings-vscode-calm .settings-nav-summary { display:none; }
+.settings-vscode-calm .settings-nav-memory { display:block; margin:0; padding:6px 8px 8px;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent); }
+.settings-vscode-calm .settings-nav-memory-title { padding:5px 0 4px; color:var(--fg-dim); }
+.settings-vscode-calm .settings-nav-memory-item { min-height:24px; padding:3px 6px; border-radius:2px; }
+.settings-vscode-calm .settings-nav-memory-empty { display:none; }
+.settings-vscode-calm.settings-details-open .settings-nav-summary { display:block; }
 .settings-vscode-calm .settings-nav-tools { padding:0 8px 8px; margin:0; border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent); }
 .settings-vscode-calm .settings-nav-tools input { height:26px; border-radius:2px; }
 .settings-vscode-calm .settings-nav-tools button { height:26px; border-radius:2px; }
@@ -2771,6 +2774,10 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-inspector-title { color:var(--fg-dim); }
 .settings-vscode-calm .settings-current-detail { border-radius:2px; background:transparent; border-color:color-mix(in srgb,var(--border) 70%,transparent); }
 .settings-vscode-calm .settings-current-detail .detail-chip { border-radius:2px; background:transparent; }
+.settings-vscode-calm .settings-current-detail .detail-breadcrumb { display:flex; flex-wrap:wrap; gap:4px;
+  padding-bottom:2px; color:var(--fg-dim); font:10px var(--mono); }
+.settings-vscode-calm .settings-current-detail .detail-breadcrumb span { max-width:100%;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .settings-vscode-calm .modal-btns { min-height:34px; padding:4px 18px; align-items:center;
   background:var(--statusbar-bg); color:var(--statusbar-fg); border-top:1px solid var(--border); }
 .settings-vscode-calm .modal-btns .settings-bottom-action,
@@ -4949,6 +4956,7 @@ function settingsShowRowDetails(row){
     return;
   }
   if(shell)shell.classList.add('inspecting');
+  settingsRememberRecentSetting(row);
   const info=settingsMetaForRow(row);
   const key=info.key||settingsReviewRowLabel(row);
   const scope=(info.meta&&info.meta.scope)||((row.dataset&&row.dataset.settingScope)||'Extension');
@@ -4960,6 +4968,22 @@ function settingsShowRowDetails(row){
   const rowPos=settingsRowPosition(row);
   host.innerHTML='';
   host.classList.add('open');
+  const breadcrumb=document.createElement('div');
+  breadcrumb.className='detail-breadcrumb';
+  breadcrumb.dataset.settingsDetailBreadcrumb='1';
+  [settingsTargetDisplayName(currentSettingsTarget),section?settingsSectionTitle(section):'',key].filter(Boolean).forEach((part,index)=>{
+    if(index){
+      const sep=document.createElement('span');
+      sep.textContent='>';
+      sep.setAttribute('aria-hidden','true');
+      breadcrumb.appendChild(sep);
+    }
+    const item=document.createElement('span');
+    item.textContent=part;
+    item.title=part;
+    breadcrumb.appendChild(item);
+  });
+  host.appendChild(breadcrumb);
   const title=document.createElement('strong');title.textContent=settingsRowTitle(row);host.appendChild(title);
   const code=document.createElement('code');code.textContent=key;host.appendChild(code);
   if(section){
@@ -27242,6 +27266,10 @@ function openSettings(){
     const saved=settingsViewState().section;
     const target=saved&&settingsCategorySections().find(section=>section.dataset.settingsId===saved&&section.style.display!=='none');
     if(target)scrollToSettingsSection(saved);
+    const search=$('settings-search');
+    if(search&&!String(search.value||'').trim()){
+      try{search.focus({preventScroll:true})}catch(e){try{search.focus()}catch(_e){}}
+    }
   },0);
 }
 function closeSettings(){$('settings-modal').classList.remove('open');settingsShowRowDetails(null)}
@@ -27500,10 +27528,15 @@ function settingsCommonlyUsedItems(){
 function renderSettingsPersonalNav(){
   const host=$('settings-nav-personal');if(!host)return;
   host.innerHTML='';
+  host.dataset.settingsPersonalNav='1';
   const common=settingsCommonlyUsedItems().slice(0,8);
   const favorites=settingsFavoriteList().slice(0,5);
   const recent=settingsStorageList(SETTINGS_RECENT_STORAGE_KEY).filter(item=>item&&item.key&&!settingsIsFavorite(item.key)).slice(0,5);
-  const addBlock=(title,items,kind)=>{
+  host.dataset.settingsCommonCount=String(common.length);
+  host.dataset.settingsFavoriteCount=String(favorites.length);
+  host.dataset.settingsRecentCount=String(recent.length);
+  const addBlock=(title,items,kind,required)=>{
+    if(!required&&!items.length)return;
     const titleEl=document.createElement('div');titleEl.className='settings-nav-memory-title';titleEl.textContent=title;host.appendChild(titleEl);
     if(!items.length){
       const empty=document.createElement('div');empty.className='settings-nav-memory-empty';empty.textContent='None';
@@ -27511,9 +27544,9 @@ function renderSettingsPersonalNav(){
     }
     items.forEach(item=>host.appendChild(settingsPersonalItemButton(item,kind)));
   };
-  addBlock('Commonly Used',common,'◆');
-  addBlock('Favorites',favorites,'★');
-  addBlock('Recent',recent,'↪');
+  addBlock('Commonly Used',common,'◆',true);
+  addBlock('Favorites',favorites,'★',false);
+  addBlock('Recent',recent,'↪',false);
 }
 function setActiveSettingsNav(id){
   const nav=$('settings-nav');if(!nav)return;
@@ -28022,9 +28055,11 @@ function settingsUiSelfCheckSnapshot(){
   const recommendations=$('settings-recommendations');
   const focusDeck=$('settings-focus-deck');
   const quickNav=$('settings-nav-quick');
+  const personalNav=$('settings-nav-personal');
   const footerSummary=$('settings-footer-summary');
   const footerSave=document.querySelector('.modal-btns .settings-save-button');
   const rowImpact=document.querySelector('.settings-row-impact');
+  const detailBreadcrumb=detail?detail.querySelector('[data-settings-detail-breadcrumb="1"]'):null;
   const route=$('settings-title-route');
   const caption=$('settings-search-caption-text');
   const secondaryAction=document.querySelector('.settings-secondary-action');
@@ -28111,6 +28146,9 @@ function settingsUiSelfCheckSnapshot(){
     hasFocusDeckActions:!!(focusDeck&&focusDeck.querySelector('[data-settings-focus-actions="1"] button')),
     hasFocusDeckStateChips:!!(focusDeck&&focusDeck.querySelector('.focus-chip')),
     hasSettingsQuickAccess:!!(quickNav&&quickNav.querySelector('[data-settings-quick-token="@common"]')&&quickNav.querySelector('[data-settings-quick-token="@modified"]')&&quickNav.querySelector('[data-settings-quick-token="@error"]')&&quickNav.querySelector('[data-settings-quick-token="@overrides"]')),
+    hasSettingsPersonalNav:!!(personalNav&&personalNav.dataset.settingsPersonalNav==='1'&&Number(personalNav.dataset.settingsCommonCount||0)>0),
+    hasDefaultVisiblePersonalNav:!!(personalNav&&String(getComputedStyle(personalNav).display)!=='none'),
+    hasDetailBreadcrumb:!!(detailBreadcrumb&&/>/.test(detailBreadcrumb.textContent||'')),
     hasFooterSaveSummary:!!(footerSummary&&footerSave&&footerSave.closest('.modal-btns')),
     hasRowImpactSummary:!!(rowImpact&&rowImpact.querySelector('.impact-chip')),
     hasRowSaveRevertMenu:!!Array.from(document.querySelectorAll('.settings-row-action-menu button')).find(btn=>String(btn.textContent||'')==='Save Setting')&&!!Array.from(document.querySelectorAll('.settings-row-action-menu button')).find(btn=>String(btn.textContent||'')==='Revert Setting'),

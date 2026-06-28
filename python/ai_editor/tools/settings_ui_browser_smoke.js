@@ -291,6 +291,9 @@ async function main() {
   if (!result.snapshot.hasDetailCopyLinkAction || !result.snapshot.hasExperienceBar || !result.snapshot.hasExperienceScopeChip || !result.snapshot.hasRowImpactSummary || !result.snapshot.hasSuggestedMatchesHost) {
     throw new Error("Settings selfcheck missing humanized context affordances: " + JSON.stringify(result.snapshot));
   }
+  if (!result.snapshot.hasSettingsPersonalNav || !result.snapshot.hasDefaultVisiblePersonalNav || !result.snapshot.hasDetailBreadcrumb) {
+    throw new Error("Settings selfcheck missing VS Code-style personal navigation or breadcrumb affordances: " + JSON.stringify(result.snapshot));
+  }
   if (!result.snapshot.hasReviewFilterActions || !result.snapshot.hasOverridesFilterToken) {
     throw new Error("Settings selfcheck missing review filter affordances: " + JSON.stringify(result.snapshot));
   }

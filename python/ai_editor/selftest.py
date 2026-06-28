@@ -4317,7 +4317,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".settings-vscode-calm .settings-quick-filters { margin:6px 0 0; max-height:0; opacity:0; pointer-events:none; }" in html
            and ".settings-vscode-calm.settings-details-open .settings-quick-filters { max-height:28px; opacity:1; pointer-events:auto; }" in html
            and ".settings-vscode-calm .settings-target-tabs { border:0; border-bottom:1px solid var(--border); border-radius:0; background:transparent; overflow:visible; }" in html
-           and ".settings-vscode-calm .settings-nav-summary," in html
+           and ".settings-vscode-calm .settings-nav-summary { display:none; }" in html
+           and ".settings-vscode-calm .settings-nav-memory { display:block;" in html
            and ".settings-vscode-calm .settings-control-status { display:none; }" in html
            and ".settings-vscode-calm .settings-field.builtin-setting { grid-template-columns:minmax(270px,.72fr) minmax(330px,1fr);" in html
            and ".settings-vscode-calm:not(.settings-details-open) .settings-secondary-action { display:none; }" in html
@@ -9906,6 +9907,9 @@ console.log("frontend word separator behavior ok");
             and "function settingsCommonlyUsedItems()" in html
             and "id='settings-nav-personal'" in html
             and "Commonly Used" in html
+            and "host.dataset.settingsPersonalNav='1';" in html
+            and "host.dataset.settingsCommonCount=String(common.length);" in html
+            and ".settings-vscode-calm .settings-nav-memory { display:block;" in html
             and "data-settings-filter-token=\"@common\"" in html
             and "function settingsGroupMatchesCommonFilter(group)" in html
             and "filters.common" in html
@@ -9915,6 +9919,9 @@ console.log("frontend word separator behavior ok");
             and "id=\"settings-section-context\"" in html
             and "id=\"settings-current-detail\"" in html
             and "function settingsShowRowDetails(row)" in html
+            and "breadcrumb.dataset.settingsDetailBreadcrumb='1';" in html
+            and "settingsRememberRecentSetting(row);" in html
+            and "search.focus({preventScroll:true})" in html
             and "function settingsSearchForKey(key,target)" in html
             and "function installSettingsScrollSync()" in html
             and "function settingsVisibleSections()" in html
@@ -10199,6 +10206,9 @@ console.log("frontend word separator behavior ok");
             and "hasFocusDeckStateChips" in html
             and "hasInspectorFocusDeck" in html
             and "hasSettingsQuickAccess" in html
+            and "hasSettingsPersonalNav" in html
+            and "hasDefaultVisiblePersonalNav" in html
+            and "hasDetailBreadcrumb" in html
             and "hasFooterSaveSummary" in html
             and "renderSettingsFocusDeck(parsed,visible,total,targetStats);" in html
             and "renderSettingsFocusDeck(settingsQueryFilters((($('settings-search')||{}).value)||''),0,0" in html
