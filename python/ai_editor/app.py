@@ -11735,6 +11735,15 @@ class AIEditorAPI:
                 return sorted(str(item) for item in value.keys())
             return []
 
+        def webview_html_keys() -> List[str]:
+            result: List[str] = []
+            for view_id, view in getattr(vscode_ns, "_webview_views", {}).items():
+                webview = getattr(view, "webview", None)
+                html = getattr(webview, "html", "") if webview is not None else ""
+                if html:
+                    result.append(f"{view_id}:{len(str(html))}")
+            return sorted(result)
+
         payload = {
             "context": context if isinstance(context, dict) else {},
             "contributionKeys": {
@@ -11748,6 +11757,7 @@ class AIEditorAPI:
                 "webviewViewProviders": keys(
                     getattr(vscode_ns, "_webview_view_providers", {})),
                 "webviewViews": keys(getattr(vscode_ns, "_webview_views", {})),
+                "webviewHtml": webview_html_keys(),
                 "lmProviders": keys(getattr(vscode_ns, "_lm_providers", {})),
                 "registeredTools": keys(getattr(vscode_ns, "registered_tools", {})),
                 "chatParticipants": keys(
@@ -11805,7 +11815,11 @@ class AIEditorAPI:
                 view_id = str(decorated.get("id") or "")
                 if view_id:
                     manifest_view_ids.add(view_id)
-                views.append({
+                runtime_state = decorated.get("runtimeState", {})
+                webview_evidence = (
+                    runtime_state.get("webviewEvidence", {})
+                    if isinstance(runtime_state, dict) else {})
+                view_record = {
                     "id": view_id,
                     "name": str(decorated.get("name") or view_id),
                     "container": str(container_id),
@@ -11821,7 +11835,14 @@ class AIEditorAPI:
                     "runtimeState": decorated.get("runtimeState", {}),
                     "titleActions": decorated.get("titleActions", []),
                     "welcome": decorated.get("welcome", []),
-                })
+                }
+                if webview_evidence:
+                    view_record["webviewEvidence"] = webview_evidence
+                    view_record["htmlAvailable"] = bool(
+                        webview_evidence.get("htmlAvailable"))
+                    view_record["htmlLength"] = int(
+                        webview_evidence.get("htmlLength") or 0)
+                views.append(view_record)
         runtime_ids = set(getattr(self._vscode_ns, "_tree_data_providers", {}).keys())
         runtime_ids.update(getattr(self._vscode_ns, "_tree_views", {}).keys())
         runtime_ids.update(
@@ -11831,7 +11852,8 @@ class AIEditorAPI:
             snapshot = self._extension_view_snapshot(view_id)
             if not snapshot.get("runtimeAvailable"):
                 continue
-            views.append({
+            webview_evidence = snapshot.get("webviewEvidence", {})
+            view_record = {
                 "id": view_id,
                 "name": str(snapshot.get("title") or view_id),
                 "container": "",
@@ -11843,7 +11865,14 @@ class AIEditorAPI:
                 "runtimeState": snapshot,
                 "titleActions": snapshot.get("titleActions", []),
                 "welcome": snapshot.get("welcome", []),
-            })
+            }
+            if isinstance(webview_evidence, dict) and webview_evidence:
+                view_record["webviewEvidence"] = webview_evidence
+                view_record["htmlAvailable"] = bool(
+                    webview_evidence.get("htmlAvailable"))
+                view_record["htmlLength"] = int(
+                    webview_evidence.get("htmlLength") or 0)
+            views.append(view_record)
         view_containers: List[Dict[str, Any]] = []
         for location in ("activitybar", "panel", "secondarySidebar"):
             view_containers.extend(
@@ -11877,6 +11906,17 @@ class AIEditorAPI:
             item for item in views
             if str(item.get("kind") or "").lower() == "webviewview"
         ]
+        webview_html_available = sum(
+            1 for item in webview_views
+            if _as_dict(item.get("webviewEvidence")).get("htmlAvailable")
+            or item.get("htmlAvailable"))
+        webview_retained = sum(
+            1 for item in webview_views
+            if _as_dict(item.get("webviewEvidence")).get(
+                "retainContextWhenHidden"))
+        webview_visible = sum(
+            1 for item in webview_views
+            if _as_dict(item.get("webviewEvidence")).get("visible"))
         tree_views = [
             item for item in views
             if str(item.get("kind") or "").lower() == "treeview"
@@ -11900,6 +11940,9 @@ class AIEditorAPI:
                 "views": len(views),
                 "treeViews": len(tree_views),
                 "webviewViews": len(webview_views),
+                "webviewHtmlAvailable": webview_html_available,
+                "webviewRetained": webview_retained,
+                "webviewVisible": webview_visible,
                 "viewContainers": len(view_containers),
                 "customEditors": len(custom_editors),
                 "customEditorStates": sum(
@@ -13756,7 +13799,7 @@ class AIEditorAPI:
                 webview_options = {}
             if not webview_options:
                 webview_options = _as_dict(node_webview_state.get("options"))
-            return {
+            state = {
                 "ok": True,
                 "kind": "webviewView",
                 "runtimeAvailable": True,
@@ -13784,6 +13827,9 @@ class AIEditorAPI:
                     node_webview_state.get(
                         "visible", getattr(webview_view, "visible", False))),
             }
+            state["webviewEvidence"] = self._webview_runtime_evidence(
+                view_id, state)
+            return state
         manifest_view = self._manifest_view(view_id)
         if manifest_view:
             welcome = self._view_welcome_entries(view_id)
@@ -13808,6 +13854,35 @@ class AIEditorAPI:
             "kind": "view",
             "runtimeAvailable": False,
             "message": f"No registered runtime or manifest view found for '{view_id}'.",
+        }
+
+    @staticmethod
+    def _webview_runtime_evidence(
+            view_id: str, state: Dict[str, Any]) -> Dict[str, Any]:
+        html = str(state.get("html") or "")
+        view_state = state.get("state")
+        options = _as_dict(state.get("options"))
+        state_keys: List[str] = []
+        if isinstance(view_state, dict):
+            state_keys = sorted(str(key) for key in view_state.keys())[:12]
+        return {
+            "viewId": str(view_id or ""),
+            "htmlAvailable": bool(html),
+            "htmlLength": len(html),
+            "stateKind": type(view_state).__name__ if view_state is not None else "",
+            "stateKeys": state_keys,
+            "enableScripts": bool(options.get("enableScripts", True)),
+            "enableForms": bool(options.get("enableForms", True)),
+            "enableCommandUris": bool(options.get("enableCommandUris", False)),
+            "retainContextWhenHidden": bool(state.get("retainContextWhenHidden")),
+            "visible": bool(state.get("visible")),
+            "hasBadge": state.get("badge") is not None,
+            "title": str(state.get("title") or ""),
+            "description": str(state.get("description") or ""),
+            "message": str(
+                state.get("message")
+                or state.get("runtimeMessage")
+                or ""),
         }
 
     def _manifest_view(self, view_id: str) -> Dict[str, Any]:

@@ -9905,6 +9905,19 @@ console.log("frontend word separator behavior ok");
            and "channel: \"msedge\"" in settings_smoke_source
            and "PASS settings-ui-browser-smoke" in settings_smoke_source
            and "SKIP settings-ui-browser-smoke playwright unavailable" in settings_smoke_source)
+    _check("frontend settings browser exposes VS Code style interaction state",
+           "settings-query-box::before" in html
+           and "function updateSettingsTargetTabCounts(stats)" in html
+           and "settings-target-tab-count" in html
+           and "function decorateExtensionSettingRowChrome(row,opts)" in html
+           and "function updateExtensionSettingSaveState(row,state,label)" in html
+           and "ext-setting-status-chip" in html
+           and "dataset.extSettingSaveState" in html
+           and "updateExtensionSettingSaveState(row,'saving','Saving')" in html
+           and "updateExtensionSettingSaveState(row,'saved','Saved')" in html
+           and "updateExtensionSettingSaveState(row,'error','Save failed')" in html
+           and "keyEl.classList.add('clickable')" in html
+           and "settingsSearchForKey(key,opts.target||currentSettingsTarget)" in html)
     _check("frontend settings saves scoped target updates",
            "function settingsBackendTargetName(target)" in html
            and "function settingTargetEntry(meta)" in html
@@ -10407,6 +10420,11 @@ console.log("frontend word separator behavior ok");
            and "action.dataset.actionLabel=row.action&&row.action.label||'Inspect';" in html
            and "el.addEventListener('dblclick',e=>{e.preventDefault();void openExtensionRuntimeSurface(row)});" in html
            and "['Runtime',rows.filter(row=>row.ready).length]" in html
+           and "['Webview HTML',summary.webviewHtmlAvailable||0]" in html
+           and "webviewEvidence:evidence" in html
+           and "el.dataset.webviewHtmlAvailable=row.htmlAvailable?'1':'0';" in html
+           and "extension-runtime-tag webview-evidence" in html
+           and "snapshot.runtimeWebviewEvidenceRows>=4" in html
            and "['Manifest',rows.filter(row=>!row.ready).length]" in html
            and "(data.terminalProfiles||[]).slice(0,8).forEach(item=>push('TerminalProfile'" in html
            and "(data.languageModelTools||[]).slice(0,8).forEach(item=>push('LMTool'" in html
@@ -10433,6 +10451,10 @@ console.log("frontend word separator behavior ok");
            "self._extension_runtime_surface_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}" in app_source
            and "self._extension_runtime_surface_cache_ttl = 0.35" in app_source
            and "def _extension_runtime_surface_cache_key(" in app_source
+           and "\"webviewHtml\": webview_html_keys()" in app_source
+           and "def _webview_runtime_evidence(" in app_source
+           and "view_record[\"webviewEvidence\"] = webview_evidence" in app_source
+           and "\"webviewHtmlAvailable\": webview_html_available" in app_source
            and "payload.setdefault(\"summary\", {})[\"cacheHit\"] = True" in app_source
            and "\"cacheHit\": False" in app_source
            and "if len(self._extension_runtime_surface_cache) > 12:" in app_source)
@@ -10449,10 +10471,10 @@ console.log("frontend word separator behavior ok");
                "if(isHiddenSetting&&!hiddenEditable){setExtensionSettingError(row,"
                "'Hidden settings are shown for diagnostics only');return}") in html
            and (
-               "if(hiddenEditable||deprecation){await renderExtensionSettings();return}"
+               "if(hiddenEditable||deprecation){updateExtensionSettingSaveState(row,'saved','Reset');await renderExtensionSettings();return}"
                in html)
            and (
-               "if(hiddenEditable){await renderExtensionSettings();return}"
+               "if(hiddenEditable){updateExtensionSettingSaveState(row,'saved','Saved');await renderExtensionSettings();return}"
                in html)
            and (
                "(isHiddenSetting?'hidden excluded included false diagnostics ':'')"
@@ -10465,10 +10487,10 @@ console.log("frontend word separator behavior ok");
                    "(isHiddenSetting?'hidden excluded included false diagnostics ':'')"
                    in html),
                "hasRefreshAfterReset": (
-                   "if(hiddenEditable||deprecation){await renderExtensionSettings();return}"
+                   "if(hiddenEditable||deprecation){updateExtensionSettingSaveState(row,'saved','Reset');await renderExtensionSettings();return}"
                    in html),
                "hasRefreshAfterSave": (
-                   "if(hiddenEditable){await renderExtensionSettings();return}"
+                   "if(hiddenEditable){updateExtensionSettingSaveState(row,'saved','Saved');await renderExtensionSettings();return}"
                    in html),
            }, ensure_ascii=False))
     if node_path:

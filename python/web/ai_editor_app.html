@@ -1594,9 +1594,11 @@ pre.code-block code .type { color:var(--fg-type); }
   grid-template-columns:minmax(220px,1fr); gap:7px; align-items:start; padding:10px 18px 8px;
   border-bottom:1px solid var(--border); background:color-mix(in srgb,var(--bg) 92%,var(--bg2)); flex-shrink:0; }
 .settings-search-row { grid-column:1 / -1; display:grid; grid-template-columns:minmax(280px,1fr) auto; gap:8px; align-items:center; }
-.settings-query-box { min-width:0; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center;
-  border:1px solid var(--border); border-radius:4px; background:var(--bg-input); }
-.settings-query-box:focus-within { border-color:var(--border-focus); }
+.settings-query-box { min-width:0; display:grid; grid-template-columns:24px minmax(0,1fr) auto; align-items:center;
+  border:1px solid var(--border); border-radius:4px; background:var(--bg-input);
+  box-shadow:inset 0 0 0 1px transparent; transition:border-color .12s ease, box-shadow .12s ease, background .12s ease; }
+.settings-query-box::before { content:'⌕'; display:flex; align-items:center; justify-content:center; color:var(--fg-dim); font:13px var(--mono); }
+.settings-query-box:focus-within { border-color:var(--border-focus); box-shadow:0 0 0 1px color-mix(in srgb,var(--border-focus) 24%,transparent); background:color-mix(in srgb,var(--bg-input) 88%,var(--bg3)); }
 .settings-searchbar input#settings-search { width:100%; height:32px; box-sizing:border-box; background:transparent;
   color:var(--fg); border:0; border-radius:4px; padding:5px 10px;
   font:13px var(--sans); outline:none; }
@@ -1605,10 +1607,15 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-scope-label { color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; letter-spacing:0; }
 .settings-target-tabs { display:inline-flex; align-items:center; border:1px solid var(--border); border-radius:4px; overflow:hidden; background:var(--bg3); }
 .settings-target-tabs button { height:28px; min-width:76px; padding:0 10px; border:0; border-left:1px solid var(--border);
+  display:inline-flex; align-items:center; justify-content:center; gap:5px;
   background:transparent; color:var(--fg-dim); font:12px var(--sans); cursor:pointer; }
 .settings-target-tabs button:first-child { border-left:0; }
 .settings-target-tabs button:hover,.settings-target-tabs button:focus { color:var(--fg); outline:none; background:var(--bg-hover); }
 .settings-target-tabs button.active { color:var(--fg); background:color-mix(in srgb,var(--fg-accent) 16%,var(--bg3)); }
+.settings-target-tab-count { min-width:16px; max-width:42px; padding:0 4px; border-radius:999px;
+  background:color-mix(in srgb,var(--bg) 70%,transparent); color:var(--fg-dim); font:9px var(--mono);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-target-tabs button.active .settings-target-tab-count { color:var(--fg-accent); background:color-mix(in srgb,var(--fg-accent) 10%,transparent); }
 .settings-result-nav { display:inline-flex; align-items:center; gap:4px; justify-self:end; padding-right:4px; }
 .settings-result-nav button { height:24px; min-width:24px; padding:0 7px; border:1px solid var(--border);
   border-radius:4px; background:var(--bg3); color:var(--fg-dim); font:12px var(--sans); cursor:pointer; }
@@ -1854,6 +1861,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .extension-runtime-tag { border:1px solid color-mix(in srgb,var(--border) 80%,transparent); border-radius:999px; padding:0 5px; color:var(--fg-dim); }
 .extension-runtime-tag.runtime { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 45%,var(--border)); }
 .extension-runtime-tag.manifest { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 45%,var(--border)); }
+.extension-runtime-tag.webview-evidence { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 40%,var(--border)); background:color-mix(in srgb,var(--fg-accent) 5%,transparent); }
+.extension-runtime-tag.webview-evidence.missing { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 45%,var(--border)); background:transparent; }
 .extension-runtime-state { border:1px solid var(--border); border-radius:999px; padding:1px 6px; font:10px var(--mono); color:var(--fg-dim); }
 .extension-runtime-state.ready { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 50%,var(--border)); }
 .extension-runtime-state.pending { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 50%,var(--border)); }
@@ -2230,7 +2239,7 @@ pre.code-block { overflow:visible; }
 .settings-field.invalid, .settings-input-invalid { border-color:var(--fg-error) !important; }
 .settings-field.settings-target-hidden { display:none !important; }
 .settings-field.builtin-setting { padding:7px 28px 7px 8px; border-radius:4px; margin:3px 0 6px;
-  border-left:2px solid transparent; background:transparent; }
+  border-left:2px solid transparent; background:transparent; transition:background .12s ease, border-color .12s ease, box-shadow .12s ease; }
 .settings-field.builtin-setting.has-row-actions { padding-right:258px; }
 .settings-field.builtin-setting:hover,.settings-field.builtin-setting:focus-within { background:color-mix(in srgb,var(--bg-hover) 62%,transparent); }
 .settings-field.builtin-setting:focus { outline:1px solid color-mix(in srgb,var(--border-focus) 55%,transparent); outline-offset:-1px; }
@@ -2300,12 +2309,15 @@ pre.code-block { overflow:visible; }
 .settings-filter-chip:hover { color:var(--fg); border-color:var(--fg-accent); }
 .settings-filter-summary { color:var(--fg-dim); font:11px var(--mono); min-height:16px; margin:-4px 0 8px; }
 .ext-setting-row { position:relative; margin-bottom:8px; padding:6px 74px 6px 8px;
-  border-left:2px solid transparent; border-radius:3px; }
+  border-left:2px solid transparent; border-radius:3px; transition:background .12s ease, border-color .12s ease, box-shadow .12s ease; }
 .ext-setting-row.has-row-actions { padding-right:154px; }
 .ext-setting-row:hover,.ext-setting-row:focus-within,.ext-setting-row:focus { background:color-mix(in srgb,var(--bg-hover) 62%,transparent); }
 .ext-setting-row:focus { outline:1px solid color-mix(in srgb,var(--border-focus) 55%,transparent); outline-offset:-1px; }
 .ext-setting-row.highlight { animation:settingsSectionFlash .65s ease-out; }
 .ext-setting-row.modified { border-left-color:var(--fg-accent); background:var(--bg-hover); }
+.ext-setting-row.saving { box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--fg-accent) 28%,transparent); }
+.ext-setting-row.saved-flash { animation:settingsSavedFlash .7s ease-out; }
+.ext-setting-row.save-error { box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--fg-error) 42%,transparent); }
 .ext-setting-row.hidden-setting { border-left-color:color-mix(in srgb,var(--fg-dim) 45%,transparent); opacity:.78; }
 .ext-setting-row.settings-field.modified { padding-left:8px; }
 .ext-setting-row .s-reset { top:8px; right:6px; transform:none; }
@@ -2319,6 +2331,11 @@ pre.code-block { overflow:visible; }
   border-radius:3px; padding:0 4px; line-height:15px; }
 .ext-setting-scope-badge { font-size:9px; color:var(--fg-dim); border:1px solid var(--border);
   border-radius:3px; padding:0 4px; line-height:15px; }
+.ext-setting-status-chip { display:inline-flex; align-items:center; min-height:15px; padding:0 5px; border:1px solid var(--border);
+  border-radius:999px; color:var(--fg-dim); background:var(--bg3); font:9px/15px var(--mono); }
+.ext-setting-status-chip.saving { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); animation:languageStatusPulse 1.1s ease-in-out infinite; }
+.ext-setting-status-chip.saved { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 45%,var(--border)); }
+.ext-setting-status-chip.error { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 52%,var(--border)); }
 .ext-setting-sync-badge { font-size:9px; color:var(--fg-dim); border:1px solid var(--border);
   border-radius:3px; padding:0 4px; line-height:15px; }
 .ext-setting-tag-badge { font-size:9px; color:var(--fg-dim); border:1px solid var(--border);
@@ -2326,6 +2343,8 @@ pre.code-block { overflow:visible; }
 .ext-setting-tag-badge.preview { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 55%,var(--border)); }
 .ext-setting-tag-badge.experimental { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 45%,var(--border)); }
 .ext-setting-tag-badge.online { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 45%,var(--border)); }
+.ext-setting-key.clickable { cursor:pointer; text-decoration-color:transparent; text-underline-offset:3px; }
+.ext-setting-key.clickable:hover,.ext-setting-key.clickable:focus { color:var(--fg-accent); outline:none; text-decoration:underline; }
 .ext-setting-target { display:flex; align-items:center; gap:5px; margin:3px 0 4px;
   color:var(--fg-dim); font-size:10px; }
 .ext-setting-target select { width:auto; min-width:128px; height:22px; padding:1px 20px 1px 6px;
@@ -26291,10 +26310,28 @@ function renderSettingsReviewBar(stats){
   host.appendChild(actions);
   renderSettingsSavePreview(state,($('settings-save-preview')||{}).classList&&$('settings-save-preview').classList.contains('open'));
 }
+function updateSettingsTargetTabCounts(stats){
+  const safeStats=stats||{user:0,workspace:0,extensions:0,visible:0,modified:0};
+  document.querySelectorAll('.settings-target-tabs [data-settings-target]').forEach(btn=>{
+    const target=btn.dataset.settingsTarget||'user';
+    const count=Number(safeStats[target]||0);
+    let chip=btn.querySelector('.settings-target-tab-count');
+    if(!chip){
+      chip=document.createElement('span');
+      chip.className='settings-target-tab-count';
+      btn.appendChild(chip);
+    }
+    chip.textContent=String(count);
+    chip.title=count+' setting row'+(count===1?'':'s')+' in '+settingsTargetDisplayName(target);
+    btn.dataset.settingsTargetCount=String(count);
+    btn.dataset.settingsVisibleTarget=currentSettingsTarget===target?'1':'0';
+  });
+}
 function renderSettingsTargetSummary(stats){
   const host=$('settings-target-summary');
   const resetBtn=document.querySelector('.settings-reset-visible');
   const safeStats=stats||{user:0,workspace:0,extensions:0,visible:0,modified:0,overrides:0};
+  updateSettingsTargetTabCounts(safeStats);
   if(resetBtn)resetBtn.disabled=!safeStats.modified;
   if(!host)return;
   host.innerHTML='';
@@ -29546,6 +29583,55 @@ function setExtensionSettingError(row,message){
   row.classList.toggle('invalid',!!message);
   const el=row.querySelector('.ext-setting-error');
   if(el)el.textContent=message||'';
+  if(message)updateExtensionSettingSaveState(row,'error','Error');
+}
+function updateExtensionSettingSaveState(row,state,label){
+  if(!row)return;
+  const value=String(state||'idle');
+  row.dataset.extSettingSaveState=value;
+  row.classList.toggle('saving',value==='saving');
+  row.classList.toggle('save-error',value==='error');
+  if(value==='saved'){
+    row.classList.add('saved-flash');
+    setTimeout(()=>row.classList.remove('saved-flash'),760);
+  }
+  let chip=row.querySelector('.ext-setting-status-chip');
+  if(!chip){
+    const head=row.querySelector('.ext-setting-head');
+    if(!head)return;
+    chip=document.createElement('span');
+    chip.className='ext-setting-status-chip';
+    head.appendChild(chip);
+  }
+  chip.className='ext-setting-status-chip '+(value==='saving'?'saving':value==='saved'?'saved':value==='error'?'error':'');
+  chip.textContent=label||(
+    value==='saving'?'Saving'
+      : value==='saved'?'Saved'
+      : value==='error'?'Error'
+      : 'Ready');
+  chip.title='Setting state: '+chip.textContent;
+}
+function decorateExtensionSettingRowChrome(row,opts){
+  if(!row||row.dataset.extSettingChrome==='1')return;
+  opts=opts||{};
+  row.dataset.extSettingChrome='1';
+  row.dataset.extSettingSaveState='idle';
+  updateExtensionSettingSaveState(row,'idle','Ready');
+  const key=String(opts.key||row.dataset.extSettingKey||'');
+  const keyEl=row.querySelector('.ext-setting-key');
+  if(keyEl&&key){
+    keyEl.classList.add('clickable');
+    keyEl.tabIndex=0;
+    keyEl.setAttribute('role','button');
+    keyEl.title='Filter Settings to '+key;
+    keyEl.onclick=ev=>{ev.preventDefault();ev.stopPropagation();settingsSearchForKey(key,opts.target||currentSettingsTarget)};
+    keyEl.onkeydown=ev=>{
+      if(ev.key==='Enter'||ev.key===' '){
+        ev.preventDefault();
+        settingsSearchForKey(key,opts.target||currentSettingsTarget);
+      }
+    };
+  }
 }
 function extensionSettingSplitFilterValues(value){
   const items=[];
@@ -30572,6 +30658,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       const keyLabel=document.createElement('div');keyLabel.className='ext-setting-key';
       keyLabel.textContent=override+' · '+key+(scopeName!=='window'?' · '+scopeName:'')+' · '+type+' · '+extensionSettingTargetLabel(targetName);
       row.appendChild(keyLabel);
+      decorateExtensionSettingRowChrome(row,{key,target:targetName,extensionId:extId,language:item.language});
       const targetOverrideNote=document.createElement('div');targetOverrideNote.className='ext-setting-note';
       renderExtensionSettingTargetOverrides(targetOverrideNote,scopedValues,targetName);
       row.appendChild(targetOverrideNote);
@@ -30626,6 +30713,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       const reset=document.createElement('span');reset.className='s-reset';reset.textContent='↻';reset.title='Reset language override';
       reset.onclick=async ev=>{
         ev.preventDefault();ev.stopPropagation();setExtensionSettingError(row,'');
+        updateExtensionSettingSaveState(row,'saving','Resetting');
         const r=await call('reset_extension_language_setting',item.language,key,item.extension_id||'',extensionSettingRowTarget(row));
         if(r&&r.ok){
           row.dataset.extSettingTarget=extensionSettingTargetName(r.target||extensionSettingRowTarget(row));
@@ -30647,9 +30735,10 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
           ].join(' ').toLowerCase();
           renderExtensionSettingTargetOverrides(targetOverrideNote,scopedValues,row.dataset.extSettingTarget);
           renderExtensionSettingIndicators(indicators,schema,scopedValues,row.dataset.extSettingTarget,defaultSource);
+          updateExtensionSettingSaveState(row,'saved','Reset');
           applyExtensionSettingsFilter();
         }
-        else showToast('Reset failed: '+((r&&r.error)||'unknown'),'error');
+        else { updateExtensionSettingSaveState(row,'error','Reset failed'); showToast('Reset failed: '+((r&&r.error)||'unknown'),'error'); }
       };
       row.appendChild(reset);
       input.addEventListener('change',async()=>{
@@ -30658,7 +30747,8 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
         if(enumHelp)renderExtensionSettingEnumDescription(enumHelp,schema,input);
         let nextValue;
         try{nextValue=readExtensionSettingInputValue(input,schema,type)}
-        catch(e){setExtensionSettingError(row,'Invalid JSON: '+e.message);return}
+        catch(e){setExtensionSettingError(row,'Invalid JSON: '+e.message);updateExtensionSettingSaveState(row,'error','Invalid');return}
+        updateExtensionSettingSaveState(row,'saving','Saving');
         const r=await call('set_extension_language_setting',item.language,key,nextValue,item.extension_id||'',extensionSettingRowTarget(row));
         if(r&&r.ok){
           row.dataset.extSettingTarget=r.target||extensionSettingRowTarget(row);
@@ -30678,9 +30768,10 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
           ].join(' ').toLowerCase();
           renderExtensionSettingTargetOverrides(targetOverrideNote,scopedValues,row.dataset.extSettingTarget);
           renderExtensionSettingIndicators(indicators,schema,scopedValues,row.dataset.extSettingTarget,defaultSource);
+          updateExtensionSettingSaveState(row,'saved','Saved');
           applyExtensionSettingsFilter();
         }
-        else showToast('Setting save failed: '+((r&&r.error)||'unknown'),'error');
+        else { updateExtensionSettingSaveState(row,'error','Save failed'); showToast('Setting save failed: '+((r&&r.error)||'unknown'),'error'); }
       });
       if(type==='array'||type==='object')input.addEventListener('input',()=>setExtensionSettingError(row,''));
       markExtensionSettingRow(row,modified[key]===true);
@@ -31012,6 +31103,7 @@ async function renderExtensionSettings(){
       keyLabel.className='ext-setting-key';
       keyLabel.textContent=key+(scopeName!=='window'?' · '+scopeName:'')+' · '+type+' · '+extensionSettingTargetLabel(targetName);
       row.appendChild(keyLabel);
+      decorateExtensionSettingRowChrome(row,{key,target:targetName,extensionId:extId});
       const targetOverrideNote=document.createElement('div');targetOverrideNote.className='ext-setting-note';
       renderExtensionSettingTargetOverrides(targetOverrideNote,scopedValues,targetName);
       row.appendChild(targetOverrideNote);
@@ -31082,6 +31174,7 @@ async function renderExtensionSettings(){
       reset.onclick=async ev=>{
         ev.preventDefault();ev.stopPropagation();setExtensionSettingError(row,'');
         if(isHiddenSetting&&!hiddenEditable){setExtensionSettingError(row,'Hidden settings are shown for diagnostics only');return}
+        updateExtensionSettingSaveState(row,'saving','Resetting');
         const r=await call('reset_extension_setting',key,extensionSettingRowTarget(row));
         if(r&&r.ok){
           row.dataset.extSettingTarget=extensionSettingTargetName(r.target||extensionSettingRowTarget(row));
@@ -31102,12 +31195,13 @@ async function renderExtensionSettings(){
               extensionSettingTargetSearchText(scopedValues,type)+' '+
               extensionSettingTargetLabel(row.dataset.extSettingTarget)
           ).trim().toLowerCase();
-          if(hiddenEditable||deprecation){await renderExtensionSettings();return}
+          if(hiddenEditable||deprecation){updateExtensionSettingSaveState(row,'saved','Reset');await renderExtensionSettings();return}
           renderExtensionSettingTargetOverrides(targetOverrideNote,scopedValues,row.dataset.extSettingTarget);
           renderExtensionSettingIndicators(indicators,schema,scopedValues,row.dataset.extSettingTarget,defaultSource);
+          updateExtensionSettingSaveState(row,'saved','Reset');
           applyExtensionSettingsFilter();
         }
-        else showToast('Reset failed: '+((r&&r.error)||'unknown'),'error');
+        else { updateExtensionSettingSaveState(row,'error','Reset failed'); showToast('Reset failed: '+((r&&r.error)||'unknown'),'error'); }
       };
       row.appendChild(reset);
       input.addEventListener('change',async()=>{
@@ -31116,7 +31210,8 @@ async function renderExtensionSettings(){
         if(enumHelp)renderExtensionSettingEnumDescription(enumHelp,schema,input);
         let nextValue;
         try{nextValue=readExtensionSettingInputValue(input,schema,type)}
-        catch(e){setExtensionSettingError(row,'Invalid JSON: '+e.message);return}
+        catch(e){setExtensionSettingError(row,'Invalid JSON: '+e.message);updateExtensionSettingSaveState(row,'error','Invalid');return}
+        updateExtensionSettingSaveState(row,'saving','Saving');
         const r=await call('set_extension_setting',key,nextValue,extensionSettingRowTarget(row));
         if(r&&r.ok){
           row.dataset.extSettingTarget=r.target||extensionSettingRowTarget(row);
@@ -31136,12 +31231,13 @@ async function renderExtensionSettings(){
               extensionSettingTargetSearchText(scopedValues,type)+' '+
               extensionSettingTargetLabel(row.dataset.extSettingTarget)
           ).trim().toLowerCase();
-          if(hiddenEditable){await renderExtensionSettings();return}
+          if(hiddenEditable){updateExtensionSettingSaveState(row,'saved','Saved');await renderExtensionSettings();return}
           renderExtensionSettingTargetOverrides(targetOverrideNote,scopedValues,row.dataset.extSettingTarget);
           renderExtensionSettingIndicators(indicators,schema,scopedValues,row.dataset.extSettingTarget,defaultSource);
+          updateExtensionSettingSaveState(row,'saved','Saved');
           applyExtensionSettingsFilter();
         }
-        else showToast('Setting save failed: '+((r&&r.error)||'unknown'),'error');
+        else { updateExtensionSettingSaveState(row,'error','Save failed'); showToast('Setting save failed: '+((r&&r.error)||'unknown'),'error'); }
       });
       if(type==='array'||type==='object')input.addEventListener('input',()=>setExtensionSettingError(row,''));
       markExtensionSettingRow(row,modifiedMap[key]===true);
@@ -31328,6 +31424,23 @@ function extensionRuntimeSurfaceRows(data){
     const runtime=ready!==false;
     const extensionId=String(item.extensionId||item.extension_id||item._extensionId||'');
     const resourceUri=extensionRuntimeSurfaceResourceUri(item);
+    const evidence=(item&&item.webviewEvidence&&typeof item.webviewEvidence==='object')
+      ? item.webviewEvidence
+      : (item&&item.runtimeState&&item.runtimeState.webviewEvidence&&typeof item.runtimeState.webviewEvidence==='object'
+        ? item.runtimeState.webviewEvidence
+        : {});
+    const htmlLength=Number(evidence.htmlLength||item.htmlLength||0)||0;
+    const evidenceText=[
+      evidence.htmlAvailable||item.htmlAvailable?'html':'no-html',
+      htmlLength?'htmlLength:'+htmlLength:'',
+      evidence.stateKind?'state:'+evidence.stateKind:'',
+      Array.isArray(evidence.stateKeys)?evidence.stateKeys.join(' '):'',
+      evidence.enableScripts===false?'no-scripts':(evidence.enableScripts===true?'scripts':''),
+      evidence.enableForms===false?'no-forms':(evidence.enableForms===true?'forms':''),
+      evidence.enableCommandUris===true?'command-uri':'',
+      evidence.retainContextWhenHidden?'retain':'',
+      evidence.visible?'visible':'',
+    ].filter(Boolean).join(' ');
     const row={
       kind,
       label:String(label||item.id||item.command||item.viewType||item.type||''),
@@ -31339,11 +31452,16 @@ function extensionRuntimeSurfaceRows(data){
       ready:runtime,
       command:String(item.command||''),
       id:String(item.id||item.profileId||item.profile_id||item.viewType||item.type||item.vendor||item.kind||item.name||item.command||''),
+      webviewEvidence:evidence,
+      htmlAvailable:!!(evidence.htmlAvailable||item.htmlAvailable),
+      htmlLength,
+      lifecycleState:String(item.lifecycleState||item.runtimeState&&item.runtimeState.lifecycleState||''),
+      evidenceText,
     };
     row.action=extensionRuntimeSurfaceAction(kind,item,row);
     row.openable=row.action&&row.action.type!=='inspect';
     row.key=[row.kind,row.id,row.command,row.extensionId,row.source,row.container,row.resourceUri].join('|');
-    row.searchText=[row.kind,row.label,row.meta,row.extensionId,row.container,row.resourceUri,row.source,row.command,row.id,row.action&&row.action.type].join(' ').toLowerCase();
+    row.searchText=[row.kind,row.label,row.meta,row.extensionId,row.container,row.resourceUri,row.source,row.command,row.id,row.action&&row.action.type,row.evidenceText].join(' ').toLowerCase();
     rows.push(row);
   };
   (data.treeViews||[]).slice(0,8).forEach(item=>push('TreeView',item,item.name||item.id,item.id+' · '+(item.container||'runtime'),item.runtimeAvailable!==false));
@@ -31564,6 +31682,8 @@ function renderExtensionRuntimeSurfacePanel(data){
     ['LM Provider',summary.languageModelProviders||0],
     ['Chat',summary.chatParticipants||0],
     ['Context',summary.chatContextProviders||0],
+    ['Webview HTML',summary.webviewHtmlAvailable||0],
+    ['Retained Webview',summary.webviewRetained||0],
     ['Runtime',rows.filter(row=>row.ready).length],
     ['Manifest',rows.filter(row=>!row.ready).length],
   ];
@@ -31616,6 +31736,9 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.action=row.action&&row.action.type||'inspect';
       el.dataset.actionTarget=row.action&&row.action.target||'';
       el.dataset.openable=row.openable?'1':'0';
+      el.dataset.webviewHtmlAvailable=row.htmlAvailable?'1':'0';
+      el.dataset.webviewHtmlLength=String(row.htmlLength||0);
+      el.dataset.webviewRetained=row.webviewEvidence&&row.webviewEvidence.retainContextWhenHidden?'1':'0';
       el.dataset.search=row.searchText||'';
       el.dataset.label=row.label||'';
       el.setAttribute('aria-selected','false');
@@ -31633,6 +31756,23 @@ function renderExtensionRuntimeSurfacePanel(data){
       meta.appendChild(source);
       if(row.extensionId){const ext=document.createElement('span');ext.className='extension-runtime-tag';ext.textContent=row.extensionId;meta.appendChild(ext)}
       if(row.meta){const detail=document.createElement('span');detail.textContent=row.meta;meta.appendChild(detail)}
+      if(row.kind==='WebviewView'){
+        const ev=row.webviewEvidence||{};
+        const chips=[
+          {text:(row.htmlAvailable?'HTML '+String(row.htmlLength||0):'No HTML'),missing:!row.htmlAvailable},
+          ev.stateKind?{text:'state '+ev.stateKind}:null,
+          ev.enableScripts!==undefined?{text:ev.enableScripts?'scripts':'no scripts',missing:!ev.enableScripts}:null,
+          ev.enableCommandUris?{text:'command-uri'}:null,
+          ev.retainContextWhenHidden?{text:'retain'}:null,
+          ev.visible?{text:'visible'}:null,
+        ].filter(Boolean);
+        chips.forEach(item=>{
+          const chip=document.createElement('span');
+          chip.className='extension-runtime-tag webview-evidence'+(item.missing?' missing':'');
+          chip.textContent=item.text;
+          meta.appendChild(chip);
+        });
+      }
       mid.appendChild(main);mid.appendChild(meta);
       const state=document.createElement('div');state.className='extension-runtime-state '+(row.ready?'ready':'pending');state.textContent=row.ready?'ready':'pending';
       const action=document.createElement('button');
@@ -32994,10 +33134,10 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     root.appendChild(notebookOutputHost);
 
     const runtimeData={
-      summary:{treeViews:1,webviewViews:1,customEditors:1,notebooks:1,commands:1,menus:1,terminalProfiles:1,languageModelTools:1,languageModelProviders:1,chatParticipants:1,chatContextProviders:1,dynamicSurfaces:11},
+      summary:{treeViews:1,webviewViews:1,webviewHtmlAvailable:1,webviewRetained:1,webviewVisible:1,customEditors:1,notebooks:1,commands:1,menus:1,terminalProfiles:1,languageModelTools:1,languageModelProviders:1,chatParticipants:1,chatContextProviders:1,dynamicSurfaces:11},
       viewContainers:[fixtureItem],
       treeViews:[{id:'selftest.dynamic.tree',name:'Runtime Tree',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true}],
-      webviewViews:[{id:'selftest.dynamic.webview',name:'Runtime Webview',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true}],
+      webviewViews:[{id:'selftest.dynamic.webview',name:'Runtime Webview',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true,htmlAvailable:true,htmlLength:61,webviewEvidence:{htmlAvailable:true,htmlLength:61,stateKind:'dict',stateKeys:['ready'],enableScripts:true,enableForms:true,enableCommandUris:false,retainContextWhenHidden:true,visible:true}}],
       customEditors:[{viewType:'selftest.customEditor',displayName:'Custom Fixture',extensionId:'selftest.extension',stateCount:1,states:[{uri:'custom.fixture'}],runtimeAvailable:true}],
       notebooks:[{type:'selftest-notebook',displayName:'Selftest Notebook',extensionId:'selftest.extension',serializerCount:1,controllerCount:1,uri:'selftest.notebook',runtimeAvailable:true}],
       commands:[{command:'selftest.run',title:'Run Fixture',source:'extension',extensionId:'selftest.extension',disabled:false}],
@@ -33160,6 +33300,9 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row').length:0,
       runtimeReadyRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-state.ready').length:0,
       runtimeTags:runtimeList?runtimeList.querySelectorAll('.extension-runtime-tag').length:0,
+      runtimeWebviewEvidenceRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-tag.webview-evidence').length:0,
+      runtimeHtmlEvidenceRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewHtmlAvailable==='1').length:0,
+      runtimeWebviewRetainedRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewRetained==='1').length:0,
       runtimeChips:runtimeSummary?runtimeSummary.querySelectorAll('.extension-runtime-chip').length:0,
       runtimeKinds:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-kind')).map(item=>String(item.textContent||'')):[],
       runtimeListRole:runtimeList?runtimeList.getAttribute('role'):'',
@@ -33206,6 +33349,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'&&snapshot.customCapabilities
       && snapshot.notebookOutputItems===3&&snapshot.notebookHtmlFrame&&snapshot.notebookImage&&snapshot.notebookText
       && snapshot.runtimeRows>=11&&snapshot.runtimeReadyRows>=10&&snapshot.runtimeChips>=13
+      && snapshot.runtimeWebviewEvidenceRows>=4&&snapshot.runtimeHtmlEvidenceRows>=1&&snapshot.runtimeWebviewRetainedRows>=1
       && snapshot.runtimeListRole==='list'&&snapshot.runtimeListItems===snapshot.runtimeRows
       && snapshot.runtimeDatasetReady===snapshot.runtimeReadyRows&&snapshot.runtimePanelCount==='11'
       && snapshot.runtimeOpenableRows===snapshot.runtimeRows&&snapshot.runtimeOpenableRows>=11&&snapshot.runtimeActionButtons===snapshot.runtimeRows
