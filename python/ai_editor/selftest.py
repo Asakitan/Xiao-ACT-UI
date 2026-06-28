@@ -4307,6 +4307,19 @@ def test_phase1_ai_editor_regressions() -> None:
            and "el.addEventListener('focus',()=>{frame.dataset.settingControlFocused='1'});" in html
            and "kind==='secret'?'Secret':kind==='json'?'JSON':kind==='select'?'Choice':kind==='checkbox'?'Toggle':kind==='number'?'Number':kind==='textarea'?'Text':'Value';" in html
            and "settingsRenderRowImpact(wrap);" in html)
+    _check("frontend Settings defaults to calmer VS Code workbench UX",
+           'class="modal settings-modal preferences-workbench settings-vscode-calm"' in html
+           and 'id="settings-details-toggle" onclick="settingsToggleDetails()"' in html
+           and "const SETTINGS_DETAILS_STORAGE_KEY='sao.aiEditor.settings.details.v1';" in html
+           and "function settingsApplyDetails(open)" in html
+           and "modal.classList.toggle('settings-details-open',enabled);" in html
+           and "settingsApplyDetails(settingsReadDetails());" in html
+           and ".settings-vscode-calm .settings-quick-filters { margin:6px 0 0; max-height:0; opacity:0; pointer-events:none; }" in html
+           and ".settings-vscode-calm.settings-details-open .settings-quick-filters { max-height:28px; opacity:1; pointer-events:auto; }" in html
+           and ".settings-vscode-calm .settings-target-tabs { border:0; border-bottom:1px solid var(--border); border-radius:0; background:transparent; overflow:visible; }" in html
+           and ".settings-vscode-calm .settings-nav-summary," in html
+           and ".settings-vscode-calm .settings-control-status { display:none; }" in html
+           and ".settings-vscode-calm .settings-field.builtin-setting { grid-template-columns:minmax(270px,.72fr) minmax(330px,1fr);" in html)
     _check("provider webviews bridge persistent vscode state",
            'type:"webview-set-state"' in html
            and 'webview_set_state' in html
@@ -9777,7 +9790,7 @@ console.log("frontend word separator behavior ok");
            and "window.formatSettingsJsonTab=formatSettingsJsonTab;" in html
            and "window.revertSettingsJsonTab=revertSettingsJsonTab;" in html)
     _check("frontend settings uses VS Code style settings layout",
-           "class=\"modal settings-modal preferences-workbench\"" in html
+           "class=\"modal settings-modal preferences-workbench settings-vscode-calm\"" in html
             and "class=\"settings-titlebar\"" in html
             and "id=\"settings-title-route\"" in html
             and "settings-toolbar-strip" in html

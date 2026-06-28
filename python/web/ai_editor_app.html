@@ -2653,6 +2653,105 @@ pre.code-block { overflow:visible; }
 .settings-row-action.favorite.active { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 55%,var(--border));
   background:color-mix(in srgb,var(--fg-accent) 8%,var(--bg3)); }
 .settings-row-action:hover,.settings-row-action:focus { color:var(--fg); border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
+
+/* VS Code-style Settings editor calm mode */
+.modal.settings-modal.settings-vscode-calm { width:min(1400px, calc(100vw - 44px)); background:var(--bg); }
+.settings-vscode-calm .settings-titlebar,
+.settings-vscode-calm .settings-searchbar,
+.settings-vscode-calm .settings-shell { width:min(1400px,100%); align-self:center; box-sizing:border-box; }
+.settings-vscode-calm .settings-titlebar { min-height:34px; padding:5px 24px 3px; background:var(--bg); border-bottom:0; }
+.settings-vscode-calm .settings-titlebar h2 { font-size:14px; }
+.settings-vscode-calm .settings-titlebar h2::before { display:none; }
+.settings-vscode-calm .settings-title-sub { color:var(--fg-dim); font-size:11px; }
+.settings-vscode-calm .settings-title-route { display:none; }
+.settings-vscode-calm .settings-searchbar { position:relative; padding:7px 24px 0; gap:0; border-bottom:0; background:var(--bg); }
+.settings-vscode-calm .settings-search-row { grid-template-columns:minmax(480px,1fr) auto; align-items:end; padding-bottom:8px; border-bottom:1px solid var(--border); }
+.settings-vscode-calm .settings-query-box { border-radius:2px; min-height:34px; background:var(--bg-input); }
+.settings-vscode-calm .settings-query-box:focus-within { box-shadow:0 0 0 1px color-mix(in srgb,var(--border-focus) 22%,transparent); }
+.settings-vscode-calm .settings-searchbar input#settings-search { height:34px; font:13px var(--sans); }
+.settings-vscode-calm .settings-search-caption,
+.settings-vscode-calm .settings-target-summary,
+.settings-vscode-calm .settings-search-memory,
+.settings-vscode-calm .settings-search-inspector,
+.settings-vscode-calm .settings-section-context,
+.settings-vscode-calm .settings-filter-summary,
+.settings-vscode-calm .settings-validation-summary,
+.settings-vscode-calm .settings-experience-bar,
+.settings-vscode-calm .settings-recommendations { display:none !important; }
+.settings-vscode-calm.settings-details-open .settings-search-caption,
+.settings-vscode-calm.settings-details-open .settings-target-summary,
+.settings-vscode-calm.settings-details-open .settings-search-memory.open,
+.settings-vscode-calm.settings-details-open .settings-search-inspector.open,
+.settings-vscode-calm.settings-details-open .settings-section-context,
+.settings-vscode-calm.settings-details-open .settings-filter-summary.open,
+.settings-vscode-calm.settings-details-open .settings-validation-summary.open,
+.settings-vscode-calm.settings-details-open .settings-experience-bar.open,
+.settings-vscode-calm.settings-details-open .settings-recommendations.open { display:flex !important; }
+.settings-vscode-calm.settings-details-open .settings-recommendations.open { display:grid !important; }
+.settings-vscode-calm .settings-quick-filters { margin:6px 0 0; max-height:0; opacity:0; pointer-events:none; }
+.settings-vscode-calm.settings-details-open .settings-quick-filters { max-height:28px; opacity:1; pointer-events:auto; }
+.settings-vscode-calm .settings-target-tabs { border:0; border-bottom:1px solid var(--border); border-radius:0; background:transparent; overflow:visible; }
+.settings-vscode-calm .settings-target-tabs button { height:30px; min-width:76px; border:0; border-bottom:1px solid transparent; border-radius:0; background:transparent; }
+.settings-vscode-calm .settings-target-tabs button.active { color:var(--fg); background:transparent; border-bottom-color:var(--fg-accent); }
+.settings-vscode-calm .settings-target-tab-count { background:transparent; border:0; padding:0; min-width:auto; }
+.settings-vscode-calm .settings-shell { grid-template-columns:220px minmax(0,1fr); background:var(--bg); border-top:0; }
+.settings-vscode-calm .settings-shell.inspecting { grid-template-columns:220px minmax(0,1fr) minmax(286px,330px); background:var(--bg); }
+.settings-vscode-calm .settings-nav { padding:10px 8px 12px 0; border-right:1px solid var(--border); background:var(--bg); }
+.settings-vscode-calm .settings-nav-summary,
+.settings-vscode-calm .settings-nav-memory { display:none; }
+.settings-vscode-calm.settings-details-open .settings-nav-summary,
+.settings-vscode-calm.settings-details-open .settings-nav-memory { display:block; }
+.settings-vscode-calm .settings-nav-tools { padding:0 8px 8px; margin:0; border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent); }
+.settings-vscode-calm .settings-nav-tools input { height:26px; border-radius:2px; }
+.settings-vscode-calm .settings-nav-tools button { height:26px; border-radius:2px; }
+.settings-vscode-calm .settings-nav-quick { grid-template-columns:1fr 1fr; padding:8px; margin:0; }
+.settings-vscode-calm .settings-nav-heading { padding:7px 8px 4px; }
+.settings-vscode-calm .settings-nav-item { min-height:26px; border-radius:0; border-left:0; padding:4px 8px; }
+.settings-vscode-calm .settings-nav-item.active { border-left:0; box-shadow:inset 2px 0 0 var(--fg-accent); background:var(--bg-hover); }
+.settings-vscode-calm .settings-nav-item .settings-nav-meta { display:none; }
+.settings-vscode-calm .settings-nav-item .count::before { display:none; }
+.settings-vscode-calm .settings-main { padding:8px 32px 22px; }
+.settings-vscode-calm .settings-main > .settings-section,
+.settings-vscode-calm .settings-main > details.settings-section,
+.settings-vscode-calm #ext-settings-container { max-width:940px; width:100%; padding:0 0 16px; border-top:0; }
+.settings-vscode-calm .settings-section-overview { position:relative; top:auto; z-index:1; margin:0 0 8px; padding:15px 0 7px;
+  border:0; border-bottom:1px solid color-mix(in srgb,var(--border) 62%,transparent); border-radius:0; background:transparent; backdrop-filter:none; }
+.settings-vscode-calm .settings-section-overview-title { font-size:13px; }
+.settings-vscode-calm .settings-section-overview-desc { white-space:normal; }
+.settings-vscode-calm .settings-section-overview-stats { display:none; }
+.settings-vscode-calm.settings-details-open .settings-section-overview-stats { display:flex; }
+.settings-vscode-calm .settings-field.builtin-setting { grid-template-columns:minmax(270px,.72fr) minmax(330px,1fr);
+  gap:4px 24px; padding:9px 34px 9px 0; margin:0; border-left:0; border-bottom-color:color-mix(in srgb,var(--border) 54%,transparent); border-radius:0; }
+.settings-vscode-calm .settings-field.builtin-setting.modified { box-shadow:inset 2px 0 0 var(--fg-accent); padding-left:8px; background:transparent; }
+.settings-vscode-calm .settings-field.builtin-setting:hover,
+.settings-vscode-calm .settings-field.builtin-setting:focus-within { background:color-mix(in srgb,var(--bg-hover) 50%,transparent); box-shadow:none; }
+.settings-vscode-calm .settings-field.builtin-setting.modified:hover,
+.settings-vscode-calm .settings-field.builtin-setting.modified:focus-within { box-shadow:inset 2px 0 0 var(--fg-accent); }
+.settings-vscode-calm .settings-built-head { grid-template-columns:minmax(0,1fr) auto; gap:8px; }
+.settings-vscode-calm .settings-built-head code { display:none; }
+.settings-vscode-calm.settings-details-open .settings-built-head code,
+.settings-vscode-calm .settings-field.settings-current .settings-built-head code,
+.settings-vscode-calm .settings-field:hover .settings-built-head code,
+.settings-vscode-calm .settings-field:focus-within .settings-built-head code { display:block; }
+.settings-vscode-calm .settings-built-head-state { max-width:130px; background:transparent; }
+.settings-vscode-calm .settings-row-impact,
+.settings-vscode-calm .settings-built-foot,
+.settings-vscode-calm .settings-value-summary { display:none; }
+.settings-vscode-calm.settings-details-open .settings-value-summary,
+.settings-vscode-calm.settings-details-open .settings-row-impact,
+.settings-vscode-calm .settings-field.settings-current > .settings-row-impact,
+.settings-vscode-calm .settings-field:hover > .settings-row-impact,
+.settings-vscode-calm .settings-field:focus-within > .settings-row-impact { display:flex; }
+.settings-vscode-calm .settings-control-frame { border-radius:2px; padding:4px 6px; background:var(--bg-input); }
+.settings-vscode-calm .settings-control-status { display:none; }
+.settings-vscode-calm.settings-details-open .settings-control-status,
+.settings-vscode-calm .settings-control-frame.modified .settings-control-status,
+.settings-vscode-calm .settings-control-frame.override .settings-control-status,
+.settings-vscode-calm .settings-control-frame.invalid .settings-control-status,
+.settings-vscode-calm .settings-control-frame[data-setting-control-focused="1"] .settings-control-status { display:inline-flex; }
+.settings-vscode-calm .settings-row-actions { right:4px; }
+.settings-vscode-calm .settings-row-action { border-color:transparent; background:transparent; }
+.settings-vscode-calm .settings-row-action-menu { border-radius:3px; }
 .settings-row-action:disabled { opacity:.35; cursor:default; }
 .settings-row-action-menu { display:none; position:absolute; top:26px; right:0; min-width:174px; padding:4px;
   border:1px solid var(--border); border-radius:4px; background:var(--bg2); box-shadow:var(--shadow); }
@@ -3575,7 +3674,7 @@ pre.code-block { overflow:visible; }
 
 <!-- Settings modal -->
 <div class="modal-bg" id="settings-modal">
-  <div class="modal settings-modal preferences-workbench" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+  <div class="modal settings-modal preferences-workbench settings-vscode-calm" role="dialog" aria-modal="true" aria-labelledby="settings-title">
     <div class="settings-titlebar">
       <div>
         <h2 id="settings-title">Settings</h2>
@@ -3587,6 +3686,7 @@ pre.code-block { overflow:visible; }
         <span class="settings-view-options" role="group" aria-label="Settings view">
           <button type="button" class="settings-top-action" id="settings-density-toggle" onclick="settingsToggleDensity()">Compact</button>
           <button type="button" class="settings-top-action" onclick="settingsFocusActiveSection()">Current</button>
+          <button type="button" class="settings-top-action" id="settings-details-toggle" onclick="settingsToggleDetails()">Details</button>
           <button type="button" class="settings-top-action" id="settings-query-help-toggle" onclick="settingsToggleQueryHelp()">Query Help</button>
         </span>
         <span class="settings-toolbar-strip" role="group" aria-label="Settings commands">
@@ -4614,6 +4714,30 @@ function settingsToggleQueryHelp(force){
     btn.setAttribute('aria-expanded',open?'true':'false');
   }
   return open;
+}
+function settingsReadDetails(){
+  try{return localStorage.getItem(SETTINGS_DETAILS_STORAGE_KEY)==='open'}catch(e){return false}
+}
+function settingsApplyDetails(open){
+  const modal=document.querySelector('.modal.settings-modal');
+  const btn=$('settings-details-toggle');
+  const enabled=open===true;
+  if(modal){
+    modal.classList.toggle('settings-details-open',enabled);
+    modal.dataset.settingsDetailsOpen=enabled?'1':'0';
+  }
+  if(btn){
+    btn.classList.toggle('active',enabled);
+    btn.setAttribute('aria-pressed',enabled?'true':'false');
+    btn.textContent=enabled?'Details On':'Details';
+  }
+  return enabled;
+}
+function settingsToggleDetails(force){
+  const modal=document.querySelector('.modal.settings-modal');
+  const open=force===undefined?!(modal&&modal.classList.contains('settings-details-open')):force===true;
+  try{localStorage.setItem(SETTINGS_DETAILS_STORAGE_KEY,open?'open':'closed')}catch(e){}
+  return settingsApplyDetails(open);
 }
 function settingsSearchForKey(key,target){
   const input=$('settings-search');if(!input)return;
@@ -27084,6 +27208,7 @@ function openSettings(){
   installSettingsKeyboardHandlers();
   installSettingsScrollSync();
   settingsApplyDensity(settingsReadDensity());
+  settingsApplyDetails(settingsReadDetails());
   $('settings-modal').classList.add('open');
   setTimeout(()=>{
     renderSettingsSectionOverviews();
@@ -27104,6 +27229,7 @@ const SETTINGS_FAVORITES_STORAGE_KEY='sao.aiEditor.settings.favorites.v1';
 const SETTINGS_RECENT_STORAGE_KEY='sao.aiEditor.settings.recent.v1';
 const SETTINGS_SEARCH_HISTORY_STORAGE_KEY='sao.aiEditor.settings.searchHistory.v1';
 const SETTINGS_DENSITY_STORAGE_KEY='sao.aiEditor.settings.density.v1';
+const SETTINGS_DETAILS_STORAGE_KEY='sao.aiEditor.settings.details.v1';
 let _settingsNavFilterValue='';
 const SETTINGS_COMMONLY_USED_KEYS=[
   'aiEditor.provider','aiEditor.model','workbench.colorTheme','workbench.iconTheme',
