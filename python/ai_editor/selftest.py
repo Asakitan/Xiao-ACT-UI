@@ -11584,6 +11584,7 @@ console.log("frontend word separator behavior ok");
            and "function extensionRuntimeSurfaceResourceUri(item)" in html
            and "function extensionRuntimeSurfaceAction(kind,item,row)" in html
            and "function extensionRuntimeWebviewEvidenceStatus(row)" in html
+           and "function extensionWebviewRuntimeDiagnostics(evidence)" in html
            and "function extensionRuntimeEvidenceMatches(row,value)" in html
            and "function extensionRuntimeSurfaceViewId(row)" in html
            and "function prepareExtensionRuntimeAssistantPrompt(row,prompt,statusText)" in html
@@ -11715,13 +11716,29 @@ console.log("frontend word separator behavior ok");
            and "el.dataset.webviewPortMappingCount=String(row.webviewEvidence&&row.webviewEvidence.portMappingCount||0);" in html
            and "el.dataset.webviewAsWebviewUriReady=row.webviewEvidence&&row.webviewEvidence.asWebviewUriReady?'1':'0';" in html
            and "el.dataset.webviewResourceEndpointReady=row.webviewEvidence&&row.webviewEvidence.resourceEndpointReady?'1':'0';" in html
+           and "el.dataset.webviewMessageHealth=String(row.webviewEvidence&&row.webviewEvidence.messageHealth||'');" in html
+           and "el.dataset.webviewBridgeHealth=String(row.webviewEvidence&&row.webviewEvidence.bridgeHealth||'');" in html
+           and "el.dataset.webviewResourceHealth=String(row.webviewEvidence&&row.webviewEvidence.resourceHealth||'');" in html
+           and "el.dataset.webviewFailureCount=String(row.webviewEvidence&&row.webviewEvidence.failureCount||0);" in html
+           and "el.dataset.webviewDiagnosticSummary=String(row.webviewEvidence&&row.webviewEvidence.diagnosticSummary||'');" in html
            and "el.dataset.webviewReadiness=row.webviewReadiness||row.webviewEvidence&&row.webviewEvidence.readiness||'';" in html
            and "el.dataset.webviewReadinessIssues=(row.webviewReadinessIssues||row.webviewEvidence&&row.webviewEvidence.readinessIssues||[]).join(',');" in html
            and "evidence.asWebviewUriReady?'aswebviewuri-ready':''" in html
            and "ev.asWebviewUriReady?{text:'asWebviewUri ready'}:null" in html
            and "row.webviewReadiness?{text:'readiness '+row.webviewReadiness" in html
+           and "ev.messageHealth?{text:'message '+ev.messageHealth" in html
+           and "ev.bridgeHealth?{text:'bridge '+ev.bridgeHealth" in html
+           and "ev.resourceHealth?{text:'resource '+ev.resourceHealth" in html
+           and "ev.failureCount?{text:'fail '+ev.failureCount" in html
+           and "['Bridge Ready',summary.webviewBridgeReady||" in html
+           and "['Message Stalled',summary.webviewMessageStalled||" in html
+           and "['Webview Failures',summary.webviewFailureCount||" in html
+           and "if(v==='bridge-ready')return ev.bridgeHealth==='ready';" in html
            and "runtimeWebviewReadyRows" in html
            and "runtimeWebviewWarningRows" in html
+           and "runtimeWebviewBridgeReadyRows" in html
+           and "runtimeWebviewFailureRows" in html
+           and "runtimeBridgeWarningFilterVisible" in html
            and "runtimeSurfaceEvidenceRows" in html
            and "runtimeCustomDirtyRows" in html
            and "runtimeNotebookStatusRows" in html
@@ -11779,6 +11796,15 @@ console.log("frontend word separator behavior ok");
            and "\"webviewReadinessReady\": webview_readiness_ready" in app_source
            and "\"webviewReadinessWarnings\": webview_readiness_warnings" in app_source
            and "\"webviewReadinessIssues\": webview_readiness_issues[:12]" in app_source
+           and "\"webviewMessageStalled\": webview_message_stalled" in app_source
+           and "\"webviewBridgeReady\": webview_bridge_ready" in app_source
+           and "\"webviewBridgeWarnings\": webview_bridge_warnings" in app_source
+           and "\"webviewResourceWarnings\": webview_resource_warnings" in app_source
+           and "\"webviewFailureCount\": webview_failure_count" in app_source
+           and "\"messageHealth\": message_health" in app_source
+           and "\"bridgeHealth\": bridge_health" in app_source
+           and "\"resourceHealth\": resource_health" in app_source
+           and "\"diagnosticSummary\": (" in app_source
            and "\"localResourceRootCount\": local_resource_root_count" in app_source
            and "\"asWebviewUriSupported\": as_webview_uri_supported" in app_source
            and "def _custom_editor_surface_evidence(" in app_source

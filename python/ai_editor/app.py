@@ -12353,6 +12353,40 @@ class AIEditorAPI:
                     "readinessIssues") or [])
             if str(issue or "").strip()
         })
+        webview_message_stalled = sum(
+            1 for item in webview_views
+            if _as_dict(item.get("webviewEvidence")).get(
+                "messageHealth") == "stalled")
+        webview_bridge_ready = sum(
+            1 for item in webview_views
+            if _as_dict(item.get("webviewEvidence")).get(
+                "bridgeHealth") == "ready")
+        webview_bridge_warnings = sum(
+            1 for item in webview_views
+            if str(_as_dict(item.get("webviewEvidence")).get(
+                "bridgeHealth") or "") in {
+                    "iframe-pending", "api-pending", "inactive",
+                    "disposed",
+                })
+        webview_resource_warnings = sum(
+            1 for item in webview_views
+            if str(_as_dict(item.get("webviewEvidence")).get(
+                "resourceHealth") or "") in {
+                    "pending", "unconfigured", "rewrite-warning",
+                    "unused-roots",
+                })
+        webview_failure_count = sum(
+            int(_as_dict(item.get("webviewEvidence")).get(
+                "failureCount") or 0)
+            for item in webview_views)
+        webview_failure_reasons = sorted({
+            str(reason)
+            for item in webview_views
+            for reason in (
+                _as_dict(item.get("webviewEvidence")).get(
+                    "failureReasons") or [])
+            if str(reason or "").strip()
+        })
         runtime_only_surfaces = sum(
             1 for item in views if item.get("runtimeOnly"))
         manifest_backed_surfaces = sum(
@@ -12435,6 +12469,12 @@ class AIEditorAPI:
                 "webviewReadinessReady": webview_readiness_ready,
                 "webviewReadinessWarnings": webview_readiness_warnings,
                 "webviewReadinessIssues": webview_readiness_issues[:12],
+                "webviewMessageStalled": webview_message_stalled,
+                "webviewBridgeReady": webview_bridge_ready,
+                "webviewBridgeWarnings": webview_bridge_warnings,
+                "webviewResourceWarnings": webview_resource_warnings,
+                "webviewFailureCount": webview_failure_count,
+                "webviewFailureReasons": webview_failure_reasons[:12],
                 "runtimeOnlySurfaces": runtime_only_surfaces,
                 "manifestBackedSurfaces": manifest_backed_surfaces,
                 "manifestRuntimeSurfaces": manifest_runtime_surfaces,
@@ -14388,13 +14428,32 @@ class AIEditorAPI:
                 and not evidence.get("asWebviewUriReady")):
             issues.append("resource-uri-pending")
             score -= 10
+        if evidence.get("bridgeHealth") in {"iframe-pending", "api-pending"}:
+            issues.append(str(evidence.get("bridgeHealth")))
+            score -= 8
+        if evidence.get("messageHealth") == "stalled":
+            issues.append("message-stalled")
+            score -= 12
+        if evidence.get("resourceHealth") in {
+                "rewrite-warning", "unused-roots"}:
+            issues.append(str(evidence.get("resourceHealth")))
+            score -= 8
+        if int(evidence.get("failureCount") or 0) > 0:
+            issues.append("runtime-failures")
+            score -= 12
         score = max(0, min(100, int(round(score))))
         kind = "ready"
         if "waiting-html" in issues:
             kind = "waiting-html"
+        elif "iframe-pending" in issues or "api-pending" in issues:
+            kind = "bridge-warning"
         elif "dropped-messages" in issues or "queued-messages" in issues:
             kind = "message-warning"
+        elif "message-stalled" in issues:
+            kind = "message-warning"
         elif "resource-uri-pending" in issues:
+            kind = "resource-warning"
+        elif "resource-warning" in issues or "unused-roots" in issues:
             kind = "resource-warning"
         return {"kind": kind, "score": score, "issues": issues}
 
@@ -14416,6 +14475,76 @@ class AIEditorAPI:
         local_resource_root_count = len(local_resource_roots)
         port_mapping_count = len(port_mapping)
         as_webview_uri_supported = bool(local_resource_root_count)
+        pending_message_count = int(state.get("pendingMessageCount") or 0)
+        queued_message_count = int(state.get("queuedMessageCount") or 0)
+        flushed_message_count = int(state.get("flushedMessageCount") or 0)
+        dropped_message_count = int(state.get("droppedMessageCount") or 0)
+        message_count = int(state.get("messageCount") or 0)
+        messages_to_webview = int(state.get("messagesToWebview") or 0)
+        messages_from_webview = int(state.get("messagesFromWebview") or 0)
+        frame_loaded = bool(state.get("frameLoaded"))
+        api_ready = bool(state.get("apiReady"))
+        resource_rewrite_count = int(state.get("resourceRewriteCount") or 0)
+        resource_map_hit_count = int(state.get("resourceMapHitCount") or 0)
+        resource_endpoint_rewrite_count = int(
+            state.get("resourceEndpointRewriteCount") or 0)
+        resource_map_ready = bool(
+            state.get("resourceMapReady") or resource_map_hit_count)
+        resource_endpoint_ready = bool(
+            state.get("resourceEndpointReady")
+            or resource_endpoint_rewrite_count)
+        as_webview_uri_ready = bool(
+            state.get("asWebviewUriReady")
+            or ((resource_rewrite_count or resource_map_ready
+                 or resource_endpoint_ready) and as_webview_uri_supported))
+        waiting_messages = pending_message_count + queued_message_count
+        message_health = "idle"
+        if dropped_message_count:
+            message_health = "dropped"
+        elif waiting_messages and not flushed_message_count:
+            message_health = "stalled"
+        elif waiting_messages:
+            message_health = "queued"
+        elif message_count or messages_to_webview or messages_from_webview:
+            message_health = "active"
+        bridge_health = "inactive"
+        if state.get("disposed"):
+            bridge_health = "disposed"
+        elif html and not frame_loaded:
+            bridge_health = "iframe-pending"
+        elif html and frame_loaded and not api_ready:
+            bridge_health = "api-pending"
+        elif api_ready:
+            bridge_health = "ready"
+        elif html:
+            bridge_health = "rendered"
+        resource_health = "unconfigured"
+        if as_webview_uri_ready:
+            resource_health = "ready"
+        elif resource_rewrite_count and not (
+                resource_endpoint_ready or resource_map_ready):
+            resource_health = "rewrite-warning"
+        elif as_webview_uri_supported:
+            resource_health = "pending"
+        elif local_resource_root_count:
+            resource_health = "unused-roots"
+        failure_reasons = [
+            str(value).strip()
+            for value in (
+                state.get("lastError"),
+                state.get("lastDroppedReason"),
+                state.get("lastQueueReason") if message_health == "stalled"
+                else "",
+                state.get("lastResourceRewriteKind")
+                if resource_health == "rewrite-warning" else "",
+            )
+            if str(value or "").strip()
+        ]
+        failure_count = (
+            dropped_message_count
+            + int(state.get("failedMessageCount") or 0)
+            + int(state.get("commandUriFailedCount") or 0)
+            + (1 if state.get("lastError") else 0))
         evidence = {
             "viewId": str(view_id or ""),
             "htmlAvailable": bool(html),
@@ -14430,10 +14559,29 @@ class AIEditorAPI:
             "localResourceRootCount": local_resource_root_count,
             "portMappingCount": port_mapping_count,
             "asWebviewUriSupported": as_webview_uri_supported,
-            "asWebviewUriReady": False,
-            "resourceEndpointReady": False,
-            "resourceMapReady": False,
-            "resourceRewriteBreakdown": "0/0/0/0/0",
+            "asWebviewUriReady": as_webview_uri_ready,
+            "resourceEndpointReady": resource_endpoint_ready,
+            "resourceMapReady": resource_map_ready,
+            "resourceRewriteCount": resource_rewrite_count,
+            "resourceMapHitCount": resource_map_hit_count,
+            "resourceEndpointRewriteCount": resource_endpoint_rewrite_count,
+            "resourcePortMappingRewriteCount": int(
+                state.get("resourcePortMappingRewriteCount") or 0),
+            "resourceCssRewriteCount": int(
+                state.get("resourceCssRewriteCount") or 0),
+            "resourceAttributeRewriteCount": int(
+                state.get("resourceAttributeRewriteCount") or 0),
+            "resourceRewriteBreakdown": "/".join(
+                str(int(state.get(key) or 0))
+                for key in (
+                    "resourceMapHitCount",
+                    "resourceEndpointRewriteCount",
+                    "resourcePortMappingRewriteCount",
+                    "resourceCssRewriteCount",
+                    "resourceAttributeRewriteCount",
+                )),
+            "lastResourceRewriteKind": str(
+                state.get("lastResourceRewriteKind") or ""),
             "retainContextWhenHidden": bool(state.get("retainContextWhenHidden")),
             "visible": bool(state.get("visible")),
             "hasBadge": state.get("badge") is not None,
@@ -14443,6 +14591,32 @@ class AIEditorAPI:
                 state.get("message")
                 or state.get("runtimeMessage")
                 or ""),
+            "messageCount": message_count,
+            "pendingMessageCount": pending_message_count,
+            "queuedMessageCount": queued_message_count,
+            "flushedMessageCount": flushed_message_count,
+            "droppedMessageCount": dropped_message_count,
+            "messagesToWebview": messages_to_webview,
+            "messagesFromWebview": messages_from_webview,
+            "lastQueueReason": str(state.get("lastQueueReason") or ""),
+            "lastFlushReason": str(state.get("lastFlushReason") or ""),
+            "lastDroppedReason": str(state.get("lastDroppedReason") or ""),
+            "lastDeliveredMessageSeq": int(
+                state.get("lastDeliveredMessageSeq") or 0),
+            "frameLoaded": frame_loaded,
+            "apiReady": api_ready,
+            "apiAcquireCount": int(state.get("apiAcquireCount") or 0),
+            "apiCallCount": int(state.get("apiCallCount") or 0),
+            "lastApiCallKind": str(state.get("lastApiCallKind") or ""),
+            "messageHealth": message_health,
+            "bridgeHealth": bridge_health,
+            "resourceHealth": resource_health,
+            "failureCount": failure_count,
+            "failureReasons": failure_reasons[:8],
+            "lastError": str(state.get("lastError") or ""),
+            "diagnosticSummary": (
+                f"bridge={bridge_health}; message={message_health}; "
+                f"resource={resource_health}; failures={failure_count}"),
         }
         readiness = AIEditorAPI._webview_evidence_readiness(evidence)
         evidence["readiness"] = readiness["kind"]
