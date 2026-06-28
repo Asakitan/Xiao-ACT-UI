@@ -4584,8 +4584,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and 'data-settings-manage-icon="gear"' in html
            and 'data-settings-manage-style="codicon-gear"' in html
            and 'data-settings-manage-shape="codicon-settings-gear"' in html
-           and 'viewBox="0 0 16 16" fill="currentColor"' in html
+           and 'viewBox="0 0 24 24" fill="none" stroke="currentColor"' in html
            and 'data-settings-manage-gear-path="codicon-settings-gear"' in html
+           and 'data-settings-manage-gear-teeth="codicon-settings-gear"' in html
            and 'id="settings-details-toggle" data-settings-icon-action="1"' in html
            and "const SETTINGS_DETAILS_STORAGE_KEY='sao.aiEditor.settings.details.v1';" in html
            and "function settingsApplyDetails(open)" in html
@@ -4809,10 +4810,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and 'data-settings-manage-icon="gear"' in html
            and 'data-settings-manage-style="codicon-gear"' in html
            and 'data-settings-manage-shape="codicon-settings-gear"' in html
-           and 'viewBox="0 0 16 16" fill="currentColor"' in html
+           and 'viewBox="0 0 24 24" fill="none" stroke="currentColor"' in html
            and 'data-settings-manage-gear-path="codicon-settings-gear"' in html
-           and '2.55 2.55 0 1 1 0-5.1' in html
-           and '<circle cx="10" cy="10" r="2.85"' not in html
+           and 'data-settings-manage-gear-teeth="codicon-settings-gear"' in html
+           and 'M12 15.5a3.5 3.5 0 1 0 0-7' in html
+           and 'M10 2v2.5M10 15.5V18' not in html
+           and '<circle cx="10" cy="10"' not in html
            and 'class="ab-icon theme-toggle"' not in html
            and 'title="Toggle Theme" onclick="toggleTheme()"' not in html
            and "function toggleTheme()" in html
