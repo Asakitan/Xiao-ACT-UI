@@ -1667,6 +1667,23 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-target-summary code { color:var(--fg-accent); font:11px var(--mono); }
 .settings-target-summary .settings-target-count { padding:1px 6px; border:1px solid var(--border);
   border-radius:999px; background:var(--bg3); color:var(--fg-dim); font:10px var(--mono); }
+.settings-experience-bar { display:flex; align-items:center; gap:6px; min-height:26px; padding:4px 6px;
+  border:1px solid color-mix(in srgb,var(--border) 74%,transparent); border-radius:5px;
+  background:color-mix(in srgb,var(--bg2) 72%,transparent); color:var(--fg-dim); font-size:11px; }
+.settings-experience-bar strong { color:var(--fg); font-weight:600; }
+.settings-experience-bar .experience-chip { min-height:19px; display:inline-flex; align-items:center;
+  max-width:260px; padding:1px 6px; border:1px solid var(--border); border-radius:999px;
+  background:var(--bg3); color:var(--fg-dim); font:10px var(--mono); overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; }
+.settings-experience-bar .experience-chip.active { color:var(--fg-accent);
+  border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); }
+.settings-experience-bar .experience-chip.warning { color:var(--fg-warning);
+  border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
+.settings-experience-bar .experience-actions { margin-left:auto; display:inline-flex; gap:4px; }
+.settings-experience-bar button { height:22px; padding:1px 7px; border:1px solid var(--border);
+  border-radius:4px; background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
+.settings-experience-bar button:hover,.settings-experience-bar button:focus { color:var(--fg);
+  border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
 .settings-section-context { display:flex; align-items:center; gap:7px; min-height:24px; color:var(--fg-dim);
   font-size:11px; padding:3px 0; }
 .settings-section-context strong { color:var(--fg); font-weight:600; }
@@ -1813,6 +1830,17 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-empty-state-actions button { height:24px; padding:2px 8px; border:1px solid var(--border); border-radius:4px;
   background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
 .settings-empty-state-actions button:hover,.settings-empty-state-actions button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
+.settings-suggested-matches { display:none; flex-direction:column; gap:4px; margin-top:2px; }
+.settings-suggested-matches.open { display:flex; }
+.settings-suggested-matches-title { color:var(--fg); font-weight:600; font-size:12px; }
+.settings-suggested-match { min-height:25px; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px;
+  align-items:center; border:1px solid var(--border); border-radius:4px; background:var(--bg3);
+  color:var(--fg); padding:3px 7px; text-align:left; cursor:pointer; }
+.settings-suggested-match:hover,.settings-suggested-match:focus { border-color:var(--border-focus);
+  background:var(--bg-hover); outline:none; }
+.settings-suggested-match .label,.settings-suggested-match .key { min-width:0; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; }
+.settings-suggested-match .key { color:var(--fg-dim); font:10px var(--mono); }
 .settings-main > .settings-section,.settings-main > details.settings-section,#ext-settings-container {
   width:min(100%, 1020px); max-width:1020px; padding:12px 0 16px; margin:0; border-top:1px solid var(--border); }
 .settings-main > .settings-section:first-child { border-top:0; }
@@ -2358,6 +2386,16 @@ pre.code-block { overflow:visible; }
 .settings-value-summary .configured { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 45%,var(--border)); }
 .settings-value-summary .default { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 42%,var(--border)); }
 .settings-value-summary .override { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
+.settings-row-impact { display:flex; flex-wrap:wrap; align-items:center; gap:4px; margin:3px 0 5px;
+  color:var(--fg-dim); font:10px var(--mono); }
+.settings-row-impact .impact-chip { display:inline-flex; align-items:center; max-width:300px; min-height:17px;
+  padding:0 5px; border:1px solid color-mix(in srgb,var(--border) 78%,transparent);
+  border-radius:999px; background:color-mix(in srgb,var(--bg3) 70%,transparent);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-row-impact .impact-chip.active { color:var(--fg-accent);
+  border-color:color-mix(in srgb,var(--fg-accent) 42%,var(--border)); }
+.settings-row-impact .impact-chip.warning { color:var(--fg-warning);
+  border-color:color-mix(in srgb,var(--fg-warning) 42%,var(--border)); }
 .settings-match-summary { display:none; margin:3px 0 4px; color:var(--fg-accent); font:10px var(--mono);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .settings-search-hit > .settings-match-summary { display:block; }
@@ -3407,6 +3445,7 @@ pre.code-block { overflow:visible; }
       <div id="settings-search-inspector" class="settings-search-inspector" aria-live="polite"></div>
       <div id="settings-search-memory" class="settings-search-memory" aria-label="Recent settings searches"></div>
       <div id="settings-target-summary" class="settings-target-summary" role="status" aria-live="polite"></div>
+      <div id="settings-experience-bar" class="settings-experience-bar" role="status" aria-live="polite"></div>
       <div id="settings-section-context" class="settings-section-context" role="status" aria-live="polite"></div>
       <div id="settings-review-bar" class="settings-review-bar" role="status" aria-live="polite"></div>
       <div id="settings-save-preview" class="settings-save-preview" aria-live="polite"></div>
@@ -3419,6 +3458,7 @@ pre.code-block { overflow:visible; }
         <div id="settings-empty-state" class="settings-empty-state" role="status" aria-live="polite">
           <strong>No settings match</strong>
           <span id="settings-empty-state-text">Try a different search or clear the active filters.</span>
+          <div id="settings-suggested-matches" class="settings-suggested-matches" aria-label="Suggested settings"></div>
           <div class="settings-empty-state-actions">
             <button type="button" onclick="settingsClearFilters()">Clear Filters</button>
             <button type="button" onclick="selectSettingsTarget('user',{preserveSearch:true})">User</button>
@@ -4176,6 +4216,74 @@ function settingsUpdateExtensionValueSummary(row,value,defaultValue,type){
   settingsAppendValueSummaryChip(host,configured?'configured':'default',configured?'Configured':'Default');
   settingsAppendValueSummaryChip(host,'default','Default',extensionSettingCompactValue(defaultValue,type));
 }
+function settingsEnsureRowImpact(row){
+  if(!row||!row.querySelector)return null;
+  let impact=row.querySelector(':scope > .settings-row-impact');
+  if(impact)return impact;
+  impact=document.createElement('div');
+  impact.className='settings-row-impact';
+  const summary=row.querySelector('[data-settings-value-summary="1"]');
+  if(summary&&summary.parentElement)summary.parentElement.insertBefore(impact,summary.nextSibling);
+  else {
+    const head=row.querySelector('.settings-built-head,.ext-setting-head');
+    if(head&&head.parentElement)head.parentElement.insertBefore(impact,head.nextSibling);
+    else row.insertBefore(impact,row.firstChild||null);
+  }
+  return impact;
+}
+function settingsImpactChip(host,text,cls){
+  if(!host||!text)return null;
+  const chip=document.createElement('span');
+  chip.className='impact-chip'+(cls?' '+cls:'');
+  chip.textContent=text;
+  chip.title=text;
+  host.appendChild(chip);
+  return chip;
+}
+function settingsRowSourceLabel(row,info,valueState){
+  if(row&&row.classList&&row.classList.contains('ext-setting-row')){
+    const ext=String((row.dataset&&row.dataset.extSettingExtension)||'Extension').trim();
+    const scope=String((row.dataset&&row.dataset.extSettingScope)||'window').trim();
+    return ext+' · '+scope;
+  }
+  if(!(info&&info.meta))return 'Local setting';
+  const target=settingsBackendTargetName(currentSettingsTarget);
+  if(valueState&&valueState.state==='edited')return 'Unsaved in '+settingsTargetDisplayName(currentSettingsTarget);
+  if(valueState&&valueState.state==='override')return 'Configured in '+settingsTargetDisplayName(currentSettingsTarget);
+  if(target!=='global')return 'Inherited from User';
+  if(valueState&&valueState.state==='default')return 'Default value';
+  return 'User value';
+}
+function settingsRowAppliesLabel(row,info){
+  if(row&&row.classList&&row.classList.contains('ext-setting-row')){
+    const scope=String((row.dataset&&row.dataset.extSettingScope)||'window').trim();
+    return 'Applies: '+scope;
+  }
+  const scope=String((info&&info.meta&&info.meta.scope)||((row&&row.dataset&&row.dataset.settingScope)||'User')).trim();
+  return 'Applies: '+scope;
+}
+function settingsRenderRowImpact(row){
+  const host=settingsEnsureRowImpact(row);if(!host)return;
+  host.innerHTML='';
+  const info=settingsMetaForRow(row);
+  const current=info&&info.input&&info.meta?settingsInputValue(info.input,info.meta):settingsRowCurrentValue(row);
+  const state=info&&info.meta?settingValueState(info.meta,current,currentSettingsTarget):null;
+  settingsImpactChip(host,settingsRowSourceLabel(row,info,state),state&&state.state==='edited'?'active':state&&state.state==='override'?'warning':'');
+  settingsImpactChip(host,settingsRowAppliesLabel(row,info),'');
+  if(info&&info.meta&&settingsBackendTargetName(currentSettingsTarget)!=='global'){
+    settingsImpactChip(host,'Inherited: '+settingCompactDisplayValue(settingInheritedValueForTarget(info.meta,currentSettingsTarget),36),'');
+  }
+  if(row&&row.classList&&row.classList.contains('invalid'))settingsImpactChip(host,'Needs attention','warning');
+}
+function renderSettingsRowImpactSummaries(){
+  const root=settingsMainElement()||document;
+  Array.from(root.querySelectorAll('.settings-field.builtin-setting,.ext-setting-row')).forEach(settingsRenderRowImpact);
+}
+function settingsCopyRowUrl(row){
+  const key=settingsRowKey(row)||settingsReviewRowLabel(row);
+  if(!key)return;
+  settingsCopyText('settings://'+encodeURIComponent(key),'Setting link');
+}
 function settingsConfigureRowInJson(row,key){
   key=String(key||settingsRowKey(row)||'').trim();
   if(!key)return;
@@ -4295,6 +4403,7 @@ function settingsShowRowDetails(row){
     const posChip=document.createElement('span');posChip.className='detail-chip position';posChip.textContent=rowPos.label+(rowPos.sectionLabel?' · '+rowPos.sectionLabel:'');host.appendChild(posChip);
   }
   const stateChip=document.createElement('span');stateChip.className='detail-chip value-state '+valueState.state;stateChip.textContent=valueState.label;host.appendChild(stateChip);
+  const sourceChip=document.createElement('span');sourceChip.className='detail-chip';sourceChip.textContent='Source: '+settingsRowSourceLabel(row,info,valueState);host.appendChild(sourceChip);
   const scopeChip=document.createElement('span');scopeChip.className='detail-chip';scopeChip.textContent='Scope: '+scope;host.appendChild(scopeChip);
   const currentChip=document.createElement('span');currentChip.className='detail-chip';currentChip.textContent='Current: '+settingCompactDisplayValue(current,56);host.appendChild(currentChip);
   if(info.meta){
@@ -4314,6 +4423,7 @@ function settingsShowRowDetails(row){
   addAction('Section','Jump to the current settings section',()=>settingsFocusActiveSection());
   addAction('Filter','Filter Settings to this setting ID',()=>settingsSearchForKey(key,currentSettingsTarget));
   addAction('Copy ID','Copy setting ID',()=>settingsCopyText(key,'Setting ID'));
+  addAction('Copy Link','Copy a direct setting link',()=>settingsCopyRowUrl(row));
   addAction('Copy Value','Copy the current setting value',()=>settingsCopyRowValue(row));
   addAction('Copy JSON','Copy this setting and current value as JSON',()=>settingsCopyRowJson(row));
   addAction('Use Default','Apply the default value to this setting',()=>settingsApplyRowValue(row,'default'),!(info&&info.input&&info.meta));
@@ -4332,6 +4442,7 @@ function settingsHighlightRow(row){
   row.setAttribute('aria-current','true');
   settingsShowRowDetails(row);
   updateSettingsResultNav(settingsVisibleRows().length);
+  renderSettingsExperienceBar(settingsQueryFilters((($('settings-search')||{}).value)||''),0,0,{visible:settingsVisibleRows().length,modified:settingsReviewRows('modified').length,overrides:settingsReviewRows('override').length});
   try{row.focus({preventScroll:true})}catch(e){try{row.focus()}catch(_e){}}
   setTimeout(()=>row.classList.remove('highlight'),900);
 }
@@ -4363,6 +4474,8 @@ function settingsAddRowActions(row,opts){
     fav.dataset.settingsFavoriteKey=opts.key;
     fav.classList.toggle('active',settingsIsFavorite(opts.key));
     addMenuItem('Open JSON','Open settings.json and copy this setting id',()=>settingsConfigureRowInJson(row,opts.key));
+    addMenuItem('Copy Link','Copy a direct link for this setting',()=>settingsCopyRowUrl(row));
+    addMenuItem('Reveal Section','Reveal this setting category in the left navigation',()=>settingsFocusActiveSection());
   }
   if(opts.key&&opts.searchable)addButton('⌕','Filter to this setting',()=>settingsSearchForKey(opts.key,opts.target||currentSettingsTarget));
   if(opts.meta&&opts.inputId)addMenuItem('Use Default','Apply default value',()=>{const el=$(opts.inputId);if(el){setSettingsInputValue(el,opts.meta,settingDefaultValue(opts.meta));markSettingsModified();scheduleFilterSettings(0);showToast('Default applied: '+(opts.meta.key||opts.inputId),'info',1400)}});
@@ -26447,6 +26560,8 @@ function settingsUiSelfCheckSnapshot(){
     .find(chip=>!(chip.closest&&chip.closest('.settings-current,.modified')));
   const detailActionLabels=detail?Array.from(detail.querySelectorAll('.detail-actions button')).map(btn=>String(btn.textContent||'')):[];
   const reviewActionLabels=Array.from(document.querySelectorAll('#settings-review-bar .review-actions button')).map(btn=>String(btn.textContent||''));
+  const experienceBar=$('settings-experience-bar');
+  const rowImpact=document.querySelector('.settings-row-impact');
   return {
     pass:!!(modal&&nav&&main&&inspector&&$('settings-nav-filter')&&$('settings-density-toggle')&&detail
       &&typeof settingsFilterNavCategories==='function'
@@ -26488,6 +26603,11 @@ function settingsUiSelfCheckSnapshot(){
     hasCurrentDetail:!!detail,
     hasDetailActions:!!(detail&&detail.querySelector('.detail-actions')),
     hasDetailValueActions:['Copy Value','Copy JSON','Use Default','Use Inherited','Clear Override'].every(label=>detailActionLabels.includes(label)),
+    hasDetailCopyLinkAction:detailActionLabels.includes('Copy Link'),
+    hasExperienceBar:!!(experienceBar&&experienceBar.querySelector('.experience-chip')&&experienceBar.querySelector('.experience-actions button')),
+    hasExperienceScopeChip:!!(experienceBar&&/User|Workspace|Extensions/.test(experienceBar.textContent||'')),
+    hasRowImpactSummary:!!(rowImpact&&rowImpact.querySelector('.impact-chip')),
+    hasSuggestedMatchesHost:!!$('settings-suggested-matches'),
     hasReviewFilterActions:['Show Modified','Show Overrides','Show Errors','Clear Review'].every(label=>reviewActionLabels.includes(label)),
     hasOverridesFilterToken:!!document.querySelector('[data-settings-filter-token="@overrides"]'),
     hasLanguageSuggestions:!!document.querySelector('#settings-language-suggestions [data-settings-language-suggestion]'),
@@ -26525,6 +26645,7 @@ window.settingsVisibleRows=settingsVisibleRows;
 window.settingsHighlightRow=settingsHighlightRow;
 window.settingsCopyRowValue=settingsCopyRowValue;
 window.settingsCopyRowJson=settingsCopyRowJson;
+window.settingsCopyRowUrl=settingsCopyRowUrl;
 window.settingsApplyRowValue=settingsApplyRowValue;
 window.settingsFocusVisibleRow=settingsFocusVisibleRow;
 window.settingsFocusBoundaryRow=settingsFocusBoundaryRow;
@@ -26538,6 +26659,9 @@ window.settingsUiSelfCheckSnapshot=settingsUiSelfCheckSnapshot;
 window.settingsToggleDensity=settingsToggleDensity;
 window.settingsToggleQueryHelp=settingsToggleQueryHelp;
 window.renderSettingsRowMatchSummaries=renderSettingsRowMatchSummaries;
+window.renderSettingsRowImpactSummaries=renderSettingsRowImpactSummaries;
+window.renderSettingsExperienceBar=renderSettingsExperienceBar;
+window.renderSettingsSuggestedMatches=renderSettingsSuggestedMatches;
 window.closeSettingsRowActionMenus=closeSettingsRowActionMenus;
 window.settingsToggleFilterToken=settingsToggleFilterToken;
 window.settingsClearFilters=settingsClearFilters;
@@ -26957,6 +27081,105 @@ function renderSettingsSearchInspector(parsed,visible,total,targetStats){
   if(Number(total)>0)add(String(visible)+' / '+String(total)+' groups','');
   if(Number(visible)===0)add('No visible matches. Remove a token or switch target.','warning');
 }
+function settingsExperienceActiveRowLabel(){
+  const row=document.querySelector('.settings-field.settings-current,.ext-setting-row.settings-current');
+  if(!row)return '';
+  return settingsRowTitle(row)||settingsReviewRowLabel(row);
+}
+function renderSettingsExperienceBar(parsed,visible,total,stats){
+  const host=$('settings-experience-bar');if(!host)return;
+  host.innerHTML='';
+  const title=document.createElement('strong');
+  title.textContent='Settings';
+  host.appendChild(title);
+  const add=(text,cls)=>{
+    const chip=document.createElement('span');
+    chip.className='experience-chip'+(cls?' '+cls:'');
+    chip.textContent=text;
+    chip.title=text;
+    host.appendChild(chip);
+  };
+  const visibleRows=settingsVisibleRows().length;
+  add(settingsTargetDisplayName(currentSettingsTarget),currentSettingsTarget==='workspace'?'warning':currentSettingsTarget==='extensions'?'active':'');
+  add(String(visibleRows)+' visible row'+(visibleRows===1?'':'s'),'');
+  if(parsed&&parsed.active)add('Query: '+String(($('settings-search')||{}).value||'').trim(),'active');
+  else add(String(visible)+' / '+String(total)+' groups','');
+  if(stats&&stats.modified)add(String(stats.modified)+' modified','active');
+  if(stats&&stats.overrides)add(String(stats.overrides)+' overrides','warning');
+  const current=settingsExperienceActiveRowLabel();
+  if(current)add('Focused: '+current,'active');
+  const actions=document.createElement('span');
+  actions.className='experience-actions';
+  const addButton=(label,title,handler,disabled)=>{
+    const btn=document.createElement('button');
+    btn.type='button';btn.textContent=label;btn.title=title;btn.disabled=!!disabled;
+    btn.onclick=ev=>{ev.preventDefault();if(!btn.disabled)handler&&handler()};
+    actions.appendChild(btn);
+  };
+  addButton('Common','Show commonly used settings',()=>settingsUseSearchHint('@common'));
+  addButton('Modified','Show modified settings',()=>settingsApplyReviewFilter('modified'),!(stats&&stats.modified));
+  addButton('JSON','Open settings JSON',settingsOpenJsonView);
+  host.appendChild(actions);
+}
+function settingsSuggestionScore(row,tokens){
+  const text=settingsRowFilterText(row);
+  const key=settingsRowKey(row).toLowerCase();
+  return tokens.reduce((score,token)=>{
+    if(!token)return score;
+    if(key.includes(token))return score+5;
+    if(text.includes(token))return score+2;
+    return score;
+  },0);
+}
+function settingsSuggestedRows(parsed,limit){
+  const tokens=[];
+  if(parsed&&parsed.text)String(parsed.text).split(/\s+/).filter(Boolean).forEach(token=>tokens.push(token));
+  ['ids','tags','features','extensionIds','languages'].forEach(name=>{
+    (parsed&&parsed[name]||[]).forEach(token=>tokens.push(String(token||'').toLowerCase()));
+  });
+  const unique=Array.from(new Set(tokens.filter(Boolean)));
+  if(!unique.length)return [];
+  const root=settingsMainElement()||document;
+  return Array.from(root.querySelectorAll('.settings-field.builtin-setting,.ext-setting-row'))
+    .filter(row=>settingsRowMatchesTarget(row,currentSettingsTarget))
+    .map(row=>({row,score:settingsSuggestionScore(row,unique)}))
+    .filter(item=>item.score>0)
+    .sort((a,b)=>b.score-a.score||settingsRowTitle(a.row).localeCompare(settingsRowTitle(b.row)))
+    .slice(0,limit||5)
+    .map(item=>item.row);
+}
+function renderSettingsSuggestedMatches(parsed){
+  const host=$('settings-suggested-matches');if(!host)return;
+  host.innerHTML='';
+  const rows=settingsSuggestedRows(parsed,5);
+  host.classList.toggle('open',rows.length>0);
+  if(!rows.length)return;
+  const title=document.createElement('div');
+  title.className='settings-suggested-matches-title';
+  title.textContent='Nearby settings';
+  host.appendChild(title);
+  rows.forEach(row=>{
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.className='settings-suggested-match';
+    const label=document.createElement('span');
+    label.className='label';
+    label.textContent=settingsRowTitle(row)||settingsReviewRowLabel(row);
+    const key=document.createElement('span');
+    key.className='key';
+    key.textContent=settingsRowKey(row)||settingsReviewRowLabel(row);
+    btn.appendChild(label);
+    btn.appendChild(key);
+    btn.onclick=ev=>{
+      ev.preventDefault();
+      const input=$('settings-search');
+      if(input)input.value='@id:'+key.textContent;
+      scheduleFilterSettings(0);
+      setTimeout(()=>settingsHighlightRow(row),30);
+    };
+    host.appendChild(btn);
+  });
+}
 function renderSettingsEmptyState(visible,total,parsed){
   const empty=$('settings-empty-state');if(!empty)return;
   const show=Number(total)>0&&Number(visible)===0;
@@ -26968,6 +27191,8 @@ function renderSettingsEmptyState(visible,total,parsed){
       ? target+' has no matches for the current search and filters.'
       : target+' has no visible settings in this target.';
   }
+  if(show)renderSettingsSuggestedMatches(parsed);
+  else renderSettingsSuggestedMatches(null);
 }
 function renderSettingsActiveFilters(parsed,visible,total){
   const host=$('settings-active-filters'),summary=$('settings-filter-summary');
@@ -27329,6 +27554,7 @@ function filterSettings(){
     applyExtensionSettingsFilter();
   }
   renderSettingsRowMatchSummaries(parsed);
+  renderSettingsRowImpactSummaries();
   renderSettingsSectionOverviews();
   const inp=$('settings-search');if(inp)inp.placeholder=parsed.active?visible+' matches':currentSettingsTarget==='extensions'?'Search extension settings...':currentSettingsTarget==='workspace'?'Search workspace settings...':'Search user settings...';
   settingsRecordSearch(q,parsed);
@@ -27336,6 +27562,7 @@ function filterSettings(){
   renderSettingsSearchInspector(parsed,visible,total,targetStats);
   renderSettingsSearchMemory(parsed);
   renderSettingsTargetSummary(targetStats);
+  renderSettingsExperienceBar(parsed,visible,total,targetStats);
   renderSettingsReviewBar(targetStats);
   updateSettingsResultNav(settingsVisibleRows().length);
   renderSettingsFilterSuggestions();

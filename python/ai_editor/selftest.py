@@ -9950,6 +9950,17 @@ console.log("frontend word separator behavior ok");
              and "hasTargetSummaryScopeCounts" in html
              and "hasOnDemandSettingValueDetails" in html
              and "hasDetailValueActions" in html
+             and "settings-experience-bar" in html
+             and "function renderSettingsExperienceBar(parsed,visible,total,stats)" in html
+             and "function renderSettingsSuggestedMatches(parsed)" in html
+             and "function renderSettingsRowImpactSummaries()" in html
+             and "settings-row-impact" in html
+             and "settings-suggested-matches" in html
+             and "Copy Link','Copy a direct setting link" in html
+             and "hasExperienceBar" in html
+             and "hasExperienceScopeChip" in html
+             and "hasRowImpactSummary" in html
+             and "hasSuggestedMatchesHost" in html
              and "hasReviewFilterActions" in html
              and "hasOverridesFilterToken" in html
              and "hasLanguageSuggestions" in html
@@ -9957,6 +9968,9 @@ console.log("frontend word separator behavior ok");
              and "window.settingsSearchForKey=settingsSearchForKey;" in html
              and "window.settingsFilterNavCategories=settingsFilterNavCategories;" in html
              and "window.settingsUiSelfCheckSnapshot=settingsUiSelfCheckSnapshot;" in html
+             and "window.settingsCopyRowUrl=settingsCopyRowUrl;" in html
+             and "window.renderSettingsRowImpactSummaries=renderSettingsRowImpactSummaries;" in html
+             and "window.renderSettingsExperienceBar=renderSettingsExperienceBar;" in html
              and "window.settingsApplyReviewFilter=settingsApplyReviewFilter;" in html
              and "window.settingsClearReviewFilters=settingsClearReviewFilters;" in html
              and "window.settingsHasReviewFilter=settingsHasReviewFilter;" in html
@@ -10004,6 +10018,11 @@ console.log("frontend word separator behavior ok");
             and "result.snapshot.hasExtensionSortControl" in settings_smoke_source
             and "result.snapshot.hasExtensionSectionActions" in settings_smoke_source
             and "result.snapshot.hasDetailValueActions" in settings_smoke_source
+            and "result.snapshot.hasDetailCopyLinkAction" in settings_smoke_source
+            and "result.snapshot.hasExperienceBar" in settings_smoke_source
+            and "result.snapshot.hasExperienceScopeChip" in settings_smoke_source
+            and "result.snapshot.hasRowImpactSummary" in settings_smoke_source
+            and "result.snapshot.hasSuggestedMatchesHost" in settings_smoke_source
             and "result.snapshot.hasReviewFilterActions" in settings_smoke_source
             and "result.snapshot.hasOverridesFilterToken" in settings_smoke_source
             and "result.snapshot.hasLanguageSuggestions" in settings_smoke_source

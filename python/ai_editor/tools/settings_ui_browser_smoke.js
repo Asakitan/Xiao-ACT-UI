@@ -246,7 +246,7 @@ async function main() {
   await page.screenshot({ path: shotPath, fullPage: false });
   await browser.close();
 
-  const requiredActions = ["Prev", "Next", "Section", "Filter", "Copy ID", "Copy Value", "Copy JSON", "Use Default", "Use Inherited", "Clear Override", "JSON"];
+  const requiredActions = ["Prev", "Next", "Section", "Filter", "Copy ID", "Copy Link", "Copy Value", "Copy JSON", "Use Default", "Use Inherited", "Clear Override", "JSON"];
   const missingDetail = requiredActions.filter(action => !result.detailActions.includes(action));
   const requiredReview = ["Show Modified", "Show Overrides", "Show Errors", "Clear Review"];
   const missingReview = requiredReview.filter(action => !result.reviewActions.includes(action));
@@ -281,6 +281,9 @@ async function main() {
   }
   if (!result.snapshot.hasDetailValueActions) {
     throw new Error("Settings selfcheck missing row value actions: " + JSON.stringify(result.snapshot));
+  }
+  if (!result.snapshot.hasDetailCopyLinkAction || !result.snapshot.hasExperienceBar || !result.snapshot.hasExperienceScopeChip || !result.snapshot.hasRowImpactSummary || !result.snapshot.hasSuggestedMatchesHost) {
+    throw new Error("Settings selfcheck missing humanized context affordances: " + JSON.stringify(result.snapshot));
   }
   if (!result.snapshot.hasReviewFilterActions || !result.snapshot.hasOverridesFilterToken) {
     throw new Error("Settings selfcheck missing review filter affordances: " + JSON.stringify(result.snapshot));
