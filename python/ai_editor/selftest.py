@@ -10048,6 +10048,21 @@ console.log("frontend word separator behavior ok");
             and "settings-experience-bar" in html
             and "experience-chip.dirty" in html
             and "function renderSettingsExperienceBar(parsed,visible,total,stats)" in html
+            and "id=\"settings-recommendations\"" in html
+            and ".settings-recommendations.open" in html
+            and ".settings-recommendation-card" in html
+            and "function settingsRecommendationItems()" in html
+            and "function renderSettingsRecommendations()" in html
+            and "function settingsRecommendationApply(kind)" in html
+            and "function settingsRecommendationShowKey(key,target)" in html
+            and "renderSettingsRecommendations();" in html
+            and "Enable format on save" in html
+            and "Use file save cleanup" in html
+            and "Enable workspace auto-detect" in html
+            and "Turn off extension diagnostics outside tracing" in html
+            and "Add '+lang+' language override" in html
+            and "host.dataset.settingsRecommendations=String(items.length);" in html
+            and "card.dataset.recommendationId=item.id;" in html
             and "id=\"settings-focus-deck\"" in html
             and ".settings-inspector .settings-focus-deck" in html
             and "function renderSettingsFocusDeck(parsed,visible,total,stats)" in html
@@ -10062,6 +10077,10 @@ console.log("frontend word separator behavior ok");
              and "settings-suggested-matches" in html
              and "Copy Link','Copy a direct setting link" in html
             and "hasExperienceBar" in html
+            and "hasSettingsRecommendations" in html
+            and "hasRecommendationCards" in html
+            and "hasRecommendationActions" in html
+            and "recommendationCount" in html
             and "hasExperienceScopeChip" in html
             and "hasRowImpactSummary" in html
             and "hasFocusDeck" in html
@@ -10103,6 +10122,9 @@ console.log("frontend word separator behavior ok");
              and "window.settingsPersistedValueForTarget=settingsPersistedValueForTarget;" in html
             and "window.renderSettingsRowImpactSummaries=renderSettingsRowImpactSummaries;" in html
             and "window.renderSettingsExperienceBar=renderSettingsExperienceBar;" in html
+            and "window.renderSettingsRecommendations=renderSettingsRecommendations;" in html
+            and "window.settingsRecommendationItems=settingsRecommendationItems;" in html
+            and "window.settingsRecommendationApply=settingsRecommendationApply;" in html
             and "window.renderSettingsFocusDeck=renderSettingsFocusDeck;" in html
             and "window.settingsApplyReviewFilter=settingsApplyReviewFilter;" in html
              and "window.settingsClearReviewFilters=settingsClearReviewFilters;" in html

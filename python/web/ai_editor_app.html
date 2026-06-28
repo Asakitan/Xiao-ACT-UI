@@ -1705,6 +1705,33 @@ pre.code-block code .type { color:var(--fg-type); }
   border-radius:4px; background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
 .settings-experience-bar button:hover,.settings-experience-bar button:focus { color:var(--fg);
   border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
+.settings-recommendations { display:none; grid-column:1 / -1; gap:6px; min-height:28px; padding:6px;
+  border:1px solid color-mix(in srgb,var(--border) 78%,transparent); border-radius:5px;
+  background:color-mix(in srgb,var(--bg2) 76%,transparent); color:var(--fg-dim); }
+.settings-recommendations.open { display:grid; grid-template-columns:minmax(0,1fr); }
+.settings-recommendations-head { display:flex; align-items:center; justify-content:space-between; gap:8px; min-width:0; }
+.settings-recommendations-title { color:var(--fg); font-weight:600; font-size:12px; }
+.settings-recommendations-summary { color:var(--fg-dim); font:10px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-recommendation-list { display:flex; flex-wrap:wrap; gap:5px; align-items:stretch; }
+.settings-recommendation-card { min-width:210px; max-width:360px; flex:1 1 230px; display:grid; gap:4px;
+  padding:6px 7px; border:1px solid var(--border); border-radius:5px; background:var(--bg3);
+  color:var(--fg-dim); text-align:left; }
+.settings-recommendation-card[data-severity="warning"] { border-color:color-mix(in srgb,var(--fg-warning) 45%,var(--border)); }
+.settings-recommendation-card[data-severity="active"] { border-color:color-mix(in srgb,var(--fg-accent) 45%,var(--border)); }
+.settings-recommendation-title { color:var(--fg); font-weight:600; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-recommendation-detail { color:var(--fg-dim); font-size:11px; line-height:1.35; }
+.settings-recommendation-meta { display:flex; flex-wrap:wrap; gap:4px; align-items:center; }
+.settings-recommendation-meta code,.settings-recommendation-chip { max-width:180px; padding:1px 5px;
+  border:1px solid color-mix(in srgb,var(--border) 78%,transparent); border-radius:999px;
+  color:var(--fg-dim); background:color-mix(in srgb,var(--bg) 55%,transparent); font:10px var(--mono);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-recommendation-actions { display:flex; flex-wrap:wrap; gap:4px; align-items:center; }
+.settings-recommendation-actions button { height:21px; padding:1px 7px; border:1px solid var(--border);
+  border-radius:4px; background:transparent; color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
+.settings-recommendation-actions button.primary { color:var(--fg); border-color:color-mix(in srgb,var(--fg-accent) 55%,var(--border));
+  background:color-mix(in srgb,var(--fg-accent) 10%,transparent); }
+.settings-recommendation-actions button:hover,.settings-recommendation-actions button:focus {
+  color:var(--fg); border-color:var(--border-focus); background:var(--bg-hover); outline:none; }
 .settings-focus-deck { grid-column:1 / -1; display:grid; grid-template-columns:minmax(170px,.95fr) minmax(190px,1fr) minmax(220px,1.25fr) auto;
   gap:8px; align-items:stretch; padding:7px; border:1px solid var(--border); border-radius:5px;
   background:color-mix(in srgb,var(--bg2) 82%,transparent); color:var(--fg-dim); }
@@ -3610,6 +3637,7 @@ pre.code-block { overflow:visible; }
       <div id="settings-search-memory" class="settings-search-memory" aria-label="Recent settings searches"></div>
       <div id="settings-target-summary" class="settings-target-summary" role="status" aria-live="polite"></div>
       <div id="settings-experience-bar" class="settings-experience-bar" role="status" aria-live="polite"></div>
+      <div id="settings-recommendations" class="settings-recommendations" role="region" aria-label="Recommended settings"></div>
       <div id="settings-section-context" class="settings-section-context" role="status" aria-live="polite"></div>
       <div id="settings-review-bar" class="settings-review-bar" role="status" aria-live="polite"></div>
       <div id="settings-save-preview" class="settings-save-preview" aria-live="polite"></div>
@@ -27574,6 +27602,7 @@ function settingsUiSelfCheckSnapshot(){
   const detailActionLabels=detail?Array.from(detail.querySelectorAll('.detail-actions button')).map(btn=>String(btn.textContent||'')):[];
   const reviewActionLabels=Array.from(document.querySelectorAll('#settings-review-bar .review-actions button')).map(btn=>String(btn.textContent||''));
   const experienceBar=$('settings-experience-bar');
+  const recommendations=$('settings-recommendations');
   const focusDeck=$('settings-focus-deck');
   const quickNav=$('settings-nav-quick');
   const footerSummary=$('settings-footer-summary');
@@ -27630,6 +27659,10 @@ function settingsUiSelfCheckSnapshot(){
     hasExperienceBar:!!(experienceBar&&experienceBar.querySelector('.experience-chip')&&experienceBar.querySelector('.experience-actions button')),
     hasExperienceScopeChip:!!(experienceBar&&/User|Workspace|Extensions/.test(experienceBar.textContent||'')),
     hasExperienceDirtyChip:!!(experienceBar&&experienceBar.querySelector('.experience-chip.dirty,.experience-chip.warning')),
+    hasSettingsRecommendations:!!(recommendations&&recommendations.dataset.settingsRecommendations!==undefined),
+    hasRecommendationCards:!!(recommendations&&recommendations.querySelector('[data-recommendation-id]')),
+    hasRecommendationActions:!!(recommendations&&recommendations.querySelector('.settings-recommendation-actions button.primary')),
+    recommendationCount:Number(recommendations&&recommendations.dataset.settingsRecommendations)||0,
     hasFocusDeck:!!(focusDeck&&focusDeck.dataset.settingsFocusDeck==='1'),
     hasFocusDeckCards:!!(focusDeck&&focusDeck.querySelector('[data-settings-focus-card="target"]')&&focusDeck.querySelector('[data-settings-focus-card="section"]')&&focusDeck.querySelector('[data-settings-focus-card="setting"]')),
     hasFocusDeckActions:!!(focusDeck&&focusDeck.querySelector('[data-settings-focus-actions="1"] button')),
@@ -27702,6 +27735,9 @@ window.settingsToggleQueryHelp=settingsToggleQueryHelp;
 window.renderSettingsRowMatchSummaries=renderSettingsRowMatchSummaries;
 window.renderSettingsRowImpactSummaries=renderSettingsRowImpactSummaries;
 window.renderSettingsExperienceBar=renderSettingsExperienceBar;
+window.renderSettingsRecommendations=renderSettingsRecommendations;
+window.settingsRecommendationItems=settingsRecommendationItems;
+window.settingsRecommendationApply=settingsRecommendationApply;
 window.renderSettingsFocusDeck=renderSettingsFocusDeck;
 window.renderSettingsSuggestedMatches=renderSettingsSuggestedMatches;
 window.closeSettingsRowActionMenus=closeSettingsRowActionMenus;
@@ -28171,6 +28207,130 @@ function renderSettingsExperienceBar(parsed,visible,total,stats){
   addButton('Modified','Show modified settings',()=>settingsApplyReviewFilter('modified'),!(stats&&stats.modified));
   addButton('JSON','Open settings JSON',settingsOpenJsonView);
   host.appendChild(actions);
+}
+function settingsRecommendationSetChecked(inputId,value){
+  const el=$(inputId);if(!el)return false;
+  setCheckedValue(inputId,value===true);
+  el.dispatchEvent(new Event('change',{bubbles:true}));
+  markSettingsModified();
+  scheduleFilterSettings(0);
+  const row=el.closest('.settings-field.builtin-setting');
+  if(row)settingsHighlightRow(row);
+  return true;
+}
+function settingsRecommendationSetValue(inputId,value){
+  const el=$(inputId);if(!el)return false;
+  setInputValue(inputId,value);
+  el.dispatchEvent(new Event('input',{bubbles:true}));
+  el.dispatchEvent(new Event('change',{bubbles:true}));
+  markSettingsModified();
+  scheduleFilterSettings(0);
+  const row=el.closest('.settings-field.builtin-setting');
+  if(row)settingsHighlightRow(row);
+  return true;
+}
+function settingsRecommendationApply(kind){
+  kind=String(kind||'');
+  if(kind==='formatOnSave')return settingsRecommendationSetChecked('s-editor-format-on-save',true);
+  if(kind==='filesSaveHygiene'){
+    const a=settingsRecommendationSetChecked('s-files-trim-trailing-whitespace',true);
+    const b=settingsRecommendationSetChecked('s-files-insert-final-newline',true);
+    return a||b;
+  }
+  if(kind==='workspaceAutoDetect')return settingsRecommendationSetChecked('s-workspace-auto',true);
+  if(kind==='disableExtensionDiagnostics')return settingsRecommendationSetChecked('s-ext-diagnostics',false);
+  if(kind==='terminalProfile')return settingsRecommendationSetValue('s-term-profile','Windows PowerShell');
+  if(kind==='languageOverride')return settingsRecommendationSetChecked('s-editor-lang-override-enabled',true);
+  return false;
+}
+function settingsRecommendationShowKey(key,target){
+  if(!key)return false;
+  settingsSearchForKey(key,target||currentSettingsTarget);
+  setTimeout(()=>{
+    const row=settingsFindRowByKey(key);
+    if(row)settingsHighlightRow(row);
+  },30);
+  return true;
+}
+function settingsRecommendationItems(){
+  const items=[];
+  const add=item=>{if(item&&item.id&&!items.some(existing=>existing.id===item.id))items.push(item)};
+  const editor=settingSection('editor'),files=settingSection('files'),workspace=settingSection('workspace'),terminal=settingSection('terminal'),extensions=settingSection('extensions');
+  const formatOnSave=readCheckedValue('s-editor-format-on-save')||editor.formatOnSave===true;
+  const defaultFormatter=readInputValue('s-editor-default-formatter')||editor.defaultFormatter||editor.default_formatter||'';
+  if(!formatOnSave)add({
+    id:'formatOnSave',severity:'active',title:'Enable format on save',
+    detail:'Run formatter providers before explicit saves so editor formatting settings have visible effect.',
+    key:'editor.formatOnSave',target:'user',action:'Enable',apply:'formatOnSave'
+  });
+  if(formatOnSave&&!String(defaultFormatter||'').trim())add({
+    id:'defaultFormatter',severity:'warning',title:'Choose a default formatter',
+    detail:'Format on save is enabled, but no default formatter is selected for provider tie-breaks.',
+    key:'editor.defaultFormatter',target:'user',action:'Open'
+  });
+  if(!(readCheckedValue('s-files-trim-trailing-whitespace')||files.trimTrailingWhitespace===true)||
+     !(readCheckedValue('s-files-insert-final-newline')||files.insertFinalNewline===true)){
+    add({
+      id:'filesSaveHygiene',severity:'active',title:'Use file save cleanup',
+      detail:'Trim trailing whitespace and insert a final newline on save, matching common VS Code workspace defaults.',
+      key:'files.trimTrailingWhitespace',target:'user',action:'Apply',apply:'filesSaveHygiene'
+    });
+  }
+  if(readCheckedValue('s-workspace-auto')===false&&workspace.auto_detect===false)add({
+    id:'workspaceAutoDetect',severity:'warning',title:'Enable workspace auto-detect',
+    detail:'Explorer and Terminal cwd work better when the IDE can resolve the active repository root.',
+    key:'aiEditor.workspace.autoDetect',target:'workspace',action:'Enable',apply:'workspaceAutoDetect'
+  });
+  if((readInputValue('s-term-profile')||terminal.profile||'').trim()==='')add({
+    id:'terminalProfile',severity:'active',title:'Set a terminal profile',
+    detail:'Give the integrated terminal an explicit PowerShell profile so commands and UI metadata agree.',
+    key:'terminal.integrated.defaultProfile.windows',target:'user',action:'Set',apply:'terminalProfile'
+  });
+  if(readCheckedValue('s-ext-diagnostics')||extensions.diagnostics_enabled===true)add({
+    id:'disableExtensionDiagnostics',severity:'warning',title:'Turn off extension diagnostics outside tracing',
+    detail:'Diagnostics are useful while debugging extension activation but add noise and work during normal use.',
+    key:'extensions.diagnostics.enabled',target:'user',action:'Turn Off',apply:'disableExtensionDiagnostics'
+  });
+  const lang=String(editorLang||'plaintext').toLowerCase();
+  if(lang&&lang!=='plaintext'&&!editorLanguageOverrideHasEditor(editorLang))add({
+    id:'languageOverride',severity:'active',title:'Add '+lang+' language override',
+    detail:'Create VS Code-style ['+lang+'] editor settings for formatter, suggestions, and save actions.',
+    key:editorLanguageOverrideKey(editorLang),target:'user',action:'Enable',apply:'languageOverride'
+  });
+  return items.slice(0,5);
+}
+function renderSettingsRecommendations(){
+  const host=$('settings-recommendations');if(!host)return;
+  const items=settingsRecommendationItems();
+  host.innerHTML='';
+  host.classList.toggle('open',items.length>0);
+  host.dataset.settingsRecommendations=String(items.length);
+  if(!items.length)return;
+  const head=document.createElement('div');head.className='settings-recommendations-head';
+  const title=document.createElement('div');title.className='settings-recommendations-title';title.textContent='Recommended';
+  const summary=document.createElement('div');summary.className='settings-recommendations-summary';
+  summary.textContent=items.length+' context-aware setting'+(items.length===1?'':'s');
+  head.appendChild(title);head.appendChild(summary);host.appendChild(head);
+  const list=document.createElement('div');list.className='settings-recommendation-list';
+  items.forEach(item=>{
+    const card=document.createElement('div');card.className='settings-recommendation-card';card.dataset.recommendationId=item.id;card.dataset.severity=item.severity||'';
+    const cardTitle=document.createElement('div');cardTitle.className='settings-recommendation-title';cardTitle.textContent=item.title;card.appendChild(cardTitle);
+    const detail=document.createElement('div');detail.className='settings-recommendation-detail';detail.textContent=item.detail;card.appendChild(detail);
+    const meta=document.createElement('div');meta.className='settings-recommendation-meta';
+    const code=document.createElement('code');code.textContent=item.key||item.id;meta.appendChild(code);
+    const target=document.createElement('span');target.className='settings-recommendation-chip';target.textContent=settingsTargetDisplayName(item.target||currentSettingsTarget);meta.appendChild(target);
+    card.appendChild(meta);
+    const actions=document.createElement('div');actions.className='settings-recommendation-actions';
+    const primary=document.createElement('button');primary.type='button';primary.className='primary';primary.textContent=item.action||'Open';
+    primary.onclick=ev=>{ev.preventDefault();if(item.apply)settingsRecommendationApply(item.apply);else settingsRecommendationShowKey(item.key,item.target)};
+    actions.appendChild(primary);
+    const show=document.createElement('button');show.type='button';show.textContent='Show';show.title='Reveal this setting';
+    show.onclick=ev=>{ev.preventDefault();settingsRecommendationShowKey(item.key,item.target)};
+    actions.appendChild(show);
+    card.appendChild(actions);
+    list.appendChild(card);
+  });
+  host.appendChild(list);
 }
 function settingsFocusDeckChip(host,text,cls){
   if(!host||!text)return null;
@@ -28723,6 +28883,7 @@ function filterSettings(){
   renderSettingsSearchMemory(parsed);
   renderSettingsTargetSummary(targetStats);
   renderSettingsExperienceBar(parsed,visible,total,targetStats);
+  renderSettingsRecommendations();
   renderSettingsFocusDeck(parsed,visible,total,targetStats);
   renderSettingsReviewBar(targetStats);
   updateSettingsResultNav(settingsVisibleRows().length);
