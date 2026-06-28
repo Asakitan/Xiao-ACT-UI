@@ -2724,6 +2724,11 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-nav-summary { display:none; }
 .settings-vscode-calm .settings-nav-memory { display:block; margin:0; padding:6px 8px 8px;
   border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent); }
+.settings-vscode-calm .settings-nav-memory-block { display:block; }
+.settings-vscode-calm .settings-nav-memory-block[data-settings-personal-kind="favorites"],
+.settings-vscode-calm .settings-nav-memory-block[data-settings-personal-kind="recent"] { display:none; }
+.settings-vscode-calm.settings-details-open .settings-nav-memory-block[data-settings-personal-kind="favorites"],
+.settings-vscode-calm.settings-details-open .settings-nav-memory-block[data-settings-personal-kind="recent"] { display:block; }
 .settings-vscode-calm .settings-nav-memory-title { padding:5px 0 4px; color:var(--fg-dim); }
 .settings-vscode-calm .settings-nav-memory-item { min-height:24px; padding:3px 6px; border-radius:2px; }
 .settings-vscode-calm .settings-nav-memory-empty { display:none; }
@@ -2731,7 +2736,8 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-nav-tools { padding:0 8px 8px; margin:0; border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent); }
 .settings-vscode-calm .settings-nav-tools input { height:26px; border-radius:2px; }
 .settings-vscode-calm .settings-nav-tools button { height:26px; border-radius:2px; }
-.settings-vscode-calm .settings-nav-quick { grid-template-columns:1fr 1fr; padding:8px; margin:0; }
+.settings-vscode-calm .settings-nav-quick { display:none; grid-template-columns:1fr 1fr; padding:8px; margin:0; }
+.settings-vscode-calm.settings-details-open .settings-nav-quick { display:grid; }
 .settings-vscode-calm .settings-nav-heading { padding:7px 8px 4px; }
 .settings-vscode-calm .settings-nav-item { min-height:27px; border-radius:0; border-left:0; padding:4px 8px; }
 .settings-vscode-calm .settings-nav-item.active { border-left:0; box-shadow:inset 2px 0 0 var(--fg-accent); background:var(--bg-hover); }
@@ -2787,7 +2793,7 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-field:hover > .settings-row-impact,
 .settings-vscode-calm .settings-field:focus-within > .settings-row-impact { display:flex; }
 .settings-vscode-calm .settings-field.builtin-setting > .settings-control-frame { grid-column:1; grid-row:auto; }
-.settings-vscode-calm .settings-control-frame { max-width:620px; min-height:30px; border-radius:2px; padding:3px 6px; background:var(--bg-input); }
+.settings-vscode-calm .settings-control-frame { max-width:680px; min-height:30px; border-radius:2px; padding:3px 6px; background:var(--bg-input); }
 .settings-vscode-calm .settings-field.builtin-setting[data-setting-control-kind="textarea"] > .settings-control-frame,
 .settings-vscode-calm .settings-field.builtin-setting[data-setting-control-kind="json"] > .settings-control-frame { max-width:none; }
 .settings-vscode-calm .settings-control-status { display:none; }
@@ -2846,10 +2852,13 @@ pre.code-block { overflow:visible; }
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .settings-vscode-calm .modal-btns { min-height:34px; padding:4px 18px; align-items:center;
   background:var(--statusbar-bg); color:var(--statusbar-fg); border-top:1px solid var(--border); }
+.settings-vscode-calm.settings-has-modified .modal-btns { box-shadow:inset 2px 0 0 var(--fg-accent); }
+.settings-vscode-calm.settings-has-errors .modal-btns { box-shadow:inset 2px 0 0 var(--fg-error); }
 .settings-vscode-calm .modal-btns .settings-bottom-action,
 .settings-vscode-calm .modal-btns .settings-reset-visible { height:24px; border-radius:2px; background:transparent; }
 .settings-vscode-calm .modal-btns .settings-save-button { min-width:66px; }
 .settings-vscode-calm .modal-btns .settings-save-button[data-modified-count="0"] { opacity:.72; }
+.settings-vscode-calm .modal-btns .settings-save-button:disabled { opacity:.42; cursor:default; }
 .settings-vscode-calm .settings-footer-summary { color:var(--statusbar-fg); }
 .settings-vscode-calm .settings-footer-summary.modified { color:var(--fg-accent); }
 .settings-vscode-calm .settings-footer-summary.error { color:var(--fg-error); }
@@ -4196,7 +4205,7 @@ pre.code-block { overflow:visible; }
             <input id="extension-runtime-filter-text" placeholder="Filter surfaces" aria-label="Filter extension runtime surfaces" oninput="applyExtensionRuntimeSurfaceFilter()">
             <select id="extension-runtime-filter-kind" aria-label="Filter extension runtime surface kind" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All kinds</option></select>
             <select id="extension-runtime-filter-source" aria-label="Filter extension runtime source" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All sources</option><option value="runtime">Runtime</option><option value="manifest">Manifest</option><option value="runtime-only">Runtime only</option></select>
-            <select id="extension-runtime-filter-evidence" aria-label="Filter webview render evidence" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All evidence</option><option value="rendered">Rendered HTML</option><option value="missing">Missing HTML</option><option value="retained">Retained</option><option value="scripts">Scripts enabled</option><option value="messages">Has messages</option><option value="queued">Queued messages</option><option value="dropped">Dropped messages</option></select>
+            <select id="extension-runtime-filter-evidence" aria-label="Filter webview render evidence" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All evidence</option><option value="rendered">Rendered HTML</option><option value="missing">Missing HTML</option><option value="retained">Retained</option><option value="scripts">Scripts enabled</option><option value="resources">Resource rewrites</option><option value="messages">Has messages</option><option value="queued">Queued messages</option><option value="dropped">Dropped messages</option></select>
           </div>
         </div>
         <div class="extension-runtime-summary" id="extension-runtime-summary"></div>
@@ -5643,13 +5652,20 @@ function refreshSettingsDirtySummary(modifiedCount,errorCount){
   const save=document.querySelector('.settings-save-button');
   if(save){
     save.dataset.modifiedCount=String(modifiedCount);
-    save.disabled=errorCount>0;
+    save.dataset.settingsSaveState=errorCount?'blocked':(modifiedCount?'ready':'clean');
+    save.disabled=errorCount>0||modifiedCount===0;
     save.textContent=errorCount?'Fix Errors':(modifiedCount?'Save '+String(modifiedCount):'Save');
     save.title=errorCount
       ? 'Fix validation errors before saving'
       : modifiedCount
         ? 'Save '+String(modifiedCount)+' modified setting'+(modifiedCount===1?'':'s')+' to '+settingsTargetDisplayName(currentSettingsTarget)
-        : 'Save Settings';
+        : 'No Settings changes to save';
+  }
+  const frame=document.querySelector('.modal.settings-modal');
+  if(frame){
+    frame.classList.toggle('settings-has-modified',modifiedCount>0&&errorCount===0);
+    frame.classList.toggle('settings-has-errors',errorCount>0);
+    frame.dataset.settingsDirtyState=errorCount?'error':(modifiedCount?'modified':'clean');
   }
   settingsUpdateCloseButton(modifiedCount,errorCount);
 }
@@ -24429,6 +24445,7 @@ function applyWebviewRuntimeDataset(el,viewId,runtime){
   el.dataset.webviewLocalResourceRoots=String(roots.length);
   el.dataset.webviewPortMappings=String(portMapping.length);
   el.dataset.webviewLifecycleSeq=String(Number(data.lifecycleSeq)||0);
+  el.dataset.webviewMountedAt=String(Number(data.mountedAt)||0);
   el.dataset.webviewRenderedAt=String(Number(data.renderedAt)||0);
   el.dataset.webviewUpdatedAt=String(Number(data.updatedAt)||0);
   el.dataset.webviewMessageCount=String(Number(data.messageCount)||0);
@@ -24452,6 +24469,8 @@ function applyWebviewRuntimeDataset(el,viewId,runtime){
   el.dataset.webviewStateUpdateCount=String(Number(data.stateUpdateCount)||0);
   el.dataset.webviewFrameLoaded=data.frameLoaded?'true':'false';
   el.dataset.webviewIframeLoadedAt=String(Number(data.iframeLoadedAt)||0);
+  el.dataset.webviewIframeReferrerPolicy=String(data.iframeReferrerPolicy||'');
+  el.dataset.webviewIframeLoading=String(data.iframeLoading||'');
   el.dataset.webviewApiReady=data.apiReady?'true':'false';
   el.dataset.webviewReadyCount=String(Number(data.readyCount)||0);
   el.dataset.webviewLastReadyPhase=String(data.readyPhase||'');
@@ -24472,6 +24491,15 @@ function applyWebviewRuntimeDataset(el,viewId,runtime){
   el.dataset.webviewFocused=data.focused?'true':'false';
   el.dataset.webviewKeyEventCount=String(Number(data.keyEventCount)||0);
   el.dataset.webviewLastKey=String(data.lastKey||'');
+  el.dataset.webviewResourceRewriteCount=String(Number(data.resourceRewriteCount)||0);
+  el.dataset.webviewResourceMapHitCount=String(Number(data.resourceMapHitCount)||0);
+  el.dataset.webviewResourceEndpointRewriteCount=String(Number(data.resourceEndpointRewriteCount)||0);
+  el.dataset.webviewResourcePortMappingRewriteCount=String(Number(data.resourcePortMappingRewriteCount)||0);
+  el.dataset.webviewResourceCssRewriteCount=String(Number(data.resourceCssRewriteCount)||0);
+  el.dataset.webviewResourceAttributeRewriteCount=String(Number(data.resourceAttributeRewriteCount)||0);
+  el.dataset.webviewLastResourceRewriteKind=String(data.lastResourceRewriteKind||'');
+  el.dataset.webviewLastResourceOriginal=String(data.lastResourceOriginal||'');
+  el.dataset.webviewLastResourceRewritten=String(data.lastResourceRewritten||'');
   el.dataset.webviewVisible=data.viewState&&data.viewState.visible!==undefined?(data.viewState.visible?'true':'false'):(data.visible===false?'false':'true');
   el.dataset.webviewActive=data.viewState&&data.viewState.active?'true':'false';
   if(data.title||data.name)el.dataset.webviewTitle=String(data.title||data.name);
@@ -25966,7 +25994,8 @@ var _webviewTokens=Object.create(null);
 // ── Webview panel injection (plugin-provided panels) ──
 function _injectWebviewHtml(container,viewId,html,initialState){
   if(!container)return;
-  const runtime=patchWebviewRuntimeLifecycle(viewId,{html:html,state:initialState,disposed:false,visible:true,renderedAt:(webviewRuntimeCache[viewId]&&webviewRuntimeCache[viewId].renderedAt)||webviewRuntimeNow()});
+  const mountedAt=webviewRuntimeNow();
+  const runtime=patchWebviewRuntimeLifecycle(viewId,{html:html,state:initialState,disposed:false,visible:true,mountedAt,renderedAt:(webviewRuntimeCache[viewId]&&webviewRuntimeCache[viewId].renderedAt)||mountedAt,iframeReferrerPolicy:'no-referrer',iframeLoading:'eager'});
   const runtimeOptions=webviewRuntimeOptions(runtime);
   delete container.dataset.webviewFallback;
   container.classList.add('provider-webview-host');
@@ -25988,6 +26017,10 @@ function _injectWebviewHtml(container,viewId,html,initialState){
   iframe.title='Extension webview '+String(viewId||'');
   iframe.style.cssText='border:none;width:100%;height:100%;flex:1;background:var(--bg)';
   iframe.setAttribute('sandbox',webviewIframeSandbox(runtime));
+  iframe.setAttribute('referrerpolicy','no-referrer');
+  iframe.setAttribute('loading','eager');
+  iframe.setAttribute('allow','clipboard-read; clipboard-write');
+  iframe.dataset.webviewMountedAt=String(mountedAt);
   iframe.dataset.webviewFrameLoaded='false';
   iframe.dataset.webviewApiReady='false';
   iframe.dataset.webviewApiAcquired='false';
@@ -26025,16 +26058,20 @@ function _injectWebviewHtml(container,viewId,html,initialState){
     +'document.documentElement.classList.add("vscode-"+_themeKind);'
     +'document.documentElement.dataset.vscodeThemeKind=_themeKind;'
     +'var _state='+initialStateJson+';'
+    +'var _resourceTelemetry={count:0,map:0,endpoint:0,port:0,css:0,attribute:0,lastKind:"",lastOriginal:"",lastRewritten:"",timer:0};'
+    +'function _trimResourceValue(v){v=String(v||"");return v.length>240?v.slice(0,237)+"...":v;}'
+    +'function _flushResourceTelemetry(){_resourceTelemetry.timer=0;try{window.parent.postMessage({type:"webview-resource-event",viewId:'+JSON.stringify(viewId)+',token:_token,counts:{total:_resourceTelemetry.count,map:_resourceTelemetry.map,endpoint:_resourceTelemetry.endpoint,port:_resourceTelemetry.port,css:_resourceTelemetry.css,attribute:_resourceTelemetry.attribute},lastKind:_resourceTelemetry.lastKind,lastOriginal:_resourceTelemetry.lastOriginal,lastRewritten:_resourceTelemetry.lastRewritten},"*");}catch(e){}}'
+    +'function _recordResourceRewrite(kind,original,rewritten){if(!rewritten||String(original)===String(rewritten))return;kind=String(kind||"resource");_resourceTelemetry.count++;if(kind==="map")_resourceTelemetry.map++;else if(kind==="endpoint")_resourceTelemetry.endpoint++;else if(kind==="port")_resourceTelemetry.port++;else if(kind==="css")_resourceTelemetry.css++;else if(kind==="attribute")_resourceTelemetry.attribute++;_resourceTelemetry.lastKind=kind;_resourceTelemetry.lastOriginal=_trimResourceValue(original);_resourceTelemetry.lastRewritten=_trimResourceValue(rewritten);if(!_resourceTelemetry.timer)_resourceTelemetry.timer=setTimeout(_flushResourceTelemetry,0);}'
     +'function _resourceMap(){if(window.__saoWebviewResourceMap)return window.__saoWebviewResourceMap;var el=document.getElementById("sao-webview-resource-map");try{window.__saoWebviewResourceMap=el?JSON.parse(el.textContent||"{}"):{};}catch(e){window.__saoWebviewResourceMap={};}return window.__saoWebviewResourceMap;}'
     +'function _resourceEndpointBase(){if(window.__saoWebviewResourceEndpointBase!==undefined)return window.__saoWebviewResourceEndpointBase;var el=document.getElementById("sao-webview-resource-endpoint");try{var payload=el?JSON.parse(el.textContent||"{}"):{};window.__saoWebviewResourceEndpointBase=payload&&typeof payload.base==="string"?payload.base:"";}catch(e){window.__saoWebviewResourceEndpointBase="";}return window.__saoWebviewResourceEndpointBase;}'
     +'function _optionValue(name,fallback){return Object.prototype.hasOwnProperty.call(_options,name)?_options[name]:fallback;}'
-    +'function _portMappedUrl(v){try{var maps=_optionValue("portMapping",[]);if(!Array.isArray(maps)||!maps.length)return"";var u=new URL(v,document.baseURI||"https://webview.local/");var host=String(u.hostname||"").toLowerCase();if(!(host==="localhost"||host==="127.0.0.1"||host==="[::1]"))return"";var port=Number(u.port||((u.protocol==="https:")?443:80));for(var i=0;i<maps.length;i++){var m=maps[i]||{};if(Number(m.webviewPort)===port&&Number(m.extensionHostPort)){u.port=String(Number(m.extensionHostPort));return u.href;}}}catch(e){}return"";}'
+    +'function _portMappedUrl(v){try{var maps=_optionValue("portMapping",[]);if(!Array.isArray(maps)||!maps.length)return"";var u=new URL(v,document.baseURI||"https://webview.local/");var host=String(u.hostname||"").toLowerCase();if(!(host==="localhost"||host==="127.0.0.1"||host==="[::1]"))return"";var port=Number(u.port||((u.protocol==="https:")?443:80));for(var i=0;i<maps.length;i++){var m=maps[i]||{};if(Number(m.webviewPort)===port&&Number(m.extensionHostPort)){u.port=String(Number(m.extensionHostPort));_recordResourceRewrite("port",v,u.href);return u.href;}}}catch(e){}return"";}'
     +'function _isLocalResourceUrl(v){if(typeof v!=="string"||!v)return false;try{var u=new URL(v,document.baseURI||"https://webview.local/");var h=String(u.hostname||"").toLowerCase();return u.protocol==="https:"&&(h==="webview.local"||/\\.vscode-resource\\.webview\\.local$/.test(h));}catch(e){return false;}}'
-    +'function _endpointResourceUrl(v){if(!_isLocalResourceUrl(v))return"";var base=_resourceEndpointBase();if(!base)return"";try{var u=new URL(v,document.baseURI||"https://webview.local/");return base+"/"+encodeURIComponent(u.host)+(u.pathname||"/")+(u.search||"");}catch(e){return"";}}'
-    +'function _rewriteResourceUrl(v){if(typeof v!=="string")return v;var mapped=_portMappedUrl(v);if(mapped)return mapped;var m=_resourceMap();var hit=m[v]||m[v.replace(/\\\\\\//g,"/")]||"";return hit||_endpointResourceUrl(v)||v;}'
+    +'function _endpointResourceUrl(v){if(!_isLocalResourceUrl(v))return"";var base=_resourceEndpointBase();if(!base)return"";try{var u=new URL(v,document.baseURI||"https://webview.local/");var out=base+"/"+encodeURIComponent(u.host)+(u.pathname||"/")+(u.search||"");_recordResourceRewrite("endpoint",v,out);return out;}catch(e){return"";}}'
+    +'function _rewriteResourceUrl(v){if(typeof v!=="string")return v;var mapped=_portMappedUrl(v);if(mapped)return mapped;var m=_resourceMap();var hit=m[v]||m[v.replace(/\\\\\\//g,"/")]||"";if(hit){_recordResourceRewrite("map",v,hit);return hit;}return _endpointResourceUrl(v)||v;}'
     +'function _rewriteModuleResourceUrl(v){if(typeof v!=="string")return v;return _endpointResourceUrl(v)||_rewriteResourceUrl(v);}'
     +'function _rewriteSrcset(v){return String(v||"").split(",").map(function(part){var p=part.trim();if(!p)return p;var bits=p.split(/\\s+/);bits[0]=_rewriteResourceUrl(bits[0]);return bits.join(" ");}).join(", ");}'
-    +'function _rewriteCssText(v){return String(v||"").replace(/url\\(\\s*([\\\"\\']?)([^\\\"\\')]+)\\1\\s*\\)/g,function(all,q,url){var low=String(url||"").trim().toLowerCase();if(!url||low.indexOf("data:")===0||low.indexOf("http:")===0||low.indexOf("https:")===0||url.indexOf("//")===0||url.charAt(0)==="#")return all;var r=_rewriteResourceUrl(url);return "url("+q+r+q+")";});}'
+    +'function _rewriteCssText(v){return String(v||"").replace(/url\\(\\s*([\\\"\\']?)([^\\\"\\')]+)\\1\\s*\\)/g,function(all,q,url){var low=String(url||"").trim().toLowerCase();if(!url||low.indexOf("data:")===0||low.indexOf("http:")===0||low.indexOf("https:")===0||url.indexOf("//")===0||url.charAt(0)==="#")return all;var r=_rewriteResourceUrl(url);if(r!==url)_recordResourceRewrite("css",url,r);return "url("+q+r+q+")";});}'
     +'var _urlAttrs={src:1,href:1,poster:1,data:1,action:1,formaction:1,preload:1};'
     +'var _setAttr=Element.prototype.setAttribute;Element.prototype.setAttribute=function(name,value){var n=String(name||"").toLowerCase();if(_urlAttrs[n])value=_rewriteResourceUrl(String(value));else if(n==="srcset"||n==="imagesrcset")value=_rewriteSrcset(value);else if(n==="style")value=_rewriteCssText(value);return _setAttr.call(this,name,value);};'
     +'function _patchUrlProperty(proto,prop,rewriter){if(!proto)return;var d=Object.getOwnPropertyDescriptor(proto,prop);if(!d||!d.set||!d.get)return;try{Object.defineProperty(proto,prop,{configurable:true,enumerable:d.enumerable,get:d.get,set:function(v){d.set.call(this,rewriter(String(v)));}});}catch(e){}}'
@@ -26062,7 +26099,7 @@ function _injectWebviewHtml(container,viewId,html,initialState){
     +'var _fetch=window.fetch;if(typeof _fetch==="function"){window.fetch=function(input,init){if(typeof input==="string")input=_rewriteResourceUrl(input);else if(input&&typeof input.url==="string"){var r=_rewriteResourceUrl(input.url);if(r!==input.url){try{input=new Request(r,input);}catch(e){input=r;}}}return _fetch.call(this,input,init);};}'
     +'var _xhrOpen=window.XMLHttpRequest&&XMLHttpRequest.prototype.open;if(_xhrOpen){XMLHttpRequest.prototype.open=function(method,url){if(arguments.length>1)arguments[1]=_rewriteResourceUrl(String(url));return _xhrOpen.apply(this,arguments);};}'
     +'function _rewriteStyleElement(n){if(!n||!n.tagName||String(n.tagName).toLowerCase()!=="style")return;var t=n.textContent||"";var r=_rewriteCssText(t);if(r!==t)n.textContent=r;}'
-    +'function _rewriteNode(n){if(!n||n.nodeType!==1)return;["src","href","poster","data","action","formaction","preload"].forEach(function(a){var v=n.getAttribute&&n.getAttribute(a);if(v){var r=_rewriteResourceUrl(v);if(r!==v)n.setAttribute(a,r);}});["srcset","imagesrcset"].forEach(function(a){var s=n.getAttribute&&n.getAttribute(a);if(s){var rs=_rewriteSrcset(s);if(rs!==s)n.setAttribute(a,rs);}});var st=n.getAttribute&&n.getAttribute("style");if(st){var rst=_rewriteCssText(st);if(rst!==st)n.setAttribute("style",rst);}_rewriteStyleElement(n);if(n.querySelectorAll)n.querySelectorAll("[src],[href],[poster],[data],[action],[formaction],[preload],[srcset],[imagesrcset],[style],style").forEach(_rewriteNode);}'
+    +'function _rewriteNode(n){if(!n||n.nodeType!==1)return;["src","href","poster","data","action","formaction","preload"].forEach(function(a){var v=n.getAttribute&&n.getAttribute(a);if(v){var r=_rewriteResourceUrl(v);if(r!==v){_recordResourceRewrite("attribute",v,r);n.setAttribute(a,r);}}});["srcset","imagesrcset"].forEach(function(a){var s=n.getAttribute&&n.getAttribute(a);if(s){var rs=_rewriteSrcset(s);if(rs!==s){_recordResourceRewrite("attribute",s,rs);n.setAttribute(a,rs);}}});var st=n.getAttribute&&n.getAttribute("style");if(st){var rst=_rewriteCssText(st);if(rst!==st)n.setAttribute("style",rst);}_rewriteStyleElement(n);if(n.querySelectorAll)n.querySelectorAll("[src],[href],[poster],[data],[action],[formaction],[preload],[srcset],[imagesrcset],[style],style").forEach(_rewriteNode);}'
     +'new MutationObserver(function(ms){ms.forEach(function(m){if(m.type==="attributes")_rewriteNode(m.target);else if(m.type==="characterData")_rewriteStyleElement(m.target&&m.target.parentElement);else m.addedNodes&&m.addedNodes.forEach(_rewriteNode);});}).observe(document.documentElement,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:["src","href","poster","data","action","formaction","preload","srcset","imagesrcset","style"]});'
     +'document.addEventListener("DOMContentLoaded",function(){_rewriteNode(document.documentElement);});'
     +'function _commandPayloadFromHref(href){var raw=String(href||"");if(raw.indexOf("command:")!==0)return{command:"",arguments:[]};raw=raw.slice(8);var qi=raw.indexOf("?"),cmd=qi>=0?raw.slice(0,qi):raw,q=qi>=0?raw.slice(qi+1):"";try{cmd=decodeURIComponent(cmd);}catch(e){}var args=[];if(q){try{var parsed=JSON.parse(decodeURIComponent(q));args=Array.isArray(parsed)?parsed:[parsed];}catch(e){args=[];}}return{command:String(cmd||"").trim(),arguments:args};}'
@@ -26199,6 +26236,24 @@ window.addEventListener('message',function(e){
     if(kind==='setState')patch.apiSetStateCount=(Number(cached.apiSetStateCount)||0)+1;
     if(kind==='getState')patch.apiGetStateCount=(Number(cached.apiGetStateCount)||0)+1;
     patchWebviewRuntimeLifecycle(viewId,patch);
+    return;
+  }
+  if(e.data.type==='webview-resource-event'){
+    const viewId=e.data.viewId,tok=e.data.token;
+    if(!viewId||!tok||_webviewTokens[viewId]!==tok)return;
+    const counts=e.data.counts&&typeof e.data.counts==='object'?e.data.counts:{};
+    patchWebviewRuntimeLifecycle(viewId,{
+      resourceRewriteCount:Number(counts.total)||0,
+      resourceMapHitCount:Number(counts.map)||0,
+      resourceEndpointRewriteCount:Number(counts.endpoint)||0,
+      resourcePortMappingRewriteCount:Number(counts.port)||0,
+      resourceCssRewriteCount:Number(counts.css)||0,
+      resourceAttributeRewriteCount:Number(counts.attribute)||0,
+      lastResourceRewriteKind:String(e.data.lastKind||''),
+      lastResourceOriginal:String(e.data.lastOriginal||''),
+      lastResourceRewritten:String(e.data.lastRewritten||''),
+      lastResourceRewriteAt:webviewRuntimeNow()
+    });
     return;
   }
   if(e.data.type==='webview-visibility'){
@@ -27829,12 +27884,17 @@ function renderSettingsPersonalNav(){
   host.dataset.settingsRecentCount=String(recent.length);
   const addBlock=(title,items,kind,required)=>{
     if(!required&&!items.length)return;
-    const titleEl=document.createElement('div');titleEl.className='settings-nav-memory-title';titleEl.textContent=title;host.appendChild(titleEl);
+    const block=document.createElement('div');
+    block.className='settings-nav-memory-block';
+    block.dataset.settingsPersonalKind=title.toLowerCase().replace(/\s+/g,'-');
+    block.dataset.settingsPersonalCount=String(items.length);
+    const titleEl=document.createElement('div');titleEl.className='settings-nav-memory-title';titleEl.textContent=title;block.appendChild(titleEl);
     if(!items.length){
       const empty=document.createElement('div');empty.className='settings-nav-memory-empty';empty.textContent='None';
-      host.appendChild(empty);return;
+      block.appendChild(empty);host.appendChild(block);return;
     }
-    items.forEach(item=>host.appendChild(settingsPersonalItemButton(item,kind)));
+    items.forEach(item=>block.appendChild(settingsPersonalItemButton(item,kind)));
+    host.appendChild(block);
   };
   addBlock('Commonly Used',common,'◆',true);
   addBlock('Favorites',favorites,'★',false);
@@ -28400,6 +28460,8 @@ function settingsUiSelfCheckSnapshot(){
   const focusDeck=$('settings-focus-deck');
   const quickNav=$('settings-nav-quick');
   const personalNav=$('settings-nav-personal');
+  const personalBlocks=personalNav?Array.from(personalNav.querySelectorAll('.settings-nav-memory-block')):[];
+  const hiddenPersonalBlocks=personalBlocks.filter(block=>String(getComputedStyle(block).display)==='none');
   const footerSummary=$('settings-footer-summary');
   const footerSave=document.querySelector('.modal-btns .settings-save-button');
   const rowImpact=document.querySelector('.settings-row-impact');
@@ -28479,6 +28541,7 @@ function settingsUiSelfCheckSnapshot(){
     hasLeanSettingControls:!!(controlFrame&&parseFloat(getComputedStyle(controlFrame).borderRadius||'0')<=3),
     hasBoundedSettingControlWidth:!!(controlFrame&&parseFloat(getComputedStyle(controlFrame).maxWidth||'0')>=500),
     hasMoreComfortableSettingControls:!!(controlFrame&&parseFloat(getComputedStyle(controlFrame).maxWidth||'0')>=560&&parseFloat(getComputedStyle(controlFrame).minHeight||'0')>=30),
+    hasVsCodePolishedSettingControls:!!(controlFrame&&parseFloat(getComputedStyle(controlFrame).maxWidth||'0')>=660&&parseFloat(getComputedStyle(controlFrame).borderRadius||'0')<=3),
     hasVsCodeListSettingFlow:!!(builtHead&&controlFrame&&String(getComputedStyle(builtHead).gridTemplateColumns||'').split(' ').length>=3&&String(getComputedStyle(controlFrame).gridColumnStart||'')==='1'),
     hasSettingCategoryPrefix:!!(rowCategory&&rowCategory.textContent&&typeof settingsCategoryLabelForKey==='function'),
     hasRowHeadControlActivation:!!rowHead&&String(rowHead.dataset.settingsRowHead)==='1'&&typeof settingsFocusRowControl==='function',
@@ -28487,6 +28550,8 @@ function settingsUiSelfCheckSnapshot(){
     hasHumanizedSaveAffordance:!!(footerSave&&String(getComputedStyle(footerSave).minWidth||'0')&&parseFloat(getComputedStyle(footerSave).minWidth||'0')>=60),
     hasQuietInspectorFocusDeck:!!(focusDeck&&String(getComputedStyle(focusDeck).display)==='none'),
     hasStatusbarFooter:!!(footer&&String(getComputedStyle(footer).backgroundColor||'')===String(getComputedStyle(document.querySelector('.statusbar')||footer).backgroundColor||'')),
+    hasStatusbarDirtyClass:!!(settingsFrame&&settingsFrame.dataset.settingsDirtyState!==undefined&&typeof refreshSettingsDirtySummary==='function'&&String(refreshSettingsDirtySummary).includes("frame.classList.toggle('settings-has-modified'")),
+    hasDisabledCleanSave:!!(footerSave&&footerSave.dataset.settingsSaveState!==undefined&&typeof refreshSettingsDirtySummary==='function'&&String(refreshSettingsDirtySummary).includes('save.disabled=errorCount>0||modifiedCount===0')),
     hasInspectorFocusDeck:!!(inspector&&focusDeck&&inspector.contains(focusDeck)),
     hasLabelsInsideRows:!!originalLabel&&originalLabel.closest('.settings-field.builtin-setting'),
     hidesOriginalLabels:!!originalLabel&&String(getComputedStyle(originalLabel).display)==='none',
@@ -28551,6 +28616,9 @@ function settingsUiSelfCheckSnapshot(){
     hasSettingsQuickAccess:!!(quickNav&&quickNav.querySelector('[data-settings-quick-token="@common"]')&&quickNav.querySelector('[data-settings-quick-token="@modified"]')&&quickNav.querySelector('[data-settings-quick-token="@error"]')&&quickNav.querySelector('[data-settings-quick-token="@overrides"]')),
     hasSettingsPersonalNav:!!(personalNav&&personalNav.dataset.settingsPersonalNav==='1'&&Number(personalNav.dataset.settingsCommonCount||0)>0),
     hasDefaultVisiblePersonalNav:!!(personalNav&&String(getComputedStyle(personalNav).display)!=='none'),
+    hasGroupedPersonalNav:personalBlocks.length>=1&&personalBlocks.some(block=>block.dataset.settingsPersonalKind==='commonly-used'),
+    hasQuietPersonalNavHistory:hiddenPersonalBlocks.some(block=>['favorites','recent'].includes(block.dataset.settingsPersonalKind||'')),
+    hasDetailsOnlyNavQuickFilters:!!(quickNav&&String(getComputedStyle(quickNav).display)==='none'),
     hasDetailBreadcrumb:!!(detailBreadcrumb&&/>/.test(detailBreadcrumb.textContent||'')),
     hasFooterSaveSummary:!!(footerSummary&&footerSave&&footerSave.closest('.modal-btns')),
     hasRowImpactSummary:!!(rowImpact&&rowImpact.querySelector('.impact-chip')),
@@ -35185,6 +35253,7 @@ function extensionRuntimeEvidenceMatches(row,value){
   if(v==='missing')return !row.htmlAvailable;
   if(v==='retained')return !!ev.retainContextWhenHidden;
   if(v==='scripts')return ev.enableScripts===true;
+  if(v==='resources')return (Number(ev.resourceRewriteCount)||0)>0;
   if(v==='messages')return (Number(ev.messageCount)||0)>0;
   if(v==='queued')return (Number(ev.pendingMessageCount)||0)>0||(Number(ev.queuedMessageCount)||0)>0;
   if(v==='dropped')return (Number(ev.droppedMessageCount)||0)>0;
@@ -35258,6 +35327,13 @@ function extensionRuntimeSurfaceRows(data){
       evidence.lastDeliveredMessageSeq=Number(cachedRuntime.lastDeliveredMessageSeq)||Number(evidence.lastDeliveredMessageSeq)||0;
       evidence.lastQueuedMessageSeq=Number(cachedRuntime.lastQueuedMessageSeq)||Number(evidence.lastQueuedMessageSeq)||0;
       evidence.lastFlushedMessageSeq=Number(cachedRuntime.lastFlushedMessageSeq)||Number(evidence.lastFlushedMessageSeq)||0;
+      evidence.resourceRewriteCount=Number(cachedRuntime.resourceRewriteCount)||Number(evidence.resourceRewriteCount)||0;
+      evidence.resourceMapHitCount=Number(cachedRuntime.resourceMapHitCount)||Number(evidence.resourceMapHitCount)||0;
+      evidence.resourceEndpointRewriteCount=Number(cachedRuntime.resourceEndpointRewriteCount)||Number(evidence.resourceEndpointRewriteCount)||0;
+      evidence.resourcePortMappingRewriteCount=Number(cachedRuntime.resourcePortMappingRewriteCount)||Number(evidence.resourcePortMappingRewriteCount)||0;
+      evidence.resourceCssRewriteCount=Number(cachedRuntime.resourceCssRewriteCount)||Number(evidence.resourceCssRewriteCount)||0;
+      evidence.resourceAttributeRewriteCount=Number(cachedRuntime.resourceAttributeRewriteCount)||Number(evidence.resourceAttributeRewriteCount)||0;
+      evidence.lastResourceRewriteKind=String(cachedRuntime.lastResourceRewriteKind||evidence.lastResourceRewriteKind||'');
     }
     const htmlLength=Number(evidence.htmlLength||item.htmlLength||0)||0;
     const evidenceText=[
@@ -35276,6 +35352,8 @@ function extensionRuntimeSurfaceRows(data){
       evidence.flushedMessageCount?'flushed:'+evidence.flushedMessageCount:'',
       evidence.droppedMessageCount?'dropped:'+evidence.droppedMessageCount:'',
       evidence.lastDroppedReason?'drop:'+evidence.lastDroppedReason:'',
+      evidence.resourceRewriteCount?'resources:'+evidence.resourceRewriteCount:'',
+      evidence.lastResourceRewriteKind?'resource-kind:'+evidence.lastResourceRewriteKind:'',
     ].filter(Boolean).join(' ');
     const row={
       kind,
@@ -35578,6 +35656,7 @@ function renderExtensionRuntimeSurfacePanel(data){
     ['Missing Webview HTML',rows.filter(row=>row.kind==='WebviewView'&&!row.htmlAvailable).length],
     ['Retained Webview',summary.webviewRetained||0],
     ['Evidence Ready',rows.filter(row=>row.evidenceStatus==='rendered').length],
+    ['Resource Rewrites',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.resourceRewriteCount)||0):0),0)],
     ['Webview Messages',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.messageCount)||0):0),0)],
     ['Queued Webview',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.pendingMessageCount)||0):0),0)],
     ['Dropped Webview',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.droppedMessageCount)||0):0),0)],
@@ -35593,7 +35672,7 @@ function renderExtensionRuntimeSurfacePanel(data){
   chips.forEach(([label,value])=>{
     const chip=document.createElement('span');chip.className='extension-runtime-chip';
     chip.innerHTML='<strong>'+esc(String(value))+'</strong>'+esc(label);
-    if(['TreeView','WebviewView','CustomEditor','Notebook','Command','Menu','Terminal','LM Tool','LM Provider','Chat','Context','Runtime','Manifest','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Webview Messages','Queued Webview','Dropped Webview'].includes(label)){
+    if(['TreeView','WebviewView','CustomEditor','Notebook','Command','Menu','Terminal','LM Tool','LM Provider','Chat','Context','Runtime','Manifest','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Resource Rewrites','Webview Messages','Queued Webview','Dropped Webview'].includes(label)){
       chip.classList.add('filterable');
       chip.tabIndex=0;
       chip.setAttribute('role','button');
@@ -35601,7 +35680,7 @@ function renderExtensionRuntimeSurfacePanel(data){
       chip.onclick=()=>{
         const kindMap={'Terminal':'TerminalProfile','LM Tool':'LMTool','LM Provider':'LMProvider','Chat':'ChatParticipant','Context':'ChatContext'};
         const sourceMap={Runtime:'runtime',Manifest:'manifest'};
-        const evidenceMap={'Webview HTML':'rendered','Missing Webview HTML':'missing','Retained Webview':'retained','Evidence Ready':'rendered','Webview Messages':'messages','Queued Webview':'queued','Dropped Webview':'dropped'};
+        const evidenceMap={'Webview HTML':'rendered','Missing Webview HTML':'missing','Retained Webview':'retained','Evidence Ready':'rendered','Resource Rewrites':'resources','Webview Messages':'messages','Queued Webview':'queued','Dropped Webview':'dropped'};
         const kindSel=$('extension-runtime-filter-kind'),sourceSel=$('extension-runtime-filter-source'),evidenceSel=$('extension-runtime-filter-evidence');
         if(sourceMap[label]&&sourceSel)sourceSel.value=sourceMap[label];
         else if(evidenceMap[label]&&evidenceSel)evidenceSel.value=evidenceMap[label];
@@ -35648,6 +35727,13 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.webviewLastQueueReason=String(row.webviewEvidence&&row.webviewEvidence.lastQueueReason||'');
       el.dataset.webviewLastFlushReason=String(row.webviewEvidence&&row.webviewEvidence.lastFlushReason||'');
       el.dataset.webviewLastDeliveredMessageSeq=String(row.webviewEvidence&&row.webviewEvidence.lastDeliveredMessageSeq||0);
+      el.dataset.webviewResourceRewriteCount=String(row.webviewEvidence&&row.webviewEvidence.resourceRewriteCount||0);
+      el.dataset.webviewResourceMapHitCount=String(row.webviewEvidence&&row.webviewEvidence.resourceMapHitCount||0);
+      el.dataset.webviewResourceEndpointRewriteCount=String(row.webviewEvidence&&row.webviewEvidence.resourceEndpointRewriteCount||0);
+      el.dataset.webviewResourcePortMappingRewriteCount=String(row.webviewEvidence&&row.webviewEvidence.resourcePortMappingRewriteCount||0);
+      el.dataset.webviewResourceCssRewriteCount=String(row.webviewEvidence&&row.webviewEvidence.resourceCssRewriteCount||0);
+      el.dataset.webviewResourceAttributeRewriteCount=String(row.webviewEvidence&&row.webviewEvidence.resourceAttributeRewriteCount||0);
+      el.dataset.webviewLastResourceRewriteKind=String(row.webviewEvidence&&row.webviewEvidence.lastResourceRewriteKind||'');
       el.dataset.focusable=row.focusable?'1':'0';
       el.dataset.refreshable=row.refreshable?'1':'0';
       el.dataset.search=row.searchText||'';

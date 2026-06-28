@@ -4334,7 +4334,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "aria-label=\"Next visible setting\"" in html
            and ".settings-vscode-calm .settings-shell { grid-template-columns:300px minmax(0,1fr);" in html
            and ".settings-vscode-calm .settings-field.builtin-setting.settings-current:not(.modified)" in html
-           and ".settings-vscode-calm .settings-control-frame { max-width:620px;" in html
+           and ".settings-vscode-calm .settings-control-frame { max-width:680px;" in html
            and 'onkeydown="settingsHandleTargetTabKeydown(event)"' in html
            and "function settingsHandleTargetTabKeydown(ev)" in html
            and "function settingsMoveTargetTab(delta)" in html
@@ -4377,6 +4377,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hasVsCodeWideCategoryNav" in html
            and "hasReducedSettingsTitleNoise" in html
            and "hasHumanizedSaveAffordance" in html
+           and "hasDisabledCleanSave" in html
+           and "hasStatusbarDirtyClass" in html
+           and "hasGroupedPersonalNav" in html
+           and "hasQuietPersonalNavHistory" in html
+           and "hasDetailsOnlyNavQuickFilters" in html
+           and "hasVsCodePolishedSettingControls" in html
            and "hasIconOnlySettingsToolbar" in html
            and "hasPrimaryJsonOnlyDefaultToolbar" in html
            and "hasCalmDefaultSettingsMode" in html
@@ -9963,7 +9969,11 @@ console.log("frontend word separator behavior ok");
            and "cur.dataset.settingCurrentValue='1'" in html
            and "settings-save-button" in html
            and "id=\"settings-footer-summary\"" in html
-           and "save.disabled=errorCount>0;" in html
+           and "save.dataset.settingsSaveState=errorCount?'blocked':(modifiedCount?'ready':'clean');" in html
+           and "save.disabled=errorCount>0||modifiedCount===0;" in html
+           and "No Settings changes to save" in html
+           and "frame.classList.toggle('settings-has-modified',modifiedCount>0&&errorCount===0);" in html
+           and "frame.dataset.settingsDirtyState=errorCount?'error':(modifiedCount?'modified':'clean');" in html
            and "fix errors before saving" in html
             and "Settings saved" in html
             and "closeSettings();" not in html[html.index("async function saveSettings()"):html.index("window.saveSettings=saveSettings;")]
@@ -9987,6 +9997,12 @@ console.log("frontend word separator behavior ok");
             and "Commonly Used" in html
             and "host.dataset.settingsPersonalNav='1';" in html
             and "host.dataset.settingsCommonCount=String(common.length);" in html
+            and "block.className='settings-nav-memory-block';" in html
+            and "block.dataset.settingsPersonalKind=title.toLowerCase().replace" in html
+            and ".settings-vscode-calm .settings-nav-memory-block[data-settings-personal-kind=\"favorites\"]" in html
+            and ".settings-vscode-calm.settings-details-open .settings-nav-memory-block[data-settings-personal-kind=\"favorites\"]" in html
+            and ".settings-vscode-calm .settings-nav-quick { display:none;" in html
+            and ".settings-vscode-calm.settings-details-open .settings-nav-quick { display:grid; }" in html
             and ".settings-vscode-calm .settings-nav-memory { display:block;" in html
             and "data-settings-filter-token=\"@common\"" in html
             and "function settingsGroupMatchesCommonFilter(group)" in html
