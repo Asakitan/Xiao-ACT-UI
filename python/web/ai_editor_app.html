@@ -4760,7 +4760,7 @@ pre.code-block { overflow:visible; }
             <input id="extension-runtime-filter-text" placeholder="Filter surfaces" aria-label="Filter extension runtime surfaces" oninput="applyExtensionRuntimeSurfaceFilter()">
             <select id="extension-runtime-filter-kind" aria-label="Filter extension runtime surface kind" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All kinds</option></select>
             <select id="extension-runtime-filter-source" aria-label="Filter extension runtime source" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All sources</option><option value="manifest+runtime">Manifest + runtime</option><option value="manifest">Manifest</option><option value="runtime-only">Runtime only</option></select>
-            <select id="extension-runtime-filter-evidence" aria-label="Filter webview render evidence" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All evidence</option><option value="rendered">Rendered HTML</option><option value="missing">Missing HTML</option><option value="retained">Retained</option><option value="scripts">Scripts enabled</option><option value="resources">Resource rewrites</option><option value="port-hit">Port mapped resources</option><option value="messages">Has messages</option><option value="queued">Queued messages</option><option value="queue-stale">Stale queue</option><option value="dropped">Dropped messages</option><option value="lifecycle">Lifecycle events</option></select>
+            <select id="extension-runtime-filter-evidence" aria-label="Filter webview render evidence" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All evidence</option><option value="rendered">Rendered HTML</option><option value="missing">Missing HTML</option><option value="retained">Retained</option><option value="scripts">Scripts enabled</option><option value="resources">Resource rewrites</option><option value="port-hit">Port mapped resources</option><option value="messages">Has messages</option><option value="binary">Binary messages</option><option value="queued">Queued messages</option><option value="queue-stale">Stale queue</option><option value="dropped">Dropped messages</option><option value="lifecycle">Lifecycle events</option></select>
           </div>
         </div>
         <div class="extension-runtime-summary" id="extension-runtime-summary"></div>
@@ -26112,6 +26112,15 @@ function applyWebviewRuntimeDataset(el,viewId,runtime){
   el.dataset.webviewLastFlushTargetFrameId=String(data.lastFlushTargetFrameId||'');
   el.dataset.webviewMessagesToCount=String(Number(data.messagesToWebview)||0);
   el.dataset.webviewMessagesFromCount=String(Number(data.messagesFromWebview)||0);
+  el.dataset.webviewBinaryMessageCount=String(Number(data.binaryMessageCount)||0);
+  el.dataset.webviewBinaryMessagesToCount=String(Number(data.binaryMessagesToWebview)||0);
+  el.dataset.webviewBinaryMessagesFromCount=String(Number(data.binaryMessagesFromWebview)||0);
+  el.dataset.webviewBinaryByteLength=String(Number(data.binaryByteLength)||0);
+  el.dataset.webviewLastBinaryByteLength=String(Number(data.lastBinaryByteLength)||0);
+  el.dataset.webviewLastBinaryMessageDirection=String(data.lastBinaryMessageDirection||'');
+  el.dataset.webviewLastBinaryMessageSeq=String(Number(data.lastBinaryMessageSeq)||0);
+  el.dataset.webviewLastBinaryTypes=Array.isArray(data.lastBinaryTypes)?data.lastBinaryTypes.join(','):String(data.lastBinaryTypes||'');
+  el.dataset.webviewLastBinaryPaths=Array.isArray(data.lastBinaryPaths)?data.lastBinaryPaths.join(','):String(data.lastBinaryPaths||'');
   el.dataset.webviewLastInboundMessageSeq=String(Number(data.lastInboundMessageSeq)||0);
   el.dataset.webviewLastOutboundMessageSeq=String(Number(data.lastOutboundMessageSeq)||0);
   el.dataset.webviewLastDeliveredMessageSeq=String(Number(data.lastDeliveredMessageSeq)||0);
@@ -27904,13 +27913,20 @@ window.addEventListener('message',function(e){
     const viewId=e.data.viewId,msg=serializeWebviewBridgeMessage(e.data.message),tok=e.data.token;
     if(!viewId||!tok||_webviewTokens[viewId]!==tok)return;
     const cached=webviewRuntimeCache[viewId]||{};
+    const inboundSeq=Number(e.data.sequence)||webviewRuntimeNextMessageSeq(viewId,'from-webview');
+    const binarySummary=webviewBinaryMessageSummary(msg);
+    const binaryPatch=webviewBinaryRuntimePatch(binarySummary,'from-webview',inboundSeq);
     patchWebviewRuntimeLifecycle(viewId,{
+      ...binaryPatch,
       messageCount:(Number(cached.messageCount)||0)+1,
       messagesFromWebview:(Number(cached.messagesFromWebview)||0)+1,
+      binaryMessageCount:(Number(cached.binaryMessageCount)||0)+(Number(binaryPatch.binaryMessageCount)||0),
+      binaryMessagesFromWebview:(Number(cached.binaryMessagesFromWebview)||0)+(Number(binaryPatch.binaryMessagesFromWebview)||0),
+      binaryByteLength:(Number(cached.binaryByteLength)||0)+(Number(binaryPatch.binaryByteLength)||0),
       lastMessageAt:webviewRuntimeNow(),
       lastMessageDirection:'from-webview',
-      lastInboundMessageSeq:Number(e.data.sequence)||webviewRuntimeNextMessageSeq(viewId,'from-webview'),
-      lastMessageSeq:Number(e.data.sequence)||webviewRuntimeNextMessageSeq(viewId,'from-webview')
+      lastInboundMessageSeq:inboundSeq,
+      lastMessageSeq:inboundSeq
     });
     if(window.pywebview&&window.pywebview.api&&window.pywebview.api.webview_post_message){
       window.pywebview.api.webview_post_message(viewId,msg);
@@ -28281,6 +28297,56 @@ function deserializeWebviewBridgeMessage(message){
   Object.keys(message).forEach(key=>{copy[key]=deserializeWebviewBridgeMessage(message[key]);});
   return copy;
 }
+function webviewBinaryMessageSummary(message){
+  const summary={binaryCount:0,byteLength:0,types:[],paths:[]};
+  const seen=new Set();
+  const add=(type,bytes,path)=>{
+    summary.binaryCount++;
+    summary.byteLength+=Math.max(0,Number(bytes)||0);
+    const t=String(type||'ArrayBuffer');
+    if(t&&!summary.types.includes(t))summary.types.push(t);
+    const p=String(path||'$');
+    if(p&&!summary.paths.includes(p))summary.paths.push(p);
+  };
+  const visit=(value,path,depth)=>{
+    if(value===null||value===undefined||depth>8)return;
+    if(typeof value==='object'){
+      if(seen.has(value))return;
+      seen.add(value);
+    }
+    if(value instanceof ArrayBuffer){add('ArrayBuffer',value.byteLength,path);return;}
+    if(ArrayBuffer.isView(value)){add(webviewTypedArrayType(value)||'TypedArray',value.byteLength,path);return;}
+    if(value&&typeof value==='object'&&value[WEBVIEW_ARRAY_BUFFER_REF]){
+      const view=value.view&&typeof value.view==='object'?value.view:null;
+      add(view&&view.type?view.type:'ArrayBuffer',view&&view.byteLength!==undefined?view.byteLength:value.byteLength,path);
+      return;
+    }
+    if(Array.isArray(value)){
+      value.slice(0,32).forEach((item,index)=>visit(item,path+'['+index+']',depth+1));
+      return;
+    }
+    if(value&&typeof value==='object'){
+      Object.keys(value).slice(0,32).forEach(key=>visit(value[key],path?path+'.'+key:key,depth+1));
+    }
+  };
+  visit(message,'$',0);
+  return summary;
+}
+function webviewBinaryRuntimePatch(summary,direction,seq){
+  if(!summary||!summary.binaryCount)return {};
+  const patch={
+    binaryMessageCount:Number(summary.binaryCount)||0,
+    binaryByteLength:Number(summary.byteLength)||0,
+    lastBinaryMessageDirection:String(direction||''),
+    lastBinaryMessageSeq:Number(seq)||0,
+    lastBinaryByteLength:Number(summary.byteLength)||0,
+    lastBinaryTypes:Array.isArray(summary.types)?summary.types.slice(0,8):[],
+    lastBinaryPaths:Array.isArray(summary.paths)?summary.paths.slice(0,8):[]
+  };
+  if(direction==='to-webview')patch.binaryMessagesToWebview=Number(summary.binaryCount)||0;
+  if(direction==='from-webview')patch.binaryMessagesFromWebview=Number(summary.binaryCount)||0;
+  return patch;
+}
 function postExtensionMessageToWebview(iframe,msg,reason,seqOverride){
   if(!iframe||!iframe.contentWindow)return false;
   const runtimeId=iframe.dataset&&iframe.dataset.viewId?String(iframe.dataset.viewId):'';
@@ -28292,16 +28358,22 @@ function postExtensionMessageToWebview(iframe,msg,reason,seqOverride){
       return false;
     }
     const seq=Number(seqOverride)||webviewRuntimeNextMessageSeq(cacheId,'to-webview');
+    const binarySummary=webviewBinaryMessageSummary(msg);
+    const binaryPatch=webviewBinaryRuntimePatch(binarySummary,'to-webview',seq);
     patchWebviewRuntimeLifecycle(cacheId,{
+      ...binaryPatch,
       messageCount:(Number(cached.messageCount)||0)+1,
       messagesToWebview:(Number(cached.messagesToWebview)||0)+1,
+      binaryMessageCount:(Number(cached.binaryMessageCount)||0)+(Number(binaryPatch.binaryMessageCount)||0),
+      binaryMessagesToWebview:(Number(cached.binaryMessagesToWebview)||0)+(Number(binaryPatch.binaryMessagesToWebview)||0),
+      binaryByteLength:(Number(cached.binaryByteLength)||0)+(Number(binaryPatch.binaryByteLength)||0),
       lastMessageAt:webviewRuntimeNow(),
       lastMessageDirection:'to-webview',
       lastOutboundMessageSeq:seq,
-    lastDeliveredMessageSeq:seq,
-    lastMessageSeq:seq,
-    lastDeliveryReason:String(reason||'direct'),
-    lastDeliveryTargetFrameId:String(iframe.id||'')
+      lastDeliveredMessageSeq:seq,
+      lastMessageSeq:seq,
+      lastDeliveryReason:String(reason||'direct'),
+      lastDeliveryTargetFrameId:String(iframe.id||'')
     });
   }
   const delivered=deserializeWebviewBridgeMessage(msg);
@@ -37497,6 +37569,7 @@ function extensionRuntimeEvidenceMatches(row,value){
   if(v==='resources')return (Number(ev.resourceRewriteCount)||0)>0;
   if(v==='port-hit')return (Number(ev.resourcePortMappingRewriteCount)||0)>0||(Number(ev.portMappingCount)||0)>0&&!!ev.lastPortMappingTarget;
   if(v==='messages')return (Number(ev.messageCount)||0)>0;
+  if(v==='binary')return (Number(ev.binaryMessageCount)||0)>0||(Number(ev.binaryByteLength)||0)>0;
   if(v==='queued')return (Number(ev.pendingMessageCount)||0)>0||(Number(ev.queuedMessageCount)||0)>0;
   if(v==='queue-stale')return (Number(ev.oldestQueuedAgeMs)||0)>5000;
   if(v==='dropped')return (Number(ev.droppedMessageCount)||0)>0;
@@ -37573,6 +37646,15 @@ function extensionRuntimeSurfaceRows(data){
       evidence.droppedMessageCount=Number(cachedRuntime.droppedMessageCount)||Number(evidence.droppedMessageCount)||0;
       evidence.messagesToWebview=Number(cachedRuntime.messagesToWebview)||Number(evidence.messagesToWebview)||0;
       evidence.messagesFromWebview=Number(cachedRuntime.messagesFromWebview)||Number(evidence.messagesFromWebview)||0;
+      evidence.binaryMessageCount=Number(cachedRuntime.binaryMessageCount)||Number(evidence.binaryMessageCount)||0;
+      evidence.binaryMessagesToWebview=Number(cachedRuntime.binaryMessagesToWebview)||Number(evidence.binaryMessagesToWebview)||0;
+      evidence.binaryMessagesFromWebview=Number(cachedRuntime.binaryMessagesFromWebview)||Number(evidence.binaryMessagesFromWebview)||0;
+      evidence.binaryByteLength=Number(cachedRuntime.binaryByteLength)||Number(evidence.binaryByteLength)||0;
+      evidence.lastBinaryByteLength=Number(cachedRuntime.lastBinaryByteLength)||Number(evidence.lastBinaryByteLength)||0;
+      evidence.lastBinaryMessageDirection=String(cachedRuntime.lastBinaryMessageDirection||evidence.lastBinaryMessageDirection||'');
+      evidence.lastBinaryMessageSeq=Number(cachedRuntime.lastBinaryMessageSeq)||Number(evidence.lastBinaryMessageSeq)||0;
+      evidence.lastBinaryTypes=Array.isArray(cachedRuntime.lastBinaryTypes)?cachedRuntime.lastBinaryTypes:(Array.isArray(evidence.lastBinaryTypes)?evidence.lastBinaryTypes:[]);
+      evidence.lastBinaryPaths=Array.isArray(cachedRuntime.lastBinaryPaths)?cachedRuntime.lastBinaryPaths:(Array.isArray(evidence.lastBinaryPaths)?evidence.lastBinaryPaths:[]);
       evidence.lastQueueReason=String(cachedRuntime.lastQueueReason||evidence.lastQueueReason||'');
       evidence.lastFlushReason=String(cachedRuntime.lastFlushReason||evidence.lastFlushReason||'');
       evidence.oldestQueuedAt=Number(cachedRuntime.oldestQueuedAt)||Number(evidence.oldestQueuedAt)||0;
@@ -37690,6 +37772,11 @@ function extensionRuntimeSurfaceRows(data){
       evidence.retainContextWhenHidden?'retain':'',
       evidence.visible?'visible':'',
       evidence.messageCount?'messages:'+evidence.messageCount:'',
+      evidence.binaryMessageCount?'binary:'+evidence.binaryMessageCount:'',
+      evidence.binaryByteLength?'binary-bytes:'+evidence.binaryByteLength:'',
+      evidence.lastBinaryMessageDirection?'binary-direction:'+evidence.lastBinaryMessageDirection:'',
+      Array.isArray(evidence.lastBinaryTypes)?evidence.lastBinaryTypes.join(' '):'',
+      Array.isArray(evidence.lastBinaryPaths)?evidence.lastBinaryPaths.join(' '):'',
       evidence.pendingMessageCount?'pending:'+evidence.pendingMessageCount:'',
       evidence.queuedMessageCount?'queued:'+evidence.queuedMessageCount:'',
       evidence.oldestQueuedAgeMs?'queue-age:'+evidence.oldestQueuedAgeMs:'',
@@ -38002,7 +38089,29 @@ function applyExtensionRuntimeSurfaceFilter(){
       source:row.dataset.source||'',
       evidenceStatus:row.dataset.webviewEvidenceStatus||'',
       htmlAvailable:row.dataset.webviewHtmlAvailable==='1',
-      webviewEvidence:{retainContextWhenHidden:row.dataset.webviewRetained==='1',enableScripts:String(row.dataset.search||'').includes('scripts')},
+      webviewEvidence:{
+        retainContextWhenHidden:row.dataset.webviewRetained==='1',
+        enableScripts:String(row.dataset.search||'').includes('scripts'),
+        messageCount:Number(row.dataset.webviewMessageCount)||0,
+        binaryMessageCount:Number(row.dataset.webviewBinaryMessageCount)||0,
+        binaryByteLength:Number(row.dataset.webviewBinaryByteLength)||0,
+        pendingMessageCount:Number(row.dataset.webviewPendingMessageCount)||0,
+        queuedMessageCount:Number(row.dataset.webviewQueuedMessageCount)||0,
+        oldestQueuedAgeMs:Number(row.dataset.webviewOldestQueuedAgeMs)||0,
+        droppedMessageCount:Number(row.dataset.webviewDroppedMessageCount)||0,
+        resourceRewriteCount:Number(row.dataset.webviewResourceRewriteCount)||0,
+        resourcePortMappingRewriteCount:Number(row.dataset.webviewResourcePortMappingRewriteCount)||0,
+        portMappingCount:Number(row.dataset.webviewPortMappingCount)||0,
+        lastPortMappingTarget:String(row.dataset.webviewLastPortMappingTarget||''),
+        bridgeHealth:String(row.dataset.webviewBridgeHealth||''),
+        messageHealth:String(row.dataset.webviewMessageHealth||''),
+        resourceHealth:String(row.dataset.webviewResourceHealth||''),
+        failureCount:Number(row.dataset.webviewFailureCount)||0,
+        renderCount:Number(row.dataset.webviewRenderCount)||0,
+        revealCount:Number(row.dataset.webviewRevealCount)||0,
+        reviveCount:Number(row.dataset.webviewReviveCount)||0,
+        disposeCount:Number(row.dataset.webviewDisposeCount)||0
+      },
       searchText:row.dataset.search||''
     },filter);
     row.style.display=match?'':'none';
@@ -38059,6 +38168,7 @@ function renderExtensionRuntimeSurfacePanel(data){
     ['Resource Roots',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.localResourceRootCount)||0):0),0)],
     ['Port Mappings',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.portMappingCount)||0):0),0)],
     ['Webview Messages',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.messageCount)||0):0),0)],
+    ['Binary Webview',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.binaryMessageCount)||0):0),0)],
     ['Queued Webview',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.pendingMessageCount)||0):0),0)],
     ['Dropped Webview',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.droppedMessageCount)||0):0),0)],
     ['Bridge Ready',summary.webviewBridgeReady||rows.filter(row=>row.kind==='WebviewView'&&row.webviewEvidence&&row.webviewEvidence.bridgeHealth==='ready').length],
@@ -38085,7 +38195,7 @@ function renderExtensionRuntimeSurfacePanel(data){
   chips.forEach(([label,value])=>{
     const chip=document.createElement('span');chip.className='extension-runtime-chip';
     chip.innerHTML='<strong>'+esc(String(value))+'</strong>'+esc(label);
-    if(['TreeView','WebviewView','CustomEditor','Notebook','Custom Ready','Custom Warnings','Custom Dirty','Notebook Ready','Notebook Warnings','Notebook Kernels','Notebook Status','Command','Menu','Terminal','LM Tool','LM Provider','Chat','Context','Runtime','Manifest','Manifest + Runtime','Runtime Only','Provider Webview','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Resource Rewrites','Resource Roots','Port Mappings','Webview Messages','Queued Webview','Dropped Webview','Bridge Ready','Bridge Warnings','Message Stalled','Resource Warnings','Webview Failures','Webview Ready','Webview Warnings'].includes(label)){
+    if(['TreeView','WebviewView','CustomEditor','Notebook','Custom Ready','Custom Warnings','Custom Dirty','Notebook Ready','Notebook Warnings','Notebook Kernels','Notebook Status','Command','Menu','Terminal','LM Tool','LM Provider','Chat','Context','Runtime','Manifest','Manifest + Runtime','Runtime Only','Provider Webview','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Resource Rewrites','Resource Roots','Port Mappings','Webview Messages','Binary Webview','Queued Webview','Dropped Webview','Bridge Ready','Bridge Warnings','Message Stalled','Resource Warnings','Webview Failures','Webview Ready','Webview Warnings'].includes(label)){
       chip.classList.add('filterable');
       chip.tabIndex=0;
       chip.setAttribute('role','button');
@@ -38093,7 +38203,7 @@ function renderExtensionRuntimeSurfacePanel(data){
       chip.onclick=()=>{
         const kindMap={'Terminal':'TerminalProfile','LM Tool':'LMTool','LM Provider':'LMProvider','Chat':'ChatParticipant','Context':'ChatContext'};
         const sourceMap={Runtime:'manifest+runtime',Manifest:'manifest','Manifest + Runtime':'manifest+runtime','Runtime Only':'runtime-only'};
-        const evidenceMap={'Webview HTML':'rendered','Missing Webview HTML':'missing','Retained Webview':'retained','Evidence Ready':'rendered','Resource Rewrites':'resources','Resource Roots':'resources','Port Mappings':'resources','Webview Messages':'messages','Queued Webview':'queued','Dropped Webview':'dropped','Bridge Ready':'bridge-ready','Bridge Warnings':'bridge-warning','Message Stalled':'message-stalled','Resource Warnings':'resource-warning','Webview Failures':'failures','Provider Webview':'rendered'};
+        const evidenceMap={'Webview HTML':'rendered','Missing Webview HTML':'missing','Retained Webview':'retained','Evidence Ready':'rendered','Resource Rewrites':'resources','Resource Roots':'resources','Port Mappings':'resources','Webview Messages':'messages','Binary Webview':'binary','Queued Webview':'queued','Dropped Webview':'dropped','Bridge Ready':'bridge-ready','Bridge Warnings':'bridge-warning','Message Stalled':'message-stalled','Resource Warnings':'resource-warning','Webview Failures':'failures','Provider Webview':'rendered'};
         const kindSel=$('extension-runtime-filter-kind'),sourceSel=$('extension-runtime-filter-source'),evidenceSel=$('extension-runtime-filter-evidence');
         if(sourceMap[label]&&sourceSel)sourceSel.value=sourceMap[label];
         else if(evidenceMap[label]&&evidenceSel)evidenceSel.value=evidenceMap[label];
@@ -38134,6 +38244,15 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.webviewRetained=row.webviewEvidence&&row.webviewEvidence.retainContextWhenHidden?'1':'0';
       el.dataset.webviewEvidenceStatus=row.evidenceStatus||'';
       el.dataset.webviewMessageCount=String(row.webviewEvidence&&row.webviewEvidence.messageCount||0);
+      el.dataset.webviewBinaryMessageCount=String(row.webviewEvidence&&row.webviewEvidence.binaryMessageCount||0);
+      el.dataset.webviewBinaryMessagesToCount=String(row.webviewEvidence&&row.webviewEvidence.binaryMessagesToWebview||0);
+      el.dataset.webviewBinaryMessagesFromCount=String(row.webviewEvidence&&row.webviewEvidence.binaryMessagesFromWebview||0);
+      el.dataset.webviewBinaryByteLength=String(row.webviewEvidence&&row.webviewEvidence.binaryByteLength||0);
+      el.dataset.webviewLastBinaryByteLength=String(row.webviewEvidence&&row.webviewEvidence.lastBinaryByteLength||0);
+      el.dataset.webviewLastBinaryMessageDirection=String(row.webviewEvidence&&row.webviewEvidence.lastBinaryMessageDirection||'');
+      el.dataset.webviewLastBinaryMessageSeq=String(row.webviewEvidence&&row.webviewEvidence.lastBinaryMessageSeq||0);
+      el.dataset.webviewLastBinaryTypes=Array.isArray(row.webviewEvidence&&row.webviewEvidence.lastBinaryTypes)?row.webviewEvidence.lastBinaryTypes.join(','):'';
+      el.dataset.webviewLastBinaryPaths=Array.isArray(row.webviewEvidence&&row.webviewEvidence.lastBinaryPaths)?row.webviewEvidence.lastBinaryPaths.join(','):'';
       el.dataset.webviewPendingMessageCount=String(row.webviewEvidence&&row.webviewEvidence.pendingMessageCount||0);
       el.dataset.webviewQueuedMessageCount=String(row.webviewEvidence&&row.webviewEvidence.queuedMessageCount||0);
       el.dataset.webviewFlushedMessageCount=String(row.webviewEvidence&&row.webviewEvidence.flushedMessageCount||0);
@@ -38225,6 +38344,9 @@ function renderExtensionRuntimeSurfacePanel(data){
           ev.retainContextWhenHidden?{text:'retain'}:null,
           ev.visible?{text:'visible'}:null,
           ev.messageCount?{text:'msg '+ev.messageCount}:null,
+          ev.binaryMessageCount?{text:'binary '+ev.binaryMessageCount}:null,
+          ev.binaryByteLength?{text:'bytes '+ev.binaryByteLength}:null,
+          Array.isArray(ev.lastBinaryTypes)&&ev.lastBinaryTypes.length?{text:'binary '+ev.lastBinaryTypes.slice(0,2).join(',')}:null,
           ev.pendingMessageCount?{text:'pending '+ev.pendingMessageCount,missing:true}:null,
           ev.queuedMessageCount?{text:'queued '+ev.queuedMessageCount}:null,
           ev.oldestQueuedAgeMs?{text:'queue '+Math.round(ev.oldestQueuedAgeMs/1000)+'s',missing:true}:null,
@@ -39335,6 +39457,8 @@ function extensionWebviewRuntimeDiagnostics(evidence){
   const messageCount=Number(ev.messageCount||0)||0;
   const toWebview=Number(ev.messagesToWebview||0)||0;
   const fromWebview=Number(ev.messagesFromWebview||0)||0;
+  const binaryCount=Number(ev.binaryMessageCount||0)||0;
+  const binaryBytes=Number(ev.binaryByteLength||0)||0;
   let messageHealth='idle';
   if(dropped>0)messageHealth='dropped';
   else if((pending+queued)>0&&(flushed<=0||queueAge>5000))messageHealth='stalled';
@@ -39374,7 +39498,7 @@ function extensionWebviewRuntimeDiagnostics(evidence){
     resourceHealth,
     failureCount,
     failureReasons:[...new Set(failureReasons)].slice(0,8),
-    diagnosticSummary:'bridge='+bridgeHealth+'; message='+messageHealth+'; resource='+resourceHealth+'; failures='+failureCount,
+    diagnosticSummary:'bridge='+bridgeHealth+'; message='+messageHealth+'; binary='+binaryCount+'/'+binaryBytes+'B; resource='+resourceHealth+'; failures='+failureCount,
     asWebviewUriReady,
     asWebviewUriSupported,
     resourceMapReady,
@@ -39472,6 +39596,15 @@ function extensionWebviewViewEvidence(view,state,html){
     messageCount:Number(ev.messageCount||0)||0,
     messagesToWebview:Number(ev.messagesToWebview||0)||0,
     messagesFromWebview:Number(ev.messagesFromWebview||0)||0,
+    binaryMessageCount:Number(ev.binaryMessageCount||0)||0,
+    binaryMessagesToWebview:Number(ev.binaryMessagesToWebview||0)||0,
+    binaryMessagesFromWebview:Number(ev.binaryMessagesFromWebview||0)||0,
+    binaryByteLength:Number(ev.binaryByteLength||0)||0,
+    lastBinaryByteLength:Number(ev.lastBinaryByteLength||0)||0,
+    lastBinaryMessageDirection:String(ev.lastBinaryMessageDirection||''),
+    lastBinaryMessageSeq:Number(ev.lastBinaryMessageSeq||0)||0,
+    lastBinaryTypes:Array.isArray(ev.lastBinaryTypes)?ev.lastBinaryTypes.slice(0,8):[],
+    lastBinaryPaths:Array.isArray(ev.lastBinaryPaths)?ev.lastBinaryPaths.slice(0,8):[],
     frameLoaded:!!ev.frameLoaded,
     apiReady:!!ev.apiReady,
     readyCount:Number(ev.readyCount||0)||0,
@@ -39579,6 +39712,7 @@ function extensionWebviewViewSummaryText(view,state,evidence){
     'Forms: '+String(evidence.enableForms),
     'Command URIs: '+String(evidence.enableCommandUris),
     'Messages: '+String(evidence.messageCount)+' / queued '+String(evidence.queuedMessageCount||evidence.pendingMessageCount)+' / dropped '+String(evidence.droppedMessageCount),
+    'Binary messages: '+String(evidence.binaryMessageCount||0)+' / bytes '+String(evidence.binaryByteLength||0)+' / '+(evidence.lastBinaryMessageDirection||'-')+' / '+((evidence.lastBinaryTypes||[]).join(', ')||'-'),
     'Queue age: '+String(evidence.oldestQueuedAgeMs||0)+'ms / reasons '+((evidence.pendingReasons||[]).join(', ')||'-'),
     'Flush: batches '+String(evidence.flushBatchCount||0)+' / last '+String(evidence.lastFlushBatchSize||0)+' / '+(evidence.lastFlushTargetFrameId||'-'),
     'Message health: '+String(evidence.messageHealth||'-'),
@@ -39614,6 +39748,15 @@ function applyExtensionWebviewViewDataset(target,evidence){
   target.dataset.webviewEnableForms=evidence.enableForms?'true':'false';
   target.dataset.webviewEnableCommandUris=evidence.enableCommandUris?'true':'false';
   target.dataset.webviewMessageCount=String(evidence.messageCount||0);
+  target.dataset.webviewBinaryMessageCount=String(evidence.binaryMessageCount||0);
+  target.dataset.webviewBinaryMessagesToCount=String(evidence.binaryMessagesToWebview||0);
+  target.dataset.webviewBinaryMessagesFromCount=String(evidence.binaryMessagesFromWebview||0);
+  target.dataset.webviewBinaryByteLength=String(evidence.binaryByteLength||0);
+  target.dataset.webviewLastBinaryByteLength=String(evidence.lastBinaryByteLength||0);
+  target.dataset.webviewLastBinaryMessageDirection=String(evidence.lastBinaryMessageDirection||'');
+  target.dataset.webviewLastBinaryMessageSeq=String(evidence.lastBinaryMessageSeq||0);
+  target.dataset.webviewLastBinaryTypes=Array.isArray(evidence.lastBinaryTypes)?evidence.lastBinaryTypes.join(','):'';
+  target.dataset.webviewLastBinaryPaths=Array.isArray(evidence.lastBinaryPaths)?evidence.lastBinaryPaths.join(','):'';
   target.dataset.webviewQueuedMessageCount=String(evidence.queuedMessageCount||0);
   target.dataset.webviewPendingMessageCount=String(evidence.pendingMessageCount||0);
   target.dataset.webviewOldestQueuedAt=String(evidence.oldestQueuedAt||0);
@@ -39696,6 +39839,9 @@ function appendExtensionWebviewViewStatus(body,view,state,evidence){
   if(evidence.stateKind)addChip('state '+evidence.stateKind,'');
   if(evidence.stateKeys&&evidence.stateKeys.length)addChip('keys '+evidence.stateKeys.join(','),'');
   if(evidence.messageCount)addChip('msg '+evidence.messageCount,'accent');
+  if(evidence.binaryMessageCount)addChip('binary '+evidence.binaryMessageCount,'accent');
+  if(evidence.binaryByteLength)addChip('bytes '+evidence.binaryByteLength,'accent');
+  if(evidence.lastBinaryTypes&&evidence.lastBinaryTypes.length)addChip('binary '+evidence.lastBinaryTypes.slice(0,2).join(','),'');
   if(evidence.messageHealth)addChip('message '+evidence.messageHealth,['stalled','dropped'].includes(evidence.messageHealth)?'warn':'');
   if(evidence.frameLoaded)addChip('frame','accent');
   if(evidence.apiReady)addChip('api ready','accent');
@@ -40090,7 +40236,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
             badge:{value:1,tooltip:'one'},
             html:'<html><body><button id="inside">inside</button></body></html>',
             state:{ready:true},
-            webviewEvidence:{htmlAvailable:true,htmlLength:61,enableScripts:true,enableForms:true,retainContextWhenHidden:true,visible:true,messageCount:2,queuedMessageCount:1,flushedMessageCount:1,flushBatchCount:1,lastFlushBatchSize:1,lastFlushTargetFrameId:'webview-frame-selftest',resourceRewriteCount:8,localResourceRootCount:1,portMappingCount:1,resourceMapHitCount:2,resourceEndpointRewriteCount:2,resourcePortMappingRewriteCount:1,resourceCssRewriteCount:2,resourceAttributeRewriteCount:1,lastResourceRewriteKind:'port',lastResourceOriginal:'http://localhost:3000/app.js',lastResourceRewritten:'http://localhost:5173/app.js',lastResourceOriginalScheme:'http',lastResourceRewrittenScheme:'http',lastPortMappingTarget:'http://localhost:5173/app.js',renderCount:1,revealCount:1,reviveCount:1,stateKind:'dict',stateKeys:['ready']},
+            webviewEvidence:{htmlAvailable:true,htmlLength:61,enableScripts:true,enableForms:true,retainContextWhenHidden:true,visible:true,messageCount:2,binaryMessageCount:2,binaryMessagesToWebview:1,binaryMessagesFromWebview:1,binaryByteLength:12,lastBinaryByteLength:4,lastBinaryMessageDirection:'from-webview',lastBinaryMessageSeq:3,lastBinaryTypes:['ArrayBuffer','Uint8Array'],lastBinaryPaths:['$.raw','$.nested.bytes'],queuedMessageCount:1,flushedMessageCount:1,flushBatchCount:1,lastFlushBatchSize:1,lastFlushTargetFrameId:'webview-frame-selftest',resourceRewriteCount:8,localResourceRootCount:1,portMappingCount:1,resourceMapHitCount:2,resourceEndpointRewriteCount:2,resourcePortMappingRewriteCount:1,resourceCssRewriteCount:2,resourceAttributeRewriteCount:1,lastResourceRewriteKind:'port',lastResourceOriginal:'http://localhost:3000/app.js',lastResourceRewritten:'http://localhost:5173/app.js',lastResourceOriginalScheme:'http',lastResourceRewrittenScheme:'http',lastPortMappingTarget:'http://localhost:5173/app.js',renderCount:1,revealCount:1,reviveCount:1,stateKind:'dict',stateKeys:['ready']},
             welcome:[{contents:'[Run](command:selftest.run?[1])'}],
             titleActions:[{command:'selftest.webview.refresh',title:'Refresh Webview',icon:'$(refresh)',group:'navigation@1'}]
           }
@@ -40162,7 +40308,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       viewContainers:[fixtureItem],
       treeViews:[{id:'selftest.dynamic.tree',name:'Runtime Tree',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true}],
       webviewViews:[
-        {id:'selftest.dynamic.webview',name:'Runtime Webview',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true,htmlAvailable:true,htmlLength:61,webviewEvidence:{htmlAvailable:true,htmlLength:61,stateKind:'dict',stateKeys:['ready'],enableScripts:true,enableForms:true,enableCommandUris:false,retainContextWhenHidden:true,visible:true,frameLoaded:true,apiReady:true,messageCount:3,messagesToWebview:2,messagesFromWebview:1,queuedMessageCount:1,flushedMessageCount:1,flushBatchCount:1,lastFlushBatchSize:1,lastFlushTargetFrameId:'webview-frame-selftest',lastDeliveredMessageSeq:2,lastQueuedMessageSeq:1,lastFlushedMessageSeq:1,lastQueueReason:'missing-frame',lastFlushReason:'webview-ready:selftest',resourceRewriteCount:8,localResourceRootCount:1,portMappingCount:1,resourceMapHitCount:2,resourceEndpointRewriteCount:2,resourcePortMappingRewriteCount:1,resourceCssRewriteCount:2,resourceAttributeRewriteCount:1,lastResourceRewriteKind:'port',lastResourceOriginal:'http://localhost:3000/app.js',lastResourceRewritten:'http://localhost:5173/app.js',lastResourceOriginalScheme:'http',lastResourceRewrittenScheme:'http',lastPortMappingTarget:'http://localhost:5173/app.js',renderCount:1,revealCount:1,reviveCount:1}},
+        {id:'selftest.dynamic.webview',name:'Runtime Webview',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true,htmlAvailable:true,htmlLength:61,webviewEvidence:{htmlAvailable:true,htmlLength:61,stateKind:'dict',stateKeys:['ready'],enableScripts:true,enableForms:true,enableCommandUris:false,retainContextWhenHidden:true,visible:true,frameLoaded:true,apiReady:true,messageCount:3,messagesToWebview:2,messagesFromWebview:1,binaryMessageCount:2,binaryMessagesToWebview:1,binaryMessagesFromWebview:1,binaryByteLength:12,lastBinaryByteLength:4,lastBinaryMessageDirection:'from-webview',lastBinaryMessageSeq:3,lastBinaryTypes:['ArrayBuffer','Uint8Array'],lastBinaryPaths:['$.raw','$.nested.bytes'],queuedMessageCount:1,flushedMessageCount:1,flushBatchCount:1,lastFlushBatchSize:1,lastFlushTargetFrameId:'webview-frame-selftest',lastDeliveredMessageSeq:2,lastQueuedMessageSeq:1,lastFlushedMessageSeq:1,lastQueueReason:'missing-frame',lastFlushReason:'webview-ready:selftest',resourceRewriteCount:8,localResourceRootCount:1,portMappingCount:1,resourceMapHitCount:2,resourceEndpointRewriteCount:2,resourcePortMappingRewriteCount:1,resourceCssRewriteCount:2,resourceAttributeRewriteCount:1,lastResourceRewriteKind:'port',lastResourceOriginal:'http://localhost:3000/app.js',lastResourceRewritten:'http://localhost:5173/app.js',lastResourceOriginalScheme:'http',lastResourceRewrittenScheme:'http',lastPortMappingTarget:'http://localhost:5173/app.js',renderCount:1,revealCount:1,reviveCount:1}},
         {id:'selftest.dynamic.webview.pending',name:'Pending Runtime Webview',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true,htmlAvailable:false,htmlLength:0,webviewEvidence:{htmlAvailable:false,stateKind:'dict',stateKeys:['pending'],enableScripts:true,enableForms:true,retainContextWhenHidden:false,visible:false,pendingMessageCount:1,queuedMessageCount:1,oldestQueuedAgeMs:6000,oldestQueuedMessageSeq:1,pendingReasons:['missing-frame'],flushBatchCount:1,lastFlushBatchSize:0,droppedMessageCount:1,lastDroppedReason:'disposed-queue',lastQueueReason:'missing-frame',lastError:'selftest-failure',disposeCount:1}}
       ],
       customEditors:[{viewType:'selftest.customEditor',displayName:'Custom Fixture',extensionId:'selftest.extension',selectorCount:1,stateCount:1,dirtyStateCount:1,states:[{uri:'custom.fixture',dirty:true,canUndo:true}],runtimeAvailable:true,readiness:'dirty',readinessScore:100,readinessIssues:[],surfaceEvidence:{kind:'customEditor',viewType:'selftest.customEditor',selectorCount:1,stateCount:1,dirtyStateCount:1,canUndoStateCount:1,resourceUris:['custom.fixture'],capabilities:{supportsMultipleEditorsPerDocument:true,hasSave:true,hasSaveAs:true,hasRevert:true,hasBackup:true},readiness:'dirty',readinessScore:100,readinessIssues:[]}}],
@@ -40191,6 +40337,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     const runtimeRenderedEvidenceFilterResult=applyExtensionRuntimeSurfaceFilter();
     if(runtimeEvidenceFilter)runtimeEvidenceFilter.value='missing';
     const runtimeMissingEvidenceFilterResult=applyExtensionRuntimeSurfaceFilter();
+    if(runtimeEvidenceFilter)runtimeEvidenceFilter.value='binary';
+    const runtimeBinaryEvidenceFilterResult=applyExtensionRuntimeSurfaceFilter();
     if(runtimeEvidenceFilter)runtimeEvidenceFilter.value='';
     if(runtimeTextFilter)runtimeTextFilter.value='custom fixture';
     const runtimeTextFilterResult=applyExtensionRuntimeSurfaceFilter();
@@ -40266,7 +40414,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-ready',viewId:lifecycleViewId,token:lifecycleToken,phase:'selftest',apiAcquired:true,apiAcquireCount:1,visibilityState:'visible'}}));
       window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-api-call',viewId:lifecycleViewId,token:lifecycleToken,apiKind:'acquire',apiAcquired:true,apiAcquireCount:1}}));
       window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-set-state',viewId:lifecycleViewId,token:lifecycleToken,state:{phase:'state'}}}));
-      window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-message',viewId:lifecycleViewId,token:lifecycleToken,message:{kind:'from-webview'}}}));
+      window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-message',viewId:lifecycleViewId,token:lifecycleToken,message:{kind:'from-webview',raw:new Uint8Array([1,2,3,4]).buffer,nested:{bytes:new Uint8Array([5,6,7,8])}}}}));
       window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-visibility',viewId:lifecycleViewId,token:lifecycleToken,visibilityState:'visible'}}));
       window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-context-menu',viewId:lifecycleViewId,token:lifecycleToken,clientX:12,clientY:18,context:{webviewSection:'editor',preventDefaultContextMenuItems:true}}}));
       window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-command-uri',viewId:lifecycleViewId,token:lifecycleToken,href:'command:selftest.webviewCommand?%5B1%5D',command:'selftest.webviewCommand',arguments:[1]}}));
@@ -40304,6 +40452,12 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       messageCount:Number(lifecycleBeforeDispose.messageCount)||0,
       messagesTo:Number(lifecycleBeforeDispose.messagesToWebview)||0,
       messagesFrom:Number(lifecycleBeforeDispose.messagesFromWebview)||0,
+      binaryCount:Number(lifecycleBeforeDispose.binaryMessageCount)||0,
+      binaryBytes:Number(lifecycleBeforeDispose.binaryByteLength)||0,
+      binaryDirection:String(lifecycleBeforeDispose.lastBinaryMessageDirection||''),
+      binaryTypes:Array.isArray(lifecycleBeforeDispose.lastBinaryTypes)?lifecycleBeforeDispose.lastBinaryTypes:[],
+      panelBinaryCount:lifecyclePanel?Number(lifecyclePanel.dataset.webviewBinaryMessageCount)||0:0,
+      panelBinaryTypes:lifecyclePanel?lifecyclePanel.dataset.webviewLastBinaryTypes:'',
       lastInboundSeq:Number(lifecycleBeforeDispose.lastInboundMessageSeq)||0,
       lastOutboundSeq:Number(lifecycleBeforeDispose.lastOutboundMessageSeq)||0,
       lastDeliveredSeq:Number(lifecycleBeforeDispose.lastDeliveredMessageSeq)||0,
@@ -40377,6 +40531,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       webviewStatusBars:webviewStatusBars.length,
       webviewStatusKinds:webviewStatusBars.map(item=>item.dataset.webviewViewStatus||'').filter(Boolean),
       webviewHtmlDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-html-available="1"]'),
+      webviewBinaryDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-binary-message-count="2"][data-webview-last-binary-message-direction="from-webview"]'),
       webviewPendingDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview.pending"][data-webview-html-available="0"]'),
       webviewStatusChips:root.querySelectorAll('.extension-webview-view-chip').length,
       webviewViewActions:webviewViewActions.length,
@@ -40426,6 +40581,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeMissingEvidenceRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewEvidenceStatus==='missing').length:0,
       runtimeWebviewRetainedRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewRetained==='1').length:0,
       runtimeWebviewMessageRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewMessageCount)||0).length:0,
+      runtimeWebviewBinaryRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewBinaryMessageCount)||0).length:0,
+      runtimeWebviewBinaryTypes:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.webviewLastBinaryTypes||'').filter(Boolean):[],
       runtimeWebviewQueuedRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>(Number(row.dataset.webviewPendingMessageCount)||0)||(Number(row.dataset.webviewQueuedMessageCount)||0)).length:0,
       runtimeWebviewDroppedRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewDroppedMessageCount)||0).length:0,
       runtimeWebviewBridgeReadyRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewBridgeHealth==='ready').length:0,
@@ -40488,6 +40645,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeSourceFilterVisible:runtimeSourceFilterResult?runtimeSourceFilterResult.visible:0,
       runtimeRenderedEvidenceFilterVisible:runtimeRenderedEvidenceFilterResult?runtimeRenderedEvidenceFilterResult.visible:0,
       runtimeMissingEvidenceFilterVisible:runtimeMissingEvidenceFilterResult?runtimeMissingEvidenceFilterResult.visible:0,
+      runtimeBinaryEvidenceFilterVisible:runtimeBinaryEvidenceFilterResult?runtimeBinaryEvidenceFilterResult.visible:0,
       runtimeMessageEvidenceFilterVisible:(()=>{if(!runtimeEvidenceFilter)return 0;runtimeEvidenceFilter.value='messages';const r=applyExtensionRuntimeSurfaceFilter();runtimeEvidenceFilter.value='';applyExtensionRuntimeSurfaceFilter();return r?r.visible:0})(),
       runtimeQueuedEvidenceFilterVisible:(()=>{if(!runtimeEvidenceFilter)return 0;runtimeEvidenceFilter.value='queued';const r=applyExtensionRuntimeSurfaceFilter();runtimeEvidenceFilter.value='';applyExtensionRuntimeSurfaceFilter();return r?r.visible:0})(),
       runtimeDroppedEvidenceFilterVisible:(()=>{if(!runtimeEvidenceFilter)return 0;runtimeEvidenceFilter.value='dropped';const r=applyExtensionRuntimeSurfaceFilter();runtimeEvidenceFilter.value='';applyExtensionRuntimeSurfaceFilter();return r?r.visible:0})(),
@@ -40518,7 +40676,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.treeInlineActions>=1&&snapshot.treeCheckboxCount>=1&&snapshot.treeDndReady&&snapshot.treeResourceRows>=2
       && snapshot.webviewGroup&&snapshot.webviewFrame&&snapshot.webviewTitle.includes('selftest.dynamic.webview')&&snapshot.webviewSandbox.includes('allow-scripts')&&snapshot.webviewSandbox.includes('allow-forms')&&snapshot.webviewSandbox.includes('allow-popups')&&snapshot.webviewSandbox.includes('allow-downloads')&&snapshot.webviewRetain
       && snapshot.webviewStatusBars>=2&&snapshot.webviewStatusKinds.includes('rendered')&&snapshot.webviewStatusKinds.includes('partial')
-      && snapshot.webviewHtmlDataset&&snapshot.webviewPendingDataset&&snapshot.webviewStatusChips>=10
+      && snapshot.webviewHtmlDataset&&snapshot.webviewBinaryDataset&&snapshot.webviewPendingDataset&&snapshot.webviewStatusChips>=10
       && snapshot.webviewViewActions>=6&&['Open','Refresh','Copy'].every(label=>snapshot.webviewActionLabels.includes(label))&&snapshot.webviewEmptyState
       && snapshot.webviewResourceRootDataset&&snapshot.webviewPortMappingDataset&&snapshot.webviewResourceMapDataset&&snapshot.webviewResourceEndpointDataset&&snapshot.webviewResourceCssDataset
       && snapshot.webviewResourcePortHitDataset&&snapshot.webviewResourceSchemeDataset&&snapshot.webviewPortTargetDataset&&snapshot.webviewQueueAgeDataset&&snapshot.webviewFlushDataset&&snapshot.webviewLifecycleDataset
@@ -40531,7 +40689,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.notebookOutputItems===3&&snapshot.notebookHtmlFrame&&snapshot.notebookImage&&snapshot.notebookText
       && snapshot.runtimeRows>=12&&snapshot.runtimeReadyRows>=11&&snapshot.runtimeChips>=15
       && snapshot.runtimeWebviewEvidenceRows>=6&&snapshot.runtimeHtmlEvidenceRows>=1&&snapshot.runtimeMissingEvidenceRows>=1&&snapshot.runtimeWebviewRetainedRows>=1
-      && snapshot.runtimeWebviewMessageRows>=1&&snapshot.runtimeWebviewQueuedRows>=2&&snapshot.runtimeWebviewDroppedRows>=1&&snapshot.runtimeWebviewSeqRows>=1&&snapshot.runtimeWebviewLastDropReasons.includes('disposed-queue')
+      && snapshot.runtimeWebviewMessageRows>=1&&snapshot.runtimeWebviewBinaryRows>=1&&snapshot.runtimeWebviewBinaryTypes.some(value=>value.includes('Uint8Array'))&&snapshot.runtimeWebviewQueuedRows>=2&&snapshot.runtimeWebviewDroppedRows>=1&&snapshot.runtimeWebviewSeqRows>=1&&snapshot.runtimeWebviewLastDropReasons.includes('disposed-queue')
       && snapshot.runtimeWebviewBridgeReadyRows>=1&&snapshot.runtimeWebviewBridgeWarningRows>=1&&snapshot.runtimeWebviewMessageStalledRows>=1
       && snapshot.runtimeWebviewResourceWarningRows>=1&&snapshot.runtimeWebviewFailureRows>=1&&snapshot.runtimeWebviewFailureReasons.some(value=>value.includes('selftest-failure'))&&snapshot.runtimeWebviewDiagnosticRows>=2
       && snapshot.runtimeWebviewResourceRootRows>=1&&snapshot.runtimeWebviewPortMappingRows>=1&&snapshot.runtimeWebviewResourceMapRows>=1
@@ -40552,7 +40710,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimePanelVisibleCount==='12'&&snapshot.runtimePanelTotalCount==='12'
       && snapshot.runtimeDatasetSources.includes('runtime')&&snapshot.runtimeStatusText.includes('12 visible of 12 rows')
       && snapshot.runtimeFilterKinds.includes('LMTool')&&snapshot.runtimeFilterBefore.visible===12
-      && snapshot.runtimeKindFilterVisible===1&&snapshot.runtimeSourceFilterVisible===12&&snapshot.runtimeRenderedEvidenceFilterVisible===1&&snapshot.runtimeMissingEvidenceFilterVisible===1
+      && snapshot.runtimeKindFilterVisible===1&&snapshot.runtimeSourceFilterVisible===12&&snapshot.runtimeRenderedEvidenceFilterVisible===1&&snapshot.runtimeMissingEvidenceFilterVisible===1&&snapshot.runtimeBinaryEvidenceFilterVisible>=1
       && snapshot.runtimeMessageEvidenceFilterVisible>=1&&snapshot.runtimeQueuedEvidenceFilterVisible>=2&&snapshot.runtimeDroppedEvidenceFilterVisible>=1&&snapshot.runtimeTextFilterVisible===1
       && snapshot.runtimeBridgeReadyFilterVisible>=1&&snapshot.runtimeBridgeWarningFilterVisible>=1&&snapshot.runtimeMessageStalledFilterVisible>=1&&snapshot.runtimeResourceWarningFilterVisible>=1&&snapshot.runtimeFailuresFilterVisible>=1
       && snapshot.runtimePortHitFilterVisible>=1&&snapshot.runtimeQueueStaleFilterVisible>=1&&snapshot.runtimeLifecycleFilterVisible>=2
@@ -40581,6 +40739,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.webviewLifecycle.messageCount>=3
       && snapshot.webviewLifecycle.messagesTo>=2
       && snapshot.webviewLifecycle.messagesFrom>=1
+      && snapshot.webviewLifecycle.binaryCount>=2&&snapshot.webviewLifecycle.binaryBytes>=8&&snapshot.webviewLifecycle.binaryDirection==='from-webview'&&snapshot.webviewLifecycle.binaryTypes.includes('Uint8Array')&&snapshot.webviewLifecycle.panelBinaryCount>=2&&snapshot.webviewLifecycle.panelBinaryTypes.includes('Uint8Array')
       && snapshot.webviewLifecycle.lastInboundSeq>=1&&snapshot.webviewLifecycle.lastOutboundSeq>=2&&snapshot.webviewLifecycle.lastDeliveredSeq>=1&&snapshot.webviewLifecycle.lastQueuedSeq>=1&&snapshot.webviewLifecycle.lastFlushedSeq>=1
       && snapshot.webviewLifecycle.lastQueueReason==='missing-frame'&&snapshot.webviewLifecycle.lastFlushReason&&snapshot.webviewLifecycle.lastDeliveryReason
       && snapshot.webviewLifecycle.viewStateCount>=1

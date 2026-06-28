@@ -4887,7 +4887,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "webviewRuntimePatchDropped(id,'disposed-queue'" in html
            and "lastDroppedReason:pending?'dispose-pending'" in html
            and "sequence:_messageSeq" in html
-           and "lastInboundMessageSeq:Number(e.data.sequence)||webviewRuntimeNextMessageSeq(viewId,'from-webview')" in html)
+           and "const inboundSeq=Number(e.data.sequence)||webviewRuntimeNextMessageSeq(viewId,'from-webview');" in html
+           and "lastInboundMessageSeq:inboundSeq" in html)
     _check("frontend accepts provider webview pushes",
            "const providerId=String(viewId).startsWith('provider.')?String(viewId).slice(9):''" in html
             and "isNativeCliProvider" not in html
@@ -14012,6 +14013,7 @@ console.log("extension setting schema helpers ok");
            and "webviewStatusBars:webviewStatusBars.length" in html
            and "webviewStatusKinds:webviewStatusBars.map(item=>item.dataset.webviewViewStatus||'').filter(Boolean)" in html
            and "webviewHtmlDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-html-available=\"1\"]')" in html
+           and "webviewBinaryDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-binary-message-count=\"2\"][data-webview-last-binary-message-direction=\"from-webview\"]')" in html
            and "webviewPendingDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview.pending\"][data-webview-html-available=\"0\"]')" in html
            and "webviewViewActions:webviewViewActions.length" in html
            and "webviewResourceRootDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-local-resource-root-count=\"1\"]')" in html
@@ -14032,7 +14034,7 @@ console.log("extension setting schema helpers ok");
            and "runtimeWebviewLifecycleRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>(Number(row.dataset.webviewRenderCount)||0)||(Number(row.dataset.webviewRevealCount)||0)||(Number(row.dataset.webviewReviveCount)||0)||(Number(row.dataset.webviewDisposeCount)||0)).length:0" in html
            and "runtimeWebviewAsWebviewUriReadyRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewAsWebviewUriReady==='1').length:0" in html
            and "snapshot.webviewStatusBars>=2" in html
-           and "snapshot.webviewHtmlDataset&&snapshot.webviewPendingDataset" in html
+           and "snapshot.webviewHtmlDataset&&snapshot.webviewBinaryDataset&&snapshot.webviewPendingDataset" in html
            and "snapshot.webviewResourceRootDataset&&snapshot.webviewPortMappingDataset&&snapshot.webviewResourceMapDataset&&snapshot.webviewResourceEndpointDataset&&snapshot.webviewResourceCssDataset" in html
            and "snapshot.webviewResourcePortHitDataset&&snapshot.webviewResourceSchemeDataset&&snapshot.webviewPortTargetDataset&&snapshot.webviewQueueAgeDataset&&snapshot.webviewFlushDataset&&snapshot.webviewLifecycleDataset" in html
            and "snapshot.webviewAsWebviewUriReadyDataset&&snapshot.webviewResourceEndpointReadyDataset&&snapshot.webviewResourceMapReadyDataset" in html
@@ -14101,12 +14103,15 @@ console.log("extension setting schema helpers ok");
            and "snapshot.webviewLifecycle.frameApiReady==='true'" in html
            and "snapshot.webviewLifecycle.frameApiAcquired==='true'" in html
            and "snapshot.runtimeWebviewMessageRows>=1" in html
+           and "snapshot.runtimeWebviewBinaryRows>=1" in html
+           and "snapshot.runtimeWebviewBinaryTypes.some(value=>value.includes('Uint8Array'))" in html
            and "snapshot.runtimeWebviewQueuedRows>=2" in html
            and "snapshot.runtimeWebviewDroppedRows>=1" in html
            and "snapshot.runtimeWebviewResourceRootRows>=1&&snapshot.runtimeWebviewPortMappingRows>=1&&snapshot.runtimeWebviewResourceMapRows>=1" in html
            and "snapshot.runtimeWebviewPortHitRows>=1&&snapshot.runtimeWebviewQueueAgeRows>=1&&snapshot.runtimeWebviewFlushRows>=1&&snapshot.runtimeWebviewLifecycleRows>=2&&snapshot.runtimeWebviewSchemeRows>=1" in html
            and "snapshot.runtimeWebviewSeqRows>=1" in html
            and "snapshot.runtimeMessageEvidenceFilterVisible>=1" in html
+           and "snapshot.runtimeBinaryEvidenceFilterVisible>=1" in html
            and "snapshot.runtimeQueuedEvidenceFilterVisible>=2" in html
            and "snapshot.runtimeDroppedEvidenceFilterVisible>=1" in html
            and "snapshot.runtimePortHitFilterVisible>=1&&snapshot.runtimeQueueStaleFilterVisible>=1&&snapshot.runtimeLifecycleFilterVisible>=2" in html
@@ -14115,6 +14120,8 @@ console.log("extension setting schema helpers ok");
            and "snapshot.webviewLifecycle.lastQueueReason==='missing-frame'" in html
            and "snapshot.webviewLifecycle.messagesTo>=2" in html
            and "snapshot.webviewLifecycle.messagesFrom>=1" in html
+           and "snapshot.webviewLifecycle.binaryCount>=2" in html
+           and "snapshot.webviewLifecycle.panelBinaryTypes.includes('Uint8Array')" in html
            and "snapshot.webviewLifecycle.droppedAfterDispose>=1" in html
            and "snapshot.webviewLifecycle.disposePendingReason==='dispose-pending'" in html
            and "snapshot.webviewLifecycle.stateUpdateCount>=1" in html
@@ -14637,6 +14644,12 @@ console.log("command palette quick access helpers ok");
            and "function deserializeWebviewBridgeMessage(message)" in html
            and "dataBase64:webviewArrayBufferToBase64(value.buffer)" in html
            and "return new Ctor(arrayBuffer,Number(view.byteOffset)||0,(Number(view.byteLength)||0)/Ctor.BYTES_PER_ELEMENT);" in html
+           and "function webviewBinaryMessageSummary(message)" in html
+           and "function webviewBinaryRuntimePatch(summary,direction,seq)" in html
+           and "binaryMessageCount:(Number(cached.binaryMessageCount)||0)+(Number(binaryPatch.binaryMessageCount)||0)" in html
+           and "el.dataset.webviewBinaryMessageCount=String(Number(data.binaryMessageCount)||0);" in html
+           and "target.dataset.webviewBinaryMessageCount=String(evidence.binaryMessageCount||0);" in html
+           and '<option value="binary">Binary messages</option>' in html
            and "msg=serializeWebviewBridgeMessage(e.data.message)" in html
            and "message:_serializeBridgeMessage(msg)" in html
            and "var _arrayBufferRef=\"$$vscode_array_buffer_reference$$\";" in html
