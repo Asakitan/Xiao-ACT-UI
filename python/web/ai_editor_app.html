@@ -1666,6 +1666,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-target-tabs button:first-child { border-left:0; }
 .settings-target-tabs button:hover,.settings-target-tabs button:focus { color:var(--fg); outline:none; background:var(--bg-hover); }
 .settings-target-tabs button.active { color:var(--fg); background:color-mix(in srgb,var(--fg-accent) 16%,var(--bg3)); }
+.settings-target-tabs button.target-empty:not(.active) { opacity:.62; }
+.settings-target-tabs button[data-settings-last-selected="1"] { box-shadow:inset 0 -1px 0 color-mix(in srgb,var(--fg-accent) 55%,transparent); }
 .settings-target-tab-count { min-width:16px; max-width:42px; padding:0 4px; border-radius:999px;
   background:color-mix(in srgb,var(--bg) 70%,transparent); color:var(--fg-dim); font:9px var(--mono);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -1697,6 +1699,10 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-target-summary code { color:var(--fg-accent); font:11px var(--mono); }
 .settings-target-summary .settings-target-count { padding:1px 6px; border:1px solid var(--border);
   border-radius:999px; background:var(--bg3); color:var(--fg-dim); font:10px var(--mono); }
+.settings-target-summary button.settings-target-count { cursor:pointer; font-family:var(--mono); }
+.settings-target-summary button.settings-target-count:hover,
+.settings-target-summary button.settings-target-count:focus { color:var(--fg); border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
+.settings-target-summary .settings-target-count.empty { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 45%,var(--border)); }
 .settings-experience-bar { display:none; align-items:center; gap:6px; min-height:26px; padding:4px 6px;
   border:1px solid color-mix(in srgb,var(--border) 74%,transparent); border-radius:5px;
   background:color-mix(in srgb,var(--bg2) 72%,transparent); color:var(--fg-dim); font-size:11px; }
@@ -3798,10 +3804,10 @@ pre.code-block { overflow:visible; }
         </div>
         <div class="settings-scope-control">
           <span class="settings-scope-label">Scope</span>
-          <div class="settings-target-tabs" role="tablist" aria-label="Settings target">
-            <button type="button" class="active" data-settings-target="user" onclick="selectSettingsTarget('user')">User</button>
-            <button type="button" data-settings-target="workspace" onclick="selectSettingsTarget('workspace')">Workspace</button>
-            <button type="button" data-settings-target="extensions" onclick="selectSettingsTarget('extensions')">Extensions</button>
+          <div class="settings-target-tabs" role="tablist" aria-label="Settings target" onkeydown="settingsHandleTargetTabKeydown(event)">
+            <button type="button" class="active" data-settings-target="user" aria-controls="settings-main" onclick="selectSettingsTarget('user')">User</button>
+            <button type="button" data-settings-target="workspace" aria-controls="settings-main" onclick="selectSettingsTarget('workspace')">Workspace</button>
+            <button type="button" data-settings-target="extensions" aria-controls="settings-main" onclick="selectSettingsTarget('extensions')">Extensions</button>
           </div>
         </div>
       </div>
@@ -5001,6 +5007,10 @@ function settingsShowRowDetails(row){
     host.classList.remove('open');
     if(shell)shell.classList.remove('inspecting');
     host.innerHTML='';
+    delete host.dataset.settingsDetailTarget;
+    delete host.dataset.settingsDetailKey;
+    delete host.dataset.settingsDetailState;
+    delete host.dataset.settingsDetailScope;
     renderSettingsWorkbenchHeader();
     return;
   }
@@ -5017,6 +5027,10 @@ function settingsShowRowDetails(row){
   const rowPos=settingsRowPosition(row);
   host.innerHTML='';
   host.classList.add('open');
+  host.dataset.settingsDetailTarget=currentSettingsTarget;
+  host.dataset.settingsDetailKey=key;
+  host.dataset.settingsDetailState=valueState.state||'';
+  host.dataset.settingsDetailScope=scope;
   const breadcrumb=document.createElement('div');
   breadcrumb.className='detail-breadcrumb';
   breadcrumb.dataset.settingsDetailBreadcrumb='1';
@@ -5055,6 +5069,8 @@ function settingsShowRowDetails(row){
   const actions=document.createElement('span');actions.className='detail-actions';
   const addAction=(label,title,handler,disabled)=>{
     const btn=document.createElement('button');btn.type='button';btn.textContent=label;btn.title=title;
+    btn.dataset.settingsDetailAction=label.toLowerCase().replace(/\s+/g,'-');
+    btn.dataset.settingsDetailDisabled=disabled?'1':'0';
     btn.disabled=!!disabled;
     btn.onclick=ev=>{ev.preventDefault();if(!btn.disabled)handler&&handler()};
     actions.appendChild(btn);
@@ -28153,6 +28169,49 @@ function updateSettingsNavCounts(){
 function focusSettingsSearch(){
   const input=$('settings-search');if(input){input.focus();input.select&&input.select();}
 }
+function settingsTargetButtons(){
+  return Array.from(document.querySelectorAll('.settings-target-tabs [data-settings-target]'));
+}
+function settingsTargetIndex(target){
+  const buttons=settingsTargetButtons();
+  const wanted=String(target||currentSettingsTarget||'user');
+  return Math.max(0,buttons.findIndex(btn=>btn.dataset.settingsTarget===wanted));
+}
+function settingsSelectTargetByIndex(index,opts){
+  const buttons=settingsTargetButtons();
+  if(!buttons.length)return false;
+  const nextIndex=((Number(index)||0)%buttons.length+buttons.length)%buttons.length;
+  const btn=buttons[nextIndex];
+  if(!btn)return false;
+  selectSettingsTarget(btn.dataset.settingsTarget||'user',Object.assign({preserveSearch:true,focusTab:true},opts||{}));
+  return true;
+}
+function settingsMoveTargetTab(delta){
+  const buttons=settingsTargetButtons();
+  if(!buttons.length)return false;
+  const active=document.activeElement&&document.activeElement.closest?document.activeElement.closest('[data-settings-target]'):null;
+  const base=active?buttons.indexOf(active):settingsTargetIndex(currentSettingsTarget);
+  return settingsSelectTargetByIndex(base+Number(delta||1),{focusTab:true});
+}
+function settingsFocusCurrentTargetTab(){
+  const btn=settingsTargetButtons().find(item=>item.dataset.settingsTarget===currentSettingsTarget);
+  if(btn){try{btn.focus({preventScroll:true})}catch(e){try{btn.focus()}catch(_e){}}}
+  return !!btn;
+}
+function settingsHandleTargetTabKeydown(ev){
+  if(!ev)return;
+  const key=String(ev.key||'');
+  if(key==='ArrowRight'||key==='ArrowDown'){ev.preventDefault();settingsMoveTargetTab(1);return}
+  if(key==='ArrowLeft'||key==='ArrowUp'){ev.preventDefault();settingsMoveTargetTab(-1);return}
+  if(key==='Home'){ev.preventDefault();settingsSelectTargetByIndex(0,{focusTab:true});return}
+  if(key==='End'){ev.preventDefault();settingsSelectTargetByIndex(settingsTargetButtons().length-1,{focusTab:true});return}
+}
+function settingsAnnounceTargetSwitch(target){
+  const host=$('settings-target-summary');
+  if(host)host.dataset.settingsLastAnnouncedTarget=String(target||currentSettingsTarget||'user');
+  const modal=$('settings-modal');
+  if(modal)modal.dataset.settingsLastTarget=String(target||currentSettingsTarget||'user');
+}
 function selectSettingsTarget(target,options){
   const opts=isPlainObject(options)?options:{};
   currentSettingsTarget=String(target||'user');
@@ -28162,6 +28221,7 @@ function selectSettingsTarget(target,options){
     btn.classList.toggle('active',active);
     btn.setAttribute('role','tab');
     btn.setAttribute('aria-selected',active?'true':'false');
+    btn.dataset.settingsLastSelected=active?'1':'0';
     btn.tabIndex=active?0:-1;
   });
   const input=$('settings-search');
@@ -28177,6 +28237,9 @@ function selectSettingsTarget(target,options){
   applySettingsTargetValuesToInputs(currentSettingsTarget);
   if(opts.persist!==false)persistSettingsViewState({target:currentSettingsTarget,search:(input||{}).value||''});
   updateSettingsTitleStatus();
+  settingsAnnounceTargetSwitch(currentSettingsTarget);
+  if(opts.focusTab)settingsFocusCurrentTargetTab();
+  else if(opts.focusSearch)focusSettingsSearch();
   scheduleFilterSettings(0);
 }
 function installSettingsKeyboardHandlers(){
@@ -28392,6 +28455,12 @@ function settingsUiSelfCheckSnapshot(){
       && String(getComputedStyle(document.querySelector('.settings-field.builtin-setting')).borderBottomStyle)==='solid',
     hasTargetCountChips:document.querySelectorAll('.settings-target-tab-count').length>=3,
     hasTargetSummaryScopeCounts:!!($('settings-target-summary')&&/User:|Workspace:|Extensions:/.test($('settings-target-summary').textContent||'')),
+    hasTargetRovingKeyboard:typeof settingsHandleTargetTabKeydown==='function'&&typeof settingsMoveTargetTab==='function',
+    hasTargetTabAriaLabels:settingsTargetButtons().length>=3&&settingsTargetButtons().every(btn=>btn.getAttribute('role')==='tab'&&btn.getAttribute('aria-selected')!=null&&btn.getAttribute('aria-label')),
+    hasTargetSummaryDataset:!!($('settings-target-summary')&&$('settings-target-summary').dataset.settingsCurrentTarget&&$('settings-target-summary').dataset.settingsVisible!==undefined),
+    hasTargetSummaryJumpActions:!!($('settings-target-summary')&&$('settings-target-summary').querySelector('button.settings-target-count')),
+    hasDetailStateDataset:!!(detail&&detail.dataset.settingsDetailTarget&&detail.dataset.settingsDetailKey!==undefined&&detail.dataset.settingsDetailState!==undefined),
+    hasDetailActionMetadata:!!(detail&&detail.querySelector('[data-settings-detail-action][data-settings-detail-disabled]')),
     hasOnDemandSettingValueDetails:!!(idleCurrentChip&&String(getComputedStyle(idleCurrentChip).display)==='none'),
     hasDensityToggle:!!$('settings-density-toggle'),
     hasStickySectionOverview:!!overview&&String(getComputedStyle(overview).position)==='sticky',
@@ -28480,6 +28549,11 @@ window.settingsCloseThen=settingsCloseThen;
 window.settingsHasPendingCloseWork=settingsHasPendingCloseWork;
 window.resetVisibleModifiedSettings=resetVisibleModifiedSettings;
 window.selectSettingsTarget=selectSettingsTarget;
+window.settingsTargetButtons=settingsTargetButtons;
+window.settingsHandleTargetTabKeydown=settingsHandleTargetTabKeydown;
+window.settingsMoveTargetTab=settingsMoveTargetTab;
+window.settingsSelectTargetByIndex=settingsSelectTargetByIndex;
+window.settingsFocusCurrentTargetTab=settingsFocusCurrentTargetTab;
 window.scrollToSettingsSection=scrollToSettingsSection;
 window.settingsVisibleRows=settingsVisibleRows;
 window.settingsHighlightRow=settingsHighlightRow;
@@ -29611,6 +29685,8 @@ function updateSettingsTargetTabCounts(stats){
     chip.title=count+' setting row'+(count===1?'':'s')+' in '+settingsTargetDisplayName(target);
     btn.dataset.settingsTargetCount=String(count);
     btn.dataset.settingsVisibleTarget=currentSettingsTarget===target?'1':'0';
+    btn.classList.toggle('target-empty',count===0);
+    btn.setAttribute('aria-label',settingsTargetDisplayName(target)+' settings, '+count+' row'+(count===1?'':'s')+(currentSettingsTarget===target?', selected':''));
   });
 }
 function renderSettingsTargetSummary(stats){
@@ -29620,6 +29696,10 @@ function renderSettingsTargetSummary(stats){
   updateSettingsTargetTabCounts(safeStats);
   if(resetBtn)resetBtn.disabled=!safeStats.modified;
   if(!host)return;
+  host.dataset.settingsCurrentTarget=currentSettingsTarget;
+  host.dataset.settingsVisible=String(Number(safeStats.visible||0));
+  host.dataset.settingsModified=String(Number(safeStats.modified||0));
+  host.dataset.settingsOverrides=String(Number(safeStats.overrides||0));
   host.innerHTML='';
   const label=document.createElement('strong');
   label.textContent=settingsTargetDisplayName(currentSettingsTarget);
@@ -29642,7 +29722,7 @@ function renderSettingsTargetSummary(stats){
     host.appendChild(text);
   }
   const count=document.createElement('span');
-  count.className='settings-target-count';
+  count.className='settings-target-count'+(Number(safeStats.visible||0)?'':' empty');
   count.textContent=safeStats.visible+' visible';
   host.appendChild(count);
   if(safeStats.modified){
@@ -29658,12 +29738,28 @@ function renderSettingsTargetSummary(stats){
     host.appendChild(overrides);
   }
   ['user','workspace','extensions'].forEach(target=>{
-    const chip=document.createElement('span');
+    const chip=Number(safeStats[target]||0)&&target!==currentSettingsTarget?document.createElement('button'):document.createElement('span');
     chip.className='settings-target-count';
     chip.textContent=settingsTargetDisplayName(target)+': '+String(Number(safeStats[target]||0));
     chip.title='Rows available in '+settingsTargetDisplayName(target)+' target';
+    if(chip.tagName==='BUTTON'){
+      chip.type='button';
+      chip.onclick=ev=>{ev.preventDefault();selectSettingsTarget(target,{preserveSearch:true,focusSearch:true})};
+    }
     host.appendChild(chip);
   });
+  if(!Number(safeStats.visible||0)){
+    const firstTarget=['user','workspace','extensions'].find(target=>target!==currentSettingsTarget&&Number(safeStats[target]||0)>0);
+    if(firstTarget){
+      const jump=document.createElement('button');
+      jump.type='button';
+      jump.className='settings-target-count empty';
+      jump.textContent='Show '+settingsTargetDisplayName(firstTarget);
+      jump.title='Switch to '+settingsTargetDisplayName(firstTarget)+' settings with available rows';
+      jump.onclick=ev=>{ev.preventDefault();selectSettingsTarget(firstTarget,{preserveSearch:true,focusSearch:true})};
+      host.appendChild(jump);
+    }
+  }
 }
 function resetVisibleModifiedSettings(){
   const root=settingsMainElement()||document;

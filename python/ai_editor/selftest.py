@@ -4335,6 +4335,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".settings-vscode-calm .settings-shell { grid-template-columns:260px minmax(0,1fr);" in html
            and ".settings-vscode-calm .settings-field.builtin-setting.settings-current:not(.modified)" in html
            and ".settings-vscode-calm .settings-control-frame { max-width:520px;" in html
+           and 'onkeydown="settingsHandleTargetTabKeydown(event)"' in html
+           and "function settingsHandleTargetTabKeydown(ev)" in html
+           and "function settingsMoveTargetTab(delta)" in html
+           and "function settingsSelectTargetByIndex(index,opts)" in html
+           and "btn.setAttribute('aria-label',settingsTargetDisplayName(target)+' settings, '+count+' row'" in html
+           and "host.dataset.settingsCurrentTarget=currentSettingsTarget" in html
+           and "button.settings-target-count" in html
+           and "dataset.settingsDetailTarget=currentSettingsTarget" in html
+           and "btn.dataset.settingsDetailAction=label.toLowerCase().replace" in html
            and "function settingsResultCountLabel(current,total)" in html
            and "return String(current)+' of '+String(total);" in html
            and 'id="settings-clear-search" class="settings-query-clear"' in html
@@ -4367,6 +4376,17 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hasMoreReadableCategoryNav" in html
            and "hasReducedSettingsTitleNoise" in html
            and "hasHumanizedSaveAffordance" in html)
+    _check("frontend Settings target switching is keyboard and state accessible",
+           "hasTargetRovingKeyboard" in html
+           and "hasTargetTabAriaLabels" in html
+           and "hasTargetSummaryDataset" in html
+           and "hasTargetSummaryJumpActions" in html
+           and "hasDetailStateDataset" in html
+           and "hasDetailActionMetadata" in html
+           and "window.settingsHandleTargetTabKeydown=settingsHandleTargetTabKeydown;" in html
+           and "window.settingsMoveTargetTab=settingsMoveTargetTab;" in html
+           and "window.settingsSelectTargetByIndex=settingsSelectTargetByIndex;" in html
+           and "window.settingsFocusCurrentTargetTab=settingsFocusCurrentTargetTab;" in html)
     _check("provider webviews bridge persistent vscode state",
            'type:"webview-set-state"' in html
            and 'webview_set_state' in html
