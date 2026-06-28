@@ -25966,7 +25966,12 @@ function _injectWebviewHtml(container,viewId,html,initialState){
     +'document.addEventListener("visibilitychange",function(){_postHostEvent("webview-visibility",{visibilityState:document.visibilityState||""});},true);'
     +'document.addEventListener("readystatechange",function(){if(document.readyState==="interactive"||document.readyState==="complete")_notifyReady(document.readyState);},true);'
     +'window.addEventListener("pageshow",function(){_notifyReady("pageshow");},true);'
-    +'var _vscodeApi=Object.freeze({postMessage:function(msg){_postApiTelemetry("postMessage");_messageSeq++;try{window.parent.postMessage({type:"webview-message",viewId:'+JSON.stringify(viewId)+',token:_token,message:msg,sequence:_messageSeq},"*")}catch(e){}},'
+    +'var _arrayBufferRef="$$vscode_array_buffer_reference$$";'
+    +'var _typedArrayCtors={Int8Array:window.Int8Array,Uint8Array:window.Uint8Array,Uint8ClampedArray:window.Uint8ClampedArray,Int16Array:window.Int16Array,Uint16Array:window.Uint16Array,Int32Array:window.Int32Array,Uint32Array:window.Uint32Array,Float32Array:window.Float32Array,Float64Array:window.Float64Array,BigInt64Array:window.BigInt64Array,BigUint64Array:window.BigUint64Array};'
+    +'function _typedArrayType(v){var n=v&&v.constructor&&v.constructor.name;return n&&_typedArrayCtors[n]?n:"";}'
+    +'function _arrayBufferToBase64(ab){var b=new Uint8Array(ab),s="";for(var i=0;i<b.length;i+=32768)s+=String.fromCharCode.apply(null,b.subarray(i,i+32768));return btoa(s);}'
+    +'function _serializeBridgeMessage(message){var buffers=[];function add(ab){var i=buffers.indexOf(ab);if(i<0){i=buffers.length;buffers.push(ab);}return i;}var json=JSON.stringify(message,function(_k,v){if(v instanceof ArrayBuffer){var i=add(v);var o={};o[_arrayBufferRef]=true;o.index=i;o.dataBase64=_arrayBufferToBase64(v);o.byteLength=v.byteLength;return o;}if(ArrayBuffer.isView(v)){var t=_typedArrayType(v);if(t){var ix=add(v.buffer);var r={};r[_arrayBufferRef]=true;r.index=ix;r.dataBase64=_arrayBufferToBase64(v.buffer);r.byteLength=v.buffer.byteLength;r.view={type:t,byteLength:v.byteLength,byteOffset:v.byteOffset};return r;}}return v;});return json===undefined?undefined:JSON.parse(json);}'
+    +'var _vscodeApi=Object.freeze({postMessage:function(msg){_postApiTelemetry("postMessage");_messageSeq++;try{window.parent.postMessage({type:"webview-message",viewId:'+JSON.stringify(viewId)+',token:_token,message:_serializeBridgeMessage(msg),sequence:_messageSeq},"*")}catch(e){}},'
     +'setState:function(s){_state=s;_postApiTelemetry("setState");try{window.parent.postMessage({type:"webview-set-state",viewId:'+JSON.stringify(viewId)+',token:_token,state:s},"*")}catch(e){}return s;},'
     +'getState:function(){_postApiTelemetry("getState");return _state}});'
     +'Object.defineProperty(window,"acquireVsCodeApi",{configurable:false,enumerable:false,value:function(){_apiAcquireCount++;if(_apiAcquired){_postApiTelemetry("acquire-duplicate",{duplicate:true});return _vscodeApi;}_apiAcquired=true;_postApiTelemetry("acquire");return _vscodeApi;}});'
@@ -25987,7 +25992,7 @@ function _injectWebviewHtml(container,viewId,html,initialState){
 window.addEventListener('message',function(e){
   if(!e.data)return;
   if(e.data.type==='webview-message'){
-    const viewId=e.data.viewId,msg=e.data.message,tok=e.data.token;
+    const viewId=e.data.viewId,msg=serializeWebviewBridgeMessage(e.data.message),tok=e.data.token;
     if(!viewId||!tok||_webviewTokens[viewId]!==tok)return;
     const cached=webviewRuntimeCache[viewId]||{};
     patchWebviewRuntimeLifecycle(viewId,{
@@ -26281,6 +26286,71 @@ function renderProviderToolConfirm(pid,data){
   const body=createProviderMessage(pid,'tool',data.name||'tool');
   if(body)renderConfirmBar(body,data,providerRefs(pid).messages,'Provider confirmation');
 }
+const WEBVIEW_ARRAY_BUFFER_REF='$$vscode_array_buffer_reference$$';
+const WEBVIEW_TYPED_ARRAY_CTORS={
+  Int8Array:Int8Array,Uint8Array:Uint8Array,Uint8ClampedArray:Uint8ClampedArray,
+  Int16Array:Int16Array,Uint16Array:Uint16Array,Int32Array:Int32Array,
+  Uint32Array:Uint32Array,Float32Array:Float32Array,Float64Array:Float64Array,
+  BigInt64Array:typeof BigInt64Array==='function'?BigInt64Array:null,
+  BigUint64Array:typeof BigUint64Array==='function'?BigUint64Array:null
+};
+function webviewTypedArrayType(value){
+  const name=value&&value.constructor&&value.constructor.name;
+  return name&&WEBVIEW_TYPED_ARRAY_CTORS[name]?name:'';
+}
+function webviewArrayBufferToBase64(arrayBuffer){
+  const bytes=new Uint8Array(arrayBuffer);
+  let out='';
+  for(let i=0;i<bytes.length;i+=0x8000){
+    out+=String.fromCharCode.apply(null,bytes.subarray(i,i+0x8000));
+  }
+  return btoa(out);
+}
+function webviewArrayBufferFromBase64(value){
+  const raw=atob(String(value||''));
+  const bytes=new Uint8Array(raw.length);
+  for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);
+  return bytes.buffer;
+}
+function serializeWebviewBridgeMessage(message){
+  const buffers=[];
+  const addBuffer=(arrayBuffer)=>{
+    let index=buffers.indexOf(arrayBuffer);
+    if(index<0){index=buffers.length;buffers.push(arrayBuffer);}
+    return index;
+  };
+  const json=JSON.stringify(message,function(_key,value){
+    if(value instanceof ArrayBuffer){
+      const index=addBuffer(value);
+      return {[WEBVIEW_ARRAY_BUFFER_REF]:true,index:index,dataBase64:webviewArrayBufferToBase64(value),byteLength:value.byteLength};
+    }
+    if(ArrayBuffer.isView(value)){
+      const type=webviewTypedArrayType(value);
+      if(type){
+        const index=addBuffer(value.buffer);
+        return {[WEBVIEW_ARRAY_BUFFER_REF]:true,index:index,dataBase64:webviewArrayBufferToBase64(value.buffer),byteLength:value.buffer.byteLength,view:{type:type,byteLength:value.byteLength,byteOffset:value.byteOffset}};
+      }
+    }
+    return value;
+  });
+  return json===undefined?undefined:JSON.parse(json);
+}
+function deserializeWebviewBridgeMessage(message){
+  if(!message||typeof message!=='object')return message;
+  if(message[WEBVIEW_ARRAY_BUFFER_REF]&&typeof message.dataBase64==='string'){
+    const arrayBuffer=webviewArrayBufferFromBase64(message.dataBase64);
+    const view=message.view;
+    if(view&&WEBVIEW_TYPED_ARRAY_CTORS[view.type]){
+      const Ctor=WEBVIEW_TYPED_ARRAY_CTORS[view.type];
+      return new Ctor(arrayBuffer,Number(view.byteOffset)||0,(Number(view.byteLength)||0)/Ctor.BYTES_PER_ELEMENT);
+    }
+    return arrayBuffer;
+  }
+  if(Array.isArray(message))return message.map(deserializeWebviewBridgeMessage);
+  const copy={};
+  Object.keys(message).forEach(key=>{copy[key]=deserializeWebviewBridgeMessage(message[key]);});
+  return copy;
+}
 function postExtensionMessageToWebview(iframe,msg,reason,seqOverride){
   if(!iframe||!iframe.contentWindow)return false;
   const runtimeId=iframe.dataset&&iframe.dataset.viewId?String(iframe.dataset.viewId):'';
@@ -26303,10 +26373,11 @@ function postExtensionMessageToWebview(iframe,msg,reason,seqOverride){
       lastDeliveryReason:String(reason||'direct')
     });
   }
-  try{iframe.contentWindow.postMessage(msg,'*')}catch(e){}
-  const alreadyWrapped=msg&&typeof msg==='object'&&msg.type==='webview-extension-message'&&Object.prototype.hasOwnProperty.call(msg,'message');
+  const delivered=deserializeWebviewBridgeMessage(msg);
+  try{iframe.contentWindow.postMessage(delivered,'*')}catch(e){}
+  const alreadyWrapped=delivered&&typeof delivered==='object'&&delivered.type==='webview-extension-message'&&Object.prototype.hasOwnProperty.call(delivered,'message');
   if(!alreadyWrapped){
-    try{iframe.contentWindow.postMessage({type:'webview-extension-message',message:msg},'*')}catch(e){}
+    try{iframe.contentWindow.postMessage({type:'webview-extension-message',message:delivered},'*')}catch(e){}
   }
   return true;
 }

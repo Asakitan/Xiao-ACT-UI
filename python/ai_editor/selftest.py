@@ -13706,11 +13706,22 @@ console.log("command palette quick access helpers ok");
         _check("frontend command palette QuickAccess helpers skipped without Node.js", True)
     _check("webview bridge preserves raw and falsy messages",
             "postExtensionMessageToWebview(iframe,msg,'editor-event')" in html
-            and "iframe.contentWindow.postMessage(msg,'*')" in html
+            and "const delivered=deserializeWebviewBridgeMessage(msg);" in html
+            and "iframe.contentWindow.postMessage(delivered,'*')" in html
             and "messagesToWebview:(Number(cached.messagesToWebview)||0)+1" in html
             and "messagesFromWebview:(Number(cached.messagesFromWebview)||0)+1" in html
             and "if(!viewId||!tok||_webviewTokens[viewId]!==tok)return;" in html
             and "if(!viewId||!msg||!tok" not in html)
+    _check("webview bridge preserves binary messages in iframe transport",
+           "const WEBVIEW_ARRAY_BUFFER_REF='$$vscode_array_buffer_reference$$';" in html
+           and "function serializeWebviewBridgeMessage(message)" in html
+           and "function deserializeWebviewBridgeMessage(message)" in html
+           and "dataBase64:webviewArrayBufferToBase64(value.buffer)" in html
+           and "return new Ctor(arrayBuffer,Number(view.byteOffset)||0,(Number(view.byteLength)||0)/Ctor.BYTES_PER_ELEMENT);" in html
+           and "msg=serializeWebviewBridgeMessage(e.data.message)" in html
+           and "message:_serializeBridgeMessage(msg)" in html
+           and "var _arrayBufferRef=\"$$vscode_array_buffer_reference$$\";" in html
+           and "function _serializeBridgeMessage(message)" in html)
     _check("webview bridge reports VS Code API readiness and usage",
            "Object.freeze({postMessage:function(msg)" in html
             and "Object.defineProperty(window,\"acquireVsCodeApi\"" in html
