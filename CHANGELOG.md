@@ -2,6 +2,23 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v5.2.2: 脚本 compositor API 扩展、MMF 零拷贝图层接入、AI Editor 扩展 webview panel 运行时可观测性补齐.
+
+  - **脚本 / SDK API**:
+    - `act_platform.plugins` 的 `create_compositor_layer()` 新增 `high_fps` / `target_fps` 参数;
+      新增 `set_compositor_layer_mmf_source()` 和 `set_compositor_layer_position()`。
+    - `act_platform.scripting.base` / `csharp_runtime` 同步暴露上述 API，Lua / C# / AngelScript / Emma / Python 脚本运行时保持一致能力。
+  - **render / compositor**:
+    - `overlay_compositor` 新增命名 MMF 零拷贝读帧路径 `_MMFReader`, 图层可直接从共享内存取 BGRA 帧, 规避 Python 字节拷贝上传。
+    - host region 同步增加高帧率图层矩形快速路径与逐层 alpha span 缓存, 并按图层 `target_fps` 动态提升 compositor tick 频率。
+  - **GUI / 视觉**:
+    - `sao_gui_fisheye_mixin` 的 procedural 鱼眼背景重做为更亮的 HUD / ring / data-rain 风格, 支持更丰富的噪声与扫描效果。
+    - `sao_theme.link_start` / `sao_gui_link_animation_mixin` 微调 LinkStart / NervGear 过渡焦点与 FX 衰减路径。
+  - **AI Editor**:
+    - `ai_editor.app` / `extension_host` 为扩展 `createWebviewPanel()` 运行时增加独立记录与 surface 汇总, `list_extension_runtime_surfaces()` 现在包含 `webviewPanels` 桶与 `viewType` / `renderCount` / `messageCount` / `disposed` 等状态。
+  - **文档**:
+    - 同步更新 `PLUGIN_SDK.md`、`MULTI_LANGUAGE_SCRIPTING.md`、`AI_EDITOR.md`。
+
 ## v5.2.1: unified overlay 输入/采集收口, streaming/fisheye 交互整理, Cython region 扫描与 bridge 默认点透更新.
 
   - **unified overlay / render**:

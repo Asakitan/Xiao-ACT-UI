@@ -11768,6 +11768,8 @@ console.log("frontend word separator behavior ok");
            and "function extensionRuntimeWebviewEvidenceStatus(row)" in html
            and "function extensionWebviewRuntimeDiagnostics(evidence)" in html
            and "function extensionRuntimeEvidenceMatches(row,value)" in html
+           and "function extensionRuntimeSurfaceDomSnapshot(viewId,runtime)" in html
+           and "function extensionRuntimeSurfaceHealthSnapshot()" in html
            and "function extensionRuntimeSurfaceViewId(row)" in html
            and "function prepareExtensionRuntimeAssistantPrompt(row,prompt,statusText)" in html
            and "function openExtensionRuntimeTerminalProfile(row)" in html
@@ -11802,6 +11804,8 @@ console.log("frontend word separator behavior ok");
            and "window.renderExtensionRuntimeSurfaces=renderExtensionRuntimeSurfaces;" in html
            and "window.applyExtensionRuntimeSurfaceFilter=applyExtensionRuntimeSurfaceFilter;" in html
            and "window.extensionRuntimeSurfaceRows=extensionRuntimeSurfaceRows;" in html
+           and "window.extensionRuntimeSurfaceHealthSnapshot=extensionRuntimeSurfaceHealthSnapshot;" in html
+           and "window.extensionRuntimeSurfaceDomSnapshot=extensionRuntimeSurfaceDomSnapshot;" in html
            and "window.openExtensionRuntimeSurface=openExtensionRuntimeSurface;" in html
            and "window.focusExtensionRuntimeSurface=focusExtensionRuntimeSurface;" in html
            and "window.refreshExtensionRuntimeSurface=refreshExtensionRuntimeSurface;" in html
@@ -11839,6 +11843,11 @@ console.log("frontend word separator behavior ok");
            and "panel.dataset.runtimeHealthWarnings=String(cards.filter(card=>card.state==='warning').length);" in html
            and "panel.dataset.runtimeHealthErrors=String(cards.filter(card=>card.state==='error').length);" in html
            and "panel.dataset.runtimeHealthFilters=cards.map(card=>card.filter).join(',');" in html
+           and "extensionRuntimeSurfaceDomSnapshot(webviewId,cachedRuntime)" in html
+           and "evidence.iframePresent=domSnapshot.iframePresent;" in html
+           and "evidence.domVisible=domSnapshot.visible;" in html
+           and "if(v==='iframe-mounted')return !!ev.iframePresent;" in html
+           and "if(v==='dom-hidden')return ev.domVisible===false;" in html
            and "panel.dataset.runtimeVisibleCount=String(visible);" in html
            and "panel.dataset.runtimeTotalCount=String(total);" in html
            and "panel.dataset.runtimeLastAction=action.type||'inspect';" in html
@@ -11897,6 +11906,8 @@ console.log("frontend word separator behavior ok");
            and "surfaceReadiness:evidence.readiness||readiness.kind" in html
            and "webviewReadiness:evidence.readiness||readiness.kind" in html
            and "el.dataset.webviewHtmlAvailable=row.htmlAvailable?'1':'0';" in html
+           and "el.dataset.webviewIframePresent=row.webviewEvidence&&row.webviewEvidence.iframePresent?'1':'0';" in html
+           and "el.dataset.webviewDomVisible=row.webviewEvidence&&row.webviewEvidence.domVisible?'1':'0';" in html
            and "el.dataset.surfaceReadiness=row.surfaceReadiness||row.surfaceEvidence&&row.surfaceEvidence.readiness||'';" in html
            and "el.dataset.surfaceStateCount=String(row.surfaceEvidence&&row.surfaceEvidence.stateCount||0);" in html
            and "el.dataset.surfaceDirtyStateCount=String(row.surfaceEvidence&&row.surfaceEvidence.dirtyStateCount||0);" in html

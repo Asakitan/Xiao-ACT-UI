@@ -1230,6 +1230,8 @@ class PluginContext:
         self, name: str, width: int, height: int,
         x: int = 0, y: int = 0, z: int = 140,
         click_through: bool = True,
+        high_fps: bool = False,
+        target_fps: int = 0,
     ) -> dict[str, Any]:
         """Create a compositor layer owned by this plugin for direct BGRA frame upload."""
         import sys
@@ -1244,12 +1246,32 @@ class PluginContext:
             full_name, int(width), int(height),
             x=int(x), y=int(y), z=int(z),
             click_through=bool(click_through),
+            high_fps=bool(high_fps),
+            target_fps=int(target_fps),
         )
         print(f"[CuteGirl-PY] layer created: {layer} visible={getattr(layer, 'visible', '?')}", file=sys.stderr)
         if not hasattr(self, "_compositor_layers"):
             self._compositor_layers: dict[str, Any] = {}
         self._compositor_layers[str(name)] = layer
         return {"ok": True, "name": full_name}
+
+    def set_compositor_layer_mmf_source(
+        self, name: str, mmf_name: str,
+    ) -> None:
+        """Attach an MMF zero-copy source to a compositor layer.
+
+        The compositor render thread will read frames directly from
+        the named shared memory, bypassing upload_compositor_frame().
+        """
+        layers = getattr(self, "_compositor_layers", None)
+        if not layers:
+            return
+        layer = layers.get(str(name))
+        if layer is None:
+            return
+        layer.set_mmf_source(str(mmf_name) if mmf_name else None)
+        if not layer.visible:
+            layer.show()
 
     _upload_log_count: int = 0
 
@@ -1280,6 +1302,15 @@ class PluginContext:
         if self._upload_log_count < 3:
             print(f"[CuteGirl-PY] upload OK: layer={layer.name} {width}x{height} visible={layer.visible} bytes={len(raw)}", file=sys.stderr)
             self._upload_log_count += 1
+
+    def set_compositor_layer_position(self, name: str, x: int, y: int) -> None:
+        """Update the screen position of a compositor layer (no frame data)."""
+        layers = getattr(self, "_compositor_layers", None)
+        if not layers:
+            return
+        layer = layers.get(str(name))
+        if layer is not None:
+            layer.set_position(int(x), int(y))
 
     def destroy_compositor_layer(self, name: str) -> None:
         """Destroy a compositor layer owned by this plugin."""

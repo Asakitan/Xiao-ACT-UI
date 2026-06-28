@@ -4816,7 +4816,7 @@ pre.code-block { overflow:visible; }
             <input id="extension-runtime-filter-text" placeholder="Filter surfaces" aria-label="Filter extension runtime surfaces" oninput="applyExtensionRuntimeSurfaceFilter()">
             <select id="extension-runtime-filter-kind" aria-label="Filter extension runtime surface kind" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All kinds</option></select>
             <select id="extension-runtime-filter-source" aria-label="Filter extension runtime source" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All sources</option><option value="manifest+runtime">Manifest + runtime</option><option value="manifest">Manifest</option><option value="runtime-only">Runtime only</option></select>
-            <select id="extension-runtime-filter-evidence" aria-label="Filter webview render evidence" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All evidence</option><option value="rendered">Rendered HTML</option><option value="missing">Missing HTML</option><option value="retained">Retained</option><option value="scripts">Scripts enabled</option><option value="resources">Resource rewrites</option><option value="port-hit">Port mapped resources</option><option value="messages">Has messages</option><option value="binary">Binary messages</option><option value="queued">Queued messages</option><option value="queue-stale">Stale queue</option><option value="dropped">Dropped messages</option><option value="lifecycle">Lifecycle events</option></select>
+            <select id="extension-runtime-filter-evidence" aria-label="Filter webview render evidence" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All evidence</option><option value="rendered">Rendered HTML</option><option value="missing">Missing HTML</option><option value="iframe-mounted">Iframe mounted</option><option value="iframe-missing">Iframe missing</option><option value="dom-visible">DOM visible</option><option value="dom-hidden">DOM hidden</option><option value="retained">Retained</option><option value="scripts">Scripts enabled</option><option value="resources">Resource rewrites</option><option value="port-hit">Port mapped resources</option><option value="messages">Has messages</option><option value="binary">Binary messages</option><option value="queued">Queued messages</option><option value="queue-stale">Stale queue</option><option value="dropped">Dropped messages</option><option value="lifecycle">Lifecycle events</option></select>
           </div>
         </div>
         <div class="extension-runtime-summary" id="extension-runtime-summary"></div>
@@ -26332,9 +26332,73 @@ function webviewRuntimeReadiness(runtime){
   else if(issues.includes('resource-warning'))kind='resource-warning';
   return {kind,score,issues};
 }
+function extensionRuntimeSurfaceDomSnapshot(viewId,runtime){
+  const id=String(viewId||'').trim();
+  const data=runtime||webviewRuntimeCache[id]||{};
+  const frameId=id?'webview-frame-'+providerDomKey(id):'';
+  const iframe=frameId?document.getElementById(frameId):null;
+  const panel=iframe&&iframe.closest('.right-panel,.provider-webview-host,#editor-custom-webview-host')
+    ||(id?document.querySelector('.right-panel[data-view-id="'+((window.CSS&&CSS.escape)?CSS.escape(id):id.replace(/["\\]/g,'\\$&'))+'"]'):null);
+  const tab=findCustomEditorTabByViewId(id);
+  const queueStats=webviewQueuedMessageStats(data);
+  const active=!!(panel&&panel.classList&&panel.classList.contains('active'))||!!(tab&&tab.id===activeTab);
+  const visible=!!(iframe&&iframe.offsetParent!==null)||active||data.visible===true;
+  const mounted=!!iframe;
+  const readiness=webviewRuntimeReadiness({
+    ...data,
+    frameLoaded:!!(data.frameLoaded||(iframe&&iframe.dataset.webviewFrameLoaded==='true')),
+    apiReady:!!(data.apiReady||(iframe&&iframe.dataset.webviewApiReady==='true')),
+    visible
+  });
+  return {
+    viewId:id,
+    frameId:iframe&&iframe.id||frameId,
+    mounted,
+    iframePresent:mounted,
+    iframeLoaded:!!(data.frameLoaded||(iframe&&iframe.dataset.webviewFrameLoaded==='true')),
+    apiReady:!!(data.apiReady||(iframe&&iframe.dataset.webviewApiReady==='true')),
+    apiAcquired:!!(data.apiAcquired||(iframe&&iframe.dataset.webviewApiAcquired==='true')),
+    htmlAvailable:!!(data.html||data.htmlAvailable),
+    htmlLength:Number(data.htmlLength)||String(data.html||'').length||0,
+    panelPresent:!!panel,
+    panelActive:active,
+    visible,
+    display:iframe&&iframe.style?String(iframe.style.display||''):'',
+    lifecycleState:webviewRuntimeLifecycleState(data),
+    readiness:readiness.kind,
+    readinessScore:readiness.score,
+    readinessIssues:readiness.issues.slice(),
+    pendingMessageCount:Array.isArray(data.pendingMessages)?data.pendingMessages.length:0,
+    queuedMessageCount:Number(data.queuedMessageCount)||0,
+    flushedMessageCount:Number(data.flushedMessageCount)||0,
+    droppedMessageCount:Number(data.droppedMessageCount)||0,
+    oldestQueuedAt:queueStats.oldestQueuedAt||0,
+    oldestQueuedAgeMs:queueStats.oldestQueuedAgeMs||0,
+    oldestQueuedMessageSeq:queueStats.oldestQueuedMessageSeq||0,
+    pendingReasons:queueStats.pendingReasons.slice(),
+    lastQueuedMessageSeq:Number(data.lastQueuedMessageSeq)||0,
+    lastFlushedMessageSeq:Number(data.lastFlushedMessageSeq)||0,
+    lastDeliveredMessageSeq:Number(data.lastDeliveredMessageSeq)||0,
+    lastInboundMessageSeq:Number(data.lastInboundMessageSeq)||0,
+    lastOutboundMessageSeq:Number(data.lastOutboundMessageSeq)||0,
+    lastDeliveryTargetFrameId:String(data.lastDeliveryTargetFrameId||''),
+    lastFlushTargetFrameId:String(data.lastFlushTargetFrameId||''),
+    messageHealth:String(data.messageHealth||''),
+    bridgeHealth:String(data.bridgeHealth||''),
+    resourceHealth:String(data.resourceHealth||''),
+    mountedAt:Number(data.mountedAt)||0,
+    renderedAt:Number(data.renderedAt)||0,
+    updatedAt:Number(data.updatedAt)||0,
+    iframeLoadedAt:Number(data.iframeLoadedAt)||0
+  };
+}
+function extensionRuntimeSurfaceHealthSnapshot(){
+  return Object.keys(webviewRuntimeCache||{}).sort().map(id=>extensionRuntimeSurfaceDomSnapshot(id,webviewRuntimeCache[id]));
+}
 function applyWebviewRuntimeDataset(el,viewId,runtime){
   if(!el||!viewId)return;
   const data=runtime||{};
+  const domSnapshot=extensionRuntimeSurfaceDomSnapshot(viewId,data);
   const readiness=webviewRuntimeReadiness(data);
   const diagnostics=extensionWebviewRuntimeDiagnostics(data);
   const queueStats=webviewQueuedMessageStats(data);
@@ -26404,6 +26468,10 @@ function applyWebviewRuntimeDataset(el,viewId,runtime){
   el.dataset.webviewInitialStateKind=String(data.initialStateKind||data.stateKind||'');
   el.dataset.webviewInitialStateKeys=Array.isArray(data.initialStateKeys)?data.initialStateKeys.join(','):(Array.isArray(data.stateKeys)?data.stateKeys.join(','):String(data.stateKeys||''));
   el.dataset.webviewFrameLoaded=data.frameLoaded?'true':'false';
+  el.dataset.webviewIframePresent=domSnapshot.iframePresent?'true':'false';
+  el.dataset.webviewPanelPresent=domSnapshot.panelPresent?'true':'false';
+  el.dataset.webviewPanelActive=domSnapshot.panelActive?'true':'false';
+  el.dataset.webviewDomVisible=domSnapshot.visible?'true':'false';
   el.dataset.webviewIframeLoadedAt=String(Number(data.iframeLoadedAt)||0);
   el.dataset.webviewIframeReferrerPolicy=String(data.iframeReferrerPolicy||'');
   el.dataset.webviewIframeLoading=String(data.iframeLoading||'');
@@ -37983,6 +38051,10 @@ function extensionRuntimeEvidenceMatches(row,value){
   const ev=row.webviewEvidence||{};
   if(v==='rendered')return !!row.htmlAvailable;
   if(v==='missing')return !row.htmlAvailable;
+  if(v==='iframe-mounted')return !!ev.iframePresent;
+  if(v==='iframe-missing')return !ev.iframePresent;
+  if(v==='dom-visible')return !!ev.domVisible;
+  if(v==='dom-hidden')return ev.domVisible===false;
   if(v==='retained')return !!ev.retainContextWhenHidden;
   if(v==='scripts')return ev.enableScripts===true;
   if(v==='resources')return (Number(ev.resourceRewriteCount)||0)>0;
@@ -38058,6 +38130,13 @@ function extensionRuntimeSurfaceRows(data){
     const webviewId=String(item.id||item.viewId||item.view_id||item.webviewId||item.webview_id||'').trim();
     const cachedRuntime=kind==='WebviewView'&&webviewId?(webviewRuntimeCache[webviewId]||{}):{};
     if(kind==='WebviewView'&&cachedRuntime&&Object.keys(cachedRuntime).length){
+      const domSnapshot=extensionRuntimeSurfaceDomSnapshot(webviewId,cachedRuntime);
+      evidence.domSnapshot=domSnapshot;
+      evidence.iframePresent=domSnapshot.iframePresent;
+      evidence.iframeLoaded=domSnapshot.iframeLoaded;
+      evidence.panelPresent=domSnapshot.panelPresent;
+      evidence.panelActive=domSnapshot.panelActive;
+      evidence.domVisible=domSnapshot.visible;
       evidence.messageCount=Number(cachedRuntime.messageCount)||Number(evidence.messageCount)||0;
       evidence.pendingMessageCount=Array.isArray(cachedRuntime.pendingMessages)?cachedRuntime.pendingMessages.length:Number(evidence.pendingMessageCount)||0;
       evidence.queuedMessageCount=Number(cachedRuntime.queuedMessageCount)||Number(evidence.queuedMessageCount)||0;
@@ -38088,6 +38167,8 @@ function extensionRuntimeSurfaceRows(data){
       evidence.lastDeliveredMessageSeq=Number(cachedRuntime.lastDeliveredMessageSeq)||Number(evidence.lastDeliveredMessageSeq)||0;
       evidence.lastQueuedMessageSeq=Number(cachedRuntime.lastQueuedMessageSeq)||Number(evidence.lastQueuedMessageSeq)||0;
       evidence.lastFlushedMessageSeq=Number(cachedRuntime.lastFlushedMessageSeq)||Number(evidence.lastFlushedMessageSeq)||0;
+      evidence.lastInboundMessageSeq=Number(cachedRuntime.lastInboundMessageSeq)||Number(evidence.lastInboundMessageSeq)||0;
+      evidence.lastOutboundMessageSeq=Number(cachedRuntime.lastOutboundMessageSeq)||Number(evidence.lastOutboundMessageSeq)||0;
       evidence.frameLoaded=!!(cachedRuntime.frameLoaded||evidence.frameLoaded);
       evidence.apiReady=!!(cachedRuntime.apiReady||evidence.apiReady);
       evidence.apiAcquired=!!(cachedRuntime.apiAcquired||evidence.apiAcquired);
@@ -38113,6 +38194,11 @@ function extensionRuntimeSurfaceRows(data){
       evidence.revealCount=Number(cachedRuntime.revealCount)||Number(evidence.revealCount)||0;
       evidence.disposeCount=Number(cachedRuntime.disposeCount)||Number(evidence.disposeCount)||0;
       evidence.reviveCount=Number(cachedRuntime.reviveCount)||Number(evidence.reviveCount)||0;
+    }else if(kind==='WebviewView'&&webviewId){
+      evidence.domSnapshot=extensionRuntimeSurfaceDomSnapshot(webviewId,evidence);
+      evidence.iframePresent=evidence.domSnapshot.iframePresent;
+      evidence.panelPresent=evidence.domSnapshot.panelPresent;
+      evidence.domVisible=evidence.domSnapshot.visible;
     }
     const htmlLength=Number(evidence.htmlLength||item.htmlLength||0)||0;
     const dynamicSource=String(item.dynamicSource||item.dynamic_source||item.source||'').trim()
@@ -38190,6 +38276,10 @@ function extensionRuntimeSurfaceRows(data){
       evidence.enableCommandUris===true?'command-uri':'',
       evidence.retainContextWhenHidden?'retain':'',
       evidence.visible?'visible':'',
+      evidence.iframePresent?'iframe':'no-iframe',
+      evidence.panelPresent?'panel':'no-panel',
+      evidence.panelActive?'panel-active':'',
+      evidence.domVisible?'dom-visible':'dom-hidden',
       evidence.messageCount?'messages:'+evidence.messageCount:'',
       evidence.binaryMessageCount?'binary:'+evidence.binaryMessageCount:'',
       evidence.binaryByteLength?'binary-bytes:'+evidence.binaryByteLength:'',
@@ -38204,6 +38294,11 @@ function extensionRuntimeSurfaceRows(data){
       evidence.flushBatchCount?'flush-batches:'+evidence.flushBatchCount:'',
       evidence.lastFlushBatchSize?'flush-size:'+evidence.lastFlushBatchSize:'',
       evidence.lastFlushTargetFrameId?'flush-target:'+evidence.lastFlushTargetFrameId:'',
+      evidence.lastDeliveredMessageSeq?'delivered-seq:'+evidence.lastDeliveredMessageSeq:'',
+      evidence.lastQueuedMessageSeq?'queued-seq:'+evidence.lastQueuedMessageSeq:'',
+      evidence.lastFlushedMessageSeq?'flushed-seq:'+evidence.lastFlushedMessageSeq:'',
+      evidence.lastInboundMessageSeq?'in-seq:'+evidence.lastInboundMessageSeq:'',
+      evidence.lastOutboundMessageSeq?'out-seq:'+evidence.lastOutboundMessageSeq:'',
       evidence.droppedMessageCount?'dropped:'+evidence.droppedMessageCount:'',
       evidence.lastDroppedReason?'drop:'+evidence.lastDroppedReason:'',
       evidence.messageHealth?'message-health:'+evidence.messageHealth:'',
@@ -38467,6 +38562,10 @@ async function copyExtensionRuntimeSurfaceSummary(rowOrKey){
     'Action: '+((row.action&&row.action.type)||'-'),
     'Target: '+((row.action&&row.action.target)||'-'),
     'Evidence: '+(row.evidenceStatus||'-'),
+    'Iframe: '+(row.webviewEvidence&&row.webviewEvidence.iframePresent?'mounted':'missing'),
+    'Visible: '+(row.webviewEvidence&&row.webviewEvidence.domVisible?'yes':'no'),
+    'Queue: '+String(row.webviewEvidence&&row.webviewEvidence.pendingMessageCount||0)+' pending, '+String(row.webviewEvidence&&row.webviewEvidence.droppedMessageCount||0)+' dropped',
+    'Seq: out '+String(row.webviewEvidence&&row.webviewEvidence.lastOutboundMessageSeq||0)+' / in '+String(row.webviewEvidence&&row.webviewEvidence.lastInboundMessageSeq||0)+' / delivered '+String(row.webviewEvidence&&row.webviewEvidence.lastDeliveredMessageSeq||0),
     'Meta: '+(row.meta||'-')
   ].join('\n');
   try{await navigator.clipboard.writeText(text);setStatus('Runtime surface summary copied')}
@@ -38510,6 +38609,10 @@ function applyExtensionRuntimeSurfaceFilter(){
       htmlAvailable:row.dataset.webviewHtmlAvailable==='1',
       webviewEvidence:{
         retainContextWhenHidden:row.dataset.webviewRetained==='1',
+        iframePresent:row.dataset.webviewIframePresent==='1',
+        panelPresent:row.dataset.webviewPanelPresent==='1',
+        panelActive:row.dataset.webviewPanelActive==='1',
+        domVisible:row.dataset.webviewDomVisible==='1',
         enableScripts:String(row.dataset.search||'').includes('scripts'),
         messageCount:Number(row.dataset.webviewMessageCount)||0,
         binaryMessageCount:Number(row.dataset.webviewBinaryMessageCount)||0,
@@ -38561,6 +38664,8 @@ function extensionRuntimeHealthDeckRows(rows,summary){
   const warnings=count(row=>row.webviewReadiness&&row.webviewReadiness!=='ready');
   const bridgeReady=count(row=>row.webviewEvidence&&row.webviewEvidence.bridgeHealth==='ready');
   const bridgeWarnings=count(row=>['iframe-pending','api-pending','inactive','disposed'].includes(row.webviewEvidence&&row.webviewEvidence.bridgeHealth));
+  const mounted=count(row=>row.webviewEvidence&&row.webviewEvidence.iframePresent);
+  const visible=count(row=>row.webviewEvidence&&row.webviewEvidence.domVisible);
   const messageTotal=sum(row=>row.webviewEvidence&&row.webviewEvidence.messageCount);
   const queued=sum(row=>Number(row.webviewEvidence&&row.webviewEvidence.pendingMessageCount)||Number(row.webviewEvidence&&row.webviewEvidence.queuedMessageCount)||0);
   const dropped=sum(row=>row.webviewEvidence&&row.webviewEvidence.droppedMessageCount);
@@ -38572,6 +38677,7 @@ function extensionRuntimeHealthDeckRows(rows,summary){
   const failures=sum(row=>row.webviewEvidence&&row.webviewEvidence.failureCount);
   return [
     {id:'ready',label:'Readiness',value:ready+'/'+webviews.length,detail:warnings?warnings+' warning':'all ready',state:warnings?'warning':'ready',filter:warnings?'missing':'rendered'},
+    {id:'mount',label:'Mounted',value:mounted+'/'+webviews.length,detail:visible+' visible',state:mounted===webviews.length?'ready':'warning',filter:mounted===webviews.length?'iframe-mounted':'iframe-missing'},
     {id:'bridge',label:'Bridge',value:String(bridgeReady),detail:bridgeWarnings?bridgeWarnings+' warning':'API ready',state:bridgeWarnings?'warning':'ready',filter:bridgeWarnings?'bridge-warning':'bridge-ready'},
     {id:'messages',label:'Messages',value:String(messageTotal),detail:(queued?queued+' queued · ':'')+(dropped?dropped+' dropped · ':'')+(stalled?stalled+' stalled':'flow ok'),state:(dropped||stalled)?'error':(queued?'warning':'ready'),filter:stalled?'message-stalled':(dropped?'dropped':(queued?'queued':'messages'))},
     {id:'resources',label:'Resources',value:String(resourceRewrites),detail:roots+' roots · '+ports+' ports'+(resourceWarnings?' · '+resourceWarnings+' warning':''),state:resourceWarnings?'warning':'ready',filter:resourceWarnings?'resource-warning':'resources'},
@@ -38644,6 +38750,9 @@ function renderExtensionRuntimeSurfacePanel(data){
     ['Missing Webview HTML',rows.filter(row=>row.kind==='WebviewView'&&!row.htmlAvailable).length],
     ['Retained Webview',summary.webviewRetained||0],
     ['Evidence Ready',rows.filter(row=>row.evidenceStatus==='rendered').length],
+    ['Iframe Mounted',rows.filter(row=>row.kind==='WebviewView'&&row.webviewEvidence&&row.webviewEvidence.iframePresent).length],
+    ['Iframe Missing',rows.filter(row=>row.kind==='WebviewView'&&!(row.webviewEvidence&&row.webviewEvidence.iframePresent)).length],
+    ['DOM Visible',rows.filter(row=>row.kind==='WebviewView'&&row.webviewEvidence&&row.webviewEvidence.domVisible).length],
     ['Resource Rewrites',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.resourceRewriteCount)||0):0),0)],
     ['Resource Roots',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.localResourceRootCount)||0):0),0)],
     ['Port Mappings',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.portMappingCount)||0):0),0)],
@@ -38676,7 +38785,7 @@ function renderExtensionRuntimeSurfacePanel(data){
   chips.forEach(([label,value])=>{
     const chip=document.createElement('span');chip.className='extension-runtime-chip';
     chip.innerHTML='<strong>'+esc(String(value))+'</strong>'+esc(label);
-    if(['TreeView','WebviewView','CustomEditor','Notebook','Custom Ready','Custom Warnings','Custom Dirty','Notebook Ready','Notebook Warnings','Notebook Kernels','Notebook Status','Command','Menu','Terminal','LM Tool','LM Provider','Chat','Context','Runtime','Manifest','Manifest + Runtime','Runtime Only','Provider Webview','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Resource Rewrites','Resource Roots','Port Mappings','Webview Messages','Binary Webview','Queued Webview','Dropped Webview','Bridge Ready','Bridge Warnings','Message Stalled','Resource Warnings','Webview Failures','Webview Ready','Webview Warnings'].includes(label)){
+    if(['TreeView','WebviewView','CustomEditor','Notebook','Custom Ready','Custom Warnings','Custom Dirty','Notebook Ready','Notebook Warnings','Notebook Kernels','Notebook Status','Command','Menu','Terminal','LM Tool','LM Provider','Chat','Context','Runtime','Manifest','Manifest + Runtime','Runtime Only','Provider Webview','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Iframe Mounted','Iframe Missing','DOM Visible','Resource Rewrites','Resource Roots','Port Mappings','Webview Messages','Binary Webview','Queued Webview','Dropped Webview','Bridge Ready','Bridge Warnings','Message Stalled','Resource Warnings','Webview Failures','Webview Ready','Webview Warnings'].includes(label)){
       chip.classList.add('filterable');
       chip.tabIndex=0;
       chip.setAttribute('role','button');
@@ -38684,7 +38793,7 @@ function renderExtensionRuntimeSurfacePanel(data){
       chip.onclick=()=>{
         const kindMap={'Terminal':'TerminalProfile','LM Tool':'LMTool','LM Provider':'LMProvider','Chat':'ChatParticipant','Context':'ChatContext'};
         const sourceMap={Runtime:'manifest+runtime',Manifest:'manifest','Manifest + Runtime':'manifest+runtime','Runtime Only':'runtime-only'};
-        const evidenceMap={'Webview HTML':'rendered','Missing Webview HTML':'missing','Retained Webview':'retained','Evidence Ready':'rendered','Resource Rewrites':'resources','Resource Roots':'resources','Port Mappings':'resources','Webview Messages':'messages','Binary Webview':'binary','Queued Webview':'queued','Dropped Webview':'dropped','Bridge Ready':'bridge-ready','Bridge Warnings':'bridge-warning','Message Stalled':'message-stalled','Resource Warnings':'resource-warning','Webview Failures':'failures','Provider Webview':'rendered'};
+        const evidenceMap={'Webview HTML':'rendered','Missing Webview HTML':'missing','Retained Webview':'retained','Evidence Ready':'rendered','Iframe Mounted':'iframe-mounted','Iframe Missing':'iframe-missing','DOM Visible':'dom-visible','Resource Rewrites':'resources','Resource Roots':'resources','Port Mappings':'resources','Webview Messages':'messages','Binary Webview':'binary','Queued Webview':'queued','Dropped Webview':'dropped','Bridge Ready':'bridge-ready','Bridge Warnings':'bridge-warning','Message Stalled':'message-stalled','Resource Warnings':'resource-warning','Webview Failures':'failures','Provider Webview':'rendered'};
         const kindSel=$('extension-runtime-filter-kind'),sourceSel=$('extension-runtime-filter-source'),evidenceSel=$('extension-runtime-filter-evidence');
         if(sourceMap[label]&&sourceSel)sourceSel.value=sourceMap[label];
         else if(evidenceMap[label]&&evidenceSel)evidenceSel.value=evidenceMap[label];
@@ -38723,6 +38832,11 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.webviewHtmlAvailable=row.htmlAvailable?'1':'0';
       el.dataset.webviewHtmlLength=String(row.htmlLength||0);
       el.dataset.webviewRetained=row.webviewEvidence&&row.webviewEvidence.retainContextWhenHidden?'1':'0';
+      el.dataset.webviewIframePresent=row.webviewEvidence&&row.webviewEvidence.iframePresent?'1':'0';
+      el.dataset.webviewIframeLoaded=row.webviewEvidence&&row.webviewEvidence.iframeLoaded?'1':'0';
+      el.dataset.webviewPanelPresent=row.webviewEvidence&&row.webviewEvidence.panelPresent?'1':'0';
+      el.dataset.webviewPanelActive=row.webviewEvidence&&row.webviewEvidence.panelActive?'1':'0';
+      el.dataset.webviewDomVisible=row.webviewEvidence&&row.webviewEvidence.domVisible?'1':'0';
       el.dataset.webviewEvidenceStatus=row.evidenceStatus||'';
       el.dataset.webviewMessageCount=String(row.webviewEvidence&&row.webviewEvidence.messageCount||0);
       el.dataset.webviewBinaryMessageCount=String(row.webviewEvidence&&row.webviewEvidence.binaryMessageCount||0);
@@ -38750,6 +38864,10 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.webviewLastFlushTargetFrameId=String(row.webviewEvidence&&row.webviewEvidence.lastFlushTargetFrameId||'');
       el.dataset.webviewLastDeliveryTargetFrameId=String(row.webviewEvidence&&row.webviewEvidence.lastDeliveryTargetFrameId||'');
       el.dataset.webviewLastDeliveredMessageSeq=String(row.webviewEvidence&&row.webviewEvidence.lastDeliveredMessageSeq||0);
+      el.dataset.webviewLastQueuedMessageSeq=String(row.webviewEvidence&&row.webviewEvidence.lastQueuedMessageSeq||0);
+      el.dataset.webviewLastFlushedMessageSeq=String(row.webviewEvidence&&row.webviewEvidence.lastFlushedMessageSeq||0);
+      el.dataset.webviewLastInboundMessageSeq=String(row.webviewEvidence&&row.webviewEvidence.lastInboundMessageSeq||0);
+      el.dataset.webviewLastOutboundMessageSeq=String(row.webviewEvidence&&row.webviewEvidence.lastOutboundMessageSeq||0);
       el.dataset.webviewMessageHealth=String(row.webviewEvidence&&row.webviewEvidence.messageHealth||'');
       el.dataset.webviewBridgeHealth=String(row.webviewEvidence&&row.webviewEvidence.bridgeHealth||'');
       el.dataset.webviewResourceHealth=String(row.webviewEvidence&&row.webviewEvidence.resourceHealth||'');
@@ -38824,6 +38942,10 @@ function renderExtensionRuntimeSurfacePanel(data){
           ev.enableCommandUris?{text:'command-uri'}:null,
           ev.retainContextWhenHidden?{text:'retain'}:null,
           ev.visible?{text:'visible'}:null,
+          ev.iframePresent?{text:'iframe'}:{text:'no iframe',missing:true},
+          ev.panelPresent?{text:'panel'}:{text:'no panel',missing:true},
+          ev.panelActive?{text:'active'}:null,
+          ev.domVisible?{text:'dom visible'}:{text:'dom hidden',missing:true},
           ev.messageCount?{text:'msg '+ev.messageCount}:null,
           ev.binaryMessageCount?{text:'binary '+ev.binaryMessageCount}:null,
           ev.binaryByteLength?{text:'bytes '+ev.binaryByteLength}:null,
@@ -38841,6 +38963,8 @@ function renderExtensionRuntimeSurfacePanel(data){
           Array.isArray(ev.failureReasons)&&ev.failureReasons.length?{text:'why '+ev.failureReasons[0],missing:true}:null,
           ev.lastDroppedReason?{text:'why '+ev.lastDroppedReason,missing:true}:null,
           ev.lastDeliveredMessageSeq?{text:'seq '+ev.lastDeliveredMessageSeq}:null,
+          ev.lastOutboundMessageSeq||ev.lastInboundMessageSeq?{text:'io '+(ev.lastOutboundMessageSeq||0)+'/'+(ev.lastInboundMessageSeq||0)}:null,
+          ev.lastQueuedMessageSeq||ev.lastFlushedMessageSeq?{text:'qseq '+(ev.lastQueuedMessageSeq||0)+'/'+(ev.lastFlushedMessageSeq||0)}:null,
           ev.localResourceRootCount?{text:'roots '+ev.localResourceRootCount}:null,
           ev.portMappingCount?{text:'ports '+ev.portMappingCount}:null,
           ev.resourceMapHitCount?{text:'map '+ev.resourceMapHitCount}:null,
@@ -38961,6 +39085,8 @@ async function renderExtensionRuntimeSurfaces(force){
 window.renderExtensionRuntimeSurfaces=renderExtensionRuntimeSurfaces;
 window.applyExtensionRuntimeSurfaceFilter=applyExtensionRuntimeSurfaceFilter;
 window.extensionRuntimeSurfaceRows=extensionRuntimeSurfaceRows;
+window.extensionRuntimeSurfaceHealthSnapshot=extensionRuntimeSurfaceHealthSnapshot;
+window.extensionRuntimeSurfaceDomSnapshot=extensionRuntimeSurfaceDomSnapshot;
 window.openExtensionRuntimeSurface=openExtensionRuntimeSurface;
 window.focusExtensionRuntimeSurface=focusExtensionRuntimeSurface;
 window.refreshExtensionRuntimeSurface=refreshExtensionRuntimeSurface;

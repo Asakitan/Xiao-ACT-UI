@@ -659,11 +659,14 @@ class _CSharpProxy:
         self._ctx.clear_overlay(str(surface) if surface else None)
 
     def create_compositor_layer(self, name, width, height,
-                                x=0, y=0, z=140, click_through=True):
+                                x=0, y=0, z=140, click_through=True,
+                                high_fps=False, target_fps=0):
         return self._ctx.create_compositor_layer(
             str(name), int(width), int(height),
             x=int(x), y=int(y), z=int(z),
-            click_through=bool(click_through))
+            click_through=bool(click_through),
+            high_fps=bool(high_fps),
+            target_fps=int(target_fps))
 
     def upload_compositor_frame(self, name, bgra_bytes, width, height,
                                 x=None, y=None):
@@ -672,6 +675,12 @@ class _CSharpProxy:
             str(name), raw, int(width), int(height),
             int(x) if x is not None else None,
             int(y) if y is not None else None)
+
+    def set_compositor_layer_mmf_source(self, name, mmf_name):
+        self._ctx.set_compositor_layer_mmf_source(str(name), str(mmf_name))
+
+    def set_compositor_layer_position(self, name, x, y):
+        self._ctx.set_compositor_layer_position(str(name), int(x), int(y))
 
     def destroy_compositor_layer(self, name):
         self._ctx.destroy_compositor_layer(str(name))

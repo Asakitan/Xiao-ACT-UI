@@ -102,6 +102,8 @@ class ContextProxy:
         "register_ui_panel", "register_render_hook",
         "set_overlay", "clear_overlay",
         "create_compositor_layer", "upload_compositor_frame",
+        "set_compositor_layer_mmf_source",
+        "set_compositor_layer_position",
         "destroy_compositor_layer", "set_compositor_layer_visible",
         "set_compositor_layer_input",
         "register_hotkey", "register_menu_category",

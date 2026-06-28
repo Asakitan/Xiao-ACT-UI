@@ -30,6 +30,67 @@ my_lua_plugin/
 
 > **多文件拆分**：脚本插件不限于单个入口文件。Lua/AngelScript/Emma 在主脚本里用 `load_script("相对路径")` 加载同语言子文件（Lua 也可用 `dofile`），子文件的函数和全局合并进同一解释器作用域——例如 `dofile("utils.lua")`、`load_script("cities.as")`、`load_script("levels.emma")`。C# 不用 `load_script`：源码模式下平台**自动编译同目录所有 `.cs`** 进同一程序集。详见后文 [多文件拆分](#多文件拆分)。
 
+## 统一 compositor 图层 API
+
+多语言脚本运行时现在都能访问同一组 unified compositor 图层 API：
+
+- `create_compositor_layer(name, width, height, x=0, y=0, z=140, click_through=True, high_fps=False, target_fps=0)`
+- `upload_compositor_frame(name, bgra_bytes, width, height, x=None, y=None)`
+- `set_compositor_layer_mmf_source(name, mmf_name)`
+- `set_compositor_layer_position(name, x, y)`
+- `set_compositor_layer_visible(name, visible)`
+- `set_compositor_layer_input(name, click_through)`
+- `destroy_compositor_layer(name)`
+
+新增能力说明：
+
+| API | 用途 |
+|-----|------|
+| `high_fps=True` | 告诉 unified compositor 这是高刷图层，允许命中区走更轻量的快速路径 |
+| `target_fps` | 为该图层声明期望帧率；统一 compositor 会提升全局 tick 到可见图层里的最高值 |
+| `set_compositor_layer_mmf_source()` | 绑定 Win32 命名共享内存，render 线程直接零拷贝读取 BGRA 帧 |
+| `set_compositor_layer_position()` | 只改坐标，不重传 frame buffer |
+
+### C# 示例
+
+```csharp
+public void OnEnable(dynamic ctx)
+{
+    ctx.create_compositor_layer(
+        "pet_preview", 384, 576,
+        x: 80, y: 120, z: 220,
+        click_through: true,
+        high_fps: true,
+        target_fps: 144);
+
+    ctx.set_compositor_layer_mmf_source(
+        "pet_preview",
+        @"Global\SAO_PET_FRAME_01");
+
+    ctx.set_compositor_layer_position("pet_preview", 120, 140);
+}
+```
+
+### Lua 示例
+
+```lua
+function on_load(ctx)
+    ctx:create_compositor_layer(
+        "pet_preview", 384, 576,
+        80, 120, 220,
+        true,   -- click_through
+        true,   -- high_fps
+        144     -- target_fps
+    )
+    ctx:set_compositor_layer_mmf_source(
+        "pet_preview",
+        "Global\\SAO_PET_FRAME_01"
+    )
+end
+```
+
+如果你的脚本只是偶尔更新一张静态 RGBA/BGRA 图，继续走 `upload_compositor_frame()` 就足够；只有当你已经有外部渲染器、持续共享内存写帧、或高帧率动画场景时，才建议切换到 MMF 零拷贝路径。
+
 ### 第二步：写 plugin.json
 
 在常规字段基础上，加一个 `language` 字段（也可以省略，平台会从 `entry` 扩展名自动推断）：

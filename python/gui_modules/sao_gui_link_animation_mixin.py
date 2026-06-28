@@ -694,11 +694,15 @@ void main() {
             sh = self.root.winfo_screenheight()
         except Exception:
             sw, sh = 1920, 1080
-        try:
-            fx = self._float.winfo_rootx() + self._fw // 2
-            fy = self._float.winfo_rooty() + self._fh // 2
-        except Exception:
+        nervgear_on = bool(self.settings.get('nervgear_mode', True))
+        if not nervgear_on:
             fx, fy = sw // 2, sh // 2
+        else:
+            try:
+                fx = self._float.winfo_rootx() + self._fw // 2
+                fy = self._float.winfo_rooty() + self._fh // 2
+            except Exception:
+                fx, fy = sw // 2, sh // 2
         fx, fy = self._entity_transition_focus_center(fx, fy)
         try:
             gpu = EntityTransitionGpuOverlay(
@@ -903,17 +907,12 @@ void main() {
         wins = []
         seen = set()
 
-        nervgear_on = bool(self.settings.get('nervgear_mode', True))
-        if not nervgear_on:
+        try:
+            focus_x = self._float.winfo_x() + self._fw // 2
+            focus_y = self._float.winfo_y() + self._fh // 2
+        except Exception:
             focus_x = self.root.winfo_screenwidth() // 2
             focus_y = self.root.winfo_screenheight() // 2
-        else:
-            try:
-                focus_x = self._float.winfo_x() + self._fw // 2
-                focus_y = self._float.winfo_y() + self._fh // 2
-            except Exception:
-                focus_x = self.root.winfo_screenwidth() // 2
-                focus_y = self.root.winfo_screenheight() // 2
 
         def _profile(x, y, role, order):
             dx = x - focus_x

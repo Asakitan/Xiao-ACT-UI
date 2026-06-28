@@ -1794,8 +1794,9 @@ void main() {
             if scene_t >= self._P3_START:
                 self._gl_fx_energy, self._gl_fx_flash, self._gl_fx_tint, self._gl_motion_mix = self._calc_p3_p4_fx_state(scene_t, 0.0)
             else:
-                self._gl_fx_energy = 0.12
-                self._gl_fx_flash = 0.0
+                p2_fade = min(1.0, max(0.0, (scene_t - self._P1_END) / 1.2))
+                self._gl_fx_energy = lerp(0.85, 0.12, ease_out(p2_fade))
+                self._gl_fx_flash = lerp(0.15, 0.0, p2_fade)
                 self._gl_fx_tint = (0.96, 0.78, 0.24)
                 self._gl_motion_mix = 0.60
             self._draw_startup_gl(readback_canvas, bg, t=elapsed)
@@ -2062,6 +2063,10 @@ void main() {
             if scene_t >= self._P3_START:
                 self._gl_fx_energy, self._gl_fx_flash, self._gl_fx_tint, self._gl_motion_mix = self._calc_p3_p4_fx_state(scene_t, 0.0)
             else:
+                p2_fade = min(1.0, max(0.0, (scene_t - self._P1_END) / 1.2))
+                self._gl_fx_energy = lerp(0.85, 0.12, ease_out(p2_fade))
+                self._gl_fx_flash = lerp(0.15, 0.0, p2_fade)
+                self._gl_fx_tint = (0.96, 0.78, 0.24)
                 self._gl_motion_mix = 0.60
             self._draw_startup_gl(cv, bg, t=elapsed)
             rendered_gl_scene = True

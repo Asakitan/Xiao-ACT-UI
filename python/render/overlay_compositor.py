@@ -15,6 +15,7 @@ onto the full-screen window.
 from __future__ import annotations
 
 import queue
+import struct as _struct
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -34,6 +35,117 @@ try:
     from _sao_cy_pixels import bgra_alpha_spans as _cy_alpha_spans
 except ImportError:
     _cy_alpha_spans = None
+
+# ── MMF zero-copy reader ────────────────────────────────────────
+_k32 = _ct.windll.kernel32
+_FILE_MAP_READ = 0x0004
+_SOPF_MAGIC = 0x46504F53
+_MMF_HEADER = 64
+
+try:
+    _k32.OpenFileMappingW.restype = _ct.c_void_p
+    _k32.OpenFileMappingW.argtypes = [_wt.DWORD, _wt.BOOL, _wt.LPCWSTR]
+    _k32.MapViewOfFile.restype = _ct.c_void_p
+    _k32.MapViewOfFile.argtypes = [
+        _ct.c_void_p, _wt.DWORD, _wt.DWORD, _wt.DWORD, _ct.c_size_t]
+    _k32.UnmapViewOfFile.argtypes = [_ct.c_void_p]
+    _k32.CloseHandle.argtypes = [_ct.c_void_p]
+except Exception:
+    pass
+
+
+class _MMFReader:
+    """Zero-copy reader for the pet engine's shared memory frame buffer.
+
+    Opens a named Win32 file mapping created by XiaoACTPeto.exe,
+    reads BGRA frames directly via memoryview (no Python bytes alloc).
+    """
+    __slots__ = (
+        '_name', '_hmap', '_ptr', '_view',
+        'fw', 'fh', 'slot_count', 'slot_stride', '_last_seq',
+    )
+
+    def __init__(self, name: str):
+        self._name = name
+        self._hmap = 0
+        self._ptr = 0
+        self._view: Optional[memoryview] = None
+        self.fw = 0
+        self.fh = 0
+        self.slot_count = 0
+        self.slot_stride = 0
+        self._last_seq = -1
+
+    def open(self) -> bool:
+        if self._view is not None:
+            return True
+        try:
+            hmap = _k32.OpenFileMappingW(_FILE_MAP_READ, False, self._name)
+            if not hmap:
+                return False
+            ptr = _k32.MapViewOfFile(hmap, _FILE_MAP_READ, 0, 0, _MMF_HEADER)
+            if not ptr:
+                _k32.CloseHandle(hmap)
+                return False
+            hdr = (_ct.c_char * _MMF_HEADER).from_address(ptr)
+            hdr_bytes = bytes(hdr)
+            magic = _struct.unpack_from('<I', hdr_bytes, 0)[0]
+            if magic != _SOPF_MAGIC:
+                _k32.UnmapViewOfFile(ptr)
+                _k32.CloseHandle(hmap)
+                return False
+            fw, fh = _struct.unpack_from('<II', hdr_bytes, 8)
+            sc, ss = _struct.unpack_from('<II', hdr_bytes, 16)
+            _k32.UnmapViewOfFile(ptr)
+            if fw <= 0 or fh <= 0 or sc <= 0 or ss <= 0:
+                _k32.CloseHandle(hmap)
+                return False
+            total = _MMF_HEADER + sc * ss
+            ptr = _k32.MapViewOfFile(hmap, _FILE_MAP_READ, 0, 0, total)
+            if not ptr:
+                _k32.CloseHandle(hmap)
+                return False
+            self._hmap = hmap
+            self._ptr = ptr
+            self.fw = fw
+            self.fh = fh
+            self.slot_count = sc
+            self.slot_stride = ss
+            buf = (_ct.c_char * total).from_address(ptr)
+            self._view = memoryview(buf)
+            return True
+        except Exception:
+            return False
+
+    def poll(self) -> Optional[memoryview]:
+        """Return frame memoryview if a new frame is available, else None."""
+        v = self._view
+        if v is None:
+            return None
+        seq = _struct.unpack_from('<q', v, 24)[0]
+        if seq == self._last_seq:
+            return None
+        self._last_seq = seq
+        ws = _struct.unpack_from('<I', v, 32)[0]
+        rs = (ws + self.slot_count - 1) % self.slot_count
+        off = _MMF_HEADER + rs * self.slot_stride
+        sz = self.fw * self.fh * 4
+        return v[off:off + sz]
+
+    def close(self) -> None:
+        self._view = None
+        if self._ptr:
+            try:
+                _k32.UnmapViewOfFile(self._ptr)
+            except Exception:
+                pass
+            self._ptr = 0
+        if self._hmap:
+            try:
+                _k32.CloseHandle(self._hmap)
+            except Exception:
+                pass
+            self._hmap = 0
 
 # MsgWaitForMultipleObjects: sleep while still pumping Win32 messages.
 # Without this, WM_NCHITTEST blocks ALL mouse input during sleep.
@@ -127,7 +239,9 @@ class CompositorLayer:
     def __init__(self, name: str, width: int, height: int,
                  x: int = 0, y: int = 0, z: int = 0,
                  click_through: bool = True,
-                 bgra_swizzle: bool = True):
+                 bgra_swizzle: bool = True,
+                 high_fps: bool = False,
+                 target_fps: int = 0):
         self.name = name
         self.x = x
         self.y = y
@@ -138,6 +252,8 @@ class CompositorLayer:
         self.alpha = 1.0
         self.click_through = click_through
         self.bgra_swizzle = bgra_swizzle
+        self.high_fps = high_fps
+        self.target_fps = target_fps
 
         # GL resources (created lazily on render thread)
         self._texture: Optional[moderngl.Texture] = None
@@ -151,6 +267,10 @@ class CompositorLayer:
         self._frame_seq = 0
         self._uploaded_seq = -1
         self._lock = threading.Lock()
+
+        # MMF zero-copy source (render thread manages lifecycle)
+        self._mmf_name: Optional[str] = None
+        self._mmf: Optional[_MMFReader] = None
 
         # Optional render-to-FBO callback
         self._render_fn: Optional[
@@ -185,6 +305,10 @@ class CompositorLayer:
         self._fade_dur = 0.3
         self._fade_done_fn: Optional[Callable[[], None]] = None
 
+        # Per-layer RGN span cache (avoids re-scanning alpha every frame)
+        self._rgn_cache_key: Any = None
+        self._rgn_cached_spans: list = []
+
     def upload_bgra(self, bgra: bytes, w: int, h: int) -> None:
         """Upload premultiplied BGRA frame data (thread-safe)."""
         with self._lock:
@@ -193,6 +317,15 @@ class CompositorLayer:
             self._frame_h = h
             self._frame_seq += 1
             self._dirty = True
+
+    def set_mmf_source(self, mmf_name: Optional[str]) -> None:
+        """Attach an MMF zero-copy frame source (thread-safe)."""
+        with self._lock:
+            self._mmf_name = mmf_name
+            if mmf_name is None and self._mmf is not None:
+                self._mmf.close()
+                self._mmf = None
+        self._dirty = True
 
     def set_render_fn(
         self, fn: Optional[Callable[[moderngl.Context, float], None]],
@@ -209,8 +342,10 @@ class CompositorLayer:
         self._dirty = True
 
     def set_position(self, x: int, y: int) -> None:
-        self.x = x
-        self.y = y
+        if self.x != x or self.y != y:
+            self.x = x
+            self.y = y
+            self._dirty = True
 
     def show(self) -> None:
         self.visible = True
@@ -340,7 +475,44 @@ class CompositorLayer:
 
     # ── GL resource management (render thread only) ──────────
 
+    def _poll_mmf(self, ctx: moderngl.Context) -> bool:
+        """Try to read a new frame from the MMF source. Returns True
+        if a new frame was uploaded to the texture."""
+        mmf_name = self._mmf_name
+        if mmf_name is None:
+            return False
+        mmf = self._mmf
+        if mmf is None:
+            mmf = _MMFReader(mmf_name)
+            if not mmf.open():
+                return False
+            self._mmf = mmf
+            self._frame_w = mmf.fw
+            self._frame_h = mmf.fh
+            self.width = mmf.fw
+            self.height = mmf.fh
+        frame = mmf.poll()
+        if frame is None:
+            return False
+        w, h = mmf.fw, mmf.fh
+        if self._texture is None or self._tex_w != w or self._tex_h != h:
+            if self._texture is not None:
+                self._texture.release()
+            self._texture = ctx.texture((w, h), 4, data=frame)
+            self._texture.filter = (moderngl.LINEAR, moderngl.LINEAR)
+            self._tex_w = w
+            self._tex_h = h
+        else:
+            self._texture.write(frame)
+        self._frame_seq += 1
+        self._uploaded_seq = self._frame_seq
+        self._dirty = True
+        return True
+
     def _ensure_texture(self, ctx: moderngl.Context) -> None:
+        if self._mmf_name is not None:
+            self._poll_mmf(ctx)
+            return
         with self._lock:
             seq = self._frame_seq
             w = self._frame_w
@@ -395,6 +567,9 @@ class CompositorLayer:
         self._dirty = True
 
     def _release_gl(self) -> None:
+        if self._mmf is not None:
+            self._mmf.close()
+            self._mmf = None
         if self._texture is not None:
             self._texture.release()
             self._texture = None
@@ -474,21 +649,30 @@ class UnifiedOverlay:
         self._rgn_moving = False
 
         # Performance
+        self._default_fps = 60
         self._target_fps = 60
         self._frame_interval = 1.0 / self._target_fps
+
+        # RGN throttle for high-fps layers
+        self._rgn_last_full_scan = 0.0
+        self._rgn_scan_interval = 0.1  # 10 Hz for high-fps layers
 
     # ── Layer management ─────────────────────────────────────
 
     def create_layer(self, name: str, width: int = 1, height: int = 1,
                      x: int = 0, y: int = 0, z: int = 0,
                      click_through: bool = True,
-                     bgra_swizzle: bool = True) -> CompositorLayer:
+                     bgra_swizzle: bool = True,
+                     high_fps: bool = False,
+                     target_fps: int = 0) -> CompositorLayer:
         layer = CompositorLayer(
             name, width, height, x, y, z, click_through, bgra_swizzle,
+            high_fps=high_fps, target_fps=target_fps,
         )
         with self._lock:
             self._layers[name] = layer
             self._rebuild_z_order()
+        self._recalc_fps()
         return layer
 
     def destroy_layer(self, name: str) -> None:
@@ -496,6 +680,7 @@ class UnifiedOverlay:
             layer = self._layers.pop(name, None)
             if layer:
                 self._rebuild_z_order()
+        self._recalc_fps()
 
         if layer:
             try:
@@ -532,6 +717,17 @@ class UnifiedOverlay:
         self._z_sorted = sorted(
             self._layers.values(), key=lambda l: l.z_order,
         )
+
+    def _recalc_fps(self) -> None:
+        """Adjust compositor frame interval to match the fastest layer."""
+        max_fps = self._default_fps
+        with self._lock:
+            for layer in self._z_sorted:
+                if layer.visible and layer.target_fps > max_fps:
+                    max_fps = layer.target_fps
+        if max_fps != self._target_fps:
+            self._target_fps = max_fps
+            self._frame_interval = 1.0 / max_fps
 
     def lift_all_input_proxies(self) -> None:
         """Re-lift all input proxies in z-order so higher-z layers
@@ -668,9 +864,9 @@ class UnifiedOverlay:
     def _sync_host_rgn(self, has_visible: bool) -> None:
         """Per-pixel click passthrough via SetWindowRgn.
 
-        Scanline spans give precise passthrough for transparent areas.
-        When layers are moving, padding expands so the region stays
-        ahead of the content and nothing gets clipped.
+        Optimisations vs naive full-scan:
+        * click_through + high_fps layers use a bounding rect (no alpha scan)
+        * other layers cache their alpha spans keyed by (frame_seq, x, y, pad)
         """
         if self._host is None:
             return
@@ -709,27 +905,44 @@ class UnifiedOverlay:
                     moving = True
             self._rgn_prev_pos = cur_pos
             pad = self._RGN_PAD_MOVE if moving else self._RGN_PAD_STILL
-            spans = []
+            spans: list = []
             _cy = _cy_alpha_spans
             for layer in self._z_sorted:
                 if not layer.visible or layer.alpha < 0.01:
                     continue
+                lx = layer.x - ox
+                ly = layer.y - oy
+
+                # Fast path: high-fps click-through layers use bounding rect
+                if layer.high_fps and layer.click_through:
+                    spans.append((
+                        lx - pad, ly - pad,
+                        lx + layer.width + pad,
+                        ly + layer.height + pad))
+                    continue
+
                 fb = layer._frame_bytes
                 fw = layer._frame_w
                 fh = layer._frame_h
-                lx = layer.x - ox
-                ly = layer.y - oy
                 if not fb or fw <= 0 or fh <= 0:
                     spans.append((
                         lx - pad, ly - pad,
                         lx + layer.width + pad,
                         ly + layer.height + pad))
                     continue
+
+                # Per-layer span cache (avoids re-scanning unchanged frames)
+                cache_key = (layer._frame_seq, lx, ly, pad)
+                if layer._rgn_cache_key == cache_key:
+                    spans.extend(layer._rgn_cached_spans)
+                    continue
+
                 sx = max(1, layer.width / fw)
                 sy = max(1, layer.height / fh)
                 if _cy is not None:
-                    spans.extend(_cy(fb, fw, fh, lx, ly, sx, sy, pad))
+                    layer_spans = list(_cy(fb, fw, fh, lx, ly, sx, sy, pad))
                 else:
+                    layer_spans = []
                     stride = fw * 4
                     mv = memoryview(fb)
                     for row in range(0, fh):
@@ -741,13 +954,17 @@ class UnifiedOverlay:
                                 x += 1
                                 while x < fw and mv[row_off + x * 4] > 0:
                                     x += 1
-                                spans.append((
+                                layer_spans.append((
                                     int(lx + x0 * sx) - pad,
                                     int(ly + row * sy) - pad,
                                     int(lx + x * sx) + pad,
                                     int(ly + (row + 1) * sy) + pad))
                             else:
                                 x += 1
+                layer._rgn_cached_spans = layer_spans
+                layer._rgn_cache_key = cache_key
+                spans.extend(layer_spans)
+
             key = hash(tuple(spans)) if spans else 0
             if key == self._host_rgn_key:
                 return
@@ -945,6 +1162,12 @@ class UnifiedOverlay:
             if now - self._last_topmost >= self._topmost_interval:
                 self._host.raise_topmost()
                 self._last_topmost = now
+
+            # Poll MMF-sourced layers for new frames (zero-copy)
+            ctx = self._host.ctx
+            for layer in self._z_sorted:
+                if layer.visible and layer._mmf_name is not None:
+                    layer._poll_mmf(ctx)
 
             # Tick layer fades + check if any layer needs rendering
             any_dirty = False

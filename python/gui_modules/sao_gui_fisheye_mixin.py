@@ -1372,6 +1372,18 @@ class SAOPlayerGUIFisheyeMixin:
                                 float hash(vec2 p) {
                                     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
                                 }
+                                float noise(vec2 p) {
+                                    vec2 i = floor(p), f = fract(p);
+                                    f = f * f * (3.0 - 2.0 * f);
+                                    return mix(mix(hash(i), hash(i + vec2(1,0)), f.x),
+                                               mix(hash(i + vec2(0,1)), hash(i + vec2(1,1)), f.x), f.y);
+                                }
+                                float fbm(vec2 p) {
+                                    float v = 0.0, a = 0.5;
+                                    mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);
+                                    for (int i = 0; i < 5; i++) { v += a * noise(p); p = rot * p * 2.0; a *= 0.5; }
+                                    return v;
+                                }
 
                                 void main() {
                                     float t = u_time;
@@ -1381,96 +1393,147 @@ class SAOPlayerGUIFisheyeMixin:
                                     float cr = length(cuv);
                                     float ca = atan(cuv.y, cuv.x);
 
-                                    // ── bright base ──
-                                    vec3 col = vec3(0.92, 0.92, 0.93);
+                                    // --- radial gradient base: brighter ---
+                                    vec3 col = mix(vec3(0.96, 0.96, 0.97), vec3(0.80, 0.81, 0.83), cr * 1.0);
 
-                                    // ── matrix rain: classic style ──
-                                    // 40 columns, each with own speed/length/phase.
-                                    // Characters = grid of cells; brightness wave
-                                    // scrolls down revealing them.
-                                    float ncols = 40.0;
-                                    float nrows = 30.0;
-                                    float ci = floor(uv.x * ncols);
-                                    float ri = floor(uv.y * nrows);
-                                    vec2 cf = fract(vec2(uv.x * ncols, uv.y * nrows));
+                                    // accent palette (matches SAO menu amber border + teal highlights)
+                                    vec3 white  = vec3(0.95, 0.95, 0.96);
+                                    vec3 silver = vec3(0.75, 0.76, 0.78);
+                                    vec3 grey   = vec3(0.55, 0.56, 0.58);
+                                    vec3 amber  = vec3(0.83, 0.66, 0.33);
+                                    vec3 teal   = vec3(0.30, 0.72, 0.72);
 
-                                    // column properties
-                                    float c_seed = hash(vec2(ci, 0.0));
-                                    float c_spd = 0.3 + c_seed * 1.5;
-                                    float c_phase = hash(vec2(ci, 1.0));
-                                    float c_len = 0.08 + hash(vec2(ci, 2.0)) * 0.35;
+                                    // frosted glass
+                                    float frost = fbm(uv * 6.0 + vec2(t * 0.03, -t * 0.02));
+                                    col += vec3(0.03) * (frost - 0.5);
 
-                                    // brightness wave
-                                    float wave = fract(uv.y + t * c_spd * 0.05 + c_phase);
-                                    float body = smoothstep(c_len, c_len * 0.8, wave)
-                                               * smoothstep(0.0, 0.01, wave);
-                                    float head = exp(-10.0 * wave) * body;
-                                    float trail = (1.0 - wave / c_len) * body;
+                                    // center glow
+                                    col += vec3(0.06, 0.06, 0.07) * exp(-cr * cr * 8.0);
 
-                                    // character: 3x5 bitmap, flips over time
-                                    float ch_t = floor(t * (1.5 + c_seed * 4.0));
-                                    float ch_seed = hash(vec2(ci + ch_t, ri));
-                                    int bits = int(ch_seed * 32768.0);
-                                    int px = int(cf.x * 3.0);
-                                    int py = int(cf.y * 5.0);
-                                    float pixel = float((bits >> (py * 3 + px)) & 1);
-
-                                    // cell margin
-                                    float margin = step(0.10, cf.x) * step(cf.x, 0.90)
-                                                 * step(0.05, cf.y) * step(cf.y, 0.95);
-
-                                    // column on/off
-                                    float c_on = step(0.25, c_seed);
-
-                                    // darken: characters visible as dark marks on bright bg
-                                    float char_alpha = body * pixel * margin * c_on;
-                                    col -= vec3(0.30, 0.31, 0.34) * char_alpha * 0.35;
-                                    // bright head highlight
-                                    col -= vec3(0.15) * head * margin * c_on;
-
-                                    // second layer: sparser, different speed
-                                    float ci2 = floor(uv.x * 25.0);
-                                    float ri2 = floor(uv.y * 20.0);
-                                    vec2 cf2 = fract(vec2(uv.x * 25.0, uv.y * 20.0));
-                                    float c2_seed = hash(vec2(ci2, 10.0));
-                                    float c2_spd = 0.2 + c2_seed * 1.0;
-                                    float wave2 = fract(uv.y + t * c2_spd * 0.04 + hash(vec2(ci2, 11.0)));
-                                    float c2_len = 0.12 + hash(vec2(ci2, 12.0)) * 0.30;
-                                    float body2 = smoothstep(c2_len, c2_len * 0.8, wave2)
-                                                * smoothstep(0.0, 0.01, wave2);
-                                    float ch2_t = floor(t * (1.0 + c2_seed * 2.0));
-                                    int bits2 = int(hash(vec2(ci2 + ch2_t, ri2)) * 32768.0);
-                                    float pixel2 = float((bits2 >> (int(cf2.y * 5.0) * 3 + int(cf2.x * 3.0))) & 1);
-                                    float margin2 = step(0.12, cf2.x) * step(cf2.x, 0.88)
-                                                  * step(0.06, cf2.y) * step(cf2.y, 0.94);
-                                    float c2_on = step(0.40, c2_seed);
-                                    col -= vec3(0.22, 0.23, 0.26) * body2 * pixel2 * margin2 * c2_on * 0.20;
-
-                                    // ── concentric rings ──
-                                    for (int i = 0; i < 3; i++) {
+                                    // god rays — amber tinted
+                                    for (int i = 0; i < 5; i++) {
                                         float fi = float(i);
-                                        float r = 0.12 + fi * 0.14;
-                                        float ring = smoothstep(0.003, 0.0, abs(cr - r));
-                                        float seg = smoothstep(0.0, 0.02, abs(sin(ca * (8.0 + fi * 3.0) + t * (0.2 + fi * 0.1))));
-                                        float p = 0.5 + 0.5 * sin(t * (0.5 + fi * 0.3) + fi * 1.57);
-                                        col -= vec3(0.18) * ring * seg * p;
-                                        col -= vec3(0.06) * smoothstep(0.025, 0.0, abs(cr - r)) * p;
+                                        float ray_a = fi * 1.2566 + t * 0.05;
+                                        float da = abs(mod(ca - ray_a + 3.1416, 6.2832) - 3.1416);
+                                        float ray = smoothstep(0.10, 0.0, da) * smoothstep(0.55, 0.04, cr);
+                                        float rp = 0.6 + 0.4 * sin(t * 0.35 + fi * 1.5);
+                                        col += mix(white, amber, 0.3) * ray * rp * 0.06;
                                     }
 
-                                    // ── scanning beam ──
-                                    float beam_a = t * 0.25;
-                                    float bda = mod(ca - beam_a + 6.2832, 6.2832);
-                                    float beam = smoothstep(0.2, 0.0, bda) * exp(-bda * 3.0);
-                                    beam *= smoothstep(0.45, 0.03, cr);
-                                    col += vec3(0.96, 0.97, 0.98) * beam * 0.08;
+                                    // data rain — smooth fade, both directions
+                                    for (int layer = 0; layer < 3; layer++) {
+                                        float fl = float(layer);
+                                        float ncols = 30.0 + fl * 15.0;
+                                        float gx = floor(uv.x * ncols);
+                                        float col_h = hash(vec2(gx, fl * 7.0));
+                                        float col_spd = (col_h * 2.0 + 0.5) * (0.7 + fl * 0.25);
+                                        float phase = hash(vec2(gx, fl * 13.0));
+                                        // direction: ~half up, ~half down
+                                        float dir = (hash(vec2(gx, fl + 77.0)) > 0.5) ? 1.0 : -1.0;
+                                        float scrolled = uv.y + dir * t * col_spd * 0.06 + phase;
+                                        float fy = fract(scrolled);
+                                        // length: short/medium/long mix
+                                        float lh = hash(vec2(gx, fl + 50.0));
+                                        float streak_len = lh < 0.2 ? (0.70 + lh * 1.5)
+                                                         : lh < 0.5 ? (0.20 + (lh - 0.2) * 0.8)
+                                                         : (0.06 + (lh - 0.5) * 0.2);
+                                        float in_streak = smoothstep(streak_len, streak_len * 0.85, fy)
+                                                        * smoothstep(0.0, 0.01, fy);
+                                        float head = exp(-15.0 * fy) * in_streak;
+                                        // smooth fade in/out (no floor→step jump)
+                                        float col_cycle = sin(t * (0.15 + col_h * 0.2) + col_h * 6.28);
+                                        float col_vis = smoothstep(-0.3, 0.3, col_cycle);
+                                        vec3 sc = mix(mix(grey, teal, 0.35), mix(silver, amber, 0.25), fl / 2.0);
+                                        col += sc * in_streak * col_vis * 0.10 * (0.6 + fl * 0.2);
+                                        col += white * head * col_vis * 0.08;
+                                    }
 
-                                    // ── subtle scan lines ──
-                                    col *= 0.985 + 0.015 * sin(uv.y * u_res.y * 1.5);
+                                    // gauge rings — offset from center so barrel distortion deforms them
+                                    vec2 ring_center = vec2(
+                                        0.03 * sin(t * 0.15),
+                                        0.02 * cos(t * 0.12)
+                                    );
+                                    vec2 rcuv = cuv - ring_center;
+                                    float rcr = length(rcuv);
+                                    float rca = atan(rcuv.y, rcuv.x);
+                                    for (int i = 0; i < 4; i++) {
+                                        float fi = float(i);
+                                        float radius = 0.10 + fi * 0.12;
+                                        float ring = smoothstep(0.003, 0.0, abs(rcr - radius));
+                                        float seg = smoothstep(0.0, 0.015, abs(sin(rca * (8.0 + fi * 4.0) + t * (0.18 + fi * 0.10))));
+                                        float pulse = 0.5 + 0.5 * sin(t * (0.45 + fi * 0.3) + fi * 1.57);
+                                        vec3 rc = mix(silver, white, fi / 3.0);
+                                        col += rc * ring * seg * pulse * 0.35;
+                                        col += rc * smoothstep(0.025, 0.0, abs(rcr - radius)) * 0.04 * pulse;
+                                        // major ticks every 30 deg
+                                        float major_a = mod(rca + 3.1416, 0.5236);
+                                        float major = smoothstep(0.012, 0.0, major_a) * smoothstep(0.008, 0.0, abs(rcr - radius - 0.015));
+                                        col += mix(rc, amber, 0.4) * major * 0.30 * pulse;
+                                        // minor ticks every 10 deg
+                                        float minor_a = mod(rca + 3.1416, 0.1745);
+                                        float minor = smoothstep(0.006, 0.0, minor_a) * smoothstep(0.004, 0.0, abs(rcr - radius - 0.008));
+                                        col += rc * minor * 0.12 * pulse;
+                                    }
 
-                                    // ── gentle vignette ──
-                                    col *= clamp(1.0 - cr * cr * 0.12, 0.84, 1.0);
+                                    // scanning beams — follow ring center
+                                    for (int b = 0; b < 3; b++) {
+                                        float fb = float(b);
+                                        float bspd = 0.18 + fb * 0.10;
+                                        float beam_a = t * bspd + fb * 2.094;
+                                        float bda = mod(rca - beam_a + 6.2832, 6.2832);
+                                        float beam = smoothstep(0.22, 0.0, bda) * exp(-bda * 3.5);
+                                        beam *= smoothstep(0.46, 0.03, rcr);
+                                        float bp = 0.6 + 0.4 * sin(t * (0.6 + fb * 0.35));
+                                        col += mix(white, teal, 0.35) * beam * 0.15 * bp;
+                                    }
 
-                                    fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+                                    // data table grid — cells randomly appear/disappear
+                                    vec2 gp = uv * vec2(ar, 1.0) * vec2(16.0, 10.0);
+                                    vec2 gid = floor(gp);
+                                    vec2 gf = fract(gp);
+                                    // cell lifecycle: each cell has its own phase
+                                    float cell_seed = hash(gid + vec2(17.0, 31.0));
+                                    float cell_period = 2.0 + cell_seed * 5.0;
+                                    float cell_phase = cell_seed * 6.28;
+                                    float life = fract(t / cell_period + cell_phase);
+                                    // fade in 0-0.15, hold 0.15-0.7, fade out 0.7-0.85, off 0.85-1
+                                    float vis = smoothstep(0.0, 0.15, life) * (1.0 - smoothstep(0.7, 0.85, life));
+                                    // grid lines (always faintly visible)
+                                    float gline = 1.0 - step(0.03, gf.x) * step(gf.x, 0.97)
+                                                      * step(0.04, gf.y) * step(gf.y, 0.96);
+                                    col += silver * gline * 0.04;
+                                    // cell fill when alive
+                                    float inner = step(0.06, gf.x) * step(gf.x, 0.94)
+                                                * step(0.08, gf.y) * step(gf.y, 0.92);
+                                    // simulate data rows inside the cell
+                                    float row_line = step(0.45, fract(gf.y * 3.0));
+                                    float data_bar = step(0.1, gf.x) * step(gf.x, 0.1 + hash(gid + vec2(floor(t * 0.4), 0.0)) * 0.7);
+                                    float cell_content = inner * (row_line * 0.3 + data_bar * 0.5);
+                                    vec3 cell_col = mix(silver, mix(amber, teal, cell_seed), 0.3);
+                                    col += cell_col * cell_content * vis * 0.08;
+
+                                    // floating motes — mixed amber/teal
+                                    for (int i = 0; i < 6; i++) {
+                                        float fi = float(i);
+                                        vec2 pos = fract(vec2(hash(vec2(fi, 1.0)), hash(vec2(fi, 2.0)))
+                                                   + vec2(sin(fi * 1.7 + t * 0.25), cos(fi * 2.3 + t * 0.18)) * 0.12
+                                                   + vec2(0.0, -t * (0.02 + hash(vec2(fi, 5.0)) * 0.03)));
+                                        pos.x *= ar;
+                                        float d = length(cuv - pos + vec2(ar * 0.5, 0.5));
+                                        float glow = 0.0008 / (d * d + 0.0008);
+                                        float blink = 0.4 + 0.6 * sin(t * (0.7 + fi * 0.2) + fi * 2.0);
+                                        vec3 mc = (mod(fi, 2.0) < 0.5) ? mix(white, amber, 0.5) : mix(white, teal, 0.4);
+                                        col += mc * glow * blink * 0.05;
+                                    }
+
+                                    // micro scan lines
+                                    col *= 0.975 + 0.025 * sin(uv.y * u_res.y * 1.5);
+
+                                    // vignette
+                                    float vig = 1.0 - cr * cr * 0.3;
+                                    col *= clamp(vig, 0.72, 1.0);
+
+                                    fragColor = vec4(col, 1.0);
                                 }
                             '''
                         )

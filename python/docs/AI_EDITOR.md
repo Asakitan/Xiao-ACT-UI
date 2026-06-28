@@ -355,3 +355,29 @@ plugins/my-plugin/
 - **Agent 相关**：`list_agents`、`invoke_agent`
 - **Workflow 相关**：`list_workflows`、`run_workflow`
 - **插件动态注册的 action**
+
+## 扩展运行时诊断
+
+AI Editor 内部有一套扩展运行时 surface 诊断接口，用于对齐 VSCode 扩展能力和排查前端/Node host 状态。当前除了 tree views、webview views、custom editors、notebooks 等 surface 之外，也会追踪扩展通过 `vscode.window.createWebviewPanel(...)` 动态创建的独立 panel。
+
+这类记录会进入 `list_extension_runtime_surfaces()` 的 `webviewPanels` 桶，包含以下典型字段：
+
+| 字段 | 说明 |
+|------|------|
+| `view_id` / `viewType` | panel 的逻辑 ID 与 VSCode `viewType` |
+| `title` | 当前标题 |
+| `renderCount` | 已推送到前端的 HTML 渲染次数 |
+| `messageCount` / `lastMessage` | 扩展发往该 panel 的消息次数与最后一条消息 |
+| `htmlAvailable` / `htmlLength` / `rawHtmlLength` | 当前是否已有 HTML，以及预处理前后的长度 |
+| `localResourceRootCount` | 注册的本地资源根数量 |
+| `visible` / `active` / `disposed` | 当前显示、激活、释放状态 |
+| `readiness` | `pending` / `ready` / `disposed` |
+| `providerBacked` | 当前是否已经拿到可渲染 HTML |
+
+这套记录由 Python 侧 `_AIEditorUIBridge.render_webview_panel()` 和 Node host 的 `webview_html` 消息桥接共同维护，主要用途是：
+
+1. 排查扩展 panel 是否真的被创建、渲染、销毁。
+2. 对比 `WebviewView` 和 `WebviewPanel` 两类 surface 的运行时状态。
+3. 在 command palette / 运行时支持面板 / probe 脚本里做 smoke diagnostics。
+
+如果你在扩展里创建动态 panel，建议保持稳定的 `viewId` / `viewType`，并在 panel 标题、资源根、消息桥接发生变化时观察这组 surface 记录，确认 AI Editor 的扩展宿主和前端 iframe 状态一致。

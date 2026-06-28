@@ -846,17 +846,6 @@ class SAOPlayerGUIMenuMixin:
         if menu is not None:
             menu.cascade_mode = not new_val
         self._sync_float_button_geometry(show=new_val)
-        if not new_val:
-            try:
-                sw = self.root.winfo_screenwidth()
-                sh = self.root.winfo_screenheight()
-                fw = int(getattr(self, '_fw', 1) or 1)
-                fh = int(getattr(self, '_fh', 1) or 1)
-                cx = sw // 2 - fw // 2
-                cy = sh // 2 + 80
-                self._float.geometry(f'{fw}x{fh}+{cx}+{cy}')
-            except Exception:
-                pass
         self._refresh_menu_if_open(force=True)
         tag = 'ON' if new_val else 'OFF'
         self._show_entity_alert('NERVGEAR', f'NervGear Mode: {tag}', display_time=2.5)

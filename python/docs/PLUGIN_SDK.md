@@ -541,6 +541,52 @@ ctx.clear_overlay("dps_panel")  # 清除指定 surface
 ctx.clear_overlay()              # 清除全部
 ```
 
+### Unified compositor 图层
+
+对于需要直接提交 BGRA 帧、零拷贝共享内存、或更高刷新率的插件，可以使用 unified compositor 图层 API，而不是普通 Tk/WebView 面板。
+
+```python
+# 创建图层
+ctx.create_compositor_layer(
+    "pet_preview",
+    width=384,
+    height=576,
+    x=80,
+    y=120,
+    z=220,
+    click_through=True,
+    high_fps=True,
+    target_fps=144,
+)
+
+# 传统路径：上传一帧 BGRA 数据
+ctx.upload_compositor_frame("pet_preview", bgra_bytes, 384, 576)
+
+# 仅更新位置（不重传帧）
+ctx.set_compositor_layer_position("pet_preview", 120, 140)
+
+# 零拷贝路径：把图层绑定到命名 MMF 共享内存
+ctx.set_compositor_layer_mmf_source("pet_preview", "Global\\SAO_PET_FRAME_01")
+```
+
+字段说明：
+
+| 参数 | 说明 |
+|------|------|
+| `click_through` | `True` 时图层默认只显示不吃鼠标；需要 direct-host 交互时显式传 `False` |
+| `high_fps` | 标记为高帧率图层，compositor 的 hit region 会优先走矩形快速路径，减少逐像素扫描成本 |
+| `target_fps` | 请求该图层期望的刷新频率；统一 compositor 会取所有可见图层中的最高值作为 tick 频率 |
+
+`set_compositor_layer_mmf_source()` 适合外部渲染器或子进程通过 Win32 命名 file mapping 持续写入 BGRA 帧的场景。绑定 MMF 后，render 线程会直接轮询共享内存中的最新 frame，绕过 `upload_compositor_frame()` 的 Python 字节拷贝。
+
+如果只想临时隐藏图层或调整交互，也可以继续使用已存在的：
+
+```python
+ctx.set_compositor_layer_visible("pet_preview", False)
+ctx.set_compositor_layer_input("pet_preview", click_through=False)
+ctx.destroy_compositor_layer("pet_preview")
+```
+
 ### 引擎访问 (ctx.engine)
 
 通过 `ctx.engine` 访问平台和其他插件注册的引擎实例。
