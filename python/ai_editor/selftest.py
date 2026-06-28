@@ -986,7 +986,9 @@ def test_app_settings_parity() -> None:
         AIEditorAPI,
         _AI_EDITOR_WORKSPACE_ROOT_ENV,
         _LAUNCH_CHILD_WINDOW_GRACE_SECONDS,
+        _LAUNCH_FRONTEND_READY_GRACE_SECONDS,
         _recent_child_launch_alive,
+        _launch_state_frontend_ready,
         _activate_window_handle,
         _normalize_window_geometry,
         _window_client_area_ok,
@@ -1043,6 +1045,7 @@ def test_app_settings_parity() -> None:
         "get_model_info", "test_connection", "set_mode", "save_config",
         "get_mode", "list_models", "save_custom_model",
         "delete_custom_model", "search_extensions",
+        "mark_frontend_ready",
         "list_installed_extensions", "get_extension_install_preflight",
         "uninstall_extension",
         "install_extension", "win_minimize", "win_maximize", "win_close",
@@ -2214,6 +2217,16 @@ def test_app_settings_parity() -> None:
         "pid": 424242,
         "started_at": time.time() - 1,
     }
+    stale_window_unready_state = {
+        "pid": 424242,
+        "started_at": time.time() - (_LAUNCH_FRONTEND_READY_GRACE_SECONDS + 3),
+        "frontend_ready_at": 0,
+    }
+    ready_window_state = {
+        "pid": 424242,
+        "started_at": time.time() - (_LAUNCH_FRONTEND_READY_GRACE_SECONDS + 3),
+        "frontend_ready_at": time.time() - 1,
+    }
     with patch("ai_editor.app._running_child_process", None), \
             patch("ai_editor.app._process_alive", return_value=True), \
             patch("ai_editor.app._find_ai_editor_window", return_value=0), \
@@ -2228,6 +2241,22 @@ def test_app_settings_parity() -> None:
                   return_value=young_launch_state):
         _check("AI Editor keeps short child launch grace before duplicate spawn",
                _recent_child_launch_alive() is True)
+    with patch("ai_editor.app._running_child_process", None), \
+            patch("ai_editor.app._process_alive", return_value=True), \
+            patch("ai_editor.app._find_ai_editor_window", return_value=123), \
+            patch("ai_editor.app._read_launch_state",
+                  return_value=stale_window_unready_state):
+        _check("AI Editor relaunches when window exists but frontend never becomes ready",
+               _recent_child_launch_alive() is False)
+    with patch("ai_editor.app._running_child_process", None), \
+            patch("ai_editor.app._process_alive", return_value=True), \
+            patch("ai_editor.app._find_ai_editor_window", return_value=123), \
+            patch("ai_editor.app._read_launch_state",
+                  return_value=ready_window_state):
+        _check("AI Editor keeps child when frontend ready signal is present",
+               _recent_child_launch_alive() is True
+               and _launch_state_frontend_ready(ready_window_state, 424242) is True
+               and _launch_state_frontend_ready(stale_window_unready_state, 424242) is False)
     root_dir = os.path.dirname(os.path.dirname(__file__))
     panels_path = os.path.join(root_dir, "gui_modules", "sao_gui_panels_mixin.py")
     with open(panels_path, "r", encoding="utf-8") as fh:
@@ -2265,8 +2294,13 @@ def test_app_settings_parity() -> None:
             and "_LAUNCH_INFLIGHT_TTL_SECONDS" in app_src
             and "_LAUNCH_CHILD_GRACE_SECONDS" in app_src
             and "_LAUNCH_CHILD_WINDOW_GRACE_SECONDS" in app_src
+            and "_LAUNCH_FRONTEND_READY_GRACE_SECONDS" in app_src
             and "recent child pid={pid} alive but no usable window" in app_src
+            and "has a window but no frontend ready signal" in app_src
             and "_LAUNCH_STATE_FILE" in app_src
+            and "def _mark_launch_state_frontend_ready" in app_src
+            and "def _launch_state_frontend_ready" in app_src
+            and "def mark_frontend_ready(self, phase: str = \"ready\")" in app_src
             and "def _process_alive(pid: int)" in app_src
             and "def _recent_child_launch_alive()" in app_src
             and "launch request ignored; recent child process alive" in app_src
@@ -2302,6 +2336,15 @@ def test_app_settings_parity() -> None:
     _check("AI Editor classic Tk fallback does not collide with WebView title",
            'win.title("SAO AI Editor (Classic)")' in tk_ai_src
            and 'win.title("SAO AI Editor")' not in tk_ai_src)
+    workshop_path = os.path.join(root_dir, "gui_modules", "sao_gui_workshop.py")
+    with open(workshop_path, "r", encoding="utf-8") as fh:
+        workshop_src = fh.read()
+    _check("AI Editor workshop launch uses safe owner launcher",
+           "def _open_ai_editor_via_owner(owner: Any" in workshop_src
+           and "safe_toggle = getattr(owner, \"_toggle_ai_editor_panel\", None)" in workshop_src
+           and "root.after_idle(safe_toggle)" in workshop_src
+           and "_open_ai_editor_via_owner(self._owner)" in workshop_src
+           and "_open_ai_editor_via_owner(self.owner, status_var=self._status_var)" in workshop_src)
 
     data = {
         "ai_editor": {
@@ -4603,8 +4646,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hasJumpbarActionState" in html
            and "hasJumpbarModifiedCount" in html
            and "hasJumpbarActions" in html
-           and "#settings-modal.open:has(.settings-vscode-calm) { padding:0; background:var(--bg); }" in html
-           and ".modal.settings-modal.preferences-workbench.settings-vscode-calm { width:100vw; height:100vh; max-width:none;" in html
+           and "#settings-modal.open:has(.settings-vscode-calm) {\n  align-items:center; justify-content:center; padding:18px 24px;" in html
+           and ".modal.settings-modal.preferences-workbench.settings-vscode-calm {\n  width:min(1280px, calc(100vw - 48px)); height:min(860px, calc(100vh - 48px));" in html
+           and ".settings-vscode-calm .settings-nav,\n.settings-vscode-calm .settings-main,\n.settings-vscode-calm .settings-inspector {\n  min-height:0; overflow-y:auto; overscroll-behavior:contain;" in html
            and 'id="settings-workbench-status" class="settings-workbench-status" role="status"' in html
            and "function renderSettingsWorkbenchStatus(visible,total,stats)" in html
            and "host.dataset.settingsWorkbenchStatus='1'" in html
@@ -4617,18 +4661,22 @@ def test_phase1_ai_editor_regressions() -> None:
            and "quick.dataset.settingsCommandSurface='sidebar';" in html
            and "addQuick('Details','','Toggle settings details',()=>settingsToggleDetails());" in html
            and "addQuick('Keyboard Shortcuts','','Open keyboard shortcuts',()=>settingsCloseThen(openKeybindings));" in html
+           and ".settings-vscode-calm .settings-nav-quick[data-settings-command-surface=\"sidebar\"] { display:none; grid-template-columns:1fr; }" in html
+           and ".settings-vscode-calm.settings-details-open .settings-nav-quick[data-settings-command-surface=\"sidebar\"] { display:grid; }" in html
+           and ".settings-vscode-calm:not(.settings-details-open) .settings-nav-commandbar button[data-settings-nav-command=\"keyboard-shortcuts\"]," in html
            and ".settings-vscode-calm .settings-shell { grid-template-columns:286px minmax(0,1fr);" in html
            and ".settings-vscode-calm .settings-field.builtin-setting { padding:13px 96px 13px 0;" in html
            and ".settings-vscode-calm .settings-control-frame { max-width:720px; min-height:32px; }" in html
            and ".settings-vscode-calm .settings-row-actions { top:10px; opacity:0;" in html
            and "hasSettingsWorkbenchStatus" in html
-           and "hasFullBleedSettingsWorkbench" in html
+           and "hasBoundedSettingsWorkbench" in html
+           and "hasScrollableSettingsColumns" in html
            and "hasVsCodeWorkbenchSearchWidth" in html
            and "hasVsCodeHumanSettingControls" in html
            and ".settings-vscode-calm.settings-details-open .settings-toolbar-strip { display:none; }" in html
            and ".settings-vscode-calm:not(.settings-details-open) .settings-query-box #settings-details-toggle," in html
            and ".settings-vscode-calm:not(.settings-details-open) .settings-result-nav button { display:none; }" in html
-           and ".settings-vscode-calm .settings-nav-quick[data-settings-command-surface=\"sidebar\"] { grid-template-columns:1fr; }" in html
+           and ".settings-vscode-calm .settings-nav-quick[data-settings-command-surface=\"sidebar\"] { display:none; grid-template-columns:1fr; }" in html
            and ".settings-vscode-calm.settings-details-open .settings-search-row { grid-template-columns:minmax(520px,760px);" in html
            and ".drag-overlay:not(.active) { pointer-events:none; }" in html
            and "function clearTransientInteractionBlockers(reason)" in html

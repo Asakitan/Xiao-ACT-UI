@@ -2313,6 +2313,12 @@ class AIEditorAPI:
             self._capture_window_geometry(prefer_live=True)
         self._ready.set()
 
+    def mark_frontend_ready(self, phase: str = "ready") -> Dict[str, Any]:
+        """Record that the HTML/JS layer booted and released transient blockers."""
+        phase_text = str(phase or "ready")
+        _mark_launch_state_frontend_ready(phase_text)
+        return {"ok": True, "phase": phase_text, "pid": os.getpid()}
+
     def _capture_window_geometry(self, prefer_live: bool = False) -> Dict[str, int]:
         min_w, min_h = _AI_EDITOR_MIN_SIZE
         cached = self._window_geometry if isinstance(self._window_geometry, dict) else {}
@@ -17103,6 +17109,7 @@ _launch_inflight_started_at = 0.0
 _LAUNCH_INFLIGHT_TTL_SECONDS = 8.0
 _LAUNCH_CHILD_GRACE_SECONDS = 90.0
 _LAUNCH_CHILD_WINDOW_GRACE_SECONDS = 12.0
+_LAUNCH_FRONTEND_READY_GRACE_SECONDS = 20.0
 _EXISTING_WINDOW_RECOVERY_SECONDS = 5.0
 _LAUNCH_STATE_FILE = os.path.join(os.path.expanduser("~"), ".sao", "ai_editor_launch.json")
 _last_existing_window_activation: Dict[str, Any] = {"hwnd": 0, "at": 0.0}
@@ -17311,9 +17318,40 @@ def _write_launch_state(pid: int) -> None:
                 "started_at": time.time(),
                 "cwd": os.getcwd(),
                 "title": _AI_EDITOR_WINDOW_TITLE,
+                "frontend_ready_at": 0.0,
+                "frontend_ready_phase": "",
             }, fh)
     except Exception:
         pass
+
+
+def _mark_launch_state_frontend_ready(phase: str = "ready") -> None:
+    try:
+        state = _read_launch_state()
+        state["pid"] = int(state.get("pid") or os.getpid())
+        state["started_at"] = float(state.get("started_at") or time.time())
+        state["cwd"] = state.get("cwd") or os.getcwd()
+        state["title"] = state.get("title") or _AI_EDITOR_WINDOW_TITLE
+        state["frontend_ready_at"] = time.time()
+        state["frontend_ready_phase"] = str(phase or "ready")
+        os.makedirs(os.path.dirname(_LAUNCH_STATE_FILE), exist_ok=True)
+        with open(_LAUNCH_STATE_FILE, "w", encoding="utf-8") as fh:
+            json.dump(state, fh)
+    except Exception:
+        pass
+
+
+def _launch_state_frontend_ready(state: Dict[str, Any], pid: int) -> bool:
+    try:
+        current_pid = int(state.get("pid") or 0)
+    except Exception:
+        current_pid = 0
+    if current_pid and int(pid or 0) and current_pid != int(pid or 0):
+        return False
+    try:
+        return float(state.get("frontend_ready_at") or 0.0) > 0.0
+    except Exception:
+        return False
 
 
 def _clear_launch_state_for_pid(pid: int) -> None:
@@ -17333,7 +17371,18 @@ def _recent_child_launch_alive() -> bool:
     def _child_has_window_or_grace(pid: int, age: float) -> bool:
         if age <= _LAUNCH_CHILD_WINDOW_GRACE_SECONDS:
             return True
+        state = _read_launch_state()
         if _find_ai_editor_window(skip_current_process=True):
+            if _launch_state_frontend_ready(state, pid):
+                return True
+            if age <= _LAUNCH_FRONTEND_READY_GRACE_SECONDS:
+                _append_ai_editor_log(
+                    f"recent child pid={pid} has a window but frontend is not ready yet age={age:.1f}s")
+                return True
+            _append_ai_editor_log(
+                f"recent child pid={pid} has a window but no frontend ready signal after {age:.1f}s; allowing relaunch")
+            return False
+        if _launch_state_frontend_ready(state, pid) and age <= _LAUNCH_CHILD_GRACE_SECONDS:
             return True
         _append_ai_editor_log(
             f"recent child pid={pid} alive but no usable window after {age:.1f}s; allowing relaunch")

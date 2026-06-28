@@ -88,6 +88,29 @@ def _get_workshop_client():
         return None
 
 
+def _open_ai_editor_via_owner(owner: Any, *, status_var: Any = None) -> None:
+    """Open AI Editor through the owner path that releases menu/fisheye input first."""
+    try:
+        safe_toggle = getattr(owner, "_toggle_ai_editor_panel", None)
+        if callable(safe_toggle):
+            root = getattr(owner, "root", None)
+            if root is not None and hasattr(root, "after_idle"):
+                root.after_idle(safe_toggle)
+            else:
+                safe_toggle()
+            return
+        from ai_editor.app import launch
+        launch(gui_ref=owner)
+    except Exception as exc:
+        if status_var is not None:
+            try:
+                status_var.set(f"AI Editor: {exc}")
+            except Exception:
+                pass
+        else:
+            raise
+
+
 def _get_installed_ids(owner: Any) -> list[str]:
     try:
         from act_platform.runtime import act_plugin_status
@@ -289,8 +312,7 @@ class WorkshopChildPreview(tk.Frame):
                     plugin_path = p.get('path')
                     break
             if plugin_path:
-                from ai_editor.app import launch
-                launch(gui_ref=self._owner)
+                _open_ai_editor_via_owner(self._owner)
         except Exception:
             pass
 
@@ -1144,11 +1166,7 @@ class WorkshopPanel:
         card.bind('<Leave>', lambda e, c=card: c.configure(highlightbackground=_WG_BORDER))
 
     def _open_in_editor(self, plugin: dict):
-        try:
-            from ai_editor.app import launch
-            launch(gui_ref=self.owner)
-        except Exception as exc:
-            self._status_var.set(f'AI Editor: {exc}')
+        _open_ai_editor_via_owner(self.owner, status_var=self._status_var)
 
     def _delete_local(self, plugin_id: str):
         try:
