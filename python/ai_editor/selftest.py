@@ -4698,8 +4698,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hasJumpbarActionState" in html
            and "hasJumpbarModifiedCount" in html
            and "hasJumpbarActions" in html
-           and "#settings-modal.open:has(.settings-vscode-calm) {\n  align-items:center; justify-content:center; padding:18px 24px;" in html
-           and ".modal.settings-modal.preferences-workbench.settings-vscode-calm {\n  width:min(1280px, calc(100vw - 48px)); height:min(860px, calc(100vh - 48px));" in html
+           and "#settings-modal.open:has(.settings-vscode-calm) {\n  align-items:flex-start; justify-content:center; padding:14px 20px 18px;" in html
+           and ".modal.settings-modal.preferences-workbench.settings-vscode-calm {\n  width:min(1180px, calc(100vw - 40px)); height:min(780px, calc(100vh - 40px));" in html
            and ".settings-vscode-calm .settings-nav,\n.settings-vscode-calm .settings-main,\n.settings-vscode-calm .settings-inspector {\n  min-height:0; overflow-y:auto; overscroll-behavior:contain;" in html
            and 'id="settings-workbench-status" class="settings-workbench-status" role="status"' in html
            and "function renderSettingsWorkbenchStatus(visible,total,stats)" in html
@@ -4717,8 +4717,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".settings-vscode-calm.settings-details-open .settings-nav-quick[data-settings-command-surface=\"sidebar\"] { display:grid; }" in html
            and ".settings-vscode-calm:not(.settings-details-open) .settings-nav-commandbar button[data-settings-nav-command=\"keyboard-shortcuts\"]," in html
            and ".settings-vscode-calm .settings-shell { grid-template-columns:286px minmax(0,1fr);" in html
-           and ".settings-vscode-calm .settings-field.builtin-setting { padding:13px 96px 13px 0;" in html
-           and ".settings-vscode-calm .settings-control-frame { max-width:720px; min-height:32px; }" in html
+           and ".settings-vscode-calm .settings-field.builtin-setting { padding:11px 72px 11px 0;" in html
+           and ".settings-vscode-calm .settings-control-frame { max-width:680px; min-height:32px; }" in html
            and ".settings-vscode-calm .settings-row-actions { top:10px; opacity:0;" in html
            and "hasSettingsWorkbenchStatus" in html
            and "hasBoundedSettingsWorkbench" in html
@@ -4900,10 +4900,11 @@ def test_phase1_ai_editor_regressions() -> None:
             and ".chat-control-popup.workflow { min-width:340px; }" in html
             and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px;" in html
             and "margin-left:auto; flex:0 0 auto; min-width:max-content; width:max-content; flex-wrap:nowrap; overflow:hidden; white-space:nowrap;" in html
-            and ".chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:5px; min-width:0; max-width:148px; flex:0 1 148px;" in html
+            and ".chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:6px; min-width:0; max-width:170px; flex:0 1 170px;" in html
             and "color:var(--fg-dim); white-space:nowrap; overflow:hidden;" in html
             and ".chat-session-chip { max-width:76px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" in html
             and ".ctx-bar { width:30px; height:6px;" in html
+            and ".ctx-ring { width:16px; height:16px; flex:0 0 16px; border-radius:50%;" in html
            and '<div class="chat-toolbar" role="toolbar" aria-label="Assistant composer">' in html
            and '<div class="chat-control-strip" role="group" aria-label="Chat controls">' in html
            and '<div class="chat-composer-trailing" role="group" aria-label="Chat actions and status">' in html
@@ -5053,7 +5054,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".chat-control-popup { position:absolute; bottom:calc(100% + 7px); left:0; display:none;" in html
            and "border-radius:10px; box-shadow:0 14px 36px #00000078,0 0 0 1px #ffffff08;" in html
            and ".chat-composer-action { width:22px; height:22px; border:1px solid transparent; border-radius:999px;" in html
-           and ".model-chip { display:inline-flex; align-items:center; gap:3px; padding:2px 6px; background:var(--bg3);" in html
+           and ".model-chip { display:none; align-items:center; gap:3px; padding:2px 6px; background:var(--bg3);" in html
+           and ".ctx-ring { width:16px; height:16px; flex:0 0 16px; border-radius:50%;" in html
+           and 'id="ctx-ring" aria-hidden="true"' in html
+           and 'id="ctx-token-estimate"' in html
+           and "function assistantCompactNumber(value)" in html
+           and "return assistantCompactNumber(value)+' tok';" in html
            and "border:1px solid var(--border); border-radius:999px; font-size:11px; color:var(--fg-dim);" in html
            and ".workflow-popup-action { width:20px; height:20px; border:1px solid transparent; border-radius:999px;" in html
            and ".chat-control-popup.show { display:block; }" in html
@@ -5227,6 +5233,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and 'data-chat-prompt-action="review"' in html
            and 'data-chat-prompt-action="copy-context"' in html
            and 'data-chat-prompt-action="clear-draft"' in html
+           and ".chat-prompt-shortcuts { display:none;" in html
            and "function assistantComposerSummaryState()" in html
            and "function renderAssistantComposerSummary()" in html
            and "function assistantComposerContextText()" in html
@@ -6342,6 +6349,9 @@ def test_phase1_ai_editor_regressions() -> None:
             and "assistantUiSelfCheckRecord(checks,'visual-composer-fill-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-controls-one-row-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-control-widths-ready'" in html
+            and "assistantUiSelfCheckRecord(checks,'visual-prompt-shortcuts-hidden-ready'" in html
+            and "assistantUiSelfCheckRecord(checks,'visual-model-chip-removed-ready'" in html
+            and "assistantUiSelfCheckRecord(checks,'visual-content-window-ring-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-no-old-control-boxes-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'visual-popup-surfaces-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'visual-model-custom-endpoint-ready'" in html

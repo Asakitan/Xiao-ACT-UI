@@ -1091,7 +1091,7 @@ pre.code-block code .type { color:var(--fg-type); }
   background:color-mix(in srgb,var(--bg2) 70%,transparent); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-composer-summary-chip.primary { color:var(--fg); border-color:color-mix(in srgb,var(--fg-accent) 38%,var(--border)); }
 .chat-composer-summary-chip.dirty { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 42%,var(--border)); }
-.chat-prompt-shortcuts { display:flex; align-items:center; gap:5px; flex-wrap:wrap; padding:6px 8px 0; }
+.chat-prompt-shortcuts { display:none; align-items:center; gap:5px; flex-wrap:wrap; padding:6px 8px 0; }
 .chat-prompt-shortcut { border:1px solid color-mix(in srgb,var(--border) 84%,transparent); border-radius:999px;
   background:transparent; color:var(--fg-dim); min-height:22px; padding:0 8px; font:11px/20px var(--sans);
   cursor:pointer; transition:background .14s,border-color .14s,color .14s,transform .14s; }
@@ -1530,14 +1530,23 @@ pre.code-block code .type { color:var(--fg-type); }
   border-color:var(--border); outline:none; }
 .chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px;
   margin-left:auto; flex:0 0 auto; min-width:max-content; width:max-content; flex-wrap:nowrap; overflow:hidden; white-space:nowrap; }
-.chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:5px; min-width:0; max-width:148px; flex:0 1 148px;
+.chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:6px; min-width:0; max-width:170px; flex:0 1 170px;
   color:var(--fg-dim); white-space:nowrap; overflow:hidden; }
-.ctx-usage { display:inline-flex; align-items:center; gap:4px; font-size:10px; color:var(--fg-dim); cursor:default; }
+.ctx-usage { --ctx-percent:0%; display:inline-flex; align-items:center; gap:5px; min-width:0;
+  font:10px var(--mono); color:var(--fg-dim); cursor:default; }
 .ctx-bar { width:30px; height:6px; background:var(--bg3); border-radius:3px; overflow:hidden; position:relative; }
 .ctx-fill { height:100%; border-radius:3px; background:var(--fg-success); transition:width .3s; }
 .ctx-fill.warn { background:var(--fg-warning); }
 .ctx-fill.crit { background:var(--fg-error); }
-.model-chip { display:inline-flex; align-items:center; gap:3px; padding:2px 6px; background:var(--bg3);
+.ctx-ring { width:16px; height:16px; flex:0 0 16px; border-radius:50%;
+  background:conic-gradient(var(--fg-success) var(--ctx-percent), color-mix(in srgb,var(--border) 70%,transparent) 0);
+  display:inline-flex; align-items:center; justify-content:center; transition:background .2s ease; }
+.ctx-ring::after { content:''; width:8px; height:8px; border-radius:50%; background:var(--bg2); }
+.ctx-usage.warn .ctx-ring { background:conic-gradient(var(--fg-warning) var(--ctx-percent), color-mix(in srgb,var(--border) 70%,transparent) 0); }
+.ctx-usage.crit .ctx-ring { background:conic-gradient(var(--fg-error) var(--ctx-percent), color-mix(in srgb,var(--border) 70%,transparent) 0); }
+.ctx-text { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ctx-token-estimate { color:color-mix(in srgb,var(--fg-dim) 88%,var(--fg)); }
+.model-chip { display:none; align-items:center; gap:3px; padding:2px 6px; background:var(--bg3);
   border:1px solid var(--border); border-radius:999px; font-size:11px; color:var(--fg-dim);
   cursor:pointer; white-space:nowrap; height:18px; max-width:86px; overflow:hidden; text-overflow:ellipsis; }
 .model-chip:hover { color:var(--fg); border-color:var(--fg-dim); }
@@ -1683,15 +1692,15 @@ pre.code-block code .type { color:var(--fg-type); }
 .modal-bg.open { display:flex; }
 #settings-modal.open { align-items:stretch; justify-content:center; padding:12px 22px; box-sizing:border-box;
   background:color-mix(in srgb,#000 42%,transparent); }
-#settings-modal.open:has(.settings-vscode-calm) { align-items:center; justify-content:center; padding:18px 24px; background:color-mix(in srgb,#000 34%,transparent); }
+#settings-modal.open:has(.settings-vscode-calm) { align-items:flex-start; justify-content:center; padding:14px 20px 18px; background:color-mix(in srgb,#000 34%,transparent); }
 .modal { background:var(--bg2); border:1px solid var(--border); border-radius:6px;
   width:560px; max-height:85vh; overflow-y:auto; padding:20px 24px; box-shadow:0 8px 32px #00000080; }
 .modal.settings-modal { width:min(1520px, calc(100vw - 44px)); height:calc(100vh - 24px);
   max-height:calc(100vh - 24px); overflow:hidden; padding:0; display:flex; flex-direction:column;
   border-radius:3px; background:var(--bg); box-shadow:0 18px 54px #00000092; }
 .modal.settings-modal.preferences-workbench { border-color:color-mix(in srgb,var(--border) 86%,var(--fg-accent)); }
-.modal.settings-modal.preferences-workbench.settings-vscode-calm { width:min(1280px, calc(100vw - 48px)); height:min(860px, calc(100vh - 48px)); max-width:calc(100vw - 48px);
-  max-height:calc(100vh - 48px); border:1px solid color-mix(in srgb,var(--border) 82%,transparent); border-radius:4px; box-shadow:0 14px 42px #00000072; }
+.modal.settings-modal.preferences-workbench.settings-vscode-calm { width:min(1180px, calc(100vw - 40px)); height:min(780px, calc(100vh - 40px)); max-width:calc(100vw - 40px);
+  max-height:calc(100vh - 40px); border:1px solid color-mix(in srgb,var(--border) 82%,transparent); border-radius:4px; box-shadow:0 14px 42px #00000072; }
 .modal h2 { color:var(--fg); font-size:14px; margin-bottom:16px; font-weight:600; }
 .settings-titlebar { display:flex; align-items:center; justify-content:space-between; gap:16px;
   min-height:36px; padding:6px 14px; border-bottom:1px solid var(--border); background:var(--bg2); flex-shrink:0; }
@@ -3153,12 +3162,12 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-nav-review button.active { color:var(--fg-accent); }
 .settings-vscode-calm .settings-nav-review button.error { color:var(--fg-error); }
 .settings-vscode-calm .settings-nav-review button:disabled { opacity:.45; cursor:default; }
-.settings-vscode-calm .settings-main { padding:15px 54px 40px; background:var(--bg); }
+.settings-vscode-calm .settings-main { padding:12px 40px 32px; background:var(--bg); scroll-padding-top:12px; }
 .settings-vscode-calm .settings-main > .settings-section,
 .settings-vscode-calm .settings-main > details.settings-section,
 .settings-vscode-calm #ext-settings-container { max-width:960px; }
 .settings-vscode-calm .settings-section-overview { padding-top:13px; border-bottom-color:color-mix(in srgb,var(--border) 58%,transparent); }
-.settings-vscode-calm .settings-field.builtin-setting { padding:13px 96px 13px 0;
+.settings-vscode-calm .settings-field.builtin-setting { padding:11px 72px 11px 0;
   border-bottom:1px solid color-mix(in srgb,var(--border) 58%,transparent); }
 .settings-vscode-calm .settings-field.builtin-setting.modified { box-shadow:inset 2px 0 0 var(--fg-accent);
   padding-left:10px; }
@@ -3167,7 +3176,7 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-built-head-category { color:color-mix(in srgb,var(--fg-dim) 86%,var(--fg)); }
 .settings-vscode-calm .settings-built-head-state.edited { color:var(--fg-accent); }
 .settings-vscode-calm .settings-built-head-state.override { color:var(--fg-warning); }
-.settings-vscode-calm .settings-control-frame { max-width:720px; min-height:32px; }
+.settings-vscode-calm .settings-control-frame { max-width:680px; min-height:32px; }
 .settings-vscode-calm .settings-control-frame:focus-within { border-color:color-mix(in srgb,var(--border-focus) 68%,var(--border));
   box-shadow:0 0 0 1px color-mix(in srgb,var(--border-focus) 24%,transparent); }
 .settings-vscode-calm .settings-row-actions { top:10px; opacity:0; transform:translateX(3px); transition:opacity .12s ease,transform .12s ease; }
@@ -3313,17 +3322,17 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-nav-result-group:disabled { opacity:.45; cursor:default; }
 .settings-vscode-calm .settings-nav-result-group strong { color:var(--fg); font:600 11px var(--mono); }
 #settings-modal.open:has(.settings-vscode-calm) {
-  align-items:center; justify-content:center; padding:18px 24px; background:color-mix(in srgb,#000 34%,transparent);
+  align-items:flex-start; justify-content:center; padding:14px 20px 18px; background:color-mix(in srgb,#000 34%,transparent);
 }
 .modal.settings-modal.preferences-workbench.settings-vscode-calm {
-  width:min(1280px, calc(100vw - 48px)); height:min(860px, calc(100vh - 48px));
-  max-width:calc(100vw - 48px); max-height:calc(100vh - 48px);
+  width:min(1180px, calc(100vw - 40px)); height:min(780px, calc(100vh - 40px));
+  max-width:calc(100vw - 40px); max-height:calc(100vh - 40px);
   border:1px solid color-mix(in srgb,var(--border) 82%,transparent); border-radius:4px;
   box-shadow:0 14px 42px #00000072; overflow:hidden;
 }
 @supports (height: 100dvh) {
   .modal.settings-modal.preferences-workbench.settings-vscode-calm {
-    height:min(860px, calc(100dvh - 48px)); max-height:calc(100dvh - 48px);
+    height:min(780px, calc(100dvh - 40px)); max-height:calc(100dvh - 40px);
   }
 }
 .settings-vscode-calm .settings-shell {
@@ -4204,10 +4213,10 @@ pre.code-block { overflow:visible; }
                     <button class="chat-composer-action" onclick="uploadImage()" title="Attach image" aria-label="Attach image">📎</button>
                     <span class="chat-composer-meta" id="chat-input-status" role="status" aria-live="polite">
                       <span class="chat-session-chip" id="chat-session-chip" title="Chat session">Local - 0 req</span>
-                      <span class="model-chip" id="model-chip" onclick="openSettings()" title="Change model">-</span>
                       <span class="ctx-usage" id="ctx-usage" title="Context window usage">
-                        <span id="ctx-text">0</span>
-                        <span class="ctx-bar"><span class="ctx-fill" id="ctx-fill" style="width:0%"></span></span>
+                        <span class="ctx-ring" id="ctx-ring" aria-hidden="true"></span>
+                        <span class="ctx-text" id="ctx-text">Ctx 0 / 128K</span>
+                        <span class="ctx-token-estimate" id="ctx-token-estimate">0 tok</span>
                       </span>
                     </span>
                   </div>
@@ -12109,6 +12118,9 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'visual-composer-fill-ready',visualLayout.ok&&visualLayout.composerLeftAligned&&visualLayout.composerRightAligned&&visualLayout.composerFillsArea&&visualLayout.composerBottomFilled,JSON.stringify(visualLayout));
   assistantUiSelfCheckRecord(checks,'visual-controls-one-row-ready',visualLayout.toolbarOneLine&&visualLayout.metaInsideTrailing&&visualLayout.buttonSurfaceReady&&visualLayout.triggerMotionReady,JSON.stringify(visualLayout));
   assistantUiSelfCheckRecord(checks,'visual-control-widths-ready',visualLayout.controlWidthsReady===true,JSON.stringify(visualLayout.triggerWidths));
+  assistantUiSelfCheckRecord(checks,'visual-prompt-shortcuts-hidden-ready',visualLayout.promptShortcutsHidden===true&&visualLayout.promptShortcutsHeight===0,JSON.stringify(visualLayout));
+  assistantUiSelfCheckRecord(checks,'visual-model-chip-removed-ready',visualLayout.modelChipHidden===true&&visualLayout.modelChipWidth===0,JSON.stringify(visualLayout));
+  assistantUiSelfCheckRecord(checks,'visual-content-window-ring-ready',visualLayout.contextRingReady===true&&visualLayout.contextTokenCompactReady===true,JSON.stringify(visualLayout.contextWindow));
   assistantUiSelfCheckRecord(checks,'visual-no-old-control-boxes-ready',visualLayout.noOldNativeBoxes===true,JSON.stringify(visualLayout.nativeBoxes));
   assistantUiSelfCheckRecord(checks,'visual-popup-surfaces-ready',visualLayout.popupsCustomSurface&&visualLayout.popupsOpenAbove&&visualLayout.popupMotionReady,JSON.stringify(visualLayout.popups));
   assistantUiSelfCheckRecord(checks,'visual-model-custom-endpoint-ready',visualLayout.modelEndpointReady===true,JSON.stringify(visualLayout));
@@ -12239,6 +12251,7 @@ function assistantComposerLayoutSnapshot(){
 }
 function assistantVisualLayoutSnapshot(){
   renderChatControlPopups();
+  if(typeof updateContextUsage==='function')updateContextUsage(totalTokens||0);
   const panel=$('chat-panel');
   const area=document.querySelector('.chat-input-area');
   const container=$('chat-input-container');
@@ -12246,9 +12259,15 @@ function assistantVisualLayoutSnapshot(){
   const controls=document.querySelector('.chat-control-strip');
   const trailing=document.querySelector('.chat-composer-trailing');
   const meta=document.querySelector('.chat-composer-meta');
+  const shortcuts=$('chat-prompt-shortcuts');
+  const modelChip=$('model-chip');
+  const ctxUsage=$('ctx-usage');
+  const ctxRing=$('ctx-ring');
+  const ctxText=$('ctx-text');
+  const ctxEstimate=$('ctx-token-estimate');
   const rect=el=>{if(!el)return null;const r=el.getBoundingClientRect();return {top:Math.round(r.top),left:Math.round(r.left),right:Math.round(r.right),bottom:Math.round(r.bottom),width:Math.round(r.width),height:Math.round(r.height)}};
   const cssPx=value=>{const n=parseFloat(String(value||'0'));return Number.isFinite(n)?n:0};
-  const panelRect=rect(panel),areaRect=rect(area),containerRect=rect(container),toolbarRect=rect(toolbar),controlsRect=rect(controls),trailingRect=rect(trailing),metaRect=rect(meta);
+  const panelRect=rect(panel),areaRect=rect(area),containerRect=rect(container),toolbarRect=rect(toolbar),controlsRect=rect(controls),trailingRect=rect(trailing),metaRect=rect(meta),shortcutsRect=rect(shortcuts),modelChipRect=rect(modelChip),ctxRingRect=rect(ctxRing);
   const areaStyle=area?getComputedStyle(area):null;
   const contentLeft=areaRect?areaRect.left+cssPx(areaStyle&&areaStyle.paddingLeft):0;
   const contentRight=areaRect?areaRect.right-cssPx(areaStyle&&areaStyle.paddingRight):0;
@@ -12280,6 +12299,20 @@ function assistantVisualLayoutSnapshot(){
   const toolbarOverlap=!!(controlsRect&&trailingRect&&controlsRect.right>trailingRect.left+1&&Math.abs(controlsRect.top-trailingRect.top)<=1);
   const triggerWidthMap={};
   triggers.forEach(item=>{triggerWidthMap[item.id]=item.width});
+  const shortcutStyle=shortcuts?getComputedStyle(shortcuts):null;
+  const modelChipStyle=modelChip?getComputedStyle(modelChip):null;
+  const compactSamples=typeof assistantCompactNumber==='function'
+    ? [assistantCompactNumber(999),assistantCompactNumber(1200),assistantCompactNumber(2500000),assistantCompactNumber(4300000000)]
+    : [];
+  const contextWindow={
+    usageExists:!!ctxUsage,
+    ringExists:!!ctxRing,
+    ringWidth:ctxRingRect?ctxRingRect.width:0,
+    label:String(ctxText&&ctxText.textContent||''),
+    estimate:String(ctxEstimate&&ctxEstimate.textContent||''),
+    cssPercent:String(ctxUsage&&ctxUsage.style&&ctxUsage.style.getPropertyValue('--ctx-percent')||''),
+    compactSamples
+  };
   return {
     ok:!!(panel&&area&&container&&toolbar&&controls&&trailing),
     panel:panelRect,
@@ -12296,6 +12329,13 @@ function assistantVisualLayoutSnapshot(){
     composerBottomFilled:!!(panelRect&&areaRect&&Math.abs(panelRect.bottom-areaRect.bottom)<=2),
     toolbarOneLine:!!(controlsRect&&trailingRect&&Math.abs(controlsRect.top-trailingRect.top)<=1&&!toolbarOverlap),
     metaInsideTrailing:!!(metaRect&&trailingRect&&metaRect.left>=trailingRect.left-1&&metaRect.right<=trailingRect.right+1),
+    promptShortcutsHidden:!!(shortcuts&&shortcutStyle&&shortcutStyle.display==='none'),
+    promptShortcutsHeight:shortcutsRect?shortcutsRect.height:0,
+    modelChipHidden:!modelChip||(modelChipStyle&&modelChipStyle.display==='none'),
+    modelChipWidth:modelChipRect?modelChipRect.width:0,
+    contextWindow,
+    contextRingReady:!!(ctxUsage&&ctxRing&&ctxRingRect&&ctxRingRect.width>=14&&contextWindow.cssPercent&&String(ctxRing.getAttribute('aria-hidden')||'')==='true'),
+    contextTokenCompactReady:contextWindow.label.includes('CW ')&&contextWindow.estimate.endsWith('tok')&&compactSamples.join(',')==='999,1.2K,2.5M,4.3B',
     triggers,
     buttonSurfaceReady:triggers.every(item=>item.exists&&item.tag==='button'&&item.radius>=10&&item.width>18&&item.height>=20),
     triggerMotionReady:triggers.every(item=>item.transition.includes('border-color')&&item.transition.includes('background')),
@@ -20873,7 +20913,7 @@ async function updateTokenCount(options){
     const floor=Math.max(0,Number(opts.minTokens)||0);
     totalTokens=Math.max(reported,floor);
     updateContextUsage(totalTokens);
-    const statusTokens=$('status-tokens');if(statusTokens)statusTokens.textContent=totalTokens+' tokens';
+    const statusTokens=$('status-tokens');if(statusTokens)statusTokens.textContent=assistantTokenEstimateLabel(totalTokens);
   }
 }
 
@@ -30071,7 +30111,8 @@ function settingsUiSelfCheckSnapshot(){
       &&typeof settingsFocusVisibleRow==='function'
       &&typeof settingsFocusPagedRow==='function'
       &&typeof settingsFocusActiveSection==='function'),
-    hasWorkspaceSizedModal:!!modal&&String(getComputedStyle(modal).alignItems)==='stretch',
+    hasWorkspaceSizedModal:!!(modal&&settingsFrameRect&&String(getComputedStyle(modal).alignItems)==='flex-start'
+      &&settingsFrameRect.top>=10&&settingsFrameRect.bottom<=window.innerHeight-10),
     hasPreferencesWorkbenchShell:!!document.querySelector('.modal.settings-modal.preferences-workbench'),
     hasWorkbenchHeaderContext:!!(route&&route.textContent&&typeof renderSettingsWorkbenchHeader==='function'&&typeof settingsWorkbenchContextLabel==='function'),
     hasSettingsToolbarStrip:!!document.querySelector('.settings-toolbar-strip .settings-top-action.primary'),
@@ -32168,15 +32209,34 @@ function syncUI(){
   if(typeof renderTerminalProfileSelector==='function')renderTerminalProfileSelector();
   renderChatControlOptions();
 }
+function assistantCompactNumber(value){
+  const n=Math.max(0,Number(value)||0);
+  const units=[['B',1000000000],['M',1000000],['K',1000]];
+  for(const [unit,size] of units){
+    if(n>=size){
+      const raw=n/size;
+      const rounded=raw>=100?Math.round(raw):raw>=10?Math.round(raw*10)/10:Math.round(raw*10)/10;
+      return String(rounded).replace(/\.0$/,'')+unit;
+    }
+  }
+  return String(Math.round(n));
+}
+function assistantTokenEstimateLabel(value){
+  return assistantCompactNumber(value)+' tok';
+}
 function updateContextUsage(usedTokens){
+  usedTokens=Math.max(0,Number(usedTokens)||0);
   totalTokens=usedTokens;
-  const statusTokens=$('status-tokens');if(statusTokens)statusTokens.textContent=usedTokens+' tokens';
-  const ctxEl=$('ctx-text'),fillEl=$('ctx-fill');if(!ctxEl||!fillEl)return;
+  const statusTokens=$('status-tokens');if(statusTokens)statusTokens.textContent=assistantTokenEstimateLabel(usedTokens);
+  const ctxEl=$('ctx-text'),ctxWrap=$('ctx-usage'),estimateEl=$('ctx-token-estimate');if(!ctxEl||!ctxWrap)return;
   const cw=(config.context_window&&config.context_window.max_input)||128000;
   const pct=Math.min(100,Math.round(usedTokens/cw*100));
-  ctxEl.textContent=usedTokens>=1000?Math.round(usedTokens/1000)+'K / '+Math.round(cw/1000)+'K':usedTokens+' / '+Math.round(cw/1000)+'K';
-  fillEl.style.width=pct+'%';
-  fillEl.className='ctx-fill'+(pct>=90?' crit':pct>=75?' warn':'');
+  ctxEl.textContent='CW '+assistantCompactNumber(usedTokens)+' / '+assistantCompactNumber(cw);
+  if(estimateEl)estimateEl.textContent=assistantTokenEstimateLabel(usedTokens);
+  ctxWrap.style.setProperty('--ctx-percent',pct+'%');
+  ctxWrap.classList.toggle('warn',pct>=75&&pct<90);
+  ctxWrap.classList.toggle('crit',pct>=90);
+  ctxWrap.title='Content window usage: '+assistantCompactNumber(usedTokens)+' / '+assistantCompactNumber(cw)+' tokens ('+pct+'%)';
 }
 function providerLabel(value){
   const labels={openai:'OpenAI',anthropic:'Anthropic',deepseek:'DeepSeek',ollama:'Ollama',custom:'Custom'};
