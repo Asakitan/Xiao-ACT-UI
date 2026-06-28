@@ -3754,7 +3754,7 @@ pre.code-block { overflow:visible; }
         <span class="settings-toolbar-strip" role="group" aria-label="Settings commands">
           <button type="button" class="settings-top-action primary" onclick="settingsOpenJsonView()">Open JSON</button>
           <button type="button" class="settings-top-action" onclick="focusSettingsSearch()">Search</button>
-          <button type="button" class="settings-top-action" onclick="closeSettings();openKeybindings()">Keyboard Shortcuts</button>
+          <button type="button" class="settings-top-action" onclick="settingsCloseThen(openKeybindings)">Keyboard Shortcuts</button>
         </span>
       </div>
     </div>
@@ -4225,10 +4225,10 @@ pre.code-block { overflow:visible; }
     <div class="modal-status" id="s-status"></div>
     <div class="modal-btns">
       <span id="settings-footer-summary" class="settings-footer-summary" role="status" aria-live="polite">Clean</span>
-      <button type="button" class="settings-bottom-action" onclick="closeSettings();openKeybindings()">Keyboard Shortcuts</button>
+      <button type="button" class="settings-bottom-action" onclick="settingsCloseThen(openKeybindings)">Keyboard Shortcuts</button>
       <button type="button" class="settings-top-action settings-reset-visible" onclick="resetVisibleModifiedSettings()">Reset Visible</button>
       <button type="button" class="settings-bottom-action" onclick="testConn()">Test</button>
-      <button type="button" class="settings-bottom-action" onclick="closeSettings()">Cancel</button>
+      <button type="button" class="settings-bottom-action settings-cancel-button" id="settings-cancel-button" onclick="settingsCancelOrClose()">Close</button>
       <button type="button" class="settings-bottom-action primary settings-save-button" onclick="saveSettings()">Save</button>
     </div>
   </div>
@@ -5570,6 +5570,23 @@ function refreshSettingsDirtySummary(modifiedCount,errorCount){
         ? 'Save '+String(modifiedCount)+' modified setting'+(modifiedCount===1?'':'s')+' to '+settingsTargetDisplayName(currentSettingsTarget)
         : 'Save Settings';
   }
+  settingsUpdateCloseButton(modifiedCount,errorCount);
+}
+function settingsUpdateCloseButton(modifiedCount,errorCount){
+  const btn=$('settings-cancel-button');
+  if(!btn)return;
+  const modal=$('settings-modal');
+  modifiedCount=Number(modifiedCount)||0;
+  errorCount=Number(errorCount)||0;
+  if(modal&&!(modifiedCount||errorCount))delete modal.dataset.settingsDiscardArmed;
+  const armed=!!(modal&&modal.dataset.settingsDiscardArmed==='1');
+  btn.dataset.discardArmed=armed?'1':'0';
+  btn.textContent=armed?'Discard':(modifiedCount||errorCount?'Close...':'Close');
+  btn.title=armed
+    ? 'Discard unsaved Settings changes and close'
+    : (modifiedCount||errorCount
+      ? 'Review unsaved Settings changes before closing'
+      : 'Close Settings');
 }
 
 let streaming=false, totalTokens=0, streamBuf='', currentMsgBody=null;
@@ -27058,7 +27075,13 @@ function applySettingsValidation(errors,options){
 }
 function validateSettingsBeforeSave(options){
   const errors=applySettingsValidation(collectSettingsValidationErrors(),options||{});
-  if(errors.length&&options&&options.toast!==false)showToast('Fix settings validation errors before saving','error',2600);
+  if(errors.length){
+    if(options&&options.focusFirst){
+      settingsApplyReviewFilter('error');
+      setTimeout(()=>settingsFocusFirstReviewRow('error'),0);
+    }
+    if(options&&options.toast!==false)showToast('Fix settings validation errors before saving','error',2600);
+  }
   return errors;
 }
 function scheduleSettingsValidation(){
@@ -27402,7 +27425,64 @@ function openSettings(){
     }
   },0);
 }
-function closeSettings(){$('settings-modal').classList.remove('open');settingsShowRowDetails(null)}
+function settingsAllRows(){
+  const root=settingsMainElement()||document;
+  return Array.from(root.querySelectorAll('.settings-field.builtin-setting,.ext-setting-row'));
+}
+function settingsPendingCloseState(){
+  const rows=settingsAllRows();
+  const modified=rows.filter(row=>row.classList&&row.classList.contains('modified'));
+  const invalidRows=rows.filter(row=>(row.querySelector&&row.querySelector('[aria-invalid="true"],.settings-input-invalid'))||(row.classList&&row.classList.contains('invalid')));
+  const validationErrors=typeof collectSettingsValidationErrors==='function'?collectSettingsValidationErrors():[];
+  const errors=validationErrors.length?validationErrors:invalidRows;
+  return {modified,errors,modifiedCount:modified.length,errorCount:errors.length};
+}
+function settingsHasPendingCloseWork(){
+  const state=settingsPendingCloseState();
+  return !!(state.modifiedCount||state.errorCount);
+}
+function settingsArmDiscardClose(reason){
+  const modal=$('settings-modal');
+  const state=settingsPendingCloseState();
+  if(!(state.modifiedCount||state.errorCount))return true;
+  if(modal)modal.dataset.settingsDiscardArmed='1';
+  const reviewState=settingsComputeReviewState({visible:settingsVisibleRows().length});
+  renderSettingsReviewBar({visible:settingsVisibleRows().length,modified:state.modifiedCount,errors:state.errorCount,overrides:settingsReviewRows('override').length});
+  renderSettingsSavePreview(reviewState,true);
+  refreshSettingsDirtySummary(state.modifiedCount,state.errorCount);
+  settingsApplyReviewFilter(state.errorCount?'error':'modified');
+  setTimeout(()=>{
+    const first=state.errorCount?settingsFocusFirstReviewRow('error'):settingsFocusFirstReviewRow('modified');
+    if(!first)focusSettingsSearch();
+  },0);
+  showToast((state.errorCount?'Fix errors or ':'')+'Save or click Discard to close Settings.','warning',2600);
+  return false;
+}
+function settingsResetCloseGuard(){
+  const modal=$('settings-modal');
+  if(modal)delete modal.dataset.settingsDiscardArmed;
+  const state=settingsPendingCloseState();
+  settingsUpdateCloseButton(state.modifiedCount,state.errorCount);
+}
+function closeSettings(options){
+  const opts=options||{};
+  if(!opts.force&&!settingsArmDiscardClose('close'))return false;
+  const modal=$('settings-modal');
+  if(modal){
+    modal.classList.remove('open');
+    delete modal.dataset.settingsDiscardArmed;
+  }
+  settingsShowRowDetails(null);
+  return true;
+}
+function settingsCancelOrClose(){
+  const modal=$('settings-modal');
+  if(modal&&modal.dataset.settingsDiscardArmed==='1')return closeSettings({force:true});
+  return closeSettings();
+}
+function settingsCloseThen(fn){
+  if(closeSettings()&&typeof fn==='function')fn();
+}
 // SETTINGS-01: Filter settings sections by search query
 let _settingsFilterDomCache=null;
 function invalidateSettingsFilterCache(){_settingsFilterDomCache=null}
@@ -28224,6 +28304,19 @@ function settingsUiSelfCheckSnapshot(){
       &&!String(settingsHandleBackdropClick).includes('closeSettings()'),
     hasSaveCountLabel:typeof refreshSettingsDirtySummary==='function'
       &&String(refreshSettingsDirtySummary).includes("save.textContent=errorCount?'Fix Errors':(modifiedCount?'Save '+String(modifiedCount):'Save')"),
+    hasUnsavedCloseGuard:typeof settingsArmDiscardClose==='function'
+      &&String(settingsArmDiscardClose).includes("modal.dataset.settingsDiscardArmed='1'")
+      &&String(closeSettings).includes('settingsArmDiscardClose'),
+    hasDiscardCloseAction:!!$('settings-cancel-button')
+      &&typeof settingsCancelOrClose==='function'
+      &&String(settingsCancelOrClose).includes("settingsDiscardArmed==='1'"),
+    hasGuardedSettingsNavigation:typeof settingsCloseThen==='function'
+      &&document.querySelectorAll('[onclick="settingsCloseThen(openKeybindings)"]').length>=2,
+    hasCloseGuardReviewFilter:typeof settingsArmDiscardClose==='function'
+      &&String(settingsArmDiscardClose).includes("settingsApplyReviewFilter(state.errorCount?'error':'modified')"),
+    hasSaveErrorReviewFocus:typeof validateSettingsBeforeSave==='function'
+      &&String(validateSettingsBeforeSave).includes("settingsApplyReviewFilter('error')")
+      &&String(validateSettingsBeforeSave).includes("settingsFocusFirstReviewRow('error')"),
     hasHumanizedResultCount:typeof settingsResultCountLabel==='function'
       && settingsResultCountLabel(3,12)==='3 of 12'
       && settingsResultCountLabel(0,12)==='12 Settings'
@@ -28358,6 +28451,9 @@ window.settingsOpenJsonView=settingsOpenJsonView;
 window.settingsUseSearchHint=settingsUseSearchHint;
 window.settingsSearchHintKeydown=settingsSearchHintKeydown;
 window.settingsClearSearch=settingsClearSearch;
+window.settingsCancelOrClose=settingsCancelOrClose;
+window.settingsCloseThen=settingsCloseThen;
+window.settingsHasPendingCloseWork=settingsHasPendingCloseWork;
 window.resetVisibleModifiedSettings=resetVisibleModifiedSettings;
 window.selectSettingsTarget=selectSettingsTarget;
 window.scrollToSettingsSection=scrollToSettingsSection;

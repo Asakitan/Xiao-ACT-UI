@@ -4342,14 +4342,28 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function settingsHandleBackdropClick(ev)" in html
            and "settingsHasActiveSearch()" in html
            and "save.textContent=errorCount?'Fix Errors':(modifiedCount?'Save '+String(modifiedCount):'Save')" in html
+           and 'id="settings-cancel-button" onclick="settingsCancelOrClose()"' in html
+           and "function settingsArmDiscardClose(reason)" in html
+           and "modal.dataset.settingsDiscardArmed='1'" in html
+           and "function settingsCancelOrClose()" in html
+           and "function settingsCloseThen(fn)" in html
+           and "settingsCloseThen(openKeybindings)" in html
+           and "settingsApplyReviewFilter(state.errorCount?'error':'modified')" in html
+           and "settingsApplyReviewFilter('error')" in html
            and "window.settingsResultCountLabel=settingsResultCountLabel;" in html
            and "window.settingsClearSearch=settingsClearSearch;" in html
+           and "window.settingsCancelOrClose=settingsCancelOrClose;" in html
            and "hasHumanizedResultCount" in html
            and "hasIconResultNavigation" in html
            and "hasSearchClearButton" in html
            and "hasEscapeSearchClearFirst" in html
            and "hasBackdropFocusesSearch" in html
            and "hasSaveCountLabel" in html
+           and "hasUnsavedCloseGuard" in html
+           and "hasDiscardCloseAction" in html
+           and "hasGuardedSettingsNavigation" in html
+           and "hasCloseGuardReviewFilter" in html
+           and "hasSaveErrorReviewFocus" in html
            and "hasMoreReadableCategoryNav" in html
            and "hasReducedSettingsTitleNoise" in html
            and "hasHumanizedSaveAffordance" in html)
