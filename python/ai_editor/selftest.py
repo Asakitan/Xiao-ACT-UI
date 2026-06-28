@@ -9613,14 +9613,25 @@ console.log("frontend word separator behavior ok");
            and "function settingsNumberValidation(errors,id,label,opts)" in html
            and "function settingsJsonObjectValidation(errors,id,label)" in html
            and "function settingsPublisherValidation(errors)" in html
+           and "function settingsValidationErrorGroups(errors)" in html
+           and "function settingsFocusValidationError(id)" in html
+           and "function settingsFilterValidationErrors()" in html
            and "function validateSettingsBeforeSave(options)" in html
            and "window.collectSettingsValidationErrors=collectSettingsValidationErrors;" in html
            and "window.validateSettingsBeforeSave=validateSettingsBeforeSave;" in html
+           and "window.settingsValidationErrorGroups=settingsValidationErrorGroups;" in html
+           and "window.settingsFocusValidationError=settingsFocusValidationError;" in html
+           and "window.settingsFilterValidationErrors=settingsFilterValidationErrors;" in html
            and "const validationErrors=validateSettingsBeforeSave({focusFirst:true});" in html
            and "if(validationErrors.length)return;" in html
            and "setAttribute('aria-invalid','true')" in html
            and "settings-input-invalid" in html
            and "settings-error-text" in html
+           and "className='settings-validation-head'" in html
+           and "className='settings-validation-list'" in html
+           and "className='settings-validation-item'" in html
+           and "settingsValidationSectionForInput(err.id)" in html
+           and "settingsApplyReviewFilter('error')" in html
            and "Duplicate publisher" in html
            and "Publisher also appears in Blocked Publishers" in html
            and "s-editor-code-actions-on-save-json" in html
@@ -10036,6 +10047,22 @@ console.log("frontend word separator behavior ok");
             and "hasSuggestedMatchesHost" in html
              and "hasReviewFilterActions" in html
              and "hasOverridesFilterToken" in html
+             and "function settingsAppendExtensionDetailPanel(host,row)" in html
+             and "card.dataset.settingsExtensionDetail='1';" in html
+             and "className='detail-extension-card'" in html
+             and "extension-card-grid" in html
+             and "Same Extension','Filter extension settings from" in html
+             and "Same Scope','Filter extension settings by scope" in html
+             and "Copy Schema','Copy extension setting schema summary" in html
+             and "row.dataset.extSettingDisplayName=displayName||extId||'Extension';" in html
+             and "row.dataset.extSettingConfig=configId||title||headerLabel||'Configuration';" in html
+             and "row.dataset.extSettingConfig='Language Defaults';" in html
+             and "window.settingsAppendExtensionDetailPanel=settingsAppendExtensionDetailPanel;" in html
+             and "hasValidationSummaryHost" in html
+             and "hasValidationSummaryRenderer" in html
+             and "hasExtensionDetailPanel" in html
+             and "hasExtensionDetailGrid" in html
+             and "hasExtensionDetailActions" in html
              and "hasLanguageSuggestions" in html
              and "hasLanguageModifiedSearch" in html
              and "window.settingsSearchForKey=settingsSearchForKey;" in html

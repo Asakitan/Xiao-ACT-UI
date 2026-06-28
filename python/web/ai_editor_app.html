@@ -1762,6 +1762,17 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-current-detail .detail-target-note span { color:var(--fg-dim); }
 .settings-current-detail .detail-target-note.warning { border-color:color-mix(in srgb,var(--fg-warning) 45%,var(--border)); }
 .settings-current-detail .detail-target-note.active { border-color:color-mix(in srgb,var(--fg-accent) 45%,var(--border)); }
+.settings-current-detail .detail-extension-card { display:grid; gap:5px; padding:7px;
+  border:1px solid color-mix(in srgb,var(--border) 75%,transparent); border-radius:5px;
+  background:color-mix(in srgb,var(--bg3) 62%,transparent); }
+.settings-current-detail .detail-extension-card .extension-card-head { display:flex; align-items:center; gap:6px;
+  color:var(--fg); font-weight:600; }
+.settings-current-detail .detail-extension-card .extension-card-grid { display:grid; grid-template-columns:76px minmax(0,1fr);
+  gap:3px 7px; align-items:center; }
+.settings-current-detail .detail-extension-card .extension-card-grid span:nth-child(odd) {
+  color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; }
+.settings-current-detail .detail-extension-card .extension-card-grid span:nth-child(even) {
+  min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg); font:11px var(--mono); }
 .settings-current-detail .detail-matrix { display:grid; gap:1px; padding:3px; border:1px solid var(--border);
   border-radius:5px; background:color-mix(in srgb,var(--bg) 42%,transparent); }
 .settings-current-detail .detail-value-row { display:grid; grid-template-columns:76px minmax(0,1fr) auto; align-items:center;
@@ -2554,6 +2565,28 @@ pre.code-block { overflow:visible; }
 .settings-validation-summary.error { display:block; color:var(--fg-error);
   border-color:color-mix(in srgb,var(--fg-error) 55%,var(--border));
   background:color-mix(in srgb,var(--fg-error) 8%,var(--bg2)); }
+.settings-validation-head { display:flex; flex-wrap:wrap; align-items:center; gap:6px; color:var(--fg); }
+.settings-validation-head strong { font-weight:600; }
+.settings-validation-head .validation-chip { display:inline-flex; align-items:center; min-height:18px;
+  padding:0 6px; border:1px solid color-mix(in srgb,var(--fg-error) 45%,var(--border));
+  border-radius:999px; color:var(--fg-error); background:color-mix(in srgb,var(--fg-error) 7%,transparent);
+  font:10px var(--mono); }
+.settings-validation-actions { margin-left:auto; display:inline-flex; align-items:center; gap:4px; }
+.settings-validation-actions button,.settings-validation-list button { min-height:21px; padding:1px 7px;
+  border:1px solid var(--border); border-radius:4px; background:var(--bg3); color:var(--fg-dim);
+  font:11px var(--sans); cursor:pointer; }
+.settings-validation-actions button:hover,.settings-validation-actions button:focus,
+.settings-validation-list button:hover,.settings-validation-list button:focus {
+  color:var(--fg); border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
+.settings-validation-list { display:grid; gap:4px; margin-top:6px; }
+.settings-validation-item { display:grid; grid-template-columns:minmax(140px,1fr) minmax(220px,2fr) minmax(90px,auto) auto;
+  align-items:center; gap:8px; min-height:25px; padding:4px 6px; border:1px solid color-mix(in srgb,var(--border) 70%,transparent);
+  border-radius:4px; background:color-mix(in srgb,var(--bg3) 58%,transparent); }
+.settings-validation-item .validation-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:var(--fg); font-weight:600; }
+.settings-validation-item .validation-message { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:var(--fg-error); }
+.settings-validation-item .validation-meta { color:var(--fg-dim); font:10px var(--mono); }
 .settings-error-text { margin:3px 0 6px; color:var(--fg-error); font-size:11px; line-height:1.35; }
 .settings-active-filters { display:none; flex-wrap:wrap; gap:5px; margin:-2px 0 8px; }
 .settings-active-filters.open { display:flex; }
@@ -4523,6 +4556,55 @@ function settingsAppendTargetNote(host,row,info,valueState){
   host.appendChild(note);
   return note;
 }
+function settingsAppendExtensionDetailPanel(host,row){
+  if(!host||!row||!(row.classList&&row.classList.contains('ext-setting-row')))return null;
+  const data=row.dataset||{};
+  const key=data.extSettingKey||settingsRowKey(row)||'';
+  const card=document.createElement('div');
+  card.className='detail-extension-card';
+  card.dataset.settingsExtensionDetail='1';
+  const head=document.createElement('div');
+  head.className='extension-card-head';
+  head.textContent='Extension setting details';
+  card.appendChild(head);
+  const grid=document.createElement('div');
+  grid.className='extension-card-grid';
+  const add=(label,value)=>{
+    const l=document.createElement('span');l.textContent=label;
+    const v=document.createElement('span');v.textContent=String(value||'Not available');v.title=v.textContent;
+    grid.appendChild(l);grid.appendChild(v);
+  };
+  add('Extension',data.extSettingDisplayName||data.extSettingExtensionId||data.extSettingExtension||'Extension');
+  add('Extension ID',data.extSettingExtensionId||'');
+  add('Config',data.extSettingConfig||'');
+  add('Scope',data.extSettingScope||'');
+  add('Target',data.extSettingTarget||'');
+  add('Type',data.extSettingType||'');
+  add('Default',data.extSettingDefaultSource||'');
+  add('Schema',data.extSettingSchemaSummary||'');
+  if(data.extSettingReadonlyReason)add('Readonly',data.extSettingReadonlyReason);
+  card.appendChild(grid);
+  const actions=document.createElement('span');
+  actions.className='detail-actions';
+  const applyExtFilter=token=>{
+    selectSettingsTarget('extensions',{preserveSearch:true});
+    if(typeof extensionSettingAppendFilterToken==='function')extensionSettingAppendFilterToken(token);
+    else settingsUseSearchHint(token);
+  };
+  const addAction=(label,title,handler)=>{
+    const btn=document.createElement('button');
+    btn.type='button';btn.textContent=label;btn.title=title||label;
+    btn.onclick=ev=>{ev.preventDefault();handler&&handler()};
+    actions.appendChild(btn);
+  };
+  if(data.extSettingExtensionId)addAction('Same Extension','Filter extension settings from '+data.extSettingExtensionId,()=>applyExtFilter('@ext:'+extensionSettingQuotedFilterValue(data.extSettingExtensionId)));
+  if(data.extSettingScope)addAction('Same Scope','Filter extension settings by scope '+data.extSettingScope,()=>applyExtFilter('@scope:'+extensionSettingQuotedFilterValue(data.extSettingScope)));
+  if(key)addAction('Setting ID','Filter to '+key,()=>settingsSearchForKey(key,'extensions'));
+  if(key)addAction('Copy Schema','Copy extension setting schema summary',()=>settingsCopyText([key,data.extSettingSchemaSummary,data.extSettingDefaultSource].filter(Boolean).join('\n'),'Extension setting schema'));
+  card.appendChild(actions);
+  host.appendChild(card);
+  return card;
+}
 function settingsDetailValueMatrix(row,info,current,inherited,def,key){
   const matrix=document.createElement('div');
   matrix.className='detail-matrix';
@@ -4617,6 +4699,7 @@ function settingsShowRowDetails(row){
   const scopeChip=document.createElement('span');scopeChip.className='detail-chip';scopeChip.textContent='Scope: '+scope;host.appendChild(scopeChip);
   const currentChip=document.createElement('span');currentChip.className='detail-chip';currentChip.textContent='Current: '+settingCompactDisplayValue(current,56);host.appendChild(currentChip);
   settingsAppendTargetNote(host,row,info,valueState);
+  settingsAppendExtensionDetailPanel(host,row);
   if(info.meta){
     const inheritedChip=document.createElement('span');inheritedChip.className='detail-chip';inheritedChip.textContent='Inherited: '+settingCompactDisplayValue(inherited,44);host.appendChild(inheritedChip);
     const defaultChip=document.createElement('span');defaultChip.className='detail-chip';defaultChip.textContent='Default: '+settingCompactDisplayValue(def,44);host.appendChild(defaultChip);
@@ -25986,13 +26069,97 @@ function setSettingsFieldError(id,message){
   }
   err.textContent=message;
 }
+function settingsValidationSectionForInput(id){
+  const el=$(id);
+  const section=el&&el.closest?el.closest('.settings-section,#ext-settings-container,details'):null;
+  return section?settingsSectionTitle(section):'Settings';
+}
+function settingsValidationErrorGroups(errors){
+  const groups=new Map();
+  (Array.isArray(errors)?errors:[]).forEach(err=>{
+    const section=settingsValidationSectionForInput(err.id);
+    if(!groups.has(section))groups.set(section,[]);
+    groups.get(section).push(err);
+  });
+  return Array.from(groups.entries()).map(([section,items])=>({section,items}));
+}
+function settingsFocusValidationError(id){
+  const el=$(id);if(!el)return false;
+  const row=el.closest&&el.closest('.settings-field.builtin-setting,.ext-setting-row');
+  if(row)settingsHighlightRow(row);
+  try{el.focus({preventScroll:true})}catch(e){try{el.focus()}catch(_e){}}
+  try{el.scrollIntoView({block:'center',behavior:'smooth'})}catch(e){}
+  return true;
+}
+function settingsFilterValidationErrors(){
+  settingsApplyReviewFilter('error');
+  return true;
+}
 function renderSettingsValidationSummary(errors){
   const summary=$('settings-validation-summary');if(!summary)return;
   const count=errors.length;
   summary.classList.toggle('error',count>0);
-  summary.textContent=count
-    ? count+' setting error'+(count===1?'':'s')+': '+errors[0].label+' - '+errors[0].message+(count>1?' (use @error to filter invalid settings)':'')
-    : '';
+  summary.innerHTML='';
+  if(!count)return;
+  summary.dataset.settingsValidationCount=String(count);
+  const groups=settingsValidationErrorGroups(errors);
+  const head=document.createElement('div');
+  head.className='settings-validation-head';
+  const title=document.createElement('strong');
+  title.textContent=count+' setting error'+(count===1?'':'s');
+  head.appendChild(title);
+  groups.slice(0,4).forEach(group=>{
+    const chip=document.createElement('span');
+    chip.className='validation-chip';
+    chip.textContent=group.section+': '+group.items.length;
+    chip.title=group.section+' has '+group.items.length+' validation error'+(group.items.length===1?'':'s');
+    head.appendChild(chip);
+  });
+  const actions=document.createElement('span');
+  actions.className='settings-validation-actions';
+  const first=document.createElement('button');
+  first.type='button';first.textContent='First Error';first.title='Focus the first invalid setting';
+  first.onclick=()=>settingsFocusValidationError(errors[0].id);
+  const filter=document.createElement('button');
+  filter.type='button';filter.textContent='Show Errors';filter.title='Filter Settings to invalid rows; use @error to filter invalid settings';
+  filter.onclick=()=>settingsFilterValidationErrors();
+  actions.appendChild(first);actions.appendChild(filter);
+  head.appendChild(actions);
+  summary.appendChild(head);
+  const list=document.createElement('div');
+  list.className='settings-validation-list';
+  errors.slice(0,6).forEach((err,index)=>{
+    const item=document.createElement('div');
+    item.className='settings-validation-item';
+    item.dataset.settingsValidationItem=err.id||'';
+    const label=document.createElement('span');
+    label.className='validation-label';
+    label.textContent=err.label||err.id||'Setting';
+    const message=document.createElement('span');
+    message.className='validation-message';
+    message.textContent=err.message||'Invalid value';
+    const meta=document.createElement('span');
+    meta.className='validation-meta';
+    meta.textContent=settingsValidationSectionForInput(err.id);
+    const jump=document.createElement('button');
+    jump.type='button';
+    jump.textContent='Go';
+    jump.title='Focus '+(err.label||err.id||'setting');
+    jump.onclick=()=>settingsFocusValidationError(err.id);
+    item.appendChild(label);
+    item.appendChild(message);
+    item.appendChild(meta);
+    item.appendChild(jump);
+    if(index===0)item.dataset.settingsValidationFirst='1';
+    list.appendChild(item);
+  });
+  if(errors.length>6){
+    const more=document.createElement('div');
+    more.className='settings-validation-item';
+    more.textContent='+'+(errors.length-6)+' more errors. Use Show Errors to filter the full list.';
+    list.appendChild(more);
+  }
+  summary.appendChild(list);
 }
 function settingsNumberValidation(errors,id,label,opts){
   const el=$(id);if(!el)return;
@@ -26088,6 +26255,9 @@ window.collectSettingsValidationErrors=collectSettingsValidationErrors;
 window.applySettingsValidation=applySettingsValidation;
 window.validateSettingsBeforeSave=validateSettingsBeforeSave;
 window.scheduleSettingsValidation=scheduleSettingsValidation;
+window.settingsValidationErrorGroups=settingsValidationErrorGroups;
+window.settingsFocusValidationError=settingsFocusValidationError;
+window.settingsFilterValidationErrors=settingsFilterValidationErrors;
 function editorSaveSettingEnabled(value){return ['always','explicit'].includes(editorCodeActionOnSaveMode(value))}
 function editorKnownCodeActionsOnSave(setting,kind){
   if(Array.isArray(setting))return setting.includes(kind);
@@ -27056,6 +27226,8 @@ function settingsUiSelfCheckSnapshot(){
   const detail=$('settings-current-detail');
   const detailMatrix=detail?detail.querySelector('.detail-matrix'):null;
   const detailTargetNote=detail?detail.querySelector('[data-settings-detail-target-note="1"]'):null;
+  const extensionDetail=detail?detail.querySelector('[data-settings-extension-detail="1"]'):null;
+  const validationSummary=$('settings-validation-summary');
   const builtHead=document.querySelector('.settings-built-head');
   const originalLabel=document.querySelector('.settings-field.builtin-setting > label.settings-original-label');
   const idleCurrentChip=Array.from(document.querySelectorAll('.settings-built-chip.current'))
@@ -27124,6 +27296,13 @@ function settingsUiSelfCheckSnapshot(){
     hasSuggestedMatchesHost:!!$('settings-suggested-matches'),
     hasReviewFilterActions:['Show Modified','Show Overrides','Show Errors','Clear Review'].every(label=>reviewActionLabels.includes(label)),
     hasOverridesFilterToken:!!document.querySelector('[data-settings-filter-token="@overrides"]'),
+    hasValidationSummaryHost:!!validationSummary,
+    hasValidationSummaryRenderer:typeof renderSettingsValidationSummary==='function'
+      &&typeof settingsValidationErrorGroups==='function'
+      &&typeof settingsFocusValidationError==='function',
+    hasExtensionDetailPanel:!!extensionDetail,
+    hasExtensionDetailGrid:!!(extensionDetail&&extensionDetail.querySelector('.extension-card-grid')),
+    hasExtensionDetailActions:!!(extensionDetail&&extensionDetail.querySelector('.detail-actions button')),
     hasLanguageSuggestions:!!document.querySelector('#settings-language-suggestions [data-settings-language-suggestion]'),
     hasLanguageModifiedSearch:!!document.querySelector('#settings-language-suggestions [data-settings-language-modified="1"]'),
     hasExtensionInsightActions:!!document.querySelector('#ext-settings-insight [data-ext-settings-insight-token]'),
@@ -27198,6 +27377,7 @@ window.settingsFocusFirstReviewRow=settingsFocusFirstReviewRow;
 window.settingsApplyReviewFilter=settingsApplyReviewFilter;
 window.settingsClearReviewFilters=settingsClearReviewFilters;
 window.settingsHasReviewFilter=settingsHasReviewFilter;
+window.settingsAppendExtensionDetailPanel=settingsAppendExtensionDetailPanel;
 window.extensionSettingRenderStats=extensionSettingRenderStats;
 window.scheduleExtensionSettingsFilter=scheduleExtensionSettingsFilter;
 window.extensionSettingPreheatLazyRows=extensionSettingPreheatLazyRows;
@@ -32422,6 +32602,11 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       row.dataset.extSettingType=type;
       row.dataset.extSettingExtension=[extId,displayName].join(' ').toLowerCase();
       row.dataset.extSettingExtensionId=String(extId||'').toLowerCase();
+      row.dataset.extSettingDisplayName=displayName||extId||'Extension';
+      row.dataset.extSettingConfig='Language Defaults';
+      row.dataset.extSettingDefaultSource=defaultSource||'Extension default';
+      row.dataset.extSettingSchemaSummary=schemaSummary||type;
+      row.dataset.extSettingReadonlyReason=readOnlyReason||'';
       row.dataset.extSettingFeature=['language',item.language,displayName,extId].join(' ').toLowerCase();
       row.dataset.extSettingLanguage=String(item.language||'').toLowerCase();
       row.dataset.extSettingPolicy=policyMeta.filterText||policyMeta.name.toLowerCase();
@@ -32908,6 +33093,11 @@ async function renderExtensionSettings(){
       row.dataset.extSettingType=type;
       row.dataset.extSettingExtension=[extId,displayName,title,configId].join(' ').toLowerCase();
       row.dataset.extSettingExtensionId=String(extId||'').toLowerCase();
+      row.dataset.extSettingDisplayName=displayName||extId||'Extension';
+      row.dataset.extSettingConfig=configId||title||headerLabel||'Configuration';
+      row.dataset.extSettingDefaultSource=defaultSource||'Extension default';
+      row.dataset.extSettingSchemaSummary=schemaSummary||type;
+      row.dataset.extSettingReadonlyReason=readOnlyReason||'';
       row.dataset.extSettingFeature=[displayName,title,configId,sectionDescription].join(' ').toLowerCase();
       row.dataset.extSettingLanguage='';
       row.dataset.extSettingPolicy=policyMeta.filterText||policyMeta.name.toLowerCase();
