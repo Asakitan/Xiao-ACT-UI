@@ -14631,11 +14631,23 @@ console.log("command palette quick access helpers ok");
             and "function _updateTerminalRecordForRun(cmd,state,result,durationMs)" in html
             and "function currentWorkspaceRoot()" in html
             and "function syncTerminalWorkspaceState()" in html
-            and "terminal-context-bar" in html
-            and "function _terminalWorkspaceSource()" in html
-            and "function _terminalContextMeta(meta)" in html
-            and "function _updateTerminalContextBar(meta,state)" in html
-            and "function terminalCurrentCwd()" in html
+           and "terminal-context-bar" in html
+           and "terminal-diagnostics-strip" in html
+           and "terminal-diagnostic-pill" in html
+           and "data-terminal-diagnostic=\"run\"" in html
+           and "data-terminal-diagnostic=\"output\"" in html
+           and "function _terminalWorkspaceSource()" in html
+           and "function _terminalContextMeta(meta)" in html
+           and "function _updateTerminalContextBar(meta,state)" in html
+           and "function _terminalOutputStats(out)" in html
+           and "function _setTerminalDiagnosticPill(host,kind,label,value,state,title)" in html
+           and "function _updateTerminalDiagnostics(meta,state)" in html
+           and "strip.dataset.outputLines=String(stats.lines);" in html
+           and "strip.dataset.outputBytes=String(stats.bytes);" in html
+           and "strip.dataset.commandBlocks=String(stats.blocks);" in html
+           and "strip.dataset.historyCount=String(historyCount);" in html
+           and "strip.dataset.truncated=truncation?'1':'0';" in html
+           and "function terminalCurrentCwd()" in html
             and "function copyTerminalCwd()" in html
             and "function useTerminalCwdAsWorkspace()" in html
             and "data-terminal-status=\"workspace\"" in html
@@ -14690,6 +14702,11 @@ console.log("command palette quick access helpers ok");
             and "statusWorkspaceSource==='selfcheck'" in html
             and "contextReady" in html
             and "contextActions.includes('copy-cwd')" in html
+            and "diagnosticsReady" in html
+            and "diagnosticsOutputLines" in html
+            and "diagnosticsHistoryCount" in html
+            and "diagnosticsTruncated==='1'" in html
+            and "['run','cwd','profile','exit','output','history'].every" in html
             and "commandCwdDataset.includes('E:/VC/SAO-UI/sao_auto')" in html
             and "commandActionCount>=15" in html
             and "selectorValue" in html

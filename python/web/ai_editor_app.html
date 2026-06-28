@@ -1620,6 +1620,18 @@ pre.code-block code .type { color:var(--fg-type); }
 .terminal-context-actions button { height:20px; padding:0 7px; border:1px solid var(--border); border-radius:3px;
   background:transparent; color:var(--fg-dim); font:10px var(--sans); cursor:pointer; }
 .terminal-context-actions button:hover,.terminal-context-actions button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
+.terminal-diagnostics-strip { min-height:25px; display:flex; align-items:center; gap:5px; padding:3px 12px;
+  border-top:1px solid color-mix(in srgb,var(--border) 50%,transparent);
+  background:color-mix(in srgb,var(--bg-panel) 92%,var(--bg2)); color:var(--fg-dim);
+  font:10px var(--mono); flex-shrink:0; overflow:hidden; }
+.terminal-diagnostic-pill { min-width:0; max-width:190px; height:18px; display:inline-flex; align-items:center; gap:4px;
+  padding:0 6px; border:1px solid color-mix(in srgb,var(--border) 76%,transparent); border-radius:999px;
+  background:color-mix(in srgb,var(--bg3) 68%,transparent); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.terminal-diagnostic-pill strong { color:var(--fg); font-weight:600; }
+.terminal-diagnostic-pill.running { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 45%,var(--border)); }
+.terminal-diagnostic-pill.ok { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 45%,var(--border)); }
+.terminal-diagnostic-pill.warn { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 45%,var(--border)); }
+.terminal-diagnostic-pill.error { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 48%,var(--border)); }
 .terminal-status-line { display:flex; align-items:center; gap:8px; min-height:24px; padding:0 12px;
   border-top:1px solid var(--border); background:var(--bg-panel); color:var(--fg-dim);
   font:11px var(--mono); flex-shrink:0; }
@@ -3882,6 +3894,14 @@ pre.code-block { overflow:visible; }
             <button type="button" data-terminal-context-action="copy-cwd" onclick="copyTerminalCwd()">Copy CWD</button>
             <button type="button" data-terminal-context-action="reuse-cwd" onclick="useTerminalCwdAsWorkspace()">Use CWD</button>
           </span>
+        </div>
+        <div class="terminal-diagnostics-strip" id="terminal-diagnostics-strip" data-terminal-diagnostics="1" role="status" aria-live="polite">
+          <span class="terminal-diagnostic-pill" data-terminal-diagnostic="run">run <strong>idle</strong></span>
+          <span class="terminal-diagnostic-pill" data-terminal-diagnostic="cwd">cwd <strong>workspace</strong></span>
+          <span class="terminal-diagnostic-pill" data-terminal-diagnostic="profile">profile <strong>System Shell</strong></span>
+          <span class="terminal-diagnostic-pill" data-terminal-diagnostic="exit">exit <strong>-</strong></span>
+          <span class="terminal-diagnostic-pill" data-terminal-diagnostic="output">output <strong>0 lines</strong></span>
+          <span class="terminal-diagnostic-pill" data-terminal-diagnostic="history">history <strong>0</strong></span>
         </div>
         <div class="terminal-status-line" id="terminal-status-line" data-state="idle" role="status" aria-live="polite">
           <span class="term-status-dot"></span>
@@ -20999,6 +21019,9 @@ function _appendTerminalHtml(el,html){
   while(frag.firstChild)el.appendChild(frag.firstChild);
   _trimTerminalScrollback(el);
   el.scrollTop=el.scrollHeight;
+  if(el&&el.classList&&el.classList.contains('terminal-output')){
+    try{_updateTerminalDiagnostics({},(el.dataset&&el.dataset.terminalState)||'running')}catch(_e){}
+  }
 }
 function logTerminal(text){const el=$('terminal-output');_appendTerminalHtml(el,ansiToHtml('> '+text)+'\n')}
 
@@ -42113,6 +42136,7 @@ function renderTerminalRecentCommands(){
     btn.onclick=ev=>{ev.preventDefault();_terminalUseRecentCommand(cmd,ev.ctrlKey||ev.metaKey)};
     bar.appendChild(btn);
   });
+  _updateTerminalDiagnostics({},($('terminal-status-line')&&$('terminal-status-line').dataset)?$('terminal-status-line').dataset.state:'idle');
 }
 function _updateTerminalPrompt(meta){
   const prompt=document.querySelector('.terminal-input-prompt');if(!prompt)return;
@@ -42178,6 +42202,66 @@ function _updateTerminalContextBar(meta,state){
     profileEl.textContent=ctx.profile;
     profileEl.title=[ctx.profile,ctx.shellKind?('Shell: '+ctx.shellKind):''].filter(Boolean).join('\n');
   }
+}
+function _terminalOutputStats(out){
+  const text=out?String(out.textContent||''):'';
+  const blocks=out?Array.from(out.querySelectorAll('.terminal-command-block')):[];
+  return {
+    lines:text?text.split(/\r?\n/).length:0,
+    bytes:text.length,
+    blocks:blocks.length,
+    running:blocks.filter(block=>block.classList.contains('running')).length,
+    errors:blocks.filter(block=>block.classList.contains('error')).length,
+    cancelled:blocks.filter(block=>block.classList.contains('cancelled')).length,
+    truncated:blocks.some(block=>block.dataset.stdoutTruncated==='1'||block.dataset.stderrTruncated==='1')
+  };
+}
+function _setTerminalDiagnosticPill(host,kind,label,value,state,title){
+  const pill=host?host.querySelector('[data-terminal-diagnostic="'+kind+'"]'):null;
+  if(!pill)return;
+  pill.className='terminal-diagnostic-pill '+(state||'');
+  pill.dataset.value=String(value||'');
+  pill.dataset.state=String(state||'');
+  pill.title=title||String(value||'');
+  pill.innerHTML=esc(label)+' <strong>'+esc(String(value||'-'))+'</strong>';
+}
+function _updateTerminalDiagnostics(meta,state){
+  const strip=$('terminal-diagnostics-strip');if(!strip)return;
+  meta=meta&&typeof meta==='object'?meta:{};
+  const out=_activeTerminalRunOutput?_activeTerminalRunOutput():_getActiveTermOutput();
+  const run=_terminalCurrentRun(out);
+  const stats=_terminalOutputStats(out);
+  const cwd=String(meta.cwd||terminalCurrentCwd()||currentWorkspaceRoot()||'');
+  const profile=_terminalProfileLabel(meta);
+  const exitCode=meta.exitCode===null||meta.exitCode===undefined?'':String(meta.exitCode);
+  const historyCount=_terminalActiveHistory().filter(Boolean).length;
+  const workspaceCwd=_terminalCwdMatchesWorkspace(cwd);
+  const finalState=String(state||meta.state||((run&&!run.cancelled)?'running':'idle')||'idle');
+  const runningValue=run&&run.jobId?('job '+String(run.jobId).slice(0,8)):finalState;
+  const outputValue=stats.lines+' lines · '+stats.bytes+' chars';
+  const truncation=!!(stats.truncated||meta.stdoutTruncated||meta.stderrTruncated);
+  strip.dataset.terminalDiagnostics='1';
+  strip.dataset.state=finalState;
+  strip.dataset.running=run&&!run.cancelled?'1':'0';
+  strip.dataset.jobId=run&&run.jobId?run.jobId:'';
+  strip.dataset.cwd=cwd;
+  strip.dataset.workspaceCwd=workspaceCwd?'1':'0';
+  strip.dataset.profile=profile;
+  strip.dataset.exitCode=exitCode;
+  strip.dataset.outputLines=String(stats.lines);
+  strip.dataset.outputBytes=String(stats.bytes);
+  strip.dataset.commandBlocks=String(stats.blocks);
+  strip.dataset.runningBlocks=String(stats.running);
+  strip.dataset.errorBlocks=String(stats.errors);
+  strip.dataset.cancelledBlocks=String(stats.cancelled);
+  strip.dataset.historyCount=String(historyCount);
+  strip.dataset.truncated=truncation?'1':'0';
+  _setTerminalDiagnosticPill(strip,'run','run',runningValue,run&&!run.cancelled?'running':(finalState==='error'?'error':finalState==='done'?'ok':finalState==='cancelled'||finalState==='timeout'?'warn':''),run&&run.command?run.command:'Terminal state');
+  _setTerminalDiagnosticPill(strip,'cwd','cwd',_terminalWorkspaceLabel(cwd),workspaceCwd?'ok':'warn',cwd);
+  _setTerminalDiagnosticPill(strip,'profile','profile',profile,'',profile);
+  _setTerminalDiagnosticPill(strip,'exit','exit',exitCode===''?'-':exitCode,exitCode===''?'':Number(exitCode)===0?'ok':'error','Last exit code');
+  _setTerminalDiagnosticPill(strip,'output','output',outputValue,truncation?'warn':'',truncation?'Output was truncated':'Terminal output size');
+  _setTerminalDiagnosticPill(strip,'history','history',historyCount,historyCount?'ok':'','Recent command count');
 }
 function terminalCurrentCwd(){
   const term=_getActiveTerminalRecord();
@@ -42322,6 +42406,7 @@ function _setTerminalStatus(state,text,detail,meta){
   if(detailEl){detailEl.textContent=detail||'';detailEl.title=[meta.lastCommand?('$ '+meta.lastCommand):'',meta.startedAt?('Started: '+meta.startedAt):'',meta.finishedAt?('Finished: '+meta.finishedAt):''].filter(Boolean).join('\n')}
   _updateTerminalPrompt({...meta,cwd,profile});
   _updateTerminalContextBar({...meta,cwd,profile},state);
+  _updateTerminalDiagnostics({...meta,cwd,profile,exitCode,durationMs,stdoutTruncated,stderrTruncated},state);
 }
 function _updateTerminalStatusLine(){
   const term=_getActiveTerminalRecord();
@@ -42437,6 +42522,7 @@ function _setTerminalRun(out,run){
     delete out.dataset.terminalRunCancelled;
   }
   _updateTerminalActionButtons();
+  _updateTerminalDiagnostics({},run&&!run.cancelled?'running':'idle');
 }
 function _updateTerminalActionButtons(){
   const out=_activeTerminalRunOutput();
@@ -42654,7 +42740,7 @@ async function runTerminalCommand(cmd,options){
     return result;
   }
 }
-clearTerminal=function(){const el=_getActiveTermOutput();if(el)el.innerHTML=''};
+clearTerminal=function(){const el=_getActiveTermOutput();if(el)el.innerHTML='';_updateTerminalDiagnostics({},'idle')};
 window.clearTerminal=clearTerminal;
 window.runTerminalCommand=runTerminalCommand;
 window.copyTerminalCwd=copyTerminalCwd;
@@ -42733,11 +42819,14 @@ async function terminalUiSelfCheckSnapshot(){
   const defaultOut=$('terminal-output');
   const status=$('terminal-status-line');
   const contextBar=$('terminal-context-bar');
+  const diagnostics=$('terminal-diagnostics-strip');
   const oldDefaultHtml=defaultOut?defaultOut.innerHTML:'';
   const oldDefaultDataset=defaultOut?{...defaultOut.dataset}:{};
   const oldStatusClass=status?status.className:'';
   const oldStatusDataset=status?{...status.dataset}:{};
   const oldContextDataset=contextBar?{...contextBar.dataset}:{};
+  const oldDiagnosticsHtml=diagnostics?diagnostics.innerHTML:'';
+  const oldDiagnosticsDataset=diagnostics?{...diagnostics.dataset}:{};
   const oldTermInputValue=$('term-input')?$('term-input').value:'';
   const oldWorkspace=config.workspace;
   const oldTerminal=config.terminal;
@@ -42792,6 +42881,9 @@ async function terminalUiSelfCheckSnapshot(){
     const commandMetaRows=blocks.map(block=>Array.from(block.querySelectorAll('.terminal-command-meta-chip')).map(chip=>({kind:chip.dataset.terminalCommandMeta||'',text:chip.textContent||''})));
     const commandMetaText=commandMetaRows.map(row=>row.map(chip=>chip.text).join(' '));
     const contextActions=Array.from(document.querySelectorAll('#terminal-context-bar [data-terminal-context-action]')).map(btn=>btn.dataset.terminalContextAction||'');
+    const diagnosticPills=diagnostics?Array.from(diagnostics.querySelectorAll('.terminal-diagnostic-pill')):[];
+    const diagnosticKinds=diagnosticPills.map(pill=>pill.dataset.terminalDiagnostic||'');
+    const diagnosticValues=diagnosticPills.map(pill=>pill.dataset.value||'');
     const snapshot={
       okExit:ok&&ok.exitCode,
       badExit:bad&&bad.exitCode,
@@ -42826,6 +42918,19 @@ async function terminalUiSelfCheckSnapshot(){
       contextShellKind:contextBar?contextBar.dataset.shellKind:'',
       contextText:contextBar?contextBar.textContent.trim():'',
       contextActions,
+      diagnosticsReady:!!(diagnostics&&diagnostics.dataset.terminalDiagnostics==='1'),
+      diagnosticsState:diagnostics?diagnostics.dataset.state:'',
+      diagnosticsRunning:diagnostics?diagnostics.dataset.running:'',
+      diagnosticsWorkspaceCwd:diagnostics?diagnostics.dataset.workspaceCwd:'',
+      diagnosticsProfile:diagnostics?diagnostics.dataset.profile:'',
+      diagnosticsExitCode:diagnostics?diagnostics.dataset.exitCode:'',
+      diagnosticsOutputLines:diagnostics?Number(diagnostics.dataset.outputLines||0):0,
+      diagnosticsOutputBytes:diagnostics?Number(diagnostics.dataset.outputBytes||0):0,
+      diagnosticsBlocks:diagnostics?Number(diagnostics.dataset.commandBlocks||0):0,
+      diagnosticsHistoryCount:diagnostics?Number(diagnostics.dataset.historyCount||0):0,
+      diagnosticsTruncated:diagnostics?diagnostics.dataset.truncated:'',
+      diagnosticKinds,
+      diagnosticValues,
       promptText:prompt?prompt.textContent:'',
       promptTitle:prompt?prompt.title:'',
       statusAfterBad,
@@ -42861,7 +42966,7 @@ async function terminalUiSelfCheckSnapshot(){
       closeStdinEcho:defaultOut?defaultOut.textContent.includes('[stdin closed]'):false,
       closeStdinResult:closed&&closed.stdinClosed
     };
-    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.hasInputEcho&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusWorkspaceCwd==='1'&&snapshot.statusWorkspaceSource==='selfcheck'&&snapshot.statusWorkspaceAutoDetected==='1'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusExitCode===''&&snapshot.statusDurationMs==='7'&&snapshot.statusStdoutTruncated==='0'&&snapshot.statusStderrTruncated==='0'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.contextReady&&snapshot.contextWorkspace==='sao_auto'&&snapshot.contextCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.contextSource==='selfcheck'&&snapshot.contextAutoDetected==='1'&&snapshot.contextWorkspaceCwd==='1'&&snapshot.contextProfile==='Windows PowerShell'&&snapshot.contextShellKind==='powershell'&&snapshot.contextText.includes('Selfcheck')&&snapshot.contextActions.includes('switch-workspace')&&snapshot.contextActions.includes('copy-cwd')&&snapshot.contextActions.includes('reuse-cwd')&&snapshot.promptText.includes('sao_auto')&&snapshot.promptTitle.includes('Windows PowerShell')&&snapshot.statusAfterBad.state==='error'&&snapshot.statusAfterBad.exitCode==='7'&&snapshot.statusAfterBad.durationMs==='9'&&snapshot.statusAfterBad.stderrTruncated==='1'&&String(snapshot.statusAfterBad.flags||'').includes('stderr truncated')&&snapshot.recentCount>=3&&snapshot.recentLabels.includes('slow-command')&&snapshot.recentInputValue==='echo terminal-ok'&&snapshot.commandActionCount>=15&&snapshot.commandActionLabels.includes('▶')&&snapshot.commandActionTypes.includes('copy-command')&&snapshot.commandActionTypes.includes('copy-output')&&snapshot.commandActionTypes.includes('copy-cwd')&&snapshot.commandMetaCount>=15&&snapshot.commandMetaText.some(text=>text.includes('Windows PowerShell')&&text.includes('sao_auto'))&&snapshot.commandMetaText.some(text=>text.includes('exit 7')&&text.includes('stderr truncated'))&&snapshot.commandDataset.includes('bad-command')&&snapshot.commandCwdDataset.includes('E:/VC/SAO-UI/sao_auto')&&snapshot.commandProfileDataset.includes('Windows PowerShell')&&snapshot.commandWorkspaceSourceDataset.includes('selfcheck')&&snapshot.commandExitCodeDataset.includes('7')&&snapshot.commandDurationDataset.includes('9')&&String(snapshot.commandCopyOutputCandidate||'').includes('bad')&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.lastDurationMs==='7'&&snapshot.lastStdoutTruncated==='0'&&snapshot.lastStderrTruncated==='0'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell'&&snapshot.writePayloadData==='hello stdin\n'&&snapshot.writeBytes===12&&snapshot.closeStdinPayload===true&&snapshot.closeStdinEcho&&snapshot.closeStdinResult===true;
+    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.hasInputEcho&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusWorkspaceCwd==='1'&&snapshot.statusWorkspaceSource==='selfcheck'&&snapshot.statusWorkspaceAutoDetected==='1'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusExitCode===''&&snapshot.statusDurationMs==='7'&&snapshot.statusStdoutTruncated==='0'&&snapshot.statusStderrTruncated==='0'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.contextReady&&snapshot.contextWorkspace==='sao_auto'&&snapshot.contextCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.contextSource==='selfcheck'&&snapshot.contextAutoDetected==='1'&&snapshot.contextWorkspaceCwd==='1'&&snapshot.contextProfile==='Windows PowerShell'&&snapshot.contextShellKind==='powershell'&&snapshot.contextText.includes('Selfcheck')&&snapshot.contextActions.includes('switch-workspace')&&snapshot.contextActions.includes('copy-cwd')&&snapshot.contextActions.includes('reuse-cwd')&&snapshot.diagnosticsReady&&snapshot.diagnosticsState==='cancelled'&&snapshot.diagnosticsWorkspaceCwd==='1'&&snapshot.diagnosticsProfile==='Windows PowerShell'&&snapshot.diagnosticsOutputLines>=3&&snapshot.diagnosticsOutputBytes>0&&snapshot.diagnosticsBlocks>=3&&snapshot.diagnosticsHistoryCount>=3&&snapshot.diagnosticsTruncated==='1'&&['run','cwd','profile','exit','output','history'].every(kind=>snapshot.diagnosticKinds.includes(kind))&&snapshot.diagnosticValues.some(value=>String(value).includes('lines'))&&snapshot.promptText.includes('sao_auto')&&snapshot.promptTitle.includes('Windows PowerShell')&&snapshot.statusAfterBad.state==='error'&&snapshot.statusAfterBad.exitCode==='7'&&snapshot.statusAfterBad.durationMs==='9'&&snapshot.statusAfterBad.stderrTruncated==='1'&&String(snapshot.statusAfterBad.flags||'').includes('stderr truncated')&&snapshot.recentCount>=3&&snapshot.recentLabels.includes('slow-command')&&snapshot.recentInputValue==='echo terminal-ok'&&snapshot.commandActionCount>=15&&snapshot.commandActionLabels.includes('▶')&&snapshot.commandActionTypes.includes('copy-command')&&snapshot.commandActionTypes.includes('copy-output')&&snapshot.commandActionTypes.includes('copy-cwd')&&snapshot.commandMetaCount>=15&&snapshot.commandMetaText.some(text=>text.includes('Windows PowerShell')&&text.includes('sao_auto'))&&snapshot.commandMetaText.some(text=>text.includes('exit 7')&&text.includes('stderr truncated'))&&snapshot.commandDataset.includes('bad-command')&&snapshot.commandCwdDataset.includes('E:/VC/SAO-UI/sao_auto')&&snapshot.commandProfileDataset.includes('Windows PowerShell')&&snapshot.commandWorkspaceSourceDataset.includes('selfcheck')&&snapshot.commandExitCodeDataset.includes('7')&&snapshot.commandDurationDataset.includes('9')&&String(snapshot.commandCopyOutputCandidate||'').includes('bad')&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.lastDurationMs==='7'&&snapshot.lastStdoutTruncated==='0'&&snapshot.lastStderrTruncated==='0'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell'&&snapshot.writePayloadData==='hello stdin\n'&&snapshot.writeBytes===12&&snapshot.closeStdinPayload===true&&snapshot.closeStdinEcho&&snapshot.closeStdinResult===true;
     return snapshot;
   }finally{
     call=oldCall;
@@ -42876,6 +42981,7 @@ async function terminalUiSelfCheckSnapshot(){
     }
     if(status){status.className=oldStatusClass;Object.keys(status.dataset).forEach(k=>delete status.dataset[k]);Object.assign(status.dataset,oldStatusDataset)}
     if(contextBar){Object.keys(contextBar.dataset).forEach(k=>delete contextBar.dataset[k]);Object.assign(contextBar.dataset,oldContextDataset)}
+    if(diagnostics){diagnostics.innerHTML=oldDiagnosticsHtml;Object.keys(diagnostics.dataset).forEach(k=>delete diagnostics.dataset[k]);Object.assign(diagnostics.dataset,oldDiagnosticsDataset)}
     if($('term-input'))$('term-input').value=oldTermInputValue;
     _terminals.forEach(t=>{t.outputEl.style.display=t.id===_activeTermId?'':'none'});
     if(defaultOut)defaultOut.style.display=_activeTermId!==null?'none':'';
