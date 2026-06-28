@@ -2675,13 +2675,13 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-titlebar,
 .settings-vscode-calm .settings-searchbar,
 .settings-vscode-calm .settings-shell { width:min(1400px,100%); align-self:center; box-sizing:border-box; }
-.settings-vscode-calm .settings-titlebar { min-height:34px; padding:5px 24px 3px; background:var(--bg); border-bottom:0; }
+.settings-vscode-calm .settings-titlebar { min-height:30px; padding:5px 24px 2px; background:var(--bg); border-bottom:0; }
 .settings-vscode-calm .settings-titlebar h2 { font-size:14px; }
 .settings-vscode-calm .settings-titlebar h2::before { display:none; }
 .settings-vscode-calm .settings-title-sub { display:none; }
 .settings-vscode-calm .settings-title-route { display:none; }
-.settings-vscode-calm .settings-searchbar { position:relative; padding:7px 24px 0; gap:0; border-bottom:0; background:var(--bg); }
-.settings-vscode-calm .settings-search-row { grid-template-columns:minmax(560px,1fr) minmax(260px,auto); align-items:end; padding-bottom:8px; border-bottom:1px solid var(--border); }
+.settings-vscode-calm .settings-searchbar { position:relative; padding:5px 24px 0; gap:0; border-bottom:0; background:var(--bg); }
+.settings-vscode-calm .settings-search-row { grid-template-columns:minmax(600px,1fr) minmax(260px,auto); align-items:end; padding-bottom:8px; border-bottom:1px solid var(--border); }
 .settings-vscode-calm .settings-query-box { border-radius:2px; min-height:34px; background:var(--bg-input); }
 .settings-vscode-calm .settings-query-box:focus-within { box-shadow:0 0 0 1px color-mix(in srgb,var(--border-focus) 22%,transparent); }
 .settings-vscode-calm .settings-searchbar input#settings-search { height:34px; font:13px var(--sans); }
@@ -2716,8 +2716,8 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-target-tabs button { height:30px; min-width:76px; border:0; border-bottom:1px solid transparent; border-radius:0; background:transparent; }
 .settings-vscode-calm .settings-target-tabs button.active { color:var(--fg); background:transparent; border-bottom-color:var(--fg-accent); }
 .settings-vscode-calm .settings-target-tab-count { background:transparent; border:0; padding:0; min-width:auto; }
-.settings-vscode-calm .settings-shell { grid-template-columns:260px minmax(0,1fr); background:var(--bg); border-top:0; }
-.settings-vscode-calm .settings-shell.inspecting { grid-template-columns:260px minmax(0,1fr) minmax(286px,330px); background:var(--bg); }
+.settings-vscode-calm .settings-shell { grid-template-columns:280px minmax(0,1fr); background:var(--bg); border-top:0; }
+.settings-vscode-calm .settings-shell.inspecting { grid-template-columns:280px minmax(0,1fr) minmax(300px,340px); background:var(--bg); }
 .settings-vscode-calm .settings-nav { padding:10px 8px 12px 0; border-right:1px solid var(--border); background:var(--bg); }
 .settings-vscode-calm .settings-nav-summary { display:none; }
 .settings-vscode-calm .settings-nav-memory { display:block; margin:0; padding:6px 8px 8px;
@@ -2749,8 +2749,8 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-section-overview-desc { white-space:normal; }
 .settings-vscode-calm .settings-section-overview-stats { display:none; }
 .settings-vscode-calm.settings-details-open .settings-section-overview-stats { display:flex; }
-.settings-vscode-calm .settings-field.builtin-setting { grid-template-columns:minmax(290px,.72fr) minmax(340px,1fr);
-  gap:4px 24px; min-height:54px; padding:9px 34px 9px 0; margin:0; border-left:0;
+.settings-vscode-calm .settings-field.builtin-setting { grid-template-columns:minmax(320px,.76fr) minmax(360px,1fr);
+  gap:4px 26px; min-height:56px; padding:10px 64px 10px 0; margin:0; border-left:0;
   border-bottom-color:color-mix(in srgb,var(--border) 54%,transparent); border-radius:0; cursor:default; }
 .settings-vscode-calm .settings-field.builtin-setting.modified { box-shadow:inset 2px 0 0 var(--fg-accent); padding-left:8px; background:transparent; }
 .settings-vscode-calm .settings-field.builtin-setting:hover,
@@ -2782,7 +2782,7 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-field.settings-current > .settings-row-impact,
 .settings-vscode-calm .settings-field:hover > .settings-row-impact,
 .settings-vscode-calm .settings-field:focus-within > .settings-row-impact { display:flex; }
-.settings-vscode-calm .settings-control-frame { max-width:520px; border-radius:2px; padding:4px 6px; background:var(--bg-input); }
+.settings-vscode-calm .settings-control-frame { max-width:560px; min-height:30px; border-radius:2px; padding:3px 6px; background:var(--bg-input); }
 .settings-vscode-calm .settings-field.builtin-setting[data-setting-control-kind="textarea"] > .settings-control-frame,
 .settings-vscode-calm .settings-field.builtin-setting[data-setting-control-kind="json"] > .settings-control-frame { max-width:none; }
 .settings-vscode-calm .settings-control-status { display:none; }
@@ -2791,14 +2791,17 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-control-frame.override .settings-control-status,
 .settings-vscode-calm .settings-control-frame.invalid .settings-control-status,
 .settings-vscode-calm .settings-control-frame[data-setting-control-focused="1"] .settings-control-status { display:inline-flex; }
-.settings-vscode-calm .settings-row-actions { right:4px; }
+.settings-vscode-calm .settings-row-actions { right:4px; top:8px; }
 .settings-vscode-calm .settings-row-action { border-color:transparent; background:transparent; }
 .settings-vscode-calm .settings-row-action-menu { border-radius:3px; }
 .settings-vscode-calm:not(.settings-details-open) .settings-secondary-action { display:none; }
-.settings-vscode-calm .settings-title-actions { gap:4px; }
+.settings-vscode-calm .settings-title-actions { gap:3px; }
 .settings-vscode-calm .settings-view-options { gap:3px; }
-.settings-vscode-calm .settings-top-action { height:24px; border-radius:2px; background:transparent; }
+.settings-vscode-calm .settings-toolbar-strip { gap:2px; }
+.settings-vscode-calm .settings-top-action { min-width:26px; height:24px; padding:0 7px; border-radius:2px; background:transparent; }
+.settings-vscode-calm .settings-top-action[data-settings-icon-action="1"] { width:26px; padding:0; font:13px var(--sans); }
 .settings-vscode-calm .settings-top-action.primary { background:color-mix(in srgb,var(--fg-accent) 9%,transparent); }
+.settings-vscode-calm:not(.settings-details-open) .settings-toolbar-strip .settings-top-action:not(.primary) { display:none; }
 .settings-vscode-calm .ext-settings-filter { border-radius:0; border-left:0; border-right:0; background:transparent; padding:6px 0; }
 .settings-vscode-calm .ext-settings-filter button,
 .settings-vscode-calm .ext-settings-filter select { border-radius:2px; }
@@ -3777,15 +3780,15 @@ pre.code-block { overflow:visible; }
       <div class="settings-title-actions">
         <span id="settings-dirty-summary" class="settings-status-pill" role="status" aria-live="polite">Clean</span>
         <span class="settings-view-options" role="group" aria-label="Settings view">
-          <button type="button" class="settings-top-action settings-secondary-action" id="settings-density-toggle" onclick="settingsToggleDensity()">Compact</button>
-          <button type="button" class="settings-top-action settings-secondary-action" onclick="settingsFocusActiveSection()">Current</button>
-          <button type="button" class="settings-top-action" id="settings-details-toggle" onclick="settingsToggleDetails()">Details</button>
-          <button type="button" class="settings-top-action settings-secondary-action" id="settings-query-help-toggle" onclick="settingsToggleQueryHelp()">Query Help</button>
+          <button type="button" class="settings-top-action settings-secondary-action" id="settings-density-toggle" data-settings-icon-action="1" title="Toggle compact settings density" aria-label="Toggle compact settings density" onclick="settingsToggleDensity()">≡</button>
+          <button type="button" class="settings-top-action settings-secondary-action" data-settings-icon-action="1" title="Reveal current settings section" aria-label="Reveal current settings section" onclick="settingsFocusActiveSection()">◎</button>
+          <button type="button" class="settings-top-action" id="settings-details-toggle" data-settings-icon-action="1" title="Toggle settings details" aria-label="Toggle settings details" onclick="settingsToggleDetails()">⋯</button>
+          <button type="button" class="settings-top-action settings-secondary-action" id="settings-query-help-toggle" data-settings-icon-action="1" title="Show settings query help" aria-label="Show settings query help" onclick="settingsToggleQueryHelp()">?</button>
         </span>
         <span class="settings-toolbar-strip" role="group" aria-label="Settings commands">
-          <button type="button" class="settings-top-action primary" onclick="settingsOpenJsonView()">Open JSON</button>
-          <button type="button" class="settings-top-action" onclick="focusSettingsSearch()">Search</button>
-          <button type="button" class="settings-top-action" onclick="settingsCloseThen(openKeybindings)">Keyboard Shortcuts</button>
+          <button type="button" class="settings-top-action primary" data-settings-icon-action="1" title="Open Settings JSON" aria-label="Open Settings JSON" onclick="settingsOpenJsonView()">{}</button>
+          <button type="button" class="settings-top-action" data-settings-icon-action="1" title="Focus settings search" aria-label="Focus settings search" onclick="focusSettingsSearch()">⌕</button>
+          <button type="button" class="settings-top-action" data-settings-icon-action="1" title="Open keyboard shortcuts" aria-label="Open keyboard shortcuts" onclick="settingsCloseThen(openKeybindings)">⌘</button>
         </span>
       </div>
     </div>
@@ -4823,7 +4826,9 @@ function settingsApplyDetails(open){
   if(btn){
     btn.classList.toggle('active',enabled);
     btn.setAttribute('aria-pressed',enabled?'true':'false');
-    btn.textContent=enabled?'Details On':'Details';
+    btn.textContent='⋯';
+    btn.title=enabled?'Hide settings details':'Show settings details';
+    btn.setAttribute('aria-label',btn.title);
   }
   return enabled;
 }
@@ -27585,8 +27590,9 @@ function settingsApplyDensity(value){
   if(btn){
     btn.classList.toggle('active',mode==='compact');
     btn.setAttribute('aria-pressed',mode==='compact'?'true':'false');
-    btn.textContent=mode==='compact'?'Comfortable':'Compact';
+    btn.textContent='≡';
     btn.title=mode==='compact'?'Use comfortable Settings density':'Use compact Settings density';
+    btn.setAttribute('aria-label',btn.title);
   }
   return mode;
 }
@@ -28369,6 +28375,10 @@ function settingsUiSelfCheckSnapshot(){
   const sbGroup=document.querySelector('.settings-main .sb-group');
   const controlFrame=document.querySelector('.settings-field.builtin-setting > .settings-control-frame');
   const footer=document.querySelector('.modal.settings-modal .modal-btns');
+  const settingsFrame=document.querySelector('.modal.settings-modal');
+  const iconActions=Array.from(document.querySelectorAll('.settings-title-actions [data-settings-icon-action="1"]'));
+  const toolbarButtons=Array.from(document.querySelectorAll('.settings-toolbar-strip .settings-top-action'));
+  const hiddenToolbarButtons=toolbarButtons.filter(btn=>String(getComputedStyle(btn).display)==='none');
   return {
     pass:!!(modal&&nav&&main&&inspector&&$('settings-nav-filter')&&$('settings-density-toggle')&&detail
       &&typeof settingsFilterNavCategories==='function'
@@ -28379,6 +28389,9 @@ function settingsUiSelfCheckSnapshot(){
     hasPreferencesWorkbenchShell:!!document.querySelector('.modal.settings-modal.preferences-workbench'),
     hasWorkbenchHeaderContext:!!(route&&route.textContent&&typeof renderSettingsWorkbenchHeader==='function'&&typeof settingsWorkbenchContextLabel==='function'),
     hasSettingsToolbarStrip:!!document.querySelector('.settings-toolbar-strip .settings-top-action.primary'),
+    hasIconOnlySettingsToolbar:iconActions.length>=7&&iconActions.every(btn=>btn.getAttribute('aria-label')&&btn.title&&String(btn.textContent||'').trim().length<=2),
+    hasPrimaryJsonOnlyDefaultToolbar:toolbarButtons.length>=3&&hiddenToolbarButtons.length>=2&&!!document.querySelector('.settings-toolbar-strip .settings-top-action.primary[data-settings-icon-action="1"]'),
+    hasCalmDefaultSettingsMode:!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')),
     hasSearchPrimaryCaption:!!(caption&&document.querySelector('.settings-search-primary .settings-query-box #settings-search')),
     hasSearchClearButton:!!($('settings-clear-search')&&document.querySelector('.settings-query-box .settings-query-clear')),
     hasSearchClearBehavior:typeof settingsClearSearch==='function'
@@ -28418,6 +28431,7 @@ function settingsUiSelfCheckSnapshot(){
     hasSettingsEditorShell:!!main&&String(getComputedStyle(main).overflowY)==='auto',
     hasWideCategoryNav:!!nav&&parseFloat(getComputedStyle(nav).width||'0')>=230,
     hasMoreReadableCategoryNav:!!nav&&parseFloat(getComputedStyle(nav).width||'0')>=250,
+    hasVsCodeWideCategoryNav:!!nav&&parseFloat(getComputedStyle(nav).width||'0')>=270,
     hasSettingsInspector:!!inspector&&String(getComputedStyle(inspector).overflowY)==='auto',
     hasInspectorDetail:!!(inspector&&detail&&inspector.contains(detail)),
     hasOnDemandInspector:!!(shell&&typeof settingsClearCurrentRow==='function'&&String(getComputedStyle(inspector).display)!=='none'&&shell.classList.contains('inspecting')),
@@ -28426,6 +28440,7 @@ function settingsUiSelfCheckSnapshot(){
     hasVsCodeGroupHeadings:!!(sbGroup&&String(getComputedStyle(sbGroup).textTransform)==='none'&&parseFloat(getComputedStyle(sbGroup).fontSize||'0')>=13),
     hasLeanSettingControls:!!(controlFrame&&parseFloat(getComputedStyle(controlFrame).borderRadius||'0')<=3),
     hasBoundedSettingControlWidth:!!(controlFrame&&parseFloat(getComputedStyle(controlFrame).maxWidth||'0')>=500),
+    hasMoreComfortableSettingControls:!!(controlFrame&&parseFloat(getComputedStyle(controlFrame).maxWidth||'0')>=560&&parseFloat(getComputedStyle(controlFrame).minHeight||'0')>=30),
     hasReducedSettingsTitleNoise:!!$('settings-title-sub')&&String(getComputedStyle($('settings-title-sub')).display)==='none',
     hasHumanizedSaveAffordance:!!(footerSave&&String(getComputedStyle(footerSave).minWidth||'0')&&parseFloat(getComputedStyle(footerSave).minWidth||'0')>=60),
     hasQuietInspectorFocusDeck:!!(focusDeck&&String(getComputedStyle(focusDeck).display)==='none'),

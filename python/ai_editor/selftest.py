@@ -4310,7 +4310,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "settingsRenderRowImpact(wrap);" in html)
     _check("frontend Settings defaults to calmer VS Code workbench UX",
            'class="modal settings-modal preferences-workbench settings-vscode-calm"' in html
-           and 'id="settings-details-toggle" onclick="settingsToggleDetails()"' in html
+           and 'id="settings-details-toggle" data-settings-icon-action="1"' in html
            and "const SETTINGS_DETAILS_STORAGE_KEY='sao.aiEditor.settings.details.v1';" in html
            and "function settingsApplyDetails(open)" in html
            and "modal.classList.toggle('settings-details-open',enabled);" in html
@@ -4321,20 +4321,20 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".settings-vscode-calm .settings-nav-summary { display:none; }" in html
            and ".settings-vscode-calm .settings-nav-memory { display:block;" in html
            and ".settings-vscode-calm .settings-control-status { display:none; }" in html
-           and ".settings-vscode-calm .settings-field.builtin-setting { grid-template-columns:minmax(290px,.72fr) minmax(340px,1fr);" in html
+           and ".settings-vscode-calm .settings-field.builtin-setting { grid-template-columns:minmax(320px,.76fr) minmax(360px,1fr);" in html
            and ".settings-vscode-calm:not(.settings-details-open) .settings-secondary-action { display:none; }" in html
            and ".settings-vscode-calm .settings-main .sb-group { margin:18px 0 7px !important;" in html
            and ".settings-vscode-calm:not(.settings-details-open) .settings-inspector .settings-focus-deck { display:none; }" in html
            and ".settings-vscode-calm .modal-btns { min-height:34px; padding:4px 18px; align-items:center;" in html)
     _check("frontend Settings improves humanized VS Code interactions",
            ".settings-vscode-calm .settings-title-sub { display:none; }" in html
-           and ".settings-vscode-calm .settings-search-row { grid-template-columns:minmax(560px,1fr) minmax(260px,auto);" in html
+           and ".settings-vscode-calm .settings-search-row { grid-template-columns:minmax(600px,1fr) minmax(260px,auto);" in html
            and ".settings-vscode-calm .settings-result-nav button { width:24px; min-width:24px;" in html
            and "aria-label=\"Previous visible setting\"" in html
            and "aria-label=\"Next visible setting\"" in html
-           and ".settings-vscode-calm .settings-shell { grid-template-columns:260px minmax(0,1fr);" in html
+           and ".settings-vscode-calm .settings-shell { grid-template-columns:280px minmax(0,1fr);" in html
            and ".settings-vscode-calm .settings-field.builtin-setting.settings-current:not(.modified)" in html
-           and ".settings-vscode-calm .settings-control-frame { max-width:520px;" in html
+           and ".settings-vscode-calm .settings-control-frame { max-width:560px;" in html
            and 'onkeydown="settingsHandleTargetTabKeydown(event)"' in html
            and "function settingsHandleTargetTabKeydown(ev)" in html
            and "function settingsMoveTargetTab(delta)" in html
@@ -4374,8 +4374,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hasCloseGuardReviewFilter" in html
            and "hasSaveErrorReviewFocus" in html
            and "hasMoreReadableCategoryNav" in html
+           and "hasVsCodeWideCategoryNav" in html
            and "hasReducedSettingsTitleNoise" in html
-           and "hasHumanizedSaveAffordance" in html)
+           and "hasHumanizedSaveAffordance" in html
+           and "hasIconOnlySettingsToolbar" in html
+           and "hasPrimaryJsonOnlyDefaultToolbar" in html
+           and "hasCalmDefaultSettingsMode" in html
+           and "hasMoreComfortableSettingControls" in html
+           and 'data-settings-icon-action="1"' in html
+           and "settings-vscode-calm:not(.settings-details-open) .settings-toolbar-strip .settings-top-action:not(.primary)" in html)
     _check("frontend Settings target switching is keyboard and state accessible",
            "hasTargetRovingKeyboard" in html
            and "hasTargetTabAriaLabels" in html
@@ -10205,6 +10212,7 @@ console.log("frontend word separator behavior ok");
              and "hasWideSettingsEditor" in html
              and "hasSettingsEditorShell" in html
              and "hasWideCategoryNav" in html
+             and "hasVsCodeWideCategoryNav" in html
             and "hasSettingsInspector" in html
             and "hasInspectorDetail" in html
             and "hasOnDemandInspector" in html
@@ -10214,6 +10222,10 @@ console.log("frontend word separator behavior ok");
              and "hasLeanSettingControls" in html
              and "hasQuietInspectorFocusDeck" in html
              and "hasStatusbarFooter" in html
+             and "hasIconOnlySettingsToolbar" in html
+             and "hasPrimaryJsonOnlyDefaultToolbar" in html
+             and "hasCalmDefaultSettingsMode" in html
+             and "hasMoreComfortableSettingControls" in html
              and "hasLabelsInsideRows" in html
              and "hidesOriginalLabels" in html
              and "hasBuiltSettingGridHead" in html
@@ -10410,6 +10422,11 @@ console.log("frontend word separator behavior ok");
             and "result.snapshot.hasLeanSettingControls" in settings_smoke_source
             and "result.snapshot.hasQuietInspectorFocusDeck" in settings_smoke_source
             and "result.snapshot.hasStatusbarFooter" in settings_smoke_source
+            and "result.snapshot.hasIconOnlySettingsToolbar" in settings_smoke_source
+            and "result.snapshot.hasPrimaryJsonOnlyDefaultToolbar" in settings_smoke_source
+            and "result.snapshot.hasCalmDefaultSettingsMode" in settings_smoke_source
+            and "result.snapshot.hasVsCodeWideCategoryNav" in settings_smoke_source
+            and "result.snapshot.hasMoreComfortableSettingControls" in settings_smoke_source
             and "result.snapshot.hasExtensionVirtualSummary" in settings_smoke_source
             and "result.snapshot.hasExtensionVirtualActions" in settings_smoke_source
             and "result.snapshot.hasExtensionQuickFilters" in settings_smoke_source

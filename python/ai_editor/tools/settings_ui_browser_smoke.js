@@ -178,6 +178,10 @@ async function main() {
   await page.goto(pathToFileURL(htmlPath).href, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => typeof window.openSettings === "function" && typeof window.settingsUiSelfCheckSnapshot === "function", null, { timeout: 15000 });
   await page.evaluate(() => {
+    try {
+      localStorage.setItem("sao.aiEditor.settings.details.v1", "closed");
+      localStorage.setItem("sao.aiEditor.settings.density.v1", "comfortable");
+    } catch (_error) {}
     window.config = Object.assign(window.config || {}, {
       provider: "openai",
       model: "gpt-4o-mini",
@@ -278,6 +282,9 @@ async function main() {
   }
   if (!result.snapshot.hasCollapsedSecondaryActions || !result.snapshot.hasVsCodeGroupHeadings || !result.snapshot.hasLeanSettingControls || !result.snapshot.hasQuietInspectorFocusDeck || !result.snapshot.hasStatusbarFooter) {
     throw new Error("Settings selfcheck missing calmer VS Code layout refinements: " + JSON.stringify(result.snapshot));
+  }
+  if (!result.snapshot.hasIconOnlySettingsToolbar || !result.snapshot.hasPrimaryJsonOnlyDefaultToolbar || !result.snapshot.hasCalmDefaultSettingsMode || !result.snapshot.hasVsCodeWideCategoryNav || !result.snapshot.hasMoreComfortableSettingControls) {
+    throw new Error("Settings selfcheck missing VS Code-like default interaction refinements: " + JSON.stringify(result.snapshot));
   }
   if (!result.snapshot.hasExtensionVirtualSummary || !result.snapshot.hasExtensionVirtualActions) {
     throw new Error("Settings selfcheck missing extension virtualization controls: " + JSON.stringify(result.snapshot));
