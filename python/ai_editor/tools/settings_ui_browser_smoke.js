@@ -129,6 +129,8 @@ async function main() {
     const navCleared = window.settingsClearNavFilter ? window.settingsClearNavFilter() : null;
     const sectionMoved = window.settingsFocusSiblingSection ? window.settingsFocusSiblingSection(1) : false;
     if (firstRow) window.settingsSearchForKey(firstRow.dataset.settingKey || firstRow.dataset.extSettingKey || "editor.tabSize", "user");
+    const reviewApplied = window.settingsApplyReviewFilter ? window.settingsApplyReviewFilter("modified") : false;
+    const reviewCleared = window.settingsClearReviewFilters ? window.settingsClearReviewFilters() : false;
     const snapshot = window.settingsUiSelfCheckSnapshot();
     const modal = document.querySelector("#settings-modal .settings-modal");
     const rect = modal ? modal.getBoundingClientRect() : null;
@@ -141,7 +143,10 @@ async function main() {
       resultCountText: (document.querySelector("#settings-result-count") || {}).textContent || "",
       filterSummary: (document.querySelector("#settings-filter-summary") || {}).textContent || "",
       detailActions: Array.from(document.querySelectorAll("#settings-current-detail .detail-actions button")).map(btn => btn.textContent),
+      reviewActions: Array.from(document.querySelectorAll("#settings-review-bar .review-actions button")).map(btn => btn.textContent),
       sectionActions: Array.from(document.querySelectorAll("#settings-section-context .section-actions button")).map(btn => btn.textContent),
+      reviewApplied,
+      reviewCleared,
       visibleRows: window.settingsVisibleRows ? window.settingsVisibleRows().length : 0
     };
   });
@@ -152,6 +157,8 @@ async function main() {
 
   const requiredActions = ["Prev", "Next", "Section", "Filter", "Copy ID", "Copy Value", "Copy JSON", "Use Default", "Use Inherited", "Clear Override", "JSON"];
   const missingDetail = requiredActions.filter(action => !result.detailActions.includes(action));
+  const requiredReview = ["Show Modified", "Show Overrides", "Show Errors", "Clear Review"];
+  const missingReview = requiredReview.filter(action => !result.reviewActions.includes(action));
   const requiredSection = ["Prev Section", "Next Section", "Search"];
   const missingSection = requiredSection.filter(action => !result.sectionActions.includes(action));
   if (!result.snapshot || result.snapshot.pass !== true) {
@@ -166,8 +173,14 @@ async function main() {
   if (!result.snapshot.hasDetailValueActions) {
     throw new Error("Settings selfcheck missing row value actions: " + JSON.stringify(result.snapshot));
   }
+  if (!result.snapshot.hasReviewFilterActions || !result.snapshot.hasOverridesFilterToken) {
+    throw new Error("Settings selfcheck missing review filter affordances: " + JSON.stringify(result.snapshot));
+  }
   if (!result.navFiltered || result.navFiltered.visible < 1 || !result.navCleared || result.navCleared.visible < result.navFiltered.visible) {
     throw new Error("Settings category filter did not behave as expected: " + JSON.stringify(result));
+  }
+  if (!result.reviewApplied || !result.reviewCleared || missingReview.length) {
+    throw new Error("Settings review filters did not behave as expected: " + JSON.stringify({ result, missingReview }));
   }
   if (!result.resultCountText || missingDetail.length || missingSection.length || !result.visibleRows) {
     throw new Error("Settings smoke missing navigation feedback: " + JSON.stringify({ result, missingDetail, missingSection }));

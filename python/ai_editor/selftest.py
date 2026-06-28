@@ -8567,19 +8567,20 @@ const SETTINGS_SCOPE_FILTERS={
   extensions:["extension","publisher","contribution","marketplace","runtime","trust"]
 };
 const SETTINGS_TOKEN_LABELS={
-  modified:"Modified",error:"Errors",json:"JSON",extensions:"Extensions",
+  modified:"Modified",overrides:"Overrides",override:"Overrides",error:"Errors",json:"JSON",extensions:"Extensions",
   editor:"Editor",files:"Files",language:"Language",terminal:"Terminal",
   workspace:"Workspace",assistant:"Assistant",mcp:"MCP"
 };
 let scheduled = 0;
-const fakeSearch = { value:"font @editor @modified" };
+const fakeSearch = { value:"font @editor @modified @overrides" };
 function $(id){ return id === "settings-search" ? fakeSearch : null; }
 function scheduleFilterSettings(delay){ scheduled = delay; }
 """ + settings_diff_js_functions + r"""
-let q = settingsQueryFilters("font @editor @modified @json");
+let q = settingsQueryFilters("font @editor @modified @overrides @json");
 assert(q.text === "font" && q.editor === true && q.modified === true
+       && q.overrides === true
        && q.json === true && q.scopes.includes("editor")
-       && q.tokens.join(",") === "@editor,@modified,@json",
+       && q.tokens.join(",") === "@editor,@modified,@overrides,@json",
        "settings query extracts text scope and state tokens");
         q = settingsQueryFilters("@terminal @workspace shell");
         assert(q.terminal === true && q.workspace === true
@@ -8600,11 +8601,12 @@ assert(q.text === "font" && q.editor === true && q.modified === true
                "settings scope aliases normalize");
         assert(settingsFilterChipLabel("@mcp") === "@MCP"
                && settingsFilterChipLabel("@error") === "@Errors"
+               && settingsFilterChipLabel("@overrides") === "@Overrides"
                && settingsFilterChipLabel("@feature:editor") === "Feature: editor"
                && settingsFilterChipLabel("@lang:python") === "Language: python",
                "settings filter chip labels are readable");
 removeSettingsFilterToken("@editor");
-assert(fakeSearch.value === "font @modified" && scheduled === 0,
+assert(fakeSearch.value === "font @modified @overrides" && scheduled === 0,
        "settings filter token removal preserves text and schedules immediate filter");
 
 const multi = computeEditorDirtyDiff(
@@ -9592,7 +9594,7 @@ console.log("frontend word separator behavior ok");
              and "add('{}','Copy JSON setting entry'" in html
              and "settingsAddRowActions(wrap,{key:meta.key||meta.path||inputId,searchable:false,meta,inputId,clearTarget:" in html
              and "settingsAddRowActions(row,{key:key,searchable:true});" in html
-              and "filters={modified:false,common:false,error:false,json:false,extensions:false,scopes:[],ids:[],tags:[],features:[],extensionIds:[],languages:[]}" in html
+              and "filters={modified:false,overrides:false,common:false,error:false,json:false,extensions:false,scopes:[],ids:[],tags:[],features:[],extensionIds:[],languages:[]}" in html
               and "Setting: '+raw.slice(3)" in html
               and "@([A-Za-z][A-Za-z0-9_-]*)" in html
               and "SETTINGS_SCOPE_FILTERS[scope]" in html
@@ -9796,17 +9798,27 @@ console.log("frontend word separator behavior ok");
             and "id=\"settings-density-toggle\"" in html
             and ".settings-modal.compact" in html
             and "window.settingsToggleDensity=settingsToggleDensity;" in html
-            and "settingsConfigureRowInJson(row,opts.key)" in html
-            and "function settingValueState(meta,value,target)" in html
-            and "dataset.settingValueState='1'" in html
-            and "settings-built-chip value-state" in html
+             and "settingsConfigureRowInJson(row,opts.key)" in html
+             and "function settingValueState(meta,value,target)" in html
+             and "dataset.settingValueState='1'" in html
+             and "settings-built-chip value-state" in html
             and "detail-chip value-state" in html
             and "Unsaved edit" in html
-            and "function settingsReviewRowBeforeAfter(row)" in html
-            and "className='before-after'" in html
-            and "No visible matches. Remove a token or switch target." in html
-            and "['f','l'].includes(String(ev.key||'').toLowerCase())" in html
-            and "String(ev.key||'')==='1'" in html
+             and "function settingsReviewRowBeforeAfter(row)" in html
+             and "className='before-after'" in html
+             and "data-settings-filter-token=\"@overrides\"" in html
+             and "overrides:'Overrides'" in html
+             and "const SETTINGS_REVIEW_FILTER_TOKENS=[" in html
+             and "function settingsApplyReviewFilter(kind)" in html
+             and "function settingsClearReviewFilters()" in html
+             and "function settingsHasReviewFilter()" in html
+             and "Show Modified','Filter the Settings list to visible modified settings" in html
+             and "Show Overrides','Filter the Settings list to visible target overrides" in html
+             and "Show Errors','Filter the Settings list to visible invalid settings" in html
+             and "Clear Review','Remove modified override and error review filters" in html
+             and "No visible matches. Remove a token or switch target." in html
+             and "['f','l'].includes(String(ev.key||'').toLowerCase())" in html
+             and "String(ev.key||'')==='1'" in html
             and "settingsFocusSiblingSection(1)" in html
             and "settingsFocusBoundaryRow('first')" in html
             and "settingsFocusPagedRow(1)" in html
@@ -9831,17 +9843,22 @@ console.log("frontend word separator behavior ok");
             and "hasNavFilterCount" in html
             and "hasSectionContextActions" in html
             and "hasQueryBox" in html
-            and "hasScopeControl" in html
-            and "hasNavHeading" in html
-            and "hasNavCountPills" in html
-            and "hasActiveNavRail" in html
-            and "hasDetailValueActions" in html
-            and "window.settingsSearchForKey=settingsSearchForKey;" in html
-            and "window.settingsFilterNavCategories=settingsFilterNavCategories;" in html
-            and "window.settingsUiSelfCheckSnapshot=settingsUiSelfCheckSnapshot;" in html
-            and "String(ev.key||'').toLowerCase()==='n'" in html
-            and "settingsRememberRecentSetting(row);" in html
-            and "fav.dataset.settingsFavoriteKey=opts.key;" in html
+             and "hasScopeControl" in html
+             and "hasNavHeading" in html
+             and "hasNavCountPills" in html
+             and "hasActiveNavRail" in html
+             and "hasDetailValueActions" in html
+             and "hasReviewFilterActions" in html
+             and "hasOverridesFilterToken" in html
+             and "window.settingsSearchForKey=settingsSearchForKey;" in html
+             and "window.settingsFilterNavCategories=settingsFilterNavCategories;" in html
+             and "window.settingsUiSelfCheckSnapshot=settingsUiSelfCheckSnapshot;" in html
+             and "window.settingsApplyReviewFilter=settingsApplyReviewFilter;" in html
+             and "window.settingsClearReviewFilters=settingsClearReviewFilters;" in html
+             and "window.settingsHasReviewFilter=settingsHasReviewFilter;" in html
+             and "String(ev.key||'').toLowerCase()==='n'" in html
+             and "settingsRememberRecentSetting(row);" in html
+             and "fav.dataset.settingsFavoriteKey=opts.key;" in html
             and "renderSettingsReviewBar(targetStats);" in html
             and "renderSettingsReviewBar();" in html)
     settings_smoke_path = os.path.join(
@@ -9859,10 +9876,14 @@ console.log("frontend word separator behavior ok");
            and "window.settingsSearchForKey(" in settings_smoke_source
            and "result.snapshot.hasQueryBox" in settings_smoke_source
            and "result.snapshot.hasScopeControl" in settings_smoke_source
-           and "result.snapshot.hasActiveNavRail" in settings_smoke_source
-           and "result.snapshot.hasDetailValueActions" in settings_smoke_source
-           and "\"Copy Value\"" in settings_smoke_source
-           and "\"Use Inherited\"" in settings_smoke_source
+            and "result.snapshot.hasActiveNavRail" in settings_smoke_source
+            and "result.snapshot.hasDetailValueActions" in settings_smoke_source
+            and "result.snapshot.hasReviewFilterActions" in settings_smoke_source
+            and "result.snapshot.hasOverridesFilterToken" in settings_smoke_source
+            and "window.settingsApplyReviewFilter(" in settings_smoke_source
+            and "window.settingsClearReviewFilters()" in settings_smoke_source
+            and "\"Copy Value\"" in settings_smoke_source
+            and "\"Use Inherited\"" in settings_smoke_source
            and "settings.png" in settings_smoke_source
            and "channel: \"msedge\"" in settings_smoke_source
            and "PASS settings-ui-browser-smoke" in settings_smoke_source

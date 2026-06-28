@@ -3157,6 +3157,7 @@ pre.code-block { overflow:visible; }
       <div id="settings-active-filters" class="settings-active-filters" aria-live="polite"></div>
       <div id="settings-quick-filters" class="settings-quick-filters" aria-label="Quick setting filters">
         <button type="button" data-settings-filter-token="@modified" onclick="settingsToggleFilterToken('@modified')">Modified</button>
+        <button type="button" data-settings-filter-token="@overrides" onclick="settingsToggleFilterToken('@overrides')">Overrides</button>
         <button type="button" data-settings-filter-token="@common" onclick="settingsToggleFilterToken('@common')">Common</button>
         <button type="button" data-settings-filter-token="@error" onclick="settingsToggleFilterToken('@error')">Errors</button>
         <button type="button" data-settings-filter-token="@json" onclick="settingsToggleFilterToken('@json')">JSON</button>
@@ -25578,6 +25579,7 @@ function settingsUiSelfCheckSnapshot(){
   const navItems=nav?Array.from(nav.querySelectorAll('.settings-nav-item')):[];
   const detail=$('settings-current-detail');
   const detailActionLabels=detail?Array.from(detail.querySelectorAll('.detail-actions button')).map(btn=>String(btn.textContent||'')):[];
+  const reviewActionLabels=Array.from(document.querySelectorAll('#settings-review-bar .review-actions button')).map(btn=>String(btn.textContent||''));
   return {
     pass:!!(modal&&nav&&main&&$('settings-nav-filter')&&$('settings-density-toggle')&&detail
       &&typeof settingsFilterNavCategories==='function'
@@ -25599,6 +25601,8 @@ function settingsUiSelfCheckSnapshot(){
     hasCurrentDetail:!!detail,
     hasDetailActions:!!(detail&&detail.querySelector('.detail-actions')),
     hasDetailValueActions:['Copy Value','Copy JSON','Use Default','Use Inherited','Clear Override'].every(label=>detailActionLabels.includes(label)),
+    hasReviewFilterActions:['Show Modified','Show Overrides','Show Errors','Clear Review'].every(label=>reviewActionLabels.includes(label)),
+    hasOverridesFilterToken:!!document.querySelector('[data-settings-filter-token="@overrides"]'),
     density:settingsReadDensity(),
     currentTarget:currentSettingsTarget,
     navItems:navItems.length,
@@ -25641,6 +25645,9 @@ window.settingsComputeReviewState=settingsComputeReviewState;
 window.renderSettingsReviewBar=renderSettingsReviewBar;
 window.settingsToggleSavePreview=settingsToggleSavePreview;
 window.settingsFocusFirstReviewRow=settingsFocusFirstReviewRow;
+window.settingsApplyReviewFilter=settingsApplyReviewFilter;
+window.settingsClearReviewFilters=settingsClearReviewFilters;
+window.settingsHasReviewFilter=settingsHasReviewFilter;
 const SETTINGS_SCOPE_FILTERS={
   editor:['editor','format','formatter','suggest','hover','minimap','folding','sticky scroll','diff','diagnostic','language override'],
   files:['files','save','auto save','trim trailing','final newline'],
@@ -25652,10 +25659,11 @@ const SETTINGS_SCOPE_FILTERS={
   extensions:['extension','publisher','contribution','marketplace','runtime','trust']
 };
 const SETTINGS_TOKEN_LABELS={
-  modified:'Modified',common:'Commonly Used',error:'Errors',json:'JSON',extensions:'Extensions',
+  modified:'Modified',overrides:'Overrides',override:'Overrides',common:'Commonly Used',error:'Errors',json:'JSON',extensions:'Extensions',
   editor:'Editor',files:'Files',language:'Language',terminal:'Terminal',
   workspace:'Workspace',assistant:'Assistant',mcp:'MCP'
 };
+const SETTINGS_REVIEW_FILTER_TOKENS=['@modified','@overrides','@error'];
 function settingsScopeTokenKey(token){
   const key=String(token||'').toLowerCase();
   if(key==='ext')return 'extensions';
@@ -25779,7 +25787,7 @@ function settingsGroupMatchesCommonFilter(group){
 }
 function settingsQueryFilters(raw){
   const query=String(raw||'');
-  const filters={modified:false,common:false,error:false,json:false,extensions:false,scopes:[],ids:[],tags:[],features:[],extensionIds:[],languages:[]};
+  const filters={modified:false,overrides:false,common:false,error:false,json:false,extensions:false,scopes:[],ids:[],tags:[],features:[],extensionIds:[],languages:[]};
   let text=query.replace(/(^|\s)@id:([^\s]+)/ig,(match,prefix,id)=>{
     const clean=String(id||'').trim().toLowerCase();
     if(clean)filters.ids.push(clean);
@@ -25802,8 +25810,8 @@ function settingsQueryFilters(raw){
     if(scope){
       filters[scope]=true;
       if(!filters.scopes.includes(scope))filters.scopes.push(scope);
-    }else if(key==='modified'||key==='common'||key==='error'||key==='json'){
-      filters[key]=true;
+    }else if(key==='modified'||key==='common'||key==='error'||key==='json'||key==='overrides'||key==='override'){
+      filters[key==='override'?'overrides':key]=true;
     }else{
       return match;
     }
@@ -25812,7 +25820,7 @@ function settingsQueryFilters(raw){
   text=text.replace(/\s+/g,' ');
   filters.text=text;
   filters.tokens=settingsFilterTokens(query).map(v=>v.trim()).filter(Boolean);
-  filters.active=!!(text||filters.modified||filters.common||filters.error||filters.json||filters.scopes.length||filters.ids.length||filters.tags.length||filters.features.length||filters.extensionIds.length||filters.languages.length);
+  filters.active=!!(text||filters.modified||filters.overrides||filters.common||filters.error||filters.json||filters.scopes.length||filters.ids.length||filters.tags.length||filters.features.length||filters.extensionIds.length||filters.languages.length);
   return filters;
 }
 function settingsGroupMatchesIdFilters(group,ids){
@@ -25833,6 +25841,7 @@ function settingsGroupMatchesFilter(group,query){
   if(query.extensionIds&&!settingsGroupMatchesExtensionFilters(group,query.extensionIds))return false;
   if(query.languages&&!settingsGroupMatchesLanguageFilters(group,query.languages))return false;
   if(query.modified&&!group.querySelector('.settings-field.modified:not(.settings-target-hidden),.ext-setting-row.modified:not(.settings-target-hidden)'))return false;
+  if(query.overrides&&!group.querySelector('[data-setting-target-override="1"]:not(.settings-target-hidden)'))return false;
   if(query.common&&!settingsGroupMatchesCommonFilter(group))return false;
   if(query.error&&!group.querySelector('[aria-invalid="true"],.settings-field.invalid:not(.settings-target-hidden),.settings-input-invalid'))return false;
   if(query.json&&!(text.includes('json')||group.querySelector('[id$="-json"],#s-xheaders,#s-xbody')))return false;
@@ -25977,6 +25986,7 @@ function renderSettingsSearchInspector(parsed,visible,total,targetStats){
   if(parsed&&parsed.languages&&parsed.languages.length)add('Languages: '+parsed.languages.join(', '),'active');
   if(parsed&&parsed.extensionIds&&parsed.extensionIds.length)add('Extensions: '+parsed.extensionIds.join(', '),'active');
   if(parsed&&parsed.modified)add('Modified only','active');
+  if(parsed&&parsed.overrides)add('Overrides only','active');
   if(parsed&&parsed.common)add('Commonly used','active');
   if(parsed&&parsed.error)add('Errors only','warning');
   if(parsed&&parsed.json)add('JSON settings','active');
@@ -26037,6 +26047,41 @@ function settingsFocusFirstReviewRow(kind){
   if(row){settingsHighlightRow(row);return true}
   showToast('No visible '+kind+' settings','info',1400);
   return false;
+}
+function settingsReviewTokenForKind(kind){
+  kind=String(kind||'').toLowerCase();
+  if(kind==='modified')return '@modified';
+  if(kind==='override'||kind==='overrides')return '@overrides';
+  if(kind==='error'||kind==='errors')return '@error';
+  return '';
+}
+function settingsSearchWithoutReviewTokens(text){
+  text=String(text||'');
+  SETTINGS_REVIEW_FILTER_TOKENS.forEach(token=>{
+    text=text.replace(settingsTokenRegex(token),' ');
+  });
+  return text.replace(/\s+/g,' ').trim();
+}
+function settingsApplyReviewFilter(kind){
+  const token=settingsReviewTokenForKind(kind);
+  const input=$('settings-search');if(!input||!token)return false;
+  const base=settingsSearchWithoutReviewTokens(input.value);
+  input.value=(base?base+' ':'')+token;
+  input.focus&&input.focus();
+  scheduleFilterSettings(0);
+  return true;
+}
+function settingsClearReviewFilters(){
+  const input=$('settings-search');if(!input)return false;
+  const next=settingsSearchWithoutReviewTokens(input.value);
+  const changed=next!==String(input.value||'').trim();
+  input.value=next;
+  scheduleFilterSettings(0);
+  return changed;
+}
+function settingsHasReviewFilter(){
+  const text=String(($('settings-search')||{}).value||'');
+  return SETTINGS_REVIEW_FILTER_TOKENS.some(token=>settingsTokenRegex(token).test(text));
 }
 function settingsReviewRowBeforeAfter(row){
   const info=settingsMetaForRow(row);
@@ -26136,6 +26181,10 @@ function renderSettingsReviewBar(stats){
     return btn;
   };
   addButton('Review','Preview visible setting changes before saving',settingsToggleSavePreview,!dirty,false);
+  addButton('Show Modified','Filter the Settings list to visible modified settings',()=>settingsApplyReviewFilter('modified'),!state.modified.length,false);
+  addButton('Show Overrides','Filter the Settings list to visible target overrides',()=>settingsApplyReviewFilter('overrides'),!state.overrides.length,false);
+  addButton('Show Errors','Filter the Settings list to visible invalid settings',()=>settingsApplyReviewFilter('error'),!state.errors.length,false);
+  addButton('Clear Review','Remove modified override and error review filters',settingsClearReviewFilters,!settingsHasReviewFilter(),false);
   addButton('Modified','Focus first visible modified setting',()=>settingsFocusFirstReviewRow('modified'),!state.modified.length,false);
   addButton('Override','Focus first visible target override',()=>settingsFocusFirstReviewRow('override'),!state.overrides.length,false);
   addButton('Error','Focus first visible invalid setting',()=>settingsFocusFirstReviewRow('error'),!state.errors.length,false);
@@ -26224,7 +26273,7 @@ function settingsBuiltinFilterSuggestions(query){
     return !current||normalized.startsWith(current)||current.startsWith(normalized);
   };
   const push=token=>{if(include(token))settingsPushSuggestion(suggestions,seen,query,token)};
-  ['@common','@modified','@error','@json','@workspace','@extensions','@tag:','@feature:','@ext:','@lang:','@id:'].forEach(push);
+  ['@common','@modified','@overrides','@error','@json','@workspace','@extensions','@tag:','@feature:','@ext:','@lang:','@id:'].forEach(push);
   Object.keys(SETTINGS_SCOPE_FILTERS).sort().forEach(scope=>push('@feature:'+scope));
   ['modified','error','json','extension','preview','advanced'].forEach(tag=>push('@tag:'+tag));
   ['javascript','typescript','python','json','markdown','html','css'].forEach(lang=>push('@lang:'+lang));
