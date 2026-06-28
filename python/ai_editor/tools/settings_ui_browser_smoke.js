@@ -276,6 +276,9 @@ async function main() {
   if (!result.snapshot.hasQuietSearchHints || !result.snapshot.hasHelpOpenSearchHints || !result.snapshot.hasConditionalReviewBar) {
     throw new Error("Settings selfcheck missing calm workbench disclosure states: " + JSON.stringify(result.snapshot));
   }
+  if (!result.snapshot.hasCollapsedSecondaryActions || !result.snapshot.hasVsCodeGroupHeadings || !result.snapshot.hasLeanSettingControls || !result.snapshot.hasQuietInspectorFocusDeck || !result.snapshot.hasStatusbarFooter) {
+    throw new Error("Settings selfcheck missing calmer VS Code layout refinements: " + JSON.stringify(result.snapshot));
+  }
   if (!result.snapshot.hasExtensionVirtualSummary || !result.snapshot.hasExtensionVirtualActions) {
     throw new Error("Settings selfcheck missing extension virtualization controls: " + JSON.stringify(result.snapshot));
   }

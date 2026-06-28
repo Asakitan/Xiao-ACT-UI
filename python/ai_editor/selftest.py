@@ -4319,7 +4319,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".settings-vscode-calm .settings-target-tabs { border:0; border-bottom:1px solid var(--border); border-radius:0; background:transparent; overflow:visible; }" in html
            and ".settings-vscode-calm .settings-nav-summary," in html
            and ".settings-vscode-calm .settings-control-status { display:none; }" in html
-           and ".settings-vscode-calm .settings-field.builtin-setting { grid-template-columns:minmax(270px,.72fr) minmax(330px,1fr);" in html)
+           and ".settings-vscode-calm .settings-field.builtin-setting { grid-template-columns:minmax(270px,.72fr) minmax(330px,1fr);" in html
+           and ".settings-vscode-calm:not(.settings-details-open) .settings-secondary-action { display:none; }" in html
+           and ".settings-vscode-calm .settings-main .sb-group { margin:18px 0 7px !important;" in html
+           and ".settings-vscode-calm:not(.settings-details-open) .settings-inspector .settings-focus-deck { display:none; }" in html
+           and ".settings-vscode-calm .modal-btns { min-height:34px; padding:4px 18px; align-items:center;" in html)
     _check("provider webviews bridge persistent vscode state",
            'type:"webview-set-state"' in html
            and 'webview_set_state' in html
@@ -10113,6 +10117,11 @@ console.log("frontend word separator behavior ok");
             and "hasInspectorDetail" in html
             and "hasOnDemandInspector" in html
             and "hasQuietRecommendations" in html
+             and "hasCollapsedSecondaryActions" in html
+             and "hasVsCodeGroupHeadings" in html
+             and "hasLeanSettingControls" in html
+             and "hasQuietInspectorFocusDeck" in html
+             and "hasStatusbarFooter" in html
              and "hasLabelsInsideRows" in html
              and "hidesOriginalLabels" in html
              and "hasBuiltSettingGridHead" in html
@@ -10288,6 +10297,11 @@ console.log("frontend word separator behavior ok");
             and "result.snapshot.hasHelpOpenSearchHints" in settings_smoke_source
             and "result.snapshot.hasConditionalReviewBar" in settings_smoke_source
             and "result.snapshot.hasOnDemandSettingValueDetails" in settings_smoke_source
+            and "result.snapshot.hasCollapsedSecondaryActions" in settings_smoke_source
+            and "result.snapshot.hasVsCodeGroupHeadings" in settings_smoke_source
+            and "result.snapshot.hasLeanSettingControls" in settings_smoke_source
+            and "result.snapshot.hasQuietInspectorFocusDeck" in settings_smoke_source
+            and "result.snapshot.hasStatusbarFooter" in settings_smoke_source
             and "result.snapshot.hasExtensionVirtualSummary" in settings_smoke_source
             and "result.snapshot.hasExtensionVirtualActions" in settings_smoke_source
             and "result.snapshot.hasExtensionQuickFilters" in settings_smoke_source

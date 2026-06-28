@@ -2694,8 +2694,8 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-target-tabs button { height:30px; min-width:76px; border:0; border-bottom:1px solid transparent; border-radius:0; background:transparent; }
 .settings-vscode-calm .settings-target-tabs button.active { color:var(--fg); background:transparent; border-bottom-color:var(--fg-accent); }
 .settings-vscode-calm .settings-target-tab-count { background:transparent; border:0; padding:0; min-width:auto; }
-.settings-vscode-calm .settings-shell { grid-template-columns:220px minmax(0,1fr); background:var(--bg); border-top:0; }
-.settings-vscode-calm .settings-shell.inspecting { grid-template-columns:220px minmax(0,1fr) minmax(286px,330px); background:var(--bg); }
+.settings-vscode-calm .settings-shell { grid-template-columns:240px minmax(0,1fr); background:var(--bg); border-top:0; }
+.settings-vscode-calm .settings-shell.inspecting { grid-template-columns:240px minmax(0,1fr) minmax(286px,330px); background:var(--bg); }
 .settings-vscode-calm .settings-nav { padding:10px 8px 12px 0; border-right:1px solid var(--border); background:var(--bg); }
 .settings-vscode-calm .settings-nav-summary,
 .settings-vscode-calm .settings-nav-memory { display:none; }
@@ -2752,6 +2752,32 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-row-actions { right:4px; }
 .settings-vscode-calm .settings-row-action { border-color:transparent; background:transparent; }
 .settings-vscode-calm .settings-row-action-menu { border-radius:3px; }
+.settings-vscode-calm:not(.settings-details-open) .settings-secondary-action { display:none; }
+.settings-vscode-calm .settings-title-actions { gap:4px; }
+.settings-vscode-calm .settings-view-options { gap:3px; }
+.settings-vscode-calm .settings-top-action { height:24px; border-radius:2px; background:transparent; }
+.settings-vscode-calm .settings-top-action.primary { background:color-mix(in srgb,var(--fg-accent) 9%,transparent); }
+.settings-vscode-calm .settings-main .sb-group { margin:18px 0 7px !important; padding:0 !important;
+  color:var(--fg); font-size:13px; font-weight:600; line-height:18px; text-transform:none; }
+.settings-vscode-calm .settings-main .sb-group:first-child { margin-top:0 !important; }
+.settings-vscode-calm .settings-main .settings-help { max-width:720px; color:color-mix(in srgb,var(--fg-dim) 88%,var(--fg)); }
+.settings-vscode-calm .settings-field.builtin-setting > label.settings-original-label { display:none; }
+.settings-vscode-calm .settings-field.builtin-setting > .settings-built-desc { max-width:560px; line-height:1.42; }
+.settings-vscode-calm .settings-control-frame input,
+.settings-vscode-calm .settings-control-frame select { height:26px; padding:2px 4px; font:12px var(--sans); }
+.settings-vscode-calm .settings-control-frame textarea { padding:5px 4px; font:12px/1.45 var(--mono); }
+.settings-vscode-calm:not(.settings-details-open) .settings-inspector .settings-focus-deck { display:none; }
+.settings-vscode-calm .settings-inspector { background:var(--bg); padding:12px 10px; }
+.settings-vscode-calm .settings-inspector-title { color:var(--fg-dim); }
+.settings-vscode-calm .settings-current-detail { border-radius:2px; background:transparent; border-color:color-mix(in srgb,var(--border) 70%,transparent); }
+.settings-vscode-calm .settings-current-detail .detail-chip { border-radius:2px; background:transparent; }
+.settings-vscode-calm .modal-btns { min-height:34px; padding:4px 18px; align-items:center;
+  background:var(--statusbar-bg); color:var(--statusbar-fg); border-top:1px solid var(--border); }
+.settings-vscode-calm .modal-btns .settings-bottom-action,
+.settings-vscode-calm .modal-btns .settings-reset-visible { height:24px; border-radius:2px; background:transparent; }
+.settings-vscode-calm .settings-footer-summary { color:var(--statusbar-fg); }
+.settings-vscode-calm .settings-footer-summary.modified { color:var(--fg-accent); }
+.settings-vscode-calm .settings-footer-summary.error { color:var(--fg-error); }
 .settings-row-action:disabled { opacity:.35; cursor:default; }
 .settings-row-action-menu { display:none; position:absolute; top:26px; right:0; min-width:174px; padding:4px;
   border:1px solid var(--border); border-radius:4px; background:var(--bg2); box-shadow:var(--shadow); }
@@ -3684,10 +3710,10 @@ pre.code-block { overflow:visible; }
       <div class="settings-title-actions">
         <span id="settings-dirty-summary" class="settings-status-pill" role="status" aria-live="polite">Clean</span>
         <span class="settings-view-options" role="group" aria-label="Settings view">
-          <button type="button" class="settings-top-action" id="settings-density-toggle" onclick="settingsToggleDensity()">Compact</button>
-          <button type="button" class="settings-top-action" onclick="settingsFocusActiveSection()">Current</button>
+          <button type="button" class="settings-top-action settings-secondary-action" id="settings-density-toggle" onclick="settingsToggleDensity()">Compact</button>
+          <button type="button" class="settings-top-action settings-secondary-action" onclick="settingsFocusActiveSection()">Current</button>
           <button type="button" class="settings-top-action" id="settings-details-toggle" onclick="settingsToggleDetails()">Details</button>
-          <button type="button" class="settings-top-action" id="settings-query-help-toggle" onclick="settingsToggleQueryHelp()">Query Help</button>
+          <button type="button" class="settings-top-action settings-secondary-action" id="settings-query-help-toggle" onclick="settingsToggleQueryHelp()">Query Help</button>
         </span>
         <span class="settings-toolbar-strip" role="group" aria-label="Settings commands">
           <button type="button" class="settings-top-action primary" onclick="settingsOpenJsonView()">Open JSON</button>
@@ -28001,6 +28027,10 @@ function settingsUiSelfCheckSnapshot(){
   const rowImpact=document.querySelector('.settings-row-impact');
   const route=$('settings-title-route');
   const caption=$('settings-search-caption-text');
+  const secondaryAction=document.querySelector('.settings-secondary-action');
+  const sbGroup=document.querySelector('.settings-main .sb-group');
+  const controlFrame=document.querySelector('.settings-field.builtin-setting > .settings-control-frame');
+  const footer=document.querySelector('.modal.settings-modal .modal-btns');
   return {
     pass:!!(modal&&nav&&main&&inspector&&$('settings-nav-filter')&&$('settings-density-toggle')&&detail
       &&typeof settingsFilterNavCategories==='function'
@@ -28020,6 +28050,11 @@ function settingsUiSelfCheckSnapshot(){
     hasInspectorDetail:!!(inspector&&detail&&inspector.contains(detail)),
     hasOnDemandInspector:!!(shell&&typeof settingsClearCurrentRow==='function'&&String(getComputedStyle(inspector).display)!=='none'&&shell.classList.contains('inspecting')),
     hasQuietRecommendations:!!(recommendations&&recommendations.classList.contains('quiet')&&typeof renderSettingsRecommendations==='function'),
+    hasCollapsedSecondaryActions:!!(secondaryAction&&String(getComputedStyle(secondaryAction).display)==='none'),
+    hasVsCodeGroupHeadings:!!(sbGroup&&String(getComputedStyle(sbGroup).textTransform)==='none'&&parseFloat(getComputedStyle(sbGroup).fontSize||'0')>=13),
+    hasLeanSettingControls:!!(controlFrame&&parseFloat(getComputedStyle(controlFrame).borderRadius||'0')<=3),
+    hasQuietInspectorFocusDeck:!!(focusDeck&&String(getComputedStyle(focusDeck).display)==='none'),
+    hasStatusbarFooter:!!(footer&&String(getComputedStyle(footer).backgroundColor||'')===String(getComputedStyle(document.querySelector('.statusbar')||footer).backgroundColor||'')),
     hasInspectorFocusDeck:!!(inspector&&focusDeck&&inspector.contains(focusDeck)),
     hasLabelsInsideRows:!!originalLabel&&originalLabel.closest('.settings-field.builtin-setting'),
     hidesOriginalLabels:!!originalLabel&&String(getComputedStyle(originalLabel).display)==='none',
