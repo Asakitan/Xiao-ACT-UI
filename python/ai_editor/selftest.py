@@ -4875,7 +4875,29 @@ def test_phase1_ai_editor_regressions() -> None:
             and "messages.classList.toggle('empty',count===0);" in html
             and "messages.dataset.chatMessageCount=String(count);" in html
             and ".chat-messages.empty .chat-messages-inner { justify-content:center; }" in html
-            and "updateAssistantSurfaceState();\n  updateMessageFootersState();\n  renderChatComposerHeader();" in html)
+            and "updateAssistantSurfaceState();\n  updateMessageFootersState();\n  renderChatComposerHeader();\n  renderAssistantComposerSummary();" in html)
+    _check("frontend Assistant composer summary and shortcuts mirror Copilot Chat input affordances",
+           'id="chat-composer-summary"' in html
+           and 'id="chat-prompt-shortcuts"' in html
+           and 'data-chat-prompt-action="explain"' in html
+           and 'data-chat-prompt-action="fix"' in html
+           and 'data-chat-prompt-action="tests"' in html
+           and 'data-chat-prompt-action="review"' in html
+           and 'data-chat-prompt-action="copy-context"' in html
+           and 'data-chat-prompt-action="clear-draft"' in html
+           and "function assistantComposerSummaryState()" in html
+           and "function renderAssistantComposerSummary()" in html
+           and "function assistantComposerContextText()" in html
+           and "function assistantPromptShortcutText(action)" in html
+           and "function applyAssistantPromptShortcut(action)" in html
+           and "function clearAssistantDraft()" in html
+           and "async function copyAssistantComposerContext()" in html
+           and "panel.dataset.chatComposerProviderLabel=state.provider;" in html
+           and "panel.dataset.chatComposerModelLabel=state.model;" in html
+           and "panel.dataset.chatComposerDraftLength=String(state.draftLength);" in html
+           and "panel.dataset.chatComposerShortcut=state.shortcut;" in html
+           and "lastComposerShortcut:String(src.lastComposerShortcut||'')" in html
+           and "assistantUiSelfCheckRecord(checks,'composer-summary-shortcuts-ready'" in html)
     _check("frontend Assistant tracks Copilot-style session and input state",
            "ASSISTANT_SESSION_STATE_KEY='sao-ai-editor-chat-session-state'"
            in html

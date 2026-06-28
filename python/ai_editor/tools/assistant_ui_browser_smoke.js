@@ -114,6 +114,7 @@ async function main() {
     "composer-edit-target-highlight-ready",
     "composer-attachment-summary-ready",
     "composer-queue-state-ready",
+    "composer-summary-shortcuts-ready",
     "model-popup-configured-models-ready",
     "model-popup-custom-endpoint-models-ready",
     "model-popup-custom-endpoint-selection-ready",

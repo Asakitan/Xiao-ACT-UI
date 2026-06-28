@@ -1083,6 +1083,22 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-toolbar-head { display:none; align-items:center; gap:6px; flex-wrap:wrap; min-height:26px;
   padding:7px 8px 0; color:var(--fg-dim); }
 .chat-toolbar-head.has-state { display:flex; }
+.chat-composer-summary { display:none; align-items:center; gap:5px; flex-wrap:wrap; padding:6px 8px 0;
+  color:var(--fg-dim); font:10px/18px var(--mono); }
+.chat-composer-summary.has-state { display:flex; }
+.chat-composer-summary-chip { display:inline-flex; align-items:center; gap:4px; max-width:220px; min-height:18px;
+  padding:0 6px; border:1px solid color-mix(in srgb,var(--border) 80%,transparent); border-radius:999px;
+  background:color-mix(in srgb,var(--bg2) 70%,transparent); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chat-composer-summary-chip.primary { color:var(--fg); border-color:color-mix(in srgb,var(--fg-accent) 38%,var(--border)); }
+.chat-composer-summary-chip.dirty { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 42%,var(--border)); }
+.chat-prompt-shortcuts { display:flex; align-items:center; gap:5px; flex-wrap:wrap; padding:6px 8px 0; }
+.chat-prompt-shortcut { border:1px solid color-mix(in srgb,var(--border) 84%,transparent); border-radius:999px;
+  background:transparent; color:var(--fg-dim); min-height:22px; padding:0 8px; font:11px/20px var(--sans);
+  cursor:pointer; transition:background .14s,border-color .14s,color .14s,transform .14s; }
+.chat-prompt-shortcut:hover,.chat-prompt-shortcut:focus { background:var(--bg-hover); color:var(--fg);
+  border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); outline:none; transform:translateY(-1px); }
+.chat-prompt-shortcut:active { transform:translateY(0); }
+.chat-prompt-shortcut.utility { color:var(--fg-dim); }
 .chat-action-tray { display:none; margin:7px 8px 0; }
 .chat-action-tray.active { display:flex; flex-direction:column; gap:8px; }
 .chat-action-tray .chat-question-carousel-widget-container:empty,
@@ -3774,6 +3790,15 @@ pre.code-block { overflow:visible; }
                 <div class="chat-toolbar-head" id="chat-toolbar-head" aria-live="polite"></div>
                 <div class="chat-action-tray" id="chat-action-tray" role="group" aria-label="Pending Assistant actions"></div>
                 <div class="chat-workflow-session-strip" id="chat-workflow-session-strip" role="status" aria-live="polite"></div>
+                <div class="chat-composer-summary" id="chat-composer-summary" role="status" aria-live="polite"></div>
+                <div class="chat-prompt-shortcuts" id="chat-prompt-shortcuts" role="toolbar" aria-label="Prompt shortcuts">
+                  <button type="button" class="chat-prompt-shortcut" data-chat-prompt-action="explain" onclick="applyAssistantPromptShortcut('explain')" title="Draft an explanation request">Explain</button>
+                  <button type="button" class="chat-prompt-shortcut" data-chat-prompt-action="fix" onclick="applyAssistantPromptShortcut('fix')" title="Draft a fix request">Fix</button>
+                  <button type="button" class="chat-prompt-shortcut" data-chat-prompt-action="tests" onclick="applyAssistantPromptShortcut('tests')" title="Draft a test request">Tests</button>
+                  <button type="button" class="chat-prompt-shortcut" data-chat-prompt-action="review" onclick="applyAssistantPromptShortcut('review')" title="Draft a review request">Review</button>
+                  <button type="button" class="chat-prompt-shortcut utility" data-chat-prompt-action="copy-context" onclick="copyAssistantComposerContext()" title="Copy current composer context">Copy Context</button>
+                  <button type="button" class="chat-prompt-shortcut utility" data-chat-prompt-action="clear-draft" onclick="clearAssistantDraft()" title="Clear the current draft">Clear</button>
+                </div>
                 <div class="chat-input-row">
                   <textarea class="chat-input" id="chat-input" rows="1" data-i18n="ask_placeholder" placeholder="Ask anything... (/ commands, @ context, # tools)" aria-label="Ask Agent" aria-describedby="chat-input-status chat-input-help" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false"></textarea>
                   <button class="send-btn" id="send-btn" onclick="doSend()" title="Send" aria-label="Send" aria-disabled="true"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 2.5l-5 5h3.5V13h3V7.5H13L8 2.5z"/></svg></button>
@@ -7043,6 +7068,139 @@ function renderAssistantStatePills(parent,pillClass){
     parent.appendChild(pill);
   });
 }
+function assistantComposerSummaryState(){
+  let state={provider:'-',model:'',mode:'agent',approval:'default',approvalLabel:'Default',agent:'Default',agentId:'',workflow:'',workflowId:''};
+  try{state=Object.assign(state,chatControlDisplayState()||{})}catch(_e){}
+  const input=$('chat-input');
+  let session={};
+  try{session=assistantSessionState||{}}catch(_e){session={}}
+  const draft=String(input?input.value:session.draft||'');
+  const contextCount=Array.isArray(chatContextAttachments)?chatContextAttachments.length:0;
+  let attachmentCounts={total:0,images:0,files:0};
+  try{attachmentCounts=typeof assistantAttachmentCounts==='function'?assistantAttachmentCounts():attachmentCounts}catch(_e){}
+  let queued=0;
+  try{queued=assistantQueuedRequestCount()}catch(_e){queued=0}
+  let workflowMode='off';
+  try{workflowMode=normalizeWorkflowMode(assistantWorkflowMode)}catch(_e){workflowMode='off'}
+  const workflowLabel=workflowMode==='off'?'Off':(state.workflow||session.workflowLabel||workflowMode);
+  const status=streaming?'Running':queued?'Queued':draft.trim()?'Draft':'Ready';
+  return {
+    provider:state.provider||'-',
+    model:state.model||'-',
+    mode:state.mode||'agent',
+    approval:state.approval||'default',
+    approvalLabel:state.approvalLabel||state.approval||'Default',
+    agent:state.agent||'Default',
+    agentId:state.agentId||'',
+    workflow:workflowLabel,
+    workflowId:state.workflowId||'',
+    workflowMode,
+    contextCount,
+    attachmentCount:attachmentCounts.total||0,
+    imageAttachmentCount:attachmentCounts.images||0,
+    fileAttachmentCount:attachmentCounts.files||0,
+    draftLength:draft.length,
+    requestCount:Math.max(0,Number(session.requestCount||0)),
+    queued,
+    status,
+    shortcut:String(session.lastComposerShortcut||''),
+    resource:(()=>{try{return assistantSessionResource()}catch(_e){return 'sao-ai-chat://local/pending'}})()
+  };
+}
+function appendAssistantComposerSummaryChip(parent,label,kind,title){
+  const chip=document.createElement('span');
+  chip.className='chat-composer-summary-chip'+(kind?' '+kind:'');
+  chip.textContent=label;
+  chip.title=title||label;
+  parent.appendChild(chip);
+  return chip;
+}
+function assistantComposerContextText(){
+  const state=assistantComposerSummaryState();
+  return [
+    'Session: '+state.resource,
+    'Status: '+state.status,
+    'Provider: '+state.provider,
+    'Model: '+state.model,
+    'Mode: '+state.mode,
+    'Approval: '+state.approvalLabel,
+    'Agent: '+state.agent,
+    'Workflow: '+state.workflow+' ('+state.workflowMode+')',
+    'Requests: '+state.requestCount,
+    'Context refs: '+state.contextCount,
+    'Attachments: '+state.attachmentCount,
+    'Draft chars: '+state.draftLength
+  ].join('\n');
+}
+function renderAssistantComposerSummary(){
+  const summary=$('chat-composer-summary');
+  const panel=$('chat-panel');
+  const state=assistantComposerSummaryState();
+  if(panel){
+    panel.dataset.chatComposerProviderLabel=state.provider;
+    panel.dataset.chatComposerModelLabel=state.model;
+    panel.dataset.chatComposerMode=state.mode;
+    panel.dataset.chatComposerApproval=state.approval;
+    panel.dataset.chatComposerAgentLabel=state.agent;
+    panel.dataset.chatComposerWorkflowLabel=state.workflow;
+    panel.dataset.chatComposerWorkflowMode=state.workflowMode;
+    panel.dataset.chatComposerContextCount=String(state.contextCount);
+    panel.dataset.chatComposerAttachmentCount=String(state.attachmentCount);
+    panel.dataset.chatComposerDraftLength=String(state.draftLength);
+    panel.dataset.chatComposerStatus=state.status.toLowerCase();
+    panel.dataset.chatComposerShortcut=state.shortcut;
+  }
+  if(!summary)return state;
+  summary.innerHTML='';
+  appendAssistantComposerSummaryChip(summary,state.status,state.status==='Draft'?'dirty':'primary','Composer status');
+  appendAssistantComposerSummaryChip(summary,state.provider+' / '+state.model,'','Provider and model');
+  appendAssistantComposerSummaryChip(summary,'Agent: '+state.agent,'','Active agent');
+  appendAssistantComposerSummaryChip(summary,'Mode: '+state.mode,'','Assistant mode');
+  appendAssistantComposerSummaryChip(summary,'Workflow: '+state.workflow,'','Workflow mode and selection');
+  appendAssistantComposerSummaryChip(summary,'Ctx '+state.contextCount+' · Files '+state.attachmentCount,'','Attached context and files');
+  appendAssistantComposerSummaryChip(summary,state.requestCount+' req','','Session request count');
+  if(state.draftLength)appendAssistantComposerSummaryChip(summary,state.draftLength+' chars','dirty','Current draft length');
+  summary.classList.add('has-state');
+  summary.title=assistantComposerContextText();
+  return state;
+}
+function assistantPromptShortcutText(action){
+  const key=String(action||'').toLowerCase();
+  if(key==='explain')return 'Explain this code and point out the important control flow.';
+  if(key==='fix')return 'Find the likely bug and propose a minimal fix.';
+  if(key==='tests')return 'Add or update focused tests for this change.';
+  if(key==='review')return 'Review this change for regressions and missing coverage.';
+  return '';
+}
+function applyAssistantPromptShortcut(action){
+  const text=assistantPromptShortcutText(action);
+  if(!text)return '';
+  const input=$('chat-input');
+  const current=String(input?input.value:'').trimEnd();
+  const next=current?current+'\n\n'+text:text;
+  setChatInputValue(next,{focus:true});
+  if(input)input.selectionStart=input.selectionEnd=input.value.length;
+  syncAssistantSessionState({lastComposerShortcut:String(action||'')});
+  announceAssistantAction('Prompt shortcut ready: '+String(action||'prompt'));
+  return next;
+}
+function clearAssistantDraft(){
+  const input=$('chat-input');
+  if(!input||!input.value){announceAssistantAction('Draft already empty');return false}
+  setChatInputValue('',{focus:true});
+  syncAssistantSessionState({lastComposerShortcut:''});
+  announceAssistantAction('Draft cleared');
+  return true;
+}
+async function copyAssistantComposerContext(){
+  const text=assistantComposerContextText();
+  if(typeof settingsCopyText==='function')settingsCopyText(text,'Composer context');
+  else{
+    try{await navigator.clipboard.writeText(text);showToast('Composer context copied','success',1400)}
+    catch(_e){setStatus(text)}
+  }
+  return text;
+}
 function refreshChatWelcomeState(){
   const welcome=$('chat-welcome-msg');if(!welcome)return;
   renderAssistantStatePills(welcome.querySelector('.chat-welcome-meta'),'chat-welcome-pill');
@@ -7158,6 +7316,7 @@ function updateChatComposerState(){
   updateAssistantSurfaceState();
   updateMessageFootersState();
   renderChatComposerHeader();
+  renderAssistantComposerSummary();
 }
 function setChatStreamingState(active){
   streaming=!!active;
@@ -7584,6 +7743,7 @@ function assistantSessionDefaults(seed){
     context:Array.isArray(src.context)?src.context.slice(0,20):[],
     lastRequestId:String(src.lastRequestId||''),
     lastPromptSample:String(src.lastPromptSample||''),
+    lastComposerShortcut:String(src.lastComposerShortcut||''),
     parentSessionResource:String(src.parentSessionResource||''),
     parentSessionTitle:String(src.parentSessionTitle||''),
     provider:String(src.provider||config.provider||''),
@@ -11455,6 +11615,7 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'composer-edit-target-highlight-ready',composerInteractions.editHighlighted&&composerInteractions.editCleared&&composerInteractions.editInput==='edit selfcheck request',JSON.stringify(composerInteractions));
   assistantUiSelfCheckRecord(checks,'composer-attachment-summary-ready',composerInteractions.attachHeader&&composerInteractions.attachCounts.total===2&&composerInteractions.attachCounts.images===1&&composerInteractions.attachCounts.files===1,JSON.stringify(composerInteractions));
   assistantUiSelfCheckRecord(checks,'composer-queue-state-ready',composerInteractions.queueClass&&composerInteractions.queueCount===1&&composerInteractions.queuedMessage,JSON.stringify(composerInteractions));
+  assistantUiSelfCheckRecord(checks,'composer-summary-shortcuts-ready',composerInteractions.shortcutButtonCount>=6&&composerInteractions.shortcutText.includes('minimal fix')&&composerInteractions.summaryChipCount>=7&&composerInteractions.summaryDatasetReady&&composerInteractions.copyContextReady&&composerInteractions.clearDraftReady,JSON.stringify(composerInteractions));
   const previousCustomModels=config.custom_models;
   config.custom_models={...(config.custom_models||{}),'custom-endpoint-model':{max_input:64000,max_output:4096,provider:config.provider||'openai'}};
   const providerPopup=assistantControlPopupSnapshot('provider');
@@ -11699,7 +11860,7 @@ function assistantVisualLayoutSnapshot(){
   };
 }
 function assistantComposerInteractionSnapshot(){
-  const input=$('chat-input'),container=$('chat-input-container'),head=$('chat-toolbar-head');
+  const input=$('chat-input'),container=$('chat-input-container'),head=$('chat-toolbar-head'),summary=$('chat-composer-summary'),shortcuts=$('chat-prompt-shortcuts');
   const previousHistory=_chatHistory.slice();
   const previousHistoryIdx=_chatHistoryIdx;
   const previousDraft=_chatDraft;
@@ -11707,8 +11868,10 @@ function assistantComposerInteractionSnapshot(){
   const previousInput=input?String(input.value||''):'';
   const previousQueue=_assistantRequestQueue.slice();
   const previousStreaming=streaming;
+  const previousSessionState=assistantSessionDefaults(assistantSessionState);
   const beforeItems=chatConversationItems();
   let historyRecalled='',historyRestored='',editHighlighted=false,editCleared=false,editInput='',queueClass=false,queueCount=0,queuedMessage=false,attachHeader=false,attachCounts={total:0,images:0,files:0};
+  let shortcutButtonCount=0,shortcutText='',summaryChipCount=0,summaryDatasetReady=false,copyContextReady=false,clearDraftReady=false;
   try{
     _chatHistory.length=0;
     _chatHistory.push('first selfcheck request','second selfcheck request');
@@ -11737,12 +11900,22 @@ function assistantComposerInteractionSnapshot(){
     queueCount=assistantQueuedRequestCount();
     queueClass=!!(container&&container.classList.contains('queued'));
     queuedMessage=chatConversationItems().some(el=>el.dataset.chatRequestPending==='true');
+    shortcutButtonCount=shortcuts?shortcuts.querySelectorAll('button[data-chat-prompt-action]').length:0;
+    setChatInputValue('summary seed',{focus:false});
+    shortcutText=applyAssistantPromptShortcut('fix');
+    renderAssistantComposerSummary();
+    summaryChipCount=summary?summary.querySelectorAll('.chat-composer-summary-chip').length:0;
+    const panel=$('chat-panel');
+    summaryDatasetReady=!!(panel&&panel.dataset.chatComposerStatus==='draft'&&Number(panel.dataset.chatComposerDraftLength||0)>0&&panel.dataset.chatComposerShortcut==='fix');
+    copyContextReady=typeof copyAssistantComposerContext==='function'&&assistantComposerContextText().includes('Provider:')&&assistantComposerContextText().includes('Draft chars:');
+    clearDraftReady=clearAssistantDraft()&&!!(input&&input.value==='');
   }finally{
     chatConversationItems().forEach(el=>{if(!beforeItems.includes(el))el.remove()});
     _assistantRequestQueue.length=0;previousQueue.forEach(item=>_assistantRequestQueue.push(item));
     _chatHistory.length=0;previousHistory.forEach(item=>_chatHistory.push(item));
     _chatHistoryIdx=previousHistoryIdx;_chatDraft=previousDraft;
     attachments=previousAttachments;renderAttachments();
+    assistantSessionState=previousSessionState;
     if(input)setChatInputValue(previousInput,{focus:false,sync:false});
     streaming=previousStreaming;
     clearAssistantEditTarget({restore:false});
@@ -11759,7 +11932,13 @@ function assistantComposerInteractionSnapshot(){
     attachCounts,
     queueClass,
     queueCount,
-    queuedMessage
+    queuedMessage,
+    shortcutButtonCount,
+    shortcutText,
+    summaryChipCount,
+    summaryDatasetReady,
+    copyContextReady,
+    clearDraftReady
   };
 }
 function dedupeChatReferences(refs){
