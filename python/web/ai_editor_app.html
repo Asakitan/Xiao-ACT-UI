@@ -1683,7 +1683,20 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-searchbar .settings-active-filters,.settings-searchbar .settings-filter-summary,
 .settings-searchbar .settings-validation-summary,.settings-searchbar .settings-review-bar,
 .settings-searchbar .settings-save-preview,.settings-searchbar .settings-search-memory,
-.settings-searchbar .settings-section-context { grid-column:1 / -1; }
+.settings-searchbar .settings-section-context,.settings-searchbar .settings-jumpbar { grid-column:1 / -1; }
+.settings-jumpbar { display:flex; flex-wrap:wrap; align-items:center; gap:4px; min-height:26px;
+  padding:1px 0 4px; color:var(--fg-dim); }
+.settings-jumpbar button { height:23px; max-width:168px; display:inline-flex; align-items:center; gap:5px;
+  padding:1px 8px; border:1px solid transparent; border-radius:3px; background:transparent;
+  color:var(--fg-dim); font:11px var(--sans); cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-jumpbar button:hover,.settings-jumpbar button:focus { color:var(--fg); border-color:var(--border-focus);
+  background:var(--bg-hover); outline:none; }
+.settings-jumpbar button[aria-pressed="true"] { color:var(--fg-accent);
+  border-color:color-mix(in srgb,var(--fg-accent) 42%,var(--border));
+  background:color-mix(in srgb,var(--fg-accent) 7%,transparent); }
+.settings-jumpbar .settings-jump-count { min-width:14px; padding:0 4px; border-radius:999px;
+  background:color-mix(in srgb,var(--bg3) 78%,transparent); color:var(--fg-dim); font:10px var(--mono); }
+.settings-jumpbar button[data-settings-jump-action="modified"] .settings-jump-count:not(:empty) { color:var(--fg-accent); }
 .settings-searchbar .settings-quick-filters { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:5px;
   margin:-1px 0 0; max-height:24px; overflow:hidden; }
 .settings-quick-filters button { height:22px; max-width:160px; padding:1px 7px; border:1px solid var(--border);
@@ -2684,6 +2697,8 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm #settings-dirty-summary[data-settings-state="clean"] { display:none; }
 .settings-vscode-calm .settings-searchbar { position:relative; padding:5px 24px 0; gap:0; border-bottom:0; background:var(--bg); }
 .settings-vscode-calm .settings-search-row { grid-template-columns:minmax(600px,1fr) minmax(260px,auto); align-items:end; padding-bottom:8px; border-bottom:1px solid var(--border); }
+.settings-vscode-calm .settings-jumpbar { padding:6px 0 5px; border-bottom:1px solid color-mix(in srgb,var(--border) 56%,transparent); }
+.settings-vscode-calm .settings-jumpbar button { border-radius:2px; }
 .settings-vscode-calm .settings-query-box { border-radius:2px; min-height:34px; background:var(--bg-input); }
 .settings-vscode-calm .settings-query-box:focus-within { box-shadow:0 0 0 1px color-mix(in srgb,var(--border-focus) 22%,transparent); }
 .settings-vscode-calm .settings-searchbar input#settings-search { height:34px; font:13px var(--sans); }
@@ -3834,6 +3849,15 @@ pre.code-block { overflow:visible; }
           </div>
         </div>
       </div>
+      <div id="settings-jumpbar" class="settings-jumpbar" role="toolbar" aria-label="Settings quick access">
+        <button type="button" data-settings-jump-action="common" title="Show commonly used settings" aria-label="Show commonly used settings" onclick="settingsJumpbarAction('common')">Commonly Used <span class="settings-jump-count" data-settings-jump-count="common"></span></button>
+        <button type="button" data-settings-jump-action="modified" title="Show modified settings" aria-label="Show modified settings" onclick="settingsJumpbarAction('modified')">Modified <span class="settings-jump-count" data-settings-jump-count="modified"></span></button>
+        <button type="button" data-settings-jump-action="editor" title="Show editor settings" aria-label="Show editor settings" onclick="settingsJumpbarAction('editor')">Editor</button>
+        <button type="button" data-settings-jump-action="terminal" title="Show terminal settings" aria-label="Show terminal settings" onclick="settingsJumpbarAction('terminal')">Terminal</button>
+        <button type="button" data-settings-jump-action="workspace" title="Open workspace settings" aria-label="Open workspace settings" onclick="settingsJumpbarAction('workspace')">Workspace</button>
+        <button type="button" data-settings-jump-action="extensions" title="Open extension settings" aria-label="Open extension settings" onclick="settingsJumpbarAction('extensions')">Extensions</button>
+        <button type="button" data-settings-jump-action="json" title="Open Settings JSON" aria-label="Open Settings JSON" onclick="settingsJumpbarAction('json')">JSON</button>
+      </div>
       <div id="settings-active-filters" class="settings-active-filters" aria-live="polite"></div>
       <div id="settings-quick-filters" class="settings-quick-filters" aria-label="Quick setting filters">
         <button type="button" data-settings-filter-token="@modified" onclick="settingsToggleFilterToken('@modified')">Modified</button>
@@ -4806,6 +4830,61 @@ function settingsUseSearchHint(text){
   else if(/^@extensions\b/i.test(input.value))selectSettingsTarget('extensions',{preserveSearch:true});
   else scheduleFilterSettings(0);
 }
+function settingsJumpbarAction(action){
+  const name=String(action||'').trim().toLowerCase();
+  const search=$('settings-search');
+  if(name==='json'){settingsOpenJsonView();return true}
+  if(name==='workspace'){
+    if(search)search.value='';
+    selectSettingsTarget('workspace',{preserveSearch:true});
+    scheduleFilterSettings(0);
+    return true;
+  }
+  if(name==='extensions'){
+    if(search)search.value='';
+    selectSettingsTarget('extensions',{preserveSearch:true});
+    scheduleFilterSettings(0);
+    return true;
+  }
+  const tokens={
+    common:'@common',
+    modified:'@modified',
+    editor:'@feature:editor',
+    terminal:'@feature:terminal'
+  };
+  if(tokens[name]){settingsUseSearchHint(tokens[name]);return true}
+  return false;
+}
+function renderSettingsJumpbar(stats){
+  const host=$('settings-jumpbar');if(!host)return;
+  const parsed=settingsQueryFilters((($('settings-search')||{}).value)||'');
+  const text=String(parsed.text||'').toLowerCase();
+  const tokens=(parsed.tokens||[]).map(token=>String(token||'').toLowerCase());
+  const activeByAction={
+    common:tokens.includes('@common'),
+    modified:tokens.includes('@modified'),
+    editor:tokens.includes('@editor')||tokens.includes('@feature:editor')||text==='editor',
+    terminal:tokens.includes('@terminal')||tokens.includes('@feature:terminal')||text==='terminal',
+    workspace:currentSettingsTarget==='workspace',
+    extensions:currentSettingsTarget==='extensions',
+    json:tokens.includes('@json')||tokens.includes('@tag:json')
+  };
+  host.querySelectorAll('[data-settings-jump-action]').forEach(btn=>{
+    const action=btn.dataset.settingsJumpAction||'';
+    btn.setAttribute('aria-pressed',activeByAction[action]?'true':'false');
+    btn.classList.toggle('active',!!activeByAction[action]);
+  });
+  const modified=Number((stats&&stats.modified)||settingsReviewRows('modified').length)||0;
+  const common=settingsCommonlyUsedItems().length;
+  const modifiedCount=host.querySelector('[data-settings-jump-count="modified"]');
+  if(modifiedCount)modifiedCount.textContent=modified?String(modified):'';
+  const commonCount=host.querySelector('[data-settings-jump-count="common"]');
+  if(commonCount)commonCount.textContent=common?String(common):'';
+  host.dataset.settingsJumpbarRendered='1';
+  host.dataset.settingsJumpbarTarget=currentSettingsTarget;
+  host.dataset.settingsJumpbarModified=String(modified);
+  return host;
+}
 function settingsSearchHintKeydown(ev,text){
   if(!ev)return;
   if(ev.key==='Enter'||ev.key===' '){
@@ -5160,6 +5239,7 @@ function settingsAddRowActions(row,opts){
   const addButton=(label,title,handler,disabled)=>{
     const btn=document.createElement('button');
     btn.type='button';btn.className='settings-row-action';btn.textContent=label;btn.title=title;btn.disabled=!!disabled;
+    btn.setAttribute('aria-label',title||label);
     if(String(label||'').length>2)btn.classList.add('wide');
     btn.onclick=ev=>{ev.preventDefault();ev.stopPropagation();if(!btn.disabled)handler&&handler(ev)};
     actions.appendChild(btn);
@@ -5191,23 +5271,45 @@ function settingsAddRowActions(row,opts){
   }
   addMenuItem('Focus Row','Focus setting row',()=>settingsHighlightRow(row));
   if(menuItems.length){
-    const more=addButton('...','More setting actions',null,false);
+    const more=addButton('⋯','More setting actions',null,false);
     more.setAttribute('aria-haspopup','menu');
     more.setAttribute('aria-expanded','false');
     const menu=document.createElement('div');menu.className='settings-row-action-menu';menu.setAttribute('role','menu');
     menuItems.forEach(item=>{
       const btn=document.createElement('button');
       btn.type='button';btn.textContent=item.label;btn.title=item.title||item.label;btn.disabled=!!item.disabled;btn.setAttribute('role','menuitem');
+      btn.setAttribute('aria-label',item.title||item.label);
+      btn.dataset.settingsMenuItem=String(item.label||'').toLowerCase().replace(/\s+/g,'-');
+      btn.dataset.settingsMenuDisabled=item.disabled?'1':'0';
       btn.onclick=ev=>{ev.preventDefault();ev.stopPropagation();menu.classList.remove('open');more.setAttribute('aria-expanded','false');if(!btn.disabled)item.handler&&item.handler(ev)};
       menu.appendChild(btn);
       if(item.label==='Clear Override')btn.dataset.settingsClearTarget='1';
     });
+    const focusMenuItem=delta=>{
+      const items=Array.from(menu.querySelectorAll('button:not(:disabled)'));
+      if(!items.length)return false;
+      const current=document.activeElement&&items.includes(document.activeElement)?items.indexOf(document.activeElement):-1;
+      const next=current<0?(delta<0?items.length-1:0):(current+delta+items.length)%items.length;
+      items[next].focus();
+      return true;
+    };
     more.onclick=ev=>{
       ev.preventDefault();ev.stopPropagation();
       const open=!menu.classList.contains('open');
       document.querySelectorAll('.settings-row-action-menu.open').forEach(item=>{if(item!==menu)item.classList.remove('open')});
       menu.classList.toggle('open',open);
       more.setAttribute('aria-expanded',open?'true':'false');
+      if(open)setTimeout(()=>focusMenuItem(1),0);
+    };
+    more.onkeydown=ev=>{
+      if(ev.key==='ArrowDown'||ev.key==='Enter'||ev.key===' '){ev.preventDefault();if(!menu.classList.contains('open'))more.click();else focusMenuItem(1)}
+      if(ev.key==='ArrowUp'){ev.preventDefault();if(!menu.classList.contains('open'))more.click();focusMenuItem(-1)}
+      if(ev.key==='Escape'){ev.preventDefault();menu.classList.remove('open');more.setAttribute('aria-expanded','false');more.focus()}
+    };
+    menu.onkeydown=ev=>{
+      if(ev.key==='ArrowDown'){ev.preventDefault();focusMenuItem(1)}
+      if(ev.key==='ArrowUp'){ev.preventDefault();focusMenuItem(-1)}
+      if(ev.key==='Escape'){ev.preventDefault();menu.classList.remove('open');more.setAttribute('aria-expanded','false');more.focus()}
     };
     actions.appendChild(menu);
     const clearBtn=menu.querySelector('[data-settings-clear-target="1"]');
@@ -5620,6 +5722,7 @@ function markSettingsModified(){
   });
   settingsRefreshRowsAccessibility();
   refreshSettingsDirtySummary(modifiedCount,errorCount);
+  renderSettingsJumpbar({modified:modifiedCount,errors:errorCount,overrides:settingsReviewRows('override').length,visible:settingsVisibleRows().length});
   updateSettingsNavCounts();
   renderSettingsReviewBar();
   renderSettingsFocusDeck(settingsQueryFilters((($('settings-search')||{}).value)||''),0,0,{visible:settingsVisibleRows().length,modified:modifiedCount,errors:errorCount,overrides:settingsReviewRows('override').length});
@@ -28479,6 +28582,10 @@ function settingsUiSelfCheckSnapshot(){
   const rowHead=document.querySelector('[data-settings-row-head="1"]');
   const rowCategory=document.querySelector('[data-settings-category-label="1"]');
   const dirtySummary=$('settings-dirty-summary');
+  const jumpbar=$('settings-jumpbar');
+  const jumpButtons=jumpbar?Array.from(jumpbar.querySelectorAll('[data-settings-jump-action]')):[];
+  const rowActionMenu=document.querySelector('.settings-row-action-menu');
+  const rowActionButtons=Array.from(document.querySelectorAll('.settings-row-action'));
   return {
     pass:!!(modal&&nav&&main&&inspector&&$('settings-nav-filter')&&$('settings-density-toggle')&&detail
       &&typeof settingsFilterNavCategories==='function'
@@ -28490,6 +28597,14 @@ function settingsUiSelfCheckSnapshot(){
     hasWorkbenchHeaderContext:!!(route&&route.textContent&&typeof renderSettingsWorkbenchHeader==='function'&&typeof settingsWorkbenchContextLabel==='function'),
     hasSettingsToolbarStrip:!!document.querySelector('.settings-toolbar-strip .settings-top-action.primary'),
     hasIconOnlySettingsToolbar:iconActions.length>=7&&iconActions.every(btn=>btn.getAttribute('aria-label')&&btn.title&&String(btn.textContent||'').trim().length<=2),
+    hasSettingsJumpbar:!!(jumpbar&&jumpbar.getAttribute('role')==='toolbar'&&jumpButtons.length>=7),
+    hasJumpbarActionState:!!(jumpbar&&jumpbar.dataset.settingsJumpbarRendered==='1'&&jumpbar.dataset.settingsJumpbarTarget&&jumpButtons.every(btn=>btn.getAttribute('aria-pressed')!==null)),
+    hasJumpbarModifiedCount:!!(jumpbar&&jumpbar.dataset.settingsJumpbarModified!==undefined&&jumpbar.querySelector('[data-settings-jump-count="modified"]')),
+    hasJumpbarActions:typeof settingsJumpbarAction==='function'
+      &&typeof renderSettingsJumpbar==='function'
+      &&String(settingsJumpbarAction).includes("settingsOpenJsonView()")
+      &&String(settingsJumpbarAction).includes("selectSettingsTarget('workspace'")
+      &&String(settingsJumpbarAction).includes("'@feature:editor'"),
     hasPrimaryJsonOnlyDefaultToolbar:toolbarButtons.length>=3&&hiddenToolbarButtons.length>=2&&!!document.querySelector('.settings-toolbar-strip .settings-top-action.primary[data-settings-icon-action="1"]'),
     hasCalmDefaultSettingsMode:!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')),
     hasSearchPrimaryCaption:!!(caption&&document.querySelector('.settings-search-primary .settings-query-box #settings-search')),
@@ -28572,7 +28687,12 @@ function settingsUiSelfCheckSnapshot(){
       && String(renderSettingsReviewBar).includes("host.classList.toggle('open',!!dirty||settingsHasReviewFilter())"),
     hasValueSummary:!!document.querySelector('[data-settings-value-summary="1"]'),
     hasMatchSummary:!!document.querySelector('.settings-match-summary'),
-    hasRowActionMenu:!!document.querySelector('.settings-row-action-menu'),
+    hasRowActionMenu:!!rowActionMenu,
+    hasAccessibleRowActions:rowActionButtons.length>0&&rowActionButtons.every(btn=>btn.getAttribute('aria-label')),
+    hasKeyboardRowActionMenu:!!(rowActionMenu&&typeof settingsAddRowActions==='function'
+      &&String(settingsAddRowActions).includes('more.onkeydown=ev=>')
+      &&String(settingsAddRowActions).includes('menu.onkeydown=ev=>')
+      &&String(settingsAddRowActions).includes("btn.dataset.settingsMenuItem")),
     hasScopeControl:!!document.querySelector('.settings-scope-control .settings-target-tabs'),
     hasNavHeading:!!document.querySelector('.settings-nav-heading'),
     hasNavCountPills:!!document.querySelector('.settings-nav-item .count'),
@@ -28681,6 +28801,8 @@ window.focusSettingsSearch=focusSettingsSearch;
 window.focusSettingsNavFilter=focusSettingsNavFilter;
 window.settingsOpenJsonView=settingsOpenJsonView;
 window.settingsUseSearchHint=settingsUseSearchHint;
+window.settingsJumpbarAction=settingsJumpbarAction;
+window.renderSettingsJumpbar=renderSettingsJumpbar;
 window.settingsSearchHintKeydown=settingsSearchHintKeydown;
 window.settingsClearSearch=settingsClearSearch;
 window.settingsCancelOrClose=settingsCancelOrClose;
@@ -30093,6 +30215,7 @@ function filterSettings(){
   renderSettingsSearchMemory(parsed);
   renderSettingsTargetSummary(targetStats);
   renderSettingsWorkbenchHeader(visible,total,targetStats);
+  renderSettingsJumpbar(targetStats);
   renderSettingsExperienceBar(parsed,visible,total,targetStats);
   renderSettingsRecommendations();
   renderSettingsFocusDeck(parsed,visible,total,targetStats);

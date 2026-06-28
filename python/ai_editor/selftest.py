@@ -4388,7 +4388,24 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hasCalmDefaultSettingsMode" in html
            and "hasMoreComfortableSettingControls" in html
            and 'data-settings-icon-action="1"' in html
-           and "settings-vscode-calm:not(.settings-details-open) .settings-toolbar-strip .settings-top-action:not(.primary)" in html)
+           and "settings-vscode-calm:not(.settings-details-open) .settings-toolbar-strip .settings-top-action:not(.primary)" in html
+           and 'id="settings-jumpbar" class="settings-jumpbar" role="toolbar"' in html
+           and "function settingsJumpbarAction(action)" in html
+           and "function renderSettingsJumpbar(stats)" in html
+           and "host.dataset.settingsJumpbarRendered='1'" in html
+           and "window.settingsJumpbarAction=settingsJumpbarAction;" in html
+           and "hasSettingsJumpbar" in html
+           and "hasJumpbarActionState" in html
+           and "hasJumpbarModifiedCount" in html
+           and "hasJumpbarActions" in html)
+    _check("frontend Settings row actions are keyboard accessible",
+           "btn.setAttribute('aria-label',title||label);" in html
+           and "const more=addButton('⋯','More setting actions',null,false);" in html
+           and "btn.dataset.settingsMenuItem=String(item.label||'').toLowerCase().replace" in html
+           and "more.onkeydown=ev=>" in html
+           and "menu.onkeydown=ev=>" in html
+           and "hasAccessibleRowActions" in html
+           and "hasKeyboardRowActionMenu" in html)
     _check("frontend Settings target switching is keyboard and state accessible",
            "hasTargetRovingKeyboard" in html
            and "hasTargetTabAriaLabels" in html
