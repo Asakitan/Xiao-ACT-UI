@@ -9757,9 +9757,12 @@ console.log("frontend word separator behavior ok");
             and "btn.setAttribute('aria-selected',active?'true':'false')" in html
             and "settingsUseSearchHint('@common')" in html
             and "id=\"settings-language-override-panel\"" in html
+            and "id=\"settings-language-suggestions\"" in html
+            and "function settingsLanguageSuggestionIds()" in html
             and "function settingsLanguageOverrideKeys()" in html
             and "function renderSettingsLanguageOverridePanel()" in html
             and "function settingsSearchForLanguageOverride(language)" in html
+            and "function settingsSearchModifiedLanguageOverride(language)" in html
             and "function settingsCopyLanguageOverrideJson(language)" in html
             and "function settingsResetCurrentLanguageOverride()" in html
             and "window.settingsFocusCurrentLanguageOverride=settingsFocusCurrentLanguageOverride;" in html
@@ -9850,12 +9853,16 @@ console.log("frontend word separator behavior ok");
              and "hasDetailValueActions" in html
              and "hasReviewFilterActions" in html
              and "hasOverridesFilterToken" in html
+             and "hasLanguageSuggestions" in html
+             and "hasLanguageModifiedSearch" in html
              and "window.settingsSearchForKey=settingsSearchForKey;" in html
              and "window.settingsFilterNavCategories=settingsFilterNavCategories;" in html
              and "window.settingsUiSelfCheckSnapshot=settingsUiSelfCheckSnapshot;" in html
              and "window.settingsApplyReviewFilter=settingsApplyReviewFilter;" in html
              and "window.settingsClearReviewFilters=settingsClearReviewFilters;" in html
              and "window.settingsHasReviewFilter=settingsHasReviewFilter;" in html
+             and "window.settingsSearchModifiedLanguageOverride=settingsSearchModifiedLanguageOverride;" in html
+             and "window.settingsLanguageSuggestionIds=settingsLanguageSuggestionIds;" in html
              and "String(ev.key||'').toLowerCase()==='n'" in html
              and "settingsRememberRecentSetting(row);" in html
              and "fav.dataset.settingsFavoriteKey=opts.key;" in html
@@ -9880,8 +9887,11 @@ console.log("frontend word separator behavior ok");
             and "result.snapshot.hasDetailValueActions" in settings_smoke_source
             and "result.snapshot.hasReviewFilterActions" in settings_smoke_source
             and "result.snapshot.hasOverridesFilterToken" in settings_smoke_source
+            and "result.snapshot.hasLanguageSuggestions" in settings_smoke_source
+            and "result.snapshot.hasLanguageModifiedSearch" in settings_smoke_source
             and "window.settingsApplyReviewFilter(" in settings_smoke_source
             and "window.settingsClearReviewFilters()" in settings_smoke_source
+            and "window.settingsSearchModifiedLanguageOverride(" in settings_smoke_source
             and "\"Copy Value\"" in settings_smoke_source
             and "\"Use Inherited\"" in settings_smoke_source
            and "settings.png" in settings_smoke_source
@@ -10068,9 +10078,15 @@ console.log("frontend word separator behavior ok");
             and "function extensionSettingApplyStructuredInputValue(input,type,value)" in html
             and "function extensionSettingSortedObject(value)" in html
             and "function extensionSettingStructuredStatus(input,type,schema)" in html
+            and "function extensionSettingArrayItemSchema(schema,index)" in html
+            and "function extensionSettingCreateInlineControl(schema,value,onChange)" in html
+            and "function appendExtensionSettingStructuredInlineEditor(wrap,input,schema,type,value)" in html
             and "function appendExtensionSettingStructuredAssist(row,input,schema,type,defaultValue)" in html
+            and "window.appendExtensionSettingStructuredAssist=appendExtensionSettingStructuredAssist;" in html
             and "ext-setting-structured-assist" in html
             and "ext-setting-structured-status" in html
+            and "ext-setting-structured-editor" in html
+            and "dataset.extStructuredInline='1'" in html
             and "Format JSON" in html
             and "Sort Keys" in html
             and "Add Property" in html
@@ -10471,6 +10487,11 @@ console.log("frontend word separator behavior ok");
             "extensionSettingApplyStructuredInputValue",
             "extensionSettingSortedObject",
             "extensionSettingStructuredStatus",
+            "extensionSettingArrayItemSchema",
+            "extensionSettingInlineValueType",
+            "extensionSettingReadInlineControl",
+            "extensionSettingCreateInlineControl",
+            "appendExtensionSettingStructuredInlineEditor",
             "appendExtensionSettingStructuredAssist",
             "extensionSettingSearchText",
             "extensionSettingSplitFilterValues",

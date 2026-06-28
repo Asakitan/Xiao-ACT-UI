@@ -131,6 +131,8 @@ async function main() {
     if (firstRow) window.settingsSearchForKey(firstRow.dataset.settingKey || firstRow.dataset.extSettingKey || "editor.tabSize", "user");
     const reviewApplied = window.settingsApplyReviewFilter ? window.settingsApplyReviewFilter("modified") : false;
     const reviewCleared = window.settingsClearReviewFilters ? window.settingsClearReviewFilters() : false;
+    const languageSearchApplied = window.settingsSearchModifiedLanguageOverride ? window.settingsSearchModifiedLanguageOverride("python") : false;
+    if (window.settingsClearFilters) window.settingsClearFilters();
     const snapshot = window.settingsUiSelfCheckSnapshot();
     const modal = document.querySelector("#settings-modal .settings-modal");
     const rect = modal ? modal.getBoundingClientRect() : null;
@@ -144,9 +146,11 @@ async function main() {
       filterSummary: (document.querySelector("#settings-filter-summary") || {}).textContent || "",
       detailActions: Array.from(document.querySelectorAll("#settings-current-detail .detail-actions button")).map(btn => btn.textContent),
       reviewActions: Array.from(document.querySelectorAll("#settings-review-bar .review-actions button")).map(btn => btn.textContent),
+      languageSuggestions: Array.from(document.querySelectorAll("#settings-language-suggestions [data-settings-language-suggestion]")).map(btn => btn.dataset.settingsLanguageSuggestion),
       sectionActions: Array.from(document.querySelectorAll("#settings-section-context .section-actions button")).map(btn => btn.textContent),
       reviewApplied,
       reviewCleared,
+      languageSearchApplied,
       visibleRows: window.settingsVisibleRows ? window.settingsVisibleRows().length : 0
     };
   });
@@ -175,6 +179,9 @@ async function main() {
   }
   if (!result.snapshot.hasReviewFilterActions || !result.snapshot.hasOverridesFilterToken) {
     throw new Error("Settings selfcheck missing review filter affordances: " + JSON.stringify(result.snapshot));
+  }
+  if (!result.snapshot.hasLanguageSuggestions || !result.snapshot.hasLanguageModifiedSearch || !result.languageSearchApplied || !result.languageSuggestions.length) {
+    throw new Error("Settings selfcheck missing language override affordances: " + JSON.stringify(result));
   }
   if (!result.navFiltered || result.navFiltered.visible < 1 || !result.navCleared || result.navCleared.visible < result.navFiltered.visible) {
     throw new Error("Settings category filter did not behave as expected: " + JSON.stringify(result));
