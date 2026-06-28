@@ -4320,11 +4320,28 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".settings-vscode-calm .settings-nav-summary { display:none; }" in html
            and ".settings-vscode-calm .settings-nav-memory { display:block;" in html
            and ".settings-vscode-calm .settings-control-status { display:none; }" in html
-           and ".settings-vscode-calm .settings-field.builtin-setting { grid-template-columns:minmax(270px,.72fr) minmax(330px,1fr);" in html
+           and ".settings-vscode-calm .settings-field.builtin-setting { grid-template-columns:minmax(290px,.72fr) minmax(340px,1fr);" in html
            and ".settings-vscode-calm:not(.settings-details-open) .settings-secondary-action { display:none; }" in html
            and ".settings-vscode-calm .settings-main .sb-group { margin:18px 0 7px !important;" in html
            and ".settings-vscode-calm:not(.settings-details-open) .settings-inspector .settings-focus-deck { display:none; }" in html
            and ".settings-vscode-calm .modal-btns { min-height:34px; padding:4px 18px; align-items:center;" in html)
+    _check("frontend Settings improves humanized VS Code interactions",
+           ".settings-vscode-calm .settings-title-sub { display:none; }" in html
+           and ".settings-vscode-calm .settings-search-row { grid-template-columns:minmax(560px,1fr) minmax(260px,auto);" in html
+           and ".settings-vscode-calm .settings-result-nav button { width:24px; min-width:24px;" in html
+           and "aria-label=\"Previous visible setting\"" in html
+           and "aria-label=\"Next visible setting\"" in html
+           and ".settings-vscode-calm .settings-shell { grid-template-columns:260px minmax(0,1fr);" in html
+           and ".settings-vscode-calm .settings-field.builtin-setting.settings-current:not(.modified)" in html
+           and ".settings-vscode-calm .settings-control-frame { max-width:520px;" in html
+           and "function settingsResultCountLabel(current,total)" in html
+           and "return String(current)+' of '+String(total);" in html
+           and "window.settingsResultCountLabel=settingsResultCountLabel;" in html
+           and "hasHumanizedResultCount" in html
+           and "hasIconResultNavigation" in html
+           and "hasMoreReadableCategoryNav" in html
+           and "hasReducedSettingsTitleNoise" in html
+           and "hasHumanizedSaveAffordance" in html)
     _check("provider webviews bridge persistent vscode state",
            'type:"webview-set-state"' in html
            and 'webview_set_state' in html
