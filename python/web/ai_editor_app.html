@@ -2222,6 +2222,28 @@ button.review-pill { cursor:pointer; }
 .extension-runtime-mini-action:hover,.extension-runtime-mini-action:focus { color:var(--fg); background:var(--bg-hover); border-color:var(--border-focus); outline:none; }
 .extension-runtime-mini-action:disabled { opacity:.32; cursor:default; background:transparent; border-color:transparent; }
 .extension-runtime-empty { padding:8px; color:var(--fg-dim); font-size:11px; }
+.extension-webview-view-status { display:flex; align-items:center; gap:6px; min-height:28px; padding:4px 6px;
+  border:1px solid color-mix(in srgb,var(--border) 72%,transparent); border-radius:4px;
+  background:color-mix(in srgb,var(--bg2) 72%,transparent); color:var(--fg-dim); font:10px var(--mono); margin-bottom:6px; }
+.extension-webview-view-status.rendered { border-color:color-mix(in srgb,var(--fg-success) 32%,var(--border)); }
+.extension-webview-view-status.partial { border-color:color-mix(in srgb,var(--fg-warning) 34%,var(--border)); }
+.extension-webview-view-status.missing { border-color:color-mix(in srgb,var(--fg-error) 32%,var(--border)); }
+.extension-webview-view-title { min-width:0; flex:1; display:flex; align-items:center; gap:5px; overflow:hidden; }
+.extension-webview-view-title strong { color:var(--fg); font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.extension-webview-view-chips { display:flex; align-items:center; gap:4px; flex-wrap:wrap; min-width:0; }
+.extension-webview-view-chip { display:inline-flex; align-items:center; max-width:168px; min-height:18px; padding:0 5px;
+  border:1px solid color-mix(in srgb,var(--border) 74%,transparent); border-radius:999px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.extension-webview-view-chip.ok { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 45%,var(--border)); }
+.extension-webview-view-chip.warn { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 45%,var(--border)); }
+.extension-webview-view-chip.accent { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 42%,var(--border)); }
+.extension-webview-view-actions { display:inline-flex; align-items:center; gap:3px; margin-left:auto; }
+.extension-webview-view-action { height:22px; min-width:24px; padding:0 6px; border:1px solid transparent; border-radius:4px;
+  background:transparent; color:var(--fg-dim); font:10px var(--sans); cursor:pointer; }
+.extension-webview-view-action:hover,.extension-webview-view-action:focus { color:var(--fg); background:var(--bg-hover); border-color:var(--border-focus); outline:none; }
+.extension-webview-view-empty { padding:10px; border:1px dashed color-mix(in srgb,var(--border) 78%,transparent); border-radius:4px;
+  background:color-mix(in srgb,var(--bg2) 48%,transparent); color:var(--fg-dim); font-size:11px; line-height:1.45; }
+.extension-webview-view-empty strong { display:block; color:var(--fg); font-weight:600; margin-bottom:2px; }
 .modal label.settings-danger { border:1px solid #f14c4c80; border-radius:var(--radius); padding:8px; background:#ff000012; }
 .modal input[type="checkbox"] { width:auto; }
 
@@ -37902,6 +37924,149 @@ function appendExtensionRuntimeViewHeader(card,view,state,kind){
   card.appendChild(title);
   return title;
 }
+function extensionWebviewViewEvidence(view,state,html){
+  view=view||{};state=state||{};
+  const viewId=extensionRuntimeViewId(view,state);
+  const cached=viewId?(webviewRuntimeCache[viewId]||{}):{};
+  const ev={
+    ...(view.webviewEvidence&&typeof view.webviewEvidence==='object'?view.webviewEvidence:{}),
+    ...(state.webviewEvidence&&typeof state.webviewEvidence==='object'?state.webviewEvidence:{}),
+    ...(cached&&typeof cached==='object'?cached:{})
+  };
+  const options=(state.options&&typeof state.options==='object'?state.options:(ev.options&&typeof ev.options==='object'?ev.options:{}))||{};
+  const stateObj=state.state!==undefined?state.state:ev.state;
+  const stateKeys=Array.isArray(ev.stateKeys)?ev.stateKeys.slice():(
+    stateObj&&typeof stateObj==='object'&&!Array.isArray(stateObj)?Object.keys(stateObj).slice(0,8):[]);
+  const htmlText=String(html||ev.html||'');
+  const htmlLength=Number(ev.htmlLength||htmlText.length||0)||0;
+  const htmlAvailable=!!(htmlText||ev.htmlAvailable);
+  const visible=state.visible!==false&&ev.visible!==false;
+  const retain=state.retainContextWhenHidden!==undefined?!!state.retainContextWhenHidden:!!(options.retainContextWhenHidden||ev.retainContextWhenHidden);
+  const enableScripts=ev.enableScripts!==undefined?!!ev.enableScripts:(options.enableScripts!==false);
+  const enableForms=ev.enableForms!==undefined?!!ev.enableForms:(options.enableForms!==false);
+  const enableCommandUris=ev.enableCommandUris!==undefined?!!ev.enableCommandUris:!!options.enableCommandUris;
+  const status=htmlAvailable?'rendered':(visible||retain||state.kind||stateKeys.length?'partial':'missing');
+  return {
+    viewId,
+    status,
+    htmlAvailable,
+    htmlLength,
+    visible,
+    retainContextWhenHidden:retain,
+    enableScripts,
+    enableForms,
+    enableCommandUris,
+    stateKind:ev.stateKind||(stateObj&&typeof stateObj==='object'?(Array.isArray(stateObj)?'array':'dict'):''),
+    stateKeys,
+    messageCount:Number(ev.messageCount||0)||0,
+    messagesToWebview:Number(ev.messagesToWebview||0)||0,
+    messagesFromWebview:Number(ev.messagesFromWebview||0)||0,
+    pendingMessageCount:Number(ev.pendingMessageCount||0)||0,
+    queuedMessageCount:Number(ev.queuedMessageCount||0)||0,
+    flushedMessageCount:Number(ev.flushedMessageCount||0)||0,
+    droppedMessageCount:Number(ev.droppedMessageCount||0)||0,
+    lastDroppedReason:String(ev.lastDroppedReason||''),
+    lastQueueReason:String(ev.lastQueueReason||''),
+    lastFlushReason:String(ev.lastFlushReason||''),
+    lastDeliveredMessageSeq:Number(ev.lastDeliveredMessageSeq||0)||0,
+    resourceRewriteCount:Number(ev.resourceRewriteCount||0)||0,
+    resourceMapHitCount:Number(ev.resourceMapHitCount||0)||0,
+    resourceEndpointRewriteCount:Number(ev.resourceEndpointRewriteCount||0)||0,
+    resourcePortMappingRewriteCount:Number(ev.resourcePortMappingRewriteCount||0)||0,
+    resourceCssRewriteCount:Number(ev.resourceCssRewriteCount||0)||0,
+    resourceAttributeRewriteCount:Number(ev.resourceAttributeRewriteCount||0)||0,
+    lastResourceRewriteKind:String(ev.lastResourceRewriteKind||'')
+  };
+}
+function extensionWebviewViewSummaryText(view,state,evidence){
+  view=view||{};state=state||{};evidence=evidence||extensionWebviewViewEvidence(view,state,state.html||view.html||'');
+  return [
+    'WebviewView: '+(evidence.viewId||view.id||'-'),
+    'Title: '+(state.title||extensionViewTitle(view)||'-'),
+    'Extension: '+(view.extensionId||view.extension_id||'-'),
+    'Status: '+(evidence.status||'-'),
+    'HTML: '+(evidence.htmlAvailable?String(evidence.htmlLength||0):'missing'),
+    'Visible: '+String(evidence.visible),
+    'Retain: '+String(evidence.retainContextWhenHidden),
+    'Scripts: '+String(evidence.enableScripts),
+    'Forms: '+String(evidence.enableForms),
+    'Command URIs: '+String(evidence.enableCommandUris),
+    'Messages: '+String(evidence.messageCount)+' / queued '+String(evidence.queuedMessageCount||evidence.pendingMessageCount)+' / dropped '+String(evidence.droppedMessageCount),
+    'Resources: '+String(evidence.resourceRewriteCount)
+  ].join('\n');
+}
+function applyExtensionWebviewViewDataset(target,evidence){
+  if(!target||!evidence)return;
+  target.dataset.webviewViewId=String(evidence.viewId||'');
+  target.dataset.webviewViewStatus=String(evidence.status||'');
+  target.dataset.webviewHtmlAvailable=evidence.htmlAvailable?'1':'0';
+  target.dataset.webviewHtmlLength=String(evidence.htmlLength||0);
+  target.dataset.webviewVisible=evidence.visible?'1':'0';
+  target.dataset.webviewRetainContext=evidence.retainContextWhenHidden?'true':'false';
+  target.dataset.webviewEnableScripts=evidence.enableScripts?'true':'false';
+  target.dataset.webviewEnableForms=evidence.enableForms?'true':'false';
+  target.dataset.webviewEnableCommandUris=evidence.enableCommandUris?'true':'false';
+  target.dataset.webviewMessageCount=String(evidence.messageCount||0);
+  target.dataset.webviewQueuedMessageCount=String(evidence.queuedMessageCount||0);
+  target.dataset.webviewPendingMessageCount=String(evidence.pendingMessageCount||0);
+  target.dataset.webviewDroppedMessageCount=String(evidence.droppedMessageCount||0);
+  target.dataset.webviewResourceRewriteCount=String(evidence.resourceRewriteCount||0);
+}
+function appendExtensionWebviewViewStatus(body,view,state,evidence){
+  const bar=document.createElement('div');
+  bar.className='extension-webview-view-status '+(evidence.status||'missing');
+  bar.setAttribute('role','toolbar');
+  bar.setAttribute('aria-label','WebviewView runtime status '+(evidence.viewId||''));
+  applyExtensionWebviewViewDataset(bar,evidence);
+  const title=document.createElement('div');title.className='extension-webview-view-title';
+  const strong=document.createElement('strong');strong.textContent=evidence.viewId||view.id||'webview';
+  title.appendChild(strong);
+  const chips=document.createElement('div');chips.className='extension-webview-view-chips';
+  const addChip=(text,kind)=>{
+    if(!text)return null;
+    const chip=document.createElement('span');
+    chip.className='extension-webview-view-chip'+(kind?' '+kind:'');
+    chip.textContent=text;
+    chips.appendChild(chip);
+    return chip;
+  };
+  addChip(evidence.htmlAvailable?'HTML '+String(evidence.htmlLength||0):'No HTML',evidence.htmlAvailable?'ok':'warn');
+  addChip(evidence.visible?'visible':'hidden',evidence.visible?'ok':'warn');
+  addChip(evidence.retainContextWhenHidden?'retain':'dispose when hidden',evidence.retainContextWhenHidden?'accent':'');
+  addChip(evidence.enableScripts?'scripts':'no scripts',evidence.enableScripts?'accent':'warn');
+  if(evidence.enableForms)addChip('forms','accent');
+  if(evidence.enableCommandUris)addChip('command-uri','accent');
+  if(evidence.stateKind)addChip('state '+evidence.stateKind,'');
+  if(evidence.stateKeys&&evidence.stateKeys.length)addChip('keys '+evidence.stateKeys.join(','),'');
+  if(evidence.messageCount)addChip('msg '+evidence.messageCount,'accent');
+  if(evidence.queuedMessageCount||evidence.pendingMessageCount)addChip('queued '+String(evidence.queuedMessageCount||evidence.pendingMessageCount),'warn');
+  if(evidence.droppedMessageCount)addChip('drop '+evidence.droppedMessageCount,'warn');
+  if(evidence.resourceRewriteCount)addChip('resources '+evidence.resourceRewriteCount,'accent');
+  const actions=document.createElement('div');actions.className='extension-webview-view-actions';
+  const addAction=(label,title,handler)=>{
+    const btn=document.createElement('button');
+    btn.type='button';btn.className='extension-webview-view-action';
+    btn.textContent=label;btn.title=title;btn.setAttribute('aria-label',title);
+    btn.onclick=e=>{e.preventDefault();e.stopPropagation();handler()};
+    actions.appendChild(btn);
+    return btn;
+  };
+  addAction('Open','Open this dynamic WebviewView',()=>{
+    const ok=revealExtensionWebviewPanel({view_id:evidence.viewId,title:state.title||extensionViewTitle(view),preserveFocus:false});
+    setStatus(ok?'Opened WebviewView '+(evidence.viewId||''):'WebviewView is not available: '+(evidence.viewId||''));
+  });
+  addAction('Refresh','Refresh dynamic WebviewView evidence',()=>{void renderExtensionRuntimeSurfaces(true);setStatus('Refreshing WebviewView evidence: '+(evidence.viewId||''));});
+  addAction('Copy','Copy WebviewView summary',async()=>{
+    const text=extensionWebviewViewSummaryText(view,state,evidence);
+    try{await navigator.clipboard.writeText(text);setStatus('WebviewView summary copied')}
+    catch(_e){setStatus(text)}
+  });
+  title.appendChild(chips);
+  bar.appendChild(title);
+  bar.appendChild(actions);
+  body.appendChild(bar);
+  return bar;
+}
 function renderExtensionWebviewView(view){
   const state=view.runtimeState||{};
   const host=document.createElement('div');host.className='tool-call';host.style.margin='0 0 8px 0';
@@ -37914,6 +38079,11 @@ function renderExtensionWebviewView(view){
   body.dataset.viewId=extensionRuntimeViewId(view,state);
   body.dataset.webviewVisible=String(state.visible!==false);
   if(state.retainContextWhenHidden!==undefined)body.dataset.webviewRetainContext=String(!!state.retainContextWhenHidden);
+  const html=state.html||view.html||'';
+  const evidence=extensionWebviewViewEvidence(view,state,html);
+  applyExtensionWebviewViewDataset(host,evidence);
+  applyExtensionWebviewViewDataset(body,evidence);
+  appendExtensionWebviewViewStatus(body,view,state,evidence);
   const message=String(state.message||state.runtimeMessage||'').trim();
   if(message){
     const msg=document.createElement('div');
@@ -37921,13 +38091,13 @@ function renderExtensionWebviewView(view){
     msg.textContent=message;
     body.appendChild(msg);
   }
-  const html=state.html||view.html||'';
   if(html){
     const frameHost=document.createElement('div');
     frameHost.className='extension-webview-view-host';
     frameHost.style.cssText='display:flex;min-height:220px;height:280px;border:1px solid var(--border);background:var(--bg);overflow:hidden';
     frameHost.dataset.viewId=extensionRuntimeViewId(view,state);
     frameHost.dataset.webviewVisible=String(state.visible!==false);
+    applyExtensionWebviewViewDataset(frameHost,evidence);
     body.appendChild(frameHost);
     _injectWebviewHtml(frameHost,extensionRuntimeViewId(view,state),html,state.state);
     host.appendChild(body);
@@ -37936,8 +38106,11 @@ function renderExtensionWebviewView(view){
   const hasWelcome=appendExtensionWelcomeContent(body,welcomeEntries);
   if(!hasWelcome){
     const empty=document.createElement('div');
-    empty.style.cssText='color:var(--fg-dim);font-size:11px';
-    empty.textContent=view.runtimeMessage||state.runtimeMessage||'Runtime webview provider registered; no HTML reported yet.';
+    empty.className='extension-webview-view-empty';
+    const emptyTitle=document.createElement('strong');emptyTitle.textContent='Provider registered';
+    const emptyText=document.createElement('span');
+    emptyText.textContent=view.runtimeMessage||state.runtimeMessage||'No HTML reported yet. The extension owns this view and can render it when its provider resolves.';
+    empty.appendChild(emptyTitle);empty.appendChild(emptyText);
     body.appendChild(empty);
   }
   host.appendChild(body);return host;
@@ -38234,8 +38407,26 @@ function extensionRuntimeDomSelfCheckSnapshot(){
             badge:{value:1,tooltip:'one'},
             html:'<html><body><button id="inside">inside</button></body></html>',
             state:{ready:true},
+            webviewEvidence:{htmlAvailable:true,htmlLength:61,enableScripts:true,enableForms:true,retainContextWhenHidden:true,visible:true,messageCount:2,queuedMessageCount:1,resourceRewriteCount:1,stateKind:'dict',stateKeys:['ready']},
             welcome:[{contents:'[Run](command:selftest.run?[1])'}],
             titleActions:[{command:'selftest.webview.refresh',title:'Refresh Webview',icon:'$(refresh)',group:'navigation@1'}]
+          }
+        },
+        {
+          id:'selftest.dynamic.webview.pending',
+          name:'Pending Runtime Webview',
+          runtimeKind:'webviewView',
+          runtimeAvailable:true,
+          runtimeState:{
+            kind:'webviewView',
+            title:'Pending Runtime Webview',
+            description:'Registered provider without HTML',
+            visible:false,
+            retainContextWhenHidden:false,
+            message:'Waiting for extension HTML',
+            state:{pending:true},
+            webviewEvidence:{htmlAvailable:false,enableScripts:true,enableForms:true,visible:false,pendingMessageCount:1,queuedMessageCount:1,droppedMessageCount:1,lastDroppedReason:'disposed-queue',stateKind:'dict',stateKeys:['pending']},
+            titleActions:[{command:'selftest.webview.pending.refresh',title:'Refresh Pending Webview',icon:'$(refresh)',group:'navigation@1'}]
           }
         },
         {
@@ -38477,6 +38668,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     const tree=root.querySelector('[role="tree"][data-view-id="selftest.dynamic.tree"]');
     const treeNodes=Array.from(root.querySelectorAll('.ext-tree-node'));
     const webviewFrame=root.querySelector('.extension-webview-view-host iframe.provider-webview-frame');
+    const webviewStatusBars=Array.from(root.querySelectorAll('.extension-webview-view-status'));
+    const webviewViewActions=Array.from(root.querySelectorAll('.extension-webview-view-action'));
     const manifest=root.querySelector('[data-view-id="selftest.dynamic.manifest"]');
     const customPlaceholder=customHost.querySelector('.custom-editor-placeholder');
     const snapshot={
@@ -38498,6 +38691,14 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       webviewTitle:webviewFrame?webviewFrame.title:'',
       webviewSandbox:webviewFrame?webviewFrame.getAttribute('sandbox'):'',
       webviewRetain:!!root.querySelector('[data-webview-retain-context="true"]'),
+      webviewStatusBars:webviewStatusBars.length,
+      webviewStatusKinds:webviewStatusBars.map(item=>item.dataset.webviewViewStatus||'').filter(Boolean),
+      webviewHtmlDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-html-available="1"]'),
+      webviewPendingDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview.pending"][data-webview-html-available="0"]'),
+      webviewStatusChips:root.querySelectorAll('.extension-webview-view-chip').length,
+      webviewViewActions:webviewViewActions.length,
+      webviewActionLabels:webviewViewActions.map(item=>String(item.textContent||'')),
+      webviewEmptyState:!!root.querySelector('.extension-webview-view-empty strong'),
       manifestGroup:!!manifest,
       manifestHidden:manifest?manifest.dataset.runtimeVisible:'',
       welcomeRegions:root.querySelectorAll('.ext-view-welcome[role="region"]').length,
@@ -38581,6 +38782,9 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.treeGroup&&snapshot.treeRole==='tree'&&snapshot.treeNodeCount>=2
       && snapshot.treeInlineActions>=1&&snapshot.treeCheckboxCount>=1&&snapshot.treeDndReady&&snapshot.treeResourceRows>=2
       && snapshot.webviewGroup&&snapshot.webviewFrame&&snapshot.webviewTitle.includes('selftest.dynamic.webview')&&snapshot.webviewSandbox.includes('allow-scripts')&&snapshot.webviewSandbox.includes('allow-forms')&&snapshot.webviewSandbox.includes('allow-popups')&&snapshot.webviewSandbox.includes('allow-downloads')&&snapshot.webviewRetain
+      && snapshot.webviewStatusBars>=2&&snapshot.webviewStatusKinds.includes('rendered')&&snapshot.webviewStatusKinds.includes('partial')
+      && snapshot.webviewHtmlDataset&&snapshot.webviewPendingDataset&&snapshot.webviewStatusChips>=10
+      && snapshot.webviewViewActions>=6&&['Open','Refresh','Copy'].every(label=>snapshot.webviewActionLabels.includes(label))&&snapshot.webviewEmptyState
       && snapshot.manifestGroup&&snapshot.manifestHidden==='false'&&snapshot.welcomeRegions>=1&&snapshot.welcomeCommands>=1&&snapshot.welcomeExternalLinks>=1
       && snapshot.activityRole==='button'&&snapshot.activityTabIndex===0&&snapshot.activityLabel.includes('Selftest Extensions')&&snapshot.activityPanel==='ext-vc-selftest.dynamic.container'
       && snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'&&snapshot.customCapabilities

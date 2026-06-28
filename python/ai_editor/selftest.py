@@ -13395,8 +13395,14 @@ console.log("extension setting schema helpers ok");
             and "call('select_extension_tree_item',viewId,node.handle)" in html
             and "call('execute_extension_tree_item_action',viewId,node.handle,action.command,...(action.arguments||[]))" in html
             and "window.pywebview.api.execute_command(node.command.command" in html
-            and "function renderExtensionWebviewView(view)" in html
-            and "_injectWebviewHtml(frameHost,extensionRuntimeViewId(view,state),html,state.state)" in html
+           and "function renderExtensionWebviewView(view)" in html
+           and "function extensionWebviewViewEvidence(view,state,html)" in html
+           and "function appendExtensionWebviewViewStatus(body,view,state,evidence)" in html
+           and "function applyExtensionWebviewViewDataset(target,evidence)" in html
+           and "extension-webview-view-status" in html
+           and "extension-webview-view-action" in html
+           and "extension-webview-view-empty" in html
+           and "_injectWebviewHtml(frameHost,extensionRuntimeViewId(view,state),html,state.state)" in html
             and "renderExtensionContainerContent(item)" in html
             and "function extensionContainerIconUri(item)" in html
             and "function extensionContainerIconVisual(item)" in html
@@ -13443,6 +13449,16 @@ console.log("extension setting schema helpers ok");
            and "snapshot.pass=snapshot.containerRole==='group'" in html
            and "snapshot.treeGroup&&snapshot.treeRole==='tree'" in html
            and "snapshot.webviewGroup&&snapshot.webviewFrame" in html
+           and "webviewStatusBars=Array.from(root.querySelectorAll('.extension-webview-view-status'))" in html
+           and "webviewViewActions=Array.from(root.querySelectorAll('.extension-webview-view-action'))" in html
+           and "webviewStatusBars:webviewStatusBars.length" in html
+           and "webviewStatusKinds:webviewStatusBars.map(item=>item.dataset.webviewViewStatus||'').filter(Boolean)" in html
+           and "webviewHtmlDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-html-available=\"1\"]')" in html
+           and "webviewPendingDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview.pending\"][data-webview-html-available=\"0\"]')" in html
+           and "webviewViewActions:webviewViewActions.length" in html
+           and "snapshot.webviewStatusBars>=2" in html
+           and "snapshot.webviewHtmlDataset&&snapshot.webviewPendingDataset" in html
+           and "['Open','Refresh','Copy'].every(label=>snapshot.webviewActionLabels.includes(label))" in html
            and "snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'" in html
            and "snapshot.notebookOutputItems===3" in html
            and "snapshot.runtimeRows>=12" in html
@@ -22112,9 +22128,17 @@ def test_app_extension_runtime_support() -> None:
                and "host.dataset.webviewRetainContext=String(!!state.retainContextWhenHidden);" in html
                and "host.dataset.webviewOptions=JSON.stringify(state.options);" in html
                and "hidden.textContent='Hidden';hidden.title='View is not visible';" in html
+               and "function extensionWebviewViewEvidence(view,state,html)" in html
+               and "function appendExtensionWebviewViewStatus(body,view,state,evidence)" in html
+               and "applyExtensionWebviewViewDataset(frameHost,evidence);" in html
+               and "bar.className='extension-webview-view-status '+(evidence.status||'missing');" in html
+               and "addAction('Open','Open this dynamic WebviewView'" in html
+               and "addAction('Refresh','Refresh dynamic WebviewView evidence'" in html
+               and "addAction('Copy','Copy WebviewView summary'" in html
                and "frameHost.className='extension-webview-view-host';" in html
                and "_injectWebviewHtml(frameHost,extensionRuntimeViewId(view,state),html,state.state)" in html
-               and "empty.textContent=view.runtimeMessage||state.runtimeMessage||'Runtime webview provider registered; no HTML reported yet.';" in html)
+               and "empty.className='extension-webview-view-empty';" in html
+               and "emptyTitle.textContent='Provider registered';" in html)
         activity_tree_welcome = activity_views.get(
             "selftest.activity.tree", {}).get(
                 "runtimeState", {}).get("welcome", [])
